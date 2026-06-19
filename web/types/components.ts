@@ -4,7 +4,21 @@
  * into the component files.
  */
 
-import type { QuoteRow, StatusTone } from "@/lib/schemas"
+import type {
+  QuoteRow,
+  StatusTone,
+  QuoteView,
+  BalanceView,
+  DepositView,
+  TicketsView,
+  TicketOption,
+  ReceiptView,
+} from "@/lib/schemas"
+
+// ─── Density ──────────────────────────────────────────────────────────────────
+
+/** Drives sizing/padding/radii variants across all chat message cards. */
+export type Density = "mobile" | "desktop"
 
 // ─── Money (10.1) ─────────────────────────────────────────────────────────────
 
@@ -44,5 +58,39 @@ export interface AssetIconProps {
 
 export interface QrPlaceholderProps {
   size?: number
+  className?: string
+}
+
+// ─── Chat message cards (Phase 11) ────────────────────────────────────────────
+
+/** 11.1 */
+export type QuoteCardProps = QuoteView & {
+  density: Density
+  onConfirm: () => void
+  className?: string
+}
+
+/** 11.2 */
+export type BalanceCardProps = BalanceView & {
+  density: Density
+  className?: string
+}
+
+/** 11.3 */
+export type ReceiveCardProps = DepositView & {
+  density: Density
+  className?: string
+}
+
+/** 11.4 */
+export type TicketsCardProps = TicketsView & {
+  density: Density
+  onSelect: (opt: TicketOption) => void
+  className?: string
+}
+
+/** 11.5 */
+export type ReceiptCardProps = ReceiptView & {
+  density: Density
   className?: string
 }
