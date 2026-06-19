@@ -1,7 +1,8 @@
 import { z } from 'zod'
-import { SupportedAssetSchema } from '../common'
-import { NetworkSchema } from './send-crypto.intent'
+import { NetworkSchema, SupportedAssetSchema } from '../common'
 
+// The NLU layer emits this validated intent — not a transaction; the engine
+// re-validates and authorizes.
 export const ReceiveCryptoIntentSchema = z.object({
   action: z.literal('receive_crypto'),
   asset: SupportedAssetSchema,

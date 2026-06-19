@@ -1,10 +1,12 @@
 import { z } from 'zod'
-import { FiatCurrencySchema, SupportedAssetSchema } from '../common'
+import { CryptoAmountSchema, FiatCurrencySchema, SupportedAssetSchema } from '../common'
 
+// The NLU layer emits this validated intent — not a transaction; the engine
+// re-validates and authorizes.
 export const SwapIntentSchema = z.object({
   action: z.literal('swap'),
   fromAsset: SupportedAssetSchema,
   toCurrency: FiatCurrencySchema.default('NGN'),
-  amount: z.string().regex(/^\d+(\.\d{1,8})?$/, 'Enter a valid amount'),
+  amount: CryptoAmountSchema,
 })
 export type SwapIntent = z.infer<typeof SwapIntentSchema>

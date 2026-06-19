@@ -1,15 +1,15 @@
 import { z } from 'zod'
-import { SupportedAssetSchema } from '../common'
+import { CryptoAmountSchema, NetworkSchema, SupportedAssetSchema } from '../common'
 
-// Networks supported for on-chain sends. TRON is the launch default (TRC-20
-// USDT). Widen as additional networks are enabled in the service registry.
-export const NetworkSchema = z.enum(['TRON'])
-
+// The NLU layer emits this validated intent — not a transaction; the engine
+// re-validates and authorizes.
 export const SendCryptoIntentSchema = z.object({
   action: z.literal('send_crypto'),
   asset: SupportedAssetSchema,
-  amount: z.string().regex(/^\d+(\.\d{1,8})?$/, 'Enter a valid amount'),
+  amount: CryptoAmountSchema,
   network: NetworkSchema.default('TRON'),
+  // Loose validation by design: the deterministic engine is the authoritative
+  // on-chain address check; the NLU layer only ensures a non-trivial string.
   address: z.string().min(20),
 })
 export type SendCryptoIntent = z.infer<typeof SendCryptoIntentSchema>
