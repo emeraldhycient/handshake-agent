@@ -14,6 +14,7 @@ import type {
   TicketOption,
   ReceiptView,
   ChatMessage,
+  ChatAction,
 } from "@/lib/schemas"
 
 // ─── Density ──────────────────────────────────────────────────────────────────
@@ -106,4 +107,14 @@ export interface ChatMessageViewProps {
   density: Density
   onConfirm: (m: ChatMessage) => void
   onSelectTicket: (opt: TicketOption) => void
+}
+
+/** 12.3 */
+export interface ChatComposerProps {
+  chips: ChatAction[]
+  value: string
+  onChange: (v: string) => void
+  onSubmit: () => void
+  onChip: (a: ChatAction) => void
+  density: Density
 }
