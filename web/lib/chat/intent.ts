@@ -4,8 +4,10 @@ import type { ChatAction } from "@/lib/schemas"
  * Coarse NLU stub — ports the prototype's `parse()` method verbatim
  * (docs/design/_ref/handshake-prototype.html lines 1069–1078).
  *
- * Order is intentional: balance is checked BEFORE swap so "cash out" phrases
- * cannot be shadowed, and "my wallet" triggers balance before the swap branch.
+ * Order is intentional and matches the prototype: the first matching branch
+ * wins. Notable consequences of that order — "my wallet" routes to balance
+ * (before the swap branch), and "show ..." matches the ticket branch (the word
+ * "show") before balance, so "show my balance" resolves to "ticket".
  */
 export function parseIntent(text: string): ChatAction | null {
   const t = (text || "").toLowerCase()

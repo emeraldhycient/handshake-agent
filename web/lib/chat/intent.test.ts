@@ -19,6 +19,13 @@ const cases: [string, ReturnType<typeof parseIntent>][] = [
   ["swap to naira", "swap"],
   ["convert usdt", "swap"],
   ["cash out", "swap"],
+  // Case-insensitivity proven across branches (input is lowercased first).
+  ["SEND 10 USDT", "send"],
+  ["CONVERT to NGN", "swap"],
+  ["My Wallet", "balance"],
+  // Documented prototype quirk: "show" lives in the ticket branch (pos 4),
+  // checked before balance (pos 5), so "show my balance" resolves to ticket.
+  ["show my balance", "ticket"],
   ["hello there", null],
   ["", null],
 ]
