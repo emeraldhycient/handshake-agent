@@ -2,6 +2,7 @@ import { z } from "zod"
 import { StatusToneSchema } from "./common"
 
 export const ActivityItemSchema = z.object({
+  id: z.string(),
   /** Transaction direction / category */
   dir: z.enum(["in", "out", "ticket"]),
   /** Emoji or icon string for the row */

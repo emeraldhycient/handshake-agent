@@ -98,7 +98,7 @@ export function ActivityTab({ className }: ActivityTabProps) {
             <div className="overflow-hidden rounded-[18px] border border-border bg-card">
               {group.items.map((item, i) => (
                 <div
-                  key={`${group.group}-${i}`}
+                  key={item.id}
                   className={cn(
                     "flex items-center gap-3 px-[15px] py-[13px]",
                     i > 0 && "border-t border-border"

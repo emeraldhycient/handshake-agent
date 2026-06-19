@@ -90,6 +90,7 @@ export const activityFixture: ActivityGroup[] = [
     group: "Today",
     items: [
       {
+        id: "act-today-1",
         dir: "in",
         icon: "+",
         tint: "#e6f3ec",
@@ -101,6 +102,7 @@ export const activityFixture: ActivityGroup[] = [
         statusTone: "success",
       },
       {
+        id: "act-today-2",
         dir: "out",
         icon: "↗",
         tint: "#fbeece",
@@ -117,6 +119,7 @@ export const activityFixture: ActivityGroup[] = [
     group: "Yesterday",
     items: [
       {
+        id: "act-yest-1",
         dir: "in",
         icon: "↓",
         tint: "#e6f3ec",
@@ -128,6 +131,7 @@ export const activityFixture: ActivityGroup[] = [
         statusTone: "success",
       },
       {
+        id: "act-yest-2",
         // ticket icon retains info tint/col; status tone is success (payment done)
         dir: "ticket",
         icon: "◇",

@@ -10,6 +10,7 @@ describe("ActivityGroupSchema", () => {
         group: "Today",
         items: [
           {
+            id: "act-1",
             dir: "in",
             icon: "↓",
             tint: "#7fd1a8",
@@ -31,6 +32,7 @@ describe("ActivityGroupSchema", () => {
         group: "Today",
         items: [
           {
+            id: "act-1",
             dir: "unknown",
             icon: "↓",
             tint: "#7fd1a8",
@@ -52,6 +54,7 @@ describe("ActivityGroupSchema", () => {
         group: "Today",
         items: [
           {
+            id: "act-1",
             dir: "in",
             icon: "↓",
             tint: "#7fd1a8",
@@ -73,6 +76,7 @@ describe("ActivityGroupSchema", () => {
         group: "Yesterday",
         items: [
           {
+            id: "act-2",
             dir: "ticket",
             icon: "🎟",
             tint: "#cfe6d8",
