@@ -71,6 +71,7 @@ export type ChatSurface = "m" | "d";
 export type QuoteRow = { label: string; value: string };
 export type QuoteView = {
   kind: "quote";
+  action: ChatAction;
   receiveAmt: string;
   receiveSub: string;
   rows: QuoteRow[];
