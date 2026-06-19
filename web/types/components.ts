@@ -16,6 +16,8 @@ import type {
   ChatMessage,
   ChatAction,
   ConfirmPayload,
+  DashboardPage,
+  SearchResult,
 } from "@/lib/schemas"
 
 // ─── Density ──────────────────────────────────────────────────────────────────
@@ -182,8 +184,6 @@ export interface VerificationRowProps {
 }
 
 // ─── Phase 16 desktop components ─────────────────────────────────────────────
-
-import type { DashboardPage, SearchResult, ChatAction } from "@/lib/schemas"
 
 /** 16.1 */
 export interface DashboardSidebarProps {
