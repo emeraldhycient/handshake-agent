@@ -52,6 +52,10 @@
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
   --color-info-muted: var(--info-muted);
+  --color-primary-mid: var(--primary-mid);
+  --shadow-card: var(--card-shadow);
+  --shadow-card-lg: var(--card-shadow-lg);
+  --shadow-cta: var(--cta-shadow);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -63,6 +67,10 @@
 
 :root {
   --radius: 0.875rem;
+  --primary-mid: oklch(0.42 0.062 162);
+  --card-shadow: 0 6px 18px oklch(0.244 0.024 162 / 0.07);
+  --card-shadow-lg: 0 8px 22px oklch(0.244 0.024 162 / 0.22);
+  --cta-shadow: 0 3px 10px oklch(0.72 0.155 65 / 0.32);
   --background: oklch(0.946 0.012 95.6); /* #f3efe7 */
   --foreground: oklch(0.244 0.024 162); /* #16261e */
   --card: oklch(1 0 0); /* #ffffff */

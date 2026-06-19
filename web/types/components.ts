@@ -79,6 +79,7 @@ export type BalanceCardProps = BalanceView & {
 /** 11.3 */
 export type ReceiveCardProps = DepositView & {
   density: Density
+  onCopy?: () => void
   className?: string
 }
 
@@ -92,5 +93,6 @@ export type TicketsCardProps = TicketsView & {
 /** 11.5 */
 export type ReceiptCardProps = ReceiptView & {
   density: Density
+  onShare?: () => void
   className?: string
 }

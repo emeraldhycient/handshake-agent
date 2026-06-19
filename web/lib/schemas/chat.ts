@@ -84,7 +84,7 @@ export const ReceiptViewSchema = z.object({
   subtitle: z.string(),
   amount: z.string(),
   rows: z.array(QuoteRowSchema),
-  ref: z.string(),
+  txRef: z.string(),
 })
 export type ReceiptView = z.infer<typeof ReceiptViewSchema>
 

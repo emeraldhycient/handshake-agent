@@ -176,12 +176,12 @@ describe("ChatMessageSchema", () => {
         subtitle: "USDT bought successfully",
         amount: "+ 29.97 USDT",
         rows: [{ label: "Rate", value: "₦1,669/USDT" }],
-        ref: "HS-20250101-ABCD",
+        txRef: "HS-20250101-ABCD",
       }).success
     ).toBe(true)
   })
 
-  it("rejects a receipt message missing ref", () => {
+  it("rejects a receipt message missing txRef", () => {
     expect(
       ChatMessageSchema.safeParse({
         id: "m11",
@@ -191,7 +191,7 @@ describe("ChatMessageSchema", () => {
         subtitle: "USDT bought",
         amount: "+ 29.97 USDT",
         rows: [],
-        // ref omitted
+        // txRef omitted
       }).success
     ).toBe(false)
   })

@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils"
 import { Money } from "@/components/shared/money"
 import { DetailRows } from "@/components/shared/detail-rows"
+import { StatusPill } from "@/components/shared/status-pill"
 import type { QuoteCardProps } from "@/types/components"
 
 /**
@@ -9,12 +10,21 @@ import type { QuoteCardProps } from "@/types/components"
  * density prop controls sizing/padding/radii only — both variants render the same data.
  * No hex literals. No data fetching. Pure presentational.
  */
+
+/** Format lockSeconds as m:ss (e.g. 60 → "1:00", 58 → "0:58"). */
+function formatLock(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${m}:${s.toString().padStart(2, "0")}`
+}
+
 export function QuoteCard({
   receiveAmt,
   receiveSub,
   rows,
   totalLabel,
   totalValue,
+  lockSeconds,
   density,
   onConfirm,
   className,
@@ -26,8 +36,8 @@ export function QuoteCard({
       className={cn(
         "overflow-hidden border border-border bg-card",
         isMobile
-          ? "w-[88%] rounded-[20px] shadow-[0_6px_18px_rgba(20,40,32,0.07)]"
-          : "w-[92%] rounded-[16px] shadow-[0_4px_14px_rgba(20,40,32,0.06)]",
+          ? "w-[88%] rounded-[20px] shadow-card"
+          : "w-[92%] rounded-[16px] shadow-[0_4px_14px_oklch(0.244_0.024_162_/_0.06)]",
         className
       )}
     >
@@ -46,16 +56,17 @@ export function QuoteCard({
         >
           Quote
         </span>
-        <span
+        <StatusPill
+          tone="warn"
           className={cn(
-            "rounded-full bg-warn-muted font-semibold text-warn",
+            "font-semibold",
             isMobile
               ? "px-[9px] py-[3px] text-[11.5px]"
               : "px-2 py-[2px] text-[11px]"
           )}
         >
-          Locked 0:58
-        </span>
+          Locked {formatLock(lockSeconds)}
+        </StatusPill>
       </div>
 
       {/* Receive amount */}
@@ -133,7 +144,7 @@ export function QuoteCard({
           onClick={onConfirm}
           className={cn(
             "w-full cursor-pointer border-none bg-accent font-bold text-accent-foreground",
-            "shadow-[0_3px_10px_rgba(232,150,26,0.32)]",
+            "shadow-cta",
             isMobile
               ? "rounded-[14px] py-3.5 text-[15px]"
               : "rounded-[12px] py-3 text-[14px]"
@@ -143,7 +154,7 @@ export function QuoteCard({
         </button>
         {isMobile && (
           <p className="mt-[9px] text-center text-[11.5px] text-muted-foreground-subtle">
-            Rate locked 60s · No hidden fees
+            Rate locked {lockSeconds}s · No hidden fees
           </p>
         )}
       </div>

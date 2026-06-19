@@ -22,6 +22,16 @@ const baseProps: QuoteCardProps = {
 }
 
 describe("QuoteCard", () => {
+  it("renders lock badge with lockSeconds=58 formatted as '0:58'", () => {
+    render(<QuoteCard {...baseProps} lockSeconds={58} />)
+    expect(screen.getByText("Locked 0:58")).toBeInTheDocument()
+  })
+
+  it("renders lock badge with lockSeconds=60 formatted as '1:00'", () => {
+    render(<QuoteCard {...baseProps} lockSeconds={60} />)
+    expect(screen.getByText("Locked 1:00")).toBeInTheDocument()
+  })
+
   it("renders receiveAmt and receiveSub for mobile density", () => {
     render(<QuoteCard {...baseProps} density="mobile" />)
     // getAllByText because ₦50,000 also appears in the detail rows

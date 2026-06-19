@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react"
-import { describe, it, expect } from "vitest"
+import userEvent from "@testing-library/user-event"
+import { describe, it, expect, vi } from "vitest"
 import { ReceiptCard } from "./receipt-card"
 import type { ReceiptCardProps } from "@/types/components"
 
@@ -13,7 +14,7 @@ const baseProps: ReceiptCardProps = {
     { label: "Network fee", value: "₦120" },
     { label: "Rate", value: "₦1,538/USDT" },
   ],
-  ref: "TXN-20240614-8821",
+  txRef: "TXN-20240614-8821",
   density: "mobile",
 }
 
@@ -59,5 +60,14 @@ describe("ReceiptCard", () => {
   it("renders the transaction ref for desktop density", () => {
     render(<ReceiptCard {...baseProps} density="desktop" />)
     expect(screen.getByText("TXN-20240614-8821")).toBeInTheDocument()
+  })
+
+  it("calls onShare when the Share receipt button is clicked (mobile)", async () => {
+    const onShare = vi.fn()
+    render(<ReceiptCard {...baseProps} density="mobile" onShare={onShare} />)
+    await userEvent.click(
+      screen.getByRole("button", { name: /share receipt/i })
+    )
+    expect(onShare).toHaveBeenCalledOnce()
   })
 })

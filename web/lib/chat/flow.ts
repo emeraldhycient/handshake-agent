@@ -282,7 +282,7 @@ export function buildReceipt(
           { label: "Rate", value: RATE },
           { label: "Date", value: "18 Jun, 2:14pm" },
         ],
-        ref: "REF · HS-9F4C-22A1",
+        txRef: "REF · HS-9F4C-22A1",
       }
 
     case "send":
@@ -296,7 +296,7 @@ export function buildReceipt(
           { label: "Network fee", value: SEND_NETWORK_FEE },
           { label: "Date", value: "18 Jun, 2:16pm" },
         ],
-        ref: "TX · a91f…7c0e",
+        txRef: "TX · a91f…7c0e",
       }
 
     case "swap":
@@ -310,7 +310,7 @@ export function buildReceipt(
           { label: "Rate", value: RATE },
           { label: "Date", value: "18 Jun, 2:18pm" },
         ],
-        ref: "REF · HS-7B22-90C4",
+        txRef: "REF · HS-7B22-90C4",
       }
 
     case "ticket": {
@@ -327,7 +327,7 @@ export function buildReceipt(
           { label: "Gate", value: "Eko Hotel · Gate B" },
           { label: "Date", value: "Sat 12 Jul, 8:00pm" },
         ],
-        ref: "Saved to Wallet · tap to view QR",
+        txRef: "Saved to Wallet · tap to view QR",
       }
     }
 

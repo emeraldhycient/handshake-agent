@@ -252,7 +252,7 @@ describe("flow", () => {
     expect(buildReceipt("buy")).toMatchObject({
       kind: "receipt",
       amount: "+ 29.97 USDT",
-      ref: expect.stringContaining("HS-"),
+      txRef: expect.stringContaining("HS-"),
     }))
 
   it("buy receipt has all fields", () => {
@@ -264,7 +264,7 @@ describe("flow", () => {
     expect(r.rows[0]).toEqual({ label: "Paid", value: "₦50,000.00" })
     expect(r.rows[1]).toEqual({ label: "Rate", value: "₦1,640.00 / USDT" })
     expect(r.rows[2]).toEqual({ label: "Date", value: "18 Jun, 2:14pm" })
-    expect(r.ref).toBe("REF · HS-9F4C-22A1")
+    expect(r.txRef).toBe("REF · HS-9F4C-22A1")
   })
 
   // ─── buildReceipt — send ────────────────────────────────────────────────────
@@ -279,7 +279,7 @@ describe("flow", () => {
     expect(r.rows[0]).toEqual({ label: "To", value: "TQn9Y2…d3pVgk7r" })
     expect(r.rows[1]).toEqual({ label: "Network fee", value: "1.00 USDT" })
     expect(r.rows[2]).toEqual({ label: "Date", value: "18 Jun, 2:16pm" })
-    expect(r.ref).toBe("TX · a91f…7c0e")
+    expect(r.txRef).toBe("TX · a91f…7c0e")
   })
 
   // ─── buildReceipt — swap ────────────────────────────────────────────────────
@@ -294,7 +294,7 @@ describe("flow", () => {
     expect(r.rows[0]).toEqual({ label: "Swapped", value: "10.00 USDT" })
     expect(r.rows[1]).toEqual({ label: "Rate", value: "₦1,640.00 / USDT" })
     expect(r.rows[2]).toEqual({ label: "Date", value: "18 Jun, 2:18pm" })
-    expect(r.ref).toBe("REF · HS-7B22-90C4")
+    expect(r.txRef).toBe("REF · HS-7B22-90C4")
   })
 
   // ─── buildReceipt — ticket ──────────────────────────────────────────────────
@@ -309,7 +309,7 @@ describe("flow", () => {
     expect(r.rows[0]).toEqual({ label: "Entry code", value: "AFL-26-7741" })
     expect(r.rows[1]).toEqual({ label: "Gate", value: "Eko Hotel · Gate B" })
     expect(r.rows[2]).toEqual({ label: "Date", value: "Sat 12 Jul, 8:00pm" })
-    expect(r.ref).toBe("Saved to Wallet · tap to view QR")
+    expect(r.txRef).toBe("Saved to Wallet · tap to view QR")
   })
 
   // ─── buildReceipt — throws on non-receipt actions ──────────────────────────

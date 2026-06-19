@@ -6,8 +6,8 @@ import type { ReceiptCardProps } from "@/types/components"
 /**
  * ReceiptCard — chat message card confirming a completed transaction.
  * Mobile prototype: lines 283–308. Desktop prototype: lines 877–888.
- * Green success header on bg-success-muted; dashed divider above ref row.
- * Mobile shows a "Share receipt" affordance (desktop omits it — line 886 has
+ * Green success header on bg-success-muted; dashed divider above txRef row.
+ * Mobile shows a "Share receipt" button (desktop omits it — line 886 has
  * none). No hex literals. DetailRows and Money atoms reused.
  */
 export function ReceiptCard({
@@ -15,8 +15,9 @@ export function ReceiptCard({
   subtitle,
   amount,
   rows,
-  ref: txRef,
+  txRef,
   density,
+  onShare,
   className,
 }: ReceiptCardProps) {
   const isMobile = density === "mobile"
@@ -26,7 +27,7 @@ export function ReceiptCard({
       className={cn(
         "overflow-hidden border border-border bg-card",
         isMobile
-          ? "w-[88%] rounded-[20px] shadow-[0_6px_18px_rgba(20,40,32,0.07)]"
+          ? "w-[88%] rounded-[20px] shadow-card"
           : "w-[92%] rounded-[16px]",
         className
       )}
@@ -103,7 +104,7 @@ export function ReceiptCard({
         <DetailRows rows={rows} className={isMobile ? "gap-2" : "gap-[7px]"} />
       </div>
 
-      {/* Dashed divider + ref row */}
+      {/* Dashed divider + txRef row */}
       <div
         className={cn(
           "mt-2 border-t border-dashed border-border",
@@ -119,9 +120,14 @@ export function ReceiptCard({
           {txRef}
         </span>
         {isMobile && (
-          <span className="cursor-pointer text-[13px] font-bold text-primary">
+          <button
+            type="button"
+            aria-label="Share receipt"
+            onClick={onShare}
+            className="cursor-pointer border-none bg-transparent p-0 text-[13px] font-bold text-primary"
+          >
             Share receipt
-          </span>
+          </button>
         )}
       </div>
     </div>

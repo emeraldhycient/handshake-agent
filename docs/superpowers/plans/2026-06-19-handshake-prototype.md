@@ -101,7 +101,7 @@ export type ReceiptView = {
   subtitle: string;
   amount: string;
   rows: QuoteRow[];
-  ref: string;
+  txRef: string;
 };
 export type AssetView = {
   sym: string;
@@ -1084,7 +1084,7 @@ describe("flow", () => {
     expect(buildReceipt("buy")).toMatchObject({
       kind: "receipt",
       amount: "+ 29.97 USDT",
-      ref: expect.stringContaining("HS-"),
+      txRef: expect.stringContaining("HS-"),
     }));
   it("startChips + labels", () => {
     expect(startChips()).toEqual(["buy", "balance", "send", "ticket"]);
@@ -1386,7 +1386,7 @@ describe("QuoteCard", () => {
 
 ### Task 11.5: `ReceiptCard`
 
-**Files:** `.../receipt-card.tsx`; test. Port 283–308 (m) / 877–888 (d). Test: renders title, amount, each row, and the `ref`. Uses `DetailRows`. Commit `feat(web): ReceiptCard`.
+**Files:** `.../receipt-card.tsx`; test. Port 283–308 (m) / 877–888 (d). Test: renders title, amount, each row, and the `txRef`. Uses `DetailRows`. Commit `feat(web): ReceiptCard`.
 
 ---
 

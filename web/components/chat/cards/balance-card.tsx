@@ -22,7 +22,7 @@ export function BalanceCard({
       className={cn(
         "overflow-hidden bg-gradient-to-b from-primary to-primary-deep text-primary-foreground",
         isMobile
-          ? "w-[88%] rounded-[20px] shadow-[0_8px_22px_rgba(14,36,28,0.22)]"
+          ? "w-[88%] rounded-[20px] shadow-card-lg"
           : "w-[92%] rounded-[16px]",
         className
       )}

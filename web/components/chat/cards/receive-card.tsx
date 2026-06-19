@@ -15,6 +15,7 @@ export function ReceiveCard({
   minDeposit,
   creditedEta,
   density,
+  onCopy,
   className,
 }: ReceiveCardProps) {
   const isMobile = density === "mobile"
@@ -24,7 +25,7 @@ export function ReceiveCard({
       className={cn(
         "overflow-hidden border border-border bg-card",
         isMobile
-          ? "w-[88%] rounded-[20px] shadow-[0_6px_18px_rgba(20,40,32,0.07)]"
+          ? "w-[88%] rounded-[20px] shadow-card"
           : "w-[92%] rounded-[16px]",
         className
       )}
@@ -86,10 +87,8 @@ export function ReceiveCard({
         <button
           type="button"
           aria-label="Copy address"
-          className={cn(
-            "flex-none cursor-pointer rounded-[9px] border-none bg-foreground font-semibold text-card",
-            isMobile ? "px-3 py-2 text-[12px]" : "px-3 py-2 text-[12px]"
-          )}
+          onClick={onCopy}
+          className="flex-none cursor-pointer rounded-[9px] border-none bg-foreground px-3 py-2 text-[12px] font-semibold text-card"
         >
           Copy
         </button>

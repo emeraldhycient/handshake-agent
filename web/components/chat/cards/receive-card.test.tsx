@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react"
-import { describe, it, expect } from "vitest"
+import userEvent from "@testing-library/user-event"
+import { describe, it, expect, vi } from "vitest"
 import { ReceiveCard } from "./receive-card"
 import type { ReceiveCardProps } from "@/types/components"
 
@@ -57,5 +58,12 @@ describe("ReceiveCard", () => {
   it("renders the QR placeholder for desktop density", () => {
     render(<ReceiveCard {...baseProps} density="desktop" />)
     expect(screen.getByTestId("qr")).toBeInTheDocument()
+  })
+
+  it("calls onCopy when the Copy button is clicked", async () => {
+    const onCopy = vi.fn()
+    render(<ReceiveCard {...baseProps} onCopy={onCopy} />)
+    await userEvent.click(screen.getByRole("button", { name: /copy/i }))
+    expect(onCopy).toHaveBeenCalledOnce()
   })
 })

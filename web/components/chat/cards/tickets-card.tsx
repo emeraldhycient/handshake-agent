@@ -7,8 +7,8 @@ import type { TicketOption } from "@/lib/schemas"
  * TicketsCard — chat message card for event ticket selection.
  * Mobile prototype: lines 256–280. Desktop prototype: lines 866–875.
  * Each option is a button; clicking calls onSelect(opt).
- * No hex literals. Banner uses from-primary gradient; accent stripe is a
- * repeating-linear-gradient defined inline (structural, not a theme colour).
+ * No hex literals. Banner uses from-primary / to-primary-mid gradient.
+ * Accent stripe color uses color-mix to derive from --color-accent token.
  */
 export function TicketsCard({
   eventMeta,
@@ -25,7 +25,7 @@ export function TicketsCard({
       className={cn(
         "overflow-hidden border border-border bg-card",
         isMobile
-          ? "w-[88%] rounded-[20px] shadow-[0_6px_18px_rgba(20,40,32,0.07)]"
+          ? "w-[88%] rounded-[20px] shadow-card"
           : "w-[92%] rounded-[16px]",
         className
       )}
@@ -33,17 +33,17 @@ export function TicketsCard({
       {/* Event banner */}
       <div
         className={cn(
-          "relative flex items-end bg-gradient-to-br from-primary to-[#2a6f55]",
+          "relative flex items-end bg-gradient-to-br from-primary to-primary-mid",
           isMobile ? "h-24 px-4 pb-[13px]" : "h-[84px] px-[15px] pb-3"
         )}
       >
-        {/* Diagonal accent stripe — structural graphic, not a theme colour */}
+        {/* Diagonal accent stripe — structural graphic, derived from --color-accent token */}
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0"
           style={{
             background:
-              "repeating-linear-gradient(115deg, rgba(245,166,35,0.16) 0 12px, transparent 12px 26px)",
+              "repeating-linear-gradient(115deg, color-mix(in oklch, var(--color-accent) 16%, transparent) 0 12px, transparent 12px 26px)",
           }}
         />
         <div className="relative">
