@@ -13,8 +13,9 @@ export default function OnboardingPage() {
   const router = useRouter()
 
   return (
-    <main className="flex min-h-svh items-center justify-center bg-background">
-      <div className="flex h-svh max-h-[844px] w-full max-w-[402px] flex-col overflow-hidden shadow-xl">
+    <main className="min-h-svh bg-background sm:flex sm:items-center sm:justify-center sm:p-6">
+      {/* Full-bleed on mobile; framed phone-width preview only at sm+ (desktop). */}
+      <div className="flex h-svh w-full flex-col overflow-hidden bg-background sm:h-[min(100svh,844px)] sm:max-w-[402px] sm:rounded-[40px] sm:shadow-xl">
         <KycSummary onFinish={() => router.push("/app")} />
       </div>
     </main>
