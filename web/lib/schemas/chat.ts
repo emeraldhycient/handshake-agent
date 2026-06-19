@@ -12,6 +12,7 @@ export const ChatActionSchema = z.enum([
 ])
 export type ChatAction = z.infer<typeof ChatActionSchema>
 
+/** "m" = mobile chat thread, "d" = desktop chat rail */
 export const ChatSurfaceSchema = z.enum(["m", "d"])
 export type ChatSurface = z.infer<typeof ChatSurfaceSchema>
 
@@ -57,11 +58,14 @@ const MessageBaseSchema = z.object({
 })
 
 // text
-const TextKindSchema = z.object({ kind: z.literal("text"), text: z.string() })
+export const TextViewSchema = z.object({
+  kind: z.literal("text"),
+  text: z.string(),
+})
 export type TextView = { kind: "text"; text: string }
 
 // quote  — includes `action` so shells know which confirm builder to invoke.
-const QuoteKindSchema = z.object({
+export const QuoteViewSchema = z.object({
   kind: z.literal("quote"),
   action: ChatActionSchema,
   receiveAmt: z.string(),
@@ -71,10 +75,10 @@ const QuoteKindSchema = z.object({
   totalValue: z.string(),
   lockSeconds: z.number(),
 })
-export type QuoteView = z.infer<typeof QuoteKindSchema>
+export type QuoteView = z.infer<typeof QuoteViewSchema>
 
 // receipt
-const ReceiptKindSchema = z.object({
+export const ReceiptViewSchema = z.object({
   kind: z.literal("receipt"),
   title: z.string(),
   subtitle: z.string(),
@@ -82,27 +86,27 @@ const ReceiptKindSchema = z.object({
   rows: z.array(QuoteRowSchema),
   ref: z.string(),
 })
-export type ReceiptView = z.infer<typeof ReceiptKindSchema>
+export type ReceiptView = z.infer<typeof ReceiptViewSchema>
 
-// balance
-const AssetViewKindSchema = z.object({
+// balance — AssetView is also a named export for wallet.ts to extend
+export const AssetViewSchema = z.object({
   sym: z.string(),
   name: z.string(),
   amount: z.string(),
   value: z.string(),
   tint: z.string(),
 })
-export type AssetView = z.infer<typeof AssetViewKindSchema>
+export type AssetView = z.infer<typeof AssetViewSchema>
 
-const BalanceKindSchema = z.object({
+export const BalanceViewSchema = z.object({
   kind: z.literal("balance"),
   total: z.string(),
-  assets: z.array(AssetViewKindSchema),
+  assets: z.array(AssetViewSchema),
 })
-export type BalanceView = z.infer<typeof BalanceKindSchema>
+export type BalanceView = z.infer<typeof BalanceViewSchema>
 
 // receive (deposit address)
-const DepositKindSchema = z.object({
+export const DepositViewSchema = z.object({
   kind: z.literal("receive"),
   asset: z.string(),
   network: z.string(),
@@ -110,25 +114,25 @@ const DepositKindSchema = z.object({
   minDeposit: z.string(),
   creditedEta: z.string(),
 })
-export type DepositView = z.infer<typeof DepositKindSchema>
+export type DepositView = z.infer<typeof DepositViewSchema>
 
 // tickets
-const TicketOptionKindSchema = z.object({
+export const TicketOptionSchema = z.object({
   tier: z.string(),
   perk: z.string(),
   price: z.string(),
   left: z.string(),
   total: z.string(),
 })
-export type TicketOption = z.infer<typeof TicketOptionKindSchema>
+export type TicketOption = z.infer<typeof TicketOptionSchema>
 
-const TicketsKindSchema = z.object({
+export const TicketsViewSchema = z.object({
   kind: z.literal("tickets"),
   eventMeta: z.string(),
   eventName: z.string(),
-  options: z.array(TicketOptionKindSchema),
+  options: z.array(TicketOptionSchema),
 })
-export type TicketsView = z.infer<typeof TicketsKindSchema>
+export type TicketsView = z.infer<typeof TicketsViewSchema>
 
 // ─── ChatMessage discriminated union ──────────────────────────────────────────
 
@@ -137,12 +141,12 @@ export type TicketsView = z.infer<typeof TicketsKindSchema>
 // directly — so we merge base into each variant rather than wrapping a union.
 
 export const ChatMessageSchema = z.discriminatedUnion("kind", [
-  MessageBaseSchema.merge(TextKindSchema),
-  MessageBaseSchema.merge(QuoteKindSchema),
-  MessageBaseSchema.merge(ReceiptKindSchema),
-  MessageBaseSchema.merge(BalanceKindSchema),
-  MessageBaseSchema.merge(DepositKindSchema),
-  MessageBaseSchema.merge(TicketsKindSchema),
+  MessageBaseSchema.merge(TextViewSchema),
+  MessageBaseSchema.merge(QuoteViewSchema),
+  MessageBaseSchema.merge(ReceiptViewSchema),
+  MessageBaseSchema.merge(BalanceViewSchema),
+  MessageBaseSchema.merge(DepositViewSchema),
+  MessageBaseSchema.merge(TicketsViewSchema),
 ])
 
 export type ChatMessage = z.infer<typeof ChatMessageSchema>

@@ -158,17 +158,17 @@ export type WalletAsset = {
   change: string;
   tint: string;
 };
+export type StatusTone = "success" | "warn" | "info" | "neutral";
 export type ActivityItem = {
   dir: "in" | "out" | "ticket";
   icon: string;
-  tint: string;
-  col: string;
+  tint: string; // data tint — applied via inline style
+  col: string; // data tint — applied via inline style
   title: string;
   sub: string;
   amount: string;
   status: string;
-  sCol: string;
-  sBg: string;
+  statusTone: StatusTone;
 };
 export type ActivityGroup = { group: string; items: ActivityItem[] };
 export type EventListItem = { name: string; meta: string; price: string };
@@ -952,7 +952,7 @@ git commit -m "feat(web): chat view-model schemas"
 - [ ] **Step 3: Implement `fixtures.ts`** with the exact data from the prototype:
   - `balanceFixture` (lines 1159–1164): total `≈ ₦72,340`, assets USDT/BTC/NGN with tints.
   - `walletAssetsFixture` (lines 1409–1413).
-  - `activityFixture` (lines 1414–1423).
+  - `activityFixture` (lines 1414–1423). Map each prototype activity item's status pill color to a `statusTone`: Completed→success, Confirming→warn (the ticket row's icon stays info via `tint`/`col`, but its `statusTone` is success).
   - `depositFixture` — `{ kind:"receive", asset:"USDT", network:"TRON · TRC-20", address: DEPOSIT_ADDRESS, minDeposit:"1 USDT", creditedEta:"~1 min" }`.
   - `eventsFixture` (lines 1474–1477).
   - `notificationsFixture` (lines 1467–1472).
@@ -1302,7 +1302,7 @@ describe("chat store", () => {
 **Files:** `web/components/shared/status-pill.tsx`; `StatusPillProps`; test.
 
 - [ ] **Step 1: Failing test** — `<StatusPill tone="success">Completed</StatusPill>` shows text "Completed" and has token classes for success (`bg-success-muted text-success`); tones `success|warn|info|neutral` map to the right token classes; **text label always present (color never sole signal, §13.8).**
-- [ ] **Step 2–4:** implement a `cva` variant map over the four tones. Pass.
+- [ ] **Step 2–4:** implement a `cva` variant map over the four tones. `StatusPill`'s `tone` prop type is `StatusTone` imported from `@/lib/schemas` (the `common.ts` schema), not a locally-redeclared union. Pass.
 - [ ] **Step 5: Commit** `git commit -m "feat(web): StatusPill atom"`.
 
 ### Task 10.4: `AssetIcon`

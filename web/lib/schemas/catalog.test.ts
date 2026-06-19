@@ -1,89 +1,9 @@
 import { describe, expect, it } from "vitest"
 import {
-  WalletAssetSchema,
-  ActivityGroupSchema,
   AppNotificationSchema,
   SearchResultSchema,
   EventListItemSchema,
-} from "./index"
-
-// ─── WalletAssetSchema ────────────────────────────────────────────────────────
-
-describe("WalletAssetSchema", () => {
-  it("parses a valid wallet asset", () => {
-    expect(
-      WalletAssetSchema.safeParse({
-        sym: "USDT",
-        name: "Tether",
-        sub: "TRC-20",
-        amount: "120.50 USDT",
-        value: "₦72,300",
-        change: "+0.01%",
-        tint: "#7fd1a8",
-      }).success
-    ).toBe(true)
-  })
-  it("rejects a wallet asset missing tint", () => {
-    expect(
-      WalletAssetSchema.safeParse({
-        sym: "USDT",
-        name: "Tether",
-        sub: "TRC-20",
-        amount: "120.50 USDT",
-        value: "₦72,300",
-        change: "+0.01%",
-        // tint omitted
-      }).success
-    ).toBe(false)
-  })
-})
-
-// ─── ActivityGroupSchema ──────────────────────────────────────────────────────
-
-describe("ActivityGroupSchema", () => {
-  it("parses a valid activity group", () => {
-    expect(
-      ActivityGroupSchema.safeParse({
-        group: "Today",
-        items: [
-          {
-            dir: "in",
-            icon: "↓",
-            tint: "#7fd1a8",
-            col: "#1f8a5b",
-            title: "Received USDT",
-            sub: "From Emeka",
-            amount: "+ 50 USDT",
-            status: "Completed",
-            sCol: "#1f8a5b",
-            sBg: "#e6f3ec",
-          },
-        ],
-      }).success
-    ).toBe(true)
-  })
-  it("rejects an item with an invalid dir", () => {
-    expect(
-      ActivityGroupSchema.safeParse({
-        group: "Today",
-        items: [
-          {
-            dir: "unknown",
-            icon: "↓",
-            tint: "#7fd1a8",
-            col: "#1f8a5b",
-            title: "Received USDT",
-            sub: "From Emeka",
-            amount: "+ 50 USDT",
-            status: "Completed",
-            sCol: "#1f8a5b",
-            sBg: "#e6f3ec",
-          },
-        ],
-      }).success
-    ).toBe(false)
-  })
-})
+} from "./catalog"
 
 // ─── AppNotificationSchema ────────────────────────────────────────────────────
 

@@ -1,13 +1,14 @@
 import { z } from "zod"
+import { StatusToneSchema } from "./common"
 
 export const ActivityItemSchema = z.object({
   /** Transaction direction / category */
   dir: z.enum(["in", "out", "ticket"]),
   /** Emoji or icon string for the row */
   icon: z.string(),
-  /** Hex colour for the icon background tint */
+  /** Hex colour for the icon background tint (data — applied via inline style) */
   tint: z.string(),
-  /** Hex colour for the icon foreground / stroke */
+  /** Hex colour for the icon foreground / stroke (data — applied via inline style) */
   col: z.string(),
   title: z.string(),
   /** Secondary descriptor e.g. counterparty or network */
@@ -16,10 +17,8 @@ export const ActivityItemSchema = z.object({
   amount: z.string(),
   /** Status label e.g. "Completed", "Pending" */
   status: z.string(),
-  /** Hex colour for the status text */
-  sCol: z.string(),
-  /** Hex colour for the status pill background */
-  sBg: z.string(),
+  /** Semantic tone for the status pill — drives StatusPill's token classes */
+  statusTone: StatusToneSchema,
 })
 
 export type ActivityItem = z.infer<typeof ActivityItemSchema>
