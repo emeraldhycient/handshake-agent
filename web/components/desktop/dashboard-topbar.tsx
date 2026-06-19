@@ -2,9 +2,15 @@
 
 import { useState, useMemo } from "react"
 import { cn } from "@/lib/utils"
+import { Skeleton } from "@/components/ui/skeleton"
 import { useNotifications, useSearchCatalog } from "@/lib/query/hooks"
 import type { DashboardTopbarProps } from "@/types/components"
 import type { SearchResult } from "@/lib/schemas"
+
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+/** Stable keys for the notifications loading skeleton (fixed placeholder rows). */
+const NOTIF_SKELETON_ROWS = ["a", "b", "c"] as const
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -251,11 +257,29 @@ export function DashboardTopbar({
               Notifications
             </div>
 
-            {/* Loading branch */}
+            {/* Loading branch — pulsing skeleton rows */}
             {notifLoading && (
-              <p className="px-4 py-6 text-sm text-muted-foreground">
-                Loading…
-              </p>
+              <div
+                data-testid="notif-loading"
+                role="status"
+                aria-busy="true"
+                aria-label="Loading notifications"
+                className="px-4 py-2"
+              >
+                {NOTIF_SKELETON_ROWS.map((row) => (
+                  <div
+                    key={row}
+                    aria-hidden="true"
+                    className="flex items-start gap-[11px] py-3"
+                  >
+                    <Skeleton className="h-8 w-8 flex-none rounded-[9px]" />
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <Skeleton className="h-3 w-2/3" />
+                      <Skeleton className="h-3 w-full" />
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
 
             {/* Error branch */}

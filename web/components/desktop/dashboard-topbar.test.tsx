@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { DashboardTopbar } from "./dashboard-topbar"
 import { gateway } from "@/lib/api/gateway"
+import type { AppNotification, SearchResult } from "@/lib/schemas"
 
 function makeWrapper() {
   const client = new QueryClient({
@@ -140,6 +141,41 @@ describe("DashboardTopbar", () => {
         screen.getByText(/couldn't load notifications/i)
       ).toBeInTheDocument()
     })
+  })
+
+  it("search dropdown shows a loading state while getSearchCatalog is pending", async () => {
+    // A never-resolving promise keeps the query in its loading state.
+    vi.spyOn(gateway, "getSearchCatalog").mockReturnValue(
+      new Promise<SearchResult[]>(() => {})
+    )
+    const user = userEvent.setup()
+    render(
+      <DashboardTopbar onSearchSelect={() => {}} onQuickAction={() => {}} />,
+      { wrapper: makeWrapper() }
+    )
+    const input = screen.getByPlaceholderText(/search or ask handshake/i)
+    await user.click(input)
+    expect(await screen.findByText(/searching/i)).toBeInTheDocument()
+  })
+
+  it("notifications dropdown shows a loading skeleton while getNotifications is pending", async () => {
+    // A never-resolving promise keeps the query in its loading state.
+    vi.spyOn(gateway, "getNotifications").mockReturnValue(
+      new Promise<AppNotification[]>(() => {})
+    )
+    const user = userEvent.setup()
+    render(
+      <DashboardTopbar onSearchSelect={() => {}} onQuickAction={() => {}} />,
+      { wrapper: makeWrapper() }
+    )
+    const bell = screen.getByRole("button", { name: /notifications/i })
+    await user.click(bell)
+    const loading = await screen.findByTestId("notif-loading")
+    // Skeleton placeholders render — not the loaded rows or the empty/error copy.
+    expect(
+      loading.querySelectorAll('[data-slot="skeleton"]').length
+    ).toBeGreaterThan(0)
+    expect(screen.queryByText(/no notifications/i)).not.toBeInTheDocument()
   })
 
   it("search input has combobox role and aria attributes", () => {
