@@ -10,6 +10,19 @@
 
 import axios, { type AxiosError } from "axios"
 
+// ─── ApiError ─────────────────────────────────────────────────────────────────
+// Extends Error with an optional HTTP status so error-handling UI can branch on
+// e.g. 401 (unauthenticated), 402 (payment required), 422 (validation), etc.
+
+export class ApiError extends Error {
+  status?: number
+  constructor(message: string, status?: number) {
+    super(message)
+    this.name = "ApiError"
+    this.status = status
+  }
+}
+
 export const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api",
 })
@@ -32,6 +45,6 @@ api.interceptors.response.use(
   (error: AxiosError<{ message?: string }>) => {
     const message =
       error.response?.data?.message ?? error.message ?? "Unknown error"
-    return Promise.reject(new Error(message))
+    return Promise.reject(new ApiError(message, error.response?.status))
   }
 )

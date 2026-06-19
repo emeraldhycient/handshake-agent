@@ -113,17 +113,23 @@ const realGateway: Gateway = {
     idempotencyKey: string,
     meta?: Record<string, string>
   ) {
-    const { data } = await api.post("/transactions", {
-      action,
-      idempotencyKey,
-      meta,
-    })
+    const { data } = await api.post(
+      "/transactions",
+      { action, idempotencyKey, meta },
+      // Forward the caller's key so the interceptor's ??= preserves it instead
+      // of minting a new UUID — the backend uses this header for dedup.
+      { headers: { "Idempotency-Key": idempotencyKey } }
+    )
     return ReceiptViewSchema.parse(data)
   },
 }
 
 // ─── Gateway switch ───────────────────────────────────────────────────────────
 
+// Explicit typed assignment so TypeScript enforces that the mock module fully
+// satisfies the Gateway contract — any missing method is a compile-time error.
+const mockGateway: Gateway = mock
+
 const USE_MOCK = (process.env.NEXT_PUBLIC_USE_MOCK ?? "true") !== "false"
 
-export const gateway: Gateway = USE_MOCK ? mock : realGateway
+export const gateway: Gateway = USE_MOCK ? mockGateway : realGateway

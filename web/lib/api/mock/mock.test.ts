@@ -18,4 +18,16 @@ describe("mock api", () => {
     const b = await mock.executeTransaction("buy", "key-1")
     expect(a).toEqual(b)
   })
+
+  it("createQuote rejects for 'balance' action", async () => {
+    await expect(mock.createQuote("balance")).rejects.toThrow(/no quote/i)
+  })
+
+  it("createQuote rejects for 'receive' action", async () => {
+    await expect(mock.createQuote("receive")).rejects.toThrow(/no quote/i)
+  })
+
+  it("createQuote rejects for 'ticket' action", async () => {
+    await expect(mock.createQuote("ticket")).rejects.toThrow(/no quote/i)
+  })
 })
