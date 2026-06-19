@@ -192,6 +192,16 @@ export interface VerificationRowProps {
 
 // ─── Phase 16 desktop components ─────────────────────────────────────────────
 
+/**
+ * Shared prop shape for full-page desktop views that expose a quick-action
+ * entry-point into the chat rail. All three desktop pages
+ * (OverviewPage / WalletPage / TicketsPage) satisfy this interface exactly.
+ */
+export interface PageWithQuickActionProps {
+  onQuickAction: (action: ChatAction, label: string) => void
+  className?: string
+}
+
 /** 16.1 */
 export interface DashboardSidebarProps {
   active: DashboardPage

@@ -7,13 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useBalances, useWalletAssets, useActivity } from "@/lib/query/hooks"
 import { cn } from "@/lib/utils"
 import type { ChatAction } from "@/lib/schemas"
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface OverviewPageProps {
-  onQuickAction: (action: ChatAction, label: string) => void
-  className?: string
-}
+import type { PageWithQuickActionProps } from "@/types/components"
 
 // ─── Hero action definitions ──────────────────────────────────────────────────
 
@@ -33,7 +27,10 @@ const HERO_ACTIONS: { action: ChatAction; label: string; primary: boolean }[] =
  * Gradient: from-primary to-primary-deep (no hex).
  * Four async branches: loading / error / empty / data.
  */
-export function OverviewPage({ onQuickAction, className }: OverviewPageProps) {
+export function OverviewPage({
+  onQuickAction,
+  className,
+}: PageWithQuickActionProps) {
   const balances = useBalances()
   const assets = useWalletAssets()
   const activity = useActivity()

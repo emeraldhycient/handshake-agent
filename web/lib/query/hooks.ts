@@ -80,6 +80,13 @@ export function useSearchCatalog() {
 
 // ─── Mutation hooks ───────────────────────────────────────────────────────────
 
+/**
+ * Real-API scaffolding — intentionally retained.
+ * The prototype's chat flow currently drives quote/receipt state via `@/lib/chat/flow`
+ * builders and the Zustand store. These hooks wire the real gateway + idempotency-key
+ * + balances-invalidation and will replace that store flow once the backend is live.
+ */
+
 /** Fetch a quote for a given chat action (buy / send / swap). */
 export function useCreateQuote() {
   return useMutation({

@@ -7,15 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { DEPOSIT_ADDRESS } from "@/lib/constants"
 import { useWalletAssets } from "@/lib/query/hooks"
-import type { ChatAction } from "@/lib/schemas"
 import { cn } from "@/lib/utils"
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface WalletPageProps {
-  onQuickAction: (action: ChatAction, label: string) => void
-  className?: string
-}
+import type { PageWithQuickActionProps } from "@/types/components"
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -24,7 +17,10 @@ interface WalletPageProps {
  * Port of prototype lines 684–718.
  * Four async branches: loading / error / empty / data.
  */
-export function WalletPage({ onQuickAction, className }: WalletPageProps) {
+export function WalletPage({
+  onQuickAction,
+  className,
+}: PageWithQuickActionProps) {
   const assets = useWalletAssets()
 
   // ── Loading state ──────────────────────────────────────────────────────────

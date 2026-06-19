@@ -3,15 +3,8 @@
 import { QrPlaceholder } from "@/components/shared/qr-placeholder"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useEvents } from "@/lib/query/hooks"
-import type { ChatAction } from "@/lib/schemas"
 import { cn } from "@/lib/utils"
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface TicketsPageProps {
-  onQuickAction: (action: ChatAction, label: string) => void
-  className?: string
-}
+import type { PageWithQuickActionProps } from "@/types/components"
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -21,7 +14,10 @@ interface TicketsPageProps {
  * Static confirmed ticket card + useEvents browse list.
  * Four async branches on the events list (loading / error / empty / data).
  */
-export function TicketsPage({ onQuickAction, className }: TicketsPageProps) {
+export function TicketsPage({
+  onQuickAction,
+  className,
+}: PageWithQuickActionProps) {
   const events = useEvents()
 
   return (
