@@ -49,7 +49,8 @@ describe("ConfirmSheet — mobile density", () => {
         onCancel={() => {}}
       />
     )
-    expect(screen.getByText("Buy USDT")).toBeInTheDocument()
+    // Title appears twice: once in sr-only SheetTitle and once in the visible body span
+    expect(screen.getAllByText("Buy USDT").length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText("29.97 USDT")).toBeInTheDocument()
     expect(screen.getByText("You pay")).toBeInTheDocument()
     // ₦50,000.00 appears in both the row value and totalValue — getAllByText is correct
@@ -161,7 +162,8 @@ describe("ConfirmSheet — desktop density", () => {
         onCancel={() => {}}
       />
     )
-    expect(screen.getByText("Buy USDT")).toBeInTheDocument()
+    // Title appears twice: once in sr-only DialogTitle and once in the visible body span
+    expect(screen.getAllByText("Buy USDT").length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText("29.97 USDT")).toBeInTheDocument()
     expect(screen.getByText("Confirm with PIN")).toBeInTheDocument()
   })
@@ -195,6 +197,21 @@ describe("ConfirmSheet — desktop density", () => {
       />
     )
     await userEvent.click(screen.getByRole("button", { name: /cancel/i }))
+    expect(onCancel).toHaveBeenCalledOnce()
+  })
+
+  it("calls onCancel when Escape key is pressed", async () => {
+    const onCancel = vi.fn()
+    render(
+      <ConfirmSheet
+        open
+        payload={buyPayload}
+        density="desktop"
+        onConfirm={() => {}}
+        onCancel={onCancel}
+      />
+    )
+    await userEvent.keyboard("{Escape}")
     expect(onCancel).toHaveBeenCalledOnce()
   })
 })

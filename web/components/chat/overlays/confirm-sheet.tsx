@@ -24,28 +24,23 @@ import type { ConfirmSheetProps } from "@/types/components"
  * Rendered by both the Sheet (mobile) and Dialog (desktop) wrappers —
  * no duplication.
  *
- * The `titleId` prop lets Radix's Sheet/Dialog reference the visible heading
- * via `aria-labelledby` instead of using a separate (duplicate) SheetTitle.
+ * The visible title here is purely presentational — Radix reads the title
+ * from the sr-only SheetTitle/DialogTitle rendered in the shell above.
  */
 function ConfirmBody({
   payload,
   onConfirm,
   onCancel,
-  titleId,
 }: {
   payload: NonNullable<ConfirmSheetProps["payload"]>
   onConfirm: () => void
   onCancel: () => void
-  titleId: string
 }) {
   return (
     <div data-testid="confirm-body" className="flex flex-col">
-      {/* Title + subtitle — the id is referenced as the sheet/dialog label */}
+      {/* Title + subtitle — presentational only; AT reads the sr-only shell title */}
       <div className="flex flex-col gap-1">
-        <span
-          id={titleId}
-          className="text-xl font-extrabold tracking-tight text-foreground"
-        >
+        <span className="text-xl font-extrabold tracking-tight text-foreground">
           {payload.title}
         </span>
         <span className="text-sm text-muted-foreground">
@@ -148,10 +143,7 @@ export function ConfirmSheet({
   onCancel,
 }: ConfirmSheetProps) {
   // Guard: don't render the shell at all when there is nothing to show.
-  if (!payload) return null
-
-  // Stable id used to connect the visible title to the dialog's aria-labelledby.
-  const titleId = "confirm-overlay-title"
+  if (!open || !payload) return null
 
   if (density === "mobile") {
     return (
@@ -168,20 +160,17 @@ export function ConfirmSheet({
             "rounded-t-[28px] bg-card-muted px-0 pt-0 pb-8",
             "max-h-[92%] overflow-y-auto"
           )}
-          // Override Radix's aria-labelledby to point at the visible heading in the body
-          aria-labelledby={titleId}
         >
           {/* Drag handle */}
           <div className="flex justify-center pt-2.5 pb-1">
             <div className="h-[5px] w-10 rounded-full bg-border" />
           </div>
           {/*
-            SheetTitle is required by Radix for a11y, but we use
-            the visible title inside ConfirmBody via aria-labelledby.
-            Render a blank SheetTitle with an empty string so Radix is
-            satisfied without duplicating the text.
+            SheetTitle is required by Radix for a11y. Use the real title text
+            in an sr-only element so AT reads it, while the visible title in
+            ConfirmBody is purely presentational (no id/aria-labelledby plumbing).
           */}
-          <SheetTitle className="sr-only">{"​"}</SheetTitle>
+          <SheetTitle className="sr-only">{payload.title}</SheetTitle>
           <SheetDescription className="sr-only">
             {payload.subtitle}
           </SheetDescription>
@@ -190,7 +179,6 @@ export function ConfirmSheet({
               payload={payload}
               onConfirm={onConfirm}
               onCancel={onCancel}
-              titleId={titleId}
             />
           </div>
         </SheetContent>
@@ -211,13 +199,13 @@ export function ConfirmSheet({
           "w-[430px] max-w-[calc(100%-2rem)] rounded-[22px] bg-card-muted",
           "max-h-[90%] overflow-y-auto"
         )}
-        aria-labelledby={titleId}
       >
         {/*
-          DialogTitle required by Radix — hidden, zero-width space so it doesn't
-          duplicate the visible title text already rendered in ConfirmBody.
+          DialogTitle required by Radix. Use the real title text in an sr-only
+          element so AT announces the modal correctly; the visible title in
+          ConfirmBody is presentational (no id/aria-labelledby plumbing needed).
         */}
-        <DialogTitle className="sr-only">{"​"}</DialogTitle>
+        <DialogTitle className="sr-only">{payload.title}</DialogTitle>
         <DialogDescription className="sr-only">
           {payload.subtitle}
         </DialogDescription>
@@ -225,7 +213,6 @@ export function ConfirmSheet({
           payload={payload}
           onConfirm={onConfirm}
           onCancel={onCancel}
-          titleId={titleId}
         />
       </DialogContent>
     </Dialog>

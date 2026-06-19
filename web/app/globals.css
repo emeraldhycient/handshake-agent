@@ -61,6 +61,7 @@
   --shadow-card: var(--card-shadow);
   --shadow-card-lg: var(--card-shadow-lg);
   --shadow-cta: var(--cta-shadow);
+  --shadow-success: var(--success-shadow);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -76,6 +77,7 @@
   --card-shadow: 0 6px 18px oklch(0.244 0.024 162 / 0.07);
   --card-shadow-lg: 0 8px 22px oklch(0.244 0.024 162 / 0.22);
   --cta-shadow: 0 3px 10px oklch(0.72 0.155 65 / 0.32);
+  --success-shadow: 0 8px 26px oklch(0.575 0.115 162 / 0.5);
   --background: oklch(0.946 0.012 95.6); /* #f3efe7 */
   --foreground: oklch(0.244 0.024 162); /* #16261e */
   --card: oklch(1 0 0); /* #ffffff */

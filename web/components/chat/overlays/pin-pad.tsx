@@ -27,6 +27,8 @@ export function PinPad({
   onFaceId,
   onCancel,
 }: PinPadProps) {
+  // TODO(PHASE-15): the shell must wrap this in a focus trap with role="dialog" aria-modal="true" aria-labelledby.
+  // PinPad stays emit-only (no Esc-dismiss — a PIN gate must not be dismissable by Escape; use the Cancel button).
   if (!open) return null
 
   const isDesktop = density === "desktop"

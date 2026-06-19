@@ -30,7 +30,7 @@ export function SuccessOverlay({ open, text }: SuccessOverlayProps) {
         />
         {/* Circle */}
         <div
-          className="flex h-[84px] w-[84px] animate-hs-pop items-center justify-center rounded-full bg-success shadow-[0_8px_26px_oklch(0.575_0.115_162/0.5)]"
+          className="flex h-[84px] w-[84px] animate-hs-pop items-center justify-center rounded-full bg-success shadow-success"
           aria-hidden="true"
         >
           {/* Check mark SVG */}
