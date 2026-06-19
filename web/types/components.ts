@@ -181,6 +181,30 @@ export interface VerificationRowProps {
   pillLabel: string
 }
 
+// ─── Phase 16 desktop components ─────────────────────────────────────────────
+
+import type { DashboardPage, SearchResult, ChatAction } from "@/lib/schemas"
+
+/** 16.1 */
+export interface DashboardSidebarProps {
+  active: DashboardPage
+  onNavigate: (p: DashboardPage) => void
+  className?: string
+}
+
+/** 16.2 */
+export interface DashboardTopbarProps {
+  onSearchSelect: (r: SearchResult) => void
+  onQuickAction: (action: ChatAction, label: string) => void
+  className?: string
+}
+
+/** 16.4 */
+export interface ChatRailProps {
+  store?: import("@/lib/store/chat-store").ChatStore
+  className?: string
+}
+
 // ─── Shared FocusTrap (Step 0 extraction) ────────────────────────────────────
 
 export interface FocusTrapProps {
