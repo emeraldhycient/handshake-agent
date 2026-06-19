@@ -19,7 +19,7 @@ export function ChatHeader({ className }: ChatHeaderProps) {
             className={cn(
               "flex h-[42px] w-[42px] items-center justify-center rounded-[13px]",
               "[background:linear-gradient(150deg,var(--accent)_0%,var(--accent-deep)_100%)]",
-              "shadow-[0_3px_10px_rgba(0,0,0,0.25)]"
+              "shadow-lg"
             )}
             aria-hidden="true"
           >
@@ -31,7 +31,7 @@ export function ChatHeader({ className }: ChatHeaderProps) {
               "h-[13px] w-[13px] rounded-full bg-success-bright",
               "border-[2.5px] border-primary-deep"
             )}
-            aria-label="Online"
+            aria-hidden="true"
           />
         </div>
 

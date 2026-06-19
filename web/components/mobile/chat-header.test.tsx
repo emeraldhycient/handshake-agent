@@ -17,4 +17,9 @@ describe("ChatHeader", () => {
     render(<ChatHeader />)
     expect(screen.getByText("Secured")).toBeInTheDocument()
   })
+
+  it("passes className to the root element", () => {
+    const { container } = render(<ChatHeader className="test-class" />)
+    expect(container.firstChild).toHaveClass("test-class")
+  })
 })
