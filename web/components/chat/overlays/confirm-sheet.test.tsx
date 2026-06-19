@@ -137,7 +137,7 @@ describe("ConfirmSheet — mobile density", () => {
   })
 
   it("renders nothing when payload is null", () => {
-    const { container } = render(
+    render(
       <ConfirmSheet
         open
         payload={null}
