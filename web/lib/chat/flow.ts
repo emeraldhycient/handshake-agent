@@ -21,10 +21,19 @@ import type {
   TicketsView,
 } from "@/lib/schemas"
 
+// ─── Money-literal constants (DRY: each appears 3+ times) ────────────────────
+
+const RATE = "₦1,640.00 / USDT"
+const PAY_NGN_50K = "₦50,000.00"
+const SWAP_RECEIVE_NGN = "₦16,320"
+const SEND_AMOUNT_USDT = "25.00 USDT"
+const SWAP_AMOUNT_USDT = "10.00 USDT"
+const SEND_NETWORK_FEE = "1.00 USDT"
+
 // ─── Internal helper ──────────────────────────────────────────────────────────
 
-function text(t: string): TextView {
-  return { kind: "text", text: t }
+export function assistantText(text: string): TextView {
+  return { kind: "text", text }
 }
 
 // ─── buildResponse ────────────────────────────────────────────────────────────
@@ -43,7 +52,7 @@ export function buildResponse(action: ChatAction): {
     case "buy":
       return {
         messages: [
-          text(
+          assistantText(
             "Here's your quote for ₦50,000 of USDT. The rate is locked for 60 seconds — check the full breakdown, then confirm."
           ),
           {
@@ -52,14 +61,14 @@ export function buildResponse(action: ChatAction): {
             receiveAmt: "29.97 USDT",
             receiveSub: "≈ what lands in your wallet",
             rows: [
-              { label: "You pay", value: "₦50,000.00" },
-              { label: "Exchange rate", value: "₦1,640.00 / USDT" },
+              { label: "You pay", value: PAY_NGN_50K },
+              { label: "Exchange rate", value: RATE },
               { label: "FX spread (0.9%)", value: "₦450.00" },
               { label: "Processing fee", value: "₦250.00" },
               { label: "Network fee · USDT on TRON", value: "₦150.00" },
             ],
             totalLabel: "Total to pay",
-            totalValue: "₦50,000.00",
+            totalValue: PAY_NGN_50K,
             lockSeconds: 60,
           } satisfies QuoteView,
         ],
@@ -67,13 +76,16 @@ export function buildResponse(action: ChatAction): {
 
     case "balance":
       return {
-        messages: [text("Here's where you stand right now:"), balanceFixture],
+        messages: [
+          assistantText("Here's where you stand right now:"),
+          balanceFixture,
+        ],
       }
 
     case "receive":
       return {
         messages: [
-          text(
+          assistantText(
             "Here's your USDT deposit address on TRON. Only send USDT (TRC-20) here."
           ),
           depositFixture,
@@ -83,7 +95,7 @@ export function buildResponse(action: ChatAction): {
     case "ticket":
       return {
         messages: [
-          text(
+          assistantText(
             "Found a match near you. Pick a tier and I'll prepare the payment — you can pay from your naira or USDT balance."
           ),
           {
@@ -120,18 +132,18 @@ export function buildResponse(action: ChatAction): {
     case "send":
       return {
         messages: [
-          text(
+          assistantText(
             "Got it — sending 25 USDT on TRON. I don't recognise this address, so please double-check it before you confirm."
           ),
           {
             kind: "quote",
             action: "send",
-            receiveAmt: "25.00 USDT",
+            receiveAmt: SEND_AMOUNT_USDT,
             receiveSub: "≈ ₦41,000 sent",
             rows: [
-              { label: "Amount", value: "25.00 USDT" },
+              { label: "Amount", value: SEND_AMOUNT_USDT },
               { label: "Network", value: "USDT · TRON (TRC-20)" },
-              { label: "Network fee", value: "1.00 USDT" },
+              { label: "Network fee", value: SEND_NETWORK_FEE },
               { label: "Handshake fee", value: "₦0.00" },
             ],
             totalLabel: "Total debited",
@@ -144,20 +156,22 @@ export function buildResponse(action: ChatAction): {
     case "swap":
       return {
         messages: [
-          text("Sure — here's a swap of 10 USDT into naira at today's rate."),
+          assistantText(
+            "Sure — here's a swap of 10 USDT into naira at today's rate."
+          ),
           {
             kind: "quote",
             action: "swap",
-            receiveAmt: "₦16,320",
+            receiveAmt: SWAP_RECEIVE_NGN,
             receiveSub: "≈ from 10.00 USDT",
             rows: [
-              { label: "You swap", value: "10.00 USDT" },
-              { label: "Exchange rate", value: "₦1,640.00 / USDT" },
+              { label: "You swap", value: SWAP_AMOUNT_USDT },
+              { label: "Exchange rate", value: RATE },
               { label: "Spread (0.8%)", value: "₦80.00" },
               { label: "Handshake fee", value: "₦0.00" },
             ],
             totalLabel: "You receive",
-            totalValue: "₦16,320",
+            totalValue: SWAP_RECEIVE_NGN,
             lockSeconds: 60,
           } satisfies QuoteView,
         ],
@@ -175,12 +189,12 @@ export function buildBuyConfirm(): ConfirmPayload {
     heroAmount: "29.97 USDT",
     heroSub: "into your Handshake USDT wallet",
     rows: [
-      { label: "You pay (debited from bank)", value: "₦50,000.00" },
-      { label: "Exchange rate", value: "₦1,640.00 / USDT" },
+      { label: "You pay (debited from bank)", value: PAY_NGN_50K },
+      { label: "Exchange rate", value: RATE },
       { label: "FX spread + fees", value: "₦850.00" },
     ],
     totalLabel: "Total to pay",
-    totalValue: "₦50,000.00",
+    totalValue: PAY_NGN_50K,
     cta: "Confirm with PIN",
     action: "buy",
   }
@@ -191,14 +205,14 @@ export function buildSendConfirm(): ConfirmPayload {
     title: "Confirm transfer",
     subtitle: "Sending crypto is irreversible. Confirm the address.",
     heroLabel: "You send",
-    heroAmount: "25.00 USDT",
+    heroAmount: SEND_AMOUNT_USDT,
     heroSub: "≈ ₦41,000 · on TRON",
     toLabel: "To address",
     toValue: "TQn9Y2khEb7g5mZ8FjpRt1cWnH4d3pVgk7r",
     warn: "First time sending to this address. Make sure it exactly matches your recipient — funds cannot be recovered.",
     rows: [
-      { label: "Amount", value: "25.00 USDT" },
-      { label: "Network fee", value: "1.00 USDT" },
+      { label: "Amount", value: SEND_AMOUNT_USDT },
+      { label: "Network fee", value: SEND_NETWORK_FEE },
     ],
     totalLabel: "Total debited",
     totalValue: "26.00 USDT",
@@ -212,15 +226,15 @@ export function buildSwapConfirm(): ConfirmPayload {
     title: "Confirm swap",
     subtitle: "Review the conversion before you confirm.",
     heroLabel: "You receive",
-    heroAmount: "₦16,320",
+    heroAmount: SWAP_RECEIVE_NGN,
     heroSub: "into your naira balance",
     rows: [
-      { label: "You swap", value: "10.00 USDT" },
-      { label: "Exchange rate", value: "₦1,640.00 / USDT" },
+      { label: "You swap", value: SWAP_AMOUNT_USDT },
+      { label: "Exchange rate", value: RATE },
       { label: "Spread + fees", value: "₦80.00" },
     ],
     totalLabel: "You receive",
-    totalValue: "₦16,320",
+    totalValue: SWAP_RECEIVE_NGN,
     cta: "Confirm with PIN",
     action: "swap",
   }
@@ -264,8 +278,8 @@ export function buildReceipt(
         subtitle: "USDT credited to your wallet",
         amount: "+ 29.97 USDT",
         rows: [
-          { label: "Paid", value: "₦50,000.00" },
-          { label: "Rate", value: "₦1,640.00 / USDT" },
+          { label: "Paid", value: PAY_NGN_50K },
+          { label: "Rate", value: RATE },
           { label: "Date", value: "18 Jun, 2:14pm" },
         ],
         ref: "REF · HS-9F4C-22A1",
@@ -279,7 +293,7 @@ export function buildReceipt(
         amount: "- 26.00 USDT",
         rows: [
           { label: "To", value: "TQn9Y2…d3pVgk7r" },
-          { label: "Network fee", value: "1.00 USDT" },
+          { label: "Network fee", value: SEND_NETWORK_FEE },
           { label: "Date", value: "18 Jun, 2:16pm" },
         ],
         ref: "TX · a91f…7c0e",
@@ -290,10 +304,10 @@ export function buildReceipt(
         kind: "receipt",
         title: "Swap complete",
         subtitle: "10 USDT converted to naira",
-        amount: "+ ₦16,320",
+        amount: `+ ${SWAP_RECEIVE_NGN}`,
         rows: [
-          { label: "Swapped", value: "10.00 USDT" },
-          { label: "Rate", value: "₦1,640.00 / USDT" },
+          { label: "Swapped", value: SWAP_AMOUNT_USDT },
+          { label: "Rate", value: RATE },
           { label: "Date", value: "18 Jun, 2:18pm" },
         ],
         ref: "REF · HS-7B22-90C4",
@@ -318,15 +332,8 @@ export function buildReceipt(
     }
 
     default:
-      // receive and balance have no receipt in the prototype
-      return {
-        kind: "receipt",
-        title: "",
-        subtitle: "",
-        amount: "",
-        rows: [],
-        ref: "",
-      }
+      // receive and balance have no receipt in the prototype — fail loudly
+      throw new Error(`buildReceipt: no receipt for action "${action}"`)
   }
 }
 
