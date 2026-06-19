@@ -6,10 +6,10 @@ module.exports = {
       comment:
         'API application layer must depend on abstractions, not details: no import of infrastructure or @prisma/client.',
       severity: 'error',
-      from: { path: '^api/src/(modules/[^/]+/)?application/' },
+      from: { path: '^api/src/modules/[^/]+/application/' },
       to: {
         path: [
-          '^api/src/(modules/[^/]+/)?infrastructure/',
+          '^api/src/modules/[^/]+/infrastructure/',
           '^@prisma/client$',
           '/node_modules/@prisma/client/',
           '^api/generated/prisma',
@@ -24,7 +24,7 @@ module.exports = {
       from: { path: '^api/src/(modules/)?agent/' },
       to: {
         path: [
-          '^api/src/(modules/[^/]+/)?infrastructure/',
+          '^api/src/modules/[^/]+/infrastructure/',
           '^@prisma/client$',
           '/node_modules/@prisma/client/',
           '^api/generated/prisma',
@@ -36,7 +36,7 @@ module.exports = {
       comment:
         'Domain layer is pure: no Nest, no Prisma, no framework imports.',
       severity: 'error',
-      from: { path: '^api/src/(modules/[^/]+/)?domain/' },
+      from: { path: '^api/src/modules/[^/]+/domain/' },
       to: { path: ['^@nestjs/', '^@prisma/client$', '/node_modules/@prisma/client/', '^api/generated/prisma'] },
     },
     {
@@ -65,6 +65,9 @@ module.exports = {
   ],
   options: {
     doNotFollow: { path: 'node_modules' },
+    // Never lint generated or build output (e.g. the Prisma client, which has
+    // internal circular refs by design).
+    exclude: { path: '(^|/)(generated|dist|\\.next|coverage)/' },
     tsPreCompilationDeps: true,
     enhancedResolveOptions: {
       exportsFields: ['exports'],
