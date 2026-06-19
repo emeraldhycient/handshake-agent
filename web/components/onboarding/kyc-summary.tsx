@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import { StatusPill } from "@/components/shared"
 import { Button } from "@/components/ui/button"
-import type { KycSummaryProps } from "@/types/components"
+import type { KycSummaryProps, VerificationRowProps } from "@/types/components"
 
 /**
  * KYC onboarding summary screen — Phase 14.1.
@@ -61,36 +61,13 @@ export function KycSummary({ onFinish }: KycSummaryProps) {
           pillLabel="Matched"
         />
 
-        {/* Row 3 — Liveness selfie */}
-        <div className="flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3.5">
-          {/* Selfie thumbnail placeholder */}
-          <div
-            className={cn(
-              "flex h-11 w-11 flex-none items-end justify-center overflow-hidden rounded-full",
-              "border border-border"
-            )}
-            style={{
-              background:
-                "repeating-linear-gradient(45deg,#dfe6df 0 5px,#eef1ea 5px 10px)",
-            }}
-            aria-hidden
-          >
-            <span className="mb-1 font-mono text-[6px] font-bold tracking-wider text-muted-foreground uppercase">
-              SELFIE
-            </span>
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold text-muted-foreground">
-              Liveness selfie
-            </p>
-            <p className="text-[15px] font-bold text-foreground">
-              Face captured
-            </p>
-          </div>
-          <StatusPill tone="success" className="flex-none">
-            Done
-          </StatusPill>
-        </div>
+        {/* Row 3 — Liveness selfie: circular thumbnail as left-slot override */}
+        <VerificationRow
+          iconNode={<SelfieThumbnail />}
+          label="Liveness selfie"
+          value="Face captured"
+          pillLabel="Done"
+        />
 
         {/* Encryption note */}
         <div className="flex items-center gap-2 px-1 py-1.5 text-muted-foreground">
@@ -104,7 +81,7 @@ export function KycSummary({ onFinish }: KycSummaryProps) {
       {/* ── Footer CTA ─────────────────────────────────────────────────────── */}
       <div className="flex-none bg-background px-4 pt-3.5 pb-7">
         <Button
-          className="h-auto w-full rounded-2xl bg-accent py-4 text-base font-bold text-accent-foreground shadow-[0_4px_12px_rgba(232,150,26,0.3)] hover:bg-accent-deep"
+          className="h-auto w-full rounded-2xl bg-accent py-4 text-base font-bold text-accent-foreground shadow-cta hover:bg-accent-deep"
           onClick={onFinish}
         >
           Finish &amp; open my wallet
@@ -119,16 +96,14 @@ export function KycSummary({ onFinish }: KycSummaryProps) {
 
 // ─── Internal sub-components ─────────────────────────────────────────────────
 
-interface VerificationRowProps {
-  icon: React.ReactNode
-  label: string
-  value: string
-  /** Apply font-mono to the value (masked numbers) */
-  valueMono?: boolean
-  pillLabel: string
-}
-
+/**
+ * Renders a single verification card row.
+ * When `iconNode` is provided it is placed directly in the left slot (used for
+ * the selfie circular thumbnail). Otherwise `icon` is wrapped in the standard
+ * square icon-box.
+ */
 function VerificationRow({
+  iconNode,
   icon,
   label,
   value,
@@ -137,10 +112,13 @@ function VerificationRow({
 }: VerificationRowProps) {
   return (
     <div className="flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3.5">
-      {/* Token-tinted icon box */}
-      <div className="flex h-10 w-10 flex-none items-center justify-center rounded-xl bg-background">
-        {icon}
-      </div>
+      {/* Left slot */}
+      {iconNode ?? (
+        /* Token-tinted icon box */
+        <div className="flex h-10 w-10 flex-none items-center justify-center rounded-xl bg-background">
+          {icon}
+        </div>
+      )}
       <div className="min-w-0 flex-1">
         <p className="text-xs font-semibold text-muted-foreground">{label}</p>
         <p
@@ -155,6 +133,30 @@ function VerificationRow({
       <StatusPill tone="success" className="flex-none">
         {pillLabel}
       </StatusPill>
+    </div>
+  )
+}
+
+/**
+ * Circular selfie placeholder with a token-based stripe gradient.
+ * No hex literals — uses color-mix over CSS custom properties.
+ */
+function SelfieThumbnail() {
+  return (
+    <div
+      className={cn(
+        "flex h-11 w-11 flex-none items-end justify-center overflow-hidden rounded-full",
+        "border border-border"
+      )}
+      style={{
+        backgroundImage:
+          "repeating-linear-gradient(45deg, color-mix(in oklch, var(--border) 55%, var(--background)) 0 5px, var(--card-muted) 5px 10px)",
+      }}
+      aria-hidden
+    >
+      <span className="mb-1 font-mono text-[6px] font-bold tracking-wider text-muted-foreground uppercase">
+        SELFIE
+      </span>
     </div>
   )
 }
