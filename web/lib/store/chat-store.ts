@@ -22,6 +22,7 @@ import {
   startChips,
   chipLabel,
 } from "@/lib/chat/flow"
+import { parseIntent } from "@/lib/chat/intent"
 import { GREETING_M, GREETING_D } from "@/lib/constants"
 import type {
   ChatAction,
@@ -32,6 +33,9 @@ import type {
 
 // Re-export chipLabel so components can import it from the store module if needed.
 export { chipLabel }
+
+/** Milliseconds before the success overlay auto-dismisses. Matches prototype (line 1352). */
+const SUCCESS_DISMISS_MS = 1150
 
 // ─── Scheduler type ───────────────────────────────────────────────────────────
 
@@ -134,9 +138,6 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
       const trimmed = text.trim()
       if (!trimmed) return
 
-      // Import parseIntent lazily to avoid circular issues at module load time.
-      // We do a dynamic import at the module level below — see the re-export.
-      const { parseIntent } = _deps
       const action: ChatAction | null = explicitAction ?? parseIntent(trimmed)
 
       // Append the user message immediately.
@@ -284,14 +285,14 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
         successSurface: overlaySurface,
       }))
 
-      // Auto-dismiss the success overlay after a fixed 2-second delay.
+      // Auto-dismiss the success overlay after SUCCESS_DISMISS_MS (matches prototype).
       // We use a plain setTimeout here (not the injected `schedule`) so that
       // the injected synchronous scheduler used in tests does not immediately
       // dismiss the overlay — tests can assert `successOpen === true` after
       // pressing 4 digits, and separately assert auto-dismiss via a dedicated test.
       setTimeout(() => {
         set({ successOpen: false })
-      }, 2000)
+      }, SUCCESS_DISMISS_MS)
     },
 
     reset(surface) {
@@ -306,16 +307,6 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
     },
   }))
 }
-
-// ─── Lazy deps (break circular import) ───────────────────────────────────────
-// parseIntent is in lib/chat/intent — same lib layer, no architectural violation.
-// We import it eagerly here since there is no actual circular dependency.
-
-import { parseIntent } from "@/lib/chat/intent"
-
-/** Internal dependency bag — injected as a module-level object so tests can
- *  monkey-patch if needed (they don't need to today). */
-const _deps = { parseIntent }
 
 // ─── React singleton binding ──────────────────────────────────────────────────
 

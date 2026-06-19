@@ -100,29 +100,29 @@ describe("chat store", () => {
       true
     )
     expect(store.getState().successOpen).toBe(true)
+    expect(store.getState().successText).toBe("Purchase complete")
+    expect(store.getState().successSurface).toBe("m")
     expect(store.getState().pinOpen).toBe(false)
     expect(store.getState().pin).toBe("")
     expect(store.getState().pending).toBeNull()
     expect(store.getState().confirmOpen).toBe(false)
   })
 
-  it("pressPin ignores digit when pin already has 4 characters", () => {
+  it("pressPin after pinComplete (pin reset to '') starts fresh entry, does not duplicate receipt", () => {
     const s = store.getState()
     s.openConfirm("m", buildBuyConfirm())
     s.confirmToPin()
-    // Fill 4 digits — this triggers pinComplete
+    // Fill 4 digits — this triggers pinComplete, which resets pin to ""
     "1234".split("").forEach((d) => store.getState().pressPin(d))
     const receiptsBefore = store
       .getState()
       .threads.m.filter((m) => m.kind === "receipt").length
 
-    // Extra digit after completion — pin resets to "" in pinComplete, so this
-    // should start a new pin entry (length 1) rather than appending a 5th char.
+    // After pinComplete, pin === "". Pressing another digit starts a fresh entry
+    // (length 1), does not trigger another pinComplete (length never reaches 4),
+    // and does not produce an additional receipt.
     store.getState().pressPin("5")
     expect(store.getState().pin).toBe("5")
-    // No additional receipt from the extra digit press (store is now in
-    // closed-overlay state, but we just verify receipt count hasn't grown
-    // beyond what pinComplete produced)
     const receiptsAfter = store
       .getState()
       .threads.m.filter((m) => m.kind === "receipt").length
@@ -254,6 +254,46 @@ describe("chat store", () => {
     expect(store.getState().threads.m.length).toBe(before)
     store.getState().send("m", "")
     expect(store.getState().threads.m.length).toBe(before)
+  })
+
+  // ─── unrecognized-intent fallback ────────────────────────────────────────────
+
+  it("send with unrecognized text appends user msg + fallback TEXT reply, no quote/receipt, chips restored", () => {
+    const threadBefore = store.getState().threads.m.length
+    // "hello there" does not match any ChatAction keyword in parseIntent
+    store.getState().send("m", "hello there")
+
+    const thread = store.getState().threads.m
+    // user message appended — sent messages are always kind "text"
+    const userMsg = thread.find((m) => m.role === "user")
+    expect(userMsg).toBeDefined()
+    expect(userMsg?.kind).toBe("text")
+    // Narrow to text kind to access .text
+    if (userMsg?.kind === "text") {
+      expect(userMsg.text).toBe("hello there")
+    } else {
+      throw new Error("Expected user message to be kind 'text'")
+    }
+
+    // Thread grew by exactly 2: user msg + fallback assistant text
+    expect(thread.length).toBe(threadBefore + 2)
+
+    // The assistant reply is a plain text message — no quote or receipt
+    const lastMsg = thread.at(-1)!
+    expect(lastMsg.role).toBe("assistant")
+    expect(lastMsg.kind).toBe("text")
+    if (lastMsg.kind === "text") {
+      expect(typeof lastMsg.text).toBe("string")
+      expect(lastMsg.text.length).toBeGreaterThan(0)
+    }
+    expect(thread.some((m) => m.kind === "quote")).toBe(false)
+    expect(thread.some((m) => m.kind === "receipt")).toBe(false)
+
+    // typing cleared
+    expect(store.getState().typing.m).toBe(false)
+
+    // startChips() restored for the surface
+    expect(store.getState().chips.m.length).toBeGreaterThan(0)
   })
 
   // ─── successOpen auto-dismiss ────────────────────────────────────────────────
