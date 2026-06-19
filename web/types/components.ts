@@ -157,3 +157,10 @@ export interface SuccessOverlayProps {
   open: boolean
   text: string
 }
+
+// ─── Phase 14 onboarding ──────────────────────────────────────────────────────
+
+/** 14.1 — presentational; no router dependency */
+export interface KycSummaryProps {
+  onFinish: () => void
+}
