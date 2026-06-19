@@ -10,7 +10,6 @@ import type { ChatMessageViewProps } from "@/types/components"
  * ChatMessageView — kind-dispatch wrapper for all chat message variants.
  * Handles alignment (user → right, assistant/cards → left) and entrance animation.
  * Pure component: no hooks, no effects, no "use client" directive.
- * Mobile prototype: lines 154–308.
  */
 export function ChatMessageView({
   message,
@@ -76,6 +75,14 @@ export function ChatMessageView({
 
           case "receipt":
             return <ReceiptCard {...message} density={density} />
+
+          default: {
+            // Exhaustiveness check: TypeScript will error here if a new kind is
+            // added to ChatMessage without a matching case above.
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const _exhaustive: never = message
+            return null
+          }
         }
       })()}
     </div>

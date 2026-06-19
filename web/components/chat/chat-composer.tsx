@@ -1,6 +1,6 @@
 "use client"
 
-import type { KeyboardEvent } from "react"
+import type { CSSProperties, KeyboardEvent } from "react"
 import { Input } from "@/components/ui/input"
 import { chipLabel } from "@/lib/chat/flow"
 import { cn } from "@/lib/utils"
@@ -12,6 +12,10 @@ export function ChatComposer({
   onChange,
   onSubmit,
   onChip,
+  // density accepted for future sizing variants; currently drives no changes
+  // (both mobile and desktop use the same compact composer layout)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  density: _density,
 }: ChatComposerProps) {
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter") {
@@ -25,7 +29,7 @@ export function ChatComposer({
       {/* Chips row — horizontal scroll, no scrollbar */}
       <div
         className="flex [scrollbar-width:none] gap-2 overflow-x-auto px-4 pt-1.5 pb-2.5"
-        style={{ WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+        style={{ WebkitOverflowScrolling: "touch" } as CSSProperties}
       >
         {chips.map((action) => (
           <button
@@ -35,7 +39,7 @@ export function ChatComposer({
             className={cn(
               "flex-none cursor-pointer rounded-full border border-border whitespace-nowrap",
               "bg-card px-3.5 py-2 text-[13px] font-semibold text-foreground",
-              "shadow-[0_1px_2px_rgba(20,40,32,0.05)] focus-visible:outline-none",
+              "shadow-sm focus-visible:outline-none",
               "focus-visible:ring-2 focus-visible:ring-ring/50"
             )}
           >
@@ -48,8 +52,11 @@ export function ChatComposer({
       <div className="flex items-center gap-2.5 px-3.5">
         {/* Input pill */}
         <div className="flex flex-1 items-center gap-2.5 rounded-full border border-border bg-card px-4 py-[11px]">
-          {/* Attachment glyph */}
-          <span className="shrink-0 text-xl leading-none text-muted-foreground">
+          {/* Attachment glyph — decorative; interaction reserved for a future attachment feature */}
+          <span
+            aria-hidden="true"
+            className="shrink-0 text-xl leading-none text-muted-foreground"
+          >
             +
           </span>
 

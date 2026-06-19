@@ -5,6 +5,7 @@ import { ChatMessageView } from "./chat-message"
 import type { ChatMessage, TicketOption } from "@/lib/schemas"
 
 const noop = () => {}
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const noopTicket = (_: TicketOption) => {}
 
 describe("ChatMessageView", () => {

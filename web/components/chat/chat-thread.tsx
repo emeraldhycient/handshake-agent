@@ -10,7 +10,6 @@ import type { ChatThreadProps } from "@/types/components"
  * ChatThread — scrollable message list with auto-scroll to bottom.
  * Renders the "Today" date divider, all ChatMessageView instances,
  * and the TypingIndicator when the agent is composing a reply.
- * Prototype markup: lines 149–320.
  */
 export function ChatThread({
   messages,
