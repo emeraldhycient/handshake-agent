@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { Switch } from "@/components/ui/switch"
+import { AvatarPlaceholder } from "@/components/shared"
 import { LANGUAGES } from "@/lib/constants"
 import { cn } from "@/lib/utils"
 
@@ -35,15 +36,8 @@ export function SettingsPage({ className }: { className?: string }) {
 
       {/* ── Profile card ────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-[14px] rounded-[16px] border border-border bg-card px-5 py-[18px]">
-        {/* Avatar — striped gradient placeholder */}
-        <div
-          className="h-12 w-12 flex-none rounded-full"
-          style={{
-            background:
-              "repeating-linear-gradient(45deg,#2a6f55 0 5px,#1a4536 5px 10px)",
-          }}
-          aria-hidden="true"
-        />
+        {/* Avatar — tokenized striped placeholder */}
+        <AvatarPlaceholder size={48} />
         <div className="flex-1">
           <p className="text-base font-bold text-foreground">Amara Okeke</p>
           <p className="text-[13px] text-muted-foreground tabular-nums">

@@ -16,6 +16,9 @@ import type { SearchResult } from "@/lib/schemas"
  *  - search open/query
  *  - unread count (cleared by "Mark all read")
  *  - notifications panel open/closed
+ *
+ * All four async branches (loading / error / empty / data) are covered for both
+ * the search dropdown and the notifications dropdown.
  */
 export function DashboardTopbar({
   onSearchSelect,
@@ -26,7 +29,11 @@ export function DashboardTopbar({
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
 
-  const { data: catalog = [] } = useSearchCatalog()
+  const {
+    data: catalog = [],
+    isLoading: searchLoading,
+    isError: searchError,
+  } = useSearchCatalog()
 
   const searchResults = useMemo<SearchResult[]>(() => {
     const q = searchQuery.trim().toLowerCase()
@@ -45,7 +52,12 @@ export function DashboardTopbar({
   const [notifOpen, setNotifOpen] = useState(false)
   const [markedRead, setMarkedRead] = useState(false)
 
-  const { data: notifications = [] } = useNotifications()
+  const {
+    data: notifications = [],
+    isLoading: notifLoading,
+    isError: notifError,
+  } = useNotifications()
+
   const unreadCount = markedRead ? 0 : notifications.length
 
   function handleMarkAllRead() {
@@ -106,6 +118,10 @@ export function DashboardTopbar({
             />
           </svg>
           <input
+            role="combobox"
+            aria-expanded={searchOpen}
+            aria-haspopup="listbox"
+            aria-controls="dashboard-search-listbox"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onFocus={() => setSearchOpen(true)}
@@ -119,37 +135,72 @@ export function DashboardTopbar({
           />
         </div>
 
-        {/* Search dropdown */}
-        {searchOpen && searchResults.length > 0 && (
-          <div className="absolute top-12 left-0 z-40 w-[344px] overflow-hidden rounded-[16px] border border-border bg-card p-1.5 shadow-[0_16px_40px_rgba(20,40,32,0.16)]">
-            {searchResults.map((r, i) => (
-              <div
-                key={i}
-                onMouseDown={() => handleSelectResult(r)}
-                role="option"
-                aria-selected={false}
-                className="flex cursor-pointer items-center gap-[11px] rounded-[11px] px-[11px] py-[10px] hover:bg-card-muted"
-              >
-                {/* Icon */}
+        {/* Search dropdown — always render when focused; content switches on branch */}
+        {searchOpen && (
+          <div
+            id="dashboard-search-listbox"
+            role="listbox"
+            className="absolute top-12 left-0 z-40 w-[344px] overflow-hidden rounded-[16px] border border-border bg-card p-1.5 shadow-dropdown"
+          >
+            {/* Loading branch */}
+            {searchLoading && (
+              <p className="px-[11px] py-[10px] text-[13.5px] text-muted-foreground-subtle">
+                Searching…
+              </p>
+            )}
+
+            {/* Error branch */}
+            {!searchLoading && searchError && (
+              <p className="text-danger px-[11px] py-[10px] text-[13.5px]">
+                Couldn&apos;t load results
+              </p>
+            )}
+
+            {/* Empty branch */}
+            {!searchLoading && !searchError && searchResults.length === 0 && (
+              <p className="px-[11px] py-[10px] text-[13.5px] text-muted-foreground-subtle">
+                {searchQuery.trim()
+                  ? `No results for "${searchQuery}"`
+                  : "Start typing to search…"}
+              </p>
+            )}
+
+            {/* Data branch */}
+            {!searchLoading &&
+              !searchError &&
+              searchResults.map((r) => (
                 <div
-                  className="flex h-8 w-8 flex-none items-center justify-center rounded-[9px] text-[15px] font-bold"
-                  style={{ background: r.tint, color: r.col }}
+                  key={`${r.kind}-${r.title}`}
+                  role="option"
+                  aria-selected={false}
+                  onMouseDown={(e) => {
+                    // Prevent the onBlur from closing the dropdown before
+                    // the click registers — more robust than the setTimeout alone.
+                    e.preventDefault()
+                    handleSelectResult(r)
+                  }}
+                  className="flex cursor-pointer items-center gap-[11px] rounded-[11px] px-[11px] py-[10px] hover:bg-card-muted"
                 >
-                  {r.icon}
+                  {/* Icon */}
+                  <div
+                    className="flex h-8 w-8 flex-none items-center justify-center rounded-[9px] text-[15px] font-bold"
+                    style={{ background: r.tint, color: r.col }}
+                  >
+                    {r.icon}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13.5px] font-bold text-foreground">
+                      {r.title}
+                    </p>
+                    <p className="text-xs text-muted-foreground-subtle">
+                      {r.desc}
+                    </p>
+                  </div>
+                  <span className="flex-none text-[10.5px] font-bold tracking-[0.04em] text-muted-foreground-subtle uppercase">
+                    {r.kind}
+                  </span>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[13.5px] font-bold text-foreground">
-                    {r.title}
-                  </p>
-                  <p className="text-xs text-muted-foreground-subtle">
-                    {r.desc}
-                  </p>
-                </div>
-                <span className="flex-none text-[10.5px] font-bold tracking-[0.04em] text-muted-foreground-subtle uppercase">
-                  {r.kind}
-                </span>
-              </div>
-            ))}
+              ))}
           </div>
         )}
       </div>
@@ -195,18 +246,38 @@ export function DashboardTopbar({
 
         {/* Notifications dropdown */}
         {notifOpen && (
-          <div className="absolute top-[52px] right-0 z-40 w-[332px] overflow-hidden rounded-[16px] border border-border bg-card shadow-[0_16px_40px_rgba(20,40,32,0.16)]">
+          <div className="absolute top-[52px] right-0 z-40 w-[332px] overflow-hidden rounded-[16px] border border-border bg-card shadow-dropdown">
             <div className="border-b border-border px-4 py-[13px] text-sm font-bold text-foreground">
               Notifications
             </div>
-            {notifications.length === 0 ? (
+
+            {/* Loading branch */}
+            {notifLoading && (
+              <p className="px-4 py-6 text-sm text-muted-foreground">
+                Loading…
+              </p>
+            )}
+
+            {/* Error branch */}
+            {!notifLoading && notifError && (
+              <p className="text-danger px-4 py-6 text-sm">
+                Couldn&apos;t load notifications
+              </p>
+            )}
+
+            {/* Empty branch */}
+            {!notifLoading && !notifError && notifications.length === 0 && (
               <p className="px-4 py-6 text-sm text-muted-foreground">
                 No notifications
               </p>
-            ) : (
-              notifications.map((n, i) => (
+            )}
+
+            {/* Data branch */}
+            {!notifLoading &&
+              !notifError &&
+              notifications.map((n) => (
                 <div
-                  key={i}
+                  key={`${n.title}-${n.time}`}
                   className="flex items-start gap-[11px] border-b border-border px-4 py-3"
                 >
                   <div
@@ -227,8 +298,8 @@ export function DashboardTopbar({
                     {n.time}
                   </span>
                 </div>
-              ))
-            )}
+              ))}
+
             <button
               type="button"
               onClick={handleMarkAllRead}

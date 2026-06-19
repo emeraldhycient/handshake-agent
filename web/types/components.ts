@@ -66,6 +66,13 @@ export interface QrPlaceholderProps {
   className?: string
 }
 
+// ─── AvatarPlaceholder (10.6) ─────────────────────────────────────────────────
+
+export interface AvatarPlaceholderProps {
+  size?: number
+  className?: string
+}
+
 // ─── Chat message cards (Phase 11) ────────────────────────────────────────────
 
 /** 11.1 */

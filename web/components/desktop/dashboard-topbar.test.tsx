@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { DashboardTopbar } from "./dashboard-topbar"
+import { gateway } from "@/lib/api/gateway"
 
 function makeWrapper() {
   const client = new QueryClient({
@@ -15,6 +16,8 @@ function makeWrapper() {
 }
 
 describe("DashboardTopbar", () => {
+  afterEach(() => vi.restoreAllMocks())
+
   it("renders the greeting", () => {
     render(
       <DashboardTopbar onSearchSelect={() => {}} onQuickAction={() => {}} />,
@@ -102,6 +105,64 @@ describe("DashboardTopbar", () => {
     await waitFor(() => {
       const badges = screen.queryAllByText(/^\d+$/)
       expect(badges.length).toBe(0)
+    })
+  })
+
+  it("search dropdown shows error branch when getSearchCatalog rejects", async () => {
+    vi.spyOn(gateway, "getSearchCatalog").mockRejectedValue(
+      new Error("network error")
+    )
+    const user = userEvent.setup()
+    render(
+      <DashboardTopbar onSearchSelect={() => {}} onQuickAction={() => {}} />,
+      { wrapper: makeWrapper() }
+    )
+    const input = screen.getByPlaceholderText(/search or ask handshake/i)
+    await user.click(input)
+    await waitFor(() => {
+      expect(screen.getByText(/couldn't load results/i)).toBeInTheDocument()
+    })
+  })
+
+  it("notifications dropdown shows error branch when getNotifications rejects", async () => {
+    vi.spyOn(gateway, "getNotifications").mockRejectedValue(
+      new Error("network error")
+    )
+    const user = userEvent.setup()
+    render(
+      <DashboardTopbar onSearchSelect={() => {}} onQuickAction={() => {}} />,
+      { wrapper: makeWrapper() }
+    )
+    const bell = screen.getByRole("button", { name: /notifications/i })
+    await user.click(bell)
+    await waitFor(() => {
+      expect(
+        screen.getByText(/couldn't load notifications/i)
+      ).toBeInTheDocument()
+    })
+  })
+
+  it("search input has combobox role and aria attributes", () => {
+    render(
+      <DashboardTopbar onSearchSelect={() => {}} onQuickAction={() => {}} />,
+      { wrapper: makeWrapper() }
+    )
+    const input = screen.getByRole("combobox", { name: /search/i })
+    expect(input).toHaveAttribute("aria-haspopup", "listbox")
+    expect(input).toHaveAttribute("aria-controls", "dashboard-search-listbox")
+    expect(input).toHaveAttribute("aria-expanded", "false")
+  })
+
+  it("search dropdown container has listbox role when open", async () => {
+    const user = userEvent.setup()
+    render(
+      <DashboardTopbar onSearchSelect={() => {}} onQuickAction={() => {}} />,
+      { wrapper: makeWrapper() }
+    )
+    const input = screen.getByRole("combobox", { name: /search/i })
+    await user.click(input)
+    await waitFor(() => {
+      expect(screen.getByRole("listbox")).toBeInTheDocument()
     })
   })
 })

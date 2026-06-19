@@ -40,12 +40,13 @@ export function TicketsPage({ onQuickAction, className }: TicketsPageProps) {
       <div className="flex overflow-hidden rounded-[18px] border border-border bg-card">
         {/* Left banner */}
         <div className="relative flex w-[150px] flex-none items-center justify-center bg-gradient-to-br from-primary to-primary-deep">
-          {/* Diagonal stripe overlay */}
+          {/* Diagonal stripe overlay — uses color-mix to avoid rgba literals */}
           <div
+            aria-hidden="true"
             className="absolute inset-0"
             style={{
               backgroundImage:
-                "repeating-linear-gradient(115deg, rgba(245,166,35,0.16) 0 12px, transparent 12px 26px)",
+                "repeating-linear-gradient(115deg, color-mix(in oklch, var(--accent) 16%, transparent) 0 12px, transparent 12px 26px)",
             }}
           />
           {/* Mini QR */}

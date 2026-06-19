@@ -1,6 +1,7 @@
 "use client"
 
 import { cn } from "@/lib/utils"
+import { AvatarPlaceholder } from "@/components/shared"
 import type { DashboardSidebarProps } from "@/types/components"
 import type { DashboardPage } from "@/lib/schemas"
 
@@ -113,15 +114,8 @@ export function DashboardSidebar({
 
       {/* ── Profile ──────────────────────────────────────────────────────── */}
       <div className="mt-0 flex items-center gap-[11px] px-1.5 pt-[14px]">
-        {/* Avatar — striped gradient placeholder */}
-        <div
-          className="h-[38px] w-[38px] flex-none rounded-full"
-          style={{
-            background:
-              "repeating-linear-gradient(45deg,#2a6f55 0 5px,#1a4536 5px 10px)",
-          }}
-          aria-hidden="true"
-        />
+        {/* Avatar — tokenized striped placeholder */}
+        <AvatarPlaceholder size={38} />
         <div className="min-w-0 flex-1">
           <p className="text-[13.5px] font-bold">Amara Okeke</p>
           <p className="text-xs text-primary-foreground/60">Lagos, NG</p>
