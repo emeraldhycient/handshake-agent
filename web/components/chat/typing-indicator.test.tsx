@@ -13,4 +13,9 @@ describe("TypingIndicator", () => {
     const dots = screen.getByTestId("typing").querySelectorAll("span")
     expect(dots).toHaveLength(3)
   })
+
+  it("has role='status' for live-region accessibility", () => {
+    render(<TypingIndicator />)
+    expect(screen.getByRole("status")).toBeInTheDocument()
+  })
 })

@@ -1,6 +1,7 @@
 "use client"
 
 import type { CSSProperties, KeyboardEvent } from "react"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { chipLabel } from "@/lib/chat/flow"
 import { cn } from "@/lib/utils"
@@ -32,19 +33,19 @@ export function ChatComposer({
         style={{ WebkitOverflowScrolling: "touch" } as CSSProperties}
       >
         {chips.map((action) => (
-          <button
+          <Button
             key={action}
             type="button"
+            variant="outline"
             onClick={() => onChip(action)}
             className={cn(
-              "flex-none cursor-pointer rounded-full border border-border whitespace-nowrap",
+              "flex-none rounded-full whitespace-nowrap",
               "bg-card px-3.5 py-2 text-[13px] font-semibold text-foreground",
-              "shadow-sm focus-visible:outline-none",
-              "focus-visible:ring-2 focus-visible:ring-ring/50"
+              "h-auto border-border shadow-sm"
             )}
           >
             {chipLabel(action)}
-          </button>
+          </Button>
         ))}
       </div>
 
@@ -99,14 +100,14 @@ export function ChatComposer({
         </div>
 
         {/* Send button */}
-        <button
+        <Button
           type="button"
-          onClick={onSubmit}
+          size="icon"
           aria-label="Send"
+          onClick={onSubmit}
           className={cn(
-            "flex h-[46px] w-[46px] shrink-0 cursor-pointer items-center justify-center",
-            "rounded-full bg-accent shadow-cta",
-            "focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            "h-[46px] w-[46px] shrink-0 rounded-full bg-accent shadow-cta",
+            "hover:bg-accent/90"
           )}
         >
           <svg
@@ -124,7 +125,7 @@ export function ChatComposer({
               strokeLinejoin="round"
             />
           </svg>
-        </button>
+        </Button>
       </div>
     </div>
   )

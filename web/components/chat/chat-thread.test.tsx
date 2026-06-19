@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import userEvent from "@testing-library/user-event"
+import { describe, expect, it, vi } from "vitest"
 import { ChatThread } from "./chat-thread"
 import type { ChatMessage, TicketOption } from "@/lib/schemas"
 
@@ -94,5 +95,35 @@ describe("ChatThread", () => {
     for (let i = 0; i < 5; i++) {
       expect(screen.getByText(`Message ${i}`)).toBeInTheDocument()
     }
+  })
+
+  it("propagates onConfirm with the full message when quote card confirm is clicked", async () => {
+    const onConfirm = vi.fn()
+    const onSelectTicket = vi.fn()
+    const quoteMsg: ChatMessage = {
+      id: "q1",
+      role: "assistant",
+      kind: "quote",
+      action: "buy",
+      receiveAmt: "29.97 USDT",
+      receiveSub: "≈ what lands in your wallet",
+      rows: [{ label: "You pay", value: "₦50,000" }],
+      totalLabel: "Total",
+      totalValue: "₦50,000",
+      lockSeconds: 60,
+    }
+    render(
+      <ChatThread
+        messages={[quoteMsg]}
+        typing={false}
+        density="mobile"
+        onConfirm={onConfirm}
+        onSelectTicket={onSelectTicket}
+      />
+    )
+    await userEvent.click(
+      screen.getByRole("button", { name: /review & confirm/i })
+    )
+    expect(onConfirm).toHaveBeenCalledWith(quoteMsg)
   })
 })

@@ -189,6 +189,6 @@ describe("ChatMessageView", () => {
     await userEvent.click(
       screen.getByRole("button", { name: /review & confirm/i })
     )
-    expect(onConfirm).toHaveBeenCalledOnce()
+    expect(onConfirm).toHaveBeenCalledWith(msg)
   })
 })
