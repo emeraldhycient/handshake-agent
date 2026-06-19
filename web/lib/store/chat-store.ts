@@ -311,12 +311,12 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
 // ─── React singleton binding ──────────────────────────────────────────────────
 
 /**
- * Module-default singleton store for use by React components.
+ * Module-level singleton vanilla store — used by `useChatStore` and `MobileShell` default.
  * Components: `const state = useChatStore(selector)` or `useChatStore()` for full state.
  *
  * Separate from `createChatStore` so tests use fresh isolated stores.
  */
-const _defaultStore = createChatStore()
+export const defaultChatStore = createChatStore()
 
 export type ChatStore = ReturnType<typeof createChatStore>
 
@@ -334,8 +334,8 @@ export function useChatStore<U>(
 ): U | ChatState {
   if (selector) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
-    return useStore(_defaultStore, selector)
+    return useStore(defaultChatStore, selector)
   }
   // eslint-disable-next-line react-hooks/rules-of-hooks
-  return useStore(_defaultStore)
+  return useStore(defaultChatStore)
 }
