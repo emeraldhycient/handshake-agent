@@ -181,6 +181,29 @@ export function buildResponse(action: ChatAction): {
 
 // ─── Confirm builders ─────────────────────────────────────────────────────────
 
+/**
+ * Exhaustive dispatcher — maps the three quote-producing actions to their
+ * confirm payloads. Throws at runtime (and narrows to `never`) for any
+ * action that does not produce a quote. Phase 16 reuses this instead of
+ * duplicating the if/else chain.
+ */
+export function buildConfirmForQuote(
+  action: "buy" | "send" | "swap"
+): ConfirmPayload {
+  switch (action) {
+    case "buy":
+      return buildBuyConfirm()
+    case "send":
+      return buildSendConfirm()
+    case "swap":
+      return buildSwapConfirm()
+    default: {
+      const _x: never = action
+      throw new Error(`buildConfirmForQuote: no builder for "${_x}"`)
+    }
+  }
+}
+
 export function buildBuyConfirm(): ConfirmPayload {
   return {
     title: "Confirm purchase",

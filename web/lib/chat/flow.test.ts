@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import type { QuoteView, TicketsView } from "@/lib/schemas"
 import {
   buildResponse,
+  buildConfirmForQuote,
   buildBuyConfirm,
   buildSendConfirm,
   buildSwapConfirm,
@@ -119,6 +120,36 @@ describe("flow", () => {
     const t = buildResponse("ticket").messages[1] as TicketsView
     expect(t.kind).toBe("tickets")
     expect(t.options).toHaveLength(3)
+  })
+
+  // ─── buildConfirmForQuote (exhaustive dispatcher) ──────────────────────────
+
+  it("buildConfirmForQuote('buy') returns the buy ConfirmPayload", () => {
+    const result = buildConfirmForQuote("buy")
+    expect(result.action).toBe("buy")
+    expect(result.heroAmount).toBe("29.97 USDT")
+    expect(result.cta).toBe("Confirm with PIN")
+  })
+
+  it("buildConfirmForQuote('send') returns the send ConfirmPayload", () => {
+    const result = buildConfirmForQuote("send")
+    expect(result.action).toBe("send")
+    expect(result.heroAmount).toBe("25.00 USDT")
+    expect(result.cta).toBe("Confirm with PIN")
+  })
+
+  it("buildConfirmForQuote('swap') returns the swap ConfirmPayload", () => {
+    const result = buildConfirmForQuote("swap")
+    expect(result.action).toBe("swap")
+    expect(result.heroAmount).toBe("₦16,320")
+    expect(result.cta).toBe("Confirm with PIN")
+  })
+
+  it("buildConfirmForQuote throws for an invalid action", () => {
+    // Cast to bypass TypeScript — tests the runtime exhaustive guard.
+    expect(() =>
+      buildConfirmForQuote("balance" as "buy" | "send" | "swap")
+    ).toThrow('buildConfirmForQuote: no builder for "balance"')
   })
 
   // ─── buildBuyConfirm ────────────────────────────────────────────────────────

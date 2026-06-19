@@ -43,7 +43,7 @@ export function SuccessOverlay({ open, text }: SuccessOverlayProps) {
           >
             <path
               d="M11 20.5l6 6.2L29 13"
-              stroke="white"
+              className="stroke-primary-foreground"
               strokeWidth="3.4"
               strokeLinecap="round"
               strokeLinejoin="round"
