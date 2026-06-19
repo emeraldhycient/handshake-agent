@@ -1,0 +1,29 @@
+import { z } from 'zod'
+import { FiatAmountSchema, FiatCurrencySchema, SupportedAssetSchema } from '../common'
+
+// The NLU layer emits ONE of these validated intent objects. It is NOT a
+// transaction: there is no destination, no final rate, no authorization. The
+// deterministic engine turns a confirmed intent into an actual transaction.
+export const BuyCryptoIntentSchema = z.object({
+  action: z.literal('buy_crypto'),
+  asset: SupportedAssetSchema,
+  fiatAmount: FiatAmountSchema,
+  fiatCurrency: FiatCurrencySchema.default('NGN'),
+})
+export type BuyCryptoIntent = z.infer<typeof BuyCryptoIntentSchema>
+
+// When the model cannot resolve a concrete action it returns `none` so the
+// calling layer can ask a clarifying question — it never guesses a transaction.
+export const NoIntentSchema = z.object({
+  action: z.literal('none'),
+  clarification: z.string().min(1).max(500),
+})
+export type NoIntent = z.infer<typeof NoIntentSchema>
+
+// Discriminated-union root. Add sell_crypto, send_crypto, swap, buy_ticket here
+// as those flows land; consumers narrow on `action`.
+export const IntentSchema = z.discriminatedUnion('action', [
+  BuyCryptoIntentSchema,
+  NoIntentSchema,
+])
+export type Intent = z.infer<typeof IntentSchema>

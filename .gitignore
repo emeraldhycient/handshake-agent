@@ -1,0 +1,38 @@
+# dependencies
+node_modules/
+.pnp.*
+
+# build output
+dist/
+.next/
+out/
+build/
+
+# turbo
+.turbo/
+
+# test coverage
+coverage/
+
+# prisma generated client (regenerated via `prisma generate`)
+**/generated/prisma/
+
+# env & secrets
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# os / editor
+.DS_Store
+.idea/
+*.swp
+
+# misc
+*.tsbuildinfo
+.eslintcache
+.prettiercache

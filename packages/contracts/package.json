@@ -1,0 +1,47 @@
+{
+  "name": "@handshake-agent/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "require": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./intents": {
+      "types": "./src/intents/index.ts",
+      "import": "./src/intents/index.ts",
+      "require": "./src/intents/index.ts",
+      "default": "./src/intents/index.ts"
+    },
+    "./tools": {
+      "types": "./src/tools/index.ts",
+      "import": "./src/tools/index.ts",
+      "require": "./src/tools/index.ts",
+      "default": "./src/tools/index.ts"
+    },
+    "./dto": {
+      "types": "./src/dto/index.ts",
+      "import": "./src/dto/index.ts",
+      "require": "./src/dto/index.ts",
+      "default": "./src/dto/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"add a test runner (vitest) for contracts\" && exit 0",
+    "lint": "echo \"contracts uses the repo prettier/tsc gates\" && exit 0"
+  },
+  "peerDependencies": {
+    "zod": "^3.25.32"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "zod": "^3.25.32"
+  }
+}
