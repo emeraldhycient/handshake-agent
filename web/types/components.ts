@@ -15,6 +15,7 @@ import type {
   ReceiptView,
   ChatMessage,
   ChatAction,
+  ConfirmPayload,
 } from "@/lib/schemas"
 
 // ─── Density ──────────────────────────────────────────────────────────────────
@@ -126,4 +127,33 @@ export interface ChatThreadProps {
   density: Density
   onConfirm: (m: ChatMessage) => void
   onSelectTicket: (opt: TicketOption) => void
+}
+
+// ─── Phase 13 overlay components ──────────────────────────────────────────────
+
+/** 13.1 */
+export interface ConfirmSheetProps {
+  open: boolean
+  payload: ConfirmPayload | null
+  density: Density
+  onConfirm: () => void
+  onCancel: () => void
+}
+
+/** 13.2 */
+export interface PinPadProps {
+  open: boolean
+  /** Number of digits entered so far (0–4). Controls filled dot count. */
+  pinLength: number
+  density: Density
+  onDigit: (d: string) => void
+  onBack: () => void
+  onFaceId: () => void
+  onCancel: () => void
+}
+
+/** 13.3 */
+export interface SuccessOverlayProps {
+  open: boolean
+  text: string
 }
