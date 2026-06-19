@@ -118,3 +118,12 @@ export interface ChatComposerProps {
   onChip: (a: ChatAction) => void
   density: Density
 }
+
+/** 12.4 */
+export interface ChatThreadProps {
+  messages: ChatMessage[]
+  typing: boolean
+  density: Density
+  onConfirm: (m: ChatMessage) => void
+  onSelectTicket: (opt: TicketOption) => void
+}
