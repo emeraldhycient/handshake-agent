@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useState, useEffect } from "react"
+import { useState } from "react"
 import { useStore } from "zustand"
 import { defaultChatStore } from "@/lib/store/chat-store"
 import {
@@ -17,70 +17,9 @@ import { ChatComposer } from "@/components/chat/chat-composer"
 import { ConfirmSheet } from "@/components/chat/overlays/confirm-sheet"
 import { PinPad } from "@/components/chat/overlays/pin-pad"
 import { SuccessOverlay } from "@/components/chat/overlays/success-overlay"
+import { FocusTrap } from "@/components/shared/focus-trap"
 import type { MobileShellProps, MobileTabId } from "@/types/components"
 import type { ChatMessage, TicketOption, ChatAction } from "@/lib/schemas"
-
-// ─── Minimal focus trap — no radix-ui/internal dependency ────────────────────
-
-const FOCUSABLE =
-  'a[href],button:not([disabled]),input,textarea,select,[tabindex]:not([tabindex="-1"])'
-
-/**
- * Wraps the PIN modal with a self-contained focus trap:
- *  - Focuses the wrapper div (or its first focusable descendant) on mount.
- *  - Intercepts Tab / Shift+Tab to cycle within the wrapper.
- *  - No Esc-dismiss (PIN confirmation must be explicit).
- */
-function PinFocusTrap({ children }: { children: React.ReactNode }) {
-  const wrapRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const wrap = wrapRef.current
-    if (!wrap) return
-
-    // Focus the first focusable child, or the wrapper itself.
-    const first = wrap.querySelector<HTMLElement>(FOCUSABLE)
-    ;(first ?? wrap).focus()
-
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key !== "Tab" || !wrap) return
-      const focusable = Array.from(
-        wrap.querySelectorAll<HTMLElement>(FOCUSABLE)
-      )
-      if (focusable.length === 0) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (e.shiftKey) {
-        if (document.activeElement === first) {
-          e.preventDefault()
-          last.focus()
-        }
-      } else {
-        if (document.activeElement === last) {
-          e.preventDefault()
-          first.focus()
-        }
-      }
-    }
-
-    wrap.addEventListener("keydown", handleKeyDown)
-    return () => wrap.removeEventListener("keydown", handleKeyDown)
-  }, [])
-
-  return (
-    <div
-      ref={wrapRef}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Enter your PIN"
-      className="absolute inset-0 z-[45]"
-      // tabIndex makes the wrapper itself focusable as a fallback
-      tabIndex={-1}
-    >
-      {children}
-    </div>
-  )
-}
 
 export function MobileShell({ store: injectedStore }: MobileShellProps) {
   const state = useStore(injectedStore ?? defaultChatStore)
@@ -146,7 +85,7 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
       />
 
       {showPin && (
-        <PinFocusTrap>
+        <FocusTrap ariaLabel="Enter your PIN">
           <PinPad
             open
             pinLength={state.pin.length}
@@ -156,7 +95,7 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
             onFaceId={state.pinComplete}
             onCancel={state.cancel}
           />
-        </PinFocusTrap>
+        </FocusTrap>
       )}
 
       <SuccessOverlay open={showSuccess} text={state.successText} />

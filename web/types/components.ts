@@ -181,6 +181,14 @@ export interface VerificationRowProps {
   pillLabel: string
 }
 
+// ─── Shared FocusTrap (Step 0 extraction) ────────────────────────────────────
+
+export interface FocusTrapProps {
+  ariaLabel: string
+  children: React.ReactNode
+  className?: string
+}
+
 // ─── Phase 15 mobile components ───────────────────────────────────────────────
 
 /** 15.1 — presentational; no state */
