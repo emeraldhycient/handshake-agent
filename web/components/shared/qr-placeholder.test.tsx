@@ -39,4 +39,23 @@ describe("QrPlaceholder", () => {
     const root = screen.getByTestId("qr")
     expect(root.className).not.toMatch(/#[0-9a-fA-F]{3,6}/)
   })
+
+  it("root has border-border class for visible outline", () => {
+    render(<QrPlaceholder />)
+    const root = screen.getByTestId("qr")
+    expect(root).toHaveClass("border-border")
+    expect(root).toHaveClass("border")
+  })
+
+  it("module div does NOT carry bg-foreground (stripe visibility regression)", () => {
+    render(<QrPlaceholder />)
+    const moduleDiv = screen.getByTestId("qr-module")
+    expect(moduleDiv).not.toHaveClass("bg-foreground")
+  })
+
+  it("module div has no hex literals in className (tokens only)", () => {
+    render(<QrPlaceholder />)
+    const moduleDiv = screen.getByTestId("qr-module")
+    expect(moduleDiv.className).not.toMatch(/#[0-9a-fA-F]{3,6}/)
+  })
 })

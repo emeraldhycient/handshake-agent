@@ -10,6 +10,8 @@ import type { QuoteRow, StatusTone } from "@/lib/schemas"
 
 export interface MoneyProps {
   value: string
+  /** Rendered HTML element — defaults to "span" for inline usage */
+  as?: "span" | "div" | "p"
   className?: string
 }
 

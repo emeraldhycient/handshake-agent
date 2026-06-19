@@ -19,9 +19,6 @@ const pillVariants = cva(
         neutral: "bg-muted text-muted-foreground",
       } satisfies Record<StatusTone, string>,
     },
-    defaultVariants: {
-      tone: "neutral",
-    },
   }
 )
 

@@ -18,14 +18,17 @@ export function QrPlaceholder({ size = 150, className }: QrPlaceholderProps) {
     <div
       data-testid="qr"
       className={cn(
-        "relative overflow-hidden rounded-xl bg-card p-[12px]",
+        "relative overflow-hidden rounded-xl border border-border bg-card p-[12px] text-foreground",
         className
       )}
       style={{ width: `${size}px`, height: `${size}px` }}
     >
-      {/* QR module field — diagonal stripe approximation */}
+      {/* QR module field — diagonal stripe approximation.
+          No bg-foreground here: currentColor resolves to foreground (set on root),
+          and transparent gaps reveal bg-card — producing visible dark stripes on light. */}
       <div
-        className="h-full w-full rounded-sm bg-foreground opacity-90"
+        data-testid="qr-module"
+        className="h-full w-full rounded-sm opacity-90"
         style={{
           backgroundImage:
             "repeating-linear-gradient(45deg, currentColor 0 4px, transparent 4px 8px)",

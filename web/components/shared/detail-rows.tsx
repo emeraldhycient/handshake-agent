@@ -8,8 +8,11 @@ import type { DetailRowsProps } from "@/types/components"
 export function DetailRows({ rows, className }: DetailRowsProps) {
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>
-      {rows.map((row) => (
-        <div key={row.label} className="flex items-center justify-between">
+      {rows.map((row, i) => (
+        <div
+          key={`${row.label}-${i}`}
+          className="flex items-center justify-between"
+        >
           <span className="text-sm text-muted-foreground">{row.label}</span>
           <span className="text-sm font-semibold tabular-nums">
             {row.value}
