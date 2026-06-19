@@ -13,6 +13,7 @@ import type {
   TicketsView,
   TicketOption,
   ReceiptView,
+  ChatMessage,
 } from "@/lib/schemas"
 
 // ─── Density ──────────────────────────────────────────────────────────────────
@@ -95,4 +96,14 @@ export type ReceiptCardProps = ReceiptView & {
   density: Density
   onShare?: () => void
   className?: string
+}
+
+// ─── Phase 12 chat thread components ──────────────────────────────────────────
+
+/** 12.2 */
+export interface ChatMessageViewProps {
+  message: ChatMessage
+  density: Density
+  onConfirm: (m: ChatMessage) => void
+  onSelectTicket: (opt: TicketOption) => void
 }
