@@ -1,7 +1,7 @@
 "use client"
 
 import { cn } from "@/lib/utils"
-import { AvatarPlaceholder } from "@/components/shared"
+import { AvatarPlaceholder, BrandMark } from "@/components/shared"
 import type { DashboardSidebarProps } from "@/types/components"
 import type { DashboardPage } from "@/lib/schemas"
 
@@ -37,9 +37,7 @@ export function DashboardSidebar({
       {/* ── Brand lockup ─────────────────────────────────────────────────── */}
       <div className="flex items-center gap-[11px] px-2 pb-1">
         {/* Logo mark */}
-        <div className="flex h-[34px] w-[34px] flex-none items-center justify-center rounded-[10px] bg-gradient-to-b from-accent to-accent-deep">
-          <div className="h-[13px] w-[13px] rounded-[4px] bg-primary-deep" />
-        </div>
+        <BrandMark size={34} />
         <span className="text-[15.5px] font-bold">Handshake Agent</span>
       </div>
 

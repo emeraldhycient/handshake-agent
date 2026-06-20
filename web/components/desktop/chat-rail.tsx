@@ -13,6 +13,7 @@ import { ConfirmSheet } from "@/components/chat/overlays/confirm-sheet"
 import { PinPad } from "@/components/chat/overlays/pin-pad"
 import { SuccessOverlay } from "@/components/chat/overlays/success-overlay"
 import { FocusTrap } from "@/components/shared/focus-trap"
+import { BrandMark } from "@/components/shared"
 import { cn } from "@/lib/utils"
 import type { ChatRailProps } from "@/types/components"
 import type { ChatMessage, TicketOption } from "@/lib/schemas"
@@ -66,9 +67,7 @@ export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
       <div className="flex flex-none items-center gap-[11px] border-b border-border px-5 py-[18px]">
         {/* Agent avatar with online dot */}
         <div className="relative h-9 w-9 flex-none">
-          <div className="flex h-9 w-9 items-center justify-center rounded-[11px] bg-gradient-to-b from-accent to-accent-deep">
-            <div className="h-[13px] w-[13px] rounded-[4px] bg-primary-deep" />
-          </div>
+          <BrandMark size={36} />
           {/* Online indicator */}
           <div className="absolute -right-0.5 -bottom-0.5 h-[11px] w-[11px] rounded-full border-2 border-card-muted bg-success-bright" />
         </div>
