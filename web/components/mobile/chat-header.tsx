@@ -1,6 +1,7 @@
 "use client"
 
 import { cn } from "@/lib/utils"
+import { BrandMark } from "@/components/shared"
 import type { ChatHeaderProps } from "@/types/components"
 
 export function ChatHeader({ className }: ChatHeaderProps) {
@@ -15,16 +16,7 @@ export function ChatHeader({ className }: ChatHeaderProps) {
       <div className="flex items-center gap-3">
         {/* Brand avatar with online indicator */}
         <div className="relative h-[42px] w-[42px] flex-none">
-          <div
-            className={cn(
-              "flex h-[42px] w-[42px] items-center justify-center rounded-[13px]",
-              "[background:linear-gradient(150deg,var(--accent)_0%,var(--accent-deep)_100%)]",
-              "shadow-lg"
-            )}
-            aria-hidden="true"
-          >
-            <div className="h-4 w-4 rounded-[5px] bg-primary-deep" />
-          </div>
+          <BrandMark size={42} className="shadow-lg" />
           <div
             className={cn(
               "absolute -right-0.5 -bottom-0.5",

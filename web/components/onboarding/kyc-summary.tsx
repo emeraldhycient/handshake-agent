@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import { StatusPill } from "@/components/shared"
+import { BrandMark, StatusPill } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import type { KycSummaryProps, VerificationRowProps } from "@/types/components"
 
@@ -15,9 +15,7 @@ export function KycSummary({ onFinish }: KycSummaryProps) {
       <div className="flex-none bg-gradient-to-b from-primary to-primary-deep px-6 pt-14 pb-6 text-primary-foreground">
         {/* Brand lockup */}
         <div className="mb-5 flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-b from-accent to-accent-deep">
-            <div className="h-3.5 w-3.5 rounded-[3px] bg-primary-deep" />
-          </div>
+          <BrandMark size={36} />
           <span className="text-base font-bold">Handshake Agent</span>
         </div>
 

@@ -4,6 +4,7 @@
  */
 export * from "./asset-icon"
 export * from "./avatar-placeholder"
+export * from "./brand-mark"
 export * from "./focus-trap"
 export * from "./detail-rows"
 export * from "./money"

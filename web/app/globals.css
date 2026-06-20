@@ -10,6 +10,8 @@
   --animate-hs-pop: hsPop 0.45s cubic-bezier(0.22, 0.61, 0.36, 1) both;
   --animate-hs-ring: hsRing 0.9s ease-out infinite;
   --animate-hs-scrim: hsScrim 0.2s ease both;
+  --animate-hs-spark-spin: hsSparkSpin 3s linear infinite;
+  --animate-hs-spark-breathe: hsSparkBreathe 2.2s ease-in-out infinite;
   --font-heading: var(--font-sans);
   --font-sans: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -229,5 +231,23 @@
   }
   to {
     opacity: 1;
+  }
+}
+
+@keyframes hsSparkSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes hsSparkBreathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 0.78;
   }
 }

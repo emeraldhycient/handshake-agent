@@ -73,6 +73,26 @@ export interface AvatarPlaceholderProps {
   className?: string
 }
 
+// ─── BrandMark (logo) ─────────────────────────────────────────────────────────
+
+export interface BrandMarkProps {
+  /**
+   * Centre treatment:
+   *  - "default" — static dark square (the standing logo mark)
+   *  - "spark"   — animated rotating sunburst (Claude-style), for thinking / splash
+   */
+  variant?: "default" | "spark"
+  /** Outer tile size in px. Centre + corner radii scale proportionally. Default 42. */
+  size?: number
+  /**
+   * Accessible name. When set, the mark is exposed as `role="img"` with this
+   * label; when omitted the mark is decorative (`aria-hidden`) — it normally
+   * sits beside the "Handshake Agent" wordmark.
+   */
+  ariaLabel?: string
+  className?: string
+}
+
 // ─── Chat message cards (Phase 11) ────────────────────────────────────────────
 
 /** 11.1 */

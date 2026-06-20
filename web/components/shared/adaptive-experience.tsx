@@ -1,6 +1,7 @@
 "use client"
 
 import { useIsDesktop } from "@/hooks/use-is-desktop"
+import { BrandMark } from "./brand-mark"
 import { DashboardExperience } from "@/components/desktop/dashboard-experience"
 import { MobileShell } from "@/components/mobile/mobile-shell"
 
@@ -20,10 +21,8 @@ export function AdaptiveExperience() {
     return (
       <div className="flex h-svh w-full items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
-          {/* Brand lockup — tokens only */}
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary shadow-md">
-            <div className="h-6 w-6 rounded-lg bg-accent" />
-          </div>
+          {/* Brand lockup — animated spark mark */}
+          <BrandMark variant="spark" size={56} className="shadow-md" />
           <span className="text-base font-semibold tracking-tight text-foreground">
             Handshake Agent
           </span>
