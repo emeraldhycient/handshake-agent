@@ -19,13 +19,13 @@ describe("OnboardingPage (/onboarding)", () => {
     ).toBeInTheDocument()
   })
 
-  it("routes to /app when Finish button is clicked", async () => {
+  it("routes to / when Finish button is clicked", async () => {
     pushMock.mockClear()
     const user = userEvent.setup()
     render(<OnboardingPage />)
     await user.click(
       screen.getByRole("button", { name: /finish & open my wallet/i })
     )
-    expect(pushMock).toHaveBeenCalledWith("/app")
+    expect(pushMock).toHaveBeenCalledWith("/")
   })
 })
