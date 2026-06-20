@@ -20,10 +20,3 @@ export const NoIntentSchema = z.object({
 })
 export type NoIntent = z.infer<typeof NoIntentSchema>
 
-// Discriminated-union root. Add sell_crypto, send_crypto, swap, buy_ticket here
-// as those flows land; consumers narrow on `action`.
-export const IntentSchema = z.discriminatedUnion('action', [
-  BuyCryptoIntentSchema,
-  NoIntentSchema,
-])
-export type Intent = z.infer<typeof IntentSchema>

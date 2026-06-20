@@ -14,4 +14,14 @@ export const FiatAmountSchema = z
   .string()
   .regex(/^\d+(\.\d{1,2})?$/, 'Enter a valid amount')
 
+// Crypto carries up to 8 d.p. (vs FiatAmountSchema's 2 d.p.) to
+// accommodate satoshi-level precision for BTC and similar assets.
+export const CryptoAmountSchema = z
+  .string()
+  .regex(/^\d+(\.\d{1,8})?$/, 'Enter a valid amount')
+
+// On-chain networks supported for sends/receives.
+// TRON is the launch default (TRC-20 USDT); widen as new networks are enabled.
+export const NetworkSchema = z.enum(['TRON'])
+
 export const IdempotencyKeySchema = z.string().uuid()
