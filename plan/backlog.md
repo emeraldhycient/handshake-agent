@@ -274,6 +274,31 @@ Goal: real users with KYC + PIN + step-up, and a **separate admin platform** wit
 
 ---
 
+### 5C · Agent-driven UI directives (ADR-0005)
+
+How the agent triggers modals/forms/PIN/confirmation on both channels — declarative, provenance-gated directives. Depends on the channels + engine work above.
+
+- [ ] **UID-01 — UiDirective contract** · M · deps: AGT-01, CHN-01
+      Closed Zod union in `packages/contracts/src/channels/`: `UiComponentRef` enum, directives discriminated on `type` with server `origin` + trust tier, `directive_result` + result-by-ref schemas; `ConversationReply.directives[]`. AC: unknown ref/type fails parse; high-trust members require `proposalId` + nonce + expiry + sig.
+- [ ] **UID-02 — DirectiveGrant + signer** · M · deps: TXN-01, FND-15
+      `DirectiveGrant` table (issued/consumed/expired/failed); CSPRNG nonce bound to (userId, proposalId), hash-at-rest, TTL = quote lock; HMAC/token signer (key in env). AC: one-shot consume-on-redeem; replay/expiry rejected.
+- [ ] **UID-03 — Core directive emission + provenance** · M · deps: UID-01, UID-02, TXN-02, CHN-02
+      Only the engine/core mints high-trust directives (origin-stamped + signed); the LLM may request low-trust only. AC: an agent-origin high-trust directive is dropped server-side; depcruise + unit test prove the agent path cannot construct one.
+- [ ] **UID-04 — Submit re-validation (settleFromDirective)** · M · deps: UID-02, TXN-02
+      Every web/Flow submit re-checks identity/KYC/limits/velocity/sanctions/balance/re-quote/nonce/PIN/step-up/idempotency from the proposal, ignoring client-supplied figures. AC: amount-substitution, stale-price, and replay all rejected.
+- [ ] **UID-05 — Web DirectiveHost + registry** · M · deps: WEB-04, UID-01
+      `components/chat/DirectiveHost` reads validated directives from `chat-store`; exhaustive `ref→component` registry over app-owned overlays/cards; safe fallback; sensitive directives gate on a complete state. AC: agent ships no markup; unknown ref → fallback; `lib/` stays component-free.
+- [ ] **UID-06 — Web directive-result client** · S · deps: UID-05, WEB-02
+      Modal/form submit → typed `directive_result` inbound (Idempotency-Key); PIN submitted out-of-band to the engine, never to chat. AC: round-trip parsed by ref; PIN never in chat history.
+- [ ] **UID-07 — WhatsApp directive→Flow mapper** · M · deps: CHN-07, UID-01
+      Map the same directive to a Flow / buttons; `ref→published-Flow-id` AppSetting; secret-bearing directives only via E2E Flow; web-handoff fallback when a Flow is unavailable; never a commerce object. AC: PIN/KYC never plaintext; parity with web.
+- [ ] **UID-08 — WhatsApp Flow → directive_result** · S · deps: CHN-07, UID-01
+      Decrypt Flow `data_exchange` → reconstruct the same `directive_result` inbound into `handleInbound()`. AC: web and WhatsApp submits indistinguishable to the core.
+- [ ] **UID-09 — Directive security telemetry** · S · deps: UID-03, AUD-02
+      Dropped/forged high-trust directives raise a compliance/admin security event (prompt-injection signal); no-raw-HTML lint on `params`. AC: a forged directive is logged + alerted.
+
+---
+
 ## Phase 6 — Event ticketing
 
 - [ ] **TKT-01 — TicketProvider port + registry gate** · M · deps: FND-05

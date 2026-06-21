@@ -4,7 +4,7 @@ Date: 2026-06-19
 
 ## Status
 
-Accepted. Builds on [ADR-0003](0003-whatsapp-full-agent-surface.md) (WhatsApp is a full agent surface) and the foundational architecture in [ADR-0002](0002-foundational-architecture.md).
+Accepted. Builds on [ADR-0003](0003-whatsapp-full-agent-surface.md) (WhatsApp is a full agent surface) and the foundational architecture in [ADR-0002](0002-foundational-architecture.md). **Amended by [ADR-0005](0005-agent-driven-ui-directives.md)** — `ConversationReply`'s single optional directive becomes `directives[]` (agent-driven UI directives).
 
 ## Context
 
