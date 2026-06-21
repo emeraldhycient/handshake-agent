@@ -6,7 +6,7 @@
 **Owner:** Founder / Product
 **Related documents:** Business Requirements Document (BRD), Investor Memo
 
-> **Open items referenced throughout** (tracked, not yet resolved): WaaS provider selection, commercial terms with ticketing providers, and the detailed regulatory design workstream. These are flagged inline as `[TBD]` where they affect a requirement.
+> **Open items referenced throughout** (tracked, not yet resolved): commercial terms with ticketing providers, the identity-verification vendor, BTC custody (the chosen WaaS, Blockradar, has no native BTC — see ADR-0006), and the detailed regulatory design workstream. These are flagged inline as `[TBD]` where they affect a requirement. (WaaS, email, and payment rails are now selected — ADR-0006.)
 
 ---
 
@@ -64,7 +64,7 @@ Each flow below is written as the user experiences it, with the channel boundary
 1. **(WA)** An existing WhatsApp user messages the business number. The assistant greets them in the language they wrote in and explains what it does.
 2. **(WA)** The assistant creates a provisional account keyed to the user and guides them through tiered KYC — completed in-thread via an end-to-end-encrypted WhatsApp Flow, or on the web app. Verification and authorization use the Flow's encrypted forms (or web), never plaintext chat.
 3. **(Web)** The user completes tiered KYC: identity verification using NIN/BVN, an ID document, and a liveness check. The user sets a transaction PIN. The current device is bound to the account.
-4. **(Web)** On successful KYC, the platform provisions custodial wallets for the supported assets/chains via the WaaS provider `[TBD]` and displays the wallet addresses and balances.
+4. **(Web)** On successful KYC, the platform provisions custodial wallets for the supported assets/chains via the WaaS provider (Blockradar; USDT on TRON at launch) and displays the wallet addresses and balances.
 5. **(WA)** The assistant confirms the account is live and can now answer questions, surface balances, and complete money movement in-thread via encrypted WhatsApp Flows (or on the web app).
 
 **Critical requirement:** account identity is bound to the verified KYC record and device, not to the phone number. A change of SIM or phone number triggers re-verification and step-up authentication before any transaction.
@@ -232,7 +232,7 @@ Requirements are numbered for traceability against the BRD. "MVP" marks Phase 0 
 
 ## 7. Custody model
 
-Crypto custody is delegated to a Wallet-as-a-Service provider `[TBD]`. Selection criteria, to be evaluated before commitment:
+Crypto custody is delegated to **Blockradar** (Wallet-as-a-Service; stablecoins on TRON/EVM — USDT on TRON at launch, BTC deferred; see ADR-0006), isolated behind a provider port. It was selected against these criteria:
 
 - Key-management security model (MPC vs HSM-backed), and where signing authority sits.
 - Supported chains and assets matching launch scope.
@@ -270,7 +270,7 @@ Sensitive data (KYC secrets, keys) is segregated and access-controlled; the conv
 
 ## 10. Dependencies and open questions
 
-- **WaaS provider** `[TBD]` — gates wallet provisioning, custody, and supported assets.
+- **WaaS provider** — Blockradar, selected (ADR-0006). **BTC custody remains open** (Blockradar has no native BTC), which gates BTC support specifically; USDT on TRON ships first.
 - **Payment processor** crypto-permissibility and settlement timing — affects on/off-ramp viability and float.
 - **Ticketing providers** `[TBD terms]` — settlement timing and refund/chargeback handling affect working capital and the ticket flow.
 - **Regulatory status** — access to compliant banking/payment rails depends on entering the SEC's supervised perimeter (ARIP); see BRD.

@@ -71,7 +71,7 @@ These are model logic, not forecasts; actuals depend on volume, mix, and confirm
 
 ## 6. Stakeholders
 
-Founder/management; product and engineering; compliance/operations; the WaaS provider `[TBD]`; the payment processor; ticketing providers (`[TBD terms]`); identity-verification vendors (NIN/BVN, liveness); the SEC and, indirectly, the CBN as it governs banking access for crypto businesses; investors; and end users.
+Founder/management; product and engineering; compliance/operations; Blockradar (WaaS/custody); Flutterwave (payment rails); Resend (email); ticketing providers (`[TBD terms]`); identity-verification vendors (NIN/BVN, liveness); the SEC and, indirectly, the CBN as it governs banking access for crypto businesses; investors; and end users.
 
 ---
 
@@ -119,13 +119,14 @@ Specific figures and conditions above should be validated against current SEC in
 
 ## 10. Partnerships and integrations
 
-| Partner / integration                     | Role                                                         | Status                                                                  |
-| ----------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| Payment processor (e.g., Flutterwave)     | Fiat collection and payout (NGN; multi-currency optionality) | Confirmed available; validate crypto-permissibility & settlement timing |
-| WaaS provider                             | Wallet provisioning and custody                              | `[TBD — selection pending]`                                             |
-| Ticketing providers (Zentry, Tix, others) | Ticket inventory and fulfillment                             | APIs available; `[commercial terms TBD]`                                |
-| Identity verification (NIN/BVN, liveness) | KYC                                                          | Vendor selection pending                                                |
-| On-chain infrastructure                   | Broadcast, monitoring, screening                             | Tied to WaaS selection                                                  |
+| Partner / integration                     | Role                                                    | Status                                                                  |
+| ----------------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Flutterwave (payment rails)               | Fiat collection (virtual accounts) + payout (NGN)       | Selected (ADR-0006); validate crypto-permissibility & settlement timing |
+| Blockradar (WaaS / custody)               | Wallet provisioning & custody — stablecoins on TRON/EVM | Selected (ADR-0006); no native BTC → BTC custody deferred               |
+| Resend (email)                            | Transactional email / notification failover             | Selected (ADR-0006)                                                     |
+| Ticketing providers (Zentry, Tix, others) | Ticket inventory and fulfillment                        | APIs available; `[commercial terms TBD]`                                |
+| Identity verification (NIN/BVN, liveness) | KYC                                                     | Vendor selection pending                                                |
+| On-chain infrastructure                   | Broadcast, monitoring, screening                        | Tied to WaaS selection                                                  |
 
 The payment processor's multi-currency reach across African markets is noted as **expansion optionality** for a later phase, not MVP scope.
 

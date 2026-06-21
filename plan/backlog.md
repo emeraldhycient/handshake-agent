@@ -125,15 +125,15 @@ Goal: real users with KYC + PIN + step-up, and a **separate admin platform** wit
 ### 2A · Wallets & custody
 
 - [ ] **WAL-01 — WaaS provider port** · M · deps: FND-05
-      provision/address/balance/signing-policy behind a port (provider TBD). AC: provider isolated; mockable.
+      provision/address/balance/signing-policy behind a port — **Blockradar** (stablecoins on TRON/EVM; master wallet → per-user child addresses), per ADR-0006. AC: provider isolated; mockable.
 - [ ] **WAL-02 — Wallet provisioning** · M · deps: WAL-01, IDN-10
-      Provision custodial wallets on KYC-verified (USDT/BTC, TRON). AC: wallets created idempotently; provider ref stored.
+      Provision custodial wallets on KYC-verified — **USDT on TRON via Blockradar**; BTC deferred (no Blockradar BTC support, ADR-0006). AC: wallets created idempotently; provider ref stored.
 - [ ] **WAL-03 — Address management** · S · deps: WAL-02
       Surface deposit addresses (read-only). AC: addresses validated; safe to display after link.
 - [ ] **WAL-04 — Balance reads** · S · deps: WAL-02
       Cached balances with sensible staleTime. AC: consistent with provider; no plaintext keys.
 - [ ] **WAL-05 — Deposit/receive detection** · M · deps: WAL-02, FND-14
-      Provider webhook or chain watcher → confirmation events. AC: confirmed deposit emits an event idempotently.
+      Blockradar deposit webhooks (auto-sweep, signature-verified) → confirmation events. AC: confirmed deposit emits an event idempotently.
 - [ ] **WAL-06 — Withdrawal controls / allow-listing** · M · deps: WAL-02
       Policy hooks for withdrawals. AC: out-of-policy withdrawal blocked + audited.
 
@@ -161,7 +161,7 @@ Goal: real users with KYC + PIN + step-up, and a **separate admin platform** wit
 - [ ] **TXN-02 — Engine pipeline core** · L · deps: TXN-01, IDN-05, IDN-06, IDN-11, IDN-12, AUD-03
       Re-validate → balance/velocity/limit/sanctions/AML checks → itemized confirmation → PIN+step-up → idempotent execute → audit. AC: no path moves money without confirmation + PIN + idempotency; 100% covered.
 - [ ] **TXN-04 — Payment processor port + adapter** · L · deps: FND-05, FND-14
-      Flutterwave collect/payout + webhook + reconciliation. AC: webhook verified; reconciliation idempotent.
+      Flutterwave (ADR-0006): on-ramp generates a collection/virtual bank account for buying; off-ramp transfers/pays out on selling; + webhooks + reconciliation. AC: webhook verified; reconciliation idempotent.
 - [ ] **TXN-03 — Buy (fiat→crypto)** · M · deps: TXN-02, TXN-04
       Collect fiat, credit wallet. AC: failure rolls back cleanly; receipt emitted.
 - [ ] **TXN-05 — Sell (crypto→fiat)** · M · deps: TXN-02, TXN-04
@@ -199,7 +199,7 @@ Goal: real users with KYC + PIN + step-up, and a **separate admin platform** wit
 - [ ] **NTF-02 — Channel provider abstraction** · S · deps: NTF-01
       `NotificationProvider` port. AC: channels pluggable.
 - [ ] **NTF-03 — Email adapter** · S · deps: NTF-02
-      Resend/SES. AC: delivery status captured.
+      Resend (ADR-0006). AC: delivery status captured.
 - [ ] **NTF-04 — SMS adapter** · S · deps: NTF-02
       Africa's Talking/Twilio. AC: E.164 normalized; status captured.
 - [ ] **NTF-05 — In-app/web channel** · S · deps: NTF-02
@@ -281,7 +281,7 @@ How the agent triggers modals/forms/PIN/confirmation on both channels — declar
 - [ ] **UID-01 — UiDirective contract** · M · deps: AGT-01, CHN-01
       Closed Zod union in `packages/contracts/src/channels/`: `UiComponentRef` enum, directives discriminated on `type` with server `origin` + trust tier, `directive_result` + result-by-ref schemas; `ConversationReply.directives[]`. AC: unknown ref/type fails parse; high-trust members require `proposalId` + nonce + expiry + sig.
 - [ ] **UID-02 — DirectiveGrant + signer** · M · deps: TXN-01, FND-15
-      `DirectiveGrant` table (issued/consumed/expired/failed); CSPRNG nonce bound to (userId, proposalId), hash-at-rest, TTL = quote lock; HMAC/token signer (key in env). AC: one-shot consume-on-redeem; replay/expiry rejected.
+      `DirectiveGrant` table (issued/consumed/expired/failed); CSPRNG nonce bound to (userId, proposalId), hash-at-rest, TTL = quote lock; HMAC-SHA256 signer (`DIRECTIVE_SIGNING_KEY`, ADR-0006). AC: one-shot consume-on-redeem; replay/expiry rejected.
 - [ ] **UID-03 — Core directive emission + provenance** · M · deps: UID-01, UID-02, TXN-02, CHN-02
       Only the engine/core mints high-trust directives (origin-stamped + signed); the LLM may request low-trust only. AC: an agent-origin high-trust directive is dropped server-side; depcruise + unit test prove the agent path cannot construct one.
 - [ ] **UID-04 — Submit re-validation (settleFromDirective)** · M · deps: UID-02, TXN-02
@@ -400,7 +400,8 @@ Each ticket depends on its backend epic and can start as soon as that API lands.
 
 ### Open inputs that gate specific tickets (track separately)
 
-- **WaaS provider** `[TBD]` → WAL-01/02, TXN-06/07.
+- **WaaS = Blockradar** (USDT/stablecoins on TRON/EVM, ADR-0006) → WAL-01/02. **BTC custody is the open item** — Blockradar has no native BTC, so BTC buy/sell/send is deferred until a BTC-capable provider is added → affects TXN-06/07.
+- **Email = Resend**, **payments = Flutterwave** (ADR-0006) → NTF-03, TXN-04.
 - **Ticketing vendor terms** `[TBD]` → TKT-02/04.
 - **Identity vendor** `[TBD]` → IDN-09.
 - **ARIP / counsel + Meta review** → OPS-05, and gates the ADR-0003 compliance posture before launch.

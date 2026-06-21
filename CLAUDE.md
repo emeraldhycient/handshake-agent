@@ -12,7 +12,7 @@ This file is the canonical guidance for Claude Code (and any AI agent) working a
 
 The defining property of this system is **safety of funds before convenience**: no language-model output ever moves money on its own. The model interprets intent; a separate deterministic engine executes — after explicit parameter confirmation, server-side validation, and PIN + step-up authentication. This is not a feature, it is the architecture. See [`docs/PRD.md`](docs/PRD.md) §4.
 
-This is a **separate product** from the `handshake` escrow app in the sibling directory. It shares the brand and the engineering-quality philosophy, but none of its infrastructure (no Turnkey / Stellar / Trustless Work). This product is **custodial** via a Wallet-as-a-Service provider (selection is an open item — `[TBD]` in the PRD).
+This is a **separate product** from the `handshake` escrow app in the sibling directory. It shares the brand and the engineering-quality philosophy, but none of its infrastructure (no Turnkey / Stellar / Trustless Work). This product is **custodial** via **Blockradar** (Wallet-as-a-Service; stablecoins on TRON/EVM) — USDT on TRON at launch, BTC deferred. See [`docs/adr/0006-provider-selections.md`](docs/adr/0006-provider-selections.md).
 
 ---
 

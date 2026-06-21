@@ -42,8 +42,8 @@ This is the part that makes it safe for money. Inferring trust from a directive'
 - **Extensibility (mirrors §7).** A new rich-UI surface = one `UiComponentRef` value + one `DirectiveHost`/registry entry + one WhatsApp adapter branch (+ a result schema if it submits) + a Flow-id mapping. No change to `ConversationReply`, the agent, or callers.
 - **Audit.** Every dropped/forged high-trust directive raises a security event to the compliance/admin console (a prompt-injection signal); a `dependency-cruiser` rule + unit test prove the agent code path cannot construct a high-trust directive.
 
-## Open items
+## Resolved (see [ADR-0006](0006-provider-selections.md))
 
-- Signing primitive (HMAC vs short-lived signed token e.g. PASETO) and key location (env secret, §7).
-- Whether `DirectiveGrant` is a dedicated table (recommended) vs. folded into the quote record.
-- `request_pin` expiry = quote lock vs. a shorter independent window (AppSetting default).
+- **Signing primitive: HMAC-SHA256** — signer == verifier (single backend trust domain), so symmetric HMAC is simplest/fastest/dependency-free and consistent with the WhatsApp webhook HMAC; PASETO's public-key verifiability isn't needed. Sign `(directiveId, ref, proposalId, nonce, expiresAt, userId, origin)` with `DIRECTIVE_SIGNING_KEY` (env secret, rotatable); the client never holds the key.
+- **`DirectiveGrant` is its own table** (`issued/consumed/expired/failed`).
+- **`request_pin` expiry = 120s, configurable** via an AppSetting (bounded independently of the quote lock).
