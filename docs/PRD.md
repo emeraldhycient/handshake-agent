@@ -12,9 +12,9 @@
 
 ## 1. Overview
 
-Handshake Agent is a conversational financial assistant that lets users in Nigeria buy, sell, swap, send, and receive cryptocurrency, and discover and purchase event tickets, entirely through natural-language chat in any language. Users reach Handshake Agent first through WhatsApp, which serves as the acquisition, discovery, and support surface. Money movement and any regulated transaction execution happen on a companion web application, which is the primary system of record.
+Handshake Agent is a conversational financial assistant that lets users in Nigeria buy, sell, swap, send, and receive cryptocurrency, and discover and purchase event tickets, entirely through natural-language chat in any language. WhatsApp and a companion web application are both full agent surfaces: a user can complete the entire experience in either, including in-thread on WhatsApp via end-to-end-encrypted WhatsApp Flows. The web application remains the system of record and full fallback, and the same server-side deterministic engine settles every regulated transaction in both channels.
 
-This split is intentional. Meta's WhatsApp Commerce Policy keeps crypto transactions off the platform — buying, selling, collecting payment, or completing an order in-thread — while explicitly permitting awareness, product questions, customer care, and linking users to an external site to transact. Handshake's architecture sits cleanly on the permitted side of that line while delivering a chat-native experience.
+This stays within Meta policy by design. Meta's WhatsApp Commerce Policy prohibits crypto as in-thread _commerce_ (Catalog, Cart, WhatsApp Pay), so Handshake never uses those for crypto: WhatsApp carries conversation, approved templates, and end-to-end-encrypted WhatsApp Flows (for KYC, confirmation, and PIN), while the regulated settlement is brokered by our own server-side engine — never as a WhatsApp commerce transaction. See `docs/adr/0003-whatsapp-full-agent-surface.md` (a counsel/Meta review is required before launch).
 
 ### 1.1 Product principles
 
@@ -27,7 +27,7 @@ The product is governed by four principles, in priority order:
 
 ### 1.2 Goals
 
-- Let an existing WhatsApp user create a verified account and a set of provisioned crypto wallets through a guided conversation, with a clean handoff to the web app for verification and execution.
+- Let a WhatsApp or web user create a verified account and provisioned crypto wallets through a guided conversation — completing KYC and verification in-thread via WhatsApp Flows or on the web app.
 - Support fiat-to-crypto and crypto-to-fiat conversion in the fiat currencies available through the payment processor, with a transparent, competitive FX spread.
 - Support on-chain send and receive, and asset-to-asset swaps, for a supported set of assets and chains.
 - Let users manage saved beneficiaries and authorize payments with a PIN plus step-up authentication.
@@ -37,7 +37,7 @@ The product is governed by four principles, in priority order:
 ### 1.3 Non-goals (for the MVP / Phase 0)
 
 - The platform is **not** a custodial bank, a lending product, a yield/staking product, or an investment-advice service.
-- The MVP does not execute crypto transactions inside the WhatsApp thread.
+- The MVP never completes a crypto purchase as a WhatsApp _commerce_ transaction (no Catalog/Cart/WhatsApp Pay for crypto); in-thread flows are conversation + encrypted WhatsApp Flows, and every settlement is engine-brokered server-side.
 - The MVP does not attempt to support every asset, chain, or fiat currency — scope is intentionally narrow at launch (see Section 12).
 - The product does not provide tax filing, though it will retain records sufficient for users and the business to meet reporting obligations.
 
@@ -62,20 +62,20 @@ Each flow below is written as the user experiences it, with the channel boundary
 ### 3.1 Onboarding and wallet provisioning
 
 1. **(WA)** An existing WhatsApp user messages the business number. The assistant greets them in the language they wrote in and explains what it does.
-2. **(WA → Web)** The assistant creates a provisional account keyed to the user and sends a secure, single-use link to the web app to complete verification. It is explicit that account setup and any future transactions happen on the web app, not in chat.
+2. **(WA)** The assistant creates a provisional account keyed to the user and guides them through tiered KYC — completed in-thread via an end-to-end-encrypted WhatsApp Flow, or on the web app. Verification and authorization use the Flow's encrypted forms (or web), never plaintext chat.
 3. **(Web)** The user completes tiered KYC: identity verification using NIN/BVN, an ID document, and a liveness check. The user sets a transaction PIN. The current device is bound to the account.
 4. **(Web)** On successful KYC, the platform provisions custodial wallets for the supported assets/chains via the WaaS provider `[TBD]` and displays the wallet addresses and balances.
-5. **(WA)** The assistant confirms the account is live and can now answer questions, surface balances (read-only), and hand off to the web app for any money movement.
+5. **(WA)** The assistant confirms the account is live and can now answer questions, surface balances, and complete money movement in-thread via encrypted WhatsApp Flows (or on the web app).
 
 **Critical requirement:** account identity is bound to the verified KYC record and device, not to the phone number. A change of SIM or phone number triggers re-verification and step-up authentication before any transaction.
 
 ### 3.2 Buy crypto (fiat → crypto)
 
 1. **(WA)** User expresses intent ("I want to buy 50,000 naira of USDT"). The assistant parses this into a _structured intent_, not a transaction.
-2. **(WA → Web)** The assistant generates a quote (asset, fiat amount, crypto amount, the FX rate applied, the spread, the processing fee, and the all-in price) and hands the user to the web app to review and execute.
+2. **(WA)** The assistant generates a quote (asset, fiat amount, crypto amount, the FX rate applied, the spread, the processing fee, and the all-in price) and presents the itemized confirmation in-thread via a WhatsApp Flow (or on the web app) for explicit review and PIN authorization.
 3. **(Web)** The user reviews the fully itemized quote. The exact parameters are displayed for explicit confirmation. The user authorizes with PIN and step-up authentication.
 4. **(Web)** The deterministic execution engine re-validates the quote against live pricing and limits, collects fiat through the payment processor, and credits the user's wallet with the purchased asset.
-5. **(WA + Web)** A receipt is delivered. (Note: a receipt for the crypto transaction is delivered through the web app and via email/notification, not transacted in-thread, to stay within WhatsApp policy.)
+5. **(WA + Web)** A receipt is delivered in-thread and via email/notification. The settlement itself is engine-brokered server-side — never a WhatsApp _commerce_ transaction — which keeps it within WhatsApp policy.
 
 ### 3.3 Sell crypto (crypto → fiat)
 
@@ -105,7 +105,7 @@ The user expresses intent to swap one supported asset for another. The platform 
 
 1. **(WA)** User asks the assistant to find tickets to an event.
 2. **(WA)** The assistant queries integrated ticketing providers (e.g., Zentry, Tix, and others `[TBD commercial terms]`) through internal tools and presents normalized options (event, date, tier, price in naira inclusive of the platform fee).
-3. **(WA → Web)** The user selects an option and is handed to the web app to pay.
+3. **(WA)** The user selects an option and pays via an in-thread WhatsApp Flow (or on the web app); settlement is engine-brokered server-side.
 4. **(Web)** User pays; the platform settles the provider from its business account and the provider issues the ticket, which is delivered to the user.
 
 **Settlement note:** the platform is the merchant of record to the user and settles the provider out of band. Provider commercial terms, settlement timing, and refund/chargeback handling are open items that materially affect working-capital needs (see BRD).
@@ -114,9 +114,9 @@ The user expresses intent to swap one supported asset for another. The platform 
 
 The assistant detects the user's language per message and responds in kind, across all flows. Financial figures, asset tickers, and addresses are rendered unambiguously regardless of language. Numerals and amounts are normalized to a canonical representation before parsing into structured intent.
 
-### 3.10 Web app as primary surface and fallback
+### 3.10 Web app as system of record and full fallback
 
-The web app exposes the same conversational interface plus full account management. If WhatsApp restricts or removes the business account, users transact entirely on the web app with no loss of funds, history, or beneficiaries. User communications, marketing, and onboarding can fail over to web/email/SMS channels.
+WhatsApp and the web app are both full agent surfaces; the web app is additionally the **system of record** and the **full fallback**. It exposes the same conversational interface plus full account management. If WhatsApp restricts or removes the business account, users transact entirely on the web app with no loss of funds, history, or beneficiaries. User communications, marketing, and onboarding can fail over to web/email/SMS channels.
 
 ---
 
@@ -165,7 +165,7 @@ Requirements are numbered for traceability against the BRD. "MVP" marks Phase 0 
 
 **Onboarding & identity**
 
-- FR-1 (MVP): Provision a provisional account from a WhatsApp inbound message and hand off to the web app via a secure single-use link.
+- FR-1 (MVP): Provision a provisional account from a WhatsApp inbound message and guide the user into verification — in-thread via an encrypted WhatsApp Flow, or via a secure single-use web link.
 - FR-2 (MVP): Complete tiered KYC (NIN/BVN, ID document, liveness) on the web app before any wallet is provisioned.
 - FR-3 (MVP): Bind the account to a verified device and a user-set PIN; anchor identity to KYC, not the phone number.
 - FR-4 (MVP): Detect SIM/phone-number change and require re-verification + step-up before transactions.
@@ -195,7 +195,7 @@ Requirements are numbered for traceability against the BRD. "MVP" marks Phase 0 
 
 **Channel**
 
-- FR-17 (MVP): Keep WhatsApp to awareness/discovery/care + handoff; execute transactions only on the web app.
+- FR-17 (MVP): WhatsApp is a full agent surface (Cloud API + WhatsApp Flows) — KYC, confirmation, and PIN complete in-thread; settlement is engine-brokered server-side in either channel, never as a WhatsApp commerce object.
 - FR-18 (MVP): Provide a web app with the full conversational + account-management experience and channel failover.
 
 ---
@@ -226,7 +226,7 @@ Requirements are numbered for traceability against the BRD. "MVP" marks Phase 0 
 
 **Platform integrity**
 
-- NFR-11: Use only the official WhatsApp Business Platform (Cloud API) with approved messaging templates; no unofficial automation tooling (which itself triggers bans).
+- NFR-11: Use only the official WhatsApp Business Platform (Cloud API) + WhatsApp Flows with approved templates; never a crypto commerce object (Catalog/Cart/WhatsApp Pay); settlement is engine-brokered server-side; no unofficial automation tooling (which itself triggers bans).
 
 ---
 
@@ -256,15 +256,15 @@ Sensitive data (KYC secrets, keys) is segregated and access-controlled; the conv
 
 ## 9. Product risks and mitigations
 
-| Risk                                            | Mitigation                                                                                                     |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| LLM hallucinates a transaction parameter        | Deterministic execution layer, explicit parameter confirmation, PIN/step-up, hard caps, idempotency            |
-| SIM-swap / account takeover                     | Identity anchored to KYC + device, not phone; SIM-change re-verification; step-up on sensitive actions         |
-| WhatsApp restriction/removal                    | WhatsApp scoped to awareness/discovery/care + handoff; web app is the system of record and full fallback       |
-| Custody provider failure or compromise          | Provider due diligence; custody isolated behind tool layer; withdrawal controls; migration path                |
-| Fraud / social engineering / scams              | First-use address warnings, beneficiary cooling-off, velocity limits, anomaly alerting, user education in-flow |
-| Irreversible mis-send                           | Address validation, explicit destination confirmation, first-time-address friction                             |
-| Payment-rail or processor restriction on crypto | Confirm crypto-permissible rails; regulatory standing (ARIP) to access compliant rails; processor redundancy   |
+| Risk                                            | Mitigation                                                                                                                |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| LLM hallucinates a transaction parameter        | Deterministic execution layer, explicit parameter confirmation, PIN/step-up, hard caps, idempotency                       |
+| SIM-swap / account takeover                     | Identity anchored to KYC + device, not phone; SIM-change re-verification; step-up on sensitive actions                    |
+| WhatsApp restriction/removal                    | Web app is the system of record and full fallback; no money operation depends on WhatsApp, so a restriction is survivable |
+| Custody provider failure or compromise          | Provider due diligence; custody isolated behind tool layer; withdrawal controls; migration path                           |
+| Fraud / social engineering / scams              | First-use address warnings, beneficiary cooling-off, velocity limits, anomaly alerting, user education in-flow            |
+| Irreversible mis-send                           | Address validation, explicit destination confirmation, first-time-address friction                                        |
+| Payment-rail or processor restriction on crypto | Confirm crypto-permissible rails; regulatory standing (ARIP) to access compliant rails; processor redundancy              |
 
 ---
 
@@ -291,7 +291,7 @@ Sensitive data (KYC secrets, keys) is segregated and access-controlled; the conv
 
 ## 12. Phasing and MVP scope
 
-**Phase 0 — Pre-seed bridge (≈0–6 months).** Entity setup and ARIP application preparation; web app core (onboarding + tiered KYC, wallet provisioning, buy/sell NGN↔crypto for a narrow asset set, send/receive, PIN, beneficiaries); WhatsApp acquisition layer (awareness/discovery/care + handoff) on the official Cloud API; one ticketing integration as a pilot; closed beta with capped limits. Deliberately narrow: one or two assets (e.g., USDT, BTC), NGN only, single primary chain per asset.
+**Phase 0 — Pre-seed bridge (≈0–6 months).** Entity setup and ARIP application preparation; web app core (onboarding + tiered KYC, wallet provisioning, buy/sell NGN↔crypto for a narrow asset set, send/receive, PIN, beneficiaries); WhatsApp as a full agent surface (Cloud API + WhatsApp Flows); one ticketing integration as a pilot; closed beta with capped limits. Deliberately narrow: one or two assets (e.g., USDT, BTC), NGN only, single primary chain per asset.
 
 **Phase 1 — Seed / licensing round.** Full SEC VASP registration and statutory capital; broaden assets, chains, and fiat currencies (leveraging the processor's multi-currency reach for pan-African optionality); add swap; scale go-to-market; additional ticketing providers; hardened operations and compliance tooling.
 

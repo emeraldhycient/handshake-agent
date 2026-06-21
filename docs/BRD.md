@@ -84,7 +84,7 @@ Business requirements are numbered and trace to PRD functional requirements (FR-
 - BR-3 → FR-11..12: The business must let users control payouts (beneficiaries) and authorize transactions securely (PIN + step-up).
 - BR-4 → FR-13..14: The business must source, sell, and fulfill event tickets as merchant of record, settling providers reliably.
 - BR-5 → FR-15..16: The business must serve users in any language and must never let a probabilistic component move funds unaided.
-- BR-6 → FR-17..18: The business must keep WhatsApp within Meta's Commerce Policy (no in-thread crypto transactions) and must operate a web app that is both primary execution surface and full fallback.
+- BR-6 → FR-17..18: The business must operate WhatsApp as a full agent surface within Meta policy — in-thread via Cloud API + WhatsApp Flows, with settlement engine-brokered server-side and never presented as a crypto _commerce_ transaction — and a web app that is the system of record and full fallback.
 - BR-7 → NFR-4..5: The business must meet KYC/AML/CFT, sanctions-screening, Travel Rule, and reporting obligations as a regulated activity.
 - BR-8: The business must operate within the SEC perimeter (via ARIP near-term) to access compliant banking/payment rails.
 
@@ -113,7 +113,7 @@ Specific figures and conditions above should be validated against current SEC in
 
 **Fraud and support.** Handshake builds fraud monitoring and user-facing safeguards (first-use warnings, cooling-off) into the flow, with responsive support, to address social-engineering and scam-induced transfer risks.
 
-**Platform integrity.** WhatsApp messaging must use the official Cloud API with approved templates and within messaging/frequency limits; unofficial automation is itself a ban trigger and is prohibited.
+**Platform integrity.** WhatsApp must use only the official Cloud API + WhatsApp Flows with approved templates and within messaging/frequency limits; crypto settlement is engine-brokered server-side and never presented as a WhatsApp _commerce_ object (Catalog/Cart/Pay); unofficial automation is itself a ban trigger and is prohibited.
 
 ---
 
@@ -170,7 +170,7 @@ The payment processor's multi-currency reach across African markets is noted as 
 
 ## 14. Roadmap / phasing
 
-**Phase 0 (bridge, ≈0–6 months):** entity + ARIP preparation; web app core (KYC, wallets, NGN↔crypto buy/sell, send/receive, PIN, beneficiaries); WhatsApp acquisition layer; one ticketing pilot; closed beta with capped limits.
+**Phase 0 (bridge, ≈0–6 months):** entity + ARIP preparation; web app core (KYC, wallets, NGN↔crypto buy/sell, send/receive, PIN, beneficiaries); WhatsApp as a full agent surface (Cloud API + Flows); one ticketing pilot; closed beta with capped limits.
 
 **Phase 1 (seed/licensing round):** full SEC registration + capital; broaden assets/chains/currencies; add swap; scale GTM; additional ticketing providers; hardened compliance ops.
 

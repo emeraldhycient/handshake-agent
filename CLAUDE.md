@@ -8,7 +8,7 @@ This file is the canonical guidance for Claude Code (and any AI agent) working a
 
 ## 1. Project overview
 
-**Handshake Agent** — a chat-native assistant for the Nigerian market that lets users buy, sell, send, receive, and (later) swap crypto, and discover and buy event tickets, through natural-language conversation. WhatsApp is the acquisition/discovery/support channel; a companion **web app is the system of record** where verification and every money-moving transaction happen.
+**Handshake Agent** — a chat-native assistant for the Nigerian market that lets users buy, sell, send, receive, and (later) swap crypto, and discover and buy event tickets, through natural-language conversation. WhatsApp and the web app are **both full agent surfaces**: a user can complete flows in either, including in-thread on WhatsApp via end-to-end-encrypted **WhatsApp Flows** (KYC, itemized confirmation, PIN). The **web app remains the system of record and full fallback**, and the same **server-side deterministic engine settles every transaction** in either channel (§3.1). See [`docs/adr/0003-whatsapp-full-agent-surface.md`](docs/adr/0003-whatsapp-full-agent-surface.md).
 
 The defining property of this system is **safety of funds before convenience**: no language-model output ever moves money on its own. The model interprets intent; a separate deterministic engine executes — after explicit parameter confirmation, server-side validation, and PIN + step-up authentication. This is not a feature, it is the architecture. See [`docs/PRD.md`](docs/PRD.md) §4.
 
@@ -67,9 +67,9 @@ Every money-moving endpoint re-checks KYC status, tier limits, velocity, and san
 
 Account identity and authorization are anchored to verified KYC + a bound device + a user-set PIN — never the WhatsApp phone number alone (SIM-swap risk). A SIM/number change triggers re-verification + step-up.
 
-### 3.5 WhatsApp stays on the permitted side of Meta policy
+### 3.5 WhatsApp is a full agent surface, settled by the engine
 
-Use **only** the official WhatsApp Cloud API with approved templates. No crypto transaction is ever completed in-thread — awareness, discovery, care, and handoff only. Execution happens on the web app. No unofficial automation (it is itself a ban trigger).
+WhatsApp is a first-class agent surface, not a handoff-only funnel: users complete flows **in-thread** via the official WhatsApp Cloud API + **WhatsApp Flows** (Meta's end-to-end-encrypted in-chat forms) for KYC, itemized confirmation, and PIN entry. But the model still only proposes and the **same server-side deterministic engine still settles** (§3.1) — WhatsApp collects intent + authorization; the engine executes. Meta's Commerce Policy prohibits crypto as in-thread _commerce_, so WhatsApp must **never** present a crypto Catalog/Cart/WhatsApp-Pay object or complete a crypto payment as a WhatsApp _commerce_ transaction — settlement is **engine-brokered server-side**. Use **only** the official Cloud API + Flows + approved templates; no unofficial automation (a ban trigger). PIN/KYC secrets travel **only** via Flow E2E encryption, never as plaintext chat. The web app stays the system of record and full fallback. See [`docs/adr/0003-whatsapp-full-agent-surface.md`](docs/adr/0003-whatsapp-full-agent-surface.md).
 
 ### 3.6 No shortcuts
 
