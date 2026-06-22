@@ -15,13 +15,12 @@
  * (pipe-delimited; all fields are UUID/ISO-8601/enum so no field can embed `|`).
  */
 
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
-import { hmacHex } from '../../../core/crypto/hmac';
+import { hmacHex, sha256Hex } from '../../../core/crypto/hmac';
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import {
   DIRECTIVE_REPOSITORY,
@@ -46,11 +45,6 @@ const ENGINE_REFS = new Set([
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/** SHA-256 hex of a UTF-8 string. Used for nonce hashing. */
-function sha256Hex(input: string): string {
-  return createHash('sha256').update(input, 'utf8').digest('hex');
-}
 
 /**
  * Builds the canonical signing payload.

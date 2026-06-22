@@ -1,6 +1,17 @@
 import * as crypto from 'crypto';
 
 /**
+ * Returns a lowercase hex SHA-256 digest of a UTF-8 string.
+ *
+ * Used for nonce hashing in DirectiveGrant (plain nonce never stored — only
+ * its hash is persisted). Centralised here to avoid re-implementing in each
+ * layer that needs it.
+ */
+export function sha256Hex(input: string): string {
+  return crypto.createHash('sha256').update(input, 'utf8').digest('hex');
+}
+
+/**
  * Returns a lowercase hex HMAC digest.
  *
  * Supports sha256 (WhatsApp/Meta X-Hub-Signature-256) and sha512

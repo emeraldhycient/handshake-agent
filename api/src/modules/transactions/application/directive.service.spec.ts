@@ -10,10 +10,10 @@
  * Red → Green → Refactor per CLAUDE.md §9.
  */
 
-import { createHash } from 'node:crypto';
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 
+import { sha256Hex } from '../../../core/crypto/hmac';
 import { CLOCK } from '../../../core/common/clock';
 import type { Clock } from '../../../core/common/clock';
 import {
@@ -31,12 +31,8 @@ import {
 } from '../domain/directive-errors';
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Constants
 // ---------------------------------------------------------------------------
-
-function sha256Hex(input: string): string {
-  return createHash('sha256').update(input, 'utf8').digest('hex');
-}
 
 const TEST_SIGNING_KEY = 'test-signing-key-32-bytes-minimum';
 const FIXED_NOW = new Date('2025-01-01T12:00:00.000Z');

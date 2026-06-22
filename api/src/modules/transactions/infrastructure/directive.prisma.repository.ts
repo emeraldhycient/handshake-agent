@@ -12,17 +12,24 @@
  * no concurrent consumer can slip between the update and the follow-up read.
  */
 
-import { createHash } from 'node:crypto';
-
 import { Injectable } from '@nestjs/common';
 
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import {
+  DirectiveGrantStatus,
+  DirectiveOrigin,
+  UiComponentRef,
+} from '../../../../generated/prisma/client';
 import type {
   IDirectiveRepository,
   DirectiveGrantRecord,
   CreateDirectiveGrantData,
   ConsumeIfIssuedInput,
 } from '../application/ports/directive.repository.port';
+
+// Re-export so infrastructure tests and callers can hash nonces without
+// re-implementing. The canonical implementation lives in core/crypto/hmac.
+export { sha256Hex } from '../../../core/crypto/hmac';
 
 // ---------------------------------------------------------------------------
 // Internal helper
@@ -94,11 +101,11 @@ export class DirectivePrismaRepository implements IDirectiveRepository {
         directiveId: data.directiveId,
         proposalId: data.proposalId,
         userId: data.userId,
-        directiveRef: data.directiveRef as never,
-        origin: data.origin as never,
+        directiveRef: data.directiveRef as UiComponentRef,
+        origin: data.origin as DirectiveOrigin,
         nonceHash: data.nonceHash,
         signatureValue: data.signatureValue,
-        status: 'issued',
+        status: DirectiveGrantStatus.issued,
         issuedAt: data.issuedAt,
         expiresAt: data.expiresAt,
       },
@@ -115,11 +122,11 @@ export class DirectivePrismaRepository implements IDirectiveRepository {
       const { count } = await tx.directiveGrant.updateMany({
         where: {
           directiveId,
-          status: 'issued',
+          status: DirectiveGrantStatus.issued,
           expiresAt: { gt: consumedAt },
         },
         data: {
-          status: 'consumed',
+          status: DirectiveGrantStatus.consumed,
           consumedAt,
           consumedProposalId,
         },
@@ -172,19 +179,15 @@ export class DirectivePrismaRepository implements IDirectiveRepository {
     await this.prisma.directiveGrant.updateMany({
       where: {
         directiveId,
-        status: { notIn: ['consumed', 'revoked', 'cancelled'] as never },
+        status: {
+          notIn: [
+            DirectiveGrantStatus.consumed,
+            DirectiveGrantStatus.revoked,
+            DirectiveGrantStatus.cancelled,
+          ],
+        },
       },
-      data: { status: 'failed' as never },
+      data: { status: DirectiveGrantStatus.failed },
     });
   }
-}
-
-// ---------------------------------------------------------------------------
-// Exported sha256 helper (used by DirectiveService via import from this file
-// if needed; the service currently uses its own local copy). Kept here so
-// infrastructure tests can compute expected hashes without re-implementing.
-// ---------------------------------------------------------------------------
-
-export function sha256Hex(input: string): string {
-  return createHash('sha256').update(input, 'utf8').digest('hex');
 }

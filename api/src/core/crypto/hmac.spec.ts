@@ -1,6 +1,6 @@
 import * as nodeCrypto from 'crypto';
 
-import { hmacHex, verifyHmacHeader } from './hmac';
+import { hmacHex, sha256Hex, verifyHmacHeader } from './hmac';
 
 const KEY = 'test-secret-key';
 const BODY = Buffer.from('{"object":"whatsapp_business_account"}');
@@ -16,6 +16,19 @@ function referenceHmac(
 ): string {
   return nodeCrypto.createHmac(algo, key).update(data).digest('hex');
 }
+
+describe('sha256Hex', () => {
+  /**
+   * Hardcoded reference vector (produced with Node):
+   *   require('crypto').createHash('sha256').update('hello','utf8').digest('hex')
+   * → 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+   */
+  it('returns the correct SHA-256 hex digest of a UTF-8 string', () => {
+    expect(sha256Hex('hello')).toBe(
+      '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+    );
+  });
+});
 
 describe('hmacHex', () => {
   it('returns correct sha256 hex for a Buffer payload', () => {

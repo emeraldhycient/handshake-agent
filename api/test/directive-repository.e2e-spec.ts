@@ -10,10 +10,10 @@
  * Runs in the `test:e2e` lane (jest-e2e.json), NOT the default unit lane.
  */
 
-import { createHash, randomBytes } from 'node:crypto';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 import { PrismaClient } from '../generated/prisma/client';
+import { sha256Hex } from '../src/core/crypto/hmac';
 import { DirectivePrismaRepository } from '../src/modules/transactions/infrastructure/directive.prisma.repository';
 import type { PrismaService } from '../src/core/prisma/prisma.service';
 import { startTestPostgres } from './helpers/pg-testcontainer';
@@ -23,10 +23,6 @@ jest.setTimeout(180_000);
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function sha256Hex(input: string): string {
-  return createHash('sha256').update(input, 'utf8').digest('hex');
-}
 
 function makeNonce(): string {
   return randomBytes(32).toString('hex');
