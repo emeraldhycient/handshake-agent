@@ -11,8 +11,50 @@ export const envSchema = z.object({
     .default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().url(),
+
+  // LLM (LangGraph agent). Optional: tests fake the LlmProvider; a live key is
+  // only needed to exercise the real agent.
   ANTHROPIC_API_KEY: z.string().min(1).optional(),
   AGENT_MODEL: z.string().min(1).default('claude-opus-4-8'),
+
+  // --- WhatsApp (Meta Cloud API + Flows, ADR-0003) ---
+  // Required to send/receive at all.
+  WHATSAPP_PHONE_NUMBER_ID: z.string().min(1),
+  WHATSAPP_ACCESS_TOKEN: z.string().min(1),
+  WHATSAPP_GRAPH_VERSION: z.string().min(1).default('v25.0'),
+  // Non-secret ids / convenience — optional.
+  WHATSAPP_WABA_ID: z.string().optional().default(''),
+  WHATSAPP_APP_ID: z.string().optional().default(''),
+  WHATSAPP_TEST_RECIPIENT: z.string().optional().default(''),
+  // Operator-supplied-later secrets (empty is valid at boot; enforced where used):
+  //  - APP_SECRET: HMAC key for X-Hub-Signature-256 webhook verification.
+  //  - VERIFY_TOKEN: GET webhook handshake token.
+  //  - FLOW_PRIVATE_KEY: PEM RSA key to decrypt Flow payloads (KYC/confirm/PIN).
+  WHATSAPP_APP_SECRET: z.string().optional().default(''),
+  WHATSAPP_VERIFY_TOKEN: z.string().optional().default(''),
+  WHATSAPP_FLOW_PRIVATE_KEY: z.string().optional().default(''),
+
+  // --- Blockradar (WaaS; USDT-on-TRON). Auth is x-api-key; key is wallet-scoped. ---
+  BLOCKRADAR_API_KEY: z.string().min(1),
+  BLOCKRADAR_MASTER_WALLET_ID: z.string().min(1),
+  BLOCKRADAR_BASE_URL: z.string().url().default('https://api.blockradar.co/v1'),
+  // NOTE: Blockradar signs deposit webhooks with the API key (HMAC-SHA512), not a
+  // separate secret. Present only if the dashboard ever exposes one.
+  BLOCKRADAR_WEBHOOK_SECRET: z.string().optional().default(''),
+
+  // --- Flutterwave (NGN collection for buy) ---
+  FLUTTERWAVE_SECRET_KEY: z.string().min(1),
+  FLUTTERWAVE_BASE_URL: z
+    .string()
+    .url()
+    .default('https://api.flutterwave.com/v3'),
+  // Dashboard "secret hash" — verifies collection/transfer webhooks (verif-hash equality, v3).
+  FLUTTERWAVE_WEBHOOK_SECRET: z.string().optional().default(''),
+
+  // --- Engine ---
+  // HMAC-SHA256 key for DirectiveGrant signing (ADR-0005/0006). Required before the
+  // engine can execute; empty is tolerated until the engine phase is wired.
+  DIRECTIVE_SIGNING_KEY: z.string().optional().default(''),
 });
 
 export type Env = z.infer<typeof envSchema>;
