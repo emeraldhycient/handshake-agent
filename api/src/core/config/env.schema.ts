@@ -13,8 +13,13 @@ export const envSchema = z.object({
   DATABASE_URL: z.string().url(),
 
   // LLM (LangGraph agent). Optional: tests fake the LlmProvider; a live key is
-  // only needed to exercise the real agent.
-  ANTHROPIC_API_KEY: z.string().min(1).optional(),
+  // only needed to exercise the real agent. Empty in .env means "not provided" —
+  // coerce '' → undefined so a blank placeholder passes boot, while a present
+  // value must be non-empty. Without this, `ANTHROPIC_API_KEY=` fails `.min(1)`.
+  ANTHROPIC_API_KEY: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(1).optional(),
+  ),
   AGENT_MODEL: z.string().min(1).default('claude-opus-4-8'),
 
   // --- WhatsApp (Meta Cloud API + Flows, ADR-0003) ---

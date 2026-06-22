@@ -83,4 +83,17 @@ describe('validateEnv', () => {
       validateEnv({ ...validRaw, BLOCKRADAR_BASE_URL: 'not-a-url' }),
     ).toThrow(/BLOCKRADAR_BASE_URL/);
   });
+
+  it('treats an empty ANTHROPIC_API_KEY as not provided (boot does not fail)', () => {
+    // A blank placeholder in .env must not fail boot; tests fake the LlmProvider.
+    const env = validateEnv({ ...validRaw, ANTHROPIC_API_KEY: '' });
+
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  it('accepts a present non-empty ANTHROPIC_API_KEY', () => {
+    const env = validateEnv({ ...validRaw, ANTHROPIC_API_KEY: 'sk-ant-123' });
+
+    expect(env.ANTHROPIC_API_KEY).toBe('sk-ant-123');
+  });
 });
