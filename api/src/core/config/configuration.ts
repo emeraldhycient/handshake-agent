@@ -65,11 +65,24 @@ export interface DirectiveConfig {
   ttlSeconds: number;
 }
 
+/** Blockradar provider constants (non-secret, derived from ADR-0006). */
+export interface BlockradarProviderConfig {
+  /** Asset id for USDT-on-TRON in the Blockradar API. */
+  usdtTronAssetId: string;
+  /** Network name used when provisioning/querying TRON child addresses. */
+  network: string;
+}
+
+export interface ProvidersConfig {
+  blockradar: BlockradarProviderConfig;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
   auth: AuthConfig;
   directive: DirectiveConfig;
+  providers: ProvidersConfig;
 }
 
 export default (): AppConfig => ({
@@ -113,6 +126,14 @@ export default (): AppConfig => ({
       maxAttempts: 5,
       lockoutMinutes: 15,
       scryptKeyLen: 64,
+    },
+  },
+  providers: {
+    blockradar: {
+      // USDT-on-TRON asset id in the Blockradar API (ADR-0006). Not a secret — kept
+      // in config (not env) because it is a provider constant, not an infra/secret value.
+      usdtTronAssetId: 'f56d297c-a3db-4cda-95bd-180b54679070',
+      network: 'TRON',
     },
   },
 });
