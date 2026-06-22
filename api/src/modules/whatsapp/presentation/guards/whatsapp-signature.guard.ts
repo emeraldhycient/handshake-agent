@@ -71,7 +71,22 @@ export class WhatsAppSignatureGuard implements CanActivate {
       );
     }
 
-    const header = req.headers['x-hub-signature-256'] as string | undefined;
+    // Express types the header as `string | string[] | undefined`.
+    // WhatsApp always sends exactly one signature header; duplicate values
+    // indicate proxy tampering or a spoofing attempt — reject explicitly
+    // rather than relying on the catch-all inside `verifyHmacHeader`.
+    const rawHeader: string | string[] | undefined =
+      req.headers['x-hub-signature-256'];
+
+    if (Array.isArray(rawHeader)) {
+      return Promise.reject(
+        new UnauthorizedException(
+          'Invalid webhook signature: duplicate X-Hub-Signature-256 headers',
+        ),
+      );
+    }
+
+    const header: string | undefined = rawHeader;
 
     const valid = verifyHmacHeader('sha256', appSecret, req.rawBody, header);
     if (!valid) {

@@ -19,7 +19,7 @@ function makeValidHeader(): string {
 
 function makeContext(opts: {
   rawBody?: Buffer;
-  header?: string | undefined;
+  header?: string | string[] | undefined;
 }): ExecutionContext {
   const req: Record<string, unknown> = {
     rawBody: opts.rawBody,
@@ -120,6 +120,20 @@ describe('WhatsAppSignatureGuard', () => {
   it('throws UnauthorizedException when secret is empty in production (fail-closed)', async () => {
     const guard = new WhatsAppSignatureGuard(makeConfig('', 'production'));
     const ctx = makeContext({ rawBody: BODY, header: makeValidHeader() });
+
+    await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+  });
+
+  it('throws UnauthorizedException when signature header is an array (duplicate headers, secret set)', async () => {
+    // WhatsApp always sends exactly one X-Hub-Signature-256 header.
+    // Duplicate values indicate tampering or a proxy anomaly — fail closed.
+    const guard = new WhatsAppSignatureGuard(makeConfig(APP_SECRET));
+    const ctx = makeContext({
+      rawBody: BODY,
+      header: [makeValidHeader(), makeValidHeader()],
+    });
 
     await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(
       UnauthorizedException,
