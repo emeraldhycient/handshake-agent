@@ -32,6 +32,9 @@ describe('QuotesService.quoteBuy', () => {
     expect(quote.fiatAmount).toBe('100000');
     expect(quote.fiatCurrency).toBe('NGN');
     expect(quote.cryptoAmount).toBe('60.960591');
+    // baseRate is the raw pre-spread market rate from the rate provider.
+    expect(quote.baseRate).toBe('1600');
+    // fxRate is the effective (spread-inclusive) rate used for conversion.
     expect(quote.fxRate).toBe('1624');
     expect(quote.spreadBps).toBe(150);
     expect(quote.processingFeeBps).toBe(100);

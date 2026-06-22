@@ -37,6 +37,8 @@ const STUB_QUOTE: QuoteBuyOutput = {
   fiatAmount: '10000',
   fiatCurrency: 'NGN',
   cryptoAmount: '6.123456',
+  // Raw pre-spread market rate (distinct from fxRate which is effective).
+  baseRate: '1600',
   fxRate: '1600.123456',
   spreadBps: 100,
   processingFeeBps: 50,
@@ -242,12 +244,13 @@ describe('ProposalService.createBuyProposal', () => {
   it('propagates KYC gate error and does NOT persist a Proposal', async () => {
     const gateError = new Error('KYC_NOT_VERIFIED');
     const kycGate = makeKycGate(gateError);
+    const quoteRepo = makeQuoteRepo();
     const proposalRepo = makeProposalRepo();
 
     const svc = new ProposalService(
       makeQuotesService() as unknown as QuotesService,
       kycGate as unknown as KycGateService,
-      makeQuoteRepo(),
+      quoteRepo,
       proposalRepo,
       stubClock,
     );
@@ -255,7 +258,33 @@ describe('ProposalService.createBuyProposal', () => {
     await expect(svc.createBuyProposal(BASE_INPUT)).rejects.toThrow(
       'KYC_NOT_VERIFIED',
     );
+    // Quote snapshot is always persisted (pricing record), Proposal is not.
+    expect(quoteRepo.create).toHaveBeenCalledTimes(1);
     expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('persists the Quote row with raw baseRate (pre-spread) distinct from effective fxRate', async () => {
+    const quoteRepo = makeQuoteRepo();
+    const svc = new ProposalService(
+      makeQuotesService() as unknown as QuotesService,
+      makeKycGate() as unknown as KycGateService,
+      quoteRepo,
+      makeProposalRepo(),
+      stubClock,
+    );
+
+    await svc.createBuyProposal(BASE_INPUT);
+
+    const createArg = (
+      quoteRepo.create as jest.Mock<
+        Promise<{ id: string }>,
+        [Parameters<IQuoteRepository['create']>[0]]
+      >
+    ).mock.calls[0][0];
+    // baseRate must be the raw pre-spread rate from the quote, NOT fxRate.
+    expect(createArg.baseRate).toBe(STUB_QUOTE.baseRate);
+    expect(createArg.fxRate).toBe(STUB_QUOTE.fxRate);
+    expect(createArg.baseRate).not.toBe(createArg.fxRate);
   });
 
   it('KYC gate is called AFTER the Quote is persisted but BEFORE the Proposal is persisted', async () => {

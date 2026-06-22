@@ -68,6 +68,8 @@ function addFiatStrings(a: string, b: string): string {
 /**
  * Computes the SHA-256 hex digest of the canonical JSON of the parameters object.
  * Key ordering is deterministic (sorted alphabetically) so the checksum is stable.
+ * NOTE: the key-sort is shallow and assumes a flat parameters object; nested
+ * objects would need a recursive sort to guarantee a fully canonical encoding.
  */
 function sha256Hex(parameters: Record<string, unknown>): string {
   const sorted = Object.fromEntries(
@@ -135,8 +137,8 @@ export class ProposalService {
       fiatCurrency: intent.fiatCurrency,
       fiatAmount: intent.fiatAmount,
       cryptoAmount: quote.cryptoAmount,
-      fxRate: quote.fxRate,
-      baseRate: quote.fxRate, // fxRate is already the effective (base + spread) rate here
+      fxRate: quote.fxRate, // effective (spread-inclusive) rate used for conversion
+      baseRate: quote.baseRate, // raw pre-spread market rate for treasury/audit
       spreadBps: quote.spreadBps,
       processingFeeBps: quote.processingFeeBps,
       processingFeeAmount,

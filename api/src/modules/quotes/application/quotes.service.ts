@@ -38,6 +38,9 @@ export class QuotesService {
       fiatAmount: input.fiatAmount,
       fiatCurrency: input.fiatCurrency,
       cryptoAmount: breakdown.cryptoAmount,
+      // Raw pre-spread market rate — stored in the Quote row for treasury/audit.
+      baseRate: String(rate.baseRate),
+      // Effective (spread-inclusive) rate — used for conversion and shown to user.
       fxRate: String(breakdown.effectiveRate),
       spreadBps: rate.spreadBps,
       processingFeeBps: rate.processingFeeBps,

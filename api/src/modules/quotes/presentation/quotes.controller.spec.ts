@@ -9,6 +9,7 @@ const OUTPUT: QuoteBuyOutput = {
   fiatAmount: '100000',
   fiatCurrency: 'NGN',
   cryptoAmount: '60.960591',
+  baseRate: '1600',
   fxRate: '1624',
   spreadBps: 150,
   processingFeeBps: 100,
