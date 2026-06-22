@@ -56,10 +56,20 @@ export interface AuthConfig {
   pin: PinConfig;
 }
 
+/** Directive-grant configuration (task 4.2, ADR-0005/0006). */
+export interface DirectiveConfig {
+  /**
+   * Time-to-live in seconds for a DirectiveGrant. After this window the grant
+   * is expired and cannot be consumed. Admin-tunable later (DB-admin layer, §7).
+   */
+  ttlSeconds: number;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
   auth: AuthConfig;
+  directive: DirectiveConfig;
 }
 
 export default (): AppConfig => ({
@@ -71,6 +81,11 @@ export default (): AppConfig => ({
       USDT: { baseRate: 1600, cryptoDecimals: 6 },
       BTC: { baseRate: 100_000_000, cryptoDecimals: 8 },
     },
+  },
+  directive: {
+    // 5-minute window: enough for a user to complete PIN/confirmation on WhatsApp.
+    // Admin-tunable later (DB-admin AppSetting layer, root CLAUDE.md §7).
+    ttlSeconds: 300,
   },
   limits: {
     // Tier 1 — basic KYC: moderate daily limits to reduce exposure (NGN).
