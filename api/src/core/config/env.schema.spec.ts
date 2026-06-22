@@ -50,6 +50,18 @@ describe('validateEnv', () => {
     expect(env.WHATSAPP_GRAPH_VERSION).toBe('v25.0');
   });
 
+  it('defaults WHATSAPP_GRAPH_BASE_URL to https://graph.facebook.com', () => {
+    const env = validateEnv(validRaw);
+
+    expect(env.WHATSAPP_GRAPH_BASE_URL).toBe('https://graph.facebook.com');
+  });
+
+  it('throws when WHATSAPP_GRAPH_BASE_URL is not a valid URL', () => {
+    expect(() =>
+      validateEnv({ ...validRaw, WHATSAPP_GRAPH_BASE_URL: 'not-a-url' }),
+    ).toThrow(/WHATSAPP_GRAPH_BASE_URL/);
+  });
+
   it('allows operator-supplied-later secrets to be empty (dev)', () => {
     const env = validateEnv(validRaw);
 

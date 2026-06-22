@@ -22,6 +22,11 @@ export const envSchema = z.object({
   WHATSAPP_PHONE_NUMBER_ID: z.string().min(1),
   WHATSAPP_ACCESS_TOKEN: z.string().min(1),
   WHATSAPP_GRAPH_VERSION: z.string().min(1).default('v25.0'),
+  // Base URL kept in env for testability (mirrors BLOCKRADAR_BASE_URL / FLUTTERWAVE_BASE_URL).
+  WHATSAPP_GRAPH_BASE_URL: z
+    .string()
+    .url()
+    .default('https://graph.facebook.com'),
   // Non-secret ids / convenience — optional.
   WHATSAPP_WABA_ID: z.string().optional().default(''),
   WHATSAPP_APP_ID: z.string().optional().default(''),
