@@ -6,6 +6,7 @@ import { ZodValidationPipe } from 'nestjs-zod';
 
 import configuration from './core/config/configuration';
 import { validateEnv } from './core/config/env.schema';
+import { PrismaModule } from './core/prisma/prisma.module';
 import { QuotesModule } from './modules/quotes/quotes.module';
 
 @Module({
@@ -23,6 +24,7 @@ import { QuotesModule } from './modules/quotes/quotes.module';
             : undefined,
       },
     }),
+    PrismaModule,
     QuotesModule,
   ],
   // Global Zod validation: every request DTO is checked against its contract schema.
