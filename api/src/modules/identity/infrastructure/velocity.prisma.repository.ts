@@ -3,6 +3,10 @@ import { Injectable } from '@nestjs/common';
 // The generated Prisma client is the ONLY sanctioned DB door (CLAUDE.md §3.2).
 // This is the infrastructure layer — the only place it is allowed.
 import { PrismaService } from '../../../core/prisma/prisma.service';
+// VelocityCounterType is re-exported from the main client entry point (which also
+// re-exports all enums via `export * from "./enums"`). Import from client.ts so
+// the module resolver resolves the same path used everywhere else in infrastructure.
+import { VelocityCounterType } from '../../../../generated/prisma/client';
 import type {
   DailyUsage,
   IVelocityRepository,
@@ -33,7 +37,9 @@ export class VelocityPrismaRepository implements IVelocityRepository {
     const rows = await this.prisma.velocityCounter.findMany({
       where: {
         userId,
-        counterType: { in: ['amount_24h', 'count_24h'] },
+        counterType: {
+          in: [VelocityCounterType.amount_24h, VelocityCounterType.count_24h],
+        },
         // Row's window must still be active: windowEnd > (asOf - 24h)
         windowEnd: { gt: windowCutoff },
         // Window must have started at or before asOf
@@ -51,9 +57,9 @@ export class VelocityPrismaRepository implements IVelocityRepository {
     for (const row of rows) {
       // currentValue is a Prisma Decimal — convert to number for application use.
       const value = Number(row.currentValue);
-      if (row.counterType === 'amount_24h') {
+      if (row.counterType === VelocityCounterType.amount_24h) {
         fiatTotal += value;
-      } else if (row.counterType === 'count_24h') {
+      } else if (row.counterType === VelocityCounterType.count_24h) {
         txCount += value;
       }
     }

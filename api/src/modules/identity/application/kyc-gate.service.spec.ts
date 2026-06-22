@@ -268,8 +268,10 @@ describe('KycGateService.assertCanTransact', () => {
 
   // ── Missing user ──────────────────────────────────────────────────────────
 
-  it('throws when user cannot be found (repo returns null)', async () => {
+  it('throws with a "not found" message when user cannot be found (repo returns null)', async () => {
     const svc = makeService(null);
-    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toThrow();
+    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toThrow(
+      /not found/i,
+    );
   });
 });
