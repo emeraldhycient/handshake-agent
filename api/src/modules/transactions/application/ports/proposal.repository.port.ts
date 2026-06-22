@@ -1,0 +1,49 @@
+/**
+ * DI token for the Proposal repository. Infrastructure provides the concrete
+ * Prisma adapter; application only knows this symbol.
+ */
+export const PROPOSAL_REPOSITORY = Symbol('PROPOSAL_REPOSITORY');
+
+// ---------------------------------------------------------------------------
+// Application-level input/output types — NOT Prisma-generated types.
+// Infrastructure maps these to Prisma args; the application stays DB-agnostic.
+// ---------------------------------------------------------------------------
+
+export interface CreateProposalData {
+  userId: string;
+  conversationId?: string;
+  /** 'buy' | 'sell' | 'send' | 'swap' | 'ticket_purchase' | 'add_beneficiary' */
+  type: string;
+  /** Action-specific parameters (JSON-serializable). */
+  parameters: Record<string, unknown>;
+  /** SHA-256 hex of canonical JSON of parameters. */
+  parametersChecksum: string;
+  quoteId?: string;
+  expiresAt: Date;
+}
+
+export interface ProposalRecord {
+  id: string;
+  userId: string;
+  conversationId: string | null;
+  type: string;
+  status: string;
+  parameters: Record<string, unknown>;
+  parametersChecksum: string;
+  quoteId: string | null;
+  expiresAt: Date;
+  createdAt: Date;
+}
+
+export interface IProposalRepository {
+  /**
+   * Persists a new Proposal row in `pending` status.
+   * Returns the auto-generated id.
+   */
+  create(data: CreateProposalData): Promise<{ id: string }>;
+
+  /**
+   * Loads a Proposal by id, or null if not found.
+   */
+  findById(id: string): Promise<ProposalRecord | null>;
+}
