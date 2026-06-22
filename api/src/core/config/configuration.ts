@@ -42,9 +42,24 @@ export interface LimitsConfig {
   tier_3: TierLimits;
 }
 
+/** PIN authentication configuration (task 4.3, root CLAUDE.md §7). */
+export interface PinConfig {
+  /** Maximum consecutive wrong-PIN attempts before the account is locked. */
+  maxAttempts: number;
+  /** Duration (minutes) for which the account remains locked after maxAttempts failures. */
+  lockoutMinutes: number;
+  /** Output key length (bytes) for the scrypt KDF. */
+  scryptKeyLen: number;
+}
+
+export interface AuthConfig {
+  pin: PinConfig;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
+  auth: AuthConfig;
 }
 
 export default (): AppConfig => ({
@@ -75,6 +90,14 @@ export default (): AppConfig => ({
       perTxFiatMax: 5_000_000,
       dailyFiatMax: 20_000_000,
       dailyTxCountMax: 100,
+    },
+  },
+  auth: {
+    pin: {
+      // Admin-tunable later (DB-admin AppSetting layer, root CLAUDE.md §7).
+      maxAttempts: 5,
+      lockoutMinutes: 15,
+      scryptKeyLen: 64,
     },
   },
 });
