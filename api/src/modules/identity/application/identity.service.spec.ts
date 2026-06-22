@@ -171,4 +171,67 @@ describe('IdentityService.resolveByChannel', () => {
       expect(result.contact).toBe(contact);
     }
   });
+
+  // ── Dangling-FK defensive branches ────────────────────────────────────────
+
+  it('CI with userId set but loadUser → null (dangling user FK) → creates new contact and returns {kind:"contact"}', async () => {
+    // Simulates data inconsistency: ChannelIdentity.userId points to a deleted
+    // User row. The service must NOT throw — it must fall back to contact
+    // creation so the caller is not gated behind a corrupt FK.
+    const newContact = baseContact({ id: 'contact-id-new' });
+    const createFn = jest.fn().mockResolvedValue({
+      contact: newContact,
+      channelIdentity: baseCI({ contactId: 'contact-id-new' }),
+    });
+    const repo = makeRepo({
+      findActiveChannelIdentity: jest
+        .fn()
+        .mockResolvedValue(baseCI({ userId: 'user-id-missing' })),
+      loadUser: jest.fn().mockResolvedValue(null), // dangling FK
+      createContactWithChannelIdentity: createFn,
+    });
+    const svc = new IdentityService(repo);
+
+    const result = await svc.resolveByChannel(INPUT);
+
+    expect(createFn).toHaveBeenCalledWith({
+      channel: 'whatsapp',
+      channelAddress: '+2348000000001',
+      normalizedPhone: '+2348000000001',
+    });
+    expect(result.kind).toBe('contact');
+    if (result.kind === 'contact') {
+      expect(result.contact).toBe(newContact);
+    }
+  });
+
+  it('CI with contactId set but loadContact → null (dangling contact FK) → creates new contact and returns {kind:"contact"}', async () => {
+    // Simulates data inconsistency: ChannelIdentity.contactId points to a
+    // deleted Contact row. Same safe-fallback path as the user FK case above.
+    const newContact = baseContact({ id: 'contact-id-new' });
+    const createFn = jest.fn().mockResolvedValue({
+      contact: newContact,
+      channelIdentity: baseCI({ contactId: 'contact-id-new' }),
+    });
+    const repo = makeRepo({
+      findActiveChannelIdentity: jest
+        .fn()
+        .mockResolvedValue(baseCI({ contactId: 'contact-id-missing' })),
+      loadContact: jest.fn().mockResolvedValue(null), // dangling FK
+      createContactWithChannelIdentity: createFn,
+    });
+    const svc = new IdentityService(repo);
+
+    const result = await svc.resolveByChannel(INPUT);
+
+    expect(createFn).toHaveBeenCalledWith({
+      channel: 'whatsapp',
+      channelAddress: '+2348000000001',
+      normalizedPhone: '+2348000000001',
+    });
+    expect(result.kind).toBe('contact');
+    if (result.kind === 'contact') {
+      expect(result.contact).toBe(newContact);
+    }
+  });
 });

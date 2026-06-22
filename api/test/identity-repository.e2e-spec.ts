@@ -131,4 +131,33 @@ describe('IdentityPrismaRepository (integration, Testcontainers Postgres)', () =
     );
     expect(result).toBeNull();
   });
+
+  // ── Test 6: partial unique index (channel, channelAddress) WHERE deletedAt IS NULL ──
+  it('rejects a second ACTIVE ChannelIdentity with the same (channel, channelAddress); allows a soft-deleted duplicate', async () => {
+    const addr = '+2348000000097';
+
+    // First active row — should succeed.
+    await prisma.channelIdentity.create({
+      data: { channel: 'whatsapp', channelAddress: addr },
+    });
+
+    // Second active row with the same (channel, address) — partial unique rejects it.
+    await expect(
+      prisma.channelIdentity.create({
+        data: { channel: 'whatsapp', channelAddress: addr },
+      }),
+    ).rejects.toThrow();
+
+    // A soft-deleted (deletedAt set) row with the same pair is outside the
+    // partial index predicate (WHERE deletedAt IS NULL) and must be accepted.
+    await expect(
+      prisma.channelIdentity.create({
+        data: {
+          channel: 'whatsapp',
+          channelAddress: addr,
+          deletedAt: new Date(),
+        },
+      }),
+    ).resolves.toBeDefined();
+  });
 });
