@@ -92,9 +92,15 @@ describe('buildBuyLedgerEntries', () => {
     });
 
     it('every amount is non-zero (invariant 2)', () => {
+      const SCALE = 10n ** 18n;
       for (const e of entries) {
-        expect(e.amount).not.toBe('0');
-        expect(e.amount).not.toBe('0.000000000000000000');
+        // Value-based check: parse via BigInt scaling so any zero representation is caught.
+        const isNeg = e.amount.startsWith('-');
+        const abs = isNeg ? e.amount.slice(1) : e.amount;
+        const [whole = '0', frac = ''] = abs.split('.');
+        const fracPadded = frac.slice(0, 18).padEnd(18, '0');
+        const scaled = BigInt(whole) * SCALE + BigInt(fracPadded);
+        expect(scaled).not.toBe(0n);
       }
     });
 
@@ -351,6 +357,65 @@ describe('buildBuyLedgerEntries', () => {
       expect(() =>
         buildBuyLedgerEntries(freshInput({ fiatAmount: 'abc' })),
       ).toThrow(LedgerError);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Zero processingFee — promotional / zero-fee tier
+  // -------------------------------------------------------------------------
+
+  describe('zero processingFee (promotional / zero-fee tier)', () => {
+    let entries: LedgerEntryDraft[];
+
+    beforeAll(() => {
+      entries = buildBuyLedgerEntries(freshInput({ processingFee: '0' }));
+    });
+
+    it('(a) no entry has a zero amount', () => {
+      const SCALE = 10n ** 18n;
+      for (const e of entries) {
+        const isNeg = e.amount.startsWith('-');
+        const abs = isNeg ? e.amount.slice(1) : e.amount;
+        const [whole = '0', frac = ''] = abs.split('.');
+        const fracPadded = frac.slice(0, 18).padEnd(18, '0');
+        const scaled = BigInt(whole) * SCALE + BigInt(fracPadded);
+        expect(scaled).not.toBe(0n);
+      }
+    });
+
+    it('(b) NGN leg still sums to exactly zero', () => {
+      expect(sumByCurrency(entries, 'NGN')).toBe(0n);
+    });
+
+    it('(c) exactly 2 NGN entries (no fee entry) and 2 USDT entries', () => {
+      const ngn = entries.filter((e) => e.currency === 'NGN');
+      const usdt = entries.filter((e) => e.currency === 'USDT');
+      expect(ngn).toHaveLength(2);
+      expect(usdt).toHaveLength(2);
+    });
+
+    it('no platform_float entry is emitted when fee is zero', () => {
+      const feeEntry = entries.find(
+        (e) => e.accountType === LedgerAccountType.platform_float,
+      );
+      expect(feeEntry).toBeUndefined();
+    });
+
+    it('treasury_reserve NGN is debited the full fiatAmount when fee is zero', () => {
+      const trsNgn = entries.find(
+        (e) =>
+          e.accountType === LedgerAccountType.treasury_reserve &&
+          e.currency === 'NGN',
+      );
+      expect(trsNgn).toBeDefined();
+      expect(trsNgn!.amount).toBe('-5000');
+      expect(trsNgn!.direction).toBe(LedgerDirection.debit);
+    });
+
+    it('USDT leg is unaffected by zero fee', () => {
+      expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+      const usdt = entries.filter((e) => e.currency === 'USDT');
+      expect(usdt).toHaveLength(2);
     });
   });
 });

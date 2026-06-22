@@ -251,8 +251,8 @@ function assertNonNegativeDecimal(value: string, fieldName: string): bigint {
 // ---------------------------------------------------------------------------
 
 /**
- * Produce the five balanced double-entry `LedgerEntryDraft` rows for a crypto
- * BUY settlement.
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for a crypto BUY
+ * settlement (4 or 5 entries depending on whether processingFee is zero).
  *
  * The function is pure: it reads prior account state from `input.accountStates`
  * and computes the next `sequence` and `balanceAfter` values deterministically.
@@ -261,14 +261,22 @@ function assertNonNegativeDecimal(value: string, fieldName: string): bigint {
  *
  * Account mapping (credit positive, debit negative; per-currency sums = 0):
  *
- * NGN leg (sum = 0):
- *  + processor_settlement / ngn_processor / NGN  +fiatAmount  (NGN received)
- *  − treasury_reserve    / ngn_treasury  / NGN  −(fiatAmount − fee) (cost basis)
- *  − platform_float      / ngn_fees      / NGN  −processingFee      (fee revenue)
+ * NGN leg (sum = 0) — processingFee > 0 (3 entries):
+ *  + processor_settlement / ngn_processor / NGN  +fiatAmount          (NGN received)
+ *  − treasury_reserve    / ngn_treasury  / NGN  −(fiatAmount − fee)  (cost basis)
+ *  − platform_float      / ngn_fees      / NGN  −processingFee        (fee revenue)
  *
- * USDT leg (sum = 0):
+ * NGN leg (sum = 0) — processingFee = 0 (2 entries, fee entry omitted):
+ *  + processor_settlement / ngn_processor / NGN  +fiatAmount          (NGN received)
+ *  − treasury_reserve    / ngn_treasury  / NGN  −fiatAmount           (cost basis)
+ *
+ * USDT leg (sum = 0, always 2 entries):
  *  + user_wallet         / walletId      / USDT +cryptoAmount (delivered to user)
  *  − treasury_reserve    / usdt_treasury / USDT −cryptoAmount (sourced from treasury)
+ *
+ * Zero-amount entries are never emitted (invariant 2). A zero processingFee is a
+ * legitimate business case (promotions / zero-fee tier) — the fee entry is simply
+ * omitted rather than rejecting the input.
  */
 export function buildBuyLedgerEntries(
   input: BuildBuyLedgerInput,
@@ -295,12 +303,13 @@ export function buildBuyLedgerEntries(
 
   // Derived amounts (exact BigInt arithmetic).
   const costBasis = fromScaled(-(scaledFiat - scaledFee)); // negative (debit)
-  const negFee = fromScaled(-scaledFee); // negative (debit)
   const negCrypto = fromScaled(-toScaled(cryptoAmount)); // negative (debit)
 
   // -- Build entries in deterministic order --
-  const specs: EntrySpec[] = [
-    // NGN leg
+  // NGN leg: when processingFee is zero, omit the platform_float fee entry to
+  // preserve the invariant that every LedgerEntry.amount is non-zero.
+  // The two remaining NGN entries still balance: +fiatAmount − fiatAmount = 0.
+  const ngnSpecs: EntrySpec[] = [
     {
       accountType: LedgerAccountType.processor_settlement,
       accountId: 'ngn_processor',
@@ -315,13 +324,22 @@ export function buildBuyLedgerEntries(
       amount: costBasis,
       description: `Buy: NGN ${fromScaled(scaledFiat - scaledFee)} cost basis of USDT sourced from treasury`,
     },
-    {
-      accountType: LedgerAccountType.platform_float,
-      accountId: 'ngn_fees',
-      currency: 'NGN',
-      amount: negFee,
-      description: `Buy: NGN ${processingFee} processing fee booked to platform`,
-    },
+    // Fee entry only emitted when processingFee > 0 (a zero entry violates invariant 2).
+    ...(scaledFee > 0n
+      ? [
+          {
+            accountType: LedgerAccountType.platform_float,
+            accountId: 'ngn_fees',
+            currency: 'NGN',
+            amount: fromScaled(-scaledFee),
+            description: `Buy: NGN ${processingFee} processing fee booked to platform`,
+          } satisfies EntrySpec,
+        ]
+      : []),
+  ];
+
+  const specs: EntrySpec[] = [
+    ...ngnSpecs,
     // USDT leg
     {
       accountType: LedgerAccountType.user_wallet,
