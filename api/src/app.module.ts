@@ -7,6 +7,7 @@ import { ZodValidationPipe } from 'nestjs-zod';
 import configuration from './core/config/configuration';
 import { validateEnv } from './core/config/env.schema';
 import { PrismaModule } from './core/prisma/prisma.module';
+import { AgentModule } from './modules/agent/agent.module';
 import { QuotesModule } from './modules/quotes/quotes.module';
 import { WhatsAppModule } from './modules/whatsapp/whatsapp.module';
 
@@ -26,6 +27,7 @@ import { WhatsAppModule } from './modules/whatsapp/whatsapp.module';
       },
     }),
     PrismaModule,
+    AgentModule,
     QuotesModule,
     WhatsAppModule,
   ],
