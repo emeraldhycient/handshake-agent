@@ -32,6 +32,14 @@ module.exports = {
       },
     },
     {
+      name: 'api-agent-core-no-nest',
+      comment:
+        'The agent core is framework-agnostic (CLAUDE.md §3.2/§6): it must import zero Nest symbols. Nest wiring belongs in the adapter layer (Task 3.3).',
+      severity: 'error',
+      from: { path: '^api/src/modules/agent/core/' },
+      to: { path: '^@nestjs/' },
+    },
+    {
       name: 'api-domain-is-pure',
       comment:
         'Domain layer is pure: no Nest, no Prisma, no framework imports.',
