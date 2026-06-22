@@ -1,0 +1,45 @@
+// =============================================================================
+// Receipts (RCP) — immutable, sequentially-numbered, signed proof-of-settlement
+// linked 1:1 to a Transaction and to the audit chain (RCP-01/03). Byte-stable
+// renders for the same input; HMAC-signed for verifiable authenticity. Append-only
+// (only deliveryStatus transitions, via the delivery service).
+// =============================================================================
+
+model Receipt {
+  id             String                @id @default(uuid(7)) @db.Uuid
+  transactionId  String                @unique @db.Uuid
+  /// Global sequential human-readable number, e.g. "HS-2026-000001" (compliance).
+  receiptNumber  String                @unique
+  userId         String                @db.Uuid
+  /// Deterministic itemized breakdown (QTE-05 pricing contract): asset, amount,
+  /// fiatAmount, fxRate, spreadBps, processingFeeBps, networkFee, totalFee.
+  itemized       Json
+  htmlContent    String
+  /// BCP-47 language the receipt was rendered in (en, yo, ha, ig).
+  language       String                @default("en")
+  pdfBlob        Bytes?
+  /// SHA-256 of html+itemized (tamper detection / dedup).
+  contentHash    String
+  /// HMAC-SHA256 over (receiptNumber, transactionId, contentHash, userId, issuedAt).
+  signatureHash  String
+  /// Plain ref to the audit row recording issuance (decoupled from the chain).
+  auditLogId     String?               @db.Uuid
+  deliveryStatus ReceiptDeliveryStatus @default(pending)
+  issuedAt       DateTime              @default(now()) @db.Timestamptz
+  createdAt      DateTime              @default(now()) @db.Timestamptz
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  user        User        @relation(fields: [userId], references: [id])
+
+  @@index([userId, issuedAt])
+  @@map("receipts")
+}
+
+enum ReceiptDeliveryStatus {
+  pending
+  sent
+  failed
+  delivered
+
+  @@map("receipt_delivery_status")
+}

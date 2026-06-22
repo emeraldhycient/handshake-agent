@@ -1,0 +1,360 @@
+// =============================================================================
+// Deterministic execution engine (TXN) — the ONLY component that moves money
+// (CLAUDE.md §3.1). Proposal = a validated intent awaiting execution (never moves
+// money). Transaction = settled movement, reconciled by double-entry LedgerEntry.
+// DirectiveGrant = one-shot, signed, replay-proof authority for high-trust UI
+// (PIN/confirmation) — ADR-0005/0006. Append-only tables (LedgerEntry) and the
+// immutable-after-terminal rule are enforced in the infrastructure repository.
+// =============================================================================
+
+/// Validated intent awaiting engine execution. Bridges agent/tool layer → engine.
+/// parameters are re-validated against the Quote at execute time — never trusted.
+model Proposal {
+  id                 String         @id @default(uuid(7)) @db.Uuid
+  userId             String         @db.Uuid
+  /// Conversation context for audit/replay (web + WhatsApp are both conversations).
+  conversationId     String?        @db.Uuid
+  /// The resolved NLU intent that produced this proposal (null for direct tool calls).
+  intentId           String?        @unique @db.Uuid
+  type               ProposalType
+  status             ProposalStatus @default(pending)
+  /// Validated, action-specific parameters; re-validated from Quote at execution.
+  parameters         Json
+  /// SHA-256 of parameters for tamper detection / audit-chain integrity.
+  parametersChecksum String
+  /// Pricing snapshot for buy/sell/swap; null for send / add_beneficiary.
+  quoteId            String?        @unique @db.Uuid
+  idempotencyKey     String?        @unique @db.Uuid
+  expiresAt          DateTime       @db.Timestamptz
+  confirmedAt        DateTime?      @db.Timestamptz
+  executedAt         DateTime?      @db.Timestamptz
+  rejectedAt         DateTime?      @db.Timestamptz
+  rejectionReason    String?
+  createdAt          DateTime       @default(now()) @db.Timestamptz
+  updatedAt          DateTime       @updatedAt @db.Timestamptz
+
+  user            User             @relation(fields: [userId], references: [id])
+  conversation    Conversation?    @relation(fields: [conversationId], references: [id])
+  intent          MessageIntent?   @relation(fields: [intentId], references: [id])
+  quote           Quote?           @relation(fields: [quoteId], references: [id])
+  transaction     Transaction?
+  directiveGrants DirectiveGrant[]
+
+  @@index([userId, status, createdAt])
+  @@index([status, expiresAt])
+  @@index([conversationId, createdAt])
+  @@map("proposals")
+}
+
+enum ProposalType {
+  buy
+  sell
+  send
+  swap
+  ticket_purchase
+  add_beneficiary
+
+  @@map("proposal_type")
+}
+
+enum ProposalStatus {
+  pending
+  confirmed
+  executing
+  executed
+  rejected
+  cancelled
+  expired
+  failed
+
+  @@map("proposal_status")
+}
+
+/// Settled money movement — the source of truth for funds. Re-validated from a
+/// Proposal: re-quote within drift, balance/velocity/limit/sanctions/AML, PIN +
+/// step-up, idempotency key (TXN-02). Immutable after a terminal state.
+model Transaction {
+  id                      String            @id @default(uuid(7)) @db.Uuid
+  proposalId              String?           @unique @db.Uuid
+  userId                  String            @db.Uuid
+  type                    TransactionType
+  status                  TransactionStatus @default(pending)
+  idempotencyKey          String            @unique @db.Uuid
+  /// SHA-256 of request params (asset/amount/destination) — distinct-param dedup.
+  requestChecksum         String
+  /// SHA-256 of the wallet-balance snapshot taken at validation.
+  balanceChecksum         String?
+  /// FX rate locked at quote time; re-checked for drift before settle.
+  fxRateSnapshot          Decimal?          @db.Decimal(38, 18)
+  /// Type-specific params: { asset, amount, fiatAmount, destination, network, ... }.
+  metadata                Json
+  /// For SEND: on-chain tx hash (immutable once set). For BUY/SELL/TICKET: processor ref.
+  onChainTxHash           String?
+  processorTxRef          String?
+  pinVerifiedAt           DateTime?         @db.Timestamptz
+  stepUpVerifiedAt        DateTime?         @db.Timestamptz
+  executedAt              DateTime?         @db.Timestamptz
+  completedAt             DateTime?         @db.Timestamptz
+  failedAt                DateTime?         @db.Timestamptz
+  failureReason           String?
+  failureRecoveryAttempts Int               @default(0)
+  createdAt               DateTime          @default(now()) @db.Timestamptz
+  updatedAt               DateTime          @updatedAt @db.Timestamptz
+
+  user                    User                 @relation(fields: [userId], references: [id])
+  proposal                Proposal?            @relation(fields: [proposalId], references: [id])
+  ledgerEntries           LedgerEntry[]
+  receipt                 Receipt?
+  settlementOutbox        SettlementOutbox[]
+  complianceEvents        ComplianceEvent[]
+  travelRuleData          TravelRuleData?
+  originatedCompensations CompensationRecord[] @relation("OriginatingTxn")
+  compensationFor         CompensationRecord?  @relation("CompensationTxn")
+
+  @@index([userId, status, createdAt])
+  @@index([status, createdAt])
+  @@index([proposalId])
+  @@map("transactions")
+}
+
+enum TransactionType {
+  buy
+  sell
+  send
+  swap
+  ticket_purchase
+  reward
+  refund
+
+  @@map("transaction_type")
+}
+
+enum TransactionStatus {
+  pending
+  validating
+  confirmed
+  settling
+  completed
+  failed
+  rolled_back
+  cancelled
+
+  @@map("transaction_status")
+}
+
+/// Double-entry bookkeeping. Every Transaction posts ≥2 entries summing to zero.
+/// `sequence` is a per-account monotonic counter for deterministic, immutable
+/// ordering (the running balanceAfter depends on posting order). Append-only.
+model LedgerEntry {
+  id            String            @id @default(uuid(7)) @db.Uuid
+  transactionId String            @db.Uuid
+  accountType   LedgerAccountType
+  /// Scoped account ref: walletId for USER_WALLET; named ref otherwise.
+  accountId     String
+  /// "NGN" | "USDT" | "BTC" — spans FiatCurrency and SupportedAsset.
+  currency      String
+  /// Signed: positive = credit, negative = debit. Never zero.
+  amount        Decimal           @db.Decimal(38, 18)
+  direction     LedgerDirection
+  description   String
+  /// Running balance for this account after this entry (audit anomaly detection).
+  balanceAfter  Decimal           @db.Decimal(38, 18)
+  /// Per-(accountType, accountId) monotonic order; deterministic + immutable.
+  sequence      Int
+  postedAt      DateTime          @db.Timestamptz
+  createdAt     DateTime          @default(now()) @db.Timestamptz
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+
+  @@unique([accountType, accountId, sequence])
+  @@index([accountType, accountId, postedAt])
+  @@index([transactionId])
+  @@map("ledger_entries")
+}
+
+enum LedgerDirection {
+  debit
+  credit
+
+  @@map("ledger_direction")
+}
+
+enum LedgerAccountType {
+  user_wallet
+  platform_float
+  processor_settlement
+  treasury_reserve
+  clearing
+  compensation
+
+  @@map("ledger_account_type")
+}
+
+/// Durable outbox for reliable, idempotent external settlement (TXN-09, FND-14).
+/// Dequeued by a worker; retried with backoff; compensation on exhausted retries.
+model SettlementOutbox {
+  id              String                 @id @default(uuid(7)) @db.Uuid
+  transactionId   String                 @db.Uuid
+  settlementType  SettlementType
+  /// Idempotent settlement request — immutable; replay detection.
+  payload         Json
+  idempotencyKey  String?                @unique @db.Uuid
+  status          SettlementOutboxStatus @default(pending)
+  attempt         Int                    @default(1)
+  /// Processor/on-chain reference returned after first dispatch (reconciliation).
+  processorRef    String?
+  webhookVerified Boolean                @default(false)
+  lastAttemptAt   DateTime?              @db.Timestamptz
+  completedAt     DateTime?              @db.Timestamptz
+  failureReason   String?
+  createdAt       DateTime               @default(now()) @db.Timestamptz
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+
+  @@unique([transactionId, settlementType])
+  @@index([status, createdAt])
+  @@index([processorRef])
+  @@map("settlement_outbox")
+}
+
+enum SettlementType {
+  processor_collection
+  processor_payout
+  onchain_send
+  compensation
+
+  @@map("settlement_type")
+}
+
+enum SettlementOutboxStatus {
+  pending
+  enqueued
+  in_progress
+  completed
+  failed
+  compensated
+  cancelled
+
+  @@map("settlement_outbox_status")
+}
+
+/// Refunds/rewards/compensations from failed settlements or operator action (TXN-09).
+/// Each issues a reverse/refund Transaction; at most one compensation per failed txn.
+model CompensationRecord {
+  id                        String             @id @default(uuid(7)) @db.Uuid
+  originatingTransactionId  String             @db.Uuid
+  /// The reverse/refund txn created to issue the compensation (set once issued).
+  compensationTransactionId String?            @unique @db.Uuid
+  userId                    String             @db.Uuid
+  reason                    CompensationReason
+  amount                    Decimal            @db.Decimal(38, 18)
+  /// "NGN" | "USDT" | "BTC".
+  currency                  String
+  status                    CompensationStatus @default(pending)
+  approvedByAdminId         String?            @db.Uuid
+  approvalComment           String?
+  issuedAt                  DateTime?          @db.Timestamptz
+  createdAt                 DateTime           @default(now()) @db.Timestamptz
+  updatedAt                 DateTime           @updatedAt @db.Timestamptz
+
+  user                    User         @relation(fields: [userId], references: [id])
+  originatingTransaction  Transaction  @relation("OriginatingTxn", fields: [originatingTransactionId], references: [id])
+  compensationTransaction Transaction? @relation("CompensationTxn", fields: [compensationTransactionId], references: [id])
+
+  @@unique([originatingTransactionId])
+  @@index([userId, issuedAt])
+  @@map("compensation_records")
+}
+
+enum CompensationReason {
+  settlement_failed
+  processor_error
+  duplicate_debit
+  operator_adjustment
+  promotion_reward
+
+  @@map("compensation_reason")
+}
+
+enum CompensationStatus {
+  pending
+  approved
+  issued
+  declined
+  cancelled
+
+  @@map("compensation_status")
+}
+
+/// One-shot authority for a high-trust UI directive (confirmation/PIN/step-up).
+/// Only the engine/core mints these (origin), HMAC-signed over a canonical tuple;
+/// only the nonce hash is stored; atomic consume-on-redeem prevents replay/stale
+/// price (ADR-0005/0006). Canonical home — agent/channels reference by FK.
+model DirectiveGrant {
+  id                 String               @id @default(uuid(7)) @db.Uuid
+  /// Ref echoed to the client in ConversationReply.directives[].id.
+  directiveId        String               @unique @db.Uuid
+  proposalId         String               @db.Uuid
+  userId             String               @db.Uuid
+  directiveRef       UiComponentRef
+  origin             DirectiveOrigin
+  /// CSPRNG ≥256-bit nonce, stored as hash only; client submits the plain nonce.
+  nonceHash          String               @unique
+  /// HMAC-SHA256 over (directiveId, ref, proposalId, nonce, expiresAt, userId, origin).
+  signatureValue     String
+  status             DirectiveGrantStatus @default(issued)
+  issuedAt           DateTime             @default(now()) @db.Timestamptz
+  expiresAt          DateTime             @db.Timestamptz
+  consumedAt         DateTime?            @db.Timestamptz
+  /// Proposal id observed at consumption — must match proposalId, else failed (audit).
+  consumedProposalId String?              @db.Uuid
+  failureReason      String?
+  failureCount       Int                  @default(0)
+  createdAt          DateTime             @default(now()) @db.Timestamptz
+  updatedAt          DateTime             @updatedAt @db.Timestamptz
+
+  proposal Proposal @relation(fields: [proposalId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@unique([proposalId, directiveRef])
+  @@index([userId, status])
+  @@index([expiresAt])
+  @@map("directive_grants")
+}
+
+enum DirectiveGrantStatus {
+  issued
+  consumed
+  expired
+  failed
+  revoked
+  cancelled
+
+  @@map("directive_grant_status")
+}
+
+/// Finite catalog of renderable UI components a directive can reference (ADR-0005).
+/// High-trust members (show_confirmation/request_pin/request_step_up/show_kyc_wizard)
+/// require origin=engine|core + a valid signature.
+enum UiComponentRef {
+  show_confirmation
+  request_pin
+  request_step_up
+  show_info_card
+  show_balance_card
+  show_receive_address_card
+  show_beneficiary_picker
+  show_kyc_wizard
+  show_quote_card
+  show_receipt_card
+
+  @@map("ui_component_ref")
+}
+
+enum DirectiveOrigin {
+  engine
+  core
+  agent
+
+  @@map("directive_origin")
+}

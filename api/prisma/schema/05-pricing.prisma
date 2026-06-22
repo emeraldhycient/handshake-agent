@@ -1,0 +1,151 @@
+// =============================================================================
+// Pricing, quotes & treasury (QTE). Quote is the canonical, time-bounded pricing
+// snapshot (one definition repo-wide). It is ALWAYS re-validated at execution by
+// the engine — never blindly trusted (NFR-6). Crypto amounts/rates are stored as
+// byte-stable strings (snapshots); fiat amounts as Decimal for aggregation.
+// =============================================================================
+
+model Quote {
+  id                  String         @id @default(uuid(7)) @db.Uuid
+  userId              String         @db.Uuid
+  type                QuoteType
+  asset               SupportedAsset
+  fiatCurrency        FiatCurrency   @default(NGN)
+  fiatAmount          Decimal        @db.Decimal(38, 2)
+  /// Byte-stable snapshots (contracts CryptoAmountSchema / fxRate). Display + re-validation only.
+  cryptoAmount        String
+  fxRate              String
+  baseRate            String
+  networkFeeCrypto    String?
+  /// Fees as basis points (mirrors contracts spreadBps / processingFeeBps).
+  spreadBps           Int
+  processingFeeBps    Int
+  processingFeeAmount Decimal        @db.Decimal(38, 2)
+  rateSource          String?
+  quotedAt            DateTime       @default(now()) @db.Timestamptz
+  expiresAt           DateTime       @db.Timestamptz
+  status              QuoteStatus    @default(valid)
+  /// Lock window (separate from rate validity) once the user confirms — ADR-0005.
+  lockedAt            DateTime?      @db.Timestamptz
+  lockedUntil         DateTime?      @db.Timestamptz
+  idempotencyKey      String?        @unique @db.Uuid
+  /// Channel origin / language / device for audit (non-authoritative).
+  metadata            Json?
+  createdAt           DateTime       @default(now()) @db.Timestamptz
+  updatedAt           DateTime       @updatedAt @db.Timestamptz
+
+  user     User      @relation(fields: [userId], references: [id])
+  proposal Proposal?
+
+  @@index([userId, status, createdAt])
+  @@index([status, expiresAt])
+  @@map("quotes")
+}
+
+enum QuoteType {
+  buy
+  sell
+  swap
+
+  @@map("quote_type")
+}
+
+enum QuoteStatus {
+  valid
+  locked
+  expired
+  settled
+  rejected
+
+  @@map("quote_status")
+}
+
+/// Append-only historical market-rate record (treasury analysis, rate-source audit).
+model PriceSnapshot {
+  id               String         @id @default(uuid(7)) @db.Uuid
+  asset            SupportedAsset
+  fiatCurrency     FiatCurrency
+  baseRate         String
+  spreadBps        Int
+  processingFeeBps Int
+  source           String
+  capturedAt       DateTime       @default(now()) @db.Timestamptz
+  createdAt        DateTime       @default(now()) @db.Timestamptz
+
+  @@index([asset, fiatCurrency, capturedAt])
+  @@index([source, capturedAt])
+  @@map("price_snapshots")
+}
+
+/// Real-time treasury inventory position vs limits (QTE-04). One real_time row per
+/// (asset, currency); daily_snapshot rows are separate periodic aggregates.
+model TreasuryExposure {
+  id                String               @id @default(uuid(7)) @db.Uuid
+  asset             SupportedAsset
+  fiatCurrency      FiatCurrency
+  /// Crypto held in treasury — byte-stable string snapshot.
+  cryptoHeld        String
+  fiatEquivalent    Decimal              @db.Decimal(38, 2)
+  fiatReserve       Decimal              @db.Decimal(38, 2)
+  netExposure       Decimal              @db.Decimal(38, 2)
+  exposureLimitBps  Int
+  alertThresholdBps Int
+  status            ExposureStatus       @default(safe)
+  snapshotType      TreasurySnapshotType @default(real_time)
+  lastAlertAt       DateTime?            @db.Timestamptz
+  createdAt         DateTime             @default(now()) @db.Timestamptz
+  updatedAt         DateTime             @updatedAt @db.Timestamptz
+
+  alerts TreasuryAlert[]
+
+  @@unique([asset, fiatCurrency, snapshotType])
+  @@index([asset, fiatCurrency, updatedAt])
+  @@index([status, updatedAt])
+  @@map("treasury_exposures")
+}
+
+enum ExposureStatus {
+  safe
+  warning
+  critical
+
+  @@map("exposure_status")
+}
+
+enum TreasurySnapshotType {
+  real_time
+  daily_snapshot
+
+  @@map("treasury_snapshot_type")
+}
+
+/// Immutable exposure-threshold breach / operational alert (QTE-04). Append-only.
+model TreasuryAlert {
+  id                    String         @id @default(uuid(7)) @db.Uuid
+  exposureId            String         @db.Uuid
+  asset                 SupportedAsset
+  severity              AlertSeverity
+  message               String
+  netExposure           Decimal        @db.Decimal(38, 2)
+  exposureLimit         Decimal        @db.Decimal(38, 2)
+  triggeredAt           DateTime       @default(now()) @db.Timestamptz
+  acknowledgedAt        DateTime?      @db.Timestamptz
+  acknowledgedByAdminId String?        @db.Uuid
+  acknowledgmentNote    String?
+  createdAt             DateTime       @default(now()) @db.Timestamptz
+
+  exposure TreasuryExposure @relation(fields: [exposureId], references: [id])
+
+  @@index([severity, triggeredAt])
+  @@index([asset, triggeredAt])
+  @@index([acknowledgedAt])
+  @@map("treasury_alerts")
+}
+
+enum AlertSeverity {
+  info
+  warning
+  critical
+
+  @@map("alert_severity")
+}

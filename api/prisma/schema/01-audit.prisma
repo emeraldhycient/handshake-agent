@@ -1,0 +1,362 @@
+// =============================================================================
+// Audit & compliance (AUD) — the tamper-evident spine plus sanctions/AML/Travel
+// Rule. AuditLog is append-only and intentionally RELATION-FREE: it carries plain
+// indexed string refs (actor/subject) so it survives soft-deletes of its subjects
+// and nothing can cascade into the chain. Immutability (no UPDATE/DELETE) is
+// enforced in the infrastructure repository (Prisma can't express it) — AUD-01.
+// =============================================================================
+
+/// Hash-chained record of every propose/confirm/authorize/execute and every admin
+/// action. currentHash = SHA-256(actor‖subject‖action‖details‖before‖after‖
+/// createdAt‖prevHash) with deterministic field order; prevHash links the previous
+/// row ('0' genesis). A daily job re-walks the chain (writes an audit_chain_check).
+model AuditLog {
+  id            String      @id @default(uuid(7)) @db.Uuid
+  /// Ties related events across a single request/flow end-to-end.
+  correlationId String
+  /// "system" | "user:<id>" | "admin:<id>" | external service name.
+  actor         String
+  /// Plain refs (NOT FKs) for filtering — keeps the chain decoupled & immutable.
+  actorUserId   String?     @db.Uuid
+  actorAdminId  String?     @db.Uuid
+  /// What was acted on, free-form "Type:id" (e.g. "Transaction:<uuid>").
+  subject       String
+  action        AuditAction
+  details       Json
+  /// State snapshots; before is null for creates, after is null for pure reads.
+  before        Json?
+  after         Json?
+  /// Tamper-evident chain. 64-hex SHA-256 digests.
+  prevHash      String      @db.Char(64)
+  currentHash   String      @unique @db.Char(64)
+  createdAt     DateTime    @default(now()) @db.Timestamptz
+
+  @@unique([correlationId, action, currentHash])
+  @@index([actorUserId, createdAt])
+  @@index([actorAdminId, createdAt])
+  @@index([subject, action, createdAt])
+  @@map("audit_logs")
+}
+
+enum AuditAction {
+  propose
+  confirm
+  authorize
+  execute
+  admin_update
+  admin_review
+  admin_override
+  sanctions_hit
+  aml_flag
+  rule_violation
+  kyc_state_change
+  beneficiary_add
+  beneficiary_remove
+  device_bind
+  pin_set
+  pin_reset
+  session_create
+  session_revoke
+  step_up_challenge
+  step_up_passed
+  config_change
+  audit_chain_check
+
+  @@map("audit_action")
+}
+
+/// Flags from sanctions/AML/velocity/Travel-Rule screening, queued for RBAC-gated
+/// admin disposition. Every flag carries an immutable disposition trail (AUD-09).
+model ComplianceEvent {
+  id                 String              @id @default(uuid(7)) @db.Uuid
+  userId             String              @db.Uuid
+  transactionId      String?             @db.Uuid
+  eventType          ComplianceEventType
+  severity           Severity
+  /// Service that produced the flag, e.g. "open_sanctions" / "aml_engine".
+  screeningProvider  String
+  /// AML rule key or matched sanctions list/entity — supports trend analysis.
+  ruleOrHit          String?
+  details            Json
+  status             ComplianceStatus    @default(flagged)
+  dispositionComment String?
+  /// Admin attribution kept as a plain ref (full trail in AuditLog).
+  dispositionAdminId String?             @db.Uuid
+  dispositionAt      DateTime?           @db.Timestamptz
+  createdAt          DateTime            @default(now()) @db.Timestamptz
+  updatedAt          DateTime            @updatedAt @db.Timestamptz
+
+  user        User         @relation(fields: [userId], references: [id])
+  transaction Transaction? @relation(fields: [transactionId], references: [id])
+
+  @@index([userId, status, createdAt])
+  @@index([status, severity, createdAt])
+  @@index([eventType, dispositionAt])
+  @@map("compliance_events")
+}
+
+enum ComplianceEventType {
+  sanctions_hit
+  aml_rule_triggered
+  velocity_limit_exceeded
+  travel_rule_required
+  policy_override
+  kyc_escalation
+  fraud_signal
+  unusual_pattern
+
+  @@map("compliance_event_type")
+}
+
+enum Severity {
+  low
+  medium
+  high
+  critical
+
+  @@map("severity")
+}
+
+enum ComplianceStatus {
+  flagged
+  under_review
+  approved
+  blocked
+  dismissed
+
+  @@map("compliance_status")
+}
+
+/// Immutable record of each screening run on a counterparty. Append-only; plain
+/// refs keep it decoupled from the operational graph (AUD-06).
+model SanctionsRecord {
+  id                     String            @id @default(uuid(7)) @db.Uuid
+  /// "beneficiary:<id>" | "address:<addr>" | "user:<id>" | free-form.
+  counterpartyId         String
+  userId                 String?           @db.Uuid
+  beneficiaryId          String?           @db.Uuid
+  screeningType          ScreeningType
+  provider               ScreeningProvider
+  query                  Json
+  result                 Json
+  verdict                ScreeningVerdict
+  /// Provider-side request id for traceability.
+  screeningCorrelationId String?
+  createdAt              DateTime          @default(now()) @db.Timestamptz
+
+  @@index([counterpartyId, createdAt])
+  @@index([verdict, createdAt])
+  @@index([provider, createdAt])
+  @@map("sanctions_records")
+}
+
+enum ScreeningType {
+  beneficiary_add
+  transaction_counterparty
+  identity_verification
+  periodic_recheck
+
+  @@map("screening_type")
+}
+
+enum ScreeningProvider {
+  open_sanctions
+  trm
+
+  @@map("screening_provider")
+}
+
+enum ScreeningVerdict {
+  clear
+  hit
+  inconclusive
+
+  @@map("screening_verdict")
+}
+
+/// Admin-configurable, versioned AML rules evaluated by the engine at txn time.
+model AmlRule {
+  id               String        @id @default(uuid(7)) @db.Uuid
+  /// Stable code-like key referenced in audit logs, e.g. "velocity_daily_limit".
+  ruleKey          String        @unique
+  name             String
+  description      String
+  enabled          Boolean       @default(true)
+  ruleType         AmlRuleType
+  action           AmlRuleAction
+  /// Rule config snapshot: { window, limit, thresholdScore, kycTierMin, ... }.
+  parameters       Json
+  version          Int           @default(1)
+  createdByAdminId String?       @db.Uuid
+  updatedByAdminId String?       @db.Uuid
+  createdAt        DateTime      @default(now()) @db.Timestamptz
+  updatedAt        DateTime      @updatedAt @db.Timestamptz
+
+  evaluations AmlRuleEvaluation[]
+
+  @@index([enabled, ruleType])
+  @@map("aml_rules")
+}
+
+enum AmlRuleType {
+  velocity_amount
+  velocity_count
+  behavior_pattern
+  kyc_gate
+  rate_limit
+
+  @@map("aml_rule_type")
+}
+
+enum AmlRuleAction {
+  flag
+  block
+
+  @@map("aml_rule_action")
+}
+
+/// Immutable record of each AML rule evaluation at txn time (rule decisions audit).
+model AmlRuleEvaluation {
+  id            String         @id @default(uuid(7)) @db.Uuid
+  ruleId        String         @db.Uuid
+  /// Plain ref — keeps this immutable log decoupled from Transaction back-relations.
+  transactionId String         @db.Uuid
+  userId        String         @db.Uuid
+  ruleVersion   Int
+  triggered     Boolean
+  context       Json
+  outcome       AmlRuleOutcome
+  evaluatedAt   DateTime       @default(now()) @db.Timestamptz
+
+  rule AmlRule @relation(fields: [ruleId], references: [id])
+
+  @@index([transactionId, ruleId])
+  @@index([userId, evaluatedAt])
+  @@index([ruleId, outcome, evaluatedAt])
+  @@map("aml_rule_evaluations")
+}
+
+enum AmlRuleOutcome {
+  allowed
+  flagged
+  blocked
+
+  @@map("aml_rule_outcome")
+}
+
+/// Originator/beneficiary capture on qualifying transfers (AUD-08). 1:1 with the
+/// transaction; immutable. PII fields are encrypted at rest by the application.
+model TravelRuleData {
+  id                       String              @id @default(uuid(7)) @db.Uuid
+  transactionId            String              @unique @db.Uuid
+  originatorType           TravelRulePartyType
+  originatorId             String?             @db.Uuid
+  originatorName           String
+  originatorAddress        String
+  originatorAccountNumber  String
+  beneficiaryType          TravelRulePartyType
+  beneficiaryId            String?             @db.Uuid
+  beneficiaryName          String?
+  beneficiaryAddress       String?
+  beneficiaryAccountNumber String
+  asset                    SupportedAsset
+  /// Snapshot amounts: asset amount byte-stable as string; fiat equivalent as Decimal.
+  amount                   String
+  amountFiat               Decimal             @db.Decimal(38, 2)
+  triggeringFactor         TravelRuleTrigger
+  capturedAt               DateTime            @default(now()) @db.Timestamptz
+  reportedAt               DateTime?           @db.Timestamptz
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+
+  @@index([originatorId, capturedAt])
+  @@index([beneficiaryAccountNumber])
+  @@index([reportedAt])
+  @@map("travel_rule_data")
+}
+
+enum TravelRulePartyType {
+  individual
+  business
+  unknown
+
+  @@map("travel_rule_party_type")
+}
+
+enum TravelRuleTrigger {
+  amount_threshold
+  jurisdiction
+  policy_requirement
+  beneficiary_risk
+  other
+
+  @@map("travel_rule_trigger")
+}
+
+/// Real-time per-user velocity counters consulted by the engine to enforce limits
+/// and detect structuring. One row per (user, counterType), rolled over per window.
+/// (Single source of truth — supersedes the engine's TransactionVelocityRecord.)
+model VelocityCounter {
+  id           String              @id @default(uuid(7)) @db.Uuid
+  userId       String              @db.Uuid
+  counterType  VelocityCounterType
+  /// Fiat-equivalent total for AMOUNT_*; transaction count for COUNT_* (exact precision).
+  currentValue Decimal             @db.Decimal(38, 18)
+  windowStart  DateTime            @db.Timestamptz
+  windowEnd    DateTime            @db.Timestamptz
+  createdAt    DateTime            @default(now()) @db.Timestamptz
+  updatedAt    DateTime            @updatedAt @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, counterType])
+  @@index([userId, windowEnd])
+  @@index([updatedAt])
+  @@map("velocity_counters")
+}
+
+enum VelocityCounterType {
+  amount_24h
+  amount_30d
+  count_24h
+  count_30d
+  first_use_24h
+
+  @@map("velocity_counter_type")
+}
+
+/// SAR/STR filing records (AUD-10). Immutable once submitted; exportable.
+model ComplianceReport {
+  id               String                 @id @default(uuid(7)) @db.Uuid
+  reportType       ComplianceReportType
+  /// ComplianceEvent / AuditLog ids that triggered the report (plain refs).
+  relatedEvents    String[]
+  content          Json
+  status           ComplianceReportStatus @default(draft)
+  submittedAt      DateTime?              @db.Timestamptz
+  /// Filing authority confirmation id (e.g. SEC receipt).
+  submissionRef    String?
+  createdByAdminId String?                @db.Uuid
+  createdAt        DateTime               @default(now()) @db.Timestamptz
+  updatedAt        DateTime               @updatedAt @db.Timestamptz
+
+  @@index([reportType, status, submittedAt])
+  @@index([createdAt])
+  @@map("compliance_reports")
+}
+
+enum ComplianceReportType {
+  sar
+  str
+
+  @@map("compliance_report_type")
+}
+
+enum ComplianceReportStatus {
+  draft
+  submitted
+  rejected
+  closed
+
+  @@map("compliance_report_status")
+}

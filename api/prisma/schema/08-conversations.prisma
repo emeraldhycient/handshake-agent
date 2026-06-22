@@ -1,0 +1,246 @@
+// =============================================================================
+// Agent / NLU + channels / conversations (AGT, CHN). One identity-keyed thread
+// spans WhatsApp + web; `channel` is a per-message audit tag that NEVER reaches the
+// agent or engine (ADR-0004). The agent emits a validated Intent (MessageIntent) —
+// it never moves money and (CLAUDE.md §3.2) never touches the DB directly; the
+// conversations application layer persists these rows. Nonce/handoff tokens are
+// stored as hashes only.
+// =============================================================================
+
+/// One thread per resolved identity: Contact (unlinked) XOR User (linked). Both FKs
+/// are unique → at most one conversation per contact and per user (ADR-0004).
+model Conversation {
+  id            String             @id @default(uuid(7)) @db.Uuid
+  contactId     String?            @unique @db.Uuid
+  userId        String?            @unique @db.Uuid
+  /// Detected BCP-47 language (reply-in-kind); inferred, never user-supplied.
+  language      String             @default("en")
+  status        ConversationStatus @default(active)
+  lastMessageAt DateTime?          @db.Timestamptz
+  createdAt     DateTime           @default(now()) @db.Timestamptz
+  updatedAt     DateTime           @updatedAt @db.Timestamptz
+
+  contact       Contact?              @relation(fields: [contactId], references: [id])
+  user          User?                 @relation(fields: [userId], references: [id])
+  messages      ConversationMessage[]
+  replies       ConversationReply[]
+  proposals     Proposal[]
+  handoffTokens HandoffToken[]
+
+  // NOTE: contactId XOR userId (exactly one set) is enforced in the application and
+  // by a CHECK constraint added in the migration (Prisma can't express XOR).
+  @@index([lastMessageAt])
+  @@map("conversations")
+}
+
+enum ConversationStatus {
+  active
+  archived
+  suspended
+  closed
+
+  @@map("conversation_status")
+}
+
+/// Immutable inbound message log, deduped by channel externalMessageId (wamid for
+/// WhatsApp). Drives fast-ack → durable processing without double-answering (CHN-05).
+model ConversationMessage {
+  id                String                  @id @default(uuid(7)) @db.Uuid
+  conversationId    String                  @db.Uuid
+  /// Channel-provider message id (wamid / web id) — dedup key.
+  externalMessageId String                  @unique
+  /// Audit tag only — never sent to the agent or engine.
+  channel           Channel
+  senderAddress     String
+  text              String
+  /// Original text as received (audit / language detection).
+  rawUserText       String
+  language          String?
+  processingStatus  MessageProcessingStatus @default(received)
+  processedAt       DateTime?               @db.Timestamptz
+  errorReason       String?
+  /// receivedAt = inbound webhook/channel arrival time; createdAt = DB insertion (audit ordering).
+  receivedAt        DateTime                @default(now()) @db.Timestamptz
+  createdAt         DateTime                @default(now()) @db.Timestamptz
+  correlationId     String
+
+  conversation Conversation       @relation(fields: [conversationId], references: [id])
+  intent       MessageIntent?
+  reply        ConversationReply?
+
+  @@index([conversationId, processingStatus])
+  @@index([receivedAt])
+  @@index([correlationId])
+  @@map("conversation_messages")
+}
+
+enum MessageProcessingStatus {
+  received
+  processing
+  processed
+  failed
+  duplicated
+
+  @@map("message_processing_status")
+}
+
+/// Structured intent emitted by the NLU layer (withStructuredOutput(IntentSchema)).
+/// Immutable; never executable parameters. 1:1 with the inbound message.
+model MessageIntent {
+  id                   String       @id @default(uuid(7)) @db.Uuid
+  messageId            String       @unique @db.Uuid
+  /// Denormalized for query convenience (plain ref).
+  conversationId       String       @db.Uuid
+  action               IntentAction
+  /// Validated intent body from contracts/src/intents (e.g. BuyCryptoIntent). Never
+  /// a destination/rate/authorization.
+  payload              Json
+  language             String?
+  /// Optional model confidence 0.00–1.00; below an AppSetting threshold → clarify.
+  extractionConfidence Decimal?     @db.Decimal(3, 2)
+  createdAt            DateTime     @default(now()) @db.Timestamptz
+
+  message  ConversationMessage @relation(fields: [messageId], references: [id])
+  proposal Proposal?
+
+  @@index([conversationId])
+  @@map("message_intents")
+}
+
+/// Intent discriminator — mirrors @handshake-agent/contracts IntentSchema actions.
+enum IntentAction {
+  buy_crypto
+  sell_crypto
+  send_crypto
+  receive_crypto
+  swap
+  buy_ticket
+  check_balance
+  none
+
+  @@map("intent_action")
+}
+
+/// Channel-neutral outbound reply (text + optional directives/Flow/handoff/template).
+/// directives are validated UiDirective objects (ADR-0005); high-trust ones carry a
+/// signed DirectiveGrant by reference. Never contains markup.
+model ConversationReply {
+  id             String      @id @default(uuid(7)) @db.Uuid
+  conversationId String      @db.Uuid
+  /// Inbound message that triggered this reply; null for unsolicited (notifications).
+  messageId      String?     @unique @db.Uuid
+  text           String
+  /// Array of channel-neutral UiDirective objects (Zod-validated from contracts).
+  directives     Json[]
+  /// Reference to a HandoffToken row when the reply routes to web; never the raw token.
+  handoffTokenId String?     @db.Uuid
+  /// Approved WhatsApp template ref when out-of-window (enforces 24h policy at edge).
+  templateRef    String?
+  status         ReplyStatus @default(created)
+  sentAt         DateTime?   @db.Timestamptz
+  deliveredAt    DateTime?   @db.Timestamptz
+  failureReason  String?
+  correlationId  String
+  createdAt      DateTime    @default(now()) @db.Timestamptz
+
+  conversation Conversation              @relation(fields: [conversationId], references: [id])
+  message      ConversationMessage?      @relation(fields: [messageId], references: [id])
+  dispatches   ChannelOutboundDispatch[]
+
+  @@index([conversationId, createdAt])
+  @@index([correlationId])
+  @@map("conversation_replies")
+}
+
+enum ReplyStatus {
+  created
+  queued
+  sent
+  failed
+  delivered
+
+  @@map("reply_status")
+}
+
+/// Per-channel delivery attempt for a reply (one reply → many on failover). Records
+/// provider ids (wamid) and the WhatsApp failure state machine (131047/131026).
+model ChannelOutboundDispatch {
+  id                            String         @id @default(uuid(7)) @db.Uuid
+  replyId                       String         @db.Uuid
+  channel                       Channel
+  externalMessageId             String?
+  status                        DispatchStatus @default(queued)
+  queuedAt                      DateTime       @default(now()) @db.Timestamptz
+  sentAt                        DateTime?      @db.Timestamptz
+  deliveredAt                   DateTime?      @db.Timestamptz
+  /// Provider error code, e.g. "131047" (out-of-window) / "131026" (undeliverable).
+  failureCode                   String?
+  failureReason                 String?
+  retryCount                    Int            @default(0)
+  maxRetries                    Int            @default(3)
+  nextRetryAt                   DateTime?      @db.Timestamptz
+  failoverTriggeredAt           DateTime?      @db.Timestamptz
+  /// Dispatch id that triggered failover to this one (plain ref, audit chain).
+  failoverTriggeredByDispatchId String?        @db.Uuid
+  correlationId                 String
+  createdAt                     DateTime       @default(now()) @db.Timestamptz
+
+  reply ConversationReply @relation(fields: [replyId], references: [id])
+
+  @@index([status, nextRetryAt])
+  @@index([replyId, channel])
+  @@index([correlationId])
+  @@map("channel_outbound_dispatches")
+}
+
+enum DispatchStatus {
+  queued
+  sent
+  delivered
+  failed
+  bounced
+
+  @@map("dispatch_status")
+}
+
+/// Single-use web-handoff bearer token (CHN-04). CSPRNG ≥256-bit; only the hash is
+/// stored; short TTL; atomic consume-on-redeem; sibling tokens invalidated; never logged.
+model HandoffToken {
+  id                String             @id @default(uuid(7)) @db.Uuid
+  tokenHash         String             @unique
+  userId            String             @db.Uuid
+  conversationId    String?            @db.Uuid
+  purpose           HandoffPurpose
+  status            HandoffTokenStatus @default(issued)
+  issuedAt          DateTime           @default(now()) @db.Timestamptz
+  createdAt         DateTime           @default(now()) @db.Timestamptz
+  expiresAt         DateTime           @db.Timestamptz
+  redeemedAt        DateTime?          @db.Timestamptz
+  redeemedIp        String?
+  redeemedUserAgent String?
+
+  user         User          @relation(fields: [userId], references: [id])
+  conversation Conversation? @relation(fields: [conversationId], references: [id])
+
+  @@index([userId, status])
+  @@index([expiresAt])
+  @@map("handoff_tokens")
+}
+
+enum HandoffPurpose {
+  kyc
+  confirmation
+  pin_reset
+  device_binding
+
+  @@map("handoff_purpose")
+}
+
+enum HandoffTokenStatus {
+  issued
+  redeemed
+  expired
+  revoked
+
+  @@map("handoff_token_status")
+}
