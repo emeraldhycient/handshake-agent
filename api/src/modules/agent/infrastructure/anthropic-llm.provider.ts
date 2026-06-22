@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 // ESM-under-CJS: always use `import` for @langchain packages (tsc downlevels to require).
 // Never hand-write require() — see root CLAUDE.md §6.
 import { ChatAnthropic } from '@langchain/anthropic';
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { IntentSchema, type Intent } from '@handshake-agent/contracts';
 import type { LlmProvider } from '../core/ports/llm-provider.port';
 import type { Env } from '../../../core/config/env.schema';
@@ -53,7 +52,12 @@ Rules:
 @Injectable()
 export class AnthropicLlmProvider implements LlmProvider {
   /** Lazily initialised on first call to extractIntent. */
-  private model: BaseChatModel | null = null;
+  // Concrete ChatAnthropic, not BaseChatModel: @langchain/anthropic and
+  // @langchain/core resolve BaseChatModel to distinct class identities, so
+  // assigning ChatAnthropic to a BaseChatModel field trips TS2322 under ts-jest
+  // (tsc tolerates it via skipLibCheck). The adapter only needs
+  // withStructuredOutput/invoke, both on ChatAnthropic.
+  private model: ChatAnthropic | null = null;
 
   constructor(private readonly config: ConfigService<Env, true>) {}
 
@@ -74,7 +78,7 @@ export class AnthropicLlmProvider implements LlmProvider {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  private getOrCreateModel(): BaseChatModel {
+  private getOrCreateModel(): ChatAnthropic {
     if (this.model) return this.model;
 
     const apiKey = this.config.get('ANTHROPIC_API_KEY', { infer: true });
@@ -86,11 +90,8 @@ export class AnthropicLlmProvider implements LlmProvider {
 
     const modelId = this.config.get('AGENT_MODEL', { infer: true });
 
-    this.model = new ChatAnthropic({
-      apiKey,
-      model: modelId,
-    });
-
-    return this.model;
+    const model = new ChatAnthropic({ apiKey, model: modelId });
+    this.model = model;
+    return model;
   }
 }
