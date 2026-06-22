@@ -1,0 +1,100 @@
+// =============================================================================
+// Notifications (NTF). Outbox-driven dispatch with deterministic failover
+// (WhatsApp → email → SMS → in-app) and idempotent, at-most-once sends per logical
+// event. Templates are multilingual and admin-editable (hot-reloadable). Critical
+// events are non-disableable by user preference (NTF-09).
+// =============================================================================
+
+model Notification {
+  id             String                @id @default(uuid(7)) @db.Uuid
+  userId         String                @db.Uuid
+  eventType      NotificationEventType
+  /// Ref to the triggering domain object (transactionId / kycProfileId / ticketOrderId).
+  eventRef       String
+  primaryChannel Channel               @default(whatsapp)
+  /// Points at a NotificationTemplate.templateKey; null → plain fallback text.
+  templateKey    String?
+  /// Render variables, frozen at issue time for consistent replay.
+  templateVars   Json
+  /// [{ channel, status, attemptCount, lastError, sentAt, deliveredAt }] per attempt.
+  deliveryLog    Json                  @default("[]")
+  isDisableable  Boolean               @default(true)
+  isSent         Boolean               @default(false)
+  isFailed       Boolean               @default(false)
+  createdAt      DateTime              @default(now()) @db.Timestamptz
+  expiresAt      DateTime?             @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([eventRef, eventType])
+  @@index([userId, eventType])
+  @@index([createdAt, isSent, isFailed])
+  @@map("notifications")
+}
+
+/// Per-user, per-event channel preferences. Non-disableable events ignore isEnabled.
+model NotificationPreference {
+  id                String                @id @default(uuid(7)) @db.Uuid
+  userId            String                @db.Uuid
+  eventType         NotificationEventType
+  isEnabled         Boolean               @default(true)
+  /// Ordered preferred channels; failover follows this sequence.
+  preferredChannels Json                  @default("[\"whatsapp\",\"email\"]")
+  createdAt         DateTime              @default(now()) @db.Timestamptz
+  updatedAt         DateTime              @updatedAt @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, eventType])
+  @@map("notification_preferences")
+}
+
+enum NotificationEventType {
+  transaction_pending
+  transaction_completed
+  transaction_failed
+  kyc_approved
+  kyc_rejected
+  kyc_pending_review
+  compliance_flag
+  compliance_resolved
+  receipt_ready
+  balance_update
+  beneficiary_added
+  beneficiary_verified
+  ticket_delivered
+  refund_issued
+  refund_pending
+  deposit_confirmed
+  withdrawal_initiated
+  pin_reset_initiated
+  device_added
+  suspicious_activity_alert
+
+  @@map("notification_event_type")
+}
+
+/// Multilingual, admin-editable, channel-specific templates (NTF-07). Deterministic
+/// rendering; no raw HTML injected. WhatsApp rows reference an approved Meta template.
+model NotificationTemplate {
+  id                 String   @id @default(uuid(7)) @db.Uuid
+  /// Hierarchical key referenced by Notification.templateKey.
+  templateKey        String
+  /// BCP-47 tag (en, yo, ha, ig). Render falls back to 'en' if unavailable.
+  language           String   @default("en")
+  channel            Channel
+  /// Email subject (required for email channel); supports variable interpolation.
+  subject            String?
+  contentText        String
+  contentHtml        String?
+  /// Meta-issued approved template id when sent via WhatsApp.
+  whatsappTemplateId String?
+  /// [{ name, type, description }] documenting expected variables.
+  variables          Json     @default("[]")
+  updatedByAdminId   String?  @db.Uuid
+  createdAt          DateTime @default(now()) @db.Timestamptz
+  updatedAt          DateTime @updatedAt @db.Timestamptz
+
+  @@unique([templateKey, language, channel])
+  @@map("notification_templates")
+}

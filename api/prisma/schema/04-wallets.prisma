@@ -1,0 +1,164 @@
+// =============================================================================
+// Wallets & custody (WAL) — custodial wallets via Blockradar (master wallet →
+// per-user child addresses; deposit webhooks with auto-sweep; withdraw API).
+// Keys live with the provider (MPC/HSM) — we store references and addresses only,
+// never private keys (NFR-1). USDT-on-TRON at launch; BTC deferred (ADR-0006).
+// =============================================================================
+
+model Wallet {
+  id                String         @id @default(uuid(7)) @db.Uuid
+  userId            String         @db.Uuid
+  asset             SupportedAsset
+  network           Network
+  /// On-chain receive address (Blockradar child address). Validated before storage.
+  address           String         @unique
+  /// Opaque Blockradar reference (child-wallet/account id) — idempotent provisioning key.
+  providerReference String
+  status            WalletStatus   @default(provisioning)
+  provisionedAt     DateTime?      @db.Timestamptz
+  lastSyncedAt      DateTime?      @db.Timestamptz
+  suspendedAt       DateTime?      @db.Timestamptz
+  closedAt          DateTime?      @db.Timestamptz
+  createdAt         DateTime       @default(now()) @db.Timestamptz
+  updatedAt         DateTime       @updatedAt @db.Timestamptz
+
+  user               User                  @relation(fields: [userId], references: [id])
+  balances           WalletBalance[]
+  deposits           DepositConfirmation[]
+  withdrawalPolicies WithdrawalPolicy[]
+  syncLogs           WalletSyncLog[]
+
+  @@unique([userId, asset, network])
+  @@index([userId])
+  @@index([asset, network, status])
+  @@map("wallets")
+}
+
+enum WalletStatus {
+  provisioning
+  active
+  suspended
+  closed
+
+  @@map("wallet_status")
+}
+
+/// Cached balance snapshot (provider reads are expensive; staleTime-bounded).
+model WalletBalance {
+  id            String        @id @default(uuid(7)) @db.Uuid
+  walletId      String        @db.Uuid
+  /// Asset-native amount; engine-precision Decimal (38,18) per repo convention.
+  amount        Decimal       @db.Decimal(38, 18)
+  /// Asset decimal precision at snapshot (e.g. USDT=6, BTC=8) — denormalized for audit.
+  assetDecimals Int
+  source        BalanceSource
+  syncedAt      DateTime      @db.Timestamptz
+  createdAt     DateTime      @default(now()) @db.Timestamptz
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, syncedAt])
+  @@map("wallet_balances")
+}
+
+enum BalanceSource {
+  provider_sync
+  deposit_webhook
+  manual_audit
+
+  @@map("balance_source")
+}
+
+/// Immutable inbound-deposit record, deduped by on-chain txHash (WAL-05). Append-only.
+model DepositConfirmation {
+  id             String        @id @default(uuid(7)) @db.Uuid
+  walletId       String        @db.Uuid
+  txHash         String        @unique
+  amount         Decimal       @db.Decimal(38, 18)
+  assetDecimals  Int
+  sourceAddress  String?
+  status         DepositStatus @default(pending)
+  blockHeight    BigInt?
+  confirmations  Int           @default(0)
+  /// Provider webhook event id (idempotent retry handling).
+  webhookId      String?
+  /// Plain refs (decoupled from the immutable AuditLog / Notification graphs).
+  notificationId String?       @db.Uuid
+  auditLogId     String?       @db.Uuid
+  detectedAt     DateTime      @default(now()) @db.Timestamptz
+  confirmedAt    DateTime?     @db.Timestamptz
+  createdAt      DateTime      @default(now()) @db.Timestamptz
+
+  wallet Wallet @relation(fields: [walletId], references: [id])
+
+  @@index([walletId, confirmedAt])
+  @@index([webhookId])
+  @@index([status])
+  @@map("deposit_confirmations")
+}
+
+enum DepositStatus {
+  pending
+  confirmed
+  failed
+  disputed
+
+  @@map("deposit_status")
+}
+
+/// Per-wallet withdrawal controls / allow-listing (WAL-06). Only the latest active
+/// policy (disabledAt IS NULL) applies; superseded policies are kept for audit.
+model WithdrawalPolicy {
+  id                  String        @id @default(uuid(7)) @db.Uuid
+  walletId            String        @db.Uuid
+  maxWithdrawalPerTx  Decimal?      @db.Decimal(38, 18)
+  maxWithdrawalPerDay Decimal?      @db.Decimal(38, 18)
+  requiresApproval    Boolean       @default(false)
+  allowListMode       AllowListMode @default(allow_all)
+  description         String?
+  enabledAt           DateTime      @default(now()) @db.Timestamptz
+  disabledAt          DateTime?     @db.Timestamptz
+  createdAt           DateTime      @default(now()) @db.Timestamptz
+  updatedAt           DateTime      @updatedAt @db.Timestamptz
+
+  wallet Wallet @relation(fields: [walletId], references: [id])
+
+  @@index([walletId, disabledAt])
+  @@map("withdrawal_policies")
+}
+
+enum AllowListMode {
+  allow_all
+  allow_list_only
+  deny_list
+
+  @@map("allow_list_mode")
+}
+
+/// Provider sync/latency log (ops/observability; not business-critical). Append-only.
+model WalletSyncLog {
+  id             String           @id @default(uuid(7)) @db.Uuid
+  walletId       String           @db.Uuid
+  requestedAt    DateTime         @db.Timestamptz
+  respondedAt    DateTime?        @db.Timestamptz
+  latencyMs      Int?
+  status         WalletSyncStatus
+  errorCode      String?
+  errorMessage   String?
+  fetchedBalance Decimal?         @db.Decimal(38, 18)
+  createdAt      DateTime         @default(now()) @db.Timestamptz
+
+  wallet Wallet @relation(fields: [walletId], references: [id])
+
+  @@index([walletId, requestedAt])
+  @@map("wallet_sync_logs")
+}
+
+enum WalletSyncStatus {
+  success
+  timeout
+  error
+  rate_limited
+
+  @@map("wallet_sync_status")
+}

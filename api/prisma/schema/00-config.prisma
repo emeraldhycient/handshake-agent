@@ -1,0 +1,73 @@
+// =============================================================================
+// Config & foundation (FND) — the DB-admin layer of the layered config
+// (DB-admin › env › JSON, CLAUDE.md §7) and the durable transactional outbox.
+// =============================================================================
+
+/// Admin-tunable business values resolved on top of env/JSON defaults and
+/// hot-reloaded with cache invalidation: FX spread, fees, tier limits, velocity
+/// caps, service-enablement flags, WhatsApp Flow-id mappings, and message
+/// templates. The public /config endpoint exposes only non-secret rows.
+model AppSetting {
+  id               String       @id @default(uuid(7)) @db.Uuid
+  /// Hierarchical key, e.g. "crypto.buy.spread_bps", "ticketing.enabled".
+  key              String
+  /// Polymorphic value (string | number | boolean | object); validated by key in ConfigService.
+  value            Json
+  description      String?
+  /// GLOBAL applies universally; TIER varies by KYC tier; PROVIDER is per provider/vendor.
+  scope            SettingScope @default(global)
+  /// KYC tier (e.g. "tier_1") or provider key (e.g. "blockradar") when scope != global.
+  scopeValue       String?
+  /// Excluded from /config and admin reads; only injected via infrastructure.
+  isSecret         Boolean      @default(false)
+  /// When false, locked to env/JSON defaults — guards safety-critical values from admin override.
+  isEditable       Boolean      @default(true)
+  /// Admin user id of the last editor (plain ref; full trail in AuditLog).
+  updatedByAdminId String?      @db.Uuid
+  createdAt        DateTime     @default(now()) @db.Timestamptz
+  updatedAt        DateTime     @updatedAt @db.Timestamptz
+
+  @@unique([key, scope, scopeValue])
+  @@index([key, isEditable])
+  @@map("app_settings")
+}
+
+enum SettingScope {
+  global
+  tier
+  provider
+
+  @@map("setting_scope")
+}
+
+/// Transactional outbox (FND-14): use-cases write domain events in the same
+/// transaction as their state change; a durable worker publishes them at-least-once
+/// with idempotent handlers. Backs notifications, channel sends and settlement fan-out.
+model OutboxMessage {
+  id            String              @id @default(uuid(7)) @db.Uuid
+  /// Aggregate that produced the event, e.g. "Transaction" / "Notification".
+  aggregateType String
+  aggregateId   String              @db.Uuid
+  eventType     String
+  payload       Json
+  status        OutboxMessageStatus @default(pending)
+  attempts      Int                 @default(0)
+  /// Earliest time a worker may pick this up (enables backoff/scheduling).
+  availableAt   DateTime            @default(now()) @db.Timestamptz
+  publishedAt   DateTime?           @db.Timestamptz
+  lastError     String?
+  createdAt     DateTime            @default(now()) @db.Timestamptz
+
+  @@index([status, availableAt])
+  @@index([aggregateType, aggregateId])
+  @@map("outbox_messages")
+}
+
+enum OutboxMessageStatus {
+  pending
+  processing
+  published
+  failed
+
+  @@map("outbox_message_status")
+}

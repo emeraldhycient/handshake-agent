@@ -1,0 +1,81 @@
+// =============================================================================
+// Handshake Agent — Prisma schema (multi-file). THIS FILE: generator, datasource
+// and the cross-module SYMBOLIC enums. Per-module models live in the numbered
+// files (00-config … 10-tickets) and mirror api/src/modules/<feature>.
+//
+// Repo-wide conventions (see docs/superpowers/specs/*-prisma-schema-design.md):
+//   • IDs            String @id @default(uuid(7)) @db.Uuid  (time-sortable uuid)
+//   • Crypto/engine  Decimal @db.Decimal(38, 18)           (no in-flight rounding)
+//   • Fiat display   Decimal @db.Decimal(38, 2)
+//   • Fees/spread    Int basis points (mirrors contracts spreadBps/processingFeeBps)
+//   • Snapshots      String for amounts/rates that must byte-round-trip (contracts)
+//   • Timestamps     @db.Timestamptz, UTC; createdAt + updatedAt on mutable tables;
+//                    append-only tables get createdAt only.
+//   • Soft-delete    deletedAt only on User/Beneficiary/ChannelIdentity/Contact;
+//                    everywhere else a status terminal state. No hard deletes in
+//                    the money/identity/audit path.
+//   • Idempotency    idempotencyKey String? @unique @db.Uuid on side-effecting tables.
+//   • Naming         PascalCase models / camelCase fields. Table names map to
+//                    snake_case via @@map (SQL-facing idiom). COLUMN names stay
+//                    camelCase (Prisma default): the typed client is the only
+//                    sanctioned DB door (§3.2) and uses field names, Prisma has no
+//                    global snake_case setting, and ~400 per-column @map would be
+//                    noise (§13 KISS). Add @map to a column only if a raw-SQL
+//                    consumer needs a specific name.
+//   • Enum casing    UPPER for symbolic constants (assets/currencies/networks,
+//                    mirrors @handshake-agent/contracts); lower_snake for status/
+//                    type/action enums (mirrors the BuyOrderStatus / IntentSchema
+//                    precedent so DB value === Zod value === wire value, no mapping).
+//   • Audit/admin    The immutable AuditLog and cross-module admin attribution use
+//                    plain indexed String refs (no Prisma relation) to stay
+//                    decoupled (audit survives soft-deletes; AdminUser keeps a small
+//                    back-relation surface). Operational graph uses real relations.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client"
+  output   = "../../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  // url is supplied by api/prisma.config.ts (datasource.url = env DATABASE_URL).
+}
+
+// --- Shared symbolic enums (mirror @handshake-agent/contracts/src/common.ts) ---
+
+/// Tradable assets. Launch scope is USDT; BTC is a forward value, flag-off until a
+/// BTC-capable custody path exists (Blockradar has no native BTC — ADR-0006).
+enum SupportedAsset {
+  USDT
+  BTC
+
+  @@map("supported_asset")
+}
+
+/// Fiat currencies. NGN only at launch (PRD §12).
+enum FiatCurrency {
+  NGN
+
+  @@map("fiat_currency")
+}
+
+/// On-chain networks. TRON only at launch (TRC-20 USDT). Widen as chains are enabled.
+enum Network {
+  TRON
+
+  @@map("network")
+}
+
+/// Delivery/agent surfaces. Superset across identity, channels and notifications.
+/// `channel` is a per-message AUDIT tag only — it never reaches the agent or engine
+/// (ADR-0004 §"No channel field reaches the agent or engine").
+enum Channel {
+  whatsapp
+  web
+  email
+  sms
+  in_app
+
+  @@map("channel")
+}

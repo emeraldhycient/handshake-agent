@@ -1,0 +1,313 @@
+// =============================================================================
+// Identity, KYC, devices, PIN, sessions (IDN). Identity is anchored to verified
+// KYC + a bound device + a PIN — NEVER the phone number (CLAUDE.md §3.4). The
+// phone lives on Contact/ChannelIdentity as a routing key only; a number change
+// sets simSwapDetectedAt and gates transactions until re-verification + step-up.
+// =============================================================================
+
+model User {
+  id                  String     @id @default(uuid(7)) @db.Uuid
+  status              UserStatus @default(provisional)
+  /// Mirrors KycProfile.status/tier; the server-side gate reads these (IDN-12, §3.3).
+  kycStatus           KycStatus  @default(not_started)
+  kycTier             KycTier    @default(unverified)
+  /// Currently trusted device; a different device requires step-up. Null until bound.
+  pinnedDeviceId      String?    @unique @db.Uuid
+  /// Argon2id hash of the transaction PIN — never plaintext (NFR-1). Null pre-set.
+  pinHash             String?
+  pinFailureCount     Int        @default(0)
+  pinLockedUntil      DateTime?  @db.Timestamptz
+  /// Out-of-band failover identifiers captured at KYC (IDN-02, ADR-0004).
+  verifiedEmail       String?    @unique
+  verifiedBackupPhone String?    @unique
+  /// Set when a SIM/number change is detected; gates transactions until re-verified.
+  simSwapDetectedAt   DateTime?  @db.Timestamptz
+  lastTransactionAt   DateTime?  @db.Timestamptz
+  createdAt           DateTime   @default(now()) @db.Timestamptz
+  updatedAt           DateTime   @updatedAt @db.Timestamptz
+  deletedAt           DateTime?  @db.Timestamptz
+
+  // Identity graph
+  kycProfile        KycProfile?
+  pinnedDevice      Device?                  @relation("PinnedDevice", fields: [pinnedDeviceId], references: [id])
+  devices           Device[]                 @relation("UserDevices")
+  sessions          Session[]
+  beneficiaries     Beneficiary[]
+  contacts          Contact[]
+  channelIdentities ChannelIdentity[]
+  // Money & product graph (defined in their own module files)
+  wallets           Wallet[]
+  quotes            Quote[]
+  proposals         Proposal[]
+  transactions      Transaction[]
+  directiveGrants   DirectiveGrant[]
+  compensations     CompensationRecord[]
+  receipts          Receipt[]
+  conversation      Conversation?
+  handoffTokens     HandoffToken[]
+  notifications     Notification[]
+  notificationPrefs NotificationPreference[]
+  complianceEvents  ComplianceEvent[]
+  velocityCounters  VelocityCounter[]
+  ticketOrders      TicketOrder[]
+
+  @@index([status, createdAt])
+  @@index([kycStatus, kycTier])
+  @@map("users")
+}
+
+enum UserStatus {
+  provisional
+  active
+  suspended
+  deactivated
+
+  @@map("user_status")
+}
+
+enum KycStatus {
+  not_started
+  pending
+  pending_review
+  verified
+  rejected
+  expired
+
+  @@map("kyc_status")
+}
+
+enum KycTier {
+  unverified
+  tier_1
+  tier_2
+  tier_3
+
+  @@map("kyc_tier")
+}
+
+/// Segregated KYC record (sensitive — access-controlled). Secrets (NIN/BVN, doc
+/// refs, liveness ids) are encrypted at rest by the application (NFR-1). 1:1 User.
+model KycProfile {
+  id                      String              @id @default(uuid(7)) @db.Uuid
+  userId                  String              @unique @db.Uuid
+  status                  KycStatus           @default(not_started)
+  tier                    KycTier             @default(unverified)
+  nin                     String?
+  bvn                     String?
+  idDocumentType          IdDocumentType?
+  idDocumentReference     String?
+  livenessCheckResult     LivenessCheckResult @default(not_attempted)
+  livenessCheckProviderId String?
+  firstName               String?
+  lastName                String?
+  dateOfBirth             DateTime?           @db.Date
+  address                 String?
+  verifiedAt              DateTime?           @db.Timestamptz
+  expiresAt               DateTime?           @db.Timestamptz
+  rejectionReason         String?
+  /// Admin attribution kept as a plain ref (full trail in AuditLog).
+  reviewedByAdminId       String?             @db.Uuid
+  createdAt               DateTime            @default(now()) @db.Timestamptz
+  updatedAt               DateTime            @updatedAt @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, tier])
+  @@index([expiresAt])
+  @@map("kyc_profiles")
+}
+
+enum IdDocumentType {
+  passport
+  drivers_license
+  national_id
+
+  @@map("id_document_type")
+}
+
+enum LivenessCheckResult {
+  not_attempted
+  pending
+  passed
+  failed
+
+  @@map("liveness_check_result")
+}
+
+/// A device seen for a user. The user's pinned device is User.pinnedDeviceId; a new
+/// or unbound device requires step-up before sensitive actions (IDN-04/06).
+model Device {
+  id                 String           @id @default(uuid(7)) @db.Uuid
+  userId             String           @db.Uuid
+  fingerprint        String           @unique
+  trustState         DeviceTrustState @default(unbound)
+  userAgent          String?
+  ipAddressAtBinding String?
+  boundAt            DateTime?        @db.Timestamptz
+  lastUsedAt         DateTime?        @db.Timestamptz
+  createdAt          DateTime         @default(now()) @db.Timestamptz
+  updatedAt          DateTime         @updatedAt @db.Timestamptz
+
+  user         User      @relation("UserDevices", fields: [userId], references: [id], onDelete: Cascade)
+  pinnedByUser User?     @relation("PinnedDevice")
+  sessions     Session[]
+
+  @@index([userId, trustState])
+  @@map("devices")
+}
+
+enum DeviceTrustState {
+  unbound
+  bound
+  revoked
+
+  @@map("device_trust_state")
+}
+
+/// JWT/refresh session with revocation and step-up tracking (IDN-03/06).
+model Session {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  userId            String    @db.Uuid
+  /// SHA-256 hashes — tokens are never stored in plaintext.
+  accessTokenHash   String    @unique
+  refreshTokenHash  String    @unique
+  deviceId          String?   @db.Uuid
+  channel           Channel   @default(web)
+  isActive          Boolean   @default(true)
+  issuedAt          DateTime  @default(now()) @db.Timestamptz
+  expiresAt         DateTime  @db.Timestamptz
+  lastActivityAt    DateTime? @db.Timestamptz
+  revokedAt         DateTime? @db.Timestamptz
+  revokedReason     String?
+  /// Set when a step-up challenge is completed; sensitive endpoints require a fresh one.
+  stepUpCompletedAt DateTime? @db.Timestamptz
+  createdAt         DateTime  @default(now()) @db.Timestamptz
+  updatedAt         DateTime  @updatedAt @db.Timestamptz
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device Device? @relation(fields: [deviceId], references: [id])
+
+  @@index([userId, isActive])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Unified saved counterparty: a fiat payout (bank account) OR an on-chain address.
+/// Step-up on add; crypto addresses carry a first-use cooling-off (IDN-08). Replaces
+/// the separate WalletAddressBook. Sensitive fields encrypted at rest (NFR-1).
+model Beneficiary {
+  id                  String             @id @default(uuid(7)) @db.Uuid
+  userId              String             @db.Uuid
+  type                BeneficiaryType
+  label               String
+  // Bank-account fields (type = bank_account)
+  accountNumber       String?
+  accountHolderName   String?
+  bankCode            String?
+  // Crypto-address fields (type = crypto_address)
+  cryptoAddress       String?
+  cryptoAsset         SupportedAsset?
+  cryptoNetwork       Network?
+  verificationStatus  VerificationStatus @default(pending)
+  /// Cooling-off expiry for first crypto send; null once verified or for bank accounts.
+  firstUseLockedUntil DateTime?          @db.Timestamptz
+  verifiedAt          DateTime?          @db.Timestamptz
+  isDefault           Boolean            @default(false)
+  createdAt           DateTime           @default(now()) @db.Timestamptz
+  updatedAt           DateTime           @updatedAt @db.Timestamptz
+  deletedAt           DateTime?          @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, deletedAt])
+  @@index([userId, type, isDefault, deletedAt])
+  @@index([firstUseLockedUntil])
+  @@map("beneficiaries")
+}
+
+enum BeneficiaryType {
+  bank_account
+  crypto_address
+
+  @@map("beneficiary_type")
+}
+
+/// Verification lifecycle shared by Beneficiary and ChannelIdentity.
+enum VerificationStatus {
+  pending
+  verified
+  failed
+  unverified
+  suspected_swap
+
+  @@map("verification_status")
+}
+
+/// Unlinked inbound contact (a phone/email seen before KYC). Gets product-info /
+/// onboarding only; never auto-authorizes. Upgraded to a User on KYC completion.
+model Contact {
+  id               String        @id @default(uuid(7)) @db.Uuid
+  primaryChannel   Channel
+  primaryAddress   String
+  status           ContactStatus @default(active)
+  /// Set on KYC completion; the contact persists for routing + audit.
+  linkedUserId     String?       @db.Uuid
+  /// Out-of-band failover identifiers (mirror User's once linked).
+  fallbackEmail    String?
+  fallbackPhoneAlt String?
+  createdAt        DateTime      @default(now()) @db.Timestamptz
+  updatedAt        DateTime      @updatedAt @db.Timestamptz
+  lastSeenAt       DateTime?     @db.Timestamptz
+  unsubscribedAt   DateTime?     @db.Timestamptz
+  deletedAt        DateTime?     @db.Timestamptz
+
+  linkedUser        User?             @relation(fields: [linkedUserId], references: [id])
+  channelIdentities ChannelIdentity[]
+  conversation      Conversation?
+
+  @@unique([primaryChannel, primaryAddress])
+  @@index([linkedUserId])
+  @@index([lastSeenAt])
+  @@map("contacts")
+}
+
+enum ContactStatus {
+  active
+  blocked
+  undeliverable
+  unlinked
+
+  @@map("contact_status")
+}
+
+/// Resolver mapping a channel-specific address (WhatsApp phone, web session id) to
+/// a Contact (unlinked) XOR a User (linked) — CHN-03. The phone is a routing key.
+model ChannelIdentity {
+  id                 String             @id @default(uuid(7)) @db.Uuid
+  channel            Channel
+  channelAddress     String
+  /// E.164-normalized phone for phone channels; used for dedup + SIM-swap detection.
+  normalizedPhone    String?
+  contactId          String?            @db.Uuid
+  userId             String?            @db.Uuid
+  verificationStatus VerificationStatus @default(pending)
+  verifiedAt         DateTime?          @db.Timestamptz
+  lastInboundAt      DateTime?          @db.Timestamptz
+  simSwapDetectedAt  DateTime?          @db.Timestamptz
+  createdAt          DateTime           @default(now()) @db.Timestamptz
+  updatedAt          DateTime           @updatedAt @db.Timestamptz
+  deletedAt          DateTime?          @db.Timestamptz
+
+  contact Contact? @relation(fields: [contactId], references: [id])
+  user    User?    @relation(fields: [userId], references: [id])
+
+  // NOTE: the real guarantee is a PARTIAL unique — one active row per (channel,
+  // channelAddress) WHERE deleted_at IS NULL — added as raw SQL in the migration
+  // (Prisma can't express partial uniques; a composite unique including the
+  // nullable deletedAt would be defeated by NULL-distinctness in Postgres).
+  @@index([channel, channelAddress, deletedAt])
+  @@index([userId, channel, deletedAt])
+  @@index([normalizedPhone, channel, deletedAt])
+  @@index([simSwapDetectedAt])
+  @@map("channel_identities")
+}

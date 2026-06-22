@@ -1,0 +1,119 @@
+// =============================================================================
+// Event ticketing (TKT). The platform is merchant-of-record: it collects payment
+// from the user and settles the provider out-of-band (TKT-04). Provider-specific
+// logic stays behind the TicketProvider port (vendorKey selects the adapter);
+// vendorOrderId/eventId are opaque provider refs. Amounts are fiat (NGN) Decimals.
+// =============================================================================
+
+model TicketOrder {
+  id               String                 @id @default(uuid(7)) @db.Uuid
+  userId           String                 @db.Uuid
+  /// Opaque provider event id (not an FK — provider-owned).
+  eventId          String
+  /// Provider key selecting the TicketProvider adapter, e.g. "zentry".
+  vendorKey        String
+  ticketType       String
+  quantity         Int                    @default(1)
+  unitPrice        Decimal                @db.Decimal(38, 2)
+  /// Handshake commission per ticket (included in totalAmount).
+  platformFee      Decimal                @db.Decimal(38, 2)
+  totalAmount      Decimal                @db.Decimal(38, 2)
+  /// Optional link to a crypto buy Quote if funded that way (plain ref).
+  quoteId          String?                @db.Uuid
+  paymentStatus    TicketPaymentStatus    @default(pending)
+  settlementStatus TicketSettlementStatus @default(pending)
+  deliveryStatus   TicketDeliveryStatus   @default(pending)
+  /// Provider transaction id (post-settlement) for reconciliation/refunds.
+  vendorOrderId    String?
+  providerResponse Json?
+  /// Ticket artifact(s): { format (pdf|qr|link), content, expiresAt? }.
+  ticketDelivery   Json?
+  idempotencyKey   String                 @unique @db.Uuid
+  createdAt        DateTime               @default(now()) @db.Timestamptz
+  collectedAt      DateTime?              @db.Timestamptz
+  settledAt        DateTime?              @db.Timestamptz
+  deliveredAt      DateTime?              @db.Timestamptz
+
+  user    User           @relation(fields: [userId], references: [id])
+  refunds TicketRefund[]
+
+  @@index([userId, createdAt])
+  @@index([vendorKey, vendorOrderId])
+  @@map("ticket_orders")
+}
+
+enum TicketPaymentStatus {
+  pending
+  collecting
+  collected
+  failed
+  refunded
+
+  @@map("ticket_payment_status")
+}
+
+enum TicketSettlementStatus {
+  pending
+  settling
+  settled
+  settlement_failed
+  chargeback
+
+  @@map("ticket_settlement_status")
+}
+
+enum TicketDeliveryStatus {
+  pending
+  delivering
+  delivered
+  delivery_failed
+  cancelled
+
+  @@map("ticket_delivery_status")
+}
+
+/// Refund/cancellation for a ticket order (TKT-06). One refund per order.
+model TicketRefund {
+  id               String             @id @default(uuid(7)) @db.Uuid
+  ticketOrderId    String             @unique @db.Uuid
+  reason           TicketRefundReason
+  status           TicketRefundStatus @default(pending)
+  refundAmount     Decimal            @db.Decimal(38, 2)
+  refundReason     String
+  vendorRefundId   String?
+  userRefundMethod TicketRefundMethod @default(wallet_credit)
+  createdAt        DateTime           @default(now()) @db.Timestamptz
+  processedAt      DateTime?          @db.Timestamptz
+
+  ticketOrder TicketOrder @relation(fields: [ticketOrderId], references: [id])
+
+  @@map("ticket_refunds")
+}
+
+enum TicketRefundReason {
+  user_requested
+  event_cancelled
+  delivery_failed
+  vendor_error
+  chargeback
+
+  @@map("ticket_refund_reason")
+}
+
+enum TicketRefundStatus {
+  pending
+  processing
+  completed
+  failed
+  disputed
+
+  @@map("ticket_refund_status")
+}
+
+enum TicketRefundMethod {
+  wallet_credit
+  bank_transfer
+  original_method
+
+  @@map("ticket_refund_method")
+}

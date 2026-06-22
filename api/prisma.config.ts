@@ -4,7 +4,9 @@ import 'dotenv/config';
 import { defineConfig } from 'prisma/config';
 
 export default defineConfig({
-  schema: 'prisma/schema.prisma',
+  // Multi-file schema: every *.prisma in this folder is merged into one schema.
+  // Models/enums are split per feature module (mirrors api/src/modules/<feature>).
+  schema: 'prisma/schema',
   migrations: {
     path: 'prisma/migrations',
   },
