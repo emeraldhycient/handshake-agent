@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { Injectable, Inject, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 import type {
   IInboundHandler,
@@ -16,6 +17,8 @@ import {
 } from '../../agent/application/ports/agent.port';
 import { IdentityService } from '../../identity/application/identity.service';
 import type { ProposalService } from '../../transactions/application/proposal.service';
+import type { DirectiveService } from '../../transactions/application/directive.service';
+import { signFlowToken } from '../../whatsapp/application/flow-token';
 
 import {
   CONVERSATION_REPOSITORY,
@@ -36,6 +39,9 @@ import {
 
 /** DI token for ProposalService — injected by symbol to avoid circular import at module level */
 export const PROPOSAL_SERVICE = Symbol('PROPOSAL_SERVICE');
+
+/** DI token for DirectiveService — injected by symbol to keep application layer clean */
+export const DIRECTIVE_SERVICE = Symbol('DIRECTIVE_SERVICE');
 
 const SAFE_FALLBACK = 'Sorry, something went wrong — please try again.';
 const NOT_SUPPORTED = "That's not supported yet — you can buy USDT with naira.";
@@ -76,6 +82,9 @@ export class ConversationService implements IInboundHandler {
     private readonly messageRepo: IMessageRepository,
     @Inject(INTENT_REPOSITORY) private readonly intentRepo: IIntentRepository,
     @Inject(REPLY_REPOSITORY) private readonly replyRepo: IReplyRepository,
+    private readonly configService: ConfigService,
+    @Inject(DIRECTIVE_SERVICE)
+    private readonly directiveService: DirectiveService,
   ) {}
 
   async handleInbound(msg: InboundMessage): Promise<void> {
@@ -142,6 +151,7 @@ export class ConversationService implements IInboundHandler {
 
       // Step 6: Route on intent action.
       let replyText: string;
+      let flowSent = false;
 
       if (intent.action === 'buy_crypto') {
         if (identity.kind !== 'user') {
@@ -155,14 +165,70 @@ export class ConversationService implements IInboundHandler {
         } else {
           // Happy path: create a buy proposal (deterministic engine; model proposes, engine disposes — §3.1).
           // TypeScript narrows `intent` to BuyCryptoIntent here (discriminated union on `action`).
-          const { confirmation } = await this.proposalService.createBuyProposal(
-            {
+          const { proposalId, confirmation } =
+            await this.proposalService.createBuyProposal({
               userId: identity.user.id,
               conversationId: conversation.id,
               intent,
-            },
-          );
-          replyText = buildConfirmationText(confirmation);
+            });
+
+          const flowId =
+            this.configService.get<string>('WHATSAPP_FLOW_ID') ?? '';
+
+          if (flowId) {
+            // Flow path: mint a directive, sign a flow_token, send the E2E confirmation Flow.
+            // The nonce travels ONLY via the Flow E2E channel — never in plaintext chat (§3.5).
+            const signingKey =
+              this.configService.get<string>('DIRECTIVE_SIGNING_KEY') ?? '';
+
+            const { directiveId, nonce, expiresAt } =
+              await this.directiveService.issue({
+                proposalId,
+                userId: identity.user.id,
+                ref: 'request_pin',
+              });
+
+            const flowToken = signFlowToken(
+              {
+                proposalId,
+                directiveId,
+                userId: identity.user.id,
+                exp: Math.floor(expiresAt.getTime() / 1000),
+              },
+              signingKey,
+            );
+
+            await this.sender.sendFlow({
+              to: msg.fromAddress,
+              flowId,
+              flowToken,
+              cta: 'Confirm',
+              screen: 'CONFIRM',
+              data: {
+                proposalId,
+                asset: confirmation.asset,
+                cryptoAmount: confirmation.cryptoAmount,
+                fiatAmount: confirmation.fiatAmount,
+                processingFeeAmount: confirmation.processingFeeAmount,
+                totalFiat: confirmation.totalFiat,
+                // nonce travels only via Flow E2E encryption — never plaintext (§3.5)
+                nonce,
+              },
+            });
+
+            flowSent = true;
+            // Short summary for the reply row — the Flow is the real interaction surface.
+            replyText =
+              'A secure confirmation form has been sent. Please complete it to proceed with your purchase.';
+          } else {
+            // Fallback: no Flow published yet — send itemized text confirmation.
+            // Operators enable the Flow by setting WHATSAPP_FLOW_ID after publishing in Meta.
+            this.logger.warn(
+              { proposalId },
+              'WHATSAPP_FLOW_ID not configured — falling back to plain-text confirmation',
+            );
+            replyText = buildConfirmationText(confirmation);
+          }
         }
       } else if (intent.action === 'none') {
         replyText = intent.clarification;
@@ -171,7 +237,7 @@ export class ConversationService implements IInboundHandler {
         replyText = NOT_SUPPORTED;
       }
 
-      // Step 7: Persist the reply and dispatch it.
+      // Step 7: Persist the reply and dispatch it (unless the Flow was already dispatched).
       const reply = await this.replyRepo.create({
         conversationId: conversation.id,
         messageId: message.id,
@@ -179,7 +245,10 @@ export class ConversationService implements IInboundHandler {
         correlationId,
       });
 
-      await this.sender.sendText(msg.fromAddress, replyText);
+      if (!flowSent) {
+        // Text path: dispatch via sendText.
+        await this.sender.sendText(msg.fromAddress, replyText);
+      }
 
       // Mark statuses: reply sent, message processed.
       await this.replyRepo.updateStatus(reply.id, 'sent', {

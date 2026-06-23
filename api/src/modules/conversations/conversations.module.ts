@@ -8,6 +8,7 @@ import { WhatsAppSenderModule } from '../whatsapp/whatsapp-sender.module';
 import {
   ConversationService,
   PROPOSAL_SERVICE,
+  DIRECTIVE_SERVICE,
 } from './application/conversation.service';
 import { CONVERSATION_REPOSITORY } from './application/ports/conversation.repository.port';
 import { MESSAGE_REPOSITORY } from './application/ports/message.repository.port';
@@ -19,6 +20,7 @@ import { IntentPrismaRepository } from './infrastructure/intent.prisma.repositor
 import { ReplyPrismaRepository } from './infrastructure/reply.prisma.repository';
 import { INBOUND_HANDLER } from '../whatsapp/application/ports/inbound-handler.port';
 import { ProposalService } from '../transactions/application/proposal.service';
+import { DirectiveService } from '../transactions/application/directive.service';
 
 /**
  * Conversations feature module.
@@ -32,6 +34,9 @@ import { ProposalService } from '../transactions/application/proposal.service';
  *
  * PrismaModule is global (registered in AppModule) so PrismaService is available
  * without an explicit import here.
+ *
+ * TransactionsModule exports both ProposalService and DirectiveService; both are
+ * re-bound here under local DI tokens so ConversationService uses symbol injection.
  */
 @Module({
   imports: [
@@ -46,6 +51,9 @@ import { ProposalService } from '../transactions/application/proposal.service';
     // ConversationService receives it via symbol injection without a direct
     // import of ProposalService in the application layer.
     { provide: PROPOSAL_SERVICE, useExisting: ProposalService },
+    // Expose DirectiveService under our local DIRECTIVE_SERVICE token so
+    // ConversationService can mint request_pin directives for the Flow path.
+    { provide: DIRECTIVE_SERVICE, useExisting: DirectiveService },
     { provide: INBOUND_HANDLER, useExisting: ConversationService },
     {
       provide: CONVERSATION_REPOSITORY,

@@ -1,11 +1,14 @@
 /**
- * Unit tests for ConversationService (task 2.3).
+ * Unit tests for ConversationService (tasks 2.3 + 6.3).
  *
  * All external dependencies are mocked — no DB, no HTTP, no LLM.
  *
  * Covers:
  *   - duplicate wamid → no-op (dedup)
- *   - linked user + buy_crypto → proposal + confirmation text sent
+ *   - linked user + buy_crypto (no FLOW_ID) → proposal + confirmation text sent
+ *   - linked user + buy_crypto (FLOW_ID set) → directive issued, flow_token signed,
+ *     sendFlow called with itemized data + nonce; NO plain text confirmation sent
+ *   - linked user + buy_crypto (FLOW_ID set, directive fails) → falls back to text
  *   - contact (unlinked) + buy_crypto → KYC message, no proposal
  *   - user requiresReverification + buy_crypto → re-verify message, no proposal
  *   - none intent → clarification text
@@ -14,6 +17,7 @@
  */
 
 import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { IAgentPort } from '../../agent/application/ports/agent.port';
 import { AGENT_PORT } from '../../agent/application/ports/agent.port';
 import type { IWhatsAppSender } from '../../whatsapp/application/ports/whatsapp-sender.port';
@@ -24,6 +28,7 @@ import type {
   ProposalService,
   CreateBuyProposalOutput,
 } from '../../transactions/application/proposal.service';
+import type { DirectiveService } from '../../transactions/application/directive.service';
 import type {
   IConversationRepository,
   ConversationRecord,
@@ -52,6 +57,11 @@ const FIXED_MSG_ID = 'msg-id-1';
 const FIXED_REPLY_ID = 'reply-id-1';
 const FIXED_WAMID = 'wamid.abc123';
 const FIXED_FROM = '2348001234567';
+const FIXED_DIRECTIVE_ID = 'directive-id-1';
+const FIXED_NONCE =
+  'fixed-nonce-hex-64chars-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+const FIXED_SIGNING_KEY = 'test-signing-key-32bytes-xxxxxxxx';
+const FIXED_FLOW_ID = 'flow-id-meta-123';
 
 const baseMsg = (): InboundMessage => ({
   externalMessageId: FIXED_WAMID,
@@ -185,6 +195,9 @@ function makeSender(): jest.Mocked<IWhatsAppSender> {
     sendTemplate: jest
       .fn()
       .mockResolvedValue({ externalMessageId: 'wamid.out' }),
+    sendFlow: jest
+      .fn()
+      .mockResolvedValue({ externalMessageId: 'wamid.flow.out' }),
   };
 }
 
@@ -223,6 +236,36 @@ function makeReplyRepo(
   };
 }
 
+function makeConfigService(
+  overrides: { flowId?: string; signingKey?: string } = {},
+): jest.Mocked<ConfigService> {
+  const flowId = overrides.flowId ?? '';
+  const signingKey = overrides.signingKey ?? '';
+  return {
+    get: jest.fn((key: string) => {
+      if (key === 'WHATSAPP_FLOW_ID') return flowId;
+      if (key === 'DIRECTIVE_SIGNING_KEY') return signingKey;
+      return undefined;
+    }),
+  } as unknown as jest.Mocked<ConfigService>;
+}
+
+function makeDirectiveService(
+  output: { directiveId: string; nonce: string; expiresAt: Date } | Error = {
+    directiveId: FIXED_DIRECTIVE_ID,
+    nonce: FIXED_NONCE,
+    expiresAt: new Date(Date.now() + 300_000),
+  },
+): jest.Mocked<Pick<DirectiveService, 'issue'>> {
+  const svc = { issue: jest.fn() };
+  if (output instanceof Error) {
+    svc.issue.mockRejectedValue(output);
+  } else {
+    svc.issue.mockResolvedValue(output);
+  }
+  return svc;
+}
+
 // ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
@@ -237,6 +280,8 @@ function buildService(
     msgRepo?: jest.Mocked<IMessageRepository>;
     intentRepo?: jest.Mocked<IIntentRepository>;
     replyRepo?: jest.Mocked<IReplyRepository>;
+    configService?: jest.Mocked<ConfigService>;
+    directiveService?: jest.Mocked<Pick<DirectiveService, 'issue'>>;
   } = {},
 ) {
   const identityService = overrides.identityService ?? makeIdentityService();
@@ -247,6 +292,8 @@ function buildService(
   const msgRepo = overrides.msgRepo ?? makeMsgRepo();
   const intentRepo = overrides.intentRepo ?? makeIntentRepo();
   const replyRepo = overrides.replyRepo ?? makeReplyRepo();
+  const configService = overrides.configService ?? makeConfigService();
+  const directiveService = overrides.directiveService ?? makeDirectiveService();
 
   // Build the service directly (not via Nest DI) since all deps are mocks.
   const svc = new ConversationService(
@@ -258,6 +305,8 @@ function buildService(
     msgRepo,
     intentRepo,
     replyRepo,
+    configService,
+    directiveService as unknown as DirectiveService,
   );
 
   return {
@@ -270,6 +319,8 @@ function buildService(
     msgRepo,
     intentRepo,
     replyRepo,
+    configService,
+    directiveService,
   };
 }
 
@@ -292,12 +343,18 @@ describe('ConversationService.handleInbound', () => {
     expect(sender.sendText).not.toHaveBeenCalled();
   });
 
-  // ── Happy path: linked user + buy_crypto ──────────────────────────────────
+  // ── Happy path (FLOW_ID empty): linked user + buy_crypto → text confirmation ──
 
-  it('linked user + buy_crypto → calls proposalService, sends confirmation text, marks message processed', async () => {
+  it('buy_crypto with FLOW_ID empty → text confirmation sent, no directive issued, no sendFlow', async () => {
     const proposalOut = stubBuyProposalOutput();
+    const directiveService = makeDirectiveService();
     const { svc, sender, msgRepo, replyRepo, proposalService } = buildService({
       proposalService: makeProposalService(proposalOut),
+      configService: makeConfigService({
+        flowId: '',
+        signingKey: FIXED_SIGNING_KEY,
+      }),
+      directiveService,
     });
 
     await svc.handleInbound(baseMsg());
@@ -316,6 +373,12 @@ describe('ConversationService.handleInbound', () => {
     expect(sentText).toContain('5000');
     expect(sentText).toContain('Reply CONFIRM');
 
+    // No Flow sent
+    expect(sender.sendFlow).not.toHaveBeenCalled();
+
+    // No directive issued in the text-fallback path
+    expect(directiveService.issue).not.toHaveBeenCalled();
+
     // Message status marked processed
     expect(msgRepo.updateStatus).toHaveBeenCalledWith(
       FIXED_MSG_ID,
@@ -328,6 +391,117 @@ describe('ConversationService.handleInbound', () => {
       'sent',
       expect.objectContaining({ sentAt: expect.any(Date) as unknown }),
     );
+  });
+
+  // ── Happy path (FLOW_ID set): linked user + buy_crypto → sendFlow ──────────
+
+  it('buy_crypto with FLOW_ID set → issues directive, signs token, calls sendFlow with itemized data + nonce; does NOT send text confirmation', async () => {
+    const proposalOut = stubBuyProposalOutput();
+    const directiveOutput = {
+      directiveId: FIXED_DIRECTIVE_ID,
+      nonce: FIXED_NONCE,
+      expiresAt: new Date(Date.now() + 300_000),
+    };
+    const directiveService = makeDirectiveService(directiveOutput);
+    const { svc, sender, proposalService } = buildService({
+      proposalService: makeProposalService(proposalOut),
+      configService: makeConfigService({
+        flowId: FIXED_FLOW_ID,
+        signingKey: FIXED_SIGNING_KEY,
+      }),
+      directiveService,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    // Proposal created
+    expect(proposalService.createBuyProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-id-1',
+        conversationId: FIXED_CONV_ID,
+      }),
+    );
+
+    // Directive issued with ref 'request_pin'
+    expect(directiveService.issue).toHaveBeenCalledWith({
+      proposalId: proposalOut.proposalId,
+      userId: 'user-id-1',
+      ref: 'request_pin',
+    });
+
+    // sendFlow called with correct fields
+    expect(sender.sendFlow).toHaveBeenCalledTimes(1);
+    const sendFlowCalls = (
+      sender.sendFlow as jest.Mock<
+        Promise<{ externalMessageId: string }>,
+        [
+          {
+            to: string;
+            flowId: string;
+            flowToken: string;
+            cta: string;
+            screen: string;
+            data: Record<string, unknown>;
+          },
+        ]
+      >
+    ).mock.calls;
+    const sendFlowArg = sendFlowCalls[0][0];
+    expect(sendFlowArg.to).toBe(FIXED_FROM);
+    expect(sendFlowArg.flowId).toBe(FIXED_FLOW_ID);
+    expect(sendFlowArg.cta).toBe('Confirm');
+    expect(sendFlowArg.screen).toBe('CONFIRM');
+    // flowToken is a signed JWT-like string — just verify it's non-empty
+    expect(typeof sendFlowArg.flowToken).toBe('string');
+    expect(sendFlowArg.flowToken.length).toBeGreaterThan(0);
+    // Data carries itemized confirmation fields
+    expect(sendFlowArg.data).toMatchObject({
+      proposalId: proposalOut.proposalId,
+      asset: proposalOut.confirmation.asset,
+      cryptoAmount: proposalOut.confirmation.cryptoAmount,
+      fiatAmount: proposalOut.confirmation.fiatAmount,
+      processingFeeAmount: proposalOut.confirmation.processingFeeAmount,
+      totalFiat: proposalOut.confirmation.totalFiat,
+      nonce: FIXED_NONCE,
+    });
+
+    // Plain text confirmation must NOT be sent
+    expect(sender.sendText).not.toHaveBeenCalledWith(
+      FIXED_FROM,
+      expect.stringContaining('Here is your buy summary'),
+    );
+  });
+
+  it('buy_crypto with FLOW_ID set → reply text is a short "check the secure form" summary', async () => {
+    const proposalOut = stubBuyProposalOutput();
+    const { svc, replyRepo } = buildService({
+      proposalService: makeProposalService(proposalOut),
+      configService: makeConfigService({
+        flowId: FIXED_FLOW_ID,
+        signingKey: FIXED_SIGNING_KEY,
+      }),
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    // Reply row persisted with a summary text (not the itemized block)
+    const createCalls = (
+      replyRepo.create as jest.Mock<
+        Promise<ConversationReplyRecord>,
+        [
+          {
+            text: string;
+            conversationId: string;
+            messageId: string;
+            correlationId: string;
+          },
+        ]
+      >
+    ).mock.calls;
+    const createArg = createCalls[0][0];
+    expect(createArg.text).toBeTruthy();
+    // Should be a short message, not the full itemized confirmation
+    expect(createArg.text).not.toContain('Reply CONFIRM');
   });
 
   it('new conversation: when no existing conv found, creates one', async () => {
@@ -528,7 +702,7 @@ describe('ConversationService.handleInbound', () => {
 
   // ── Reply persisted ───────────────────────────────────────────────────────
 
-  it('persists the reply row before dispatching to sender', async () => {
+  it('persists the reply row before dispatching to sender (text path)', async () => {
     const callOrder: string[] = [];
     const replyRepo = makeReplyRepo();
     (replyRepo.create as jest.Mock).mockImplementation(() => {
@@ -541,7 +715,12 @@ describe('ConversationService.handleInbound', () => {
       return Promise.resolve({ externalMessageId: 'wamid.out' });
     });
 
-    const { svc } = buildService({ replyRepo, sender });
+    // No FLOW_ID → text path
+    const { svc } = buildService({
+      replyRepo,
+      sender,
+      configService: makeConfigService({ flowId: '' }),
+    });
     await svc.handleInbound(baseMsg());
 
     expect(callOrder.indexOf('replyRepo.create')).toBeLessThan(

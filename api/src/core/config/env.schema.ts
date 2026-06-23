@@ -36,6 +36,10 @@ export const envSchema = z.object({
   WHATSAPP_WABA_ID: z.string().optional().default(''),
   WHATSAPP_APP_ID: z.string().optional().default(''),
   WHATSAPP_TEST_RECIPIENT: z.string().optional().default(''),
+  // Meta Flow ID — set by operator after publishing the confirmation+PIN Flow
+  // in the WhatsApp Business dashboard. Empty string = Flow not yet published;
+  // ConversationService falls back to plain-text confirmation in that case.
+  WHATSAPP_FLOW_ID: z.string().optional().default(''),
   // Operator-supplied-later secrets (empty is valid at boot; enforced where used):
   //  - APP_SECRET: HMAC key for X-Hub-Signature-256 webhook verification.
   //  - VERIFY_TOKEN: GET webhook handshake token.

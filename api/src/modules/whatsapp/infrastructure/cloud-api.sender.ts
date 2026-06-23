@@ -7,6 +7,7 @@ import type { AxiosError } from 'axios';
 import type { Env } from '../../../core/config/env.schema';
 import type {
   IWhatsAppSender,
+  SendFlowInput,
   SendResult,
 } from '../application/ports/whatsapp-sender.port';
 
@@ -96,6 +97,36 @@ export class CloudApiSender implements IWhatsAppSender {
       type: 'template',
       template,
     };
+    return this.post(payload);
+  }
+
+  async sendFlow(input: SendFlowInput): Promise<SendResult> {
+    const { to, flowId, flowToken, cta, screen, data } = input;
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'flow',
+        body: {
+          text: 'Please complete the secure form to confirm your transaction.',
+        },
+        action: {
+          name: 'flow',
+          parameters: {
+            flow_message_version: '3',
+            flow_token: flowToken,
+            flow_id: flowId,
+            flow_cta: cta,
+            flow_action: 'navigate',
+            flow_action_payload: { screen, data },
+          },
+        },
+      },
+    };
+
     return this.post(payload);
   }
 

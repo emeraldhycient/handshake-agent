@@ -4,9 +4,6 @@
  * Application depends on this abstraction; infrastructure provides the
  * Cloud API adapter. Follows the same Symbol-token + interface pattern as
  * `rate-provider.port.ts` in the quotes module.
- *
- * `sendFlow` is declared in Phase 6 — see the brief. It is intentionally
- * omitted here to avoid a silent stub.
  */
 
 /** DI token for the WhatsApp outbound sender. */
@@ -17,6 +14,33 @@ export const WHATSAPP_SENDER = Symbol('WHATSAPP_SENDER');
  * `externalMessageId` is the `wamid.*` returned by the Cloud API.
  */
 export type SendResult = { externalMessageId: string };
+
+/**
+ * Input for sending a WhatsApp Flow interactive message.
+ * The nonce is carried ONLY inside the E2E-encrypted flow payload data —
+ * it must never appear in plaintext chat or logs.
+ */
+export interface SendFlowInput {
+  /** Recipient phone number in E.164 without the leading '+'. */
+  to: string;
+  /** Meta Flow ID as registered in the WhatsApp Business dashboard. */
+  flowId: string;
+  /**
+   * Signed flow_token — opaque to the WhatsApp surface; verified by the
+   * flow data-exchange endpoint to bind the session to a proposal+directive.
+   */
+  flowToken: string;
+  /** CTA button label shown on the opening screen. */
+  cta: string;
+  /** Initial screen name to navigate to (e.g. 'CONFIRM'). */
+  screen: string;
+  /**
+   * Initial data seeded into the Flow screen — carries itemized confirmation
+   * fields and the nonce (E2E-encrypted by the WhatsApp client; never
+   * in plaintext chat).
+   */
+  data: Record<string, unknown>;
+}
 
 /**
  * The application depends on this abstraction, never on the Cloud API
@@ -44,4 +68,16 @@ export interface IWhatsAppSender {
     languageCode: string,
     components?: unknown[],
   ): Promise<SendResult>;
+
+  /**
+   * Send an E2E-encrypted WhatsApp Flow interactive message.
+   *
+   * Used for the buy confirmation+PIN flow (Phase 6): the nonce and itemized
+   * confirmation data travel ONLY inside the Flow E2E channel — never as
+   * plaintext chat. See ADR-0003 and CLAUDE.md §3.5.
+   *
+   * @param input  Flow parameters including flowId, flowToken, screen, and
+   *               the initial data payload (carries nonce and confirmation).
+   */
+  sendFlow(input: SendFlowInput): Promise<SendResult>;
 }

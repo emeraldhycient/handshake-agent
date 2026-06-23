@@ -9,6 +9,7 @@
  * (conversations, conversation_messages, message_intents, conversation_replies).
  */
 
+import { ConfigService } from '@nestjs/config';
 import { PrismaClient } from '../generated/prisma/client';
 import type { PrismaService } from '../src/core/prisma/prisma.service';
 import { startTestPostgres } from './helpers/pg-testcontainer';
@@ -27,6 +28,7 @@ import type { InboundMessage } from '../src/modules/whatsapp/application/ports/i
 import type { IAgentPort } from '../src/modules/agent/application/ports/agent.port';
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 import type { ProposalService } from '../src/modules/transactions/application/proposal.service';
+import type { DirectiveService } from '../src/modules/transactions/application/directive.service';
 import type { BuyProposalConfirmation } from '@handshake-agent/contracts';
 
 jest.setTimeout(180_000);
@@ -53,7 +55,31 @@ const fakeSender: jest.Mocked<IWhatsAppSender> = {
   sendTemplate: jest
     .fn()
     .mockResolvedValue({ externalMessageId: 'wamid.out.tmpl' }),
+  sendFlow: jest
+    .fn()
+    .mockResolvedValue({ externalMessageId: 'wamid.out.flow' }),
 };
+
+/**
+ * Fake ConfigService — WHATSAPP_FLOW_ID is empty so the service uses the
+ * plain-text confirmation fallback path (Flow not yet published in Meta).
+ */
+const fakeConfigService = {
+  get: jest.fn((key: string) => {
+    if (key === 'WHATSAPP_FLOW_ID') return '';
+    if (key === 'DIRECTIVE_SIGNING_KEY') return '';
+    return undefined;
+  }),
+} as unknown as ConfigService;
+
+/** Fake DirectiveService — not exercised in the text-fallback path but required by the ctor. */
+const fakeDirectiveService = {
+  issue: jest.fn().mockResolvedValue({
+    directiveId: 'directive-id-stub',
+    nonce: 'nonce-stub',
+    expiresAt: new Date(Date.now() + 300_000),
+  }),
+} as unknown as DirectiveService;
 
 /** Fake ProposalService — returns a fixed confirmation without hitting the DB. */
 const fakeConfirmation: BuyProposalConfirmation = {
@@ -111,6 +137,8 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       msgRepo,
       intentRepo,
       replyRepo,
+      fakeConfigService,
+      fakeDirectiveService,
     );
 
     // Seed a Tier-1 verified User + ChannelIdentity
@@ -150,6 +178,15 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
     });
     (fakeSender.sendText as jest.Mock).mockResolvedValue({
       externalMessageId: 'wamid.out.test',
+    });
+    (fakeSender.sendFlow as jest.Mock).mockResolvedValue({
+      externalMessageId: 'wamid.out.flow',
+    });
+    // fakeConfigService.get returns '' for WHATSAPP_FLOW_ID — re-apply after clearAllMocks
+    (fakeConfigService.get as jest.Mock).mockImplementation((key: string) => {
+      if (key === 'WHATSAPP_FLOW_ID') return '';
+      if (key === 'DIRECTIVE_SIGNING_KEY') return '';
+      return undefined;
     });
     (fakeProposalService.createBuyProposal as jest.Mock).mockResolvedValue({
       proposalId: 'proposal-test-id',

@@ -213,4 +213,120 @@ describe('CloudApiSender', () => {
       );
     });
   });
+
+  // -------------------------------------------------------------------------
+  // sendFlow
+  // -------------------------------------------------------------------------
+
+  describe('sendFlow', () => {
+    it('posts the exact interactive/flow body shape and returns the wamid', async () => {
+      httpService.post.mockReturnValue(of(axiosResponse(SUCCESS_RESPONSE)));
+
+      const result = await sender.sendFlow({
+        to: '2348000000000',
+        flowId: 'flow-id-123',
+        flowToken: 'signed.token.abc',
+        cta: 'Confirm',
+        screen: 'CONFIRM',
+        data: {
+          proposalId: 'proposal-id-1',
+          asset: 'USDT',
+          cryptoAmount: '3.0625',
+          fiatAmount: '5000',
+          processingFeeAmount: '25.00',
+          totalFiat: '5025.00',
+          nonce: 'abc123nonce',
+        },
+      });
+
+      expect(result).toEqual({ externalMessageId: 'wamid.abc123' });
+
+      expect(httpService.post).toHaveBeenCalledTimes(1);
+      const [url, body, config] = httpService.post.mock.calls[0] as [
+        string,
+        unknown,
+        { headers: Record<string, string> },
+      ];
+
+      expect(url).toBe(
+        'https://graph.facebook.com/v25.0/TEST_PHONE_ID/messages',
+      );
+      expect(body).toEqual({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: '2348000000000',
+        type: 'interactive',
+        interactive: {
+          type: 'flow',
+          body: { text: expect.any(String) as unknown },
+          action: {
+            name: 'flow',
+            parameters: {
+              flow_message_version: '3',
+              flow_token: 'signed.token.abc',
+              flow_id: 'flow-id-123',
+              flow_cta: 'Confirm',
+              flow_action: 'navigate',
+              flow_action_payload: {
+                screen: 'CONFIRM',
+                data: {
+                  proposalId: 'proposal-id-1',
+                  asset: 'USDT',
+                  cryptoAmount: '3.0625',
+                  fiatAmount: '5000',
+                  processingFeeAmount: '25.00',
+                  totalFiat: '5025.00',
+                  nonce: 'abc123nonce',
+                },
+              },
+            },
+          },
+        },
+      });
+      expect(config.headers['Authorization']).toBe('Bearer TEST_TOKEN');
+      expect(config.headers['Content-Type']).toBe('application/json');
+    });
+
+    it('returns the wamid from messages[0].id', async () => {
+      const response = {
+        ...SUCCESS_RESPONSE,
+        messages: [{ id: 'wamid.flow.XYZ' }],
+      };
+      httpService.post.mockReturnValue(of(axiosResponse(response)));
+
+      const result = await sender.sendFlow({
+        to: '2341111111111',
+        flowId: 'flow-abc',
+        flowToken: 'tok',
+        cta: 'Go',
+        screen: 'CONFIRM',
+        data: {},
+      });
+
+      expect(result.externalMessageId).toBe('wamid.flow.XYZ');
+    });
+
+    it('uses the same base URL and auth header as sendText', async () => {
+      httpService.post.mockReturnValue(of(axiosResponse(SUCCESS_RESPONSE)));
+
+      await sender.sendFlow({
+        to: '2348000000000',
+        flowId: 'fid',
+        flowToken: 'tok',
+        cta: 'Ok',
+        screen: 'S1',
+        data: {},
+      });
+
+      const [url, , config] = httpService.post.mock.calls[0] as [
+        string,
+        unknown,
+        { headers: Record<string, string> },
+      ];
+      expect(url).toBe(
+        'https://graph.facebook.com/v25.0/TEST_PHONE_ID/messages',
+      );
+      expect(config.headers['Authorization']).toBe('Bearer TEST_TOKEN');
+    });
+  });
 });

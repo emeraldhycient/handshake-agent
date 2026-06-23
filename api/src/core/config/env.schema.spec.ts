@@ -71,6 +71,20 @@ describe('validateEnv', () => {
     expect(env.DIRECTIVE_SIGNING_KEY).toBe('');
   });
 
+  it('defaults WHATSAPP_FLOW_ID to empty string (flow not yet published)', () => {
+    const env = validateEnv(validRaw);
+
+    // WHATSAPP_FLOW_ID is set by the operator after publishing the confirmation+PIN
+    // Flow in the Meta dashboard; empty = not yet published, fall back to text.
+    expect(env.WHATSAPP_FLOW_ID).toBe('');
+  });
+
+  it('accepts a non-empty WHATSAPP_FLOW_ID once the Flow is published', () => {
+    const env = validateEnv({ ...validRaw, WHATSAPP_FLOW_ID: 'flow-id-123' });
+
+    expect(env.WHATSAPP_FLOW_ID).toBe('flow-id-123');
+  });
+
   it('throws when a required integration secret is missing', () => {
     const withoutBlockradar: Record<string, unknown> = { ...validRaw };
     delete withoutBlockradar.BLOCKRADAR_API_KEY;
