@@ -35,7 +35,7 @@ jest.setTimeout(180_000);
 /** Minimal ConfigService stub that reads from the JSON defaults and env. */
 function makeConfigService(): { get: <T>(key: string) => T | undefined } {
   // Load the defaults from configuration() so TTLs / other values are set.
-  const defaults = configuration() as Record<string, unknown>;
+  const defaults = configuration() as unknown as Record<string, unknown>;
   return {
     get: <T>(key: string): T | undefined => {
       // Nested key lookup (e.g. 'handoffToken.kycTtlMinutes')
@@ -86,7 +86,11 @@ describe('KYC complete — service integration (Testcontainers Postgres)', () =>
     // KycService signature: (kycProvider, pinService, identityRepo, kycRepo)
     const kycProviderStub = {
       // eslint-disable-next-line @typescript-eslint/require-await
-      verify: async () => ({ passed: true as const, rawResult: {} }),
+      verify: async () => ({
+        approved: true as const,
+        tier: 'tier_1' as const,
+        reference: 'mock-ref',
+      }),
     };
     const pinServiceStub = {
       // eslint-disable-next-line @typescript-eslint/require-await
@@ -94,8 +98,7 @@ describe('KYC complete — service integration (Testcontainers Postgres)', () =>
     };
 
     kycService = new KycService(
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-      kycProviderStub as any,
+      kycProviderStub,
       // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
       pinServiceStub as any,
       identityRepo,
