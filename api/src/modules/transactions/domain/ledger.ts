@@ -423,10 +423,213 @@ export function buildDepositLedgerEntries(
 }
 
 // ---------------------------------------------------------------------------
-// Sell ledger (user's crypto leaves to treasury; NGN dispatched to payout)
+// Sell ledger — two-phase (reserve at execute, finalize or refund at settle)
 // ---------------------------------------------------------------------------
 
-/** Input to the pure sell ledger builder. */
+/**
+ * Export `toScaled` so execution-layer consumers (e.g. ExecutionService) can
+ * perform decimal-safe comparisons using the same scale factor as the ledger
+ * domain without redefining the helper (DRY — root §13.2).
+ */
+export { toScaled };
+
+// ── Phase 1: Reserve (execute) ──────────────────────────────────────────────
+
+/** Input to buildSellReserveEntries. */
+export interface BuildSellReserveInput {
+  /** accountId for the user_wallet USDT account. */
+  walletId: string;
+  /** USDT the user is selling, as a decimal string (e.g. "3.06"). */
+  cryptoAmount: string;
+  postedAt: Date;
+  /**
+   * Current per-account state. Missing keys default to
+   * { sequence: 0, balance: '0' }.
+   */
+  accountStates: Record<AccountKey, AccountState>;
+}
+
+/**
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for the RESERVE
+ * phase of a crypto SELL (exactly 2 USDT entries; no NGN entries).
+ *
+ * The USDT is moved from the user's wallet into the clearing account so it
+ * cannot be double-spent while the NGN payout is in flight.
+ *
+ * Account mapping (credit positive, debit negative; USDT sum = 0):
+ *  − user_wallet / walletId           / USDT  −cryptoAmount  (hold from user)
+ *  + clearing    / usdt_sell_clearing / USDT  +cryptoAmount  (in clearing)
+ */
+export function buildSellReserveEntries(
+  input: BuildSellReserveInput,
+): LedgerEntryDraft[] {
+  const { walletId, cryptoAmount, postedAt, accountStates } = input;
+
+  assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
+
+  const scaledCrypto = toScaled(cryptoAmount);
+  const posCrypto = fromScaled(scaledCrypto);
+  const negCrypto = fromScaled(-scaledCrypto);
+
+  const specs: EntrySpec[] = [
+    {
+      accountType: LedgerAccountType.user_wallet,
+      accountId: walletId,
+      currency: 'USDT',
+      amount: negCrypto,
+      description: `Sell reserve: USDT ${cryptoAmount} held from user wallet`,
+    },
+    {
+      accountType: LedgerAccountType.clearing,
+      accountId: 'usdt_sell_clearing',
+      currency: 'USDT',
+      amount: posCrypto,
+      description: `Sell reserve: USDT ${cryptoAmount} moved to clearing`,
+    },
+  ];
+
+  return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
+}
+
+// ── Phase 2a: Finalize (settle — payout success) ───────────────────────────
+
+/** Input to buildSellFinalizeEntries. */
+export interface BuildSellFinalizeInput {
+  /** accountId for the user_wallet USDT account (used only as metadata — not debited again). */
+  walletId: string;
+  /** USDT amount that was reserved (the same value as at reserve). */
+  cryptoAmount: string;
+  /** Net NGN the user receives after spread + fee. */
+  netFiatAmount: string;
+  postedAt: Date;
+  accountStates: Record<AccountKey, AccountState>;
+}
+
+/**
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for the FINALIZE
+ * phase of a crypto SELL (4 entries: 2 USDT + 2 NGN).
+ *
+ * USDT moves from clearing → treasury (completing the sell).
+ * NGN moves from treasury → processor_settlement (payout dispatched).
+ *
+ * Account mapping (credit positive, debit negative; per-currency sum = 0):
+ *
+ * USDT leg (sum = 0, 2 entries):
+ *  − clearing         / usdt_sell_clearing / USDT  −cryptoAmount  (leave clearing)
+ *  + treasury_reserve / usdt_treasury      / USDT  +cryptoAmount  (treasury receives)
+ *
+ * NGN leg (sum = 0, 2 entries):
+ *  − treasury_reserve     / ngn_treasury / NGN  −netFiatAmount  (treasury pays)
+ *  + processor_settlement / ngn_payout   / NGN  +netFiatAmount  (payout dispatched)
+ */
+export function buildSellFinalizeEntries(
+  input: BuildSellFinalizeInput,
+): LedgerEntryDraft[] {
+  const { cryptoAmount, netFiatAmount, postedAt, accountStates } = input;
+
+  assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
+  assertPositiveDecimal(netFiatAmount, 'netFiatAmount');
+
+  const scaledCrypto = toScaled(cryptoAmount);
+  const scaledFiat = toScaled(netFiatAmount);
+  const posCrypto = fromScaled(scaledCrypto);
+  const negCrypto = fromScaled(-scaledCrypto);
+  const posFiat = fromScaled(scaledFiat);
+  const negFiat = fromScaled(-scaledFiat);
+
+  const specs: EntrySpec[] = [
+    // USDT leg: clearing → treasury
+    {
+      accountType: LedgerAccountType.clearing,
+      accountId: 'usdt_sell_clearing',
+      currency: 'USDT',
+      amount: negCrypto,
+      description: `Sell finalize: USDT ${cryptoAmount} leaves clearing to treasury`,
+    },
+    {
+      accountType: LedgerAccountType.treasury_reserve,
+      accountId: 'usdt_treasury',
+      currency: 'USDT',
+      amount: posCrypto,
+      description: `Sell finalize: USDT ${cryptoAmount} credited to treasury`,
+    },
+    // NGN leg: treasury → processor_settlement (payout)
+    {
+      accountType: LedgerAccountType.treasury_reserve,
+      accountId: 'ngn_treasury',
+      currency: 'NGN',
+      amount: negFiat,
+      description: `Sell finalize: NGN ${netFiatAmount} dispatched from treasury`,
+    },
+    {
+      accountType: LedgerAccountType.processor_settlement,
+      accountId: 'ngn_payout',
+      currency: 'NGN',
+      amount: posFiat,
+      description: `Sell finalize: NGN ${netFiatAmount} credited for payout to user`,
+    },
+  ];
+
+  return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
+}
+
+// ── Phase 2b: Refund (settle — payout failure) ─────────────────────────────
+
+/** Input to buildSellRefundEntries. */
+export interface BuildSellRefundInput {
+  walletId: string;
+  cryptoAmount: string;
+  postedAt: Date;
+  accountStates: Record<AccountKey, AccountState>;
+}
+
+/**
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for the REFUND
+ * phase of a failed crypto SELL (exactly 2 USDT entries; mirrors reserve in
+ * reverse).
+ *
+ * Account mapping (credit positive, debit negative; USDT sum = 0):
+ *  − clearing    / usdt_sell_clearing / USDT  −cryptoAmount  (leave clearing)
+ *  + user_wallet / walletId           / USDT  +cryptoAmount  (refund to user)
+ */
+export function buildSellRefundEntries(
+  input: BuildSellRefundInput,
+): LedgerEntryDraft[] {
+  const { walletId, cryptoAmount, postedAt, accountStates } = input;
+
+  assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
+
+  const scaledCrypto = toScaled(cryptoAmount);
+  const posCrypto = fromScaled(scaledCrypto);
+  const negCrypto = fromScaled(-scaledCrypto);
+
+  const specs: EntrySpec[] = [
+    {
+      accountType: LedgerAccountType.clearing,
+      accountId: 'usdt_sell_clearing',
+      currency: 'USDT',
+      amount: negCrypto,
+      description: `Sell refund: USDT ${cryptoAmount} leaves clearing`,
+    },
+    {
+      accountType: LedgerAccountType.user_wallet,
+      accountId: walletId,
+      currency: 'USDT',
+      amount: posCrypto,
+      description: `Sell refund: USDT ${cryptoAmount} returned to user wallet`,
+    },
+  ];
+
+  return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
+}
+
+// ---------------------------------------------------------------------------
+// DEPRECATED: buildSellLedgerEntries — superseded by the two-phase builders
+// ---------------------------------------------------------------------------
+
+/** Input to the pure sell ledger builder.
+ * @deprecated Use buildSellReserveEntries + buildSellFinalizeEntries instead.
+ */
 export interface BuildSellLedgerInput {
   /** accountId for the user_wallet USDT account. */
   walletId: string;
@@ -443,13 +646,13 @@ export interface BuildSellLedgerInput {
 }
 
 /**
+ * @deprecated Superseded by buildSellReserveEntries + buildSellFinalizeEntries
+ * (two-phase sell: reserve USDT at execute to prevent double-spend; finalize on
+ * payout success). This single-phase builder is retained only to avoid breaking
+ * the ledger.spec.ts suite until it is fully migrated in task S4b.
+ *
  * Produce the balanced double-entry `LedgerEntryDraft` rows for a crypto SELL
  * settlement (exactly 4 entries: 2 USDT legs + 2 NGN legs).
- *
- * The function is pure: it reads prior account state from `input.accountStates`
- * and computes the next `sequence` and `balanceAfter` values deterministically.
- * The caller (execution engine) persists the returned rows inside a DB
- * transaction after adding `id` and `transactionId`.
  *
  * Account mapping (credit positive, debit negative; per-currency sums = 0):
  *
@@ -460,8 +663,6 @@ export interface BuildSellLedgerInput {
  * NGN leg (sum = 0, 2 entries):
  *  − treasury_reserve / ngn_treasury  / NGN  −netFiatAmount (NGN dispatched)
  *  + processor_settlement / ngn_payout / NGN  +netFiatAmount (payout to user)
- *
- * Zero-amount entries are never emitted (invariant 2).
  */
 export function buildSellLedgerEntries(
   input: BuildSellLedgerInput,

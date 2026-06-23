@@ -16,7 +16,10 @@
  * TDD: tests written first (red), then ExecutionService is implemented.
  */
 
-import type { QuoteBuyOutput } from '@handshake-agent/contracts';
+import type {
+  QuoteBuyOutput,
+  QuoteSellOutput,
+} from '@handshake-agent/contracts';
 
 import type { Clock } from '../../../core/common/clock';
 import type { PinService } from '../../../core/auth/pin.service';
@@ -46,6 +49,7 @@ import {
   ProposalNotExecutableError,
   QuoteDriftError,
   SettlementInvalidStatusError,
+  InsufficientBalanceError,
 } from '../domain/execution-errors';
 import { DirectiveReplayError } from '../domain/directive-errors';
 import { PinInvalidError } from '../../../core/auth/domain/pin-errors';
@@ -215,6 +219,11 @@ function makeSettlementRepo(
   return {
     findReceiptNumber: jest.fn().mockResolvedValue(receiptNumber),
     settleBuyAtomic: jest.fn().mockResolvedValue(atomicOutput),
+    postSellReserveAtomic: jest.fn().mockResolvedValue(undefined),
+    settleSellFinalizeAtomic: jest
+      .fn()
+      .mockResolvedValue({ receiptNumber: STUB_RECEIPT_NUMBER }),
+    settleSellRefundAtomic: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -336,10 +345,11 @@ function makePaymentProvider(
 
 const stubClock: Clock = { now: () => FIXED_NOW };
 
-// Stub ConfigService (returns the buy config value).
+// Stub ConfigService (returns the buy/sell config values).
 const stubConfig = {
   get: jest.fn((key: string) => {
     if (key === 'buy') return { maxDriftBps: 50 };
+    if (key === 'sell') return { maxDriftBps: 50 };
     return undefined;
   }),
 };
@@ -387,6 +397,10 @@ function buildService(
     stubConfig as never,
     stubClock,
     overrides.assetRegistry ?? makeAssetRegistry(),
+    // beneficiaryService stub (sell tests override via buildSellService helper)
+    { getById: jest.fn().mockResolvedValue(null) } as never,
+    // ledgerRepo stub
+    { getAccountBalance: jest.fn().mockResolvedValue('100') },
   );
 }
 
@@ -1133,5 +1147,650 @@ describe('ExecutionService.settleBuyPayment', () => {
     await expect(svc.settleBuyPayment(SETTLE_INPUT)).rejects.toBeInstanceOf(
       SettlementInvalidStatusError,
     );
+  });
+});
+
+// =============================================================================
+// ExecutionService.executeSell (task S4b)
+// =============================================================================
+
+const SELL_PROPOSAL_ID = 'sell-proposal-id';
+const SELL_QUOTE_ID = 'sell-quote-id';
+const SELL_TXN_ID = 'sell-txn-id';
+const SELL_IDEMPOTENCY_KEY = 'sell-idempotency-key';
+const BENEFICIARY_ID = 'beneficiary-id';
+const PROVIDER_REF = 'flw_transfer_001';
+
+const STORED_SELL_QUOTE: QuoteRecord = {
+  id: SELL_QUOTE_ID,
+  userId: USER_ID,
+  type: 'sell',
+  asset: 'USDT',
+  fiatCurrency: 'NGN',
+  fiatAmount: '24600', // net NGN the user receives
+  cryptoAmount: '16.000000', // USDT the user is selling
+  fxRate: '1600',
+  baseRate: '1600',
+  spreadBps: 150,
+  processingFeeBps: 100,
+  processingFeeAmount: '0',
+  status: 'valid',
+  expiresAt: FUTURE,
+  createdAt: FIXED_NOW,
+};
+
+const FRESH_SELL_QUOTE: QuoteSellOutput = {
+  asset: 'USDT',
+  cryptoAmount: '16.000000',
+  fiatCurrency: 'NGN',
+  netFiatAmount: '24600',
+  baseRate: '1600',
+  fxRate: '1600', // same rate → no drift
+  spreadBps: 150,
+  processingFeeBps: 100,
+  processingFeeAmount: '0',
+  quotedAt: FIXED_NOW.toISOString(),
+  expiresInSec: 30,
+};
+
+const STUB_SELL_PROPOSAL: ProposalRecord = {
+  id: SELL_PROPOSAL_ID,
+  userId: USER_ID,
+  conversationId: null,
+  type: 'sell',
+  status: 'pending',
+  parameters: {
+    asset: 'USDT',
+    cryptoAmount: '16.000000',
+    fiatCurrency: 'NGN',
+    beneficiaryId: BENEFICIARY_ID,
+  },
+  parametersChecksum: 'b'.repeat(64),
+  quoteId: SELL_QUOTE_ID,
+  expiresAt: FUTURE,
+  confirmedAt: null,
+  createdAt: FIXED_NOW,
+};
+
+const STUB_SELL_GRANT: DirectiveGrantRecord = {
+  directiveId: DIRECTIVE_ID,
+  proposalId: SELL_PROPOSAL_ID,
+  userId: USER_ID,
+  directiveRef: 'request_pin',
+  origin: 'engine',
+  nonceHash: 'hash',
+  signatureValue: 'sig',
+  status: 'consumed',
+  issuedAt: FIXED_NOW,
+  expiresAt: FUTURE,
+  consumedAt: FIXED_NOW,
+  consumedProposalId: SELL_PROPOSAL_ID,
+  failureReason: null,
+  failureCount: 0,
+};
+
+const STUB_SELL_TXN: TransactionRecord = {
+  id: SELL_TXN_ID,
+  proposalId: SELL_PROPOSAL_ID,
+  userId: USER_ID,
+  type: 'sell',
+  status: 'settling',
+  idempotencyKey: SELL_IDEMPOTENCY_KEY,
+  requestChecksum: 'sell-checksum',
+  fxRateSnapshot: '1600',
+  metadata: {
+    asset: 'USDT',
+    cryptoAmount: '16.000000',
+    netFiatAmount: '24600',
+    beneficiaryId: BENEFICIARY_ID,
+    walletId: 'wallet-id',
+    providerRef: PROVIDER_REF,
+  },
+  processorTxRef: null,
+  pinVerifiedAt: FIXED_NOW,
+  createdAt: FIXED_NOW,
+};
+
+const STUB_BENEFICIARY = {
+  id: BENEFICIARY_ID,
+  userId: USER_ID,
+  type: 'bank_account' as const,
+  label: 'My Bank',
+  accountNumber: '0123456789',
+  accountHolderName: 'Test User',
+  bankCode: '044',
+  address: null,
+  network: null,
+  isDefault: false,
+  createdAt: FIXED_NOW,
+};
+
+const SELL_BASE_INPUT = {
+  userId: USER_ID,
+  proposalId: SELL_PROPOSAL_ID,
+  directiveId: DIRECTIVE_ID,
+  nonce: NONCE,
+  pin: PIN,
+  idempotencyKey: SELL_IDEMPOTENCY_KEY,
+};
+
+/**
+ * Builds a QuotesService stub that handles both quoteBuy and quoteSell.
+ */
+function makeSellQuotesService(
+  freshSellQuote: QuoteSellOutput = FRESH_SELL_QUOTE,
+): jest.Mocked<Pick<QuotesService, 'quoteBuy' | 'quoteSell'>> {
+  return {
+    quoteBuy: jest.fn().mockResolvedValue(FRESH_QUOTE),
+    quoteSell: jest.fn().mockResolvedValue(freshSellQuote),
+  };
+}
+
+/**
+ * Builds a BeneficiaryService stub.
+ */
+function makeBeneficiaryService(
+  result: typeof STUB_BENEFICIARY | null = STUB_BENEFICIARY,
+): { getById: jest.Mock } {
+  return {
+    getById: jest.fn().mockResolvedValue(result),
+  };
+}
+
+/**
+ * Builds a LedgerRepository stub with sufficient balance by default.
+ */
+function makeLedgerRepo(balance: string = '100'): {
+  getAccountBalance: jest.Mock;
+} {
+  return {
+    getAccountBalance: jest.fn().mockResolvedValue(balance),
+  };
+}
+
+/**
+ * Builds a PaymentProvider stub that handles createPayout and verifyPayout
+ * in addition to buy-side methods.
+ */
+function makeSellPaymentProvider(
+  payoutThrows?: Error,
+  verifyPayoutResult?: {
+    status: 'successful' | 'pending' | 'failed';
+    amount: string;
+    currency: string;
+    providerRef: string;
+  },
+): jest.Mocked<
+  Pick<
+    IPaymentProvider,
+    'createCollection' | 'verify' | 'createPayout' | 'verifyPayout'
+  >
+> {
+  const svc = {
+    createCollection: jest.fn().mockResolvedValue(STUB_COLLECTION),
+    verify: jest.fn().mockResolvedValue({
+      status: 'successful',
+      amount: '10000',
+      currency: 'NGN',
+      providerRef: 'flw_ref_001',
+    }),
+    createPayout: jest.fn(),
+    verifyPayout: jest.fn(),
+  };
+
+  if (payoutThrows) {
+    svc.createPayout.mockRejectedValue(payoutThrows);
+  } else {
+    svc.createPayout.mockResolvedValue({
+      providerRef: PROVIDER_REF,
+      status: 'pending' as const,
+    });
+  }
+
+  svc.verifyPayout.mockResolvedValue(
+    verifyPayoutResult ?? {
+      status: 'successful' as const,
+      amount: '24600',
+      currency: 'NGN',
+      providerRef: PROVIDER_REF,
+    },
+  );
+
+  return svc;
+}
+
+/**
+ * Builds ExecutionService with sell-specific stubs.
+ * Overrides the default buildService factory to inject sell deps.
+ */
+function buildSellService(
+  overrides: {
+    proposalRepo?: jest.Mocked<IProposalRepository>;
+    quoteRepo?: jest.Mocked<IQuoteRepository>;
+    transactionRepo?: jest.Mocked<ITransactionRepository>;
+    outboxRepo?: jest.Mocked<ISettlementOutboxRepository>;
+    settlementRepo?: jest.Mocked<ISettlementRepository>;
+    quotesService?: jest.Mocked<Pick<QuotesService, 'quoteBuy' | 'quoteSell'>>;
+    kycGate?: jest.Mocked<Pick<KycGateService, 'assertCanTransact'>>;
+    directiveService?: jest.Mocked<Pick<DirectiveService, 'consume'>>;
+    pinService?: jest.Mocked<Pick<PinService, 'verifyPin'>>;
+    walletService?: jest.Mocked<Pick<WalletService, 'getOrProvisionWallet'>>;
+    paymentProvider?: ReturnType<typeof makeSellPaymentProvider>;
+    beneficiaryService?: ReturnType<typeof makeBeneficiaryService>;
+    ledgerRepo?: ReturnType<typeof makeLedgerRepo>;
+  } = {},
+): ExecutionService {
+  return new ExecutionService(
+    overrides.proposalRepo ?? makeProposalRepo(STUB_SELL_PROPOSAL),
+    overrides.quoteRepo ?? makeQuoteRepo(STORED_SELL_QUOTE),
+    overrides.transactionRepo ?? makeTransactionRepo(null, STUB_SELL_TXN),
+    overrides.outboxRepo ?? makeOutboxRepo(),
+    overrides.settlementRepo ?? makeSettlementRepo(),
+    (overrides.quotesService as unknown as QuotesService) ??
+      (makeSellQuotesService() as unknown as QuotesService),
+    (overrides.kycGate as unknown as KycGateService) ??
+      (makeKycGate() as unknown as KycGateService),
+    (overrides.directiveService as unknown as DirectiveService) ??
+      (makeDirectiveService(STUB_SELL_GRANT) as unknown as DirectiveService),
+    (overrides.pinService as unknown as PinService) ??
+      (makePinService() as unknown as PinService),
+    (overrides.walletService as unknown as WalletService) ??
+      (makeWalletService() as unknown as WalletService),
+    (overrides.paymentProvider as unknown as IPaymentProvider) ??
+      (makeSellPaymentProvider() as unknown as IPaymentProvider),
+    stubConfig as never,
+    stubClock,
+    makeAssetRegistry(),
+    (overrides.beneficiaryService as never) ??
+      (makeBeneficiaryService() as never),
+    (overrides.ledgerRepo as never) ?? makeLedgerRepo(),
+  );
+}
+
+describe('ExecutionService.executeSell', () => {
+  // ── Happy path ──────────────────────────────────────────────────────────────
+
+  it('happy path: creates Transaction (settling), reserves USDT, initiates payout, enqueues outbox', async () => {
+    const transactionRepo = makeTransactionRepo(null, STUB_SELL_TXN);
+    const settlementRepo = makeSettlementRepo();
+    const outboxRepo = makeOutboxRepo();
+    const paymentProvider = makeSellPaymentProvider();
+
+    const svc = buildSellService({
+      transactionRepo,
+      settlementRepo,
+      outboxRepo,
+      paymentProvider,
+    });
+
+    const result = await svc.executeSell(SELL_BASE_INPUT);
+
+    expect(result.status).toBe('settling');
+    expect(result.transactionId).toBe(SELL_TXN_ID);
+    expect(result.payout.providerRef).toBe(PROVIDER_REF);
+    expect(transactionRepo.createSettlingWithProposal).toHaveBeenCalledTimes(1);
+    expect(settlementRepo.postSellReserveAtomic).toHaveBeenCalledTimes(1);
+    expect(paymentProvider.createPayout).toHaveBeenCalledTimes(1);
+    expect(outboxRepo.create).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Proposal not found ─────────────────────────────────────────────────────
+
+  it('proposal not found → ProposalNotExecutableError, no Transaction', async () => {
+    const proposalRepo = makeProposalRepo(null);
+    const transactionRepo = makeTransactionRepo();
+
+    const svc = buildSellService({ proposalRepo, transactionRepo });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProposalNotExecutableError,
+    );
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+  });
+
+  // ── Wrong owner ────────────────────────────────────────────────────────────
+
+  it('userId mismatch → ProposalNotExecutableError', async () => {
+    const otherProposal: ProposalRecord = {
+      ...STUB_SELL_PROPOSAL,
+      userId: OTHER_USER_ID,
+    };
+    const proposalRepo = makeProposalRepo(otherProposal);
+
+    const svc = buildSellService({ proposalRepo });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProposalNotExecutableError,
+    );
+  });
+
+  // ── Wrong proposal type ────────────────────────────────────────────────────
+
+  it('proposal type is buy → ProposalNotExecutableError', async () => {
+    const buyProposal: ProposalRecord = {
+      ...STUB_SELL_PROPOSAL,
+      type: 'buy',
+    };
+    const proposalRepo = makeProposalRepo(buyProposal);
+
+    const svc = buildSellService({ proposalRepo });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProposalNotExecutableError,
+    );
+  });
+
+  // ── Expired proposal ───────────────────────────────────────────────────────
+
+  it('expired proposal → ProposalExpiredError', async () => {
+    const expired: ProposalRecord = {
+      ...STUB_SELL_PROPOSAL,
+      expiresAt: PAST,
+    };
+    const proposalRepo = makeProposalRepo(expired);
+
+    const svc = buildSellService({ proposalRepo });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProposalExpiredError,
+    );
+  });
+
+  // ── Quote drift exceeded ───────────────────────────────────────────────────
+
+  it('FX rate drifted beyond maxDriftBps → QuoteDriftError, no Transaction', async () => {
+    // Fresh rate is 10% higher than stored → 1000 bps > 50 bps
+    const driftedFreshQuote: QuoteSellOutput = {
+      ...FRESH_SELL_QUOTE,
+      fxRate: '1760', // +10%
+    };
+    const quotesService = makeSellQuotesService(driftedFreshQuote);
+    const transactionRepo = makeTransactionRepo();
+
+    const svc = buildSellService({ quotesService, transactionRepo });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      QuoteDriftError,
+    );
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+  });
+
+  // ── Insufficient balance ───────────────────────────────────────────────────
+
+  it('ledger balance < cryptoAmount → InsufficientBalanceError, no Transaction', async () => {
+    // STORED_SELL_QUOTE.cryptoAmount = '16.000000'
+    // Ledger balance is only 1 USDT
+    const ledgerRepo = makeLedgerRepo('1.000000');
+    const transactionRepo = makeTransactionRepo();
+
+    const svc = buildSellService({ ledgerRepo, transactionRepo });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      InsufficientBalanceError,
+    );
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+  });
+
+  // ── KYC gate throws ───────────────────────────────────────────────────────
+
+  it('KYC gate throws → propagates, no Transaction', async () => {
+    const kycError = new Error('KYC tier 1 exceeded');
+    const kycGate = makeKycGate(kycError);
+    const transactionRepo = makeTransactionRepo();
+
+    const svc = buildSellService({ kycGate, transactionRepo });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toThrow(kycError);
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+  });
+
+  // ── Directive replay ─────────────────────────────────────────────────────
+
+  it('directive already consumed → DirectiveReplayError, no Transaction', async () => {
+    const directiveService = makeDirectiveService(new DirectiveReplayError());
+    const transactionRepo = makeTransactionRepo();
+    const pinService = makePinService();
+
+    const svc = buildSellService({
+      directiveService,
+      transactionRepo,
+      pinService,
+    });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      DirectiveReplayError,
+    );
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+    expect(pinService.verifyPin).not.toHaveBeenCalled();
+  });
+
+  // ── PIN invalid ───────────────────────────────────────────────────────────
+
+  it('wrong PIN → PinInvalidError, no collection/outbox', async () => {
+    const pinService = makePinService(new PinInvalidError(4));
+    const transactionRepo = makeTransactionRepo();
+    const outboxRepo = makeOutboxRepo();
+
+    const svc = buildSellService({ pinService, transactionRepo, outboxRepo });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      PinInvalidError,
+    );
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  // ── Idempotent replay ─────────────────────────────────────────────────────
+
+  it('idempotent replay: returns existing result, no new side-effects', async () => {
+    const transactionRepo = makeTransactionRepo(STUB_SELL_TXN);
+    const settlementRepo = makeSettlementRepo();
+    const paymentProvider = makeSellPaymentProvider();
+
+    const svc = buildSellService({
+      transactionRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    const result = await svc.executeSell(SELL_BASE_INPUT);
+
+    expect(result.transactionId).toBe(SELL_TXN_ID);
+    expect(result.status).toBe('settling');
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+    expect(settlementRepo.postSellReserveAtomic).not.toHaveBeenCalled();
+    expect(paymentProvider.createPayout).not.toHaveBeenCalled();
+  });
+
+  // ── Missing beneficiary ───────────────────────────────────────────────────
+
+  it('beneficiaryId not found → ProposalNotExecutableError', async () => {
+    const beneficiaryService = makeBeneficiaryService(null);
+    const transactionRepo = makeTransactionRepo();
+
+    const svc = buildSellService({ beneficiaryService, transactionRepo });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProposalNotExecutableError,
+    );
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+  });
+
+  // ── Wrong beneficiary type ────────────────────────────────────────────────
+
+  it('beneficiary type is crypto_address → ProposalNotExecutableError', async () => {
+    const cryptoBeneficiary = {
+      ...STUB_BENEFICIARY,
+      type: 'crypto_address' as const,
+      accountNumber: null,
+      bankCode: null,
+    };
+    const beneficiaryService = makeBeneficiaryService(
+      cryptoBeneficiary as never,
+    );
+    const transactionRepo = makeTransactionRepo();
+
+    const svc = buildSellService({ beneficiaryService, transactionRepo });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProposalNotExecutableError,
+    );
+  });
+});
+
+// =============================================================================
+// ExecutionService.settleSellPayout (task S4b)
+// =============================================================================
+
+const SETTLING_SELL_TXN: TransactionRecord = {
+  ...STUB_SELL_TXN,
+  status: 'settling',
+};
+
+const SETTLE_SELL_INPUT = { reference: SELL_IDEMPOTENCY_KEY };
+
+/**
+ * Transaction repo for settle tests that uses findByIdempotencyKey
+ * (same pattern as the buy settlement tests above).
+ */
+function makeTransactionRepoForSellSettle(
+  txn: TransactionRecord | null,
+): jest.Mocked<ITransactionRepository> {
+  return {
+    findByIdempotencyKey: jest.fn().mockResolvedValue(txn),
+    create: jest.fn(),
+    createSettlingWithProposal: jest.fn(),
+    updateStatus: jest.fn(),
+    mergeMetadata: jest.fn().mockResolvedValue(undefined),
+  };
+}
+
+describe('ExecutionService.settleSellPayout', () => {
+  // ── Happy path: payout successful → finalize ──────────────────────────────
+
+  it('payout successful → calls settleSellFinalizeAtomic, returns completed', async () => {
+    const transactionRepo = makeTransactionRepoForSellSettle(SETTLING_SELL_TXN);
+    const settlementRepo = makeSettlementRepo();
+    const paymentProvider = makeSellPaymentProvider(undefined, {
+      status: 'successful',
+      amount: '24600',
+      currency: 'NGN',
+      providerRef: PROVIDER_REF,
+    });
+
+    const svc = buildSellService({
+      transactionRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    const result = await svc.settleSellPayout(SETTLE_SELL_INPUT);
+
+    expect(result.status).toBe('completed');
+    expect(result.receiptNumber).toBe(STUB_RECEIPT_NUMBER);
+    expect(settlementRepo.settleSellFinalizeAtomic).toHaveBeenCalledTimes(1);
+    expect(settlementRepo.settleSellRefundAtomic).not.toHaveBeenCalled();
+  });
+
+  // ── Payout pending ────────────────────────────────────────────────────────
+
+  it('payout still pending → returns pending, no settle or refund', async () => {
+    const transactionRepo = makeTransactionRepoForSellSettle(SETTLING_SELL_TXN);
+    const settlementRepo = makeSettlementRepo();
+    const paymentProvider = makeSellPaymentProvider(undefined, {
+      status: 'pending',
+      amount: '24600',
+      currency: 'NGN',
+      providerRef: PROVIDER_REF,
+    });
+
+    const svc = buildSellService({
+      transactionRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    const result = await svc.settleSellPayout(SETTLE_SELL_INPUT);
+
+    expect(result.status).toBe('pending');
+    expect(settlementRepo.settleSellFinalizeAtomic).not.toHaveBeenCalled();
+    expect(settlementRepo.settleSellRefundAtomic).not.toHaveBeenCalled();
+  });
+
+  // ── Payout failed → refund ────────────────────────────────────────────────
+
+  it('payout failed → calls settleSellRefundAtomic, returns failed', async () => {
+    const transactionRepo = makeTransactionRepoForSellSettle(SETTLING_SELL_TXN);
+    const settlementRepo = makeSettlementRepo();
+    const paymentProvider = makeSellPaymentProvider(undefined, {
+      status: 'failed',
+      amount: '0',
+      currency: 'NGN',
+      providerRef: PROVIDER_REF,
+    });
+
+    const svc = buildSellService({
+      transactionRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    const result = await svc.settleSellPayout(SETTLE_SELL_INPUT);
+
+    expect(result.status).toBe('failed');
+    expect(settlementRepo.settleSellRefundAtomic).toHaveBeenCalledTimes(1);
+    expect(settlementRepo.settleSellFinalizeAtomic).not.toHaveBeenCalled();
+  });
+
+  // ── Idempotent: already completed ─────────────────────────────────────────
+
+  it('transaction already completed → returns completed (idempotent), no finalize called', async () => {
+    const completedTxn: TransactionRecord = {
+      ...SETTLING_SELL_TXN,
+      status: 'completed',
+    };
+    const transactionRepo = makeTransactionRepoForSellSettle(completedTxn);
+    const settlementRepo = makeSettlementRepo(STUB_RECEIPT_NUMBER);
+    const paymentProvider = makeSellPaymentProvider();
+
+    const svc = buildSellService({
+      transactionRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    const result = await svc.settleSellPayout(SETTLE_SELL_INPUT);
+
+    expect(result.status).toBe('completed');
+    expect(settlementRepo.settleSellFinalizeAtomic).not.toHaveBeenCalled();
+    expect(paymentProvider.verifyPayout).not.toHaveBeenCalled();
+  });
+
+  // ── Unknown reference ─────────────────────────────────────────────────────
+
+  it('unknown reference → ProposalNotExecutableError', async () => {
+    const transactionRepo = makeTransactionRepoForSellSettle(null);
+
+    const svc = buildSellService({ transactionRepo });
+
+    await expect(
+      svc.settleSellPayout(SETTLE_SELL_INPUT),
+    ).rejects.toBeInstanceOf(ProposalNotExecutableError);
+  });
+
+  // ── Invalid status ────────────────────────────────────────────────────────
+
+  it('transaction status is failed → throws SettlementInvalidStatusError', async () => {
+    const failedTxn: TransactionRecord = {
+      ...SETTLING_SELL_TXN,
+      status: 'failed',
+    };
+    const transactionRepo = makeTransactionRepoForSellSettle(failedTxn);
+
+    const svc = buildSellService({ transactionRepo });
+
+    await expect(
+      svc.settleSellPayout(SETTLE_SELL_INPUT),
+    ).rejects.toBeInstanceOf(SettlementInvalidStatusError);
   });
 });

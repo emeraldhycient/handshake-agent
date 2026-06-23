@@ -13,6 +13,9 @@ import {
   buildBuyLedgerEntries,
   buildDepositLedgerEntries,
   buildSellLedgerEntries,
+  buildSellReserveEntries,
+  buildSellFinalizeEntries,
+  buildSellRefundEntries,
   LedgerError,
   LedgerAccountType,
   LedgerDirection,
@@ -20,6 +23,9 @@ import {
   type BuildBuyLedgerInput,
   type BuildDepositLedgerInput,
   type BuildSellLedgerInput,
+  type BuildSellReserveInput,
+  type BuildSellFinalizeInput,
+  type BuildSellRefundInput,
   type LedgerEntryDraft,
 } from './ledger';
 
@@ -851,6 +857,412 @@ describe('buildSellLedgerEntries', () => {
         );
         expect(sumByCurrency(entries, 'USDT')).toBe(0n);
         expect(sumByCurrency(entries, 'NGN')).toBe(0n);
+      },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSellReserveEntries (task S4b — phase 1: reserve at execute)
+// ---------------------------------------------------------------------------
+
+function freshSellReserveInput(
+  overrides?: Partial<BuildSellReserveInput>,
+): BuildSellReserveInput {
+  return {
+    walletId: 'wallet-reserve-abc',
+    cryptoAmount: '5.0',
+    postedAt: new Date('2025-06-01T12:00:00Z'),
+    accountStates: {},
+    ...overrides,
+  };
+}
+
+describe('buildSellReserveEntries', () => {
+  describe('happy path — fresh account states', () => {
+    let entries: LedgerEntryDraft[];
+
+    beforeAll(() => {
+      entries = buildSellReserveEntries(freshSellReserveInput());
+    });
+
+    it('returns exactly 2 entries', () => {
+      expect(entries).toHaveLength(2);
+    });
+
+    it('USDT signed amounts sum to exactly zero (invariant 1)', () => {
+      expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+    });
+
+    it('no NGN entries', () => {
+      expect(entries.filter((e) => e.currency === 'NGN')).toHaveLength(0);
+    });
+
+    it('every amount is non-zero (invariant 2)', () => {
+      const SCALE = 10n ** 18n;
+      for (const e of entries) {
+        const isNeg = e.amount.startsWith('-');
+        const abs = isNeg ? e.amount.slice(1) : e.amount;
+        const [whole = '0', frac = ''] = abs.split('.');
+        const fracPadded = frac.slice(0, 18).padEnd(18, '0');
+        const scaled = BigInt(whole) * SCALE + BigInt(fracPadded);
+        expect(scaled).not.toBe(0n);
+      }
+    });
+
+    it('direction matches the sign of amount (invariant 2)', () => {
+      for (const e of entries) {
+        const isNeg = e.amount.startsWith('-');
+        if (isNeg) {
+          expect(e.direction).toBe(LedgerDirection.debit);
+        } else {
+          expect(e.direction).toBe(LedgerDirection.credit);
+        }
+      }
+    });
+
+    it('sequence is 1 for fresh accounts (invariant 3)', () => {
+      for (const e of entries) {
+        expect(e.sequence).toBe(1);
+      }
+    });
+
+    it('balanceAfter equals normalised signedAmount for fresh accounts (invariant 4)', () => {
+      for (const e of entries) {
+        expect(e.balanceAfter).toBe(e.amount);
+      }
+    });
+
+    it('user_wallet is debited −cryptoAmount', () => {
+      const e = entries.find(
+        (x) => x.accountType === LedgerAccountType.user_wallet,
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('-5');
+      expect(e!.direction).toBe(LedgerDirection.debit);
+    });
+
+    it('clearing / usdt_sell_clearing is credited +cryptoAmount', () => {
+      const e = entries.find(
+        (x) =>
+          x.accountType === LedgerAccountType.clearing &&
+          x.accountId === 'usdt_sell_clearing',
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('5');
+      expect(e!.direction).toBe(LedgerDirection.credit);
+    });
+
+    it('entries are in deterministic order (invariant 5)', () => {
+      const a = buildSellReserveEntries(freshSellReserveInput());
+      const b = buildSellReserveEntries(freshSellReserveInput());
+      expect(
+        a.map((e) => `${e.accountType}:${e.accountId}:${e.currency}`),
+      ).toEqual(b.map((e) => `${e.accountType}:${e.accountId}:${e.currency}`));
+    });
+  });
+
+  describe('guards', () => {
+    it('throws LedgerError when cryptoAmount is zero', () => {
+      expect(() =>
+        buildSellReserveEntries(freshSellReserveInput({ cryptoAmount: '0' })),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when cryptoAmount is negative', () => {
+      expect(() =>
+        buildSellReserveEntries(
+          freshSellReserveInput({ cryptoAmount: '-1.0' }),
+        ),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when cryptoAmount is not a valid decimal', () => {
+      expect(() =>
+        buildSellReserveEntries(freshSellReserveInput({ cryptoAmount: 'abc' })),
+      ).toThrow(LedgerError);
+    });
+  });
+
+  describe('property: USDT sum=0 for various amounts', () => {
+    const cases = [
+      { cryptoAmount: '0.000001' },
+      { cryptoAmount: '1' },
+      { cryptoAmount: '100.5' },
+      { cryptoAmount: '999999.123456789012345678' },
+    ];
+
+    it.each(cases)(
+      'USDT sum=0 for cryptoAmount=$cryptoAmount',
+      ({ cryptoAmount }) => {
+        const entries = buildSellReserveEntries(
+          freshSellReserveInput({ cryptoAmount }),
+        );
+        expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+      },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSellFinalizeEntries (task S4b — phase 2a: finalize on payout success)
+// ---------------------------------------------------------------------------
+
+function freshSellFinalizeInput(
+  overrides?: Partial<BuildSellFinalizeInput>,
+): BuildSellFinalizeInput {
+  return {
+    walletId: 'wallet-finalize-abc',
+    cryptoAmount: '5.0',
+    netFiatAmount: '7500',
+    postedAt: new Date('2025-06-01T12:00:00Z'),
+    accountStates: {},
+    ...overrides,
+  };
+}
+
+describe('buildSellFinalizeEntries', () => {
+  describe('happy path — fresh account states', () => {
+    let entries: LedgerEntryDraft[];
+
+    beforeAll(() => {
+      entries = buildSellFinalizeEntries(freshSellFinalizeInput());
+    });
+
+    it('returns exactly 4 entries (2 USDT + 2 NGN)', () => {
+      expect(entries).toHaveLength(4);
+    });
+
+    it('USDT signed amounts sum to exactly zero (invariant 1)', () => {
+      expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+    });
+
+    it('NGN signed amounts sum to exactly zero (invariant 1)', () => {
+      expect(sumByCurrency(entries, 'NGN')).toBe(0n);
+    });
+
+    it('every amount is non-zero (invariant 2)', () => {
+      const SCALE = 10n ** 18n;
+      for (const e of entries) {
+        const isNeg = e.amount.startsWith('-');
+        const abs = isNeg ? e.amount.slice(1) : e.amount;
+        const [whole = '0', frac = ''] = abs.split('.');
+        const fracPadded = frac.slice(0, 18).padEnd(18, '0');
+        const scaled = BigInt(whole) * SCALE + BigInt(fracPadded);
+        expect(scaled).not.toBe(0n);
+      }
+    });
+
+    it('direction matches sign (invariant 2)', () => {
+      for (const e of entries) {
+        const isNeg = e.amount.startsWith('-');
+        if (isNeg) {
+          expect(e.direction).toBe(LedgerDirection.debit);
+        } else {
+          expect(e.direction).toBe(LedgerDirection.credit);
+        }
+      }
+    });
+
+    it('sequence is 1 for fresh accounts (invariant 3)', () => {
+      for (const e of entries) {
+        expect(e.sequence).toBe(1);
+      }
+    });
+
+    it('clearing / usdt_sell_clearing / USDT is debited −cryptoAmount', () => {
+      const e = entries.find(
+        (x) =>
+          x.accountType === LedgerAccountType.clearing &&
+          x.accountId === 'usdt_sell_clearing' &&
+          x.currency === 'USDT',
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('-5');
+      expect(e!.direction).toBe(LedgerDirection.debit);
+    });
+
+    it('treasury_reserve / usdt_treasury / USDT is credited +cryptoAmount', () => {
+      const e = entries.find(
+        (x) =>
+          x.accountType === LedgerAccountType.treasury_reserve &&
+          x.accountId === 'usdt_treasury' &&
+          x.currency === 'USDT',
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('5');
+      expect(e!.direction).toBe(LedgerDirection.credit);
+    });
+
+    it('treasury_reserve / ngn_treasury / NGN is debited −netFiatAmount', () => {
+      const e = entries.find(
+        (x) =>
+          x.accountType === LedgerAccountType.treasury_reserve &&
+          x.accountId === 'ngn_treasury' &&
+          x.currency === 'NGN',
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('-7500');
+      expect(e!.direction).toBe(LedgerDirection.debit);
+    });
+
+    it('processor_settlement / ngn_payout / NGN is credited +netFiatAmount', () => {
+      const e = entries.find(
+        (x) =>
+          x.accountType === LedgerAccountType.processor_settlement &&
+          x.accountId === 'ngn_payout' &&
+          x.currency === 'NGN',
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('7500');
+      expect(e!.direction).toBe(LedgerDirection.credit);
+    });
+  });
+
+  describe('guards', () => {
+    it('throws LedgerError when cryptoAmount is zero', () => {
+      expect(() =>
+        buildSellFinalizeEntries(freshSellFinalizeInput({ cryptoAmount: '0' })),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when netFiatAmount is zero', () => {
+      expect(() =>
+        buildSellFinalizeEntries(
+          freshSellFinalizeInput({ netFiatAmount: '0' }),
+        ),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when netFiatAmount is negative', () => {
+      expect(() =>
+        buildSellFinalizeEntries(
+          freshSellFinalizeInput({ netFiatAmount: '-100' }),
+        ),
+      ).toThrow(LedgerError);
+    });
+  });
+
+  describe('property: per-currency sums = 0 for various amounts', () => {
+    const cases = [
+      { cryptoAmount: '0.000001', netFiatAmount: '0.15' },
+      { cryptoAmount: '1', netFiatAmount: '1550' },
+      { cryptoAmount: '100.5', netFiatAmount: '149000.50' },
+    ];
+
+    it.each(cases)(
+      'USDT sum=0 and NGN sum=0 for crypto=$cryptoAmount fiat=$netFiatAmount',
+      ({ cryptoAmount, netFiatAmount }) => {
+        const entries = buildSellFinalizeEntries(
+          freshSellFinalizeInput({ cryptoAmount, netFiatAmount }),
+        );
+        expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+        expect(sumByCurrency(entries, 'NGN')).toBe(0n);
+      },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSellRefundEntries (task S4b — phase 2b: refund on payout failure)
+// ---------------------------------------------------------------------------
+
+function freshSellRefundInput(
+  overrides?: Partial<BuildSellRefundInput>,
+): BuildSellRefundInput {
+  return {
+    walletId: 'wallet-refund-abc',
+    cryptoAmount: '5.0',
+    postedAt: new Date('2025-06-01T12:00:00Z'),
+    accountStates: {},
+    ...overrides,
+  };
+}
+
+describe('buildSellRefundEntries', () => {
+  describe('happy path — fresh account states', () => {
+    let entries: LedgerEntryDraft[];
+
+    beforeAll(() => {
+      entries = buildSellRefundEntries(freshSellRefundInput());
+    });
+
+    it('returns exactly 2 entries', () => {
+      expect(entries).toHaveLength(2);
+    });
+
+    it('USDT signed amounts sum to exactly zero (invariant 1)', () => {
+      expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+    });
+
+    it('no NGN entries', () => {
+      expect(entries.filter((e) => e.currency === 'NGN')).toHaveLength(0);
+    });
+
+    it('clearing / usdt_sell_clearing is debited −cryptoAmount (mirrors reserve credit)', () => {
+      const e = entries.find(
+        (x) =>
+          x.accountType === LedgerAccountType.clearing &&
+          x.accountId === 'usdt_sell_clearing',
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('-5');
+      expect(e!.direction).toBe(LedgerDirection.debit);
+    });
+
+    it('user_wallet is credited +cryptoAmount (refund to user)', () => {
+      const e = entries.find(
+        (x) => x.accountType === LedgerAccountType.user_wallet,
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('5');
+      expect(e!.direction).toBe(LedgerDirection.credit);
+    });
+
+    it('reserve → refund round-trip: USDT sums cancel', () => {
+      // Reserve: user_wallet −5, clearing +5.  Sum = 0.
+      // Refund:  clearing −5, user_wallet +5.  Sum = 0.
+      // Together (different transactions): each independently balanced.
+      const reserve = buildSellReserveEntries(
+        freshSellReserveInput({ cryptoAmount: '5.0' }),
+      );
+      const refund = buildSellRefundEntries(
+        freshSellRefundInput({ cryptoAmount: '5.0' }),
+      );
+      const combined = [...reserve, ...refund];
+      expect(sumByCurrency(combined, 'USDT')).toBe(0n);
+    });
+  });
+
+  describe('guards', () => {
+    it('throws LedgerError when cryptoAmount is zero', () => {
+      expect(() =>
+        buildSellRefundEntries(freshSellRefundInput({ cryptoAmount: '0' })),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when cryptoAmount is negative', () => {
+      expect(() =>
+        buildSellRefundEntries(freshSellRefundInput({ cryptoAmount: '-1' })),
+      ).toThrow(LedgerError);
+    });
+  });
+
+  describe('property: USDT sum=0 for various amounts', () => {
+    const cases = [
+      { cryptoAmount: '0.000001' },
+      { cryptoAmount: '1' },
+      { cryptoAmount: '100.5' },
+      { cryptoAmount: '999999.123456789012345678' },
+    ];
+
+    it.each(cases)(
+      'USDT sum=0 for cryptoAmount=$cryptoAmount',
+      ({ cryptoAmount }) => {
+        const entries = buildSellRefundEntries(
+          freshSellRefundInput({ cryptoAmount }),
+        );
+        expect(sumByCurrency(entries, 'USDT')).toBe(0n);
       },
     );
   });

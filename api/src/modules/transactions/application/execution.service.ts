@@ -36,8 +36,13 @@ import { PinService } from '../../../core/auth/pin.service';
 import { KycGateService } from '../../identity/application/kyc-gate.service';
 import { QuotesService } from '../../quotes/application/quotes.service';
 import { WalletService } from '../../wallets/application/wallet.service';
+import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
-import type { AppConfig, BuyConfig } from '../../../core/config/configuration';
+import type {
+  AppConfig,
+  BuyConfig,
+  SellConfig,
+} from '../../../core/config/configuration';
 import {
   PAYMENT_PROVIDER,
   type IPaymentProvider,
@@ -63,13 +68,19 @@ import {
   SETTLEMENT_REPOSITORY,
   type ISettlementRepository,
 } from './ports/settlement.repository.port';
+import {
+  LEDGER_REPOSITORY,
+  type ILedgerRepository,
+} from './ports/ledger.repository.port';
 import { DirectiveService } from './directive.service';
 import {
   ProposalExpiredError,
   ProposalNotExecutableError,
   QuoteDriftError,
   SettlementInvalidStatusError,
+  InsufficientBalanceError,
 } from '../domain/execution-errors';
+import { toScaled } from '../domain/ledger';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -114,10 +125,44 @@ export interface SettleBuyResult {
   userId?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Sell types
+// ---------------------------------------------------------------------------
+
+export interface ExecuteSellInput {
+  userId: string;
+  proposalId: string;
+  directiveId: string;
+  nonce: string;
+  pin: string;
+  idempotencyKey: string;
+}
+
+export interface ExecuteSellResult {
+  transactionId: string;
+  status: 'settling';
+  payout: {
+    /** Flutterwave transfer id. */
+    providerRef: string;
+  };
+}
+
+export interface SettleSellInput {
+  /** The Flutterwave transfer reference (providerRef from createPayout). */
+  reference: string;
+}
+
+export interface SettleSellResult {
+  transactionId: string;
+  status: 'completed' | 'failed' | 'pending';
+  receiptNumber?: string;
+  userId?: string;
+}
+
 // Statuses that allow the engine to execute against a proposal (I1: typed set).
 const EXECUTABLE_STATUSES = new Set<string>(['pending', 'confirmed']);
 
-// The directive ref that must authorize a buy execution.
+// The directive ref that must authorize a buy or sell execution.
 const REQUIRED_DIRECTIVE_REF = 'request_pin';
 
 // ---------------------------------------------------------------------------
@@ -126,7 +171,8 @@ const REQUIRED_DIRECTIVE_REF = 'request_pin';
 
 @Injectable()
 export class ExecutionService {
-  private readonly maxDriftBps: number;
+  private readonly maxBuyDriftBps: number;
+  private readonly maxSellDriftBps: number;
 
   constructor(
     @Inject(PROPOSAL_REPOSITORY)
@@ -150,9 +196,14 @@ export class ExecutionService {
     @Inject(CLOCK)
     private readonly clock: Clock,
     private readonly assetRegistry: AssetRegistry,
+    private readonly beneficiaryService: BeneficiaryService,
+    @Inject(LEDGER_REPOSITORY)
+    private readonly ledgerRepo: ILedgerRepository,
   ) {
     const buyConfig = this.config.get<BuyConfig>('buy');
-    this.maxDriftBps = buyConfig.maxDriftBps;
+    this.maxBuyDriftBps = buyConfig.maxDriftBps;
+    const sellConfig = this.config.get<SellConfig>('sell');
+    this.maxSellDriftBps = sellConfig.maxDriftBps;
   }
 
   /**
@@ -211,8 +262,8 @@ export class ExecutionService {
         ? (Math.abs(freshRate - storedRate) / storedRate) * 10_000
         : 0;
 
-    if (driftBps > this.maxDriftBps) {
-      throw new QuoteDriftError(driftBps, this.maxDriftBps);
+    if (driftBps > this.maxBuyDriftBps) {
+      throw new QuoteDriftError(driftBps, this.maxBuyDriftBps);
     }
 
     // ── Step 3: KYC gate (server-side, always) ──────────────────────────────
@@ -471,6 +522,370 @@ export class ExecutionService {
       status: 'completed',
       userId: txn.userId,
       receiptNumber,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sell execution (task S4b)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Executes a sell order after running the full server-side validation gauntlet.
+   *
+   * TWO-PHASE SELL:
+   *   Phase 1 (this method): reserve USDT (user_wallet → clearing) to prevent
+   *   double-spend while the NGN payout is in flight.  Transaction status = 'settling'.
+   *   Phase 2 (settleSellPayout): on payout success, finalize (clearing → treasury +
+   *   NGN leg); on failure, refund (clearing → user_wallet) + CompensationRecord.
+   *
+   * Validation gauntlet (ORDER IS SECURITY-CRITICAL):
+   *   1. Load Proposal(sell, status pending|confirmed, owner, not expired).
+   *   2. Re-quote drift check.
+   *   3. KYC gate (server-side, always).
+   *   4. Balance re-check via ledger (TOCTOU guard at execute time).
+   *   5. DirectiveService.consume (ref must be request_pin).
+   *   6. PinService.verifyPin.
+   *   7. Idempotency check (after auth, before writes).
+   *   8. Atomic write: Transaction(settling) + reserve ledger + Proposal→executing.
+   *   9. Initiate Flutterwave payout + enqueue SettlementOutbox(processor_payout).
+   */
+  async executeSell(input: ExecuteSellInput): Promise<ExecuteSellResult> {
+    const { userId, proposalId, directiveId, nonce, pin, idempotencyKey } =
+      input;
+    const now = this.clock.now();
+
+    // ── Step 1: Load and validate proposal ──────────────────────────────────
+    const proposal = await this.proposalRepo.findById(proposalId);
+
+    if (proposal === null) {
+      throw new ProposalNotExecutableError('not found');
+    }
+    if (proposal.userId !== userId) {
+      throw new ProposalNotExecutableError('userId mismatch');
+    }
+    if (!EXECUTABLE_STATUSES.has(proposal.status)) {
+      throw new ProposalNotExecutableError(
+        `status '${proposal.status}' is not executable`,
+      );
+    }
+    if (proposal.expiresAt <= now) {
+      throw new ProposalExpiredError();
+    }
+    if (proposal.type !== 'sell') {
+      throw new ProposalNotExecutableError(
+        `proposal type '${proposal.type}' is not 'sell'`,
+      );
+    }
+
+    // ── Step 2: Re-quote drift check ─────────────────────────────────────────
+    const quoteId = proposal.quoteId;
+    if (quoteId === null) {
+      throw new ProposalNotExecutableError('proposal has no associated quote');
+    }
+    const storedQuote = await this.quoteRepo.findById(quoteId);
+    if (storedQuote === null) {
+      throw new ProposalNotExecutableError('associated quote not found');
+    }
+
+    // Re-quote to get a fresh effective rate.
+    const freshQuote = await this.quotesService.quoteSell({
+      asset: storedQuote.asset as 'USDT',
+      cryptoAmount: storedQuote.cryptoAmount,
+      fiatCurrency: storedQuote.fiatCurrency as 'NGN',
+    });
+
+    const storedRate = Number(storedQuote.fxRate);
+    const freshRate = Number(freshQuote.fxRate);
+
+    const driftBps =
+      storedRate > 0
+        ? (Math.abs(freshRate - storedRate) / storedRate) * 10_000
+        : 0;
+
+    if (driftBps > this.maxSellDriftBps) {
+      throw new QuoteDriftError(driftBps, this.maxSellDriftBps);
+    }
+
+    // ── Step 3: KYC gate (server-side, always) ──────────────────────────────
+    // Use netFiatAmount from stored quote as the fiat amount for the gate.
+    await this.kycGate.assertCanTransact({
+      userId,
+      fiatAmount: Number(storedQuote.fiatAmount),
+      asset: storedQuote.asset,
+    });
+
+    // ── Step 4: Re-check balance via ledger (TOCTOU guard) ──────────────────
+    // Resolve the wallet to look up its authoritative ledger balance.
+    const sellAsset = storedQuote.asset;
+    const sellNetwork = this.assetRegistry.defaultNetworkFor(sellAsset);
+    const wallet = await this.walletService.getOrProvisionWallet(
+      userId,
+      sellAsset,
+      sellNetwork,
+    );
+
+    const balance = await this.ledgerRepo.getAccountBalance(
+      'user_wallet',
+      wallet.id,
+      sellAsset,
+    );
+
+    // Decimal-safe comparison using the same scale as the ledger domain.
+    if (toScaled(balance) < toScaled(storedQuote.cryptoAmount)) {
+      throw new InsufficientBalanceError(
+        balance,
+        storedQuote.cryptoAmount,
+        sellAsset,
+      );
+    }
+
+    // ── Step 5: Consume directive grant ──────────────────────────────────────
+    const grant = await this.directiveService.consume({
+      directiveId,
+      nonce,
+      proposalId,
+    });
+
+    if (grant.directiveRef !== REQUIRED_DIRECTIVE_REF) {
+      throw new ProposalNotExecutableError(
+        `directive ref '${grant.directiveRef}' is not '${REQUIRED_DIRECTIVE_REF}'`,
+      );
+    }
+
+    // ── Step 6: Verify PIN ───────────────────────────────────────────────────
+    await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 7: Idempotency check ────────────────────────────────────────────
+    const existing =
+      await this.transactionRepo.findByIdempotencyKey(idempotencyKey);
+    if (existing !== null) {
+      const meta = existing.metadata as Record<string, string>;
+      return {
+        transactionId: existing.id,
+        status: 'settling',
+        payout: {
+          providerRef: meta.providerRef ?? existing.processorTxRef ?? '',
+        },
+      };
+    }
+
+    // ── Step 8: Read beneficiary bank account for payout ────────────────────
+    const meta = proposal.parameters as Record<string, string>;
+    const beneficiaryId = meta.beneficiaryId;
+    if (!beneficiaryId) {
+      throw new ProposalNotExecutableError(
+        'proposal parameters missing beneficiaryId',
+      );
+    }
+
+    const beneficiary = await this.beneficiaryService.getById(
+      userId,
+      beneficiaryId,
+    );
+    if (beneficiary === null) {
+      throw new ProposalNotExecutableError(
+        `beneficiary '${beneficiaryId}' not found`,
+      );
+    }
+    if (beneficiary.type !== 'bank_account') {
+      throw new ProposalNotExecutableError(
+        `beneficiary type '${beneficiary.type}' must be 'bank_account' for a sell payout`,
+      );
+    }
+    if (
+      !beneficiary.accountNumber ||
+      !beneficiary.bankCode ||
+      !beneficiary.accountHolderName
+    ) {
+      throw new ProposalNotExecutableError(
+        'beneficiary bank account details incomplete (accountNumber, bankCode, accountHolderName required)',
+      );
+    }
+
+    // ── Step 9: Atomic write ─────────────────────────────────────────────────
+    // create Transaction(sell, settling) + reserve USDT (user_wallet→clearing)
+    // + mark Proposal→executing — all in a single DB $transaction (C1).
+    const requestChecksum = this.buildRequestChecksum({
+      userId,
+      proposalId,
+      asset: storedQuote.asset,
+      fiatAmount: storedQuote.fiatAmount,
+      fxRate: storedQuote.fxRate,
+    });
+
+    const txn = await this.transactionRepo.createSettlingWithProposal({
+      txnData: {
+        proposalId,
+        userId,
+        type: 'sell',
+        status: 'settling',
+        idempotencyKey,
+        requestChecksum,
+        fxRateSnapshot: storedQuote.fxRate,
+        metadata: {
+          asset: storedQuote.asset,
+          cryptoAmount: storedQuote.cryptoAmount,
+          netFiatAmount: storedQuote.fiatAmount,
+          beneficiaryId,
+          walletId: wallet.id,
+        },
+        pinVerifiedAt: now,
+      },
+      proposalId,
+      confirmedAt: now,
+      velocityIncrement: {
+        userId,
+        fiatAmountStr: storedQuote.fiatAmount,
+        now,
+      },
+    });
+
+    // Post reserve ledger entries atomically (Phase 1 of the two-phase sell).
+    // This USDT debit (user_wallet → clearing) prevents double-spend while the
+    // NGN payout is in flight. The reserve entries are the source of truth for
+    // the user's USDT balance during settlement.
+    await this.settlementRepo.postSellReserveAtomic({
+      transactionId: txn.id,
+      walletId: wallet.id,
+      cryptoAmount: storedQuote.cryptoAmount,
+      now,
+    });
+
+    // ── Step 10: Initiate NGN payout ─────────────────────────────────────────
+    const payout = await this.paymentProvider.createPayout({
+      amount: storedQuote.fiatAmount,
+      currency: 'NGN',
+      reference: idempotencyKey,
+      bankAccount: {
+        // These are guaranteed non-null by the guard in step 8 of the gauntlet.
+
+        accountNumber: beneficiary.accountNumber,
+
+        bankCode: beneficiary.bankCode,
+
+        accountName: beneficiary.accountHolderName,
+      },
+    });
+
+    // Persist providerRef into Transaction metadata for idempotent replay.
+    await this.transactionRepo.mergeMetadata(txn.id, {
+      providerRef: payout.providerRef,
+    });
+
+    // ── Step 11: Enqueue SettlementOutbox ────────────────────────────────────
+    await this.outboxRepo.create({
+      transactionId: txn.id,
+      settlementType: 'processor_payout',
+      payload: {
+        reference: idempotencyKey,
+        amount: storedQuote.fiatAmount,
+        providerRef: payout.providerRef,
+        beneficiaryId,
+      },
+      idempotencyKey,
+      status: 'pending',
+      processorRef: payout.providerRef,
+    });
+
+    return {
+      transactionId: txn.id,
+      status: 'settling',
+      payout: { providerRef: payout.providerRef },
+    };
+  }
+
+  /**
+   * Phase 2 of a sell: verifies the NGN payout then atomically settles or refunds.
+   *
+   * Flow (§3.1 preserved — model proposes, engine disposes):
+   *   1. Load Transaction by providerRef (stored in SettlementOutbox / metadata).
+   *      Use idempotencyKey as the lookup (= reference passed to createPayout).
+   *   2. Idempotent path: already completed → return existing receipt.
+   *   3. Guard: status must be 'settling'.
+   *   4. Verify payout with PAYMENT_PROVIDER.verifyPayout(reference).
+   *      - Pending → return pending.
+   *      - Successful → settleSellFinalizeAtomic.
+   *      - Failed → settleSellRefundAtomic + return failed.
+   */
+  async settleSellPayout(input: SettleSellInput): Promise<SettleSellResult> {
+    const { reference } = input;
+
+    // ── Step 1: Load Transaction ─────────────────────────────────────────────
+    const txn = await this.transactionRepo.findByIdempotencyKey(reference);
+    if (txn === null) {
+      throw new ProposalNotExecutableError(
+        `no transaction found for reference '${reference}'`,
+      );
+    }
+
+    // ── Step 2: Idempotent path ──────────────────────────────────────────────
+    if (txn.status === 'completed') {
+      const receiptNumber = await this.settlementRepo.findReceiptNumber(txn.id);
+      return {
+        transactionId: txn.id,
+        status: 'completed',
+        userId: txn.userId,
+        ...(receiptNumber !== null ? { receiptNumber } : {}),
+      };
+    }
+
+    // ── Step 3: Guard ─────────────────────────────────────────────────────────
+    if (txn.status !== 'settling') {
+      throw new SettlementInvalidStatusError(txn.status);
+    }
+
+    // ── Step 4: Verify payout ─────────────────────────────────────────────────
+    const meta = txn.metadata as Record<string, string>;
+    const providerRef = meta.providerRef ?? '';
+
+    const verifyResult = await this.paymentProvider.verifyPayout(providerRef);
+
+    if (verifyResult.status === 'pending') {
+      return { transactionId: txn.id, status: 'pending', userId: txn.userId };
+    }
+
+    const walletId = meta.walletId ?? '';
+    const cryptoAmount = meta.cryptoAmount ?? '0';
+    const netFiatAmount = meta.netFiatAmount ?? '0';
+    const now = this.clock.now();
+    const year = now.getFullYear().toString();
+
+    if (verifyResult.status === 'successful') {
+      // ── Step 5a: Finalize ───────────────────────────────────────────────────
+      const { receiptNumber } =
+        await this.settlementRepo.settleSellFinalizeAtomic({
+          transactionId: txn.id,
+          userId: txn.userId,
+          walletId,
+          cryptoAmount,
+          netFiatAmount,
+          providerRef: verifyResult.providerRef,
+          now,
+          year,
+        });
+
+      return {
+        transactionId: txn.id,
+        status: 'completed',
+        userId: txn.userId,
+        receiptNumber,
+      };
+    }
+
+    // ── Step 5b: Failure → refund + compensation ──────────────────────────────
+    await this.settlementRepo.settleSellRefundAtomic({
+      transactionId: txn.id,
+      userId: txn.userId,
+      walletId,
+      cryptoAmount,
+      failureReason: `payout verifyPayout returned status '${verifyResult.status}'`,
+      now,
+    });
+
+    return {
+      transactionId: txn.id,
+      status: 'failed',
+      userId: txn.userId,
     };
   }
 
