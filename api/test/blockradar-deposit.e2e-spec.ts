@@ -184,6 +184,12 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
     const identityService = new IdentityService(identityRepo);
 
     // Wire controller.
+    // ExecutionService is only used for withdraw.success/failed events; deposit
+    // e2e tests do not exercise those paths so a minimal stub is sufficient here.
+    const fakeExecutionService = {
+      settleSendOnChain: jest.fn().mockResolvedValue({ status: 'pending' }),
+    };
+
     controller = new BlockradarWebhookController(
       config,
       walletRepo,
@@ -191,6 +197,7 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
       identityService,
       fakeSender,
       assetRegistry,
+      fakeExecutionService as never,
     );
 
     // Seed: User → Wallet → WhatsApp ChannelIdentity.

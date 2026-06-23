@@ -1525,6 +1525,38 @@ describe('ExecutionService.executeSell', () => {
     expect(outboxRepo.create).toHaveBeenCalledTimes(1);
   });
 
+  // ── Deterministic providerRef in atomic metadata (crash-safety) ────────────
+
+  it('includes providerRef: idempotencyKey in atomic metadata write so settleSellPayout can verify without post-write mergeMetadata', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
+    const paymentProvider = makeSellPaymentProvider();
+
+    const svc = buildSellService({ settlementRepo, paymentProvider });
+
+    await svc.executeSell(SELL_BASE_INPUT);
+
+    // The atomic write must include providerRef: idempotencyKey in txnData.metadata
+    // so that if the process crashes after the write but before mergeMetadata,
+    // settleSellPayout can still call verifyPayout(reference) correctly.
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    expect(
+      settlementRepo.createSellSettlingWithReserveAtomic,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        txnData: expect.objectContaining({
+          metadata: expect.objectContaining({
+            providerRef: SELL_IDEMPOTENCY_KEY,
+          }),
+        }),
+      }),
+    );
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+  });
+
   // ── Proposal not found ─────────────────────────────────────────────────────
 
   it('proposal not found → ProposalNotExecutableError, no Transaction', async () => {
@@ -1884,6 +1916,42 @@ function makeTransactionRepoForSellSettle(
 }
 
 describe('ExecutionService.settleSellPayout', () => {
+  // ── verifyPayout uses reference directly (not meta.providerRef) ────────────
+
+  it('calls verifyPayout with the incoming reference directly (not meta.providerRef) to eliminate the crash-window race', async () => {
+    // Transaction has an EMPTY providerRef in metadata to simulate a crash between
+    // the atomic write and the subsequent mergeMetadata call.
+    const crashWindowTxn: TransactionRecord = {
+      ...SETTLING_SELL_TXN,
+      metadata: {
+        ...STUB_SELL_TXN.metadata,
+        // Simulate: providerRef not yet written by post-payout mergeMetadata.
+        providerRef: '',
+      },
+    };
+    const transactionRepo = makeTransactionRepoForSellSettle(crashWindowTxn);
+    const paymentProvider = makeSellPaymentProvider(undefined, {
+      status: 'successful',
+      amount: '24600',
+      currency: 'NGN',
+      providerRef: PROVIDER_REF,
+    });
+
+    const svc = buildSellService({ transactionRepo, paymentProvider });
+
+    const result = await svc.settleSellPayout(SETTLE_SELL_INPUT);
+
+    // Must succeed even with empty meta.providerRef because the reference
+    // (= SELL_IDEMPOTENCY_KEY) is used directly for verifyPayout.
+    expect(result.status).toBe('completed');
+    // verifyPayout must be called with the incoming reference, NOT meta.providerRef.
+    expect(paymentProvider.verifyPayout).toHaveBeenCalledWith(
+      SELL_IDEMPOTENCY_KEY,
+    );
+    // Ensure verifyPayout was NOT called with empty string (the crash-window fallback).
+    expect(paymentProvider.verifyPayout).not.toHaveBeenCalledWith('');
+  });
+
   // ── Happy path: payout successful → finalize ──────────────────────────────
 
   it('payout successful → calls settleSellFinalizeAtomic, returns completed', async () => {

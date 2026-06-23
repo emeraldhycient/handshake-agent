@@ -40,6 +40,7 @@ import {
   WHATSAPP_SENDER,
   type IWhatsAppSender,
 } from '../../whatsapp/application/ports/whatsapp-sender.port';
+import { ExecutionService } from '../../transactions/application/execution.service';
 import {
   WALLET_REPOSITORY,
   type IWalletRepository,
@@ -73,6 +74,8 @@ interface BlockradarWebhookBody {
     confirmations?: unknown;
     status?: unknown;
     id?: unknown;
+    /** Present on withdraw.success/withdraw.failed events — our idempotencyKey passed to withdraw. */
+    reference?: unknown;
     [key: string]: unknown;
   };
 }
@@ -96,6 +99,7 @@ export class BlockradarWebhookController {
     @Inject(WHATSAPP_SENDER)
     private readonly sender: IWhatsAppSender,
     private readonly assetRegistry: AssetRegistry,
+    private readonly executionService: ExecutionService,
   ) {
     this.apiKey = this.config.get<string>('BLOCKRADAR_API_KEY') ?? '';
   }
@@ -138,14 +142,39 @@ export class BlockradarWebhookController {
     // ── Step 2: Defensive parse ──────────────────────────────────────────────
     const payload = body as BlockradarWebhookBody;
 
-    if (payload?.event !== 'deposit.success') {
-      this.logger.log(
-        { event: payload?.event },
-        'Blockradar webhook: not deposit.success — acking without processing',
-      );
-      return { status: 'ok' };
+    if (payload?.event === 'deposit.success') {
+      return this.handleDepositSuccess(payload);
     }
 
+    if (payload?.event === 'withdraw.success') {
+      return this.handleWithdrawEvent(payload, true);
+    }
+
+    if (payload?.event === 'withdraw.failed') {
+      return this.handleWithdrawEvent(payload, false);
+    }
+
+    this.logger.log(
+      { event: payload?.event },
+      'Blockradar webhook: unhandled event — acking without processing',
+    );
+    return { status: 'ok' };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private helpers
+  // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+  // Private event-routing handlers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handles event=deposit.success: maps fields and delegates to settleAndNotify.
+   */
+  private async handleDepositSuccess(
+    payload: BlockradarWebhookBody,
+  ): Promise<AckResponse> {
     const data = payload.data;
     const hash = typeof data?.hash === 'string' ? data.hash : undefined;
     const amount = typeof data?.amount === 'string' ? data.amount : undefined;
@@ -174,7 +203,7 @@ export class BlockradarWebhookController {
     const senderAddress =
       typeof data?.senderAddress === 'string' ? data.senderAddress : undefined;
 
-    // ── Steps 3–5: Resolve wallet, settle, notify (errors swallowed) ─────────
+    // Ack-then-process: errors must NOT change the 200.
     await this.settleAndNotify({
       hash,
       amount,
@@ -189,9 +218,111 @@ export class BlockradarWebhookController {
     return { status: 'ok' };
   }
 
-  // ---------------------------------------------------------------------------
-  // Private helpers
-  // ---------------------------------------------------------------------------
+  /**
+   * Handles event=withdraw.success or withdraw.failed: routes to
+   * ExecutionService.settleSendOnChain using the reference (our idempotencyKey)
+   * and the on-chain tx hash (for success). Errors are swallowed.
+   */
+  private async handleWithdrawEvent(
+    payload: BlockradarWebhookBody,
+    success: boolean,
+  ): Promise<AckResponse> {
+    const data = payload.data;
+    const reference = data?.reference;
+
+    if (typeof reference !== 'string' || reference.length === 0) {
+      this.logger.warn(
+        { data, success },
+        'Blockradar webhook: withdraw event missing reference — acking without processing',
+      );
+      return { status: 'ok' };
+    }
+
+    // on-chain tx hash is only meaningful for success events.
+    const onChainTxHash =
+      success && typeof data?.hash === 'string' ? data.hash : undefined;
+
+    // Ack-then-process: errors must NOT change the 200.
+    await this.settleSendAndNotify({ reference, success, onChainTxHash });
+
+    return { status: 'ok' };
+  }
+
+  /**
+   * Calls ExecutionService.settleSendOnChain and — if completed — sends the
+   * WhatsApp receipt. Errors are caught and logged.
+   */
+  private async settleSendAndNotify(params: {
+    reference: string;
+    success: boolean;
+    onChainTxHash?: string;
+  }): Promise<void> {
+    try {
+      const result = await this.executionService.settleSendOnChain({
+        reference: params.reference,
+        success: params.success,
+        onChainTxHash: params.onChainTxHash,
+      });
+
+      if (result.status === 'pending') {
+        this.logger.log(
+          { reference: params.reference },
+          'Blockradar webhook: send settlement pending — will process on retry',
+        );
+        return;
+      }
+
+      // Settlement confirmed — send receipt on WhatsApp.
+      if (result.userId) {
+        try {
+          const waAddress = await this.identityService.findWhatsAppAddress(
+            result.userId,
+          );
+          if (waAddress) {
+            const receiptText = this.buildWithdrawReceiptText(result);
+            await this.sender.sendText(waAddress, receiptText);
+            this.logger.log(
+              { userId: result.userId, reference: params.reference },
+              'Blockradar webhook: send receipt sent on WhatsApp',
+            );
+          }
+        } catch (notifyErr: unknown) {
+          this.logger.error(
+            { notifyErr, userId: result.userId },
+            'Blockradar webhook: failed to send send WhatsApp receipt — ignoring',
+          );
+        }
+      }
+    } catch (err: unknown) {
+      this.logger.error(
+        { err, reference: params.reference },
+        'Blockradar webhook: send settlement threw — acking 200 anyway',
+      );
+    }
+  }
+
+  /**
+   * Builds a plaintext on-chain send receipt / failure notice for WhatsApp.
+   */
+  private buildWithdrawReceiptText(result: {
+    status: 'completed' | 'failed' | 'pending';
+    transactionId: string;
+    receiptNumber?: string;
+  }): string {
+    if (result.status === 'completed') {
+      const ref = result.receiptNumber ?? result.transactionId;
+      return (
+        `✅ Your crypto send is complete!\n` +
+        `Receipt: ${ref}\n` +
+        `Your USDT has been sent on-chain. Reply "balance" to check your balance.`
+      );
+    }
+    return (
+      `⚠️ Send failed\n` +
+      `Your USDT has been refunded to your Handshake wallet. ` +
+      `Reply "balance" to check your balance.`
+    );
+  }
 
   /**
    * Verifies the HMAC-SHA512 signature header (constant-time comparison).

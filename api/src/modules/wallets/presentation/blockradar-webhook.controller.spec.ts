@@ -1,7 +1,8 @@
 /**
- * Unit tests for BlockradarWebhookController (R2 — deposit webhook).
+ * Unit tests for BlockradarWebhookController (R2 — deposit/withdraw webhook).
  *
  * Covers the ack-then-process contract:
+ *   deposit.success:
  *   - valid sig + deposit.success with known address + deposited:true → settleDepositAtomic
  *     called with mapped fields (including sourceAddress extracted from senderAddress);
  *     sendText called with registry-formatted receipt (contains amount + asset displayName
@@ -12,6 +13,12 @@
  *   - settleDepositAtomic returns deposited:false (idempotent) → 200, no receipt sent.
  *   - settleDepositAtomic throws → 200 (error swallowed + logged).
  *   - WhatsApp address not found → 200, settle happened, sendText NOT called.
+ *
+ *   withdraw.success / withdraw.failed:
+ *   - valid sig + withdraw.success + reference → settleSendOnChain called with success:true + hash.
+ *   - valid sig + withdraw.failed + reference → settleSendOnChain called with success:false.
+ *   - missing reference → 200, settleSendOnChain NOT called.
+ *   - settleSendOnChain throws → 200 (error swallowed).
  */
 
 import { Logger } from '@nestjs/common';
@@ -27,6 +34,7 @@ import type {
 import type { IdentityService } from '../../identity/application/identity.service';
 import type { IWhatsAppSender } from '../../whatsapp/application/ports/whatsapp-sender.port';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
+import type { ExecutionService } from '../../transactions/application/execution.service';
 import { BlockradarWebhookController } from './blockradar-webhook.controller';
 import { hmacHex } from '../../../core/crypto/hmac';
 
@@ -47,6 +55,8 @@ const WA_ADDRESS = '2348012345678';
 const NEW_BALANCE = '20.5'; // running balance (prior 10 + new 10.5)
 const RECEIPT_NUMBER = 'HS-2026-000001';
 const NETWORK = 'TRON';
+const WITHDRAW_REFERENCE = 'withdraw-idempotency-key-uuid-789';
+const TXN_ID = 'txn-id-withdraw-test';
 
 // ---------------------------------------------------------------------------
 // Helpers: fake raw body buffer
@@ -156,10 +166,48 @@ function makeConfigService(apiKey: string = API_KEY): { get: jest.Mock } {
   };
 }
 
+function makeExecutionService(
+  settleSendResult: 'completed' | 'failed' | 'pending' | 'throw' = 'completed',
+): jest.Mocked<Pick<ExecutionService, 'settleSendOnChain'>> {
+  if (settleSendResult === 'throw') {
+    return {
+      settleSendOnChain: jest
+        .fn()
+        .mockRejectedValue(new Error('send settlement boom')),
+    };
+  }
+  if (settleSendResult === 'failed') {
+    return {
+      settleSendOnChain: jest.fn().mockResolvedValue({
+        transactionId: TXN_ID,
+        status: 'failed',
+        userId: USER_ID,
+      }),
+    };
+  }
+  if (settleSendResult === 'pending') {
+    return {
+      settleSendOnChain: jest.fn().mockResolvedValue({
+        transactionId: TXN_ID,
+        status: 'pending',
+      }),
+    };
+  }
+  return {
+    settleSendOnChain: jest.fn().mockResolvedValue({
+      transactionId: TXN_ID,
+      status: 'completed',
+      receiptNumber: RECEIPT_NUMBER,
+      userId: USER_ID,
+    }),
+  };
+}
+
 function makeController(
   overrides: {
     wallet?: WalletRecord | null;
     settleResult?: 'deposited' | 'duplicate' | 'throw';
+    settleSendResult?: 'completed' | 'failed' | 'pending' | 'throw';
     waAddress?: string | null;
     apiKey?: string;
   } = {},
@@ -176,6 +224,9 @@ function makeController(
   const sender = makeSender();
   const assetRegistry = makeAssetRegistry();
   const config = makeConfigService(overrides.apiKey ?? API_KEY);
+  const executionService = makeExecutionService(
+    overrides.settleSendResult ?? 'completed',
+  );
 
   const controller = new BlockradarWebhookController(
     config as never,
@@ -184,6 +235,7 @@ function makeController(
     identityService as unknown as IdentityService,
     sender as unknown as IWhatsAppSender,
     assetRegistry as unknown as AssetRegistry,
+    executionService as unknown as ExecutionService,
   );
 
   return {
@@ -193,6 +245,7 @@ function makeController(
     identityService,
     sender,
     assetRegistry,
+    executionService,
   };
 }
 
@@ -292,10 +345,10 @@ describe('BlockradarWebhookController', () => {
 
     // ── Non-deposit event ─────────────────────────────────────────────────────
 
-    it('unknown event (not deposit.success) → returns 200, settleDepositAtomic NOT called', async () => {
-      const { controller, settlementRepo } = makeController();
+    it('unknown event (not deposit.success/withdraw.*) → returns 200, settleDepositAtomic NOT called', async () => {
+      const { controller, settlementRepo, executionService } = makeController();
 
-      const body = { event: 'transfer.success', data: { hash: TX_HASH } };
+      const body = { event: 'some.other.event', data: { hash: TX_HASH } };
       const rawBody = makeRawBody(body);
       const sig = makeValidSig(rawBody);
 
@@ -303,6 +356,7 @@ describe('BlockradarWebhookController', () => {
 
       expect(result).toEqual({ status: 'ok' });
       expect(settlementRepo.settleDepositAtomic).not.toHaveBeenCalled();
+      expect(executionService.settleSendOnChain).not.toHaveBeenCalled();
     });
 
     // ── Unknown recipient address ─────────────────────────────────────────────
@@ -387,6 +441,160 @@ describe('BlockradarWebhookController', () => {
 
       expect(result).toEqual({ status: 'ok' });
       expect(settlementRepo.settleDepositAtomic).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // withdraw.success / withdraw.failed webhook events
+  // ---------------------------------------------------------------------------
+
+  describe('withdraw webhook events', () => {
+    function withdrawBody(
+      event: 'withdraw.success' | 'withdraw.failed',
+      reference: string = WITHDRAW_REFERENCE,
+      hash: string = TX_HASH,
+    ) {
+      return {
+        event,
+        data: {
+          reference,
+          hash,
+          amount: '5.0',
+          asset: { symbol: ASSET_SYMBOL, network: { name: NETWORK } },
+        },
+      };
+    }
+
+    it('withdraw.success + reference → settleSendOnChain called with success:true + onChainTxHash', async () => {
+      const { controller, executionService, settlementRepo } = makeController();
+
+      const body = withdrawBody('withdraw.success');
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      const result = await controller.handleWebhook(body, rawBody, sig);
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(executionService.settleSendOnChain).toHaveBeenCalledWith({
+        reference: WITHDRAW_REFERENCE,
+        success: true,
+        onChainTxHash: TX_HASH,
+      });
+      // Deposit path must NOT be triggered
+      expect(settlementRepo.settleDepositAtomic).not.toHaveBeenCalled();
+    });
+
+    it('withdraw.success → receipt sent on WhatsApp when completed', async () => {
+      const { controller, identityService, sender } = makeController({
+        settleSendResult: 'completed',
+      });
+
+      const body = withdrawBody('withdraw.success');
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      await controller.handleWebhook(body, rawBody, sig);
+
+      expect(identityService.findWhatsAppAddress).toHaveBeenCalledWith(USER_ID);
+      expect(sender.sendText).toHaveBeenCalledWith(
+        WA_ADDRESS,
+        expect.stringContaining(RECEIPT_NUMBER),
+      );
+    });
+
+    it('withdraw.failed + reference → settleSendOnChain called with success:false', async () => {
+      const { controller, executionService } = makeController({
+        settleSendResult: 'failed',
+      });
+
+      const body = withdrawBody('withdraw.failed');
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      const result = await controller.handleWebhook(body, rawBody, sig);
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(executionService.settleSendOnChain).toHaveBeenCalledWith({
+        reference: WITHDRAW_REFERENCE,
+        success: false,
+        onChainTxHash: undefined,
+      });
+    });
+
+    it('withdraw.failed → failure notice sent on WhatsApp', async () => {
+      const { controller, identityService, sender } = makeController({
+        settleSendResult: 'failed',
+      });
+
+      const body = withdrawBody('withdraw.failed');
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      await controller.handleWebhook(body, rawBody, sig);
+
+      expect(identityService.findWhatsAppAddress).toHaveBeenCalledWith(USER_ID);
+      expect(sender.sendText).toHaveBeenCalledWith(
+        WA_ADDRESS,
+        expect.stringContaining('⚠️'),
+      );
+    });
+
+    it('withdraw.success missing reference → returns 200, settleSendOnChain NOT called', async () => {
+      const { controller, executionService } = makeController();
+
+      const body = {
+        event: 'withdraw.success',
+        data: { hash: TX_HASH }, // no reference
+      };
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      const result = await controller.handleWebhook(body, rawBody, sig);
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(executionService.settleSendOnChain).not.toHaveBeenCalled();
+    });
+
+    it('settleSendOnChain throws → returns 200 (error swallowed)', async () => {
+      const { controller } = makeController({ settleSendResult: 'throw' });
+
+      const body = withdrawBody('withdraw.success');
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      const result = await controller.handleWebhook(body, rawBody, sig);
+
+      expect(result).toEqual({ status: 'ok' });
+    });
+
+    it('settleSendOnChain returns pending → returns 200, sendText NOT called', async () => {
+      const { controller, executionService, sender } = makeController({
+        settleSendResult: 'pending',
+      });
+
+      const body = withdrawBody('withdraw.success');
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      const result = await controller.handleWebhook(body, rawBody, sig);
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(executionService.settleSendOnChain).toHaveBeenCalled();
+      expect(sender.sendText).not.toHaveBeenCalled();
+    });
+
+    it('invalid sig on withdraw event → returns 401, settleSendOnChain NOT called', async () => {
+      const { controller, executionService } = makeController();
+
+      const body = withdrawBody('withdraw.success');
+      const rawBody = makeRawBody(body);
+      const badSig = 'deadbeef'.repeat(16);
+
+      await expect(
+        controller.handleWebhook(body, rawBody, badSig),
+      ).rejects.toMatchObject({ status: 401 });
+
+      expect(executionService.settleSendOnChain).not.toHaveBeenCalled();
     });
   });
 });

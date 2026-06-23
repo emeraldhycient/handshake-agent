@@ -12,8 +12,9 @@
  *   2. WhatsApp Flow data-exchange (RSA-OAEP/AES-128-GCM E2E encrypted, real keys)
  *      → FlowCryptoService(real) → ExecutionService.executeSell → Transaction(settling)
  *      → SUCCESS screen — decrypted by test using same key + flipped IV.
- *   3. Call settleSellPayout directly on ExecutionService (payout webhook seam;
- *      the HTTP payout webhook is not yet wired — see notes below).
+ *   3. POST /webhooks/flutterwave with signed transfer.completed body (status=SUCCESSFUL)
+ *      → FlutterwaveWebhookController.handleTransferCompleted
+ *      → ExecutionService.settleSellPayout(reference=proposalId)
  *      → Transaction(completed) + balanced finalize ledger + Receipt.
  *      → fakeSender.sendText receives text containing the receipt number.
  *
@@ -21,13 +22,11 @@
  *   1. Inbound WhatsApp webhook (signed) with send_crypto intent.
  *   2. WhatsApp Flow data-exchange (PIN) → ExecutionService.executeSend
  *      → Transaction(settling) + withdraw called.
- *   3. Call settleSendOnChain directly → Transaction(completed) + balanced ledger
- *      + Receipt with on-chain txHash + fakeSender notified.
- *
- * Production note: settleSellPayout / settleSendOnChain are called directly
- * here because no HTTP endpoint exists yet for Flutterwave payout/transfer
- * webhooks — the existing /webhooks/flutterwave only handles charge.completed
- * (buys). Adding a payout webhook controller is out-of-scope for this e2e.
+ *   3. POST /webhooks/blockradar with signed withdraw.success body (reference=proposalId)
+ *      → BlockradarWebhookController.handleWithdrawEvent
+ *      → ExecutionService.settleSendOnChain(reference=proposalId, success=true)
+ *      → Transaction(completed) + balanced ledger + Receipt with on-chain txHash
+ *      → fakeSender.sendText notified.
  *
  * Fakes ONLY the external edges:
  *   - LLM_PROVIDER  → sell_crypto or send_crypto intent per test
@@ -235,6 +234,14 @@ function buildInboundWebhookPayload(params: {
   };
 }
 
+/**
+ * Builds the x-blockradar-signature header: lowercase hex HMAC-SHA512 of the
+ * raw JSON body keyed by BLOCKRADAR_API_KEY (no prefix — raw hex only).
+ */
+function buildBlockradarSignature(apiKey: string, rawBody: Buffer): string {
+  return crypto.createHmac('sha512', apiKey).update(rawBody).digest('hex');
+}
+
 // ---------------------------------------------------------------------------
 // Decimal-to-scaled helper (same pattern as buy-vertical.e2e-spec.ts)
 // ---------------------------------------------------------------------------
@@ -264,9 +271,6 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
   let fakeWalletProvider: jest.Mocked<IWalletProvider>;
   let fakePaymentProvider: jest.Mocked<IPaymentProvider>;
   let fakeSender: jest.Mocked<IWhatsAppSender>;
-
-  // ExecutionService reference (retrieved from module, used for Phase 2 of each flow)
-  let executionService: import('../src/modules/transactions/application/execution.service').ExecutionService;
 
   // ── beforeAll: set env → import AppModule → boot → seed ────────────────────
 
@@ -418,11 +422,6 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
 
     app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();
-
-    // Grab ExecutionService for direct Phase-2 calls (sell/send settlement)
-    const { ExecutionService } =
-      await import('../src/modules/transactions/application/execution.service');
-    executionService = moduleRef.get(ExecutionService);
 
     // 6. Seed: Tier-1 KYC-verified User + PIN + WhatsApp ChannelIdentity
     const user = await prisma.user.create({
@@ -719,27 +718,44 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
     expect(reserveSum).toBe(0n);
 
     // ───────────────────────────────────────────────────────────────────────
-    // STEP 3 — Settlement: call settleSellPayout directly
+    // STEP 3 — Settlement: POST /webhooks/flutterwave with transfer.completed
     //
-    // Note: The existing /webhooks/flutterwave only handles charge.completed
-    // (buy). There is no HTTP payout webhook yet (transfer.completed / sell).
-    // We call settleSellPayout directly on the real ExecutionService instance
-    // retrieved from the Nest module. The idempotencyKey = proposalId
-    // (per whatsapp-flow.controller.ts executeByType).
+    // The idempotencyKey = proposalId (per whatsapp-flow.controller.ts
+    // executeByType → executeSell). Flutterwave calls us with data.reference =
+    // the idempotencyKey we passed to createPayout (SUCCESSFUL = uppercase).
+    // verif-hash header = the FLUTTERWAVE_WEBHOOK_SECRET constant.
     // ───────────────────────────────────────────────────────────────────────
 
-    const settleResult = await executionService.settleSellPayout({
-      reference: capturedProposalId,
-    });
+    const flwWebhookBody = {
+      event: 'transfer.completed',
+      data: {
+        status: 'SUCCESSFUL',
+        reference: capturedProposalId,
+      },
+    };
 
-    expect(settleResult.status).toBe('completed');
-    expect(settleResult.receiptNumber).toMatch(/^HS-\d{4}-\d{6}$/);
-    expect(settleResult.userId).toBe(userId);
+    const flwWebhookRes = await supertest(app.getHttpServer())
+      .post('/webhooks/flutterwave')
+      .set('Content-Type', 'application/json')
+      .set('verif-hash', FLUTTERWAVE_WEBHOOK_SECRET)
+      .send(flwWebhookBody);
 
-    // Transaction(sell, completed)
-    const completedTxn = await prisma.transaction.findUnique({
-      where: { id: sellTransactionId },
-    });
+    expect(flwWebhookRes.status).toBe(200);
+    expect(flwWebhookRes.body).toEqual({ status: 'ok' });
+
+    // Transaction(sell, completed) — settlement is awaited inside the handler
+    // before the 200 is returned, so the DB write should already be done.
+    // Poll briefly as a safety net against any async edge.
+    let completedTxn: Awaited<
+      ReturnType<typeof prisma.transaction.findUnique>
+    > = null;
+    for (let i = 0; i < 20; i++) {
+      completedTxn = await prisma.transaction.findUnique({
+        where: { id: sellTransactionId },
+      });
+      if (completedTxn?.status === 'completed') break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
     expect(completedTxn).not.toBeNull();
     expect(completedTxn!.status).toBe('completed');
     expect(completedTxn!.completedAt).not.toBeNull();
@@ -766,12 +782,18 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
     // Sell involves USDT (reserve + finalize) and NGN (payout ledger)
     expect(Object.keys(sellByCurrency)).toContain('USDT');
 
-    // Receipt row minted
-    const sellReceipt = await prisma.receipt.findUnique({
-      where: { transactionId: sellTransactionId },
-    });
+    // Receipt row minted — settlement ran in the webhook handler (async inside ack-then-process),
+    // so we poll briefly for the DB write to land.
+    let sellReceipt: Awaited<ReturnType<typeof prisma.receipt.findUnique>> =
+      null;
+    for (let i = 0; i < 20; i++) {
+      sellReceipt = await prisma.receipt.findUnique({
+        where: { transactionId: sellTransactionId },
+      });
+      if (sellReceipt) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
     expect(sellReceipt).not.toBeNull();
-    expect(sellReceipt!.receiptNumber).toBe(settleResult.receiptNumber);
     expect(sellReceipt!.receiptNumber).toMatch(/^HS-\d{4}-\d{6}$/);
     expect(sellReceipt!.signatureHash).toBeTruthy();
     expect(sellReceipt!.userId).toBe(userId);
@@ -946,27 +968,52 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
     expect(sendOutbox!.status).toBe('pending');
 
     // ───────────────────────────────────────────────────────────────────────
-    // STEP 3 — Settlement: call settleSendOnChain directly with fake success
+    // STEP 3 — Settlement: POST /webhooks/blockradar with withdraw.success
     //
-    // Note: No HTTP trigger exists yet for on-chain confirmation callbacks.
-    // We call settleSendOnChain directly on the real ExecutionService instance.
-    // idempotencyKey = proposalId (per whatsapp-flow.controller.ts executeByType).
+    // The idempotencyKey = proposalId (per whatsapp-flow.controller.ts
+    // executeByType → executeSend). Blockradar calls us with data.reference =
+    // the idempotencyKey we passed to withdraw(), data.hash = on-chain txHash.
+    // x-blockradar-signature = HMAC-SHA512(BLOCKRADAR_API_KEY, rawBody) — raw hex.
     // ───────────────────────────────────────────────────────────────────────
 
-    const settleResult = await executionService.settleSendOnChain({
-      reference: capturedProposalId,
-      success: true,
-      onChainTxHash: FAKE_ON_CHAIN_TX_HASH,
-    });
+    const blockradarWebhookBody = {
+      event: 'withdraw.success',
+      data: {
+        reference: capturedProposalId,
+        hash: FAKE_ON_CHAIN_TX_HASH,
+        amount: '3.0',
+        asset: { symbol: 'USDT', network: { name: 'TRON' } },
+      },
+    };
+    const blockradarRawBody = Buffer.from(
+      JSON.stringify(blockradarWebhookBody),
+    );
+    const blockradarSig = buildBlockradarSignature(
+      'fake-blockradar-key-e2e-outbound',
+      blockradarRawBody,
+    );
 
-    expect(settleResult.status).toBe('completed');
-    expect(settleResult.receiptNumber).toMatch(/^HS-\d{4}-\d{6}$/);
-    expect(settleResult.userId).toBe(userId);
+    const blockradarWebhookRes = await supertest(app.getHttpServer())
+      .post('/webhooks/blockradar')
+      .set('Content-Type', 'application/json')
+      .set('x-blockradar-signature', blockradarSig)
+      .send(blockradarWebhookBody);
 
-    // Transaction(send, completed)
-    const completedTxn = await prisma.transaction.findUnique({
-      where: { id: sendTransactionId },
-    });
+    expect(blockradarWebhookRes.status).toBe(200);
+    expect(blockradarWebhookRes.body).toEqual({ status: 'ok' });
+
+    // Transaction(send, completed) — settlement ran async inside the webhook handler,
+    // so poll briefly to let the DB write land.
+    let completedTxn: Awaited<
+      ReturnType<typeof prisma.transaction.findUnique>
+    > = null;
+    for (let i = 0; i < 20; i++) {
+      completedTxn = await prisma.transaction.findUnique({
+        where: { id: sendTransactionId },
+      });
+      if (completedTxn?.status === 'completed') break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
     expect(completedTxn).not.toBeNull();
     expect(completedTxn!.status).toBe('completed');
     expect(completedTxn!.completedAt).not.toBeNull();
@@ -994,12 +1041,17 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
     expect(Object.keys(sendByCurrency)).toContain('USDT');
     expect(Object.keys(sendByCurrency)).not.toContain('NGN');
 
-    // Receipt row minted
-    const sendReceipt = await prisma.receipt.findUnique({
-      where: { transactionId: sendTransactionId },
-    });
+    // Receipt row minted — poll for the async write.
+    let sendReceipt: Awaited<ReturnType<typeof prisma.receipt.findUnique>> =
+      null;
+    for (let i = 0; i < 20; i++) {
+      sendReceipt = await prisma.receipt.findUnique({
+        where: { transactionId: sendTransactionId },
+      });
+      if (sendReceipt) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
     expect(sendReceipt).not.toBeNull();
-    expect(sendReceipt!.receiptNumber).toBe(settleResult.receiptNumber);
     expect(sendReceipt!.receiptNumber).toMatch(/^HS-\d{4}-\d{6}$/);
     expect(sendReceipt!.signatureHash).toBeTruthy();
     expect(sendReceipt!.userId).toBe(userId);

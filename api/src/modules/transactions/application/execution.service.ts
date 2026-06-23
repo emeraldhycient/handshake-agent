@@ -341,6 +341,9 @@ export class ExecutionService {
     });
 
     // ── Step 4: Consume directive grant (authorizes this exact proposal) ─────
+    // NOTE: The directive is consumed before the idempotency check so idempotent
+    // replay (step 6/7) applies to in-process retry holding a valid directive,
+    // not a fresh re-submit.
     // Throws DirectiveReplayError, DirectiveExpiredError, DirectiveSignatureError,
     // DirectiveProposalMismatchError on any failure — let them propagate.
     const grant = await this.directiveService.consume({
@@ -532,17 +535,10 @@ export class ExecutionService {
       return { transactionId: txn.id, status: 'pending', userId: txn.userId };
     }
 
-    // Validate amount (decimal-safe: compare as BigInt-scaled integers).
+    // Validate amount (decimal-safe: compare as BigInt-scaled integers using
+    // the imported toScaled from '../domain/ledger').
     const meta = txn.metadata as Record<string, string>;
     const expectedFiatAmount = meta.fiatAmount ?? '0';
-
-    // Scale and compare to avoid float drift.
-    const SCALE = 10n ** 18n;
-    const toScaled = (s: string): bigint => {
-      const [whole = '0', frac = ''] = s.trim().split('.');
-      const fracPadded = frac.slice(0, 18).padEnd(18, '0');
-      return BigInt(whole) * SCALE + BigInt(fracPadded);
-    };
 
     const verifiedAmount = toScaled(verifyResult.amount);
     const expectedAmount = toScaled(expectedFiatAmount);
@@ -707,6 +703,9 @@ export class ExecutionService {
     }
 
     // ── Step 5: Consume directive grant ──────────────────────────────────────
+    // NOTE: The directive is consumed before the idempotency check so idempotent
+    // replay (step 7/8) applies to in-process retry holding a valid directive,
+    // not a fresh re-submit.
     const grant = await this.directiveService.consume({
       directiveId,
       nonce,
@@ -802,6 +801,13 @@ export class ExecutionService {
             netFiatAmount: storedQuote.fiatAmount,
             beneficiaryId,
             walletId: wallet.id,
+            // providerRef is written atomically here because we pass idempotencyKey
+            // as the reference to createPayout (step 10). If the process crashes
+            // between the atomic write and the mergeMetadata call below,
+            // settleSellPayout can still call verifyPayout(reference) directly
+            // using the incoming webhook reference (= idempotencyKey) without
+            // relying on meta.providerRef being populated.
+            providerRef: idempotencyKey,
           },
           pinVerifiedAt: now,
         },
@@ -901,10 +907,14 @@ export class ExecutionService {
     }
 
     // ── Step 4: Verify payout ─────────────────────────────────────────────────
+    // Use `reference` directly (= idempotencyKey = what we passed to createPayout).
+    // meta.providerRef is set atomically in executeSell so it equals reference;
+    // using the incoming reference eliminates the providerRef-empty race window
+    // that would occur if the process crashed between the atomic write and the
+    // post-payout mergeMetadata call.
     const meta = txn.metadata as Record<string, string>;
-    const providerRef = meta.providerRef ?? '';
 
-    const verifyResult = await this.paymentProvider.verifyPayout(providerRef);
+    const verifyResult = await this.paymentProvider.verifyPayout(reference);
 
     if (verifyResult.status === 'pending') {
       return { transactionId: txn.id, status: 'pending', userId: txn.userId };
@@ -1130,6 +1140,9 @@ export class ExecutionService {
     }
 
     // ── Step 6: Consume directive grant ──────────────────────────────────────
+    // NOTE: The directive is consumed before the idempotency check so idempotent
+    // replay (step 8/9) applies to in-process retry holding a valid directive,
+    // not a fresh re-submit.
     const grant = await this.directiveService.consume({
       directiveId,
       nonce,

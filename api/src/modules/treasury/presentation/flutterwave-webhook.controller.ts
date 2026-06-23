@@ -5,12 +5,16 @@
  * Flow (CLAUDE.md §3.1 preserved — model proposes, engine disposes):
  *   1. Verify authenticity: PAYMENT_PROVIDER.verifyWebhookSignature (constant-time).
  *      Invalid → 401. No downstream processing.
- *   2. Parse body defensively. Only act on event=charge.completed with
- *      data.status=successful and a non-empty tx_ref.
- *      Anything else → 200 (ack; Flutterwave retries on non-2xx).
- *   3. ExecutionService.settleBuyPayment({ reference: tx_ref }) — RE-VERIFIES
- *      via the provider server-side (§3.6; never trust the webhook body alone).
- *      Idempotent: the engine handles duplicate delivery safely.
+ *   2. Parse body defensively. Route on event type:
+ *      - charge.completed + data.status=successful + non-empty tx_ref
+ *        → ExecutionService.settleBuyPayment({ reference: tx_ref })
+ *      - transfer.completed + data.status=SUCCESSFUL|FAILED + non-empty data.reference
+ *        → ExecutionService.settleSellPayout({ reference })
+ *        (sell engine handles refund on FAILED internally via verifyPayout)
+ *      - transfer.completed + unknown status → log + ack, no processing
+ *      - Anything else → 200 (ack; Flutterwave retries on non-2xx).
+ *   3. Settlement methods RE-VERIFY via the provider server-side (§3.6;
+ *      never trust the webhook body alone). Idempotent: duplicate delivery safe.
  *   4. If completed: resolve user's WhatsApp address (IdentityService) and
  *      send the receipt text via IWhatsAppSender.
  *   5. ALWAYS respond 200 quickly after kicking off processing.
@@ -61,6 +65,8 @@ interface FlutterwaveWebhookBody {
   data?: {
     status?: unknown;
     tx_ref?: unknown;
+    /** Present on transfer.completed events — our idempotencyKey passed to createPayout. */
+    reference?: unknown;
     [key: string]: unknown;
   };
 }
@@ -107,14 +113,32 @@ export class FlutterwaveWebhookController {
     // ── Step 2: Defensive parse ──────────────────────────────────────────────
     const payload = body as FlutterwaveWebhookBody;
 
-    if (payload?.event !== 'charge.completed') {
-      this.logger.log(
-        { event: payload?.event },
-        'Flutterwave webhook: not charge.completed — acking without processing',
-      );
-      return { status: 'ok' };
+    if (payload?.event === 'charge.completed') {
+      return this.handleChargeCompleted(payload);
     }
 
+    if (payload?.event === 'transfer.completed') {
+      return this.handleTransferCompleted(payload);
+    }
+
+    this.logger.log(
+      { event: payload?.event },
+      'Flutterwave webhook: unhandled event — acking without processing',
+    );
+    return { status: 'ok' };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private event-routing handlers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handles event=charge.completed: verifies status=successful + non-empty tx_ref,
+   * then delegates to settleBuyPayment.
+   */
+  private async handleChargeCompleted(
+    payload: FlutterwaveWebhookBody,
+  ): Promise<AckResponse> {
     const data = payload.data;
 
     if (data?.status !== 'successful') {
@@ -134,10 +158,43 @@ export class FlutterwaveWebhookController {
       return { status: 'ok' };
     }
 
-    // ── Steps 3-4: Settle + notify (errors swallowed) ────────────────────────
     // Ack-then-process: errors here must NOT change the 200.
     // Signature failure (step 1) is the ONLY path that returns non-200.
     await this.settleAndNotify(txRef);
+
+    return { status: 'ok' };
+  }
+
+  /**
+   * Handles event=transfer.completed: routes SUCCESSFUL/FAILED statuses to
+   * settleSellPayout (which handles refund on failure internally via verifyPayout).
+   * Unknown statuses are logged and acked without processing.
+   */
+  private async handleTransferCompleted(
+    payload: FlutterwaveWebhookBody,
+  ): Promise<AckResponse> {
+    const data = payload.data;
+    const status = data?.status;
+
+    if (status !== 'SUCCESSFUL' && status !== 'FAILED') {
+      this.logger.log(
+        { status },
+        'Flutterwave webhook: transfer.completed with unhandled status — acking without processing',
+      );
+      return { status: 'ok' };
+    }
+
+    const reference = data?.reference;
+    if (typeof reference !== 'string' || reference.length === 0) {
+      this.logger.warn(
+        { data },
+        'Flutterwave webhook: transfer.completed missing reference — acking without processing',
+      );
+      return { status: 'ok' };
+    }
+
+    // Ack-then-process: errors must NOT change the 200.
+    await this.settleSellAndNotify(reference);
 
     return { status: 'ok' };
   }
@@ -174,6 +231,40 @@ export class FlutterwaveWebhookController {
       this.logger.error(
         { err, txRef },
         'Flutterwave webhook: settlement threw — acking 200 anyway',
+      );
+    }
+  }
+
+  /**
+   * Calls settleSellPayout and — if completed or failed — sends the WhatsApp
+   * receipt/notice. The sell engine handles refund on FAILED status internally
+   * (via verifyPayout), so we pass the reference regardless of webhook status.
+   * All errors are caught and logged so the ack-then-process invariant holds.
+   */
+  private async settleSellAndNotify(reference: string): Promise<void> {
+    try {
+      const result = await this.executionService.settleSellPayout({
+        reference,
+      });
+
+      if (result.status === 'pending') {
+        this.logger.log(
+          { reference, status: result.status },
+          'Flutterwave webhook: sell settlement pending — will process on retry',
+        );
+        return;
+      }
+
+      // Settlement confirmed (completed or failed with refund) — send receipt.
+      await this.sendReceipt(
+        result.transactionId,
+        result.userId,
+        result.receiptNumber,
+      );
+    } catch (err: unknown) {
+      this.logger.error(
+        { err, reference },
+        'Flutterwave webhook: sell settlement threw — acking 200 anyway',
       );
     }
   }
