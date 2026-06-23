@@ -330,7 +330,7 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
     expect(Object.keys(byCurrency)).toContain('NGN');
     expect(Object.keys(byCurrency)).toContain('USDT');
 
-    // ── WalletBalance credited (at least one record for this wallet) ─────────
+    // ── WalletBalance credited with the exact cryptoAmount ───────────────────
     const wallet = await prisma.wallet.findFirst({
       where: { userId, asset: 'USDT' },
     });
@@ -341,11 +341,16 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
       orderBy: { syncedAt: 'desc' },
     });
     expect(balances.length).toBeGreaterThanOrEqual(1);
-    // The most-recent balance should be positive (the credited cryptoAmount).
+
+    // Read the cryptoAmount from the transaction's metadata (the exact amount
+    // the settlement repo is expected to credit) and assert equality — not just
+    // > 0 — to catch any amount-scaling or wrong-field bugs.
+    const txnMeta = txn!.metadata as Record<string, string>;
+    const expectedCryptoAmount = txnMeta.cryptoAmount ?? '0';
     const latestBalance = balances[0];
     expect(
       toScaled((latestBalance.amount as { toString(): string }).toString()),
-    ).toBeGreaterThan(0n);
+    ).toBe(toScaled(expectedCryptoAmount));
 
     // ── SettlementOutbox completed ────────────────────────────────────────────
     const outbox = await prisma.settlementOutbox.findFirst({

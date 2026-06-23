@@ -66,17 +66,3 @@ export class SettlementInvalidStatusError extends Error {
     this.name = 'SettlementInvalidStatusError';
   }
 }
-
-/**
- * Thrown when the payment provider returns a non-successful verify result
- * (amount or currency mismatch, as opposed to simply 'pending').
- * Code: ENGINE_PAYMENT_VERIFY_FAILED
- */
-export class PaymentVerifyFailedError extends Error {
-  readonly code = 'ENGINE_PAYMENT_VERIFY_FAILED' as const;
-
-  constructor(reason: string) {
-    super(`Payment verification failed: ${reason}`);
-    this.name = 'PaymentVerifyFailedError';
-  }
-}

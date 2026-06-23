@@ -28,10 +28,12 @@ import { ConfigService } from '@nestjs/config';
 
 import {
   BalanceSource,
+  LedgerAccountType,
   ReceiptDeliveryStatus,
   SettlementOutboxStatus,
   TransactionStatus,
 } from '../../../../generated/prisma/client';
+import type { Prisma } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { hmacHex } from '../../../core/crypto/hmac';
 import { buildBuyLedgerEntries } from '../domain/ledger';
@@ -115,7 +117,7 @@ async function fetchAccountStates(
 
     const latest = await prisma.ledgerEntry.findFirst({
       where: {
-        accountType: account.accountType as never,
+        accountType: account.accountType as LedgerAccountType,
         accountId: account.accountId,
         currency: account.currency,
       },
@@ -260,15 +262,16 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           await tx.ledgerEntry.create({
             data: {
               transactionId,
-              // Domain enum string values map directly to Prisma enum values (string identity).
-              accountType: draft.accountType as never,
+              // Domain enum string values are identical to Prisma enum values —
+              // cast to the generated enum type (not `as never`).
+              accountType: draft.accountType,
               accountId: draft.accountId,
               currency: draft.currency,
-              amount: draft.amount as never, // Decimal(38,18) — string at runtime
-              // LedgerDirection enum values ('debit'|'credit') match Prisma's enum.
-              direction: draft.direction as never,
+              // Decimal(38,18) field — string bridges cleanly via Prisma's Decimal adapter.
+              amount: draft.amount as unknown as Prisma.Decimal,
+              direction: draft.direction,
               description: draft.description,
-              balanceAfter: draft.balanceAfter as never,
+              balanceAfter: draft.balanceAfter as unknown as Prisma.Decimal,
               sequence: draft.sequence,
               postedAt: draft.postedAt,
             },
@@ -286,7 +289,8 @@ export class SettlementPrismaRepository implements ISettlementRepository {
             // for the settlement skeleton we record the credited amount
             // as the snapshot — a full balance sync (provider_sync) will
             // reconcile the exact figure later.
-            amount: cryptoAmount as never,
+            // Decimal field — string bridges cleanly via Prisma's Decimal adapter.
+            amount: cryptoAmount as unknown as Prisma.Decimal,
             assetDecimals: USDT_ASSET_DECIMALS,
             source: BalanceSource.deposit_webhook,
             syncedAt: now,
@@ -353,7 +357,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
             transactionId,
             receiptNumber,
             userId,
-            itemized: itemized as never,
+            itemized: itemized as unknown as Prisma.InputJsonValue,
             htmlContent,
             contentHash,
             signatureHash,
