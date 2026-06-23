@@ -222,6 +222,12 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
       beneficiaryService,
       assetRegistry,
       ledgerRepo,
+      // complianceService and configService are required deps but not invoked on the sell path.
+      {
+        screenSendDestination: () =>
+          Promise.resolve({ passed: true, complianceEventId: '' }),
+      } as never,
+      config,
     );
 
     const fakePaymentProvider = makeFakePaymentProvider('successful');

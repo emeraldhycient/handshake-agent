@@ -222,6 +222,12 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
       { getById: () => Promise.resolve(null) } as never,
       assetRegistry,
       { getAccountBalance: () => Promise.resolve('0') },
+      // complianceService and configService are required deps but not invoked on the buy path.
+      {
+        screenSendDestination: () =>
+          Promise.resolve({ passed: true, complianceEventId: '' }),
+      } as never,
+      config,
     );
 
     // Payment provider fake: verifyWebhookSignature checks WEBHOOK_SECRET;

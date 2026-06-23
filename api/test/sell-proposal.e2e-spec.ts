@@ -151,6 +151,12 @@ describe('LedgerPrismaRepository.getAccountBalance + ProposalService.createSellP
       beneficiaryService,
       assetRegistry,
       ledgerRepo,
+      // complianceService and configService are required deps but not invoked on the sell path.
+      {
+        screenSendDestination: () =>
+          Promise.resolve({ passed: true, complianceEventId: '' }),
+      } as never,
+      new StubConfigService() as never,
     );
 
     // Seed a KYC-verified user

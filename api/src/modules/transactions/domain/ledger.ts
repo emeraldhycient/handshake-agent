@@ -427,9 +427,9 @@ export function buildDepositLedgerEntries(
 // ---------------------------------------------------------------------------
 
 /**
- * Export `toScaled` so execution-layer consumers (e.g. ExecutionService) can
- * perform decimal-safe comparisons using the same scale factor as the ledger
- * domain without redefining the helper (DRY — root §13.2).
+ * Re-export `toScaled` so application-layer consumers (e.g. ProposalService,
+ * ExecutionService) can perform decimal-safe comparisons using the same scale
+ * factor as the ledger domain without redefining the helper (DRY — root §13.2).
  */
 export { toScaled };
 

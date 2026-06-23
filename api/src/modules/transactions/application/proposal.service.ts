@@ -43,6 +43,7 @@ import type { IQuoteRepository } from './ports/quote.repository.port';
 import { QUOTE_REPOSITORY } from './ports/quote.repository.port';
 import type { ILedgerRepository } from './ports/ledger.repository.port';
 import { LEDGER_REPOSITORY } from './ports/ledger.repository.port';
+import { toScaled } from '../domain/ledger';
 
 export interface CreateBuyProposalInput {
   userId: string;
@@ -171,8 +172,8 @@ export class ProposalService {
     private readonly assetRegistry: AssetRegistry,
     @Inject(LEDGER_REPOSITORY)
     private readonly ledgerRepo: ILedgerRepository,
-    private readonly complianceService?: ComplianceService,
-    private readonly configService?: ConfigService,
+    private readonly complianceService: ComplianceService,
+    private readonly configService: ConfigService,
   ) {}
 
   async createBuyProposal(
@@ -304,17 +305,6 @@ export class ProposalService {
       wallet.id,
       intent.asset,
     );
-
-    // Decimal-safe compare using BigInt at 18 decimal places.
-    const toScaled = (s: string): bigint => {
-      const str = s.trim();
-      const isNeg = str.startsWith('-');
-      const abs = isNeg ? str.slice(1) : str;
-      const [whole = '0', frac = ''] = abs.split('.');
-      const fracPadded = frac.slice(0, 18).padEnd(18, '0');
-      const scaled = BigInt(whole) * 10n ** 18n + BigInt(fracPadded);
-      return isNeg ? -scaled : scaled;
-    };
 
     if (toScaled(balance) < toScaled(intent.cryptoAmount)) {
       throw new InsufficientBalanceError(
@@ -462,24 +452,19 @@ export class ProposalService {
       intent.asset,
     );
 
-    const toScaledLocal = (s: string): bigint => {
-      const str = s.trim();
-      const isNeg = str.startsWith('-');
-      const abs = isNeg ? str.slice(1) : str;
-      const [whole = '0', frac = ''] = abs.split('.');
-      const fracPadded = frac.slice(0, 18).padEnd(18, '0');
-      const scaled = BigInt(whole) * 10n ** 18n + BigInt(fracPadded);
-      return isNeg ? -scaled : scaled;
-    };
-
-    if (toScaledLocal(balance) < toScaledLocal(totalDebit)) {
+    if (toScaled(balance) < toScaled(totalDebit)) {
       throw new InsufficientBalanceError(balance, totalDebit, intent.asset);
     }
 
     // 4. KYC/velocity gate on the NGN-equivalent value of the send (§3.3).
     // Convert cryptoAmount to NGN using the baseRate from the pricing config section.
-    const pricingConfig = this.configService?.get<PricingConfig>('pricing');
-    const baseRate = pricingConfig?.assets?.[intent.asset]?.baseRate ?? 1600;
+    const pricingConfig = this.configService.get<PricingConfig>('pricing');
+    const baseRate = pricingConfig?.assets?.[intent.asset]?.baseRate;
+    if (baseRate === undefined) {
+      throw new Error(
+        `ProposalService: missing pricing.assets.${intent.asset}.baseRate in config — cannot compute NGN value for KYC gate.`,
+      );
+    }
     const ngnValue = Number(intent.cryptoAmount) * baseRate;
 
     await this.kycGate.assertCanTransact({
@@ -529,11 +514,6 @@ export class ProposalService {
     }
 
     // 7. Sanctions screening — screen BEFORE persisting; event always written.
-    if (!this.complianceService) {
-      throw new Error(
-        'ProposalService: ComplianceService is required for createSendProposal but was not injected.',
-      );
-    }
     const screeningResult = await this.complianceService.screenSendDestination({
       userId,
       address: toAddress,
@@ -550,9 +530,13 @@ export class ProposalService {
 
     // 8. Travel-Rule flag — if NGN-equivalent ≥ configured threshold, flag it.
     const complianceConfig =
-      this.configService?.get<ComplianceConfig>('compliance');
-    const travelRuleThreshold =
-      complianceConfig?.travelRuleThresholdNgn ?? 1_000_000;
+      this.configService.get<ComplianceConfig>('compliance');
+    const travelRuleThreshold = complianceConfig?.travelRuleThresholdNgn;
+    if (travelRuleThreshold === undefined) {
+      throw new Error(
+        'ProposalService: missing compliance.travelRuleThresholdNgn in config — cannot evaluate Travel Rule requirement.',
+      );
+    }
     const requiresTravelRule = ngnValue >= travelRuleThreshold;
 
     // 9. Persist the Proposal (type=send, pending; no Quote row — not an FX quote).

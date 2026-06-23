@@ -207,6 +207,12 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
       { getById: () => Promise.resolve(null) } as never,
       assetRegistry,
       { getAccountBalance: () => Promise.resolve('0') },
+      // complianceService and configService are required deps but not invoked on the buy path.
+      {
+        screenSendDestination: () =>
+          Promise.resolve({ passed: true, complianceEventId: '' }),
+      } as never,
+      config,
     );
 
     executionService = new ExecutionService(

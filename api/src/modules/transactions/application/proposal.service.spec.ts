@@ -206,9 +206,22 @@ function makeLedgerRepo(balance = '10.0'): jest.Mocked<ILedgerRepository> {
 // ---------------------------------------------------------------------------
 
 /**
+ * Minimal stubs for complianceService and configService for buy/sell tests
+ * where these deps are wired but never invoked by the code path under test.
+ */
+const NOOP_COMPLIANCE_SERVICE = {
+  screenSendDestination: jest.fn(),
+} as unknown as ComplianceService;
+
+const NOOP_CONFIG_SERVICE = {
+  get: jest.fn().mockReturnValue(undefined),
+} as never;
+
+/**
  * Creates a ProposalService wired for buy-proposal tests.
  * Sell-related deps (walletService, beneficiaryService, assetRegistry, ledgerRepo)
  * are minimal null-stubs because `createBuyProposal` never calls them.
+ * complianceService and configService are wired but not invoked on the buy path.
  */
 function makeBuySvc(
   quotesService: QuotesService = makeQuotesService() as unknown as QuotesService,
@@ -226,11 +239,14 @@ function makeBuySvc(
     makeBeneficiaryService() as unknown as BeneficiaryService,
     makeAssetRegistry() as unknown as AssetRegistry,
     makeLedgerRepo(),
+    NOOP_COMPLIANCE_SERVICE,
+    NOOP_CONFIG_SERVICE,
   );
 }
 
 /**
  * Creates a ProposalService wired for sell-proposal tests.
+ * complianceService and configService are wired but not invoked on the sell path.
  */
 function makeSellSvc(opts?: {
   quotesService?: Pick<QuotesService, 'quoteBuy' | 'quoteSell'>;
@@ -256,6 +272,8 @@ function makeSellSvc(opts?: {
       makeBeneficiaryService()) as unknown as BeneficiaryService,
     (opts?.assetRegistry ?? makeAssetRegistry()) as unknown as AssetRegistry,
     opts?.ledgerRepo ?? makeLedgerRepo(),
+    NOOP_COMPLIANCE_SERVICE,
+    NOOP_CONFIG_SERVICE,
   );
 }
 
