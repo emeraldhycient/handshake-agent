@@ -7,6 +7,7 @@ import type { AxiosError } from 'axios';
 import type { Env } from '../../../core/config/env.schema';
 import type {
   IWhatsAppSender,
+  SendBeneficiaryFlowInput,
   SendCtaUrlInput,
   SendFlowInput,
   SendResult,
@@ -147,6 +148,44 @@ export class CloudApiSender implements IWhatsAppSender {
             flow_cta: cta,
             flow_action: 'navigate',
             flow_action_payload: { screen, data },
+          },
+        },
+      },
+    };
+
+    return this.post(payload);
+  }
+
+  async sendBeneficiaryFlow(
+    input: SendBeneficiaryFlowInput,
+  ): Promise<SendResult> {
+    const { to, flowId, flowToken, type, beneficiaries } = input;
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'flow',
+        body: {
+          text: 'Select a saved payout account or add a new one.',
+        },
+        action: {
+          name: 'flow',
+          parameters: {
+            flow_message_version: '3',
+            flow_token: flowToken,
+            flow_id: flowId,
+            flow_cta: 'Manage Accounts',
+            flow_action: 'navigate',
+            flow_action_payload: {
+              screen: 'SELECT',
+              data: {
+                type,
+                beneficiaries,
+              },
+            },
           },
         },
       },

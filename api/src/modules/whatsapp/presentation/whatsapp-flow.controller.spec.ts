@@ -1,11 +1,15 @@
 /**
- * TDD — whatsapp-flow.controller.spec.ts (Task 6.2)
+ * TDD — whatsapp-flow.controller.spec.ts (Task 6.2 + S3)
  *
  * Tests the WhatsApp Flow data endpoint controller:
  *   - ping → encryptResponse called with {data:{status:'active'}}
  *   - data_exchange happy path → executeBuy called; SUCCESS screen returned
  *   - executeBuy throws PinInvalidError → ERROR screen, no internals leaked
  *   - decryptRequest throws → controller responds HTTP 421
+ *   - data_exchange / beneficiary_add (bank) → BeneficiaryService.addBankAccount called; BENEFICIARY_ADDED screen
+ *   - data_exchange / beneficiary_add (crypto invalid) → InvalidAddressError → ERROR screen
+ *   - data_exchange / beneficiary_select → validates ownership; non-owned → ERROR screen
+ *   - data_exchange / beneficiary_select (found) → BENEFICIARY_CONFIRMED screen
  */
 
 import { Test } from '@nestjs/testing';
@@ -19,6 +23,8 @@ import {
   FlowKeyNotConfiguredError,
 } from '../domain/flow-errors';
 import { ExecutionService } from '../../transactions/application/execution.service';
+import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import { InvalidAddressError } from '../../beneficiaries/domain/beneficiary-errors';
 import { PinInvalidError } from '../../../core/auth/domain/pin-errors';
 import { WhatsAppFlowController } from './whatsapp-flow.controller';
 import * as flowToken from '../application/flow-token';
@@ -72,6 +78,15 @@ describe('WhatsAppFlowController', () => {
     executeBuy: jest.Mock;
   };
 
+  let mockBeneficiaryService: {
+    addBankAccount: jest.Mock;
+    addCryptoAddress: jest.Mock;
+    getById: jest.Mock;
+    listForUser: jest.Mock;
+    getDefault: jest.Mock;
+    requireById: jest.Mock;
+  };
+
   let mockConfigService: {
     get: jest.Mock;
   };
@@ -86,6 +101,15 @@ describe('WhatsAppFlowController', () => {
 
     mockExecutionService = {
       executeBuy: jest.fn(),
+    };
+
+    mockBeneficiaryService = {
+      addBankAccount: jest.fn(),
+      addCryptoAddress: jest.fn(),
+      getById: jest.fn(),
+      listForUser: jest.fn(),
+      getDefault: jest.fn(),
+      requireById: jest.fn(),
     };
 
     mockConfigService = {
@@ -105,6 +129,7 @@ describe('WhatsAppFlowController', () => {
       providers: [
         { provide: FLOW_CRYPTO, useValue: mockFlowCrypto },
         { provide: ExecutionService, useValue: mockExecutionService },
+        { provide: BeneficiaryService, useValue: mockBeneficiaryService },
         { provide: ConfigService, useValue: mockConfigService },
       ],
     }).compile();
@@ -283,6 +308,196 @@ describe('WhatsAppFlowController', () => {
 
       expect(thrownError).toBeInstanceOf(HttpException);
       expect((thrownError as HttpException).getStatus()).toBe(421);
+    });
+  });
+
+  // ── beneficiary_add (bank account) ────────────────────────────────────────
+
+  describe('data_exchange / beneficiary_add (bank account)', () => {
+    beforeEach(() => {
+      mockFlowCrypto.decryptRequest.mockReturnValue({
+        decrypted: {
+          version: '3.0',
+          action: 'data_exchange',
+          flow_token: 'tok',
+          data: {
+            action: 'beneficiary_add',
+            accountNumber: '0123456789',
+            bankCode: '058',
+            accountName: 'John Doe',
+            label: 'GTB Savings',
+          },
+        },
+        aesKey: MOCK_AES_KEY,
+        iv: MOCK_IV,
+      });
+    });
+
+    it('calls BeneficiaryService.addBankAccount with the correct args', async () => {
+      mockBeneficiaryService.addBankAccount.mockResolvedValue({
+        id: 'ben-id-1',
+        label: 'GTB Savings',
+      });
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      expect(mockBeneficiaryService.addBankAccount).toHaveBeenCalledWith({
+        userId: 'user-001',
+        accountNumber: '0123456789',
+        bankCode: '058',
+        accountName: 'John Doe',
+        label: 'GTB Savings',
+      });
+    });
+
+    it('returns BENEFICIARY_ADDED screen with the new beneficiaryId', async () => {
+      mockBeneficiaryService.addBankAccount.mockResolvedValue({
+        id: 'ben-id-1',
+        label: 'GTB Savings',
+      });
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({
+        screen: 'BENEFICIARY_ADDED',
+        data: { beneficiaryId: 'ben-id-1' },
+      });
+    });
+
+    it('does NOT call executeBuy for a beneficiary_add action', async () => {
+      mockBeneficiaryService.addBankAccount.mockResolvedValue({
+        id: 'ben-id-1',
+        label: 'GTB Savings',
+      });
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      expect(mockExecutionService.executeBuy).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── beneficiary_add (crypto address — invalid) ───────────────────────────
+
+  describe('data_exchange / beneficiary_add (crypto — InvalidAddressError)', () => {
+    it('returns ERROR screen when InvalidAddressError is thrown', async () => {
+      mockFlowCrypto.decryptRequest.mockReturnValue({
+        decrypted: {
+          version: '3.0',
+          action: 'data_exchange',
+          flow_token: 'tok',
+          data: {
+            action: 'beneficiary_add',
+            address: 'bad-address',
+            network: 'TRON',
+            asset: 'USDT',
+            label: 'Bad wallet',
+          },
+        },
+        aesKey: MOCK_AES_KEY,
+        iv: MOCK_IV,
+      });
+
+      mockBeneficiaryService.addCryptoAddress.mockRejectedValue(
+        new InvalidAddressError('TRON', 'bad-address'),
+      );
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({ screen: 'ERROR' });
+      const data = encryptedWith.data as Record<string, unknown>;
+      expect(typeof data.message).toBe('string');
+      // No internal details
+      expect(JSON.stringify(encryptedWith)).not.toContain('bad-address');
+    });
+  });
+
+  // ── beneficiary_select ───────────────────────────────────────────────────
+
+  describe('data_exchange / beneficiary_select', () => {
+    it('returns ERROR screen when beneficiary does not belong to the user', async () => {
+      mockFlowCrypto.decryptRequest.mockReturnValue({
+        decrypted: {
+          version: '3.0',
+          action: 'data_exchange',
+          flow_token: 'tok',
+          data: {
+            action: 'beneficiary_select',
+            beneficiaryId: 'other-users-ben',
+          },
+        },
+        aesKey: MOCK_AES_KEY,
+        iv: MOCK_IV,
+      });
+
+      // Simulate not found (null = doesn't belong to this user).
+      mockBeneficiaryService.getById.mockResolvedValue(null);
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({ screen: 'ERROR' });
+    });
+
+    it('returns BENEFICIARY_CONFIRMED screen when beneficiary belongs to user', async () => {
+      mockFlowCrypto.decryptRequest.mockReturnValue({
+        decrypted: {
+          version: '3.0',
+          action: 'data_exchange',
+          flow_token: 'tok',
+          data: {
+            action: 'beneficiary_select',
+            beneficiaryId: 'ben-id-1',
+          },
+        },
+        aesKey: MOCK_AES_KEY,
+        iv: MOCK_IV,
+      });
+
+      mockBeneficiaryService.getById.mockResolvedValue({
+        id: 'ben-id-1',
+        label: 'GTB Savings',
+        userId: 'user-001',
+      });
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({
+        screen: 'BENEFICIARY_CONFIRMED',
+        data: { beneficiaryId: 'ben-id-1' },
+      });
+    });
+
+    it('calls getById with the correct userId from the flow_token', async () => {
+      mockFlowCrypto.decryptRequest.mockReturnValue({
+        decrypted: {
+          version: '3.0',
+          action: 'data_exchange',
+          flow_token: 'tok',
+          data: {
+            action: 'beneficiary_select',
+            beneficiaryId: 'ben-id-1',
+          },
+        },
+        aesKey: MOCK_AES_KEY,
+        iv: MOCK_IV,
+      });
+
+      mockBeneficiaryService.getById.mockResolvedValue({
+        id: 'ben-id-1',
+        label: 'GTB Savings',
+        userId: 'user-001',
+      });
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      // verifyFlowToken returns userId: 'user-001' (see beforeEach spy)
+      expect(mockBeneficiaryService.getById).toHaveBeenCalledWith(
+        'user-001',
+        'ben-id-1',
+      );
     });
   });
 });

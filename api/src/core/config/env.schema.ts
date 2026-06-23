@@ -40,6 +40,9 @@ export const envSchema = z.object({
   // in the WhatsApp Business dashboard. Empty string = Flow not yet published;
   // ConversationService falls back to plain-text confirmation in that case.
   WHATSAPP_FLOW_ID: z.string().optional().default(''),
+  // Meta Flow ID for the beneficiary add/select flow (S3). Empty = flow not
+  // yet published; controller falls back to directing user to the web/app.
+  WHATSAPP_BENEFICIARY_FLOW_ID: z.string().optional().default(''),
   // Operator-supplied-later secrets (empty is valid at boot; enforced where used):
   //  - APP_SECRET: HMAC key for X-Hub-Signature-256 webhook verification.
   //  - VERIFY_TOKEN: GET webhook handshake token.

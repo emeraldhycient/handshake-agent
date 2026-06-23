@@ -226,6 +226,9 @@ function makeSender(): jest.Mocked<IWhatsAppSender> {
     sendFlow: jest
       .fn()
       .mockResolvedValue({ externalMessageId: 'wamid.flow.out' }),
+    sendBeneficiaryFlow: jest
+      .fn()
+      .mockResolvedValue({ externalMessageId: 'wamid.ben.out' }),
   };
 }
 

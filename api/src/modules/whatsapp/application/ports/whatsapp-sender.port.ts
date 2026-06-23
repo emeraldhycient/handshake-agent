@@ -60,6 +60,29 @@ export interface SendFlowInput {
 }
 
 /**
+ * Input for sending the beneficiary add/select WhatsApp Flow message (S3).
+ * Beneficiary details travel ONLY via Flow E2E encryption — never plaintext.
+ */
+export interface SendBeneficiaryFlowInput {
+  /** Recipient phone number in E.164 without the leading '+'. */
+  to: string;
+  /** Meta Flow ID for the beneficiary flow (WHATSAPP_BENEFICIARY_FLOW_ID). */
+  flowId: string;
+  /**
+   * Signed flow_token — binds the session to a userId so the flow endpoint
+   * can validate beneficiary ownership.
+   */
+  flowToken: string;
+  /** 'bank_account' | 'crypto_address' — determines which add-form screen to show. */
+  type: 'bank_account' | 'crypto_address';
+  /**
+   * Saved beneficiaries seeded into the SELECT screen.
+   * Each entry is { id, label } — just enough for the user to pick.
+   */
+  beneficiaries: Array<{ id: string; label: string }>;
+}
+
+/**
  * The application depends on this abstraction, never on the Cloud API
  * directly. Infrastructure implements it (`CloudApiSender`); extraction
  * to a standalone service = swap the binding, zero caller changes.
@@ -109,4 +132,16 @@ export interface IWhatsAppSender {
    *               the initial data payload (carries nonce and confirmation).
    */
   sendFlow(input: SendFlowInput): Promise<SendResult>;
+
+  /**
+   * Send the beneficiary add/select WhatsApp Flow message (S3).
+   *
+   * Opens a SELECT screen seeded with saved beneficiaries and an "add new"
+   * option. Bank/crypto details travel ONLY via the Flow E2E channel — never
+   * as plaintext chat. See CLAUDE.md §3.5 and ADR-0003.
+   *
+   * @param input  Beneficiary flow parameters including flowId, flowToken,
+   *               type, and the list of saved beneficiaries.
+   */
+  sendBeneficiaryFlow(input: SendBeneficiaryFlowInput): Promise<SendResult>;
 }

@@ -47,6 +47,8 @@ import {
   FlowKeyNotConfiguredError,
 } from '../domain/flow-errors';
 import { ExecutionService } from '../../transactions/application/execution.service';
+import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import { InvalidAddressError } from '../../beneficiaries/domain/beneficiary-errors';
 import { verifyFlowToken } from '../application/flow-token';
 import {
   PinInvalidError,
@@ -95,6 +97,7 @@ export class WhatsAppFlowController {
   constructor(
     @Inject(FLOW_CRYPTO) private readonly flowCrypto: IFlowCrypto,
     private readonly executionService: ExecutionService,
+    private readonly beneficiaryService: BeneficiaryService,
     private readonly configService: ConfigService<Env, true>,
   ) {}
 
@@ -228,8 +231,18 @@ export class WhatsAppFlowController {
       };
     }
 
-    // Extract PIN + nonce from the decrypted data (§3.5: never log them).
     const data = payload.data ?? {};
+    const action = typeof data.action === 'string' ? data.action : '';
+
+    // Route beneficiary-specific actions before the buy flow.
+    if (action === 'beneficiary_select') {
+      return this.handleBeneficiarySelect(userId, data);
+    }
+    if (action === 'beneficiary_add') {
+      return this.handleBeneficiaryAdd(userId, data);
+    }
+
+    // Default: buy confirmation flow — extract PIN + nonce (§3.5: never log them).
     const pin = typeof data.pin === 'string' ? data.pin : '';
     const nonce = typeof data.nonce === 'string' ? data.nonce : '';
 
@@ -268,6 +281,172 @@ export class WhatsAppFlowController {
         'executeBuy failed — returning ERROR screen',
       );
       return { screen: 'ERROR', data: { message } };
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Beneficiary flow handlers (S3)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handles a `beneficiary_select` data_exchange action.
+   * Validates the selected beneficiary belongs to the authenticated user
+   * (extracted from flow_token). Returns a confirmation screen or an error.
+   */
+  private async handleBeneficiarySelect(
+    userId: string,
+    data: Record<string, unknown>,
+  ): Promise<unknown> {
+    const beneficiaryId =
+      typeof data.beneficiaryId === 'string' ? data.beneficiaryId : '';
+    if (!beneficiaryId) {
+      return { screen: 'ERROR', data: { message: 'No beneficiary selected.' } };
+    }
+
+    try {
+      const ben = await this.beneficiaryService.getById(userId, beneficiaryId);
+      if (!ben) {
+        // Beneficiary does not belong to this user (or does not exist).
+        this.logger.warn(
+          { userId, beneficiaryId },
+          'beneficiary_select: beneficiary not found for user',
+        );
+        return {
+          screen: 'ERROR',
+          data: {
+            message:
+              'Selected account not found. Please choose another or add a new one.',
+          },
+        };
+      }
+
+      // S3: Acknowledge selection; S4 will chain this into the sell proposal.
+      return {
+        screen: 'BENEFICIARY_CONFIRMED',
+        data: {
+          beneficiaryId: ben.id,
+          label: ben.label,
+          message: 'Account selected successfully.',
+        },
+      };
+    } catch (err) {
+      this.logger.warn(
+        { errorName: err instanceof Error ? err.name : 'unknown' },
+        'beneficiary_select failed',
+      );
+      return {
+        screen: 'ERROR',
+        data: { message: 'Something went wrong. Please try again.' },
+      };
+    }
+  }
+
+  /**
+   * Handles a `beneficiary_add` data_exchange action.
+   * Accepts either bank-account fields or crypto-address fields (determined by
+   * the presence of `accountNumber` vs `address`). Bank/crypto details arrive
+   * via Flow E2E only — never logged.
+   */
+  private async handleBeneficiaryAdd(
+    userId: string,
+    data: Record<string, unknown>,
+  ): Promise<unknown> {
+    try {
+      // Discriminate by the presence of accountNumber (bank) vs address (crypto).
+      if (typeof data.accountNumber === 'string' && data.accountNumber) {
+        // Bank account add
+        const accountNumber = data.accountNumber;
+        const bankCode = typeof data.bankCode === 'string' ? data.bankCode : '';
+        const accountName =
+          typeof data.accountName === 'string' ? data.accountName : '';
+        const label =
+          typeof data.label === 'string' && data.label
+            ? data.label
+            : accountName;
+
+        if (!bankCode || !accountName) {
+          return {
+            screen: 'ERROR',
+            data: { message: 'Incomplete bank account details.' },
+          };
+        }
+
+        const ben = await this.beneficiaryService.addBankAccount({
+          userId,
+          accountNumber,
+          bankCode,
+          accountName,
+          label,
+        });
+
+        return {
+          screen: 'BENEFICIARY_ADDED',
+          data: {
+            beneficiaryId: ben.id,
+            label: ben.label,
+            message: 'Bank account saved successfully.',
+          },
+        };
+      }
+
+      if (typeof data.address === 'string' && data.address) {
+        // Crypto address add
+        const address = data.address;
+        const network = typeof data.network === 'string' ? data.network : '';
+        const asset = typeof data.asset === 'string' ? data.asset : '';
+        const label =
+          typeof data.label === 'string' && data.label
+            ? data.label
+            : address.slice(0, 8) + '…';
+
+        if (!network || !asset) {
+          return {
+            screen: 'ERROR',
+            data: { message: 'Incomplete crypto address details.' },
+          };
+        }
+
+        const ben = await this.beneficiaryService.addCryptoAddress({
+          userId,
+          address,
+          network,
+          asset,
+          label,
+        });
+
+        return {
+          screen: 'BENEFICIARY_ADDED',
+          data: {
+            beneficiaryId: ben.id,
+            label: ben.label,
+            message:
+              'Crypto address saved. A cooling-off period applies before first use.',
+          },
+        };
+      }
+
+      return {
+        screen: 'ERROR',
+        data: { message: 'No account details provided.' },
+      };
+    } catch (err) {
+      if (err instanceof InvalidAddressError) {
+        return {
+          screen: 'ERROR',
+          data: {
+            message:
+              'The crypto address you entered appears to be invalid. Please check and try again.',
+          },
+        };
+      }
+      this.logger.warn(
+        { errorName: err instanceof Error ? err.name : 'unknown' },
+        'beneficiary_add failed',
+      );
+      return {
+        screen: 'ERROR',
+        data: { message: 'Something went wrong. Please try again.' },
+      };
     }
   }
 

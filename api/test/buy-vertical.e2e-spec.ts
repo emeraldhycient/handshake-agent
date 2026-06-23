@@ -373,6 +373,9 @@ describe('Buy vertical — capstone acceptance e2e (AppModule, Testcontainers Po
         capturedSendFlowCalls.push({ input });
         return Promise.resolve({ externalMessageId: 'wamid.out.flow.e2e' });
       }),
+      sendBeneficiaryFlow: jest
+        .fn()
+        .mockResolvedValue({ externalMessageId: 'wamid.out.ben.flow.e2e' }),
     };
 
     // 5. Compile NestJS TestingModule with provider overrides

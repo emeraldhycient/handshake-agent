@@ -65,6 +65,9 @@ const fakeSender: jest.Mocked<IWhatsAppSender> = {
   sendFlow: jest
     .fn()
     .mockResolvedValue({ externalMessageId: 'wamid.out.flow' }),
+  sendBeneficiaryFlow: jest
+    .fn()
+    .mockResolvedValue({ externalMessageId: 'wamid.out.ben.flow' }),
 };
 
 /**

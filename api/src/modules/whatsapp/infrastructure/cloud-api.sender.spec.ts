@@ -5,6 +5,7 @@ import { AxiosResponse } from 'axios';
 
 import { CloudApiSender } from './cloud-api.sender';
 import type { Env } from '../../../core/config/env.schema';
+import type { SendBeneficiaryFlowInput } from '../application/ports/whatsapp-sender.port';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -414,6 +415,114 @@ describe('CloudApiSender', () => {
         'https://graph.facebook.com/v25.0/TEST_PHONE_ID/messages',
       );
       expect(config.headers['Authorization']).toBe('Bearer TEST_TOKEN');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // sendBeneficiaryFlow (S3)
+  // -------------------------------------------------------------------------
+
+  describe('sendBeneficiaryFlow', () => {
+    const BENEFICIARY_INPUT: SendBeneficiaryFlowInput = {
+      to: '2348000000000',
+      flowId: 'ben-flow-id-123',
+      flowToken: 'signed.ben.token',
+      type: 'bank_account',
+      beneficiaries: [
+        { id: 'ben-1', label: 'GTB Savings' },
+        { id: 'ben-2', label: 'UBA Current' },
+      ],
+    };
+
+    it('posts the exact interactive/flow body shape for the beneficiary flow', async () => {
+      httpService.post.mockReturnValue(of(axiosResponse(SUCCESS_RESPONSE)));
+
+      const result = await sender.sendBeneficiaryFlow(BENEFICIARY_INPUT);
+
+      expect(result).toEqual({ externalMessageId: 'wamid.abc123' });
+
+      expect(httpService.post).toHaveBeenCalledTimes(1);
+      const [url, body, config] = httpService.post.mock.calls[0] as [
+        string,
+        unknown,
+        { headers: Record<string, string> },
+      ];
+
+      expect(url).toBe(
+        'https://graph.facebook.com/v25.0/TEST_PHONE_ID/messages',
+      );
+      expect(body).toEqual({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: '2348000000000',
+        type: 'interactive',
+        interactive: {
+          type: 'flow',
+          body: { text: expect.any(String) as unknown },
+          action: {
+            name: 'flow',
+            parameters: {
+              flow_message_version: '3',
+              flow_token: 'signed.ben.token',
+              flow_id: 'ben-flow-id-123',
+              flow_cta: 'Manage Accounts',
+              flow_action: 'navigate',
+              flow_action_payload: {
+                screen: 'SELECT',
+                data: {
+                  type: 'bank_account',
+                  beneficiaries: [
+                    { id: 'ben-1', label: 'GTB Savings' },
+                    { id: 'ben-2', label: 'UBA Current' },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      });
+      expect(config.headers['Authorization']).toBe('Bearer TEST_TOKEN');
+      expect(config.headers['Content-Type']).toBe('application/json');
+    });
+
+    it('returns the wamid from messages[0].id', async () => {
+      const response = {
+        ...SUCCESS_RESPONSE,
+        messages: [{ id: 'wamid.ben.XYZ' }],
+      };
+      httpService.post.mockReturnValue(of(axiosResponse(response)));
+
+      const result = await sender.sendBeneficiaryFlow({
+        ...BENEFICIARY_INPUT,
+        type: 'crypto_address',
+        beneficiaries: [],
+      });
+
+      expect(result.externalMessageId).toBe('wamid.ben.XYZ');
+    });
+
+    it('seeds the SELECT screen with provided beneficiaries list', async () => {
+      httpService.post.mockReturnValue(of(axiosResponse(SUCCESS_RESPONSE)));
+
+      await sender.sendBeneficiaryFlow({
+        ...BENEFICIARY_INPUT,
+        beneficiaries: [{ id: 'only-one', label: 'Only account' }],
+      });
+
+      const [, body] = httpService.post.mock.calls[0] as [string, unknown];
+      const params = (
+        body as {
+          interactive: {
+            action: { parameters: { flow_action_payload: { data: unknown } } };
+          };
+        }
+      ).interactive.action.parameters.flow_action_payload.data as {
+        beneficiaries: Array<{ id: string; label: string }>;
+      };
+
+      expect(params.beneficiaries).toEqual([
+        { id: 'only-one', label: 'Only account' },
+      ]);
     });
   });
 });
