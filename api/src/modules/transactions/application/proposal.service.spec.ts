@@ -113,6 +113,7 @@ function makeProposalRepo(
     create: jest.fn().mockResolvedValue({ id }),
     findById: jest.fn().mockResolvedValue(null),
     updateStatus: jest.fn().mockResolvedValue(undefined),
+    getType: jest.fn().mockResolvedValue(null),
   };
 }
 
@@ -362,6 +363,7 @@ describe('ProposalService.createBuyProposal', () => {
       }),
       findById: jest.fn().mockResolvedValue(null),
       updateStatus: jest.fn().mockResolvedValue(undefined),
+      getType: jest.fn().mockResolvedValue(null),
     };
 
     const svc = makeBuySvc(
@@ -467,6 +469,7 @@ describe('ProposalService.createBuyProposal', () => {
       }),
       findById: jest.fn().mockResolvedValue(null),
       updateStatus: jest.fn().mockResolvedValue(undefined),
+      getType: jest.fn().mockResolvedValue(null),
     };
     const kycGate = {
       assertCanTransact: jest.fn().mockImplementation(() => {
@@ -683,6 +686,7 @@ describe('ProposalService.createSellProposal', () => {
       }),
       findById: jest.fn().mockResolvedValue(null),
       updateStatus: jest.fn().mockResolvedValue(undefined),
+      getType: jest.fn().mockResolvedValue(null),
     };
 
     const svc = makeSellSvc({
@@ -1166,6 +1170,7 @@ describe('ProposalService.createSendProposal', () => {
       }),
       findById: jest.fn().mockResolvedValue(null),
       updateStatus: jest.fn().mockResolvedValue(undefined),
+      getType: jest.fn().mockResolvedValue(null),
     };
 
     const svc = makeSendSvc({

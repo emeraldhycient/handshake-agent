@@ -5,6 +5,7 @@ import { IdentityModule } from '../identity/identity.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { WhatsAppSenderModule } from '../whatsapp/whatsapp-sender.module';
 import { WalletsModule } from '../wallets/wallets.module';
+import { BeneficiariesModule } from '../beneficiaries/beneficiaries.module';
 
 import {
   ConversationService,
@@ -12,6 +13,7 @@ import {
   DIRECTIVE_SERVICE,
   WALLET_SERVICE,
   HANDOFF_TOKEN_SERVICE,
+  BENEFICIARY_SERVICE,
 } from './application/conversation.service';
 import { CONVERSATION_REPOSITORY } from './application/ports/conversation.repository.port';
 import { MESSAGE_REPOSITORY } from './application/ports/message.repository.port';
@@ -26,6 +28,7 @@ import { ProposalService } from '../transactions/application/proposal.service';
 import { DirectiveService } from '../transactions/application/directive.service';
 import { WalletService } from '../wallets/application/wallet.service';
 import { HandoffTokenService } from '../identity/application/handoff-token.service';
+import { BeneficiaryService } from '../beneficiaries/application/beneficiary.service';
 
 /**
  * Conversations feature module.
@@ -55,6 +58,7 @@ import { HandoffTokenService } from '../identity/application/handoff-token.servi
     TransactionsModule,
     WhatsAppSenderModule,
     WalletsModule,
+    BeneficiariesModule,
   ],
   providers: [
     ConversationService,
@@ -70,6 +74,8 @@ import { HandoffTokenService } from '../identity/application/handoff-token.servi
     { provide: WALLET_SERVICE, useExisting: WalletService },
     // Expose HandoffTokenService under our local HANDOFF_TOKEN_SERVICE token (K3).
     { provide: HANDOFF_TOKEN_SERVICE, useExisting: HandoffTokenService },
+    // Expose BeneficiaryService under our local BENEFICIARY_SERVICE token (W1).
+    { provide: BENEFICIARY_SERVICE, useExisting: BeneficiaryService },
     { provide: INBOUND_HANDLER, useExisting: ConversationService },
     {
       provide: CONVERSATION_REPOSITORY,

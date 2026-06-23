@@ -109,4 +109,16 @@ export class ProposalPrismaRepository implements IProposalRepository {
       },
     });
   }
+
+  /**
+   * Returns only the `type` column for a Proposal, or null when not found.
+   * Avoids loading the full record (parameters, metadata) for the dispatch use-case (W1).
+   */
+  async getType(proposalId: string): Promise<string | null> {
+    const row = await this.prisma.proposal.findUnique({
+      where: { id: proposalId },
+      select: { type: true },
+    });
+    return row?.type ?? null;
+  }
 }

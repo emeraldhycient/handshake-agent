@@ -70,4 +70,11 @@ export interface IProposalRepository {
       rejectionReason?: string;
     },
   ): Promise<void>;
+
+  /**
+   * Returns the type string of a Proposal (e.g. 'buy' | 'sell' | 'send'), or
+   * null if not found. Used by the Flow endpoint to dispatch the right
+   * execution method without loading the full record (W1).
+   */
+  getType(proposalId: string): Promise<string | null>;
 }

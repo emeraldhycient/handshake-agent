@@ -174,6 +174,7 @@ function makeProposalRepo(
     create: jest.fn().mockResolvedValue({ id: PROPOSAL_ID }),
     findById: jest.fn().mockResolvedValue(proposal),
     updateStatus: jest.fn().mockResolvedValue(undefined),
+    getType: jest.fn().mockResolvedValue(proposal?.type ?? null),
   };
 }
 

@@ -1,5 +1,5 @@
 /**
- * Unit tests for ConversationService (tasks 2.3 + 6.3 + R1 + X2).
+ * Unit tests for ConversationService (tasks 2.3 + 6.3 + R1 + X2 + W1).
  *
  * All external dependencies are mocked — no DB, no HTTP, no LLM.
  *
@@ -19,6 +19,10 @@
  *   - user requiresReverification + receive_crypto → re-verify ask, walletService NOT called
  *   - (X2) shared guard: unlinked contact gets same KYC reply for buy_crypto AND receive_crypto
  *   - (X2) receive reply is built from registry metadata (asset + network displayName)
+ *   - (W1) sell_crypto with default bank beneficiary → createSellProposal + sendFlow (request_pin)
+ *   - (W1) sell_crypto with NO beneficiary → sendBeneficiaryFlow(bank) + retry message, NO proposal
+ *   - (W1) send_crypto with crypto beneficiary → createSendProposal + sendFlow (request_step_up)
+ *   - (W1) send_crypto with NO beneficiary → sendBeneficiaryFlow(crypto), NO proposal
  */
 
 import { Logger } from '@nestjs/common';
@@ -32,6 +36,8 @@ import type { IdentityService } from '../../identity/application/identity.servic
 import type {
   ProposalService,
   CreateBuyProposalOutput,
+  CreateSellProposalOutput,
+  CreateSendProposalOutput,
 } from '../../transactions/application/proposal.service';
 import type { DirectiveService } from '../../transactions/application/directive.service';
 import type {
@@ -60,6 +66,8 @@ import type { WalletService } from '../../wallets/application/wallet.service';
 import type { WalletRecord } from '../../wallets/application/ports/wallet.repository.port';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
 import type { HandoffTokenService } from '../../identity/application/handoff-token.service';
+import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -128,6 +136,78 @@ const baseReply = (): ConversationReplyRecord => ({
   status: 'created',
   correlationId: 'corr-id-1',
   createdAt: new Date(),
+});
+
+const stubBankBeneficiary = (): BeneficiaryRecord => ({
+  id: 'ben-bank-id-1',
+  userId: 'user-id-1',
+  type: 'bank_account',
+  label: 'My GTB Account',
+  accountNumber: '0123456789',
+  accountHolderName: 'Alice Doe',
+  bankCode: '058',
+  cryptoAddress: null,
+  cryptoAsset: null,
+  cryptoNetwork: null,
+  verificationStatus: 'verified',
+  firstUseLockedUntil: null,
+  verifiedAt: new Date(),
+  isDefault: true,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  deletedAt: null,
+});
+
+const stubCryptoBeneficiary = (): BeneficiaryRecord => ({
+  id: 'ben-crypto-id-1',
+  userId: 'user-id-1',
+  type: 'crypto_address',
+  label: 'My TRON wallet',
+  accountNumber: null,
+  accountHolderName: null,
+  bankCode: null,
+  cryptoAddress: 'TXxyzFakeAddress1234567890abcdef12',
+  cryptoAsset: 'USDT',
+  cryptoNetwork: 'TRON',
+  verificationStatus: 'verified',
+  firstUseLockedUntil: null,
+  verifiedAt: new Date(),
+  isDefault: true,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  deletedAt: null,
+});
+
+const stubSellProposalOutput = (): CreateSellProposalOutput => ({
+  proposalId: 'sell-proposal-id-1',
+  quoteId: 'sell-quote-id-1',
+  confirmation: {
+    proposalId: 'sell-proposal-id-1',
+    asset: 'USDT',
+    cryptoAmount: '3.0625',
+    fiatCurrency: 'NGN',
+    netFiatAmount: '4900.00',
+    fxRate: '1600',
+    processingFeeAmount: '25.00',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    beneficiaryLabel: 'My GTB Account',
+  },
+});
+
+const stubSendProposalOutput = (): CreateSendProposalOutput => ({
+  proposalId: 'send-proposal-id-1',
+  quoteId: null,
+  confirmation: {
+    proposalId: 'send-proposal-id-1',
+    asset: 'USDT',
+    cryptoAmount: '5.0',
+    network: 'TRON',
+    networkFeeCrypto: '0.5',
+    totalDebit: '5.5',
+    toAddressMasked: 'TXxyzF...ef12',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    beneficiaryLabel: 'My TRON wallet',
+  },
 });
 
 const stubBuyProposalOutput = (): CreateBuyProposalOutput => ({
@@ -204,14 +284,46 @@ function makeAgentPort(
 
 function makeProposalService(
   output: CreateBuyProposalOutput | Error = stubBuyProposalOutput(),
-): jest.Mocked<Pick<ProposalService, 'createBuyProposal'>> {
-  const svc = { createBuyProposal: jest.fn() };
+  sellOutput: CreateSellProposalOutput | Error = stubSellProposalOutput(),
+  sendOutput: CreateSendProposalOutput | Error = stubSendProposalOutput(),
+): jest.Mocked<
+  Pick<
+    ProposalService,
+    'createBuyProposal' | 'createSellProposal' | 'createSendProposal'
+  >
+> {
+  const svc = {
+    createBuyProposal: jest.fn(),
+    createSellProposal: jest.fn(),
+    createSendProposal: jest.fn(),
+  };
   if (output instanceof Error) {
     svc.createBuyProposal.mockRejectedValue(output);
   } else {
     svc.createBuyProposal.mockResolvedValue(output);
   }
+  if (sellOutput instanceof Error) {
+    svc.createSellProposal.mockRejectedValue(sellOutput);
+  } else {
+    svc.createSellProposal.mockResolvedValue(sellOutput);
+  }
+  if (sendOutput instanceof Error) {
+    svc.createSendProposal.mockRejectedValue(sendOutput);
+  } else {
+    svc.createSendProposal.mockResolvedValue(sendOutput);
+  }
   return svc;
+}
+
+function makeBeneficiaryService(
+  defaultBeneficiary: BeneficiaryRecord | null = null,
+): jest.Mocked<Pick<BeneficiaryService, 'getDefault' | 'listForUser'>> {
+  return {
+    getDefault: jest.fn().mockResolvedValue(defaultBeneficiary),
+    listForUser: jest
+      .fn()
+      .mockResolvedValue(defaultBeneficiary ? [defaultBeneficiary] : []),
+  };
 }
 
 function makeSender(): jest.Mocked<IWhatsAppSender> {
@@ -378,7 +490,12 @@ function buildService(
   overrides: {
     identityService?: jest.Mocked<IdentityService>;
     agentPort?: jest.Mocked<IAgentPort>;
-    proposalService?: jest.Mocked<Pick<ProposalService, 'createBuyProposal'>>;
+    proposalService?: jest.Mocked<
+      Pick<
+        ProposalService,
+        'createBuyProposal' | 'createSellProposal' | 'createSendProposal'
+      >
+    >;
     sender?: jest.Mocked<IWhatsAppSender>;
     convRepo?: jest.Mocked<IConversationRepository>;
     msgRepo?: jest.Mocked<IMessageRepository>;
@@ -390,6 +507,9 @@ function buildService(
     assetRegistry?: jest.Mocked<AssetRegistry>;
     handoffTokenService?: jest.Mocked<
       Pick<HandoffTokenService, 'mintKycToken' | 'consumeKycToken'>
+    >;
+    beneficiaryService?: jest.Mocked<
+      Pick<BeneficiaryService, 'getDefault' | 'listForUser'>
     >;
   } = {},
 ) {
@@ -407,6 +527,8 @@ function buildService(
   const assetRegistry = overrides.assetRegistry ?? makeAssetRegistry();
   const handoffTokenService =
     overrides.handoffTokenService ?? makeHandoffTokenService();
+  const beneficiaryService =
+    overrides.beneficiaryService ?? makeBeneficiaryService();
 
   // Build the service directly (not via Nest DI) since all deps are mocks.
   const svc = new ConversationService(
@@ -423,6 +545,7 @@ function buildService(
     walletService as unknown as WalletService,
     assetRegistry,
     handoffTokenService as unknown as HandoffTokenService,
+    beneficiaryService as unknown as BeneficiaryService,
   );
 
   return {
@@ -440,6 +563,7 @@ function buildService(
     walletService,
     assetRegistry,
     handoffTokenService,
+    beneficiaryService,
   };
 }
 
@@ -1144,5 +1268,282 @@ describe('ConversationService.handleInbound', () => {
     expect(REPLY_REPOSITORY).toBeDefined();
     expect(PROPOSAL_SERVICE).toBeDefined();
     expect(DIRECTIVE_SERVICE).toBeDefined();
+  });
+
+  // ── W1: sell_crypto — with default bank beneficiary ───────────────────────
+
+  it('(W1) sell_crypto with default bank beneficiary (FLOW_ID set) → createSellProposal + sendFlow (request_pin)', async () => {
+    const sellOut = stubSellProposalOutput();
+    const bankBen = stubBankBeneficiary();
+    const agentPort = makeAgentPort({
+      action: 'sell_crypto',
+      asset: 'USDT',
+      cryptoAmount: '3.0625',
+      fiatCurrency: 'NGN',
+    });
+    const proposalService = makeProposalService(
+      stubBuyProposalOutput(),
+      sellOut,
+    );
+    const beneficiaryService = makeBeneficiaryService(bankBen);
+    const directiveOutput = {
+      directiveId: FIXED_DIRECTIVE_ID,
+      nonce: FIXED_NONCE,
+      expiresAt: new Date(Date.now() + 300_000),
+    };
+    const directiveService = makeDirectiveService(directiveOutput);
+
+    const { svc, sender } = buildService({
+      agentPort,
+      proposalService,
+      beneficiaryService,
+      directiveService,
+      configService: makeConfigService({
+        flowId: FIXED_FLOW_ID,
+        signingKey: FIXED_SIGNING_KEY,
+      }),
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    // Beneficiary lookup called with correct type
+    expect(beneficiaryService.getDefault).toHaveBeenCalledWith(
+      'user-id-1',
+      'bank_account',
+    );
+
+    // Sell proposal created
+    expect(proposalService.createSellProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-id-1',
+        beneficiaryId: bankBen.id,
+      }),
+    );
+
+    // Directive issued with ref 'request_pin' (sell uses PIN)
+    expect(directiveService.issue).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: 'request_pin' }),
+    );
+
+    // sendFlow called (not sendText confirmation)
+    expect(sender.sendFlow).toHaveBeenCalledTimes(1);
+    // No beneficiary flow (beneficiary exists)
+    expect(sender.sendBeneficiaryFlow).not.toHaveBeenCalled();
+  });
+
+  it('(W1) sell_crypto with NO bank beneficiary → sendBeneficiaryFlow(bank_account) + retry message, NO proposal', async () => {
+    const agentPort = makeAgentPort({
+      action: 'sell_crypto',
+      asset: 'USDT',
+      cryptoAmount: '3.0625',
+      fiatCurrency: 'NGN',
+    });
+    const proposalService = makeProposalService();
+    // null → no default bank beneficiary
+    const beneficiaryService = makeBeneficiaryService(null);
+
+    const { svc, sender } = buildService({
+      agentPort,
+      proposalService,
+      beneficiaryService,
+      configService: makeConfigService({
+        flowId: FIXED_FLOW_ID,
+        signingKey: FIXED_SIGNING_KEY,
+      }),
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    // Beneficiary lookup was made
+    expect(beneficiaryService.getDefault).toHaveBeenCalledWith(
+      'user-id-1',
+      'bank_account',
+    );
+
+    // NO sell proposal created
+    expect(proposalService.createSellProposal).not.toHaveBeenCalled();
+
+    // Beneficiary Flow sent to collect bank account
+    expect(sender.sendBeneficiaryFlow).toHaveBeenCalledTimes(1);
+    const benFlowArg = (
+      sender.sendBeneficiaryFlow as jest.Mock<
+        ReturnType<typeof sender.sendBeneficiaryFlow>,
+        [Parameters<typeof sender.sendBeneficiaryFlow>[0]]
+      >
+    ).mock.calls[0][0];
+    expect(benFlowArg.type).toBe('bank_account');
+
+    // sendFlow NOT called (no confirmation Flow)
+    expect(sender.sendFlow).not.toHaveBeenCalled();
+
+    // A retry message is sent via sendText
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toMatch(/bank|account|retry|sell/i);
+  });
+
+  // ── W1: sell_crypto text fallback (no FLOW_ID) ───────────────────────────
+
+  it('(W1) sell_crypto with beneficiary but FLOW_ID empty → text fallback, no sendFlow', async () => {
+    const sellOut = stubSellProposalOutput();
+    const bankBen = stubBankBeneficiary();
+    const agentPort = makeAgentPort({
+      action: 'sell_crypto',
+      asset: 'USDT',
+      cryptoAmount: '3.0625',
+      fiatCurrency: 'NGN',
+    });
+    const proposalService = makeProposalService(
+      stubBuyProposalOutput(),
+      sellOut,
+    );
+    const beneficiaryService = makeBeneficiaryService(bankBen);
+
+    const { svc, sender } = buildService({
+      agentPort,
+      proposalService,
+      beneficiaryService,
+      configService: makeConfigService({ flowId: '', signingKey: '' }),
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(proposalService.createSellProposal).toHaveBeenCalled();
+    expect(sender.sendFlow).not.toHaveBeenCalled();
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toContain('sell');
+  });
+
+  // ── W1: send_crypto — with default crypto beneficiary ────────────────────
+
+  it('(W1) send_crypto with crypto beneficiary (FLOW_ID set) → createSendProposal + sendFlow (request_step_up)', async () => {
+    const sendOut = stubSendProposalOutput();
+    const cryptoBen = stubCryptoBeneficiary();
+    const agentPort = makeAgentPort({
+      action: 'send_crypto',
+      asset: 'USDT',
+      cryptoAmount: '5.0',
+      network: 'TRON',
+    });
+    const proposalService = makeProposalService(
+      stubBuyProposalOutput(),
+      stubSellProposalOutput(),
+      sendOut,
+    );
+    const beneficiaryService = makeBeneficiaryService(cryptoBen);
+    const directiveOutput = {
+      directiveId: FIXED_DIRECTIVE_ID,
+      nonce: FIXED_NONCE,
+      expiresAt: new Date(Date.now() + 300_000),
+    };
+    const directiveService = makeDirectiveService(directiveOutput);
+
+    const { svc, sender } = buildService({
+      agentPort,
+      proposalService,
+      beneficiaryService,
+      directiveService,
+      configService: makeConfigService({
+        flowId: FIXED_FLOW_ID,
+        signingKey: FIXED_SIGNING_KEY,
+      }),
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    // Beneficiary lookup called with crypto_address type
+    expect(beneficiaryService.getDefault).toHaveBeenCalledWith(
+      'user-id-1',
+      'crypto_address',
+    );
+
+    // Send proposal created
+    expect(proposalService.createSendProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-id-1',
+        beneficiaryId: cryptoBen.id,
+      }),
+    );
+
+    // Directive issued with ref 'request_step_up' (send uses step-up)
+    expect(directiveService.issue).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: 'request_step_up' }),
+    );
+
+    // sendFlow called (not sendText confirmation)
+    expect(sender.sendFlow).toHaveBeenCalledTimes(1);
+    // No beneficiary flow
+    expect(sender.sendBeneficiaryFlow).not.toHaveBeenCalled();
+  });
+
+  it('(W1) send_crypto with NO crypto beneficiary → sendBeneficiaryFlow(crypto_address), NO proposal', async () => {
+    const agentPort = makeAgentPort({
+      action: 'send_crypto',
+      asset: 'USDT',
+      cryptoAmount: '5.0',
+      network: 'TRON',
+    });
+    const proposalService = makeProposalService();
+    // null → no default crypto beneficiary
+    const beneficiaryService = makeBeneficiaryService(null);
+
+    const { svc, sender } = buildService({
+      agentPort,
+      proposalService,
+      beneficiaryService,
+      configService: makeConfigService({
+        flowId: FIXED_FLOW_ID,
+        signingKey: FIXED_SIGNING_KEY,
+      }),
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    // Beneficiary lookup was made
+    expect(beneficiaryService.getDefault).toHaveBeenCalledWith(
+      'user-id-1',
+      'crypto_address',
+    );
+
+    // NO send proposal created
+    expect(proposalService.createSendProposal).not.toHaveBeenCalled();
+
+    // Beneficiary Flow sent to collect crypto address
+    expect(sender.sendBeneficiaryFlow).toHaveBeenCalledTimes(1);
+    const benFlowArg = (
+      sender.sendBeneficiaryFlow as jest.Mock<
+        ReturnType<typeof sender.sendBeneficiaryFlow>,
+        [Parameters<typeof sender.sendBeneficiaryFlow>[0]]
+      >
+    ).mock.calls[0][0];
+    expect(benFlowArg.type).toBe('crypto_address');
+
+    // sendFlow NOT called
+    expect(sender.sendFlow).not.toHaveBeenCalled();
+  });
+
+  it('(W1) send_crypto with NO beneficiary, no FLOW_ID → text fallback message, NO proposal', async () => {
+    const agentPort = makeAgentPort({
+      action: 'send_crypto',
+      asset: 'USDT',
+      cryptoAmount: '5.0',
+      network: 'TRON',
+    });
+    const proposalService = makeProposalService();
+    const beneficiaryService = makeBeneficiaryService(null);
+
+    const { svc, sender } = buildService({
+      agentPort,
+      proposalService,
+      beneficiaryService,
+      configService: makeConfigService({ flowId: '', signingKey: '' }),
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(proposalService.createSendProposal).not.toHaveBeenCalled();
+    expect(sender.sendBeneficiaryFlow).not.toHaveBeenCalled();
+    // Text fallback sent
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toMatch(/address|wallet|send/i);
   });
 });

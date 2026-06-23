@@ -73,6 +73,11 @@ import { LedgerPrismaRepository } from './infrastructure/ledger.prisma.repositor
     { provide: LEDGER_REPOSITORY, useClass: LedgerPrismaRepository },
     { provide: CLOCK, useClass: SystemClock },
   ],
-  exports: [ProposalService, DirectiveService, ExecutionService],
+  exports: [
+    ProposalService,
+    DirectiveService,
+    ExecutionService,
+    PROPOSAL_REPOSITORY,
+  ],
 })
 export class TransactionsModule {}

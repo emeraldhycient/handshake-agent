@@ -51,6 +51,10 @@ import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.
 import { InvalidAddressError } from '../../beneficiaries/domain/beneficiary-errors';
 import { verifyFlowToken } from '../application/flow-token';
 import {
+  PROPOSAL_REPOSITORY,
+  type IProposalRepository,
+} from '../../transactions/application/ports/proposal.repository.port';
+import {
   PinInvalidError,
   PinLockedError,
   PinNotSetError,
@@ -99,6 +103,8 @@ export class WhatsAppFlowController {
     private readonly executionService: ExecutionService,
     private readonly beneficiaryService: BeneficiaryService,
     private readonly configService: ConfigService<Env, true>,
+    @Inject(PROPOSAL_REPOSITORY)
+    private readonly proposalRepo: IProposalRepository,
   ) {}
 
   /**
@@ -234,7 +240,7 @@ export class WhatsAppFlowController {
     const data = payload.data ?? {};
     const action = typeof data.action === 'string' ? data.action : '';
 
-    // Route beneficiary-specific actions before the buy flow.
+    // Route beneficiary-specific actions before the proposal execution flow.
     if (action === 'beneficiary_select') {
       return this.handleBeneficiarySelect(userId, data);
     }
@@ -242,7 +248,7 @@ export class WhatsAppFlowController {
       return this.handleBeneficiaryAdd(userId, data);
     }
 
-    // Default: buy confirmation flow — extract PIN + nonce (§3.5: never log them).
+    // Default: proposal confirmation flow — extract PIN + nonce (§3.5: never log them).
     const pin = typeof data.pin === 'string' ? data.pin : '';
     const nonce = typeof data.nonce === 'string' ? data.nonce : '';
 
@@ -250,17 +256,71 @@ export class WhatsAppFlowController {
       return { screen: 'ERROR', data: { message: 'Incomplete submission.' } };
     }
 
+    // Resolve the proposal type to dispatch to the correct execution method (W1).
+    // Read from the DB for integrity — do not trust any client-supplied type field.
+    const proposalType = await this.proposalRepo.getType(proposalId);
+
+    if (proposalType === null) {
+      this.logger.warn({ proposalId }, 'Proposal not found for flow execution');
+      return {
+        screen: 'ERROR',
+        data: { message: 'Session expired or invalid. Please start again.' },
+      };
+    }
+
     // Run the deterministic engine (§3.1: only the engine moves money).
     try {
+      return await this.executeByType({
+        proposalType,
+        userId,
+        proposalId,
+        directiveId,
+        nonce,
+        pin,
+      });
+    } catch (err) {
+      // Map known domain errors to safe, user-friendly messages.
+      // NEVER leak internal error messages, PIN, or nonce.
+      const message = this.mapExecutionError(err);
+      this.logger.warn(
+        {
+          errorName: err instanceof Error ? err.name : 'unknown',
+          proposalType,
+        },
+        'execution failed — returning ERROR screen',
+      );
+      return { screen: 'ERROR', data: { message } };
+    }
+  }
+
+  /**
+   * Dispatches execution to the correct engine method based on proposal type (W1).
+   * Returns the appropriate SUCCESS screen for each type.
+   *
+   * Only 'buy', 'sell', and 'send' are executable via the Flow endpoint.
+   * Any other type returns an ERROR screen (no internal details).
+   */
+  private async executeByType(params: {
+    proposalType: string;
+    userId: string;
+    proposalId: string;
+    directiveId: string;
+    nonce: string;
+    pin: string;
+  }): Promise<unknown> {
+    const { proposalType, userId, proposalId, directiveId, nonce, pin } =
+      params;
+    const idempotencyKey = proposalId;
+
+    if (proposalType === 'buy') {
       const result = await this.executionService.executeBuy({
         userId,
         proposalId,
         directiveId,
         nonce,
         pin,
-        idempotencyKey: proposalId,
+        idempotencyKey,
       });
-
       return {
         screen: 'SUCCESS',
         data: {
@@ -272,16 +332,60 @@ export class WhatsAppFlowController {
           message: 'Transfer the amount to complete your purchase.',
         },
       };
-    } catch (err) {
-      // Map known domain errors to safe, user-friendly messages.
-      // NEVER leak internal error messages, PIN, or nonce.
-      const message = this.mapExecutionError(err);
-      this.logger.warn(
-        { errorName: err instanceof Error ? err.name : 'unknown' },
-        'executeBuy failed — returning ERROR screen',
-      );
-      return { screen: 'ERROR', data: { message } };
     }
+
+    if (proposalType === 'sell') {
+      const result = await this.executionService.executeSell({
+        userId,
+        proposalId,
+        directiveId,
+        nonce,
+        pin,
+        idempotencyKey,
+      });
+      return {
+        screen: 'SUCCESS',
+        data: {
+          transactionId: result.transactionId,
+          providerRef: result.payout.providerRef,
+          message:
+            'Your payout has been initiated. You will be notified once it completes.',
+        },
+      };
+    }
+
+    if (proposalType === 'send') {
+      const result = await this.executionService.executeSend({
+        userId,
+        proposalId,
+        directiveId,
+        nonce,
+        pin,
+        idempotencyKey,
+      });
+      return {
+        screen: 'SUCCESS',
+        data: {
+          transactionId: result.transactionId,
+          txRef: result.onChain.providerRef,
+          message:
+            'Your withdrawal has been initiated. It will be confirmed on-chain shortly.',
+        },
+      };
+    }
+
+    // Unknown proposal type — cannot execute.
+    this.logger.warn(
+      { proposalType },
+      'Unrecognised proposal type for Flow execution',
+    );
+    return {
+      screen: 'ERROR',
+      data: {
+        message:
+          'This transaction type cannot be completed here. Please start again.',
+      },
+    };
   }
 
   // ---------------------------------------------------------------------------

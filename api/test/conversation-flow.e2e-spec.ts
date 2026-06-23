@@ -208,6 +208,11 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       consumeKycToken: jest.fn(),
     } as unknown as HandoffTokenService;
 
+    const fakeBeneficiaryService = {
+      getDefault: jest.fn().mockResolvedValue(null),
+      listForUser: jest.fn().mockResolvedValue([]),
+    } as unknown as import('../src/modules/beneficiaries/application/beneficiary.service').BeneficiaryService;
+
     svc = new ConversationService(
       identityService,
       fakeAgentPort,
@@ -222,6 +227,7 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       fakeWalletService,
       fakeAssetRegistry,
       fakeHandoffTokenService,
+      fakeBeneficiaryService,
     );
 
     // Seed a Tier-1 verified User + ChannelIdentity

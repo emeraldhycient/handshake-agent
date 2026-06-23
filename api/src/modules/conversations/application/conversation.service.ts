@@ -20,6 +20,7 @@ import type { ProposalService } from '../../transactions/application/proposal.se
 import type { DirectiveService } from '../../transactions/application/directive.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { HandoffTokenService } from '../../identity/application/handoff-token.service';
+import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { signFlowToken } from '../../whatsapp/application/flow-token';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 
@@ -52,6 +53,9 @@ export const WALLET_SERVICE = Symbol('WALLET_SERVICE');
 
 /** DI token for HandoffTokenService — injected by symbol (K3). */
 export const HANDOFF_TOKEN_SERVICE = Symbol('HANDOFF_TOKEN_SERVICE');
+
+/** DI token for BeneficiaryService — injected by symbol to avoid coupling at module level (W1). */
+export const BENEFICIARY_SERVICE = Symbol('BENEFICIARY_SERVICE');
 
 const SAFE_FALLBACK = 'Sorry, something went wrong — please try again.';
 
@@ -112,6 +116,8 @@ export class ConversationService implements IInboundHandler {
     private readonly assetRegistry: AssetRegistry,
     @Inject(HANDOFF_TOKEN_SERVICE)
     private readonly handoffTokenService: HandoffTokenService,
+    @Inject(BENEFICIARY_SERVICE)
+    private readonly beneficiaryService: BeneficiaryService,
   ) {}
 
   async handleInbound(msg: InboundMessage): Promise<void> {
@@ -275,6 +281,24 @@ export class ConversationService implements IInboundHandler {
         );
         return { replyText, flowSent };
       }
+      case 'sell_crypto': {
+        const { replyText, flowSent } = await this.handleSell(
+          intent,
+          identity,
+          conversation,
+          msg,
+        );
+        return { replyText, flowSent };
+      }
+      case 'send_crypto': {
+        const { replyText, flowSent } = await this.handleSendCrypto(
+          intent,
+          identity,
+          conversation,
+          msg,
+        );
+        return { replyText, flowSent };
+      }
       case 'receive_crypto': {
         const replyText = await this.handleReceive(identity, msg.fromAddress);
         return { replyText, flowSent: false };
@@ -286,7 +310,7 @@ export class ConversationService implements IInboundHandler {
         };
       }
       default: {
-        // sell_crypto / send_crypto / swap / buy_ticket / check_balance — deferred.
+        // swap / buy_ticket / check_balance — deferred.
         return {
           replyText: this.notSupportedReply(intent.action),
           flowSent: false,
@@ -421,6 +445,299 @@ export class ConversationService implements IInboundHandler {
   }
 
   // ---------------------------------------------------------------------------
+  // Private: sell_crypto handler (W1)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handles a `sell_crypto` intent:
+   *   1. Guard: requires active user (KYC + reverification check).
+   *   2. Resolve default bank beneficiary.
+   *      - If none → send beneficiary Flow (FLOW_ID set) or text fallback, no proposal.
+   *   3. Create sell proposal → send confirmation Flow (request_pin directive).
+   *      - If FLOW_ID unset → text confirmation fallback.
+   *
+   * §3.1: model only proposes; the engine (ExecutionService.executeSell) disposes.
+   * TODO(W2): chain beneficiary-select Flow into proposal in a single Flow.
+   */
+  private async handleSell(
+    intent: RoutableIntent,
+    identity: ResolvedIdentity,
+    conversation: ConversationRecord,
+    msg: InboundMessage,
+  ): Promise<{ replyText: string; flowSent: boolean }> {
+    const guard = this.requireActiveUser(identity, msg.fromAddress);
+    if ('needsKyc' in guard) {
+      const replyText = await this.sendKycHandoff(guard.channelAddress);
+      return { replyText, flowSent: false };
+    }
+    if ('needsReverify' in guard) {
+      return { replyText: this.reverifyFallbackReply(), flowSent: false };
+    }
+    if ('reply' in guard) {
+      return { replyText: guard.reply, flowSent: false };
+    }
+
+    const { user } = guard;
+
+    // Resolve default bank beneficiary — must exist before creating the proposal.
+    const beneficiary = await this.beneficiaryService.getDefault(
+      user.id,
+      'bank_account',
+    );
+
+    if (beneficiary === null) {
+      // No bank account saved → send the beneficiary Flow so the user can add/select one.
+      // TODO(W2): full single-Flow chaining (beneficiary-select → sell proposal) in one round-trip.
+      return this.sendBeneficiaryFlowOrFallback({
+        userId: user.id,
+        to: msg.fromAddress,
+        type: 'bank_account',
+        retryText:
+          'Please add a bank account to sell crypto. Once added, send your sell request again.',
+      });
+    }
+
+    // Happy path: create the sell proposal.
+    const { proposalId, confirmation } =
+      await this.proposalService.createSellProposal({
+        userId: user.id,
+        conversationId: conversation.id,
+        intent: intent as Parameters<
+          ProposalService['createSellProposal']
+        >[0]['intent'],
+        beneficiaryId: beneficiary.id,
+      });
+
+    return this.sendConfirmationFlow({
+      proposalId,
+      userId: user.id,
+      to: msg.fromAddress,
+      directiveRef: 'request_pin',
+      screen: 'SELL_CONFIRM',
+      flowData: {
+        proposalId,
+        asset: confirmation.asset,
+        cryptoAmount: confirmation.cryptoAmount,
+        netFiatAmount: confirmation.netFiatAmount,
+        processingFeeAmount: confirmation.processingFeeAmount,
+        fiatCurrency: confirmation.fiatCurrency,
+      },
+      textFallback: this.buildSellConfirmationText(confirmation),
+      flowSentSummary:
+        'A secure confirmation form has been sent. Please complete it to proceed with your sell.',
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: send_crypto handler (W1)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handles a `send_crypto` intent:
+   *   1. Guard: requires active user.
+   *   2. Resolve default crypto_address beneficiary.
+   *      - If none → send beneficiary Flow (crypto_address) or text fallback.
+   *   3. Create send proposal → send confirmation Flow (request_step_up directive).
+   *      - If FLOW_ID unset → text confirmation fallback.
+   *
+   * §3.1: model only proposes; the engine (ExecutionService.executeSend) disposes.
+   * send uses `request_step_up` (not `request_pin`) because it moves funds on-chain.
+   * TODO(W2): chain beneficiary-select Flow into proposal in a single Flow.
+   */
+  private async handleSendCrypto(
+    intent: RoutableIntent,
+    identity: ResolvedIdentity,
+    conversation: ConversationRecord,
+    msg: InboundMessage,
+  ): Promise<{ replyText: string; flowSent: boolean }> {
+    const guard = this.requireActiveUser(identity, msg.fromAddress);
+    if ('needsKyc' in guard) {
+      const replyText = await this.sendKycHandoff(guard.channelAddress);
+      return { replyText, flowSent: false };
+    }
+    if ('needsReverify' in guard) {
+      return { replyText: this.reverifyFallbackReply(), flowSent: false };
+    }
+    if ('reply' in guard) {
+      return { replyText: guard.reply, flowSent: false };
+    }
+
+    const { user } = guard;
+
+    // Resolve default crypto_address beneficiary — must exist before creating the proposal.
+    const beneficiary = await this.beneficiaryService.getDefault(
+      user.id,
+      'crypto_address',
+    );
+
+    if (beneficiary === null) {
+      // No crypto address saved → send the beneficiary Flow so the user can add/select one.
+      return this.sendBeneficiaryFlowOrFallback({
+        userId: user.id,
+        to: msg.fromAddress,
+        type: 'crypto_address',
+        retryText:
+          'Please add a crypto wallet address first. Once added, send your send request again.',
+      });
+    }
+
+    // Happy path: create the send proposal.
+    const { proposalId, confirmation } =
+      await this.proposalService.createSendProposal({
+        userId: user.id,
+        conversationId: conversation.id,
+        intent: intent as Parameters<
+          ProposalService['createSendProposal']
+        >[0]['intent'],
+        beneficiaryId: beneficiary.id,
+      });
+
+    return this.sendConfirmationFlow({
+      proposalId,
+      userId: user.id,
+      to: msg.fromAddress,
+      directiveRef: 'request_step_up',
+      screen: 'SEND_CONFIRM',
+      flowData: {
+        proposalId,
+        asset: confirmation.asset,
+        cryptoAmount: confirmation.cryptoAmount,
+        network: confirmation.network,
+        networkFeeCrypto: confirmation.networkFeeCrypto,
+        totalDebit: confirmation.totalDebit,
+        toAddressMasked: confirmation.toAddressMasked,
+      },
+      textFallback: this.buildSendConfirmationText(confirmation),
+      flowSentSummary:
+        'A secure confirmation form has been sent. Please complete it to proceed with your send.',
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: shared confirmation Flow presenter (buy/sell/send) (W1)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Shared presenter: issues a directive, signs a flow_token, sends the
+   * confirmation Flow, and returns a short summary text.
+   *
+   * When `WHATSAPP_FLOW_ID` is absent: falls back to the caller-supplied text.
+   *
+   * Extracted to avoid duplication across buy/sell/send (DRY — root §13.2).
+   */
+  private async sendConfirmationFlow(params: {
+    proposalId: string;
+    userId: string;
+    to: string;
+    directiveRef: 'request_pin' | 'request_step_up';
+    screen: string;
+    /** Extra data fields for the Flow screen (proposal-type-specific). */
+    flowData: Record<string, unknown>;
+    /** Registry-formatted text confirmation for the no-Flow fallback. */
+    textFallback: string;
+    /** Short summary text returned when the Flow was sent. */
+    flowSentSummary: string;
+  }): Promise<{ replyText: string; flowSent: boolean }> {
+    const { proposalId, userId, to, directiveRef, screen, flowData } = params;
+    const flowId = this.configService.get<string>('WHATSAPP_FLOW_ID') ?? '';
+
+    if (flowId) {
+      const signingKey =
+        this.configService.get<string>('DIRECTIVE_SIGNING_KEY') ?? '';
+
+      const { directiveId, nonce, expiresAt } =
+        await this.directiveService.issue({
+          proposalId,
+          userId,
+          ref: directiveRef,
+        });
+
+      const flowToken = signFlowToken(
+        {
+          proposalId,
+          directiveId,
+          userId,
+          exp: Math.floor(expiresAt.getTime() / 1000),
+        },
+        signingKey,
+      );
+
+      await this.sender.sendFlow({
+        to,
+        flowId,
+        flowToken,
+        cta: 'Confirm',
+        screen,
+        data: {
+          ...flowData,
+          // nonce travels only via Flow E2E encryption — never plaintext (§3.5)
+          nonce,
+        },
+      });
+
+      return { replyText: params.flowSentSummary, flowSent: true };
+    }
+
+    // Fallback: no Flow published yet — send itemized text confirmation.
+    this.logger.warn(
+      { proposalId },
+      'WHATSAPP_FLOW_ID not configured — falling back to plain-text confirmation',
+    );
+    return { replyText: params.textFallback, flowSent: false };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: send beneficiary Flow or text fallback (W1)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Sends the beneficiary add/select Flow (FLOW_ID set) or a plain-text retry
+   * message when WHATSAPP_FLOW_ID is not configured.
+   *
+   * Returns { replyText, flowSent: true } when the Flow was dispatched,
+   * { replyText, flowSent: false } for the text-fallback path.
+   */
+  private async sendBeneficiaryFlowOrFallback(params: {
+    userId: string;
+    to: string;
+    type: 'bank_account' | 'crypto_address';
+    retryText: string;
+  }): Promise<{ replyText: string; flowSent: boolean }> {
+    const { userId, to, type, retryText } = params;
+    const flowId = this.configService.get<string>('WHATSAPP_FLOW_ID') ?? '';
+
+    if (flowId) {
+      const signingKey =
+        this.configService.get<string>('DIRECTIVE_SIGNING_KEY') ?? '';
+
+      // Mint a short-lived flow_token for the beneficiary flow session.
+      // No directive is issued here — the beneficiary-flow endpoint validates
+      // userId from the token to authorise beneficiary writes (S3).
+      const exp = Math.floor(Date.now() / 1000) + 600; // 10-minute window
+      const flowToken = signFlowToken(
+        { proposalId: '', directiveId: '', userId, exp },
+        signingKey,
+      );
+
+      await this.sender.sendBeneficiaryFlow({
+        to,
+        flowId,
+        flowToken,
+        type,
+        beneficiaries: [], // S3: empty for "add new" flow; listing saved benefs is a follow-up
+      });
+
+      // flowSent: false — the beneficiary Flow is a collection form, not the
+      // confirmation Flow. The retryText guidance must still reach the user via
+      // sendText so they know to re-send their original request after adding.
+      return { replyText: retryText, flowSent: false };
+    }
+
+    // Fallback: no Flow published yet — plain-text guidance.
+    return { replyText: retryText, flowSent: false };
+  }
+
+  // ---------------------------------------------------------------------------
   // Private: buy-confirmation presenter
   // ---------------------------------------------------------------------------
 
@@ -449,67 +766,24 @@ export class ConversationService implements IInboundHandler {
     to: string;
   }): Promise<{ replyText: string; flowSent: boolean }> {
     const { proposalId, confirmation, userId, to } = params;
-    const flowId = this.configService.get<string>('WHATSAPP_FLOW_ID') ?? '';
-
-    if (flowId) {
-      // Flow path: mint a directive, sign a flow_token, send the E2E confirmation Flow.
-      // The nonce travels ONLY via the Flow E2E channel — never in plaintext chat (§3.5).
-      const signingKey =
-        this.configService.get<string>('DIRECTIVE_SIGNING_KEY') ?? '';
-
-      const { directiveId, nonce, expiresAt } =
-        await this.directiveService.issue({
-          proposalId,
-          userId,
-          ref: 'request_pin',
-        });
-
-      const flowToken = signFlowToken(
-        {
-          proposalId,
-          directiveId,
-          userId,
-          exp: Math.floor(expiresAt.getTime() / 1000),
-        },
-        signingKey,
-      );
-
-      await this.sender.sendFlow({
-        to,
-        flowId,
-        flowToken,
-        cta: 'Confirm',
-        screen: 'CONFIRM',
-        data: {
-          proposalId,
-          asset: confirmation.asset,
-          cryptoAmount: confirmation.cryptoAmount,
-          fiatAmount: confirmation.fiatAmount,
-          processingFeeAmount: confirmation.processingFeeAmount,
-          totalFiat: confirmation.totalFiat,
-          // nonce travels only via Flow E2E encryption — never plaintext (§3.5)
-          nonce,
-        },
-      });
-
-      // Short summary for the reply row — the Flow is the real interaction surface.
-      return {
-        replyText:
-          'A secure confirmation form has been sent. Please complete it to proceed with your purchase.',
-        flowSent: true,
-      };
-    }
-
-    // Fallback: no Flow published yet — send itemized text confirmation.
-    // Operators enable the Flow by setting WHATSAPP_FLOW_ID after publishing in Meta.
-    this.logger.warn(
-      { proposalId },
-      'WHATSAPP_FLOW_ID not configured — falling back to plain-text confirmation',
-    );
-    return {
-      replyText: this.buildConfirmationText(confirmation),
-      flowSent: false,
-    };
+    return this.sendConfirmationFlow({
+      proposalId,
+      userId,
+      to,
+      directiveRef: 'request_pin',
+      screen: 'CONFIRM',
+      flowData: {
+        proposalId,
+        asset: confirmation.asset,
+        cryptoAmount: confirmation.cryptoAmount,
+        fiatAmount: confirmation.fiatAmount,
+        processingFeeAmount: confirmation.processingFeeAmount,
+        totalFiat: confirmation.totalFiat,
+      },
+      textFallback: this.buildConfirmationText(confirmation),
+      flowSentSummary:
+        'A secure confirmation form has been sent. Please complete it to proceed with your purchase.',
+    });
   }
 
   /**
@@ -576,6 +850,60 @@ export class ConversationService implements IInboundHandler {
     return (
       `Your ${assetMeta.displayName} deposit address (${networkMeta.displayName}):\n${wallet.address}\n\n` +
       `Only send ${assetMeta.displayName} on the ${networkMeta.displayName} to this address. Other assets or networks will be lost.`
+    );
+  }
+
+  /**
+   * Builds the itemized sell confirmation text via registry formatters.
+   */
+  private buildSellConfirmationText(c: {
+    asset: string;
+    cryptoAmount: string;
+    fiatCurrency: string;
+    netFiatAmount: string;
+    processingFeeAmount: string;
+    expiresAt: string;
+    beneficiaryLabel?: string;
+  }): string {
+    const assetMeta = this.assetRegistry.asset(c.asset);
+    const destLabel = c.beneficiaryLabel ? ` → ${c.beneficiaryLabel}` : '';
+    return (
+      `Here is your sell summary${destLabel}:\n` +
+      `Asset: ${assetMeta.displayName}\n` +
+      `You sell: ${this.assetRegistry.formatCrypto(c.asset, c.cryptoAmount)}\n` +
+      `You receive: ${this.assetRegistry.formatFiat(c.fiatCurrency, c.netFiatAmount)}\n` +
+      `Processing fee: ${this.assetRegistry.formatFiat(c.fiatCurrency, c.processingFeeAmount)}\n` +
+      `Expires at: ${c.expiresAt}\n` +
+      `Reply CONFIRM to proceed.`
+    );
+  }
+
+  /**
+   * Builds the itemized send confirmation text via registry formatters.
+   */
+  private buildSendConfirmationText(c: {
+    asset: string;
+    cryptoAmount: string;
+    network: string;
+    networkFeeCrypto: string;
+    totalDebit: string;
+    toAddressMasked: string;
+    expiresAt: string;
+    beneficiaryLabel?: string;
+  }): string {
+    const assetMeta = this.assetRegistry.asset(c.asset);
+    const networkMeta = this.assetRegistry.network(c.network);
+    const destLabel = c.beneficiaryLabel ? ` (${c.beneficiaryLabel})` : '';
+    return (
+      `Here is your send summary:\n` +
+      `Asset: ${assetMeta.displayName}\n` +
+      `Network: ${networkMeta.displayName}\n` +
+      `You send: ${this.assetRegistry.formatCrypto(c.asset, c.cryptoAmount)}\n` +
+      `Network fee: ${this.assetRegistry.formatCrypto(c.asset, c.networkFeeCrypto)}\n` +
+      `Total debit: ${this.assetRegistry.formatCrypto(c.asset, c.totalDebit)}\n` +
+      `To${destLabel}: ${c.toAddressMasked}\n` +
+      `Expires at: ${c.expiresAt}\n` +
+      `Reply CONFIRM to proceed.`
     );
   }
 
