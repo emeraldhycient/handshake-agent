@@ -437,6 +437,47 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
       ).toBeCloseTo(16, 4);
     });
 
+    it('atomicity: a settling Transaction always has its reserve ledger entries (no gap between creation and reserve)', async () => {
+      // This test verifies the C1 fix: createSellSettlingWithReserveAtomic runs
+      // Transaction creation AND reserve entries in ONE $transaction, so there is
+      // never a state where the Transaction exists but reserve entries are missing.
+      //
+      // We cannot simulate a crash-between-writes, but we CAN assert the
+      // post-condition: after executeSell returns, EXACTLY 2 USDT reserve
+      // LedgerEntries exist for the transaction.
+      const { proposalId } = await seedSellProposalAndPrereqs();
+      const { directiveId, nonce } = await issueDirective(proposalId);
+      const idempotencyKey = randomUUID();
+
+      const result = await executionService.executeSell({
+        userId,
+        proposalId,
+        directiveId,
+        nonce,
+        pin: '123456',
+        idempotencyKey,
+      });
+
+      // Must be settling.
+      expect(result.status).toBe('settling');
+
+      // Reserve entries: exactly 2 USDT entries (user_wallet debit + clearing credit).
+      const reserveEntries = await prisma.ledgerEntry.findMany({
+        where: {
+          transactionId: result.transactionId,
+          currency: 'USDT',
+        },
+      });
+      expect(reserveEntries).toHaveLength(2);
+
+      // Double-entry: USDT signed amounts must sum to 0.
+      const usdtSum = reserveEntries.reduce(
+        (sum, e) => sum + Number(e.amount),
+        0,
+      );
+      expect(usdtSum).toBeCloseTo(0, 10);
+    });
+
     it('idempotent replay: same idempotencyKey returns same transactionId, no new rows', async () => {
       const { proposalId } = await seedSellProposalAndPrereqs();
       const { directiveId, nonce } = await issueDirective(proposalId);

@@ -33,6 +33,7 @@ import { DirectivePrismaRepository } from '../src/modules/transactions/infrastru
 import { TransactionPrismaRepository } from '../src/modules/transactions/infrastructure/transaction.prisma.repository';
 import { SettlementOutboxPrismaRepository } from '../src/modules/transactions/infrastructure/settlement-outbox.prisma.repository';
 import { SettlementPrismaRepository } from '../src/modules/transactions/infrastructure/settlement.prisma.repository';
+import { LedgerPrismaRepository } from '../src/modules/transactions/infrastructure/ledger.prisma.repository';
 import { PinPrismaRepository } from '../src/core/auth/infrastructure/pin.prisma.repository';
 import { IdentityPrismaRepository } from '../src/modules/identity/infrastructure/identity.prisma.repository';
 import { VelocityPrismaRepository } from '../src/modules/identity/infrastructure/velocity.prisma.repository';
@@ -221,6 +222,9 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       config,
       clock,
       assetRegistry,
+      // beneficiaryService: sell tests use a dedicated e2e spec; stubs here suffice
+      { getById: () => Promise.resolve(null) } as never,
+      new LedgerPrismaRepository(ps),
     );
 
     // Seed a User that is KYC-verified (Tier 1) and has a PIN set.

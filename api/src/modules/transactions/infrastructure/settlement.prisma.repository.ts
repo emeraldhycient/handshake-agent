@@ -33,6 +33,7 @@ import {
   ReceiptDeliveryStatus,
   SettlementOutboxStatus,
   TransactionStatus,
+  VelocityCounterType,
 } from '../../../../generated/prisma/client';
 import type { Prisma } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
@@ -56,7 +57,10 @@ import type {
   SettleSellFinalizeInput,
   SettleSellFinalizeOutput,
   SettleSellRefundInput,
+  CreateSellSettlingWithReserveInput,
+  CreateSellSettlingWithReserveOutput,
 } from '../application/ports/settlement.repository.port';
+import type { TransactionRecord } from '../application/ports/transaction.repository.port';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -369,6 +373,130 @@ function formatReceiptNumber(year: string, count: bigint): string {
 }
 
 // ---------------------------------------------------------------------------
+// Transaction-record helpers (shared with the createSellSettlingWithReserveAtomic method)
+// ---------------------------------------------------------------------------
+
+const TRANSACTION_SELECT_SELL = {
+  id: true,
+  proposalId: true,
+  userId: true,
+  type: true,
+  status: true,
+  idempotencyKey: true,
+  requestChecksum: true,
+  fxRateSnapshot: true,
+  metadata: true,
+  processorTxRef: true,
+  pinVerifiedAt: true,
+  createdAt: true,
+} as const;
+
+function toTransactionRecord(row: {
+  id: string;
+  proposalId: string | null;
+  userId: string;
+  type: string;
+  status: string;
+  idempotencyKey: string;
+  requestChecksum: string;
+  fxRateSnapshot: unknown;
+  metadata: unknown;
+  processorTxRef: string | null;
+  pinVerifiedAt: Date | null;
+  createdAt: Date;
+}): TransactionRecord {
+  return {
+    id: row.id,
+    proposalId: row.proposalId,
+    userId: row.userId,
+    type: row.type,
+    status: row.status,
+    idempotencyKey: row.idempotencyKey,
+    requestChecksum: row.requestChecksum,
+    fxRateSnapshot:
+      row.fxRateSnapshot !== null && row.fxRateSnapshot !== undefined
+        ? (row.fxRateSnapshot as { toString(): string }).toString()
+        : null,
+    metadata: row.metadata as Record<string, unknown>,
+    processorTxRef: row.processorTxRef,
+    pinVerifiedAt: row.pinVerifiedAt,
+    createdAt: row.createdAt,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Velocity helpers (duplicated from transaction.prisma.repository.ts to allow
+// running inside this repository's $transaction without a cross-repo import).
+// ---------------------------------------------------------------------------
+
+const WINDOW_24H_MS_SETTLE = 24 * 60 * 60 * 1_000;
+
+async function upsertVelocityCounterInSettle(
+  tx: Prisma.TransactionClient,
+  params: {
+    userId: string;
+    counterType: VelocityCounterType;
+    delta: string;
+    now: Date;
+  },
+): Promise<void> {
+  const { userId, counterType, delta, now } = params;
+  const windowEnd = new Date(now.getTime() + WINDOW_24H_MS_SETTLE);
+
+  const existing = await tx.velocityCounter.findUnique({
+    where: { userId_counterType: { userId, counterType } },
+    select: { windowEnd: true, currentValue: true },
+  });
+
+  const windowExpired =
+    existing === null || existing.windowEnd.getTime() <= now.getTime();
+
+  if (windowExpired) {
+    await tx.velocityCounter.upsert({
+      where: { userId_counterType: { userId, counterType } },
+      create: {
+        userId,
+        counterType,
+        currentValue: delta,
+        windowStart: now,
+        windowEnd,
+      },
+      update: {
+        currentValue: delta,
+        windowStart: now,
+        windowEnd,
+      },
+    });
+  } else {
+    await tx.velocityCounter.update({
+      where: { userId_counterType: { userId, counterType } },
+      data: {
+        currentValue: { increment: delta as unknown as number },
+      },
+    });
+  }
+}
+
+async function writeVelocityIncrementsInSettle(
+  tx: Prisma.TransactionClient,
+  increment: { userId: string; fiatAmountStr: string; now: Date },
+): Promise<void> {
+  const { userId, fiatAmountStr, now } = increment;
+  await upsertVelocityCounterInSettle(tx, {
+    userId,
+    counterType: VelocityCounterType.amount_24h,
+    delta: fiatAmountStr,
+    now,
+  });
+  await upsertVelocityCounterInSettle(tx, {
+    userId,
+    counterType: VelocityCounterType.count_24h,
+    delta: '1',
+    now,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Repository
 // ---------------------------------------------------------------------------
 
@@ -558,6 +686,112 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       select: { receiptNumber: true },
     });
     return row?.receiptNumber ?? null;
+  }
+
+  /**
+   * ATOMICALLY creates the sell Transaction row, marks the Proposal 'executing',
+   * upserts VelocityCounter rows, AND posts the USDT reserve ledger entries
+   * (user_wallet → clearing) — all in ONE `prisma.$transaction` (C1 fix).
+   *
+   * This eliminates the double-spend window that existed when
+   * `createSettlingWithProposal` and `postSellReserveAtomic` were called as two
+   * separate $transactions. If a process dies between them, the Transaction would
+   * exist without reserve entries, allowing idempotency to return 'settling'
+   * without ever debiting the user's wallet.
+   *
+   * Steps inside the $transaction:
+   *   a. Create Transaction row (status='settling', type='sell').
+   *   b. Update Proposal → 'executing' (+ confirmedAt).
+   *   c. Upsert VelocityCounter rows (amount_24h, count_24h).
+   *   d. Read sell reserve account states (user_wallet + clearing) inside the tx.
+   *   e. buildSellReserveEntries → insert 2 LedgerEntry rows (USDT: user→clearing).
+   */
+  async createSellSettlingWithReserveAtomic(
+    input: CreateSellSettlingWithReserveInput,
+  ): Promise<CreateSellSettlingWithReserveOutput> {
+    const {
+      txnData,
+      proposalId,
+      confirmedAt,
+      velocityIncrement,
+      walletId,
+      cryptoAmount,
+      now,
+    } = input;
+
+    const row = await this.prisma.$transaction(
+      async (tx) => {
+        // ── a. Create Transaction row ─────────────────────────────────────────
+        const created = await tx.transaction.create({
+          data: {
+            userId: txnData.userId,
+            proposalId: txnData.proposalId,
+            type: txnData.type,
+            status: txnData.status,
+            idempotencyKey: txnData.idempotencyKey,
+            requestChecksum: txnData.requestChecksum,
+            fxRateSnapshot: txnData.fxRateSnapshot as unknown as Prisma.Decimal,
+            metadata: txnData.metadata as unknown as Prisma.InputJsonValue,
+            pinVerifiedAt: txnData.pinVerifiedAt,
+          },
+          select: TRANSACTION_SELECT_SELL,
+        });
+
+        // ── b. Flip the Proposal to 'executing' ───────────────────────────────
+        await tx.proposal.update({
+          where: { id: proposalId },
+          data: {
+            status: 'executing',
+            confirmedAt,
+          },
+        });
+
+        // ── c. Upsert velocity counters atomically (V1) ───────────────────────
+        await writeVelocityIncrementsInSettle(tx, velocityIncrement);
+
+        // ── d. Read sell reserve account states inside the tx ─────────────────
+        // Cast the interactive tx client to PrismaService for our helper —
+        // both have the same Prisma model API at runtime (safe boundary cast).
+        const accountStates = await fetchSellReserveAccountStates(
+          tx as unknown as PrismaService,
+          walletId,
+        );
+
+        // ── e. Build and insert reserve LedgerEntry rows ──────────────────────
+        const drafts: LedgerEntryDraft[] = buildSellReserveEntries({
+          walletId,
+          cryptoAmount,
+          postedAt: now,
+          accountStates,
+        });
+
+        for (const draft of drafts) {
+          await tx.ledgerEntry.create({
+            data: {
+              transactionId: created.id,
+              accountType: draft.accountType,
+              accountId: draft.accountId,
+              currency: draft.currency,
+              amount: draft.amount as unknown as Prisma.Decimal,
+              direction: draft.direction,
+              description: draft.description,
+              balanceAfter: draft.balanceAfter as unknown as Prisma.Decimal,
+              sequence: draft.sequence,
+              postedAt: draft.postedAt,
+            },
+          });
+        }
+
+        return created;
+      },
+      {
+        // Serializable isolation prevents balanceAfter sequence races when
+        // multiple sell executes run concurrently for the same user.
+        isolationLevel: 'Serializable',
+      },
+    );
+
+    return { txn: toTransactionRecord(row) };
   }
 
   /**

@@ -28,16 +28,21 @@
 
 import { createHash } from 'node:crypto';
 
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import { PinService } from '../../../core/auth/pin.service';
 import { KycGateService } from '../../identity/application/kyc-gate.service';
+import { IdentityService } from '../../identity/application/identity.service';
 import { QuotesService } from '../../quotes/application/quotes.service';
 import { WalletService } from '../../wallets/application/wallet.service';
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import {
+  WHATSAPP_SENDER,
+  type IWhatsAppSender,
+} from '../../whatsapp/application/ports/whatsapp-sender.port';
 import type {
   AppConfig,
   BuyConfig,
@@ -173,6 +178,7 @@ const REQUIRED_DIRECTIVE_REF = 'request_pin';
 export class ExecutionService {
   private readonly maxBuyDriftBps: number;
   private readonly maxSellDriftBps: number;
+  private readonly logger = new Logger(ExecutionService.name);
 
   constructor(
     @Inject(PROPOSAL_REPOSITORY)
@@ -199,6 +205,11 @@ export class ExecutionService {
     private readonly beneficiaryService: BeneficiaryService,
     @Inject(LEDGER_REPOSITORY)
     private readonly ledgerRepo: ILedgerRepository,
+    @Optional()
+    private readonly identityService?: IdentityService,
+    @Optional()
+    @Inject(WHATSAPP_SENDER)
+    private readonly whatsAppSender?: IWhatsAppSender,
   ) {
     const buyConfig = this.config.get<BuyConfig>('buy');
     this.maxBuyDriftBps = buyConfig.maxDriftBps;
@@ -704,7 +715,13 @@ export class ExecutionService {
 
     // ── Step 9: Atomic write ─────────────────────────────────────────────────
     // create Transaction(sell, settling) + reserve USDT (user_wallet→clearing)
-    // + mark Proposal→executing — all in a single DB $transaction (C1).
+    // + mark Proposal→executing — all in a SINGLE DB $transaction (C1).
+    //
+    // NOTE: We use settlementRepo.createSellSettlingWithReserveAtomic instead of
+    // the prior two-call pattern (transactionRepo.createSettlingWithProposal +
+    // settlementRepo.postSellReserveAtomic). The two separate $transactions had a
+    // double-spend window: if the process died between them, idempotency would
+    // return 'settling' on retry without ever debiting the user_wallet.
     const requestChecksum = this.buildRequestChecksum({
       userId,
       proposalId,
@@ -713,43 +730,36 @@ export class ExecutionService {
       fxRate: storedQuote.fxRate,
     });
 
-    const txn = await this.transactionRepo.createSettlingWithProposal({
-      txnData: {
-        proposalId,
-        userId,
-        type: 'sell',
-        status: 'settling',
-        idempotencyKey,
-        requestChecksum,
-        fxRateSnapshot: storedQuote.fxRate,
-        metadata: {
-          asset: storedQuote.asset,
-          cryptoAmount: storedQuote.cryptoAmount,
-          netFiatAmount: storedQuote.fiatAmount,
-          beneficiaryId,
-          walletId: wallet.id,
+    const { txn } =
+      await this.settlementRepo.createSellSettlingWithReserveAtomic({
+        txnData: {
+          proposalId,
+          userId,
+          type: 'sell',
+          status: 'settling',
+          idempotencyKey,
+          requestChecksum,
+          fxRateSnapshot: storedQuote.fxRate,
+          metadata: {
+            asset: storedQuote.asset,
+            cryptoAmount: storedQuote.cryptoAmount,
+            netFiatAmount: storedQuote.fiatAmount,
+            beneficiaryId,
+            walletId: wallet.id,
+          },
+          pinVerifiedAt: now,
         },
-        pinVerifiedAt: now,
-      },
-      proposalId,
-      confirmedAt: now,
-      velocityIncrement: {
-        userId,
-        fiatAmountStr: storedQuote.fiatAmount,
+        proposalId,
+        confirmedAt: now,
+        velocityIncrement: {
+          userId,
+          fiatAmountStr: storedQuote.fiatAmount,
+          now,
+        },
+        walletId: wallet.id,
+        cryptoAmount: storedQuote.cryptoAmount,
         now,
-      },
-    });
-
-    // Post reserve ledger entries atomically (Phase 1 of the two-phase sell).
-    // This USDT debit (user_wallet → clearing) prevents double-spend while the
-    // NGN payout is in flight. The reserve entries are the source of truth for
-    // the user's USDT balance during settlement.
-    await this.settlementRepo.postSellReserveAtomic({
-      transactionId: txn.id,
-      walletId: wallet.id,
-      cryptoAmount: storedQuote.cryptoAmount,
-      now,
-    });
+      });
 
     // ── Step 10: Initiate NGN payout ─────────────────────────────────────────
     const payout = await this.paymentProvider.createPayout({
@@ -798,19 +808,19 @@ export class ExecutionService {
    * Phase 2 of a sell: verifies the NGN payout then atomically settles or refunds.
    *
    * Flow (§3.1 preserved — model proposes, engine disposes):
-   *   1. Load Transaction by providerRef (stored in SettlementOutbox / metadata).
-   *      Use idempotencyKey as the lookup (= reference passed to createPayout).
+   *   1. Load Transaction by idempotencyKey (= reference passed to createPayout).
    *   2. Idempotent path: already completed → return existing receipt.
    *   3. Guard: status must be 'settling'.
    *   4. Verify payout with PAYMENT_PROVIDER.verifyPayout(reference).
    *      - Pending → return pending.
    *      - Successful → settleSellFinalizeAtomic.
    *      - Failed → settleSellRefundAtomic + return failed.
+   *   5. Send WhatsApp notification (swallowed — never breaks settlement).
    */
   async settleSellPayout(input: SettleSellInput): Promise<SettleSellResult> {
     const { reference } = input;
 
-    // ── Step 1: Load Transaction ─────────────────────────────────────────────
+    // ── Step 1: Load Transaction by idempotencyKey ───────────────────────────
     const txn = await this.transactionRepo.findByIdempotencyKey(reference);
     if (txn === null) {
       throw new ProposalNotExecutableError(
@@ -864,6 +874,14 @@ export class ExecutionService {
           year,
         });
 
+      // ── Step 6a: Notify (success) — errors are swallowed, never break settlement.
+      await this.notifySellComplete({
+        userId: txn.userId,
+        receiptNumber,
+        cryptoAmount,
+        netFiatAmount,
+      });
+
       return {
         transactionId: txn.id,
         status: 'completed',
@@ -882,6 +900,12 @@ export class ExecutionService {
       now,
     });
 
+    // ── Step 6b: Notify (failure) — errors are swallowed, never break settlement.
+    await this.notifySellFailed({
+      userId: txn.userId,
+      cryptoAmount,
+    });
+
     return {
       transactionId: txn.id,
       status: 'failed',
@@ -892,6 +916,92 @@ export class ExecutionService {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Sends a sell-complete WhatsApp receipt to the user.
+   *
+   * Errors are swallowed and logged — notification failure must NEVER break
+   * settlement (settlement has already committed; the user's bank payout is done).
+   */
+  private async notifySellComplete(params: {
+    userId: string;
+    receiptNumber: string;
+    cryptoAmount: string;
+    netFiatAmount: string;
+  }): Promise<void> {
+    try {
+      if (
+        this.identityService === undefined ||
+        this.whatsAppSender === undefined
+      ) {
+        return;
+      }
+      const waAddress = await this.identityService.findWhatsAppAddress(
+        params.userId,
+      );
+      if (waAddress === null) {
+        return;
+      }
+      const formattedCrypto = this.assetRegistry.formatCrypto(
+        params.cryptoAmount,
+        'USDT',
+      );
+      const formattedFiat = this.assetRegistry.formatFiat(
+        params.netFiatAmount,
+        'NGN',
+      );
+      const body =
+        `✅ Your crypto sell is complete!\n` +
+        `Receipt: ${params.receiptNumber}\n` +
+        `You sold ${formattedCrypto} — ${formattedFiat} is on its way to your bank account.`;
+      await this.whatsAppSender.sendText(waAddress, body);
+    } catch (err: unknown) {
+      // Notification errors must never propagate — settlement is already committed.
+      this.logger.warn(
+        { userId: params.userId, err },
+        'notifySellComplete: failed to send WhatsApp receipt (swallowed)',
+      );
+    }
+  }
+
+  /**
+   * Sends a sell-failed/refund WhatsApp notice to the user.
+   *
+   * Errors are swallowed and logged — notification failure must NEVER break
+   * the refund flow (the refund ledger has already committed).
+   */
+  private async notifySellFailed(params: {
+    userId: string;
+    cryptoAmount: string;
+  }): Promise<void> {
+    try {
+      if (
+        this.identityService === undefined ||
+        this.whatsAppSender === undefined
+      ) {
+        return;
+      }
+      const waAddress = await this.identityService.findWhatsAppAddress(
+        params.userId,
+      );
+      if (waAddress === null) {
+        return;
+      }
+      const formattedCrypto = this.assetRegistry.formatCrypto(
+        params.cryptoAmount,
+        'USDT',
+      );
+      const body =
+        `⚠️ Sell payout failed\n` +
+        `Your ${formattedCrypto} has been refunded to your Handshake wallet.`;
+      await this.whatsAppSender.sendText(waAddress, body);
+    } catch (err: unknown) {
+      this.logger.warn(
+        { userId: params.userId, err },
+        'notifySellFailed: failed to send WhatsApp notice (swallowed)',
+      );
+    }
+  }
 
   /**
    * Builds the SHA-256 request checksum over the canonical parameter set.

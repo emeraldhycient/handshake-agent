@@ -7,6 +7,7 @@ import { QuotesModule } from '../quotes/quotes.module';
 import { WalletsModule } from '../wallets/wallets.module';
 import { TreasuryModule } from '../treasury/treasury.module';
 import { BeneficiariesModule } from '../beneficiaries/beneficiaries.module';
+import { WhatsAppSenderModule } from '../whatsapp/whatsapp-sender.module';
 import { ProposalService } from './application/proposal.service';
 import { DirectiveService } from './application/directive.service';
 import { ExecutionService } from './application/execution.service';
@@ -49,6 +50,7 @@ import { LedgerPrismaRepository } from './infrastructure/ledger.prisma.repositor
     WalletsModule,
     TreasuryModule,
     BeneficiariesModule,
+    WhatsAppSenderModule,
   ],
   providers: [
     ProposalService,

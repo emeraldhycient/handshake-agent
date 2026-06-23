@@ -215,11 +215,19 @@ const STUB_RECEIPT_NUMBER = 'HS-2025-000001';
 function makeSettlementRepo(
   receiptNumber: string | null = null,
   atomicOutput: SettleBuyAtomicOutput = { receiptNumber: STUB_RECEIPT_NUMBER },
+  sellTxnOverride?: TransactionRecord,
 ): jest.Mocked<ISettlementRepository> {
   return {
     findReceiptNumber: jest.fn().mockResolvedValue(receiptNumber),
     settleBuyAtomic: jest.fn().mockResolvedValue(atomicOutput),
     postSellReserveAtomic: jest.fn().mockResolvedValue(undefined),
+    // Lazy so callers that do NOT need sell can pass undefined; sell tests
+    // call buildSellService which passes STUB_SELL_TXN explicitly.
+    createSellSettlingWithReserveAtomic: jest
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve({ txn: sellTxnOverride ?? STUB_TXN }),
+      ),
     settleSellFinalizeAtomic: jest
       .fn()
       .mockResolvedValue({ receiptNumber: STUB_RECEIPT_NUMBER }),
@@ -1359,6 +1367,20 @@ function makeSellPaymentProvider(
   return svc;
 }
 
+/** A IdentityService stub that returns a WhatsApp address. */
+function makeIdentityService(waAddress: string | null = '+2349000000001'): {
+  findWhatsAppAddress: jest.Mock;
+} {
+  return { findWhatsAppAddress: jest.fn().mockResolvedValue(waAddress) };
+}
+
+/** A IWhatsAppSender stub. */
+function makeWhatsAppSender(): { sendText: jest.Mock } {
+  return {
+    sendText: jest.fn().mockResolvedValue({ externalMessageId: 'wamid.test' }),
+  };
+}
+
 /**
  * Builds ExecutionService with sell-specific stubs.
  * Overrides the default buildService factory to inject sell deps.
@@ -1378,6 +1400,8 @@ function buildSellService(
     paymentProvider?: ReturnType<typeof makeSellPaymentProvider>;
     beneficiaryService?: ReturnType<typeof makeBeneficiaryService>;
     ledgerRepo?: ReturnType<typeof makeLedgerRepo>;
+    identityService?: ReturnType<typeof makeIdentityService>;
+    whatsAppSender?: ReturnType<typeof makeWhatsAppSender>;
   } = {},
 ): ExecutionService {
   return new ExecutionService(
@@ -1385,7 +1409,13 @@ function buildSellService(
     overrides.quoteRepo ?? makeQuoteRepo(STORED_SELL_QUOTE),
     overrides.transactionRepo ?? makeTransactionRepo(null, STUB_SELL_TXN),
     overrides.outboxRepo ?? makeOutboxRepo(),
-    overrides.settlementRepo ?? makeSettlementRepo(),
+    // Default sell settlement repo uses STUB_SELL_TXN for the atomic create.
+    overrides.settlementRepo ??
+      makeSettlementRepo(
+        null,
+        { receiptNumber: STUB_RECEIPT_NUMBER },
+        STUB_SELL_TXN,
+      ),
     (overrides.quotesService as unknown as QuotesService) ??
       (makeSellQuotesService() as unknown as QuotesService),
     (overrides.kycGate as unknown as KycGateService) ??
@@ -1404,20 +1434,24 @@ function buildSellService(
     (overrides.beneficiaryService as never) ??
       (makeBeneficiaryService() as never),
     (overrides.ledgerRepo as never) ?? makeLedgerRepo(),
+    (overrides.identityService as never) ?? (makeIdentityService() as never),
+    (overrides.whatsAppSender as never) ?? (makeWhatsAppSender() as never),
   );
 }
 
 describe('ExecutionService.executeSell', () => {
   // ── Happy path ──────────────────────────────────────────────────────────────
 
-  it('happy path: creates Transaction (settling), reserves USDT, initiates payout, enqueues outbox', async () => {
-    const transactionRepo = makeTransactionRepo(null, STUB_SELL_TXN);
-    const settlementRepo = makeSettlementRepo();
+  it('happy path: creates Transaction (settling), reserves USDT atomically, initiates payout, enqueues outbox', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
     const outboxRepo = makeOutboxRepo();
     const paymentProvider = makeSellPaymentProvider();
 
     const svc = buildSellService({
-      transactionRepo,
       settlementRepo,
       outboxRepo,
       paymentProvider,
@@ -1428,8 +1462,13 @@ describe('ExecutionService.executeSell', () => {
     expect(result.status).toBe('settling');
     expect(result.transactionId).toBe(SELL_TXN_ID);
     expect(result.payout.providerRef).toBe(PROVIDER_REF);
-    expect(transactionRepo.createSettlingWithProposal).toHaveBeenCalledTimes(1);
-    expect(settlementRepo.postSellReserveAtomic).toHaveBeenCalledTimes(1);
+
+    // C1 fix: only the atomic combined method must be called (not the two-step pattern).
+    expect(
+      settlementRepo.createSellSettlingWithReserveAtomic,
+    ).toHaveBeenCalledTimes(1);
+    // The old separate calls must NOT be made.
+    expect(settlementRepo.postSellReserveAtomic).not.toHaveBeenCalled();
     expect(paymentProvider.createPayout).toHaveBeenCalledTimes(1);
     expect(outboxRepo.create).toHaveBeenCalledTimes(1);
   });
@@ -1438,14 +1477,20 @@ describe('ExecutionService.executeSell', () => {
 
   it('proposal not found → ProposalNotExecutableError, no Transaction', async () => {
     const proposalRepo = makeProposalRepo(null);
-    const transactionRepo = makeTransactionRepo();
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
 
-    const svc = buildSellService({ proposalRepo, transactionRepo });
+    const svc = buildSellService({ proposalRepo, settlementRepo });
 
     await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
       ProposalNotExecutableError,
     );
-    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+    expect(
+      settlementRepo.createSellSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
   });
 
   // ── Wrong owner ────────────────────────────────────────────────────────────
@@ -1505,30 +1550,49 @@ describe('ExecutionService.executeSell', () => {
       fxRate: '1760', // +10%
     };
     const quotesService = makeSellQuotesService(driftedFreshQuote);
-    const transactionRepo = makeTransactionRepo();
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
 
-    const svc = buildSellService({ quotesService, transactionRepo });
+    const svc = buildSellService({ quotesService, settlementRepo });
 
     await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
       QuoteDriftError,
     );
-    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+    expect(
+      settlementRepo.createSellSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
   });
 
   // ── Insufficient balance ───────────────────────────────────────────────────
 
-  it('ledger balance < cryptoAmount → InsufficientBalanceError, no Transaction', async () => {
+  it('ledger balance < cryptoAmount → InsufficientBalanceError, no Transaction; directiveService NOT called', async () => {
     // STORED_SELL_QUOTE.cryptoAmount = '16.000000'
     // Ledger balance is only 1 USDT
     const ledgerRepo = makeLedgerRepo('1.000000');
-    const transactionRepo = makeTransactionRepo();
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
+    const directiveService = makeDirectiveService(STUB_SELL_GRANT);
 
-    const svc = buildSellService({ ledgerRepo, transactionRepo });
+    const svc = buildSellService({
+      ledgerRepo,
+      settlementRepo,
+      directiveService,
+    });
 
     await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
       InsufficientBalanceError,
     );
-    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+    expect(
+      settlementRepo.createSellSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+    // Balance check gates directive consumption — directive must NOT be called on insufficient balance.
+    expect(directiveService.consume).not.toHaveBeenCalled();
   });
 
   // ── KYC gate throws ───────────────────────────────────────────────────────
@@ -1536,31 +1600,43 @@ describe('ExecutionService.executeSell', () => {
   it('KYC gate throws → propagates, no Transaction', async () => {
     const kycError = new Error('KYC tier 1 exceeded');
     const kycGate = makeKycGate(kycError);
-    const transactionRepo = makeTransactionRepo();
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
 
-    const svc = buildSellService({ kycGate, transactionRepo });
+    const svc = buildSellService({ kycGate, settlementRepo });
 
     await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toThrow(kycError);
-    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+    expect(
+      settlementRepo.createSellSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
   });
 
   // ── Directive replay ─────────────────────────────────────────────────────
 
   it('directive already consumed → DirectiveReplayError, no Transaction', async () => {
     const directiveService = makeDirectiveService(new DirectiveReplayError());
-    const transactionRepo = makeTransactionRepo();
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
     const pinService = makePinService();
 
     const svc = buildSellService({
       directiveService,
-      transactionRepo,
+      settlementRepo,
       pinService,
     });
 
     await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
       DirectiveReplayError,
     );
-    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+    expect(
+      settlementRepo.createSellSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
     expect(pinService.verifyPin).not.toHaveBeenCalled();
   });
 
@@ -1568,15 +1644,21 @@ describe('ExecutionService.executeSell', () => {
 
   it('wrong PIN → PinInvalidError, no collection/outbox', async () => {
     const pinService = makePinService(new PinInvalidError(4));
-    const transactionRepo = makeTransactionRepo();
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
     const outboxRepo = makeOutboxRepo();
 
-    const svc = buildSellService({ pinService, transactionRepo, outboxRepo });
+    const svc = buildSellService({ pinService, settlementRepo, outboxRepo });
 
     await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
       PinInvalidError,
     );
-    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+    expect(
+      settlementRepo.createSellSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
     expect(outboxRepo.create).not.toHaveBeenCalled();
   });
 
@@ -1584,7 +1666,11 @@ describe('ExecutionService.executeSell', () => {
 
   it('idempotent replay: returns existing result, no new side-effects', async () => {
     const transactionRepo = makeTransactionRepo(STUB_SELL_TXN);
-    const settlementRepo = makeSettlementRepo();
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
     const paymentProvider = makeSellPaymentProvider();
 
     const svc = buildSellService({
@@ -1597,7 +1683,9 @@ describe('ExecutionService.executeSell', () => {
 
     expect(result.transactionId).toBe(SELL_TXN_ID);
     expect(result.status).toBe('settling');
-    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+    expect(
+      settlementRepo.createSellSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
     expect(settlementRepo.postSellReserveAtomic).not.toHaveBeenCalled();
     expect(paymentProvider.createPayout).not.toHaveBeenCalled();
   });
@@ -1606,14 +1694,20 @@ describe('ExecutionService.executeSell', () => {
 
   it('beneficiaryId not found → ProposalNotExecutableError', async () => {
     const beneficiaryService = makeBeneficiaryService(null);
-    const transactionRepo = makeTransactionRepo();
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
 
-    const svc = buildSellService({ beneficiaryService, transactionRepo });
+    const svc = buildSellService({ beneficiaryService, settlementRepo });
 
     await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
       ProposalNotExecutableError,
     );
-    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+    expect(
+      settlementRepo.createSellSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
   });
 
   // ── Wrong beneficiary type ────────────────────────────────────────────────
@@ -1628,12 +1722,84 @@ describe('ExecutionService.executeSell', () => {
     const beneficiaryService = makeBeneficiaryService(
       cryptoBeneficiary as never,
     );
-    const transactionRepo = makeTransactionRepo();
-
-    const svc = buildSellService({ beneficiaryService, transactionRepo });
+    const svc = buildSellService({ beneficiaryService });
 
     await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
       ProposalNotExecutableError,
+    );
+  });
+
+  // ── Gauntlet order: balance → directive → pin → idempotency → atomic create ──
+
+  it('asserts balance-check → directive.consume → pin.verify → idempotency → atomic create, in order', async () => {
+    const callOrder: string[] = [];
+
+    const ledgerRepo = {
+      getAccountBalance: jest.fn().mockImplementation(() => {
+        callOrder.push('balance_check');
+        return Promise.resolve('100');
+      }),
+    };
+    const directiveService = {
+      consume: jest.fn().mockImplementation(() => {
+        callOrder.push('directive');
+        return Promise.resolve(STUB_SELL_GRANT);
+      }),
+    };
+    const pinService = {
+      verifyPin: jest.fn().mockImplementation(() => {
+        callOrder.push('pin');
+        return Promise.resolve();
+      }),
+    };
+    const transactionRepo = {
+      findByIdempotencyKey: jest.fn().mockImplementation(() => {
+        callOrder.push('idempotency');
+        return Promise.resolve(null);
+      }),
+      create: jest.fn().mockResolvedValue(STUB_SELL_TXN),
+      createSettlingWithProposal: jest.fn().mockResolvedValue(STUB_SELL_TXN),
+      updateStatus: jest.fn().mockResolvedValue(undefined),
+      mergeMetadata: jest.fn().mockResolvedValue(undefined),
+    };
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
+    settlementRepo.createSellSettlingWithReserveAtomic = jest
+      .fn()
+      .mockImplementation(() => {
+        callOrder.push('atomic_create');
+        return Promise.resolve({ txn: STUB_SELL_TXN });
+      });
+
+    const svc = buildSellService({
+      ledgerRepo: ledgerRepo,
+      directiveService: directiveService as unknown as jest.Mocked<
+        Pick<DirectiveService, 'consume'>
+      >,
+      pinService: pinService as unknown as jest.Mocked<
+        Pick<PinService, 'verifyPin'>
+      >,
+      transactionRepo:
+        transactionRepo as unknown as jest.Mocked<ITransactionRepository>,
+      settlementRepo,
+    });
+
+    await svc.executeSell(SELL_BASE_INPUT);
+
+    expect(callOrder.indexOf('balance_check')).toBeLessThan(
+      callOrder.indexOf('directive'),
+    );
+    expect(callOrder.indexOf('directive')).toBeLessThan(
+      callOrder.indexOf('pin'),
+    );
+    expect(callOrder.indexOf('pin')).toBeLessThan(
+      callOrder.indexOf('idempotency'),
+    );
+    expect(callOrder.indexOf('idempotency')).toBeLessThan(
+      callOrder.indexOf('atomic_create'),
     );
   });
 });
@@ -1792,5 +1958,86 @@ describe('ExecutionService.settleSellPayout', () => {
     await expect(
       svc.settleSellPayout(SETTLE_SELL_INPUT),
     ).rejects.toBeInstanceOf(SettlementInvalidStatusError);
+  });
+
+  // ── Notify on success ─────────────────────────────────────────────────────
+
+  it('payout successful → sends WhatsApp receipt to user WA address', async () => {
+    const transactionRepo = makeTransactionRepoForSellSettle(SETTLING_SELL_TXN);
+    const paymentProvider = makeSellPaymentProvider(undefined, {
+      status: 'successful',
+      amount: '24600',
+      currency: 'NGN',
+      providerRef: PROVIDER_REF,
+    });
+    const identityService = makeIdentityService('+2349000000099');
+    const whatsAppSender = makeWhatsAppSender();
+
+    const svc = buildSellService({
+      transactionRepo,
+      paymentProvider,
+      identityService,
+      whatsAppSender,
+    });
+
+    await svc.settleSellPayout(SETTLE_SELL_INPUT);
+
+    expect(identityService.findWhatsAppAddress).toHaveBeenCalledWith(USER_ID);
+    expect(whatsAppSender.sendText).toHaveBeenCalledWith(
+      '+2349000000099',
+      expect.stringContaining('sell is complete'),
+    );
+  });
+
+  it('payout successful but findWhatsAppAddress throws → settlement still returns completed (notify swallowed)', async () => {
+    const transactionRepo = makeTransactionRepoForSellSettle(SETTLING_SELL_TXN);
+    const paymentProvider = makeSellPaymentProvider(undefined, {
+      status: 'successful',
+      amount: '24600',
+      currency: 'NGN',
+      providerRef: PROVIDER_REF,
+    });
+    const identityService = {
+      findWhatsAppAddress: jest.fn().mockRejectedValue(new Error('DB down')),
+    };
+
+    const svc = buildSellService({
+      transactionRepo,
+      paymentProvider,
+      identityService: identityService,
+    });
+
+    // Should not throw — notify error is swallowed.
+    const result = await svc.settleSellPayout(SETTLE_SELL_INPUT);
+    expect(result.status).toBe('completed');
+  });
+
+  // ── Notify on failure/refund ──────────────────────────────────────────────
+
+  it('payout failed → sends WhatsApp refund notice to user WA address', async () => {
+    const transactionRepo = makeTransactionRepoForSellSettle(SETTLING_SELL_TXN);
+    const paymentProvider = makeSellPaymentProvider(undefined, {
+      status: 'failed',
+      amount: '0',
+      currency: 'NGN',
+      providerRef: PROVIDER_REF,
+    });
+    const identityService = makeIdentityService('+2349000000099');
+    const whatsAppSender = makeWhatsAppSender();
+
+    const svc = buildSellService({
+      transactionRepo,
+      paymentProvider,
+      identityService,
+      whatsAppSender,
+    });
+
+    await svc.settleSellPayout(SETTLE_SELL_INPUT);
+
+    expect(identityService.findWhatsAppAddress).toHaveBeenCalledWith(USER_ID);
+    expect(whatsAppSender.sendText).toHaveBeenCalledWith(
+      '+2349000000099',
+      expect.stringContaining('payout failed'),
+    );
   });
 });

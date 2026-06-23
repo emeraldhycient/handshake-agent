@@ -38,9 +38,16 @@
   - resolve/create the `User`; call `KYC_PROVIDER.verify`; on approve: persist `KycProfile(verified, tier_1)`, set `User.kycStatus=verified, kycTier=tier_1`, link the Contact + its `ChannelIdentity` to the User (verificationStatus verified), set the PIN via `PinService.setPin`, optionally bind a device. Atomic. On reject → typed error.
 - Repos as needed (KycProfile, user upgrade, contact link). Unit + Testcontainers e2e (contact → verified user, PIN set, channel linked).
 
-### Task K3: KYC Flow (onboarding via WhatsApp Flow)
+### Task K3: KYC **web handoff** (NOT a WhatsApp Flow — corrected)
 
-- ConversationService: when an unlinked Contact attempts a transaction (or messages a KYC intent), send the **KYC Flow** (reuse sendFlow + flow_token; screen collects NIN/BVN/name + PIN). Flow endpoint `data_exchange` (KYC screen) → `KycService.completeVerification` (secrets only via Flow E2E) → success screen. (If `WHATSAPP_FLOW_ID`/KYC flow id unset → text fallback explaining KYC is required.) Reuse the Task 6.2 flow controller (add a KYC action branch). Unit + e2e.
+KYC (NIN/BVN/liveness/doc upload + PIN setup) is completed on the **web app** (system of record), not in-thread. WhatsApp prompts the user with a tappable button that opens the web KYC page, bridged by a single-use `HandoffToken` (schema CHN-04, `purpose=kyc`). The transaction-time confirmation+PIN Flow is unchanged (stays the in-thread WhatsApp Flow).
+
+- **HandoffTokenService** (`identity/application/handoff-token.service.ts`): `mintKycToken({ contactId | channelAddress }) → { token, url }` — CSPRNG ≥256-bit token, store only `tokenHash` (`HandoffToken purpose=kyc`, short TTL), return the plain token + `${WEB_APP_BASE_URL}/kyc?t=<token>`. `consumeKycToken(token) → { contactId | channelAddress }` — atomic consume-on-redeem (status issued→redeemed WHERE not expired; sibling-token invalidation), reject replay/expired. Repo via PrismaService. Config: `WEB_APP_BASE_URL` (env).
+- **sender**: add `IWhatsAppSender.sendCtaUrl({ to, body, buttonText, url })` (interactive `type:'cta_url'`) — the "modal/button that takes them to the website".
+- **ConversationService**: when resolution is an unlinked Contact (or a `requiresReverification` user) on any transactable intent → `mintKycToken` + `sendCtaUrl("Verify your identity to continue", "Verify now", url)` instead of the plain-text KYC ask. (Text fallback with the bare URL if interactive send fails.) This replaces the existing "complete KYC" text asks in the buy/receive branches.
+- **Web-facing API endpoint** (`identity/presentation/kyc.controller.ts`): `POST /kyc/complete` — body `{ token, nin?, bvn?, firstName, lastName, dateOfBirth?, pin }` (HTTPS; the web KYC modal posts here). Consume the `HandoffToken(kyc)` → `KycService.completeVerification(...)` (which runs the mock provider, upgrades the Contact→verified Tier-1 User, links the channel, sets the PIN) → return `{ userId, status:'verified' }`. Rate-limit + validate via contracts DTO.
+- **Web modal UI** (the `web/` Next.js package): the actual `/kyc` page/modal that the link opens, collects the fields, and posts to `/kyc/complete`. SEE THE OPEN QUESTION — built now vs. API+handoff now / web UI as a follow-up.
+- TDD: HandoffTokenService unit (mint/consume/replay/expiry) + Testcontainers e2e; kyc.controller unit + e2e (token redeem → verified user, PIN set, channel linked; bad/expired token → 4xx); ConversationService sends the CTA-URL on unlinked-contact.
 
 ---
 
@@ -54,9 +61,14 @@
 
 - Extend `IPaymentProvider`: `createPayout(input: { amount, currency:'NGN', reference, bankAccount: { accountNumber, bankCode, accountName } }): Promise<{ providerRef, status }>` + `verifyPayout(reference)`. Implement against Flutterwave Transfers API (`POST /transfers`, verify). Mock HTTP in tests. Unit. (⚠️ verify the exact Transfers payload against live docs at build time.)
 
-### Task S3: bank beneficiary (payout destination)
+### Task S3: beneficiary management — **WhatsApp Flow** (add + select), used by sell
 
-- Beneficiary handling for `bank_account` (add/select; the `Beneficiary` model). Minimal: a capture step (or seeded for tests) + a resolver `getDefaultBankBeneficiary(userId)`. Step-up on add (reuse directive). Unit + e2e.
+Beneficiaries (payout **bank accounts** for sell; **crypto addresses** for send, Task N2 reuses this) are added and selected via an **in-thread WhatsApp Flow** — NOT the web (this is light data entry, unlike KYC which is the web modal). The Flow is registered/published in Meta with its own flow id (`WHATSAPP_BENEFICIARY_FLOW_ID`, env, optional → text fallback).
+
+- `BeneficiaryService` (`identity/application/` or a `beneficiaries` module): `listForUser(userId, type)`, `addBankAccount(userId, { accountNumber, bankCode, accountName, label })`, `addCryptoAddress(userId, { address, network, asset, label })` (with **first-use cooling-off** `firstUseLockedUntil` + address validation via `AssetRegistry.validateAddress` for crypto), `getById(userId, beneficiaryId)`, `getDefault(userId, type)`. Step-up on ADD via the directive (high-trust). Repo + Prisma (the `Beneficiary` model; soft-delete aware).
+- **Beneficiary Flow**: `sender.sendBeneficiaryFlow(...)` — a Flow whose first screen lets the user **select** a saved beneficiary (radio list from `listForUser`) OR **add** a new one (bank fields / crypto address). The Flow endpoint (Task 6.2 controller) gains `beneficiary_select` / `beneficiary_add` `data_exchange` branches → `BeneficiaryService` → returns the chosen `beneficiaryId`. Bank/crypto details travel via Flow E2E. Reuse flow_token + the crypto/endpoint plumbing.
+- **Sell integration**: `createSellProposal` requires a `beneficiaryId`. ConversationService sell branch: if the user has no/needs-to-choose a bank beneficiary → send the **beneficiary Flow** first; once chosen, send the sell confirmation+PIN Flow (carry `beneficiaryId` in the proposal). (A combined multi-screen Flow — select → confirm → PIN — is the nicer UX; either a chained Flow or two Flows is acceptable for the skeleton; document the choice.)
+- TDD: BeneficiaryService unit (add bank/crypto, cooling-off blocks crypto first-use, list/getDefault) + Testcontainers e2e; Flow endpoint beneficiary branches unit; ConversationService sends the beneficiary Flow when none selected.
 
 ### Task S4: sell proposal + execute + settle
 
@@ -71,9 +83,10 @@
 
 - Extend `IWalletProvider`: `withdraw(input: { addressId, toAddress, amount, asset }): Promise<{ providerReference, txHash?, status }>`. `QuotesService.quoteSend` (network fee). Validate TRON address format. Mock HTTP in tests. Unit. (⚠️ verify Blockradar withdraw payload at build time.)
 
-### Task N2: crypto beneficiary + cooling-off + sanctions
+### Task N2: crypto beneficiary (reuse S3 Flow) + sanctions screening
 
-- `Beneficiary(crypto_address)` add/select with **first-use cooling-off** (`firstUseLockedUntil`) and address validation; a sanctions/compliance screen on the destination (`ComplianceEvent` — mockable screening port, like KYC). Unit + e2e (cooling-off blocks, screening blocks a flagged address).
+- Reuse the **BeneficiaryService + beneficiary WhatsApp Flow from Task S3** for `crypto_address` beneficiaries: add (with **first-use cooling-off** `firstUseLockedUntil` + `AssetRegistry.validateAddress`) + select, via the same registered Flow (crypto-address screen).
+- Add a **sanctions/compliance screening port** (`ISanctionsScreener` — mockable, like KYC; flags a denylisted destination → `ComplianceEvent`). Screen the destination address before a send proposal. Unit + e2e (cooling-off blocks first-use, screening blocks a flagged address).
 
 ### Task N3: send proposal + execute + settle (with Travel-Rule + step-up)
 

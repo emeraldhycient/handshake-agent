@@ -64,6 +64,49 @@ export interface PostSellReserveInput {
 }
 
 // ---------------------------------------------------------------------------
+// Sell — atomic create Transaction + reserve (execute phase, C1 fix)
+// ---------------------------------------------------------------------------
+
+/**
+ * All the data needed to atomically create the sell Transaction row AND post
+ * the USDT reserve ledger entries in a single $transaction.
+ *
+ * This eliminates the double-spend window that existed when createSettlingWithProposal
+ * and postSellReserveAtomic were called as two separate $transactions.
+ */
+export interface CreateSellSettlingWithReserveInput {
+  /** Full transaction data, mirroring CreateSettlingWithProposalData.txnData. */
+  txnData: {
+    proposalId: string;
+    userId: string;
+    type: 'sell';
+    status: 'settling';
+    idempotencyKey: string;
+    requestChecksum: string;
+    fxRateSnapshot: string;
+    metadata: Record<string, unknown>;
+    pinVerifiedAt: Date;
+  };
+  proposalId: string;
+  confirmedAt: Date;
+  /** Velocity counters to upsert atomically (V1). */
+  velocityIncrement: {
+    userId: string;
+    fiatAmountStr: string;
+    now: Date;
+  };
+  /** Blockradar / WalletPrismaRepository id of the user's USDT wallet. */
+  walletId: string;
+  /** USDT the user is selling (decimal string, e.g. "16.000000"). */
+  cryptoAmount: string;
+  now: Date;
+}
+
+export interface CreateSellSettlingWithReserveOutput {
+  txn: import('./transaction.repository.port').TransactionRecord;
+}
+
+// ---------------------------------------------------------------------------
 // Sell — finalize (payout success)
 // ---------------------------------------------------------------------------
 
@@ -121,6 +164,21 @@ export interface ISettlementRepository {
    *   - Payment provider returned status === 'successful' with matching amount/currency.
    */
   settleBuyAtomic(input: SettleBuyAtomicInput): Promise<SettleBuyAtomicOutput>;
+
+  /**
+   * ATOMICALLY creates the sell Transaction row, marks the Proposal 'executing',
+   * upserts VelocityCounter rows, and posts the USDT reserve ledger entries
+   * (user_wallet → clearing) — all in a SINGLE `prisma.$transaction`.
+   *
+   * This replaces the prior two-call pattern (createSettlingWithProposal +
+   * postSellReserveAtomic) which had a double-spend window between the two
+   * separate $transactions (C1 fix).
+   *
+   * Uses `isolationLevel: 'Serializable'` to prevent balanceAfter sequence races.
+   */
+  createSellSettlingWithReserveAtomic(
+    input: CreateSellSettlingWithReserveInput,
+  ): Promise<CreateSellSettlingWithReserveOutput>;
 
   /**
    * Returns the receiptNumber for the Receipt linked to `transactionId`, or
