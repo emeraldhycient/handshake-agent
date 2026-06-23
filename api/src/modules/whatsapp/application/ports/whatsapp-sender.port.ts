@@ -16,6 +16,23 @@ export const WHATSAPP_SENDER = Symbol('WHATSAPP_SENDER');
 export type SendResult = { externalMessageId: string };
 
 /**
+ * Input for sending a WhatsApp interactive CTA URL button message (K3).
+ * Used for the web-handoff link that opens the KYC flow in the web app.
+ * The URL is HTTPS and must never be sent over plaintext; the token is part
+ * of the URL — it is a single-use bearer; do NOT log the full URL.
+ */
+export interface SendCtaUrlInput {
+  /** Recipient phone number in E.164 without the leading '+'. */
+  to: string;
+  /** Text body displayed above the CTA button. */
+  body: string;
+  /** Label text shown on the CTA button. */
+  buttonText: string;
+  /** The HTTPS URL the button opens (contains the single-use token). */
+  url: string;
+}
+
+/**
  * Input for sending a WhatsApp Flow interactive message.
  * The nonce is carried ONLY inside the E2E-encrypted flow payload data —
  * it must never appear in plaintext chat or logs.
@@ -68,6 +85,18 @@ export interface IWhatsAppSender {
     languageCode: string,
     components?: unknown[],
   ): Promise<SendResult>;
+
+  /**
+   * Send an interactive CTA URL button message (K3 web-handoff).
+   *
+   * Used to send the web KYC link as a clickable button in WhatsApp chat.
+   * The URL contains a single-use bearer token — callers MUST use HTTPS.
+   * IMPORTANT: never log the full URL (it embeds the token).
+   *
+   * @param input  CTA parameters including recipient, body text, button label,
+   *               and the HTTPS URL to open.
+   */
+  sendCtaUrl(input: SendCtaUrlInput): Promise<SendResult>;
 
   /**
    * Send an E2E-encrypted WhatsApp Flow interactive message.

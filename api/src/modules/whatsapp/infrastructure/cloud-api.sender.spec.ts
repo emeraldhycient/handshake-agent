@@ -215,6 +215,93 @@ describe('CloudApiSender', () => {
   });
 
   // -------------------------------------------------------------------------
+  // sendCtaUrl
+  // -------------------------------------------------------------------------
+
+  describe('sendCtaUrl', () => {
+    it('posts the exact interactive cta_url body shape and returns the wamid', async () => {
+      httpService.post.mockReturnValue(of(axiosResponse(SUCCESS_RESPONSE)));
+
+      const result = await sender.sendCtaUrl({
+        to: '2348000000000',
+        body: 'Verify your identity to start transacting.',
+        buttonText: 'Verify now',
+        url: 'https://app.example.com/kyc?t=abc123token',
+      });
+
+      expect(result).toEqual({ externalMessageId: 'wamid.abc123' });
+
+      expect(httpService.post).toHaveBeenCalledTimes(1);
+      const [url, body, config] = httpService.post.mock.calls[0] as [
+        string,
+        unknown,
+        { headers: Record<string, string> },
+      ];
+
+      expect(url).toBe(
+        'https://graph.facebook.com/v25.0/TEST_PHONE_ID/messages',
+      );
+      expect(body).toEqual({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: '2348000000000',
+        type: 'interactive',
+        interactive: {
+          type: 'cta_url',
+          body: { text: 'Verify your identity to start transacting.' },
+          action: {
+            name: 'cta_url',
+            parameters: {
+              display_text: 'Verify now',
+              url: 'https://app.example.com/kyc?t=abc123token',
+            },
+          },
+        },
+      });
+      expect(config.headers['Authorization']).toBe('Bearer TEST_TOKEN');
+      expect(config.headers['Content-Type']).toBe('application/json');
+    });
+
+    it('returns the wamid from messages[0].id', async () => {
+      const response = {
+        ...SUCCESS_RESPONSE,
+        messages: [{ id: 'wamid.cta.XYZ' }],
+      };
+      httpService.post.mockReturnValue(of(axiosResponse(response)));
+
+      const result = await sender.sendCtaUrl({
+        to: '2348000000000',
+        body: 'Verify now',
+        buttonText: 'Verify',
+        url: 'https://app.example.com/kyc?t=tok',
+      });
+
+      expect(result.externalMessageId).toBe('wamid.cta.XYZ');
+    });
+
+    it('uses the same base URL and auth header as sendText', async () => {
+      httpService.post.mockReturnValue(of(axiosResponse(SUCCESS_RESPONSE)));
+
+      await sender.sendCtaUrl({
+        to: '2348000000000',
+        body: 'body',
+        buttonText: 'btn',
+        url: 'https://app.example.com/kyc?t=tok',
+      });
+
+      const [url, , config] = httpService.post.mock.calls[0] as [
+        string,
+        unknown,
+        { headers: Record<string, string> },
+      ];
+      expect(url).toBe(
+        'https://graph.facebook.com/v25.0/TEST_PHONE_ID/messages',
+      );
+      expect(config.headers['Authorization']).toBe('Bearer TEST_TOKEN');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // sendFlow
   // -------------------------------------------------------------------------
 

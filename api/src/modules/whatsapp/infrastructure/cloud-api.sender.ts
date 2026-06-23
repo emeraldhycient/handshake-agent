@@ -7,6 +7,7 @@ import type { AxiosError } from 'axios';
 import type { Env } from '../../../core/config/env.schema';
 import type {
   IWhatsAppSender,
+  SendCtaUrlInput,
   SendFlowInput,
   SendResult,
 } from '../application/ports/whatsapp-sender.port';
@@ -97,6 +98,30 @@ export class CloudApiSender implements IWhatsAppSender {
       type: 'template',
       template,
     };
+    return this.post(payload);
+  }
+
+  async sendCtaUrl(input: SendCtaUrlInput): Promise<SendResult> {
+    const { to, body, buttonText, url } = input;
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'cta_url',
+        body: { text: body },
+        action: {
+          name: 'cta_url',
+          parameters: {
+            display_text: buttonText,
+            url,
+          },
+        },
+      },
+    };
+
     return this.post(payload);
   }
 

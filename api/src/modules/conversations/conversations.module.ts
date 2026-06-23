@@ -11,6 +11,7 @@ import {
   PROPOSAL_SERVICE,
   DIRECTIVE_SERVICE,
   WALLET_SERVICE,
+  HANDOFF_TOKEN_SERVICE,
 } from './application/conversation.service';
 import { CONVERSATION_REPOSITORY } from './application/ports/conversation.repository.port';
 import { MESSAGE_REPOSITORY } from './application/ports/message.repository.port';
@@ -24,6 +25,7 @@ import { INBOUND_HANDLER } from '../whatsapp/application/ports/inbound-handler.p
 import { ProposalService } from '../transactions/application/proposal.service';
 import { DirectiveService } from '../transactions/application/directive.service';
 import { WalletService } from '../wallets/application/wallet.service';
+import { HandoffTokenService } from '../identity/application/handoff-token.service';
 
 /**
  * Conversations feature module.
@@ -66,6 +68,8 @@ import { WalletService } from '../wallets/application/wallet.service';
     // Expose WalletService under our local WALLET_SERVICE token so
     // ConversationService can provision/read deposit addresses (read-only; §3.1).
     { provide: WALLET_SERVICE, useExisting: WalletService },
+    // Expose HandoffTokenService under our local HANDOFF_TOKEN_SERVICE token (K3).
+    { provide: HANDOFF_TOKEN_SERVICE, useExisting: HandoffTokenService },
     { provide: INBOUND_HANDLER, useExisting: ConversationService },
     {
       provide: CONVERSATION_REPOSITORY,

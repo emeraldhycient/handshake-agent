@@ -103,6 +103,9 @@ const fakeSender: IWhatsAppSender = {
   sendTemplate: jest
     .fn()
     .mockResolvedValue({ externalMessageId: 'wamid.fake-template' }),
+  sendCtaUrl: jest
+    .fn()
+    .mockResolvedValue({ externalMessageId: 'wamid.fake-cta' }),
   sendFlow: jest
     .fn()
     .mockResolvedValue({ externalMessageId: 'wamid.fake-flow' }),

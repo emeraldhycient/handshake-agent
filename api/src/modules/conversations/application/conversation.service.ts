@@ -19,6 +19,7 @@ import { IdentityService } from '../../identity/application/identity.service';
 import type { ProposalService } from '../../transactions/application/proposal.service';
 import type { DirectiveService } from '../../transactions/application/directive.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
+import type { HandoffTokenService } from '../../identity/application/handoff-token.service';
 import { signFlowToken } from '../../whatsapp/application/flow-token';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 
@@ -49,6 +50,9 @@ export const DIRECTIVE_SERVICE = Symbol('DIRECTIVE_SERVICE');
 /** DI token for WalletService — injected by symbol to avoid coupling at module level */
 export const WALLET_SERVICE = Symbol('WALLET_SERVICE');
 
+/** DI token for HandoffTokenService — injected by symbol (K3). */
+export const HANDOFF_TOKEN_SERVICE = Symbol('HANDOFF_TOKEN_SERVICE');
+
 const SAFE_FALLBACK = 'Sorry, something went wrong — please try again.';
 
 // ---------------------------------------------------------------------------
@@ -57,10 +61,15 @@ const SAFE_FALLBACK = 'Sorry, something went wrong — please try again.';
 
 /**
  * Discriminated union returned by `requireActiveUser`.
- * The caller checks for `'reply'` key and short-circuits; otherwise gets a
- * narrowed `{ user }` with the linked user id.
+ * The caller checks for `'needsKyc'`, `'needsReverify'`, or `'user'`.
+ * Callers with `'needsKyc'` or `'needsReverify'` call `sendKycHandoff` and short-circuit.
+ * `'reply'` is kept for backward compat; populated with a generic message.
  */
-type ActiveUserResult = { user: { id: string } } | { reply: string };
+type ActiveUserResult =
+  | { user: { id: string } }
+  | { needsKyc: true; channelAddress: string }
+  | { needsReverify: true; channelAddress: string }
+  | { reply: string };
 
 // ---------------------------------------------------------------------------
 // Intent type helpers (narrow subset used by the router)
@@ -101,6 +110,8 @@ export class ConversationService implements IInboundHandler {
     @Inject(WALLET_SERVICE)
     private readonly walletService: WalletService,
     private readonly assetRegistry: AssetRegistry,
+    @Inject(HANDOFF_TOKEN_SERVICE)
+    private readonly handoffTokenService: HandoffTokenService,
   ) {}
 
   async handleInbound(msg: InboundMessage): Promise<void> {
@@ -265,7 +276,7 @@ export class ConversationService implements IInboundHandler {
         return { replyText, flowSent };
       }
       case 'receive_crypto': {
-        const replyText = await this.handleReceive(identity);
+        const replyText = await this.handleReceive(identity, msg.fromAddress);
         return { replyText, flowSent: false };
       }
       case 'none': {
@@ -292,28 +303,66 @@ export class ConversationService implements IInboundHandler {
    * Single shared guard for all intent handlers that require a linked, verified user.
    *
    * Returns `{ user }` when the identity is an active linked user ready to transact.
-   * Returns `{ reply }` when the identity is unlinked (KYC required) or requires
-   * re-verification — callers must short-circuit and return the reply immediately.
+   * Returns `{ needsKyc }` when the identity is an unlinked Contact.
+   * Returns `{ needsReverify }` when the user requires re-verification.
    *
-   * NOTE: This is the one place that generates KYC / re-verify replies (Task K3
-   * will replace these text strings with a web-handoff CTA; that change lives here only).
+   * Callers with `needsKyc`/`needsReverify` must call `sendKycHandoff` and return its result.
+   * This is the ONE place that generates KYC / re-verify replies (K3 — web handoff CTA).
    */
-  private requireActiveUser(identity: ResolvedIdentity): ActiveUserResult {
+  private requireActiveUser(
+    identity: ResolvedIdentity,
+    channelAddress: string,
+  ): ActiveUserResult {
     if (identity.kind !== 'user') {
-      return { reply: this.kycRequiredReply() };
+      return { needsKyc: true, channelAddress };
     }
     if (identity.requiresReverification) {
-      return { reply: this.reverifyReply() };
+      return { needsReverify: true, channelAddress };
     }
     return { user: identity.user };
   }
 
   /**
-   * KYC-required reply — ONE canonical text for all routes that need a linked user.
-   * Task K3 will replace this with a web-handoff CTA button; the one-place rule
-   * ensures that change lands in a single method.
+   * Mints a KYC handoff token and sends a CTA-URL button to the user.
+   *
+   * Single shared path for all needs-KYC and needs-reverify cases (K3).
+   * If WEB_APP_BASE_URL is unset, falls back to a plain-text message.
+   *
+   * Returns the short summary text that goes into the reply row.
    */
-  private kycRequiredReply(): string {
+  private async sendKycHandoff(channelAddress: string): Promise<string> {
+    try {
+      const { url } = await this.handoffTokenService.mintKycToken({
+        channelAddress,
+      });
+
+      if (!url) {
+        // WEB_APP_BASE_URL not configured → text fallback.
+        return this.kycRequiredFallbackReply();
+      }
+
+      await this.sender.sendCtaUrl({
+        to: channelAddress,
+        body: 'To start transacting, please verify your identity. It only takes a minute.',
+        buttonText: 'Verify now',
+        url,
+      });
+
+      return "I've sent you a secure link to verify your identity.";
+    } catch (err: unknown) {
+      this.logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'sendKycHandoff failed — falling back to text reply',
+      );
+      return this.kycRequiredFallbackReply();
+    }
+  }
+
+  /**
+   * Text fallback for when WEB_APP_BASE_URL is unset or the handoff token service fails.
+   * ONE canonical text for all routes that need a linked user (when CTA is unavailable).
+   */
+  private kycRequiredFallbackReply(): string {
     return (
       'To transact, you need to complete KYC first. ' +
       'Please visit our web app to verify your identity.'
@@ -321,10 +370,9 @@ export class ConversationService implements IInboundHandler {
   }
 
   /**
-   * Re-verification required reply — ONE canonical text for SIM-swap / step-up cases
-   * (CLAUDE.md §3.4). Same one-place rule as kycRequiredReply.
+   * Re-verification text fallback — for SIM-swap / step-up cases (CLAUDE.md §3.4).
    */
-  private reverifyReply(): string {
+  private reverifyFallbackReply(): string {
     return (
       'Your account requires re-verification before you can transact. ' +
       'Please visit our web app to re-verify.'
@@ -341,7 +389,14 @@ export class ConversationService implements IInboundHandler {
     conversation: ConversationRecord,
     msg: InboundMessage,
   ): Promise<{ replyText: string; flowSent: boolean }> {
-    const guard = this.requireActiveUser(identity);
+    const guard = this.requireActiveUser(identity, msg.fromAddress);
+    if ('needsKyc' in guard) {
+      const replyText = await this.sendKycHandoff(guard.channelAddress);
+      return { replyText, flowSent: false };
+    }
+    if ('needsReverify' in guard) {
+      return { replyText: this.reverifyFallbackReply(), flowSent: false };
+    }
     if ('reply' in guard) {
       return { replyText: guard.reply, flowSent: false };
     }
@@ -488,8 +543,17 @@ export class ConversationService implements IInboundHandler {
   // Private: receive_crypto handler
   // ---------------------------------------------------------------------------
 
-  private async handleReceive(identity: ResolvedIdentity): Promise<string> {
-    const guard = this.requireActiveUser(identity);
+  private async handleReceive(
+    identity: ResolvedIdentity,
+    channelAddress: string,
+  ): Promise<string> {
+    const guard = this.requireActiveUser(identity, channelAddress);
+    if ('needsKyc' in guard) {
+      return this.sendKycHandoff(guard.channelAddress);
+    }
+    if ('needsReverify' in guard) {
+      return this.reverifyFallbackReply();
+    }
     if ('reply' in guard) {
       return guard.reply;
     }

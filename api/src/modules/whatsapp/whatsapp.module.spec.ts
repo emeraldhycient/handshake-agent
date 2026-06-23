@@ -15,6 +15,7 @@
 
 import { ConfigModule } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
+import { ThrottlerModule } from '@nestjs/throttler';
 
 import configuration from '../../core/config/configuration';
 import { validateEnv } from '../../core/config/env.schema';
@@ -81,6 +82,9 @@ describe('WhatsAppModule (compile)', () => {
         // CatalogModule is @Global in the full app — import here so AssetRegistry
         // is available to ConversationsModule's ConversationService.
         CatalogModule,
+        // ThrottlerModule is needed by KycController (part of IdentityModule,
+        // which WhatsAppModule transitively depends on since K3).
+        ThrottlerModule.forRoot([{ ttl: 60_000, limit: 10 }]),
         WhatsAppModule,
       ],
     })

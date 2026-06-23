@@ -33,6 +33,7 @@ import type { WalletService } from '../src/modules/wallets/application/wallet.se
 import type { WalletRecord } from '../src/modules/wallets/application/ports/wallet.repository.port';
 import type { BuyProposalConfirmation } from '@handshake-agent/contracts';
 import type { AssetRegistry } from '../src/core/catalog/asset-registry';
+import type { HandoffTokenService } from '../src/modules/identity/application/handoff-token.service';
 
 jest.setTimeout(180_000);
 
@@ -58,6 +59,9 @@ const fakeSender: jest.Mocked<IWhatsAppSender> = {
   sendTemplate: jest
     .fn()
     .mockResolvedValue({ externalMessageId: 'wamid.out.tmpl' }),
+  sendCtaUrl: jest
+    .fn()
+    .mockResolvedValue({ externalMessageId: 'wamid.out.cta' }),
   sendFlow: jest
     .fn()
     .mockResolvedValue({ externalMessageId: 'wamid.out.flow' }),
@@ -193,6 +197,14 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
     const identityRepo = new IdentityPrismaRepository(p);
     const identityService = new IdentityService(identityRepo);
 
+    const fakeHandoffTokenService = {
+      mintKycToken: jest.fn().mockResolvedValue({
+        token: 'fake-token',
+        url: 'https://app.example.com/kyc?t=fake-token',
+      }),
+      consumeKycToken: jest.fn(),
+    } as unknown as HandoffTokenService;
+
     svc = new ConversationService(
       identityService,
       fakeAgentPort,
@@ -206,6 +218,7 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       fakeDirectiveService,
       fakeWalletService,
       fakeAssetRegistry,
+      fakeHandoffTokenService,
     );
 
     // Seed a Tier-1 verified User + ChannelIdentity

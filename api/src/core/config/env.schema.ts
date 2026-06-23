@@ -74,6 +74,17 @@ export const envSchema = z.object({
   // When 'true', the MockKycProvider is active (the only adapter at launch).
   // Flip to 'false' once a real NIN/BVN provider is wired in IdentityModule.
   KYC_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+
+  // --- Web App (K3 KYC web handoff) ---
+  // Base URL for the web application. Used to build the KYC CTA URL:
+  //   `${WEB_APP_BASE_URL}/kyc?t=<token>`
+  // Optional: when unset, ConversationService falls back to a plain-text message.
+  // Coerce '' → undefined so an empty placeholder passes boot-time validation
+  // (same pattern as ANTHROPIC_API_KEY above).
+  WEB_APP_BASE_URL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().url().optional(),
+  ),
 });
 
 export type Env = z.infer<typeof envSchema>;

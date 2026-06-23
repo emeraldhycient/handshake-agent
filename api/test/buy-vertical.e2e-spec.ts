@@ -364,6 +364,9 @@ describe('Buy vertical — capstone acceptance e2e (AppModule, Testcontainers Po
       sendTemplate: jest
         .fn()
         .mockResolvedValue({ externalMessageId: 'wamid.out.tmpl.e2e' }),
+      sendCtaUrl: jest
+        .fn()
+        .mockResolvedValue({ externalMessageId: 'wamid.out.cta.e2e' }),
       sendFlow: jest.fn().mockImplementation((input: SendFlowInput) => {
         capturedSendFlowCalls.push({ input });
         return Promise.resolve({ externalMessageId: 'wamid.out.flow.e2e' });

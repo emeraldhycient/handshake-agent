@@ -59,6 +59,7 @@ import {
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { WalletRecord } from '../../wallets/application/ports/wallet.repository.port';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
+import type { HandoffTokenService } from '../../identity/application/handoff-token.service';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -219,6 +220,9 @@ function makeSender(): jest.Mocked<IWhatsAppSender> {
     sendTemplate: jest
       .fn()
       .mockResolvedValue({ externalMessageId: 'wamid.out' }),
+    sendCtaUrl: jest
+      .fn()
+      .mockResolvedValue({ externalMessageId: 'wamid.cta.out' }),
     sendFlow: jest
       .fn()
       .mockResolvedValue({ externalMessageId: 'wamid.flow.out' }),
@@ -298,6 +302,24 @@ function makeWalletService(
   };
 }
 
+function makeHandoffTokenService(
+  mintOutput: { token: string; url: string } | Error = {
+    token: 'raw-token-hex',
+    url: 'https://app.example.com/kyc?t=raw-token-hex',
+  },
+): jest.Mocked<Pick<HandoffTokenService, 'mintKycToken' | 'consumeKycToken'>> {
+  const svc = {
+    mintKycToken: jest.fn(),
+    consumeKycToken: jest.fn(),
+  };
+  if (mintOutput instanceof Error) {
+    svc.mintKycToken.mockRejectedValue(mintOutput);
+  } else {
+    svc.mintKycToken.mockResolvedValue(mintOutput);
+  }
+  return svc;
+}
+
 /**
  * Minimal AssetRegistry stub — mirrors the real registry's surface used by
  * ConversationService. Formatters return predictable values for assertions.
@@ -363,6 +385,9 @@ function buildService(
     directiveService?: jest.Mocked<Pick<DirectiveService, 'issue'>>;
     walletService?: jest.Mocked<Pick<WalletService, 'getOrProvisionWallet'>>;
     assetRegistry?: jest.Mocked<AssetRegistry>;
+    handoffTokenService?: jest.Mocked<
+      Pick<HandoffTokenService, 'mintKycToken' | 'consumeKycToken'>
+    >;
   } = {},
 ) {
   const identityService = overrides.identityService ?? makeIdentityService();
@@ -377,6 +402,8 @@ function buildService(
   const directiveService = overrides.directiveService ?? makeDirectiveService();
   const walletService = overrides.walletService ?? makeWalletService();
   const assetRegistry = overrides.assetRegistry ?? makeAssetRegistry();
+  const handoffTokenService =
+    overrides.handoffTokenService ?? makeHandoffTokenService();
 
   // Build the service directly (not via Nest DI) since all deps are mocks.
   const svc = new ConversationService(
@@ -392,6 +419,7 @@ function buildService(
     directiveService as unknown as DirectiveService,
     walletService as unknown as WalletService,
     assetRegistry,
+    handoffTokenService as unknown as HandoffTokenService,
   );
 
   return {
@@ -408,6 +436,7 @@ function buildService(
     directiveService,
     walletService,
     assetRegistry,
+    handoffTokenService,
   };
 }
 
@@ -614,9 +643,9 @@ describe('ConversationService.handleInbound', () => {
     );
   });
 
-  // ── Contact (unlinked) + buy_crypto → KYC gate ───────────────────────────
+  // ── Contact (unlinked) + buy_crypto → KYC CTA handoff ───────────────────
 
-  it('contact (unlinked) + buy_crypto → sends KYC prompt, does NOT call proposalService', async () => {
+  it('contact (unlinked) + buy_crypto → calls mintKycToken + sendCtaUrl, does NOT call proposalService', async () => {
     const identityService = makeIdentityService({
       resolveByChannel: jest.fn().mockResolvedValue({
         kind: 'contact',
@@ -638,15 +667,73 @@ describe('ConversationService.handleInbound', () => {
       contactId: 'contact-id-1',
     });
     const proposalService = makeProposalService();
+    const handoffTokenService = makeHandoffTokenService();
     const { svc, sender } = buildService({
       identityService,
       convRepo,
       proposalService,
+      handoffTokenService,
     });
 
     await svc.handleInbound(baseMsg());
 
     expect(proposalService.createBuyProposal).not.toHaveBeenCalled();
+    // K3: CTA URL sent, not plain text
+    expect(sender.sendCtaUrl).toHaveBeenCalledTimes(1);
+    const [ctaArg] = (
+      sender.sendCtaUrl as jest.Mock<
+        ReturnType<typeof sender.sendCtaUrl>,
+        [{ to: string; url: string; buttonText: string; body: string }]
+      >
+    ).mock.calls[0];
+    expect(ctaArg.to).toBe(FIXED_FROM);
+    expect(ctaArg.url).toContain('kyc');
+    expect(ctaArg.buttonText).toBeTruthy();
+    // Reply summary text sent via sendText
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toContain('secure link');
+  });
+
+  it('contact (unlinked) + buy_crypto with WEB_APP_BASE_URL unset → text fallback, still no proposal', async () => {
+    const identityService = makeIdentityService({
+      resolveByChannel: jest.fn().mockResolvedValue({
+        kind: 'contact',
+        contact: {
+          id: 'contact-id-1',
+          primaryChannel: 'whatsapp',
+          primaryAddress: FIXED_FROM,
+          status: 'active',
+          linkedUserId: null,
+        },
+      }),
+    });
+
+    const convRepo = makeConvRepo(null);
+    convRepo.findByContactId.mockResolvedValue(null);
+    convRepo.create.mockResolvedValue({
+      ...baseConv(),
+      userId: null,
+      contactId: 'contact-id-1',
+    });
+    const proposalService = makeProposalService();
+    // Simulate WEB_APP_BASE_URL not set: mintKycToken returns empty url
+    const handoffTokenService = makeHandoffTokenService({
+      token: 'raw-token',
+      url: '', // empty → triggers text fallback
+    });
+    const { svc, sender } = buildService({
+      identityService,
+      convRepo,
+      proposalService,
+      handoffTokenService,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(proposalService.createBuyProposal).not.toHaveBeenCalled();
+    // sendCtaUrl NOT called since url is empty
+    expect(sender.sendCtaUrl).not.toHaveBeenCalled();
+    // Plain text fallback sent
     const sentText = captureFirstSentText(sender);
     expect(sentText).toContain('KYC');
   });
@@ -858,9 +945,9 @@ describe('ConversationService.handleInbound', () => {
     expect(directiveService.issue).not.toHaveBeenCalled();
   });
 
-  // ── receive_crypto: unlinked contact → KYC ask ────────────────────────────
+  // ── receive_crypto: unlinked contact → KYC CTA handoff ──────────────────
 
-  it('contact (unlinked) + receive_crypto → KYC ask, walletService NOT called', async () => {
+  it('contact (unlinked) + receive_crypto → mintKycToken + sendCtaUrl, walletService NOT called', async () => {
     const identityService = makeIdentityService({
       resolveByChannel: jest.fn().mockResolvedValue({
         kind: 'contact',
@@ -883,12 +970,14 @@ describe('ConversationService.handleInbound', () => {
 
     const agentPort = makeAgentPort({ action: 'receive_crypto' });
     const walletService = makeWalletService();
+    const handoffTokenService = makeHandoffTokenService();
 
     const { svc, sender } = buildService({
       identityService,
       convRepo,
       agentPort,
       walletService,
+      handoffTokenService,
     });
 
     await svc.handleInbound(baseMsg());
@@ -896,9 +985,11 @@ describe('ConversationService.handleInbound', () => {
     // WalletService must NOT be called for unlinked contact
     expect(walletService.getOrProvisionWallet).not.toHaveBeenCalled();
 
-    // Reply text asks user to complete KYC
+    // K3: CTA URL sent
+    expect(sender.sendCtaUrl).toHaveBeenCalledTimes(1);
+    // Reply summary text sent via sendText
     const sentText = captureFirstSentText(sender);
-    expect(sentText).toContain('KYC');
+    expect(sentText).toContain('secure link');
   });
 
   // ── receive_crypto: requiresReverification → re-verify ask ───────────────
@@ -995,8 +1086,9 @@ describe('ConversationService.handleInbound', () => {
     const receiveReply = captureFirstSentText(senderReceive);
 
     // Both routes MUST produce the exact same guard reply text — single shared guard.
+    // K3: both produce the "secure link" CTA summary text.
     expect(buyReply).toBe(receiveReply);
-    expect(buyReply).toContain('KYC');
+    expect(buyReply).toContain('secure link');
   });
 
   // ── X2: receive reply uses registry metadata (asset + network displayName) ──
