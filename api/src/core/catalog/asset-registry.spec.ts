@@ -32,6 +32,16 @@ const STUB_CATALOG = {
       },
       enabled: true,
     },
+    // Registered but explicitly disabled — should throw UnsupportedAssetError.
+    BTC: {
+      symbol: 'BTC',
+      displayName: 'Bitcoin',
+      kind: 'crypto' as const,
+      decimals: 8,
+      networks: [],
+      providers: {},
+      enabled: false,
+    },
   },
   fiats: {
     NGN: {
@@ -96,6 +106,11 @@ describe('AssetRegistry', () => {
 
     it('throws UnsupportedAssetError with a descriptive message', () => {
       expect(() => registry.asset('BTC')).toThrow(/BTC/);
+    });
+
+    it('throws UnsupportedAssetError for a registered but disabled asset', () => {
+      // BTC is registered in STUB_CATALOG but enabled: false — must be treated as absent.
+      expect(() => registry.asset('BTC')).toThrow(UnsupportedAssetError);
     });
   });
 
@@ -214,8 +229,22 @@ describe('AssetRegistry', () => {
       expect(registry.isCapabilityEnabled('ticketing.eventbrite')).toBe(false);
     });
 
+    it('returns false for any unknown capability key (fail-closed)', () => {
+      // Any key not in config must fail-closed, never grant access.
+      expect(registry.isCapabilityEnabled('unknown.capability.xyz')).toBe(
+        false,
+      );
+    });
+
     it('throws CapabilityDisabledError when capability is disabled and flag is strict', () => {
       expect(() => registry.requireCapability('crypto.swap')).toThrow(
+        CapabilityDisabledError,
+      );
+    });
+
+    it('throws CapabilityDisabledError for an entirely unknown capability key', () => {
+      // Unknown key is not in catalog.capabilities, so fail-closed → throw.
+      expect(() => registry.requireCapability('ticketing.unknown')).toThrow(
         CapabilityDisabledError,
       );
     });
@@ -288,9 +317,13 @@ describe('AssetRegistry', () => {
   });
 
   // ── formatFiat() ─────────────────────────────────────────────────────────
+  // These assertions must be deterministic across all Node ICU builds
+  // (small-icu in Alpine/Docker CI, full ICU in local dev). The formatter
+  // must NOT use Intl/toLocaleString — use the manual grouping algorithm.
 
   describe('formatFiat()', () => {
     it('formats NGN amounts with the ₦ symbol and two decimal places', () => {
+      // Deterministic: manual comma grouping, NOT toLocaleString('en-NG').
       expect(registry.formatFiat('NGN', '5000')).toBe('₦5,000.00');
     });
 
@@ -300,6 +333,10 @@ describe('AssetRegistry', () => {
 
     it('formats large amounts with comma separators', () => {
       expect(registry.formatFiat('NGN', '1000000')).toBe('₦1,000,000.00');
+    });
+
+    it('formats amounts under 1000 without comma separator', () => {
+      expect(registry.formatFiat('NGN', '999')).toBe('₦999.00');
     });
 
     it('throws UnsupportedFiatError for an unknown fiat', () => {

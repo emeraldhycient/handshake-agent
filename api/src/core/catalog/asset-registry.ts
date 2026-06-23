@@ -20,52 +20,37 @@ import {
   CapabilityDisabledError,
 } from './catalog-errors';
 
+import type {
+  AssetProviderConfig,
+  CatalogAsset,
+  CatalogConfig,
+  CatalogFiat,
+  CatalogNetwork,
+} from '../config/configuration';
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
 
+// The catalog shapes live canonically in the JSON-defaults config
+// (configuration.ts §catalog). They are re-exported here under the registry's
+// domain-facing `*Meta` names so callers keep a single source of truth — the
+// same shape is never redefined twice (root CLAUDE.md §13 rule 2, DRY).
+
 /** Per-provider metadata for an asset (e.g. Blockradar asset id). */
-export interface AssetProviderMeta {
-  assetId: string;
-}
+export type AssetProviderMeta = AssetProviderConfig;
 
 /** Crypto asset metadata. */
-export interface AssetMeta {
-  symbol: string;
-  displayName: string;
-  kind: 'crypto';
-  decimals: number;
-  networks: string[];
-  providers: Record<string, AssetProviderMeta>;
-  enabled: boolean;
-}
+export type AssetMeta = CatalogAsset;
 
 /** Fiat currency metadata. */
-export interface FiatMeta {
-  code: string;
-  displayName: string;
-  /** Currency symbol for display (e.g. '₦'). */
-  symbol: string;
-  decimals: number;
-  enabled: boolean;
-}
+export type FiatMeta = CatalogFiat;
 
 /** Blockchain network metadata. */
-export interface NetworkMeta {
-  id: string;
-  displayName: string;
-  /** Regex pattern for validating on-chain addresses on this network. */
-  addressPattern: string;
-  enabled: boolean;
-}
+export type NetworkMeta = CatalogNetwork;
 
 /** Catalog section shape as stored in the layered config (configuration.ts). */
-export interface CatalogConfig {
-  assets: Record<string, AssetMeta>;
-  fiats: Record<string, FiatMeta>;
-  networks: Record<string, NetworkMeta>;
-  capabilities: Record<string, boolean>;
-}
+export type { CatalogConfig };
 
 // ---------------------------------------------------------------------------
 // Service
@@ -80,6 +65,14 @@ export interface CatalogConfig {
 export class AssetRegistry {
   private readonly catalog: CatalogConfig;
 
+  /**
+   * Pre-compiled address validation RegExps per network id.
+   * Built once in the constructor so `validateAddress` never constructs a
+   * new RegExp on each call (avoids per-call compilation cost and ReDoS
+   * amplification on hot paths).
+   */
+  private readonly addressRegExps: Map<string, RegExp>;
+
   constructor(private readonly config: ConfigService) {
     const catalog = this.config.get<CatalogConfig>('catalog');
     if (!catalog) {
@@ -89,6 +82,14 @@ export class AssetRegistry {
       );
     }
     this.catalog = catalog;
+
+    // Compile one RegExp per network at construction time.
+    this.addressRegExps = new Map(
+      Object.entries(catalog.networks).map(([id, net]) => [
+        id,
+        new RegExp(net.addressPattern),
+      ]),
+    );
   }
 
   // ── Asset lookups ──────────────────────────────────────────────────────
@@ -193,11 +194,15 @@ export class AssetRegistry {
 
   /**
    * Validates an on-chain address against the network's configured regex pattern.
-   * @throws {UnsupportedNetworkError} when the network is not registered.
+   * Uses a pre-compiled RegExp cached in the constructor — no per-call compilation.
+   * @throws {UnsupportedNetworkError} when the network is not registered or disabled.
    */
   validateAddress(networkId: string, address: string): boolean {
-    const meta = this.network(networkId); // throws if unknown
-    return new RegExp(meta.addressPattern).test(address);
+    this.network(networkId); // throws if unknown/disabled
+    // The RegExp was compiled for every network at construction time. The
+    // defensive fallback (no match) is unreachable in practice but keeps TS happy.
+    const re = this.addressRegExps.get(networkId);
+    return re ? re.test(address) : false;
   }
 
   // ── Capability flags ──────────────────────────────────────────────────
@@ -237,15 +242,22 @@ export class AssetRegistry {
    * Formats a fiat amount for display using the currency's symbol and decimal places.
    * e.g. `formatFiat('NGN', '5000')` → `'₦5,000.00'`
    *
+   * Uses a deterministic manual formatter (no Intl/toLocaleString) so the output
+   * is identical across all Node ICU builds (small-icu in Alpine/Docker CI vs
+   * full ICU in local dev). This avoids test flakiness when the locale data
+   * differs between environments.
+   *
    * @throws {UnsupportedFiatError} when the fiat code is not registered.
    */
   formatFiat(code: string, amount: string): string {
     const meta = this.fiat(code); // validates the fiat exists
-    const num = parseFloat(amount);
-    const formatted = num.toLocaleString('en-NG', {
-      minimumFractionDigits: meta.decimals,
-      maximumFractionDigits: meta.decimals,
-    });
-    return `${meta.symbol}${formatted}`;
+    const fixed = parseFloat(amount).toFixed(meta.decimals);
+    const [intPart, fracPart] = fixed.split('.');
+    // Insert thousand-separator commas: match a position preceded by at least one
+    // digit and followed by groups of three digits to the end of the string.
+    const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return fracPart
+      ? `${meta.symbol}${grouped}.${fracPart}`
+      : `${meta.symbol}${grouped}`;
   }
 }
