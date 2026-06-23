@@ -9,6 +9,12 @@ export const PROPOSAL_REPOSITORY = Symbol('PROPOSAL_REPOSITORY');
 // Infrastructure maps these to Prisma args; the application stays DB-agnostic.
 // ---------------------------------------------------------------------------
 
+// Import the ProposalStatus literal union defined in the transaction port so
+// the engine's executable-status check is type-checked end-to-end (I1).
+import type { ProposalStatus } from './transaction.repository.port';
+
+export type { ProposalStatus };
+
 export interface CreateProposalData {
   userId: string;
   conversationId?: string;
@@ -27,7 +33,8 @@ export interface ProposalRecord {
   userId: string;
   conversationId: string | null;
   type: string;
-  status: string;
+  /** Narrowed to the known string-literal union (I1). */
+  status: ProposalStatus;
   parameters: Record<string, unknown>;
   parametersChecksum: string;
   quoteId: string | null;
@@ -55,7 +62,7 @@ export interface IProposalRepository {
    */
   updateStatus(
     id: string,
-    status: string,
+    status: ProposalStatus,
     fields?: {
       confirmedAt?: Date;
       executedAt?: Date;

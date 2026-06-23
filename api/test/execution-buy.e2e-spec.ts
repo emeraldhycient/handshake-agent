@@ -367,6 +367,11 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
     expect(second.transactionId).toBe(first.transactionId);
     expect(second.status).toBe(first.status);
 
+    // VA details must be populated on replay (C2) — not empty strings.
+    expect(second.payment.accountNumber).toBe(FAKE_ACCOUNT_NUMBER);
+    expect(second.payment.bankName).toBe(FAKE_BANK_NAME);
+    expect(second.payment.providerRef).toBe(FAKE_FLW_REF);
+
     // No duplicate Transaction row created.
     const txnCountAfter = await prisma.transaction.count({
       where: { idempotencyKey },

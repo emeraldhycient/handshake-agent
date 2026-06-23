@@ -20,8 +20,9 @@
  *   4. DirectiveService.consume — grant authorizes this exact proposal; ref must be request_pin.
  *   5. PinService.verifyPin — PIN correct and not locked.
  *   6. Idempotency — if Transaction found for key, return existing result (no new side effects).
- *   7. Atomic writes — create Transaction + mark Proposal executing.
- *   8. Side effects — provision wallet, create Flutterwave collection, enqueue outbox.
+ *   7. Atomic writes — create Transaction + mark Proposal executing (single DB transaction).
+ *   8. Side effects — provision wallet, create Flutterwave collection, persist VA details,
+ *      enqueue outbox.
  *   9. Return ExecuteBuyResult.
  */
 
@@ -51,6 +52,7 @@ import {
 import {
   TRANSACTION_REPOSITORY,
   type ITransactionRepository,
+  type TransactionRecord,
 } from './ports/transaction.repository.port';
 import {
   SETTLEMENT_OUTBOX_REPOSITORY,
@@ -88,8 +90,8 @@ export interface ExecuteBuyResult {
   };
 }
 
-// Statuses that allow the engine to execute against a proposal.
-const EXECUTABLE_STATUSES = new Set(['pending', 'confirmed']);
+// Statuses that allow the engine to execute against a proposal (I1: typed set).
+const EXECUTABLE_STATUSES = new Set<string>(['pending', 'confirmed']);
 
 // The directive ref that must authorize a buy execution.
 const REQUIRED_DIRECTIVE_REF = 'request_pin';
@@ -224,6 +226,8 @@ export class ExecutionService {
     }
 
     // ── Step 7: Atomic writes — create Transaction + mark Proposal executing ─
+    // Both writes run in a single Prisma $transaction so a failure between them
+    // cannot orphan a settling Transaction while the Proposal stays pending (C1).
     const requestChecksum = this.buildRequestChecksum({
       userId,
       proposalId,
@@ -232,31 +236,30 @@ export class ExecutionService {
       fxRate: storedQuote.fxRate,
     });
 
-    const txn = await this.transactionRepo.create({
-      proposalId,
-      userId,
-      type: 'buy',
-      status: 'settling',
-      idempotencyKey,
-      requestChecksum,
-      fxRateSnapshot: storedQuote.fxRate,
-      metadata: {
-        asset: storedQuote.asset,
-        fiatAmount: storedQuote.fiatAmount,
-        fiatCurrency: storedQuote.fiatCurrency,
-        cryptoAmount: storedQuote.cryptoAmount,
-        fxRate: storedQuote.fxRate,
-        baseRate: storedQuote.baseRate,
-        spreadBps: storedQuote.spreadBps,
-        processingFeeBps: storedQuote.processingFeeBps,
-        processingFeeAmount: storedQuote.processingFeeAmount,
+    const txn = await this.transactionRepo.createSettlingWithProposal({
+      txnData: {
+        proposalId,
+        userId,
+        type: 'buy',
+        status: 'settling',
+        idempotencyKey,
+        requestChecksum,
+        fxRateSnapshot: storedQuote.fxRate,
+        metadata: {
+          asset: storedQuote.asset,
+          fiatAmount: storedQuote.fiatAmount,
+          fiatCurrency: storedQuote.fiatCurrency,
+          // Within-tolerance drift: re-use the stored crypto amount (conservative; phase A).
+          cryptoAmount: storedQuote.cryptoAmount,
+          fxRate: storedQuote.fxRate,
+          baseRate: storedQuote.baseRate,
+          spreadBps: storedQuote.spreadBps,
+          processingFeeBps: storedQuote.processingFeeBps,
+          processingFeeAmount: storedQuote.processingFeeAmount,
+        },
+        pinVerifiedAt: now,
       },
-      pinVerifiedAt: now,
-    });
-
-    // Mark the proposal as executing (non-fatal if this races — the Transaction
-    // row is the source of truth).
-    await this.proposalRepo.updateStatus(proposalId, 'executing', {
+      proposalId,
       confirmedAt: now,
     });
 
@@ -284,7 +287,15 @@ export class ExecutionService {
       },
     });
 
-    // 8c. Enqueue the SettlementOutbox entry for reliable async processing.
+    // 8c. Persist VA details into Transaction metadata so idempotent replay
+    // can return the real VA without calling the provider again (C2).
+    await this.transactionRepo.mergeMetadata(txn.id, {
+      accountNumber: collection.accountNumber,
+      bankName: collection.bankName,
+      providerRef: collection.providerRef,
+    });
+
+    // 8d. Enqueue the SettlementOutbox entry for reliable async processing.
     await this.outboxRepo.create({
       transactionId: txn.id,
       settlementType: 'processor_collection',
@@ -345,9 +356,12 @@ export class ExecutionService {
    * Reconstructs an ExecuteBuyResult from an existing Transaction row.
    * Used for idempotent replay (Step 6) — returns previous result without
    * calling any side-effecting port.
+   *
+   * VA details (accountNumber, bankName, providerRef) are read from
+   * Transaction.metadata where they were persisted after createCollection (C2).
    */
   private buildResultFromTransaction(
-    txn: import('./ports/transaction.repository.port').TransactionRecord,
+    txn: TransactionRecord,
     fiatAmount: string,
   ): ExecuteBuyResult {
     const meta = txn.metadata as Record<string, string>;
@@ -357,9 +371,8 @@ export class ExecutionService {
       // any non-terminal status (completed is the only other terminal success).
       status: txn.status === 'completed' ? 'completed' : 'settling',
       payment: {
-        // These were persisted in the outbox/metadata at first execution.
-        // For idempotent replay, we reconstruct from metadata if available,
-        // otherwise emit a placeholder (the VA is still valid at the provider).
+        // VA details were persisted into metadata after first createCollection (C2).
+        // processorTxRef is a fallback for legacy rows that pre-date the merge.
         accountNumber: meta.accountNumber ?? '',
         bankName: meta.bankName ?? '',
         providerRef: meta.providerRef ?? txn.processorTxRef ?? '',

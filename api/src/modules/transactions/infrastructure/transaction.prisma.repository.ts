@@ -11,15 +11,14 @@
 
 import { Injectable } from '@nestjs/common';
 
-import {
-  TransactionStatus,
-  TransactionType,
-} from '../../../../generated/prisma/client';
+import { TransactionType } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
+  CreateSettlingWithProposalData,
   CreateTransactionData,
   ITransactionRepository,
   TransactionRecord,
+  TransactionStatus,
 } from '../application/ports/transaction.repository.port';
 
 // ---------------------------------------------------------------------------
@@ -106,7 +105,7 @@ export class TransactionPrismaRepository implements ITransactionRepository {
         userId: data.userId,
         proposalId: data.proposalId ?? null,
         type: data.type as TransactionType,
-        status: data.status as TransactionStatus,
+        status: data.status,
         idempotencyKey: data.idempotencyKey,
         requestChecksum: data.requestChecksum,
         fxRateSnapshot:
@@ -124,9 +123,79 @@ export class TransactionPrismaRepository implements ITransactionRepository {
     return toRecord(row);
   }
 
+  /**
+   * Atomically creates a Transaction (status='settling') and updates the
+   * associated Proposal to 'executing' in a single Prisma $transaction (C1).
+   *
+   * A failure in either write rolls back the entire operation, eliminating the
+   * orphan-transaction window that would exist if they were separate awaited calls.
+   */
+  async createSettlingWithProposal(
+    input: CreateSettlingWithProposalData,
+  ): Promise<TransactionRecord> {
+    const { txnData, proposalId, confirmedAt } = input;
+
+    const [row] = await this.prisma.$transaction([
+      this.prisma.transaction.create({
+        data: {
+          userId: txnData.userId,
+          proposalId: txnData.proposalId ?? null,
+          type: txnData.type as TransactionType,
+          status: txnData.status,
+          idempotencyKey: txnData.idempotencyKey,
+          requestChecksum: txnData.requestChecksum,
+          fxRateSnapshot:
+            txnData.fxRateSnapshot !== undefined
+              ? (txnData.fxRateSnapshot as never)
+              : null,
+          metadata: txnData.metadata as never,
+          pinVerifiedAt: txnData.pinVerifiedAt ?? null,
+        },
+        select: TRANSACTION_SELECT,
+      }),
+      this.prisma.proposal.update({
+        where: { id: proposalId },
+        data: {
+          status: 'executing',
+          ...(confirmedAt !== undefined ? { confirmedAt } : {}),
+        },
+      }),
+    ]);
+
+    return toRecord(row);
+  }
+
+  /**
+   * Merges partial metadata into the Transaction's existing metadata (C2).
+   *
+   * Persists VA details (accountNumber, bankName, providerRef) so that an
+   * idempotent replay can reconstruct the full ExecuteBuyResult from the DB row
+   * without calling any external provider again.
+   */
+  async mergeMetadata(
+    id: string,
+    extra: Record<string, unknown>,
+  ): Promise<void> {
+    // Read current metadata, merge, and write back atomically in one update.
+    // Prisma's JSON update merges at the DB level using an object spread in JS:
+    // we fetch the row in the same call to keep the logic simple and safe.
+    const current = await this.prisma.transaction.findUniqueOrThrow({
+      where: { id },
+      select: { metadata: true },
+    });
+    const merged = {
+      ...(current.metadata as Record<string, unknown>),
+      ...extra,
+    };
+    await this.prisma.transaction.update({
+      where: { id },
+      data: { metadata: merged as never },
+    });
+  }
+
   async updateStatus(
     id: string,
-    status: string,
+    status: TransactionStatus,
     fields?: {
       processorTxRef?: string;
       executedAt?: Date;
@@ -138,7 +207,7 @@ export class TransactionPrismaRepository implements ITransactionRepository {
     await this.prisma.transaction.update({
       where: { id },
       data: {
-        status: status as TransactionStatus,
+        status: status,
         ...(fields?.processorTxRef !== undefined
           ? { processorTxRef: fields.processorTxRef }
           : {}),

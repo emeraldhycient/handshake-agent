@@ -179,7 +179,9 @@ function makeTransactionRepo(
   return {
     findByIdempotencyKey: jest.fn().mockResolvedValue(existing),
     create: jest.fn().mockResolvedValue(created),
+    createSettlingWithProposal: jest.fn().mockResolvedValue(created),
     updateStatus: jest.fn().mockResolvedValue(undefined),
+    mergeMetadata: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -384,24 +386,38 @@ describe('ExecutionService.executeBuy', () => {
     // PIN was verified.
     expect(pinService.verifyPin).toHaveBeenCalledWith(USER_ID, PIN);
 
-    // Transaction was created.
-    expect(transactionRepo.create).toHaveBeenCalledTimes(1);
-    expect(transactionRepo.create).toHaveBeenCalledWith(
+    // Transaction + Proposal update must be atomic (C1): createSettlingWithProposal called.
+    expect(transactionRepo.createSettlingWithProposal).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const expectedTxnData = expect.objectContaining({
+      type: 'buy',
+      status: 'settling',
+      userId: USER_ID,
+      proposalId: PROPOSAL_ID,
+      idempotencyKey: IDEMPOTENCY_KEY,
+      pinVerifiedAt: FIXED_NOW,
+    });
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    expect(transactionRepo.createSettlingWithProposal).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: 'buy',
-        status: 'settling',
-        userId: USER_ID,
         proposalId: PROPOSAL_ID,
-        idempotencyKey: IDEMPOTENCY_KEY,
-        pinVerifiedAt: FIXED_NOW,
+        confirmedAt: FIXED_NOW,
+        txnData: expectedTxnData,
       }),
     );
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+    // The separate create + proposalRepo.updateStatus calls must NOT be made (C1).
+    expect(transactionRepo.create).not.toHaveBeenCalled();
+    expect(proposalRepo.updateStatus).not.toHaveBeenCalled();
 
-    // Proposal was marked executing.
-    expect(proposalRepo.updateStatus).toHaveBeenCalledWith(
-      PROPOSAL_ID,
-      'executing',
-      expect.objectContaining({ confirmedAt: FIXED_NOW }),
+    // VA details persisted after createCollection (C2).
+    expect(transactionRepo.mergeMetadata).toHaveBeenCalledWith(
+      TXN_ID,
+      expect.objectContaining({
+        accountNumber: STUB_COLLECTION.accountNumber,
+        bankName: STUB_COLLECTION.bankName,
+        providerRef: STUB_COLLECTION.providerRef,
+      }),
     );
 
     // Wallet was provisioned.
@@ -430,7 +446,7 @@ describe('ExecutionService.executeBuy', () => {
     );
   });
 
-  it('asserts directive + PIN are called BEFORE Transaction create (security-critical order)', async () => {
+  it('asserts directive + PIN are called BEFORE atomic Transaction+Proposal write (security-critical order)', async () => {
     const callOrder: string[] = [];
 
     const directiveService = {
@@ -447,11 +463,13 @@ describe('ExecutionService.executeBuy', () => {
     };
     const transactionRepo = {
       findByIdempotencyKey: jest.fn().mockResolvedValue(null),
-      create: jest.fn().mockImplementation(() => {
+      create: jest.fn().mockResolvedValue(STUB_TXN),
+      createSettlingWithProposal: jest.fn().mockImplementation(() => {
         callOrder.push('create_txn');
         return Promise.resolve(STUB_TXN);
       }),
       updateStatus: jest.fn().mockResolvedValue(undefined),
+      mergeMetadata: jest.fn().mockResolvedValue(undefined),
     };
 
     const svc = buildService({
@@ -480,7 +498,7 @@ describe('ExecutionService.executeBuy', () => {
     );
   });
 
-  it('asserts idempotency check happens AFTER auth and BEFORE Transaction create', async () => {
+  it('asserts idempotency check happens AFTER auth and BEFORE atomic write', async () => {
     const callOrder: string[] = [];
 
     const directiveService = {
@@ -500,11 +518,13 @@ describe('ExecutionService.executeBuy', () => {
         callOrder.push('idempotency_check');
         return Promise.resolve(null);
       }),
-      create: jest.fn().mockImplementation(() => {
+      create: jest.fn().mockResolvedValue(STUB_TXN),
+      createSettlingWithProposal: jest.fn().mockImplementation(() => {
         callOrder.push('create_txn');
         return Promise.resolve(STUB_TXN);
       }),
       updateStatus: jest.fn().mockResolvedValue(undefined),
+      mergeMetadata: jest.fn().mockResolvedValue(undefined),
     };
 
     const svc = buildService({
@@ -542,7 +562,7 @@ describe('ExecutionService.executeBuy', () => {
     await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
       ProposalExpiredError,
     );
-    expect(transactionRepo.create).not.toHaveBeenCalled();
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
   // ── Wrong owner ───────────────────────────────────────────────────────────
@@ -559,13 +579,13 @@ describe('ExecutionService.executeBuy', () => {
     await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
       ProposalNotExecutableError,
     );
-    expect(transactionRepo.create).not.toHaveBeenCalled();
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
   // ── Bad status ────────────────────────────────────────────────────────────
 
   it('bad status (executing) → ProposalNotExecutableError; no Transaction created', async () => {
-    const executing = { ...STUB_PROPOSAL, status: 'executing' };
+    const executing: ProposalRecord = { ...STUB_PROPOSAL, status: 'executing' };
     const transactionRepo = makeTransactionRepo();
 
     const svc = buildService({
@@ -576,11 +596,11 @@ describe('ExecutionService.executeBuy', () => {
     await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
       ProposalNotExecutableError,
     );
-    expect(transactionRepo.create).not.toHaveBeenCalled();
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
   it('bad status (failed) → ProposalNotExecutableError', async () => {
-    const failed = { ...STUB_PROPOSAL, status: 'failed' };
+    const failed: ProposalRecord = { ...STUB_PROPOSAL, status: 'failed' };
     const svc = buildService({ proposalRepo: makeProposalRepo(failed) });
     await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
       ProposalNotExecutableError,
@@ -612,7 +632,7 @@ describe('ExecutionService.executeBuy', () => {
     await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
       QuoteDriftError,
     );
-    expect(transactionRepo.create).not.toHaveBeenCalled();
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
   it('drift within tolerance (0 bps) → succeeds', async () => {
@@ -638,7 +658,7 @@ describe('ExecutionService.executeBuy', () => {
     await expect(svc.executeBuy(BASE_INPUT)).rejects.toThrow(
       'KYC_NOT_VERIFIED',
     );
-    expect(transactionRepo.create).not.toHaveBeenCalled();
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
   // ── Directive consume throws (replay) ─────────────────────────────────────
@@ -659,7 +679,7 @@ describe('ExecutionService.executeBuy', () => {
     );
     // PIN must NOT be called after directive failure.
     expect(pinService.verifyPin).not.toHaveBeenCalled();
-    expect(transactionRepo.create).not.toHaveBeenCalled();
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
   // ── PIN invalid ───────────────────────────────────────────────────────────
@@ -682,7 +702,7 @@ describe('ExecutionService.executeBuy', () => {
     );
     expect(paymentProvider.createCollection).not.toHaveBeenCalled();
     expect(outboxRepo.create).not.toHaveBeenCalled();
-    expect(transactionRepo.create).not.toHaveBeenCalled();
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
   // ── Idempotent replay ─────────────────────────────────────────────────────
@@ -705,7 +725,7 @@ describe('ExecutionService.executeBuy', () => {
     // No new collection or outbox.
     expect(paymentProvider.createCollection).not.toHaveBeenCalled();
     expect(outboxRepo.create).not.toHaveBeenCalled();
-    expect(transactionRepo.create).not.toHaveBeenCalled();
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
   it('idempotent replay with completed status → returns status=completed', async () => {
@@ -737,6 +757,49 @@ describe('ExecutionService.executeBuy', () => {
     await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
       ProposalNotExecutableError,
     );
-    expect(transactionRepo.create).not.toHaveBeenCalled();
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+  });
+
+  // ── Idempotent replay returns non-empty VA details (C2) ───────────────────
+
+  it('idempotent replay returns populated VA details (accountNumber/bankName/providerRef) from metadata', async () => {
+    // The existing Transaction already has VA details in its metadata (as persisted
+    // by mergeMetadata after createCollection on the first execution).
+    const existingTxnWithVA: TransactionRecord = {
+      ...STUB_TXN,
+      status: 'settling',
+      metadata: {
+        asset: 'USDT',
+        fiatAmount: '10000',
+        fiatCurrency: 'NGN',
+        // VA details merged in after first createCollection (C2).
+        accountNumber: STUB_COLLECTION.accountNumber,
+        bankName: STUB_COLLECTION.bankName,
+        providerRef: STUB_COLLECTION.providerRef,
+      },
+    };
+
+    const paymentProvider = makePaymentProvider();
+    const outboxRepo = makeOutboxRepo();
+    const transactionRepo = makeTransactionRepo(existingTxnWithVA);
+
+    const svc = buildService({ transactionRepo, paymentProvider, outboxRepo });
+
+    const result = await svc.executeBuy(BASE_INPUT);
+
+    // transactionId and status must match.
+    expect(result.transactionId).toBe(TXN_ID);
+    expect(result.status).toBe('settling');
+
+    // VA details must be populated — not empty strings (C2).
+    expect(result.payment.accountNumber).toBe(STUB_COLLECTION.accountNumber);
+    expect(result.payment.bankName).toBe(STUB_COLLECTION.bankName);
+    expect(result.payment.providerRef).toBe(STUB_COLLECTION.providerRef);
+
+    // No duplicate side effects.
+    expect(paymentProvider.createCollection).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+    expect(transactionRepo.mergeMetadata).not.toHaveBeenCalled();
   });
 });

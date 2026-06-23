@@ -7,6 +7,29 @@
 export const TRANSACTION_REPOSITORY = Symbol('TRANSACTION_REPOSITORY');
 
 // ---------------------------------------------------------------------------
+// String-literal unions for status fields (I1).
+// Defined here in the application/port layer — NOT importing Prisma enum types.
+// ---------------------------------------------------------------------------
+
+/** Executable Proposal statuses recognised by the engine. */
+export type ProposalStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'executing'
+  | 'executed'
+  | 'expired'
+  | 'rejected'
+  | 'failed';
+
+/** Transaction lifecycle statuses. */
+export type TransactionStatus =
+  | 'pending'
+  | 'settling'
+  | 'completed'
+  | 'failed'
+  | 'rolled_back';
+
+// ---------------------------------------------------------------------------
 // Application-level types — NOT the Prisma-generated types.
 // ---------------------------------------------------------------------------
 
@@ -16,8 +39,7 @@ export interface CreateTransactionData {
   userId: string;
   /** 'buy' | 'sell' | 'send' | 'swap' | 'ticket_purchase' | 'reward' | 'refund' */
   type: string;
-  /** 'pending' | 'settling' | 'completed' | etc. */
-  status: string;
+  status: TransactionStatus;
   /** UUID — caller generates this for at-most-once semantics (NFR-7). */
   idempotencyKey: string;
   /** SHA-256 hex of canonical request params (asset/amount/destination). */
@@ -45,6 +67,15 @@ export interface TransactionRecord {
   createdAt: Date;
 }
 
+/** Data required for an atomic transaction+proposal settling write (C1). */
+export interface CreateSettlingWithProposalData {
+  txnData: CreateTransactionData;
+  /** Proposal to flip to 'executing' in the same DB transaction. */
+  proposalId: string;
+  /** Optional timestamp to set on Proposal.confirmedAt. */
+  confirmedAt?: Date;
+}
+
 export interface ITransactionRepository {
   /**
    * Looks up a Transaction by its idempotency key.
@@ -58,12 +89,23 @@ export interface ITransactionRepository {
   create(data: CreateTransactionData): Promise<TransactionRecord>;
 
   /**
+   * Atomically creates a Transaction row (status='settling') and updates the
+   * associated Proposal to status='executing' in a single Prisma $transaction.
+   *
+   * This prevents the orphan-transaction window (C1): if either write fails
+   * the entire operation is rolled back.
+   */
+  createSettlingWithProposal(
+    input: CreateSettlingWithProposalData,
+  ): Promise<TransactionRecord>;
+
+  /**
    * Updates the status of an existing Transaction.
    * Optionally sets additional fields (processorTxRef, failureReason, etc.).
    */
   updateStatus(
     id: string,
-    status: string,
+    status: TransactionStatus,
     fields?: {
       processorTxRef?: string;
       executedAt?: Date;
@@ -72,4 +114,11 @@ export interface ITransactionRepository {
       failureReason?: string;
     },
   ): Promise<void>;
+
+  /**
+   * Merges the given partial metadata into the Transaction's existing metadata.
+   * Used to persist VA details (accountNumber, bankName, providerRef) after
+   * createCollection so idempotent replay can reconstruct the full result (C2).
+   */
+  mergeMetadata(id: string, extra: Record<string, unknown>): Promise<void>;
 }

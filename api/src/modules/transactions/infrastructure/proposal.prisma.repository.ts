@@ -2,12 +2,12 @@ import { Injectable } from '@nestjs/common';
 
 // The generated Prisma client is the ONLY sanctioned DB door (CLAUDE.md §3.2).
 // This is the infrastructure layer — the only place it is allowed.
-import { ProposalStatus } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   CreateProposalData,
   IProposalRepository,
   ProposalRecord,
+  ProposalStatus,
 } from '../application/ports/proposal.repository.port';
 
 /**
@@ -69,7 +69,8 @@ export class ProposalPrismaRepository implements IProposalRepository {
       userId: row.userId,
       conversationId: row.conversationId,
       type: row.type,
-      status: row.status,
+      // Cast Prisma enum to port-layer string-literal union — values are identical.
+      status: row.status as ProposalStatus,
       parameters: row.parameters as Record<string, unknown>,
       parametersChecksum: row.parametersChecksum,
       quoteId: row.quoteId,
@@ -81,7 +82,7 @@ export class ProposalPrismaRepository implements IProposalRepository {
 
   async updateStatus(
     id: string,
-    status: string,
+    status: ProposalStatus,
     fields?: {
       confirmedAt?: Date;
       executedAt?: Date;
@@ -92,7 +93,7 @@ export class ProposalPrismaRepository implements IProposalRepository {
     await this.prisma.proposal.update({
       where: { id },
       data: {
-        status: status as ProposalStatus,
+        status,
         ...(fields?.confirmedAt !== undefined
           ? { confirmedAt: fields.confirmedAt }
           : {}),
