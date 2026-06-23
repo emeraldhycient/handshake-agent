@@ -26,7 +26,9 @@
 import {
   Body,
   Controller,
+  HttpCode,
   HttpException,
+  HttpStatus,
   Inject,
   Logger,
   Post,
@@ -107,6 +109,7 @@ export class WhatsAppFlowController {
    * NestJS passes it through when @Res({ passthrough: true }) is set.
    */
   @Post('flow')
+  @HttpCode(HttpStatus.OK)
   async handleFlow(
     @Body() body: FlowEncryptedBody,
     @Res({ passthrough: true }) res: Response,

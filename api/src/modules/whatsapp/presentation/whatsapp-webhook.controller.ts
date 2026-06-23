@@ -3,6 +3,8 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  HttpCode,
+  HttpStatus,
   Inject,
   Logger,
   Post,
@@ -108,6 +110,7 @@ export class WhatsAppWebhookController {
    * source (Meta) before schema validation — `safeParse` enforces the shape.
    */
   @Post('webhook')
+  @HttpCode(HttpStatus.OK)
   @UseGuards(WhatsAppSignatureGuard)
   async receive(@Body() body: any): Promise<AckResponse> {
     const parsed = WhatsAppInboundSchema.safeParse(body);
