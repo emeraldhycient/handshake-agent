@@ -85,6 +85,10 @@ From the test WhatsApp number, message the business number: **"buy 5000 naira of
 
 `Transaction.status='completed'`, balanced `LedgerEntry` rows (sum 0 per currency), a `Receipt` row, `WalletBalance` credited, `SettlementOutbox.status='completed'`.
 
+## Other flows (RECEIVE · SELL · SEND · KYC)
+
+See [`whatsapp-outbound-staging.md`](./whatsapp-outbound-staging.md) for the companion runbook covering the deposit receive, USDT→NGN sell, on-chain USDT send, KYC web handoff, and beneficiary management flows. That document reuses this one's prerequisites, secrets, and tunnel setup without repeating them.
+
 ## Known follow-ups (tracked, non-blocking)
 
 Overpayment reconciliation; `Number()`→BigInt at the KYC gate; cumulative `WalletBalance` semantics; receipt numbering via a Postgres sequence; session step-up (`Session.stepUpCompletedAt`) wiring; a dedicated `RECEIPT_SIGNING_KEY`; long-lived Meta token. See `.superpowers/sdd/progress.md` for the full list.
