@@ -6,8 +6,8 @@ import { BuyProposalConfirmationSchema } from '@handshake-agent/contracts';
 import type { BuyProposalConfirmation } from '@handshake-agent/contracts';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
-import type { KycGateService } from '../../identity/application/kyc-gate.service';
-import type { QuotesService } from '../../quotes/application/quotes.service';
+import { KycGateService } from '../../identity/application/kyc-gate.service';
+import { QuotesService } from '../../quotes/application/quotes.service';
 import type { IProposalRepository } from './ports/proposal.repository.port';
 import { PROPOSAL_REPOSITORY } from './ports/proposal.repository.port';
 import type { IQuoteRepository } from './ports/quote.repository.port';
