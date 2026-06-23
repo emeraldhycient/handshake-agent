@@ -47,7 +47,11 @@ import type {
   AppConfig,
   BuyConfig,
   SellConfig,
+  PricingConfig,
 } from '../../../core/config/configuration';
+import { BeneficiaryCoolingOffError } from '../../beneficiaries/domain/beneficiary-errors';
+import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
+import { ComplianceService } from '../../compliance/application/compliance.service';
 import {
   PAYMENT_PROVIDER,
   type IPaymentProvider,
@@ -164,6 +168,46 @@ export interface SettleSellResult {
   userId?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Send types
+// ---------------------------------------------------------------------------
+
+export interface ExecuteSendInput {
+  userId: string;
+  proposalId: string;
+  directiveId: string;
+  nonce: string;
+  pin: string;
+  idempotencyKey: string;
+}
+
+export interface ExecuteSendResult {
+  transactionId: string;
+  status: 'settling';
+  onChain: {
+    providerRef: string;
+  };
+}
+
+export interface SettleSendOnChainInput {
+  /** The idempotency key used at executeSend (= providerRef for wallet provider). */
+  reference: string;
+  /** true = finalize (on-chain success), false = refund (on-chain failure). */
+  success: boolean;
+  /** On-chain tx hash — required when success=true. */
+  onChainTxHash?: string;
+}
+
+export interface SettleSendOnChainResult {
+  transactionId: string;
+  status: 'completed' | 'failed' | 'pending';
+  receiptNumber?: string;
+  userId?: string;
+}
+
+// The directive ref required to authorize a send execution (step-up auth).
+const REQUIRED_SEND_DIRECTIVE_REF = 'request_step_up';
+
 // Statuses that allow the engine to execute against a proposal (I1: typed set).
 const EXECUTABLE_STATUSES = new Set<string>(['pending', 'confirmed']);
 
@@ -210,6 +254,8 @@ export class ExecutionService {
     @Optional()
     @Inject(WHATSAPP_SENDER)
     private readonly whatsAppSender?: IWhatsAppSender,
+    @Optional()
+    private readonly complianceService?: ComplianceService,
   ) {
     const buyConfig = this.config.get<BuyConfig>('buy');
     this.maxBuyDriftBps = buyConfig.maxDriftBps;
@@ -914,8 +960,455 @@ export class ExecutionService {
   }
 
   // ---------------------------------------------------------------------------
+  // Send execution (task N3b)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Executes a send order after running the full server-side validation gauntlet.
+   *
+   * TWO-PHASE SEND:
+   *   Phase 1 (this method): reserve totalDebit USDT (user_wallet → clearing) to prevent
+   *   double-spend while the on-chain broadcast is in flight. Transaction status = 'settling'.
+   *   Phase 2 (settleSendOnChain): on success, finalize (clearing → treasury legs);
+   *   on failure, refund (clearing → user_wallet) + CompensationRecord.
+   *
+   * Validation gauntlet (ORDER IS SECURITY-CRITICAL):
+   *   1. Load Proposal(send, status pending|confirmed, owner, not expired).
+   *   2. KYC gate (server-side, always) — uses NGN-equivalent of cryptoAmount × baseRate.
+   *   3. Balance re-check via ledger ≥ totalDebit (TOCTOU guard at execute time).
+   *   4. Cooling-off re-check — beneficiary.firstUseLockedUntil must be null or past.
+   *   5. Re-screen sanctions — complianceService.screenSendDestination.
+   *   6. DirectiveService.consume (ref must be request_step_up).
+   *   7. PinService.verifyPin.
+   *   8. Idempotency check (after auth, before writes).
+   *   9. Atomic write: Transaction(settling) + reserve ledger + Proposal→executing.
+   *   10. walletService.withdraw → providerRef.
+   *   11. mergeMetadata(providerRef).
+   *   12. Enqueue SettlementOutbox(onchain_send).
+   */
+  async executeSend(input: ExecuteSendInput): Promise<ExecuteSendResult> {
+    const { userId, proposalId, directiveId, nonce, pin, idempotencyKey } =
+      input;
+    const now = this.clock.now();
+
+    // ── Step 1: Load and validate proposal ──────────────────────────────────
+    const proposal = await this.proposalRepo.findById(proposalId);
+
+    if (proposal === null) {
+      throw new ProposalNotExecutableError('not found');
+    }
+    if (proposal.userId !== userId) {
+      throw new ProposalNotExecutableError('userId mismatch');
+    }
+    if (!EXECUTABLE_STATUSES.has(proposal.status)) {
+      throw new ProposalNotExecutableError(
+        `status '${proposal.status}' is not executable`,
+      );
+    }
+    if (proposal.expiresAt <= now) {
+      throw new ProposalExpiredError();
+    }
+    if (proposal.type !== 'send') {
+      throw new ProposalNotExecutableError(
+        `proposal type '${proposal.type}' is not 'send'`,
+      );
+    }
+
+    // Parse send-specific parameters from the proposal.
+    // Send proposals have NO quote — parameters come directly from proposal.parameters.
+    const params = proposal.parameters as Record<string, string>;
+    const asset = params.asset ?? 'USDT';
+    const cryptoAmount = params.cryptoAmount ?? '0';
+    const networkFeeCrypto = params.networkFeeCrypto ?? '0';
+    const totalDebit = params.totalDebit ?? '0';
+    const beneficiaryId = params.beneficiaryId;
+    const walletId = params.walletId;
+    const toAddress = params.toAddress ?? '';
+    const network = params.network ?? 'TRON';
+
+    if (!beneficiaryId) {
+      throw new ProposalNotExecutableError(
+        'proposal parameters missing beneficiaryId',
+      );
+    }
+
+    // ── Step 2: KYC gate (server-side, always) ──────────────────────────────
+    // No quote on send — use cryptoAmount × baseRate for NGN-equivalent.
+    const pricingConfig = (
+      this.config as unknown as { get<T>(key: string): T }
+    ).get<PricingConfig>('pricing');
+    const baseRate = pricingConfig?.assets?.[asset]?.baseRate ?? 0;
+    const ngnEquivalent = Number(cryptoAmount) * baseRate;
+
+    await this.kycGate.assertCanTransact({
+      userId,
+      fiatAmount: ngnEquivalent,
+      asset,
+    });
+
+    // ── Step 3: Re-check balance via ledger ≥ totalDebit (TOCTOU guard) ─────
+    // Use the walletId stored in the proposal parameters (set at proposal time).
+    const balance = await this.ledgerRepo.getAccountBalance(
+      'user_wallet',
+      walletId,
+      asset,
+    );
+
+    if (toScaled(balance) < toScaled(totalDebit)) {
+      throw new InsufficientBalanceError(balance, totalDebit, asset);
+    }
+
+    // ── Step 4: Cooling-off re-check ─────────────────────────────────────────
+    const beneficiary = await this.beneficiaryService.getById(
+      userId,
+      beneficiaryId,
+    );
+    if (beneficiary === null) {
+      throw new ProposalNotExecutableError(
+        `beneficiary '${beneficiaryId}' not found`,
+      );
+    }
+    if (
+      beneficiary.firstUseLockedUntil !== null &&
+      beneficiary.firstUseLockedUntil !== undefined &&
+      beneficiary.firstUseLockedUntil > now
+    ) {
+      throw new BeneficiaryCoolingOffError(
+        beneficiaryId,
+        beneficiary.firstUseLockedUntil,
+      );
+    }
+
+    // ── Step 5: Re-screen sanctions ───────────────────────────────────────────
+    if (this.complianceService !== undefined) {
+      const screening = await this.complianceService.screenSendDestination({
+        userId,
+        address: toAddress,
+        network,
+      });
+      if (!screening.passed) {
+        throw new SanctionsBlockedError(
+          toAddress,
+          screening.reason,
+          screening.complianceEventId,
+          '',
+        );
+      }
+    } else {
+      this.logger.warn(
+        { userId, proposalId },
+        'executeSend: ComplianceService not injected — skipping sanctions re-screen (warn)',
+      );
+    }
+
+    // ── Step 6: Consume directive grant ──────────────────────────────────────
+    const grant = await this.directiveService.consume({
+      directiveId,
+      nonce,
+      proposalId,
+    });
+
+    if (grant.directiveRef !== REQUIRED_SEND_DIRECTIVE_REF) {
+      throw new ProposalNotExecutableError(
+        `directive ref '${grant.directiveRef}' is not '${REQUIRED_SEND_DIRECTIVE_REF}'`,
+      );
+    }
+
+    // ── Step 7: Verify PIN ───────────────────────────────────────────────────
+    await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 8: Idempotency check ────────────────────────────────────────────
+    const existing =
+      await this.transactionRepo.findByIdempotencyKey(idempotencyKey);
+    if (existing !== null) {
+      const meta = existing.metadata as Record<string, string>;
+      return {
+        transactionId: existing.id,
+        status: 'settling',
+        onChain: {
+          providerRef: meta.providerRef ?? existing.processorTxRef ?? '',
+        },
+      };
+    }
+
+    // ── Step 9: Atomic write ─────────────────────────────────────────────────
+    // create Transaction(send, settling) + reserve USDT (user_wallet→clearing)
+    // + mark Proposal→executing — all in a SINGLE DB $transaction (C1).
+    const requestChecksum = this.buildRequestChecksum({
+      userId,
+      proposalId,
+      asset,
+      fiatAmount: String(ngnEquivalent),
+      fxRate: String(baseRate),
+    });
+
+    const { txn } =
+      await this.settlementRepo.createSendSettlingWithReserveAtomic({
+        txnData: {
+          proposalId,
+          userId,
+          type: 'send',
+          status: 'settling',
+          idempotencyKey,
+          requestChecksum,
+          fxRateSnapshot: null,
+          metadata: {
+            asset,
+            cryptoAmount,
+            networkFeeCrypto,
+            totalDebit,
+            beneficiaryId,
+            walletId,
+            toAddress,
+            network,
+          },
+          pinVerifiedAt: now,
+        },
+        proposalId,
+        confirmedAt: now,
+        velocityIncrement: {
+          userId,
+          fiatAmountStr: String(ngnEquivalent),
+          now,
+        },
+        walletId,
+        totalDebit,
+        now,
+      });
+
+    // ── Step 10: Initiate on-chain withdrawal ────────────────────────────────
+    // Load the full wallet record (idempotent — already provisioned at propose time).
+    const walletRecord = await this.walletService.getOrProvisionWallet(
+      userId,
+      asset,
+      network,
+    );
+    const assetId = this.assetRegistry.assetProviderId(asset, 'blockradar');
+    const withdrawOutput = await this.walletService.withdraw(
+      walletRecord,
+      toAddress,
+      cryptoAmount,
+      assetId,
+      idempotencyKey,
+    );
+    const providerRef = withdrawOutput.providerReference;
+
+    // ── Step 11: Persist providerRef into Transaction metadata ───────────────
+    await this.transactionRepo.mergeMetadata(txn.id, { providerRef });
+
+    // ── Step 12: Enqueue SettlementOutbox(onchain_send) ─────────────────────
+    await this.outboxRepo.create({
+      transactionId: txn.id,
+      settlementType: 'onchain_send',
+      payload: {
+        reference: idempotencyKey,
+        cryptoAmount,
+        networkFeeCrypto,
+        toAddress,
+        providerRef,
+      },
+      idempotencyKey,
+      status: 'pending',
+      processorRef: providerRef,
+    });
+
+    return {
+      transactionId: txn.id,
+      status: 'settling',
+      onChain: { providerRef },
+    };
+  }
+
+  /**
+   * Phase 2 of a send: finalizes or refunds the on-chain withdrawal.
+   *
+   * Called by a Blockradar withdraw webhook or a polling job after the
+   * on-chain broadcast is confirmed or fails.
+   *
+   * Flow (§3.1 preserved — model proposes, engine disposes):
+   *   1. Load Transaction by idempotencyKey (reference).
+   *   2. Idempotent path: already completed → return existing receipt.
+   *   3. Guard: status must be 'settling'.
+   *   4. Route on success flag:
+   *      - success=true  → settleSendFinalizeAtomic (onChainTxHash required).
+   *      - success=false → settleSendRefundAtomic.
+   *   5. Send WhatsApp notification (swallowed — never breaks settlement).
+   */
+  async settleSendOnChain(
+    input: SettleSendOnChainInput,
+  ): Promise<SettleSendOnChainResult> {
+    const { reference, success, onChainTxHash } = input;
+
+    // ── Step 1: Load Transaction by idempotencyKey ───────────────────────────
+    const txn = await this.transactionRepo.findByIdempotencyKey(reference);
+    if (txn === null) {
+      throw new ProposalNotExecutableError(
+        `no transaction found for reference '${reference}'`,
+      );
+    }
+
+    // ── Step 2: Idempotent path ──────────────────────────────────────────────
+    if (txn.status === 'completed') {
+      const receiptNumber = await this.settlementRepo.findReceiptNumber(txn.id);
+      return {
+        transactionId: txn.id,
+        status: 'completed',
+        userId: txn.userId,
+        ...(receiptNumber !== null ? { receiptNumber } : {}),
+      };
+    }
+
+    // ── Step 3: Guard ─────────────────────────────────────────────────────────
+    if (txn.status !== 'settling') {
+      throw new SettlementInvalidStatusError(txn.status);
+    }
+
+    const meta = txn.metadata as Record<string, string>;
+    const walletId = meta.walletId ?? '';
+    const cryptoAmount = meta.cryptoAmount ?? '0';
+    const networkFeeCrypto = meta.networkFeeCrypto ?? '0';
+    const totalDebit = meta.totalDebit ?? '0';
+    const now = this.clock.now();
+    const year = now.getFullYear().toString();
+
+    if (success) {
+      // ── Step 4a: Finalize ─────────────────────────────────────────────────
+      const txHash = onChainTxHash ?? '';
+      const { receiptNumber } =
+        await this.settlementRepo.settleSendFinalizeAtomic({
+          transactionId: txn.id,
+          userId: txn.userId,
+          walletId,
+          cryptoAmount,
+          networkFeeCrypto,
+          onChainTxHash: txHash,
+          now,
+          year,
+        });
+
+      // ── Step 5a: Notify (success) — errors are swallowed, never break settlement.
+      await this.notifySendComplete({
+        userId: txn.userId,
+        receiptNumber,
+        cryptoAmount,
+        toAddress: meta.toAddress ?? '',
+      });
+
+      return {
+        transactionId: txn.id,
+        status: 'completed',
+        userId: txn.userId,
+        receiptNumber,
+      };
+    }
+
+    // ── Step 4b: Failure → refund + compensation ──────────────────────────────
+    await this.settlementRepo.settleSendRefundAtomic({
+      transactionId: txn.id,
+      userId: txn.userId,
+      walletId,
+      totalDebit,
+      failureReason: 'on-chain withdrawal failed',
+      now,
+    });
+
+    // ── Step 5b: Notify (failure) — errors are swallowed, never break settlement.
+    await this.notifySendFailed({
+      userId: txn.userId,
+      cryptoAmount,
+    });
+
+    return {
+      transactionId: txn.id,
+      status: 'failed',
+      userId: txn.userId,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Sends a send-complete WhatsApp receipt to the user.
+   *
+   * Errors are swallowed and logged — notification failure must NEVER break
+   * settlement (settlement has already committed; the on-chain send is done).
+   */
+  private async notifySendComplete(params: {
+    userId: string;
+    receiptNumber: string;
+    cryptoAmount: string;
+    toAddress: string;
+  }): Promise<void> {
+    try {
+      if (
+        this.identityService === undefined ||
+        this.whatsAppSender === undefined
+      ) {
+        return;
+      }
+      const waAddress = await this.identityService.findWhatsAppAddress(
+        params.userId,
+      );
+      if (waAddress === null) {
+        return;
+      }
+      const formattedCrypto = this.assetRegistry.formatCrypto(
+        params.cryptoAmount,
+        'USDT',
+      );
+      const body =
+        `✅ Your crypto send is complete!\n` +
+        `Receipt: ${params.receiptNumber}\n` +
+        `You sent ${formattedCrypto} to ${params.toAddress}.`;
+      await this.whatsAppSender.sendText(waAddress, body);
+    } catch (err: unknown) {
+      this.logger.warn(
+        { userId: params.userId, err },
+        'notifySendComplete: failed to send WhatsApp receipt (swallowed)',
+      );
+    }
+  }
+
+  /**
+   * Sends a send-failed/refund WhatsApp notice to the user.
+   *
+   * Errors are swallowed and logged — notification failure must NEVER break
+   * the refund flow (the refund ledger has already committed).
+   */
+  private async notifySendFailed(params: {
+    userId: string;
+    cryptoAmount: string;
+  }): Promise<void> {
+    try {
+      if (
+        this.identityService === undefined ||
+        this.whatsAppSender === undefined
+      ) {
+        return;
+      }
+      const waAddress = await this.identityService.findWhatsAppAddress(
+        params.userId,
+      );
+      if (waAddress === null) {
+        return;
+      }
+      const formattedCrypto = this.assetRegistry.formatCrypto(
+        params.cryptoAmount,
+        'USDT',
+      );
+      const body =
+        `⚠️ Send failed\n` +
+        `Your ${formattedCrypto} has been refunded to your Handshake wallet.`;
+      await this.whatsAppSender.sendText(waAddress, body);
+    } catch (err: unknown) {
+      this.logger.warn(
+        { userId: params.userId, err },
+        'notifySendFailed: failed to send WhatsApp notice (swallowed)',
+      );
+    }
+  }
 
   /**
    * Sends a sell-complete WhatsApp receipt to the user.

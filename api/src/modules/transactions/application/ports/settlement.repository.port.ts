@@ -150,6 +150,80 @@ export interface SettleSellRefundInput {
 }
 
 // ---------------------------------------------------------------------------
+// Send — atomic create Transaction + reserve (execute phase, C1 fix)
+// ---------------------------------------------------------------------------
+
+export interface CreateSendSettlingWithReserveInput {
+  /** Full transaction data mirroring CreateSellSettlingWithReserveInput.txnData. */
+  txnData: {
+    proposalId: string;
+    userId: string;
+    type: 'send';
+    status: 'settling';
+    idempotencyKey: string;
+    requestChecksum: string;
+    fxRateSnapshot: string | null;
+    metadata: Record<string, unknown>;
+    pinVerifiedAt: Date;
+  };
+  proposalId: string;
+  confirmedAt: Date;
+  /** Velocity counters to upsert atomically (V1). */
+  velocityIncrement: {
+    userId: string;
+    fiatAmountStr: string;
+    now: Date;
+  };
+  /** Blockradar / WalletPrismaRepository id of the user's USDT wallet. */
+  walletId: string;
+  /** totalDebit = cryptoAmount + networkFeeCrypto */
+  totalDebit: string;
+  now: Date;
+}
+
+export interface CreateSendSettlingWithReserveOutput {
+  txn: import('./transaction.repository.port').TransactionRecord;
+}
+
+// ---------------------------------------------------------------------------
+// Send — finalize (on-chain broadcast confirmed)
+// ---------------------------------------------------------------------------
+
+export interface SettleSendFinalizeInput {
+  transactionId: string;
+  userId: string;
+  walletId: string;
+  cryptoAmount: string;
+  networkFeeCrypto: string;
+  /** The on-chain tx hash from Blockradar withdraw. */
+  onChainTxHash: string;
+  /** Timestamp to use for postedAt / completedAt / issuedAt (from CLOCK). */
+  now: Date;
+  /** Current year string for receiptNumber (e.g. "2026"). Derived from CLOCK. */
+  year: string;
+}
+
+export interface SettleSendFinalizeOutput {
+  /** Human-readable sequential receipt number, e.g. "HS-2026-000001". */
+  receiptNumber: string;
+}
+
+// ---------------------------------------------------------------------------
+// Send — refund (on-chain broadcast failed)
+// ---------------------------------------------------------------------------
+
+export interface SettleSendRefundInput {
+  transactionId: string;
+  userId: string;
+  walletId: string;
+  /** totalDebit (same as at reserve). */
+  totalDebit: string;
+  failureReason: string;
+  /** Timestamp to use for postedAt / failedAt (from CLOCK). */
+  now: Date;
+}
+
+// ---------------------------------------------------------------------------
 // Port interface
 // ---------------------------------------------------------------------------
 
@@ -225,4 +299,39 @@ export interface ISettlementRepository {
    * reconciliation will confirm the on-chain balance later).
    */
   settleSellRefundAtomic(input: SettleSellRefundInput): Promise<void>;
+
+  /**
+   * ATOMICALLY creates the send Transaction row, marks the Proposal 'executing',
+   * upserts VelocityCounter rows, and posts the USDT reserve ledger entries
+   * (user_wallet → clearing) — all in a SINGLE `prisma.$transaction` (C1 fix).
+   *
+   * The totalDebit (cryptoAmount + networkFeeCrypto) is the full amount held
+   * from the user's wallet at reserve time.
+   *
+   * Uses `isolationLevel: 'Serializable'` to prevent balanceAfter sequence races.
+   */
+  createSendSettlingWithReserveAtomic(
+    input: CreateSendSettlingWithReserveInput,
+  ): Promise<CreateSendSettlingWithReserveOutput>;
+
+  /**
+   * Atomically finalizes a send order after on-chain broadcast confirmation (task N3b):
+   *   1. Read account states (clearing, network_out, fees) inside $transaction.
+   *   2. buildSendFinalizeEntries → insert 3 LedgerEntry rows (USDT).
+   *   3. Transaction → completed (processorTxRef = onChainTxHash).
+   *   4. SettlementOutbox(onchain_send) → completed.
+   *   5. Mint signed Receipt.
+   */
+  settleSendFinalizeAtomic(
+    input: SettleSendFinalizeInput,
+  ): Promise<SettleSendFinalizeOutput>;
+
+  /**
+   * Atomically refunds a send reserve after on-chain broadcast failure (task N3b):
+   *   1. Read account states (clearing, user_wallet) inside $transaction.
+   *   2. buildSendRefundEntries → insert 2 LedgerEntry rows (reverses the reserve).
+   *   3. Transaction → failed.
+   *   4. CompensationRecord created (status=pending, reason=settlement_failed).
+   */
+  settleSendRefundAtomic(input: SettleSendRefundInput): Promise<void>;
 }

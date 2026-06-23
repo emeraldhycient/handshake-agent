@@ -7,6 +7,7 @@ import {
   WALLET_PROVIDER,
   type IWalletProvider,
   type GetBalanceOutput,
+  type WithdrawOutput,
 } from './ports/wallet-provider.port';
 import {
   WALLET_REPOSITORY,
@@ -112,5 +113,35 @@ export class WalletService {
       'blockradar',
     );
     return this.provider.getBalance(wallet.providerReference, assetId);
+  }
+
+  /**
+   * Initiates an on-chain withdrawal from the given wallet to an external address.
+   *
+   * Delegates to the `WALLET_PROVIDER` port. This is a NON-BLOCKING call:
+   * the provider returns a providerReference immediately with a pending status.
+   * The deterministic execution engine (§3.1) holds the idempotency key and
+   * updates the settlement record on webhook receipt.
+   *
+   * @param wallet    - The custodial wallet to withdraw from.
+   * @param toAddress - The on-chain destination address.
+   * @param amount    - Human-scaled amount string (e.g. "10.5" for 10.5 USDT).
+   * @param assetId   - Provider-specific asset id from AssetRegistry.assetProviderId.
+   * @param reference - Optional caller-supplied idempotency key for the provider.
+   */
+  async withdraw(
+    wallet: WalletRecord,
+    toAddress: string,
+    amount: string,
+    assetId: string,
+    reference?: string,
+  ): Promise<WithdrawOutput> {
+    return this.provider.withdraw({
+      addressId: wallet.providerReference,
+      toAddress,
+      amount,
+      assetId,
+      reference,
+    });
   }
 }

@@ -43,6 +43,9 @@ import {
   buildSellReserveEntries,
   buildSellFinalizeEntries,
   buildSellRefundEntries,
+  buildSendReserveEntries,
+  buildSendFinalizeEntries,
+  buildSendRefundEntries,
 } from '../domain/ledger';
 import type {
   AccountKey,
@@ -59,6 +62,11 @@ import type {
   SettleSellRefundInput,
   CreateSellSettlingWithReserveInput,
   CreateSellSettlingWithReserveOutput,
+  CreateSendSettlingWithReserveInput,
+  CreateSendSettlingWithReserveOutput,
+  SettleSendFinalizeInput,
+  SettleSendFinalizeOutput,
+  SettleSendRefundInput,
 } from '../application/ports/settlement.repository.port';
 import type { TransactionRecord } from '../application/ports/transaction.repository.port';
 
@@ -74,6 +82,9 @@ const ACCOUNT_IDS = {
   USDT_TREASURY: 'usdt_treasury',
   USDT_SELL_CLEARING: 'usdt_sell_clearing',
   NGN_PAYOUT: 'ngn_payout',
+  USDT_SEND_CLEARING: 'usdt_send_clearing',
+  USDT_NETWORK_OUT: 'usdt_network_out',
+  USDT_FEES: 'usdt_fees',
 } as const;
 
 /** USDT has 6 decimal places (Tether standard on TRON). */
@@ -276,6 +287,136 @@ async function fetchAccountStatesByList(
   }
 
   return states;
+}
+
+/**
+ * Builds the account-state map for send RESERVE phase accounts:
+ * user_wallet (USDT), clearing / usdt_send_clearing (USDT).
+ */
+async function fetchSendReserveAccountStates(
+  prisma: PrismaService,
+  walletId: string,
+): Promise<Record<string, AccountState>> {
+  const accounts: Array<{
+    accountType: string;
+    accountId: string;
+    currency: string;
+  }> = [
+    {
+      accountType: 'user_wallet',
+      accountId: walletId,
+      currency: 'USDT',
+    },
+    {
+      accountType: 'clearing',
+      accountId: ACCOUNT_IDS.USDT_SEND_CLEARING,
+      currency: 'USDT',
+    },
+  ];
+
+  return fetchAccountStatesByList(prisma, accounts);
+}
+
+/**
+ * Builds the account-state map for send FINALIZE phase accounts:
+ * clearing/usdt_send_clearing (USDT), treasury_reserve/usdt_network_out (USDT),
+ * treasury_reserve/usdt_fees (USDT).
+ */
+async function fetchSendFinalizeAccountStates(
+  prisma: PrismaService,
+): Promise<Record<string, AccountState>> {
+  const accounts: Array<{
+    accountType: string;
+    accountId: string;
+    currency: string;
+  }> = [
+    {
+      accountType: 'clearing',
+      accountId: ACCOUNT_IDS.USDT_SEND_CLEARING,
+      currency: 'USDT',
+    },
+    {
+      accountType: 'treasury_reserve',
+      accountId: ACCOUNT_IDS.USDT_NETWORK_OUT,
+      currency: 'USDT',
+    },
+    {
+      accountType: 'treasury_reserve',
+      accountId: ACCOUNT_IDS.USDT_FEES,
+      currency: 'USDT',
+    },
+  ];
+
+  return fetchAccountStatesByList(prisma, accounts);
+}
+
+/**
+ * Builds the account-state map for send REFUND phase accounts:
+ * clearing/usdt_send_clearing (USDT) + user_wallet (USDT).
+ */
+async function fetchSendRefundAccountStates(
+  prisma: PrismaService,
+  walletId: string,
+): Promise<Record<string, AccountState>> {
+  const accounts: Array<{
+    accountType: string;
+    accountId: string;
+    currency: string;
+  }> = [
+    {
+      accountType: 'clearing',
+      accountId: ACCOUNT_IDS.USDT_SEND_CLEARING,
+      currency: 'USDT',
+    },
+    {
+      accountType: 'user_wallet',
+      accountId: walletId,
+      currency: 'USDT',
+    },
+  ];
+
+  return fetchAccountStatesByList(prisma, accounts);
+}
+
+/**
+ * Builds the deterministic HTML content and itemized JSON for a SEND receipt.
+ */
+function buildSendReceiptContent(input: {
+  receiptNumber: string;
+  transactionId: string;
+  userId: string;
+  cryptoAmount: string;
+  networkFeeCrypto: string;
+  toAddress: string;
+  onChainTxHash: string;
+  issuedAt: Date;
+}): { htmlContent: string; itemized: Record<string, unknown> } {
+  const itemized = {
+    asset: 'USDT',
+    cryptoAmount: input.cryptoAmount,
+    networkFeeCrypto: input.networkFeeCrypto,
+    toAddress: input.toAddress,
+    onChainTxHash: input.onChainTxHash,
+    type: 'send',
+  };
+
+  const htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Receipt ${input.receiptNumber}</title></head>
+<body>
+<h1>Handshake Send Receipt</h1>
+<p>Receipt Number: ${input.receiptNumber}</p>
+<p>Transaction ID: ${input.transactionId}</p>
+<p>User ID: ${input.userId}</p>
+<p>Amount Sent: ${input.cryptoAmount} USDT</p>
+<p>Network Fee: ${input.networkFeeCrypto} USDT</p>
+<p>To Address: ${input.toAddress}</p>
+<p>On-chain Tx Hash: ${input.onChainTxHash}</p>
+<p>Issued At: ${input.issuedAt.toISOString()}</p>
+</body>
+</html>`;
+
+  return { htmlContent, itemized };
 }
 
 /**
@@ -1042,6 +1183,324 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           // twice), so this catch is only reached if the $transaction was
           // somehow retried at the application layer after a partial commit,
           // which Prisma's $transaction prevents in normal operation.
+        }
+      },
+      { isolationLevel: 'Serializable' },
+    );
+  }
+
+  /**
+   * ATOMICALLY creates the send Transaction row, marks the Proposal 'executing',
+   * upserts VelocityCounter rows, AND posts the USDT reserve ledger entries
+   * (user_wallet → clearing) — all in ONE `prisma.$transaction` (C1 fix, task N3b).
+   *
+   * The totalDebit (cryptoAmount + networkFeeCrypto) is held from the user's
+   * wallet so it cannot be double-spent while the on-chain broadcast is in flight.
+   *
+   * Steps inside the $transaction:
+   *   a. Create Transaction row (status='settling', type='send').
+   *   b. Update Proposal → 'executing' (+ confirmedAt).
+   *   c. Upsert VelocityCounter rows (amount_24h, count_24h).
+   *   d. Read send reserve account states (user_wallet + clearing) inside the tx.
+   *   e. buildSendReserveEntries → insert 2 LedgerEntry rows (USDT: user→clearing).
+   */
+  async createSendSettlingWithReserveAtomic(
+    input: CreateSendSettlingWithReserveInput,
+  ): Promise<CreateSendSettlingWithReserveOutput> {
+    const {
+      txnData,
+      proposalId,
+      confirmedAt,
+      velocityIncrement,
+      walletId,
+      totalDebit,
+      now,
+    } = input;
+
+    const row = await this.prisma.$transaction(
+      async (tx) => {
+        // ── a. Create Transaction row ─────────────────────────────────────────
+        const created = await tx.transaction.create({
+          data: {
+            userId: txnData.userId,
+            proposalId: txnData.proposalId,
+            type: txnData.type,
+            status: txnData.status,
+            idempotencyKey: txnData.idempotencyKey,
+            requestChecksum: txnData.requestChecksum,
+            fxRateSnapshot:
+              txnData.fxRateSnapshot !== null
+                ? (txnData.fxRateSnapshot as unknown as Prisma.Decimal)
+                : null,
+            metadata: txnData.metadata as unknown as Prisma.InputJsonValue,
+            pinVerifiedAt: txnData.pinVerifiedAt,
+          },
+          select: TRANSACTION_SELECT_SELL,
+        });
+
+        // ── b. Flip the Proposal to 'executing' ───────────────────────────────
+        await tx.proposal.update({
+          where: { id: proposalId },
+          data: {
+            status: 'executing',
+            confirmedAt,
+          },
+        });
+
+        // ── c. Upsert velocity counters atomically (V1) ───────────────────────
+        await writeVelocityIncrementsInSettle(tx, velocityIncrement);
+
+        // ── d. Read send reserve account states inside the tx ─────────────────
+        const accountStates = await fetchSendReserveAccountStates(
+          tx as unknown as PrismaService,
+          walletId,
+        );
+
+        // ── e. Build and insert reserve LedgerEntry rows ──────────────────────
+        const drafts: LedgerEntryDraft[] = buildSendReserveEntries({
+          walletId,
+          totalDebit,
+          postedAt: now,
+          accountStates,
+        });
+
+        for (const draft of drafts) {
+          await tx.ledgerEntry.create({
+            data: {
+              transactionId: created.id,
+              accountType: draft.accountType,
+              accountId: draft.accountId,
+              currency: draft.currency,
+              amount: draft.amount as unknown as Prisma.Decimal,
+              direction: draft.direction,
+              description: draft.description,
+              balanceAfter: draft.balanceAfter as unknown as Prisma.Decimal,
+              sequence: draft.sequence,
+              postedAt: draft.postedAt,
+            },
+          });
+        }
+
+        return created;
+      },
+      {
+        // Serializable isolation prevents balanceAfter sequence races when
+        // multiple send executes run concurrently for the same user.
+        isolationLevel: 'Serializable',
+      },
+    );
+
+    return { txn: toTransactionRecord(row) };
+  }
+
+  /**
+   * Atomic settlement of a send finalize phase in a single Prisma $transaction.
+   *
+   * Steps inside the $transaction:
+   *   1. Read account states (clearing, network_out, fees) for isolation.
+   *   2. buildSendFinalizeEntries → insert 3 LedgerEntry rows (all USDT).
+   *   3. Update Transaction → completed (set processorTxRef = onChainTxHash).
+   *   4. Update SettlementOutbox(onchain_send) → completed.
+   *   5. Mint a signed Receipt.
+   */
+  async settleSendFinalizeAtomic(
+    input: SettleSendFinalizeInput,
+  ): Promise<SettleSendFinalizeOutput> {
+    const {
+      transactionId,
+      userId,
+      walletId,
+      cryptoAmount,
+      networkFeeCrypto,
+      onChainTxHash,
+      now,
+      year,
+    } = input;
+    const signingKey = this.signingKey;
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        // ── 1. Read current account states ────────────────────────────────────
+        const accountStates = await fetchSendFinalizeAccountStates(
+          tx as unknown as PrismaService,
+        );
+
+        // ── 2. Build and insert LedgerEntry rows ──────────────────────────────
+        const drafts: LedgerEntryDraft[] = buildSendFinalizeEntries({
+          walletId,
+          cryptoAmount,
+          networkFeeCrypto,
+          postedAt: now,
+          accountStates,
+        });
+
+        for (const draft of drafts) {
+          await tx.ledgerEntry.create({
+            data: {
+              transactionId,
+              accountType: draft.accountType,
+              accountId: draft.accountId,
+              currency: draft.currency,
+              amount: draft.amount as unknown as Prisma.Decimal,
+              direction: draft.direction,
+              description: draft.description,
+              balanceAfter: draft.balanceAfter as unknown as Prisma.Decimal,
+              sequence: draft.sequence,
+              postedAt: draft.postedAt,
+            },
+          });
+        }
+
+        // ── 3. Update Transaction → completed ─────────────────────────────────
+        await tx.transaction.update({
+          where: { id: transactionId },
+          data: {
+            status: TransactionStatus.completed,
+            processorTxRef: onChainTxHash,
+            completedAt: now,
+          },
+        });
+
+        // ── 4. Update SettlementOutbox(onchain_send) → completed ──────────────
+        await tx.settlementOutbox.updateMany({
+          where: {
+            transactionId,
+            settlementType: 'onchain_send',
+          },
+          data: {
+            status: SettlementOutboxStatus.completed,
+            completedAt: now,
+          },
+        });
+
+        // ── 5. Mint signed Receipt ─────────────────────────────────────────────
+        const countBig = await tx.receipt.count();
+        const receiptNumber = formatReceiptNumber(year, BigInt(countBig));
+
+        // Read back transaction metadata to get toAddress for the receipt.
+        const txnRow = await tx.transaction.findUnique({
+          where: { id: transactionId },
+          select: { metadata: true },
+        });
+        const meta = (txnRow?.metadata ?? {}) as Record<string, unknown>;
+        const toAddress = (meta.toAddress as string | undefined) ?? '';
+
+        const { htmlContent, itemized } = buildSendReceiptContent({
+          receiptNumber,
+          transactionId,
+          userId,
+          cryptoAmount,
+          networkFeeCrypto,
+          toAddress,
+          onChainTxHash,
+          issuedAt: now,
+        });
+
+        const contentHash = createHash('sha256')
+          .update(htmlContent + JSON.stringify(itemized), 'utf8')
+          .digest('hex');
+
+        const signaturePayload = [
+          receiptNumber,
+          transactionId,
+          contentHash,
+          userId,
+          now.toISOString(),
+        ].join('|');
+
+        const signatureHash = hmacHex('sha256', signingKey, signaturePayload);
+
+        await tx.receipt.create({
+          data: {
+            transactionId,
+            receiptNumber,
+            userId,
+            itemized: itemized as unknown as Prisma.InputJsonValue,
+            htmlContent,
+            contentHash,
+            signatureHash,
+            deliveryStatus: ReceiptDeliveryStatus.pending,
+            issuedAt: now,
+          },
+        });
+
+        return { receiptNumber };
+      },
+      { isolationLevel: 'Serializable' },
+    );
+  }
+
+  /**
+   * Atomic refund of a send reserve after on-chain broadcast failure (task N3b).
+   *
+   * Steps inside the $transaction:
+   *   1. Read clearing + user_wallet account states.
+   *   2. buildSendRefundEntries → insert 2 LedgerEntry rows (reverses the reserve).
+   *   3. Update Transaction → failed.
+   *   4. Create CompensationRecord (status=pending, reason=settlement_failed).
+   */
+  async settleSendRefundAtomic(input: SettleSendRefundInput): Promise<void> {
+    const { transactionId, userId, walletId, totalDebit, failureReason, now } =
+      input;
+
+    await this.prisma.$transaction(
+      async (tx) => {
+        // ── 1. Read current account states ────────────────────────────────────
+        const accountStates = await fetchSendRefundAccountStates(
+          tx as unknown as PrismaService,
+          walletId,
+        );
+
+        // ── 2. Build and insert LedgerEntry rows ──────────────────────────────
+        const drafts: LedgerEntryDraft[] = buildSendRefundEntries({
+          walletId,
+          totalDebit,
+          postedAt: now,
+          accountStates,
+        });
+
+        for (const draft of drafts) {
+          await tx.ledgerEntry.create({
+            data: {
+              transactionId,
+              accountType: draft.accountType,
+              accountId: draft.accountId,
+              currency: draft.currency,
+              amount: draft.amount as unknown as Prisma.Decimal,
+              direction: draft.direction,
+              description: draft.description,
+              balanceAfter: draft.balanceAfter as unknown as Prisma.Decimal,
+              sequence: draft.sequence,
+              postedAt: draft.postedAt,
+            },
+          });
+        }
+
+        // ── 3. Update Transaction → failed ────────────────────────────────────
+        await tx.transaction.update({
+          where: { id: transactionId },
+          data: {
+            status: TransactionStatus.failed,
+            completedAt: now,
+          },
+        });
+
+        // ── 4. Create CompensationRecord ──────────────────────────────────────
+        try {
+          await tx.compensationRecord.create({
+            data: {
+              originatingTransactionId: transactionId,
+              userId,
+              reason: CompensationReason.settlement_failed,
+              // The refund amount is the totalDebit (cryptoAmount + networkFeeCrypto).
+              amount: totalDebit as unknown as Prisma.Decimal,
+              currency: 'USDT',
+              approvalComment: failureReason,
+            },
+          });
+        } catch {
+          // Duplicate unique constraint — compensation already recorded on a
+          // prior attempt. Safe to ignore (same logic as settleSellRefundAtomic).
         }
       },
       { isolationLevel: 'Serializable' },

@@ -57,6 +57,10 @@ import type {
   ISettlementRepository,
   SettleBuyAtomicOutput,
 } from './ports/settlement.repository.port';
+import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
+import { BeneficiaryCoolingOffError } from '../../beneficiaries/domain/beneficiary-errors';
+import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
+import type { WalletRecord } from '../../wallets/application/ports/wallet.repository.port';
 
 // ---------------------------------------------------------------------------
 // Fixed test values
@@ -216,6 +220,7 @@ function makeSettlementRepo(
   receiptNumber: string | null = null,
   atomicOutput: SettleBuyAtomicOutput = { receiptNumber: STUB_RECEIPT_NUMBER },
   sellTxnOverride?: TransactionRecord,
+  sendTxnOverride?: TransactionRecord,
 ): jest.Mocked<ISettlementRepository> {
   return {
     findReceiptNumber: jest.fn().mockResolvedValue(receiptNumber),
@@ -232,6 +237,16 @@ function makeSettlementRepo(
       .fn()
       .mockResolvedValue({ receiptNumber: STUB_RECEIPT_NUMBER }),
     settleSellRefundAtomic: jest.fn().mockResolvedValue(undefined),
+    // Send methods
+    createSendSettlingWithReserveAtomic: jest
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve({ txn: sendTxnOverride ?? STUB_TXN }),
+      ),
+    settleSendFinalizeAtomic: jest
+      .fn()
+      .mockResolvedValue({ receiptNumber: STUB_RECEIPT_NUMBER }),
+    settleSendRefundAtomic: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -299,6 +314,27 @@ function makeWalletService(): jest.Mocked<
   };
 }
 
+function makeWalletServiceWithWithdraw(
+  providerReference = 'blockradar-tx-ref-001',
+): jest.Mocked<Pick<WalletService, 'getOrProvisionWallet' | 'withdraw'>> {
+  const walletRecord: WalletRecord = {
+    id: 'wallet-id',
+    userId: USER_ID,
+    asset: 'USDT',
+    network: 'TRON',
+    address: 'TTestAddress123',
+    providerReference: 'blockradar-ref-001',
+    status: 'active',
+  };
+  return {
+    getOrProvisionWallet: jest.fn().mockResolvedValue(walletRecord),
+    withdraw: jest.fn().mockResolvedValue({
+      providerReference,
+      status: 'pending' as const,
+    }),
+  };
+}
+
 /**
  * Minimal AssetRegistry stub for ExecutionService tests.
  * ExecutionService only uses defaultNetworkFor() in executeBuy (step 8a).
@@ -309,7 +345,9 @@ function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
     asset: jest.fn(),
     network: jest.fn(),
     fiat: jest.fn(),
-    assetProviderId: jest.fn(),
+    assetProviderId: jest
+      .fn()
+      .mockReturnValue('f56d297c-a3db-4cda-95bd-180b54679070'),
     defaultCryptoAsset: jest.fn().mockReturnValue('USDT'),
     isAssetEnabled: jest.fn().mockReturnValue(true),
     isNetworkEnabled: jest.fn().mockReturnValue(true),
@@ -2038,6 +2076,770 @@ describe('ExecutionService.settleSellPayout', () => {
     expect(whatsAppSender.sendText).toHaveBeenCalledWith(
       '+2349000000099',
       expect.stringContaining('payout failed'),
+    );
+  });
+});
+
+// =============================================================================
+// ExecutionService.executeSend (task N3b)
+// =============================================================================
+
+const SEND_PROPOSAL_ID = 'send-proposal-id';
+const SEND_TXN_ID = 'send-txn-id';
+const SEND_IDEMPOTENCY_KEY = 'send-idempotency-key';
+const SEND_PROVIDER_REF = 'blockradar-send-ref-001';
+const SEND_TO_ADDRESS = 'TValidTronAddress1234567890123456';
+
+const STUB_SEND_PROPOSAL: ProposalRecord = {
+  id: SEND_PROPOSAL_ID,
+  userId: USER_ID,
+  conversationId: null,
+  type: 'send',
+  status: 'pending',
+  parameters: {
+    asset: 'USDT',
+    cryptoAmount: '10.000000',
+    networkFeeCrypto: '1.000000',
+    totalDebit: '11.000000',
+    beneficiaryId: BENEFICIARY_ID,
+    walletId: 'wallet-id',
+    toAddress: SEND_TO_ADDRESS,
+    network: 'TRON',
+    requiresTravelRule: 'false',
+  },
+  parametersChecksum: 'c'.repeat(64),
+  quoteId: null, // send proposals have NO quote
+  expiresAt: FUTURE,
+  confirmedAt: null,
+  createdAt: FIXED_NOW,
+};
+
+const STUB_SEND_GRANT: DirectiveGrantRecord = {
+  directiveId: DIRECTIVE_ID,
+  proposalId: SEND_PROPOSAL_ID,
+  userId: USER_ID,
+  directiveRef: 'request_step_up', // send uses step-up, not request_pin
+  origin: 'engine',
+  nonceHash: 'hash',
+  signatureValue: 'sig',
+  status: 'consumed',
+  issuedAt: FIXED_NOW,
+  expiresAt: FUTURE,
+  consumedAt: FIXED_NOW,
+  consumedProposalId: SEND_PROPOSAL_ID,
+  failureReason: null,
+  failureCount: 0,
+};
+
+const STUB_SEND_TXN: TransactionRecord = {
+  id: SEND_TXN_ID,
+  proposalId: SEND_PROPOSAL_ID,
+  userId: USER_ID,
+  type: 'send',
+  status: 'settling',
+  idempotencyKey: SEND_IDEMPOTENCY_KEY,
+  requestChecksum: 'send-checksum',
+  fxRateSnapshot: null,
+  metadata: {
+    asset: 'USDT',
+    cryptoAmount: '10.000000',
+    networkFeeCrypto: '1.000000',
+    totalDebit: '11.000000',
+    beneficiaryId: BENEFICIARY_ID,
+    walletId: 'wallet-id',
+    toAddress: SEND_TO_ADDRESS,
+    network: 'TRON',
+    providerRef: SEND_PROVIDER_REF,
+  },
+  processorTxRef: null,
+  pinVerifiedAt: FIXED_NOW,
+  createdAt: FIXED_NOW,
+};
+
+const STUB_CRYPTO_BENEFICIARY: BeneficiaryRecord = {
+  id: BENEFICIARY_ID,
+  userId: USER_ID,
+  type: 'crypto_address',
+  label: 'My TRON Wallet',
+  accountNumber: null,
+  accountHolderName: null,
+  bankCode: null,
+  cryptoAddress: SEND_TO_ADDRESS,
+  cryptoAsset: 'USDT',
+  cryptoNetwork: 'TRON',
+  verificationStatus: 'verified',
+  verifiedAt: FIXED_NOW,
+  isDefault: false,
+  firstUseLockedUntil: null, // past cooling-off by default
+  createdAt: FIXED_NOW,
+  updatedAt: FIXED_NOW,
+  deletedAt: null,
+};
+
+const SEND_BASE_INPUT = {
+  userId: USER_ID,
+  proposalId: SEND_PROPOSAL_ID,
+  directiveId: DIRECTIVE_ID,
+  nonce: NONCE,
+  pin: PIN,
+  idempotencyKey: SEND_IDEMPOTENCY_KEY,
+};
+
+function makeComplianceService(opts: { passed: boolean } = { passed: true }): {
+  screenSendDestination: jest.Mock;
+} {
+  return {
+    screenSendDestination: jest.fn().mockResolvedValue({
+      passed: opts.passed,
+      complianceEventId: 'compliance-event-id',
+      ...(opts.passed ? {} : { reason: 'sanctioned address' }),
+    }),
+  };
+}
+
+function makeBeneficiaryServiceForSend(
+  record: BeneficiaryRecord | null = STUB_CRYPTO_BENEFICIARY,
+): { getById: jest.Mock } {
+  return {
+    getById: jest.fn().mockResolvedValue(record),
+  };
+}
+
+function makeTransactionRepoForSend(
+  existing: TransactionRecord | null = null,
+  created: TransactionRecord = STUB_SEND_TXN,
+): jest.Mocked<ITransactionRepository> {
+  return {
+    findByIdempotencyKey: jest.fn().mockResolvedValue(existing),
+    create: jest.fn().mockResolvedValue(created),
+    createSettlingWithProposal: jest.fn().mockResolvedValue(created),
+    updateStatus: jest.fn().mockResolvedValue(undefined),
+    mergeMetadata: jest.fn().mockResolvedValue(undefined),
+  };
+}
+
+function buildSendService(
+  overrides: {
+    proposalRepo?: jest.Mocked<IProposalRepository>;
+    transactionRepo?: jest.Mocked<ITransactionRepository>;
+    outboxRepo?: jest.Mocked<ISettlementOutboxRepository>;
+    settlementRepo?: jest.Mocked<ISettlementRepository>;
+    kycGate?: jest.Mocked<Pick<KycGateService, 'assertCanTransact'>>;
+    directiveService?: jest.Mocked<Pick<DirectiveService, 'consume'>>;
+    pinService?: jest.Mocked<Pick<PinService, 'verifyPin'>>;
+    walletService?: jest.Mocked<
+      Pick<WalletService, 'getOrProvisionWallet' | 'withdraw'>
+    >;
+    beneficiaryService?: ReturnType<typeof makeBeneficiaryServiceForSend>;
+    ledgerRepo?: ReturnType<typeof makeLedgerRepo>;
+    identityService?: ReturnType<typeof makeIdentityService>;
+    whatsAppSender?: ReturnType<typeof makeWhatsAppSender>;
+    complianceService?: ReturnType<typeof makeComplianceService>;
+  } = {},
+): ExecutionService {
+  const defaultSettlementRepo = makeSettlementRepo(
+    null,
+    { receiptNumber: STUB_RECEIPT_NUMBER },
+    undefined,
+    STUB_SEND_TXN,
+  );
+
+  return new ExecutionService(
+    overrides.proposalRepo ?? makeProposalRepo(STUB_SEND_PROPOSAL),
+    // quoteRepo — not used by send
+    makeQuoteRepo(null),
+    overrides.transactionRepo ?? makeTransactionRepoForSend(),
+    overrides.outboxRepo ?? makeOutboxRepo(),
+    overrides.settlementRepo ?? defaultSettlementRepo,
+    // quotesService — not used by send
+    makeQuotesService() as unknown as QuotesService,
+    (overrides.kycGate as unknown as KycGateService) ??
+      (makeKycGate() as unknown as KycGateService),
+    (overrides.directiveService as unknown as DirectiveService) ??
+      (makeDirectiveService(STUB_SEND_GRANT) as unknown as DirectiveService),
+    (overrides.pinService as unknown as PinService) ??
+      (makePinService() as unknown as PinService),
+    (overrides.walletService as unknown as WalletService) ??
+      (makeWalletServiceWithWithdraw() as unknown as WalletService),
+    // paymentProvider — not used by send
+    makePaymentProvider() as unknown as IPaymentProvider,
+    stubConfig as never,
+    stubClock,
+    makeAssetRegistry(),
+    (overrides.beneficiaryService as never) ??
+      (makeBeneficiaryServiceForSend() as never),
+    (overrides.ledgerRepo as never) ?? makeLedgerRepo('100'),
+    (overrides.identityService as never) ?? (makeIdentityService() as never),
+    (overrides.whatsAppSender as never) ?? (makeWhatsAppSender() as never),
+    (overrides.complianceService as never) ??
+      (makeComplianceService() as never),
+  );
+}
+
+describe('ExecutionService.executeSend', () => {
+  // ── Happy path ──────────────────────────────────────────────────────────────
+
+  it('happy path: creates Transaction(settling), reserves totalDebit atomically, calls walletService.withdraw, enqueues outbox(onchain_send)', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    const outboxRepo = makeOutboxRepo();
+    const walletService = makeWalletServiceWithWithdraw(SEND_PROVIDER_REF);
+    const transactionRepo = makeTransactionRepoForSend();
+
+    const svc = buildSendService({
+      settlementRepo,
+      outboxRepo,
+      walletService,
+      transactionRepo,
+    });
+
+    const result = await svc.executeSend(SEND_BASE_INPUT);
+
+    expect(result.status).toBe('settling');
+    expect(result.transactionId).toBe(SEND_TXN_ID);
+    expect(result.onChain.providerRef).toBe(SEND_PROVIDER_REF);
+
+    // Atomic combined create+reserve must be called
+    expect(
+      settlementRepo.createSendSettlingWithReserveAtomic,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      settlementRepo.createSendSettlingWithReserveAtomic,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        walletId: 'wallet-id',
+        totalDebit: '11.000000',
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        txnData: expect.objectContaining({
+          type: 'send',
+          status: 'settling',
+          userId: USER_ID,
+          proposalId: SEND_PROPOSAL_ID,
+        }),
+      }),
+    );
+
+    // walletService.withdraw was called
+    expect(walletService.withdraw).toHaveBeenCalledTimes(1);
+    expect(walletService.withdraw).toHaveBeenCalledWith(
+      expect.objectContaining({ providerReference: 'blockradar-ref-001' }),
+      SEND_TO_ADDRESS,
+      '10.000000',
+      expect.any(String), // assetId
+      SEND_IDEMPOTENCY_KEY,
+    );
+
+    // Outbox enqueued with onchain_send
+    expect(outboxRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transactionId: SEND_TXN_ID,
+        settlementType: 'onchain_send',
+        status: 'pending',
+      }),
+    );
+  });
+
+  // ── Wrong proposal type ────────────────────────────────────────────────────
+
+  it('proposal type is sell → ProposalNotExecutableError, no Transaction', async () => {
+    const wrongTypeProposal: ProposalRecord = {
+      ...STUB_SEND_PROPOSAL,
+      type: 'sell',
+    };
+    const proposalRepo = makeProposalRepo(wrongTypeProposal);
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+
+    const svc = buildSendService({ proposalRepo, settlementRepo });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProposalNotExecutableError,
+    );
+    expect(
+      settlementRepo.createSendSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+  });
+
+  // ── Expired proposal ───────────────────────────────────────────────────────
+
+  it('expired proposal → ProposalExpiredError, no Transaction', async () => {
+    const expired: ProposalRecord = {
+      ...STUB_SEND_PROPOSAL,
+      expiresAt: PAST,
+    };
+    const proposalRepo = makeProposalRepo(expired);
+
+    const svc = buildSendService({ proposalRepo });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProposalExpiredError,
+    );
+  });
+
+  // ── Insufficient balance ───────────────────────────────────────────────────
+
+  it('ledger balance < totalDebit → InsufficientBalanceError, no Transaction', async () => {
+    // totalDebit = 11.000000, balance is only 1 USDT
+    const ledgerRepo = makeLedgerRepo('1.000000');
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    const directiveService = makeDirectiveService(STUB_SEND_GRANT);
+
+    const svc = buildSendService({
+      ledgerRepo,
+      settlementRepo,
+      directiveService,
+    });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      InsufficientBalanceError,
+    );
+    expect(
+      settlementRepo.createSendSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+    // Balance check gates directive — directive must NOT be called
+    expect(directiveService.consume).not.toHaveBeenCalled();
+  });
+
+  // ── Cooling-off active ─────────────────────────────────────────────────────
+
+  it('beneficiary in cooling-off → BeneficiaryCoolingOffError, no Transaction', async () => {
+    const coolingOffBen: BeneficiaryRecord = {
+      ...STUB_CRYPTO_BENEFICIARY,
+      firstUseLockedUntil: FUTURE, // still locked
+    };
+    const beneficiaryService = makeBeneficiaryServiceForSend(coolingOffBen);
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+
+    const svc = buildSendService({ beneficiaryService, settlementRepo });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      BeneficiaryCoolingOffError,
+    );
+    expect(
+      settlementRepo.createSendSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+  });
+
+  // ── Sanctions blocked ──────────────────────────────────────────────────────
+
+  it('sanctions check fails → SanctionsBlockedError, no Transaction', async () => {
+    const complianceService = makeComplianceService({ passed: false });
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    const directiveService = makeDirectiveService(STUB_SEND_GRANT);
+
+    const svc = buildSendService({
+      complianceService,
+      settlementRepo,
+      directiveService,
+    });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      SanctionsBlockedError,
+    );
+    expect(
+      settlementRepo.createSendSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+    // Sanctions gates directive
+    expect(directiveService.consume).not.toHaveBeenCalled();
+  });
+
+  // ── Wrong directive ref ────────────────────────────────────────────────────
+
+  it('directive ref is request_pin instead of request_step_up → ProposalNotExecutableError', async () => {
+    const wrongRefGrant: DirectiveGrantRecord = {
+      ...STUB_SEND_GRANT,
+      directiveRef: 'request_pin',
+    };
+    const directiveService = makeDirectiveService(wrongRefGrant);
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+
+    const svc = buildSendService({ directiveService, settlementRepo });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProposalNotExecutableError,
+    );
+    expect(
+      settlementRepo.createSendSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+  });
+
+  // ── PIN invalid ────────────────────────────────────────────────────────────
+
+  it('wrong PIN → PinInvalidError, no Transaction, no withdraw', async () => {
+    const pinService = makePinService(new PinInvalidError(4));
+    const walletService = makeWalletServiceWithWithdraw();
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+
+    const svc = buildSendService({ pinService, walletService, settlementRepo });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      PinInvalidError,
+    );
+    expect(
+      settlementRepo.createSendSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+    expect(walletService.withdraw).not.toHaveBeenCalled();
+  });
+
+  // ── Idempotent replay ─────────────────────────────────────────────────────
+
+  it('idempotent replay: returns existing transactionId, no new Transaction/withdraw/outbox', async () => {
+    const existingTxn: TransactionRecord = {
+      ...STUB_SEND_TXN,
+      status: 'settling',
+    };
+    const transactionRepo = makeTransactionRepoForSend(existingTxn);
+    const walletService = makeWalletServiceWithWithdraw();
+    const outboxRepo = makeOutboxRepo();
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+
+    const svc = buildSendService({
+      transactionRepo,
+      walletService,
+      outboxRepo,
+      settlementRepo,
+    });
+
+    const result = await svc.executeSend(SEND_BASE_INPUT);
+
+    expect(result.transactionId).toBe(SEND_TXN_ID);
+    expect(result.status).toBe('settling');
+    // No new side-effects
+    expect(
+      settlementRepo.createSendSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+    expect(walletService.withdraw).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  // ── TravelRule flag: does not block execution ──────────────────────────────
+
+  it('requiresTravelRule=true in parameters: execution succeeds (flag stored in metadata)', async () => {
+    const travelRuleProposal: ProposalRecord = {
+      ...STUB_SEND_PROPOSAL,
+      parameters: {
+        ...STUB_SEND_PROPOSAL.parameters,
+        requiresTravelRule: 'true',
+      },
+    };
+    const proposalRepo = makeProposalRepo(travelRuleProposal);
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+
+    const svc = buildSendService({ proposalRepo, settlementRepo });
+
+    const result = await svc.executeSend(SEND_BASE_INPUT);
+    expect(result.status).toBe('settling');
+  });
+
+  // ── Gauntlet order ─────────────────────────────────────────────────────────
+
+  it('gauntlet order: balance→cooling-off→sanctions→directive→pin→idempotency→atomic', async () => {
+    const callOrder: string[] = [];
+
+    const ledgerRepo = {
+      getAccountBalance: jest.fn().mockImplementation(() => {
+        callOrder.push('balance');
+        return Promise.resolve('100');
+      }),
+    };
+    const beneficiaryService = {
+      getById: jest.fn().mockImplementation(() => {
+        callOrder.push('cooling_off');
+        return Promise.resolve(STUB_CRYPTO_BENEFICIARY);
+      }),
+    };
+    const complianceService = {
+      screenSendDestination: jest.fn().mockImplementation(() => {
+        callOrder.push('sanctions');
+        return Promise.resolve({ passed: true, complianceEventId: 'id' });
+      }),
+    };
+    const directiveService = {
+      consume: jest.fn().mockImplementation(() => {
+        callOrder.push('directive');
+        return Promise.resolve(STUB_SEND_GRANT);
+      }),
+    };
+    const pinService = {
+      verifyPin: jest.fn().mockImplementation(() => {
+        callOrder.push('pin');
+        return Promise.resolve();
+      }),
+    };
+    const transactionRepo = {
+      findByIdempotencyKey: jest.fn().mockImplementation(() => {
+        callOrder.push('idempotency');
+        return Promise.resolve(null);
+      }),
+      create: jest.fn().mockResolvedValue(STUB_SEND_TXN),
+      createSettlingWithProposal: jest.fn().mockResolvedValue(STUB_SEND_TXN),
+      updateStatus: jest.fn().mockResolvedValue(undefined),
+      mergeMetadata: jest.fn().mockResolvedValue(undefined),
+    };
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    settlementRepo.createSendSettlingWithReserveAtomic = jest
+      .fn()
+      .mockImplementation(() => {
+        callOrder.push('atomic_create');
+        return Promise.resolve({ txn: STUB_SEND_TXN });
+      });
+
+    const svc = buildSendService({
+      ledgerRepo,
+      beneficiaryService,
+      complianceService,
+      directiveService: directiveService as unknown as jest.Mocked<
+        Pick<DirectiveService, 'consume'>
+      >,
+      pinService: pinService as unknown as jest.Mocked<
+        Pick<PinService, 'verifyPin'>
+      >,
+      transactionRepo:
+        transactionRepo as unknown as jest.Mocked<ITransactionRepository>,
+      settlementRepo,
+    });
+
+    await svc.executeSend(SEND_BASE_INPUT);
+
+    expect(callOrder.indexOf('balance')).toBeLessThan(
+      callOrder.indexOf('cooling_off'),
+    );
+    expect(callOrder.indexOf('cooling_off')).toBeLessThan(
+      callOrder.indexOf('sanctions'),
+    );
+    expect(callOrder.indexOf('sanctions')).toBeLessThan(
+      callOrder.indexOf('directive'),
+    );
+    expect(callOrder.indexOf('directive')).toBeLessThan(
+      callOrder.indexOf('pin'),
+    );
+    expect(callOrder.indexOf('pin')).toBeLessThan(
+      callOrder.indexOf('idempotency'),
+    );
+    expect(callOrder.indexOf('idempotency')).toBeLessThan(
+      callOrder.indexOf('atomic_create'),
+    );
+  });
+});
+
+// =============================================================================
+// ExecutionService.settleSendOnChain (task N3b)
+// =============================================================================
+
+const SETTLING_SEND_TXN: TransactionRecord = {
+  ...STUB_SEND_TXN,
+  status: 'settling',
+};
+
+const SETTLE_SEND_SUCCESS_INPUT: import('./execution.service').SettleSendOnChainInput =
+  {
+    reference: SEND_IDEMPOTENCY_KEY,
+    success: true,
+    onChainTxHash: 'on_chain_hash_abc',
+  };
+
+const SETTLE_SEND_FAILURE_INPUT: import('./execution.service').SettleSendOnChainInput =
+  {
+    reference: SEND_IDEMPOTENCY_KEY,
+    success: false,
+  };
+
+function makeTransactionRepoForSendSettle(
+  txn: TransactionRecord | null,
+): jest.Mocked<ITransactionRepository> {
+  return {
+    findByIdempotencyKey: jest.fn().mockResolvedValue(txn),
+    create: jest.fn(),
+    createSettlingWithProposal: jest.fn(),
+    updateStatus: jest.fn(),
+    mergeMetadata: jest.fn().mockResolvedValue(undefined),
+  };
+}
+
+describe('ExecutionService.settleSendOnChain', () => {
+  // ── Happy path: success=true → finalize ───────────────────────────────────
+
+  it('success=true → calls settleSendFinalizeAtomic, returns completed + receiptNumber', async () => {
+    const transactionRepo = makeTransactionRepoForSendSettle(SETTLING_SEND_TXN);
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+
+    const svc = buildSendService({ transactionRepo, settlementRepo });
+
+    const result = await svc.settleSendOnChain(SETTLE_SEND_SUCCESS_INPUT);
+
+    expect(result.status).toBe('completed');
+    expect(result.receiptNumber).toBe(STUB_RECEIPT_NUMBER);
+    expect(settlementRepo.settleSendFinalizeAtomic).toHaveBeenCalledTimes(1);
+    expect(settlementRepo.settleSendFinalizeAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transactionId: SEND_TXN_ID,
+        onChainTxHash: 'on_chain_hash_abc',
+      }),
+    );
+    expect(settlementRepo.settleSendRefundAtomic).not.toHaveBeenCalled();
+  });
+
+  // ── success=false → refund ─────────────────────────────────────────────────
+
+  it('success=false → calls settleSendRefundAtomic, returns failed', async () => {
+    const transactionRepo = makeTransactionRepoForSendSettle(SETTLING_SEND_TXN);
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+
+    const svc = buildSendService({ transactionRepo, settlementRepo });
+
+    const result = await svc.settleSendOnChain(SETTLE_SEND_FAILURE_INPUT);
+
+    expect(result.status).toBe('failed');
+    expect(settlementRepo.settleSendRefundAtomic).toHaveBeenCalledTimes(1);
+    expect(settlementRepo.settleSendFinalizeAtomic).not.toHaveBeenCalled();
+  });
+
+  // ── Already completed → idempotent ────────────────────────────────────────
+
+  it('transaction already completed → returns completed (idempotent), no finalize called', async () => {
+    const completedTxn: TransactionRecord = {
+      ...SETTLING_SEND_TXN,
+      status: 'completed',
+    };
+    const transactionRepo = makeTransactionRepoForSendSettle(completedTxn);
+    const settlementRepo = makeSettlementRepo(STUB_RECEIPT_NUMBER);
+
+    const svc = buildSendService({ transactionRepo, settlementRepo });
+
+    const result = await svc.settleSendOnChain(SETTLE_SEND_SUCCESS_INPUT);
+
+    expect(result.status).toBe('completed');
+    expect(result.receiptNumber).toBe(STUB_RECEIPT_NUMBER);
+    expect(settlementRepo.settleSendFinalizeAtomic).not.toHaveBeenCalled();
+  });
+
+  // ── Unknown reference ──────────────────────────────────────────────────────
+
+  it('unknown reference → ProposalNotExecutableError', async () => {
+    const transactionRepo = makeTransactionRepoForSendSettle(null);
+
+    const svc = buildSendService({ transactionRepo });
+
+    await expect(
+      svc.settleSendOnChain(SETTLE_SEND_SUCCESS_INPUT),
+    ).rejects.toBeInstanceOf(ProposalNotExecutableError);
+  });
+
+  // ── Wrong status (failed) → SettlementInvalidStatusError ─────────────────
+
+  it('transaction status is failed → throws SettlementInvalidStatusError', async () => {
+    const failedTxn: TransactionRecord = {
+      ...SETTLING_SEND_TXN,
+      status: 'failed',
+    };
+    const transactionRepo = makeTransactionRepoForSendSettle(failedTxn);
+
+    const svc = buildSendService({ transactionRepo });
+
+    await expect(
+      svc.settleSendOnChain(SETTLE_SEND_SUCCESS_INPUT),
+    ).rejects.toBeInstanceOf(SettlementInvalidStatusError);
+  });
+
+  // ── Notify on success ─────────────────────────────────────────────────────
+
+  it('success=true → sends WhatsApp send-complete receipt to user', async () => {
+    const transactionRepo = makeTransactionRepoForSendSettle(SETTLING_SEND_TXN);
+    const identityService = makeIdentityService('+2349000000099');
+    const whatsAppSender = makeWhatsAppSender();
+
+    const svc = buildSendService({
+      transactionRepo,
+      identityService,
+      whatsAppSender,
+    });
+
+    await svc.settleSendOnChain(SETTLE_SEND_SUCCESS_INPUT);
+
+    expect(identityService.findWhatsAppAddress).toHaveBeenCalledWith(USER_ID);
+    expect(whatsAppSender.sendText).toHaveBeenCalledWith(
+      '+2349000000099',
+      expect.stringContaining('send is complete'),
+    );
+  });
+
+  // ── Notify on failure ─────────────────────────────────────────────────────
+
+  it('success=false → sends WhatsApp send-failed notice to user', async () => {
+    const transactionRepo = makeTransactionRepoForSendSettle(SETTLING_SEND_TXN);
+    const identityService = makeIdentityService('+2349000000099');
+    const whatsAppSender = makeWhatsAppSender();
+
+    const svc = buildSendService({
+      transactionRepo,
+      identityService,
+      whatsAppSender,
+    });
+
+    await svc.settleSendOnChain(SETTLE_SEND_FAILURE_INPUT);
+
+    expect(identityService.findWhatsAppAddress).toHaveBeenCalledWith(USER_ID);
+    expect(whatsAppSender.sendText).toHaveBeenCalledWith(
+      '+2349000000099',
+      expect.stringContaining('Send failed'),
     );
   });
 });
