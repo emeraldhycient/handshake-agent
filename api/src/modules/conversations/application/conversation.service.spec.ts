@@ -292,8 +292,11 @@ function makeDirectiveService(
 
 function makeWalletService(
   wallet: WalletRecord = stubWalletRecord(),
-): jest.Mocked<Pick<WalletService, 'getOrProvisionUsdtTronWallet'>> {
+): jest.Mocked<
+  Pick<WalletService, 'getOrProvisionWallet' | 'getOrProvisionUsdtTronWallet'>
+> {
   return {
+    getOrProvisionWallet: jest.fn().mockResolvedValue(wallet),
     getOrProvisionUsdtTronWallet: jest.fn().mockResolvedValue(wallet),
   };
 }
@@ -326,6 +329,7 @@ function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
       addressPattern: '^T[1-9A-HJ-NP-Za-km-z]{33}$',
       enabled: true,
     })),
+    defaultCryptoAsset: jest.fn(() => 'USDT'),
     defaultNetworkFor: jest.fn(() => 'TRON'),
     formatCrypto: jest.fn(
       (symbol: string, amount: string) => `${amount} ${symbol}`,
@@ -361,7 +365,10 @@ function buildService(
     configService?: jest.Mocked<ConfigService>;
     directiveService?: jest.Mocked<Pick<DirectiveService, 'issue'>>;
     walletService?: jest.Mocked<
-      Pick<WalletService, 'getOrProvisionUsdtTronWallet'>
+      Pick<
+        WalletService,
+        'getOrProvisionWallet' | 'getOrProvisionUsdtTronWallet'
+      >
     >;
     assetRegistry?: jest.Mocked<AssetRegistry>;
   } = {},
@@ -818,7 +825,7 @@ describe('ConversationService.handleInbound', () => {
 
   // ── receive_crypto: linked user → deposit address ─────────────────────────
 
-  it('linked user + receive_crypto → calls getOrProvisionUsdtTronWallet, reply contains address + TRON + warning', async () => {
+  it('linked user + receive_crypto → calls getOrProvisionWallet with USDT/TRON, reply contains address + TRON + warning', async () => {
     const agentPort = makeAgentPort({ action: 'receive_crypto' });
     const walletService = makeWalletService();
     const { svc, sender, proposalService } = buildService({
@@ -828,9 +835,11 @@ describe('ConversationService.handleInbound', () => {
 
     await svc.handleInbound(baseMsg());
 
-    // WalletService must be called with the linked userId
-    expect(walletService.getOrProvisionUsdtTronWallet).toHaveBeenCalledWith(
+    // WalletService must be called with userId + asset/network from registry defaults
+    expect(walletService.getOrProvisionWallet).toHaveBeenCalledWith(
       'user-id-1',
+      'USDT',
+      'TRON',
     );
 
     // No proposal or directive created — receive is read-only
@@ -893,7 +902,7 @@ describe('ConversationService.handleInbound', () => {
     await svc.handleInbound(baseMsg());
 
     // WalletService must NOT be called for unlinked contact
-    expect(walletService.getOrProvisionUsdtTronWallet).not.toHaveBeenCalled();
+    expect(walletService.getOrProvisionWallet).not.toHaveBeenCalled();
 
     // Reply text asks user to complete KYC
     const sentText = captureFirstSentText(sender);
@@ -928,7 +937,7 @@ describe('ConversationService.handleInbound', () => {
 
     await svc.handleInbound(baseMsg());
 
-    expect(walletService.getOrProvisionUsdtTronWallet).not.toHaveBeenCalled();
+    expect(walletService.getOrProvisionWallet).not.toHaveBeenCalled();
 
     const sentText = captureFirstSentText(sender);
     expect(sentText).toContain('re-verif');

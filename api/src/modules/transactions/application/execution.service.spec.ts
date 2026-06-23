@@ -22,6 +22,7 @@ import type { Clock } from '../../../core/common/clock';
 import type { PinService } from '../../../core/auth/pin.service';
 import type { KycGateService } from '../../identity/application/kyc-gate.service';
 import type { QuotesService } from '../../quotes/application/quotes.service';
+import type { AssetRegistry } from '../../../core/catalog/asset-registry';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { IPaymentProvider } from '../../treasury/application/ports/payment-provider.port';
 import type {
@@ -265,19 +266,44 @@ function makePinService(
 }
 
 function makeWalletService(): jest.Mocked<
-  Pick<WalletService, 'getOrProvisionUsdtTronWallet'>
+  Pick<WalletService, 'getOrProvisionWallet' | 'getOrProvisionUsdtTronWallet'>
 > {
-  return {
-    getOrProvisionUsdtTronWallet: jest.fn().mockResolvedValue({
-      id: 'wallet-id',
-      userId: USER_ID,
-      asset: 'USDT',
-      network: 'TRON',
-      address: 'TTestAddress123',
-      providerReference: 'blockradar-ref-001',
-      status: 'active',
-    }),
+  const walletRecord = {
+    id: 'wallet-id',
+    userId: USER_ID,
+    asset: 'USDT',
+    network: 'TRON',
+    address: 'TTestAddress123',
+    providerReference: 'blockradar-ref-001',
+    status: 'active',
   };
+  return {
+    getOrProvisionWallet: jest.fn().mockResolvedValue(walletRecord),
+    getOrProvisionUsdtTronWallet: jest.fn().mockResolvedValue(walletRecord),
+  };
+}
+
+/**
+ * Minimal AssetRegistry stub for ExecutionService tests.
+ * ExecutionService only uses defaultNetworkFor() in executeBuy (step 8a).
+ */
+function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
+  return {
+    defaultNetworkFor: jest.fn().mockReturnValue('TRON'),
+    asset: jest.fn(),
+    network: jest.fn(),
+    fiat: jest.fn(),
+    assetProviderId: jest.fn(),
+    defaultCryptoAsset: jest.fn().mockReturnValue('USDT'),
+    isAssetEnabled: jest.fn().mockReturnValue(true),
+    isNetworkEnabled: jest.fn().mockReturnValue(true),
+    isFiatEnabled: jest.fn().mockReturnValue(true),
+    isCapabilityEnabled: jest.fn().mockReturnValue(true),
+    requireCapability: jest.fn(),
+    formatCrypto: jest.fn(),
+    formatFiat: jest.fn(),
+    validateAddress: jest.fn().mockReturnValue(true),
+  } as unknown as jest.Mocked<AssetRegistry>;
 }
 
 function makePaymentProvider(
@@ -335,11 +361,15 @@ function buildService(
     directiveService?: jest.Mocked<Pick<DirectiveService, 'consume'>>;
     pinService?: jest.Mocked<Pick<PinService, 'verifyPin'>>;
     walletService?: jest.Mocked<
-      Pick<WalletService, 'getOrProvisionUsdtTronWallet'>
+      Pick<
+        WalletService,
+        'getOrProvisionWallet' | 'getOrProvisionUsdtTronWallet'
+      >
     >;
     paymentProvider?: jest.Mocked<
       Pick<IPaymentProvider, 'createCollection' | 'verify'>
     >;
+    assetRegistry?: jest.Mocked<AssetRegistry>;
   } = {},
 ): ExecutionService {
   return new ExecutionService(
@@ -362,6 +392,7 @@ function buildService(
       (makePaymentProvider() as unknown as IPaymentProvider),
     stubConfig as never,
     stubClock,
+    overrides.assetRegistry ?? makeAssetRegistry(),
   );
 }
 
@@ -458,9 +489,11 @@ describe('ExecutionService.executeBuy', () => {
       }),
     );
 
-    // Wallet was provisioned.
-    expect(walletService.getOrProvisionUsdtTronWallet).toHaveBeenCalledWith(
+    // Wallet was provisioned via generic method with asset/network from registry.
+    expect(walletService.getOrProvisionWallet).toHaveBeenCalledWith(
       USER_ID,
+      'USDT',
+      'TRON',
     );
 
     // Collection was created.
@@ -915,9 +948,10 @@ const WALLET_RECORD = {
 };
 
 function makeWalletServiceWithId(): jest.Mocked<
-  Pick<WalletService, 'getOrProvisionUsdtTronWallet'>
+  Pick<WalletService, 'getOrProvisionWallet' | 'getOrProvisionUsdtTronWallet'>
 > {
   return {
+    getOrProvisionWallet: jest.fn().mockResolvedValue(WALLET_RECORD),
     getOrProvisionUsdtTronWallet: jest.fn().mockResolvedValue(WALLET_RECORD),
   };
 }
@@ -964,9 +998,11 @@ describe('ExecutionService.settleBuyPayment', () => {
     // verify was called with the reference.
     expect(paymentProvider.verify).toHaveBeenCalledWith(IDEMPOTENCY_KEY);
 
-    // wallet provisioned.
-    expect(walletService.getOrProvisionUsdtTronWallet).toHaveBeenCalledWith(
+    // wallet provisioned via generic method with asset/network from registry.
+    expect(walletService.getOrProvisionWallet).toHaveBeenCalledWith(
       USER_ID,
+      'USDT',
+      'TRON',
     );
 
     // atomic settle was called.

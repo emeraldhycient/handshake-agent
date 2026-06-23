@@ -4,7 +4,6 @@ import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import type { AxiosError } from 'axios';
 
-import type { BlockradarProviderConfig } from '../../../core/config/configuration';
 import type {
   IWalletProvider,
   ProvisionAddressInput,
@@ -60,12 +59,13 @@ export class BlockradarProvider implements IWalletProvider {
   private readonly baseUrl: string;
   private readonly apiKeyHeader: string;
   private readonly masterWalletId: string;
-  private readonly usdtTronAssetId: string;
 
   constructor(
     private readonly http: HttpService,
-    // Bare ConfigService so both env keys (BLOCKRADAR_*) and JSON-defaults
-    // nested keys (providers.blockradar.*) can be read without type-narrowing issues.
+    // Bare ConfigService so env keys (BLOCKRADAR_*) can be read without
+    // type-narrowing issues. The usdtTronAssetId previously read from the
+    // providers.blockradar config section has been removed — the catalog
+    // (AssetRegistry) is now the single source of truth (task X3).
     private readonly config: ConfigService,
   ) {
     this.baseUrl =
@@ -74,15 +74,6 @@ export class BlockradarProvider implements IWalletProvider {
     this.apiKeyHeader = this.config.get<string>('BLOCKRADAR_API_KEY') ?? '';
     this.masterWalletId =
       this.config.get<string>('BLOCKRADAR_MASTER_WALLET_ID') ?? '';
-
-    // Non-secret provider constant — read from the JSON-defaults layer (§7).
-    // ConfigService merges the load-factory result into a flat + nested store;
-    // dot-path access resolves the nested `providers.blockradar` object.
-    const blockradar = this.config.get<BlockradarProviderConfig>(
-      'providers.blockradar',
-    );
-    this.usdtTronAssetId =
-      blockradar?.usdtTronAssetId ?? 'f56d297c-a3db-4cda-95bd-180b54679070';
   }
 
   // ---------------------------------------------------------------------------
@@ -115,9 +106,12 @@ export class BlockradarProvider implements IWalletProvider {
     }
   }
 
-  async getBalance(addressId: string): Promise<GetBalanceOutput> {
+  async getBalance(
+    addressId: string,
+    assetId: string,
+  ): Promise<GetBalanceOutput> {
     const url = `${this.baseUrl}/wallets/${this.masterWalletId}/addresses/${addressId}/balance`;
-    const params = { assetId: this.usdtTronAssetId };
+    const params = { assetId };
 
     try {
       const response = await firstValueFrom(

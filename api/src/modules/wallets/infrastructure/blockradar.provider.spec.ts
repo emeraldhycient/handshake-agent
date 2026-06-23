@@ -1,8 +1,13 @@
 /**
- * Unit tests for BlockradarProvider (task 5.1).
+ * Unit tests for BlockradarProvider (task 5.1, updated for task X3).
  *
  * HttpService is mocked — no real network calls.
  * ConfigService is stubbed to return fixed env/config values.
+ *
+ * Key change (X3): getBalance(addressId, assetId) now takes assetId as an
+ * explicit parameter — the caller (WalletService) resolves it from the
+ * AssetRegistry. BlockradarProvider no longer reads usdtTronAssetId from
+ * the providers config section; the catalog is the single source of truth.
  *
  * TDD: written before the implementation to drive the design.
  */
@@ -21,6 +26,7 @@ import { BlockradarProvider } from './blockradar.provider';
 const BASE_URL = 'https://api.blockradar.co/v1';
 const API_KEY = 'test-api-key';
 const MASTER_WALLET_ID = 'master-wallet-uuid';
+/** The assetId the caller (WalletService via AssetRegistry) passes in. */
 const USDT_TRON_ASSET_ID = 'f56d297c-a3db-4cda-95bd-180b54679070';
 
 function makeConfig(): ConfigService {
@@ -28,11 +34,8 @@ function makeConfig(): ConfigService {
     BLOCKRADAR_BASE_URL: BASE_URL,
     BLOCKRADAR_API_KEY: API_KEY,
     BLOCKRADAR_MASTER_WALLET_ID: MASTER_WALLET_ID,
-    // ConfigService dot-path access for the JSON-defaults layer (§7).
-    'providers.blockradar': {
-      usdtTronAssetId: USDT_TRON_ASSET_ID,
-      network: 'TRON',
-    },
+    // Note: providers.blockradar.usdtTronAssetId is intentionally absent —
+    // the catalog (AssetRegistry) is now the single source of truth (task X3).
   };
   return {
     get: (key: string) => values[key],
@@ -167,10 +170,11 @@ describe('BlockradarProvider', () => {
       },
     };
 
-    it('GETs /wallets/{masterWalletId}/addresses/{addressId}/balance with assetId query', async () => {
+    it('GETs /wallets/{masterWalletId}/addresses/{addressId}/balance with the passed assetId as query param', async () => {
       http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
 
-      await provider.getBalance('child-address-id-1');
+      // X3: assetId is now passed explicitly by the caller (from AssetRegistry)
+      await provider.getBalance('child-address-id-1', USDT_TRON_ASSET_ID);
 
       expect(http.get).toHaveBeenCalledTimes(1);
       const [url, config] = http.get.mock.calls[0] as [
@@ -185,10 +189,26 @@ describe('BlockradarProvider', () => {
       expect(config.headers['x-api-key']).toBe(API_KEY);
     });
 
+    it('passes a different assetId correctly (provider is asset-agnostic)', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+      const OTHER_ASSET_ID = 'other-asset-uuid-9999';
+
+      await provider.getBalance('child-address-id-1', OTHER_ASSET_ID);
+
+      const [, config] = http.get.mock.calls[0] as [
+        string,
+        { params: Record<string, string> },
+      ];
+      expect(config.params.assetId).toBe(OTHER_ASSET_ID);
+    });
+
     it('maps data.balance → amount and data.asset.asset.decimals → decimals', async () => {
       http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
 
-      const result = await provider.getBalance('child-address-id-1');
+      const result = await provider.getBalance(
+        'child-address-id-1',
+        USDT_TRON_ASSET_ID,
+      );
 
       expect(result.amount).toBe('10.500000');
       expect(result.decimals).toBe(6);
@@ -204,17 +224,17 @@ describe('BlockradarProvider', () => {
       });
       http.get.mockReturnValue(throwError(() => axiosErr));
 
-      await expect(provider.getBalance('bad-id')).rejects.toThrow(
-        /Blockradar getBalance error/,
-      );
+      await expect(
+        provider.getBalance('bad-id', USDT_TRON_ASSET_ID),
+      ).rejects.toThrow(/Blockradar getBalance error/);
     });
 
     it('re-throws network errors without wrapping', async () => {
       http.get.mockReturnValue(throwError(() => new Error('ECONNREFUSED')));
 
-      await expect(provider.getBalance('child-address-id-1')).rejects.toThrow(
-        'ECONNREFUSED',
-      );
+      await expect(
+        provider.getBalance('child-address-id-1', USDT_TRON_ASSET_ID),
+      ).rejects.toThrow('ECONNREFUSED');
     });
   });
 });

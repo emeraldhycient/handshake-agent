@@ -47,6 +47,7 @@ import { QuotesService } from '../src/modules/quotes/application/quotes.service'
 import { WalletService } from '../src/modules/wallets/application/wallet.service';
 import { ConfigRateProvider } from '../src/modules/quotes/infrastructure/config-rate.provider';
 import { WalletPrismaRepository } from '../src/modules/wallets/infrastructure/wallet.prisma.repository';
+import { AssetRegistry } from '../src/core/catalog/asset-registry';
 
 // Ports/types
 import type { PrismaService } from '../src/core/prisma/prisma.service';
@@ -180,10 +181,12 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
     );
     pinService = new PinService(pinRepo, config, clock);
     directiveService = new DirectiveService(directiveRepo, config, clock);
+    const assetRegistry = new AssetRegistry(config);
     const walletService = new WalletService(
       fakeWalletProvider,
       walletRepo,
       clock,
+      assetRegistry,
     );
 
     proposalService = new ProposalService(
@@ -210,6 +213,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       fakePaymentProvider,
       config,
       clock,
+      assetRegistry,
     );
 
     // Seed a User that is KYC-verified (Tier 1) and has a PIN set.

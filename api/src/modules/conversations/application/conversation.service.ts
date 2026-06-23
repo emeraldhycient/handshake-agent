@@ -497,14 +497,16 @@ export class ConversationService implements IInboundHandler {
     // Happy path: read-only — provision the default crypto wallet if needed and
     // return the address. No proposal, no directive, no execution engine — receiving
     // is purely informational (§3.1).
-    // TODO(X3): derive asset+network from the intent payload once X3 reconciles them.
-    const defaultAsset = 'USDT';
+    // Asset and network are derived from the registry — no hardcoded literals (task X3).
+    const defaultAsset = this.assetRegistry.defaultCryptoAsset();
     const defaultNetwork = this.assetRegistry.defaultNetworkFor(defaultAsset);
     const assetMeta = this.assetRegistry.asset(defaultAsset);
     const networkMeta = this.assetRegistry.network(defaultNetwork);
 
-    const wallet = await this.walletService.getOrProvisionUsdtTronWallet(
+    const wallet = await this.walletService.getOrProvisionWallet(
       guard.user.id,
+      defaultAsset,
+      defaultNetwork,
     );
 
     return (

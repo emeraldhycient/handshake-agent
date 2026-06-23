@@ -96,6 +96,7 @@ const fakeWalletRecord: WalletRecord = {
   status: 'active',
 };
 const fakeWalletService = {
+  getOrProvisionWallet: jest.fn().mockResolvedValue(fakeWalletRecord),
   getOrProvisionUsdtTronWallet: jest.fn().mockResolvedValue(fakeWalletRecord),
 } as unknown as WalletService;
 
@@ -128,6 +129,7 @@ const fakeAssetRegistry: AssetRegistry = {
     addressPattern: '^T[1-9A-HJ-NP-Za-km-z]{33}$',
     enabled: true,
   })),
+  defaultCryptoAsset: jest.fn(() => 'USDT'),
   defaultNetworkFor: jest.fn(() => 'TRON'),
   formatCrypto: jest.fn(
     (symbol: string, amount: string) => `${amount} ${symbol}`,
@@ -258,9 +260,9 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       quoteId: 'quote-test-id',
       confirmation: fakeConfirmation,
     });
-    (
-      fakeWalletService.getOrProvisionUsdtTronWallet as jest.Mock
-    ).mockResolvedValue(fakeWalletRecord);
+    (fakeWalletService.getOrProvisionWallet as jest.Mock).mockResolvedValue(
+      fakeWalletRecord,
+    );
   });
 
   // ── Happy path ─────────────────────────────────────────────────────────────
@@ -405,9 +407,11 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
 
     await svc.handleInbound(msg);
 
-    // WalletService was called with the linked userId
-    expect(fakeWalletService.getOrProvisionUsdtTronWallet).toHaveBeenCalledWith(
+    // WalletService was called with userId + asset/network from registry defaults
+    expect(fakeWalletService.getOrProvisionWallet).toHaveBeenCalledWith(
       userId,
+      'USDT',
+      'TRON',
     );
 
     // Reply persisted with the deposit address and TRON warning

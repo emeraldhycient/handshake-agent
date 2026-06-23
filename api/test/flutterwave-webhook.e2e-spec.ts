@@ -48,6 +48,7 @@ import { QuotesService } from '../src/modules/quotes/application/quotes.service'
 import { WalletService } from '../src/modules/wallets/application/wallet.service';
 import { IdentityService } from '../src/modules/identity/application/identity.service';
 import { ConfigRateProvider } from '../src/modules/quotes/infrastructure/config-rate.provider';
+import { AssetRegistry } from '../src/core/catalog/asset-registry';
 
 // Controller under test
 import { FlutterwaveWebhookController } from '../src/modules/treasury/presentation/flutterwave-webhook.controller';
@@ -190,10 +191,12 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
     );
     pinService = new PinService(pinRepo, config, clock);
     directiveService = new DirectiveService(directiveRepo, config, clock);
+    const assetRegistry = new AssetRegistry(config);
     const walletService = new WalletService(
       fakeWalletProvider,
       walletRepo,
       clock,
+      assetRegistry,
     );
     identityService = new IdentityService(identityRepo);
 
@@ -240,6 +243,7 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
       fakePaymentProvider,
       config,
       clock,
+      assetRegistry,
     );
 
     // Wire the controller under test.

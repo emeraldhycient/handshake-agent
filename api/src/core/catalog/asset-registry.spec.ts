@@ -254,6 +254,49 @@ describe('AssetRegistry', () => {
     });
   });
 
+  // ── defaultCryptoAsset() ─────────────────────────────────────────────────
+
+  describe('defaultCryptoAsset()', () => {
+    it('returns USDT as the first enabled crypto asset in the stub catalog', () => {
+      // STUB_CATALOG has USDT (enabled: true, kind: crypto) and BTC (enabled: false).
+      // The method returns the first enabled crypto asset — must be USDT.
+      expect(registry.defaultCryptoAsset()).toBe('USDT');
+    });
+
+    it('throws UnsupportedAssetError when no enabled crypto asset is registered', () => {
+      // Build a registry with no enabled crypto assets.
+      const emptyConfig = {
+        get: (key: string) => {
+          if (key === 'catalog') {
+            return {
+              assets: {
+                BTC: {
+                  symbol: 'BTC',
+                  displayName: 'Bitcoin',
+                  kind: 'crypto' as const,
+                  decimals: 8,
+                  networks: [],
+                  providers: {},
+                  enabled: false, // disabled — no enabled crypto asset
+                },
+              },
+              fiats: {},
+              networks: {},
+              capabilities: {},
+            };
+          }
+          return undefined;
+        },
+      };
+      const emptyRegistry = new AssetRegistry(
+        emptyConfig as unknown as import('@nestjs/config').ConfigService,
+      );
+      expect(() => emptyRegistry.defaultCryptoAsset()).toThrow(
+        UnsupportedAssetError,
+      );
+    });
+  });
+
   // ── defaultNetworkFor() ──────────────────────────────────────────────────
 
   describe('defaultNetworkFor()', () => {

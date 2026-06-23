@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import {
   WALLET_PROVIDER,
   type IWalletProvider,
@@ -12,9 +13,6 @@ import {
   type WalletRecord,
 } from './ports/wallet.repository.port';
 
-/** Canonical asset / network for the USDT-on-TRON custodial wallet at launch. */
-const USDT_TRON_ASSET = 'USDT';
-const USDT_TRON_NETWORK = 'TRON';
 const WALLET_STATUS_ACTIVE = 'active';
 
 /**
@@ -35,18 +33,41 @@ export class WalletService {
     private readonly repo: IWalletRepository,
     @Inject(CLOCK)
     private readonly clock: Clock,
+    private readonly assetRegistry: AssetRegistry,
   ) {}
 
   /**
-   * Returns the user's USDT-on-TRON custodial wallet, provisioning it on first
-   * call (idempotent — a second call for the same user returns the existing row
-   * without contacting the provider again).
+   * Returns the user's custodial wallet for the given asset and network,
+   * provisioning it on first call (idempotent — a second call for the same
+   * user/asset/network triple returns the existing row without contacting the
+   * provider again).
+   *
+   * Validates that the asset is enabled in the registry and that the network
+   * is enabled and registered for that asset before provisioning.
+   *
+   * @throws {UnsupportedAssetError}   when the asset is not registered or disabled.
+   * @throws {UnsupportedNetworkError} when the network is not registered or disabled.
+   * @throws {UnsupportedAssetError}   when the asset does not list the network.
    */
-  async getOrProvisionUsdtTronWallet(userId: string): Promise<WalletRecord> {
+  async getOrProvisionWallet(
+    userId: string,
+    asset: string,
+    network: string,
+  ): Promise<WalletRecord> {
+    // Validate via registry — throws typed errors on failure.
+    const assetMeta = this.assetRegistry.asset(asset);
+    this.assetRegistry.network(network); // throws UnsupportedNetworkError if absent/disabled
+    if (!assetMeta.networks.includes(network)) {
+      // The network is registered but not listed for this asset.
+      throw new Error(
+        `Network '${network}' is not supported for asset '${asset}'`,
+      );
+    }
+
     const existing = await this.repo.findByUserAssetNetwork(
       userId,
-      USDT_TRON_ASSET,
-      USDT_TRON_NETWORK,
+      asset,
+      network,
     );
 
     if (existing !== null) {
@@ -61,8 +82,8 @@ export class WalletService {
     // Persist and return.
     return this.repo.create({
       userId,
-      asset: USDT_TRON_ASSET,
-      network: USDT_TRON_NETWORK,
+      asset,
+      network,
       address: provisioned.address,
       providerReference: provisioned.providerReference,
       status: WALLET_STATUS_ACTIVE,
@@ -71,10 +92,26 @@ export class WalletService {
   }
 
   /**
-   * Reads the current USDT balance for the given wallet from the provider.
-   * Delegates to the `WALLET_PROVIDER` port via the wallet's `providerReference`.
+   * Returns the user's USDT-on-TRON custodial wallet, provisioning it on first
+   * call. Thin delegate to `getOrProvisionWallet` using the registry default
+   * asset and network (task X3 backward-compat shim for callers not yet updated).
+   */
+  async getOrProvisionUsdtTronWallet(userId: string): Promise<WalletRecord> {
+    const asset = this.assetRegistry.defaultCryptoAsset();
+    const network = this.assetRegistry.defaultNetworkFor(asset);
+    return this.getOrProvisionWallet(userId, asset, network);
+  }
+
+  /**
+   * Reads the current balance for the given wallet from the provider.
+   * Delegates to the `WALLET_PROVIDER` port using the wallet's `providerReference`
+   * and the provider-specific asset id resolved from the registry.
    */
   async getBalance(wallet: WalletRecord): Promise<GetBalanceOutput> {
-    return this.provider.getBalance(wallet.providerReference);
+    const assetId = this.assetRegistry.assetProviderId(
+      wallet.asset,
+      'blockradar',
+    );
+    return this.provider.getBalance(wallet.providerReference, assetId);
   }
 }

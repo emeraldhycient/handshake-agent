@@ -75,18 +75,6 @@ export interface BuyConfig {
   maxDriftBps: number;
 }
 
-/** Blockradar provider constants (non-secret, derived from ADR-0006). */
-export interface BlockradarProviderConfig {
-  /** Asset id for USDT-on-TRON in the Blockradar API. */
-  usdtTronAssetId: string;
-  /** Network name used when provisioning/querying TRON child addresses. */
-  network: string;
-}
-
-export interface ProvidersConfig {
-  blockradar: BlockradarProviderConfig;
-}
-
 // ---------------------------------------------------------------------------
 // Catalog — config-driven asset / fiat / network registry (task X1, §7)
 // ---------------------------------------------------------------------------
@@ -147,7 +135,6 @@ export interface AppConfig {
   auth: AuthConfig;
   directive: DirectiveConfig;
   buy: BuyConfig;
-  providers: ProvidersConfig;
   catalog: CatalogConfig;
 }
 
@@ -164,9 +151,8 @@ export default (): AppConfig => ({
         kind: 'crypto',
         decimals: 6,
         networks: ['TRON'],
-        // The Blockradar asset id is the canonical source of truth for USDT-on-TRON.
-        // `providers.blockradar.usdtTronAssetId` below is kept for backward-compat
-        // with existing BlockradarProvider consumers until task X3 reconciles them.
+        // The Blockradar asset id in the catalog is the canonical source of truth
+        // for USDT-on-TRON (task X3 — providers.blockradar.usdtTronAssetId removed).
         providers: {
           blockradar: { assetId: 'f56d297c-a3db-4cda-95bd-180b54679070' },
         },
@@ -243,14 +229,6 @@ export default (): AppConfig => ({
       maxAttempts: 5,
       lockoutMinutes: 15,
       scryptKeyLen: 64,
-    },
-  },
-  providers: {
-    blockradar: {
-      // USDT-on-TRON asset id in the Blockradar API (ADR-0006). Not a secret — kept
-      // in config (not env) because it is a provider constant, not an infra/secret value.
-      usdtTronAssetId: 'f56d297c-a3db-4cda-95bd-180b54679070',
-      network: 'TRON',
     },
   },
 });

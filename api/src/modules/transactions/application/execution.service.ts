@@ -36,6 +36,7 @@ import { PinService } from '../../../core/auth/pin.service';
 import { KycGateService } from '../../identity/application/kyc-gate.service';
 import { QuotesService } from '../../quotes/application/quotes.service';
 import { WalletService } from '../../wallets/application/wallet.service';
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import type { AppConfig, BuyConfig } from '../../../core/config/configuration';
 import {
   PAYMENT_PROVIDER,
@@ -148,6 +149,7 @@ export class ExecutionService {
     private readonly config: ConfigService<AppConfig, true>,
     @Inject(CLOCK)
     private readonly clock: Clock,
+    private readonly assetRegistry: AssetRegistry,
   ) {
     const buyConfig = this.config.get<BuyConfig>('buy');
     this.maxDriftBps = buyConfig.maxDriftBps;
@@ -299,9 +301,13 @@ export class ExecutionService {
     // ── Step 8: Side effects ─────────────────────────────────────────────────
     // These call external sandboxes through ports — never touch the DB directly.
 
-    // 8a. Provision / retrieve the user's USDT-on-TRON custodial wallet.
+    // 8a. Provision / retrieve the user's custodial wallet for the buy asset.
     // Idempotent: returns the existing wallet if already provisioned.
-    await this.walletService.getOrProvisionUsdtTronWallet(userId);
+    // Asset is sourced from the stored quote; network from the registry default
+    // for that asset — catalog is the single source of truth (task X3).
+    const buyAsset = storedQuote.asset;
+    const buyNetwork = this.assetRegistry.defaultNetworkFor(buyAsset);
+    await this.walletService.getOrProvisionWallet(userId, buyAsset, buyNetwork);
 
     // 8b. Open a Flutterwave NGN virtual-account collection.
     // Customer details: sourced from user KYC if available; safe fallbacks used
@@ -429,8 +435,16 @@ export class ExecutionService {
     }
 
     // ── Step 5: Resolve the user's USDT wallet ────────────────────────────────
-    const wallet = await this.walletService.getOrProvisionUsdtTronWallet(
+    // Asset is sourced from the transaction metadata; network from the registry
+    // default for that asset — catalog is the single source of truth (task X3).
+    const settleAsset =
+      (meta.asset as string | undefined) ??
+      this.assetRegistry.defaultCryptoAsset();
+    const settleNetwork = this.assetRegistry.defaultNetworkFor(settleAsset);
+    const wallet = await this.walletService.getOrProvisionWallet(
       txn.userId,
+      settleAsset,
+      settleNetwork,
     );
 
     // ── Step 6: Atomic settlement ─────────────────────────────────────────────

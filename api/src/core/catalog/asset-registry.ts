@@ -133,6 +133,24 @@ export class AssetRegistry {
   }
 
   /**
+   * Returns the symbol of the first enabled crypto asset in the catalog.
+   * Used where a flow needs "the" launch asset without a hardcoded literal.
+   * @throws {UnsupportedAssetError} when no enabled crypto asset is registered.
+   */
+  defaultCryptoAsset(): string {
+    const symbol = Object.values(this.catalog.assets).find(
+      (a) => a.enabled && a.kind === 'crypto',
+    )?.symbol;
+    if (!symbol) {
+      throw new UnsupportedAssetError(
+        'default',
+        'no enabled crypto asset registered in the catalog',
+      );
+    }
+    return symbol;
+  }
+
+  /**
    * Returns the first enabled network registered for the asset.
    * @throws {UnsupportedAssetError} when the asset is not registered or has no enabled networks.
    */

@@ -1,11 +1,11 @@
 /**
- * Pure double-entry ledger domain for a crypto BUY.
+ * Pure double-entry ledger domain for crypto settlement operations.
  *
  * No framework imports, no Prisma imports — domain-only (CLAUDE.md §4.1).
  * Decimal arithmetic is performed with BigInt at 18 decimal places of scale
  * to avoid IEEE-754 float drift on money values (schema: Decimal(38,18)).
  *
- * Invariants (enforced by buildBuyLedgerEntries):
+ * Invariants (enforced by buildBuyLedgerEntries / buildDepositLedgerEntries):
  *  1. Per-currency signed amounts sum to exactly 0.
  *  2. Every amount is non-zero; direction matches the sign.
  *  3. sequence === prevSequence + 1 per account.
@@ -354,6 +354,68 @@ export function buildBuyLedgerEntries(
       currency: 'USDT',
       amount: negCrypto,
       description: `Buy: USDT ${cryptoAmount} sourced from treasury`,
+    },
+  ];
+
+  return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
+}
+
+// ---------------------------------------------------------------------------
+// Deposit ledger (inbound on-chain credit)
+// ---------------------------------------------------------------------------
+
+/** Input to the pure deposit ledger builder. */
+export interface BuildDepositLedgerInput {
+  /** accountId for the user_wallet USDT account. */
+  walletId: string;
+  /** USDT credited to the user from the on-chain deposit, as a decimal string. */
+  cryptoAmount: string;
+  postedAt: Date;
+  /**
+   * Current per-account state. Missing keys default to
+   * { sequence: 0, balance: '0' }.
+   */
+  accountStates: Record<AccountKey, AccountState>;
+}
+
+/**
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for an on-chain
+ * USDT DEPOSIT settlement (exactly 2 entries).
+ *
+ * The function is pure: it reads prior account state from `input.accountStates`
+ * and computes the next `sequence` and `balanceAfter` values deterministically.
+ * The caller (settlement repo) persists the returned rows inside a DB transaction.
+ *
+ * Account mapping (credit positive, debit negative; per-currency sum = 0):
+ *
+ * USDT leg (sum = 0, always 2 entries):
+ *  + user_wallet         / walletId                / USDT  +cryptoAmount (credited to user)
+ *  − clearing            / usdt_external_deposits   / USDT  −cryptoAmount (contra account)
+ */
+export function buildDepositLedgerEntries(
+  input: BuildDepositLedgerInput,
+): LedgerEntryDraft[] {
+  const { walletId, cryptoAmount, postedAt, accountStates } = input;
+
+  // -- Validation --
+  assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
+
+  const negCrypto = fromScaled(-toScaled(cryptoAmount));
+
+  const specs: EntrySpec[] = [
+    {
+      accountType: LedgerAccountType.user_wallet,
+      accountId: walletId,
+      currency: 'USDT',
+      amount: cryptoAmount,
+      description: `Deposit: USDT ${cryptoAmount} credited to user wallet from on-chain deposit`,
+    },
+    {
+      accountType: LedgerAccountType.clearing,
+      accountId: 'usdt_external_deposits',
+      currency: 'USDT',
+      amount: negCrypto,
+      description: `Deposit: USDT ${cryptoAmount} contra clearing for external inbound deposit`,
     },
   ];
 

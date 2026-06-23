@@ -47,6 +47,7 @@ import { KycGateService } from '../src/modules/identity/application/kyc-gate.ser
 import { QuotesService } from '../src/modules/quotes/application/quotes.service';
 import { WalletService } from '../src/modules/wallets/application/wallet.service';
 import { ConfigRateProvider } from '../src/modules/quotes/infrastructure/config-rate.provider';
+import { AssetRegistry } from '../src/core/catalog/asset-registry';
 
 // Ports/types
 import type { PrismaService } from '../src/core/prisma/prisma.service';
@@ -180,10 +181,12 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
     );
     pinService = new PinService(pinRepo, config, clock);
     directiveService = new DirectiveService(directiveRepo, config, clock);
+    const assetRegistry = new AssetRegistry(config);
     const walletService = new WalletService(
       fakeWalletProvider,
       walletRepo,
       clock,
+      assetRegistry,
     );
 
     proposalService = new ProposalService(
@@ -208,6 +211,7 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
       fakePaymentProvider,
       config,
       clock,
+      assetRegistry,
     );
 
     // Seed a verified user with a PIN.

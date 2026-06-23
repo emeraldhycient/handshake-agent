@@ -36,8 +36,11 @@ export interface IWalletProvider {
   ): Promise<ProvisionAddressOutput>;
 
   /**
-   * Returns the current USDT balance for the given provider address id.
+   * Returns the current balance for the given provider address id and asset.
    * Amount is already human-scaled (not raw integer units).
+   *
+   * @param addressId - The provider-scoped child address id (providerReference on WalletRecord).
+   * @param assetId   - The provider-specific asset id (from AssetRegistry.assetProviderId).
    */
-  getBalance(addressId: string): Promise<GetBalanceOutput>;
+  getBalance(addressId: string, assetId: string): Promise<GetBalanceOutput>;
 }
