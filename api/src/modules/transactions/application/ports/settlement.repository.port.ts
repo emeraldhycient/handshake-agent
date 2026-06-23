@@ -153,6 +153,29 @@ export interface SettleSellRefundInput {
 // Send — atomic create Transaction + reserve (execute phase, C1 fix)
 // ---------------------------------------------------------------------------
 
+/**
+ * Originator fields captured for Travel Rule compliance (FATF / CBN circular).
+ * Passed to the atomic create when requiresTravelRule is true. Available fields
+ * are sourced from the User / KycProfile at execution time; columns that cannot
+ * yet be resolved are left null (skeleton — full enrichment in a future task).
+ */
+export interface TravelRuleOriginatorFields {
+  /** Internal User.id of the originator. */
+  originatorUserId: string;
+  /** Originator display name from KycProfile (null if not yet resolved). */
+  originatorName: string | null;
+  /** Beneficiary on-chain address (the send toAddress). */
+  beneficiaryAddress: string;
+  /** Beneficiary label or name (from Beneficiary record, may be null). */
+  beneficiaryName: string | null;
+  /** Crypto asset being sent (e.g. 'USDT'). */
+  asset: string;
+  /** Crypto amount being sent (decimal string). */
+  cryptoAmount: string;
+  /** NGN-equivalent amount used for threshold evaluation. */
+  ngnEquivalent: string;
+}
+
 export interface CreateSendSettlingWithReserveInput {
   /** Full transaction data mirroring CreateSellSettlingWithReserveInput.txnData. */
   txnData: {
@@ -179,6 +202,12 @@ export interface CreateSendSettlingWithReserveInput {
   /** totalDebit = cryptoAmount + networkFeeCrypto */
   totalDebit: string;
   now: Date;
+  /**
+   * When set, the repository must persist a TravelRuleData row inside the
+   * same $transaction (SPEC DEVIATION fix — persist Travel Rule record atomically).
+   * Null when the send amount is below the configured threshold.
+   */
+  travelRule: TravelRuleOriginatorFields | null;
 }
 
 export interface CreateSendSettlingWithReserveOutput {

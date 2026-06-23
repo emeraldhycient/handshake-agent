@@ -32,7 +32,10 @@ import {
   LedgerAccountType,
   ReceiptDeliveryStatus,
   SettlementOutboxStatus,
+  SupportedAsset,
   TransactionStatus,
+  TravelRulePartyType,
+  TravelRuleTrigger,
   VelocityCounterType,
 } from '../../../../generated/prisma/client';
 import type { Prisma } from '../../../../generated/prisma/client';
@@ -1215,6 +1218,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       walletId,
       totalDebit,
       now,
+      travelRule,
     } = input;
 
     const row = await this.prisma.$transaction(
@@ -1277,6 +1281,46 @@ export class SettlementPrismaRepository implements ISettlementRepository {
               balanceAfter: draft.balanceAfter as unknown as Prisma.Decimal,
               sequence: draft.sequence,
               postedAt: draft.postedAt,
+            },
+          });
+        }
+
+        // ── f. Persist TravelRuleData row (SPEC DEVIATION fix, AUD-08) ────────
+        // When the send amount exceeds the configured NGN threshold,
+        // a TravelRuleData row must be created inside the SAME $transaction
+        // so compliance records are never orphaned from the transaction row.
+        // Null columns are explicitly noted — KycProfile enrichment is a
+        // separate compliance task; the skeleton captures what is available now.
+        if (travelRule !== null) {
+          await tx.travelRuleData.create({
+            data: {
+              transactionId: created.id,
+              // Originator is always 'individual' at launch (no business accounts yet).
+              originatorType: TravelRulePartyType.individual,
+              originatorId: travelRule.originatorUserId,
+              // originatorName: '' — KycProfile not plumbed through the engine yet.
+              // Schema requires non-null string; '' is the explicit empty sentinel.
+              originatorName: travelRule.originatorName ?? '',
+              // originatorAddress: '' — residential address not captured at this tier.
+              originatorAddress: '',
+              // originatorAccountNumber: '' — wallet address is the on-chain ref, not an account number.
+              originatorAccountNumber: '',
+              // Beneficiary fields: address is the on-chain destination.
+              beneficiaryType: TravelRulePartyType.unknown,
+              // beneficiaryId: null — internal beneficiary FK not available here.
+              beneficiaryId: null,
+              beneficiaryName: travelRule.beneficiaryName,
+              beneficiaryAddress: travelRule.beneficiaryAddress,
+              // beneficiaryAccountNumber: '' — on-chain sends do not have account numbers.
+              beneficiaryAccountNumber: '',
+              // asset is typed as SupportedAsset in the schema; engine string matches at runtime.
+              asset: travelRule.asset as SupportedAsset,
+              amount: travelRule.cryptoAmount,
+              amountFiat: travelRule.ngnEquivalent as unknown as Prisma.Decimal,
+              triggeringFactor: TravelRuleTrigger.amount_threshold,
+              capturedAt: now,
+              // reportedAt: null — not yet submitted to counterparty/regulator.
+              reportedAt: null,
             },
           });
         }

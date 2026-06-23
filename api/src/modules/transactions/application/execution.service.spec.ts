@@ -396,6 +396,11 @@ const stubConfig = {
   get: jest.fn((key: string) => {
     if (key === 'buy') return { maxDriftBps: 50 };
     if (key === 'sell') return { maxDriftBps: 50 };
+    // pricing.assets.USDT.baseRate is required by executeSend's KYC-gate guard.
+    if (key === 'pricing')
+      return {
+        assets: { USDT: { baseRate: 1600 }, BTC: { baseRate: 85_000_000 } },
+      };
     return undefined;
   }),
 };
@@ -447,6 +452,12 @@ function buildService(
     { getById: jest.fn().mockResolvedValue(null) } as never,
     // ledgerRepo stub
     { getAccountBalance: jest.fn().mockResolvedValue('100') },
+    // identityService: optional, buy path does not notify
+    undefined,
+    // whatsAppSender: optional, buy path does not notify
+    undefined,
+    // complianceService: buy path has no sanctions gate; executeSend not called
+    undefined,
   );
 }
 
@@ -1474,6 +1485,8 @@ function buildSellService(
     (overrides.ledgerRepo as never) ?? makeLedgerRepo(),
     (overrides.identityService as never) ?? (makeIdentityService() as never),
     (overrides.whatsAppSender as never) ?? (makeWhatsAppSender() as never),
+    // complianceService: sell path has no sanctions gate; executeSend not called
+    undefined,
   );
 }
 
@@ -2572,6 +2585,121 @@ describe('ExecutionService.executeSend', () => {
 
     const result = await svc.executeSend(SEND_BASE_INPUT);
     expect(result.status).toBe('settling');
+  });
+
+  // ── IMPORTANT 1: fail-closed compliance — missing ComplianceService must throw ─
+
+  it('missing complianceService (undefined) → throws rather than skipping sanctions (fail-CLOSED)', async () => {
+    // Build a service without a complianceService to exercise the fail-closed path.
+    const defaultSettlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    const svc = new ExecutionService(
+      makeProposalRepo(STUB_SEND_PROPOSAL),
+      makeQuoteRepo(null),
+      makeTransactionRepoForSend(),
+      makeOutboxRepo(),
+      defaultSettlementRepo,
+      makeQuotesService() as unknown as QuotesService,
+      makeKycGate() as unknown as KycGateService,
+      makeDirectiveService(STUB_SEND_GRANT) as unknown as DirectiveService,
+      makePinService() as unknown as PinService,
+      makeWalletServiceWithWithdraw() as unknown as WalletService,
+      makePaymentProvider() as unknown as IPaymentProvider,
+      stubConfig as never,
+      stubClock,
+      makeAssetRegistry(),
+      makeBeneficiaryServiceForSend() as never,
+      makeLedgerRepo('100'),
+      makeIdentityService() as never,
+      makeWhatsAppSender() as never,
+      // complianceService deliberately omitted (undefined)
+      undefined,
+    );
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toThrow();
+  });
+
+  // ── IMPORTANT 2: walletId null guard ──────────────────────────────────────
+
+  it('proposal parameters missing walletId → ProposalNotExecutableError before any writes', async () => {
+    const noWalletProposal: ProposalRecord = {
+      ...STUB_SEND_PROPOSAL,
+      parameters: {
+        ...STUB_SEND_PROPOSAL.parameters,
+
+        walletId: undefined,
+      },
+    };
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+
+    const svc = buildSendService({
+      proposalRepo: makeProposalRepo(noWalletProposal),
+      settlementRepo,
+    });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProposalNotExecutableError,
+    );
+    expect(
+      settlementRepo.createSendSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+  });
+
+  // ── IMPORTANT 3: baseRate=0 → config error (KYC gate bypass prevention) ──
+
+  it('baseRate is 0 or absent in pricing config → throws config error (not silently passing fiatAmount=0)', async () => {
+    // Use a config that returns pricing.assets with no USDT entry → baseRate defaults to 0.
+    const zeroRateConfig = {
+      get: jest.fn((key: string) => {
+        if (key === 'buy') return { maxDriftBps: 50 };
+        if (key === 'sell') return { maxDriftBps: 50 };
+        if (key === 'pricing') return { assets: {} }; // no USDT entry → baseRate = 0
+        return undefined;
+      }),
+    };
+
+    const defaultSettlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    const svc = new ExecutionService(
+      makeProposalRepo(STUB_SEND_PROPOSAL),
+      makeQuoteRepo(null),
+      makeTransactionRepoForSend(),
+      makeOutboxRepo(),
+      defaultSettlementRepo,
+      makeQuotesService() as unknown as QuotesService,
+      makeKycGate() as unknown as KycGateService,
+      makeDirectiveService(STUB_SEND_GRANT) as unknown as DirectiveService,
+      makePinService() as unknown as PinService,
+      makeWalletServiceWithWithdraw() as unknown as WalletService,
+      makePaymentProvider() as unknown as IPaymentProvider,
+      zeroRateConfig as never,
+      stubClock,
+      makeAssetRegistry(),
+      makeBeneficiaryServiceForSend() as never,
+      makeLedgerRepo('100'),
+      makeIdentityService() as never,
+      makeWhatsAppSender() as never,
+      makeComplianceService() as never,
+    );
+
+    // Should throw a config error — must NOT silently proceed with fiatAmount=0.
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toThrow(/baseRate/i);
+    expect(
+      defaultSettlementRepo.createSendSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
   });
 
   // ── Gauntlet order ─────────────────────────────────────────────────────────

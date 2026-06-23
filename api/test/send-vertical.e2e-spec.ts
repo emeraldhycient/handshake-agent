@@ -789,4 +789,202 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
       expect(compensation?.status).toBe('pending');
     });
   });
+
+  // -----------------------------------------------------------------------
+  // Travel Rule: TravelRuleData row persisted atomically (SPEC DEVIATION fix)
+  // -----------------------------------------------------------------------
+
+  describe('Travel Rule: TravelRuleData persisted inside createSendSettlingWithReserveAtomic', () => {
+    it('>threshold send writes a TravelRuleData row linked to the Transaction in the same DB transaction', async () => {
+      // Arrange: provision a large enough balance and create a proposal with
+      // requiresTravelRule=true directly (threshold = 1,000,000 NGN; at baseRate=1600
+      // that is 625 USDT minimum). We seed 700 USDT and create a proposal for 650 USDT.
+      // The user must be tier_3: tier_1 perTxFiatMax=50,000 NGN, tier_2=500,000 NGN,
+      // tier_3=5,000,000 NGN — the test amount 1,040,000 NGN requires tier_3.
+      await prisma.user.update({
+        where: { id: userId },
+        data: { kycTier: 'tier_3' },
+      });
+
+      const wallet = await walletService.getOrProvisionWallet(
+        userId,
+        'USDT',
+        'TRON',
+      );
+
+      // Seed 700 USDT into the ledger (cumulative — find current balance first).
+      const latestEntry = await prisma.ledgerEntry.findFirst({
+        where: { accountType: 'user_wallet', accountId: wallet.id },
+        orderBy: { sequence: 'desc' },
+      });
+      const seedSeq = (latestEntry?.sequence ?? 0) + 1;
+      const seedBalanceBefore = latestEntry?.balanceAfter
+        ? Number(latestEntry.balanceAfter)
+        : 0;
+      const SEED_AMOUNT = 700;
+      const seedBalanceAfter = seedBalanceBefore + SEED_AMOUNT;
+
+      const seedTxn = await prisma.transaction.create({
+        data: {
+          userId,
+          type: 'buy',
+          status: 'completed',
+          idempotencyKey: randomUUID(),
+          requestChecksum: 'seed-tr',
+          fxRateSnapshot: '1600',
+          metadata: {},
+          pinVerifiedAt: new Date(),
+        },
+      });
+      await prisma.ledgerEntry.create({
+        data: {
+          transactionId: seedTxn.id,
+          accountType: 'user_wallet',
+          accountId: wallet.id,
+          currency: 'USDT',
+          direction: 'credit',
+          amount: String(SEED_AMOUNT) + '.000000',
+          description: 'seed credit for travel rule e2e',
+          balanceAfter: seedBalanceAfter.toFixed(6),
+          sequence: seedSeq,
+          postedAt: new Date(),
+        },
+      });
+
+      // Reuse/create beneficiary.
+      let ben: { id: string };
+      const existingBen = await prisma.beneficiary.findFirst({
+        where: { userId, cryptoAddress: VALID_TRON_CRYPTO_ADDRESS },
+        select: { id: true },
+      });
+      if (existingBen !== null) {
+        ben = existingBen;
+      } else {
+        ben = await beneficiaryService.addCryptoAddress({
+          userId,
+          label: 'Travel Rule Beneficiary',
+          address: VALID_TRON_CRYPTO_ADDRESS,
+          network: 'TRON',
+          asset: 'USDT',
+        });
+      }
+      await prisma.beneficiary.update({
+        where: { id: ben.id },
+        data: { firstUseLockedUntil: null },
+      });
+
+      // Directly insert a proposal with requiresTravelRule='true' to avoid
+      // needing to reconfigure the compliance threshold for this test.
+      // 650 USDT × 1600 NGN/USDT = 1,040,000 NGN > 1,000,000 NGN threshold.
+      const TRAVEL_RULE_CRYPTO_AMOUNT = '650.000000';
+      const TRAVEL_RULE_NETWORK_FEE = '1.000000';
+      const TRAVEL_RULE_TOTAL_DEBIT = '651.000000';
+
+      const proposal = await prisma.proposal.create({
+        data: {
+          userId,
+          type: 'send',
+          status: 'pending',
+          expiresAt: new Date(Date.now() + 5 * 60 * 1_000),
+          parameters: {
+            asset: 'USDT',
+            cryptoAmount: TRAVEL_RULE_CRYPTO_AMOUNT,
+            networkFeeCrypto: TRAVEL_RULE_NETWORK_FEE,
+            totalDebit: TRAVEL_RULE_TOTAL_DEBIT,
+            beneficiaryId: ben.id,
+            walletId: wallet.id,
+            toAddress: VALID_TRON_CRYPTO_ADDRESS,
+            network: 'TRON',
+            requiresTravelRule: 'true',
+          },
+          parametersChecksum: 'tr-e2e-checksum',
+        },
+      });
+
+      const svc = buildSendExecutionService(
+        ps,
+        new StubConfigService(),
+        pinService,
+        walletService,
+        beneficiaryService,
+        complianceService,
+      );
+
+      const { directiveId, nonce } = await issueDirective(proposal.id);
+      const idempotencyKey = randomUUID();
+
+      const result = await svc.executeSend({
+        userId,
+        proposalId: proposal.id,
+        directiveId,
+        nonce,
+        pin: '123456',
+        idempotencyKey,
+      });
+
+      expect(result.status).toBe('settling');
+
+      // Assert TravelRuleData row exists and is linked to the Transaction.
+      const travelRuleRow = await prisma.travelRuleData.findUnique({
+        where: { transactionId: result.transactionId },
+      });
+      expect(travelRuleRow).not.toBeNull();
+      expect(travelRuleRow?.transactionId).toBe(result.transactionId);
+      expect(travelRuleRow?.originatorId).toBe(userId);
+      expect(travelRuleRow?.beneficiaryAddress).toBe(VALID_TRON_CRYPTO_ADDRESS);
+      expect(travelRuleRow?.asset).toBe('USDT');
+      expect(travelRuleRow?.triggeringFactor).toBe('amount_threshold');
+
+      // Ledger invariant still holds (2 reserve entries, sum = 0).
+      const entries = await prisma.ledgerEntry.findMany({
+        where: { transactionId: result.transactionId, currency: 'USDT' },
+      });
+      expect(entries).toHaveLength(2);
+      // BigInt-safe sum check.
+      const SCALE = 10n ** 18n;
+      const toScaledBigInt = (s: string): bigint => {
+        const [whole = '0', frac = ''] = String(s).trim().split('.');
+        const fracPadded = frac.slice(0, 18).padEnd(18, '0');
+        return BigInt(whole) * SCALE + BigInt(fracPadded);
+      };
+      const sumBigInt = entries.reduce(
+        (acc, e) => acc + toScaledBigInt(String(e.amount)),
+        0n,
+      );
+      expect(sumBigInt).toBe(0n);
+    });
+
+    it('below-threshold send (< 1,000,000 NGN equivalent) does NOT write a TravelRuleData row', async () => {
+      // 10 USDT × 1600 NGN/USDT = 16,000 NGN < 1,000,000 NGN threshold.
+      const { proposalId } = await seedSendProposalAndPrereqs();
+      const { directiveId, nonce } = await issueDirective(proposalId);
+      const idempotencyKey = randomUUID();
+
+      const svc = buildSendExecutionService(
+        ps,
+        new StubConfigService(),
+        pinService,
+        walletService,
+        beneficiaryService,
+        complianceService,
+      );
+
+      const result = await svc.executeSend({
+        userId,
+        proposalId,
+        directiveId,
+        nonce,
+        pin: '123456',
+        idempotencyKey,
+      });
+
+      expect(result.status).toBe('settling');
+
+      // No TravelRuleData row for a below-threshold send.
+      const travelRuleRow = await prisma.travelRuleData.findUnique({
+        where: { transactionId: result.transactionId },
+      });
+      expect(travelRuleRow).toBeNull();
+    });
+  });
 });

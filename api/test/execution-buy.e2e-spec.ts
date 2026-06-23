@@ -235,6 +235,11 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       // beneficiaryService: sell tests use a dedicated e2e spec; stubs here suffice
       { getById: () => Promise.resolve(null) } as never,
       new LedgerPrismaRepository(ps),
+      undefined, // identityService (optional, buy path does not notify)
+      undefined, // whatsAppSender (optional, buy path does not notify)
+      // complianceService: buy path does not run sanctions — pass undefined
+      // (executeSend is not called in buy tests; executeBuy has no compliance gate).
+      undefined,
     );
 
     // Seed a User that is KYC-verified (Tier 1) and has a PIN set.

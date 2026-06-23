@@ -249,6 +249,10 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
       assetRegistry,
       beneficiaryService,
       ledgerRepo,
+      undefined, // identityService (optional)
+      undefined, // whatsAppSender (optional)
+      // complianceService: sell path does not run sanctions — pass undefined
+      undefined,
     );
 
     // Seed a KYC-verified (Tier 1) user with a PIN.
@@ -572,6 +576,9 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         assetRegistry,
         beneficiaryService,
         new LedgerPrismaRepository(ps),
+        undefined, // identityService (optional)
+        undefined, // whatsAppSender (optional)
+        undefined, // complianceService (sell path has no sanctions gate)
       );
 
       // Phase 1
@@ -665,6 +672,9 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         assetRegistry,
         beneficiaryService,
         new LedgerPrismaRepository(ps),
+        undefined, // identityService (optional)
+        undefined, // whatsAppSender (optional)
+        undefined, // complianceService (sell path has no sanctions gate)
       );
 
       await svc.executeSell({
@@ -731,6 +741,9 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         assetRegistry,
         beneficiaryService,
         new LedgerPrismaRepository(ps),
+        undefined, // identityService (optional)
+        undefined, // whatsAppSender (optional)
+        undefined, // complianceService (sell path has no sanctions gate)
       );
 
       // Phase 1: execute

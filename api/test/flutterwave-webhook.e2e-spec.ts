@@ -271,6 +271,9 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
       // beneficiaryService: sell tests use a dedicated e2e spec; stubs here suffice
       { getById: () => Promise.resolve(null) } as never,
       new LedgerPrismaRepository(ps),
+      undefined, // identityService (optional)
+      undefined, // whatsAppSender (optional)
+      undefined, // complianceService (webhook/buy path has no sanctions gate)
     );
 
     // Wire the controller under test.

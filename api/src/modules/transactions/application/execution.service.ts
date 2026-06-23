@@ -28,7 +28,13 @@
 
 import { createHash } from 'node:crypto';
 
-import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  Optional,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
@@ -254,7 +260,11 @@ export class ExecutionService {
     @Optional()
     @Inject(WHATSAPP_SENDER)
     private readonly whatsAppSender?: IWhatsAppSender,
-    @Optional()
+    // complianceService: NOT decorated with @Optional. NestJS DI will throw at
+    // boot if ComplianceModule is not imported — fail-CLOSED posture (§3.3).
+    // The type is ComplianceService | undefined only because TypeScript requires
+    // that all optional positional params precede required ones; the runtime
+    // guard in executeSend enforces the invariant explicitly.
     private readonly complianceService?: ComplianceService,
   ) {
     const buyConfig = this.config.get<BuyConfig>('buy');
@@ -991,6 +1001,15 @@ export class ExecutionService {
       input;
     const now = this.clock.now();
 
+    // Fail-CLOSED: ComplianceService must always be wired. This is a hard
+    // invariant — if it is missing the app is misconfigured and every send must
+    // be rejected (never silently skip the sanctions re-screen, §3.3).
+    if (this.complianceService === undefined) {
+      throw new InternalServerErrorException(
+        'ExecutionService: ComplianceService is not wired — cannot execute send (fail-closed, §3.3)',
+      );
+    }
+
     // ── Step 1: Load and validate proposal ──────────────────────────────────
     const proposal = await this.proposalRepo.findById(proposalId);
 
@@ -1025,19 +1044,33 @@ export class ExecutionService {
     const walletId = params.walletId;
     const toAddress = params.toAddress ?? '';
     const network = params.network ?? 'TRON';
+    const requiresTravelRule = params.requiresTravelRule === 'true';
 
     if (!beneficiaryId) {
       throw new ProposalNotExecutableError(
         'proposal parameters missing beneficiaryId',
       );
     }
+    // IMPORTANT 2: walletId null-guard — a missing walletId would silently pass
+    // '0' (or undefined) to getAccountBalance and poison the ledger reserve.
+    if (!walletId) {
+      throw new ProposalNotExecutableError(
+        'proposal parameters missing walletId',
+      );
+    }
 
     // ── Step 2: KYC gate (server-side, always) ──────────────────────────────
     // No quote on send — use cryptoAmount × baseRate for NGN-equivalent.
-    const pricingConfig = (
-      this.config as unknown as { get<T>(key: string): T }
-    ).get<PricingConfig>('pricing');
-    const baseRate = pricingConfig?.assets?.[asset]?.baseRate ?? 0;
+    // IMPORTANT 3: baseRate must be > 0. A zero baseRate causes ngnEquivalent=0
+    // which silently bypasses the KYC tier gate for any amount. Fail loudly on
+    // misconfiguration rather than allowing a silent gate bypass.
+    const pricingConfig = this.config.get<PricingConfig>('pricing');
+    const baseRate = pricingConfig?.assets?.[asset]?.baseRate;
+    if (!baseRate || baseRate <= 0) {
+      throw new InternalServerErrorException(
+        `pricing config missing or invalid baseRate for asset '${asset}' — cannot compute NGN-equivalent for KYC gate`,
+      );
+    }
     const ngnEquivalent = Number(cryptoAmount) * baseRate;
 
     await this.kycGate.assertCanTransact({
@@ -1080,24 +1113,19 @@ export class ExecutionService {
     }
 
     // ── Step 5: Re-screen sanctions ───────────────────────────────────────────
-    if (this.complianceService !== undefined) {
-      const screening = await this.complianceService.screenSendDestination({
-        userId,
-        address: toAddress,
-        network,
-      });
-      if (!screening.passed) {
-        throw new SanctionsBlockedError(
-          toAddress,
-          screening.reason,
-          screening.complianceEventId,
-          '',
-        );
-      }
-    } else {
-      this.logger.warn(
-        { userId, proposalId },
-        'executeSend: ComplianceService not injected — skipping sanctions re-screen (warn)',
+    // ComplianceService is REQUIRED (non-optional). This call always runs and
+    // fails CLOSED — no skip branch. §3.3: server-side check on every send.
+    const screening = await this.complianceService.screenSendDestination({
+      userId,
+      address: toAddress,
+      network,
+    });
+    if (!screening.passed) {
+      throw new SanctionsBlockedError(
+        toAddress,
+        screening.reason,
+        screening.complianceEventId,
+        '',
       );
     }
 
@@ -1174,6 +1202,21 @@ export class ExecutionService {
         walletId,
         totalDebit,
         now,
+        // SPEC DEVIATION fix: persist TravelRuleData atomically when threshold exceeded.
+        // originatorName and beneficiaryName are null here — KycProfile / Beneficiary
+        // name fields are available on the user but not yet plumbed through the engine;
+        // they are left null per the "skeleton with noted nulls" requirement.
+        travelRule: requiresTravelRule
+          ? {
+              originatorUserId: userId,
+              originatorName: null,
+              beneficiaryAddress: toAddress,
+              beneficiaryName: beneficiary.label ?? null,
+              asset,
+              cryptoAmount,
+              ngnEquivalent: String(ngnEquivalent),
+            }
+          : null,
       });
 
     // ── Step 10: Initiate on-chain withdrawal ────────────────────────────────
