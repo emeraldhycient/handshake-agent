@@ -1398,8 +1398,8 @@ export class ExecutionService {
         return;
       }
       const formattedCrypto = this.assetRegistry.formatCrypto(
-        params.cryptoAmount,
         'USDT',
+        params.cryptoAmount,
       );
       const body =
         `✅ Your crypto send is complete!\n` +
@@ -1438,8 +1438,8 @@ export class ExecutionService {
         return;
       }
       const formattedCrypto = this.assetRegistry.formatCrypto(
-        params.cryptoAmount,
         'USDT',
+        params.cryptoAmount,
       );
       const body =
         `⚠️ Send failed\n` +
@@ -1479,12 +1479,12 @@ export class ExecutionService {
         return;
       }
       const formattedCrypto = this.assetRegistry.formatCrypto(
-        params.cryptoAmount,
         'USDT',
+        params.cryptoAmount,
       );
       const formattedFiat = this.assetRegistry.formatFiat(
-        params.netFiatAmount,
         'NGN',
+        params.netFiatAmount,
       );
       const body =
         `✅ Your crypto sell is complete!\n` +
@@ -1524,8 +1524,8 @@ export class ExecutionService {
         return;
       }
       const formattedCrypto = this.assetRegistry.formatCrypto(
-        params.cryptoAmount,
         'USDT',
+        params.cryptoAmount,
       );
       const body =
         `⚠️ Sell payout failed\n` +
