@@ -316,6 +316,280 @@ describe('FlutterwaveProvider', () => {
     });
   });
 
+  // ── createPayout ─────────────────────────────────────────────────────────
+
+  describe('createPayout', () => {
+    const PAYOUT_INPUT = {
+      amount: '25000',
+      currency: 'NGN' as const,
+      reference: 'payout-ref-001',
+      bankAccount: {
+        accountNumber: '0123456789',
+        bankCode: '044',
+        accountName: 'Jane Doe',
+      },
+    };
+
+    const CREATE_PAYOUT_RESPONSE = {
+      status: 'success',
+      message: 'Transfer Queued Successfully',
+      data: {
+        id: 999001,
+        account_number: '0123456789',
+        bank_code: '044',
+        full_name: 'Jane Doe',
+        created_at: '2024-01-15T10:30:00.000Z',
+        currency: 'NGN',
+        debit_currency: 'NGN',
+        amount: 25000,
+        fee: 45,
+        status: 'NEW',
+        reference: 'payout-ref-001',
+        meta: null,
+        narration: 'Sell crypto ref payout-ref-001',
+        complete_message: '',
+        requires_approval: 0,
+        is_approved: 1,
+        bank_name: 'ACCESS BANK NIGERIA',
+      },
+    };
+
+    it('POSTs to {base}/transfers with Bearer auth header', async () => {
+      http.post.mockReturnValue(of(axiosOk(CREATE_PAYOUT_RESPONSE)));
+
+      await provider.createPayout(PAYOUT_INPUT);
+
+      expect(http.post).toHaveBeenCalledTimes(1);
+      const [url, , config] = http.post.mock.calls[0] as [
+        string,
+        unknown,
+        { headers: Record<string, string> },
+      ];
+      expect(url).toBe(`${BASE_URL}/transfers`);
+      expect(config.headers['Authorization']).toBe(`Bearer ${SECRET_KEY}`);
+    });
+
+    it('sends account_bank, account_number, amount (number), currency NGN, narration, reference in body', async () => {
+      http.post.mockReturnValue(of(axiosOk(CREATE_PAYOUT_RESPONSE)));
+
+      await provider.createPayout(PAYOUT_INPUT);
+
+      const [, body] = http.post.mock.calls[0] as [
+        string,
+        {
+          account_bank: string;
+          account_number: string;
+          amount: number;
+          currency: string;
+          narration: string;
+          reference: string;
+        },
+      ];
+      expect(body.account_bank).toBe(PAYOUT_INPUT.bankAccount.bankCode);
+      expect(body.account_number).toBe(PAYOUT_INPUT.bankAccount.accountNumber);
+      expect(body.amount).toBe(25000); // coerced to number
+      expect(typeof body.amount).toBe('number');
+      expect(body.currency).toBe('NGN');
+      expect(typeof body.narration).toBe('string');
+      expect(body.reference).toBe(PAYOUT_INPUT.reference);
+    });
+
+    it('maps data.id → providerRef (as string) and normalises status NEW → pending', async () => {
+      http.post.mockReturnValue(of(axiosOk(CREATE_PAYOUT_RESPONSE)));
+
+      const result = await provider.createPayout(PAYOUT_INPUT);
+
+      expect(result.providerRef).toBe('999001');
+      expect(result.status).toBe('pending');
+    });
+
+    it('maps data.status PENDING → pending', async () => {
+      const pendingResp = {
+        ...CREATE_PAYOUT_RESPONSE,
+        data: { ...CREATE_PAYOUT_RESPONSE.data, status: 'PENDING' },
+      };
+      http.post.mockReturnValue(of(axiosOk(pendingResp)));
+
+      const result = await provider.createPayout(PAYOUT_INPUT);
+
+      expect(result.status).toBe('pending');
+    });
+
+    it('maps data.status SUCCESSFUL → successful', async () => {
+      const successResp = {
+        ...CREATE_PAYOUT_RESPONSE,
+        data: { ...CREATE_PAYOUT_RESPONSE.data, status: 'SUCCESSFUL' },
+      };
+      http.post.mockReturnValue(of(axiosOk(successResp)));
+
+      const result = await provider.createPayout(PAYOUT_INPUT);
+
+      expect(result.status).toBe('successful');
+    });
+
+    it('maps data.status FAILED → failed', async () => {
+      const failedResp = {
+        ...CREATE_PAYOUT_RESPONSE,
+        data: { ...CREATE_PAYOUT_RESPONSE.data, status: 'FAILED' },
+      };
+      http.post.mockReturnValue(of(axiosOk(failedResp)));
+
+      const result = await provider.createPayout(PAYOUT_INPUT);
+
+      expect(result.status).toBe('failed');
+    });
+
+    it('throws a descriptive error including the API message on non-2xx', async () => {
+      const axiosErr = Object.assign(new Error('Bad Request'), {
+        response: {
+          status: 400,
+          data: { status: 'error', message: 'Invalid account number' },
+        },
+        isAxiosError: true,
+      });
+      http.post.mockReturnValue(throwError(() => axiosErr));
+
+      await expect(provider.createPayout(PAYOUT_INPUT)).rejects.toThrow(
+        /Invalid account number/,
+      );
+    });
+
+    it('error thrown on non-2xx includes HTTP status', async () => {
+      const axiosErr = Object.assign(new Error('Unauthorized'), {
+        response: {
+          status: 401,
+          data: { status: 'error', message: 'Invalid API key' },
+        },
+        isAxiosError: true,
+      });
+      http.post.mockReturnValue(throwError(() => axiosErr));
+
+      await expect(provider.createPayout(PAYOUT_INPUT)).rejects.toThrow(/401/);
+    });
+
+    it('re-throws non-Flutterwave errors as-is', async () => {
+      http.post.mockReturnValue(throwError(() => new Error('Network timeout')));
+
+      await expect(provider.createPayout(PAYOUT_INPUT)).rejects.toThrow(
+        'Network timeout',
+      );
+    });
+  });
+
+  // ── verifyPayout ─────────────────────────────────────────────────────────
+
+  describe('verifyPayout', () => {
+    const PAYOUT_ID = '999001';
+
+    const VERIFY_PAYOUT_RESPONSE = {
+      status: 'success',
+      message: 'Transfer fetched',
+      data: {
+        id: 999001,
+        account_number: '0123456789',
+        bank_code: '044',
+        full_name: 'Jane Doe',
+        created_at: '2024-01-15T10:30:00.000Z',
+        currency: 'NGN',
+        debit_currency: 'NGN',
+        amount: 25000,
+        fee: 45,
+        status: 'SUCCESSFUL',
+        reference: 'payout-ref-001',
+        meta: null,
+        narration: 'Sell crypto ref payout-ref-001',
+        complete_message: 'Successful',
+        requires_approval: 0,
+        is_approved: 1,
+        bank_name: 'ACCESS BANK NIGERIA',
+      },
+    };
+
+    it('GETs {base}/transfers/{id} with Bearer auth', async () => {
+      http.get.mockReturnValue(of(axiosOk(VERIFY_PAYOUT_RESPONSE)));
+
+      await provider.verifyPayout(PAYOUT_ID);
+
+      expect(http.get).toHaveBeenCalledTimes(1);
+      const [url, config] = http.get.mock.calls[0] as [
+        string,
+        { headers: Record<string, string> },
+      ];
+      expect(url).toBe(`${BASE_URL}/transfers/${PAYOUT_ID}`);
+      expect(config.headers['Authorization']).toBe(`Bearer ${SECRET_KEY}`);
+    });
+
+    it('maps SUCCESSFUL status → successful, amount (string), currency, providerRef (string)', async () => {
+      http.get.mockReturnValue(of(axiosOk(VERIFY_PAYOUT_RESPONSE)));
+
+      const result = await provider.verifyPayout(PAYOUT_ID);
+
+      expect(result.status).toBe('successful');
+      expect(result.amount).toBe('25000');
+      expect(result.currency).toBe('NGN');
+      expect(result.providerRef).toBe('999001');
+    });
+
+    it('only SUCCESSFUL terminal state maps to successful', async () => {
+      const pendingResp = {
+        ...VERIFY_PAYOUT_RESPONSE,
+        data: { ...VERIFY_PAYOUT_RESPONSE.data, status: 'PENDING' },
+      };
+      http.get.mockReturnValue(of(axiosOk(pendingResp)));
+
+      const result = await provider.verifyPayout(PAYOUT_ID);
+
+      expect(result.status).toBe('pending');
+    });
+
+    it('maps NEW status → pending', async () => {
+      const newResp = {
+        ...VERIFY_PAYOUT_RESPONSE,
+        data: { ...VERIFY_PAYOUT_RESPONSE.data, status: 'NEW' },
+      };
+      http.get.mockReturnValue(of(axiosOk(newResp)));
+
+      const result = await provider.verifyPayout(PAYOUT_ID);
+
+      expect(result.status).toBe('pending');
+    });
+
+    it('maps FAILED status → failed', async () => {
+      const failedResp = {
+        ...VERIFY_PAYOUT_RESPONSE,
+        data: { ...VERIFY_PAYOUT_RESPONSE.data, status: 'FAILED' },
+      };
+      http.get.mockReturnValue(of(axiosOk(failedResp)));
+
+      const result = await provider.verifyPayout(PAYOUT_ID);
+
+      expect(result.status).toBe('failed');
+    });
+
+    it('throws a descriptive error on non-2xx response', async () => {
+      const axiosErr = Object.assign(new Error('Not Found'), {
+        response: {
+          status: 404,
+          data: { status: 'error', message: 'Transfer not found' },
+        },
+        isAxiosError: true,
+      });
+      http.get.mockReturnValue(throwError(() => axiosErr));
+
+      await expect(provider.verifyPayout(PAYOUT_ID)).rejects.toThrow(
+        /Transfer not found/,
+      );
+    });
+
+    it('re-throws network errors as-is', async () => {
+      http.get.mockReturnValue(throwError(() => new Error('ECONNREFUSED')));
+
+      await expect(provider.verifyPayout(PAYOUT_ID)).rejects.toThrow(
+        'ECONNREFUSED',
+      );
+    });
+  });
+
   // ── verifyWebhookSignature ────────────────────────────────────────────────
 
   describe('verifyWebhookSignature', () => {

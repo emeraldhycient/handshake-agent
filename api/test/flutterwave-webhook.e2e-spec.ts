@@ -225,6 +225,8 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
         currency: 'NGN',
         providerRef: FAKE_FLW_REF,
       }),
+      createPayout: jest.fn(),
+      verifyPayout: jest.fn(),
       verifyWebhookSignature: jest
         .fn()
         .mockImplementation(

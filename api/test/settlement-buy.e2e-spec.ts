@@ -117,6 +117,8 @@ const fakePaymentProvider: IPaymentProvider = {
     currency: 'NGN',
     providerRef: FAKE_FLW_REF,
   }),
+  createPayout: jest.fn(),
+  verifyPayout: jest.fn(),
   verifyWebhookSignature: jest.fn().mockReturnValue(true),
 };
 

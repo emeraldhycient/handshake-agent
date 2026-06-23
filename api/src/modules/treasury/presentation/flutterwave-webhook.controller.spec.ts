@@ -35,6 +35,8 @@ function makePaymentProvider(
   return {
     createCollection: jest.fn(),
     verify: jest.fn(),
+    createPayout: jest.fn(),
+    verifyPayout: jest.fn(),
     verifyWebhookSignature: jest.fn().mockReturnValue(verifyResult),
   };
 }

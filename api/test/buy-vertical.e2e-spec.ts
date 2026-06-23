@@ -349,6 +349,8 @@ describe('Buy vertical — capstone acceptance e2e (AppModule, Testcontainers Po
         currency: 'NGN',
         providerRef: FAKE_FLW_REF,
       }),
+      createPayout: jest.fn(),
+      verifyPayout: jest.fn(),
       verifyWebhookSignature: jest
         .fn()
         .mockImplementation(

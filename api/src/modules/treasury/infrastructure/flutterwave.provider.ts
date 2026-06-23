@@ -10,6 +10,9 @@ import type {
   CreateCollectionInput,
   CreateCollectionOutput,
   VerifyOutput,
+  CreatePayoutInput,
+  CreatePayoutOutput,
+  VerifyPayoutOutput,
 } from '../application/ports/payment-provider.port';
 
 // ---------------------------------------------------------------------------
@@ -56,6 +59,51 @@ interface VerifyByReferenceResponse {
     amount: number;
     currency: string;
     status: string;
+    [key: string]: unknown;
+  };
+}
+
+/**
+ * Flutterwave v3 Transfers API — create payout response.
+ *
+ * POST /transfers returns `data.status` as uppercase: NEW | PENDING | SUCCESSFUL | FAILED.
+ * `data.id` is the Flutterwave transfer id used to poll status via GET /transfers/{id}.
+ */
+interface CreateTransferResponse {
+  status: string;
+  message: string;
+  data: {
+    id: number;
+    account_number: string;
+    bank_code: string;
+    full_name: string;
+    created_at: string;
+    currency: string;
+    debit_currency: string;
+    amount: number;
+    fee: number;
+    /** Uppercase: NEW | PENDING | SUCCESSFUL | FAILED */
+    status: string;
+    reference: string;
+    narration: string;
+    [key: string]: unknown;
+  };
+}
+
+/**
+ * Flutterwave v3 Transfers API — get transfer by id response.
+ * GET /transfers/{id} — same shape as create, potentially with updated status.
+ */
+interface GetTransferResponse {
+  status: string;
+  message: string;
+  data: {
+    id: number;
+    amount: number;
+    currency: string;
+    /** Uppercase: NEW | PENDING | SUCCESSFUL | FAILED */
+    status: string;
+    reference: string;
     [key: string]: unknown;
   };
 }
@@ -163,6 +211,57 @@ export class FlutterwaveProvider implements IPaymentProvider {
     }
   }
 
+  async createPayout(input: CreatePayoutInput): Promise<CreatePayoutOutput> {
+    const url = `${this.baseUrl}/transfers`;
+    const body = {
+      account_bank: input.bankAccount.bankCode,
+      account_number: input.bankAccount.accountNumber,
+      // Coerce string → number at the provider boundary (Transfers API expects a number).
+      amount: Number(input.amount),
+      currency: input.currency,
+      narration: `Sell crypto ref ${input.reference}`,
+      reference: input.reference,
+    };
+
+    try {
+      const response = await firstValueFrom(
+        this.http.post<CreateTransferResponse>(url, body, {
+          headers: this.headers(),
+        }),
+      );
+
+      const data = response.data.data;
+      return {
+        providerRef: String(data.id),
+        status: this.normalisePayoutStatus(data.status),
+      };
+    } catch (err: unknown) {
+      throw this.wrapError('createPayout', err);
+    }
+  }
+
+  async verifyPayout(providerRef: string): Promise<VerifyPayoutOutput> {
+    const url = `${this.baseUrl}/transfers/${providerRef}`;
+
+    try {
+      const response = await firstValueFrom(
+        this.http.get<GetTransferResponse>(url, {
+          headers: this.headers(),
+        }),
+      );
+
+      const data = response.data.data;
+      return {
+        status: this.normalisePayoutStatus(data.status),
+        amount: String(data.amount),
+        currency: data.currency,
+        providerRef: String(data.id),
+      };
+    } catch (err: unknown) {
+      throw this.wrapError('verifyPayout', err);
+    }
+  }
+
   /**
    * Verifies the Flutterwave webhook `verif-hash` header (v3 constant-time
    * equality — NOT HMAC per ADR-0006).
@@ -206,12 +305,28 @@ export class FlutterwaveProvider implements IPaymentProvider {
   }
 
   /**
-   * Normalises the Flutterwave status string to our port's union type.
+   * Normalises the Flutterwave collection status string (lowercase) to our port's union type.
    * Any unknown status is coerced to 'failed' to fail closed.
    */
   private normaliseStatus(raw: string): 'successful' | 'pending' | 'failed' {
     if (raw === 'successful') return 'successful';
     if (raw === 'pending') return 'pending';
+    return 'failed';
+  }
+
+  /**
+   * Normalises the Flutterwave Transfers API status string (uppercase) to our port's union type.
+   * Transfers use uppercase: NEW | PENDING | SUCCESSFUL | FAILED.
+   * NEW and PENDING are intermediate — treated as 'pending'.
+   * Only SUCCESSFUL is the paid terminal state.
+   * Any unknown status is coerced to 'failed' to fail closed.
+   */
+  private normalisePayoutStatus(
+    raw: string,
+  ): 'successful' | 'pending' | 'failed' {
+    const upper = raw.toUpperCase();
+    if (upper === 'SUCCESSFUL') return 'successful';
+    if (upper === 'NEW' || upper === 'PENDING') return 'pending';
     return 'failed';
   }
 
