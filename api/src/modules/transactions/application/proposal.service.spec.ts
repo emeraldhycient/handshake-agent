@@ -1,16 +1,18 @@
 /**
- * Unit tests for ProposalService (task 4.1 + task S4a).
+ * Unit tests for ProposalService (task 4.1 + task S4a + task N3a).
  *
  * All external dependencies are mocked:
- *   - QuotesService        → mock returning a fixed QuoteBuyOutput / QuoteSellOutput
+ *   - QuotesService        → mock returning a fixed QuoteBuyOutput / QuoteSellOutput / QuoteSendOutput
  *   - KycGateService       → mock that resolves by default
  *   - QUOTE_REPOSITORY     → mock IQuoteRepository
  *   - PROPOSAL_REPOSITORY  → mock IProposalRepository
  *   - CLOCK                → stub returning a fixed Date
  *   - WalletService        → mock returning a fixed WalletRecord
  *   - BeneficiaryService   → mock returning a fixed BeneficiaryRecord
- *   - AssetRegistry        → mock returning 'TRON' for defaultNetworkFor
+ *   - AssetRegistry        → mock returning 'TRON' for defaultNetworkFor + validateAddress
  *   - ILedgerRepository    → mock returning a fixed balance string
+ *   - ComplianceService    → mock returning passed: true by default
+ *   - ConfigService        → stub returning compliance/pricing config
  *
  * TDD: tests written first (red), then ProposalService is implemented.
  */
@@ -18,10 +20,12 @@
 import type {
   QuoteBuyOutput,
   QuoteSellOutput,
+  QuoteSendOutput,
 } from '@handshake-agent/contracts';
 import {
   BuyProposalConfirmationSchema,
   SellProposalConfirmationSchema,
+  SendProposalConfirmationSchema,
 } from '@handshake-agent/contracts';
 
 import type { Clock } from '../../../core/common/clock';
@@ -30,6 +34,7 @@ import type { KycGateService } from '../../identity/application/kyc-gate.service
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
+import type { ComplianceService } from '../../compliance/application/compliance.service';
 import type { IQuoteRepository } from './ports/quote.repository.port';
 import type {
   IProposalRepository,
@@ -38,7 +43,12 @@ import type {
 import type { ILedgerRepository } from './ports/ledger.repository.port';
 import { ProposalService } from './proposal.service';
 import { InsufficientBalanceError } from '../domain/execution-errors';
-import { BeneficiaryNotFoundError } from '../../beneficiaries/domain/beneficiary-errors';
+import {
+  BeneficiaryNotFoundError,
+  BeneficiaryWrongTypeError,
+  BeneficiaryCoolingOffError,
+} from '../../beneficiaries/domain/beneficiary-errors';
+import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
 
 // ---------------------------------------------------------------------------
 // Fixed test values
@@ -678,5 +688,483 @@ describe('ProposalService.createSellProposal', () => {
     expect(gateIdx).toBeLessThan(quoteIdx);
     expect(benIdx).toBeLessThan(propIdx);
     expect(quoteIdx).toBeLessThan(propIdx);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ProposalService.createSendProposal (task N3a)
+// ---------------------------------------------------------------------------
+
+const FIXED_SEND_PROPOSAL_ID = 'eeeeeeee-0000-7000-8000-000000000007';
+const FIXED_SEND_WALLET_ID = 'wallet-send-ffffffff-0000-7000-8000-00000000008';
+const FIXED_SEND_BENEFICIARY_ID =
+  'ben-send-11111111-0000-7000-8000-000000000009';
+
+// A TRON address that passes the pattern '^T[1-9A-HJ-NP-Za-km-z]{33}$'
+const VALID_TRON_ADDRESS = 'TSendBeneficiaryValidTronAddress12';
+
+const STUB_SEND_QUOTE: QuoteSendOutput = {
+  asset: 'USDT',
+  cryptoAmount: '10.0',
+  network: 'TRON',
+  networkFeeCrypto: '1',
+  totalDebit: '11',
+  quotedAt: FIXED_NOW.toISOString(),
+  expiresInSec: 30,
+};
+
+const STUB_SEND_WALLET_RECORD = {
+  id: FIXED_SEND_WALLET_ID,
+  userId: 'user-id-1',
+  asset: 'USDT',
+  network: 'TRON',
+  address: 'TFakeSendWalletAddress123456789',
+  providerReference: 'br_fake_send_ref',
+  status: 'active',
+};
+
+// Crypto beneficiary — cooling-off has passed (locked in the past).
+const STUB_CRYPTO_BENEFICIARY = {
+  id: FIXED_SEND_BENEFICIARY_ID,
+  userId: 'user-id-1',
+  type: 'crypto_address' as const,
+  label: 'My TRON Wallet',
+  accountNumber: null,
+  accountHolderName: null,
+  bankCode: null,
+  cryptoAddress: VALID_TRON_ADDRESS,
+  cryptoAsset: 'USDT',
+  cryptoNetwork: 'TRON',
+  verificationStatus: 'verified',
+  firstUseLockedUntil: new Date(FIXED_NOW.getTime() - 86400_000), // 24h ago = cooling-off done
+  verifiedAt: new Date(FIXED_NOW.getTime() - 86400_000),
+  isDefault: false,
+  createdAt: FIXED_NOW,
+  updatedAt: FIXED_NOW,
+  deletedAt: null,
+};
+
+function makeQuotesServiceWithSend(
+  sendQuote = STUB_SEND_QUOTE,
+): jest.Mocked<Pick<QuotesService, 'quoteBuy' | 'quoteSell' | 'quoteSend'>> {
+  return {
+    quoteBuy: jest.fn(),
+    quoteSell: jest.fn(),
+    quoteSend: jest.fn().mockReturnValue(sendQuote),
+  };
+}
+
+function makeWalletServiceSend(
+  wallet = STUB_SEND_WALLET_RECORD,
+): jest.Mocked<Pick<WalletService, 'getOrProvisionWallet'>> {
+  return { getOrProvisionWallet: jest.fn().mockResolvedValue(wallet) };
+}
+
+function makeBeneficiaryServiceSend(
+  record: typeof STUB_CRYPTO_BENEFICIARY | null = STUB_CRYPTO_BENEFICIARY,
+): jest.Mocked<Pick<BeneficiaryService, 'getById'>> {
+  return { getById: jest.fn().mockResolvedValue(record) };
+}
+
+function makeAssetRegistrySend(opts?: {
+  network?: string;
+  addressValid?: boolean;
+}): jest.Mocked<
+  Pick<AssetRegistry, 'defaultNetworkFor' | 'validateAddress' | 'asset'>
+> {
+  return {
+    defaultNetworkFor: jest.fn().mockReturnValue(opts?.network ?? 'TRON'),
+    validateAddress: jest.fn().mockReturnValue(opts?.addressValid !== false),
+    asset: jest.fn().mockReturnValue({
+      baseRate: 1600,
+      symbol: 'USDT',
+      kind: 'crypto',
+      decimals: 6,
+      networks: ['TRON'],
+      providers: {},
+      enabled: true,
+    }),
+  };
+}
+
+function makeComplianceService(
+  passed = true,
+): jest.Mocked<Pick<ComplianceService, 'screenSendDestination'>> {
+  return {
+    screenSendDestination: jest.fn().mockResolvedValue({
+      passed,
+      reason: passed ? undefined : 'OFAC list match',
+      complianceEventId: 'ce-000000-0000-7000-8000-000000000001',
+    }),
+  };
+}
+
+/** Stub ConfigService that returns compliance + pricing config. */
+const STUB_CONFIG_SERVICE = {
+  get: jest.fn((key: string) => {
+    if (key === 'compliance') return { travelRuleThresholdNgn: 1_000_000 };
+    if (key === 'pricing') return { assets: { USDT: { baseRate: 1600 } } };
+    return undefined;
+  }),
+};
+
+function makeSendSvc(opts?: {
+  quotesService?: Pick<QuotesService, 'quoteBuy' | 'quoteSell' | 'quoteSend'>;
+  kycGate?: Pick<KycGateService, 'assertCanTransact'>;
+  proposalRepo?: IProposalRepository;
+  walletService?: Pick<WalletService, 'getOrProvisionWallet'>;
+  beneficiaryService?: Pick<BeneficiaryService, 'getById'>;
+  assetRegistry?: Pick<
+    AssetRegistry,
+    'defaultNetworkFor' | 'validateAddress' | 'asset'
+  >;
+  ledgerRepo?: ILedgerRepository;
+  complianceService?: Pick<ComplianceService, 'screenSendDestination'>;
+  configService?: { get: jest.Mock };
+}): ProposalService {
+  return new ProposalService(
+    (opts?.quotesService ??
+      makeQuotesServiceWithSend()) as unknown as QuotesService,
+    (opts?.kycGate ?? makeKycGate()) as unknown as KycGateService,
+    makeQuoteRepo(), // not used for send
+    opts?.proposalRepo ?? makeProposalRepo(FIXED_SEND_PROPOSAL_ID),
+    stubClock,
+    (opts?.walletService ??
+      makeWalletServiceSend()) as unknown as WalletService,
+    (opts?.beneficiaryService ??
+      makeBeneficiaryServiceSend()) as unknown as BeneficiaryService,
+    (opts?.assetRegistry ??
+      makeAssetRegistrySend()) as unknown as AssetRegistry,
+    opts?.ledgerRepo ?? makeLedgerRepo('100.0'), // ample balance
+    (opts?.complianceService ??
+      makeComplianceService()) as unknown as ComplianceService,
+    (opts?.configService ?? STUB_CONFIG_SERVICE) as never,
+  );
+}
+
+const BASE_SEND_INPUT = {
+  userId: 'user-id-1',
+  conversationId: 'conv-id-1',
+  intent: {
+    action: 'send_crypto' as const,
+    asset: 'USDT' as const,
+    cryptoAmount: '10.0',
+    network: 'TRON' as const,
+  },
+  beneficiaryId: FIXED_SEND_BENEFICIARY_ID,
+};
+
+describe('ProposalService.createSendProposal', () => {
+  // ── Happy path ────────────────────────────────────────────────────────────
+
+  it('returns proposalId, quoteId=null, and a valid SendProposalConfirmation', async () => {
+    const svc = makeSendSvc();
+    const result = await svc.createSendProposal(BASE_SEND_INPUT);
+
+    expect(result.proposalId).toBe(FIXED_SEND_PROPOSAL_ID);
+    expect(result.quoteId).toBeNull();
+    expect(result.confirmation.proposalId).toBe(FIXED_SEND_PROPOSAL_ID);
+    expect(result.confirmation.asset).toBe('USDT');
+    expect(result.confirmation.cryptoAmount).toBe('10.0');
+    expect(result.confirmation.network).toBe('TRON');
+    expect(result.confirmation.networkFeeCrypto).toBe('1');
+    expect(result.confirmation.totalDebit).toBe('11');
+  });
+
+  it('confirmation parses cleanly against SendProposalConfirmationSchema', async () => {
+    const svc = makeSendSvc();
+    const result = await svc.createSendProposal(BASE_SEND_INPUT);
+    expect(() =>
+      SendProposalConfirmationSchema.parse(result.confirmation),
+    ).not.toThrow();
+  });
+
+  it('masks the destination address (first 6 + ... + last 4)', async () => {
+    const svc = makeSendSvc();
+    const result = await svc.createSendProposal(BASE_SEND_INPUT);
+    // VALID_TRON_ADDRESS = 'TSendBeneficiaryValidTronAddress12' (34 chars)
+    // masked: 'TSendB...ss12'
+    expect(result.confirmation.toAddressMasked).toMatch(/^.{6}\.\.\.(.){4}$/);
+  });
+
+  it('includes beneficiaryLabel from the beneficiary record', async () => {
+    const svc = makeSendSvc();
+    const result = await svc.createSendProposal(BASE_SEND_INPUT);
+    expect(result.confirmation.beneficiaryLabel).toBe('My TRON Wallet');
+  });
+
+  it('persists a send Proposal row (type=send, no quoteId)', async () => {
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeSendSvc({ proposalRepo });
+
+    await svc.createSendProposal(BASE_SEND_INPUT);
+
+    const createArg = (
+      proposalRepo.create as jest.Mock<
+        Promise<{ id: string }>,
+        [CreateProposalData]
+      >
+    ).mock.calls[0][0];
+    expect(createArg.type).toBe('send');
+    expect(createArg.quoteId).toBeUndefined();
+    expect(createArg.parametersChecksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(createArg.parameters).toMatchObject({
+      asset: 'USDT',
+      cryptoAmount: '10.0',
+      network: 'TRON',
+      networkFeeCrypto: '1',
+      totalDebit: '11',
+      beneficiaryId: FIXED_SEND_BENEFICIARY_ID,
+    });
+  });
+
+  it('sets requiresTravelRule=false when NGN value is below threshold', async () => {
+    // 10 USDT × ₦1600/USDT = ₦16,000 — well below ₦1,000,000 threshold
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeSendSvc({ proposalRepo });
+
+    await svc.createSendProposal(BASE_SEND_INPUT);
+
+    const createArg = (
+      proposalRepo.create as jest.Mock<
+        Promise<{ id: string }>,
+        [CreateProposalData]
+      >
+    ).mock.calls[0][0];
+    expect(createArg.parameters['requiresTravelRule']).toBe(false);
+  });
+
+  it('sets requiresTravelRule=true when NGN value meets or exceeds threshold', async () => {
+    // 700 USDT × ₦1600 = ₦1,120,000 ≥ ₦1,000,000 threshold
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeSendSvc({
+      proposalRepo,
+      ledgerRepo: makeLedgerRepo('1000.0'),
+      quotesService: makeQuotesServiceWithSend({
+        ...STUB_SEND_QUOTE,
+        cryptoAmount: '700',
+        totalDebit: '701',
+      }),
+    });
+
+    await svc.createSendProposal({
+      ...BASE_SEND_INPUT,
+      intent: { ...BASE_SEND_INPUT.intent, cryptoAmount: '700' },
+    });
+
+    const createArg = (
+      proposalRepo.create as jest.Mock<
+        Promise<{ id: string }>,
+        [CreateProposalData]
+      >
+    ).mock.calls[0][0];
+    expect(createArg.parameters['requiresTravelRule']).toBe(true);
+  });
+
+  it('expiresAt is now + expiresInSec as an ISO datetime string', async () => {
+    const svc = makeSendSvc();
+    const result = await svc.createSendProposal(BASE_SEND_INPUT);
+    const expectedExpiry = new Date(FIXED_NOW.getTime() + 30_000).toISOString();
+    expect(result.confirmation.expiresAt).toBe(expectedExpiry);
+  });
+
+  // ── Insufficient balance ──────────────────────────────────────────────────
+
+  it('throws InsufficientBalanceError when ledger balance < totalDebit', async () => {
+    // balance 5.0 < totalDebit 11 (10 + 1 fee)
+    const ledgerRepo = makeLedgerRepo('5.0');
+    const svc = makeSendSvc({ ledgerRepo });
+
+    await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
+      InsufficientBalanceError,
+    );
+  });
+
+  it('does NOT persist any row when balance is insufficient (incl. fee)', async () => {
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const quoteRepo = makeQuoteRepo();
+    const svc = makeSendSvc({
+      ledgerRepo: makeLedgerRepo('0'),
+      proposalRepo,
+    });
+
+    await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
+      InsufficientBalanceError,
+    );
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+    expect(quoteRepo.create).not.toHaveBeenCalled();
+  });
+
+  // ── KYC gate failure ──────────────────────────────────────────────────────
+
+  it('propagates KYC gate error and does NOT persist a Proposal', async () => {
+    const kycGate = makeKycGate(new Error('KYC_NOT_VERIFIED'));
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeSendSvc({ kycGate, proposalRepo });
+
+    await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
+      'KYC_NOT_VERIFIED',
+    );
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  // ── Unknown beneficiary ───────────────────────────────────────────────────
+
+  it('throws BeneficiaryNotFoundError when beneficiary is not found', async () => {
+    const beneficiaryService = makeBeneficiaryServiceSend(null);
+    const svc = makeSendSvc({ beneficiaryService });
+
+    await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
+      BeneficiaryNotFoundError,
+    );
+  });
+
+  it('does NOT persist any row when beneficiary is not found', async () => {
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeSendSvc({
+      beneficiaryService: makeBeneficiaryServiceSend(null),
+      proposalRepo,
+    });
+
+    await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
+      BeneficiaryNotFoundError,
+    );
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  // ── Wrong beneficiary type ────────────────────────────────────────────────
+
+  it('throws BeneficiaryWrongTypeError when beneficiary is a bank_account', async () => {
+    const bankBeneficiary = {
+      ...STUB_CRYPTO_BENEFICIARY,
+      type: 'bank_account' as const,
+      cryptoAddress: null,
+    };
+    const svc = makeSendSvc({
+      beneficiaryService: {
+        getById: jest.fn().mockResolvedValue(bankBeneficiary),
+      },
+    });
+
+    await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
+      BeneficiaryWrongTypeError,
+    );
+  });
+
+  // ── First-use cooling-off ─────────────────────────────────────────────────
+
+  it('throws BeneficiaryCoolingOffError when firstUseLockedUntil is in the future', async () => {
+    const coolingBeneficiary = {
+      ...STUB_CRYPTO_BENEFICIARY,
+      firstUseLockedUntil: new Date(FIXED_NOW.getTime() + 86400_000), // 24h in future
+    };
+    const svc = makeSendSvc({
+      beneficiaryService: {
+        getById: jest.fn().mockResolvedValue(coolingBeneficiary),
+      },
+    });
+
+    await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
+      BeneficiaryCoolingOffError,
+    );
+  });
+
+  it('does NOT persist any row when cooling-off is active', async () => {
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const coolingBeneficiary = {
+      ...STUB_CRYPTO_BENEFICIARY,
+      firstUseLockedUntil: new Date(FIXED_NOW.getTime() + 86400_000),
+    };
+    const svc = makeSendSvc({
+      beneficiaryService: {
+        getById: jest.fn().mockResolvedValue(coolingBeneficiary),
+      },
+      proposalRepo,
+    });
+
+    await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
+      BeneficiaryCoolingOffError,
+    );
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  // ── Sanctions screen block ────────────────────────────────────────────────
+
+  it('throws SanctionsBlockedError when compliance screening fails', async () => {
+    const complianceService = makeComplianceService(false);
+    const svc = makeSendSvc({ complianceService });
+
+    await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
+      SanctionsBlockedError,
+    );
+  });
+
+  it('does NOT persist any row when sanctions screening fails', async () => {
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeSendSvc({
+      complianceService: makeComplianceService(false),
+      proposalRepo,
+    });
+
+    await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
+      SanctionsBlockedError,
+    );
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  // ── Guard ordering: all guards BEFORE persisting ───────────────────────────
+
+  it('runs balance + gate + beneficiary + cooling-off + sanctions BEFORE persisting', async () => {
+    const callOrder: string[] = [];
+
+    const ledgerRepo: ILedgerRepository = {
+      getAccountBalance: jest.fn().mockImplementation(() => {
+        callOrder.push('balance');
+        return Promise.resolve('100.0');
+      }),
+    };
+    const kycGateOrdered = {
+      assertCanTransact: jest.fn().mockImplementation(() => {
+        callOrder.push('gate');
+        return Promise.resolve();
+      }),
+    };
+    const beneficiaryService = {
+      getById: jest.fn().mockImplementation(() => {
+        callOrder.push('beneficiary');
+        return Promise.resolve(STUB_CRYPTO_BENEFICIARY);
+      }),
+    };
+    const complianceService = {
+      screenSendDestination: jest.fn().mockImplementation(() => {
+        callOrder.push('sanctions');
+        return Promise.resolve({ passed: true, complianceEventId: 'ce-xxx' });
+      }),
+    };
+    const proposalRepo: IProposalRepository = {
+      create: jest.fn().mockImplementation(() => {
+        callOrder.push('proposalRepo');
+        return Promise.resolve({ id: FIXED_SEND_PROPOSAL_ID });
+      }),
+      findById: jest.fn().mockResolvedValue(null),
+      updateStatus: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const svc = makeSendSvc({
+      ledgerRepo,
+      kycGate: kycGateOrdered,
+      beneficiaryService,
+      complianceService,
+      proposalRepo,
+    });
+
+    await svc.createSendProposal(BASE_SEND_INPUT);
+
+    // All guards must come before proposalRepo.create
+    const propIdx = callOrder.indexOf('proposalRepo');
+    expect(callOrder.indexOf('balance')).toBeLessThan(propIdx);
+    expect(callOrder.indexOf('gate')).toBeLessThan(propIdx);
+    expect(callOrder.indexOf('beneficiary')).toBeLessThan(propIdx);
+    expect(callOrder.indexOf('sanctions')).toBeLessThan(propIdx);
   });
 });

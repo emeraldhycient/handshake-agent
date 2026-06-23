@@ -15,6 +15,9 @@ import {
   buildSellReserveEntries,
   buildSellFinalizeEntries,
   buildSellRefundEntries,
+  buildSendReserveEntries,
+  buildSendFinalizeEntries,
+  buildSendRefundEntries,
   LedgerError,
   LedgerAccountType,
   LedgerDirection,
@@ -24,6 +27,9 @@ import {
   type BuildSellReserveInput,
   type BuildSellFinalizeInput,
   type BuildSellRefundInput,
+  type BuildSendReserveInput,
+  type BuildSendFinalizeInput,
+  type BuildSendRefundInput,
   type LedgerEntryDraft,
 } from './ledger';
 
@@ -1000,6 +1006,411 @@ describe('buildSellRefundEntries', () => {
       ({ cryptoAmount }) => {
         const entries = buildSellRefundEntries(
           freshSellRefundInput({ cryptoAmount }),
+        );
+        expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+      },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSendReserveEntries (task N3a — phase 1: reserve at propose)
+// ---------------------------------------------------------------------------
+
+function freshSendReserveInput(
+  overrides?: Partial<BuildSendReserveInput>,
+): BuildSendReserveInput {
+  return {
+    walletId: 'wallet-send-reserve-abc',
+    totalDebit: '11.0', // e.g. 10 USDT send + 1 USDT fee
+    postedAt: new Date('2025-06-01T12:00:00Z'),
+    accountStates: {},
+    ...overrides,
+  };
+}
+
+describe('buildSendReserveEntries', () => {
+  describe('happy path — fresh account states', () => {
+    let entries: LedgerEntryDraft[];
+
+    beforeAll(() => {
+      entries = buildSendReserveEntries(freshSendReserveInput());
+    });
+
+    it('returns exactly 2 entries', () => {
+      expect(entries).toHaveLength(2);
+    });
+
+    it('USDT signed amounts sum to exactly zero (invariant 1)', () => {
+      expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+    });
+
+    it('no NGN entries', () => {
+      expect(entries.filter((e) => e.currency === 'NGN')).toHaveLength(0);
+    });
+
+    it('every amount is non-zero (invariant 2)', () => {
+      const SCALE = 10n ** 18n;
+      for (const e of entries) {
+        const isNeg = e.amount.startsWith('-');
+        const abs = isNeg ? e.amount.slice(1) : e.amount;
+        const [whole = '0', frac = ''] = abs.split('.');
+        const fracPadded = frac.slice(0, 18).padEnd(18, '0');
+        const scaled = BigInt(whole) * SCALE + BigInt(fracPadded);
+        expect(scaled).not.toBe(0n);
+      }
+    });
+
+    it('direction matches the sign of amount (invariant 2)', () => {
+      for (const e of entries) {
+        const isNeg = e.amount.startsWith('-');
+        if (isNeg) {
+          expect(e.direction).toBe(LedgerDirection.debit);
+        } else {
+          expect(e.direction).toBe(LedgerDirection.credit);
+        }
+      }
+    });
+
+    it('sequence is 1 for fresh accounts (invariant 3)', () => {
+      for (const e of entries) {
+        expect(e.sequence).toBe(1);
+      }
+    });
+
+    it('balanceAfter equals normalised signedAmount for fresh accounts (invariant 4)', () => {
+      for (const e of entries) {
+        expect(e.balanceAfter).toBe(e.amount);
+      }
+    });
+
+    it('user_wallet is debited −totalDebit', () => {
+      const e = entries.find(
+        (x) => x.accountType === LedgerAccountType.user_wallet,
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('-11');
+      expect(e!.direction).toBe(LedgerDirection.debit);
+    });
+
+    it('clearing / usdt_send_clearing is credited +totalDebit', () => {
+      const e = entries.find(
+        (x) =>
+          x.accountType === LedgerAccountType.clearing &&
+          x.accountId === 'usdt_send_clearing',
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('11');
+      expect(e!.direction).toBe(LedgerDirection.credit);
+    });
+
+    it('entries are in deterministic order (invariant 5)', () => {
+      const a = buildSendReserveEntries(freshSendReserveInput());
+      const b = buildSendReserveEntries(freshSendReserveInput());
+      expect(
+        a.map((e) => `${e.accountType}:${e.accountId}:${e.currency}`),
+      ).toEqual(b.map((e) => `${e.accountType}:${e.accountId}:${e.currency}`));
+    });
+  });
+
+  describe('guards', () => {
+    it('throws LedgerError when totalDebit is zero', () => {
+      expect(() =>
+        buildSendReserveEntries(freshSendReserveInput({ totalDebit: '0' })),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when totalDebit is negative', () => {
+      expect(() =>
+        buildSendReserveEntries(freshSendReserveInput({ totalDebit: '-1' })),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when totalDebit is not a valid decimal', () => {
+      expect(() =>
+        buildSendReserveEntries(freshSendReserveInput({ totalDebit: 'abc' })),
+      ).toThrow(LedgerError);
+    });
+  });
+
+  describe('property: USDT sum=0 for various amounts', () => {
+    const sendReserveCases = [
+      { totalDebit: '0.000002' },
+      { totalDebit: '1.5' },
+      { totalDebit: '100.5' },
+      { totalDebit: '999999.123456789012345678' },
+    ];
+
+    it.each(sendReserveCases)(
+      'USDT sum=0 for totalDebit=$totalDebit',
+      ({ totalDebit }) => {
+        const entries = buildSendReserveEntries(
+          freshSendReserveInput({ totalDebit }),
+        );
+        expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+      },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSendFinalizeEntries (task N3a — phase 2a: finalize on broadcast confirm)
+// ---------------------------------------------------------------------------
+
+function freshSendFinalizeInput(
+  overrides?: Partial<BuildSendFinalizeInput>,
+): BuildSendFinalizeInput {
+  return {
+    walletId: 'wallet-send-finalize-abc',
+    cryptoAmount: '10.0',
+    networkFeeCrypto: '1.0',
+    postedAt: new Date('2025-06-01T12:00:00Z'),
+    accountStates: {},
+    ...overrides,
+  };
+}
+
+describe('buildSendFinalizeEntries', () => {
+  describe('happy path — fresh account states', () => {
+    let entries: LedgerEntryDraft[];
+
+    beforeAll(() => {
+      entries = buildSendFinalizeEntries(freshSendFinalizeInput());
+    });
+
+    it('returns exactly 3 entries (3 USDT)', () => {
+      expect(entries).toHaveLength(3);
+    });
+
+    it('USDT signed amounts sum to exactly zero (invariant 1)', () => {
+      expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+    });
+
+    it('no NGN entries', () => {
+      expect(entries.filter((e) => e.currency === 'NGN')).toHaveLength(0);
+    });
+
+    it('every amount is non-zero (invariant 2)', () => {
+      const SCALE = 10n ** 18n;
+      for (const e of entries) {
+        const isNeg = e.amount.startsWith('-');
+        const abs = isNeg ? e.amount.slice(1) : e.amount;
+        const [whole = '0', frac = ''] = abs.split('.');
+        const fracPadded = frac.slice(0, 18).padEnd(18, '0');
+        const scaled = BigInt(whole) * SCALE + BigInt(fracPadded);
+        expect(scaled).not.toBe(0n);
+      }
+    });
+
+    it('direction matches sign (invariant 2)', () => {
+      for (const e of entries) {
+        const isNeg = e.amount.startsWith('-');
+        if (isNeg) {
+          expect(e.direction).toBe(LedgerDirection.debit);
+        } else {
+          expect(e.direction).toBe(LedgerDirection.credit);
+        }
+      }
+    });
+
+    it('sequence is 1 for fresh accounts (invariant 3)', () => {
+      for (const e of entries) {
+        expect(e.sequence).toBe(1);
+      }
+    });
+
+    it('clearing / usdt_send_clearing is debited −(cryptoAmount+networkFeeCrypto)', () => {
+      const e = entries.find(
+        (x) =>
+          x.accountType === LedgerAccountType.clearing &&
+          x.accountId === 'usdt_send_clearing',
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('-11');
+      expect(e!.direction).toBe(LedgerDirection.debit);
+    });
+
+    it('treasury_reserve / usdt_network_out is credited +cryptoAmount', () => {
+      const e = entries.find(
+        (x) =>
+          x.accountType === LedgerAccountType.treasury_reserve &&
+          x.accountId === 'usdt_network_out',
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('10');
+      expect(e!.direction).toBe(LedgerDirection.credit);
+    });
+
+    it('treasury_reserve / usdt_fees is credited +networkFeeCrypto', () => {
+      const e = entries.find(
+        (x) =>
+          x.accountType === LedgerAccountType.treasury_reserve &&
+          x.accountId === 'usdt_fees',
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('1');
+      expect(e!.direction).toBe(LedgerDirection.credit);
+    });
+  });
+
+  describe('guards', () => {
+    it('throws LedgerError when cryptoAmount is zero', () => {
+      expect(() =>
+        buildSendFinalizeEntries(freshSendFinalizeInput({ cryptoAmount: '0' })),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when networkFeeCrypto is zero', () => {
+      expect(() =>
+        buildSendFinalizeEntries(
+          freshSendFinalizeInput({ networkFeeCrypto: '0' }),
+        ),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when cryptoAmount is negative', () => {
+      expect(() =>
+        buildSendFinalizeEntries(
+          freshSendFinalizeInput({ cryptoAmount: '-1' }),
+        ),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when networkFeeCrypto is negative', () => {
+      expect(() =>
+        buildSendFinalizeEntries(
+          freshSendFinalizeInput({ networkFeeCrypto: '-0.5' }),
+        ),
+      ).toThrow(LedgerError);
+    });
+  });
+
+  describe('property: USDT sum=0 for various amounts', () => {
+    const sendFinalizeCases = [
+      { cryptoAmount: '0.5', networkFeeCrypto: '0.000001' },
+      { cryptoAmount: '1', networkFeeCrypto: '1' },
+      { cryptoAmount: '100.5', networkFeeCrypto: '2.5' },
+      { cryptoAmount: '999999.123456', networkFeeCrypto: '1.5' },
+    ];
+
+    it.each(sendFinalizeCases)(
+      'USDT sum=0 for crypto=$cryptoAmount fee=$networkFeeCrypto',
+      ({ cryptoAmount, networkFeeCrypto }) => {
+        const entries = buildSendFinalizeEntries(
+          freshSendFinalizeInput({ cryptoAmount, networkFeeCrypto }),
+        );
+        expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+      },
+    );
+  });
+
+  it('reserve → finalize round-trip: net USDT across both phases = 0', () => {
+    const reserve = buildSendReserveEntries(
+      freshSendReserveInput({ totalDebit: '11.0' }),
+    );
+    const finalize = buildSendFinalizeEntries(
+      freshSendFinalizeInput({ cryptoAmount: '10.0', networkFeeCrypto: '1.0' }),
+    );
+    const combined = [...reserve, ...finalize];
+    expect(sumByCurrency(combined, 'USDT')).toBe(0n);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSendRefundEntries (task N3a — phase 2b: refund on broadcast failure)
+// ---------------------------------------------------------------------------
+
+function freshSendRefundInput(
+  overrides?: Partial<BuildSendRefundInput>,
+): BuildSendRefundInput {
+  return {
+    walletId: 'wallet-send-refund-abc',
+    totalDebit: '11.0',
+    postedAt: new Date('2025-06-01T12:00:00Z'),
+    accountStates: {},
+    ...overrides,
+  };
+}
+
+describe('buildSendRefundEntries', () => {
+  describe('happy path — fresh account states', () => {
+    let entries: LedgerEntryDraft[];
+
+    beforeAll(() => {
+      entries = buildSendRefundEntries(freshSendRefundInput());
+    });
+
+    it('returns exactly 2 entries', () => {
+      expect(entries).toHaveLength(2);
+    });
+
+    it('USDT signed amounts sum to exactly zero (invariant 1)', () => {
+      expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+    });
+
+    it('no NGN entries', () => {
+      expect(entries.filter((e) => e.currency === 'NGN')).toHaveLength(0);
+    });
+
+    it('clearing / usdt_send_clearing is debited −totalDebit (mirrors reserve credit)', () => {
+      const e = entries.find(
+        (x) =>
+          x.accountType === LedgerAccountType.clearing &&
+          x.accountId === 'usdt_send_clearing',
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('-11');
+      expect(e!.direction).toBe(LedgerDirection.debit);
+    });
+
+    it('user_wallet is credited +totalDebit (refund to user)', () => {
+      const e = entries.find(
+        (x) => x.accountType === LedgerAccountType.user_wallet,
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('11');
+      expect(e!.direction).toBe(LedgerDirection.credit);
+    });
+
+    it('reserve → refund round-trip: USDT sums cancel', () => {
+      const reserve = buildSendReserveEntries(
+        freshSendReserveInput({ totalDebit: '11.0' }),
+      );
+      const refund = buildSendRefundEntries(
+        freshSendRefundInput({ totalDebit: '11.0' }),
+      );
+      const combined = [...reserve, ...refund];
+      expect(sumByCurrency(combined, 'USDT')).toBe(0n);
+    });
+  });
+
+  describe('guards', () => {
+    it('throws LedgerError when totalDebit is zero', () => {
+      expect(() =>
+        buildSendRefundEntries(freshSendRefundInput({ totalDebit: '0' })),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when totalDebit is negative', () => {
+      expect(() =>
+        buildSendRefundEntries(freshSendRefundInput({ totalDebit: '-1' })),
+      ).toThrow(LedgerError);
+    });
+  });
+
+  describe('property: USDT sum=0 for various amounts', () => {
+    const sendRefundCases = [
+      { totalDebit: '0.000001' },
+      { totalDebit: '1' },
+      { totalDebit: '100.5' },
+      { totalDebit: '999999.123456789012345678' },
+    ];
+
+    it.each(sendRefundCases)(
+      'USDT sum=0 for totalDebit=$totalDebit',
+      ({ totalDebit }) => {
+        const entries = buildSendRefundEntries(
+          freshSendRefundInput({ totalDebit }),
         );
         expect(sumByCurrency(entries, 'USDT')).toBe(0n);
       },

@@ -77,7 +77,9 @@ export class ComplianceEventPrismaRepository implements IComplianceEventReposito
         severity: toSeverity(input.severity),
         screeningProvider: input.screeningProvider,
         ruleOrHit: input.ruleOrHit ?? null,
-        details: input.details,
+        details: input.details as Parameters<
+          typeof this.prisma.complianceEvent.create
+        >[0]['data']['details'],
         status: toStatus(input.status),
       },
       select: {

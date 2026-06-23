@@ -31,3 +31,33 @@ export class BeneficiaryNotFoundError extends Error {
     super(`Beneficiary "${beneficiaryId}" not found.`);
   }
 }
+
+/**
+ * Thrown by createSendProposal when the beneficiary is found but is not of
+ * type `crypto_address` (e.g. a bank_account beneficiary was passed for a send).
+ */
+export class BeneficiaryWrongTypeError extends Error {
+  override readonly name = 'BeneficiaryWrongTypeError';
+
+  constructor(beneficiaryId: string, expected: string, actual: string) {
+    super(
+      `Beneficiary "${beneficiaryId}" is type "${actual}", expected "${expected}".`,
+    );
+  }
+}
+
+/**
+ * Thrown by createSendProposal when the beneficiary's first-use cooling-off
+ * window has not yet expired (IDN-08). The send must be blocked until the
+ * cooling-off period passes.
+ */
+export class BeneficiaryCoolingOffError extends Error {
+  override readonly name = 'BeneficiaryCoolingOffError';
+
+  constructor(beneficiaryId: string, lockedUntil: Date) {
+    super(
+      `Beneficiary "${beneficiaryId}" is in cooling-off until ${lockedUntil.toISOString()}. ` +
+        'Please try again after the cooling-off period.',
+    );
+  }
+}

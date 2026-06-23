@@ -622,3 +622,203 @@ export function buildSellRefundEntries(
 
   return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
 }
+
+// ---------------------------------------------------------------------------
+// Send ledger — two-phase (reserve at propose, finalize or refund at settle)
+// ---------------------------------------------------------------------------
+
+// ── Phase 1: Reserve (propose) ───────────────────────────────────────────────
+
+/** Input to buildSendReserveEntries. */
+export interface BuildSendReserveInput {
+  /** accountId for the user_wallet USDT account. */
+  walletId: string;
+  /**
+   * Total USDT to debit from the user's wallet at reservation time
+   * (cryptoAmount + networkFeeCrypto).
+   */
+  totalDebit: string;
+  postedAt: Date;
+  /**
+   * Current per-account state. Missing keys default to
+   * { sequence: 0, balance: '0' }.
+   */
+  accountStates: Record<AccountKey, AccountState>;
+}
+
+/**
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for the RESERVE
+ * phase of an on-chain USDT SEND (exactly 2 USDT entries; no NGN entries).
+ *
+ * The total debit (cryptoAmount + networkFeeCrypto) is moved from the user's
+ * wallet into the send clearing account so it cannot be double-spent while the
+ * on-chain broadcast is in flight.
+ *
+ * Account mapping (credit positive, debit negative; USDT sum = 0):
+ *  − user_wallet / walletId            / USDT  −totalDebit  (hold from user)
+ *  + clearing    / usdt_send_clearing  / USDT  +totalDebit  (in clearing)
+ */
+export function buildSendReserveEntries(
+  input: BuildSendReserveInput,
+): LedgerEntryDraft[] {
+  const { walletId, totalDebit, postedAt, accountStates } = input;
+
+  assertPositiveDecimal(totalDebit, 'totalDebit');
+
+  const scaledDebit = toScaled(totalDebit);
+  const posDebit = fromScaled(scaledDebit);
+  const negDebit = fromScaled(-scaledDebit);
+
+  const specs: EntrySpec[] = [
+    {
+      accountType: LedgerAccountType.user_wallet,
+      accountId: walletId,
+      currency: 'USDT',
+      amount: negDebit,
+      description: `Send reserve: USDT ${totalDebit} held from user wallet (send + network fee)`,
+    },
+    {
+      accountType: LedgerAccountType.clearing,
+      accountId: 'usdt_send_clearing',
+      currency: 'USDT',
+      amount: posDebit,
+      description: `Send reserve: USDT ${totalDebit} moved to send clearing`,
+    },
+  ];
+
+  return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
+}
+
+// ── Phase 2a: Finalize (settle — on-chain broadcast confirmed) ───────────────
+
+/** Input to buildSendFinalizeEntries. */
+export interface BuildSendFinalizeInput {
+  /** accountId for the user_wallet USDT account (used as metadata only — not debited again). */
+  walletId: string;
+  /** USDT amount the user is actually sending on-chain (excluding fee). */
+  cryptoAmount: string;
+  /** Flat on-chain network fee in USDT. */
+  networkFeeCrypto: string;
+  postedAt: Date;
+  accountStates: Record<AccountKey, AccountState>;
+}
+
+/**
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for the FINALIZE
+ * phase of an on-chain USDT SEND (exactly 3 USDT entries; no NGN entries).
+ *
+ * The total debit (cryptoAmount + networkFeeCrypto) leaves the clearing account:
+ *   - cryptoAmount goes to treasury_reserve/usdt_network_out (the on-chain outflow).
+ *   - networkFeeCrypto goes to treasury_reserve/usdt_fees (the fee kept by platform).
+ *
+ * USDT sum = 0 check (let T = cryptoAmount, F = networkFeeCrypto):
+ *   clearing:          −(T+F)
+ *   usdt_network_out:  +T
+ *   usdt_fees:         +F
+ *   Sum:               −T−F + T + F = 0 ✓
+ *
+ * Account mapping:
+ *  − clearing         / usdt_send_clearing / USDT  −(cryptoAmount+networkFeeCrypto) (leave clearing)
+ *  + treasury_reserve / usdt_network_out   / USDT  +cryptoAmount                   (on-chain outflow)
+ *  + treasury_reserve / usdt_fees          / USDT  +networkFeeCrypto               (fee kept)
+ */
+export function buildSendFinalizeEntries(
+  input: BuildSendFinalizeInput,
+): LedgerEntryDraft[] {
+  const { cryptoAmount, networkFeeCrypto, postedAt, accountStates } = input;
+
+  assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
+  assertPositiveDecimal(networkFeeCrypto, 'networkFeeCrypto');
+
+  const scaledCrypto = toScaled(cryptoAmount);
+  const scaledFee = toScaled(networkFeeCrypto);
+  const scaledTotal = scaledCrypto + scaledFee;
+
+  const negTotal = fromScaled(-scaledTotal);
+  const posOut = fromScaled(scaledCrypto);
+  const posFee = fromScaled(scaledFee);
+  const totalDebitStr = fromScaled(scaledTotal);
+
+  const specs: EntrySpec[] = [
+    // Clearing debit — the total (amount + fee) leaves the clearing account.
+    {
+      accountType: LedgerAccountType.clearing,
+      accountId: 'usdt_send_clearing',
+      currency: 'USDT',
+      amount: negTotal,
+      description: `Send finalize: USDT ${totalDebitStr} leaves clearing (${cryptoAmount} sent + ${networkFeeCrypto} fee)`,
+    },
+    // On-chain outflow credit — the amount the recipient receives.
+    {
+      accountType: LedgerAccountType.treasury_reserve,
+      accountId: 'usdt_network_out',
+      currency: 'USDT',
+      amount: posOut,
+      description: `Send finalize: USDT ${cryptoAmount} on-chain outflow to recipient`,
+    },
+    // Fee credit — the network fee kept by the platform.
+    {
+      accountType: LedgerAccountType.treasury_reserve,
+      accountId: 'usdt_fees',
+      currency: 'USDT',
+      amount: posFee,
+      description: `Send finalize: USDT ${networkFeeCrypto} network fee booked to treasury`,
+    },
+  ];
+
+  return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
+}
+
+// ── Phase 2b: Refund (settle — on-chain broadcast failed) ────────────────────
+
+/** Input to buildSendRefundEntries. */
+export interface BuildSendRefundInput {
+  /** accountId for the user_wallet USDT account. */
+  walletId: string;
+  /**
+   * Total USDT to refund (same value as the original totalDebit at reserve).
+   */
+  totalDebit: string;
+  postedAt: Date;
+  accountStates: Record<AccountKey, AccountState>;
+}
+
+/**
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for the REFUND
+ * phase of a failed on-chain USDT SEND (exactly 2 USDT entries; mirrors
+ * reserve in reverse).
+ *
+ * Account mapping (credit positive, debit negative; USDT sum = 0):
+ *  − clearing    / usdt_send_clearing / USDT  −totalDebit  (leave clearing)
+ *  + user_wallet / walletId           / USDT  +totalDebit  (refund to user)
+ */
+export function buildSendRefundEntries(
+  input: BuildSendRefundInput,
+): LedgerEntryDraft[] {
+  const { walletId, totalDebit, postedAt, accountStates } = input;
+
+  assertPositiveDecimal(totalDebit, 'totalDebit');
+
+  const scaledDebit = toScaled(totalDebit);
+  const posDebit = fromScaled(scaledDebit);
+  const negDebit = fromScaled(-scaledDebit);
+
+  const specs: EntrySpec[] = [
+    {
+      accountType: LedgerAccountType.clearing,
+      accountId: 'usdt_send_clearing',
+      currency: 'USDT',
+      amount: negDebit,
+      description: `Send refund: USDT ${totalDebit} leaves clearing`,
+    },
+    {
+      accountType: LedgerAccountType.user_wallet,
+      accountId: walletId,
+      currency: 'USDT',
+      amount: posDebit,
+      description: `Send refund: USDT ${totalDebit} returned to user wallet`,
+    },
+  ];
+
+  return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
+}

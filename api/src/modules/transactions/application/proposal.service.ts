@@ -1,18 +1,27 @@
 import { createHash } from 'node:crypto';
 
 import { Inject, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type {
   BuyCryptoIntent,
   SellCryptoIntent,
+  SendCryptoIntent,
 } from '@handshake-agent/contracts';
 import {
   BuyProposalConfirmationSchema,
   SellProposalConfirmationSchema,
+  SendProposalConfirmationSchema,
 } from '@handshake-agent/contracts';
 import type {
   BuyProposalConfirmation,
   SellProposalConfirmation,
+  SendProposalConfirmation,
 } from '@handshake-agent/contracts';
+
+import type {
+  PricingConfig,
+  ComplianceConfig,
+} from '../../../core/config/configuration';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import { KycGateService } from '../../identity/application/kyc-gate.service';
@@ -21,7 +30,13 @@ import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.
 import { WalletService } from '../../wallets/application/wallet.service';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import { InsufficientBalanceError } from '../domain/execution-errors';
-import { BeneficiaryNotFoundError } from '../../beneficiaries/domain/beneficiary-errors';
+import {
+  BeneficiaryNotFoundError,
+  BeneficiaryWrongTypeError,
+  BeneficiaryCoolingOffError,
+} from '../../beneficiaries/domain/beneficiary-errors';
+import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
+import { ComplianceService } from '../../compliance/application/compliance.service';
 import type { IProposalRepository } from './ports/proposal.repository.port';
 import { PROPOSAL_REPOSITORY } from './ports/proposal.repository.port';
 import type { IQuoteRepository } from './ports/quote.repository.port';
@@ -53,6 +68,21 @@ export interface CreateSellProposalOutput {
   proposalId: string;
   quoteId: string;
   confirmation: SellProposalConfirmation;
+}
+
+export interface CreateSendProposalInput {
+  userId: string;
+  conversationId?: string;
+  intent: SendCryptoIntent;
+  /** Id of the crypto-address beneficiary to send to. */
+  beneficiaryId: string;
+}
+
+export interface CreateSendProposalOutput {
+  proposalId: string;
+  /** Send proposals do not persist a Quote row — the fee is stored in Proposal parameters. */
+  quoteId: null;
+  confirmation: SendProposalConfirmation;
 }
 
 /**
@@ -141,6 +171,8 @@ export class ProposalService {
     private readonly assetRegistry: AssetRegistry,
     @Inject(LEDGER_REPOSITORY)
     private readonly ledgerRepo: ILedgerRepository,
+    private readonly complianceService?: ComplianceService,
+    private readonly configService?: ConfigService,
   ) {}
 
   async createBuyProposal(
@@ -373,5 +405,202 @@ export class ProposalService {
     });
 
     return { proposalId, quoteId, confirmation };
+  }
+
+  /**
+   * Send-proposal use-case (task N3a, PRD §4).
+   *
+   * Flow (all guards BEFORE persisting — §3.1):
+   *   1. Resolve the user's USDT/TRON wallet (getOrProvisionWallet).
+   *   2. Quote the send (quoteSend — reads config fee; no side effects).
+   *      totalDebit = cryptoAmount + networkFeeCrypto
+   *   3. Balance check: ledger balance ≥ totalDebit (BigInt exact).
+   *      → throws InsufficientBalanceError if short.
+   *   4. KYC/velocity gate on the NGN-equivalent value of the send (§3.3).
+   *      → throws a GateError subclass if the user cannot transact.
+   *   5. Beneficiary lookup:
+   *      - must exist + belong to the user (BeneficiaryNotFoundError)
+   *      - type must be crypto_address (BeneficiaryWrongTypeError)
+   *      - address must pass AssetRegistry.validateAddress (domain guard)
+   *   6. First-use cooling-off (IDN-08):
+   *      - if beneficiary.firstUseLockedUntil > clock.now → BeneficiaryCoolingOffError
+   *   7. Sanctions screening:
+   *      - complianceService.screenSendDestination → if !passed → SanctionsBlockedError
+   *   8. Travel-Rule flag:
+   *      - if NGN value ≥ compliance.travelRuleThresholdNgn → requiresTravelRule = true
+   *   9. Persist Proposal(type=send, pending). No Quote row for send (it is not an FX quote).
+   *  10. Return { proposalId, quoteId: null, confirmation } parsed through contract schema,
+   *      with the destination address masked.
+   */
+  async createSendProposal(
+    input: CreateSendProposalInput,
+  ): Promise<CreateSendProposalOutput> {
+    const { userId, conversationId, intent, beneficiaryId } = input;
+    const now = this.clock.now();
+
+    // 1. Resolve the user's USDT/TRON wallet.
+    const network = this.assetRegistry.defaultNetworkFor(intent.asset);
+    const wallet = await this.walletService.getOrProvisionWallet(
+      userId,
+      intent.asset,
+      network,
+    );
+
+    // 2. Quote the send — flat network fee from config; no FX conversion.
+    const sendQuote = this.quotesService.quoteSend({
+      asset: intent.asset,
+      cryptoAmount: intent.cryptoAmount,
+      network: intent.network,
+    });
+
+    const { networkFeeCrypto, totalDebit } = sendQuote;
+
+    // 3. Balance check — ledger is authoritative. Must cover totalDebit (amount + fee).
+    const balance = await this.ledgerRepo.getAccountBalance(
+      'user_wallet',
+      wallet.id,
+      intent.asset,
+    );
+
+    const toScaledLocal = (s: string): bigint => {
+      const str = s.trim();
+      const isNeg = str.startsWith('-');
+      const abs = isNeg ? str.slice(1) : str;
+      const [whole = '0', frac = ''] = abs.split('.');
+      const fracPadded = frac.slice(0, 18).padEnd(18, '0');
+      const scaled = BigInt(whole) * 10n ** 18n + BigInt(fracPadded);
+      return isNeg ? -scaled : scaled;
+    };
+
+    if (toScaledLocal(balance) < toScaledLocal(totalDebit)) {
+      throw new InsufficientBalanceError(balance, totalDebit, intent.asset);
+    }
+
+    // 4. KYC/velocity gate on the NGN-equivalent value of the send (§3.3).
+    // Convert cryptoAmount to NGN using the baseRate from the pricing config section.
+    const pricingConfig = this.configService?.get<PricingConfig>('pricing');
+    const baseRate = pricingConfig?.assets?.[intent.asset]?.baseRate ?? 1600;
+    const ngnValue = Number(intent.cryptoAmount) * baseRate;
+
+    await this.kycGate.assertCanTransact({
+      userId,
+      fiatAmount: ngnValue,
+      asset: intent.asset,
+    });
+
+    // 5. Beneficiary lookup — must exist, belong to user, and be a crypto_address.
+    const beneficiary = await this.beneficiaryService.getById(
+      userId,
+      beneficiaryId,
+    );
+    if (beneficiary === null) {
+      throw new BeneficiaryNotFoundError(beneficiaryId);
+    }
+    if (beneficiary.type !== 'crypto_address') {
+      throw new BeneficiaryWrongTypeError(
+        beneficiaryId,
+        'crypto_address',
+        beneficiary.type,
+      );
+    }
+    // Address must still pass pattern validation (defensive re-check).
+    const toAddress = beneficiary.cryptoAddress!;
+    const addressValid = this.assetRegistry.validateAddress(
+      intent.network,
+      toAddress,
+    );
+    if (!addressValid) {
+      throw new BeneficiaryWrongTypeError(
+        beneficiaryId,
+        'valid crypto_address',
+        `invalid address: ${toAddress}`,
+      );
+    }
+
+    // 6. First-use cooling-off (IDN-08).
+    if (
+      beneficiary.firstUseLockedUntil !== null &&
+      beneficiary.firstUseLockedUntil > now
+    ) {
+      throw new BeneficiaryCoolingOffError(
+        beneficiaryId,
+        beneficiary.firstUseLockedUntil,
+      );
+    }
+
+    // 7. Sanctions screening — screen BEFORE persisting; event always written.
+    if (!this.complianceService) {
+      throw new Error(
+        'ProposalService: ComplianceService is required for createSendProposal but was not injected.',
+      );
+    }
+    const screeningResult = await this.complianceService.screenSendDestination({
+      userId,
+      address: toAddress,
+      network: intent.network,
+    });
+    if (!screeningResult.passed) {
+      throw new SanctionsBlockedError(
+        toAddress,
+        screeningResult.reason,
+        screeningResult.complianceEventId,
+        screeningResult.complianceEventId, // reference = event id until real provider ref is available
+      );
+    }
+
+    // 8. Travel-Rule flag — if NGN-equivalent ≥ configured threshold, flag it.
+    const complianceConfig =
+      this.configService?.get<ComplianceConfig>('compliance');
+    const travelRuleThreshold =
+      complianceConfig?.travelRuleThresholdNgn ?? 1_000_000;
+    const requiresTravelRule = ngnValue >= travelRuleThreshold;
+
+    // 9. Persist the Proposal (type=send, pending; no Quote row — not an FX quote).
+    const expiresAt = new Date(now.getTime() + sendQuote.expiresInSec * 1000);
+
+    const parameters: Record<string, unknown> = {
+      asset: intent.asset,
+      cryptoAmount: intent.cryptoAmount,
+      network: intent.network,
+      networkFeeCrypto,
+      totalDebit,
+      beneficiaryId,
+      walletId: wallet.id,
+      toAddress,
+      requiresTravelRule,
+    };
+    const parametersChecksum = sha256Hex(parameters);
+
+    const { id: proposalId } = await this.proposalRepo.create({
+      userId,
+      conversationId,
+      type: 'send',
+      parameters,
+      parametersChecksum,
+      expiresAt,
+    });
+
+    // 10. Build the itemized confirmation and parse through the contract schema.
+    // Mask the destination address: first 6 chars + '...' + last 4 chars.
+    const toAddressMasked =
+      toAddress.length > 10
+        ? `${toAddress.slice(0, 6)}...${toAddress.slice(-4)}`
+        : toAddress;
+
+    const beneficiaryLabel = beneficiary.label || undefined;
+
+    const confirmation = SendProposalConfirmationSchema.parse({
+      proposalId,
+      asset: intent.asset,
+      cryptoAmount: intent.cryptoAmount,
+      network: intent.network,
+      networkFeeCrypto,
+      totalDebit,
+      toAddressMasked,
+      beneficiaryLabel: beneficiaryLabel ?? undefined,
+      expiresAt: expiresAt.toISOString(),
+    });
+
+    return { proposalId, quoteId: null, confirmation };
   }
 }

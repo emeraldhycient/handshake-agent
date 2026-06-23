@@ -89,6 +89,25 @@ export interface SellConfig {
   maxDriftBps: number;
 }
 
+/**
+ * Compliance / AML configuration (task N3a, CLAUDE.md §7).
+ * All values are admin-tunable via the DB-admin AppSetting layer.
+ */
+export interface ComplianceConfig {
+  /**
+   * NGN-equivalent threshold above which a Travel Rule data-capture flag
+   * must be set on a send proposal (FATF Travel Rule / CBN circular).
+   * Expressed in NGN major units (e.g. 1_000_000 = ₦1,000,000).
+   *
+   * The full TravelRuleData capture happens at execution (Task N3b); for
+   * proposals this flag triggers a note to the user that additional information
+   * will be required at execution time.
+   *
+   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   */
+  travelRuleThresholdNgn: number;
+}
+
 // ---------------------------------------------------------------------------
 // Catalog — config-driven asset / fiat / network registry (task X1, §7)
 // ---------------------------------------------------------------------------
@@ -168,6 +187,7 @@ export interface AppConfig {
   directive: DirectiveConfig;
   buy: BuyConfig;
   sell: SellConfig;
+  compliance: ComplianceConfig;
   catalog: CatalogConfig;
 }
 
@@ -236,6 +256,14 @@ export default (): AppConfig => ({
   sell: {
     // 50 bps = 0.5% allowed drift. Admin-tunable later (DB-admin AppSetting layer).
     maxDriftBps: 50,
+  },
+  compliance: {
+    // FATF Travel Rule / CBN circular threshold: ₦1,000,000 equivalent.
+    // Above this NGN value the send proposal sets requiresTravelRule:true.
+    // Full TravelRuleData capture happens at execution (Task N3b).
+    // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+    // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+    travelRuleThresholdNgn: 1_000_000,
   },
   pricing: {
     processingFeeBps: 100,
