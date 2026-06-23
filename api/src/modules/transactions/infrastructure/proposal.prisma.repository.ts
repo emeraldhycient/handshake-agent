@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 // The generated Prisma client is the ONLY sanctioned DB door (CLAUDE.md §3.2).
 // This is the infrastructure layer — the only place it is allowed.
+import { ProposalStatus } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   CreateProposalData,
@@ -56,6 +57,7 @@ export class ProposalPrismaRepository implements IProposalRepository {
         parametersChecksum: true,
         quoteId: true,
         expiresAt: true,
+        confirmedAt: true,
         createdAt: true,
       },
     });
@@ -72,7 +74,38 @@ export class ProposalPrismaRepository implements IProposalRepository {
       parametersChecksum: row.parametersChecksum,
       quoteId: row.quoteId,
       expiresAt: row.expiresAt,
+      confirmedAt: row.confirmedAt,
       createdAt: row.createdAt,
     };
+  }
+
+  async updateStatus(
+    id: string,
+    status: string,
+    fields?: {
+      confirmedAt?: Date;
+      executedAt?: Date;
+      rejectedAt?: Date;
+      rejectionReason?: string;
+    },
+  ): Promise<void> {
+    await this.prisma.proposal.update({
+      where: { id },
+      data: {
+        status: status as ProposalStatus,
+        ...(fields?.confirmedAt !== undefined
+          ? { confirmedAt: fields.confirmedAt }
+          : {}),
+        ...(fields?.executedAt !== undefined
+          ? { executedAt: fields.executedAt }
+          : {}),
+        ...(fields?.rejectedAt !== undefined
+          ? { rejectedAt: fields.rejectedAt }
+          : {}),
+        ...(fields?.rejectionReason !== undefined
+          ? { rejectionReason: fields.rejectionReason }
+          : {}),
+      },
+    });
   }
 }

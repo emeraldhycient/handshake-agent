@@ -32,6 +32,7 @@ export interface ProposalRecord {
   parametersChecksum: string;
   quoteId: string | null;
   expiresAt: Date;
+  confirmedAt: Date | null;
   createdAt: Date;
 }
 
@@ -44,6 +45,22 @@ export interface IProposalRepository {
 
   /**
    * Loads a Proposal by id, or null if not found.
+   * Returns all fields required by the execution engine.
    */
   findById(id: string): Promise<ProposalRecord | null>;
+
+  /**
+   * Updates the status of a Proposal and optionally sets timestamp fields.
+   * Used by the execution engine to mark proposals as executing/executed.
+   */
+  updateStatus(
+    id: string,
+    status: string,
+    fields?: {
+      confirmedAt?: Date;
+      executedAt?: Date;
+      rejectedAt?: Date;
+      rejectionReason?: string;
+    },
+  ): Promise<void>;
 }

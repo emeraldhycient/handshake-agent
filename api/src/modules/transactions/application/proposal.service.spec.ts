@@ -74,7 +74,10 @@ function makeKycGate(
 }
 
 function makeQuoteRepo(id = FIXED_QUOTE_ID): jest.Mocked<IQuoteRepository> {
-  return { create: jest.fn().mockResolvedValue({ id }) };
+  return {
+    create: jest.fn().mockResolvedValue({ id }),
+    findById: jest.fn().mockResolvedValue(null),
+  };
 }
 
 function makeProposalRepo(
@@ -83,6 +86,7 @@ function makeProposalRepo(
   return {
     create: jest.fn().mockResolvedValue({ id }),
     findById: jest.fn().mockResolvedValue(null),
+    updateStatus: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -180,6 +184,7 @@ describe('ProposalService.createBuyProposal', () => {
         callOrder.push('quote');
         return Promise.resolve({ id: FIXED_QUOTE_ID });
       }),
+      findById: jest.fn().mockResolvedValue(null),
     };
     const proposalRepo: IProposalRepository = {
       create: jest.fn().mockImplementation(() => {
@@ -187,6 +192,7 @@ describe('ProposalService.createBuyProposal', () => {
         return Promise.resolve({ id: FIXED_PROPOSAL_ID });
       }),
       findById: jest.fn().mockResolvedValue(null),
+      updateStatus: jest.fn().mockResolvedValue(undefined),
     };
 
     const svc = new ProposalService(
@@ -294,6 +300,7 @@ describe('ProposalService.createBuyProposal', () => {
         callOrder.push('quote');
         return Promise.resolve({ id: FIXED_QUOTE_ID });
       }),
+      findById: jest.fn().mockResolvedValue(null),
     };
     const proposalRepo: IProposalRepository = {
       create: jest.fn().mockImplementation(() => {
@@ -301,6 +308,7 @@ describe('ProposalService.createBuyProposal', () => {
         return Promise.resolve({ id: FIXED_PROPOSAL_ID });
       }),
       findById: jest.fn().mockResolvedValue(null),
+      updateStatus: jest.fn().mockResolvedValue(undefined),
     };
     const kycGate = {
       assertCanTransact: jest.fn().mockImplementation(() => {

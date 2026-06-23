@@ -65,6 +65,16 @@ export interface DirectiveConfig {
   ttlSeconds: number;
 }
 
+/** Buy-execution configuration (task 4.5a, CLAUDE.md §7). */
+export interface BuyConfig {
+  /**
+   * Maximum allowed FX rate drift in basis points between the original quote and
+   * the re-quote at execution time. If drift exceeds this, throw QuoteDriftError.
+   * Admin-tunable later (DB-admin AppSetting layer, root §7).
+   */
+  maxDriftBps: number;
+}
+
 /** Blockradar provider constants (non-secret, derived from ADR-0006). */
 export interface BlockradarProviderConfig {
   /** Asset id for USDT-on-TRON in the Blockradar API. */
@@ -82,10 +92,15 @@ export interface AppConfig {
   limits: LimitsConfig;
   auth: AuthConfig;
   directive: DirectiveConfig;
+  buy: BuyConfig;
   providers: ProvidersConfig;
 }
 
 export default (): AppConfig => ({
+  buy: {
+    // 50 bps = 0.5% allowed drift. Admin-tunable later (DB-admin AppSetting layer).
+    maxDriftBps: 50,
+  },
   pricing: {
     spreadBps: 150,
     processingFeeBps: 100,

@@ -33,10 +33,37 @@ export interface CreateQuoteData {
   expiresAt: Date;
 }
 
+/**
+ * Application-level Quote record for reads — NOT the Prisma-generated type.
+ */
+export interface QuoteRecord {
+  id: string;
+  userId: string;
+  type: string;
+  asset: string;
+  fiatCurrency: string;
+  fiatAmount: string;
+  cryptoAmount: string;
+  fxRate: string;
+  baseRate: string;
+  spreadBps: number;
+  processingFeeBps: number;
+  processingFeeAmount: string;
+  status: string;
+  expiresAt: Date;
+  createdAt: Date;
+}
+
 export interface IQuoteRepository {
   /**
    * Persists a new Quote row in `valid` status.
    * Returns the auto-generated id.
    */
   create(data: CreateQuoteData): Promise<{ id: string }>;
+
+  /**
+   * Loads a Quote by id, or null if not found.
+   * Used by the execution engine for drift checking (task 4.5a).
+   */
+  findById(id: string): Promise<QuoteRecord | null>;
 }

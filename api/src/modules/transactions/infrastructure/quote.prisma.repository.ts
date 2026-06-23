@@ -6,6 +6,7 @@ import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   CreateQuoteData,
   IQuoteRepository,
+  QuoteRecord,
 } from '../application/ports/quote.repository.port';
 
 /**
@@ -45,5 +46,48 @@ export class QuotePrismaRepository implements IQuoteRepository {
     });
 
     return { id: row.id };
+  }
+
+  async findById(id: string): Promise<QuoteRecord | null> {
+    const row = await this.prisma.quote.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        userId: true,
+        type: true,
+        asset: true,
+        fiatCurrency: true,
+        fiatAmount: true,
+        cryptoAmount: true,
+        fxRate: true,
+        baseRate: true,
+        spreadBps: true,
+        processingFeeBps: true,
+        processingFeeAmount: true,
+        status: true,
+        expiresAt: true,
+        createdAt: true,
+      },
+    });
+
+    if (row === null) return null;
+
+    return {
+      id: row.id,
+      userId: row.userId,
+      type: row.type,
+      asset: row.asset,
+      fiatCurrency: row.fiatCurrency,
+      fiatAmount: row.fiatAmount.toString(),
+      cryptoAmount: row.cryptoAmount,
+      fxRate: row.fxRate,
+      baseRate: row.baseRate,
+      spreadBps: row.spreadBps,
+      processingFeeBps: row.processingFeeBps,
+      processingFeeAmount: row.processingFeeAmount.toString(),
+      status: row.status,
+      expiresAt: row.expiresAt,
+      createdAt: row.createdAt,
+    };
   }
 }
