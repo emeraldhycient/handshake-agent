@@ -1,5 +1,5 @@
 /**
- * Unit tests for BlockradarProvider (task 5.1, updated for task X3).
+ * Unit tests for BlockradarProvider (task 5.1, updated for task X3, N1).
  *
  * HttpService is mocked — no real network calls.
  * ConfigService is stubbed to return fixed env/config values.
@@ -8,6 +8,10 @@
  * explicit parameter — the caller (WalletService) resolves it from the
  * AssetRegistry. BlockradarProvider no longer reads usdtTronAssetId from
  * the providers config section; the catalog is the single source of truth.
+ *
+ * Key change (N1): withdraw() added — on-chain USDT transfer via
+ * POST /wallets/{masterWalletId}/addresses/{addressId}/withdraw.
+ * Confirmed endpoint against docs.blockradar.co/llms-full.txt.
  *
  * TDD: written before the implementation to drive the design.
  */
@@ -235,6 +239,199 @@ describe('BlockradarProvider', () => {
       await expect(
         provider.getBalance('child-address-id-1', USDT_TRON_ASSET_ID),
       ).rejects.toThrow('ECONNREFUSED');
+    });
+  });
+
+  // ── withdraw ─────────────────────────────────────────────────────────────
+  //
+  // Confirmed endpoint (docs.blockradar.co/llms-full.txt):
+  //   POST /wallets/{masterWalletId}/addresses/{addressId}/withdraw
+  //   body: { address, amount, assetId, reference? }
+  //   response: { data: { id, status (SUCCESS|PENDING|FAILED), reference, ... } }
+
+  describe('withdraw', () => {
+    const ADDRESS_ID = 'child-address-id-1';
+    const TO_ADDRESS = 'TRXDestinationAddress12345678901234';
+    const AMOUNT = '10.5';
+    const REFERENCE = 'idempotency-key-uuid-1234';
+
+    const SUCCESS_BODY = {
+      statusCode: 200,
+      message: 'Withdrawal initiated',
+      data: {
+        id: 'provider-tx-id-abc',
+        status: 'PENDING',
+        reference: REFERENCE,
+        senderAddress: 'TSenderAddress1234567890123456789',
+        recipientAddress: TO_ADDRESS,
+      },
+    };
+
+    it('POSTs to /wallets/{masterWalletId}/addresses/{addressId}/withdraw with x-api-key', async () => {
+      http.post.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      await provider.withdraw({
+        addressId: ADDRESS_ID,
+        toAddress: TO_ADDRESS,
+        amount: AMOUNT,
+        assetId: USDT_TRON_ASSET_ID,
+      });
+
+      expect(http.post).toHaveBeenCalledTimes(1);
+      const [url, , config] = http.post.mock.calls[0] as [
+        string,
+        unknown,
+        { headers: Record<string, string> },
+      ];
+
+      expect(url).toBe(
+        `${BASE_URL}/wallets/${MASTER_WALLET_ID}/addresses/${ADDRESS_ID}/withdraw`,
+      );
+      expect(config.headers['x-api-key']).toBe(API_KEY);
+    });
+
+    it('sends address, amount, assetId in the request body', async () => {
+      http.post.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      await provider.withdraw({
+        addressId: ADDRESS_ID,
+        toAddress: TO_ADDRESS,
+        amount: AMOUNT,
+        assetId: USDT_TRON_ASSET_ID,
+      });
+
+      const [, body] = http.post.mock.calls[0] as [
+        string,
+        {
+          address: string;
+          amount: string;
+          assetId: string;
+          reference?: string;
+        },
+      ];
+      expect(body.address).toBe(TO_ADDRESS);
+      expect(body.amount).toBe(AMOUNT);
+      expect(body.assetId).toBe(USDT_TRON_ASSET_ID);
+      expect(body.reference).toBeUndefined();
+    });
+
+    it('sends reference in the request body when provided', async () => {
+      http.post.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      await provider.withdraw({
+        addressId: ADDRESS_ID,
+        toAddress: TO_ADDRESS,
+        amount: AMOUNT,
+        assetId: USDT_TRON_ASSET_ID,
+        reference: REFERENCE,
+      });
+
+      const [, body] = http.post.mock.calls[0] as [
+        string,
+        { reference?: string },
+      ];
+      expect(body.reference).toBe(REFERENCE);
+    });
+
+    it('maps data.id → providerReference, data.status (PENDING → pending)', async () => {
+      http.post.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.withdraw({
+        addressId: ADDRESS_ID,
+        toAddress: TO_ADDRESS,
+        amount: AMOUNT,
+        assetId: USDT_TRON_ASSET_ID,
+      });
+
+      expect(result.providerReference).toBe('provider-tx-id-abc');
+      expect(result.status).toBe('pending');
+    });
+
+    it('maps SUCCESS status → "success"', async () => {
+      const successBody = {
+        ...SUCCESS_BODY,
+        data: { ...SUCCESS_BODY.data, status: 'SUCCESS' },
+      };
+      http.post.mockReturnValue(of(axiosOk(successBody)));
+
+      const result = await provider.withdraw({
+        addressId: ADDRESS_ID,
+        toAddress: TO_ADDRESS,
+        amount: AMOUNT,
+        assetId: USDT_TRON_ASSET_ID,
+      });
+
+      expect(result.status).toBe('success');
+    });
+
+    it('maps FAILED status → "failed"', async () => {
+      const failedBody = {
+        ...SUCCESS_BODY,
+        data: { ...SUCCESS_BODY.data, status: 'FAILED' },
+      };
+      http.post.mockReturnValue(of(axiosOk(failedBody)));
+
+      const result = await provider.withdraw({
+        addressId: ADDRESS_ID,
+        toAddress: TO_ADDRESS,
+        amount: AMOUNT,
+        assetId: USDT_TRON_ASSET_ID,
+      });
+
+      expect(result.status).toBe('failed');
+    });
+
+    it('throws a descriptive error on non-2xx response', async () => {
+      const axiosErr = Object.assign(new Error('Unprocessable'), {
+        response: {
+          status: 422,
+          data: { message: 'Insufficient balance', statusCode: 422 },
+        },
+        isAxiosError: true,
+      });
+      http.post.mockReturnValue(throwError(() => axiosErr));
+
+      await expect(
+        provider.withdraw({
+          addressId: ADDRESS_ID,
+          toAddress: TO_ADDRESS,
+          amount: AMOUNT,
+          assetId: USDT_TRON_ASSET_ID,
+        }),
+      ).rejects.toThrow(/Blockradar withdraw error/);
+    });
+
+    it('error message includes HTTP status and provider message', async () => {
+      const axiosErr = Object.assign(new Error('Unauthorized'), {
+        response: {
+          status: 401,
+          data: { message: 'Invalid API key', statusCode: 401 },
+        },
+        isAxiosError: true,
+      });
+      http.post.mockReturnValue(throwError(() => axiosErr));
+
+      await expect(
+        provider.withdraw({
+          addressId: ADDRESS_ID,
+          toAddress: TO_ADDRESS,
+          amount: AMOUNT,
+          assetId: USDT_TRON_ASSET_ID,
+        }),
+      ).rejects.toThrow(/Invalid API key/);
+    });
+
+    it('re-throws non-Blockradar errors as-is', async () => {
+      http.post.mockReturnValue(throwError(() => new Error('Network timeout')));
+
+      await expect(
+        provider.withdraw({
+          addressId: ADDRESS_ID,
+          toAddress: TO_ADDRESS,
+          amount: AMOUNT,
+          assetId: USDT_TRON_ASSET_ID,
+        }),
+      ).rejects.toThrow('Network timeout');
     });
   });
 });

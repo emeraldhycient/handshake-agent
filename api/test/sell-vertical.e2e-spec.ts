@@ -109,6 +109,10 @@ const fakeWalletProvider: IWalletProvider = {
     pending: '0',
     asset: 'USDT',
   }),
+  withdraw: jest.fn().mockResolvedValue({
+    providerReference: 'e2e-tx-ref-stub',
+    status: 'pending' as const,
+  }),
 };
 
 // Payment provider factory — allows per-test control of verifyPayout outcome

@@ -335,6 +335,10 @@ describe('Buy vertical — capstone acceptance e2e (AppModule, Testcontainers Po
         network: 'TRON',
       }),
       getBalance: jest.fn().mockResolvedValue({ amount: '0', decimals: 6 }),
+      withdraw: jest.fn().mockResolvedValue({
+        providerReference: 'e2e-tx-ref-stub',
+        status: 'pending' as const,
+      }),
     };
 
     fakePaymentProvider = {

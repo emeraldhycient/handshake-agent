@@ -64,6 +64,12 @@ function makeProvider(
     getBalance: jest
       .fn()
       .mockResolvedValue({ amount: '5.000000', decimals: 6 }),
+    // withdraw stub — not exercised by WalletService tests; present to satisfy
+    // the interface (task N1 added withdraw to IWalletProvider).
+    withdraw: jest.fn().mockResolvedValue({
+      providerReference: 'tx-ref-stub',
+      status: 'pending' as const,
+    }),
   };
 }
 

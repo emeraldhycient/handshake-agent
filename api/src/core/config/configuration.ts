@@ -129,6 +129,17 @@ export interface CatalogNetwork {
   /** Regex pattern for validating on-chain addresses. */
   addressPattern: string;
   enabled: boolean;
+  /**
+   * Flat on-chain network fee per asset for send transactions, in major units.
+   * Key is the asset symbol (e.g. 'USDT'); value is a decimal string (e.g. '1').
+   * Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7) without a
+   * deploy.  Absent entries mean no configured fee (treat as '0').
+   *
+   * TRC-20 USDT: Blockradar absorbs the TRX gas cost and charges a flat USDT
+   * fee from the transferred amount. The initial default is '1' USDT per send.
+   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   */
+  networkFeeCrypto: Record<string, string>;
 }
 
 /**
@@ -141,6 +152,13 @@ export interface CatalogConfig {
   networks: Record<string, CatalogNetwork>;
   /** Capability / service enable flags. Fail-closed: absent === false. */
   capabilities: Record<string, boolean>;
+  /**
+   * Validity window in seconds for send quotes. The quote must be confirmed
+   * before this window expires.
+   * Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   */
+  sendQuoteExpiresInSec: number;
 }
 
 export interface AppConfig {
@@ -190,6 +208,13 @@ export default (): AppConfig => ({
         // Standard TRC-20 address: starts with T, followed by 33 Base58 chars.
         addressPattern: '^T[1-9A-HJ-NP-Za-km-z]{33}$',
         enabled: true,
+        // Flat USDT network fee per on-chain send on TRC-20.
+        // Blockradar absorbs the TRX gas and charges a flat USDT fee.
+        // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+        // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+        networkFeeCrypto: {
+          USDT: '1',
+        },
       },
     },
     capabilities: {
@@ -199,6 +224,10 @@ export default (): AppConfig => ({
       'crypto.receive': true,
       'crypto.swap': false, // Deferred — no DEX integration at launch.
     },
+    // Validity window for send quotes (30 seconds — same as buy/sell).
+    // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+    // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+    sendQuoteExpiresInSec: 30,
   },
   buy: {
     // 50 bps = 0.5% allowed drift. Admin-tunable later (DB-admin AppSetting layer).

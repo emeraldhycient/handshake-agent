@@ -1,7 +1,68 @@
 import type { Clock } from '../../../core/common/clock';
 import type { IRateProvider, RateQuote } from './ports/rate-provider.port';
 import { QuotesService } from './quotes.service';
-import { QuoteSellOutputSchema } from '@handshake-agent/contracts';
+import {
+  QuoteSellOutputSchema,
+  QuoteSendOutputSchema,
+} from '@handshake-agent/contracts';
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import { ConfigService } from '@nestjs/config';
+
+// ---------------------------------------------------------------------------
+// Stub catalog for quoteSend tests — includes networkFeeCrypto (task N1)
+// ---------------------------------------------------------------------------
+
+const STUB_CATALOG_WITH_FEES = {
+  assets: {
+    USDT: {
+      symbol: 'USDT',
+      displayName: 'USDT',
+      kind: 'crypto' as const,
+      decimals: 6,
+      networks: ['TRON'],
+      providers: {
+        blockradar: { assetId: 'f56d297c-a3db-4cda-95bd-180b54679070' },
+      },
+      enabled: true,
+    },
+  },
+  fiats: {
+    NGN: {
+      code: 'NGN',
+      displayName: 'Naira',
+      symbol: '₦',
+      decimals: 2,
+      enabled: true,
+    },
+  },
+  networks: {
+    TRON: {
+      id: 'TRON',
+      displayName: 'TRON (TRC-20)',
+      addressPattern: '^T[1-9A-HJ-NP-Za-km-z]{33}$',
+      enabled: true,
+      networkFeeCrypto: { USDT: '1' },
+    },
+  },
+  capabilities: {
+    'crypto.buy': true,
+    'crypto.sell': true,
+    'crypto.send': true,
+    'crypto.receive': true,
+    'crypto.swap': false,
+  },
+  sendQuoteExpiresInSec: 30,
+};
+
+function makeRegistryConfig(): ConfigService {
+  return {
+    get: (key: string) => {
+      if (key === 'catalog') return STUB_CATALOG_WITH_FEES;
+      if (key === 'sendQuoteExpiresInSec') return 30;
+      return undefined;
+    },
+  } as unknown as ConfigService;
+}
 
 const RATE: RateQuote = {
   baseRate: 1600,
@@ -111,5 +172,175 @@ describe('QuotesService.quoteSell', () => {
     });
 
     expect(() => QuoteSellOutputSchema.parse(quote)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// QuotesService.quoteSend (task N1)
+// ---------------------------------------------------------------------------
+
+describe('QuotesService.quoteSend', () => {
+  // quoteSend does not call the rate provider — it uses the catalog network fee.
+  // We pass a dummy rateProvider so the DI token is satisfied.
+  const rateProvider: IRateProvider = {
+    getRate: jest.fn().mockRejectedValue(new Error('should not be called')),
+  };
+
+  function makeService(): QuotesService {
+    const registry = new AssetRegistry(makeRegistryConfig());
+    return new QuotesService(rateProvider, fixedClock, registry);
+  }
+
+  it('returns totalDebit = cryptoAmount + networkFeeCrypto (decimal-safe, no float drift)', () => {
+    const service = makeService();
+
+    // 10.5 + 1 = 11.5 — verified with BigInt arithmetic (no float drift)
+    const quote = service.quoteSend({
+      asset: 'USDT',
+      cryptoAmount: '10.5',
+      network: 'TRON',
+    });
+
+    expect(quote.cryptoAmount).toBe('10.5');
+    expect(quote.networkFeeCrypto).toBe('1');
+    expect(quote.totalDebit).toBe('11.5');
+  });
+
+  it('echoes asset and network in the output', () => {
+    const service = makeService();
+    const quote = service.quoteSend({
+      asset: 'USDT',
+      cryptoAmount: '5',
+      network: 'TRON',
+    });
+
+    expect(quote.asset).toBe('USDT');
+    expect(quote.network).toBe('TRON');
+  });
+
+  it('stamps quotedAt from the clock and expiresInSec from config', () => {
+    const service = makeService();
+    const quote = service.quoteSend({
+      asset: 'USDT',
+      cryptoAmount: '5',
+      network: 'TRON',
+    });
+
+    expect(quote.quotedAt).toBe('2026-06-18T00:00:00.000Z');
+    expect(quote.expiresInSec).toBe(30);
+  });
+
+  it('handles whole-number amounts correctly (100 + 1 = 101)', () => {
+    const service = makeService();
+    const quote = service.quoteSend({
+      asset: 'USDT',
+      cryptoAmount: '100',
+      network: 'TRON',
+    });
+
+    expect(quote.totalDebit).toBe('101');
+    expect(quote.networkFeeCrypto).toBe('1');
+  });
+
+  it('handles a sub-unit amount (0.000001 + 1 = 1.000001)', () => {
+    const service = makeService();
+    const quote = service.quoteSend({
+      asset: 'USDT',
+      cryptoAmount: '0.000001',
+      network: 'TRON',
+    });
+
+    expect(quote.totalDebit).toBe('1.000001');
+  });
+
+  it('output parses against QuoteSendOutputSchema', () => {
+    const service = makeService();
+    const quote = service.quoteSend({
+      asset: 'USDT',
+      cryptoAmount: '10',
+      network: 'TRON',
+    });
+
+    expect(() => QuoteSendOutputSchema.parse(quote)).not.toThrow();
+  });
+
+  it('throws UnsupportedAssetError for an unregistered asset', () => {
+    const service = makeService();
+
+    // quoteSend is synchronous — use synchronous expect().toThrow()
+    expect(() =>
+      service.quoteSend({ asset: 'BTC', cryptoAmount: '1', network: 'TRON' }),
+    ).toThrow();
+  });
+
+  it('throws UnsupportedNetworkError for a network not registered in the catalog', () => {
+    // TRON is valid in the stub catalog — should not throw.
+    const service = makeService();
+    expect(() =>
+      service.quoteSend({ asset: 'USDT', cryptoAmount: '1', network: 'TRON' }),
+    ).not.toThrow();
+
+    // The `network` field is validated by QuoteSendInputSchema (Zod enum) so
+    // 'ETHEREUM' won't even reach the service. The service-level guard handles
+    // a network that is in the enum but disabled in the catalog. We use a
+    // separate QuotesService with a catalog that disables TRON:
+    const disabledNetworkCatalog = {
+      ...STUB_CATALOG_WITH_FEES,
+      networks: {
+        TRON: { ...STUB_CATALOG_WITH_FEES.networks.TRON, enabled: false },
+      },
+    };
+    const disabledConfig = {
+      get: (key: string) => {
+        if (key === 'catalog') return disabledNetworkCatalog;
+        return undefined;
+      },
+    } as unknown as ConfigService;
+    const disabledRegistry = new AssetRegistry(disabledConfig);
+    const disabledService = new QuotesService(
+      rateProvider,
+      fixedClock,
+      disabledRegistry,
+    );
+
+    expect(() =>
+      disabledService.quoteSend({
+        asset: 'USDT',
+        cryptoAmount: '1',
+        network: 'TRON',
+      }),
+    ).toThrow();
+  });
+
+  it('throws when the asset is not supported on the given network', () => {
+    // A catalog where USDT's networks list does NOT include TRON — simulates
+    // an asset/network mismatch that passes Zod enum validation but fails the
+    // service-level AssetRegistry check.
+    const mismatchCatalog = {
+      ...STUB_CATALOG_WITH_FEES,
+      assets: {
+        USDT: { ...STUB_CATALOG_WITH_FEES.assets.USDT, networks: [] },
+      },
+    };
+    const mismatchConfig = {
+      get: (key: string) => {
+        if (key === 'catalog') return mismatchCatalog;
+        return undefined;
+      },
+    } as unknown as ConfigService;
+    const mismatchRegistry = new AssetRegistry(mismatchConfig);
+    const mismatchService = new QuotesService(
+      rateProvider,
+      fixedClock,
+      mismatchRegistry,
+    );
+
+    expect(() =>
+      mismatchService.quoteSend({
+        asset: 'USDT',
+        cryptoAmount: '1',
+        network: 'TRON',
+      }),
+    ).toThrow();
   });
 });

@@ -9,6 +9,8 @@ import type {
   ProvisionAddressInput,
   ProvisionAddressOutput,
   GetBalanceOutput,
+  WithdrawInput,
+  WithdrawOutput,
 } from '../application/ports/wallet-provider.port';
 
 // ---------------------------------------------------------------------------
@@ -43,6 +45,32 @@ interface BalanceResponseData {
 
 interface BlockradarBalanceResponse {
   data: BalanceResponseData;
+}
+
+// ---------------------------------------------------------------------------
+// withdraw — confirmed against docs.blockradar.co/llms-full.txt (task N1)
+// POST /wallets/{masterWalletId}/addresses/{addressId}/withdraw
+// Response status values from Blockradar: SUCCESS | PENDING | FAILED
+// ---------------------------------------------------------------------------
+
+interface WithdrawResponseData {
+  /** Provider-assigned transaction id. */
+  id: string;
+  /**
+   * Blockradar lifecycle status string.
+   * Known values (docs.blockradar.co): 'SUCCESS' | 'PENDING' | 'FAILED'.
+   * Typed as `string` so future Blockradar status additions do not break the
+   * type; `mapStatus` handles the conversion to our lowercase port union.
+   */
+  status: string;
+  /** Echoed caller reference (if supplied). */
+  reference?: string;
+  /** On-chain tx hash — may be absent while pending. */
+  txHash?: string;
+}
+
+interface BlockradarWithdrawResponse {
+  data: WithdrawResponseData;
 }
 
 /**
@@ -131,9 +159,69 @@ export class BlockradarProvider implements IWalletProvider {
     }
   }
 
+  /**
+   * Initiates an on-chain withdrawal from a child address.
+   *
+   * Endpoint (confirmed docs.blockradar.co/llms-full.txt, task N1):
+   *   POST /wallets/{masterWalletId}/addresses/{addressId}/withdraw
+   *
+   * The call returns immediately with PENDING status; Blockradar delivers
+   * the final status (SUCCESS | FAILED) via webhook. The execution engine
+   * updates the settlement record on webhook receipt (§3.1).
+   */
+  async withdraw(input: WithdrawInput): Promise<WithdrawOutput> {
+    const { addressId, toAddress, amount, assetId, reference } = input;
+    const url = `${this.baseUrl}/wallets/${this.masterWalletId}/addresses/${addressId}/withdraw`;
+
+    // Build body; only include reference when the caller supplied one so the
+    // request stays minimal when no idempotency key is provided.
+    const body: Record<string, string> = {
+      address: toAddress,
+      amount,
+      assetId,
+    };
+    if (reference !== undefined) {
+      body['reference'] = reference;
+    }
+
+    try {
+      const response = await firstValueFrom(
+        this.http.post<BlockradarWithdrawResponse>(url, body, {
+          headers: this.headers(),
+        }),
+      );
+
+      const { id, status, txHash } = response.data.data;
+      return {
+        providerReference: id,
+        txHash,
+        status: this.mapStatus(status),
+      };
+    } catch (err: unknown) {
+      throw this.wrapError('withdraw', err);
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Maps Blockradar's uppercase status strings to the port's lowercase union.
+   * Unknown values default to 'pending' (fail-safe; the engine re-checks on webhook).
+   * Accepts `string` (not a literal union) because the response type is widened
+   * to allow for new status values without a compile error.
+   */
+  private mapStatus(raw: string): 'success' | 'pending' | 'failed' {
+    switch (raw) {
+      case 'SUCCESS':
+        return 'success';
+      case 'FAILED':
+        return 'failed';
+      default:
+        return 'pending';
+    }
+  }
 
   /** Common Blockradar auth headers. */
   private headers(): Record<string, string> {

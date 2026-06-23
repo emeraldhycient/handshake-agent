@@ -82,6 +82,10 @@ const fakeWalletProvider: IWalletProvider = {
     network: 'TRON',
   }),
   getBalance: jest.fn().mockResolvedValue({ amount: '0', decimals: 6 }),
+  withdraw: jest.fn().mockResolvedValue({
+    providerReference: 'e2e-tx-ref-stub',
+    status: 'pending' as const,
+  }),
 };
 
 // ---------------------------------------------------------------------------

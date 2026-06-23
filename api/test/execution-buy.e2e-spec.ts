@@ -111,6 +111,10 @@ const fakeWalletProvider: IWalletProvider = {
     asset: 'USDT',
     network: 'TRON',
   }),
+  withdraw: jest.fn().mockResolvedValue({
+    providerReference: 'e2e-tx-ref-stub',
+    status: 'pending' as const,
+  }),
 };
 
 const FAKE_ACCOUNT_NUMBER = '0987654321';

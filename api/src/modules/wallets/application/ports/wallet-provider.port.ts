@@ -26,6 +26,31 @@ export interface GetBalanceOutput {
   decimals: number;
 }
 
+export interface WithdrawInput {
+  /** Provider-scoped child address id (providerReference on WalletRecord). Withdraw is sent FROM this address. */
+  addressId: string;
+  /** On-chain destination address. */
+  toAddress: string;
+  /** Human-scaled amount string (e.g. "10.5" for 10.5 USDT). */
+  amount: string;
+  /** Provider-specific asset id (from AssetRegistry.assetProviderId). */
+  assetId: string;
+  /**
+   * Optional caller-supplied idempotency key. If provided, Blockradar uses it
+   * as the `reference` field to deduplicate concurrent or retried withdrawals.
+   */
+  reference?: string;
+}
+
+export interface WithdrawOutput {
+  /** Provider-assigned transaction / reference id. */
+  providerReference: string;
+  /** On-chain transaction hash. May be absent while the transaction is still pending. */
+  txHash?: string;
+  /** Transaction lifecycle status returned by the provider. */
+  status: 'pending' | 'success' | 'failed';
+}
+
 export interface IWalletProvider {
   /**
    * Provisions a new child address under the configured master wallet.
@@ -43,4 +68,16 @@ export interface IWalletProvider {
    * @param assetId   - The provider-specific asset id (from AssetRegistry.assetProviderId).
    */
   getBalance(addressId: string, assetId: string): Promise<GetBalanceOutput>;
+
+  /**
+   * Initiates an on-chain withdrawal from the given child address to an external address.
+   *
+   * Uses `POST /wallets/{masterWalletId}/addresses/{addressId}/withdraw` (Blockradar v1).
+   * The call is NON-BLOCKING: the provider returns immediately with a pending status and
+   * delivers the final status via webhook. The deterministic execution engine (§3.1)
+   * holds the idempotency key and updates the settlement record on webhook receipt.
+   *
+   * @throws Error (with provider message) on non-2xx responses.
+   */
+  withdraw(input: WithdrawInput): Promise<WithdrawOutput>;
 }

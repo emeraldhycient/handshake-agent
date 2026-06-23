@@ -121,6 +121,10 @@ const fakeWalletProvider: IWalletProvider = {
     asset: 'USDT',
     network: 'TRON',
   }),
+  withdraw: jest.fn().mockResolvedValue({
+    providerReference: 'e2e-tx-ref-stub',
+    status: 'pending' as const,
+  }),
 };
 
 // Payment provider: verifyWebhookSignature does constant-time equality
