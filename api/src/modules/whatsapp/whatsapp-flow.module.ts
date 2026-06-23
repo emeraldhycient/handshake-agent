@@ -1,22 +1,27 @@
 /**
- * Thin module that owns the WhatsApp Flows E2E crypto binding.
+ * Module that owns the WhatsApp Flows E2E crypto binding and the Flow
+ * data-exchange endpoint controller (Task 6.2).
  *
- * Kept separate from WhatsAppSenderModule and WhatsAppModule to maintain an
- * acyclic dependency graph. The Flow endpoint controller (6.2) will import
- * this module or have it re-exported from WhatsAppModule.
+ * Imports TransactionsModule to get ExecutionService (the deterministic engine).
+ * Does NOT import ConversationsModule — keeps the module graph acyclic.
  *
  * Dependency graph (acyclic):
- *   WhatsAppModule → WhatsAppFlowModule (no further deps)
+ *   WhatsAppModule → WhatsAppFlowModule → TransactionsModule
  *
- * ConfigModule is global (registered in AppModule) so FlowCryptoService's
- * ConfigService injection works without an explicit import here.
+ * ConfigModule is global (registered in AppModule) so FlowCryptoService's and
+ * WhatsAppFlowController's ConfigService injections work without an explicit
+ * import here.
  */
 
 import { Module } from '@nestjs/common';
 import { FLOW_CRYPTO } from './application/ports/flow-crypto.port';
 import { FlowCryptoService } from './infrastructure/flow-crypto.service';
+import { WhatsAppFlowController } from './presentation/whatsapp-flow.controller';
+import { TransactionsModule } from '../transactions/transactions.module';
 
 @Module({
+  imports: [TransactionsModule],
+  controllers: [WhatsAppFlowController],
   providers: [{ provide: FLOW_CRYPTO, useClass: FlowCryptoService }],
   exports: [FLOW_CRYPTO],
 })

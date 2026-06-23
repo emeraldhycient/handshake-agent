@@ -30,3 +30,14 @@ export class FlowKeyNotConfiguredError extends Error {
     this.name = 'FlowKeyNotConfiguredError';
   }
 }
+
+/**
+ * Thrown when a flow_token HMAC fails verification or the token is expired.
+ * The controller maps this to an ERROR screen response (no internals exposed).
+ */
+export class FlowTokenError extends Error {
+  constructor(reason: string) {
+    super(`Flow token invalid: ${reason}`);
+    this.name = 'FlowTokenError';
+  }
+}
