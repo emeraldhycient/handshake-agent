@@ -30,6 +30,13 @@ export class UnsupportedNetworkError extends Error {
   }
 }
 
+export class UnsupportedNetworkForAssetError extends Error {
+  constructor(network: string, asset: string) {
+    super(`Network "${network}" is not supported for asset "${asset}"`);
+    this.name = 'UnsupportedNetworkForAssetError';
+  }
+}
+
 export class CapabilityDisabledError extends Error {
   constructor(capability: string) {
     super(`Capability "${capability}" is not enabled`);

@@ -11,11 +11,13 @@
 
 import {
   buildBuyLedgerEntries,
+  buildDepositLedgerEntries,
   LedgerError,
   LedgerAccountType,
   LedgerDirection,
   type AccountState,
   type BuildBuyLedgerInput,
+  type BuildDepositLedgerInput,
   type LedgerEntryDraft,
 } from './ledger';
 
@@ -417,5 +419,176 @@ describe('buildBuyLedgerEntries', () => {
       const usdt = entries.filter((e) => e.currency === 'USDT');
       expect(usdt).toHaveLength(2);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildDepositLedgerEntries
+// ---------------------------------------------------------------------------
+
+/** Make a fresh deposit input with all accounts at {sequence:0, balance:'0'}. */
+function freshDepositInput(
+  overrides?: Partial<BuildDepositLedgerInput>,
+): BuildDepositLedgerInput {
+  return {
+    walletId: 'wallet-deposit-abc',
+    cryptoAmount: '5.5',
+    postedAt: new Date('2025-06-01T12:00:00Z'),
+    accountStates: {},
+    ...overrides,
+  };
+}
+
+describe('buildDepositLedgerEntries', () => {
+  // -------------------------------------------------------------------------
+  // Guards — positive-amount enforcement (invariant 2)
+  // -------------------------------------------------------------------------
+
+  describe('guards', () => {
+    it('throws LedgerError when cryptoAmount is zero', () => {
+      expect(() =>
+        buildDepositLedgerEntries(freshDepositInput({ cryptoAmount: '0' })),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when cryptoAmount is negative', () => {
+      expect(() =>
+        buildDepositLedgerEntries(freshDepositInput({ cryptoAmount: '-1' })),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when cryptoAmount is not a valid decimal', () => {
+      expect(() =>
+        buildDepositLedgerEntries(freshDepositInput({ cryptoAmount: 'abc' })),
+      ).toThrow(LedgerError);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Happy path — fresh account states
+  // -------------------------------------------------------------------------
+
+  describe('happy path — fresh account states', () => {
+    let entries: LedgerEntryDraft[];
+
+    beforeAll(() => {
+      entries = buildDepositLedgerEntries(freshDepositInput());
+    });
+
+    it('returns exactly 2 entries (invariant 5)', () => {
+      expect(entries).toHaveLength(2);
+    });
+
+    it('USDT signed amounts sum to zero per-currency (invariant 1)', () => {
+      expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+    });
+
+    it('every amount is non-zero (invariant 2)', () => {
+      const SCALE = 10n ** 18n;
+      for (const e of entries) {
+        const isNeg = e.amount.startsWith('-');
+        const abs = isNeg ? e.amount.slice(1) : e.amount;
+        const [whole = '0', frac = ''] = abs.split('.');
+        const fracPadded = frac.slice(0, 18).padEnd(18, '0');
+        const scaled = BigInt(whole) * SCALE + BigInt(fracPadded);
+        expect(scaled).not.toBe(0n);
+      }
+    });
+
+    it('sequence is prevSequence + 1 for fresh accounts (invariant 3)', () => {
+      for (const e of entries) {
+        expect(e.sequence).toBe(1);
+      }
+    });
+
+    it('balanceAfter equals 0 + signedAmount for fresh accounts (invariant 4)', () => {
+      for (const e of entries) {
+        expect(e.balanceAfter).toBe(e.amount);
+      }
+    });
+
+    it('user_wallet / walletId / USDT is credited +cryptoAmount (correct direction)', () => {
+      const userEntry = entries.find(
+        (e) =>
+          e.accountType === LedgerAccountType.user_wallet &&
+          e.accountId === 'wallet-deposit-abc' &&
+          e.currency === 'USDT',
+      );
+      expect(userEntry).toBeDefined();
+      expect(userEntry!.amount).toBe('5.5');
+      expect(userEntry!.direction).toBe(LedgerDirection.credit);
+    });
+
+    it('clearing / usdt_external_deposits / USDT is debited −cryptoAmount (correct direction)', () => {
+      const clearingEntry = entries.find(
+        (e) =>
+          e.accountType === LedgerAccountType.clearing &&
+          e.accountId === 'usdt_external_deposits' &&
+          e.currency === 'USDT',
+      );
+      expect(clearingEntry).toBeDefined();
+      expect(clearingEntry!.amount).toBe('-5.5');
+      expect(clearingEntry!.direction).toBe(LedgerDirection.debit);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Non-zero prior account states — sequence + balanceAfter advance correctly
+  // -------------------------------------------------------------------------
+
+  describe('with non-zero prior account states (invariants 3 & 4)', () => {
+    it('advances sequence and balanceAfter from previous state', () => {
+      const accountStates: Record<string, AccountState> = {
+        'user_wallet:wallet-deposit-abc:USDT': {
+          sequence: 4,
+          balance: '20.0',
+        },
+        'clearing:usdt_external_deposits:USDT': {
+          sequence: 2,
+          balance: '-30.0',
+        },
+      };
+
+      const entries = buildDepositLedgerEntries(
+        freshDepositInput({ cryptoAmount: '10', accountStates }),
+      );
+
+      // user_wallet: prev seq=4 → next=5; prev balance=20.0 + 10 = 30
+      const userEntry = entries.find(
+        (e) => e.accountType === LedgerAccountType.user_wallet,
+      )!;
+      expect(userEntry.sequence).toBe(5);
+      expect(userEntry.balanceAfter).toBe('30');
+
+      // clearing: prev seq=2 → next=3; prev balance=-30.0 + (-10) = -40
+      const clearingEntry = entries.find(
+        (e) => e.accountType === LedgerAccountType.clearing,
+      )!;
+      expect(clearingEntry.sequence).toBe(3);
+      expect(clearingEntry.balanceAfter).toBe('-40');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Property: per-currency sum is zero for various deposit amounts
+  // -------------------------------------------------------------------------
+
+  describe('property: USDT signed amounts sum to 0 for various deposit sizes', () => {
+    const cases = [
+      { cryptoAmount: '0.000001' },
+      { cryptoAmount: '1' },
+      { cryptoAmount: '100.5' },
+      { cryptoAmount: '999999.123456789012345678' },
+    ];
+
+    it.each(cases)(
+      'USDT sum=0 for cryptoAmount=$cryptoAmount',
+      ({ cryptoAmount }) => {
+        const entries = buildDepositLedgerEntries(
+          freshDepositInput({ cryptoAmount }),
+        );
+        expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+      },
+    );
   });
 });

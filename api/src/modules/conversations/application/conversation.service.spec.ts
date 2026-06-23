@@ -292,12 +292,9 @@ function makeDirectiveService(
 
 function makeWalletService(
   wallet: WalletRecord = stubWalletRecord(),
-): jest.Mocked<
-  Pick<WalletService, 'getOrProvisionWallet' | 'getOrProvisionUsdtTronWallet'>
-> {
+): jest.Mocked<Pick<WalletService, 'getOrProvisionWallet'>> {
   return {
     getOrProvisionWallet: jest.fn().mockResolvedValue(wallet),
-    getOrProvisionUsdtTronWallet: jest.fn().mockResolvedValue(wallet),
   };
 }
 
@@ -364,12 +361,7 @@ function buildService(
     replyRepo?: jest.Mocked<IReplyRepository>;
     configService?: jest.Mocked<ConfigService>;
     directiveService?: jest.Mocked<Pick<DirectiveService, 'issue'>>;
-    walletService?: jest.Mocked<
-      Pick<
-        WalletService,
-        'getOrProvisionWallet' | 'getOrProvisionUsdtTronWallet'
-      >
-    >;
+    walletService?: jest.Mocked<Pick<WalletService, 'getOrProvisionWallet'>>;
     assetRegistry?: jest.Mocked<AssetRegistry>;
   } = {},
 ) {

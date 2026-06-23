@@ -12,7 +12,10 @@
 
 import type { Clock } from '../../../core/common/clock';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
-import { UnsupportedAssetError } from '../../../core/catalog/catalog-errors';
+import {
+  UnsupportedAssetError,
+  UnsupportedNetworkForAssetError,
+} from '../../../core/catalog/catalog-errors';
 import type { IWalletProvider } from './ports/wallet-provider.port';
 import type {
   IWalletRepository,
@@ -250,7 +253,7 @@ describe('WalletService', () => {
       expect(provider.provisionAddress).not.toHaveBeenCalled();
     });
 
-    it('throws when the network is not listed for the asset', async () => {
+    it('throws UnsupportedNetworkForAssetError when the network is not listed for the asset', async () => {
       const provider = makeProvider();
       const repo = makeRepo(null);
       const registry = makeAssetRegistry();
@@ -269,7 +272,7 @@ describe('WalletService', () => {
 
       await expect(
         service.getOrProvisionWallet(USER_ID, 'USDT', 'ETH'),
-      ).rejects.toThrow(/not supported for asset/);
+      ).rejects.toBeInstanceOf(UnsupportedNetworkForAssetError);
       expect(provider.provisionAddress).not.toHaveBeenCalled();
     });
   });

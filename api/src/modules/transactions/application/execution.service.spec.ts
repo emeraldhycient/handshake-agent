@@ -266,7 +266,7 @@ function makePinService(
 }
 
 function makeWalletService(): jest.Mocked<
-  Pick<WalletService, 'getOrProvisionWallet' | 'getOrProvisionUsdtTronWallet'>
+  Pick<WalletService, 'getOrProvisionWallet'>
 > {
   const walletRecord = {
     id: 'wallet-id',
@@ -279,7 +279,6 @@ function makeWalletService(): jest.Mocked<
   };
   return {
     getOrProvisionWallet: jest.fn().mockResolvedValue(walletRecord),
-    getOrProvisionUsdtTronWallet: jest.fn().mockResolvedValue(walletRecord),
   };
 }
 
@@ -360,12 +359,7 @@ function buildService(
     kycGate?: jest.Mocked<Pick<KycGateService, 'assertCanTransact'>>;
     directiveService?: jest.Mocked<Pick<DirectiveService, 'consume'>>;
     pinService?: jest.Mocked<Pick<PinService, 'verifyPin'>>;
-    walletService?: jest.Mocked<
-      Pick<
-        WalletService,
-        'getOrProvisionWallet' | 'getOrProvisionUsdtTronWallet'
-      >
-    >;
+    walletService?: jest.Mocked<Pick<WalletService, 'getOrProvisionWallet'>>;
     paymentProvider?: jest.Mocked<
       Pick<IPaymentProvider, 'createCollection' | 'verify'>
     >;
@@ -948,11 +942,10 @@ const WALLET_RECORD = {
 };
 
 function makeWalletServiceWithId(): jest.Mocked<
-  Pick<WalletService, 'getOrProvisionWallet' | 'getOrProvisionUsdtTronWallet'>
+  Pick<WalletService, 'getOrProvisionWallet'>
 > {
   return {
     getOrProvisionWallet: jest.fn().mockResolvedValue(WALLET_RECORD),
-    getOrProvisionUsdtTronWallet: jest.fn().mockResolvedValue(WALLET_RECORD),
   };
 }
 

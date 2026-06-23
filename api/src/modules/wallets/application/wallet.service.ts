@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import { UnsupportedNetworkForAssetError } from '../../../core/catalog/catalog-errors';
 import {
   WALLET_PROVIDER,
   type IWalletProvider,
@@ -45,9 +46,9 @@ export class WalletService {
    * Validates that the asset is enabled in the registry and that the network
    * is enabled and registered for that asset before provisioning.
    *
-   * @throws {UnsupportedAssetError}   when the asset is not registered or disabled.
-   * @throws {UnsupportedNetworkError} when the network is not registered or disabled.
-   * @throws {UnsupportedAssetError}   when the asset does not list the network.
+   * @throws {UnsupportedAssetError}            when the asset is not registered or disabled.
+   * @throws {UnsupportedNetworkError}           when the network is not registered or disabled.
+   * @throws {UnsupportedNetworkForAssetError}   when the asset does not list the network.
    */
   async getOrProvisionWallet(
     userId: string,
@@ -58,10 +59,8 @@ export class WalletService {
     const assetMeta = this.assetRegistry.asset(asset);
     this.assetRegistry.network(network); // throws UnsupportedNetworkError if absent/disabled
     if (!assetMeta.networks.includes(network)) {
-      // The network is registered but not listed for this asset.
-      throw new Error(
-        `Network '${network}' is not supported for asset '${asset}'`,
-      );
+      // The network is registered globally but not listed for this asset.
+      throw new UnsupportedNetworkForAssetError(network, asset);
     }
 
     const existing = await this.repo.findByUserAssetNetwork(

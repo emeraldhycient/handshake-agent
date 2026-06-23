@@ -437,6 +437,8 @@ export class ExecutionService {
     // ── Step 5: Resolve the user's USDT wallet ────────────────────────────────
     // Asset is sourced from the transaction metadata; network from the registry
     // default for that asset — catalog is the single source of truth (task X3).
+    // Fallback to defaultCryptoAsset() covers older transactions written before
+    // the asset field was added to metadata; remove once all txns carry meta.asset.
     const settleAsset =
       (meta.asset as string | undefined) ??
       this.assetRegistry.defaultCryptoAsset();
