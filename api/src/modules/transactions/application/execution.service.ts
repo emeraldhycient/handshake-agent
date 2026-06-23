@@ -286,6 +286,14 @@ export class ExecutionService {
       },
       proposalId,
       confirmedAt: now,
+      // V1 — §3.3 gap fix: write velocity counters atomically so the daily gate
+      // sees in-flight usage on the next call. Uses the Clock's `now` (not
+      // Date.now()) so the window boundary is deterministic in tests.
+      velocityIncrement: {
+        userId,
+        fiatAmountStr: storedQuote.fiatAmount,
+        now,
+      },
     });
 
     // ── Step 8: Side effects ─────────────────────────────────────────────────

@@ -92,14 +92,17 @@ class StubConfigService {
 // Fake external providers
 // ---------------------------------------------------------------------------
 
-const FAKE_WALLET_ADDRESS = 'TFakeWalletAddress1234567890';
 const FAKE_BLOCKRADAR_REF = 'fake_blockradar_ref_e2e';
 
+// provisionAddress returns a unique address per call so multiple test-user wallets
+// don't collide on the Wallet.address unique constraint.
 const fakeWalletProvider: IWalletProvider = {
-  provisionAddress: jest.fn().mockResolvedValue({
-    address: FAKE_WALLET_ADDRESS,
-    providerReference: FAKE_BLOCKRADAR_REF,
-  }),
+  provisionAddress: jest.fn().mockImplementation(() =>
+    Promise.resolve({
+      address: `TFakeWallet${randomUUID().replace(/-/g, '').slice(0, 20)}`,
+      providerReference: FAKE_BLOCKRADAR_REF,
+    }),
+  ),
   getBalance: jest.fn().mockResolvedValue({
     available: '0',
     pending: '0',
@@ -324,6 +327,292 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
   // ---------------------------------------------------------------------------
   // Idempotent replay: second call returns same transactionId, no duplicate rows
   // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+  // Velocity enforcement (V1 — §3.3 gap fix)
+  //
+  // These tests use a DEDICATED isolated user seeded per-test so that velocity
+  // counters from the happy-path and idempotency tests don't interfere.
+  // Tier 1 caps: perTxFiatMax=50_000 NGN, dailyFiatMax=200_000 NGN, dailyTxCountMax=10
+  // ---------------------------------------------------------------------------
+
+  it('velocity: executeBuy writes VelocityCounter rows atomically; subsequent KYC gate reads them', async () => {
+    // Seed an isolated user so no interference from other tests.
+    const velocityUser = await prisma.user.create({
+      data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },
+    });
+    await pinService.setPin(velocityUser.id, '123456');
+
+    // Seed a proposal for this user (reuse proposalService with the right userId).
+    const quoteResult = await proposalService.createBuyProposal({
+      userId: velocityUser.id,
+      intent: {
+        action: 'buy_crypto',
+        asset: 'USDT',
+        fiatAmount: '10000',
+        fiatCurrency: 'NGN',
+      },
+    });
+    const dir = await directiveService.issue({
+      proposalId: quoteResult.proposalId,
+      userId: velocityUser.id,
+      ref: 'request_pin',
+    });
+
+    // Execute buy — this should atomically write velocity counters.
+    await executionService.executeBuy({
+      userId: velocityUser.id,
+      proposalId: quoteResult.proposalId,
+      directiveId: dir.directiveId,
+      nonce: dir.nonce,
+      pin: '123456',
+      idempotencyKey: randomUUID(),
+    });
+
+    // Verify velocity counters were written to the DB.
+    const amountCounter = await prisma.velocityCounter.findUnique({
+      where: {
+        userId_counterType: {
+          userId: velocityUser.id,
+          counterType: 'amount_24h',
+        },
+      },
+    });
+    const countCounter = await prisma.velocityCounter.findUnique({
+      where: {
+        userId_counterType: {
+          userId: velocityUser.id,
+          counterType: 'count_24h',
+        },
+      },
+    });
+
+    expect(amountCounter).not.toBeNull();
+    expect(Number(amountCounter!.currentValue)).toBe(10_000);
+    expect(countCounter).not.toBeNull();
+    expect(Number(countCounter!.currentValue)).toBe(1);
+  });
+
+  it('velocity: daily fiat cap trips after accumulation (§3.3 enforced end-to-end)', async () => {
+    // Seed an isolated Tier-1 user.
+    const capUser = await prisma.user.create({
+      data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },
+    });
+    await pinService.setPin(capUser.id, '123456');
+
+    // Tier-1 dailyFiatMax=200_000, perTxFiatMax=50_000.
+    // Run 4 buys × 50_000 = 200_000 (at the limit — all pass).
+    for (let i = 0; i < 4; i++) {
+      const q = await proposalService.createBuyProposal({
+        userId: capUser.id,
+        intent: {
+          action: 'buy_crypto',
+          asset: 'USDT',
+          fiatAmount: '50000',
+          fiatCurrency: 'NGN',
+        },
+      });
+      const d = await directiveService.issue({
+        proposalId: q.proposalId,
+        userId: capUser.id,
+        ref: 'request_pin',
+      });
+      await executionService.executeBuy({
+        userId: capUser.id,
+        proposalId: q.proposalId,
+        directiveId: d.directiveId,
+        nonce: d.nonce,
+        pin: '123456',
+        idempotencyKey: randomUUID(),
+      });
+    }
+
+    // Velocity counter should now be at 200_000.
+    const amountCounter = await prisma.velocityCounter.findUnique({
+      where: {
+        userId_counterType: {
+          userId: capUser.id,
+          counterType: 'amount_24h',
+        },
+      },
+    });
+    expect(Number(amountCounter!.currentValue)).toBe(200_000);
+
+    // The NEXT buy (10_000 NGN) would push total to 210_000 > 200_000 cap.
+    // ProposalService.createBuyProposal also calls KycGateService internally,
+    // so we call assertCanTransact directly to test the gate in isolation.
+    const { VelocityExceededError } =
+      await import('../src/modules/identity/domain/gate-errors');
+    await expect(
+      // Import the gate service reference to call assertCanTransact.
+      // executionService exposes kycGate indirectly — easier to call directly.
+      // We re-instantiate the KycGateService with real repos to test the gate.
+      (async () => {
+        const { IdentityPrismaRepository } =
+          await import('../src/modules/identity/infrastructure/identity.prisma.repository');
+        const { VelocityPrismaRepository } =
+          await import('../src/modules/identity/infrastructure/velocity.prisma.repository');
+        const { KycGateService } =
+          await import('../src/modules/identity/application/kyc-gate.service');
+        const ps =
+          prisma as unknown as import('../src/core/prisma/prisma.service').PrismaService;
+        const identityRepo = new IdentityPrismaRepository(ps);
+        const velocityRepo = new VelocityPrismaRepository(ps);
+        const config = new StubConfigService() as never;
+        const gate = new KycGateService(
+          identityRepo,
+          velocityRepo,
+          config,
+          clock,
+        );
+        await gate.assertCanTransact({
+          userId: capUser.id,
+          fiatAmount: 10_000,
+          asset: 'USDT',
+        });
+      })(),
+    ).rejects.toBeInstanceOf(VelocityExceededError);
+  });
+
+  it('velocity: daily tx count cap trips after 10 transactions (§3.3 enforced end-to-end)', async () => {
+    // Seed an isolated Tier-1 user with a very high dailyFiatMax effective limit.
+    // We'll use tiny amounts (1 NGN) so fiat cap is never hit.
+    // But dailyTxCountMax=10 will trip on the 11th call.
+    const countUser = await prisma.user.create({
+      data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },
+    });
+    await pinService.setPin(countUser.id, '123456');
+
+    // Seed VelocityCounter directly at count=9 (faster than running 9 real buys).
+    const now = new Date();
+    await prisma.velocityCounter.create({
+      data: {
+        userId: countUser.id,
+        counterType: 'count_24h',
+        currentValue: 9,
+        windowStart: now,
+        windowEnd: new Date(now.getTime() + 24 * 60 * 60 * 1_000),
+      },
+    });
+    // Also seed amount counter (small amount so fiat cap doesn't interfere).
+    await prisma.velocityCounter.create({
+      data: {
+        userId: countUser.id,
+        counterType: 'amount_24h',
+        currentValue: 9_000,
+        windowStart: now,
+        windowEnd: new Date(now.getTime() + 24 * 60 * 60 * 1_000),
+      },
+    });
+
+    // The 10th buy (count_24h goes from 9 → 10) should succeed.
+    const q10 = await proposalService.createBuyProposal({
+      userId: countUser.id,
+      intent: {
+        action: 'buy_crypto',
+        asset: 'USDT',
+        fiatAmount: '1000',
+        fiatCurrency: 'NGN',
+      },
+    });
+    const d10 = await directiveService.issue({
+      proposalId: q10.proposalId,
+      userId: countUser.id,
+      ref: 'request_pin',
+    });
+    // Should NOT throw — count goes to 10 which equals the cap (not over).
+    await expect(
+      executionService.executeBuy({
+        userId: countUser.id,
+        proposalId: q10.proposalId,
+        directiveId: d10.directiveId,
+        nonce: d10.nonce,
+        pin: '123456',
+        idempotencyKey: randomUUID(),
+      }),
+    ).resolves.toMatchObject({ status: 'settling' });
+
+    // The 11th buy (count_24h = 10 + 1 = 11 > 10 cap) must throw VelocityExceededError.
+    // ProposalService.createBuyProposal calls KycGateService first → throws there.
+    const { VelocityExceededError } =
+      await import('../src/modules/identity/domain/gate-errors');
+    await expect(
+      proposalService.createBuyProposal({
+        userId: countUser.id,
+        intent: {
+          action: 'buy_crypto',
+          asset: 'USDT',
+          fiatAmount: '1000',
+          fiatCurrency: 'NGN',
+        },
+      }),
+    ).rejects.toBeInstanceOf(VelocityExceededError);
+  });
+
+  it('velocity: expired window resets counters on next executeBuy (V1 window-reset logic)', async () => {
+    const resetUser = await prisma.user.create({
+      data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },
+    });
+    await pinService.setPin(resetUser.id, '123456');
+
+    // Seed stale (expired) velocity counter rows — windowEnd 48h in the past.
+    const pastNow = new Date();
+    const staleEnd = new Date(pastNow.getTime() - 48 * 60 * 60 * 1_000);
+    const staleStart = new Date(staleEnd.getTime() - 24 * 60 * 60 * 1_000);
+    await prisma.velocityCounter.create({
+      data: {
+        userId: resetUser.id,
+        counterType: 'amount_24h',
+        currentValue: 199_000, // near the cap — but stale
+        windowStart: staleStart,
+        windowEnd: staleEnd,
+      },
+    });
+    await prisma.velocityCounter.create({
+      data: {
+        userId: resetUser.id,
+        counterType: 'count_24h',
+        currentValue: 9, // near the cap — but stale
+        windowStart: staleStart,
+        windowEnd: staleEnd,
+      },
+    });
+
+    // Execute a buy — should succeed because the stale counters should be reset.
+    const q = await proposalService.createBuyProposal({
+      userId: resetUser.id,
+      intent: {
+        action: 'buy_crypto',
+        asset: 'USDT',
+        fiatAmount: '10000',
+        fiatCurrency: 'NGN',
+      },
+    });
+    const d = await directiveService.issue({
+      proposalId: q.proposalId,
+      userId: resetUser.id,
+      ref: 'request_pin',
+    });
+
+    await expect(
+      executionService.executeBuy({
+        userId: resetUser.id,
+        proposalId: q.proposalId,
+        directiveId: d.directiveId,
+        nonce: d.nonce,
+        pin: '123456',
+        idempotencyKey: randomUUID(),
+      }),
+    ).resolves.toMatchObject({ status: 'settling' });
+
+    // After the buy, the counter should be reset to just the new amount (not 199_000+10_000).
+    const amountCounter = await prisma.velocityCounter.findUnique({
+      where: {
+        userId_counterType: { userId: resetUser.id, counterType: 'amount_24h' },
+      },
+    });
+    expect(Number(amountCounter!.currentValue)).toBe(10_000); // reset, not 209_000
+  });
 
   it('idempotent replay: second call returns same transactionId, no new Transaction/Outbox rows', async () => {
     const { proposalId } = await seedProposalAndQuote();

@@ -484,6 +484,40 @@ describe('ExecutionService.executeBuy', () => {
     );
   });
 
+  // ── Velocity increment passed to atomic write (V1 — §3.3 gap fix) ──────────
+
+  it('passes velocityIncrement (fiatAmountStr + now) to createSettlingWithProposal so counters are written atomically (V1)', async () => {
+    const transactionRepo = makeTransactionRepo();
+
+    const svc = buildService({ transactionRepo });
+    await svc.executeBuy(BASE_INPUT);
+
+    // The atomic write must include velocityIncrement with the correct fields.
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    expect(transactionRepo.createSettlingWithProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        velocityIncrement: expect.objectContaining({
+          userId: USER_ID,
+          fiatAmountStr: STORED_QUOTE.fiatAmount, // '10000'
+          now: FIXED_NOW,
+        }),
+      }),
+    );
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+  });
+
+  it('does NOT pass velocityIncrement on idempotent replay (no counter double-write)', async () => {
+    // On replay the engine returns early after the findByIdempotencyKey hit.
+    const existingTxn: TransactionRecord = { ...STUB_TXN, status: 'settling' };
+    const transactionRepo = makeTransactionRepo(existingTxn);
+
+    const svc = buildService({ transactionRepo });
+    await svc.executeBuy(BASE_INPUT);
+
+    // createSettlingWithProposal must NOT be called on replay.
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+  });
+
   it('asserts directive + PIN are called BEFORE atomic Transaction+Proposal write (security-critical order)', async () => {
     const callOrder: string[] = [];
 

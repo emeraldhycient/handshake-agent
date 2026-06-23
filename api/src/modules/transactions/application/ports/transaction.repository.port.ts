@@ -67,6 +67,22 @@ export interface TransactionRecord {
   createdAt: Date;
 }
 
+/**
+ * Velocity counters to atomically increment inside the settling write (V1).
+ * Passed by the application layer; the repository executes the upserts in the
+ * same DB $transaction so in-flight usage is visible to subsequent gate reads.
+ */
+export interface VelocityIncrementData {
+  userId: string;
+  /**
+   * Fiat amount for amount_24h counter (as a string to avoid float precision
+   * loss — Prisma Decimal accepts a string without rounding).
+   */
+  fiatAmountStr: string;
+  /** Wall-clock `now` supplied by the engine Clock for window calculation. */
+  now: Date;
+}
+
 /** Data required for an atomic transaction+proposal settling write (C1). */
 export interface CreateSettlingWithProposalData {
   txnData: CreateTransactionData;
@@ -74,6 +90,12 @@ export interface CreateSettlingWithProposalData {
   proposalId: string;
   /** Optional timestamp to set on Proposal.confirmedAt. */
   confirmedAt?: Date;
+  /**
+   * When provided, atomically upserts VelocityCounter rows for amount_24h and
+   * count_24h in the same Prisma $transaction (V1 — fixes the §3.3 gap where
+   * daily velocity caps never tripped because counters were never written).
+   */
+  velocityIncrement?: VelocityIncrementData;
 }
 
 export interface ITransactionRepository {
@@ -89,11 +111,14 @@ export interface ITransactionRepository {
   create(data: CreateTransactionData): Promise<TransactionRecord>;
 
   /**
-   * Atomically creates a Transaction row (status='settling') and updates the
-   * associated Proposal to status='executing' in a single Prisma $transaction.
+   * Atomically creates a Transaction row (status='settling'), updates the
+   * associated Proposal to status='executing', and — when `velocityIncrement`
+   * is provided — upserts VelocityCounter rows for amount_24h and count_24h,
+   * all in a single Prisma $transaction (C1 + V1).
    *
-   * This prevents the orphan-transaction window (C1): if either write fails
-   * the entire operation is rolled back.
+   * A failure at any step rolls back the entire operation:
+   *   - No orphan settling Transaction while the Proposal stays pending (C1).
+   *   - No partial velocity write that would over- or under-count usage (V1).
    */
   createSettlingWithProposal(
     input: CreateSettlingWithProposalData,
