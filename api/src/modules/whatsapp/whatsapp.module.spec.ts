@@ -3,6 +3,14 @@
  *
  * Sets required env vars before the module compiles so the env validation
  * schema passes. No network calls are made.
+ *
+ * WhatsAppModule now imports ConversationsModule (which pulls in AgentModule,
+ * IdentityModule, TransactionsModule, and WhatsAppSenderModule). The full
+ * dependency tree includes PrismaService (DB) and AnthropicLlmProvider (LLM).
+ *
+ * Strategy: import PrismaModule (which is @Global so it satisfies all child
+ * module PrismaService injections) and override PrismaService with a noop
+ * stub. Also override INBOUND_HANDLER with a noop stub to keep the test lean.
  */
 
 import { ConfigModule } from '@nestjs/config';
@@ -10,12 +18,31 @@ import { Test, TestingModule } from '@nestjs/testing';
 
 import configuration from '../../core/config/configuration';
 import { validateEnv } from '../../core/config/env.schema';
+import { PrismaModule } from '../../core/prisma/prisma.module';
+import { PrismaService } from '../../core/prisma/prisma.service';
+import { ProposalService } from '../transactions/application/proposal.service';
 import {
   INBOUND_HANDLER,
   type IInboundHandler,
 } from './application/ports/inbound-handler.port';
 import { WhatsAppWebhookController } from './presentation/whatsapp-webhook.controller';
 import { WhatsAppModule } from './whatsapp.module';
+
+// Stub implementations used to override real providers that require
+// external resources (DB, LLM API, HTTP) in the compiled module graph.
+const noopInboundHandler: IInboundHandler = {
+  handleInbound: () => Promise.resolve(),
+};
+
+// Noop PrismaService stub — no DB connection attempted.
+// All methods return sensible no-op values so repositories can be instantiated
+// without connecting to a real database.
+const noopPrismaService = {
+  $connect: () => Promise.resolve(),
+  $disconnect: () => Promise.resolve(),
+  onModuleInit: () => Promise.resolve(),
+  onModuleDestroy: () => Promise.resolve(),
+} as unknown as PrismaService;
 
 // Set required env vars before the module compiles (env validation runs at
 // ConfigModule load time). These are test-only dummy values — no network is hit.
@@ -46,9 +73,29 @@ describe('WhatsAppModule (compile)', () => {
           load: [configuration],
           validate: (raw: Record<string, unknown>) => validateEnv(raw),
         }),
+        // PrismaModule is @Global — importing it here makes PrismaService available
+        // to all child modules (IdentityModule, TransactionsModule, etc.) without
+        // connecting to a real DB (we override PrismaService below).
+        PrismaModule,
         WhatsAppModule,
       ],
-    }).compile();
+    })
+      // Override INBOUND_HANDLER so ConversationsModule's full orchestration
+      // (DB writes, LLM calls, proposal creation) does not execute in a compile test.
+      .overrideProvider(INBOUND_HANDLER)
+      .useValue(noopInboundHandler)
+      // Override PrismaService so infrastructure repositories can be instantiated
+      // without an actual DB connection.
+      .overrideProvider(PrismaService)
+      .useValue(noopPrismaService)
+      // Override ProposalService: it injects QuotesService via reflected type
+      // metadata (not a symbol token). The type import in proposal.service.ts
+      // emits `Object` in the compiled output, which Nest cannot resolve by type
+      // when the module is loaded in a unit test context without the real
+      // QuotesModule DI sub-tree. A noop stub avoids the resolution failure.
+      .overrideProvider(ProposalService)
+      .useValue({ createBuyProposal: jest.fn() })
+      .compile();
   });
 
   afterEach(async () => {

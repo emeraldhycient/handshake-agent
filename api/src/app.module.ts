@@ -8,7 +8,10 @@ import configuration from './core/config/configuration';
 import { validateEnv } from './core/config/env.schema';
 import { PrismaModule } from './core/prisma/prisma.module';
 import { AgentModule } from './modules/agent/agent.module';
+import { IdentityModule } from './modules/identity/identity.module';
 import { QuotesModule } from './modules/quotes/quotes.module';
+import { TransactionsModule } from './modules/transactions/transactions.module';
+import { ConversationsModule } from './modules/conversations/conversations.module';
 import { WhatsAppModule } from './modules/whatsapp/whatsapp.module';
 
 @Module({
@@ -28,7 +31,10 @@ import { WhatsAppModule } from './modules/whatsapp/whatsapp.module';
     }),
     PrismaModule,
     AgentModule,
+    IdentityModule,
     QuotesModule,
+    TransactionsModule,
+    ConversationsModule,
     WhatsAppModule,
   ],
   // Global Zod validation: every request DTO is checked against its contract schema.
