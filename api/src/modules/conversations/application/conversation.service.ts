@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 
 import type {
   IInboundHandler,
@@ -63,6 +63,8 @@ function buildConfirmationText(c: {
 
 @Injectable()
 export class ConversationService implements IInboundHandler {
+  private readonly logger = new Logger(ConversationService.name);
+
   constructor(
     private readonly identityService: IdentityService,
     @Inject(AGENT_PORT) private readonly agentPort: IAgentPort,
@@ -199,15 +201,25 @@ export class ConversationService implements IInboundHandler {
         }
       }
 
+      // Log the error so it is captured by pino — the catch block must never throw.
+      // Cast err through unknown→Error|string for structured logging; pino serialises it.
+      const logErr = err instanceof Error ? err : new Error(String(err));
+      this.logger.error(
+        {
+          err: logErr,
+          correlationId,
+          externalMessageId: msg.externalMessageId,
+          messageId,
+        },
+        'handleInbound failed — sending safe fallback',
+      );
+
       // Best-effort: send a safe fallback reply so the user is not left hanging.
       try {
         await this.sender.sendText(msg.fromAddress, SAFE_FALLBACK);
       } catch {
         // Swallow — webhook has already 200-acked; we cannot propagate errors here.
       }
-
-      // Re-surface for logging (pino will capture it) — but never rethrow to the webhook controller.
-      void err;
     }
   }
 }

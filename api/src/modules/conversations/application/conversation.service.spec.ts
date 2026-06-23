@@ -13,6 +13,7 @@
  *   - ProposalService throws → message status marked failed + safe fallback sent
  */
 
+import { Logger } from '@nestjs/common';
 import type { IAgentPort } from '../../agent/application/ports/agent.port';
 import { AGENT_PORT } from '../../agent/application/ports/agent.port';
 import type { IWhatsAppSender } from '../../whatsapp/application/ports/whatsapp-sender.port';
@@ -449,9 +450,13 @@ describe('ConversationService.handleInbound', () => {
 
   // ── ProposalService throws → failure path ─────────────────────────────────
 
-  it('ProposalService throws → message status marked failed, safe fallback sent, does not throw', async () => {
+  it('ProposalService throws → message status marked failed, safe fallback sent, logger.error called, does not throw', async () => {
     const proposalService = makeProposalService(new Error('KYC_NOT_VERIFIED'));
     const { svc, sender, msgRepo } = buildService({ proposalService });
+
+    const loggerErrorSpy = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
 
     // Must resolve (never throw) — webhook has already 200-acked.
     await expect(svc.handleInbound(baseMsg())).resolves.toBeUndefined();
@@ -466,6 +471,17 @@ describe('ConversationService.handleInbound', () => {
     // Safe fallback sent to user
     const sentText = captureFirstSentText(sender);
     expect(sentText).toContain('something went wrong');
+
+    // Logger.error must have been called with the error and context
+    expect(loggerErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        err: expect.any(Error) as unknown,
+        externalMessageId: FIXED_WAMID,
+      }),
+      expect.stringContaining('handleInbound failed'),
+    );
+
+    loggerErrorSpy.mockRestore();
   });
 
   it('even if sender.sendText throws in the fallback path, handleInbound resolves without throwing', async () => {
@@ -475,9 +491,16 @@ describe('ConversationService.handleInbound', () => {
       new Error('network error'),
     );
 
+    // Suppress logger output in this test (error is expected).
+    const loggerErrorSpy = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+
     const { svc } = buildService({ proposalService, sender });
 
     await expect(svc.handleInbound(baseMsg())).resolves.toBeUndefined();
+
+    loggerErrorSpy.mockRestore();
   });
 
   // ── Intent persisted ─────────────────────────────────────────────────────
