@@ -1,6 +1,11 @@
 /**
- * Pure buy-quote pricing. No framework, no IO — this is the money-math the
+ * Pure buy/sell-quote pricing. No framework, no IO — this is the money-math the
  * deterministic execution engine and the quote endpoint both rely on.
+ *
+ * Buy and sell price off the SAME baseRate but with INDEPENDENT spreads:
+ *   - BUY effective rate  = baseRate * (1 + buySpreadBps/10000)  — user pays more per crypto
+ *   - SELL effective rate = baseRate * (1 − sellSpreadBps/10000) — user receives less per crypto
+ * The margin ≈ buySpreadBps + sellSpreadBps (the bid-ask gap).
  *
  * NOTE: amounts use `number` for clarity in this scaffold. Production should
  * carry money as a decimal type (e.g. decimal.js / bigint minor units) to avoid
@@ -12,8 +17,8 @@ export interface BuyQuoteParams {
   fiatAmount: number;
   /** Base market rate: fiat per 1 unit of the asset. */
   baseRate: number;
-  /** Platform spread, in basis points, marked up onto the rate. */
-  spreadBps: number;
+  /** Platform buy spread, in basis points, marked up onto the rate (user gets less crypto). */
+  buySpreadBps: number;
   /** Processing fee, in basis points, taken off the fiat amount. */
   processingFeeBps: number;
   /** Decimal places the asset is quoted to (e.g. 6 for USDT). */
@@ -49,8 +54,8 @@ export interface SellQuoteParams {
   cryptoAmount: number;
   /** Base market rate: fiat per 1 unit of the asset. */
   baseRate: number;
-  /** Platform spread, in basis points, applied AGAINST the user (reduces their rate). */
-  spreadBps: number;
+  /** Platform sell spread, in basis points, applied AGAINST the user (reduces their rate). */
+  sellSpreadBps: number;
   /** Processing fee, in basis points, taken off the gross fiat amount. */
   processingFeeBps: number;
 }
@@ -67,7 +72,7 @@ export interface SellQuoteBreakdown {
 }
 
 export function computeSellQuote(params: SellQuoteParams): SellQuoteBreakdown {
-  const { cryptoAmount, baseRate, spreadBps, processingFeeBps } = params;
+  const { cryptoAmount, baseRate, sellSpreadBps, processingFeeBps } = params;
 
   if (cryptoAmount <= 0) {
     throw new QuotePricingError('cryptoAmount must be positive');
@@ -76,8 +81,8 @@ export function computeSellQuote(params: SellQuoteParams): SellQuoteBreakdown {
     throw new QuotePricingError('baseRate must be positive');
   }
 
-  // Spread is applied against the user in a sell: they receive less per unit.
-  const effectiveRate = roundTo(baseRate * (1 - spreadBps / 10000), 6);
+  // Sell spread works against the user: they receive less per unit.
+  const effectiveRate = roundTo(baseRate * (1 - sellSpreadBps / 10000), 6);
   const fiatBeforeFee = roundTo(cryptoAmount * effectiveRate, 2);
   const processingFeeAmount = roundTo(
     (fiatBeforeFee * processingFeeBps) / 10000,
@@ -90,8 +95,13 @@ export function computeSellQuote(params: SellQuoteParams): SellQuoteBreakdown {
 }
 
 export function computeBuyQuote(params: BuyQuoteParams): BuyQuoteBreakdown {
-  const { fiatAmount, baseRate, spreadBps, processingFeeBps, cryptoDecimals } =
-    params;
+  const {
+    fiatAmount,
+    baseRate,
+    buySpreadBps,
+    processingFeeBps,
+    cryptoDecimals,
+  } = params;
 
   if (fiatAmount <= 0) {
     throw new QuotePricingError('fiatAmount must be positive');
@@ -104,7 +114,7 @@ export function computeBuyQuote(params: BuyQuoteParams): BuyQuoteBreakdown {
   const netFiat = fiatAmount - processingFee;
   // Quote the rate to a fixed precision so the result is deterministic and free
   // of float noise (1600 * 1.015 would otherwise be 1623.9999…).
-  const effectiveRate = roundTo(baseRate * (1 + spreadBps / 10000), 6);
+  const effectiveRate = roundTo(baseRate * (1 + buySpreadBps / 10000), 6);
   // Floor (never round up) so the platform never credits more crypto than paid for.
   const cryptoAmount = floorTo(netFiat / effectiveRate, cryptoDecimals).toFixed(
     cryptoDecimals,

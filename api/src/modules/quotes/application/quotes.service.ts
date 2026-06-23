@@ -33,7 +33,7 @@ export class QuotesService {
       // validated by the contract schema before it reaches the service.
       fiatAmount: Number(input.fiatAmount),
       baseRate: rate.baseRate,
-      spreadBps: rate.spreadBps,
+      buySpreadBps: rate.buySpreadBps,
       processingFeeBps: rate.processingFeeBps,
       cryptoDecimals: rate.cryptoDecimals,
     });
@@ -47,7 +47,8 @@ export class QuotesService {
       baseRate: String(rate.baseRate),
       // Effective (spread-inclusive) rate — used for conversion and shown to user.
       fxRate: String(breakdown.effectiveRate),
-      spreadBps: rate.spreadBps,
+      // Reports the APPLIED (direction-specific) spread — the buy spread for buy quotes.
+      spreadBps: rate.buySpreadBps,
       processingFeeBps: rate.processingFeeBps,
       quotedAt: this.clock.now().toISOString(),
       expiresInSec: rate.expiresInSec,
@@ -71,7 +72,7 @@ export class QuotesService {
       // validated by the contract schema before it reaches the service.
       cryptoAmount: Number(input.cryptoAmount),
       baseRate: rate.baseRate,
-      spreadBps: rate.spreadBps,
+      sellSpreadBps: rate.sellSpreadBps,
       processingFeeBps: rate.processingFeeBps,
     });
 
@@ -84,7 +85,8 @@ export class QuotesService {
       baseRate: String(rate.baseRate),
       // Effective (spread-reduced) rate — what the user receives per crypto unit.
       fxRate: String(breakdown.effectiveRate),
-      spreadBps: rate.spreadBps,
+      // Reports the APPLIED (direction-specific) spread — the sell spread for sell quotes.
+      spreadBps: rate.sellSpreadBps,
       processingFeeBps: rate.processingFeeBps,
       processingFeeAmount: String(breakdown.processingFeeAmount),
       quotedAt: this.clock.now().toISOString(),

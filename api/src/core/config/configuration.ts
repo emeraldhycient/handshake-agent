@@ -4,16 +4,20 @@
  * (not built yet) overrides business-tunable values at runtime.
  *
  * NOTE: `baseRate` here is a placeholder default — production replaces the
- * ConfigRateProvider with a live pricing-feed adapter. `spreadBps` /
- * `processingFeeBps` are genuinely admin-tunable and belong in config.
+ * ConfigRateProvider with a live pricing-feed adapter. `buySpreadBps` /
+ * `sellSpreadBps` / `processingFeeBps` are genuinely admin-tunable and belong
+ * in config.
  */
 export interface AssetPricing {
   baseRate: number;
+  /** Platform spread for BUY quotes (marks up the rate; user gets less crypto). */
+  buySpreadBps: number;
+  /** Platform spread for SELL quotes (marks down the rate; user gets less fiat). */
+  sellSpreadBps: number;
   cryptoDecimals: number;
 }
 
 export interface PricingConfig {
-  spreadBps: number;
   processingFeeBps: number;
   expiresInSec: number;
   assets: Record<string, AssetPricing>;
@@ -70,6 +74,16 @@ export interface BuyConfig {
   /**
    * Maximum allowed FX rate drift in basis points between the original quote and
    * the re-quote at execution time. If drift exceeds this, throw QuoteDriftError.
+   * Admin-tunable later (DB-admin AppSetting layer, root §7).
+   */
+  maxDriftBps: number;
+}
+
+/** Sell-execution configuration (task S4b, CLAUDE.md §7). */
+export interface SellConfig {
+  /**
+   * Maximum allowed FX rate drift in basis points between the original quote and
+   * the re-quote at execution time for a sell order.
    * Admin-tunable later (DB-admin AppSetting layer, root §7).
    */
   maxDriftBps: number;
@@ -135,11 +149,12 @@ export interface AppConfig {
   auth: AuthConfig;
   directive: DirectiveConfig;
   buy: BuyConfig;
+  sell: SellConfig;
   catalog: CatalogConfig;
 }
 
 export default (): AppConfig => ({
-  // ── Asset / fiat / network catalog (task X1, CLAUDE.md §7) ─────────────
+  // ── Asset / fiat / network catalog (task X1, CLAUDE.md §7) ────────────
   // Each entry is a config-layer value; the DB-admin AppSetting layer will be
   // able to override capability flags at runtime (hot-reload) without a deploy.
   // BTC is intentionally NOT registered — Blockradar has no BTC WaaS (ADR-0006).
@@ -189,13 +204,28 @@ export default (): AppConfig => ({
     // 50 bps = 0.5% allowed drift. Admin-tunable later (DB-admin AppSetting layer).
     maxDriftBps: 50,
   },
+  sell: {
+    // 50 bps = 0.5% allowed drift. Admin-tunable later (DB-admin AppSetting layer).
+    maxDriftBps: 50,
+  },
   pricing: {
-    spreadBps: 150,
     processingFeeBps: 100,
     expiresInSec: 30,
     assets: {
-      USDT: { baseRate: 1600, cryptoDecimals: 6 },
-      BTC: { baseRate: 100_000_000, cryptoDecimals: 8 },
+      // buySpreadBps=150 matches the old global spreadBps so existing BUY quotes are unchanged.
+      // sellSpreadBps is independently tunable — set to 150 as the conservative default.
+      USDT: {
+        baseRate: 1600,
+        buySpreadBps: 150,
+        sellSpreadBps: 150,
+        cryptoDecimals: 6,
+      },
+      BTC: {
+        baseRate: 100_000_000,
+        buySpreadBps: 150,
+        sellSpreadBps: 150,
+        cryptoDecimals: 8,
+      },
     },
   },
   directive: {

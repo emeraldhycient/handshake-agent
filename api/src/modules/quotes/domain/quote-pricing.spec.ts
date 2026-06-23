@@ -5,11 +5,12 @@ import {
 } from './quote-pricing';
 
 describe('computeBuyQuote', () => {
-  it('applies the processing fee to fiat and the spread to the rate', () => {
+  it('applies the processing fee to fiat and the buySpread to the rate', () => {
+    // buySpreadBps=150 → same result as the old spreadBps=150 buy test (no buy regression)
     const result = computeBuyQuote({
       fiatAmount: 100000, // NGN
       baseRate: 1600, // NGN per 1 USDT
-      spreadBps: 150, // 1.5%
+      buySpreadBps: 150, // 1.5%
       processingFeeBps: 100, // 1%
       cryptoDecimals: 6,
     });
@@ -24,7 +25,7 @@ describe('computeBuyQuote', () => {
     const result = computeBuyQuote({
       fiatAmount: 100000,
       baseRate: 2000,
-      spreadBps: 0,
+      buySpreadBps: 0,
       processingFeeBps: 0,
       cryptoDecimals: 2,
     });
@@ -37,7 +38,7 @@ describe('computeBuyQuote', () => {
     const result = computeBuyQuote({
       fiatAmount: 100,
       baseRate: 3,
-      spreadBps: 0,
+      buySpreadBps: 0,
       processingFeeBps: 0,
       cryptoDecimals: 2,
     });
@@ -50,7 +51,7 @@ describe('computeBuyQuote', () => {
       computeBuyQuote({
         fiatAmount: 0,
         baseRate: 1600,
-        spreadBps: 150,
+        buySpreadBps: 150,
         processingFeeBps: 100,
         cryptoDecimals: 6,
       }),
@@ -62,7 +63,7 @@ describe('computeBuyQuote', () => {
       computeBuyQuote({
         fiatAmount: 100000,
         baseRate: 0,
-        spreadBps: 150,
+        buySpreadBps: 150,
         processingFeeBps: 100,
         cryptoDecimals: 6,
       }),
@@ -71,16 +72,16 @@ describe('computeBuyQuote', () => {
 });
 
 describe('computeSellQuote', () => {
-  it('applies spread against the user (reducing effective rate) and subtracts processing fee', () => {
+  it('applies sellSpread against the user (reducing effective rate) and subtracts processing fee', () => {
     // User sells 100 USDT at baseRate 1600 NGN/USDT
-    // spreadBps 150 (1.5%) → effectiveRate = 1600 * (1 - 0.015) = 1600 * 0.985 = 1576
+    // sellSpreadBps 150 (1.5%) → effectiveRate = 1600 * (1 - 0.015) = 1600 * 0.985 = 1576
     // fiatBeforeFee = 100 * 1576 = 157600
     // processingFeeAmount = 157600 * 0.01 = 1576
     // netFiat = 157600 - 1576 = 156024
     const result = computeSellQuote({
       cryptoAmount: 100,
       baseRate: 1600,
-      spreadBps: 150,
+      sellSpreadBps: 150,
       processingFeeBps: 100,
     });
 
@@ -94,7 +95,7 @@ describe('computeSellQuote', () => {
     const result = computeSellQuote({
       cryptoAmount: 10,
       baseRate: 1600,
-      spreadBps: 0,
+      sellSpreadBps: 0,
       processingFeeBps: 0,
     });
 
@@ -105,7 +106,7 @@ describe('computeSellQuote', () => {
   });
 
   it('floors the netFiat to 2 decimal places so the platform never overpays', () => {
-    // cryptoAmount=1, baseRate=1600, spreadBps=333 (3.33%)
+    // cryptoAmount=1, baseRate=1600, sellSpreadBps=333 (3.33%)
     // effectiveRate = round(1600 * (1 - 0.0333), 6) = round(1546.72, 6) = 1546.72
     // fiatBeforeFee = 1 * 1546.72 = 1546.72
     // processingFeeAmount = round(1546.72 * 0.01, 2) = round(15.4672, 2) = 15.47
@@ -113,7 +114,7 @@ describe('computeSellQuote', () => {
     const result = computeSellQuote({
       cryptoAmount: 1,
       baseRate: 1600,
-      spreadBps: 333,
+      sellSpreadBps: 333,
       processingFeeBps: 100,
     });
 
@@ -126,7 +127,7 @@ describe('computeSellQuote', () => {
       computeSellQuote({
         cryptoAmount: 0,
         baseRate: 1600,
-        spreadBps: 150,
+        sellSpreadBps: 150,
         processingFeeBps: 100,
       }),
     ).toThrow(QuotePricingError);
@@ -135,7 +136,7 @@ describe('computeSellQuote', () => {
       computeSellQuote({
         cryptoAmount: -1,
         baseRate: 1600,
-        spreadBps: 150,
+        sellSpreadBps: 150,
         processingFeeBps: 100,
       }),
     ).toThrow(QuotePricingError);
@@ -146,9 +147,51 @@ describe('computeSellQuote', () => {
       computeSellQuote({
         cryptoAmount: 100,
         baseRate: 0,
-        spreadBps: 150,
+        sellSpreadBps: 150,
         processingFeeBps: 100,
       }),
     ).toThrow(QuotePricingError);
+  });
+
+  it('sellSpreadBps=200 yields less NGN than sellSpreadBps=150 (proves independence)', () => {
+    // Same baseRate and cryptoAmount, but higher sellSpread → user gets less
+    const with150 = computeSellQuote({
+      cryptoAmount: 100,
+      baseRate: 1600,
+      sellSpreadBps: 150,
+      processingFeeBps: 100,
+    });
+    const with200 = computeSellQuote({
+      cryptoAmount: 100,
+      baseRate: 1600,
+      sellSpreadBps: 200,
+      processingFeeBps: 100,
+    });
+
+    expect(with200.netFiat).toBeLessThan(with150.netFiat);
+    expect(with200.effectiveRate).toBeLessThan(with150.effectiveRate);
+  });
+});
+
+describe('buy rate > sell rate for the same baseRate (positive margin)', () => {
+  it('buy effective rate (NGN/USDT) is greater than sell effective rate at same baseRate', () => {
+    // The platform marks up for buy and marks down for sell — the spread between
+    // them is the platform's margin.
+    const { effectiveRate: buyRate } = computeBuyQuote({
+      fiatAmount: 100000,
+      baseRate: 1600,
+      buySpreadBps: 150,
+      processingFeeBps: 100,
+      cryptoDecimals: 6,
+    });
+    const { effectiveRate: sellRate } = computeSellQuote({
+      cryptoAmount: 100,
+      baseRate: 1600,
+      sellSpreadBps: 200,
+      processingFeeBps: 100,
+    });
+
+    // buyRate > sellRate: user pays more per USDT than they receive per USDT → platform margin > 0
+    expect(buyRate).toBeGreaterThan(sellRate);
   });
 });
