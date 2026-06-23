@@ -44,6 +44,51 @@ const floorTo = (value: number, decimals: number): number => {
   return Math.floor(value * factor) / factor;
 };
 
+export interface SellQuoteParams {
+  /** Crypto the user wants to sell, in major units (e.g. USDT). */
+  cryptoAmount: number;
+  /** Base market rate: fiat per 1 unit of the asset. */
+  baseRate: number;
+  /** Platform spread, in basis points, applied AGAINST the user (reduces their rate). */
+  spreadBps: number;
+  /** Processing fee, in basis points, taken off the gross fiat amount. */
+  processingFeeBps: number;
+}
+
+export interface SellQuoteBreakdown {
+  /** Effective (post-spread) rate the user receives per unit of crypto. */
+  effectiveRate: number;
+  /** Fiat amount before the processing fee is deducted. */
+  fiatBeforeFee: number;
+  /** Processing fee amount in fiat. */
+  processingFeeAmount: number;
+  /** Net fiat the user receives after spread + fee (floored to 2 d.p.). */
+  netFiat: number;
+}
+
+export function computeSellQuote(params: SellQuoteParams): SellQuoteBreakdown {
+  const { cryptoAmount, baseRate, spreadBps, processingFeeBps } = params;
+
+  if (cryptoAmount <= 0) {
+    throw new QuotePricingError('cryptoAmount must be positive');
+  }
+  if (baseRate <= 0) {
+    throw new QuotePricingError('baseRate must be positive');
+  }
+
+  // Spread is applied against the user in a sell: they receive less per unit.
+  const effectiveRate = roundTo(baseRate * (1 - spreadBps / 10000), 6);
+  const fiatBeforeFee = roundTo(cryptoAmount * effectiveRate, 2);
+  const processingFeeAmount = roundTo(
+    (fiatBeforeFee * processingFeeBps) / 10000,
+    2,
+  );
+  // Floor (never round up) so the platform never pays out more than computed.
+  const netFiat = floorTo(fiatBeforeFee - processingFeeAmount, 2);
+
+  return { effectiveRate, fiatBeforeFee, processingFeeAmount, netFiat };
+}
+
 export function computeBuyQuote(params: BuyQuoteParams): BuyQuoteBreakdown {
   const { fiatAmount, baseRate, spreadBps, processingFeeBps, cryptoDecimals } =
     params;

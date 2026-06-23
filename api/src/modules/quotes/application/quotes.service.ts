@@ -1,8 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { QuoteBuyInput, QuoteBuyOutput } from '@handshake-agent/contracts';
+import type {
+  QuoteBuyInput,
+  QuoteBuyOutput,
+  QuoteSellInput,
+  QuoteSellOutput,
+} from '@handshake-agent/contracts';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
-import { computeBuyQuote } from '../domain/quote-pricing';
+import { computeBuyQuote, computeSellQuote } from '../domain/quote-pricing';
 import { RATE_PROVIDER, type IRateProvider } from './ports/rate-provider.port';
 
 /**
@@ -44,6 +49,44 @@ export class QuotesService {
       fxRate: String(breakdown.effectiveRate),
       spreadBps: rate.spreadBps,
       processingFeeBps: rate.processingFeeBps,
+      quotedAt: this.clock.now().toISOString(),
+      expiresInSec: rate.expiresInSec,
+    };
+  }
+
+  /**
+   * Sell-quote use-case. Given a crypto amount the user wants to sell, compute
+   * the NGN they receive after spread + processing fee. Spread works AGAINST the
+   * user in a sell direction (reduces the effective rate). No side effects — quoting
+   * never moves money.
+   */
+  async quoteSell(input: QuoteSellInput): Promise<QuoteSellOutput> {
+    const rate = await this.rateProvider.getRate(
+      input.asset,
+      input.fiatCurrency,
+    );
+
+    const breakdown = computeSellQuote({
+      // Single explicit coercion at the boundary; the value is already
+      // validated by the contract schema before it reaches the service.
+      cryptoAmount: Number(input.cryptoAmount),
+      baseRate: rate.baseRate,
+      spreadBps: rate.spreadBps,
+      processingFeeBps: rate.processingFeeBps,
+    });
+
+    return {
+      asset: input.asset,
+      cryptoAmount: input.cryptoAmount,
+      fiatCurrency: input.fiatCurrency,
+      netFiatAmount: String(breakdown.netFiat),
+      // Raw pre-spread market rate — stored for treasury/audit.
+      baseRate: String(rate.baseRate),
+      // Effective (spread-reduced) rate — what the user receives per crypto unit.
+      fxRate: String(breakdown.effectiveRate),
+      spreadBps: rate.spreadBps,
+      processingFeeBps: rate.processingFeeBps,
+      processingFeeAmount: String(breakdown.processingFeeAmount),
       quotedAt: this.clock.now().toISOString(),
       expiresInSec: rate.expiresInSec,
     };
