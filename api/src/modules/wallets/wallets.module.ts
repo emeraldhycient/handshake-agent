@@ -24,6 +24,6 @@ import { WalletPrismaRepository } from './infrastructure/wallet.prisma.repositor
     { provide: WALLET_REPOSITORY, useClass: WalletPrismaRepository },
     { provide: CLOCK, useClass: SystemClock },
   ],
-  exports: [WalletService, WALLET_PROVIDER],
+  exports: [WalletService, WALLET_PROVIDER, WALLET_REPOSITORY],
 })
 export class WalletsModule {}

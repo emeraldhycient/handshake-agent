@@ -45,6 +45,12 @@ export interface IWalletRepository {
   ): Promise<WalletRecord | null>;
 
   /**
+   * Returns the wallet for the given on-chain address, or null if none exists.
+   * Used by the Blockradar deposit webhook to resolve the recipient wallet.
+   */
+  findByAddress(address: string): Promise<WalletRecord | null>;
+
+  /**
    * Persists a new wallet record and returns the created WalletRecord.
    * Callers must ensure no duplicate (userId, asset, network) exists before calling.
    */
