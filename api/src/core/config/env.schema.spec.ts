@@ -110,4 +110,24 @@ describe('validateEnv', () => {
 
     expect(env.ANTHROPIC_API_KEY).toBe('sk-ant-123');
   });
+
+  // --- KYC (task K1) ---
+
+  it('defaults KYC_MOCK_MODE to "true" when omitted', () => {
+    const env = validateEnv(validRaw);
+
+    expect(env.KYC_MOCK_MODE).toBe('true');
+  });
+
+  it('accepts KYC_MOCK_MODE=false', () => {
+    const env = validateEnv({ ...validRaw, KYC_MOCK_MODE: 'false' });
+
+    expect(env.KYC_MOCK_MODE).toBe('false');
+  });
+
+  it('throws when KYC_MOCK_MODE is not "true" or "false"', () => {
+    expect(() => validateEnv({ ...validRaw, KYC_MOCK_MODE: 'yes' })).toThrow(
+      /KYC_MOCK_MODE/,
+    );
+  });
 });

@@ -69,6 +69,11 @@ export const envSchema = z.object({
   // HMAC-SHA256 key for DirectiveGrant signing (ADR-0005/0006). Required before the
   // engine can execute; empty is tolerated until the engine phase is wired.
   DIRECTIVE_SIGNING_KEY: z.string().optional().default(''),
+
+  // --- KYC (task K1) ---
+  // When 'true', the MockKycProvider is active (the only adapter at launch).
+  // Flip to 'false' once a real NIN/BVN provider is wired in IdentityModule.
+  KYC_MOCK_MODE: z.enum(['true', 'false']).default('true'),
 });
 
 export type Env = z.infer<typeof envSchema>;
