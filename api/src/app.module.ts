@@ -7,6 +7,7 @@ import { ZodValidationPipe } from 'nestjs-zod';
 import configuration from './core/config/configuration';
 import { validateEnv } from './core/config/env.schema';
 import { PrismaModule } from './core/prisma/prisma.module';
+import { CatalogModule } from './core/catalog/catalog.module';
 import { AgentModule } from './modules/agent/agent.module';
 import { IdentityModule } from './modules/identity/identity.module';
 import { QuotesModule } from './modules/quotes/quotes.module';
@@ -31,6 +32,7 @@ import { FlutterwaveWebhookModule } from './modules/treasury/flutterwave-webhook
       },
     }),
     PrismaModule,
+    CatalogModule,
     AgentModule,
     IdentityModule,
     QuotesModule,

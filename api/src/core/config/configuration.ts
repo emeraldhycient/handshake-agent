@@ -87,6 +87,60 @@ export interface ProvidersConfig {
   blockradar: BlockradarProviderConfig;
 }
 
+// ---------------------------------------------------------------------------
+// Catalog — config-driven asset / fiat / network registry (task X1, §7)
+// ---------------------------------------------------------------------------
+
+/** Per-provider metadata for a crypto asset (e.g. the Blockradar UUID). */
+export interface AssetProviderConfig {
+  assetId: string;
+}
+
+/**
+ * Crypto asset entry in the catalog.
+ * BTC is intentionally absent — no Blockradar BTC custody at launch (ADR-0006).
+ */
+export interface CatalogAsset {
+  symbol: string;
+  displayName: string;
+  kind: 'crypto';
+  decimals: number;
+  networks: string[];
+  providers: Record<string, AssetProviderConfig>;
+  enabled: boolean;
+}
+
+/** Fiat currency entry in the catalog. */
+export interface CatalogFiat {
+  code: string;
+  displayName: string;
+  /** Display symbol, e.g. '₦'. */
+  symbol: string;
+  decimals: number;
+  enabled: boolean;
+}
+
+/** Blockchain network entry in the catalog. */
+export interface CatalogNetwork {
+  id: string;
+  displayName: string;
+  /** Regex pattern for validating on-chain addresses. */
+  addressPattern: string;
+  enabled: boolean;
+}
+
+/**
+ * Full catalog section. Service/capability flags follow the service registry
+ * pattern (CLAUDE.md §7): `'crypto.buy'`, `'crypto.sell'`, etc.
+ */
+export interface CatalogConfig {
+  assets: Record<string, CatalogAsset>;
+  fiats: Record<string, CatalogFiat>;
+  networks: Record<string, CatalogNetwork>;
+  /** Capability / service enable flags. Fail-closed: absent === false. */
+  capabilities: Record<string, boolean>;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
@@ -94,9 +148,57 @@ export interface AppConfig {
   directive: DirectiveConfig;
   buy: BuyConfig;
   providers: ProvidersConfig;
+  catalog: CatalogConfig;
 }
 
 export default (): AppConfig => ({
+  // ── Asset / fiat / network catalog (task X1, CLAUDE.md §7) ─────────────
+  // Each entry is a config-layer value; the DB-admin AppSetting layer will be
+  // able to override capability flags at runtime (hot-reload) without a deploy.
+  // BTC is intentionally NOT registered — Blockradar has no BTC WaaS (ADR-0006).
+  catalog: {
+    assets: {
+      USDT: {
+        symbol: 'USDT',
+        displayName: 'USDT',
+        kind: 'crypto',
+        decimals: 6,
+        networks: ['TRON'],
+        // The Blockradar asset id is the canonical source of truth for USDT-on-TRON.
+        // `providers.blockradar.usdtTronAssetId` below is kept for backward-compat
+        // with existing BlockradarProvider consumers until task X3 reconciles them.
+        providers: {
+          blockradar: { assetId: 'f56d297c-a3db-4cda-95bd-180b54679070' },
+        },
+        enabled: true,
+      },
+    },
+    fiats: {
+      NGN: {
+        code: 'NGN',
+        displayName: 'Naira',
+        symbol: '₦',
+        decimals: 2,
+        enabled: true,
+      },
+    },
+    networks: {
+      TRON: {
+        id: 'TRON',
+        displayName: 'TRON (TRC-20)',
+        // Standard TRC-20 address: starts with T, followed by 33 Base58 chars.
+        addressPattern: '^T[1-9A-HJ-NP-Za-km-z]{33}$',
+        enabled: true,
+      },
+    },
+    capabilities: {
+      'crypto.buy': true,
+      'crypto.sell': true,
+      'crypto.send': true,
+      'crypto.receive': true,
+      'crypto.swap': false, // Deferred — no DEX integration at launch.
+    },
+  },
   buy: {
     // 50 bps = 0.5% allowed drift. Admin-tunable later (DB-admin AppSetting layer).
     maxDriftBps: 50,
