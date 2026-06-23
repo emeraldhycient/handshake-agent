@@ -9,30 +9,29 @@
  *      hash/amount/recipientAddress. Anything else → 200 (ack).
  *   3. Resolve the wallet by recipientAddress (WalletRepository.findByAddress).
  *      Not found → 200 + log.
- *   4. settleDepositAtomic: atomic credit (ledger + WalletBalance + DepositConfirmation).
- *      deposited:false means duplicate txHash — 200, no receipt.
- *   5. deposited:true → resolve WhatsApp address (IdentityService) + sendText receipt.
- *      Receipt text is registry-formatted (no literals).
+ *   4. settleDepositAtomic: atomic credit (ledger + WalletBalance + DepositConfirmation
+ *      + signed Receipt). deposited:false means duplicate txHash — 200, no receipt.
+ *   5. deposited:true → resolve WhatsApp address (IdentityService) + sendText receipt
+ *      referencing the receiptNumber from the signed Receipt.
  *   6. ALWAYS respond 200 except 401. Downstream errors swallowed + logged.
- *
- * NOTE (brief §5): the signed Receipt DB row for deposits is OUT OF SCOPE.
- * The `Receipt` model is Transaction-bound (requires transactionId FK); deposits
- * create a DepositConfirmation, not a Transaction. Follow-up: add a `deposit`
- * TransactionType or generalize Receipt to cover DepositConfirmation too.
  */
 
 import { timingSafeEqual } from 'node:crypto';
 
 import {
+  Body,
   Controller,
+  Headers,
   HttpCode,
   HttpException,
   HttpStatus,
   Inject,
   Logger,
   Post,
+  Req,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { Request } from 'express';
 
 import { hmacHex } from '../../../core/crypto/hmac';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
@@ -51,18 +50,6 @@ import {
 } from '../application/ports/deposit-settlement.repository.port';
 
 // ---------------------------------------------------------------------------
-// Custom decorators for raw body injection
-// ---------------------------------------------------------------------------
-// NestJS exposes a custom parameter decorator pattern. We use a simple
-// approach: the raw body is attached to the request by the rawBody:true
-// middleware option in main.ts, and we read it via a @RawBody() param.
-// To keep this controller framework-agnostic in its dependencies we use
-// direct injection via @Param decorators defined below.
-
-import { Body, Headers, Req } from '@nestjs/common';
-import type { Request } from 'express';
-
-// ---------------------------------------------------------------------------
 // Ack response
 // ---------------------------------------------------------------------------
 
@@ -78,6 +65,7 @@ interface BlockradarWebhookBody {
     hash?: unknown;
     amount?: unknown;
     recipientAddress?: unknown;
+    senderAddress?: unknown;
     asset?: {
       symbol?: unknown;
       network?: { name?: unknown };
@@ -116,7 +104,7 @@ export class BlockradarWebhookController {
    * POST /webhooks/blockradar
    *
    * Blockradar calls this when a deposit lands on a user's child address.
-   * We verify the HMAC-SHA512 signature, then atomically credit + notify.
+   * We verify the HMAC-SHA512 signature, then atomically settle + notify.
    *
    * The signature header is `x-blockradar-signature` = lowercase hex HMAC-SHA512
    * of the raw body keyed by BLOCKRADAR_API_KEY (no prefix, unlike GitHub/WhatsApp).
@@ -182,6 +170,10 @@ export class BlockradarWebhookController {
         : 'TRON';
     const webhookId = typeof data?.id === 'string' ? data.id : undefined;
 
+    // Extract on-chain sender address for audit persistence.
+    const senderAddress =
+      typeof data?.senderAddress === 'string' ? data.senderAddress : undefined;
+
     // ── Steps 3–5: Resolve wallet, settle, notify (errors swallowed) ─────────
     await this.settleAndNotify({
       hash,
@@ -190,6 +182,7 @@ export class BlockradarWebhookController {
       assetSymbol,
       networkName,
       webhookId,
+      senderAddress,
       postedAt: new Date(),
     });
 
@@ -237,6 +230,7 @@ export class BlockradarWebhookController {
     assetSymbol: string;
     networkName: string;
     webhookId?: string;
+    senderAddress?: string;
     postedAt: Date;
   }): Promise<void> {
     try {
@@ -260,7 +254,7 @@ export class BlockradarWebhookController {
         cryptoAmount: params.amount,
         asset: params.assetSymbol,
         txHash: params.hash,
-        sourceAddress: undefined,
+        sourceAddress: params.senderAddress,
         providerWebhookId: params.webhookId,
         postedAt: params.postedAt,
       });
@@ -281,6 +275,7 @@ export class BlockradarWebhookController {
         amount: params.amount,
         newBalance: result.newBalance ?? params.amount,
         txHash: params.hash,
+        receiptNumber: result.receiptNumber,
       });
     } catch (err: unknown) {
       this.logger.error(
@@ -301,6 +296,7 @@ export class BlockradarWebhookController {
     amount: string;
     newBalance: string;
     txHash: string;
+    receiptNumber?: string;
   }): Promise<void> {
     try {
       const waAddress = await this.identityService.findWhatsAppAddress(
@@ -334,6 +330,7 @@ export class BlockradarWebhookController {
   /**
    * Builds the plaintext deposit receipt sent to the user's WhatsApp.
    * All display values come from AssetRegistry — no hardcoded literals.
+   * References the signed receipt number for auditability.
    */
   private buildReceiptText(params: {
     assetSymbol: string;
@@ -341,6 +338,7 @@ export class BlockradarWebhookController {
     amount: string;
     newBalance: string;
     txHash: string;
+    receiptNumber?: string;
   }): string {
     // Use AssetRegistry for asset display name and formatted amounts.
     const assetMeta = this.assetRegistry.asset(params.assetSymbol);
@@ -364,12 +362,17 @@ export class BlockradarWebhookController {
 
     const shortHash = params.txHash.slice(0, 8) + '…';
 
+    const receiptLine = params.receiptNumber
+      ? `Receipt: ${params.receiptNumber}\n`
+      : '';
+
     return (
       `✅ Deposit received\n` +
       `${formattedAmount} ${assetMeta.displayName} credited\n` +
       `Network: ${networkDisplayName}\n` +
       `Tx: ${shortHash}\n` +
-      `New balance: ${formattedBalance}`
+      `New balance: ${formattedBalance}\n` +
+      receiptLine
     );
   }
 }

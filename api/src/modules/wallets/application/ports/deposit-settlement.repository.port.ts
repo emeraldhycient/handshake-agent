@@ -52,10 +52,17 @@ export interface SettleDepositAtomicOutput {
    */
   deposited: boolean;
   /**
-   * The new WalletBalance amount (decimal string) after the credit,
-   * populated only when `deposited === true`.
+   * The RUNNING balance (decimal string) of the user wallet after the credit,
+   * derived from the user_wallet ledger entry's balanceAfter.
+   * Populated only when `deposited === true`.
    */
   newBalance?: string;
+  /**
+   * Human-readable receipt number (e.g. "HS-2026-000001") of the signed Receipt
+   * row minted in the same atomic transaction.
+   * Populated only when `deposited === true`.
+   */
+  receiptNumber?: string;
 }
 
 // ---------------------------------------------------------------------------

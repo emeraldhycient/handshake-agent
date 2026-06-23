@@ -10,12 +10,15 @@
  *      - LedgerEntry amounts are balanced (signed sum = 0 per currency).
  *      - WalletBalance row created with the credited amount.
  *      - DepositConfirmation(txHash) row inserted with status=confirmed.
+ *      - Anchor Transaction row has type='deposit' (not 'reward').
+ *      - A Receipt row exists with non-empty signatureHash and receiptNumber.
  *      - Fake WhatsApp sender received the receipt text (contains amount,
- *        asset symbol, network, txHash short, new balance).
- *   5. Replay same txHash (idempotency):
- *      - No second LedgerEntry/WalletBalance/DepositConfirmation rows.
+ *        asset symbol, network, txHash short, new balance, receiptNumber).
+ *   5. Second distinct deposit → receipt text shows RUNNING balance (sum of both).
+ *   6. Replay same txHash (idempotency):
+ *      - No second LedgerEntry/WalletBalance/DepositConfirmation/Receipt rows.
  *      - Fake sender NOT called again.
- *   6. Invalid signature → 401, nothing written.
+ *   7. Invalid signature → 401, nothing written.
  *
  * Wiring is manual (no Nest DI). Requires Docker.
  * Runs only in the `test:e2e` lane (jest-e2e.json).
@@ -114,13 +117,14 @@ const DEPOSIT_AMOUNT = '10.5';
 const ASSET_SYMBOL = 'USDT';
 const NETWORK_NAME = 'TRON';
 
-function buildDepositBody(txHash: string) {
+function buildDepositBody(txHash: string, amount = DEPOSIT_AMOUNT) {
   return {
     event: 'deposit.success',
     data: {
       hash: txHash,
-      amount: DEPOSIT_AMOUNT,
+      amount,
       recipientAddress: DEPOSIT_ADDRESS,
+      senderAddress: 'TSenderAddress1234567890123456789',
       asset: {
         symbol: ASSET_SYMBOL,
         network: { name: NETWORK_NAME },
@@ -162,12 +166,16 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
 
     // Wire repos.
     const walletRepo = new WalletPrismaRepository(ps);
-    const settlementRepo = new DepositSettlementPrismaRepository(ps);
+    const assetRegistry = new AssetRegistry(config);
+    const settlementRepo = new DepositSettlementPrismaRepository(
+      ps,
+      config,
+      assetRegistry,
+    );
     const identityRepo = new IdentityPrismaRepository(ps);
 
     // Wire services.
     const identityService = new IdentityService(identityRepo);
-    const assetRegistry = new AssetRegistry(config);
 
     // Wire controller.
     controller = new BlockradarWebhookController(
@@ -222,7 +230,7 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
 
   // ── Happy path ─────────────────────────────────────────────────────────────
 
-  it('happy path: LedgerEntry rows balanced, WalletBalance credited, DepositConfirmation confirmed, WhatsApp receipt sent', async () => {
+  it('happy path: LedgerEntry rows balanced, WalletBalance credited, DepositConfirmation confirmed, Transaction type=deposit, Receipt minted, WhatsApp receipt sent', async () => {
     const txHash = `0x${randomUUID().replace(/-/g, '')}`;
     const body = buildDepositBody(txHash);
     const { rawBody, sig } = signBody(body);
@@ -260,6 +268,29 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
     expect(clearingEntry).toBeDefined();
     expect(clearingEntry!.direction).toBe('debit');
 
+    // ── Anchor Transaction: type must be 'deposit', not 'reward' ───────────
+
+    const txnId = userEntry!.transactionId;
+    const txn = await prisma.transaction.findUnique({ where: { id: txnId } });
+    expect(txn).not.toBeNull();
+    expect(txn!.type).toBe('deposit');
+    expect(txn!.status).toBe('completed');
+
+    // ── Receipt assertions ──────────────────────────────────────────────────
+
+    const receipt = await prisma.receipt.findUnique({
+      where: { transactionId: txnId },
+    });
+    expect(receipt).not.toBeNull();
+    expect(receipt!.receiptNumber).toBeTruthy();
+    expect(receipt!.signatureHash).toBeTruthy();
+    expect(receipt!.signatureHash.length).toBeGreaterThan(0);
+    expect(receipt!.contentHash).toBeTruthy();
+    // Itemized must describe a deposit.
+    const itemized = receipt!.itemized as Record<string, unknown>;
+    expect(itemized.type).toBe('deposit');
+    expect(itemized.txHash).toBe(txHash);
+
     // ── WalletBalance assertion ─────────────────────────────────────────────
 
     const balance = await prisma.walletBalance.findFirst({
@@ -295,6 +326,50 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
     expect(text).toContain('USDT'); // asset
     expect(text).toContain('TRON'); // network
     expect(text).toContain(txHash.slice(0, 8)); // short hash
+    expect(text).toContain(receipt!.receiptNumber); // receipt number referenced
+  });
+
+  // ── Running balance: second deposit shows SUM of prior + new amount ────────
+
+  it('second deposit: WhatsApp receipt shows RUNNING balance (sum of prior + new deposit)', async () => {
+    // First deposit (may have been seeded by previous test in the suite, but we
+    // use a fresh distinct txHash to ensure this test is self-contained).
+    const txHash1 = `0x${randomUUID().replace(/-/g, '')}`;
+    const amount1 = '5.0';
+    const body1 = buildDepositBody(txHash1, amount1);
+    const { rawBody: rawBody1, sig: sig1 } = signBody(body1);
+    await controller.handleWebhook(body1, rawBody1, sig1);
+
+    capturedSentMessages = [];
+
+    // Second deposit with a different amount.
+    const txHash2 = `0x${randomUUID().replace(/-/g, '')}`;
+    const amount2 = '3.0';
+    const body2 = buildDepositBody(txHash2, amount2);
+    const { rawBody: rawBody2, sig: sig2 } = signBody(body2);
+    await controller.handleWebhook(body2, rawBody2, sig2);
+
+    expect(capturedSentMessages).toHaveLength(1);
+    const text2 = capturedSentMessages[0].body;
+
+    // The WhatsApp receipt for the second deposit should show a balance GREATER
+    // than amount2 alone — it should reflect the running ledger balance.
+    // Parse "New balance:" line from the receipt.
+    const newBalanceLine = text2
+      .split('\n')
+      .find((l) => l.startsWith('New balance:'));
+    expect(newBalanceLine).toBeDefined();
+
+    // Extract the numeric portion after "New balance: " and before " USDT".
+    const balanceStr = newBalanceLine!
+      .replace('New balance:', '')
+      .trim()
+      .split(' ')[0];
+    const balanceNum = parseFloat(balanceStr);
+
+    // Balance must be greater than just the second deposit amount — it must
+    // include prior deposits (running sum in the ledger).
+    expect(balanceNum).toBeGreaterThan(parseFloat(amount2));
   });
 
   // ── Idempotency ────────────────────────────────────────────────────────────
@@ -315,6 +390,9 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
     });
     const confirmationCountAfterFirst = await prisma.depositConfirmation.count({
       where: { walletId },
+    });
+    const receiptCountAfterFirst = await prisma.receipt.count({
+      where: { userId },
     });
 
     // Reset captured messages.
@@ -339,6 +417,12 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
       { where: { walletId } },
     );
     expect(confirmationCountAfterSecond).toBe(confirmationCountAfterFirst);
+
+    // No second Receipt.
+    const receiptCountAfterSecond = await prisma.receipt.count({
+      where: { userId },
+    });
+    expect(receiptCountAfterSecond).toBe(receiptCountAfterFirst);
 
     // No second WhatsApp message.
     expect(capturedSentMessages).toHaveLength(0);

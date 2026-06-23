@@ -3,8 +3,9 @@
  *
  * Covers the ack-then-process contract:
  *   - valid sig + deposit.success with known address + deposited:true → settleDepositAtomic
- *     called with mapped fields; sendText called with registry-formatted receipt
- *     (contains amount + asset displayName + network + txHash + new balance).
+ *     called with mapped fields (including sourceAddress extracted from senderAddress);
+ *     sendText called with registry-formatted receipt (contains amount + asset displayName
+ *     + network + txHash + new balance + receiptNumber).
  *   - invalid sig → 401, no settle.
  *   - unknown event (not deposit.success) → 200, no settle.
  *   - address not found in wallet repo → 200, no settle.
@@ -38,11 +39,13 @@ const TX_HASH =
   '0xdeadbeef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
 const AMOUNT = '10.5';
 const RECIPIENT_ADDRESS = 'TTestRecipientAddress12345678901234';
+const SENDER_ADDRESS = 'TSenderAddress123456789012345678901';
 const ASSET_SYMBOL = 'USDT';
 const USER_ID = 'user-uuid-deposit-test';
 const WALLET_ID = 'wallet-uuid-deposit-test';
 const WA_ADDRESS = '2348012345678';
-const NEW_BALANCE = '10.5';
+const NEW_BALANCE = '20.5'; // running balance (prior 10 + new 10.5)
+const RECEIPT_NUMBER = 'HS-2026-000001';
 const NETWORK = 'TRON';
 
 // ---------------------------------------------------------------------------
@@ -97,9 +100,11 @@ function makeSettlementRepo(
     };
   }
   return {
-    settleDepositAtomic: jest
-      .fn()
-      .mockResolvedValue({ deposited: true, newBalance: NEW_BALANCE }),
+    settleDepositAtomic: jest.fn().mockResolvedValue({
+      deposited: true,
+      newBalance: NEW_BALANCE,
+      receiptNumber: RECEIPT_NUMBER,
+    }),
   };
 }
 
@@ -202,6 +207,7 @@ function depositSuccessBody(overrides: Record<string, unknown> = {}) {
       hash: TX_HASH,
       amount: AMOUNT,
       recipientAddress: RECIPIENT_ADDRESS,
+      senderAddress: SENDER_ADDRESS,
       asset: { symbol: ASSET_SYMBOL, network: { name: NETWORK } },
       confirmations: 20,
       status: 'confirmed',
@@ -228,7 +234,7 @@ describe('BlockradarWebhookController', () => {
   describe('POST /webhooks/blockradar', () => {
     // ── Happy path ────────────────────────────────────────────────────────────
 
-    it('valid sig + deposit.success → settleDepositAtomic called with mapped fields; sendText with registry-formatted receipt', async () => {
+    it('valid sig + deposit.success → settleDepositAtomic called with mapped fields (including sourceAddress); sendText with registry-formatted receipt containing receiptNumber and running balance', async () => {
       const { controller, settlementRepo, identityService, sender } =
         makeController();
 
@@ -248,6 +254,7 @@ describe('BlockradarWebhookController', () => {
           cryptoAmount: AMOUNT,
           asset: ASSET_SYMBOL,
           txHash: TX_HASH,
+          sourceAddress: SENDER_ADDRESS,
         }),
       );
 
@@ -263,7 +270,8 @@ describe('BlockradarWebhookController', () => {
       expect(sentText).toContain('USDT'); // asset displayName
       expect(sentText).toContain('TRON'); // network displayName
       expect(sentText).toContain(TX_HASH.slice(0, 8)); // short hash
-      expect(sentText).toContain(NEW_BALANCE); // new balance
+      expect(sentText).toContain(NEW_BALANCE); // RUNNING balance, not deposit amount
+      expect(sentText).toContain(RECEIPT_NUMBER); // signed receipt number
     });
 
     // ── Invalid signature ─────────────────────────────────────────────────────

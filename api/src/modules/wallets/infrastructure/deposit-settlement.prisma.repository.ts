@@ -13,24 +13,35 @@
  *   4. Insert LedgerEntry rows.
  *   5. Create WalletBalance snapshot (credit user USDT).
  *   6. Insert DepositConfirmation(txHash, status=confirmed).
+ *   7. Mint signed Receipt (same atomic tx).
  *
  * Dependency rule (enforced by dependency-cruiser):
- *   infrastructure imports domain (ledger.ts) and core (PrismaService).
- *   It must NOT be imported by application or domain layers.
+ *   infrastructure imports domain (ledger.ts), core (PrismaService, AssetRegistry,
+ *   hmacHex), and the application port. It must NOT be imported by application
+ *   or domain layers.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 import {
   BalanceSource,
   DepositStatus,
   LedgerAccountType,
+  ReceiptDeliveryStatus,
+  TransactionStatus,
+  TransactionType,
 } from '../../../../generated/prisma/client';
 import type { Prisma } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
-import { buildDepositLedgerEntries } from '../../transactions/domain/ledger';
+import { hmacHex } from '../../../core/crypto/hmac';
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import {
+  LedgerAccountType as DomainLedgerAccountType,
+  buildDepositLedgerEntries,
+} from '../../transactions/domain/ledger';
 import type {
   AccountKey,
   AccountState,
@@ -45,9 +56,6 @@ import type {
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-/** USDT has 6 decimal places (Tether standard on TRON). */
-const USDT_ASSET_DECIMALS = 6;
 
 /**
  * Account ids for the deposit's double-entry ledger:
@@ -69,17 +77,18 @@ const CLEARING_ACCOUNT_ID = 'usdt_external_deposits';
 async function fetchDepositAccountStates(
   prisma: PrismaService,
   walletId: string,
+  asset: string,
 ): Promise<Record<AccountKey, AccountState>> {
   const accounts: Array<{
     accountType: string;
     accountId: string;
     currency: string;
   }> = [
-    { accountType: 'user_wallet', accountId: walletId, currency: 'USDT' },
+    { accountType: 'user_wallet', accountId: walletId, currency: asset },
     {
       accountType: 'clearing',
       accountId: CLEARING_ACCOUNT_ID,
-      currency: 'USDT',
+      currency: asset,
     },
   ];
 
@@ -109,13 +118,76 @@ async function fetchDepositAccountStates(
   return states;
 }
 
+/**
+ * Builds the deterministic HTML content and itemized JSON for a deposit receipt.
+ * Byte-stable for the same inputs (canonical JSON, no Date.toLocaleString()).
+ */
+function buildDepositReceiptContent(input: {
+  receiptNumber: string;
+  transactionId: string;
+  userId: string;
+  asset: string;
+  amount: string;
+  txHash: string;
+  issuedAt: Date;
+}): { htmlContent: string; itemized: Record<string, unknown> } {
+  const itemized = {
+    asset: input.asset,
+    amount: input.amount,
+    type: 'deposit',
+    txHash: input.txHash,
+  };
+
+  const htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Receipt ${input.receiptNumber}</title></head>
+<body>
+<h1>Handshake Deposit Receipt</h1>
+<p>Receipt Number: ${input.receiptNumber}</p>
+<p>Transaction ID: ${input.transactionId}</p>
+<p>User ID: ${input.userId}</p>
+<p>Asset: ${input.asset}</p>
+<p>Amount Deposited: ${input.amount} ${input.asset}</p>
+<p>On-Chain Tx Hash: ${input.txHash}</p>
+<p>Type: deposit</p>
+<p>Issued At: ${input.issuedAt.toISOString()}</p>
+</body>
+</html>`;
+
+  return { htmlContent, itemized };
+}
+
+/**
+ * Derives a sequential human-readable receipt number.
+ *
+ * TODO(RCP): use a Postgres sequence instead of COUNT(*) + 1 to eliminate
+ * the race condition under high concurrency. For the skeleton, a serializable
+ * $transaction means this count is correct within the same transaction — but
+ * if multiple transactions commit concurrently at exactly the same sequence
+ * position the UNIQUE constraint on Receipt.receiptNumber will catch it.
+ */
+function formatReceiptNumber(year: string, count: bigint): string {
+  // count is the number of receipts *before* this insert (0-based index);
+  // +1 gives the 1-based position for the next receipt.
+  const seq = (count + 1n).toString().padStart(6, '0');
+  return `HS-${year}-${seq}`;
+}
+
 // ---------------------------------------------------------------------------
 // Repository
 // ---------------------------------------------------------------------------
 
 @Injectable()
 export class DepositSettlementPrismaRepository implements IDepositSettlementRepository {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly signingKey: string;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+    private readonly assetRegistry: AssetRegistry,
+  ) {
+    this.signingKey = this.config.get<string>('DIRECTIVE_SIGNING_KEY') ?? '';
+  }
 
   /**
    * Atomic deposit settlement in a single Prisma $transaction.
@@ -128,110 +200,182 @@ export class DepositSettlementPrismaRepository implements IDepositSettlementRepo
   ): Promise<SettleDepositAtomicOutput> {
     const {
       walletId,
+      userId,
       cryptoAmount,
+      asset,
       txHash,
       sourceAddress,
       providerWebhookId,
       postedAt,
     } = input;
 
-    return this.prisma.$transaction(async (tx) => {
-      // ── 1. Idempotency check ─────────────────────────────────────────────
-      const existing = await tx.depositConfirmation.findUnique({
-        where: { txHash },
-        select: { id: true },
-      });
+    // Look up decimals from AssetRegistry — never hardcode.
+    const assetMeta = this.assetRegistry.asset(asset);
+    const assetDecimals = assetMeta.decimals;
 
-      if (existing !== null) {
-        return { deposited: false };
-      }
+    const signingKey = this.signingKey;
+    const year = postedAt.getFullYear().toString();
 
-      // ── 2. Read current account states (inside tx for isolation) ─────────
-      const accountStates = await fetchDepositAccountStates(
-        tx as unknown as PrismaService,
-        walletId,
-      );
+    return this.prisma.$transaction(
+      async (tx) => {
+        // ── 1. Idempotency check ─────────────────────────────────────────────
+        const existing = await tx.depositConfirmation.findUnique({
+          where: { txHash },
+          select: { id: true },
+        });
 
-      // ── 3. Build ledger entries (pure domain function) ────────────────────
-      const drafts: LedgerEntryDraft[] = buildDepositLedgerEntries({
-        walletId,
-        cryptoAmount,
-        postedAt,
-        accountStates,
-      });
+        if (existing !== null) {
+          return { deposited: false };
+        }
 
-      // ── 4. Insert LedgerEntry rows ────────────────────────────────────────
-      // LedgerEntry requires a transactionId FK. Deposits do not follow the
-      // Proposal → Transaction flow, so we create a minimal internal Transaction
-      // record to anchor the ledger entries.
-      //
-      // Design note: the Receipt model is Transaction-bound; a signed Receipt
-      // DB row for deposits is deferred (see report §Notes). The
-      // DepositConfirmation row is the canonical deposit record.
-      // idempotencyKey must be a UUID — we generate one here (safe: the
-      // DepositConfirmation dedup check above means this branch is never
-      // re-entered for the same txHash).
-      const depositTxn = await tx.transaction.create({
-        data: {
-          userId: input.userId,
-          type: 'reward', // closest available type; deposit TransactionType is a follow-up
-          status: 'completed',
-          idempotencyKey: randomUUID(),
-          requestChecksum: txHash,
-          metadata: {
-            depositTxHash: txHash,
-            asset: input.asset,
-            amount: cryptoAmount,
-            sourceAddress: sourceAddress ?? null,
-          },
-          completedAt: postedAt,
-        },
-        select: { id: true },
-      });
+        // ── 2. Read current account states (inside tx for isolation) ─────────
+        const accountStates = await fetchDepositAccountStates(
+          tx as unknown as PrismaService,
+          walletId,
+          asset,
+        );
 
-      for (const draft of drafts) {
-        await tx.ledgerEntry.create({
+        // ── 3. Build ledger entries (pure domain function) ────────────────────
+        const drafts: LedgerEntryDraft[] = buildDepositLedgerEntries({
+          walletId,
+          cryptoAmount,
+          postedAt,
+          accountStates,
+        });
+
+        // ── 4. Create anchor Transaction (type=deposit, status=completed) ─────
+        // LedgerEntry requires a transactionId FK. Deposits do not follow the
+        // Proposal → Transaction flow, so we create a minimal anchor Transaction.
+        // type:'deposit' correctly classifies this for reconciliation.
+        const depositTxn = await tx.transaction.create({
           data: {
-            transactionId: depositTxn.id,
-            accountType: draft.accountType,
-            accountId: draft.accountId,
-            currency: draft.currency,
-            amount: draft.amount as unknown as Prisma.Decimal,
-            direction: draft.direction,
-            description: draft.description,
-            balanceAfter: draft.balanceAfter as unknown as Prisma.Decimal,
-            sequence: draft.sequence,
-            postedAt: draft.postedAt,
+            userId,
+            type: TransactionType.deposit,
+            status: TransactionStatus.completed,
+            idempotencyKey: randomUUID(),
+            requestChecksum: txHash,
+            metadata: {
+              depositTxHash: txHash,
+              asset,
+              amount: cryptoAmount,
+              sourceAddress: sourceAddress ?? null,
+            },
+            completedAt: postedAt,
+          },
+          select: { id: true },
+        });
+
+        // ── 5. Insert LedgerEntry rows ────────────────────────────────────────
+        // Extract the user_wallet ledger entry to capture balanceAfter (running balance).
+        let userWalletBalanceAfter: string = cryptoAmount;
+
+        for (const draft of drafts) {
+          await tx.ledgerEntry.create({
+            data: {
+              transactionId: depositTxn.id,
+              accountType: draft.accountType,
+              accountId: draft.accountId,
+              currency: draft.currency,
+              amount: draft.amount as unknown as Prisma.Decimal,
+              direction: draft.direction,
+              description: draft.description,
+              balanceAfter: draft.balanceAfter as unknown as Prisma.Decimal,
+              sequence: draft.sequence,
+              postedAt: draft.postedAt,
+            },
+          });
+
+          // Capture the running balance from the user_wallet credit entry.
+          if (
+            draft.accountType === DomainLedgerAccountType.user_wallet &&
+            draft.accountId === walletId
+          ) {
+            userWalletBalanceAfter = draft.balanceAfter;
+          }
+        }
+
+        // ── 6. Create WalletBalance snapshot ─────────────────────────────────
+        await tx.walletBalance.create({
+          data: {
+            walletId,
+            amount: cryptoAmount as unknown as Prisma.Decimal,
+            assetDecimals,
+            source: BalanceSource.deposit_webhook,
+            syncedAt: postedAt,
           },
         });
-      }
 
-      // ── 5. Create WalletBalance snapshot ─────────────────────────────────
-      await tx.walletBalance.create({
-        data: {
-          walletId,
-          amount: cryptoAmount as unknown as Prisma.Decimal,
-          assetDecimals: USDT_ASSET_DECIMALS,
-          source: BalanceSource.deposit_webhook,
-          syncedAt: postedAt,
-        },
-      });
+        // ── 7. Insert DepositConfirmation ─────────────────────────────────────
+        await tx.depositConfirmation.create({
+          data: {
+            walletId,
+            txHash,
+            amount: cryptoAmount as unknown as Prisma.Decimal,
+            assetDecimals,
+            sourceAddress: sourceAddress ?? null,
+            status: DepositStatus.confirmed,
+            confirmedAt: postedAt,
+            webhookId: providerWebhookId ?? null,
+          },
+        });
 
-      // ── 6. Insert DepositConfirmation ────────────────────────────────────
-      await tx.depositConfirmation.create({
-        data: {
-          walletId,
+        // ── 8. Mint signed Receipt ────────────────────────────────────────────
+        // TODO(RCP): use a Postgres sequence instead of COUNT(*)+1.
+        const countBig = await tx.receipt.count();
+        const receiptNumber = formatReceiptNumber(year, BigInt(countBig));
+
+        const { htmlContent, itemized } = buildDepositReceiptContent({
+          receiptNumber,
+          transactionId: depositTxn.id,
+          userId,
+          asset,
+          amount: cryptoAmount,
           txHash,
-          amount: cryptoAmount as unknown as Prisma.Decimal,
-          assetDecimals: USDT_ASSET_DECIMALS,
-          sourceAddress: sourceAddress ?? null,
-          status: DepositStatus.confirmed,
-          confirmedAt: postedAt,
-          webhookId: providerWebhookId ?? null,
-        },
-      });
+          issuedAt: postedAt,
+        });
 
-      return { deposited: true, newBalance: cryptoAmount };
-    });
+        // Content hash: sha256 of htmlContent + canonical(itemized).
+        const contentHash = createHash('sha256')
+          .update(htmlContent + JSON.stringify(itemized), 'utf8')
+          .digest('hex');
+
+        // Signature: HMAC-SHA256 over (receiptNumber, transactionId, contentHash, userId, issuedAt).
+        const signaturePayload = [
+          receiptNumber,
+          depositTxn.id,
+          contentHash,
+          userId,
+          postedAt.toISOString(),
+        ].join('|');
+
+        const signatureHash = hmacHex('sha256', signingKey, signaturePayload);
+
+        await tx.receipt.create({
+          data: {
+            transactionId: depositTxn.id,
+            receiptNumber,
+            userId,
+            itemized: itemized as unknown as Prisma.InputJsonValue,
+            htmlContent,
+            contentHash,
+            signatureHash,
+            deliveryStatus: ReceiptDeliveryStatus.pending,
+            issuedAt: postedAt,
+          },
+        });
+
+        return {
+          deposited: true,
+          newBalance: userWalletBalanceAfter,
+          receiptNumber,
+        };
+      },
+      {
+        // Serializable isolation to ensure the COUNT(*) + 1 for receiptNumber
+        // is not subject to a phantom read race.
+        // TODO(RCP): remove once a Postgres sequence is used.
+        isolationLevel: 'Serializable',
+      },
+    );
   }
 }
