@@ -44,9 +44,14 @@ import {
   ProposalExpiredError,
   ProposalNotExecutableError,
   QuoteDriftError,
+  SettlementInvalidStatusError,
 } from '../domain/execution-errors';
 import { DirectiveReplayError } from '../domain/directive-errors';
 import { PinInvalidError } from '../../../core/auth/domain/pin-errors';
+import type {
+  ISettlementRepository,
+  SettleBuyAtomicOutput,
+} from './ports/settlement.repository.port';
 
 // ---------------------------------------------------------------------------
 // Fixed test values
@@ -200,6 +205,18 @@ function makeOutboxRepo(): jest.Mocked<ISettlementOutboxRepository> {
   };
 }
 
+const STUB_RECEIPT_NUMBER = 'HS-2025-000001';
+
+function makeSettlementRepo(
+  receiptNumber: string | null = null,
+  atomicOutput: SettleBuyAtomicOutput = { receiptNumber: STUB_RECEIPT_NUMBER },
+): jest.Mocked<ISettlementRepository> {
+  return {
+    findReceiptNumber: jest.fn().mockResolvedValue(receiptNumber),
+    settleBuyAtomic: jest.fn().mockResolvedValue(atomicOutput),
+  };
+}
+
 function makeQuotesService(
   quote: QuoteBuyOutput = FRESH_QUOTE,
 ): jest.Mocked<Pick<QuotesService, 'quoteBuy'>> {
@@ -265,13 +282,30 @@ function makeWalletService(): jest.Mocked<
 
 function makePaymentProvider(
   throws?: Error,
-): jest.Mocked<Pick<IPaymentProvider, 'createCollection'>> {
-  const svc = { createCollection: jest.fn() };
+  verifyResult?: {
+    status: string;
+    amount: string;
+    currency: string;
+    providerRef: string;
+  },
+): jest.Mocked<Pick<IPaymentProvider, 'createCollection' | 'verify'>> {
+  const svc = {
+    createCollection: jest.fn(),
+    verify: jest.fn(),
+  };
   if (throws) {
     svc.createCollection.mockRejectedValue(throws);
   } else {
     svc.createCollection.mockResolvedValue(STUB_COLLECTION);
   }
+  svc.verify.mockResolvedValue(
+    verifyResult ?? {
+      status: 'successful',
+      amount: '10000',
+      currency: 'NGN',
+      providerRef: 'flw_ref_001',
+    },
+  );
   return svc;
 }
 
@@ -295,6 +329,7 @@ function buildService(
     quoteRepo?: jest.Mocked<IQuoteRepository>;
     transactionRepo?: jest.Mocked<ITransactionRepository>;
     outboxRepo?: jest.Mocked<ISettlementOutboxRepository>;
+    settlementRepo?: jest.Mocked<ISettlementRepository>;
     quotesService?: jest.Mocked<Pick<QuotesService, 'quoteBuy'>>;
     kycGate?: jest.Mocked<Pick<KycGateService, 'assertCanTransact'>>;
     directiveService?: jest.Mocked<Pick<DirectiveService, 'consume'>>;
@@ -302,7 +337,9 @@ function buildService(
     walletService?: jest.Mocked<
       Pick<WalletService, 'getOrProvisionUsdtTronWallet'>
     >;
-    paymentProvider?: jest.Mocked<Pick<IPaymentProvider, 'createCollection'>>;
+    paymentProvider?: jest.Mocked<
+      Pick<IPaymentProvider, 'createCollection' | 'verify'>
+    >;
   } = {},
 ): ExecutionService {
   return new ExecutionService(
@@ -310,6 +347,7 @@ function buildService(
     overrides.quoteRepo ?? makeQuoteRepo(),
     overrides.transactionRepo ?? makeTransactionRepo(),
     overrides.outboxRepo ?? makeOutboxRepo(),
+    overrides.settlementRepo ?? makeSettlementRepo(),
     (overrides.quotesService as unknown as QuotesService) ??
       (makeQuotesService() as unknown as QuotesService),
     (overrides.kycGate as unknown as KycGateService) ??
@@ -801,5 +839,236 @@ describe('ExecutionService.executeBuy', () => {
     expect(outboxRepo.create).not.toHaveBeenCalled();
     expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
     expect(transactionRepo.mergeMetadata).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// settleBuyPayment tests (Task 4.5b)
+// ---------------------------------------------------------------------------
+
+const SETTLING_TXN: TransactionRecord = {
+  ...STUB_TXN,
+  status: 'settling',
+  metadata: {
+    asset: 'USDT',
+    fiatAmount: '10000',
+    fiatCurrency: 'NGN',
+    cryptoAmount: '6.123456',
+    processingFeeAmount: '100.00',
+  },
+};
+
+const COMPLETED_TXN: TransactionRecord = {
+  ...STUB_TXN,
+  status: 'completed',
+  metadata: {
+    asset: 'USDT',
+    fiatAmount: '10000',
+    fiatCurrency: 'NGN',
+    cryptoAmount: '6.123456',
+    processingFeeAmount: '100.00',
+  },
+};
+
+const WALLET_RECORD = {
+  id: 'wallet-uuid-001',
+  userId: USER_ID,
+  asset: 'USDT',
+  network: 'TRON',
+  address: 'TTestAddress123',
+  providerReference: 'blockradar-ref-001',
+  status: 'active',
+};
+
+function makeWalletServiceWithId(): jest.Mocked<
+  Pick<WalletService, 'getOrProvisionUsdtTronWallet'>
+> {
+  return {
+    getOrProvisionUsdtTronWallet: jest.fn().mockResolvedValue(WALLET_RECORD),
+  };
+}
+
+// Stub that also returns a transactionId on findByIdempotencyKey
+function makeTransactionRepoForSettle(
+  txn: TransactionRecord | null = SETTLING_TXN,
+): jest.Mocked<ITransactionRepository> {
+  return {
+    findByIdempotencyKey: jest.fn().mockResolvedValue(txn),
+    create: jest.fn().mockResolvedValue(SETTLING_TXN),
+    createSettlingWithProposal: jest.fn().mockResolvedValue(SETTLING_TXN),
+    updateStatus: jest.fn().mockResolvedValue(undefined),
+    mergeMetadata: jest.fn().mockResolvedValue(undefined),
+  };
+}
+
+describe('ExecutionService.settleBuyPayment', () => {
+  const SETTLE_INPUT = { reference: IDEMPOTENCY_KEY };
+
+  // ── Happy path ────────────────────────────────────────────────────────────
+
+  it('happy path: verify successful → calls settleBuyAtomic, returns completed + receiptNumber', async () => {
+    const transactionRepo = makeTransactionRepoForSettle(SETTLING_TXN);
+    const settlementRepo = makeSettlementRepo(null, {
+      receiptNumber: STUB_RECEIPT_NUMBER,
+    });
+    const walletService = makeWalletServiceWithId();
+    const paymentProvider = makePaymentProvider();
+
+    const svc = buildService({
+      transactionRepo,
+      settlementRepo,
+      walletService,
+      paymentProvider,
+    });
+
+    const result = await svc.settleBuyPayment(SETTLE_INPUT);
+
+    expect(result.transactionId).toBe(TXN_ID);
+    expect(result.status).toBe('completed');
+    expect(result.receiptNumber).toBe(STUB_RECEIPT_NUMBER);
+
+    // verify was called with the reference.
+    expect(paymentProvider.verify).toHaveBeenCalledWith(IDEMPOTENCY_KEY);
+
+    // wallet provisioned.
+    expect(walletService.getOrProvisionUsdtTronWallet).toHaveBeenCalledWith(
+      USER_ID,
+    );
+
+    // atomic settle was called.
+    expect(settlementRepo.settleBuyAtomic).toHaveBeenCalledTimes(1);
+    expect(settlementRepo.settleBuyAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transactionId: TXN_ID,
+        userId: USER_ID,
+        walletId: WALLET_RECORD.id,
+        fiatAmount: '10000',
+        cryptoAmount: '6.123456',
+      }),
+    );
+  });
+
+  // ── Already completed → idempotent return ─────────────────────────────────
+
+  it('already completed → returns existing receiptNumber, settleBuyAtomic NOT called', async () => {
+    const transactionRepo = makeTransactionRepoForSettle(COMPLETED_TXN);
+    const settlementRepo = makeSettlementRepo(STUB_RECEIPT_NUMBER);
+    const paymentProvider = makePaymentProvider();
+
+    const svc = buildService({
+      transactionRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    const result = await svc.settleBuyPayment(SETTLE_INPUT);
+
+    expect(result.transactionId).toBe(TXN_ID);
+    expect(result.status).toBe('completed');
+    expect(result.receiptNumber).toBe(STUB_RECEIPT_NUMBER);
+
+    // No re-credit.
+    expect(settlementRepo.settleBuyAtomic).not.toHaveBeenCalled();
+    // No provider verify on idempotent path.
+    expect(paymentProvider.verify).not.toHaveBeenCalled();
+  });
+
+  // ── Provider verify not successful → return pending ───────────────────────
+
+  it('provider verify returns pending → returns pending, settleBuyAtomic NOT called', async () => {
+    const transactionRepo = makeTransactionRepoForSettle(SETTLING_TXN);
+    const settlementRepo = makeSettlementRepo();
+    const paymentProvider = makePaymentProvider(undefined, {
+      status: 'pending',
+      amount: '10000',
+      currency: 'NGN',
+      providerRef: 'flw_ref_001',
+    });
+
+    const svc = buildService({
+      transactionRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    const result = await svc.settleBuyPayment(SETTLE_INPUT);
+
+    expect(result.transactionId).toBe(TXN_ID);
+    expect(result.status).toBe('pending');
+    expect(result.receiptNumber).toBeUndefined();
+    expect(settlementRepo.settleBuyAtomic).not.toHaveBeenCalled();
+  });
+
+  // ── Amount mismatch → return pending ─────────────────────────────────────
+
+  it('provider verify: amount mismatch → returns pending, no settle', async () => {
+    const transactionRepo = makeTransactionRepoForSettle(SETTLING_TXN);
+    const settlementRepo = makeSettlementRepo();
+    const paymentProvider = makePaymentProvider(undefined, {
+      status: 'successful',
+      amount: '5000', // less than 10000
+      currency: 'NGN',
+      providerRef: 'flw_ref_001',
+    });
+
+    const svc = buildService({
+      transactionRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    const result = await svc.settleBuyPayment(SETTLE_INPUT);
+
+    expect(result.status).toBe('pending');
+    expect(settlementRepo.settleBuyAtomic).not.toHaveBeenCalled();
+  });
+
+  // ── Currency mismatch → return pending ───────────────────────────────────
+
+  it('provider verify: currency mismatch → returns pending, no settle', async () => {
+    const transactionRepo = makeTransactionRepoForSettle(SETTLING_TXN);
+    const settlementRepo = makeSettlementRepo();
+    const paymentProvider = makePaymentProvider(undefined, {
+      status: 'successful',
+      amount: '10000',
+      currency: 'USD', // wrong currency
+      providerRef: 'flw_ref_001',
+    });
+
+    const svc = buildService({
+      transactionRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    const result = await svc.settleBuyPayment(SETTLE_INPUT);
+
+    expect(result.status).toBe('pending');
+    expect(settlementRepo.settleBuyAtomic).not.toHaveBeenCalled();
+  });
+
+  // ── Unknown reference → throws ────────────────────────────────────────────
+
+  it('unknown reference → throws ProposalNotExecutableError', async () => {
+    const transactionRepo = makeTransactionRepoForSettle(null);
+
+    const svc = buildService({ transactionRepo });
+
+    await expect(svc.settleBuyPayment(SETTLE_INPUT)).rejects.toBeInstanceOf(
+      ProposalNotExecutableError,
+    );
+  });
+
+  // ── Invalid status (not settling / completed) → throws ───────────────────
+
+  it('transaction status is failed → throws SettlementInvalidStatusError', async () => {
+    const failedTxn: TransactionRecord = { ...SETTLING_TXN, status: 'failed' };
+    const transactionRepo = makeTransactionRepoForSettle(failedTxn);
+
+    const svc = buildService({ transactionRepo });
+
+    await expect(svc.settleBuyPayment(SETTLE_INPUT)).rejects.toBeInstanceOf(
+      SettlementInvalidStatusError,
+    );
   });
 });

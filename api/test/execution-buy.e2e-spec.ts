@@ -32,6 +32,7 @@ import { QuotePrismaRepository } from '../src/modules/transactions/infrastructur
 import { DirectivePrismaRepository } from '../src/modules/transactions/infrastructure/directive.prisma.repository';
 import { TransactionPrismaRepository } from '../src/modules/transactions/infrastructure/transaction.prisma.repository';
 import { SettlementOutboxPrismaRepository } from '../src/modules/transactions/infrastructure/settlement-outbox.prisma.repository';
+import { SettlementPrismaRepository } from '../src/modules/transactions/infrastructure/settlement.prisma.repository';
 import { PinPrismaRepository } from '../src/core/auth/infrastructure/pin.prisma.repository';
 import { IdentityPrismaRepository } from '../src/modules/identity/infrastructure/identity.prisma.repository';
 import { VelocityPrismaRepository } from '../src/modules/identity/infrastructure/velocity.prisma.repository';
@@ -190,11 +191,14 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       clock,
     );
 
+    const settlementRepo = new SettlementPrismaRepository(ps, config);
+
     executionService = new ExecutionService(
       proposalRepo,
       quoteRepo,
       transactionRepo,
       outboxRepo,
+      settlementRepo,
       quotesService,
       kycGateService,
       directiveService,

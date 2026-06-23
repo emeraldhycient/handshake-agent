@@ -50,3 +50,33 @@ export class QuoteDriftError extends Error {
     this.name = 'QuoteDriftError';
   }
 }
+
+/**
+ * Thrown when settleBuyPayment is called for a Transaction whose status is not
+ * 'settling' (and not already 'completed' — that is handled as idempotent).
+ * Code: ENGINE_SETTLEMENT_INVALID_STATUS
+ */
+export class SettlementInvalidStatusError extends Error {
+  readonly code = 'ENGINE_SETTLEMENT_INVALID_STATUS' as const;
+
+  constructor(status: string) {
+    super(
+      `Cannot settle transaction with status '${status}'; expected 'settling'`,
+    );
+    this.name = 'SettlementInvalidStatusError';
+  }
+}
+
+/**
+ * Thrown when the payment provider returns a non-successful verify result
+ * (amount or currency mismatch, as opposed to simply 'pending').
+ * Code: ENGINE_PAYMENT_VERIFY_FAILED
+ */
+export class PaymentVerifyFailedError extends Error {
+  readonly code = 'ENGINE_PAYMENT_VERIFY_FAILED' as const;
+
+  constructor(reason: string) {
+    super(`Payment verification failed: ${reason}`);
+    this.name = 'PaymentVerifyFailedError';
+  }
+}

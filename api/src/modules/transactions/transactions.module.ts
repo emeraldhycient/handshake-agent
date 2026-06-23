@@ -14,11 +14,13 @@ import { QUOTE_REPOSITORY } from './application/ports/quote.repository.port';
 import { DIRECTIVE_REPOSITORY } from './application/ports/directive.repository.port';
 import { TRANSACTION_REPOSITORY } from './application/ports/transaction.repository.port';
 import { SETTLEMENT_OUTBOX_REPOSITORY } from './application/ports/settlement-outbox.repository.port';
+import { SETTLEMENT_REPOSITORY } from './application/ports/settlement.repository.port';
 import { ProposalPrismaRepository } from './infrastructure/proposal.prisma.repository';
 import { QuotePrismaRepository } from './infrastructure/quote.prisma.repository';
 import { DirectivePrismaRepository } from './infrastructure/directive.prisma.repository';
 import { TransactionPrismaRepository } from './infrastructure/transaction.prisma.repository';
 import { SettlementOutboxPrismaRepository } from './infrastructure/settlement-outbox.prisma.repository';
+import { SettlementPrismaRepository } from './infrastructure/settlement.prisma.repository';
 
 /**
  * Transactions feature module. Wires the buy-proposal, directive, and execution
@@ -31,6 +33,7 @@ import { SettlementOutboxPrismaRepository } from './infrastructure/settlement-ou
  *  - TreasuryModule → exports PAYMENT_PROVIDER (Flutterwave collection)
  *  - QUOTE_REPOSITORY / PROPOSAL_REPOSITORY / DIRECTIVE_REPOSITORY → Prisma adapters
  *  - TRANSACTION_REPOSITORY / SETTLEMENT_OUTBOX_REPOSITORY → Prisma adapters (4.5a)
+ *  - SETTLEMENT_REPOSITORY → Prisma adapter (4.5b — atomic settle + receipt)
  *  - CLOCK → SystemClock (swappable in tests)
  *  - DirectiveService → mints/redeems one-shot signed authority grants
  *  - ExecutionService → the only code that constructs Transaction rows
@@ -54,6 +57,10 @@ import { SettlementOutboxPrismaRepository } from './infrastructure/settlement-ou
     {
       provide: SETTLEMENT_OUTBOX_REPOSITORY,
       useClass: SettlementOutboxPrismaRepository,
+    },
+    {
+      provide: SETTLEMENT_REPOSITORY,
+      useClass: SettlementPrismaRepository,
     },
     { provide: CLOCK, useClass: SystemClock },
   ],

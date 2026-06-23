@@ -58,11 +58,16 @@ import {
   SETTLEMENT_OUTBOX_REPOSITORY,
   type ISettlementOutboxRepository,
 } from './ports/settlement-outbox.repository.port';
+import {
+  SETTLEMENT_REPOSITORY,
+  type ISettlementRepository,
+} from './ports/settlement.repository.port';
 import { DirectiveService } from './directive.service';
 import {
   ProposalExpiredError,
   ProposalNotExecutableError,
   QuoteDriftError,
+  SettlementInvalidStatusError,
 } from '../domain/execution-errors';
 
 // ---------------------------------------------------------------------------
@@ -90,6 +95,18 @@ export interface ExecuteBuyResult {
   };
 }
 
+export interface SettleBuyInput {
+  /** The idempotency key used at executeBuy (= tx_ref for payment provider). */
+  reference: string;
+}
+
+export interface SettleBuyResult {
+  transactionId: string;
+  status: 'completed' | 'pending';
+  /** Set only when status === 'completed'. */
+  receiptNumber?: string;
+}
+
 // Statuses that allow the engine to execute against a proposal (I1: typed set).
 const EXECUTABLE_STATUSES = new Set<string>(['pending', 'confirmed']);
 
@@ -113,6 +130,8 @@ export class ExecutionService {
     private readonly transactionRepo: ITransactionRepository,
     @Inject(SETTLEMENT_OUTBOX_REPOSITORY)
     private readonly outboxRepo: ISettlementOutboxRepository,
+    @Inject(SETTLEMENT_REPOSITORY)
+    private readonly settlementRepo: ISettlementRepository,
     private readonly quotesService: QuotesService,
     private readonly kycGate: KycGateService,
     private readonly directiveService: DirectiveService,
@@ -322,6 +341,104 @@ export class ExecutionService {
         amount: storedQuote.fiatAmount,
         currency: 'NGN',
       },
+    };
+  }
+
+  /**
+   * Phase B of a buy: verifies the NGN collection then atomically settles it.
+   *
+   * Flow (§3.1 preserved — model proposes, engine disposes):
+   *   1. Load Transaction by idempotency key (reference).
+   *   2. Idempotent path: already completed → return existing receipt, no re-credit.
+   *   3. Guard: status must be 'settling'; anything else is an error.
+   *   4. Verify payment with PAYMENT_PROVIDER.
+   *      - Not successful → return pending (do NOT credit).
+   *      - Amount or currency mismatch → return pending.
+   *   5. Resolve the user's USDT wallet (idempotent provision).
+   *   6. Delegate the atomic multi-step write to SettlementRepository.settleBuyAtomic
+   *      (single $transaction; rolls back on any failure).
+   *   7. Return { transactionId, status:'completed', receiptNumber }.
+   */
+  async settleBuyPayment(input: SettleBuyInput): Promise<SettleBuyResult> {
+    const { reference } = input;
+
+    // ── Step 1: Load Transaction by idempotency key ──────────────────────────
+    const txn = await this.transactionRepo.findByIdempotencyKey(reference);
+    if (txn === null) {
+      throw new ProposalNotExecutableError(
+        `no transaction found for reference '${reference}'`,
+      );
+    }
+
+    // ── Step 2: Idempotent path — already completed ─────────────────────────
+    if (txn.status === 'completed') {
+      const receiptNumber = await this.settlementRepo.findReceiptNumber(txn.id);
+      return {
+        transactionId: txn.id,
+        status: 'completed',
+        ...(receiptNumber !== null ? { receiptNumber } : {}),
+      };
+    }
+
+    // ── Step 3: Guard — must be 'settling' ───────────────────────────────────
+    if (txn.status !== 'settling') {
+      throw new SettlementInvalidStatusError(txn.status);
+    }
+
+    // ── Step 4: Verify payment with provider ─────────────────────────────────
+    const verifyResult = await this.paymentProvider.verify(reference);
+
+    if (verifyResult.status !== 'successful') {
+      // Payment not yet confirmed — leave the Transaction in 'settling'.
+      return { transactionId: txn.id, status: 'pending' };
+    }
+
+    // Validate amount (decimal-safe: compare as BigInt-scaled integers).
+    const meta = txn.metadata as Record<string, string>;
+    const expectedFiatAmount = meta.fiatAmount ?? '0';
+
+    // Scale and compare to avoid float drift.
+    const SCALE = 10n ** 18n;
+    const toScaled = (s: string): bigint => {
+      const [whole = '0', frac = ''] = s.trim().split('.');
+      const fracPadded = frac.slice(0, 18).padEnd(18, '0');
+      return BigInt(whole) * SCALE + BigInt(fracPadded);
+    };
+
+    const verifiedAmount = toScaled(verifyResult.amount);
+    const expectedAmount = toScaled(expectedFiatAmount);
+
+    if (verifiedAmount < expectedAmount || verifyResult.currency !== 'NGN') {
+      // Mismatch — leave in settling; operator/webhook will retry.
+      return { transactionId: txn.id, status: 'pending' };
+    }
+
+    // ── Step 5: Resolve the user's USDT wallet ────────────────────────────────
+    const wallet = await this.walletService.getOrProvisionUsdtTronWallet(
+      txn.userId,
+    );
+
+    // ── Step 6: Atomic settlement ─────────────────────────────────────────────
+    const now = this.clock.now();
+    const year = now.getFullYear().toString();
+
+    const { receiptNumber } = await this.settlementRepo.settleBuyAtomic({
+      transactionId: txn.id,
+      userId: txn.userId,
+      walletId: wallet.id,
+      fiatAmount: expectedFiatAmount,
+      cryptoAmount: meta.cryptoAmount ?? '0',
+      processingFee: meta.processingFeeAmount ?? '0',
+      providerRef: verifyResult.providerRef,
+      now,
+      year,
+    });
+
+    // ── Step 7: Return result ─────────────────────────────────────────────────
+    return {
+      transactionId: txn.id,
+      status: 'completed',
+      receiptNumber,
     };
   }
 
