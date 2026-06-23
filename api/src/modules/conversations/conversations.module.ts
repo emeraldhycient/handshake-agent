@@ -4,11 +4,13 @@ import { AgentModule } from '../agent/agent.module';
 import { IdentityModule } from '../identity/identity.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { WhatsAppSenderModule } from '../whatsapp/whatsapp-sender.module';
+import { WalletsModule } from '../wallets/wallets.module';
 
 import {
   ConversationService,
   PROPOSAL_SERVICE,
   DIRECTIVE_SERVICE,
+  WALLET_SERVICE,
 } from './application/conversation.service';
 import { CONVERSATION_REPOSITORY } from './application/ports/conversation.repository.port';
 import { MESSAGE_REPOSITORY } from './application/ports/message.repository.port';
@@ -21,12 +23,14 @@ import { ReplyPrismaRepository } from './infrastructure/reply.prisma.repository'
 import { INBOUND_HANDLER } from '../whatsapp/application/ports/inbound-handler.port';
 import { ProposalService } from '../transactions/application/proposal.service';
 import { DirectiveService } from '../transactions/application/directive.service';
+import { WalletService } from '../wallets/application/wallet.service';
 
 /**
  * Conversations feature module.
  *
  * Dependency graph (acyclic):
  *   WhatsAppModule → ConversationsModule → WhatsAppSenderModule
+ *                                        → WalletsModule (read-only deposit address)
  *
  * ConversationsModule binds and exports INBOUND_HANDLER → ConversationService.
  * WhatsAppModule imports ConversationsModule to obtain the INBOUND_HANDLER binding
@@ -37,6 +41,10 @@ import { DirectiveService } from '../transactions/application/directive.service'
  *
  * TransactionsModule exports both ProposalService and DirectiveService; both are
  * re-bound here under local DI tokens so ConversationService uses symbol injection.
+ *
+ * WalletsModule exports WalletService; re-bound under WALLET_SERVICE token for
+ * symbol injection — ConversationsModule does not import from wallets' application
+ * layer directly (clean-arch §4.1, depcruise enforced).
  */
 @Module({
   imports: [
@@ -44,6 +52,7 @@ import { DirectiveService } from '../transactions/application/directive.service'
     IdentityModule,
     TransactionsModule,
     WhatsAppSenderModule,
+    WalletsModule,
   ],
   providers: [
     ConversationService,
@@ -54,6 +63,9 @@ import { DirectiveService } from '../transactions/application/directive.service'
     // Expose DirectiveService under our local DIRECTIVE_SERVICE token so
     // ConversationService can mint request_pin directives for the Flow path.
     { provide: DIRECTIVE_SERVICE, useExisting: DirectiveService },
+    // Expose WalletService under our local WALLET_SERVICE token so
+    // ConversationService can provision/read deposit addresses (read-only; §3.1).
+    { provide: WALLET_SERVICE, useExisting: WalletService },
     { provide: INBOUND_HANDLER, useExisting: ConversationService },
     {
       provide: CONVERSATION_REPOSITORY,

@@ -1,5 +1,5 @@
 /**
- * Integration test for the inbound→agent→proposal→reply conversation flow (task 2.3).
+ * Integration test for the inbound→agent→proposal→reply conversation flow (tasks 2.3 + R1).
  *
  * Uses a real Postgres via Testcontainers. The agent (LLM) and WhatsApp sender
  * are replaced with lightweight fakes so no external calls are made.
@@ -29,6 +29,8 @@ import type { IAgentPort } from '../src/modules/agent/application/ports/agent.po
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 import type { ProposalService } from '../src/modules/transactions/application/proposal.service';
 import type { DirectiveService } from '../src/modules/transactions/application/directive.service';
+import type { WalletService } from '../src/modules/wallets/application/wallet.service';
+import type { WalletRecord } from '../src/modules/wallets/application/ports/wallet.repository.port';
 import type { BuyProposalConfirmation } from '@handshake-agent/contracts';
 
 jest.setTimeout(180_000);
@@ -80,6 +82,21 @@ const fakeDirectiveService = {
     expiresAt: new Date(Date.now() + 300_000),
   }),
 } as unknown as DirectiveService;
+
+/** Fake WalletService — returns a fixed USDT-on-TRON wallet record. */
+const FAKE_WALLET_ADDRESS = 'TRXFakeAddress_e2e_test_ABC';
+const fakeWalletRecord: WalletRecord = {
+  id: 'wallet-e2e-id-1',
+  userId: '', // will be overridden in the test if needed
+  asset: 'USDT',
+  network: 'TRON',
+  address: FAKE_WALLET_ADDRESS,
+  providerReference: 'blockradar-ref-e2e',
+  status: 'active',
+};
+const fakeWalletService = {
+  getOrProvisionUsdtTronWallet: jest.fn().mockResolvedValue(fakeWalletRecord),
+} as unknown as WalletService;
 
 /** Fake ProposalService — returns a fixed confirmation without hitting the DB. */
 const fakeConfirmation: BuyProposalConfirmation = {
@@ -139,6 +156,7 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       replyRepo,
       fakeConfigService,
       fakeDirectiveService,
+      fakeWalletService,
     );
 
     // Seed a Tier-1 verified User + ChannelIdentity
@@ -193,6 +211,9 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       quoteId: 'quote-test-id',
       confirmation: fakeConfirmation,
     });
+    (
+      fakeWalletService.getOrProvisionUsdtTronWallet as jest.Mock
+    ).mockResolvedValue(fakeWalletRecord);
   });
 
   // ── Happy path ─────────────────────────────────────────────────────────────
@@ -314,6 +335,51 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
     expect(fakeSender.sendText).toHaveBeenCalledWith(
       channelAddress,
       clarification,
+    );
+  });
+
+  // ── receive_crypto: deposit address ───────────────────────────────────────
+
+  it('receive_crypto intent → reply persisted with provisioned USDT-TRON address and warning', async () => {
+    const wamid = `wamid.receive.${Date.now()}`;
+    (fakeAgentPort.run as jest.Mock).mockResolvedValue({
+      action: 'receive_crypto',
+    });
+
+    const msg: InboundMessage = {
+      externalMessageId: wamid,
+      fromAddress: channelAddress,
+      phoneNumberId: 'ph-test-id',
+      waName: 'Alice',
+      text: 'I want to receive USDT',
+      timestamp: String(Math.floor(Date.now() / 1000)),
+      channel: 'whatsapp',
+    };
+
+    await svc.handleInbound(msg);
+
+    // WalletService was called with the linked userId
+    expect(fakeWalletService.getOrProvisionUsdtTronWallet).toHaveBeenCalledWith(
+      userId,
+    );
+
+    // Reply persisted with the deposit address and TRON warning
+    const reply = await prisma.conversationReply.findFirst({
+      where: { message: { externalMessageId: wamid } },
+    });
+    expect(reply).not.toBeNull();
+    expect(reply!.text).toContain(FAKE_WALLET_ADDRESS);
+    expect(reply!.text).toContain('TRON');
+    expect(reply!.text).toContain(
+      'Only send USDT on the TRON network to this address. Other assets or networks will be lost.',
+    );
+    expect(reply!.status).toBe('sent');
+    expect(reply!.sentAt).not.toBeNull();
+
+    // Sender dispatched the reply text
+    expect(fakeSender.sendText).toHaveBeenCalledWith(
+      channelAddress,
+      expect.stringContaining(FAKE_WALLET_ADDRESS),
     );
   });
 

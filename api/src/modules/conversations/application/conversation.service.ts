@@ -18,6 +18,7 @@ import {
 import { IdentityService } from '../../identity/application/identity.service';
 import type { ProposalService } from '../../transactions/application/proposal.service';
 import type { DirectiveService } from '../../transactions/application/directive.service';
+import type { WalletService } from '../../wallets/application/wallet.service';
 import { signFlowToken } from '../../whatsapp/application/flow-token';
 
 import {
@@ -42,6 +43,9 @@ export const PROPOSAL_SERVICE = Symbol('PROPOSAL_SERVICE');
 
 /** DI token for DirectiveService — injected by symbol to keep application layer clean */
 export const DIRECTIVE_SERVICE = Symbol('DIRECTIVE_SERVICE');
+
+/** DI token for WalletService — injected by symbol to avoid coupling at module level */
+export const WALLET_SERVICE = Symbol('WALLET_SERVICE');
 
 const SAFE_FALLBACK = 'Sorry, something went wrong — please try again.';
 const NOT_SUPPORTED = "That's not supported yet — you can buy USDT with naira.";
@@ -85,6 +89,8 @@ export class ConversationService implements IInboundHandler {
     private readonly configService: ConfigService,
     @Inject(DIRECTIVE_SERVICE)
     private readonly directiveService: DirectiveService,
+    @Inject(WALLET_SERVICE)
+    private readonly walletService: WalletService,
   ) {}
 
   async handleInbound(msg: InboundMessage): Promise<void> {
@@ -229,6 +235,25 @@ export class ConversationService implements IInboundHandler {
             );
             replyText = buildConfirmationText(confirmation);
           }
+        }
+      } else if (intent.action === 'receive_crypto') {
+        if (identity.kind !== 'user') {
+          // Unlinked contact — needs KYC before accessing wallet details.
+          replyText =
+            'To receive crypto, you need to complete KYC first. Please visit our web app to verify your identity.';
+        } else if (identity.requiresReverification) {
+          // SIM-swap / re-verification required (CLAUDE.md §3.4).
+          replyText =
+            'Your account requires re-verification before you can transact. Please visit our web app to re-verify.';
+        } else {
+          // Happy path: read-only — provision the USDT-on-TRON wallet if needed and return the address.
+          // No proposal, no directive, no execution engine — receiving is purely informational.
+          const wallet = await this.walletService.getOrProvisionUsdtTronWallet(
+            identity.user.id,
+          );
+          replyText =
+            `Your USDT deposit address (TRON network):\n${wallet.address}\n\n` +
+            `Only send USDT on the TRON network to this address. Other assets or networks will be lost.`;
         }
       } else if (intent.action === 'none') {
         replyText = intent.clarification;

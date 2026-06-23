@@ -1,5 +1,5 @@
 /**
- * Unit tests for ConversationService (tasks 2.3 + 6.3).
+ * Unit tests for ConversationService (tasks 2.3 + 6.3 + R1).
  *
  * All external dependencies are mocked — no DB, no HTTP, no LLM.
  *
@@ -14,6 +14,9 @@
  *   - none intent → clarification text
  *   - unsupported action (swap) → "not supported yet" reply
  *   - ProposalService throws → message status marked failed + safe fallback sent
+ *   - linked user + receive_crypto → deposit address reply, no proposal/directive
+ *   - contact (unlinked) + receive_crypto → KYC ask, walletService NOT called
+ *   - user requiresReverification + receive_crypto → re-verify ask, walletService NOT called
  */
 
 import { Logger } from '@nestjs/common';
@@ -46,11 +49,29 @@ import type {
   ConversationReplyRecord,
 } from './ports/reply.repository.port';
 import { REPLY_REPOSITORY } from './ports/reply.repository.port';
-import { ConversationService, PROPOSAL_SERVICE } from './conversation.service';
+import {
+  ConversationService,
+  PROPOSAL_SERVICE,
+  DIRECTIVE_SERVICE,
+} from './conversation.service';
+import type { WalletService } from '../../wallets/application/wallet.service';
+import type { WalletRecord } from '../../wallets/application/ports/wallet.repository.port';
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
+
+const FIXED_WALLET_ADDRESS = 'TRX_USDT_ADDR_ABC123';
+
+const stubWalletRecord = (): WalletRecord => ({
+  id: 'wallet-id-1',
+  userId: 'user-id-1',
+  asset: 'USDT',
+  network: 'TRON',
+  address: FIXED_WALLET_ADDRESS,
+  providerReference: 'blockradar-ref-1',
+  status: 'active',
+});
 
 const FIXED_CONV_ID = 'conv-id-1';
 const FIXED_MSG_ID = 'msg-id-1';
@@ -266,6 +287,14 @@ function makeDirectiveService(
   return svc;
 }
 
+function makeWalletService(
+  wallet: WalletRecord = stubWalletRecord(),
+): jest.Mocked<Pick<WalletService, 'getOrProvisionUsdtTronWallet'>> {
+  return {
+    getOrProvisionUsdtTronWallet: jest.fn().mockResolvedValue(wallet),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
@@ -282,6 +311,9 @@ function buildService(
     replyRepo?: jest.Mocked<IReplyRepository>;
     configService?: jest.Mocked<ConfigService>;
     directiveService?: jest.Mocked<Pick<DirectiveService, 'issue'>>;
+    walletService?: jest.Mocked<
+      Pick<WalletService, 'getOrProvisionUsdtTronWallet'>
+    >;
   } = {},
 ) {
   const identityService = overrides.identityService ?? makeIdentityService();
@@ -294,6 +326,7 @@ function buildService(
   const replyRepo = overrides.replyRepo ?? makeReplyRepo();
   const configService = overrides.configService ?? makeConfigService();
   const directiveService = overrides.directiveService ?? makeDirectiveService();
+  const walletService = overrides.walletService ?? makeWalletService();
 
   // Build the service directly (not via Nest DI) since all deps are mocks.
   const svc = new ConversationService(
@@ -307,6 +340,7 @@ function buildService(
     replyRepo,
     configService,
     directiveService as unknown as DirectiveService,
+    walletService as unknown as WalletService,
   );
 
   return {
@@ -321,6 +355,7 @@ function buildService(
     replyRepo,
     configService,
     directiveService,
+    walletService,
   };
 }
 
@@ -728,6 +763,122 @@ describe('ConversationService.handleInbound', () => {
     );
   });
 
+  // ── receive_crypto: linked user → deposit address ─────────────────────────
+
+  it('linked user + receive_crypto → calls getOrProvisionUsdtTronWallet, reply contains address + TRON + warning', async () => {
+    const agentPort = makeAgentPort({ action: 'receive_crypto' });
+    const walletService = makeWalletService();
+    const { svc, sender, proposalService } = buildService({
+      agentPort,
+      walletService,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    // WalletService must be called with the linked userId
+    expect(walletService.getOrProvisionUsdtTronWallet).toHaveBeenCalledWith(
+      'user-id-1',
+    );
+
+    // No proposal or directive created — receive is read-only
+    expect(proposalService.createBuyProposal).not.toHaveBeenCalled();
+
+    // Reply text contains address, TRON, and the safety warning
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toContain(FIXED_WALLET_ADDRESS);
+    expect(sentText).toContain('TRON');
+    expect(sentText).toContain(
+      'Only send USDT on the TRON network to this address. Other assets or networks will be lost.',
+    );
+  });
+
+  it('linked user + receive_crypto → reply does NOT create proposal or directive', async () => {
+    const agentPort = makeAgentPort({ action: 'receive_crypto' });
+    const directiveService = makeDirectiveService();
+    const { svc } = buildService({ agentPort, directiveService });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(directiveService.issue).not.toHaveBeenCalled();
+  });
+
+  // ── receive_crypto: unlinked contact → KYC ask ────────────────────────────
+
+  it('contact (unlinked) + receive_crypto → KYC ask, walletService NOT called', async () => {
+    const identityService = makeIdentityService({
+      resolveByChannel: jest.fn().mockResolvedValue({
+        kind: 'contact',
+        contact: {
+          id: 'contact-id-2',
+          primaryChannel: 'whatsapp',
+          primaryAddress: FIXED_FROM,
+          status: 'active',
+          linkedUserId: null,
+        },
+      }),
+    });
+    const convRepo = makeConvRepo(null);
+    convRepo.findByContactId.mockResolvedValue(null);
+    convRepo.create.mockResolvedValue({
+      ...baseConv(),
+      userId: null,
+      contactId: 'contact-id-2',
+    });
+
+    const agentPort = makeAgentPort({ action: 'receive_crypto' });
+    const walletService = makeWalletService();
+
+    const { svc, sender } = buildService({
+      identityService,
+      convRepo,
+      agentPort,
+      walletService,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    // WalletService must NOT be called for unlinked contact
+    expect(walletService.getOrProvisionUsdtTronWallet).not.toHaveBeenCalled();
+
+    // Reply text asks user to complete KYC
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toContain('KYC');
+  });
+
+  // ── receive_crypto: requiresReverification → re-verify ask ───────────────
+
+  it('user requiresReverification + receive_crypto → re-verify ask, walletService NOT called', async () => {
+    const identityService = makeIdentityService({
+      resolveByChannel: jest.fn().mockResolvedValue({
+        kind: 'user',
+        user: {
+          id: 'user-id-1',
+          status: 'active',
+          kycStatus: 'verified',
+          kycTier: 'tier_1',
+          simSwapDetectedAt: new Date(),
+        },
+        requiresReverification: true,
+      }),
+    });
+
+    const agentPort = makeAgentPort({ action: 'receive_crypto' });
+    const walletService = makeWalletService();
+
+    const { svc, sender } = buildService({
+      identityService,
+      agentPort,
+      walletService,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(walletService.getOrProvisionUsdtTronWallet).not.toHaveBeenCalled();
+
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toContain('re-verif');
+  });
+
   // Token references (ensure that exported symbols are used consistently)
   it('exports match the correct Symbol tokens', () => {
     expect(AGENT_PORT).toBeDefined();
@@ -737,5 +888,6 @@ describe('ConversationService.handleInbound', () => {
     expect(INTENT_REPOSITORY).toBeDefined();
     expect(REPLY_REPOSITORY).toBeDefined();
     expect(PROPOSAL_SERVICE).toBeDefined();
+    expect(DIRECTIVE_SERVICE).toBeDefined();
   });
 });
