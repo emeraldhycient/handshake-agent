@@ -53,6 +53,19 @@ export class IdentityPrismaRepository implements IIdentityRepository {
     };
   }
 
+  async findWhatsAppAddressByUserId(userId: string): Promise<string | null> {
+    const row = await this.prisma.channelIdentity.findFirst({
+      where: {
+        userId,
+        channel: 'whatsapp' as never,
+        deletedAt: null,
+      },
+      select: { channelAddress: true },
+    });
+
+    return row?.channelAddress ?? null;
+  }
+
   async loadUser(userId: string): Promise<UserRecord | null> {
     const row = await this.prisma.user.findUnique({
       where: { id: userId },

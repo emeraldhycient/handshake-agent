@@ -40,6 +40,18 @@ export class IdentityService {
     private readonly repo: IIdentityRepository,
   ) {}
 
+  /**
+   * Resolves the WhatsApp channel address for a given userId.
+   *
+   * Returns the active WhatsApp ChannelIdentity's channelAddress, or null if
+   * the user has no linked WhatsApp identity (or the CI is inactive).
+   *
+   * Used by the Flutterwave webhook handler to send receipts (Task 6.4).
+   */
+  async findWhatsAppAddress(userId: string): Promise<string | null> {
+    return this.repo.findWhatsAppAddressByUserId(userId);
+  }
+
   async resolveByChannel(
     input: ResolveByChannelInput,
   ): Promise<ResolvedIdentity> {

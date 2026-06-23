@@ -51,6 +51,13 @@ export interface IIdentityRepository {
     channelAddress: string,
   ): Promise<ChannelIdentityRecord | null>;
 
+  /**
+   * Returns the channelAddress for the active WhatsApp ChannelIdentity linked
+   * to the given userId, or null if none exists.
+   * Used by the Flutterwave webhook handler to resolve a user's WhatsApp phone.
+   */
+  findWhatsAppAddressByUserId(userId: string): Promise<string | null>;
+
   /** Loads a User by id, or null if not found. */
   loadUser(userId: string): Promise<UserRecord | null>;
 

@@ -105,6 +105,12 @@ export interface SettleBuyResult {
   status: 'completed' | 'pending';
   /** Set only when status === 'completed'. */
   receiptNumber?: string;
+  /**
+   * The userId that owns this transaction.
+   * Always set so callers (e.g. the Flutterwave webhook handler) can resolve
+   * the user's notification address without an additional DB lookup.
+   */
+  userId?: string;
 }
 
 // Statuses that allow the engine to execute against a proposal (I1: typed set).
@@ -376,6 +382,7 @@ export class ExecutionService {
       return {
         transactionId: txn.id,
         status: 'completed',
+        userId: txn.userId,
         ...(receiptNumber !== null ? { receiptNumber } : {}),
       };
     }
@@ -390,7 +397,7 @@ export class ExecutionService {
 
     if (verifyResult.status !== 'successful') {
       // Payment not yet confirmed — leave the Transaction in 'settling'.
-      return { transactionId: txn.id, status: 'pending' };
+      return { transactionId: txn.id, status: 'pending', userId: txn.userId };
     }
 
     // Validate amount (decimal-safe: compare as BigInt-scaled integers).
@@ -410,7 +417,7 @@ export class ExecutionService {
 
     if (verifiedAmount < expectedAmount || verifyResult.currency !== 'NGN') {
       // Mismatch — leave in settling; operator/webhook will retry.
-      return { transactionId: txn.id, status: 'pending' };
+      return { transactionId: txn.id, status: 'pending', userId: txn.userId };
     }
 
     // ── Step 5: Resolve the user's USDT wallet ────────────────────────────────
@@ -438,6 +445,7 @@ export class ExecutionService {
     return {
       transactionId: txn.id,
       status: 'completed',
+      userId: txn.userId,
       receiptNumber,
     };
   }

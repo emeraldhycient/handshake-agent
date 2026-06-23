@@ -75,6 +75,7 @@ function makeUser(overrides: Partial<UserRecord> = {}): UserRecord {
 function makeIdentityRepo(user: UserRecord | null): IIdentityRepository {
   return {
     findActiveChannelIdentity: jest.fn(),
+    findWhatsAppAddressByUserId: jest.fn().mockResolvedValue(null),
     loadUser: jest.fn().mockResolvedValue(user),
     loadContact: jest.fn(),
     createContactWithChannelIdentity: jest.fn(),

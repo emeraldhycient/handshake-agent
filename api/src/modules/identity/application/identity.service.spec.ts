@@ -51,6 +51,7 @@ function makeRepo(
 ): IIdentityRepository {
   return {
     findActiveChannelIdentity: jest.fn().mockResolvedValue(null),
+    findWhatsAppAddressByUserId: jest.fn().mockResolvedValue(null),
     loadUser: jest.fn().mockResolvedValue(null),
     loadContact: jest.fn().mockResolvedValue(null),
     createContactWithChannelIdentity: jest.fn().mockResolvedValue({

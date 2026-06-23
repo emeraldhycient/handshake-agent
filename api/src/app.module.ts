@@ -13,6 +13,7 @@ import { QuotesModule } from './modules/quotes/quotes.module';
 import { TransactionsModule } from './modules/transactions/transactions.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
 import { WhatsAppModule } from './modules/whatsapp/whatsapp.module';
+import { FlutterwaveWebhookModule } from './modules/treasury/flutterwave-webhook.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { WhatsAppModule } from './modules/whatsapp/whatsapp.module';
     TransactionsModule,
     ConversationsModule,
     WhatsAppModule,
+    FlutterwaveWebhookModule,
   ],
   // Global Zod validation: every request DTO is checked against its contract schema.
   providers: [{ provide: APP_PIPE, useClass: ZodValidationPipe }],
