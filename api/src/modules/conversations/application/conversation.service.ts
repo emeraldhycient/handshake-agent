@@ -20,10 +20,12 @@ import type { ProposalService } from '../../transactions/application/proposal.se
 import type { DirectiveService } from '../../transactions/application/directive.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import { signFlowToken } from '../../whatsapp/application/flow-token';
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
 
 import {
   CONVERSATION_REPOSITORY,
   type IConversationRepository,
+  type ConversationRecord,
 } from './ports/conversation.repository.port';
 import {
   MESSAGE_REPOSITORY,
@@ -48,28 +50,35 @@ export const DIRECTIVE_SERVICE = Symbol('DIRECTIVE_SERVICE');
 export const WALLET_SERVICE = Symbol('WALLET_SERVICE');
 
 const SAFE_FALLBACK = 'Sorry, something went wrong — please try again.';
-const NOT_SUPPORTED = "That's not supported yet — you can buy USDT with naira.";
 
-function buildConfirmationText(c: {
-  asset: string;
-  cryptoAmount: string;
-  fiatAmount: string;
-  fiatCurrency: string;
-  processingFeeAmount: string;
-  totalFiat: string;
-  expiresAt: string;
-}): string {
-  return (
-    `Here is your buy summary:\n` +
-    `Asset: ${c.asset}\n` +
-    `You receive: ${c.cryptoAmount} ${c.asset}\n` +
-    `Amount: ${c.fiatCurrency} ${c.fiatAmount}\n` +
-    `Processing fee: ${c.fiatCurrency} ${c.processingFeeAmount}\n` +
-    `Total: ${c.fiatCurrency} ${c.totalFiat}\n` +
-    `Expires at: ${c.expiresAt}\n` +
-    `Reply CONFIRM to proceed.`
-  );
+// ---------------------------------------------------------------------------
+// Internal resolved-identity shapes
+// ---------------------------------------------------------------------------
+
+/**
+ * Discriminated union returned by `requireActiveUser`.
+ * The caller checks for `'reply'` key and short-circuits; otherwise gets a
+ * narrowed `{ user }` with the linked user id.
+ */
+type ActiveUserResult = { user: { id: string } } | { reply: string };
+
+// ---------------------------------------------------------------------------
+// Intent type helpers (narrow subset used by the router)
+// ---------------------------------------------------------------------------
+
+/** Minimal shape that every routed intent must carry. */
+interface RoutableIntent {
+  action: string;
+  clarification?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Identity resolution output (from IdentityService)
+// ---------------------------------------------------------------------------
+
+type ResolvedIdentity = Awaited<
+  ReturnType<IdentityService['resolveByChannel']>
+>;
 
 @Injectable()
 export class ConversationService implements IInboundHandler {
@@ -91,6 +100,7 @@ export class ConversationService implements IInboundHandler {
     private readonly directiveService: DirectiveService,
     @Inject(WALLET_SERVICE)
     private readonly walletService: WalletService,
+    private readonly assetRegistry: AssetRegistry,
   ) {}
 
   async handleInbound(msg: InboundMessage): Promise<void> {
@@ -115,21 +125,7 @@ export class ConversationService implements IInboundHandler {
       });
 
       // Step 3: Upsert conversation (one per identity, keyed by userId XOR contactId).
-      let conversation =
-        identity.kind === 'user'
-          ? await this.conversationRepo.findByUserId(identity.user.id)
-          : await this.conversationRepo.findByContactId(identity.contact.id);
-
-      if (conversation === null) {
-        conversation =
-          identity.kind === 'user'
-            ? await this.conversationRepo.create({ userId: identity.user.id })
-            : await this.conversationRepo.create({
-                contactId: identity.contact.id,
-              });
-      }
-
-      await this.conversationRepo.touch(conversation.id, new Date());
+      const conversation = await this.upsertConversation(identity);
 
       // Step 4: Persist inbound message (dedup anchor for subsequent retries).
       const message = await this.messageRepo.create({
@@ -155,112 +151,13 @@ export class ConversationService implements IInboundHandler {
         payload: intent,
       });
 
-      // Step 6: Route on intent action.
-      let replyText: string;
-      let flowSent = false;
-
-      if (intent.action === 'buy_crypto') {
-        if (identity.kind !== 'user') {
-          // Unlinked contact — needs KYC before transacting.
-          replyText =
-            'To buy crypto, you need to complete KYC first. Please visit our web app to verify your identity.';
-        } else if (identity.requiresReverification) {
-          // SIM-swap / re-verification required (CLAUDE.md §3.4).
-          replyText =
-            'Your account requires re-verification before you can transact. Please visit our web app to re-verify.';
-        } else {
-          // Happy path: create a buy proposal (deterministic engine; model proposes, engine disposes — §3.1).
-          // TypeScript narrows `intent` to BuyCryptoIntent here (discriminated union on `action`).
-          const { proposalId, confirmation } =
-            await this.proposalService.createBuyProposal({
-              userId: identity.user.id,
-              conversationId: conversation.id,
-              intent,
-            });
-
-          const flowId =
-            this.configService.get<string>('WHATSAPP_FLOW_ID') ?? '';
-
-          if (flowId) {
-            // Flow path: mint a directive, sign a flow_token, send the E2E confirmation Flow.
-            // The nonce travels ONLY via the Flow E2E channel — never in plaintext chat (§3.5).
-            const signingKey =
-              this.configService.get<string>('DIRECTIVE_SIGNING_KEY') ?? '';
-
-            const { directiveId, nonce, expiresAt } =
-              await this.directiveService.issue({
-                proposalId,
-                userId: identity.user.id,
-                ref: 'request_pin',
-              });
-
-            const flowToken = signFlowToken(
-              {
-                proposalId,
-                directiveId,
-                userId: identity.user.id,
-                exp: Math.floor(expiresAt.getTime() / 1000),
-              },
-              signingKey,
-            );
-
-            await this.sender.sendFlow({
-              to: msg.fromAddress,
-              flowId,
-              flowToken,
-              cta: 'Confirm',
-              screen: 'CONFIRM',
-              data: {
-                proposalId,
-                asset: confirmation.asset,
-                cryptoAmount: confirmation.cryptoAmount,
-                fiatAmount: confirmation.fiatAmount,
-                processingFeeAmount: confirmation.processingFeeAmount,
-                totalFiat: confirmation.totalFiat,
-                // nonce travels only via Flow E2E encryption — never plaintext (§3.5)
-                nonce,
-              },
-            });
-
-            flowSent = true;
-            // Short summary for the reply row — the Flow is the real interaction surface.
-            replyText =
-              'A secure confirmation form has been sent. Please complete it to proceed with your purchase.';
-          } else {
-            // Fallback: no Flow published yet — send itemized text confirmation.
-            // Operators enable the Flow by setting WHATSAPP_FLOW_ID after publishing in Meta.
-            this.logger.warn(
-              { proposalId },
-              'WHATSAPP_FLOW_ID not configured — falling back to plain-text confirmation',
-            );
-            replyText = buildConfirmationText(confirmation);
-          }
-        }
-      } else if (intent.action === 'receive_crypto') {
-        if (identity.kind !== 'user') {
-          // Unlinked contact — needs KYC before accessing wallet details.
-          replyText =
-            'To receive crypto, you need to complete KYC first. Please visit our web app to verify your identity.';
-        } else if (identity.requiresReverification) {
-          // SIM-swap / re-verification required (CLAUDE.md §3.4).
-          replyText =
-            'Your account requires re-verification before you can transact. Please visit our web app to re-verify.';
-        } else {
-          // Happy path: read-only — provision the USDT-on-TRON wallet if needed and return the address.
-          // No proposal, no directive, no execution engine — receiving is purely informational.
-          const wallet = await this.walletService.getOrProvisionUsdtTronWallet(
-            identity.user.id,
-          );
-          replyText =
-            `Your USDT deposit address (TRON network):\n${wallet.address}\n\n` +
-            `Only send USDT on the TRON network to this address. Other assets or networks will be lost.`;
-        }
-      } else if (intent.action === 'none') {
-        replyText = intent.clarification;
-      } else {
-        // sell_crypto / send_crypto / swap / buy_ticket / check_balance — deferred.
-        replyText = NOT_SUPPORTED;
-      }
+      // Step 6: Route on intent action via switch dispatch.
+      const { replyText, flowSent } = await this.routeIntent(
+        intent,
+        identity,
+        conversation,
+        msg,
+      );
 
       // Step 7: Persist the reply and dispatch it (unless the Flow was already dispatched).
       const reply = await this.replyRepo.create({
@@ -315,5 +212,317 @@ export class ConversationService implements IInboundHandler {
         // Swallow — webhook has already 200-acked; we cannot propagate errors here.
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: conversation upsert
+  // ---------------------------------------------------------------------------
+
+  private async upsertConversation(
+    identity: ResolvedIdentity,
+  ): Promise<ConversationRecord> {
+    let conversation =
+      identity.kind === 'user'
+        ? await this.conversationRepo.findByUserId(identity.user.id)
+        : await this.conversationRepo.findByContactId(identity.contact.id);
+
+    if (conversation === null) {
+      conversation =
+        identity.kind === 'user'
+          ? await this.conversationRepo.create({ userId: identity.user.id })
+          : await this.conversationRepo.create({
+              contactId: identity.contact.id,
+            });
+    }
+
+    await this.conversationRepo.touch(conversation.id, new Date());
+    return conversation;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: intent router
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Dispatches a validated intent to the appropriate handler. Returns the reply
+   * text and whether a WhatsApp Flow was already dispatched (so the caller knows
+   * whether to also call sendText).
+   */
+  private async routeIntent(
+    intent: RoutableIntent,
+    identity: ResolvedIdentity,
+    conversation: ConversationRecord,
+    msg: InboundMessage,
+  ): Promise<{ replyText: string; flowSent: boolean }> {
+    switch (intent.action) {
+      case 'buy_crypto': {
+        const { replyText, flowSent } = await this.handleBuy(
+          intent,
+          identity,
+          conversation,
+          msg,
+        );
+        return { replyText, flowSent };
+      }
+      case 'receive_crypto': {
+        const replyText = await this.handleReceive(identity);
+        return { replyText, flowSent: false };
+      }
+      case 'none': {
+        return {
+          replyText: intent.clarification ?? 'Could you clarify your request?',
+          flowSent: false,
+        };
+      }
+      default: {
+        // sell_crypto / send_crypto / swap / buy_ticket / check_balance — deferred.
+        return {
+          replyText: this.notSupportedReply(intent.action),
+          flowSent: false,
+        };
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: shared active-user guard
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Single shared guard for all intent handlers that require a linked, verified user.
+   *
+   * Returns `{ user }` when the identity is an active linked user ready to transact.
+   * Returns `{ reply }` when the identity is unlinked (KYC required) or requires
+   * re-verification — callers must short-circuit and return the reply immediately.
+   *
+   * NOTE: This is the one place that generates KYC / re-verify replies (Task K3
+   * will replace these text strings with a web-handoff CTA; that change lives here only).
+   */
+  private requireActiveUser(identity: ResolvedIdentity): ActiveUserResult {
+    if (identity.kind !== 'user') {
+      return { reply: this.kycRequiredReply() };
+    }
+    if (identity.requiresReverification) {
+      return { reply: this.reverifyReply() };
+    }
+    return { user: identity.user };
+  }
+
+  /**
+   * KYC-required reply — ONE canonical text for all routes that need a linked user.
+   * Task K3 will replace this with a web-handoff CTA button; the one-place rule
+   * ensures that change lands in a single method.
+   */
+  private kycRequiredReply(): string {
+    return (
+      'To transact, you need to complete KYC first. ' +
+      'Please visit our web app to verify your identity.'
+    );
+  }
+
+  /**
+   * Re-verification required reply — ONE canonical text for SIM-swap / step-up cases
+   * (CLAUDE.md §3.4). Same one-place rule as kycRequiredReply.
+   */
+  private reverifyReply(): string {
+    return (
+      'Your account requires re-verification before you can transact. ' +
+      'Please visit our web app to re-verify.'
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: buy_crypto handler
+  // ---------------------------------------------------------------------------
+
+  private async handleBuy(
+    intent: RoutableIntent,
+    identity: ResolvedIdentity,
+    conversation: ConversationRecord,
+    msg: InboundMessage,
+  ): Promise<{ replyText: string; flowSent: boolean }> {
+    const guard = this.requireActiveUser(identity);
+    if ('reply' in guard) {
+      return { replyText: guard.reply, flowSent: false };
+    }
+
+    // Happy path: create a buy proposal (deterministic engine; model proposes, engine disposes — §3.1).
+    const { proposalId, confirmation } =
+      await this.proposalService.createBuyProposal({
+        userId: guard.user.id,
+        conversationId: conversation.id,
+        // The intent object is passed through; ProposalService validates it (§3.3).
+        intent: intent as Parameters<
+          ProposalService['createBuyProposal']
+        >[0]['intent'],
+      });
+
+    return this.sendBuyConfirmation({
+      proposalId,
+      confirmation,
+      userId: guard.user.id,
+      to: msg.fromAddress,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: buy-confirmation presenter
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Extracted presenter for the buy-confirmation step.
+   *
+   * When `WHATSAPP_FLOW_ID` is set: issues a directive, signs a flow_token,
+   * dispatches the E2E confirmation Flow, and returns a short summary text.
+   *
+   * When `WHATSAPP_FLOW_ID` is absent: builds and returns a registry-formatted
+   * itemized text confirmation as the fallback (operators enable the Flow by
+   * setting this env after publishing in Meta).
+   */
+  private async sendBuyConfirmation(params: {
+    proposalId: string;
+    confirmation: {
+      asset: string;
+      cryptoAmount: string;
+      fiatAmount: string;
+      fiatCurrency: string;
+      processingFeeAmount: string;
+      totalFiat: string;
+      expiresAt: string;
+    };
+    userId: string;
+    to: string;
+  }): Promise<{ replyText: string; flowSent: boolean }> {
+    const { proposalId, confirmation, userId, to } = params;
+    const flowId = this.configService.get<string>('WHATSAPP_FLOW_ID') ?? '';
+
+    if (flowId) {
+      // Flow path: mint a directive, sign a flow_token, send the E2E confirmation Flow.
+      // The nonce travels ONLY via the Flow E2E channel — never in plaintext chat (§3.5).
+      const signingKey =
+        this.configService.get<string>('DIRECTIVE_SIGNING_KEY') ?? '';
+
+      const { directiveId, nonce, expiresAt } =
+        await this.directiveService.issue({
+          proposalId,
+          userId,
+          ref: 'request_pin',
+        });
+
+      const flowToken = signFlowToken(
+        {
+          proposalId,
+          directiveId,
+          userId,
+          exp: Math.floor(expiresAt.getTime() / 1000),
+        },
+        signingKey,
+      );
+
+      await this.sender.sendFlow({
+        to,
+        flowId,
+        flowToken,
+        cta: 'Confirm',
+        screen: 'CONFIRM',
+        data: {
+          proposalId,
+          asset: confirmation.asset,
+          cryptoAmount: confirmation.cryptoAmount,
+          fiatAmount: confirmation.fiatAmount,
+          processingFeeAmount: confirmation.processingFeeAmount,
+          totalFiat: confirmation.totalFiat,
+          // nonce travels only via Flow E2E encryption — never plaintext (§3.5)
+          nonce,
+        },
+      });
+
+      // Short summary for the reply row — the Flow is the real interaction surface.
+      return {
+        replyText:
+          'A secure confirmation form has been sent. Please complete it to proceed with your purchase.',
+        flowSent: true,
+      };
+    }
+
+    // Fallback: no Flow published yet — send itemized text confirmation.
+    // Operators enable the Flow by setting WHATSAPP_FLOW_ID after publishing in Meta.
+    this.logger.warn(
+      { proposalId },
+      'WHATSAPP_FLOW_ID not configured — falling back to plain-text confirmation',
+    );
+    return {
+      replyText: this.buildConfirmationText(confirmation),
+      flowSent: false,
+    };
+  }
+
+  /**
+   * Builds the itemized text confirmation via registry formatters.
+   * No hardcoded '₦', 'USDT', 'TRON', or manual number formatting — all go
+   * through `AssetRegistry.formatFiat` / `AssetRegistry.formatCrypto` / metadata.
+   */
+  private buildConfirmationText(c: {
+    asset: string;
+    cryptoAmount: string;
+    fiatAmount: string;
+    fiatCurrency: string;
+    processingFeeAmount: string;
+    totalFiat: string;
+    expiresAt: string;
+  }): string {
+    const assetMeta = this.assetRegistry.asset(c.asset);
+    return (
+      `Here is your buy summary:\n` +
+      `Asset: ${assetMeta.displayName}\n` +
+      `You receive: ${this.assetRegistry.formatCrypto(c.asset, c.cryptoAmount)}\n` +
+      `Amount: ${this.assetRegistry.formatFiat(c.fiatCurrency, c.fiatAmount)}\n` +
+      `Processing fee: ${this.assetRegistry.formatFiat(c.fiatCurrency, c.processingFeeAmount)}\n` +
+      `Total: ${this.assetRegistry.formatFiat(c.fiatCurrency, c.totalFiat)}\n` +
+      `Expires at: ${c.expiresAt}\n` +
+      `Reply CONFIRM to proceed.`
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: receive_crypto handler
+  // ---------------------------------------------------------------------------
+
+  private async handleReceive(identity: ResolvedIdentity): Promise<string> {
+    const guard = this.requireActiveUser(identity);
+    if ('reply' in guard) {
+      return guard.reply;
+    }
+
+    // Happy path: read-only — provision the default crypto wallet if needed and
+    // return the address. No proposal, no directive, no execution engine — receiving
+    // is purely informational (§3.1).
+    // TODO(X3): derive asset+network from the intent payload once X3 reconciles them.
+    const defaultAsset = 'USDT';
+    const defaultNetwork = this.assetRegistry.defaultNetworkFor(defaultAsset);
+    const assetMeta = this.assetRegistry.asset(defaultAsset);
+    const networkMeta = this.assetRegistry.network(defaultNetwork);
+
+    const wallet = await this.walletService.getOrProvisionUsdtTronWallet(
+      guard.user.id,
+    );
+
+    return (
+      `Your ${assetMeta.displayName} deposit address (${networkMeta.displayName}):\n${wallet.address}\n\n` +
+      `Only send ${assetMeta.displayName} on the ${networkMeta.displayName} to this address. Other assets or networks will be lost.`
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: unsupported-action reply
+  // ---------------------------------------------------------------------------
+
+  private notSupportedReply(action: string): string {
+    // The supported set grows via config (§7); this fallback covers deferred actions.
+    // `action` is logged in the future; for now build a generic reply from registry.
+    void action; // acknowledged — surface it in a future logging enhancement
+    const defaultAsset = this.assetRegistry.asset('USDT').displayName;
+    const defaultFiat = this.assetRegistry.fiat('NGN').displayName;
+    return `That's not supported yet — you can buy ${defaultAsset} with ${defaultFiat}.`;
   }
 }

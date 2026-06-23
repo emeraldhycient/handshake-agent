@@ -20,6 +20,7 @@ import configuration from '../../core/config/configuration';
 import { validateEnv } from '../../core/config/env.schema';
 import { PrismaModule } from '../../core/prisma/prisma.module';
 import { PrismaService } from '../../core/prisma/prisma.service';
+import { CatalogModule } from '../../core/catalog/catalog.module';
 import { ProposalService } from '../transactions/application/proposal.service';
 import {
   INBOUND_HANDLER,
@@ -77,6 +78,9 @@ describe('WhatsAppModule (compile)', () => {
         // to all child modules (IdentityModule, TransactionsModule, etc.) without
         // connecting to a real DB (we override PrismaService below).
         PrismaModule,
+        // CatalogModule is @Global in the full app — import here so AssetRegistry
+        // is available to ConversationsModule's ConversationService.
+        CatalogModule,
         WhatsAppModule,
       ],
     })

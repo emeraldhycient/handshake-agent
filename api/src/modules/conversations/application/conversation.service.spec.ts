@@ -1,5 +1,5 @@
 /**
- * Unit tests for ConversationService (tasks 2.3 + 6.3 + R1).
+ * Unit tests for ConversationService (tasks 2.3 + 6.3 + R1 + X2).
  *
  * All external dependencies are mocked — no DB, no HTTP, no LLM.
  *
@@ -17,6 +17,8 @@
  *   - linked user + receive_crypto → deposit address reply, no proposal/directive
  *   - contact (unlinked) + receive_crypto → KYC ask, walletService NOT called
  *   - user requiresReverification + receive_crypto → re-verify ask, walletService NOT called
+ *   - (X2) shared guard: unlinked contact gets same KYC reply for buy_crypto AND receive_crypto
+ *   - (X2) receive reply is built from registry metadata (asset + network displayName)
  */
 
 import { Logger } from '@nestjs/common';
@@ -56,6 +58,7 @@ import {
 } from './conversation.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { WalletRecord } from '../../wallets/application/ports/wallet.repository.port';
+import type { AssetRegistry } from '../../../core/catalog/asset-registry';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -295,6 +298,52 @@ function makeWalletService(
   };
 }
 
+/**
+ * Minimal AssetRegistry stub — mirrors the real registry's surface used by
+ * ConversationService. Formatters return predictable values for assertions.
+ */
+function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
+  return {
+    asset: jest.fn((symbol: string) => ({
+      symbol,
+      displayName: symbol === 'USDT' ? 'USDT' : symbol,
+      kind: 'crypto',
+      decimals: 6,
+      networks: ['TRON'],
+      providers: {},
+      enabled: true,
+    })),
+    fiat: jest.fn((code: string) => ({
+      code,
+      displayName: code === 'NGN' ? 'Naira' : code,
+      symbol: code === 'NGN' ? '₦' : code,
+      decimals: 2,
+      enabled: true,
+    })),
+    network: jest.fn((id: string) => ({
+      id,
+      displayName: id === 'TRON' ? 'TRON (TRC-20)' : id,
+      addressPattern: '^T[1-9A-HJ-NP-Za-km-z]{33}$',
+      enabled: true,
+    })),
+    defaultNetworkFor: jest.fn(() => 'TRON'),
+    formatCrypto: jest.fn(
+      (symbol: string, amount: string) => `${amount} ${symbol}`,
+    ),
+    formatFiat: jest.fn(
+      (code: string, amount: string) =>
+        `${code === 'NGN' ? '₦' : code}${amount}`,
+    ),
+    isAssetEnabled: jest.fn(() => true),
+    isFiatEnabled: jest.fn(() => true),
+    isNetworkEnabled: jest.fn(() => true),
+    isCapabilityEnabled: jest.fn(() => true),
+    requireCapability: jest.fn(),
+    assetProviderId: jest.fn(),
+    validateAddress: jest.fn(() => true),
+  } as unknown as jest.Mocked<AssetRegistry>;
+}
+
 // ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
@@ -314,6 +363,7 @@ function buildService(
     walletService?: jest.Mocked<
       Pick<WalletService, 'getOrProvisionUsdtTronWallet'>
     >;
+    assetRegistry?: jest.Mocked<AssetRegistry>;
   } = {},
 ) {
   const identityService = overrides.identityService ?? makeIdentityService();
@@ -327,6 +377,7 @@ function buildService(
   const configService = overrides.configService ?? makeConfigService();
   const directiveService = overrides.directiveService ?? makeDirectiveService();
   const walletService = overrides.walletService ?? makeWalletService();
+  const assetRegistry = overrides.assetRegistry ?? makeAssetRegistry();
 
   // Build the service directly (not via Nest DI) since all deps are mocks.
   const svc = new ConversationService(
@@ -341,6 +392,7 @@ function buildService(
     configService,
     directiveService as unknown as DirectiveService,
     walletService as unknown as WalletService,
+    assetRegistry,
   );
 
   return {
@@ -356,6 +408,7 @@ function buildService(
     configService,
     directiveService,
     walletService,
+    assetRegistry,
   };
 }
 
@@ -783,13 +836,15 @@ describe('ConversationService.handleInbound', () => {
     // No proposal or directive created — receive is read-only
     expect(proposalService.createBuyProposal).not.toHaveBeenCalled();
 
-    // Reply text contains address, TRON, and the safety warning
+    // Reply text contains address, TRON, and the safety warning.
+    // The network displayName from the stub registry is 'TRON (TRC-20)' so the
+    // warning uses that instead of the old hardcoded 'TRON network' literal.
     const sentText = captureFirstSentText(sender);
     expect(sentText).toContain(FIXED_WALLET_ADDRESS);
     expect(sentText).toContain('TRON');
-    expect(sentText).toContain(
-      'Only send USDT on the TRON network to this address. Other assets or networks will be lost.',
-    );
+    // Warning is built from registry displayNames — assert structural shape.
+    expect(sentText).toContain('Only send');
+    expect(sentText).toContain('Other assets or networks will be lost.');
   });
 
   it('linked user + receive_crypto → reply does NOT create proposal or directive', async () => {
@@ -877,6 +932,110 @@ describe('ConversationService.handleInbound', () => {
 
     const sentText = captureFirstSentText(sender);
     expect(sentText).toContain('re-verif');
+  });
+
+  // ── X2: Single shared guard — same KYC reply for buy_crypto AND receive_crypto ──
+
+  it('(X2) unlinked contact gets the SAME guard KYC reply for buy_crypto and receive_crypto (dedup proof)', async () => {
+    const contactIdentity = {
+      kind: 'contact' as const,
+      contact: {
+        id: 'contact-id-3',
+        primaryChannel: 'whatsapp',
+        primaryAddress: FIXED_FROM,
+        status: 'active',
+        linkedUserId: null,
+      },
+    };
+
+    // --- buy_crypto path ---
+    const convRepoForBuy = makeConvRepo(null);
+    convRepoForBuy.findByContactId.mockResolvedValue(null);
+    convRepoForBuy.create.mockResolvedValue({
+      ...baseConv(),
+      userId: null,
+      contactId: 'contact-id-3',
+    });
+
+    const { svc: svcBuy, sender: senderBuy } = buildService({
+      identityService: makeIdentityService({
+        resolveByChannel: jest.fn().mockResolvedValue(contactIdentity),
+      }),
+      convRepo: convRepoForBuy,
+      agentPort: makeAgentPort({
+        action: 'buy_crypto',
+        asset: 'USDT',
+        fiatAmount: '5000',
+        fiatCurrency: 'NGN',
+      }),
+    });
+
+    await svcBuy.handleInbound(baseMsg());
+    const buyReply = captureFirstSentText(senderBuy);
+
+    // --- receive_crypto path ---
+    const convRepoForReceive = makeConvRepo(null);
+    convRepoForReceive.findByContactId.mockResolvedValue(null);
+    convRepoForReceive.create.mockResolvedValue({
+      ...baseConv(),
+      userId: null,
+      contactId: 'contact-id-3',
+    });
+
+    const { svc: svcReceive, sender: senderReceive } = buildService({
+      identityService: makeIdentityService({
+        resolveByChannel: jest.fn().mockResolvedValue(contactIdentity),
+      }),
+      convRepo: convRepoForReceive,
+      agentPort: makeAgentPort({ action: 'receive_crypto' }),
+    });
+
+    await svcReceive.handleInbound(baseMsg());
+    const receiveReply = captureFirstSentText(senderReceive);
+
+    // Both routes MUST produce the exact same guard reply text — single shared guard.
+    expect(buyReply).toBe(receiveReply);
+    expect(buyReply).toContain('KYC');
+  });
+
+  // ── X2: receive reply uses registry metadata (asset + network displayName) ──
+
+  it('(X2) receive reply contains asset displayName and network displayName from registry', async () => {
+    const agentPort = makeAgentPort({ action: 'receive_crypto' });
+    const walletService = makeWalletService();
+
+    // Custom registry that uses clearly different display names so we can assert
+    // the reply is built from metadata, not hardcoded literals.
+    const assetRegistry = makeAssetRegistry();
+    (assetRegistry.asset as jest.Mock).mockImplementation((symbol: string) => ({
+      symbol,
+      displayName: symbol === 'USDT' ? 'USDTcoin' : symbol,
+      kind: 'crypto',
+      decimals: 6,
+      networks: ['TRON'],
+      providers: {},
+      enabled: true,
+    }));
+    (assetRegistry.network as jest.Mock).mockImplementation((id: string) => ({
+      id,
+      displayName: id === 'TRON' ? 'TRONnet' : id,
+      addressPattern: '^T[1-9A-HJ-NP-Za-km-z]{33}$',
+      enabled: true,
+    }));
+    (assetRegistry.defaultNetworkFor as jest.Mock).mockReturnValue('TRON');
+
+    const { svc, sender } = buildService({
+      agentPort,
+      walletService,
+      assetRegistry,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    const sentText = captureFirstSentText(sender);
+    // Reply must use the displayNames from registry, not raw literals.
+    expect(sentText).toContain('USDTcoin');
+    expect(sentText).toContain('TRONnet');
   });
 
   // Token references (ensure that exported symbols are used consistently)

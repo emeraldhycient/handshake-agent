@@ -32,6 +32,7 @@ import type { DirectiveService } from '../src/modules/transactions/application/d
 import type { WalletService } from '../src/modules/wallets/application/wallet.service';
 import type { WalletRecord } from '../src/modules/wallets/application/ports/wallet.repository.port';
 import type { BuyProposalConfirmation } from '@handshake-agent/contracts';
+import type { AssetRegistry } from '../src/core/catalog/asset-registry';
 
 jest.setTimeout(180_000);
 
@@ -98,6 +99,51 @@ const fakeWalletService = {
   getOrProvisionUsdtTronWallet: jest.fn().mockResolvedValue(fakeWalletRecord),
 } as unknown as WalletService;
 
+/**
+ * Fake AssetRegistry — mirrors the real registry's surface used by ConversationService.
+ * Uses the same display names as the real configuration so assertions remain stable.
+ */
+const fakeAssetRegistry: AssetRegistry = {
+  asset: jest.fn((symbol: string) => ({
+    symbol,
+    displayName: symbol,
+    kind: 'crypto' as const,
+    decimals: 6,
+    networks: ['TRON'],
+    providers: {
+      blockradar: { assetId: 'f56d297c-a3db-4cda-95bd-180b54679070' },
+    },
+    enabled: true,
+  })),
+  fiat: jest.fn((code: string) => ({
+    code,
+    displayName: code === 'NGN' ? 'Naira' : code,
+    symbol: code === 'NGN' ? '₦' : code,
+    decimals: 2,
+    enabled: true,
+  })),
+  network: jest.fn((id: string) => ({
+    id,
+    displayName: id === 'TRON' ? 'TRON (TRC-20)' : id,
+    addressPattern: '^T[1-9A-HJ-NP-Za-km-z]{33}$',
+    enabled: true,
+  })),
+  defaultNetworkFor: jest.fn(() => 'TRON'),
+  formatCrypto: jest.fn(
+    (symbol: string, amount: string) => `${amount} ${symbol}`,
+  ),
+  formatFiat: jest.fn(
+    (code: string, amount: string) => `${code === 'NGN' ? '₦' : code}${amount}`,
+  ),
+  isAssetEnabled: jest.fn(() => true),
+  isFiatEnabled: jest.fn(() => true),
+  isNetworkEnabled: jest.fn(() => true),
+  isCapabilityEnabled: jest.fn(() => true),
+  requireCapability: jest.fn(),
+  assetProviderId: jest.fn(() => 'f56d297c-a3db-4cda-95bd-180b54679070'),
+  validateAddress: jest.fn(() => true),
+} as unknown as AssetRegistry;
+
 /** Fake ProposalService — returns a fixed confirmation without hitting the DB. */
 const fakeConfirmation: BuyProposalConfirmation = {
   proposalId: 'proposal-test-id',
@@ -157,6 +203,7 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       fakeConfigService,
       fakeDirectiveService,
       fakeWalletService,
+      fakeAssetRegistry,
     );
 
     // Seed a Tier-1 verified User + ChannelIdentity
@@ -370,9 +417,9 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
     expect(reply).not.toBeNull();
     expect(reply!.text).toContain(FAKE_WALLET_ADDRESS);
     expect(reply!.text).toContain('TRON');
-    expect(reply!.text).toContain(
-      'Only send USDT on the TRON network to this address. Other assets or networks will be lost.',
-    );
+    // Warning is built from registry displayNames ('TRON (TRC-20)' from fakeAssetRegistry).
+    expect(reply!.text).toContain('Only send USDT');
+    expect(reply!.text).toContain('Other assets or networks will be lost.');
     expect(reply!.status).toBe('sent');
     expect(reply!.sentAt).not.toBeNull();
 
