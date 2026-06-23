@@ -1,17 +1,33 @@
 import { createHash } from 'node:crypto';
 
 import { Inject, Injectable } from '@nestjs/common';
-import type { BuyCryptoIntent } from '@handshake-agent/contracts';
-import { BuyProposalConfirmationSchema } from '@handshake-agent/contracts';
-import type { BuyProposalConfirmation } from '@handshake-agent/contracts';
+import type {
+  BuyCryptoIntent,
+  SellCryptoIntent,
+} from '@handshake-agent/contracts';
+import {
+  BuyProposalConfirmationSchema,
+  SellProposalConfirmationSchema,
+} from '@handshake-agent/contracts';
+import type {
+  BuyProposalConfirmation,
+  SellProposalConfirmation,
+} from '@handshake-agent/contracts';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import { KycGateService } from '../../identity/application/kyc-gate.service';
 import { QuotesService } from '../../quotes/application/quotes.service';
+import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import { WalletService } from '../../wallets/application/wallet.service';
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import { InsufficientBalanceError } from '../domain/execution-errors';
+import { BeneficiaryNotFoundError } from '../../beneficiaries/domain/beneficiary-errors';
 import type { IProposalRepository } from './ports/proposal.repository.port';
 import { PROPOSAL_REPOSITORY } from './ports/proposal.repository.port';
 import type { IQuoteRepository } from './ports/quote.repository.port';
 import { QUOTE_REPOSITORY } from './ports/quote.repository.port';
+import type { ILedgerRepository } from './ports/ledger.repository.port';
+import { LEDGER_REPOSITORY } from './ports/ledger.repository.port';
 
 export interface CreateBuyProposalInput {
   userId: string;
@@ -23,6 +39,20 @@ export interface CreateBuyProposalOutput {
   proposalId: string;
   quoteId: string;
   confirmation: BuyProposalConfirmation;
+}
+
+export interface CreateSellProposalInput {
+  userId: string;
+  conversationId?: string;
+  intent: SellCryptoIntent;
+  /** Id of the bank-account beneficiary to pay out to. */
+  beneficiaryId: string;
+}
+
+export interface CreateSellProposalOutput {
+  proposalId: string;
+  quoteId: string;
+  confirmation: SellProposalConfirmation;
 }
 
 /**
@@ -106,6 +136,11 @@ export class ProposalService {
     private readonly proposalRepo: IProposalRepository,
     @Inject(CLOCK)
     private readonly clock: Clock,
+    private readonly walletService: WalletService,
+    private readonly beneficiaryService: BeneficiaryService,
+    private readonly assetRegistry: AssetRegistry,
+    @Inject(LEDGER_REPOSITORY)
+    private readonly ledgerRepo: ILedgerRepository,
   ) {}
 
   async createBuyProposal(
@@ -188,6 +223,153 @@ export class ProposalService {
       processingFeeAmount,
       totalFiat,
       expiresAt: expiresAt.toISOString(),
+    });
+
+    return { proposalId, quoteId, confirmation };
+  }
+
+  /**
+   * Sell-proposal use-case (task S4a, PRD §4).
+   *
+   * Flow:
+   *   1. Resolve the user's USDT/TRON wallet (getOrProvisionWallet).
+   *   2. Quote the sell (quoteSell — no side effects).
+   *   3. Balance check via the ledger (authoritative running balance).
+   *      → throws InsufficientBalanceError if balance < cryptoAmount.
+   *   4. KYC/velocity gate on the NGN out amount (§3.3).
+   *      → throws a GateError subclass if the user cannot transact.
+   *   5. Beneficiary lookup (must exist + belong to the user, type bank_account).
+   *      → throws BeneficiaryNotFoundError if absent.
+   *   6. Persist Quote(type=sell) + Proposal(type=sell, pending).
+   *   7. Return { proposalId, quoteId, confirmation } parsed through the contract schema.
+   *
+   * ORDER: balance + gate + beneficiary BEFORE persisting (§3.1).
+   */
+  async createSellProposal(
+    input: CreateSellProposalInput,
+  ): Promise<CreateSellProposalOutput> {
+    const { userId, conversationId, intent, beneficiaryId } = input;
+    const now = this.clock.now();
+
+    // 1. Resolve the user's USDT/TRON wallet.
+    const network = this.assetRegistry.defaultNetworkFor(intent.asset);
+    const wallet = await this.walletService.getOrProvisionWallet(
+      userId,
+      intent.asset,
+      network,
+    );
+
+    // 2. Price the sell via the quotes service.
+    const quote = await this.quotesService.quoteSell({
+      asset: intent.asset,
+      cryptoAmount: intent.cryptoAmount,
+      fiatCurrency: intent.fiatCurrency,
+    });
+
+    // 3. Balance check — ledger is the authoritative balance source.
+    const balance = await this.ledgerRepo.getAccountBalance(
+      'user_wallet',
+      wallet.id,
+      intent.asset,
+    );
+
+    // Decimal-safe compare using BigInt at 18 decimal places.
+    const toScaled = (s: string): bigint => {
+      const str = s.trim();
+      const isNeg = str.startsWith('-');
+      const abs = isNeg ? str.slice(1) : str;
+      const [whole = '0', frac = ''] = abs.split('.');
+      const fracPadded = frac.slice(0, 18).padEnd(18, '0');
+      const scaled = BigInt(whole) * 10n ** 18n + BigInt(fracPadded);
+      return isNeg ? -scaled : scaled;
+    };
+
+    if (toScaled(balance) < toScaled(intent.cryptoAmount)) {
+      throw new InsufficientBalanceError(
+        balance,
+        intent.cryptoAmount,
+        intent.asset,
+      );
+    }
+
+    // 4. KYC / velocity gate on the NGN out amount (§3.3) — BEFORE persisting.
+    await this.kycGate.assertCanTransact({
+      userId,
+      fiatAmount: Number(quote.netFiatAmount),
+      asset: intent.asset,
+    });
+
+    // 5. Beneficiary lookup — must exist and belong to the user.
+    const beneficiary = await this.beneficiaryService.getById(
+      userId,
+      beneficiaryId,
+    );
+    if (beneficiary === null) {
+      throw new BeneficiaryNotFoundError(beneficiaryId);
+    }
+    // NOTE: production gates on verifiedAt / name-enquiry (beneficiary.verifiedAt !== null).
+    // This skeleton accepts any beneficiary regardless of verificationStatus.
+
+    // 6a. Persist the Quote snapshot (type=sell).
+    const expiresAt = new Date(now.getTime() + quote.expiresInSec * 1000);
+    const { id: quoteId } = await this.quoteRepo.create({
+      userId,
+      type: 'sell',
+      asset: intent.asset,
+      fiatCurrency: intent.fiatCurrency,
+      // sell quotes carry the crypto amount as the "input"; fiatAmount is the output (net).
+      fiatAmount: quote.netFiatAmount,
+      cryptoAmount: intent.cryptoAmount,
+      fxRate: quote.fxRate,
+      baseRate: quote.baseRate,
+      spreadBps: quote.spreadBps,
+      processingFeeBps: quote.processingFeeBps,
+      processingFeeAmount: quote.processingFeeAmount,
+      quotedAt: now,
+      expiresAt,
+    });
+
+    // 6b. Build parameters + checksum.
+    const parameters: Record<string, unknown> = {
+      asset: intent.asset,
+      cryptoAmount: intent.cryptoAmount,
+      fiatCurrency: intent.fiatCurrency,
+      netFiatAmount: quote.netFiatAmount,
+      fxRate: quote.fxRate,
+      beneficiaryId,
+      walletId: wallet.id,
+      quoteId,
+    };
+    const parametersChecksum = sha256Hex(parameters);
+
+    // 6c. Persist the Proposal (type=sell, pending; never moves money — §3.1).
+    const { id: proposalId } = await this.proposalRepo.create({
+      userId,
+      conversationId,
+      type: 'sell',
+      parameters,
+      parametersChecksum,
+      quoteId,
+      expiresAt,
+    });
+
+    // 7. Build the itemized confirmation and parse through the contract schema.
+    const beneficiaryLabel =
+      beneficiary.label ||
+      beneficiary.accountHolderName ||
+      beneficiary.accountNumber ||
+      undefined;
+
+    const confirmation = SellProposalConfirmationSchema.parse({
+      proposalId,
+      asset: intent.asset,
+      cryptoAmount: intent.cryptoAmount,
+      fiatCurrency: intent.fiatCurrency,
+      netFiatAmount: quote.netFiatAmount,
+      fxRate: quote.fxRate,
+      processingFeeAmount: quote.processingFeeAmount,
+      expiresAt: expiresAt.toISOString(),
+      beneficiaryLabel: beneficiaryLabel ?? undefined,
     });
 
     return { proposalId, quoteId, confirmation };

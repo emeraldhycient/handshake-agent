@@ -66,3 +66,19 @@ export class SettlementInvalidStatusError extends Error {
     this.name = 'SettlementInvalidStatusError';
   }
 }
+
+/**
+ * Thrown by ProposalService.createSellProposal when the user's ledger balance
+ * for the asset being sold is less than the requested cryptoAmount.
+ * Code: SELL_INSUFFICIENT_BALANCE
+ */
+export class InsufficientBalanceError extends Error {
+  readonly code = 'SELL_INSUFFICIENT_BALANCE' as const;
+
+  constructor(available: string, requested: string, asset: string) {
+    super(
+      `Insufficient ${asset} balance: have ${available}, need ${requested}`,
+    );
+    this.name = 'InsufficientBalanceError';
+  }
+}

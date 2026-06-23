@@ -421,3 +421,99 @@ export function buildDepositLedgerEntries(
 
   return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
 }
+
+// ---------------------------------------------------------------------------
+// Sell ledger (user's crypto leaves to treasury; NGN dispatched to payout)
+// ---------------------------------------------------------------------------
+
+/** Input to the pure sell ledger builder. */
+export interface BuildSellLedgerInput {
+  /** accountId for the user_wallet USDT account. */
+  walletId: string;
+  /** USDT the user is selling, as a decimal string (e.g. "3.06"). */
+  cryptoAmount: string;
+  /** Net NGN the user receives after spread + fee, as a decimal string (e.g. "4900"). */
+  netFiatAmount: string;
+  postedAt: Date;
+  /**
+   * Current per-account state. Missing keys default to
+   * { sequence: 0, balance: '0' }.
+   */
+  accountStates: Record<AccountKey, AccountState>;
+}
+
+/**
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for a crypto SELL
+ * settlement (exactly 4 entries: 2 USDT legs + 2 NGN legs).
+ *
+ * The function is pure: it reads prior account state from `input.accountStates`
+ * and computes the next `sequence` and `balanceAfter` values deterministically.
+ * The caller (execution engine) persists the returned rows inside a DB
+ * transaction after adding `id` and `transactionId`.
+ *
+ * Account mapping (credit positive, debit negative; per-currency sums = 0):
+ *
+ * USDT leg (sum = 0, 2 entries):
+ *  − user_wallet      / walletId      / USDT  −cryptoAmount (user's USDT leaves)
+ *  + treasury_reserve / usdt_treasury / USDT  +cryptoAmount (treasury receives)
+ *
+ * NGN leg (sum = 0, 2 entries):
+ *  − treasury_reserve / ngn_treasury  / NGN  −netFiatAmount (NGN dispatched)
+ *  + processor_settlement / ngn_payout / NGN  +netFiatAmount (payout to user)
+ *
+ * Zero-amount entries are never emitted (invariant 2).
+ */
+export function buildSellLedgerEntries(
+  input: BuildSellLedgerInput,
+): LedgerEntryDraft[] {
+  const { walletId, cryptoAmount, netFiatAmount, postedAt, accountStates } =
+    input;
+
+  // -- Validation --
+  assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
+  assertPositiveDecimal(netFiatAmount, 'netFiatAmount');
+
+  // Normalise all amounts through BigInt round-trip so credit/debit pairs are
+  // symmetric (e.g. '5.0' becomes '5' on both sides — no trailing-zero drift).
+  const scaledCrypto = toScaled(cryptoAmount);
+  const scaledFiat = toScaled(netFiatAmount);
+  const posCrypto = fromScaled(scaledCrypto);
+  const negCrypto = fromScaled(-scaledCrypto);
+  const posFiat = fromScaled(scaledFiat);
+  const negFiat = fromScaled(-scaledFiat);
+
+  const specs: EntrySpec[] = [
+    // USDT leg: user wallet → treasury
+    {
+      accountType: LedgerAccountType.user_wallet,
+      accountId: walletId,
+      currency: 'USDT',
+      amount: negCrypto,
+      description: `Sell: USDT ${cryptoAmount} debited from user wallet`,
+    },
+    {
+      accountType: LedgerAccountType.treasury_reserve,
+      accountId: 'usdt_treasury',
+      currency: 'USDT',
+      amount: posCrypto,
+      description: `Sell: USDT ${cryptoAmount} credited to treasury`,
+    },
+    // NGN leg: treasury dispatches NGN to payout
+    {
+      accountType: LedgerAccountType.treasury_reserve,
+      accountId: 'ngn_treasury',
+      currency: 'NGN',
+      amount: negFiat,
+      description: `Sell: NGN ${netFiatAmount} dispatched from treasury to payout`,
+    },
+    {
+      accountType: LedgerAccountType.processor_settlement,
+      accountId: 'ngn_payout',
+      currency: 'NGN',
+      amount: posFiat,
+      description: `Sell: NGN ${netFiatAmount} credited to processor for payout to user`,
+    },
+  ];
+
+  return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
+}

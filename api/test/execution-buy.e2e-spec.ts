@@ -197,6 +197,11 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       quoteRepo,
       proposalRepo,
       clock,
+      walletService,
+      // beneficiaryService and ledgerRepo are not used in buy-proposal tests
+      { getById: () => Promise.resolve(null) } as never,
+      assetRegistry,
+      { getAccountBalance: () => Promise.resolve('0') },
     );
 
     const settlementRepo = new SettlementPrismaRepository(ps, config);

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { BuyCryptoIntentSchema, NoIntentSchema } from './buy-crypto.intent'
+import { SellCryptoIntentSchema } from './sell-crypto.intent'
 import { SendCryptoIntentSchema } from './send-crypto.intent'
 import { ReceiveCryptoIntentSchema } from './receive-crypto.intent'
 import { SwapIntentSchema } from './swap.intent'
@@ -10,6 +11,7 @@ import { CheckBalanceIntentSchema } from './check-balance.intent'
 // The NLU layer emits one of these validated intent objects; consumers narrow on `action`.
 export const IntentSchema = z.discriminatedUnion('action', [
   BuyCryptoIntentSchema,
+  SellCryptoIntentSchema,
   SendCryptoIntentSchema,
   ReceiveCryptoIntentSchema,
   SwapIntentSchema,
@@ -20,6 +22,7 @@ export const IntentSchema = z.discriminatedUnion('action', [
 export type Intent = z.infer<typeof IntentSchema>
 
 export * from './buy-crypto.intent'
+export * from './sell-crypto.intent'
 export * from './send-crypto.intent'
 export * from './receive-crypto.intent'
 export * from './swap.intent'
