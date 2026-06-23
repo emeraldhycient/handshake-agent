@@ -106,6 +106,20 @@ export interface ComplianceConfig {
    * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
    */
   travelRuleThresholdNgn: number;
+
+  /**
+   * Denylist of crypto addresses that MockSanctionsScreener flags as
+   * sanctioned. Used in test / staging environments to exercise the blocked
+   * path without a real sanctions provider.  The JSON-defaults baseline is an
+   * empty array (no addresses flagged); operators populate this via config.
+   *
+   * The real sanctions adapter (OpenSanctions, TRM) will NOT read this field —
+   * it is an operational knob for the mock only.
+   *
+   * TODO(config-admin): replace with the DB-admin AppSetting layer so operators
+   * can update the list without a deploy.
+   */
+  sanctionsDenylist: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +278,9 @@ export default (): AppConfig => ({
     // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
     // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
     travelRuleThresholdNgn: 1_000_000,
+    // Empty by default — no addresses flagged. Populate in config to test the
+    // blocked path with MockSanctionsScreener (see mock-sanctions.screener.ts).
+    sanctionsDenylist: [] as string[],
   },
   pricing: {
     processingFeeBps: 100,

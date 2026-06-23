@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 
+import type { AppConfig } from '../../../core/config/configuration';
 import type {
   ISanctionsScreener,
   SanctionsScreenInput,
@@ -10,9 +12,13 @@ import type {
 /**
  * Mock sanctions screener — the only adapter wired at launch (N2).
  *
- * Passes all addresses by default. Flags addresses that appear in a
- * configurable denylist (injected via constructor for testability; in
- * production use the SANCTIONS_DENYLIST env variable or config array).
+ * Passes all addresses by default. Flags addresses that appear in the
+ * `compliance.sanctionsDenylist` config array (see
+ * `api/src/core/config/configuration.ts`).  Injecting `ConfigService`
+ * (instead of a bare `string[]`) lets Nest DI construct this class when it is
+ * bound via `useClass` in `ComplianceModule` — a bare constructor parameter of
+ * type `Array` has no DI token and causes:
+ *   "Nest can't resolve dependencies of the MockSanctionsScreener (?)"
  *
  * A real provider (OpenSanctions, TRM, etc.) will implement
  * `ISanctionsScreener` and be swapped in by changing the `SANCTIONS_SCREENER`
@@ -26,23 +32,11 @@ import type {
 export class MockSanctionsScreener implements ISanctionsScreener {
   private readonly denylist: ReadonlySet<string>;
 
-  /**
-   * @param denylist Optional array of addresses to flag. Defaults to
-   *   `SANCTIONS_DENYLIST` env var (comma-separated) when not provided.
-   */
-  constructor(denylist?: string[]) {
-    if (denylist !== undefined) {
-      this.denylist = new Set(denylist);
-    } else {
-      // Parse from env: SANCTIONS_DENYLIST=addr1,addr2
-      const raw = process.env['SANCTIONS_DENYLIST'] ?? '';
-      this.denylist = new Set(
-        raw
-          .split(',')
-          .map((a) => a.trim())
-          .filter((a) => a.length > 0),
-      );
-    }
+  constructor(private readonly config: ConfigService<AppConfig, true>) {
+    const list =
+      this.config.get<AppConfig['compliance']>('compliance')
+        ?.sanctionsDenylist ?? [];
+    this.denylist = new Set(list);
   }
 
   screen(input: SanctionsScreenInput): Promise<SanctionsScreenResult> {

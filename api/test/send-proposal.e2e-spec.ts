@@ -142,7 +142,24 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
     const complianceEventRepo = new ComplianceEventPrismaRepository(ps);
 
     // MockSanctionsScreener: BLOCKED_TRON_ADDRESS is on the denylist.
-    const sanctionsScreener = new MockSanctionsScreener([BLOCKED_TRON_ADDRESS]);
+    // Use a targeted stub for ConfigService so the screener resolves correctly
+    // without Nest DI (direct instantiation pattern for integration tests).
+    const sanctionsConfigStub = {
+      get: (key: string) => {
+        if (key === 'compliance') {
+          return {
+            travelRuleThresholdNgn: 1_000_000,
+            sanctionsDenylist: [BLOCKED_TRON_ADDRESS],
+          };
+        }
+        // Delegate everything else to the real config
+        return new StubConfigService().get(key);
+      },
+    } as unknown as import('@nestjs/config').ConfigService<
+      import('../src/core/config/configuration').AppConfig,
+      true
+    >;
+    const sanctionsScreener = new MockSanctionsScreener(sanctionsConfigStub);
 
     // Wire services
     const rateProvider = new ConfigRateProvider(config);

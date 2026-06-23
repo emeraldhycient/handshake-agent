@@ -9,16 +9,41 @@
  *   - Each call produces a distinct reference.
  */
 
+import { ConfigService } from '@nestjs/config';
+
 import { MockSanctionsScreener } from './mock-sanctions.screener';
+import type { AppConfig } from '../../../core/config/configuration';
 
 // ── Known denylist fixture ──────────────────────────────────────────────────
 
 const BLOCKED_ADDRESS = 'TBlocked0000000000000000000000000BAD';
 const CLEAN_ADDRESS = 'TClean0000000000000000000000000CLEAN';
 
-function makeScreener(denylist?: string[]): MockSanctionsScreener {
+/**
+ * Builds a minimal ConfigService stub that returns the given denylist
+ * from `config.get('compliance')`.  This mirrors the production wiring
+ * in AppModule (ConfigModule is global; ConfigService is always injectable)
+ * while keeping the unit tests fast and hermetic.
+ */
+function stubConfigService(denylist: string[]): ConfigService<AppConfig, true> {
+  return {
+    get: (key: string) => {
+      if (key === 'compliance') {
+        return {
+          travelRuleThresholdNgn: 1_000_000,
+          sanctionsDenylist: denylist,
+        };
+      }
+      return undefined;
+    },
+  } as unknown as ConfigService<AppConfig, true>;
+}
+
+function makeScreener(
+  denylist: string[] = [BLOCKED_ADDRESS],
+): MockSanctionsScreener {
   process.env['SANCTIONS_MOCK_MODE'] = 'true';
-  return new MockSanctionsScreener(denylist ?? [BLOCKED_ADDRESS]);
+  return new MockSanctionsScreener(stubConfigService(denylist));
 }
 
 // ---------------------------------------------------------------------------

@@ -16,11 +16,32 @@
  */
 
 import { PrismaClient } from '../generated/prisma/client';
+import { ConfigService } from '@nestjs/config';
 import type { PrismaService } from '../src/core/prisma/prisma.service';
 import { ComplianceService } from '../src/modules/compliance/application/compliance.service';
 import { MockSanctionsScreener } from '../src/modules/compliance/infrastructure/mock-sanctions.screener';
 import { ComplianceEventPrismaRepository } from '../src/modules/compliance/infrastructure/compliance-event.prisma.repository';
 import { startTestPostgres } from './helpers/pg-testcontainer';
+import type { AppConfig } from '../src/core/config/configuration';
+
+// ---------------------------------------------------------------------------
+// Minimal ConfigService stub for direct (non-Nest-DI) instantiation tests.
+// Returns the specified denylist from `compliance.sanctionsDenylist`.
+// ---------------------------------------------------------------------------
+
+function stubConfigService(denylist: string[]): ConfigService<AppConfig, true> {
+  return {
+    get: (key: string) => {
+      if (key === 'compliance') {
+        return {
+          travelRuleThresholdNgn: 1_000_000,
+          sanctionsDenylist: denylist,
+        };
+      }
+      return undefined;
+    },
+  } as unknown as ConfigService<AppConfig, true>;
+}
 
 jest.setTimeout(180_000);
 
@@ -76,7 +97,9 @@ describe('ComplianceService.screenSendDestination (integration, Testcontainers P
 
     // Wire up the service with MockSanctionsScreener (denylist: blocked address)
     // and the real Prisma repository.
-    const screener = new MockSanctionsScreener([BLOCKED_ADDRESS]);
+    const screener = new MockSanctionsScreener(
+      stubConfigService([BLOCKED_ADDRESS]),
+    );
     const eventRepo = new ComplianceEventPrismaRepository(
       prisma as unknown as PrismaService,
     );
