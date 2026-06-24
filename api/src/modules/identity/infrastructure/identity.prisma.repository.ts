@@ -7,6 +7,7 @@ import type {
   ChannelIdentityRecord,
   ContactRecord,
   IIdentityRepository,
+  KycProfileRecord,
   UserRecord,
 } from '../application/ports/identity.repository.port';
 
@@ -87,6 +88,17 @@ export class IdentityPrismaRepository implements IIdentityRepository {
       kycTier: row.kycTier,
       simSwapDetectedAt: row.simSwapDetectedAt,
     };
+  }
+
+  async findKycProfile(userId: string): Promise<KycProfileRecord | null> {
+    const row = await this.prisma.kycProfile.findUnique({
+      where: { userId },
+      select: { firstName: true, lastName: true },
+    });
+
+    if (row === null) return null;
+
+    return { firstName: row.firstName, lastName: row.lastName };
   }
 
   async loadContact(contactId: string): Promise<ContactRecord | null> {

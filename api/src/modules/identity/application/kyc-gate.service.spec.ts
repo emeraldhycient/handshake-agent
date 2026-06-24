@@ -72,12 +72,18 @@ function makeUser(overrides: Partial<UserRecord> = {}): UserRecord {
   };
 }
 
-function makeIdentityRepo(user: UserRecord | null): IIdentityRepository {
+function makeIdentityRepo(
+  user: UserRecord | null,
+  kycProfile:
+    | import('./ports/identity.repository.port').KycProfileRecord
+    | null = null,
+): IIdentityRepository {
   return {
     findActiveChannelIdentity: jest.fn(),
     findWhatsAppAddressByUserId: jest.fn().mockResolvedValue(null),
     loadUser: jest.fn().mockResolvedValue(user),
     loadContact: jest.fn(),
+    findKycProfile: jest.fn().mockResolvedValue(kycProfile),
     createContactWithChannelIdentity: jest.fn(),
   };
 }
@@ -327,5 +333,81 @@ describe('KycGateService.assertCanTransact', () => {
         userId: 'user-id-1',
       }),
     ).rejects.toThrow(TierLimitExceededError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix-D: KycGateService.getOriginatorName
+// ---------------------------------------------------------------------------
+
+describe('KycGateService.getOriginatorName', () => {
+  const USER_ID = 'user-id-1';
+  const defaultUser = makeUser();
+
+  it('returns "firstName lastName" when both KycProfile fields are present', async () => {
+    const identityRepo = makeIdentityRepo(defaultUser, {
+      firstName: 'Emeka',
+      lastName: 'Adeyemi',
+    });
+    const svc = new KycGateService(
+      identityRepo,
+      { getDailyUsage: jest.fn() },
+      stubConfig,
+      stubClock,
+    );
+    await expect(svc.getOriginatorName(USER_ID)).resolves.toBe('Emeka Adeyemi');
+  });
+
+  it('returns firstName only when lastName is null', async () => {
+    const identityRepo = makeIdentityRepo(defaultUser, {
+      firstName: 'Chisom',
+      lastName: null,
+    });
+    const svc = new KycGateService(
+      identityRepo,
+      { getDailyUsage: jest.fn() },
+      stubConfig,
+      stubClock,
+    );
+    await expect(svc.getOriginatorName(USER_ID)).resolves.toBe('Chisom');
+  });
+
+  it('returns null when KycProfile row does not exist', async () => {
+    const identityRepo = makeIdentityRepo(defaultUser, null);
+    const svc = new KycGateService(
+      identityRepo,
+      { getDailyUsage: jest.fn() },
+      stubConfig,
+      stubClock,
+    );
+    await expect(svc.getOriginatorName(USER_ID)).resolves.toBeNull();
+  });
+
+  it('returns null when both firstName and lastName are null', async () => {
+    const identityRepo = makeIdentityRepo(defaultUser, {
+      firstName: null,
+      lastName: null,
+    });
+    const svc = new KycGateService(
+      identityRepo,
+      { getDailyUsage: jest.fn() },
+      stubConfig,
+      stubClock,
+    );
+    await expect(svc.getOriginatorName(USER_ID)).resolves.toBeNull();
+  });
+
+  it('trims whitespace and returns null when name parts are blank', async () => {
+    const identityRepo = makeIdentityRepo(defaultUser, {
+      firstName: '   ',
+      lastName: '',
+    });
+    const svc = new KycGateService(
+      identityRepo,
+      { getDailyUsage: jest.fn() },
+      stubConfig,
+      stubClock,
+    );
+    await expect(svc.getOriginatorName(USER_ID)).resolves.toBeNull();
   });
 });

@@ -259,19 +259,24 @@ function makeQuotesService(
 
 function makeKycGate(
   throws?: Error,
-): jest.Mocked<Pick<KycGateService, 'assertCanTransact'>> {
+  originatorName: string | null = null,
+): jest.Mocked<
+  Pick<KycGateService, 'assertCanTransact' | 'getOriginatorName'>
+> {
   const svc = {
     // Fix-C: fiatAmount is now a string (exact NGN decimal).
     assertCanTransact: jest.fn<
       Promise<void>,
       [{ userId: string; fiatAmount: string; asset: string }]
     >(),
+    getOriginatorName: jest.fn<Promise<string | null>, [string]>(),
   };
   if (throws) {
     svc.assertCanTransact.mockRejectedValue(throws);
   } else {
     svc.assertCanTransact.mockResolvedValue(undefined);
   }
+  svc.getOriginatorName.mockResolvedValue(originatorName);
   return svc;
 }
 
@@ -2307,7 +2312,9 @@ function buildSendService(
     transactionRepo?: jest.Mocked<ITransactionRepository>;
     outboxRepo?: jest.Mocked<ISettlementOutboxRepository>;
     settlementRepo?: jest.Mocked<ISettlementRepository>;
-    kycGate?: jest.Mocked<Pick<KycGateService, 'assertCanTransact'>>;
+    kycGate?: jest.Mocked<
+      Pick<KycGateService, 'assertCanTransact' | 'getOriginatorName'>
+    >;
     directiveService?: jest.Mocked<Pick<DirectiveService, 'consume'>>;
     pinService?: jest.Mocked<Pick<PinService, 'verifyPin'>>;
     walletService?: jest.Mocked<
@@ -2655,6 +2662,111 @@ describe('ExecutionService.executeSend', () => {
 
     const result = await svc.executeSend(SEND_BASE_INPUT);
     expect(result.status).toBe('settling');
+  });
+
+  // ── Fix-D: Travel Rule originator/beneficiary enrichment ──────────────────
+
+  it('Fix-D: requiresTravelRule=true + KycProfile present → travelRule payload contains originatorName + beneficiaryName populated from real sources', async () => {
+    const ORIGINATOR_NAME = 'Ada Okafor';
+    const travelRuleProposal: ProposalRecord = {
+      ...STUB_SEND_PROPOSAL,
+      parameters: {
+        ...STUB_SEND_PROPOSAL.parameters,
+        requiresTravelRule: 'true',
+      },
+    };
+    const proposalRepo = makeProposalRepo(travelRuleProposal);
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    // KycGate returns a real name for this user (Fix-D: populated from KycProfile).
+    const kycGate = makeKycGate(undefined, ORIGINATOR_NAME);
+
+    const svc = buildSendService({ proposalRepo, settlementRepo, kycGate });
+
+    await svc.executeSend(SEND_BASE_INPUT);
+
+    // The atomic write must receive a non-null travelRule payload with the
+    // originatorName sourced from KycProfile and beneficiaryName from the
+    // Beneficiary record (label for crypto_address type).
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    expect(
+      settlementRepo.createSendSettlingWithReserveAtomic,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        travelRule: expect.objectContaining({
+          originatorName: ORIGINATOR_NAME,
+          beneficiaryName: STUB_CRYPTO_BENEFICIARY.label,
+          beneficiaryAddress: SEND_TO_ADDRESS,
+          originatorUserId: USER_ID,
+        }),
+      }),
+    );
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+  });
+
+  it('Fix-D: requiresTravelRule=true + KycProfile absent → travelRule.originatorName is null (graceful degradation, documented)', async () => {
+    const travelRuleProposal: ProposalRecord = {
+      ...STUB_SEND_PROPOSAL,
+      parameters: {
+        ...STUB_SEND_PROPOSAL.parameters,
+        requiresTravelRule: 'true',
+      },
+    };
+    const proposalRepo = makeProposalRepo(travelRuleProposal);
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    // KycGate returns null (no KycProfile created yet, or names are absent).
+    const kycGate = makeKycGate(undefined, null);
+
+    const svc = buildSendService({ proposalRepo, settlementRepo, kycGate });
+
+    await svc.executeSend(SEND_BASE_INPUT);
+
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    expect(
+      settlementRepo.createSendSettlingWithReserveAtomic,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        travelRule: expect.objectContaining({
+          originatorName: null,
+          // beneficiaryName still comes from the Beneficiary label.
+          beneficiaryName: STUB_CRYPTO_BENEFICIARY.label,
+        }),
+      }),
+    );
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+  });
+
+  it('Fix-D: requiresTravelRule=false → travelRule payload is null (getOriginatorName not called)', async () => {
+    // STUB_SEND_PROPOSAL has requiresTravelRule: 'false'
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    const kycGate = makeKycGate(undefined, 'Should Not Be Called');
+
+    const svc = buildSendService({ settlementRepo, kycGate });
+
+    await svc.executeSend(SEND_BASE_INPUT);
+
+    // When below threshold, travelRule must be null.
+
+    expect(
+      settlementRepo.createSendSettlingWithReserveAtomic,
+    ).toHaveBeenCalledWith(expect.objectContaining({ travelRule: null }));
+
+    // getOriginatorName must NOT be called when requiresTravelRule is false.
+    expect(kycGate.getOriginatorName).not.toHaveBeenCalled();
   });
 
   // ── IMPORTANT 1: fail-closed compliance — missing ComplianceService must throw ─

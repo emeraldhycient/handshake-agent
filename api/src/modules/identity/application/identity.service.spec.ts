@@ -54,6 +54,8 @@ function makeRepo(
     findWhatsAppAddressByUserId: jest.fn().mockResolvedValue(null),
     loadUser: jest.fn().mockResolvedValue(null),
     loadContact: jest.fn().mockResolvedValue(null),
+    // findKycProfile: not used by IdentityService.resolveByChannel; stub returns null.
+    findKycProfile: jest.fn().mockResolvedValue(null),
     createContactWithChannelIdentity: jest.fn().mockResolvedValue({
       contact: baseContact(),
       channelIdentity: baseCI({ contactId: 'contact-id-1' }),

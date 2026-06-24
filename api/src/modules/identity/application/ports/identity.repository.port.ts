@@ -28,6 +28,17 @@ export interface UserRecord {
   simSwapDetectedAt: Date | null;
 }
 
+/**
+ * Minimal KycProfile projection used by the execution engine to populate
+ * Travel Rule originator identity fields (AUD-08, FATF R16).
+ * Only non-sensitive name fields are exposed here; NIN/BVN/document refs
+ * stay inside the KYC module.
+ */
+export interface KycProfileRecord {
+  firstName: string | null;
+  lastName: string | null;
+}
+
 /** The subset of Contact fields needed for identity resolution. */
 export interface ContactRecord {
   id: string;
@@ -63,6 +74,16 @@ export interface IIdentityRepository {
 
   /** Loads a Contact by id, or null if not found. */
   loadContact(contactId: string): Promise<ContactRecord | null>;
+
+  /**
+   * Returns the minimal KycProfile projection (name fields only) for the given
+   * userId, or null if no KycProfile row exists yet.
+   *
+   * Used by the execution engine to populate Travel Rule originator identity
+   * (AUD-08). Returns null rather than throwing when the profile is absent so
+   * the engine can fall back to null gracefully (documented in TravelRuleData).
+   */
+  findKycProfile(userId: string): Promise<KycProfileRecord | null>;
 
   /**
    * Creates a Contact + a linked ChannelIdentity in a single transaction.

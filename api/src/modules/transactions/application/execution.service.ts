@@ -1195,7 +1195,21 @@ export class ExecutionService {
       };
     }
 
-    // ── Step 9: Atomic write ─────────────────────────────────────────────────
+    // ── Step 9: Resolve Travel Rule originator name (before atomic write) ──────
+    // Call getOriginatorName only when the send is at or above the threshold
+    // (requiresTravelRule=true). The KycGate reads KycProfile.firstName/lastName
+    // and concatenates them; returns null when the profile is absent or both
+    // name fields are empty (documented in TravelRuleData.originatorName).
+    //
+    // NOTE: This is an intentional read BEFORE the atomic write. The name is
+    // immutable identity data (set at KYC time) so there is no race window —
+    // a concurrent KYC update would not change the name mid-transaction.
+    // The write stays inside the $transaction in createSendSettlingWithReserveAtomic.
+    const originatorName: string | null = requiresTravelRule
+      ? await this.kycGate.getOriginatorName(userId)
+      : null;
+
+    // ── Step 10: Atomic write ────────────────────────────────────────────────
     // create Transaction(send, settling) + reserve USDT (user_wallet→clearing)
     // + mark Proposal→executing — all in a SINGLE DB $transaction (C1).
     const requestChecksum = this.buildRequestChecksum({
@@ -1205,6 +1219,14 @@ export class ExecutionService {
       fiatAmount: String(ngnEquivalent),
       fxRate: String(baseRate),
     });
+
+    // Beneficiary name: for crypto_address beneficiaries, accountHolderName is
+    // null (on-chain addresses have no KYC-verified name on our side). Use the
+    // user-supplied label as the best available identifier. For bank-account
+    // beneficiaries (not expected on send paths) prefer accountHolderName.
+    // If neither is available, null is the correct sentinel — do NOT invent data.
+    const beneficiaryName: string | null =
+      beneficiary.accountHolderName ?? beneficiary.label ?? null;
 
     const { txn } =
       await this.settlementRepo.createSendSettlingWithReserveAtomic({
@@ -1239,15 +1261,18 @@ export class ExecutionService {
         totalDebit,
         now,
         // SPEC DEVIATION fix: persist TravelRuleData atomically when threshold exceeded.
-        // originatorName and beneficiaryName are null here — KycProfile / Beneficiary
-        // name fields are available on the user but not yet plumbed through the engine;
-        // they are left null per the "skeleton with noted nulls" requirement.
+        // originatorName comes from KycProfile (getOriginatorName above); null when
+        // the profile has no name data yet — documented per "any genuinely-sourceless
+        // column stays null WITH a comment" requirement (fix-D).
+        // beneficiaryName: accountHolderName for bank beneficiaries; label for
+        // crypto-address beneficiaries (best available identifier at execute time).
+        // reportedAt stays null — not yet submitted to counterparty/regulator.
         travelRule: requiresTravelRule
           ? {
               originatorUserId: userId,
-              originatorName: null,
+              originatorName,
               beneficiaryAddress: toAddress,
-              beneficiaryName: beneficiary.label ?? null,
+              beneficiaryName,
               asset,
               cryptoAmount,
               ngnEquivalent: String(ngnEquivalent),
@@ -1255,7 +1280,7 @@ export class ExecutionService {
           : null,
       });
 
-    // ── Step 10: Initiate on-chain withdrawal ────────────────────────────────
+    // ── Step 11: Initiate on-chain withdrawal ────────────────────────────────
     // Load the full wallet record (idempotent — already provisioned at propose time).
     const walletRecord = await this.walletService.getOrProvisionWallet(
       userId,
@@ -1272,10 +1297,10 @@ export class ExecutionService {
     );
     const providerRef = withdrawOutput.providerReference;
 
-    // ── Step 11: Persist providerRef into Transaction metadata ───────────────
+    // ── Step 12: Persist providerRef into Transaction metadata ───────────────
     await this.transactionRepo.mergeMetadata(txn.id, { providerRef });
 
-    // ── Step 12: Enqueue SettlementOutbox(onchain_send) ─────────────────────
+    // ── Step 13: Enqueue SettlementOutbox(onchain_send) ─────────────────────
     await this.outboxRepo.create({
       transactionId: txn.id,
       settlementType: 'onchain_send',

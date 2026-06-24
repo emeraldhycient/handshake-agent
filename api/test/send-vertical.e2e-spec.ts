@@ -798,7 +798,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
   // -----------------------------------------------------------------------
 
   describe('Travel Rule: TravelRuleData persisted inside createSendSettlingWithReserveAtomic', () => {
-    it('>threshold send writes a TravelRuleData row linked to the Transaction in the same DB transaction', async () => {
+    it('>threshold send writes a TravelRuleData row with non-null originatorName + beneficiaryName (Fix-D)', async () => {
       // Arrange: provision a large enough balance and create a proposal with
       // requiresTravelRule=true directly (threshold = 1,000,000 NGN; at baseRate=1600
       // that is 625 USDT minimum). We seed 700 USDT and create a proposal for 650 USDT.
@@ -807,6 +807,26 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
       await prisma.user.update({
         where: { id: userId },
         data: { kycTier: 'tier_3' },
+      });
+
+      // Fix-D: Seed a KycProfile with name data so the originator name can be
+      // resolved by getOriginatorName. upsert so re-runs of the suite are idempotent.
+      const EXPECTED_ORIGINATOR_FIRST = 'Amara';
+      const EXPECTED_ORIGINATOR_LAST = 'Nwosu';
+      const EXPECTED_ORIGINATOR_NAME = `${EXPECTED_ORIGINATOR_FIRST} ${EXPECTED_ORIGINATOR_LAST}`;
+      await prisma.kycProfile.upsert({
+        where: { userId },
+        create: {
+          userId,
+          firstName: EXPECTED_ORIGINATOR_FIRST,
+          lastName: EXPECTED_ORIGINATOR_LAST,
+          status: 'verified',
+          tier: 'tier_3',
+        },
+        update: {
+          firstName: EXPECTED_ORIGINATOR_FIRST,
+          lastName: EXPECTED_ORIGINATOR_LAST,
+        },
       });
 
       const wallet = await walletService.getOrProvisionWallet(
@@ -854,22 +874,29 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         },
       });
 
-      // Reuse/create beneficiary.
-      let ben: { id: string };
+      // Reuse/create beneficiary. Track label for Fix-D assertion below.
+      const TR_BENEFICIARY_LABEL = 'Travel Rule Beneficiary';
+      let ben: { id: string; label: string };
       const existingBen = await prisma.beneficiary.findFirst({
         where: { userId, cryptoAddress: VALID_TRON_CRYPTO_ADDRESS },
-        select: { id: true },
+        select: { id: true, label: true },
       });
       if (existingBen !== null) {
-        ben = existingBen;
+        // Update label to the canonical value so assertions are deterministic.
+        await prisma.beneficiary.update({
+          where: { id: existingBen.id },
+          data: { label: TR_BENEFICIARY_LABEL },
+        });
+        ben = { id: existingBen.id, label: TR_BENEFICIARY_LABEL };
       } else {
-        ben = await beneficiaryService.addCryptoAddress({
+        const created = await beneficiaryService.addCryptoAddress({
           userId,
-          label: 'Travel Rule Beneficiary',
+          label: TR_BENEFICIARY_LABEL,
           address: VALID_TRON_CRYPTO_ADDRESS,
           network: 'TRON',
           asset: 'USDT',
         });
+        ben = { id: created.id, label: TR_BENEFICIARY_LABEL };
       }
       await prisma.beneficiary.update({
         where: { id: ben.id },
@@ -937,6 +964,11 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
       expect(travelRuleRow?.beneficiaryAddress).toBe(VALID_TRON_CRYPTO_ADDRESS);
       expect(travelRuleRow?.asset).toBe('USDT');
       expect(travelRuleRow?.triggeringFactor).toBe('amount_threshold');
+
+      // Fix-D: originator name must be populated from KycProfile (not null/empty).
+      // beneficiaryName must be populated from the Beneficiary label.
+      expect(travelRuleRow?.originatorName).toBe(EXPECTED_ORIGINATOR_NAME);
+      expect(travelRuleRow?.beneficiaryName).toBe(ben.label);
 
       // Ledger invariant still holds (2 reserve entries, sum = 0).
       const entries = await prisma.ledgerEntry.findMany({

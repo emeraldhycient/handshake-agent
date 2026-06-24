@@ -39,6 +39,24 @@ function getTierLimits(tier: string, limits: LimitsConfig): TierLimits {
   throw new Error(`Unexpected kycTier value after verification gate: ${tier}`);
 }
 
+/**
+ * Builds a display name string from KycProfile's firstName and lastName.
+ * Returns null when both fields are absent (profile missing or unverified).
+ *
+ * NOTE: Leading/trailing whitespace is trimmed; a name with only whitespace
+ * resolves to null. This mirrors what a regulator expects — a blank string
+ * is less useful than a null sentinel indicating "not captured yet".
+ */
+function buildDisplayName(
+  firstName: string | null,
+  lastName: string | null,
+): string | null {
+  const parts = [firstName, lastName]
+    .map((s) => s?.trim())
+    .filter((s): s is string => !!s);
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
 export interface AssertCanTransactInput {
   userId: string;
   /**
@@ -80,6 +98,23 @@ export class KycGateService {
     @Inject(CLOCK)
     private readonly clock: Clock,
   ) {}
+
+  /**
+   * Returns the originator display name (firstName + lastName) from the user's
+   * KycProfile, or null if the profile does not exist or both name fields are
+   * absent.
+   *
+   * Used exclusively by the execution engine for Travel Rule originator capture
+   * (AUD-08, FATF R16).  Resolves null rather than throwing so callers can
+   * write a null sentinel and document the gap (TravelRuleData.originatorName
+   * schema allows a non-null empty string as the current sentinel; null is the
+   * canonical "not yet captured" value passed through the port).
+   */
+  async getOriginatorName(userId: string): Promise<string | null> {
+    const profile = await this.identityRepo.findKycProfile(userId);
+    if (profile === null) return null;
+    return buildDisplayName(profile.firstName, profile.lastName);
+  }
 
   /**
    * Asserts the user is allowed to transact the given fiat amount.
