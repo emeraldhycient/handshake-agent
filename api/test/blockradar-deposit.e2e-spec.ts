@@ -77,6 +77,8 @@ const BLOCKRADAR_API_KEY = 'e2e-blockradar-api-key-test';
 class StubConfigService {
   get<T = unknown>(key: string): T {
     if (key === 'BLOCKRADAR_API_KEY') return BLOCKRADAR_API_KEY as T;
+    if (key === 'RECEIPT_SIGNING_KEY')
+      return 'e2e-blockradar-deposit-receipt-signing-key!!' as T;
     const parts = key.split('.');
     let val: unknown = appConfig;
     for (const part of parts) {

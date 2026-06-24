@@ -71,6 +71,7 @@ import type {
   SettleSendFinalizeOutput,
   SettleSendRefundInput,
 } from '../application/ports/settlement.repository.port';
+import { ReceiptNotSignableError } from '../domain/execution-errors';
 import type { TransactionRecord } from '../application/ports/transaction.repository.port';
 
 // ---------------------------------------------------------------------------
@@ -501,18 +502,19 @@ function buildReceiptContent(input: {
 }
 
 /**
- * Derives a sequential human-readable receipt number.
+ * Formats a human-readable receipt number from the year and the next value
+ * from the `hs_receipt_seq` Postgres sequence.
  *
- * TODO(RCP): use a Postgres sequence instead of COUNT(*) + 1 to eliminate
- * the race condition under high concurrency. For the skeleton, a serializable
- * $transaction means this count is correct within the same transaction — but
- * if multiple transactions commit concurrently at exactly the same sequence
- * position the UNIQUE constraint on Receipt.receiptNumber will catch it.
+ * The sequence is global and monotonic: `nextval('hs_receipt_seq')` is called
+ * inside the same `$transaction` as the Receipt insert, so the number is both
+ * unique (sequence guarantees it) and obtained atomically with the row creation.
+ * The UNIQUE constraint on Receipt.receiptNumber remains as a defence-in-depth
+ * safety net.
+ *
+ * Format: `HS-<YYYY>-<000001>` (zero-padded to 6 digits).
  */
-function formatReceiptNumber(year: string, count: bigint): string {
-  // count is the number of receipts *before* this insert (0-based index);
-  // +1 gives the 1-based position for the next receipt.
-  const seq = (count + 1n).toString().padStart(6, '0');
+function formatReceiptNumber(year: string, seqVal: bigint): string {
+  const seq = seqVal.toString().padStart(6, '0');
   return `HS-${year}-${seq}`;
 }
 
@@ -646,17 +648,19 @@ async function writeVelocityIncrementsInSettle(
 
 @Injectable()
 export class SettlementPrismaRepository implements ISettlementRepository {
-  // TODO(RCP): inject a dedicated RECEIPT_SIGNING_KEY env var instead.
+  // Dedicated receipt signing key — separate from DIRECTIVE_SIGNING_KEY so
+  // each can be rotated independently. The settlement kernel fails closed:
+  // mintReceiptInTx throws ReceiptNotSignableError when this is empty.
   private readonly signingKey: string;
 
   constructor(
     private readonly prisma: PrismaService,
-    // Bare ConfigService: reads both env-layer keys (DIRECTIVE_SIGNING_KEY)
-    // and JSON-defaults. This follows the same pattern as other infrastructure
-    // providers (blockradar, flutterwave) that read from env.
+    // Bare ConfigService: reads env-layer keys and JSON-defaults.
+    // This follows the same pattern as other infrastructure providers
+    // (blockradar, flutterwave) that read from env.
     private readonly config: ConfigService,
   ) {
-    this.signingKey = this.config.get<string>('DIRECTIVE_SIGNING_KEY') ?? '';
+    this.signingKey = this.config.get<string>('RECEIPT_SIGNING_KEY') ?? '';
   }
 
   /**
@@ -766,10 +770,16 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         });
 
         // ── 7. Mint Receipt ───────────────────────────────────────────────────
+        // Fail-closed: throw before any DB write if the signing key is absent.
+        if (!signingKey) {
+          throw new ReceiptNotSignableError();
+        }
 
-        // TODO(RCP): use a Postgres sequence here to eliminate race under concurrency.
-        const countBig = await tx.receipt.count();
-        const receiptNumber = formatReceiptNumber(year, BigInt(countBig));
+        // Derive the next receipt number from the global Postgres sequence.
+        // nextval() is atomic and unique — no phantom-read race possible.
+        const seqResult = await tx.$queryRaw<[{ nextval: bigint }]>`
+          SELECT nextval('hs_receipt_seq')`;
+        const receiptNumber = formatReceiptNumber(year, seqResult[0].nextval);
 
         const { htmlContent, itemized } = buildReceiptContent({
           receiptNumber,
@@ -787,7 +797,6 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           .digest('hex');
 
         // Signature: HMAC-SHA256 over (receiptNumber, transactionId, contentHash, userId, issuedAt).
-        // TODO(RCP): replace DIRECTIVE_SIGNING_KEY with a dedicated RECEIPT_SIGNING_KEY.
         const signaturePayload = [
           receiptNumber,
           transactionId,
@@ -815,9 +824,9 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         return { receiptNumber };
       },
       {
-        // Serializable isolation to ensure the COUNT(*) + 1 for receiptNumber
-        // is not subject to a phantom read race.
-        // TODO(RCP): remove this isolation level once a Postgres sequence is used.
+        // Serializable isolation guards the ledger-sequence reads (balanceAfter)
+        // against phantom reads under concurrent settlements. Receipt number is
+        // now sequence-derived (nextval), so isolation is defence-in-depth here.
         isolationLevel: 'Serializable',
       },
     );
@@ -1061,8 +1070,17 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         });
 
         // ── 5. Mint signed Receipt ─────────────────────────────────────────────
-        const countBig = await tx.receipt.count();
-        const receiptNumber = formatReceiptNumber(year, BigInt(countBig));
+        // Fail-closed: throw before any DB write if the signing key is absent.
+        if (!signingKey) {
+          throw new ReceiptNotSignableError();
+        }
+
+        const seqResultSell = await tx.$queryRaw<[{ nextval: bigint }]>`
+          SELECT nextval('hs_receipt_seq')`;
+        const receiptNumber = formatReceiptNumber(
+          year,
+          seqResultSell[0].nextval,
+        );
 
         const { htmlContent, itemized } = buildSellReceiptContent({
           receiptNumber,
@@ -1418,8 +1436,17 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         });
 
         // ── 5. Mint signed Receipt ─────────────────────────────────────────────
-        const countBig = await tx.receipt.count();
-        const receiptNumber = formatReceiptNumber(year, BigInt(countBig));
+        // Fail-closed: throw before any DB write if the signing key is absent.
+        if (!signingKey) {
+          throw new ReceiptNotSignableError();
+        }
+
+        const seqResultSend = await tx.$queryRaw<[{ nextval: bigint }]>`
+          SELECT nextval('hs_receipt_seq')`;
+        const receiptNumber = formatReceiptNumber(
+          year,
+          seqResultSend[0].nextval,
+        );
 
         // Read back transaction metadata to get toAddress for the receipt.
         const txnRow = await tx.transaction.findUnique({

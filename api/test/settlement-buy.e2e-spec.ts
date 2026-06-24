@@ -71,6 +71,9 @@ class StubConfigService {
     if (key === 'DIRECTIVE_SIGNING_KEY') {
       return 'e2e-settlement-test-signing-key-32-bytes-min!!' as T;
     }
+    if (key === 'RECEIPT_SIGNING_KEY') {
+      return 'e2e-settlement-receipt-signing-key-32bytes!!' as T;
+    }
     const parts = key.split('.');
     let val: unknown = appConfig;
     for (const part of parts) {

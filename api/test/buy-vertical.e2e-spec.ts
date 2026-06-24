@@ -304,6 +304,7 @@ describe('Buy vertical — capstone acceptance e2e (AppModule, Testcontainers Po
       WHATSAPP_FLOW_PRIVATE_KEY: privateKey,
       WHATSAPP_FLOW_ID: WA_FLOW_ID,
       DIRECTIVE_SIGNING_KEY,
+      RECEIPT_SIGNING_KEY: 'e2e-buy-vertical-receipt-signing-key-32b!',
       BLOCKRADAR_API_KEY: 'fake-blockradar-key-e2e',
       BLOCKRADAR_MASTER_WALLET_ID: 'fake-master-wallet-id-e2e',
       FLUTTERWAVE_SECRET_KEY: 'fake-flw-secret-key-e2e',

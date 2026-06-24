@@ -52,6 +52,7 @@ import type {
   SettleDepositAtomicInput,
   SettleDepositAtomicOutput,
 } from '../application/ports/deposit-settlement.repository.port';
+import { ReceiptNotSignableError } from '../../transactions/domain/execution-errors';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -158,18 +159,19 @@ function buildDepositReceiptContent(input: {
 }
 
 /**
- * Derives a sequential human-readable receipt number.
+ * Formats a human-readable receipt number from the year and the next value
+ * from the `hs_receipt_seq` Postgres sequence.
  *
- * TODO(RCP): use a Postgres sequence instead of COUNT(*) + 1 to eliminate
- * the race condition under high concurrency. For the skeleton, a serializable
- * $transaction means this count is correct within the same transaction — but
- * if multiple transactions commit concurrently at exactly the same sequence
- * position the UNIQUE constraint on Receipt.receiptNumber will catch it.
+ * The sequence is global and monotonic: `nextval('hs_receipt_seq')` is called
+ * inside the same `$transaction` as the Receipt insert, so the number is both
+ * unique (sequence guarantees it) and obtained atomically with the row creation.
+ * The UNIQUE constraint on Receipt.receiptNumber remains as a defence-in-depth
+ * safety net.
+ *
+ * Format: `HS-<YYYY>-<000001>` (zero-padded to 6 digits).
  */
-function formatReceiptNumber(year: string, count: bigint): string {
-  // count is the number of receipts *before* this insert (0-based index);
-  // +1 gives the 1-based position for the next receipt.
-  const seq = (count + 1n).toString().padStart(6, '0');
+function formatReceiptNumber(year: string, seqVal: bigint): string {
+  const seq = seqVal.toString().padStart(6, '0');
   return `HS-${year}-${seq}`;
 }
 
@@ -186,7 +188,10 @@ export class DepositSettlementPrismaRepository implements IDepositSettlementRepo
     private readonly config: ConfigService,
     private readonly assetRegistry: AssetRegistry,
   ) {
-    this.signingKey = this.config.get<string>('DIRECTIVE_SIGNING_KEY') ?? '';
+    // Dedicated receipt signing key — separate from DIRECTIVE_SIGNING_KEY so
+    // each can be rotated independently. The kernel is fail-closed: throws
+    // ReceiptNotSignableError when this is empty (no unsigned receipt is written).
+    this.signingKey = this.config.get<string>('RECEIPT_SIGNING_KEY') ?? '';
   }
 
   /**
@@ -320,9 +325,16 @@ export class DepositSettlementPrismaRepository implements IDepositSettlementRepo
         });
 
         // ── 8. Mint signed Receipt ────────────────────────────────────────────
-        // TODO(RCP): use a Postgres sequence instead of COUNT(*)+1.
-        const countBig = await tx.receipt.count();
-        const receiptNumber = formatReceiptNumber(year, BigInt(countBig));
+        // Fail-closed: throw before any DB write if the signing key is absent.
+        if (!signingKey) {
+          throw new ReceiptNotSignableError();
+        }
+
+        // Derive the next receipt number from the global Postgres sequence.
+        // nextval() is atomic and unique — no phantom-read race possible.
+        const seqResult = await tx.$queryRaw<[{ nextval: bigint }]>`
+          SELECT nextval('hs_receipt_seq')`;
+        const receiptNumber = formatReceiptNumber(year, seqResult[0].nextval);
 
         const { htmlContent, itemized } = buildDepositReceiptContent({
           receiptNumber,
@@ -371,9 +383,9 @@ export class DepositSettlementPrismaRepository implements IDepositSettlementRepo
         };
       },
       {
-        // Serializable isolation to ensure the COUNT(*) + 1 for receiptNumber
-        // is not subject to a phantom read race.
-        // TODO(RCP): remove once a Postgres sequence is used.
+        // Serializable isolation guards the ledger-sequence reads (balanceAfter)
+        // against phantom reads under concurrent deposits. The receipt number is
+        // now sequence-derived (nextval), so isolation is defence-in-depth here.
         isolationLevel: 'Serializable',
       },
     );

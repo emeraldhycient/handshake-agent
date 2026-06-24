@@ -89,6 +89,8 @@ const DIRECTIVE_KEY = 'e2e-webhook-test-signing-key-32-bytes!';
 class StubConfigService {
   get<T = unknown>(key: string): T {
     if (key === 'DIRECTIVE_SIGNING_KEY') return DIRECTIVE_KEY as T;
+    if (key === 'RECEIPT_SIGNING_KEY')
+      return 'e2e-flw-webhook-receipt-signing-key-32b!' as T;
     if (key === 'FLUTTERWAVE_WEBHOOK_SECRET') return WEBHOOK_SECRET as T;
     const parts = key.split('.');
     let val: unknown = appConfig;

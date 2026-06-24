@@ -82,3 +82,20 @@ export class InsufficientBalanceError extends Error {
     this.name = 'InsufficientBalanceError';
   }
 }
+
+/**
+ * Thrown by the settlement kernel when RECEIPT_SIGNING_KEY is empty.
+ * The kernel is fail-closed: no unsigned receipt is ever written.
+ * Code: RECEIPT_NOT_SIGNABLE
+ */
+export class ReceiptNotSignableError extends Error {
+  readonly code = 'RECEIPT_NOT_SIGNABLE' as const;
+
+  constructor() {
+    super(
+      'RECEIPT_SIGNING_KEY is not configured — cannot mint a signed receipt (fail-closed)',
+    );
+    this.name = 'ReceiptNotSignableError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

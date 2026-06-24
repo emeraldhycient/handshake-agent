@@ -86,6 +86,9 @@ class StubConfigService {
     if (key === 'DIRECTIVE_SIGNING_KEY') {
       return 'e2e-test-signing-key-32-bytes-minimum!!' as T;
     }
+    if (key === 'RECEIPT_SIGNING_KEY') {
+      return 'e2e-execution-buy-receipt-signing-key-32b!' as T;
+    }
     return val as T;
   }
 }

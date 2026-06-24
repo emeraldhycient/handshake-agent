@@ -81,6 +81,9 @@ class StubConfigService {
     if (key === 'DIRECTIVE_SIGNING_KEY') {
       return 'sell-vertical-e2e-signing-key-32-bytes!!' as T;
     }
+    if (key === 'RECEIPT_SIGNING_KEY') {
+      return 'sell-vertical-e2e-receipt-signing-key-32b!' as T;
+    }
     const parts = key.split('.');
     let val: unknown = appConfig;
     for (const part of parts) {
