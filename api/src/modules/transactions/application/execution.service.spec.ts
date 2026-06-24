@@ -23,6 +23,7 @@ import type {
 
 import type { Clock } from '../../../core/common/clock';
 import type { PinService } from '../../../core/auth/pin.service';
+import type { SessionService } from '../../../core/auth/session.service';
 import type { KycGateService } from '../../identity/application/kyc-gate.service';
 import type { QuotesService } from '../../quotes/application/quotes.service';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
@@ -1442,6 +1443,25 @@ function makeWhatsAppSender(): { sendText: jest.Mock } {
   };
 }
 
+/** A SessionService stub (Fix G). Records step-up silently; resolve device succeeds. */
+function makeSessionService(
+  opts: { pinnedDeviceId?: string | null } = {},
+): jest.Mocked<
+  Pick<SessionService, 'startOrTouch' | 'recordStepUp' | 'assertStepUpFresh'>
+> & { findPinnedDeviceId: jest.Mock } {
+  // When opts.pinnedDeviceId is explicitly null → no bound device → return null.
+  // When opts.pinnedDeviceId is undefined → not specified → fall back to stub.
+  const resolvedPinnedDeviceId =
+    'pinnedDeviceId' in opts ? opts.pinnedDeviceId : 'device-id-stub';
+  return {
+    startOrTouch: jest.fn().mockResolvedValue({ id: 'session-id' }),
+    recordStepUp: jest.fn().mockResolvedValue(undefined),
+    assertStepUpFresh: jest.fn().mockResolvedValue(undefined),
+    // Used internally by executeSend to resolve the bound device.
+    findPinnedDeviceId: jest.fn().mockResolvedValue(resolvedPinnedDeviceId),
+  };
+}
+
 /**
  * Builds ExecutionService with sell-specific stubs.
  * Overrides the default buildService factory to inject sell deps.
@@ -1498,6 +1518,8 @@ function buildSellService(
     (overrides.identityService as never) ?? (makeIdentityService() as never),
     (overrides.whatsAppSender as never) ?? (makeWhatsAppSender() as never),
     // complianceService: sell path has no sanctions gate; executeSend not called
+    undefined,
+    // sessionService: sell path does not use step-up session recording
     undefined,
   );
 }
@@ -2330,6 +2352,7 @@ function buildSendService(
     identityService?: ReturnType<typeof makeIdentityService>;
     whatsAppSender?: ReturnType<typeof makeWhatsAppSender>;
     complianceService?: ReturnType<typeof makeComplianceService>;
+    sessionService?: ReturnType<typeof makeSessionService>;
   } = {},
 ): ExecutionService {
   const defaultSettlementRepo = makeSettlementRepo(
@@ -2368,6 +2391,7 @@ function buildSendService(
     (overrides.whatsAppSender as never) ?? (makeWhatsAppSender() as never),
     (overrides.complianceService as never) ??
       (makeComplianceService() as never),
+    (overrides.sessionService as never) ?? (makeSessionService() as never),
   );
 }
 
@@ -2880,6 +2904,7 @@ describe('ExecutionService.executeSend', () => {
       makeIdentityService() as never,
       makeWhatsAppSender() as never,
       makeComplianceService() as never,
+      makeSessionService() as never,
     );
 
     // Should throw a config error — must NOT silently proceed with fiatAmount=0.
@@ -2982,6 +3007,100 @@ describe('ExecutionService.executeSend', () => {
     expect(callOrder.indexOf('idempotency')).toBeLessThan(
       callOrder.indexOf('atomic_create'),
     );
+  });
+
+  // ── Fix G: session step-up recording ────────────────────────────────────────
+
+  it('Fix G: happy path records step-up on session after PIN passes (via pinnedDeviceId)', async () => {
+    const sessionService = makeSessionService({
+      pinnedDeviceId: 'bound-device-id',
+    });
+
+    const svc = buildSendService({ sessionService });
+
+    await svc.executeSend(SEND_BASE_INPUT);
+
+    // startOrTouch must be called with the resolved device
+    expect(sessionService.startOrTouch).toHaveBeenCalledWith(
+      USER_ID,
+      'bound-device-id',
+    );
+    // recordStepUp must be called with the same device + a timestamp
+    expect(sessionService.recordStepUp).toHaveBeenCalledWith(
+      USER_ID,
+      'bound-device-id',
+      expect.any(Date),
+    );
+  });
+
+  it('Fix G: happy path uses deviceId from input when provided (overrides pinnedDeviceId lookup)', async () => {
+    const sessionService = makeSessionService({
+      pinnedDeviceId: 'pinned-device',
+    });
+
+    const svc = buildSendService({ sessionService });
+
+    // Pass an explicit deviceId in the input
+    await svc.executeSend({ ...SEND_BASE_INPUT, deviceId: 'input-device-id' });
+
+    // Must use the explicit deviceId, not the pinned one
+    expect(sessionService.startOrTouch).toHaveBeenCalledWith(
+      USER_ID,
+      'input-device-id',
+    );
+    expect(sessionService.recordStepUp).toHaveBeenCalledWith(
+      USER_ID,
+      'input-device-id',
+      expect.any(Date),
+    );
+    // findPinnedDeviceId should NOT be called when explicit deviceId is provided
+    expect(sessionService.findPinnedDeviceId).not.toHaveBeenCalled();
+  });
+
+  it('Fix G: no bound device (pinnedDeviceId null) + no deviceId in input → throws ProposalNotExecutableError (fail-closed)', async () => {
+    const sessionService = makeSessionService({ pinnedDeviceId: null });
+
+    const svc = buildSendService({ sessionService });
+
+    // No device resolvable — must fail closed
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toThrow();
+
+    // No transaction must have been created
+    expect(sessionService.recordStepUp).not.toHaveBeenCalled();
+  });
+
+  it('Fix G: sessionService absent (not wired) → throws (fail-closed, same posture as complianceService)', async () => {
+    // Build a service without sessionService to verify fail-closed behaviour
+    const svc = new ExecutionService(
+      makeProposalRepo(STUB_SEND_PROPOSAL),
+      makeQuoteRepo(null),
+      makeTransactionRepoForSend(),
+      makeOutboxRepo(),
+      makeSettlementRepo(
+        null,
+        { receiptNumber: STUB_RECEIPT_NUMBER },
+        undefined,
+        STUB_SEND_TXN,
+      ),
+      makeQuotesService() as unknown as QuotesService,
+      makeKycGate() as unknown as KycGateService,
+      makeDirectiveService(STUB_SEND_GRANT) as unknown as DirectiveService,
+      makePinService() as unknown as PinService,
+      makeWalletServiceWithWithdraw() as unknown as WalletService,
+      makePaymentProvider() as unknown as IPaymentProvider,
+      stubConfig as never,
+      stubClock,
+      makeAssetRegistry(),
+      makeBeneficiaryServiceForSend() as never,
+      makeLedgerRepo('100'),
+      makeIdentityService() as never,
+      makeWhatsAppSender() as never,
+      makeComplianceService() as never,
+      // sessionService deliberately omitted
+      undefined,
+    );
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toThrow();
   });
 });
 

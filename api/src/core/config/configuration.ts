@@ -56,8 +56,24 @@ export interface PinConfig {
   scryptKeyLen: number;
 }
 
+/**
+ * Step-up authentication configuration (Fix G, CLAUDE.md §3.4 / §7).
+ * Controls how long a completed step-up on a Session remains valid.
+ */
+export interface StepUpConfig {
+  /**
+   * Time-to-live in seconds for a recorded step-up on a Session.
+   * After this window, assertStepUpFresh will throw StepUpRequiredError.
+   * Admin-tunable later (DB-admin AppSetting layer, root §7).
+   * Default: 900 seconds (15 minutes).
+   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   */
+  ttlSeconds: number;
+}
+
 export interface AuthConfig {
   pin: PinConfig;
+  stepUp: StepUpConfig;
 }
 
 /** Directive-grant configuration (task 4.2, ADR-0005/0006). */
@@ -388,6 +404,13 @@ export default (): AppConfig => ({
       maxAttempts: 5,
       lockoutMinutes: 15,
       scryptKeyLen: 64,
+    },
+    stepUp: {
+      // 15-minute step-up validity window. Matches the directive TTL so a user
+      // completing PIN within the directive window gets a full 15-minute session.
+      // Admin-tunable later (DB-admin AppSetting layer, root CLAUDE.md §7).
+      // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+      ttlSeconds: 900,
     },
   },
   beneficiary: {

@@ -510,6 +510,22 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
       where: { id: cryptoBen.id },
       data: { firstUseLockedUntil: null, isDefault: true },
     });
+
+    // 10. Fix G: seed a bound Device and pin it to the user (§3.4).
+    // executeSend resolves the acting device from User.pinnedDeviceId when no
+    // explicit deviceId is provided in the WhatsApp Flow callback payload.
+    const device = await prisma.device.create({
+      data: {
+        userId,
+        fingerprint: `outbound-e2e-device-${randomUUID()}`,
+        trustState: 'bound',
+        boundAt: new Date(),
+      },
+    });
+    await prisma.user.update({
+      where: { id: userId },
+      data: { pinnedDeviceId: device.id },
+    });
   }, 120_000);
 
   afterAll(async () => {

@@ -40,6 +40,7 @@ import { SettlementOutboxPrismaRepository } from '../src/modules/transactions/in
 import { SettlementPrismaRepository } from '../src/modules/transactions/infrastructure/settlement.prisma.repository';
 import { LedgerPrismaRepository } from '../src/modules/transactions/infrastructure/ledger.prisma.repository';
 import { PinPrismaRepository } from '../src/core/auth/infrastructure/pin.prisma.repository';
+import { SessionPrismaRepository } from '../src/core/auth/infrastructure/session.prisma.repository';
 import { IdentityPrismaRepository } from '../src/modules/identity/infrastructure/identity.prisma.repository';
 import { VelocityPrismaRepository } from '../src/modules/identity/infrastructure/velocity.prisma.repository';
 import { WalletPrismaRepository } from '../src/modules/wallets/infrastructure/wallet.prisma.repository';
@@ -48,6 +49,7 @@ import { ComplianceEventPrismaRepository } from '../src/modules/compliance/infra
 
 // Services
 import { PinService } from '../src/core/auth/pin.service';
+import { SessionService } from '../src/core/auth/session.service';
 import { DirectiveService } from '../src/modules/transactions/application/directive.service';
 import { ProposalService } from '../src/modules/transactions/application/proposal.service';
 import { ExecutionService } from '../src/modules/transactions/application/execution.service';
@@ -142,6 +144,7 @@ function buildSendExecutionService(
   walletService: WalletService,
   beneficiaryService: BeneficiaryService,
   complianceService: ComplianceService,
+  sessionService: SessionService,
 ): ExecutionService {
   const clock = { now: () => new Date() };
   const assetRegistry = new AssetRegistry(config as never);
@@ -185,6 +188,7 @@ function buildSendExecutionService(
     undefined, // identityService (optional)
     undefined, // whatsAppSender (optional)
     complianceService,
+    sessionService,
   );
 }
 
@@ -205,9 +209,11 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
   let walletService: WalletService;
   let beneficiaryService: BeneficiaryService;
   let complianceService: ComplianceService;
+  let sessionService: SessionService;
 
   // Shared test IDs
   let userId: string;
+  let pinnedDeviceId: string;
 
   beforeAll(async () => {
     const result = await startTestPostgres();
@@ -256,6 +262,8 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
     const sanctionsScreener = new MockSanctionsScreener(sanctionsConfigStub);
 
     // Services
+    const sessionRepo = new SessionPrismaRepository(ps);
+    sessionService = new SessionService(sessionRepo, config, clock);
     pinService = new PinService(pinRepo, config, clock);
     walletService = new WalletService(
       fakeWalletProvider,
@@ -297,16 +305,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
       config,
     );
 
-    executionService = buildSendExecutionService(
-      ps,
-      new StubConfigService(),
-      pinService,
-      walletService,
-      beneficiaryService,
-      complianceService,
-    );
-
-    // Seed a KYC-verified (Tier 1) user with a PIN.
+    // Seed a KYC-verified (Tier 1) user with a PIN + a bound device (Fix G).
     const user = await prisma.user.create({
       data: {
         kycStatus: 'verified',
@@ -317,6 +316,33 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
     userId = user.id;
 
     await pinService.setPin(userId, '123456');
+
+    // Create a bound device and pin it to the user (Fix G §3.4).
+    const device = await prisma.device.create({
+      data: {
+        userId,
+        fingerprint: `e2e-send-vertical-device-${randomUUID()}`,
+        trustState: 'bound',
+        boundAt: new Date(),
+      },
+    });
+    pinnedDeviceId = device.id;
+
+    // Pin the device to the user (User.pinnedDeviceId).
+    await prisma.user.update({
+      where: { id: userId },
+      data: { pinnedDeviceId: device.id },
+    });
+
+    executionService = buildSendExecutionService(
+      ps,
+      new StubConfigService(),
+      pinService,
+      walletService,
+      beneficiaryService,
+      complianceService,
+      sessionService,
+    );
   });
 
   afterAll(async () => {
@@ -522,6 +548,17 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
       expect(Number(last?.balanceAfter)).toBeLessThan(
         Number(prev?.balanceAfter),
       );
+
+      // Fix G: stepUpCompletedAt must be recorded on a Session for the bound device.
+      const session = await prisma.session.findFirst({
+        where: { userId, deviceId: pinnedDeviceId, isActive: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(session).not.toBeNull();
+      expect(session?.stepUpCompletedAt).not.toBeNull();
+      // stepUpCompletedAt should be within the last 10 seconds.
+      const ageMs = Date.now() - (session?.stepUpCompletedAt?.getTime() ?? 0);
+      expect(ageMs).toBeLessThan(10_000);
     });
 
     it('atomicity (C1): settling Transaction always has its reserve ledger entries in same DB transaction', async () => {
@@ -611,6 +648,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         walletService,
         beneficiaryService,
         complianceService,
+        sessionService,
       );
 
       // Phase 1
@@ -682,6 +720,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         walletService,
         beneficiaryService,
         complianceService,
+        sessionService,
       );
 
       await svc.executeSend({
@@ -734,6 +773,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         walletService,
         beneficiaryService,
         complianceService,
+        sessionService,
       );
 
       // Phase 1: execute
@@ -950,6 +990,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         walletService,
         beneficiaryService,
         complianceService,
+        sessionService,
       );
 
       const { directiveId, nonce } = await issueDirective(proposal.id);
@@ -1014,6 +1055,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         walletService,
         beneficiaryService,
         complianceService,
+        sessionService,
       );
 
       const result = await svc.executeSend({

@@ -39,6 +39,7 @@ import { ConfigService } from '@nestjs/config';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import { PinService } from '../../../core/auth/pin.service';
+import { SessionService } from '../../../core/auth/session.service';
 import { KycGateService } from '../../identity/application/kyc-gate.service';
 import { IdentityService } from '../../identity/application/identity.service';
 import { QuotesService } from '../../quotes/application/quotes.service';
@@ -185,6 +186,13 @@ export interface ExecuteSendInput {
   nonce: string;
   pin: string;
   idempotencyKey: string;
+  /**
+   * The device ID to bind this step-up to.
+   * When omitted, executeSend resolves it from User.pinnedDeviceId via
+   * SessionService. If neither is resolvable, the send is rejected (fail-closed
+   * — §3.4: identity is anchored to bound device, not the phone number alone).
+   */
+  deviceId?: string;
 }
 
 export interface ExecuteSendResult {
@@ -266,6 +274,10 @@ export class ExecutionService {
     // that all optional positional params precede required ones; the runtime
     // guard in executeSend enforces the invariant explicitly.
     private readonly complianceService?: ComplianceService,
+    // sessionService: records device-bound step-up after PIN passes (Fix G).
+    // NOT @Optional — NestJS DI will throw at boot if AuthModule is not
+    // imported. The runtime guard in executeSend enforces the invariant.
+    private readonly sessionService?: SessionService,
   ) {
     const buyConfig = this.config.get<BuyConfig>('buy');
     this.maxBuyDriftBps = buyConfig.maxDriftBps;
@@ -1009,8 +1021,15 @@ export class ExecutionService {
    *   12. Enqueue SettlementOutbox(onchain_send).
    */
   async executeSend(input: ExecuteSendInput): Promise<ExecuteSendResult> {
-    const { userId, proposalId, directiveId, nonce, pin, idempotencyKey } =
-      input;
+    const {
+      userId,
+      proposalId,
+      directiveId,
+      nonce,
+      pin,
+      idempotencyKey,
+      deviceId: inputDeviceId,
+    } = input;
     const now = this.clock.now();
 
     // Fail-CLOSED: ComplianceService must always be wired. This is a hard
@@ -1019,6 +1038,15 @@ export class ExecutionService {
     if (this.complianceService === undefined) {
       throw new InternalServerErrorException(
         'ExecutionService: ComplianceService is not wired — cannot execute send (fail-closed, §3.3)',
+      );
+    }
+
+    // Fail-CLOSED: SessionService must always be wired (Fix G). Device-bound
+    // step-up recording is a security invariant (§3.4) — a missing SessionService
+    // means the module is misconfigured.
+    if (this.sessionService === undefined) {
+      throw new InternalServerErrorException(
+        'ExecutionService: SessionService is not wired — cannot execute send (fail-closed, Fix G §3.4)',
       );
     }
 
@@ -1180,6 +1208,26 @@ export class ExecutionService {
 
     // ── Step 7: Verify PIN ───────────────────────────────────────────────────
     await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 7b: Record device-bound step-up (Fix G, §3.4) ──────────────────
+    // Resolve the acting device: use the explicit deviceId from input when
+    // provided; otherwise fall back to User.pinnedDeviceId (the currently
+    // trusted bound device — §3.4). Fail-CLOSED: if neither is resolvable,
+    // reject — a send without a traceable device binding is a security gap.
+    const resolvedDeviceId =
+      inputDeviceId ?? (await this.sessionService.findPinnedDeviceId(userId));
+
+    if (!resolvedDeviceId) {
+      throw new ProposalNotExecutableError(
+        'no bound device for this user — step-up cannot be recorded (fail-closed, Fix G §3.4)',
+      );
+    }
+
+    // startOrTouch ensures a Session row exists for (userId, resolvedDeviceId).
+    // recordStepUp persists stepUpCompletedAt = now as the auditable device
+    // step-up state. Both calls happen AFTER PIN passes (inside the auth fence).
+    await this.sessionService.startOrTouch(userId, resolvedDeviceId);
+    await this.sessionService.recordStepUp(userId, resolvedDeviceId, now);
 
     // ── Step 8: Idempotency check ────────────────────────────────────────────
     const existing =
