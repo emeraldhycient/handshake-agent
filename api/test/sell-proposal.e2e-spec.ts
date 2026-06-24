@@ -44,6 +44,7 @@ import { InsufficientBalanceError } from '../src/modules/transactions/domain/exe
 // Ports
 import type { PrismaService } from '../src/core/prisma/prisma.service';
 import type { IWalletProvider } from '../src/modules/wallets/application/ports/wallet-provider.port';
+import type { INameEnquiry } from '../src/modules/beneficiaries/application/ports/name-enquiry.port';
 
 // Config
 import configuration from '../src/core/config/configuration';
@@ -85,6 +86,15 @@ const fakeWalletProvider: IWalletProvider = {
   withdraw: jest.fn().mockResolvedValue({
     providerReference: 'e2e-tx-ref-stub',
     status: 'pending' as const,
+  }),
+};
+
+// Deterministic mock name-enquiry (Fix E: BeneficiaryService requires the port).
+const fakeNameEnquiry: INameEnquiry = {
+  resolve: jest.fn().mockResolvedValue({
+    accountName: 'TEST USER (RESOLVED)',
+    provider: 'mock',
+    reference: 'mock-name-enquiry-sell-proposal-e2e',
   }),
 };
 
@@ -137,6 +147,7 @@ describe('LedgerPrismaRepository.getAccountBalance + ProposalService.createSellP
     );
     const beneficiaryService = new BeneficiaryService(
       beneficiaryRepo,
+      fakeNameEnquiry,
       assetRegistry,
       config,
     );

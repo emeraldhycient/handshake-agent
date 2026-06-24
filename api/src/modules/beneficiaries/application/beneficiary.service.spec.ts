@@ -1,15 +1,18 @@
 /**
- * TDD — beneficiary.service.spec.ts (S3)
+ * TDD — beneficiary.service.spec.ts (S3 + Fix E)
  *
  * Unit tests for BeneficiaryService. All dependencies are mocked:
  *   - IBeneficiaryRepository (mock object)
+ *   - INameEnquiry (mock object — resolve is an async fn)
  *   - AssetRegistry (mock object — validateAddress is a pure boolean fn)
  *   - ConfigService (stub returning undefined for the optional cooling-off key)
  *
  * Tests cover:
- *   - addBankAccount persists via the repo and returns the record
+ *   - addBankAccount calls name-enquiry, persists resolved name + verifiedAt (Fix E)
+ *   - addBankAccount enquiry failure → NameEnquiryFailedError + no repo call (Fix E)
  *   - addCryptoAddress validates address (invalid → InvalidAddressError)
  *   - addCryptoAddress sets firstUseLockedUntil on valid address
+ *   - addCryptoAddress does NOT call name-enquiry (Fix E)
  *   - listForUser returns active records from the repo
  *   - getDefault returns the default from the repo
  *   - requireById returns the record; throws BeneficiaryNotFoundError when absent
@@ -21,11 +24,13 @@ import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import {
   InvalidAddressError,
   BeneficiaryNotFoundError,
+  NameEnquiryFailedError,
 } from '../domain/beneficiary-errors';
 import type {
   IBeneficiaryRepository,
   BeneficiaryRecord,
 } from './ports/beneficiary.repository.port';
+import type { INameEnquiry } from './ports/name-enquiry.port';
 import { BeneficiaryService } from './beneficiary.service';
 
 // ---------------------------------------------------------------------------
@@ -82,6 +87,7 @@ function makeCryptoRecord(
 describe('BeneficiaryService', () => {
   let service: BeneficiaryService;
   let repo: jest.Mocked<IBeneficiaryRepository>;
+  let nameEnquiry: jest.Mocked<INameEnquiry>;
   let assetRegistry: jest.Mocked<AssetRegistry>;
   let configService: jest.Mocked<ConfigService>;
 
@@ -94,6 +100,10 @@ describe('BeneficiaryService', () => {
       getDefault: jest.fn(),
     };
 
+    nameEnquiry = {
+      resolve: jest.fn(),
+    };
+
     assetRegistry = {
       validateAddress: jest.fn(),
     } as unknown as jest.Mocked<AssetRegistry>;
@@ -103,7 +113,12 @@ describe('BeneficiaryService', () => {
     } as unknown as jest.Mocked<ConfigService>;
 
     // Build the service manually (no Nest test bed) — constructor injection.
-    service = new BeneficiaryService(repo, assetRegistry, configService);
+    service = new BeneficiaryService(
+      repo,
+      nameEnquiry,
+      assetRegistry,
+      configService,
+    );
   });
 
   // ── listForUser ────────────────────────────────────────────────────────────
@@ -134,11 +149,87 @@ describe('BeneficiaryService', () => {
     });
   });
 
-  // ── addBankAccount ─────────────────────────────────────────────────────────
+  // ── addBankAccount (Fix E) ──────────────────────────────────────────────────
 
   describe('addBankAccount', () => {
-    it('passes the correct args to the repo and returns the created record', async () => {
+    it('calls name-enquiry with bankCode + accountNumber before persisting', async () => {
+      nameEnquiry.resolve.mockResolvedValue({
+        accountName: 'RESOLVED NAME',
+        provider: 'mock',
+        reference: 'mock-ref-001',
+      });
+      repo.addBankAccount.mockResolvedValue(makeRecord());
+
+      await service.addBankAccount({
+        userId: 'user-id-1',
+        accountNumber: '0123456789',
+        bankCode: '058',
+        accountName: 'Caller Supplied Name',
+        label: 'GTB Savings',
+      });
+
+      expect(nameEnquiry.resolve).toHaveBeenCalledWith({
+        bankCode: '058',
+        accountNumber: '0123456789',
+      });
+    });
+
+    it('persists the RESOLVED accountName (not the caller-supplied name)', async () => {
+      nameEnquiry.resolve.mockResolvedValue({
+        accountName: 'RESOLVED NAME FROM BANK',
+        provider: 'mock',
+        reference: 'mock-ref-002',
+      });
+      repo.addBankAccount.mockResolvedValue(makeRecord());
+
+      await service.addBankAccount({
+        userId: 'user-id-1',
+        accountNumber: '0123456789',
+        bankCode: '058',
+        accountName: 'Caller Supplied Name',
+        label: 'GTB Savings',
+      });
+
+      expect(repo.addBankAccount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountName: 'RESOLVED NAME FROM BANK',
+        }),
+      );
+    });
+
+    it('passes verifiedAt as a Date to the repo', async () => {
+      const before = new Date();
+      nameEnquiry.resolve.mockResolvedValue({
+        accountName: 'RESOLVED',
+        provider: 'mock',
+        reference: 'ref-003',
+      });
+      repo.addBankAccount.mockResolvedValue(makeRecord());
+
+      await service.addBankAccount({
+        userId: 'user-id-1',
+        accountNumber: '0123456789',
+        bankCode: '058',
+        accountName: 'Someone',
+        label: 'GTB',
+      });
+
+      const after = new Date();
+      const callArg = repo.addBankAccount.mock.calls[0][0];
+      expect(callArg.verifiedAt).toBeInstanceOf(Date);
+      expect(callArg.verifiedAt.getTime()).toBeGreaterThanOrEqual(
+        before.getTime(),
+      );
+      expect(callArg.verifiedAt.getTime()).toBeLessThanOrEqual(after.getTime());
+    });
+
+    it('returns the record from the repo', async () => {
       const record = makeRecord();
+      nameEnquiry.resolve.mockResolvedValue({
+        accountName: 'RESOLVED',
+        provider: 'mock',
+        reference: 'ref-004',
+      });
       repo.addBankAccount.mockResolvedValue(record);
 
       const result = await service.addBankAccount({
@@ -149,17 +240,33 @@ describe('BeneficiaryService', () => {
         label: 'GTB Savings',
       });
 
-      expect(repo.addBankAccount).toHaveBeenCalledWith({
-        userId: 'user-id-1',
-        accountNumber: '0123456789',
-        bankCode: '058',
-        accountName: 'John Doe',
-        label: 'GTB Savings',
-      });
       expect(result).toBe(record);
     });
 
+    it('throws NameEnquiryFailedError and does NOT call repo when enquiry fails', async () => {
+      nameEnquiry.resolve.mockRejectedValue(
+        new NameEnquiryFailedError('058', '9999999999'),
+      );
+
+      await expect(
+        service.addBankAccount({
+          userId: 'user-id-1',
+          accountNumber: '9999999999',
+          bankCode: '058',
+          accountName: 'Should Not Matter',
+          label: 'GTB Savings',
+        }),
+      ).rejects.toThrow(NameEnquiryFailedError);
+
+      expect(repo.addBankAccount).not.toHaveBeenCalled();
+    });
+
     it('does NOT call assetRegistry.validateAddress for bank accounts', async () => {
+      nameEnquiry.resolve.mockResolvedValue({
+        accountName: 'RESOLVED',
+        provider: 'mock',
+        reference: 'ref-005',
+      });
       repo.addBankAccount.mockResolvedValue(makeRecord());
 
       await service.addBankAccount({
@@ -177,6 +284,21 @@ describe('BeneficiaryService', () => {
   // ── addCryptoAddress ───────────────────────────────────────────────────────
 
   describe('addCryptoAddress', () => {
+    it('does NOT call name-enquiry for crypto-address beneficiaries', async () => {
+      assetRegistry.validateAddress.mockReturnValue(true);
+      repo.addCryptoAddress.mockResolvedValue(makeCryptoRecord());
+
+      await service.addCryptoAddress({
+        userId: 'user-id-1',
+        address: 'TQn9Y2khDD3VHKZ2GRdmKXD8bNkRuaBP2p',
+        network: 'TRON',
+        asset: 'USDT',
+        label: 'My wallet',
+      });
+
+      expect(nameEnquiry.resolve).not.toHaveBeenCalled();
+    });
+
     it('throws InvalidAddressError when AssetRegistry.validateAddress returns false', async () => {
       assetRegistry.validateAddress.mockReturnValue(false);
 

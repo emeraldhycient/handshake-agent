@@ -63,6 +63,7 @@ import { AssetRegistry } from '../src/core/catalog/asset-registry';
 // Ports/types
 import type { PrismaService } from '../src/core/prisma/prisma.service';
 import type { IWalletProvider } from '../src/modules/wallets/application/ports/wallet-provider.port';
+import type { INameEnquiry } from '../src/modules/beneficiaries/application/ports/name-enquiry.port';
 
 // Config
 import configuration from '../src/core/config/configuration';
@@ -117,6 +118,16 @@ const fakeWalletProvider: IWalletProvider = {
   withdraw: jest.fn().mockResolvedValue({
     providerReference: FAKE_SEND_PROVIDER_REF,
     status: 'pending' as const,
+  }),
+};
+
+// Deterministic mock name-enquiry (Fix E: BeneficiaryService requires the
+// port; crypto-address adds don't call it but the constructor still needs it).
+const fakeNameEnquiry: INameEnquiry = {
+  resolve: jest.fn().mockResolvedValue({
+    accountName: 'TEST USER (RESOLVED)',
+    provider: 'mock',
+    reference: 'mock-name-enquiry-send-e2e',
   }),
 };
 
@@ -263,6 +274,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
     directiveService = new DirectiveService(directiveRepo, config, clock);
     beneficiaryService = new BeneficiaryService(
       beneficiaryRepo,
+      fakeNameEnquiry,
       assetRegistry,
       config,
     );

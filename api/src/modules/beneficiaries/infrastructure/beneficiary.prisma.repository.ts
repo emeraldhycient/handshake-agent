@@ -93,9 +93,13 @@ export class BeneficiaryPrismaRepository implements IBeneficiaryRepository {
         type: 'bank_account' as never,
         label: input.label,
         accountNumber: input.accountNumber,
+        // accountName is now the bank-resolved name (Fix E: BeneficiaryService
+        // calls INameEnquiry before this method; trusting the resolved name here).
         accountHolderName: input.accountName,
         bankCode: input.bankCode,
-        verificationStatus: 'pending' as never,
+        // Persist as verified — the name-enquiry resolved successfully (Fix E).
+        verificationStatus: 'verified' as never,
+        verifiedAt: input.verifiedAt,
         isDefault,
       },
       select: SELECT,

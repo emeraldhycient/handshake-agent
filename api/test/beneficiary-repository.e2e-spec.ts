@@ -38,15 +38,19 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
 
   // ── Test 1: addBankAccount → read back via listForUser ───────────────────
 
-  it('addBankAccount persists a bank account and listForUser returns it', async () => {
+  it('addBankAccount persists a bank account with verifiedAt + verified status (Fix E)', async () => {
     const user = await seedUser();
+    const verifiedAt = new Date();
 
     const created = await repo.addBankAccount({
       userId: user.id,
       accountNumber: '0123456789',
       bankCode: '058',
-      accountName: 'John Doe',
+      // accountName is the bank-resolved name provided by BeneficiaryService
+      // after calling INameEnquiry (Fix E — service layer resolves before calling repo).
+      accountName: 'JOHN DOE (RESOLVED)',
       label: 'GTB Savings',
+      verifiedAt,
     });
 
     expect(created.id).toBeTruthy();
@@ -55,7 +59,10 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
     expect(created.label).toBe('GTB Savings');
     expect(created.accountNumber).toBe('0123456789');
     expect(created.bankCode).toBe('058');
-    expect(created.verificationStatus).toBe('pending');
+    expect(created.accountHolderName).toBe('JOHN DOE (RESOLVED)');
+    // Fix E: repository now writes 'verified' (name was resolved by INameEnquiry).
+    expect(created.verificationStatus).toBe('verified');
+    expect(created.verifiedAt).toBeInstanceOf(Date);
     expect(created.isDefault).toBe(true); // first bank account → default
     expect(created.deletedAt).toBeNull();
 
@@ -75,6 +82,7 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       bankCode: '033',
       accountName: 'Jane Doe',
       label: 'UBA',
+      verifiedAt: new Date(),
     });
 
     const second = await repo.addBankAccount({
@@ -83,6 +91,7 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       bankCode: '011',
       accountName: 'Jane Doe',
       label: 'First Bank',
+      verifiedAt: new Date(),
     });
 
     expect(second.isDefault).toBe(false);
@@ -127,6 +136,7 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       bankCode: '044',
       accountName: 'Test User',
       label: 'Access Bank',
+      verifiedAt: new Date(),
     });
 
     const cryptoBen = await repo.addCryptoAddress({
@@ -166,6 +176,7 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       bankCode: '058',
       accountName: 'User1',
       label: 'User1 GTB',
+      verifiedAt: new Date(),
     });
 
     // user2 must not be able to see user1's beneficiary.
@@ -184,6 +195,7 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       bankCode: '044',
       accountName: 'Main',
       label: 'Main Account',
+      verifiedAt: new Date(),
     });
 
     await repo.addBankAccount({
@@ -192,6 +204,7 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       bankCode: '033',
       accountName: 'Secondary',
       label: 'Secondary',
+      verifiedAt: new Date(),
     });
 
     const def = await repo.getDefault(user.id, 'bank_account');

@@ -64,6 +64,7 @@ import { AssetRegistry } from '../src/core/catalog/asset-registry';
 import type { PrismaService } from '../src/core/prisma/prisma.service';
 import type { IWalletProvider } from '../src/modules/wallets/application/ports/wallet-provider.port';
 import type { IPaymentProvider } from '../src/modules/treasury/application/ports/payment-provider.port';
+import type { INameEnquiry } from '../src/modules/beneficiaries/application/ports/name-enquiry.port';
 
 // Config defaults
 import configuration from '../src/core/config/configuration';
@@ -115,6 +116,16 @@ const fakeWalletProvider: IWalletProvider = {
   withdraw: jest.fn().mockResolvedValue({
     providerReference: 'e2e-tx-ref-stub',
     status: 'pending' as const,
+  }),
+};
+
+// Deterministic mock name-enquiry — always resolves (Fix E: BeneficiaryService
+// requires the port; e2e wires this so addBankAccount returns the resolved name).
+const fakeNameEnquiry: INameEnquiry = {
+  resolve: jest.fn().mockResolvedValue({
+    accountName: 'TEST USER (RESOLVED)',
+    provider: 'mock',
+    reference: 'mock-name-enquiry-e2e',
   }),
 };
 
@@ -211,6 +222,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
     directiveService = new DirectiveService(directiveRepo, config, clock);
     beneficiaryService = new BeneficiaryService(
       beneficiaryRepo,
+      fakeNameEnquiry,
       assetRegistry,
       config,
     );

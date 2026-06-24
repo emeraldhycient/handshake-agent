@@ -47,8 +47,17 @@ export interface AddBankAccountInput {
   userId: string;
   accountNumber: string;
   bankCode: string;
+  /** Resolved account-holder name (from the bank name-enquiry — not caller-supplied). */
   accountName: string;
   label: string;
+  /**
+   * Timestamp at which the name-enquiry resolved the account (Fix E).
+   * Infrastructure must persist this as `verifiedAt` and set
+   * `verificationStatus` to `verified`. Passing it from the application layer
+   * (rather than letting the repository set it) keeps the timestamp consistent
+   * with what was shown to the user at confirmation time.
+   */
+  verifiedAt: Date;
 }
 
 export interface AddCryptoAddressInput {

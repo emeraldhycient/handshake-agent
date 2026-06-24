@@ -90,6 +90,32 @@ export interface SellConfig {
 }
 
 /**
+ * Beneficiary module configuration (Fix E, CLAUDE.md §7).
+ * Controls the MockNameEnquiry adapter and crypto cooling-off period.
+ */
+export interface BeneficiaryConfig {
+  /**
+   * Default crypto cooling-off window in seconds (IDN-08).
+   * Admin-tunable via the DB-admin AppSetting layer.
+   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   */
+  cryptoCoolingOffSeconds: number;
+  /**
+   * Account number that MockNameEnquiry treats as "not found" (throws
+   * NameEnquiryFailedError). Used to exercise the negative path in tests and
+   * staging. The real provider will not read this field.
+   * Empty string (default) means no account is configured as bad.
+   */
+  nameEnquiryBadAccount: string;
+  /**
+   * Deterministic resolved name returned by MockNameEnquiry for all
+   * non-bad-account lookups. Defaults to "MOCK ACCOUNT HOLDER".
+   * A real provider resolves from the bank — this field is mock-only.
+   */
+  nameEnquiryResolvedName: string;
+}
+
+/**
  * Compliance / AML configuration (task N3a, CLAUDE.md §7).
  * All values are admin-tunable via the DB-admin AppSetting layer.
  */
@@ -203,6 +229,7 @@ export interface AppConfig {
   sell: SellConfig;
   compliance: ComplianceConfig;
   catalog: CatalogConfig;
+  beneficiary: BeneficiaryConfig;
 }
 
 export default (): AppConfig => ({
@@ -334,5 +361,17 @@ export default (): AppConfig => ({
       lockoutMinutes: 15,
       scryptKeyLen: 64,
     },
+  },
+  beneficiary: {
+    // 24-hour cooling-off for new crypto-address beneficiaries (IDN-08).
+    // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+    // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+    cryptoCoolingOffSeconds: 24 * 60 * 60,
+    // Empty by default — no account configured as "not found" for the mock.
+    // Populate in config/test env to exercise the NameEnquiryFailedError path.
+    nameEnquiryBadAccount: '',
+    // Default resolved name returned by MockNameEnquiry for all successful lookups.
+    // A real provider resolves the actual account-holder name from the bank.
+    nameEnquiryResolvedName: 'MOCK ACCOUNT HOLDER',
   },
 });

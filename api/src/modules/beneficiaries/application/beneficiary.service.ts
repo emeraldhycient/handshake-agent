@@ -1,15 +1,20 @@
 /**
- * BeneficiaryService — application-layer use-case service (S3).
+ * BeneficiaryService — application-layer use-case service (S3 + Fix E).
  *
  * Manages saved payout destinations: bank accounts (sell) and crypto addresses
  * (send, Task N2). Clean-architecture invariants:
  *
  *   - No Prisma import, no @prisma/client, no direct DB access.
- *   - Injects IBeneficiaryRepository and AssetRegistry via DI tokens / class ref.
- *   - Domain errors (InvalidAddressError, BeneficiaryNotFoundError) are pure.
- *   - Crypto adds carry first-use cooling-off (IDN-08) and address validation.
- *   - Step-up-on-add is a noted hardening follow-up (Flow E2E + cooling-off provide
- *     interim protection per S3 brief).
+ *   - Injects IBeneficiaryRepository, INameEnquiry, and AssetRegistry via DI
+ *     tokens / class ref.
+ *   - Domain errors (InvalidAddressError, BeneficiaryNotFoundError,
+ *     NameEnquiryFailedError) are pure.
+ *   - Bank-account adds call the name-enquiry port and persist the RESOLVED
+ *     name + verifiedAt. On enquiry failure no beneficiary is saved (Fix E).
+ *   - Crypto adds carry first-use cooling-off (IDN-08) and address validation;
+ *     name-enquiry is NOT called for crypto (unaffected, Fix E).
+ *   - Step-up-on-add is a noted hardening follow-up (Flow E2E + cooling-off
+ *     provide interim protection per S3 brief).
  *
  * CLAUDE.md §3.2: no @prisma/client here. dependency-cruiser enforces this.
  */
@@ -24,6 +29,10 @@ import {
   type IBeneficiaryRepository,
   type BeneficiaryRecord,
 } from './ports/beneficiary.repository.port';
+import {
+  BANK_NAME_ENQUIRY,
+  type INameEnquiry,
+} from './ports/name-enquiry.port';
 import {
   InvalidAddressError,
   BeneficiaryNotFoundError,
@@ -66,6 +75,8 @@ export class BeneficiaryService {
   constructor(
     @Inject(BENEFICIARY_REPOSITORY)
     private readonly repo: IBeneficiaryRepository,
+    @Inject(BANK_NAME_ENQUIRY)
+    private readonly nameEnquiry: INameEnquiry,
     private readonly assetRegistry: AssetRegistry,
     private readonly configService: ConfigService<Env, true>,
   ) {}
@@ -85,18 +96,37 @@ export class BeneficiaryService {
   // ── addBankAccount ─────────────────────────────────────────────────────────
 
   /**
-   * Persists a new bank-account beneficiary.
+   * Persists a new bank-account beneficiary after resolving the account-holder
+   * name via the name-enquiry port (Fix E).
+   *
+   * Flow:
+   *   1. Call INameEnquiry.resolve(bankCode, accountNumber) — may throw
+   *      NameEnquiryFailedError on an invalid/not-found account.
+   *   2. Persist the RESOLVED accountName (not the caller-supplied name) and
+   *      set verifiedAt to now.
+   *   3. The repository sets verificationStatus to 'verified'.
+   *
    * Sets `isDefault` automatically if the user has no existing bank accounts.
-   * Verification status starts at `pending` (resolved skeleton; a real bank
-   * name-enquiry adapter would drive it to `verified`).
+   * Crypto-address beneficiaries are unaffected — name-enquiry is not called.
+   *
+   * @throws {NameEnquiryFailedError} when the name-enquiry provider cannot
+   *         resolve the account. No beneficiary is persisted in that case.
    */
   async addBankAccount(input: AddBankAccountInput): Promise<BeneficiaryRecord> {
+    // Resolve the account-holder name from the bank (fails-closed on error).
+    const enquiryResult = await this.nameEnquiry.resolve({
+      bankCode: input.bankCode,
+      accountNumber: input.accountNumber,
+    });
+
     return this.repo.addBankAccount({
       userId: input.userId,
       accountNumber: input.accountNumber,
       bankCode: input.bankCode,
-      accountName: input.accountName,
+      // Use the bank-resolved name, not the caller-supplied name (Fix E).
+      accountName: enquiryResult.accountName,
       label: input.label,
+      verifiedAt: new Date(),
     });
   }
 

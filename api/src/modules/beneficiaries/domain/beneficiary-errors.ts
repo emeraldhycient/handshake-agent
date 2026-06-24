@@ -61,3 +61,22 @@ export class BeneficiaryCoolingOffError extends Error {
     );
   }
 }
+
+/**
+ * Thrown by BeneficiaryService.addBankAccount when the name-enquiry provider
+ * cannot resolve the account (account not found, bank unreachable, invalid
+ * number). No beneficiary is persisted — the caller must surface the error.
+ */
+export class NameEnquiryFailedError extends Error {
+  override readonly name = 'NameEnquiryFailedError';
+
+  constructor(
+    bankCode: string,
+    accountNumber: string,
+    reason: string = 'account not found',
+  ) {
+    super(
+      `Name enquiry failed for account ${accountNumber} at bank ${bankCode}: ${reason}.`,
+    );
+  }
+}
