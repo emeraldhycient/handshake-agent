@@ -205,10 +205,16 @@ enum DispatchStatus {
 
 /// Single-use web-handoff bearer token (CHN-04). CSPRNG ≥256-bit; only the hash is
 /// stored; short TTL; atomic consume-on-redeem; sibling tokens invalidated; never logged.
+/// userId is nullable: KYC tokens are minted for unlinked Contacts (no User yet).
+/// channelAddress binds the token to a specific channel address (e.g. WhatsApp phone).
 model HandoffToken {
   id                String             @id @default(uuid(7)) @db.Uuid
   tokenHash         String             @unique
-  userId            String             @db.Uuid
+  /// Null for unlinked Contacts (KYC purpose); set once the Contact upgrades to a User.
+  userId            String?            @db.Uuid
+  /// The channel address (e.g. WhatsApp phone E.164) bound to this token at mint time.
+  /// Used by consumeKycToken to return the channelAddress for KycService.completeVerification.
+  channelAddress    String?
   conversationId    String?            @db.Uuid
   purpose           HandoffPurpose
   status            HandoffTokenStatus @default(issued)
@@ -219,10 +225,11 @@ model HandoffToken {
   redeemedIp        String?
   redeemedUserAgent String?
 
-  user         User          @relation(fields: [userId], references: [id])
+  user         User?         @relation(fields: [userId], references: [id])
   conversation Conversation? @relation(fields: [conversationId], references: [id])
 
   @@index([userId, status])
+  @@index([channelAddress, status])
   @@index([expiresAt])
   @@map("handoff_tokens")
 }

@@ -17,19 +17,34 @@ module.exports = {
       },
     },
     {
-      name: 'api-agent-no-infra-or-prisma',
+      name: 'api-agent-never-prisma',
       comment:
-        'The agent module must never touch the database: no import of infrastructure or @prisma/client. It reaches data only through injected ports.',
+        'The agent module must NEVER touch the database (CLAUDE.md §3.2) — no @prisma/client / generated client anywhere under agent/, including its thin Nest adapter.',
       severity: 'error',
       from: { path: '^api/src/(modules/)?agent/' },
       to: {
         path: [
-          '^api/src/modules/[^/]+/infrastructure/',
           '^@prisma/client$',
           '/node_modules/@prisma/client/',
           '^api/generated/prisma',
         ],
       },
+    },
+    {
+      name: 'api-agent-pure-layers-no-infra',
+      comment:
+        'The agent core/application layers reach capabilities only through injected ports — no import of any infrastructure (including the agent’s own). The thin Nest composition root (agent.module.ts) binds the adapter; the pure layers never see it.',
+      severity: 'error',
+      from: { path: '^api/src/modules/agent/(core|application)/' },
+      to: { path: '^api/src/modules/[^/]+/infrastructure/' },
+    },
+    {
+      name: 'api-agent-core-no-nest',
+      comment:
+        'The agent core is framework-agnostic (CLAUDE.md §3.2/§6): it must import zero Nest symbols. Nest wiring belongs in the adapter layer (Task 3.3).',
+      severity: 'error',
+      from: { path: '^api/src/modules/agent/core/' },
+      to: { path: '^@nestjs/' },
     },
     {
       name: 'api-domain-is-pure',

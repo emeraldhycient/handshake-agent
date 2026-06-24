@@ -6,7 +6,10 @@ export const RATE_PROVIDER = Symbol('RATE_PROVIDER');
 export interface RateQuote {
   /** Base market rate: fiat per 1 unit of the asset. */
   baseRate: number;
-  spreadBps: number;
+  /** Platform spread applied to BUY quotes (marks up the rate; user gets less crypto). */
+  buySpreadBps: number;
+  /** Platform spread applied to SELL quotes (marks down the rate; user gets less fiat). */
+  sellSpreadBps: number;
   processingFeeBps: number;
   expiresInSec: number;
   /** Decimal places the asset is quoted to. */

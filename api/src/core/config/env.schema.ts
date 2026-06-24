@@ -11,8 +11,85 @@ export const envSchema = z.object({
     .default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().url(),
-  ANTHROPIC_API_KEY: z.string().min(1).optional(),
+
+  // LLM (LangGraph agent). Optional: tests fake the LlmProvider; a live key is
+  // only needed to exercise the real agent. Empty in .env means "not provided" —
+  // coerce '' → undefined so a blank placeholder passes boot, while a present
+  // value must be non-empty. Without this, `ANTHROPIC_API_KEY=` fails `.min(1)`.
+  ANTHROPIC_API_KEY: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(1).optional(),
+  ),
   AGENT_MODEL: z.string().min(1).default('claude-opus-4-8'),
+
+  // --- WhatsApp (Meta Cloud API + Flows, ADR-0003) ---
+  // Required to send/receive at all.
+  WHATSAPP_PHONE_NUMBER_ID: z.string().min(1),
+  WHATSAPP_ACCESS_TOKEN: z.string().min(1),
+  WHATSAPP_GRAPH_VERSION: z.string().min(1).default('v25.0'),
+  // Base URL kept in env for testability (mirrors BLOCKRADAR_BASE_URL / FLUTTERWAVE_BASE_URL).
+  WHATSAPP_GRAPH_BASE_URL: z
+    .string()
+    .url()
+    .default('https://graph.facebook.com'),
+  // Non-secret ids / convenience — optional.
+  WHATSAPP_WABA_ID: z.string().optional().default(''),
+  WHATSAPP_APP_ID: z.string().optional().default(''),
+  WHATSAPP_TEST_RECIPIENT: z.string().optional().default(''),
+  // Meta Flow ID — set by operator after publishing the confirmation+PIN Flow
+  // in the WhatsApp Business dashboard. Empty string = Flow not yet published;
+  // ConversationService falls back to plain-text confirmation in that case.
+  WHATSAPP_FLOW_ID: z.string().optional().default(''),
+  // Meta Flow ID for the beneficiary add/select flow (S3). Empty = flow not
+  // yet published; controller falls back to directing user to the web/app.
+  WHATSAPP_BENEFICIARY_FLOW_ID: z.string().optional().default(''),
+  // Operator-supplied-later secrets (empty is valid at boot; enforced where used):
+  //  - APP_SECRET: HMAC key for X-Hub-Signature-256 webhook verification.
+  //  - VERIFY_TOKEN: GET webhook handshake token.
+  //  - FLOW_PRIVATE_KEY: PEM RSA key to decrypt Flow payloads (KYC/confirm/PIN).
+  WHATSAPP_APP_SECRET: z.string().optional().default(''),
+  WHATSAPP_VERIFY_TOKEN: z.string().optional().default(''),
+  WHATSAPP_FLOW_PRIVATE_KEY: z.string().optional().default(''),
+
+  // --- Blockradar (WaaS; USDT-on-TRON). Auth is x-api-key; key is wallet-scoped. ---
+  BLOCKRADAR_API_KEY: z.string().min(1),
+  BLOCKRADAR_MASTER_WALLET_ID: z.string().min(1),
+  BLOCKRADAR_BASE_URL: z.string().url().default('https://api.blockradar.co/v1'),
+
+  // --- Flutterwave (NGN collection for buy) ---
+  FLUTTERWAVE_SECRET_KEY: z.string().min(1),
+  FLUTTERWAVE_BASE_URL: z
+    .string()
+    .url()
+    .default('https://api.flutterwave.com/v3'),
+  // Dashboard "secret hash" — verifies collection/transfer webhooks (verif-hash equality, v3).
+  FLUTTERWAVE_WEBHOOK_SECRET: z.string().optional().default(''),
+
+  // --- Engine ---
+  // HMAC-SHA256 key for DirectiveGrant signing (ADR-0005/0006). Required before the
+  // engine can execute; empty is tolerated until the engine phase is wired.
+  DIRECTIVE_SIGNING_KEY: z.string().optional().default(''),
+  // HMAC-SHA256 key for Receipt signing. Separate from DIRECTIVE_SIGNING_KEY so
+  // each key can be rotated independently. Empty is tolerated at boot but the
+  // settlement kernel throws ReceiptNotSignableError before inserting a receipt
+  // (fail-closed — no unsigned receipt is ever written).
+  RECEIPT_SIGNING_KEY: z.string().optional().default(''),
+
+  // --- KYC (task K1) ---
+  // When 'true', the MockKycProvider is active (the only adapter at launch).
+  // Flip to 'false' once a real NIN/BVN provider is wired in IdentityModule.
+  KYC_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+
+  // --- Web App (K3 KYC web handoff) ---
+  // Base URL for the web application. Used to build the KYC CTA URL:
+  //   `${WEB_APP_BASE_URL}/kyc?t=<token>`
+  // Optional: when unset, ConversationService falls back to a plain-text message.
+  // Coerce '' → undefined so an empty placeholder passes boot-time validation
+  // (same pattern as ANTHROPIC_API_KEY above).
+  WEB_APP_BASE_URL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().url().optional(),
+  ),
 });
 
 export type Env = z.infer<typeof envSchema>;

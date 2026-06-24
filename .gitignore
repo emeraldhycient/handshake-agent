@@ -36,3 +36,9 @@ pnpm-debug.log*
 *.tsbuildinfo
 .eslintcache
 .prettiercache
+
+# superpowers SDD scratch (ledger)
+.superpowers/
+
+# local Claude session config
+.claude/

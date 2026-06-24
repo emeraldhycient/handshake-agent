@@ -18,6 +18,11 @@ export const QuoteBuyOutputSchema = z.object({
   // The crypto the user receives and the all-in pricing, itemized for the
   // explicit-confirmation step (PRD §3.2 / §4.3).
   cryptoAmount: z.string(),
+  /** Raw market rate (pre-spread) from the rate provider. Distinct from fxRate
+   *  which is the effective (spread-inclusive) rate used for conversion. Stored
+   *  in the Quote row for treasury / rate-audit purposes. */
+  baseRate: z.string(),
+  /** Effective (spread-inclusive) FX rate used to convert fiat → crypto. */
   fxRate: z.string(),
   spreadBps: z.number().int().nonnegative(),
   processingFeeBps: z.number().int().nonnegative(),

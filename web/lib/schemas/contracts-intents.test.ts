@@ -2,15 +2,22 @@ import { describe, expect, it } from "vitest"
 import { IntentSchema } from "@handshake-agent/contracts"
 
 describe("IntentSchema union", () => {
-  it("accepts send_crypto", () => {
+  it("accepts send_crypto without a destination address", () => {
+    // SECURITY (CLAUDE.md §3.1): send_crypto carries only asset + amount.
+    // The destination is resolved server-side from the saved beneficiary, so
+    // the NLU intent has no `address` field — an extra one is stripped, never
+    // trusted as a financial parameter.
     const r = IntentSchema.safeParse({
       action: "send_crypto",
       asset: "USDT",
-      amount: "25",
+      cryptoAmount: "25",
       network: "TRON",
       address: "TQn9Y2khEb7g5mZ8FjpRt1cWnH4d3pVgk7r",
     })
     expect(r.success).toBe(true)
+    if (r.success) {
+      expect(r.data).not.toHaveProperty("address")
+    }
   })
   it("accepts receive_crypto", () => {
     expect(

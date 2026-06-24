@@ -34,7 +34,8 @@ export class ConfigRateProvider implements IRateProvider {
 
     return Promise.resolve({
       baseRate: assetPricing.baseRate,
-      spreadBps: pricing.spreadBps,
+      buySpreadBps: assetPricing.buySpreadBps,
+      sellSpreadBps: assetPricing.sellSpreadBps,
       processingFeeBps: pricing.processingFeeBps,
       expiresInSec: pricing.expiresInSec,
       cryptoDecimals: assetPricing.cryptoDecimals,

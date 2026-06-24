@@ -6,7 +6,10 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['eslint.config.mjs'],
+    // scripts/ is excluded from tsconfig.json (smoke tools, not app code) and
+    // therefore cannot be type-checked by projectService. Ignore it here so
+    // lint-staged does not error on files the TS project service cannot find.
+    ignores: ['eslint.config.mjs', 'scripts/**'],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
