@@ -12,6 +12,7 @@ import { ComplianceModule } from '../compliance/compliance.module';
 import { ProposalService } from './application/proposal.service';
 import { DirectiveService } from './application/directive.service';
 import { ExecutionService } from './application/execution.service';
+import { SettlementReconciliationService } from './application/settlement-reconciliation.service';
 import { PROPOSAL_REPOSITORY } from './application/ports/proposal.repository.port';
 import { QUOTE_REPOSITORY } from './application/ports/quote.repository.port';
 import { DIRECTIVE_REPOSITORY } from './application/ports/directive.repository.port';
@@ -58,6 +59,7 @@ import { LedgerPrismaRepository } from './infrastructure/ledger.prisma.repositor
     ProposalService,
     DirectiveService,
     ExecutionService,
+    SettlementReconciliationService,
     { provide: QUOTE_REPOSITORY, useClass: QuotePrismaRepository },
     { provide: PROPOSAL_REPOSITORY, useClass: ProposalPrismaRepository },
     { provide: DIRECTIVE_REPOSITORY, useClass: DirectivePrismaRepository },

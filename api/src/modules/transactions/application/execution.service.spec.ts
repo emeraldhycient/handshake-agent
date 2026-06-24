@@ -210,8 +210,13 @@ function makeOutboxRepo(): jest.Mocked<ISettlementOutboxRepository> {
       idempotencyKey: IDEMPOTENCY_KEY,
       status: 'pending',
       processorRef: 'flw_ref_001',
+      attempt: 1,
+      lastAttemptAt: null,
       createdAt: FIXED_NOW,
     }),
+    findPending: jest.fn().mockResolvedValue([]),
+    markAttempt: jest.fn().mockResolvedValue(undefined),
+    complete: jest.fn().mockResolvedValue(undefined),
   };
 }
 

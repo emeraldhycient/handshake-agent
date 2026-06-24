@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_PIPE } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { LoggerModule } from 'nestjs-pino';
 import { ZodValidationPipe } from 'nestjs-zod';
 
@@ -29,6 +30,9 @@ import { ComplianceModule } from './modules/compliance/compliance.module';
     // ThrottlerModule registered globally so ThrottlerGuard resolves in any module
     // (e.g. KycController in IdentityModule). v6-style: named throttlers, ttl in ms.
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 60 }]),
+    // ScheduleModule enables @Cron / @Interval decorators in provider classes.
+    // Registered globally so any module's service can use @Cron without re-importing.
+    ScheduleModule.forRoot(),
     LoggerModule.forRoot({
       pinoHttp: {
         transport:

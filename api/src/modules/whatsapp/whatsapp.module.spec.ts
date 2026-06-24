@@ -23,6 +23,7 @@ import { PrismaModule } from '../../core/prisma/prisma.module';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { CatalogModule } from '../../core/catalog/catalog.module';
 import { ProposalService } from '../transactions/application/proposal.service';
+import { SettlementReconciliationService } from '../transactions/application/settlement-reconciliation.service';
 import {
   INBOUND_HANDLER,
   type IInboundHandler,
@@ -103,6 +104,11 @@ describe('WhatsAppModule (compile)', () => {
       // QuotesModule DI sub-tree. A noop stub avoids the resolution failure.
       .overrideProvider(ProposalService)
       .useValue({ createBuyProposal: jest.fn() })
+      // Override SettlementReconciliationService: it depends on ExecutionService
+      // (and transitively on its full port graph) and holds a @Cron scheduler.
+      // A noop stub avoids wiring the full execution engine in this compile test.
+      .overrideProvider(SettlementReconciliationService)
+      .useValue({ tick: jest.fn() })
       .compile();
   });
 

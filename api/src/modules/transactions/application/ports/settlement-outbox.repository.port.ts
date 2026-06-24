@@ -34,7 +34,16 @@ export interface SettlementOutboxRecord {
   idempotencyKey: string | null;
   status: string;
   processorRef: string | null;
+  attempt: number;
+  lastAttemptAt: Date | null;
   createdAt: Date;
+}
+
+export interface FindPendingOptions {
+  /** Only return rows whose createdAt is older than this many seconds (grace window). */
+  olderThanSec: number;
+  /** Maximum number of rows to return. */
+  limit: number;
 }
 
 export interface ISettlementOutboxRepository {
@@ -42,4 +51,21 @@ export interface ISettlementOutboxRepository {
    * Persists a new SettlementOutbox row and returns the created record.
    */
   create(data: CreateSettlementOutboxData): Promise<SettlementOutboxRecord>;
+
+  /**
+   * Returns pending outbox rows older than the grace window, up to limit.
+   * Used by SettlementReconciliationService to find missed-webhook rows.
+   */
+  findPending(options: FindPendingOptions): Promise<SettlementOutboxRecord[]>;
+
+  /**
+   * Increments the attempt counter and sets lastAttemptAt to now.
+   * Called before re-driving settlement to avoid hot-looping.
+   */
+  markAttempt(id: string): Promise<void>;
+
+  /**
+   * Marks the outbox row as completed (terminal state — row is drained).
+   */
+  complete(id: string): Promise<void>;
 }

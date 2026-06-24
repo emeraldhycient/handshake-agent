@@ -220,6 +220,33 @@ export interface CatalogConfig {
   sendQuoteExpiresInSec: number;
 }
 
+/**
+ * Settlement reconciliation configuration (Fix F, CLAUDE.md §7).
+ *
+ * Controls the SettlementReconciliationService cron that re-drives settlement
+ * for outbox rows whose webhook was missed.
+ */
+export interface ReconciliationConfig {
+  /**
+   * Cron expression controlling how often the reconciler tick runs.
+   * Default: every 2 minutes. Admin-tunable via the DB-admin AppSetting layer.
+   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   */
+  cronExpression: string;
+  /**
+   * Grace window in seconds: only pick up rows older than this to avoid
+   * racing with a webhook that is still in-flight.
+   * Default: 120 seconds (2 minutes).
+   */
+  gracePeriodSec: number;
+  /**
+   * Maximum number of outbox rows to process per tick.
+   * Bounds each run to prevent overloading the settlement engine.
+   * Default: 20.
+   */
+  batchSize: number;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
@@ -230,6 +257,7 @@ export interface AppConfig {
   compliance: ComplianceConfig;
   catalog: CatalogConfig;
   beneficiary: BeneficiaryConfig;
+  reconciliation: ReconciliationConfig;
 }
 
 export default (): AppConfig => ({
@@ -373,5 +401,14 @@ export default (): AppConfig => ({
     // Default resolved name returned by MockNameEnquiry for all successful lookups.
     // A real provider resolves the actual account-holder name from the bank.
     nameEnquiryResolvedName: 'MOCK ACCOUNT HOLDER',
+  },
+  reconciliation: {
+    // Run every 2 minutes. Admin-tunable via the DB-admin AppSetting layer.
+    // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+    cronExpression: '*/2 * * * *',
+    // Only pick up rows older than 2 minutes so we don't race in-flight webhooks.
+    gracePeriodSec: 120,
+    // Process at most 20 rows per tick to bound settlement-engine load.
+    batchSize: 20,
   },
 });
