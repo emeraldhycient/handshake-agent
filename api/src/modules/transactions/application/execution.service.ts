@@ -334,9 +334,10 @@ export class ExecutionService {
     }
 
     // ── Step 3: KYC gate (server-side, always) ──────────────────────────────
+    // Fix-C: pass the exact decimal string — no Number() conversion at the gate.
     await this.kycGate.assertCanTransact({
       userId,
-      fiatAmount: Number(storedQuote.fiatAmount),
+      fiatAmount: storedQuote.fiatAmount,
       asset: storedQuote.asset,
     });
 
@@ -670,10 +671,11 @@ export class ExecutionService {
     }
 
     // ── Step 3: KYC gate (server-side, always) ──────────────────────────────
-    // Use netFiatAmount from stored quote as the fiat amount for the gate.
+    // Fix-C: pass the exact decimal string — no Number() conversion at the gate.
+    // storedQuote.fiatAmount for a sell quote holds the netFiatAmount (NGN out).
     await this.kycGate.assertCanTransact({
       userId,
-      fiatAmount: Number(storedQuote.fiatAmount),
+      fiatAmount: storedQuote.fiatAmount,
       asset: storedQuote.asset,
     });
 
@@ -1081,13 +1083,34 @@ export class ExecutionService {
         `pricing config missing or invalid baseRate for asset '${asset}' — cannot compute NGN-equivalent for KYC gate`,
       );
     }
-    const ngnEquivalent = Number(cryptoAmount) * baseRate;
+    // Fix-C: compute NGN equivalent using BigInt to avoid float drift.
+    // baseRate is an integer NGN-per-USDT config value (e.g. 1600).
+    // toScaled(cryptoAmount) returns 10^18-scaled USDT; multiplying by an integer
+    // baseRate gives a 10^18-scaled NGN value — same unit as toScaled() outputs.
+    const LEDGER_SCALE = 10n ** 18n;
+    const scaledCryptoForGate = toScaled(cryptoAmount);
+    const scaledNgn18ForGate =
+      scaledCryptoForGate * BigInt(Math.round(baseRate));
+    // Reconstruct decimal string from 10^18-scaled bigint (mirrors fromScaled in ledger.ts).
+    const isNegNgn = scaledNgn18ForGate < 0n;
+    const absNgn = isNegNgn ? -scaledNgn18ForGate : scaledNgn18ForGate;
+    const wholeNgn = absNgn / LEDGER_SCALE;
+    const fracNgn = absNgn % LEDGER_SCALE;
+    const fracNgnStr =
+      fracNgn === 0n
+        ? ''
+        : '.' + fracNgn.toString().padStart(18, '0').replace(/0+$/, '');
+    const ngnEquivalentStr =
+      (isNegNgn ? '-' : '') + wholeNgn.toString() + fracNgnStr;
 
     await this.kycGate.assertCanTransact({
       userId,
-      fiatAmount: ngnEquivalent,
+      fiatAmount: ngnEquivalentStr,
       asset,
     });
+
+    // Numeric form retained only for metadata storage (approximate use — Fix-C scope).
+    const ngnEquivalent = Number(cryptoAmount) * baseRate;
 
     // ── Step 3: Re-check balance via ledger ≥ totalDebit (TOCTOU guard) ─────
     // Use the walletId stored in the proposal parameters (set at proposal time).

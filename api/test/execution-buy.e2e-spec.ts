@@ -498,9 +498,10 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
           config,
           clock,
         );
+        // Fix-C: fiatAmount must be a string (exact NGN decimal) — no Number() at the gate.
         await gate.assertCanTransact({
           userId: capUser.id,
-          fiatAmount: 10_000,
+          fiatAmount: '10000',
           asset: 'USDT',
         });
       })(),

@@ -83,7 +83,7 @@ function makeIdentityRepo(user: UserRecord | null): IIdentityRepository {
 }
 
 function makeVelocityRepo(
-  fiatTotal: number,
+  fiatTotal: string,
   txCount: number,
 ): IVelocityRepository {
   return {
@@ -93,7 +93,7 @@ function makeVelocityRepo(
 
 function makeService(
   user: UserRecord | null,
-  fiatTotal = 0,
+  fiatTotal = '0',
   txCount = 0,
 ): KycGateService {
   return new KycGateService(
@@ -104,7 +104,8 @@ function makeService(
   );
 }
 
-const BASE_INPUT = { userId: 'user-id-1', fiatAmount: 10_000, asset: 'USDT' };
+// Fix-C: fiatAmount is now a string (exact NGN decimal) — no Number() at the gate.
+const BASE_INPUT = { userId: 'user-id-1', fiatAmount: '10000', asset: 'USDT' };
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -112,7 +113,7 @@ const BASE_INPUT = { userId: 'user-id-1', fiatAmount: 10_000, asset: 'USDT' };
 
 describe('KycGateService.assertCanTransact', () => {
   it('resolves (no throw) for a verified tier_1 user with a small amount and low daily usage', async () => {
-    const svc = makeService(makeUser(), 0, 0);
+    const svc = makeService(makeUser(), '0', 0);
     await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
   });
 
@@ -177,8 +178,8 @@ describe('KycGateService.assertCanTransact', () => {
   // ── Per-tx limit ──────────────────────────────────────────────────────────
 
   it('throws TierLimitExceededError when fiatAmount exceeds perTxFiatMax', async () => {
-    const svc = makeService(makeUser(), 0, 0);
-    const input = { ...BASE_INPUT, fiatAmount: 50_001 }; // over tier_1 limit of 50_000
+    const svc = makeService(makeUser(), '0', 0);
+    const input = { ...BASE_INPUT, fiatAmount: '50001' }; // over tier_1 limit of 50_000
     await expect(svc.assertCanTransact(input)).rejects.toThrow(
       TierLimitExceededError,
     );
@@ -191,8 +192,8 @@ describe('KycGateService.assertCanTransact', () => {
   });
 
   it('does NOT throw TierLimitExceededError when fiatAmount equals perTxFiatMax exactly', async () => {
-    const svc = makeService(makeUser(), 0, 0);
-    const input = { ...BASE_INPUT, fiatAmount: 50_000 }; // exactly at limit
+    const svc = makeService(makeUser(), '0', 0);
+    const input = { ...BASE_INPUT, fiatAmount: '50000' }; // exactly at limit
     await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
   });
 
@@ -200,8 +201,8 @@ describe('KycGateService.assertCanTransact', () => {
 
   it('throws VelocityExceededError (fiat) when daily spend + fiatAmount would exceed dailyFiatMax', async () => {
     // 195_000 used + 10_000 requested = 205_000 > 200_000
-    const svc = makeService(makeUser(), 195_000, 2);
-    const input = { ...BASE_INPUT, fiatAmount: 10_000 };
+    const svc = makeService(makeUser(), '195000', 2);
+    const input = { ...BASE_INPUT, fiatAmount: '10000' };
     await expect(svc.assertCanTransact(input)).rejects.toThrow(
       VelocityExceededError,
     );
@@ -214,8 +215,8 @@ describe('KycGateService.assertCanTransact', () => {
 
   it('does NOT throw VelocityExceededError when daily fiat would hit exactly dailyFiatMax', async () => {
     // 190_000 used + 10_000 requested = 200_000 exactly at limit
-    const svc = makeService(makeUser(), 190_000, 0);
-    const input = { ...BASE_INPUT, fiatAmount: 10_000 };
+    const svc = makeService(makeUser(), '190000', 0);
+    const input = { ...BASE_INPUT, fiatAmount: '10000' };
     await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
   });
 
@@ -223,7 +224,7 @@ describe('KycGateService.assertCanTransact', () => {
 
   it('throws VelocityExceededError (count) when tx count + 1 would exceed dailyTxCountMax', async () => {
     // 10 used + 1 = 11 > 10 (tier_1 limit)
-    const svc = makeService(makeUser(), 0, 10);
+    const svc = makeService(makeUser(), '0', 10);
     await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toThrow(
       VelocityExceededError,
     );
@@ -236,7 +237,7 @@ describe('KycGateService.assertCanTransact', () => {
 
   it('does NOT throw VelocityExceededError when txCount is 1 below the cap', async () => {
     // 9 used + 1 = 10 exactly at limit
-    const svc = makeService(makeUser(), 0, 9);
+    const svc = makeService(makeUser(), '0', 9);
     await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
   });
 
@@ -274,5 +275,57 @@ describe('KycGateService.assertCanTransact', () => {
     await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toThrow(
       /not found/i,
     );
+  });
+
+  // ── Fix-C: BigInt-exact precision tests ──────────────────────────────────
+
+  it('compares amounts exactly at the boundary — 50000.00 passes, 50000.01 fails (tier_1 perTxFiatMax=50000)', async () => {
+    const svcPass = makeService(makeUser(), '0', 0);
+    await expect(
+      svcPass.assertCanTransact({ ...BASE_INPUT, fiatAmount: '50000.00' }),
+    ).resolves.toBeUndefined();
+
+    const svcFail = makeService(makeUser(), '0', 0);
+    await expect(
+      svcFail.assertCanTransact({ ...BASE_INPUT, fiatAmount: '50000.01' }),
+    ).rejects.toThrow(TierLimitExceededError);
+  });
+
+  it('daily accumulation: 199999.99 used + 0.01 requested = exactly 200000 passes (tier_1 dailyFiatMax=200000)', async () => {
+    const svc = makeService(makeUser(), '199999.99', 0);
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, fiatAmount: '0.01' }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('daily accumulation: 199999.99 used + 0.02 requested = 200000.01 fails (exceeds tier_1 dailyFiatMax=200000)', async () => {
+    const svc = makeService(makeUser(), '199999.99', 0);
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, fiatAmount: '0.02' }),
+    ).rejects.toThrow(VelocityExceededError);
+  });
+
+  it('handles amounts with more than 15 significant digits without float precision loss', async () => {
+    // Tier_3 limit: perTxFiatMax=5_000_000, dailyFiatMax=20_000_000
+    // This value would lose precision as a JavaScript float (>2^53 minor units for 18dp).
+    // We pass a value that is exactly at tier_3 perTxFiatMax as a string.
+    const tier3User = makeUser({ kycTier: 'tier_3' });
+    const svc = makeService(tier3User, '0', 0);
+    // 5000000 is exactly at the limit — should pass
+    await expect(
+      svc.assertCanTransact({
+        ...BASE_INPUT,
+        fiatAmount: '5000000',
+        userId: 'user-id-1',
+      }),
+    ).resolves.toBeUndefined();
+    // 5000000.01 exceeds the limit — should fail
+    await expect(
+      svc.assertCanTransact({
+        ...BASE_INPUT,
+        fiatAmount: '5000000.01',
+        userId: 'user-id-1',
+      }),
+    ).rejects.toThrow(TierLimitExceededError);
   });
 });

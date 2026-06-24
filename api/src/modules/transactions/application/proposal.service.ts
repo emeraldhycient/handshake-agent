@@ -215,9 +215,10 @@ export class ProposalService {
     });
 
     // 4. KYC / velocity gate (§3.3) — BEFORE persisting the Proposal.
+    // fiatAmount is the intent's exact NGN string — no Number() conversion (Fix-C).
     await this.kycGate.assertCanTransact({
       userId,
-      fiatAmount: Number(intent.fiatAmount),
+      fiatAmount: intent.fiatAmount,
       asset: intent.asset,
     });
 
@@ -315,9 +316,10 @@ export class ProposalService {
     }
 
     // 4. KYC / velocity gate on the NGN out amount (§3.3) — BEFORE persisting.
+    // quote.netFiatAmount is already an exact decimal string — no Number() (Fix-C).
     await this.kycGate.assertCanTransact({
       userId,
-      fiatAmount: Number(quote.netFiatAmount),
+      fiatAmount: quote.netFiatAmount,
       asset: intent.asset,
     });
 
@@ -457,7 +459,12 @@ export class ProposalService {
     }
 
     // 4. KYC/velocity gate on the NGN-equivalent value of the send (§3.3).
-    // Convert cryptoAmount to NGN using the baseRate from the pricing config section.
+    // Fix-C: compute NGN equivalent using BigInt to avoid float drift.
+    // baseRate is a whole-number NGN-per-USDT rate from config (e.g. 1600).
+    // cryptoAmount × baseRate is computed as:
+    //   scaledNgn = toScaled(cryptoAmount) × BigInt(baseRate) / SCALE
+    // where SCALE = 10^18. This gives the NGN value scaled to 10^18 units,
+    // then we convert back to a decimal string for the gate.
     const pricingConfig = this.configService.get<PricingConfig>('pricing');
     const baseRate = pricingConfig?.assets?.[intent.asset]?.baseRate;
     if (baseRate === undefined) {
@@ -465,13 +472,39 @@ export class ProposalService {
         `ProposalService: missing pricing.assets.${intent.asset}.baseRate in config — cannot compute NGN value for KYC gate.`,
       );
     }
-    const ngnValue = Number(intent.cryptoAmount) * baseRate;
+    // Compute NGN equivalent: cryptoAmount × baseRate, BigInt-exact (Fix-C).
+    // baseRate is an integer NGN-per-USDT rate from config (e.g. 1600).
+    // toScaled(cryptoAmount) returns the 10^18-scaled representation of cryptoAmount.
+    // Multiplying by baseRate (an integer) gives the result in units of
+    //   10^18 × NGN/USDT × USDT = 10^18 × NGN
+    // i.e. the NGN amount already scaled to 10^18, exactly as toScaled() outputs
+    // for a regular NGN amount — so we can feed it directly to the gate via
+    // fromScaled-equivalent string conversion.
+    const LEDGER_SCALE = 10n ** 18n;
+    const scaledCrypto = toScaled(intent.cryptoAmount);
+    // scaledNgn18 is the 10^18-scaled NGN value (same unit as toScaled returns).
+    const scaledNgn18 = scaledCrypto * BigInt(Math.round(baseRate));
+    // Reconstruct decimal string from 10^18-scaled bigint (mirrors fromScaled in ledger.ts).
+    const isNegNgn = scaledNgn18 < 0n;
+    const absNgn = isNegNgn ? -scaledNgn18 : scaledNgn18;
+    const wholeNgn = absNgn / LEDGER_SCALE;
+    const fracNgn = absNgn % LEDGER_SCALE;
+    const fracNgnStr =
+      fracNgn === 0n
+        ? ''
+        : '.' + fracNgn.toString().padStart(18, '0').replace(/0+$/, '');
+    const ngnEquivalentStr =
+      (isNegNgn ? '-' : '') + wholeNgn.toString() + fracNgnStr;
 
     await this.kycGate.assertCanTransact({
       userId,
-      fiatAmount: ngnValue,
+      fiatAmount: ngnEquivalentStr,
       asset: intent.asset,
     });
+
+    // Keep a numeric form only for the Travel Rule threshold comparison and metadata
+    // storage (those are approximate uses, not money-gate comparisons — Fix-C scope).
+    const ngnValue = Number(intent.cryptoAmount) * baseRate;
 
     // 5. Beneficiary lookup — must exist, belong to user, and be a crypto_address.
     const beneficiary = await this.beneficiaryService.getById(

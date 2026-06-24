@@ -86,9 +86,10 @@ function makeKycGate(
   throws?: Error,
 ): jest.Mocked<Pick<KycGateService, 'assertCanTransact'>> {
   const svc = {
+    // Fix-C: fiatAmount is now a string (exact NGN decimal).
     assertCanTransact: jest.fn<
       Promise<void>,
-      [{ userId: string; fiatAmount: number; asset: string }]
+      [{ userId: string; fiatAmount: string; asset: string }]
     >(),
   };
   if (throws) {
@@ -496,6 +497,32 @@ describe('ProposalService.createBuyProposal', () => {
     const input = { userId: 'user-id-1', intent: BASE_INPUT.intent };
     await expect(svc.createBuyProposal(input)).resolves.toBeDefined();
   });
+
+  // ── Fix-C: KYC gate called with exact string fiatAmount ──────────────────
+
+  it('calls KYC gate with fiatAmount as exact string (no Number() conversion)', async () => {
+    const kycGate = makeKycGate();
+    const svc = makeBuySvc(
+      makeQuotesService() as unknown as QuotesService,
+      kycGate as unknown as KycGateService,
+    );
+
+    await svc.createBuyProposal(BASE_INPUT);
+
+    // The gate must be called with the original intent.fiatAmount string.
+    const calls = (
+      kycGate.assertCanTransact as jest.MockedFunction<
+        (input: {
+          userId: string;
+          fiatAmount: string;
+          asset: string;
+        }) => Promise<void>
+      >
+    ).mock.calls;
+    const callArg = calls[0][0];
+    expect(typeof callArg.fiatAmount).toBe('string');
+    expect(callArg.fiatAmount).toBe('10000');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -710,6 +737,29 @@ describe('ProposalService.createSellProposal', () => {
     expect(gateIdx).toBeLessThan(quoteIdx);
     expect(benIdx).toBeLessThan(propIdx);
     expect(quoteIdx).toBeLessThan(propIdx);
+  });
+
+  // ── Fix-C: KYC gate called with exact string fiatAmount ──────────────────
+
+  it('calls KYC gate with fiatAmount as the exact netFiatAmount string for sell', async () => {
+    const kycGate = makeKycGate();
+    const svc = makeSellSvc({ kycGate });
+
+    await svc.createSellProposal(BASE_SELL_INPUT);
+
+    const sellCalls = (
+      kycGate.assertCanTransact as jest.MockedFunction<
+        (input: {
+          userId: string;
+          fiatAmount: string;
+          asset: string;
+        }) => Promise<void>
+      >
+    ).mock.calls;
+    const sellCallArg = sellCalls[0][0];
+    expect(typeof sellCallArg.fiatAmount).toBe('string');
+    // STUB_SELL_QUOTE.netFiatAmount = '7500'
+    expect(sellCallArg.fiatAmount).toBe('7500');
   });
 });
 
@@ -1189,5 +1239,28 @@ describe('ProposalService.createSendProposal', () => {
     expect(callOrder.indexOf('gate')).toBeLessThan(propIdx);
     expect(callOrder.indexOf('beneficiary')).toBeLessThan(propIdx);
     expect(callOrder.indexOf('sanctions')).toBeLessThan(propIdx);
+  });
+
+  // ── Fix-C: KYC gate called with exact string fiatAmount ──────────────────
+
+  it('calls KYC gate with fiatAmount as a string (no Number() float conversion) for send', async () => {
+    const kycGate = makeKycGate();
+    const svc = makeSendSvc({ kycGate });
+
+    await svc.createSendProposal(BASE_SEND_INPUT);
+
+    const sendCalls = (
+      kycGate.assertCanTransact as jest.MockedFunction<
+        (input: {
+          userId: string;
+          fiatAmount: string;
+          asset: string;
+        }) => Promise<void>
+      >
+    ).mock.calls;
+    const sendCallArg = sendCalls[0][0];
+    expect(typeof sendCallArg.fiatAmount).toBe('string');
+    // 10 USDT × 1600 NGN/USDT = 16000 NGN — should be a non-empty decimal string
+    expect(sendCallArg.fiatAmount).toBe('16000');
   });
 });

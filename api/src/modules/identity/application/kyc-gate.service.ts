@@ -13,6 +13,7 @@ import {
   TierLimitExceededError,
   VelocityExceededError,
 } from '../domain/gate-errors';
+import { toScaled } from '../../transactions/domain/ledger';
 import type { IIdentityRepository } from './ports/identity.repository.port';
 import { IDENTITY_REPOSITORY } from './ports/identity.repository.port';
 import type { IVelocityRepository } from './ports/velocity.repository.port';
@@ -40,7 +41,12 @@ function getTierLimits(tier: string, limits: LimitsConfig): TierLimits {
 
 export interface AssertCanTransactInput {
   userId: string;
-  fiatAmount: number;
+  /**
+   * Exact NGN amount as a decimal string (e.g. "10000" or "5000.50").
+   * String — not `number` — to prevent IEEE-754 float drift at the money boundary
+   * (Fix-C: BigInt-exact comparison with toScaled from the ledger domain).
+   */
+  fiatAmount: string;
   asset: string;
 }
 
@@ -106,10 +112,20 @@ export class KycGateService {
     const limits = this.config.get<LimitsConfig>('limits');
     const tierLimits: TierLimits = getTierLimits(user.kycTier, limits);
 
-    // 4. Per-transaction amount check.
-    if (fiatAmount > tierLimits.perTxFiatMax) {
+    // Fix-C: all fiat comparisons use BigInt-scaled integers via toScaled() from
+    // the ledger domain. This matches the 10^18 scale used by the ledger and avoids
+    // IEEE-754 float drift at the money boundary.
+    // Config limits are `number` (whole NGN integers from JSON); convert them to
+    // their decimal-string form before scaling so toScaled() can parse them.
+    const scaledTxAmount = toScaled(fiatAmount);
+    const scaledPerTxMax = toScaled(String(tierLimits.perTxFiatMax));
+
+    // 4. Per-transaction amount check (BigInt-exact).
+    if (scaledTxAmount > scaledPerTxMax) {
+      // Expose the original values for the error payload; convert back to numbers
+      // via Number() only for the error object (not for the comparison itself).
       throw new TierLimitExceededError(
-        fiatAmount,
+        Number(fiatAmount),
         tierLimits.perTxFiatMax,
         user.kycTier,
       );
@@ -119,10 +135,16 @@ export class KycGateService {
     const asOf = this.clock.now();
     const usage = await this.velocityRepo.getDailyUsage(userId, asOf);
 
-    if (usage.fiatTotal + fiatAmount > tierLimits.dailyFiatMax) {
+    // DailyUsage.fiatTotal is now a decimal string (Fix-C); scale both before adding.
+    const scaledDailyUsed = toScaled(usage.fiatTotal);
+    const scaledDailyMax = toScaled(String(tierLimits.dailyFiatMax));
+    const scaledDailyAfter = scaledDailyUsed + scaledTxAmount;
+
+    if (scaledDailyAfter > scaledDailyMax) {
       throw new VelocityExceededError(
         'fiat',
-        usage.fiatTotal + fiatAmount,
+        // Error payload stays as numbers for backward-compat with existing error shape.
+        Number(usage.fiatTotal) + Number(fiatAmount),
         tierLimits.dailyFiatMax,
         user.kycTier,
       );

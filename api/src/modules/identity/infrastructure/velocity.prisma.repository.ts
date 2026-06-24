@@ -7,6 +7,9 @@ import { PrismaService } from '../../../core/prisma/prisma.service';
 // re-exports all enums via `export * from "./enums"`). Import from client.ts so
 // the module resolver resolves the same path used everywhere else in infrastructure.
 import { VelocityCounterType } from '../../../../generated/prisma/client';
+// Fix-C: reuse the ledger's toScaled for exact-decimal string accumulation so
+// the velocity repo and the gate use the same arithmetic domain.
+import { toScaled } from '../../transactions/domain/ledger';
 import type {
   DailyUsage,
   IVelocityRepository,
@@ -51,19 +54,39 @@ export class VelocityPrismaRepository implements IVelocityRepository {
       },
     });
 
-    let fiatTotal = 0;
+    // Fix-C: accumulate fiatTotal using BigInt-scaled arithmetic (toScaled from the
+    // ledger domain, 10^18 scale) so the velocity repo uses exactly the same scale
+    // as the KycGateService comparisons. No Number() on the fiat path.
+    // count_24h is always an integer so Number() remains safe there.
+    const SCALE = 10n ** 18n;
+    let fiatScaled = 0n;
     let txCount = 0;
 
     for (const row of rows) {
-      // currentValue is a Prisma Decimal — convert to number for application use.
-      const value = Number(row.currentValue);
       if (row.counterType === VelocityCounterType.amount_24h) {
-        fiatTotal += value;
+        // Prisma Decimal.toString() is the exact decimal string; feed directly to toScaled.
+        const rowStr = (row.currentValue as { toString(): string }).toString();
+        fiatScaled += toScaled(rowStr);
       } else if (row.counterType === VelocityCounterType.count_24h) {
-        txCount += value;
+        txCount += Number(row.currentValue);
       }
     }
 
-    return { fiatTotal, txCount };
+    // Convert scaled bigint back to decimal string (mirrors fromScaled in ledger.ts).
+    // This string is what KycGateService.assertCanTransact feeds to toScaled() for
+    // the dailyFiat comparison — same scale, so no precision is lost in the round-trip.
+    const isNeg = fiatScaled < 0n;
+    const abs = isNeg ? -fiatScaled : fiatScaled;
+    const whole = abs / SCALE;
+    const frac = abs % SCALE;
+    const fiatTotalStr =
+      frac === 0n
+        ? (isNeg ? '-' : '') + whole.toString()
+        : (isNeg ? '-' : '') +
+          whole.toString() +
+          '.' +
+          frac.toString().padStart(18, '0').replace(/0+$/, '');
+
+    return { fiatTotal: fiatTotalStr, txCount };
   }
 }

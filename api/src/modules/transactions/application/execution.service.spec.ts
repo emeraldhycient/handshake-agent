@@ -261,9 +261,10 @@ function makeKycGate(
   throws?: Error,
 ): jest.Mocked<Pick<KycGateService, 'assertCanTransact'>> {
   const svc = {
+    // Fix-C: fiatAmount is now a string (exact NGN decimal).
     assertCanTransact: jest.fn<
       Promise<void>,
-      [{ userId: string; fiatAmount: number; asset: string }]
+      [{ userId: string; fiatAmount: string; asset: string }]
     >(),
   };
   if (throws) {

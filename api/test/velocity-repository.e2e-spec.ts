@@ -40,13 +40,14 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
   const COUNT_24H = 'count_24h';
 
   // ── Test 1: no rows → zeros ───────────────────────────────────────────────
-  it('returns { fiatTotal: 0, txCount: 0 } when no VelocityCounter rows exist for the user', async () => {
+  // Fix-C: fiatTotal is now a decimal string (not a number).
+  it('returns { fiatTotal: "0", txCount: 0 } when no VelocityCounter rows exist for the user', async () => {
     const userId = await seedUser();
     const asOf = new Date('2024-06-01T12:00:00.000Z');
 
     const usage = await repo.getDailyUsage(userId, asOf);
 
-    expect(usage.fiatTotal).toBe(0);
+    expect(usage.fiatTotal).toBe('0');
     expect(usage.txCount).toBe(0);
   });
 
@@ -80,7 +81,9 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
 
     const usage = await repo.getDailyUsage(userId, asOf);
 
-    expect(usage.fiatTotal).toBe(45000);
+    // Fix-C: fiatTotal is now a decimal string (exact). Prisma stores integers as
+    // '45000' (no fractional part), so fromScaled returns '45000' (no trailing zeros).
+    expect(usage.fiatTotal).toBe('45000');
     expect(usage.txCount).toBe(3);
   });
 
@@ -113,8 +116,8 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
 
     const usage = await repo.getDailyUsage(userId, asOf);
 
-    // Stale rows should NOT be included
-    expect(usage.fiatTotal).toBe(0);
+    // Stale rows should NOT be included. Fix-C: fiatTotal is a string.
+    expect(usage.fiatTotal).toBe('0');
     expect(usage.txCount).toBe(0);
   });
 
@@ -146,9 +149,9 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
       },
     });
 
-    // getDailyUsage for userA should return zeros
+    // getDailyUsage for userA should return zeros. Fix-C: fiatTotal is a string.
     const usage = await repo.getDailyUsage(userA, asOf);
-    expect(usage.fiatTotal).toBe(0);
+    expect(usage.fiatTotal).toBe('0');
     expect(usage.txCount).toBe(0);
   });
 
@@ -188,8 +191,9 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
     // NOTE: can't insert two rows with same (userId, counterType) due to @@unique constraint
     // so the stale-rows isolation is best tested on a clean user (Test 3 above already covers this)
     // Here we just verify the in-window row is counted
+    // Fix-C: fiatTotal is a decimal string. '20000' from integer Prisma value (no trailing zeros).
     const usage = await repo.getDailyUsage(userId, asOf);
-    expect(usage.fiatTotal).toBe(20000);
+    expect(usage.fiatTotal).toBe('20000');
     expect(usage.txCount).toBe(2);
 
     // Also confirm that seeding stale data for a separate user doesn't bleed
@@ -204,7 +208,7 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
       },
     });
     const usage2 = await repo.getDailyUsage(userId2, asOf);
-    expect(usage2.fiatTotal).toBe(0); // stale → excluded
+    expect(usage2.fiatTotal).toBe('0'); // stale → excluded
     expect(usage2.txCount).toBe(0);
   });
 });

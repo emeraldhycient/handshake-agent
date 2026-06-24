@@ -10,8 +10,12 @@ export const VELOCITY_REPOSITORY = Symbol('VELOCITY_REPOSITORY');
 
 /** Application-level record — NOT a Prisma-generated type. */
 export interface DailyUsage {
-  /** Sum of fiat-equivalent amounts transacted in the current 24-h window (NGN). */
-  fiatTotal: number;
+  /**
+   * Sum of fiat-equivalent amounts transacted in the current 24-h window (NGN),
+   * as a decimal string (e.g. "195000.00"). String type to preserve exact decimal
+   * precision — callers convert via toScaled() for BigInt comparison (Fix-C).
+   */
+  fiatTotal: string;
   /** Number of transactions in the current 24-h window. */
   txCount: number;
 }
