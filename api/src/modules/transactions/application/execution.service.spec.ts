@@ -2914,6 +2914,68 @@ describe('ExecutionService.executeSend', () => {
     ).not.toHaveBeenCalled();
   });
 
+  // ── Fix-2: exact rate scaling — fractional baseRate handled exactly ────────
+
+  it('KYC gate receives exact NGN-equivalent with fractional baseRate (no Math.round drift)', async () => {
+    // baseRate 1600.45: 10 USDT × 1600.45 = 16004.5 NGN exactly.
+    // Math.round(1600.45) = 1600 → would produce 16000 (wrong by 4.5 NGN).
+    const fractionalRateConfig = {
+      get: jest.fn((key: string) => {
+        if (key === 'buy') return { maxDriftBps: 50 };
+        if (key === 'sell') return { maxDriftBps: 50 };
+        if (key === 'pricing')
+          return { assets: { USDT: { baseRate: 1600.45 } } };
+        return undefined;
+      }),
+    };
+
+    const kycGate = makeKycGate();
+    const defaultSettlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    const svc = new ExecutionService(
+      makeProposalRepo(STUB_SEND_PROPOSAL),
+      makeQuoteRepo(null),
+      makeTransactionRepoForSend(),
+      makeOutboxRepo(),
+      defaultSettlementRepo,
+      makeQuotesService() as unknown as QuotesService,
+      kycGate as unknown as KycGateService,
+      makeDirectiveService(STUB_SEND_GRANT) as unknown as DirectiveService,
+      makePinService() as unknown as PinService,
+      makeWalletServiceWithWithdraw() as unknown as WalletService,
+      makePaymentProvider() as unknown as IPaymentProvider,
+      fractionalRateConfig as never,
+      stubClock,
+      makeAssetRegistry(),
+      makeBeneficiaryServiceForSend() as never,
+      makeLedgerRepo('100'),
+      makeIdentityService() as never,
+      makeWhatsAppSender() as never,
+      makeComplianceService() as never,
+      makeSessionService() as never,
+    );
+
+    await svc.executeSend(SEND_BASE_INPUT);
+
+    const calls = (
+      kycGate.assertCanTransact as jest.MockedFunction<
+        (input: {
+          userId: string;
+          fiatAmount: string;
+          asset: string;
+        }) => Promise<void>
+      >
+    ).mock.calls;
+    const fiatAmount = calls[0][0].fiatAmount;
+
+    // 10 USDT × 1600.45 = 16004.5 — exact scaling must produce this, not 16000.
+    expect(fiatAmount).toBe('16004.5');
+  });
+
   // ── Gauntlet order ─────────────────────────────────────────────────────────
 
   it('gauntlet order: balance→cooling-off→sanctions→directive→pin→idempotency→atomic', async () => {

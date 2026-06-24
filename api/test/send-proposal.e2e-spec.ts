@@ -91,6 +91,9 @@ const fakeWalletProvider: IWalletProvider = {
     providerReference: 'e2e-send-tx-ref-stub',
     status: 'pending' as const,
   }),
+  getWithdrawalStatus: jest
+    .fn()
+    .mockResolvedValue({ status: 'pending' as const }),
 };
 
 // Deterministic mock name-enquiry (Fix E: BeneficiaryService requires the port).

@@ -16,7 +16,10 @@ import {
   UnsupportedAssetError,
   UnsupportedNetworkForAssetError,
 } from '../../../core/catalog/catalog-errors';
-import type { IWalletProvider } from './ports/wallet-provider.port';
+import type {
+  IWalletProvider,
+  GetWithdrawalStatusOutput,
+} from './ports/wallet-provider.port';
 import type {
   IWalletRepository,
   WalletRecord,
@@ -64,10 +67,13 @@ function makeProvider(
     getBalance: jest
       .fn()
       .mockResolvedValue({ amount: '5.000000', decimals: 6 }),
-    // withdraw stub — not exercised by WalletService tests; present to satisfy
-    // the interface (task N1 added withdraw to IWalletProvider).
+    // withdraw stub — present to satisfy the interface.
     withdraw: jest.fn().mockResolvedValue({
       providerReference: 'tx-ref-stub',
+      status: 'pending' as const,
+    }),
+    // getWithdrawalStatus stub — exercised in the getWithdrawalStatus describe.
+    getWithdrawalStatus: jest.fn().mockResolvedValue({
       status: 'pending' as const,
     }),
   };
@@ -349,6 +355,87 @@ describe('WalletService', () => {
 
       expect(result.amount).toBe('100.000001');
       expect(result.decimals).toBe(6);
+    });
+  });
+
+  // ── getWithdrawalStatus ───────────────────────────────────────────────────
+
+  describe('getWithdrawalStatus', () => {
+    it('delegates to provider.getWithdrawalStatus with wallet.providerReference and reference', async () => {
+      const provider = makeProvider();
+      const service = new WalletService(
+        provider,
+        makeRepo(EXISTING_WALLET),
+        makeClock(),
+        makeAssetRegistry(),
+      );
+
+      await service.getWithdrawalStatus(EXISTING_WALLET, 'idem-key-123');
+
+      expect(provider.getWithdrawalStatus).toHaveBeenCalledWith({
+        reference: 'idem-key-123',
+        addressId: PROVIDER_REF, // wallet.providerReference
+      });
+    });
+
+    it('returns the provider output as-is (pending)', async () => {
+      const provider = makeProvider();
+      provider.getWithdrawalStatus.mockResolvedValue({ status: 'pending' });
+      const service = new WalletService(
+        provider,
+        makeRepo(EXISTING_WALLET),
+        makeClock(),
+        makeAssetRegistry(),
+      );
+
+      const result = await service.getWithdrawalStatus(
+        EXISTING_WALLET,
+        'idem-key-pending',
+      );
+
+      expect(result.status).toBe('pending');
+      expect(result.onChainTxHash).toBeUndefined();
+    });
+
+    it('returns success with onChainTxHash when provider confirms success', async () => {
+      const provider = makeProvider();
+      const statusOutput: GetWithdrawalStatusOutput = {
+        status: 'success',
+        onChainTxHash: 'tron_hash_abc123',
+      };
+      provider.getWithdrawalStatus.mockResolvedValue(statusOutput);
+      const service = new WalletService(
+        provider,
+        makeRepo(EXISTING_WALLET),
+        makeClock(),
+        makeAssetRegistry(),
+      );
+
+      const result = await service.getWithdrawalStatus(
+        EXISTING_WALLET,
+        'idem-key-success',
+      );
+
+      expect(result.status).toBe('success');
+      expect(result.onChainTxHash).toBe('tron_hash_abc123');
+    });
+
+    it('returns failed when provider confirms failure', async () => {
+      const provider = makeProvider();
+      provider.getWithdrawalStatus.mockResolvedValue({ status: 'failed' });
+      const service = new WalletService(
+        provider,
+        makeRepo(EXISTING_WALLET),
+        makeClock(),
+        makeAssetRegistry(),
+      );
+
+      const result = await service.getWithdrawalStatus(
+        EXISTING_WALLET,
+        'idem-key-failed',
+      );
+
+      expect(result.status).toBe('failed');
     });
   });
 });

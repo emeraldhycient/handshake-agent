@@ -127,6 +127,9 @@ const fakeWalletProvider: IWalletProvider = {
     providerReference: 'e2e-tx-ref-stub',
     status: 'pending' as const,
   }),
+  getWithdrawalStatus: jest
+    .fn()
+    .mockResolvedValue({ status: 'pending' as const }),
 };
 
 // Payment provider: verifyWebhookSignature does constant-time equality

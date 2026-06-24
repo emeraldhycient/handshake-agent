@@ -219,6 +219,17 @@ export interface SettleSendOnChainResult {
   userId?: string;
 }
 
+/**
+ * Output of `querySendWithdrawalStatus` — used by the reconciler to determine
+ * whether to finalize, refund, or leave a pending onchain_send outbox row open.
+ */
+export interface QuerySendWithdrawalStatusOutput {
+  /** Normalised provider status. */
+  status: 'pending' | 'success' | 'failed';
+  /** On-chain tx hash — present only when status = 'success'. */
+  onChainTxHash?: string;
+}
+
 // The directive ref required to authorize a send execution (step-up auth).
 const REQUIRED_SEND_DIRECTIVE_REF = 'request_step_up';
 
@@ -1117,8 +1128,11 @@ export class ExecutionService {
     // baseRate gives a 10^18-scaled NGN value — same unit as toScaled() outputs.
     const LEDGER_SCALE = 10n ** 18n;
     const scaledCryptoForGate = toScaled(cryptoAmount);
+    // Exact decimal multiplication: both operands as 10^18-scaled bigints,
+    // divide by SCALE once to stay in the 10^18 unit space.
+    // Handles fractional baseRates (e.g. 1600.45) exactly — no Math.round.
     const scaledNgn18ForGate =
-      scaledCryptoForGate * BigInt(Math.round(baseRate));
+      (scaledCryptoForGate * toScaled(String(baseRate))) / LEDGER_SCALE;
     // Reconstruct decimal string from 10^18-scaled bigint (mirrors fromScaled in ledger.ts).
     const isNegNgn = scaledNgn18ForGate < 0n;
     const absNgn = isNegNgn ? -scaledNgn18ForGate : scaledNgn18ForGate;
@@ -1386,6 +1400,52 @@ export class ExecutionService {
    *      - success=false → settleSendRefundAtomic.
    *   5. Send WhatsApp notification (swallowed — never breaks settlement).
    */
+  /**
+   * Queries the actual on-chain status of a send withdrawal from the wallet
+   * provider. Used by the reconciler to safely handle missed Blockradar webhooks:
+   * before deciding to refund a pending `onchain_send` outbox row the reconciler
+   * MUST call this method rather than assuming failure.
+   *
+   * Invariant (§3.1): this method is READ-ONLY — it never moves money. The
+   * reconciler routes based on the result and calls `settleSendOnChain` to act.
+   *
+   * Returns `{ status: 'pending' }` when:
+   *   - No transaction found for the reference (stale / race condition).
+   *   - Transaction metadata is missing walletId or asset.
+   *   - Provider query itself fails (network error, 4xx, 5xx).
+   *
+   * The fail-safe pending return ensures the reconciler NEVER refunds prematurely
+   * on a provider error — the webhook or a later tick will finalize the row.
+   */
+  async querySendWithdrawalStatus(
+    reference: string,
+  ): Promise<QuerySendWithdrawalStatusOutput> {
+    const txn = await this.transactionRepo.findByIdempotencyKey(reference);
+    if (txn === null) {
+      // Reference not found — fail-safe: leave pending.
+      return { status: 'pending' };
+    }
+
+    const meta = txn.metadata as Record<string, string>;
+    const walletId = meta.walletId;
+    const asset = meta.asset ?? 'USDT';
+    const network = meta.network ?? 'TRON';
+
+    if (!walletId) {
+      // Missing wallet info in metadata — fail-safe: leave pending.
+      return { status: 'pending' };
+    }
+
+    // Load the wallet record to get the providerReference (Blockradar child address id).
+    const wallet = await this.walletService.getOrProvisionWallet(
+      txn.userId,
+      asset,
+      network,
+    );
+
+    return this.walletService.getWithdrawalStatus(wallet, reference);
+  }
+
   async settleSendOnChain(
     input: SettleSendOnChainInput,
   ): Promise<SettleSendOnChainResult> {

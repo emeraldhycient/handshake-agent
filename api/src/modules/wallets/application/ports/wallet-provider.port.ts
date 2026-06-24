@@ -51,6 +51,27 @@ export interface WithdrawOutput {
   status: 'pending' | 'success' | 'failed';
 }
 
+export interface GetWithdrawalStatusInput {
+  /**
+   * The caller-supplied reference that was passed to `withdraw()`.
+   * Blockradar echoes this as the `reference` field on the transaction.
+   */
+  reference: string;
+  /**
+   * Optional provider-scoped child address id (providerReference on WalletRecord).
+   * When provided, the lookup is scoped to that address; improves accuracy and
+   * avoids cross-wallet reference collisions.
+   */
+  addressId?: string;
+}
+
+export interface GetWithdrawalStatusOutput {
+  /** Normalised withdrawal lifecycle status. */
+  status: 'pending' | 'success' | 'failed';
+  /** On-chain transaction hash — present only when status = 'success'. */
+  onChainTxHash?: string;
+}
+
 export interface IWalletProvider {
   /**
    * Provisions a new child address under the configured master wallet.
@@ -80,4 +101,25 @@ export interface IWalletProvider {
    * @throws Error (with provider message) on non-2xx responses.
    */
   withdraw(input: WithdrawInput): Promise<WithdrawOutput>;
+
+  /**
+   * Queries the provider for the current status of an on-chain withdrawal by its
+   * caller-supplied reference.
+   *
+   * Used by the reconciler to safely handle missed webhooks: before refunding a
+   * `pending` onchain_send outbox row the reconciler MUST call this method to
+   * verify the actual on-chain outcome rather than assuming failure.
+   *
+   * Endpoint (Blockradar v1):
+   *   GET /wallets/{masterWalletId}/addresses/{addressId}/transactions
+   *   — filter client-side by `data[].reference === input.reference`.
+   *
+   * Returns `pending` on any provider error so the reconciler leaves the row
+   * open for the webhook (or a later tick) to finalize — fail-safe behaviour.
+   *
+   * @throws Never — provider errors are caught and converted to `{ status: 'pending' }`.
+   */
+  getWithdrawalStatus(
+    input: GetWithdrawalStatusInput,
+  ): Promise<GetWithdrawalStatusOutput>;
 }

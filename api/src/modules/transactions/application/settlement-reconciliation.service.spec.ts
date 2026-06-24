@@ -48,13 +48,11 @@ function makeRecord(
 
 function buildStubConfigService(
   overrides: {
-    cronExpression?: string;
     gracePeriodSec?: number;
     batchSize?: number;
   } = {},
 ): ConfigService<AppConfig, true> {
   const cfg = {
-    cronExpression: overrides.cronExpression ?? '*/2 * * * *',
     gracePeriodSec: overrides.gracePeriodSec ?? 120,
     batchSize: overrides.batchSize ?? 20,
   };
@@ -104,6 +102,10 @@ describe('SettlementReconciliationService', () => {
         transactionId: 'txn-1',
         status: 'completed',
       }),
+      // querySendWithdrawalStatus: default pending (safe).
+      querySendWithdrawalStatus: jest
+        .fn()
+        .mockResolvedValue({ status: 'pending' }),
     } as unknown as jest.Mocked<ExecutionService>;
 
     service = new SettlementReconciliationService(
@@ -149,40 +151,41 @@ describe('SettlementReconciliationService', () => {
     expect(outboxRepo.complete).toHaveBeenCalledWith(row.id);
   });
 
-  // ── onchain_send → settleSendOnChain ─────────────────────────────────────
+  // ── onchain_send → querySendWithdrawalStatus + settleSendOnChain ──────────
 
-  it('calls settleSendOnChain for a pending onchain_send row (no hash → success=false)', async () => {
+  it('queries provider status when no onChainTxHash in payload', async () => {
     const row = makeRecord({
       settlementType: 'onchain_send',
       payload: { reference: 'ref-send-1' },
       idempotencyKey: 'ref-send-1',
     });
     outboxRepo.findPending.mockResolvedValue([row]);
-
-    executionService.settleSendOnChain.mockResolvedValue({
-      transactionId: 'txn-1',
-      status: 'failed',
+    executionService.querySendWithdrawalStatus.mockResolvedValue({
+      status: 'pending',
     });
 
     await service.tick();
 
     expect(outboxRepo.markAttempt).toHaveBeenCalledWith(row.id);
-    // No onChainTxHash in payload → success=false (conservative: triggers refund).
-    expect(executionService.settleSendOnChain).toHaveBeenCalledWith({
-      reference: 'ref-send-1',
-      success: false,
-    });
-    expect(outboxRepo.complete).toHaveBeenCalledWith(row.id);
+    expect(executionService.querySendWithdrawalStatus).toHaveBeenCalledWith(
+      'ref-send-1',
+    );
+    // Provider pending → no settle call, row stays open.
+    expect(executionService.settleSendOnChain).not.toHaveBeenCalled();
+    expect(outboxRepo.complete).not.toHaveBeenCalled();
   });
 
-  it('calls settleSendOnChain with success=true when payload contains onChainTxHash', async () => {
+  it('calls settleSendOnChain(success=true) when provider returns success', async () => {
     const row = makeRecord({
       settlementType: 'onchain_send',
-      payload: { reference: 'ref-send-2', onChainTxHash: 'tron_tx_hash_abc' },
+      payload: { reference: 'ref-send-2' },
       idempotencyKey: 'ref-send-2',
     });
     outboxRepo.findPending.mockResolvedValue([row]);
-
+    executionService.querySendWithdrawalStatus.mockResolvedValue({
+      status: 'success',
+      onChainTxHash: 'tron_tx_hash_abc',
+    });
     executionService.settleSendOnChain.mockResolvedValue({
       transactionId: 'txn-2',
       status: 'completed',
@@ -190,8 +193,86 @@ describe('SettlementReconciliationService', () => {
 
     await service.tick();
 
+    expect(executionService.querySendWithdrawalStatus).toHaveBeenCalledWith(
+      'ref-send-2',
+    );
     expect(executionService.settleSendOnChain).toHaveBeenCalledWith({
       reference: 'ref-send-2',
+      success: true,
+      onChainTxHash: 'tron_tx_hash_abc',
+    });
+    expect(outboxRepo.complete).toHaveBeenCalledWith(row.id);
+  });
+
+  it('calls settleSendOnChain(success=false) when provider returns failed — triggering refund', async () => {
+    const row = makeRecord({
+      settlementType: 'onchain_send',
+      payload: { reference: 'ref-send-3' },
+      idempotencyKey: 'ref-send-3',
+    });
+    outboxRepo.findPending.mockResolvedValue([row]);
+    executionService.querySendWithdrawalStatus.mockResolvedValue({
+      status: 'failed',
+    });
+    executionService.settleSendOnChain.mockResolvedValue({
+      transactionId: 'txn-3',
+      status: 'failed',
+    });
+
+    await service.tick();
+
+    expect(executionService.querySendWithdrawalStatus).toHaveBeenCalledWith(
+      'ref-send-3',
+    );
+    expect(executionService.settleSendOnChain).toHaveBeenCalledWith({
+      reference: 'ref-send-3',
+      success: false,
+    });
+    expect(outboxRepo.complete).toHaveBeenCalledWith(row.id);
+  });
+
+  it('skips settle and does NOT complete row when provider returns pending', async () => {
+    const row = makeRecord({
+      settlementType: 'onchain_send',
+      payload: { reference: 'ref-send-pend' },
+      idempotencyKey: 'ref-send-pend',
+    });
+    outboxRepo.findPending.mockResolvedValue([row]);
+    executionService.querySendWithdrawalStatus.mockResolvedValue({
+      status: 'pending',
+    });
+
+    await service.tick();
+
+    expect(executionService.querySendWithdrawalStatus).toHaveBeenCalledWith(
+      'ref-send-pend',
+    );
+    // No refund or finalize — row stays open for webhook / later tick.
+    expect(executionService.settleSendOnChain).not.toHaveBeenCalled();
+    expect(outboxRepo.complete).not.toHaveBeenCalled();
+  });
+
+  it('calls settleSendOnChain with success=true when payload already contains onChainTxHash (webhook-updated)', async () => {
+    const row = makeRecord({
+      settlementType: 'onchain_send',
+      payload: {
+        reference: 'ref-send-hash',
+        onChainTxHash: 'tron_tx_hash_abc',
+      },
+      idempotencyKey: 'ref-send-hash',
+    });
+    outboxRepo.findPending.mockResolvedValue([row]);
+    executionService.settleSendOnChain.mockResolvedValue({
+      transactionId: 'txn-hash',
+      status: 'completed',
+    });
+
+    await service.tick();
+
+    // Hash already in payload → no provider query needed.
+    expect(executionService.querySendWithdrawalStatus).not.toHaveBeenCalled();
+    expect(executionService.settleSendOnChain).toHaveBeenCalledWith({
+      reference: 'ref-send-hash',
       success: true,
       onChainTxHash: 'tron_tx_hash_abc',
     });

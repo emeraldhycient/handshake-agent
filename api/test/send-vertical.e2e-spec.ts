@@ -121,6 +121,9 @@ const fakeWalletProvider: IWalletProvider = {
     providerReference: FAKE_SEND_PROVIDER_REF,
     status: 'pending' as const,
   }),
+  getWithdrawalStatus: jest
+    .fn()
+    .mockResolvedValue({ status: 'pending' as const }),
 };
 
 // Deterministic mock name-enquiry (Fix E: BeneficiaryService requires the

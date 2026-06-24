@@ -11,6 +11,8 @@ import type {
   GetBalanceOutput,
   WithdrawInput,
   WithdrawOutput,
+  GetWithdrawalStatusInput,
+  GetWithdrawalStatusOutput,
 } from '../application/ports/wallet-provider.port';
 
 // ---------------------------------------------------------------------------
@@ -71,6 +73,29 @@ interface WithdrawResponseData {
 
 interface BlockradarWithdrawResponse {
   data: WithdrawResponseData;
+}
+
+// ---------------------------------------------------------------------------
+// getWithdrawalStatus — list address transactions, match by reference
+// GET /wallets/{masterWalletId}/addresses/{addressId}/transactions
+// Response: { data: Array<{ id, status, reference?, hash? }> }
+// ---------------------------------------------------------------------------
+
+interface AddressTransactionItem {
+  id: string;
+  /**
+   * Blockradar lifecycle status string.
+   * Known values: 'SUCCESS' | 'PENDING' | 'FAILED'.
+   */
+  status: string;
+  /** Echoed caller reference — matches what was supplied at withdrawal time. */
+  reference?: string;
+  /** On-chain tx hash — populated once the transaction is confirmed. */
+  hash?: string;
+}
+
+interface BlockradarAddressTransactionsResponse {
+  data: AddressTransactionItem[];
 }
 
 /**
@@ -199,6 +224,61 @@ export class BlockradarProvider implements IWalletProvider {
       };
     } catch (err: unknown) {
       throw this.wrapError('withdraw', err);
+    }
+  }
+
+  /**
+   * Queries the withdrawal status for a given caller reference by listing
+   * the address-scoped transactions and finding the matching entry.
+   *
+   * Endpoint (confirmed docs.blockradar.co):
+   *   GET /wallets/{masterWalletId}/addresses/{addressId}/transactions
+   *
+   * The `reference` field on each transaction item is the value the caller
+   * supplied when initiating the withdrawal. We filter client-side because
+   * Blockradar does not document a `?reference=` query parameter.
+   *
+   * Fail-safe: any provider error (network, 4xx, 5xx) returns `{ status: 'pending' }`
+   * so the reconciler leaves the outbox row open rather than refunding prematurely.
+   */
+  async getWithdrawalStatus(
+    input: GetWithdrawalStatusInput,
+  ): Promise<GetWithdrawalStatusOutput> {
+    const { reference, addressId } = input;
+
+    // addressId is required to scope the request; without it we cannot query.
+    // Return pending so the row is not refunded on a missing addressId.
+    if (!addressId) {
+      return { status: 'pending' };
+    }
+
+    const url = `${this.baseUrl}/wallets/${this.masterWalletId}/addresses/${addressId}/transactions`;
+
+    try {
+      const response = await firstValueFrom(
+        this.http.get<BlockradarAddressTransactionsResponse>(url, {
+          headers: this.headers(),
+        }),
+      );
+
+      const items: AddressTransactionItem[] = response.data.data ?? [];
+      const match = items.find((item) => item.reference === reference);
+
+      if (!match) {
+        // Reference not found yet — the withdrawal may still be queued.
+        return { status: 'pending' };
+      }
+
+      const status = this.mapStatus(match.status);
+      return {
+        status,
+        ...(status === 'success' && match.hash
+          ? { onChainTxHash: match.hash }
+          : {}),
+      };
+    } catch {
+      // Any provider error → fail-safe pending so reconciler does not refund.
+      return { status: 'pending' };
     }
   }
 

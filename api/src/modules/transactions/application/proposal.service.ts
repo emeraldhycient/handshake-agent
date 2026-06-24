@@ -482,8 +482,11 @@ export class ProposalService {
     // fromScaled-equivalent string conversion.
     const LEDGER_SCALE = 10n ** 18n;
     const scaledCrypto = toScaled(intent.cryptoAmount);
-    // scaledNgn18 is the 10^18-scaled NGN value (same unit as toScaled returns).
-    const scaledNgn18 = scaledCrypto * BigInt(Math.round(baseRate));
+    // Exact decimal multiplication: multiply both operands as 10^18-scaled bigints
+    // then divide by SCALE once to stay in the 10^18 unit space.
+    // This handles fractional baseRates (e.g. 1600.45) exactly — no Math.round.
+    const scaledNgn18 =
+      (scaledCrypto * toScaled(String(baseRate))) / LEDGER_SCALE;
     // Reconstruct decimal string from 10^18-scaled bigint (mirrors fromScaled in ledger.ts).
     const isNegNgn = scaledNgn18 < 0n;
     const absNgn = isNegNgn ? -scaledNgn18 : scaledNgn18;

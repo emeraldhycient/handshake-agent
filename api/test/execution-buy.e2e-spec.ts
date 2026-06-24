@@ -118,6 +118,9 @@ const fakeWalletProvider: IWalletProvider = {
     providerReference: 'e2e-tx-ref-stub',
     status: 'pending' as const,
   }),
+  getWithdrawalStatus: jest
+    .fn()
+    .mockResolvedValue({ status: 'pending' as const }),
 };
 
 const FAKE_ACCOUNT_NUMBER = '0987654321';

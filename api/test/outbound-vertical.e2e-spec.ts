@@ -354,6 +354,9 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
         providerReference: FAKE_SEND_PROVIDER_REF,
         status: 'pending' as const,
       }),
+      getWithdrawalStatus: jest
+        .fn()
+        .mockResolvedValue({ status: 'pending' as const }),
     };
 
     fakePaymentProvider = {

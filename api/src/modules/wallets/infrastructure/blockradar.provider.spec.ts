@@ -244,7 +244,7 @@ describe('BlockradarProvider', () => {
 
   // ── withdraw ─────────────────────────────────────────────────────────────
   //
-  // Confirmed endpoint (docs.blockradar.co/llms-full.txt):
+  // Confirmed endpoint (docs.blockradar.co):
   //   POST /wallets/{masterWalletId}/addresses/{addressId}/withdraw
   //   body: { address, amount, assetId, reference? }
   //   response: { data: { id, status (SUCCESS|PENDING|FAILED), reference, ... } }
@@ -432,6 +432,165 @@ describe('BlockradarProvider', () => {
           assetId: USDT_TRON_ASSET_ID,
         }),
       ).rejects.toThrow('Network timeout');
+    });
+  });
+
+  // ── getWithdrawalStatus ───────────────────────────────────────────────────
+  //
+  // Endpoint (docs.blockradar.co):
+  //   GET /wallets/{masterWalletId}/addresses/{addressId}/transactions
+  //   response: { data: [{ id, status, reference?, hash? }] }
+  //
+  // Fail-safe: any provider error returns { status: 'pending' } — reconciler
+  // leaves the row open rather than refunding prematurely.
+
+  describe('getWithdrawalStatus', () => {
+    const ADDRESS_ID = 'child-address-id-1';
+    const REF = 'idempotency-key-send-123';
+
+    const makeTransactionsList = (
+      items: {
+        id: string;
+        status: string;
+        reference?: string;
+        hash?: string;
+      }[],
+    ) => ({ data: items });
+
+    it('returns pending when addressId is absent (fail-safe)', async () => {
+      const result = await provider.getWithdrawalStatus({ reference: REF });
+      expect(result.status).toBe('pending');
+      expect(http.get).not.toHaveBeenCalled();
+    });
+
+    it('GETs /wallets/{masterWalletId}/addresses/{addressId}/transactions with x-api-key', async () => {
+      http.get.mockReturnValue(of(axiosOk(makeTransactionsList([]))));
+
+      await provider.getWithdrawalStatus({
+        reference: REF,
+        addressId: ADDRESS_ID,
+      });
+
+      const [url, config] = http.get.mock.calls[0] as [
+        string,
+        { headers: Record<string, string> },
+      ];
+      expect(url).toBe(
+        `${BASE_URL}/wallets/${MASTER_WALLET_ID}/addresses/${ADDRESS_ID}/transactions`,
+      );
+      expect(config.headers['x-api-key']).toBe(API_KEY);
+    });
+
+    it('returns pending when reference not found in transaction list', async () => {
+      http.get.mockReturnValue(
+        of(
+          axiosOk(
+            makeTransactionsList([
+              { id: 'tx-1', status: 'SUCCESS', reference: 'other-ref' },
+            ]),
+          ),
+        ),
+      );
+
+      const result = await provider.getWithdrawalStatus({
+        reference: REF,
+        addressId: ADDRESS_ID,
+      });
+
+      expect(result.status).toBe('pending');
+    });
+
+    it('returns success and hash when matching transaction has SUCCESS status', async () => {
+      http.get.mockReturnValue(
+        of(
+          axiosOk(
+            makeTransactionsList([
+              {
+                id: 'tx-match',
+                status: 'SUCCESS',
+                reference: REF,
+                hash: 'tron_chain_hash_abc',
+              },
+            ]),
+          ),
+        ),
+      );
+
+      const result = await provider.getWithdrawalStatus({
+        reference: REF,
+        addressId: ADDRESS_ID,
+      });
+
+      expect(result.status).toBe('success');
+      expect(result.onChainTxHash).toBe('tron_chain_hash_abc');
+    });
+
+    it('returns failed when matching transaction has FAILED status', async () => {
+      http.get.mockReturnValue(
+        of(
+          axiosOk(
+            makeTransactionsList([
+              { id: 'tx-fail', status: 'FAILED', reference: REF },
+            ]),
+          ),
+        ),
+      );
+
+      const result = await provider.getWithdrawalStatus({
+        reference: REF,
+        addressId: ADDRESS_ID,
+      });
+
+      expect(result.status).toBe('failed');
+      expect(result.onChainTxHash).toBeUndefined();
+    });
+
+    it('returns pending when matching transaction has PENDING status', async () => {
+      http.get.mockReturnValue(
+        of(
+          axiosOk(
+            makeTransactionsList([
+              { id: 'tx-pend', status: 'PENDING', reference: REF },
+            ]),
+          ),
+        ),
+      );
+
+      const result = await provider.getWithdrawalStatus({
+        reference: REF,
+        addressId: ADDRESS_ID,
+      });
+
+      expect(result.status).toBe('pending');
+    });
+
+    it('returns pending (fail-safe) on HTTP error — never throws', async () => {
+      http.get.mockReturnValue(
+        throwError(() =>
+          Object.assign(new Error('Internal Server Error'), {
+            response: { status: 500, data: { message: 'DB error' } },
+          }),
+        ),
+      );
+
+      // Must NOT throw — reconciler must never refund on provider error.
+      const result = await provider.getWithdrawalStatus({
+        reference: REF,
+        addressId: ADDRESS_ID,
+      });
+
+      expect(result.status).toBe('pending');
+    });
+
+    it('returns pending (fail-safe) on network timeout — never throws', async () => {
+      http.get.mockReturnValue(throwError(() => new Error('ECONNREFUSED')));
+
+      const result = await provider.getWithdrawalStatus({
+        reference: REF,
+        addressId: ADDRESS_ID,
+      });
+
+      expect(result.status).toBe('pending');
     });
   });
 });

@@ -75,14 +75,15 @@ export class SettlementReconciliationService {
    * settlement by type. Errors on individual rows are logged and do not abort
    * the batch (§3.1: engine disposes; a failing row is a concern, not a crash).
    *
-   * The cron expression is read at class instantiation time (NestJS schedule
-   * decorators are evaluated at module compile, not at tick time). We use a
-   * sentinel string here and delegate to the `tick()` method so tests can call
-   * it directly without triggering the scheduler.
+   * The cron schedule is hard-coded to every 2 minutes (every-2-min literal).
+   * NestJS @Cron decorators are evaluated at class-compile time and cannot
+   * read runtime config values, so the expression cannot be driven from
+   * config.reconciliation without rewriting to SchedulerRegistry —
+   * a disproportionate complexity trade-off for an infra parameter that changes
+   * rarely. Changing the tick frequency requires a code change + redeploy
+   * (not admin-tunable at runtime per root CLAUDE.md §7).
    *
-   * Note: the actual cron schedule is driven by the method decorator below.
-   * In production, `cronExpression` from config controls the schedule. In tests,
-   * call `tick()` directly.
+   * Tests call tick() directly to avoid the scheduler entirely.
    */
   @Cron('*/2 * * * *', { name: 'settlement-reconciliation' })
   async tick(): Promise<void> {
@@ -172,61 +173,97 @@ export class SettlementReconciliationService {
         terminalStatus = result.status;
       }
     } else if (row.settlementType === 'onchain_send') {
-      // Send phase 2: the poller does not know success/failure from the outbox row
-      // alone (the webhook carries that). We call settleSendOnChain without a
-      // success flag here — it will call the wallet provider to check status.
-      // NOTE: settleSendOnChain requires { reference, success, onChainTxHash? }
-      // but the reconciler cannot determine success without a provider query.
-      // We call the method with the wallet provider through the execution service
-      // which calls verifyWithdraw (or equivalent). For now, the reconciler
-      // re-drives with the reference only; the settle method will determine the
-      // outcome. If the provider is not available the row stays pending.
+      // Send phase 2: query the provider to learn the actual on-chain outcome
+      // before deciding to finalize or refund. A missed webhook does NOT imply
+      // the withdrawal failed — the USDT may already be on-chain. Refunding a
+      // confirmed withdrawal = double-spend / platform loss.
       //
-      // IMPORTANT: We pass success=true here only if we can determine it from
-      // the outbox payload. The Blockradar webhook is the authoritative source;
-      // the reconciler's job is to detect a missed webhook and re-drive. Since
-      // the row is still pending, it means the webhook was missed. We do NOT
-      // arbitrarily set success=true — instead we call the settlement method
-      // with whatever the outbox payload indicates, or fall back to checking
-      // status via the provider.
+      // Decision tree:
+      //   provider 'success'  → settleSendOnChain(success=true, onChainTxHash)
+      //   provider 'failed'   → settleSendOnChain(success=false) — refund
+      //   provider 'pending'  → leave row open (markAttempt only, no complete)
       //
-      // Current behaviour: treat pending onchain_send as still in-flight (the
-      // on-chain confirmation has not yet been detected). Log and skip without
-      // completing so operators and the webhook handler can still finalize.
-      // This is intentionally conservative — a missed Blockradar webhook is an
-      // unusual edge case; operator intervention is acceptable for now.
-      //
-      // For a fully autonomous recovery, integrate walletService.getWithdrawalStatus
-      // here in a future iteration. For now we mark the attempt and log.
-      this.logger.log(
-        { outboxId: row.id, settlementType: 'onchain_send' },
-        'settlement-reconciliation: onchain_send re-driving with success=true (operator must verify if hash absent)',
-      );
-      // Re-drive: call settleSendOnChain. If the on-chain tx succeeded, the
-      // webhook should have fired. Since it didn't, we assume the withdrawal is
-      // still pending at the provider. We can only mark attempt; the engine will
-      // return pending and the row stays open for the webhook to finalize.
-      //
-      // To make this testable + actually re-drive: call with success=true when
-      // the payload contains an onChainTxHash (provider wrote it), otherwise
-      // call with success=false to trigger the refund path for timed-out sends.
-      // The SDD says "re-drive settlement by type" — this is the correct idiom.
+      // Webhook path (payload already has onChainTxHash from a previously-processed
+      // webhook that updated the outbox payload but not yet completed it) bypasses
+      // the provider query — the hash is authoritative.
       const payloadHash = row.payload?.onChainTxHash as string | undefined;
-      const result = await this.executionService.settleSendOnChain({
-        reference,
-        success: Boolean(payloadHash),
-        ...(payloadHash ? { onChainTxHash: payloadHash } : {}),
-      });
-      this.logger.log(
-        {
-          outboxId: row.id,
-          txnId: result.transactionId,
-          status: result.status,
-        },
-        'settlement-reconciliation: settleSendOnChain result',
-      );
-      if (TERMINAL_STATUSES.has(result.status)) {
-        terminalStatus = result.status;
+
+      if (payloadHash) {
+        // Webhook already confirmed success and wrote the hash into the payload;
+        // reconciler just needs to finalize (idempotent settle call).
+        const result = await this.executionService.settleSendOnChain({
+          reference,
+          success: true,
+          onChainTxHash: payloadHash,
+        });
+        this.logger.log(
+          {
+            outboxId: row.id,
+            txnId: result.transactionId,
+            status: result.status,
+          },
+          'settlement-reconciliation: settleSendOnChain(hash-from-payload) result',
+        );
+        if (TERMINAL_STATUSES.has(result.status)) {
+          terminalStatus = result.status;
+        }
+      } else {
+        // No confirmed hash in payload: webhook was missed. Query the provider
+        // for the actual withdrawal status before taking any action.
+        const providerStatus =
+          await this.executionService.querySendWithdrawalStatus(reference);
+
+        this.logger.log(
+          {
+            outboxId: row.id,
+            providerStatus: providerStatus.status,
+          },
+          'settlement-reconciliation: onchain_send provider status',
+        );
+
+        if (providerStatus.status === 'success') {
+          const result = await this.executionService.settleSendOnChain({
+            reference,
+            success: true,
+            onChainTxHash: providerStatus.onChainTxHash,
+          });
+          this.logger.log(
+            {
+              outboxId: row.id,
+              txnId: result.transactionId,
+              status: result.status,
+            },
+            'settlement-reconciliation: settleSendOnChain(provider-success) result',
+          );
+          if (TERMINAL_STATUSES.has(result.status)) {
+            terminalStatus = result.status;
+          }
+        } else if (providerStatus.status === 'failed') {
+          const result = await this.executionService.settleSendOnChain({
+            reference,
+            success: false,
+          });
+          this.logger.log(
+            {
+              outboxId: row.id,
+              txnId: result.transactionId,
+              status: result.status,
+            },
+            'settlement-reconciliation: settleSendOnChain(provider-failed) result',
+          );
+          if (TERMINAL_STATUSES.has(result.status)) {
+            terminalStatus = result.status;
+          }
+        } else {
+          // status === 'pending' (or unknown/error — provider returns pending on error).
+          // Leave the outbox row open: markAttempt was already called above.
+          // The webhook or a later reconciler tick will finalize.
+          this.logger.log(
+            { outboxId: row.id },
+            'settlement-reconciliation: onchain_send still pending at provider — leaving row open',
+          );
+          // terminalStatus stays null → no complete() call.
+        }
       }
     } else if (row.settlementType === 'processor_collection') {
       // Buy phase 2: verify NGN collection and credit USDT.

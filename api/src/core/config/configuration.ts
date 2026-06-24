@@ -241,14 +241,14 @@ export interface CatalogConfig {
  *
  * Controls the SettlementReconciliationService cron that re-drives settlement
  * for outbox rows whose webhook was missed.
+ *
+ * Note: the cron schedule itself is hard-coded in the @Cron decorator
+ * (every 2 minutes) because NestJS decorators are evaluated at class-compile
+ * time and cannot read runtime config values. Changing the tick frequency
+ * requires a code change and redeploy — this is acceptable for an infra
+ * tuning parameter (not a business-tunable value per root CLAUDE.md §7).
  */
 export interface ReconciliationConfig {
-  /**
-   * Cron expression controlling how often the reconciler tick runs.
-   * Default: every 2 minutes. Admin-tunable via the DB-admin AppSetting layer.
-   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
-   */
-  cronExpression: string;
   /**
    * Grace window in seconds: only pick up rows older than this to avoid
    * racing with a webhook that is still in-flight.
@@ -426,9 +426,6 @@ export default (): AppConfig => ({
     nameEnquiryResolvedName: 'MOCK ACCOUNT HOLDER',
   },
   reconciliation: {
-    // Run every 2 minutes. Admin-tunable via the DB-admin AppSetting layer.
-    // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
-    cronExpression: '*/2 * * * *',
     // Only pick up rows older than 2 minutes so we don't race in-flight webhooks.
     gracePeriodSec: 120,
     // Process at most 20 rows per tick to bound settlement-engine load.

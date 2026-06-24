@@ -8,6 +8,7 @@ import {
   type IWalletProvider,
   type GetBalanceOutput,
   type WithdrawOutput,
+  type GetWithdrawalStatusOutput,
 } from './ports/wallet-provider.port';
 import {
   WALLET_REPOSITORY,
@@ -142,6 +143,30 @@ export class WalletService {
       amount,
       assetId,
       reference,
+    });
+  }
+
+  /**
+   * Queries the current status of an on-chain withdrawal by its caller-supplied
+   * reference. Delegates to `IWalletProvider.getWithdrawalStatus`.
+   *
+   * Used by the reconciler to safely handle missed webhooks. The `wallet` is
+   * needed to scope the provider query to the correct child address (the
+   * `providerReference` field is the Blockradar child address id).
+   *
+   * This method never throws: the provider implementation returns `{ status: 'pending' }`
+   * on any error so the reconciler leaves the outbox row open rather than refunding.
+   *
+   * @param wallet    - The custodial wallet the withdrawal was sent from.
+   * @param reference - The caller-supplied idempotency reference from executeSend.
+   */
+  async getWithdrawalStatus(
+    wallet: WalletRecord,
+    reference: string,
+  ): Promise<GetWithdrawalStatusOutput> {
+    return this.provider.getWithdrawalStatus({
+      reference,
+      addressId: wallet.providerReference,
     });
   }
 }

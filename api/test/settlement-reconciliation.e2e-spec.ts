@@ -10,10 +10,14 @@
  *      No webhook fired. Calling reconciler.tick() → verifyPayout returns 'successful'
  *      → settleSellPayout finalizes → Transaction=completed + outbox=completed.
  *
- *   2. Send (onchain_send): executeSend creates a settling txn + pending outbox row.
- *      Payload has no onChainTxHash (missed success webhook = unknown outcome).
- *      Reconciler.tick() with no hash → success=false → settleSendRefundAtomic →
- *      Transaction=failed + outbox=completed.
+ *   2a. Send (onchain_send) — provider PENDING: reconciler queries provider, gets 'pending'
+ *       → row stays open (Transaction=settling, outbox=pending, NO ledger movement/refund).
+ *
+ *   2b. Send (onchain_send) — provider FAILED: reconciler queries provider, gets 'failed'
+ *       → settleSendOnChain(success=false) → Transaction=failed + outbox=completed (refund).
+ *
+ *   2c. Send (onchain_send) — provider SUCCESS: reconciler queries provider, gets 'success'
+ *       → settleSendOnChain(success=true, onChainTxHash) → Transaction=completed + outbox=completed.
  *
  *   3. Idempotency: row already completed → findPending returns [] (completed rows
  *      are excluded by the pending filter) → no settle called.
@@ -38,6 +42,7 @@ import { SettlementOutboxPrismaRepository } from '../src/modules/transactions/in
 import { SettlementPrismaRepository } from '../src/modules/transactions/infrastructure/settlement.prisma.repository';
 import { LedgerPrismaRepository } from '../src/modules/transactions/infrastructure/ledger.prisma.repository';
 import { PinPrismaRepository } from '../src/core/auth/infrastructure/pin.prisma.repository';
+import { SessionPrismaRepository } from '../src/core/auth/infrastructure/session.prisma.repository';
 import { IdentityPrismaRepository } from '../src/modules/identity/infrastructure/identity.prisma.repository';
 import { VelocityPrismaRepository } from '../src/modules/identity/infrastructure/velocity.prisma.repository';
 import { WalletPrismaRepository } from '../src/modules/wallets/infrastructure/wallet.prisma.repository';
@@ -45,6 +50,7 @@ import { BeneficiaryPrismaRepository } from '../src/modules/beneficiaries/infras
 
 // Services
 import { PinService } from '../src/core/auth/pin.service';
+import { SessionService } from '../src/core/auth/session.service';
 import { DirectiveService } from '../src/modules/transactions/application/directive.service';
 import { ProposalService } from '../src/modules/transactions/application/proposal.service';
 import { ExecutionService } from '../src/modules/transactions/application/execution.service';
@@ -82,7 +88,6 @@ class StubConfigService {
     }
     if (key === 'reconciliation') {
       return {
-        cronExpression: '*/2 * * * *',
         gracePeriodSec: 0, // no grace: all pending rows immediately eligible
         batchSize: 20,
       } as T;
@@ -136,21 +141,36 @@ function makeFakePaymentProvider(
   };
 }
 
-const fakeWalletProvider: IWalletProvider = {
-  provisionAddress: jest.fn().mockResolvedValue({
-    address: FAKE_WALLET_ADDRESS,
-    providerReference: FAKE_BLOCKRADAR_REF,
-  }),
-  getBalance: jest.fn().mockResolvedValue({
-    available: '100',
-    pending: '0',
-    asset: 'USDT',
-  }),
-  withdraw: jest.fn().mockResolvedValue({
-    providerReference: FAKE_SEND_PROVIDER_REF,
-    status: 'pending' as const,
-  }),
-};
+/**
+ * Configurable wallet provider: `withdrawalStatus` controls what
+ * `getWithdrawalStatus` returns when the reconciler polls the provider.
+ * Default: 'pending' — safe (row stays open, no premature refund).
+ */
+function makeFakeWalletProvider(
+  withdrawalStatus: 'pending' | 'success' | 'failed' = 'pending',
+  onChainTxHash?: string,
+): IWalletProvider {
+  return {
+    provisionAddress: jest.fn().mockResolvedValue({
+      address: FAKE_WALLET_ADDRESS,
+      providerReference: FAKE_BLOCKRADAR_REF,
+    }),
+    getBalance: jest.fn().mockResolvedValue({
+      amount: '100',
+      decimals: 6,
+    }),
+    withdraw: jest.fn().mockResolvedValue({
+      providerReference: FAKE_SEND_PROVIDER_REF,
+      status: 'pending' as const,
+    }),
+    getWithdrawalStatus: jest.fn().mockResolvedValue({
+      status: withdrawalStatus,
+      ...(withdrawalStatus === 'success' && onChainTxHash
+        ? { onChainTxHash }
+        : {}),
+    }),
+  };
+}
 
 const fakeNameEnquiry: INameEnquiry = {
   resolve: jest.fn().mockResolvedValue({
@@ -177,6 +197,9 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
   let directiveService: DirectiveService;
   let pinService: PinService;
   let beneficiaryService: BeneficiaryService;
+
+  // Mutable wallet provider: individual send tests reconfigure getWithdrawalStatus.
+  let walletProvider: IWalletProvider;
 
   let userId: string;
 
@@ -209,10 +232,15 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
     const walletRepo = new WalletPrismaRepository(ps);
     const beneficiaryRepo = new BeneficiaryPrismaRepository(ps);
 
+    // Default wallet provider: getWithdrawalStatus returns 'pending' (safe).
+    walletProvider = makeFakeWalletProvider('pending');
+
     // Services
+    const sessionRepo = new SessionPrismaRepository(ps);
+    const sessionService = new SessionService(sessionRepo, config, clock);
     pinService = new PinService(pinRepo, config, clock);
     walletService = new WalletService(
-      fakeWalletProvider,
+      walletProvider,
       walletRepo,
       clock,
       assetRegistry,
@@ -278,6 +306,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
           complianceEventId: 'compliance-reconcil-e2e',
         }),
       } as never,
+      sessionService, // required for executeSend (Fix G §3.4)
     );
 
     reconciler = new SettlementReconciliationService(
@@ -286,7 +315,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       config,
     );
 
-    // Seed a KYC-verified (Tier 2) user with a PIN.
+    // Seed a KYC-verified (Tier 2) user with a PIN + a bound device (Fix G §3.4).
     const user = await prisma.user.create({
       data: {
         kycStatus: 'verified',
@@ -296,6 +325,21 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
     });
     userId = user.id;
     await pinService.setPin(userId, '111111');
+
+    // Create a bound device and pin it to the user so executeSend can
+    // resolve the device for step-up recording (fail-closed, Fix G §3.4).
+    const device = await prisma.device.create({
+      data: {
+        userId,
+        fingerprint: `reconcil-e2e-device-${randomUUID()}`,
+        trustState: 'bound',
+        boundAt: new Date(),
+      },
+    });
+    await prisma.user.update({
+      where: { id: userId },
+      data: { pinnedDeviceId: device.id },
+    });
   });
 
   afterAll(async () => {
@@ -437,11 +481,15 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Test 2: Send — onchain_send reconciliation (no txHash → refund path)
+  // Test 2a: Send — onchain_send reconciliation (provider PENDING → row stays open)
   // ---------------------------------------------------------------------------
 
-  it('reconciles a missed send: pending onchain_send row (no txHash) → settleSendOnChain(success=false) → failed/refunded', async () => {
-    // Provision wallet + seed send balance (totalDebit = 11 = 10 crypto + 1 fee).
+  it('2a: missed webhook + provider pending → Transaction stays settling, outbox stays pending, NO refund', async () => {
+    // Configure provider to return 'pending' (safe default).
+    (walletProvider.getWithdrawalStatus as jest.Mock).mockResolvedValue({
+      status: 'pending',
+    });
+
     const wallet = await walletService.getOrProvisionWallet(
       userId,
       'USDT',
@@ -449,23 +497,18 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
     );
     await seedUsdtBalance(wallet.id, '50');
 
-    // Create a crypto-address beneficiary for send.
     const beneficiary = await beneficiaryService.addCryptoAddress({
       userId,
-      label: 'Reconcil Send Dest',
+      label: 'Reconcil Send Pend',
       network: 'TRON',
-      // Valid base58 TRON address: T + 33 chars from [1-9A-HJ-NP-Za-km-z]
-      address: 'TSendE2EBeneficiaryTronAddress1234',
+      address: 'TPendE2EBeneficiaryTronAddr1234567',
       asset: 'USDT',
     });
-
-    // Clear the cooling-off period so the beneficiary is immediately usable.
     await prisma.beneficiary.update({
       where: { id: beneficiary.id },
       data: { firstUseLockedUntil: null },
     });
 
-    // Create a send proposal.
     const sendProposal = await proposalService.createSendProposal({
       userId,
       beneficiaryId: beneficiary.id,
@@ -476,48 +519,188 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
         network: 'TRON',
       },
     });
-    const { proposalId } = sendProposal;
 
-    // Issue a step-up directive.
     const { directiveId, nonce } = await directiveService.issue({
       userId,
-      proposalId,
+      proposalId: sendProposal.proposalId,
       ref: 'request_step_up',
     });
 
-    const idemKey = randomUUID();
-
-    // Execute send — creates Transaction(settling) + outbox row(onchain_send, pending).
     const sendResult = await executionService.executeSend({
       userId,
-      proposalId,
+      proposalId: sendProposal.proposalId,
       directiveId,
       nonce,
       pin: '111111',
-      idempotencyKey: idemKey,
+      idempotencyKey: randomUUID(),
     });
 
     expect(sendResult.status).toBe('settling');
 
-    // Verify outbox row is pending.
     const rowsBefore = await prisma.settlementOutbox.findMany({
       where: { transactionId: sendResult.transactionId, status: 'pending' },
     });
     expect(rowsBefore).toHaveLength(1);
     expect(rowsBefore[0].settlementType).toBe('onchain_send');
-    // Confirm payload has no onChainTxHash (only set after chain confirmation).
     expect(rowsBefore[0].payload).not.toHaveProperty('onChainTxHash');
 
-    // NO success webhook. Reconciler fires with no txHash → success=false.
+    // Reconciler tick: provider returns 'pending' → row must stay open.
     await reconciler.tick();
 
-    // Transaction should be 'failed' (refund path).
-    const txn = await prisma.transaction.findUnique({
+    // Transaction MUST still be 'settling' — no premature refund.
+    const txnAfter = await prisma.transaction.findUnique({
       where: { id: sendResult.transactionId },
     });
-    expect(txn?.status).toBe('failed');
+    expect(txnAfter?.status).toBe('settling');
 
-    // Outbox row should be completed.
+    // Outbox row MUST still be 'pending' — no complete() called.
+    const rowsAfter = await prisma.settlementOutbox.findMany({
+      where: { transactionId: sendResult.transactionId },
+    });
+    expect(rowsAfter).toHaveLength(1);
+    expect(rowsAfter[0].status).toBe('pending');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test 2b: Send — onchain_send reconciliation (provider FAILED → refund)
+  // ---------------------------------------------------------------------------
+
+  it('2b: missed webhook + provider failed → settleSendOnChain(success=false) → Transaction=failed, outbox=completed', async () => {
+    // Configure provider to return 'failed'.
+    (walletProvider.getWithdrawalStatus as jest.Mock).mockResolvedValue({
+      status: 'failed',
+    });
+
+    const wallet = await walletService.getOrProvisionWallet(
+      userId,
+      'USDT',
+      'TRON',
+    );
+    await seedUsdtBalance(wallet.id, '50');
+
+    const beneficiary = await beneficiaryService.addCryptoAddress({
+      userId,
+      label: 'Reconcil Send Fail',
+      network: 'TRON',
+      address: 'TFai1E2EBeneficiaryTronAddr1234567',
+      asset: 'USDT',
+    });
+    await prisma.beneficiary.update({
+      where: { id: beneficiary.id },
+      data: { firstUseLockedUntil: null },
+    });
+
+    const sendProposal = await proposalService.createSendProposal({
+      userId,
+      beneficiaryId: beneficiary.id,
+      intent: {
+        action: 'send_crypto',
+        asset: 'USDT',
+        cryptoAmount: '10.000000',
+        network: 'TRON',
+      },
+    });
+
+    const { directiveId, nonce } = await directiveService.issue({
+      userId,
+      proposalId: sendProposal.proposalId,
+      ref: 'request_step_up',
+    });
+
+    const sendResult = await executionService.executeSend({
+      userId,
+      proposalId: sendProposal.proposalId,
+      directiveId,
+      nonce,
+      pin: '111111',
+      idempotencyKey: randomUUID(),
+    });
+
+    expect(sendResult.status).toBe('settling');
+
+    // Reconciler tick: provider returns 'failed' → refund.
+    await reconciler.tick();
+
+    const txnAfter = await prisma.transaction.findUnique({
+      where: { id: sendResult.transactionId },
+    });
+    expect(txnAfter?.status).toBe('failed');
+
+    const rowsAfter = await prisma.settlementOutbox.findMany({
+      where: { transactionId: sendResult.transactionId },
+    });
+    expect(rowsAfter).toHaveLength(1);
+    expect(rowsAfter[0].status).toBe('completed');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test 2c: Send — onchain_send reconciliation (provider SUCCESS → completed)
+  // ---------------------------------------------------------------------------
+
+  it('2c: missed webhook + provider success → settleSendOnChain(success=true) → Transaction=completed, outbox=completed', async () => {
+    const FAKE_TX_HASH = 'TRON_CHAIN_HASH_ABC123456789012345678901';
+
+    // Configure provider to return 'success' with a hash.
+    (walletProvider.getWithdrawalStatus as jest.Mock).mockResolvedValue({
+      status: 'success',
+      onChainTxHash: FAKE_TX_HASH,
+    });
+
+    const wallet = await walletService.getOrProvisionWallet(
+      userId,
+      'USDT',
+      'TRON',
+    );
+    await seedUsdtBalance(wallet.id, '50');
+
+    const beneficiary = await beneficiaryService.addCryptoAddress({
+      userId,
+      label: 'Reconcil Send Succ',
+      network: 'TRON',
+      address: 'TSuccE2EBeneficiaryTronAddr1234567',
+      asset: 'USDT',
+    });
+    await prisma.beneficiary.update({
+      where: { id: beneficiary.id },
+      data: { firstUseLockedUntil: null },
+    });
+
+    const sendProposal = await proposalService.createSendProposal({
+      userId,
+      beneficiaryId: beneficiary.id,
+      intent: {
+        action: 'send_crypto',
+        asset: 'USDT',
+        cryptoAmount: '10.000000',
+        network: 'TRON',
+      },
+    });
+
+    const { directiveId, nonce } = await directiveService.issue({
+      userId,
+      proposalId: sendProposal.proposalId,
+      ref: 'request_step_up',
+    });
+
+    const sendResult = await executionService.executeSend({
+      userId,
+      proposalId: sendProposal.proposalId,
+      directiveId,
+      nonce,
+      pin: '111111',
+      idempotencyKey: randomUUID(),
+    });
+
+    expect(sendResult.status).toBe('settling');
+
+    // Reconciler tick: provider returns 'success' → finalize.
+    await reconciler.tick();
+
+    const txnAfter = await prisma.transaction.findUnique({
+      where: { id: sendResult.transactionId },
+    });
+    expect(txnAfter?.status).toBe('completed');
+
     const rowsAfter = await prisma.settlementOutbox.findMany({
       where: { transactionId: sendResult.transactionId },
     });

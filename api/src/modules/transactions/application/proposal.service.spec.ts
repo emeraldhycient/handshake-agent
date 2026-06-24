@@ -1263,4 +1263,43 @@ describe('ProposalService.createSendProposal', () => {
     // 10 USDT × 1600 NGN/USDT = 16000 NGN — should be a non-empty decimal string
     expect(sendCallArg.fiatAmount).toBe('16000');
   });
+
+  // ── Fix-2: exact rate scaling — fractional baseRate handled exactly ────────
+
+  it('computes NGN-equivalent exactly with a fractional baseRate (no Math.round drift)', async () => {
+    // baseRate 1600.45: 10 USDT × 1600.45 = 16004.5 NGN exactly.
+    // Math.round(1600.45) = 1600 → would produce 16000 (wrong by 4.5 NGN).
+    const configWithFractionalRate = {
+      get: jest.fn((key: string) => {
+        if (key === 'compliance') return { travelRuleThresholdNgn: 1_000_000 };
+        if (key === 'pricing')
+          return { assets: { USDT: { baseRate: 1600.45 } } };
+        return undefined;
+      }),
+    };
+    const kycGate = makeKycGate();
+    // No override of assetRegistry needed — baseRate comes from pricing config,
+    // not from the catalog asset (CatalogAsset has no baseRate field).
+
+    const svc = makeSendSvc({
+      kycGate,
+      configService: configWithFractionalRate,
+    });
+
+    await svc.createSendProposal(BASE_SEND_INPUT);
+
+    const sendCalls = (
+      kycGate.assertCanTransact as jest.MockedFunction<
+        (input: {
+          userId: string;
+          fiatAmount: string;
+          asset: string;
+        }) => Promise<void>
+      >
+    ).mock.calls;
+    const fiatAmount = sendCalls[0][0].fiatAmount;
+
+    // 10 × 1600.45 = 16004.5 — exact decimal scaling must produce this, not 16000.
+    expect(fiatAmount).toBe('16004.5');
+  });
 });
