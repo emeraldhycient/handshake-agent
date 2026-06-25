@@ -238,6 +238,17 @@ export class AssetRegistry {
   }
 
   /**
+   * Returns an array of symbols for all enabled crypto assets in the catalog.
+   * Used by the system-prompt builder and any UI that must enumerate supported
+   * assets without hardcoding a list (registry-driven extensibility, §7).
+   */
+  enabledCryptoAssets(): string[] {
+    return Object.values(this.catalog.assets)
+      .filter((a) => a.enabled && a.kind === 'crypto')
+      .map((a) => a.symbol);
+  }
+
+  /**
    * Returns the Blockradar master wallet id configured for the given network.
    *
    * Resolves from `catalog.networks[networkId].masterWalletId` which is populated

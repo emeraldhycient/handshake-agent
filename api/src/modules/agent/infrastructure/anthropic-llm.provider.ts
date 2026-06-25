@@ -6,34 +6,7 @@ import { ChatAnthropic } from '@langchain/anthropic';
 import { IntentSchema, type Intent } from '@handshake-agent/contracts';
 import type { LlmProvider } from '../core/ports/llm-provider.port';
 import type { Env } from '../../../core/config/env.schema';
-
-// ---------------------------------------------------------------------------
-// System prompt
-// ---------------------------------------------------------------------------
-
-/**
- * Concise instruction to the model: extract the user's intent into the
- * structured `IntentSchema`. When genuinely unsure, return `action:'none'`
- * with a clarification question — never guess a financial action.
- *
- * Kept minimal so the IntentSchema itself documents allowed shapes.
- */
-const SYSTEM_PROMPT = `You are a financial intent extractor for a crypto/ticket assistant serving Nigerian users.
-
-Given a user message, extract their intent and return it as a structured object matching one of the supported actions:
-- buy_crypto: user wants to buy cryptocurrency with fiat
-- send_crypto: user wants to send crypto to someone
-- receive_crypto: user wants to receive crypto / get their wallet address
-- swap: user wants to swap one crypto asset for another
-- buy_ticket: user wants to buy an event ticket
-- check_balance: user wants to check their wallet balance
-- none: intent is unclear — return a short clarification question in the "clarification" field
-
-Rules:
-1. Never guess a financial action if the intent is ambiguous — prefer "none" with a clarifying question.
-2. Amounts are strings (e.g. "5000" not 5000). Fiat currency defaults to "NGN".
-3. Only "USDT" and "BTC" are supported assets at launch.
-4. Return exactly one intent matching the schema — no prose, no explanation.`;
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
 
 // ---------------------------------------------------------------------------
 // Provider
@@ -48,6 +21,10 @@ Rules:
  * application boots without `ANTHROPIC_API_KEY` being set (it is optional in
  * the env schema — tests and non-LLM paths work fine). The model is created on
  * the first `extractIntent` call and cached thereafter.
+ *
+ * The system prompt is built dynamically from the `AssetRegistry` so the
+ * supported-asset and default-fiat basket are always in sync with the catalog
+ * config — no hardcoded values (root CLAUDE.md §7).
  */
 @Injectable()
 export class AnthropicLlmProvider implements LlmProvider {
@@ -59,7 +36,10 @@ export class AnthropicLlmProvider implements LlmProvider {
   // withStructuredOutput/invoke, both on ChatAnthropic.
   private model: ChatAnthropic | null = null;
 
-  constructor(private readonly config: ConfigService<Env, true>) {}
+  constructor(
+    private readonly config: ConfigService<Env, true>,
+    private readonly assetRegistry: AssetRegistry,
+  ) {}
 
   async extractIntent(userText: string): Promise<Intent> {
     const model = this.getOrCreateModel();
@@ -69,9 +49,41 @@ export class AnthropicLlmProvider implements LlmProvider {
     });
 
     return structured.invoke([
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: this.buildSystemPrompt() },
       { role: 'user', content: userText },
     ]) as Promise<Intent>;
+  }
+
+  /**
+   * Builds the system prompt from the asset catalog so the supported-asset
+   * basket and default fiat are never hardcoded in source.
+   *
+   * Called on each `extractIntent` invocation (the string is small; no caching
+   * needed). Keeping it as a method (not a constructor-time field) means tests
+   * can call it directly to assert prompt content without triggering the lazy
+   * ChatAnthropic build.
+   */
+  buildSystemPrompt(): string {
+    const enabledAssets = this.assetRegistry.enabledCryptoAssets();
+    const defaultFiat = this.assetRegistry.defaultFiat();
+    const assetList = enabledAssets.map((s) => `"${s}"`).join(', ');
+
+    return `You are a financial intent extractor for a crypto/ticket assistant serving Nigerian users.
+
+Given a user message, extract their intent and return it as a structured object matching one of the supported actions:
+- buy_crypto: user wants to buy cryptocurrency with fiat
+- send_crypto: user wants to send crypto to someone
+- receive_crypto: user wants to receive crypto / get their wallet address
+- swap: user wants to swap one crypto asset for another
+- buy_ticket: user wants to buy an event ticket
+- check_balance: user wants to check their wallet balance
+- none: intent is unclear — return a short clarification question in the "clarification" field
+
+Rules:
+1. Never guess a financial action if the intent is ambiguous — prefer "none" with a clarifying question.
+2. Amounts are strings (e.g. "5000" not 5000). Fiat currency defaults to "${defaultFiat}".
+3. Only ${assetList} are supported assets.
+4. Return exactly one intent matching the schema — no prose, no explanation.`;
   }
 
   // ---------------------------------------------------------------------------
