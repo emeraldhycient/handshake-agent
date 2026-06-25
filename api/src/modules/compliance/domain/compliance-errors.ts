@@ -18,6 +18,27 @@ export abstract class ComplianceDomainError extends Error {
 }
 
 /**
+ * The sanctions/AML screening provider was unavailable (network error, non-2xx
+ * response, timeout). The send MUST be blocked when screening cannot confirm
+ * an address is clean — fail-closed.
+ *
+ * The caller (execution engine / send proposal) must treat this the same as a
+ * failed screen: do not proceed with the transaction.
+ */
+export class SanctionsScreeningUnavailableError extends ComplianceDomainError {
+  readonly code = 'SANCTIONS_SCREENING_UNAVAILABLE' as const;
+
+  constructor(
+    readonly provider: string,
+    readonly cause?: Error,
+  ) {
+    super(
+      `Sanctions screening unavailable (provider: ${provider})${cause ? `: ${cause.message}` : ''}`,
+    );
+  }
+}
+
+/**
  * The destination address was flagged by the sanctions screener.
  * The caller (N3 send proposal) must block the send and surface this error.
  *
