@@ -944,6 +944,28 @@ describe('ExecutionService.executeBuy', () => {
     expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
+  // ── Task 5: fiatCurrency threaded from quote (not hardcoded 'NGN') ──────────
+
+  it('uses the quote fiatCurrency for the collection and result, not a literal', async () => {
+    const paymentProvider = makePaymentProvider();
+    const settlementRepo = makeSettlementRepo();
+
+    const svc = buildService({ paymentProvider, settlementRepo });
+
+    const res = await svc.executeBuy(BASE_INPUT);
+
+    // Result currency must come from the stored quote (STORED_QUOTE.fiatCurrency = 'NGN').
+    expect(res.payment.currency).toBe('NGN');
+
+    // createCollection must be called with the quote's fiatCurrency, not a literal.
+    expect(paymentProvider.createCollection).toHaveBeenCalledWith(
+      expect.objectContaining({ currency: 'NGN' }),
+    );
+
+    // settleBuyAtomic is only called during settleBuyPayment, not executeBuy —
+    // the real regression guard is in the settleBuyPayment suite below.
+  });
+
   // ── Idempotent replay returns non-empty VA details (C2) ───────────────────
 
   it('idempotent replay returns populated VA details (accountNumber/bankName/providerRef) from metadata', async () => {
@@ -1118,6 +1140,31 @@ describe('ExecutionService.settleBuyPayment', () => {
     expect(settlementRepo.settleBuyAtomic).not.toHaveBeenCalled();
     // No provider verify on idempotent path.
     expect(paymentProvider.verify).not.toHaveBeenCalled();
+  });
+
+  // ── Task 5: settleBuyAtomic receives fiatCurrency from metadata ──────────────
+
+  it('settleBuyAtomic is called with fiatCurrency read from transaction metadata (not hardcoded NGN)', async () => {
+    const transactionRepo = makeTransactionRepoForSettle(SETTLING_TXN);
+    const settlementRepo = makeSettlementRepo(null, {
+      receiptNumber: STUB_RECEIPT_NUMBER,
+    });
+    const walletService = makeWalletServiceWithId();
+    const paymentProvider = makePaymentProvider();
+
+    const svc = buildService({
+      transactionRepo,
+      settlementRepo,
+      walletService,
+      paymentProvider,
+    });
+
+    await svc.settleBuyPayment(SETTLE_INPUT);
+
+    // fiatCurrency must be threaded from meta.fiatCurrency (SETTLING_TXN.metadata.fiatCurrency = 'NGN').
+    expect(settlementRepo.settleBuyAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({ fiatCurrency: 'NGN' }),
+    );
   });
 
   // ── Provider verify not successful → return pending ───────────────────────

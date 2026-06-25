@@ -37,6 +37,8 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import type { FiatCurrency } from '@handshake-agent/contracts';
+
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import { PinService } from '../../../core/auth/pin.service';
 import { SessionService } from '../../../core/auth/session.service';
@@ -119,7 +121,7 @@ export interface ExecuteBuyResult {
     bankName: string;
     providerRef: string;
     amount: string;
-    currency: 'NGN';
+    currency: string;
   };
 }
 
@@ -340,7 +342,7 @@ export class ExecutionService {
     const freshQuote = await this.quotesService.quoteBuy({
       asset: storedQuote.asset as 'USDT' | 'BTC',
       fiatAmount: storedQuote.fiatAmount,
-      fiatCurrency: storedQuote.fiatCurrency as 'NGN',
+      fiatCurrency: storedQuote.fiatCurrency as FiatCurrency,
     });
 
     const storedRate = Number(storedQuote.fxRate);
@@ -461,7 +463,7 @@ export class ExecutionService {
     // TODO: when KycProfile is queryable from the engine, use real firstname/lastname.
     const collection = await this.paymentProvider.createCollection({
       amount: storedQuote.fiatAmount,
-      currency: 'NGN',
+      currency: storedQuote.fiatCurrency,
       reference: idempotencyKey,
       customer: {
         // Safe fallback: use a synthetic email derived from userId.
@@ -505,7 +507,7 @@ export class ExecutionService {
         bankName: collection.bankName,
         providerRef: collection.providerRef,
         amount: storedQuote.fiatAmount,
-        currency: 'NGN',
+        currency: storedQuote.fiatCurrency,
       },
     };
   }
@@ -568,7 +570,10 @@ export class ExecutionService {
     const verifiedAmount = toScaled(verifyResult.amount);
     const expectedAmount = toScaled(expectedFiatAmount);
 
-    if (verifiedAmount < expectedAmount || verifyResult.currency !== 'NGN') {
+    if (
+      verifiedAmount < expectedAmount ||
+      verifyResult.currency !== meta.fiatCurrency
+    ) {
       // Mismatch — leave in settling; operator/webhook will retry.
       return { transactionId: txn.id, status: 'pending', userId: txn.userId };
     }
@@ -601,8 +606,8 @@ export class ExecutionService {
       processingFee: meta.processingFeeAmount ?? '0',
       // WN-4: thread settleAsset so ledger legs key by asset, not a hardcoded literal.
       asset: settleAsset,
-      // Task 4: thread fiatCurrency to the ledger builder for the fiat legs.
-      fiatCurrency: meta.fiatCurrency ?? 'NGN',
+      // Task 5: fiatCurrency is always present in buy metadata (written at executeBuy).
+      fiatCurrency: meta.fiatCurrency,
       providerRef: verifyResult.providerRef,
       now,
       year,
