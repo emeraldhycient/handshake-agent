@@ -369,6 +369,7 @@ function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
       .fn()
       .mockReturnValue('f56d297c-a3db-4cda-95bd-180b54679070'),
     defaultCryptoAsset: jest.fn().mockReturnValue('USDT'),
+    defaultFiat: jest.fn().mockReturnValue('NGN'),
     isAssetEnabled: jest.fn().mockReturnValue(true),
     isNetworkEnabled: jest.fn().mockReturnValue(true),
     isFiatEnabled: jest.fn().mockReturnValue(true),
