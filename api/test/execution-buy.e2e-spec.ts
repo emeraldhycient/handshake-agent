@@ -505,6 +505,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
         await gate.assertCanTransact({
           userId: capUser.id,
           fiatAmount: '10000',
+          fiatCurrency: 'NGN',
           asset: 'USDT',
         });
       })(),

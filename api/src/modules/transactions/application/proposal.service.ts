@@ -215,10 +215,11 @@ export class ProposalService {
     });
 
     // 4. KYC / velocity gate (§3.3) — BEFORE persisting the Proposal.
-    // fiatAmount is the intent's exact NGN string — no Number() conversion (Fix-C).
+    // fiatAmount is the intent's exact fiat string — no Number() conversion (Fix-C).
     await this.kycGate.assertCanTransact({
       userId,
       fiatAmount: intent.fiatAmount,
+      fiatCurrency: intent.fiatCurrency,
       asset: intent.asset,
     });
 
@@ -316,11 +317,12 @@ export class ProposalService {
       );
     }
 
-    // 4. KYC / velocity gate on the NGN out amount (§3.3) — BEFORE persisting.
+    // 4. KYC / velocity gate on the fiat out amount (§3.3) — BEFORE persisting.
     // quote.netFiatAmount is already an exact decimal string — no Number() (Fix-C).
     await this.kycGate.assertCanTransact({
       userId,
       fiatAmount: quote.netFiatAmount,
+      fiatCurrency: intent.fiatCurrency,
       asset: intent.asset,
     });
 
@@ -504,6 +506,8 @@ export class ProposalService {
     await this.kycGate.assertCanTransact({
       userId,
       fiatAmount: ngnEquivalentStr,
+      // TODO(WN): AssetRegistry.defaultFiat() (Task 9)
+      fiatCurrency: 'NGN',
       asset: intent.asset,
     });
 

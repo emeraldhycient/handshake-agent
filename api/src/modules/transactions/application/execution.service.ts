@@ -363,6 +363,7 @@ export class ExecutionService {
     await this.kycGate.assertCanTransact({
       userId,
       fiatAmount: storedQuote.fiatAmount,
+      fiatCurrency: storedQuote.fiatCurrency,
       asset: storedQuote.asset,
     });
 
@@ -705,10 +706,11 @@ export class ExecutionService {
 
     // ── Step 3: KYC gate (server-side, always) ──────────────────────────────
     // Fix-C: pass the exact decimal string — no Number() conversion at the gate.
-    // storedQuote.fiatAmount for a sell quote holds the netFiatAmount (NGN out).
+    // storedQuote.fiatAmount for a sell quote holds the netFiatAmount (fiat out).
     await this.kycGate.assertCanTransact({
       userId,
       fiatAmount: storedQuote.fiatAmount,
+      fiatCurrency: storedQuote.fiatCurrency,
       asset: storedQuote.asset,
     });
 
@@ -1175,6 +1177,8 @@ export class ExecutionService {
     await this.kycGate.assertCanTransact({
       userId,
       fiatAmount: ngnEquivalentStr,
+      // TODO(WN): AssetRegistry.defaultFiat() (Task 9)
+      fiatCurrency: 'NGN',
       asset,
     });
 

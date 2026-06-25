@@ -42,16 +42,18 @@ const stubConfig = {
   get: (key: string) => {
     if (key === 'limits') {
       return {
-        tier_1: TIER_1_LIMITS,
-        tier_2: {
-          perTxFiatMax: 500_000,
-          dailyFiatMax: 2_000_000,
-          dailyTxCountMax: 30,
-        },
-        tier_3: {
-          perTxFiatMax: 5_000_000,
-          dailyFiatMax: 20_000_000,
-          dailyTxCountMax: 100,
+        NGN: {
+          tier_1: TIER_1_LIMITS,
+          tier_2: {
+            perTxFiatMax: 500_000,
+            dailyFiatMax: 2_000_000,
+            dailyTxCountMax: 30,
+          },
+          tier_3: {
+            perTxFiatMax: 5_000_000,
+            dailyFiatMax: 20_000_000,
+            dailyTxCountMax: 100,
+          },
         },
       } satisfies AppConfig['limits'];
     }
@@ -111,7 +113,13 @@ function makeService(
 }
 
 // Fix-C: fiatAmount is now a string (exact NGN decimal) — no Number() at the gate.
-const BASE_INPUT = { userId: 'user-id-1', fiatAmount: '10000', asset: 'USDT' };
+// Task 8: fiatCurrency is now required on AssertCanTransactInput.
+const BASE_INPUT = {
+  userId: 'user-id-1',
+  fiatAmount: '10000',
+  asset: 'USDT',
+  fiatCurrency: 'NGN',
+};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -333,6 +341,33 @@ describe('KycGateService.assertCanTransact', () => {
         userId: 'user-id-1',
       }),
     ).rejects.toThrow(TierLimitExceededError);
+  });
+
+  // ── Task 8: per-fiat limit resolution ────────────────────────────────────
+
+  it('resolves the per-fiat tier limit for the transaction currency', async () => {
+    // tier_1 perTxFiatMax = 50_000; 60_000 should breach it.
+    const svc = makeService(makeUser(), '0', 0);
+    await expect(
+      svc.assertCanTransact({
+        userId: 'user-id-1',
+        fiatAmount: '60000',
+        asset: 'USDT',
+        fiatCurrency: 'NGN',
+      }),
+    ).rejects.toBeInstanceOf(TierLimitExceededError);
+  });
+
+  it('fails closed for a currency with no configured limits', async () => {
+    const svc = makeService(makeUser(), '0', 0);
+    await expect(
+      svc.assertCanTransact({
+        userId: 'user-id-1',
+        fiatAmount: '1',
+        asset: 'USDT',
+        fiatCurrency: 'USD',
+      }),
+    ).rejects.toThrow(/USD/);
   });
 });
 

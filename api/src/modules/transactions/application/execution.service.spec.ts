@@ -273,7 +273,14 @@ function makeKycGate(
     // Fix-C: fiatAmount is now a string (exact NGN decimal).
     assertCanTransact: jest.fn<
       Promise<void>,
-      [{ userId: string; fiatAmount: string; asset: string }]
+      [
+        {
+          userId: string;
+          fiatAmount: string;
+          fiatCurrency: string;
+          asset: string;
+        },
+      ]
     >(),
     getOriginatorName: jest.fn<Promise<string | null>, [string]>(),
   };
