@@ -15,6 +15,12 @@ import { WalletPrismaRepository } from './infrastructure/wallet.prisma.repositor
  * - PrismaModule is global — PrismaService is already in the DI container.
  * - ConfigModule is global — ConfigService is already available.
  * - HttpModule is imported here for the Blockradar HTTP client.
+ *
+ * WN-5: WalletBackfillService is registered in AdminModule (not here) because
+ * it requires USER_LISTER which lives in IdentityModule. Registering it here
+ * would require importing IdentityModule → wallets→identity cycle (IdentityModule
+ * already imports WalletsModule for WN-3). AdminModule is the composition root
+ * that imports both modules and provides WalletBackfillService with full DI.
  */
 @Module({
   imports: [HttpModule],

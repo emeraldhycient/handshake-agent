@@ -8,6 +8,7 @@ import { VELOCITY_REPOSITORY } from './application/ports/velocity.repository.por
 import { KYC_PROVIDER } from './application/ports/kyc-provider.port';
 import { KYC_REPOSITORY } from './application/ports/kyc.repository.port';
 import { HANDOFF_TOKEN_REPOSITORY } from './application/ports/handoff-token.repository.port';
+import { USER_LISTER } from '../wallets/application/ports/user-lister.port';
 import { IdentityService } from './application/identity.service';
 import { KycGateService } from './application/kyc-gate.service';
 import { KycService } from './application/kyc.service';
@@ -16,6 +17,7 @@ import { IdentityPrismaRepository } from './infrastructure/identity.prisma.repos
 import { VelocityPrismaRepository } from './infrastructure/velocity.prisma.repository';
 import { KycPrismaRepository } from './infrastructure/kyc.prisma.repository';
 import { HandoffTokenPrismaRepository } from './infrastructure/handoff-token.prisma.repository';
+import { ActiveUserListerPrismaAdapter } from './infrastructure/active-user-lister.prisma';
 import { MockKycProvider } from './infrastructure/mock-kyc.provider';
 import { KycController } from './presentation/kyc.controller';
 
@@ -37,6 +39,12 @@ import { KycController } from './presentation/kyc.controller';
  * KycController for eager post-KYC address provisioning (best-effort).
  * The dependency lives at the presentation/composition layer — dep-cruiser
  * permits this; no forbidden cross-feature rule applies here.
+ *
+ * WN-5: USER_LISTER token bound to ActiveUserListerPrismaAdapter and exported
+ * so AdminModule can provide it to WalletBackfillService. This keeps the
+ * wallets→identity cycle broken: wallets/application owns the IUserLister port
+ * interface; identity/infrastructure owns the Prisma adapter; AdminModule is
+ * the composition root that imports both and resolves the binding.
  */
 @Module({
   imports: [AuthModule, WalletsModule],
@@ -55,6 +63,10 @@ import { KycController } from './presentation/kyc.controller';
     },
     { provide: KYC_PROVIDER, useClass: MockKycProvider },
     { provide: CLOCK, useClass: SystemClock },
+    // WN-5: USER_LISTER adapter lives in identity/infrastructure (the only layer
+    // allowed to import PrismaService — CLAUDE.md §3.2). Exported so AdminModule
+    // can inject it into WalletBackfillService without a wallets→identity cycle.
+    { provide: USER_LISTER, useClass: ActiveUserListerPrismaAdapter },
   ],
   exports: [
     IdentityService,
@@ -63,6 +75,8 @@ import { KycController } from './presentation/kyc.controller';
     HandoffTokenService,
     IDENTITY_REPOSITORY,
     KYC_PROVIDER,
+    // WN-5: export USER_LISTER so AdminModule can wire it into WalletBackfillService
+    USER_LISTER,
   ],
 })
 export class IdentityModule {}
