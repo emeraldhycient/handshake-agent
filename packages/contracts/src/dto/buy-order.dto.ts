@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { IdempotencyKeySchema, SupportedAssetSchema } from '../common'
+import { FiatCurrencySchema, IdempotencyKeySchema, SupportedAssetSchema } from '../common'
 import { QuoteBuyInputSchema } from '../tools/quote-buy.tool'
 
 // Request/response DTOs for the web app's execute-buy endpoint. The request is
@@ -25,6 +25,7 @@ export const CreateBuyOrderResponseSchema = z.object({
   orderId: z.string().uuid(),
   status: BuyOrderStatusSchema,
   asset: SupportedAssetSchema,
+  fiatCurrency: FiatCurrencySchema,
   cryptoAmount: z.string(),
   createdAt: z.string().datetime(),
 })
