@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { AuthModule } from '../../core/auth/auth.module';
+import { WalletsModule } from '../wallets/wallets.module';
 import { CLOCK, SystemClock } from '../../core/common/clock';
 import { IDENTITY_REPOSITORY } from './application/ports/identity.repository.port';
 import { VELOCITY_REPOSITORY } from './application/ports/velocity.repository.port';
@@ -31,9 +32,14 @@ import { KycController } from './presentation/kyc.controller';
  * PIN hashing — task K2).
  *
  * K3: HandoffTokenService + HandoffTokenPrismaRepository + KycController added.
+ *
+ * WN-3: WalletsModule imported so WalletService can be injected into
+ * KycController for eager post-KYC address provisioning (best-effort).
+ * The dependency lives at the presentation/composition layer — dep-cruiser
+ * permits this; no forbidden cross-feature rule applies here.
  */
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, WalletsModule],
   controllers: [KycController],
   providers: [
     IdentityService,
