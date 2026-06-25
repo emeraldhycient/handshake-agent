@@ -166,3 +166,43 @@ enum WalletSyncStatus {
 
   @@map("wallet_sync_status")
 }
+
+// =============================================================================
+// BackfillRun — durable state for the async wallet-network backfill job (BQ-2).
+//
+// Lifecycle: queued → running → completed | failed.
+// The coordinator BullMQ job sets totalUsers + marks running; per-user jobs
+// increment scannedUsers / perNetwork counters atomically; the last per-user
+// job that brings scannedUsers == totalUsers marks completed.
+// =============================================================================
+
+enum BackfillRunStatus {
+  queued
+  running
+  completed
+  failed
+
+  @@map("backfill_run_status")
+}
+
+/// Durable record of an async wallet-network backfill operation (BQ-2).
+/// Created synchronously by POST /admin/wallets/backfill-networks; updated
+/// atomically by the BullMQ workers. The admin UI polls GET /admin/wallets/backfill-runs/:id.
+model BackfillRun {
+  id           String            @id @default(uuid(7)) @db.Uuid
+  status       BackfillRunStatus @default(queued)
+  dryRun       Boolean           @default(false)
+  totalUsers   Int               @default(0)
+  scannedUsers Int               @default(0)
+  /// Per-network tally: { [network]: { alreadyHad: number; provisioned: number } }
+  perNetwork   Json              @default("{}")
+  /// Per-user failures: [{ userId: string; error: string }]
+  failures     Json              @default("[]")
+  createdAt    DateTime          @default(now()) @db.Timestamptz
+  startedAt    DateTime?         @db.Timestamptz
+  completedAt  DateTime?         @db.Timestamptz
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("backfill_runs")
+}

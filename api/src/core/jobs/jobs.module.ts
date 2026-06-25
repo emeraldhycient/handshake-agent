@@ -57,6 +57,7 @@ import type { Env } from '../config/env.schema';
 import { JOB_QUEUE } from './application/job-queue.port';
 import { BullMqJobQueueAdapter } from './infrastructure/bullmq-job-queue.adapter';
 import { ECHO_QUEUE_NAME } from './echo-queue.constants';
+import { WALLET_BACKFILL_QUEUE_NAME } from '../../modules/wallets/application/wallet-backfill-queue.constants';
 
 @Module({
   imports: [
@@ -79,11 +80,25 @@ import { ECHO_QUEUE_NAME } from './echo-queue.constants';
             // the operation-level timeout / backoff). Do NOT set to 0 here — that
             // causes the initial lazy-connect to throw "Stream isn't writeable".
             maxRetriesPerRequest: null,
+            // Suppress ECONNREFUSED retry noise in tests / when Redis is absent.
+            // retryStrategy returning null means "stop retrying", but with
+            // lazyConnect the initial connect is only triggered on first Queue use.
+            // This is fine: if Redis is absent and the app never enqueues, we
+            // never connect; if Redis is absent and the app tries to enqueue, BullMQ
+            // will fail fast instead of spamming reconnect logs.
+            retryStrategy: (times: number) => {
+              // Retry up to 3 times with 200ms base delay, then give up.
+              if (times > 3) return null;
+              return Math.min(times * 200, 1000);
+            },
           },
         };
       },
     }),
     BullModule.registerQueue({ name: ECHO_QUEUE_NAME }),
+    // BQ-2: register the wallet-backfill queue so the Queue instance is available
+    // for injection (producer side: enqueue coordinate + provision-user jobs).
+    BullModule.registerQueue({ name: WALLET_BACKFILL_QUEUE_NAME }),
   ],
   // NO @Processor providers here — processors register BullMQ Workers which open
   // their own Redis connections.  Processors belong in WorkerModule (consumer side).

@@ -2,7 +2,8 @@
 
 **Status:** Accepted  
 **Date:** 2026-06-25  
-**Context:** WN-5 (wallet network backfill); references WN-1, WN-3, ADR-0006.
+**Updated:** 2026-06-25 (BQ-2 — async BullMQ backfill)  
+**Context:** WN-5 (wallet network backfill); BQ-2 (async BullMQ pattern); references WN-1, WN-3, ADR-0006.
 
 ---
 
@@ -35,12 +36,43 @@ Before WN-5, the system had eager provisioning at KYC completion (WN-3) and lazy
 
 The triad is redundant by design: any missed provisioning (e.g. Blockradar outage during KYC) is caught by lazy provisioning or the backfill.
 
-### 3. Reusable service + shared contracts + dual entrypoints
+### 3. Async BullMQ execution (BQ-2)
 
-`WalletBackfillService` is presentation-agnostic: it takes a `BackfillNetworksRequest` (shared contract) and returns a `BackfillReport` (shared contract). Two thin entrypoints share the same service:
+The backfill is now **fully asynchronous**: the operator fires a single HTTP request and the work runs off the critical path. A durable `BackfillRun` row tracks progress; the admin UI polls it.
 
-- **CLI now** (`api/src/cli/backfill-wallet-networks.ts`): boots NestJS application context (no HTTP server), reads `DRY_RUN`/`BATCH_SIZE` from env, prints the report, exits with code 0/1/2.
-- **Admin HTTP endpoint now** (`POST /admin/wallets/backfill-networks`): fail-closed `AdminTokenGuard` (Bearer token; UNSET → 403 always). The web admin UI hooks up to this endpoint with zero rework when it lands.
+**Coordinator → fan-out pattern:**
+
+```
+POST /admin/wallets/backfill-networks
+  → creates BackfillRun (queued)
+  → enqueues 1 `coordinate` job on `wallet-backfill` BullMQ queue
+  → returns { runId } 202
+
+[coordinator job] pages active users, enqueues 1 `provision-user` job per user
+  jobId = `${runId}__${userId}` (deterministic BullMQ deduplication, no `:`)
+  marks BackfillRun running + totalUsers count
+
+[provision-user jobs] (up to 10 concurrent, rate-limited)
+  provision wallets, increment counters via SELECT FOR UPDATE
+  last job to complete marks BackfillRun completed
+
+GET /admin/wallets/backfill-runs/:id → BackfillRunStatusDto
+```
+
+**BackfillRun durable state:**
+
+`BackfillRun` (`backfill_runs` table) records status, totalUsers, scannedUsers, perNetwork tallies (JSONB), and failures (JSONB array). Concurrent counter updates use a `SELECT ... FOR UPDATE` row lock inside a Prisma transaction — a single hot row cannot use optimistic concurrency (SERIALIZABLE SSI exhausts retries under 10+ concurrent writers).
+
+**Dual entrypoints share the same domain logic:**
+
+- **Admin HTTP endpoint** (`POST /admin/wallets/backfill-networks`): returns `{runId}` 202; poll via `GET /admin/wallets/backfill-runs/:id`.
+- **CLI** (`api/src/cli/backfill-wallet-networks.ts`): enqueues the coordinator, then polls `BackfillRun` via the repository until `completed`/`failed`, and prints the final report.
+
+**Module split (AppModule vs WorkerModule):**
+
+BullMQ producers (controllers that enqueue) live in `AppModule`. Processors (`CoordinateBackfillProcessor`, `ProvisionUserProcessor`) live in `WorkerModule` (the separate worker entrypoint). `AdminModule` registers the `wallet-backfill` queue (via `BullModule.registerQueue`) so `@InjectQueue` resolves in `AdminWalletsController`.
+
+**Bull Board:** both `echo` and `wallet-backfill` queues appear in `/admin/queues`.
 
 ### 4. Avoiding the wallets→identity cycle
 
@@ -64,15 +96,19 @@ Resolution: a new `IUserLister` port is owned by `wallets/application`. `ActiveU
 
 - New asset on existing network = zero code change, zero migration, zero backfill.
 - New network = config entry + master wallet + one backfill run (CLI or admin endpoint).
-- Backfill is idempotent, cursor-safe for large user tables, and fault-tolerant (per-user error isolation).
-- The shared `BackfillReport` contract is immediately consumable by the web admin UI (same Zod schema for form + API response validation).
-- The admin endpoint is present and wired before the UI — the UI team has a stable API to build against.
+- Backfill is idempotent, cursor-safe for large user tables, and fault-tolerant (per-user error isolation via BullMQ retries; failures recorded in `BackfillRun.failures`).
+- The backfill runs fully off the HTTP critical path: the operator fires one request and goes away; `BackfillRun` status is polled separately.
+- Re-enqueueing the coordinator with the same `runId` is safe: deterministic `jobId` (`${runId}__${userId}`) causes BullMQ to skip duplicates.
+- The shared `BackfillRunStatusSchema` contract is immediately consumable by the web admin UI.
+- Bull Board (`/admin/queues`) gives live visibility into both queues.
 
 **Negative / tradeoffs:**
 
 - Lazy provisioning adds a Blockradar call on the first transaction to a new network — negligible latency for a rare first-time event.
 - The `IUserLister` port is a small cross-module abstraction; justified by the cycle it prevents.
 - `AdminTokenGuard` is a simpler credential model than session auth — acceptable for an ops-only endpoint with no user-facing UI yet.
+- `SELECT FOR UPDATE` on the BackfillRun row serializes counter updates; throughput is bounded by Postgres lock speed (fast enough for job-completion frequency, which is much slower than raw DB throughput).
+- Requires Redis (BullMQ). The ioredis connection is configured with `lazyConnect: true` + bounded retry so that e2e tests without Redis don't fail — only queued work is affected.
 
 ---
 
@@ -83,3 +119,5 @@ Resolution: a new `IUserLister` port is owned by `wallets/application`. `ActiveU
 - WN-1: wallet-per-network model (Wallet ← not per-asset)
 - WN-3: eager KYC provisioning
 - WN-5: this ADR — backfill + admin endpoint
+- BQ-1: BullMQ + Bull Board baseline
+- BQ-2: async BullMQ backfill with BackfillRun durable state

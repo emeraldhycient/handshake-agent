@@ -66,14 +66,16 @@ describe('Prisma schema (integration, Testcontainers Postgres)', () => {
       `SELECT count(*)::bigint AS tables FROM information_schema.tables
        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
     );
-    // 50 domain tables + Prisma's _prisma_migrations bookkeeping table.
-    expect(Number(tables)).toBe(51);
+    // 51 domain tables + Prisma's _prisma_migrations bookkeeping table.
+    // +1 for backfill_runs (BQ-2).
+    expect(Number(tables)).toBe(52);
 
     const [{ enums }] = await prisma.$queryRawUnsafe<{ enums: bigint }[]>(
       `SELECT count(DISTINCT t.typname)::bigint AS enums
        FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid`,
     );
-    expect(Number(enums)).toBe(71);
+    // +1 for backfill_run_status (BQ-2).
+    expect(Number(enums)).toBe(72);
   });
 
   it('generates time-sortable uuid v7 ids on the client (the only sanctioned DB door)', async () => {

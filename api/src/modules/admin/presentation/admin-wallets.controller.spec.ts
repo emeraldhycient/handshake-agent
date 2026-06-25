@@ -1,49 +1,80 @@
 /**
- * Unit tests for AdminWalletsController + AdminTokenGuard (WN-5).
+ * Unit tests for AdminWalletsController + AdminTokenGuard (WN-5, BQ-2).
  *
  * TDD: tests written first (red → green → refactor).
  *
  * Covers:
  *   1. Guard: ADMIN_API_TOKEN unset → 403 for every request.
  *   2. Guard: wrong token → 403.
- *   3. Guard: correct token → calls WalletBackfillService + returns report.
- *   4. Body is parsed via the contract DTO (batchSize / dryRun forwarded).
+ *   3. Guard: correct token → the guard permits.
+ *   4. POST /admin/wallets/backfill-networks: enqueues run + returns { runId } (202).
+ *   5. GET /admin/wallets/backfill-runs/:id: returns run status; 404 when not found.
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ZodValidationPipe } from 'nestjs-zod';
+import { getQueueToken } from '@nestjs/bullmq';
+import type { Queue } from 'bullmq';
 
-import type { BackfillReport } from '@handshake-agent/contracts';
+import type { BackfillRunStatusDto } from '@handshake-agent/contracts';
 import { AdminWalletsController } from './admin-wallets.controller';
 import { AdminTokenGuard } from '../guards/admin-token.guard';
-import { WalletBackfillService } from '../../wallets/application/wallet-backfill.service';
-import { BackfillNetworksDto } from './dto/backfill-networks.dto';
+import {
+  BACKFILL_RUN_REPOSITORY,
+  type IBackfillRunRepository,
+  type BackfillRunRecord,
+} from '../../wallets/application/ports/backfill-run.repository.port';
+import { WALLET_BACKFILL_QUEUE_NAME } from '../../wallets/application/wallet-backfill-queue.constants';
+import { EnqueueBackfillDto } from './dto/enqueue-backfill.dto';
 import type { Env } from '../../../core/config/env.schema';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const FAKE_REPORT: BackfillReport = {
-  usersScanned: 5,
-  perNetwork: { TRON: { alreadyHad: 3, provisioned: 2 } },
+const FAKE_RUN_ID = '00000000-0000-7000-0000-000000000001';
+
+const FAKE_RUN_RECORD: BackfillRunRecord = {
+  id: FAKE_RUN_ID,
+  status: 'queued',
+  dryRun: false,
+  totalUsers: 0,
+  scannedUsers: 0,
+  perNetwork: {},
   failures: [],
+  createdAt: new Date('2026-06-25T10:00:00Z'),
+  startedAt: null,
+  completedAt: null,
 };
 
-function makeBackfillServiceMock() {
+function makeRunRepo(
+  overrides: Partial<IBackfillRunRepository> = {},
+): IBackfillRunRepository {
   return {
-    backfillMissingNetworkAddresses: jest.fn().mockResolvedValue(FAKE_REPORT),
+    create: jest.fn().mockResolvedValue(FAKE_RUN_RECORD),
+    findById: jest.fn().mockResolvedValue(FAKE_RUN_RECORD),
+    markStarted: jest.fn().mockResolvedValue(undefined),
+    incrementCounters: jest.fn().mockResolvedValue(undefined),
+    markCompleted: jest.fn().mockResolvedValue(undefined),
+    markFailed: jest.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+function makeQueueMock(): Partial<Queue> {
+  return {
+    add: jest.fn().mockResolvedValue({ id: 'job-1' }),
   };
 }
 
 /**
- * Build a TestingModule with the guard wired against a given ADMIN_API_TOKEN value.
+ * Build a TestingModule with stubs for all BQ-2 dependencies.
  */
 async function buildModule(
   adminToken: string,
-  backfillSvc = makeBackfillServiceMock(),
+  runRepo: IBackfillRunRepository = makeRunRepo(),
+  queue: Partial<Queue> = makeQueueMock(),
 ): Promise<{ controller: AdminWalletsController; module: TestingModule }> {
   const configStub: Partial<ConfigService<Env, true>> = {
     get: jest.fn().mockImplementation((key: string) => {
@@ -55,9 +86,9 @@ async function buildModule(
   const module = await Test.createTestingModule({
     controllers: [AdminWalletsController],
     providers: [
-      { provide: WalletBackfillService, useValue: backfillSvc },
+      { provide: BACKFILL_RUN_REPOSITORY, useValue: runRepo },
+      { provide: getQueueToken(WALLET_BACKFILL_QUEUE_NAME), useValue: queue },
       { provide: ConfigService, useValue: configStub },
-      ZodValidationPipe,
     ],
   }).compile();
 
@@ -142,34 +173,75 @@ describe('AdminTokenGuard', () => {
   });
 });
 
-describe('AdminWalletsController', () => {
-  it('calls WalletBackfillService.backfillMissingNetworkAddresses and returns the report', async () => {
-    const backfillSvc = makeBackfillServiceMock();
-    const { controller } = await buildModule('any-token', backfillSvc);
+describe('AdminWalletsController — POST /admin/wallets/backfill-networks (BQ-2 async)', () => {
+  it('creates a BackfillRun and enqueues the coordinate job, returning runId', async () => {
+    const runRepo = makeRunRepo();
+    const queue = makeQueueMock();
+    const { controller } = await buildModule('any-token', runRepo, queue);
 
-    const dto: BackfillNetworksDto = {
-      batchSize: 50,
-      dryRun: true,
-    };
+    const dto: EnqueueBackfillDto = { dryRun: false, batchSize: 50 };
     const result = await controller.backfillNetworks(dto);
 
-    expect(backfillSvc.backfillMissingNetworkAddresses).toHaveBeenCalledWith({
-      batchSize: 50,
-      dryRun: true,
-    });
-    expect(result).toEqual(FAKE_REPORT);
+    expect(runRepo.create).toHaveBeenCalledWith({ dryRun: false });
+    expect(queue.add).toHaveBeenCalledWith(
+      'coordinate',
+      expect.objectContaining({
+        runId: FAKE_RUN_ID,
+        dryRun: false,
+        batchSize: 50,
+      }),
+      expect.objectContaining({ jobId: `coordinate:${FAKE_RUN_ID}` }),
+    );
+    expect(result).toEqual({ runId: FAKE_RUN_ID });
   });
 
-  it('forwards undefined options when DTO fields are absent', async () => {
-    const backfillSvc = makeBackfillServiceMock();
-    const { controller } = await buildModule('any-token', backfillSvc);
+  it('defaults dryRun=false and batchSize=100 when DTO fields are absent', async () => {
+    const runRepo = makeRunRepo();
+    const queue = makeQueueMock();
+    const { controller } = await buildModule('any-token', runRepo, queue);
 
-    const dto: BackfillNetworksDto = {};
+    const dto: EnqueueBackfillDto = {};
     await controller.backfillNetworks(dto);
 
-    expect(backfillSvc.backfillMissingNetworkAddresses).toHaveBeenCalledWith({
-      batchSize: undefined,
-      dryRun: undefined,
+    expect(runRepo.create).toHaveBeenCalledWith({ dryRun: false });
+    expect(queue.add).toHaveBeenCalledWith(
+      'coordinate',
+      expect.objectContaining({ batchSize: 100 }),
+      expect.any(Object),
+    );
+  });
+});
+
+describe('AdminWalletsController — GET /admin/wallets/backfill-runs/:id (BQ-2)', () => {
+  it('returns the BackfillRun status DTO', async () => {
+    const runRepo = makeRunRepo({
+      findById: jest.fn().mockResolvedValue({
+        ...FAKE_RUN_RECORD,
+        status: 'running',
+        totalUsers: 10,
+        scannedUsers: 3,
+      }),
     });
+    const { controller } = await buildModule('any-token', runRepo);
+
+    const result: BackfillRunStatusDto =
+      await controller.getBackfillRun(FAKE_RUN_ID);
+
+    expect(runRepo.findById).toHaveBeenCalledWith(FAKE_RUN_ID);
+    expect(result.id).toBe(FAKE_RUN_ID);
+    expect(result.status).toBe('running');
+    expect(result.totalUsers).toBe(10);
+    expect(result.scannedUsers).toBe(3);
+  });
+
+  it('throws NotFoundException when the run does not exist', async () => {
+    const runRepo = makeRunRepo({
+      findById: jest.fn().mockResolvedValue(null),
+    });
+    const { controller } = await buildModule('any-token', runRepo);
+
+    await expect(controller.getBackfillRun('nonexistent-id')).rejects.toThrow(
+      NotFoundException,
+    );
   });
 });
