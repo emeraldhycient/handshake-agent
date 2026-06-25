@@ -599,6 +599,8 @@ export class ExecutionService {
       fiatAmount: expectedFiatAmount,
       cryptoAmount: meta.cryptoAmount ?? '0',
       processingFee: meta.processingFeeAmount ?? '0',
+      // WN-4: thread settleAsset so ledger legs key by asset, not a hardcoded literal.
+      asset: settleAsset,
       providerRef: verifyResult.providerRef,
       now,
       year,
@@ -846,6 +848,8 @@ export class ExecutionService {
         },
         walletId: wallet.id,
         cryptoAmount: storedQuote.cryptoAmount,
+        // WN-4: thread storedQuote.asset so ledger legs key by asset, not a hardcoded literal.
+        asset: storedQuote.asset,
         now,
       });
 
@@ -949,6 +953,10 @@ export class ExecutionService {
     const walletId = meta.walletId ?? '';
     const cryptoAmount = meta.cryptoAmount ?? '0';
     const netFiatAmount = meta.netFiatAmount ?? '0';
+    // WN-4: asset from transaction metadata so ledger legs key by asset.
+    const sellAsset =
+      (meta.asset as string | undefined) ??
+      this.assetRegistry.defaultCryptoAsset();
     const now = this.clock.now();
     const year = now.getFullYear().toString();
 
@@ -961,6 +969,7 @@ export class ExecutionService {
           walletId,
           cryptoAmount,
           netFiatAmount,
+          asset: sellAsset,
           providerRef: verifyResult.providerRef,
           now,
           year,
@@ -988,6 +997,7 @@ export class ExecutionService {
       userId: txn.userId,
       walletId,
       cryptoAmount,
+      asset: sellAsset,
       failureReason: `payout verifyPayout returned status '${verifyResult.status}'`,
       now,
     });
@@ -1322,6 +1332,8 @@ export class ExecutionService {
         },
         walletId,
         totalDebit,
+        // WN-4: thread asset so ledger legs key by asset, not a hardcoded literal.
+        asset,
         now,
         // SPEC DEVIATION fix: persist TravelRuleData atomically when threshold exceeded.
         // originatorName comes from KycProfile (getOriginatorName above); null when
@@ -1481,6 +1493,10 @@ export class ExecutionService {
     const cryptoAmount = meta.cryptoAmount ?? '0';
     const networkFeeCrypto = meta.networkFeeCrypto ?? '0';
     const totalDebit = meta.totalDebit ?? '0';
+    // WN-4: asset from transaction metadata so ledger legs key by asset.
+    const sendAsset =
+      (meta.asset as string | undefined) ??
+      this.assetRegistry.defaultCryptoAsset();
     const now = this.clock.now();
     const year = now.getFullYear().toString();
 
@@ -1494,6 +1510,7 @@ export class ExecutionService {
           walletId,
           cryptoAmount,
           networkFeeCrypto,
+          asset: sendAsset,
           onChainTxHash: txHash,
           now,
           year,
@@ -1521,6 +1538,7 @@ export class ExecutionService {
       userId: txn.userId,
       walletId,
       totalDebit,
+      asset: sendAsset,
       failureReason: 'on-chain withdrawal failed',
       now,
     });

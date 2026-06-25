@@ -191,12 +191,19 @@ export class BlockradarWebhookController {
       return { status: 'ok' };
     }
 
-    const assetSymbol =
-      typeof data?.asset?.symbol === 'string' ? data.asset.symbol : 'USDT';
+    // WN-4: ack-without-credit when asset symbol is missing — never default to 'USDT'.
+    if (typeof data?.asset?.symbol !== 'string' || !data.asset.symbol) {
+      this.logger.warn(
+        { data },
+        'Blockradar webhook: deposit.success missing asset.symbol — acking without credit',
+      );
+      return { status: 'ok' };
+    }
+    const assetSymbol = data.asset.symbol;
     const networkName =
       typeof data?.asset?.network?.name === 'string'
         ? data.asset.network.name
-        : 'TRON';
+        : undefined;
     const webhookId = typeof data?.id === 'string' ? data.id : undefined;
 
     // Extract on-chain sender address for audit persistence.
@@ -359,7 +366,7 @@ export class BlockradarWebhookController {
     amount: string;
     recipientAddress: string;
     assetSymbol: string;
-    networkName: string;
+    networkName: string | undefined;
     webhookId?: string;
     senderAddress?: string;
     postedAt: Date;
@@ -374,6 +381,25 @@ export class BlockradarWebhookController {
         this.logger.warn(
           { recipientAddress: params.recipientAddress },
           'Blockradar webhook: no wallet found for address — ignoring',
+        );
+        return;
+      }
+
+      // ── 3a. Network mismatch guard (WN-4) ─────────────────────────────────
+      // The per-network wallet has a `network` field set at creation time.
+      // If the payload's network name doesn't match, ack without credit —
+      // a cross-network attribution error must never be silently credited.
+      if (
+        params.networkName !== undefined &&
+        params.networkName !== wallet.network
+      ) {
+        this.logger.warn(
+          {
+            payloadNetwork: params.networkName,
+            walletNetwork: wallet.network,
+            recipientAddress: params.recipientAddress,
+          },
+          'Blockradar webhook: payload network does not match wallet.network — acking without credit',
         );
         return;
       }
@@ -414,10 +440,12 @@ export class BlockradarWebhookController {
       }
 
       // ── 5. Send WhatsApp receipt ───────────────────────────────────────────
+      // WN-4: params.networkName may be undefined when the payload omitted it;
+      // fall back to wallet.network for the human-readable receipt copy.
       await this.sendReceipt({
         userId: wallet.userId,
         assetSymbol: params.assetSymbol,
-        networkName: params.networkName,
+        networkName: params.networkName ?? wallet.network,
         amount: params.amount,
         newBalance: result.newBalance ?? params.amount,
         txHash: params.hash,

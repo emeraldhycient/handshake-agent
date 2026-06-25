@@ -242,9 +242,11 @@ export class DepositSettlementPrismaRepository implements IDepositSettlementRepo
         );
 
         // ── 3. Build ledger entries (pure domain function) ────────────────────
+        // WN-4: pass asset so crypto legs key by asset, not a hardcoded literal.
         const drafts: LedgerEntryDraft[] = buildDepositLedgerEntries({
           walletId,
           cryptoAmount,
+          asset,
           postedAt,
           accountStates,
         });

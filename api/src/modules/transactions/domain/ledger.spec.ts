@@ -68,6 +68,8 @@ function freshInput(
     fiatAmount: '5000',
     processingFee: '100',
     cryptoAmount: '3.06',
+    // WN-4: asset required; default to 'USDT' so existing USDT-path tests stay green.
+    asset: 'USDT',
     postedAt: new Date('2025-01-01T00:00:00Z'),
     accountStates: {},
     ...overrides,
@@ -445,6 +447,8 @@ function freshDepositInput(
   return {
     walletId: 'wallet-deposit-abc',
     cryptoAmount: '5.5',
+    // WN-4: asset required; default to 'USDT' so existing USDT-path tests stay green.
+    asset: 'USDT',
     postedAt: new Date('2025-06-01T12:00:00Z'),
     accountStates: {},
     ...overrides,
@@ -617,6 +621,8 @@ function freshSellReserveInput(
   return {
     walletId: 'wallet-reserve-abc',
     cryptoAmount: '5.0',
+    // WN-4: asset required; default to 'USDT' so existing USDT-path tests stay green.
+    asset: 'USDT',
     postedAt: new Date('2025-06-01T12:00:00Z'),
     accountStates: {},
     ...overrides,
@@ -760,6 +766,8 @@ function freshSellFinalizeInput(
     walletId: 'wallet-finalize-abc',
     cryptoAmount: '5.0',
     netFiatAmount: '7500',
+    // WN-4: asset required; default to 'USDT' so existing USDT-path tests stay green.
+    asset: 'USDT',
     postedAt: new Date('2025-06-01T12:00:00Z'),
     accountStates: {},
     ...overrides,
@@ -918,6 +926,8 @@ function freshSellRefundInput(
   return {
     walletId: 'wallet-refund-abc',
     cryptoAmount: '5.0',
+    // WN-4: asset required; default to 'USDT' so existing USDT-path tests stay green.
+    asset: 'USDT',
     postedAt: new Date('2025-06-01T12:00:00Z'),
     accountStates: {},
     ...overrides,
@@ -1023,6 +1033,8 @@ function freshSendReserveInput(
   return {
     walletId: 'wallet-send-reserve-abc',
     totalDebit: '11.0', // e.g. 10 USDT send + 1 USDT fee
+    // WN-4: asset required; default to 'USDT' so existing USDT-path tests stay green.
+    asset: 'USDT',
     postedAt: new Date('2025-06-01T12:00:00Z'),
     accountStates: {},
     ...overrides,
@@ -1164,6 +1176,8 @@ function freshSendFinalizeInput(
     walletId: 'wallet-send-finalize-abc',
     cryptoAmount: '10.0',
     networkFeeCrypto: '1.0',
+    // WN-4: asset required; default to 'USDT' so existing USDT-path tests stay green.
+    asset: 'USDT',
     postedAt: new Date('2025-06-01T12:00:00Z'),
     accountStates: {},
     ...overrides,
@@ -1326,6 +1340,8 @@ function freshSendRefundInput(
   return {
     walletId: 'wallet-send-refund-abc',
     totalDebit: '11.0',
+    // WN-4: asset required; default to 'USDT' so existing USDT-path tests stay green.
+    asset: 'USDT',
     postedAt: new Date('2025-06-01T12:00:00Z'),
     accountStates: {},
     ...overrides,
@@ -1415,5 +1431,175 @@ describe('buildSendRefundEntries', () => {
         expect(sumByCurrency(entries, 'USDT')).toBe(0n);
       },
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WN-4: Multi-asset parameterization — non-USDT (USDC) builder tests
+// All builders must use the passed `asset` string, not a hardcoded literal.
+// ---------------------------------------------------------------------------
+
+const USDC = 'USDC';
+
+describe('WN-4: buildBuyLedgerEntries — non-USDT asset (USDC)', () => {
+  it('crypto legs keyed by USDC, not USDT', () => {
+    const entries = buildBuyLedgerEntries({
+      userId: 'user-wn4',
+      walletId: 'wallet-wn4',
+      fiatAmount: '5000',
+      processingFee: '100',
+      cryptoAmount: '4.9',
+      asset: USDC,
+      postedAt: new Date('2025-01-01T00:00:00Z'),
+      accountStates: {},
+    });
+
+    const usdcEntries = entries.filter((e) => e.currency === USDC);
+    const usdtEntries = entries.filter((e) => e.currency === 'USDT');
+
+    // Two crypto legs (user_wallet + treasury_reserve) must use USDC
+    expect(usdcEntries).toHaveLength(2);
+    // No USDT entries must exist
+    expect(usdtEntries).toHaveLength(0);
+    // Per-currency sums are zero
+    expect(sumByCurrency(entries, USDC)).toBe(0n);
+    expect(sumByCurrency(entries, 'NGN')).toBe(0n);
+  });
+
+  it('USDT path still works (backward compat) when asset=USDT', () => {
+    const entries = buildBuyLedgerEntries({
+      userId: 'user-wn4-usdt',
+      walletId: 'wallet-wn4-usdt',
+      fiatAmount: '5000',
+      processingFee: '100',
+      cryptoAmount: '3.06',
+      asset: 'USDT',
+      postedAt: new Date('2025-01-01T00:00:00Z'),
+      accountStates: {},
+    });
+
+    const usdtEntries = entries.filter((e) => e.currency === 'USDT');
+    expect(usdtEntries).toHaveLength(2);
+    expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+  });
+});
+
+describe('WN-4: buildDepositLedgerEntries — non-USDT asset (USDC)', () => {
+  it('both ledger legs keyed by USDC, not USDT', () => {
+    const entries = buildDepositLedgerEntries({
+      walletId: 'wallet-deposit-wn4',
+      cryptoAmount: '5.0',
+      asset: USDC,
+      postedAt: new Date('2025-01-01T00:00:00Z'),
+      accountStates: {},
+    });
+
+    const usdcEntries = entries.filter((e) => e.currency === USDC);
+    const usdtEntries = entries.filter((e) => e.currency === 'USDT');
+
+    expect(usdcEntries).toHaveLength(2);
+    expect(usdtEntries).toHaveLength(0);
+    expect(sumByCurrency(entries, USDC)).toBe(0n);
+  });
+});
+
+describe('WN-4: buildSellReserveEntries — non-USDT asset (USDC)', () => {
+  it('both reserve legs keyed by USDC', () => {
+    const entries = buildSellReserveEntries({
+      walletId: 'wallet-sell-wn4',
+      cryptoAmount: '3.0',
+      asset: USDC,
+      postedAt: new Date('2025-01-01T00:00:00Z'),
+      accountStates: {},
+    });
+
+    const usdcEntries = entries.filter((e) => e.currency === USDC);
+    expect(usdcEntries).toHaveLength(2);
+    expect(entries.filter((e) => e.currency === 'USDT')).toHaveLength(0);
+    expect(sumByCurrency(entries, USDC)).toBe(0n);
+  });
+});
+
+describe('WN-4: buildSellFinalizeEntries — non-USDT asset (USDC)', () => {
+  it('USDC legs keyed by USDC; NGN legs still NGN', () => {
+    const entries = buildSellFinalizeEntries({
+      walletId: 'wallet-finalize-wn4',
+      cryptoAmount: '3.0',
+      netFiatAmount: '7500',
+      asset: USDC,
+      postedAt: new Date('2025-01-01T00:00:00Z'),
+      accountStates: {},
+    });
+
+    expect(entries.filter((e) => e.currency === USDC)).toHaveLength(2);
+    expect(entries.filter((e) => e.currency === 'NGN')).toHaveLength(2);
+    expect(entries.filter((e) => e.currency === 'USDT')).toHaveLength(0);
+    expect(sumByCurrency(entries, USDC)).toBe(0n);
+    expect(sumByCurrency(entries, 'NGN')).toBe(0n);
+  });
+});
+
+describe('WN-4: buildSellRefundEntries — non-USDT asset (USDC)', () => {
+  it('refund legs keyed by USDC', () => {
+    const entries = buildSellRefundEntries({
+      walletId: 'wallet-refund-wn4',
+      cryptoAmount: '3.0',
+      asset: USDC,
+      postedAt: new Date('2025-01-01T00:00:00Z'),
+      accountStates: {},
+    });
+
+    expect(entries.filter((e) => e.currency === USDC)).toHaveLength(2);
+    expect(entries.filter((e) => e.currency === 'USDT')).toHaveLength(0);
+    expect(sumByCurrency(entries, USDC)).toBe(0n);
+  });
+});
+
+describe('WN-4: buildSendReserveEntries — non-USDT asset (USDC)', () => {
+  it('send reserve legs keyed by USDC', () => {
+    const entries = buildSendReserveEntries({
+      walletId: 'wallet-send-wn4',
+      totalDebit: '11.0',
+      asset: USDC,
+      postedAt: new Date('2025-01-01T00:00:00Z'),
+      accountStates: {},
+    });
+
+    expect(entries.filter((e) => e.currency === USDC)).toHaveLength(2);
+    expect(entries.filter((e) => e.currency === 'USDT')).toHaveLength(0);
+    expect(sumByCurrency(entries, USDC)).toBe(0n);
+  });
+});
+
+describe('WN-4: buildSendFinalizeEntries — non-USDT asset (USDC)', () => {
+  it('all 3 finalize legs keyed by USDC', () => {
+    const entries = buildSendFinalizeEntries({
+      walletId: 'wallet-send-fin-wn4',
+      cryptoAmount: '10.0',
+      networkFeeCrypto: '1.0',
+      asset: USDC,
+      postedAt: new Date('2025-01-01T00:00:00Z'),
+      accountStates: {},
+    });
+
+    expect(entries.filter((e) => e.currency === USDC)).toHaveLength(3);
+    expect(entries.filter((e) => e.currency === 'USDT')).toHaveLength(0);
+    expect(sumByCurrency(entries, USDC)).toBe(0n);
+  });
+});
+
+describe('WN-4: buildSendRefundEntries — non-USDT asset (USDC)', () => {
+  it('send refund legs keyed by USDC', () => {
+    const entries = buildSendRefundEntries({
+      walletId: 'wallet-send-refund-wn4',
+      totalDebit: '11.0',
+      asset: USDC,
+      postedAt: new Date('2025-01-01T00:00:00Z'),
+      accountStates: {},
+    });
+
+    expect(entries.filter((e) => e.currency === USDC)).toHaveLength(2);
+    expect(entries.filter((e) => e.currency === 'USDT')).toHaveLength(0);
+    expect(sumByCurrency(entries, USDC)).toBe(0n);
   });
 });

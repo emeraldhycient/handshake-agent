@@ -63,14 +63,19 @@ export interface AccountState {
 /** Input to the pure ledger builder. */
 export interface BuildBuyLedgerInput {
   userId: string;
-  /** accountId for the user_wallet USDT account. */
+  /** accountId for the user_wallet crypto account. */
   walletId: string;
   /** Gross NGN the user pays, as a decimal string (e.g. "5000"). */
   fiatAmount: string;
-  /** USDT delivered to the user, as a decimal string (e.g. "3.06"). */
+  /** Crypto amount delivered to the user, as a decimal string (e.g. "3.06"). */
   cryptoAmount: string;
   /** NGN processing fee (part of fiatAmount), as a decimal string. */
   processingFee: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Used as the `currency`
+   * label on all crypto legs so reads and writes key by (walletId, asset).
+   */
+  asset: string;
   postedAt: Date;
   /**
    * Current per-account state. Missing keys default to
@@ -286,6 +291,7 @@ export function buildBuyLedgerEntries(
     fiatAmount,
     processingFee,
     cryptoAmount,
+    asset,
     postedAt,
     accountStates,
   } = input;
@@ -322,7 +328,7 @@ export function buildBuyLedgerEntries(
       accountId: 'ngn_treasury',
       currency: 'NGN',
       amount: costBasis,
-      description: `Buy: NGN ${fromScaled(scaledFiat - scaledFee)} cost basis of USDT sourced from treasury`,
+      description: `Buy: NGN ${fromScaled(scaledFiat - scaledFee)} cost basis of ${asset} sourced from treasury`,
     },
     // Fee entry only emitted when processingFee > 0 (a zero entry violates invariant 2).
     ...(scaledFee > 0n
@@ -340,20 +346,20 @@ export function buildBuyLedgerEntries(
 
   const specs: EntrySpec[] = [
     ...ngnSpecs,
-    // USDT leg
+    // Crypto leg — currency is the passed asset (e.g. 'USDT', 'USDC')
     {
       accountType: LedgerAccountType.user_wallet,
       accountId: walletId,
-      currency: 'USDT',
+      currency: asset,
       amount: cryptoAmount,
-      description: `Buy: USDT ${cryptoAmount} delivered to user wallet`,
+      description: `Buy: ${asset} ${cryptoAmount} delivered to user wallet`,
     },
     {
       accountType: LedgerAccountType.treasury_reserve,
       accountId: 'usdt_treasury',
-      currency: 'USDT',
+      currency: asset,
       amount: negCrypto,
-      description: `Buy: USDT ${cryptoAmount} sourced from treasury`,
+      description: `Buy: ${asset} ${cryptoAmount} sourced from treasury`,
     },
   ];
 
@@ -366,10 +372,15 @@ export function buildBuyLedgerEntries(
 
 /** Input to the pure deposit ledger builder. */
 export interface BuildDepositLedgerInput {
-  /** accountId for the user_wallet USDT account. */
+  /** accountId for the user_wallet crypto account. */
   walletId: string;
-  /** USDT credited to the user from the on-chain deposit, as a decimal string. */
+  /** Crypto amount credited to the user from the on-chain deposit, as a decimal string. */
   cryptoAmount: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Used as the `currency`
+   * label on all crypto legs so reads and writes key by (walletId, asset).
+   */
+  asset: string;
   postedAt: Date;
   /**
    * Current per-account state. Missing keys default to
@@ -395,27 +406,28 @@ export interface BuildDepositLedgerInput {
 export function buildDepositLedgerEntries(
   input: BuildDepositLedgerInput,
 ): LedgerEntryDraft[] {
-  const { walletId, cryptoAmount, postedAt, accountStates } = input;
+  const { walletId, cryptoAmount, asset, postedAt, accountStates } = input;
 
   // -- Validation --
   assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
 
   const negCrypto = fromScaled(-toScaled(cryptoAmount));
 
+  // Crypto leg — currency is the passed asset (e.g. 'USDT', 'USDC')
   const specs: EntrySpec[] = [
     {
       accountType: LedgerAccountType.user_wallet,
       accountId: walletId,
-      currency: 'USDT',
+      currency: asset,
       amount: cryptoAmount,
-      description: `Deposit: USDT ${cryptoAmount} credited to user wallet from on-chain deposit`,
+      description: `Deposit: ${asset} ${cryptoAmount} credited to user wallet from on-chain deposit`,
     },
     {
       accountType: LedgerAccountType.clearing,
       accountId: 'usdt_external_deposits',
-      currency: 'USDT',
+      currency: asset,
       amount: negCrypto,
-      description: `Deposit: USDT ${cryptoAmount} contra clearing for external inbound deposit`,
+      description: `Deposit: ${asset} ${cryptoAmount} contra clearing for external inbound deposit`,
     },
   ];
 
@@ -437,10 +449,15 @@ export { toScaled };
 
 /** Input to buildSellReserveEntries. */
 export interface BuildSellReserveInput {
-  /** accountId for the user_wallet USDT account. */
+  /** accountId for the user_wallet crypto account. */
   walletId: string;
-  /** USDT the user is selling, as a decimal string (e.g. "3.06"). */
+  /** Crypto amount the user is selling, as a decimal string (e.g. "3.06"). */
   cryptoAmount: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Used as the `currency`
+   * label on all crypto legs so reads and writes key by (walletId, asset).
+   */
+  asset: string;
   postedAt: Date;
   /**
    * Current per-account state. Missing keys default to
@@ -463,7 +480,7 @@ export interface BuildSellReserveInput {
 export function buildSellReserveEntries(
   input: BuildSellReserveInput,
 ): LedgerEntryDraft[] {
-  const { walletId, cryptoAmount, postedAt, accountStates } = input;
+  const { walletId, cryptoAmount, asset, postedAt, accountStates } = input;
 
   assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
 
@@ -471,20 +488,21 @@ export function buildSellReserveEntries(
   const posCrypto = fromScaled(scaledCrypto);
   const negCrypto = fromScaled(-scaledCrypto);
 
+  // Crypto leg — currency is the passed asset (e.g. 'USDT', 'USDC')
   const specs: EntrySpec[] = [
     {
       accountType: LedgerAccountType.user_wallet,
       accountId: walletId,
-      currency: 'USDT',
+      currency: asset,
       amount: negCrypto,
-      description: `Sell reserve: USDT ${cryptoAmount} held from user wallet`,
+      description: `Sell reserve: ${asset} ${cryptoAmount} held from user wallet`,
     },
     {
       accountType: LedgerAccountType.clearing,
       accountId: 'usdt_sell_clearing',
-      currency: 'USDT',
+      currency: asset,
       amount: posCrypto,
-      description: `Sell reserve: USDT ${cryptoAmount} moved to clearing`,
+      description: `Sell reserve: ${asset} ${cryptoAmount} moved to clearing`,
     },
   ];
 
@@ -495,12 +513,17 @@ export function buildSellReserveEntries(
 
 /** Input to buildSellFinalizeEntries. */
 export interface BuildSellFinalizeInput {
-  /** accountId for the user_wallet USDT account (used only as metadata — not debited again). */
+  /** accountId for the user_wallet crypto account (used only as metadata — not debited again). */
   walletId: string;
-  /** USDT amount that was reserved (the same value as at reserve). */
+  /** Crypto amount that was reserved (the same value as at reserve). */
   cryptoAmount: string;
   /** Net NGN the user receives after spread + fee. */
   netFiatAmount: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Used as the `currency`
+   * label on all crypto legs so reads and writes key by (walletId, asset).
+   */
+  asset: string;
   postedAt: Date;
   accountStates: Record<AccountKey, AccountState>;
 }
@@ -525,7 +548,7 @@ export interface BuildSellFinalizeInput {
 export function buildSellFinalizeEntries(
   input: BuildSellFinalizeInput,
 ): LedgerEntryDraft[] {
-  const { cryptoAmount, netFiatAmount, postedAt, accountStates } = input;
+  const { cryptoAmount, netFiatAmount, asset, postedAt, accountStates } = input;
 
   assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
   assertPositiveDecimal(netFiatAmount, 'netFiatAmount');
@@ -537,21 +560,22 @@ export function buildSellFinalizeEntries(
   const posFiat = fromScaled(scaledFiat);
   const negFiat = fromScaled(-scaledFiat);
 
+  // Crypto leg — currency is the passed asset (e.g. 'USDT', 'USDC')
   const specs: EntrySpec[] = [
-    // USDT leg: clearing → treasury
+    // Crypto leg: clearing → treasury
     {
       accountType: LedgerAccountType.clearing,
       accountId: 'usdt_sell_clearing',
-      currency: 'USDT',
+      currency: asset,
       amount: negCrypto,
-      description: `Sell finalize: USDT ${cryptoAmount} leaves clearing to treasury`,
+      description: `Sell finalize: ${asset} ${cryptoAmount} leaves clearing to treasury`,
     },
     {
       accountType: LedgerAccountType.treasury_reserve,
       accountId: 'usdt_treasury',
-      currency: 'USDT',
+      currency: asset,
       amount: posCrypto,
-      description: `Sell finalize: USDT ${cryptoAmount} credited to treasury`,
+      description: `Sell finalize: ${asset} ${cryptoAmount} credited to treasury`,
     },
     // NGN leg: treasury → processor_settlement (payout)
     {
@@ -579,6 +603,11 @@ export function buildSellFinalizeEntries(
 export interface BuildSellRefundInput {
   walletId: string;
   cryptoAmount: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Used as the `currency`
+   * label on all crypto legs so reads and writes key by (walletId, asset).
+   */
+  asset: string;
   postedAt: Date;
   accountStates: Record<AccountKey, AccountState>;
 }
@@ -595,7 +624,7 @@ export interface BuildSellRefundInput {
 export function buildSellRefundEntries(
   input: BuildSellRefundInput,
 ): LedgerEntryDraft[] {
-  const { walletId, cryptoAmount, postedAt, accountStates } = input;
+  const { walletId, cryptoAmount, asset, postedAt, accountStates } = input;
 
   assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
 
@@ -603,20 +632,21 @@ export function buildSellRefundEntries(
   const posCrypto = fromScaled(scaledCrypto);
   const negCrypto = fromScaled(-scaledCrypto);
 
+  // Crypto leg — currency is the passed asset (e.g. 'USDT', 'USDC')
   const specs: EntrySpec[] = [
     {
       accountType: LedgerAccountType.clearing,
       accountId: 'usdt_sell_clearing',
-      currency: 'USDT',
+      currency: asset,
       amount: negCrypto,
-      description: `Sell refund: USDT ${cryptoAmount} leaves clearing`,
+      description: `Sell refund: ${asset} ${cryptoAmount} leaves clearing`,
     },
     {
       accountType: LedgerAccountType.user_wallet,
       accountId: walletId,
-      currency: 'USDT',
+      currency: asset,
       amount: posCrypto,
-      description: `Sell refund: USDT ${cryptoAmount} returned to user wallet`,
+      description: `Sell refund: ${asset} ${cryptoAmount} returned to user wallet`,
     },
   ];
 
@@ -631,13 +661,18 @@ export function buildSellRefundEntries(
 
 /** Input to buildSendReserveEntries. */
 export interface BuildSendReserveInput {
-  /** accountId for the user_wallet USDT account. */
+  /** accountId for the user_wallet crypto account. */
   walletId: string;
   /**
-   * Total USDT to debit from the user's wallet at reservation time
+   * Total crypto amount to debit from the user's wallet at reservation time
    * (cryptoAmount + networkFeeCrypto).
    */
   totalDebit: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Used as the `currency`
+   * label on all crypto legs so reads and writes key by (walletId, asset).
+   */
+  asset: string;
   postedAt: Date;
   /**
    * Current per-account state. Missing keys default to
@@ -661,7 +696,7 @@ export interface BuildSendReserveInput {
 export function buildSendReserveEntries(
   input: BuildSendReserveInput,
 ): LedgerEntryDraft[] {
-  const { walletId, totalDebit, postedAt, accountStates } = input;
+  const { walletId, totalDebit, asset, postedAt, accountStates } = input;
 
   assertPositiveDecimal(totalDebit, 'totalDebit');
 
@@ -669,20 +704,21 @@ export function buildSendReserveEntries(
   const posDebit = fromScaled(scaledDebit);
   const negDebit = fromScaled(-scaledDebit);
 
+  // Crypto leg — currency is the passed asset (e.g. 'USDT', 'USDC')
   const specs: EntrySpec[] = [
     {
       accountType: LedgerAccountType.user_wallet,
       accountId: walletId,
-      currency: 'USDT',
+      currency: asset,
       amount: negDebit,
-      description: `Send reserve: USDT ${totalDebit} held from user wallet (send + network fee)`,
+      description: `Send reserve: ${asset} ${totalDebit} held from user wallet (send + network fee)`,
     },
     {
       accountType: LedgerAccountType.clearing,
       accountId: 'usdt_send_clearing',
-      currency: 'USDT',
+      currency: asset,
       amount: posDebit,
-      description: `Send reserve: USDT ${totalDebit} moved to send clearing`,
+      description: `Send reserve: ${asset} ${totalDebit} moved to send clearing`,
     },
   ];
 
@@ -693,12 +729,17 @@ export function buildSendReserveEntries(
 
 /** Input to buildSendFinalizeEntries. */
 export interface BuildSendFinalizeInput {
-  /** accountId for the user_wallet USDT account (used as metadata only — not debited again). */
+  /** accountId for the user_wallet crypto account (used as metadata only — not debited again). */
   walletId: string;
-  /** USDT amount the user is actually sending on-chain (excluding fee). */
+  /** Crypto amount the user is actually sending on-chain (excluding fee). */
   cryptoAmount: string;
-  /** Flat on-chain network fee in USDT. */
+  /** Flat on-chain network fee in the same crypto asset. */
   networkFeeCrypto: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Used as the `currency`
+   * label on all crypto legs so reads and writes key by (walletId, asset).
+   */
+  asset: string;
   postedAt: Date;
   accountStates: Record<AccountKey, AccountState>;
 }
@@ -725,7 +766,8 @@ export interface BuildSendFinalizeInput {
 export function buildSendFinalizeEntries(
   input: BuildSendFinalizeInput,
 ): LedgerEntryDraft[] {
-  const { cryptoAmount, networkFeeCrypto, postedAt, accountStates } = input;
+  const { cryptoAmount, networkFeeCrypto, asset, postedAt, accountStates } =
+    input;
 
   assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
   assertPositiveDecimal(networkFeeCrypto, 'networkFeeCrypto');
@@ -739,30 +781,31 @@ export function buildSendFinalizeEntries(
   const posFee = fromScaled(scaledFee);
   const totalDebitStr = fromScaled(scaledTotal);
 
+  // Crypto leg — currency is the passed asset (e.g. 'USDT', 'USDC')
   const specs: EntrySpec[] = [
     // Clearing debit — the total (amount + fee) leaves the clearing account.
     {
       accountType: LedgerAccountType.clearing,
       accountId: 'usdt_send_clearing',
-      currency: 'USDT',
+      currency: asset,
       amount: negTotal,
-      description: `Send finalize: USDT ${totalDebitStr} leaves clearing (${cryptoAmount} sent + ${networkFeeCrypto} fee)`,
+      description: `Send finalize: ${asset} ${totalDebitStr} leaves clearing (${cryptoAmount} sent + ${networkFeeCrypto} fee)`,
     },
     // On-chain outflow credit — the amount the recipient receives.
     {
       accountType: LedgerAccountType.treasury_reserve,
       accountId: 'usdt_network_out',
-      currency: 'USDT',
+      currency: asset,
       amount: posOut,
-      description: `Send finalize: USDT ${cryptoAmount} on-chain outflow to recipient`,
+      description: `Send finalize: ${asset} ${cryptoAmount} on-chain outflow to recipient`,
     },
     // Fee credit — the network fee kept by the platform.
     {
       accountType: LedgerAccountType.treasury_reserve,
       accountId: 'usdt_fees',
-      currency: 'USDT',
+      currency: asset,
       amount: posFee,
-      description: `Send finalize: USDT ${networkFeeCrypto} network fee booked to treasury`,
+      description: `Send finalize: ${asset} ${networkFeeCrypto} network fee booked to treasury`,
     },
   ];
 
@@ -773,12 +816,17 @@ export function buildSendFinalizeEntries(
 
 /** Input to buildSendRefundEntries. */
 export interface BuildSendRefundInput {
-  /** accountId for the user_wallet USDT account. */
+  /** accountId for the user_wallet crypto account. */
   walletId: string;
   /**
-   * Total USDT to refund (same value as the original totalDebit at reserve).
+   * Total crypto amount to refund (same value as the original totalDebit at reserve).
    */
   totalDebit: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Used as the `currency`
+   * label on all crypto legs so reads and writes key by (walletId, asset).
+   */
+  asset: string;
   postedAt: Date;
   accountStates: Record<AccountKey, AccountState>;
 }
@@ -795,7 +843,7 @@ export interface BuildSendRefundInput {
 export function buildSendRefundEntries(
   input: BuildSendRefundInput,
 ): LedgerEntryDraft[] {
-  const { walletId, totalDebit, postedAt, accountStates } = input;
+  const { walletId, totalDebit, asset, postedAt, accountStates } = input;
 
   assertPositiveDecimal(totalDebit, 'totalDebit');
 
@@ -803,20 +851,21 @@ export function buildSendRefundEntries(
   const posDebit = fromScaled(scaledDebit);
   const negDebit = fromScaled(-scaledDebit);
 
+  // Crypto leg — currency is the passed asset (e.g. 'USDT', 'USDC')
   const specs: EntrySpec[] = [
     {
       accountType: LedgerAccountType.clearing,
       accountId: 'usdt_send_clearing',
-      currency: 'USDT',
+      currency: asset,
       amount: negDebit,
-      description: `Send refund: USDT ${totalDebit} leaves clearing`,
+      description: `Send refund: ${asset} ${totalDebit} leaves clearing`,
     },
     {
       accountType: LedgerAccountType.user_wallet,
       accountId: walletId,
-      currency: 'USDT',
+      currency: asset,
       amount: posDebit,
-      description: `Send refund: USDT ${totalDebit} returned to user wallet`,
+      description: `Send refund: ${asset} ${totalDebit} returned to user wallet`,
     },
   ];
 
