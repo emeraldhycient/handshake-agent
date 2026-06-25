@@ -770,6 +770,8 @@ function freshSellFinalizeInput(
     netFiatAmount: '7500',
     // WN-4: asset required; default to 'USDT' so existing USDT-path tests stay green.
     asset: 'USDT',
+    // Task 3: fiatCurrency required; default to 'NGN' so existing NGN-path tests stay green.
+    fiatCurrency: 'NGN',
     postedAt: new Date('2025-06-01T12:00:00Z'),
     accountStates: {},
     ...overrides,
@@ -915,6 +917,29 @@ describe('buildSellFinalizeEntries', () => {
         expect(sumByCurrency(entries, 'NGN')).toBe(0n);
       },
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 3: fiatCurrency threading through buildSellFinalizeEntries
+// ---------------------------------------------------------------------------
+
+describe('Task 3: buildSellFinalizeEntries — fiatCurrency threading', () => {
+  it('threads fiatCurrency through sell-finalize payout legs', () => {
+    const entries = buildSellFinalizeEntries({
+      walletId: 'w1',
+      cryptoAmount: '3.06',
+      netFiatAmount: '4800',
+      asset: 'USDT',
+      fiatCurrency: 'USD',
+      postedAt: new Date('2026-06-25T00:00:00Z'),
+      accountStates: {},
+    });
+    const fiatLegs = entries.filter((e) => e.currency === 'USD');
+    expect(fiatLegs.map((e) => e.accountId)).toEqual(
+      expect.arrayContaining(['usd_treasury', 'usd_payout']),
+    );
+    expect(entries.some((e) => e.currency === 'NGN')).toBe(false);
   });
 });
 
@@ -1573,6 +1598,7 @@ describe('WN-4: buildSellFinalizeEntries — non-USDT asset (USDC)', () => {
       cryptoAmount: '3.0',
       netFiatAmount: '7500',
       asset: USDC,
+      fiatCurrency: 'NGN',
       postedAt: new Date('2025-01-01T00:00:00Z'),
       accountStates: {},
     });

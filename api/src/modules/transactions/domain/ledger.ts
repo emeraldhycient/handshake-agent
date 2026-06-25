@@ -525,13 +525,19 @@ export interface BuildSellFinalizeInput {
   walletId: string;
   /** Crypto amount that was reserved (the same value as at reserve). */
   cryptoAmount: string;
-  /** Net NGN the user receives after spread + fee. */
+  /** Net fiat the user receives in `fiatCurrency` after spread + fee. */
   netFiatAmount: string;
   /**
    * The crypto asset symbol (e.g. 'USDT', 'USDC'). Used as the `currency`
    * label on all crypto legs so reads and writes key by (walletId, asset).
    */
   asset: string;
+  /**
+   * The fiat currency code (e.g. 'NGN'). Used as the `currency` label on all
+   * fiat payout legs and to derive the fiat bookkeeping account ids, so adding a
+   * currency is config — not a code change.
+   */
+  fiatCurrency: string;
   postedAt: Date;
   accountStates: Record<AccountKey, AccountState>;
 }
@@ -549,14 +555,22 @@ export interface BuildSellFinalizeInput {
  *  − clearing         / usdt_sell_clearing / USDT  −cryptoAmount  (leave clearing)
  *  + treasury_reserve / usdt_treasury      / USDT  +cryptoAmount  (treasury receives)
  *
- * NGN leg (sum = 0, 2 entries):
- *  − treasury_reserve     / ngn_treasury / NGN  −netFiatAmount  (treasury pays)
- *  + processor_settlement / ngn_payout   / NGN  +netFiatAmount  (payout dispatched)
+ * fiatCurrency leg (sum = 0, 2 entries):
+ *  − treasury_reserve     / ${fc}_treasury / fiatCurrency  −netFiatAmount  (treasury pays)
+ *  + processor_settlement / ${fc}_payout   / fiatCurrency  +netFiatAmount  (payout dispatched)
  */
 export function buildSellFinalizeEntries(
   input: BuildSellFinalizeInput,
 ): LedgerEntryDraft[] {
-  const { cryptoAmount, netFiatAmount, asset, postedAt, accountStates } = input;
+  const {
+    cryptoAmount,
+    netFiatAmount,
+    asset,
+    fiatCurrency,
+    postedAt,
+    accountStates,
+  } = input;
+  const fc = fiatCurrency.toLowerCase();
 
   assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
   assertPositiveDecimal(netFiatAmount, 'netFiatAmount');
@@ -585,20 +599,20 @@ export function buildSellFinalizeEntries(
       amount: posCrypto,
       description: `Sell finalize: ${asset} ${cryptoAmount} credited to treasury`,
     },
-    // NGN leg: treasury → processor_settlement (payout)
+    // Fiat leg: treasury → processor_settlement (payout)
     {
       accountType: LedgerAccountType.treasury_reserve,
-      accountId: 'ngn_treasury',
-      currency: 'NGN',
+      accountId: `${fc}_treasury`,
+      currency: fiatCurrency,
       amount: negFiat,
-      description: `Sell finalize: NGN ${netFiatAmount} dispatched from treasury`,
+      description: `Sell finalize: ${fiatCurrency} ${netFiatAmount} dispatched from treasury`,
     },
     {
       accountType: LedgerAccountType.processor_settlement,
-      accountId: 'ngn_payout',
-      currency: 'NGN',
+      accountId: `${fc}_payout`,
+      currency: fiatCurrency,
       amount: posFiat,
-      description: `Sell finalize: NGN ${netFiatAmount} credited for payout to user`,
+      description: `Sell finalize: ${fiatCurrency} ${netFiatAmount} credited for payout to user`,
     },
   ];
 
