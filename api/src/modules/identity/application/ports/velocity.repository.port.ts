@@ -23,12 +23,19 @@ export interface DailyUsage {
 export interface IVelocityRepository {
   /**
    * Returns the aggregated fiat total and transaction count for the given user
-   * that fall inside the 24-h window ending at `asOf`.
+   * that fall inside the 24-h window ending at `asOf`, scoped to `fiatCurrency`.
    *
    * The window is `[asOf - 24h, asOf]` — uses the VelocityCounter rows whose
    * `windowEnd > (asOf - 24h)` and `windowStart <= asOf`.
    *
-   * Returns `{ fiatTotal: 0, txCount: 0 }` when no rows are found.
+   * Only rows for the given `fiatCurrency` are included — no cross-currency
+   * aggregation (per-currency isolation added in WN task 10).
+   *
+   * Returns `{ fiatTotal: '0', txCount: 0 }` when no rows are found.
    */
-  getDailyUsage(userId: string, asOf: Date): Promise<DailyUsage>;
+  getDailyUsage(
+    userId: string,
+    asOf: Date,
+    fiatCurrency: string,
+  ): Promise<DailyUsage>;
 }

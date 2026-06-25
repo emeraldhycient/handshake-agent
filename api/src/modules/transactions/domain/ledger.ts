@@ -65,17 +65,23 @@ export interface BuildBuyLedgerInput {
   userId: string;
   /** accountId for the user_wallet crypto account. */
   walletId: string;
-  /** Gross NGN the user pays, as a decimal string (e.g. "5000"). */
+  /** Gross fiat the user pays in `fiatCurrency`, as a decimal string (NGN example: "5000"). */
   fiatAmount: string;
   /** Crypto amount delivered to the user, as a decimal string (e.g. "3.06"). */
   cryptoAmount: string;
-  /** NGN processing fee (part of fiatAmount), as a decimal string. */
+  /** Fiat processing fee (part of fiatAmount) in `fiatCurrency`, as a decimal string. */
   processingFee: string;
   /**
    * The crypto asset symbol (e.g. 'USDT', 'USDC'). Used as the `currency`
    * label on all crypto legs so reads and writes key by (walletId, asset).
    */
   asset: string;
+  /**
+   * The fiat currency code (e.g. 'NGN'). Used as the `currency` label on all
+   * fiat legs and to derive the fiat bookkeeping account ids, so adding a
+   * currency is config — not a code change.
+   */
+  fiatCurrency: string;
   postedAt: Date;
   /**
    * Current per-account state. Missing keys default to
@@ -266,14 +272,14 @@ function assertNonNegativeDecimal(value: string, fieldName: string): bigint {
  *
  * Account mapping (credit positive, debit negative; per-currency sums = 0):
  *
- * NGN leg (sum = 0) — processingFee > 0 (3 entries):
- *  + processor_settlement / ngn_processor / NGN  +fiatAmount          (NGN received)
- *  − treasury_reserve    / ngn_treasury  / NGN  −(fiatAmount − fee)  (cost basis)
- *  − platform_float      / ngn_fees      / NGN  −processingFee        (fee revenue)
+ * fiatCurrency leg (sum = 0) — processingFee > 0 (3 entries):
+ *  + processor_settlement / ${fc}_processor / fiatCurrency  +fiatAmount          (fiat received)
+ *  − treasury_reserve    / ${fc}_treasury  / fiatCurrency  −(fiatAmount − fee)  (cost basis)
+ *  − platform_float      / ${fc}_fees      / fiatCurrency  −processingFee        (fee revenue)
  *
- * NGN leg (sum = 0) — processingFee = 0 (2 entries, fee entry omitted):
- *  + processor_settlement / ngn_processor / NGN  +fiatAmount          (NGN received)
- *  − treasury_reserve    / ngn_treasury  / NGN  −fiatAmount           (cost basis)
+ * fiatCurrency leg (sum = 0) — processingFee = 0 (2 entries, fee entry omitted):
+ *  + processor_settlement / ${fc}_processor / fiatCurrency  +fiatAmount          (fiat received)
+ *  − treasury_reserve    / ${fc}_treasury  / fiatCurrency  −fiatAmount           (cost basis)
  *
  * USDT leg (sum = 0, always 2 entries):
  *  + user_wallet         / walletId      / USDT +cryptoAmount (delivered to user)
@@ -292,9 +298,11 @@ export function buildBuyLedgerEntries(
     processingFee,
     cryptoAmount,
     asset,
+    fiatCurrency,
     postedAt,
     accountStates,
   } = input;
+  const fc = fiatCurrency.toLowerCase();
 
   // -- Validation --
   const scaledFiat = assertPositiveDecimal(fiatAmount, 'fiatAmount');
@@ -318,27 +326,27 @@ export function buildBuyLedgerEntries(
   const ngnSpecs: EntrySpec[] = [
     {
       accountType: LedgerAccountType.processor_settlement,
-      accountId: 'ngn_processor',
-      currency: 'NGN',
+      accountId: `${fc}_processor`,
+      currency: fiatCurrency,
       amount: fiatAmount,
-      description: `Buy: NGN ${fiatAmount} collected from user via processor`,
+      description: `Buy: ${fiatCurrency} ${fiatAmount} collected from user via processor`,
     },
     {
       accountType: LedgerAccountType.treasury_reserve,
-      accountId: 'ngn_treasury',
-      currency: 'NGN',
+      accountId: `${fc}_treasury`,
+      currency: fiatCurrency,
       amount: costBasis,
-      description: `Buy: NGN ${fromScaled(scaledFiat - scaledFee)} cost basis of ${asset} sourced from treasury`,
+      description: `Buy: ${fiatCurrency} ${fromScaled(scaledFiat - scaledFee)} cost basis of ${asset} sourced from treasury`,
     },
     // Fee entry only emitted when processingFee > 0 (a zero entry violates invariant 2).
     ...(scaledFee > 0n
       ? [
           {
             accountType: LedgerAccountType.platform_float,
-            accountId: 'ngn_fees',
-            currency: 'NGN',
+            accountId: `${fc}_fees`,
+            currency: fiatCurrency,
             amount: fromScaled(-scaledFee),
-            description: `Buy: NGN ${processingFee} processing fee booked to platform`,
+            description: `Buy: ${fiatCurrency} ${processingFee} processing fee booked to platform`,
           } satisfies EntrySpec,
         ]
       : []),
@@ -517,13 +525,19 @@ export interface BuildSellFinalizeInput {
   walletId: string;
   /** Crypto amount that was reserved (the same value as at reserve). */
   cryptoAmount: string;
-  /** Net NGN the user receives after spread + fee. */
+  /** Net fiat the user receives in `fiatCurrency` after spread + fee. */
   netFiatAmount: string;
   /**
    * The crypto asset symbol (e.g. 'USDT', 'USDC'). Used as the `currency`
    * label on all crypto legs so reads and writes key by (walletId, asset).
    */
   asset: string;
+  /**
+   * The fiat currency code (e.g. 'NGN'). Used as the `currency` label on all
+   * fiat payout legs and to derive the fiat bookkeeping account ids, so adding a
+   * currency is config — not a code change.
+   */
+  fiatCurrency: string;
   postedAt: Date;
   accountStates: Record<AccountKey, AccountState>;
 }
@@ -541,14 +555,22 @@ export interface BuildSellFinalizeInput {
  *  − clearing         / usdt_sell_clearing / USDT  −cryptoAmount  (leave clearing)
  *  + treasury_reserve / usdt_treasury      / USDT  +cryptoAmount  (treasury receives)
  *
- * NGN leg (sum = 0, 2 entries):
- *  − treasury_reserve     / ngn_treasury / NGN  −netFiatAmount  (treasury pays)
- *  + processor_settlement / ngn_payout   / NGN  +netFiatAmount  (payout dispatched)
+ * fiatCurrency leg (sum = 0, 2 entries):
+ *  − treasury_reserve     / ${fc}_treasury / fiatCurrency  −netFiatAmount  (treasury pays)
+ *  + processor_settlement / ${fc}_payout   / fiatCurrency  +netFiatAmount  (payout dispatched)
  */
 export function buildSellFinalizeEntries(
   input: BuildSellFinalizeInput,
 ): LedgerEntryDraft[] {
-  const { cryptoAmount, netFiatAmount, asset, postedAt, accountStates } = input;
+  const {
+    cryptoAmount,
+    netFiatAmount,
+    asset,
+    fiatCurrency,
+    postedAt,
+    accountStates,
+  } = input;
+  const fc = fiatCurrency.toLowerCase();
 
   assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
   assertPositiveDecimal(netFiatAmount, 'netFiatAmount');
@@ -577,20 +599,20 @@ export function buildSellFinalizeEntries(
       amount: posCrypto,
       description: `Sell finalize: ${asset} ${cryptoAmount} credited to treasury`,
     },
-    // NGN leg: treasury → processor_settlement (payout)
+    // Fiat leg: treasury → processor_settlement (payout)
     {
       accountType: LedgerAccountType.treasury_reserve,
-      accountId: 'ngn_treasury',
-      currency: 'NGN',
+      accountId: `${fc}_treasury`,
+      currency: fiatCurrency,
       amount: negFiat,
-      description: `Sell finalize: NGN ${netFiatAmount} dispatched from treasury`,
+      description: `Sell finalize: ${fiatCurrency} ${netFiatAmount} dispatched from treasury`,
     },
     {
       accountType: LedgerAccountType.processor_settlement,
-      accountId: 'ngn_payout',
-      currency: 'NGN',
+      accountId: `${fc}_payout`,
+      currency: fiatCurrency,
       amount: posFiat,
-      description: `Sell finalize: NGN ${netFiatAmount} credited for payout to user`,
+      description: `Sell finalize: ${fiatCurrency} ${netFiatAmount} credited for payout to user`,
     },
   ];
 

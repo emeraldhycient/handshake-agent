@@ -364,6 +364,17 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
     expect(Object.keys(byCurrency)).toContain('NGN');
     expect(Object.keys(byCurrency)).toContain('USDT');
 
+    // ── fiatCurrency threads into persisted fiat-leg accountIds (WN-4 / Task 4) ─
+    // Assert that the NGN legs carry the accountIds derived from 'NGN' by the
+    // ledger builder (${fc}_processor and ${fc}_treasury where fc = 'ngn').
+    // This proves fiatCurrency='NGN' flowed from the settle input through
+    // settlement.prisma.repository → buildBuyLedgerEntries → DB.
+    // If fiatCurrency were absent or wrong, the accountIds would differ.
+    const ngnEntries = entries.filter((e) => e.currency === 'NGN');
+    const ngnAccountIds = ngnEntries.map((e) => e.accountId);
+    expect(ngnAccountIds).toContain('ngn_processor');
+    expect(ngnAccountIds).toContain('ngn_treasury');
+
     // ── WalletBalance credited with the exact cryptoAmount ───────────────────
     const wallet = await prisma.wallet.findFirst({
       where: { userId, network: 'TRON' },

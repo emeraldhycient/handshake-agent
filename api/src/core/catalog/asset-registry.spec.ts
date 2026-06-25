@@ -297,6 +297,34 @@ describe('AssetRegistry', () => {
     });
   });
 
+  // ── defaultFiat() ────────────────────────────────────────────────────────
+
+  describe('defaultFiat()', () => {
+    it('returns the first enabled fiat as the base fiat', () => {
+      expect(registry.defaultFiat()).toBe('NGN');
+    });
+
+    it('throws UnsupportedFiatError when no enabled fiat is registered', () => {
+      const emptyConfig = {
+        get: (key: string) => {
+          if (key === 'catalog') {
+            return {
+              assets: {},
+              fiats: {},
+              networks: {},
+              capabilities: {},
+            };
+          }
+          return undefined;
+        },
+      };
+      const emptyRegistry = new AssetRegistry(
+        emptyConfig as unknown as import('@nestjs/config').ConfigService,
+      );
+      expect(() => emptyRegistry.defaultFiat()).toThrow(UnsupportedFiatError);
+    });
+  });
+
   // ── defaultNetworkFor() ──────────────────────────────────────────────────
 
   describe('defaultNetworkFor()', () => {

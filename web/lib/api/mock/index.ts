@@ -38,6 +38,10 @@ import type {
   ReceiptView,
   ChatAction,
 } from "@/lib/schemas"
+import {
+  PublicConfigResponseSchema,
+  type PublicConfigResponse,
+} from "@handshake-agent/contracts"
 import { z } from "zod"
 
 // ─── Delay helper ─────────────────────────────────────────────────────────────
@@ -51,7 +55,30 @@ function delay(ms: number): Promise<void> {
 
 const receiptCache = new Map<string, ReceiptView>()
 
+// ─── Config fixture ───────────────────────────────────────────────────────────
+
+const configFixture = {
+  fiats: [
+    { code: "NGN", displayName: "Nigerian Naira", symbol: "₦", decimals: 2 },
+  ],
+  assets: [
+    {
+      symbol: "USDT",
+      displayName: "Tether USD",
+      decimals: 6,
+      networks: ["tron"],
+    },
+  ],
+  networks: [{ id: "tron", displayName: "TRON (TRC-20)" }],
+  capabilities: { "crypto.buy": true, "crypto.sell": true, send: true },
+}
+
 // ─── Reader functions ─────────────────────────────────────────────────────────
+
+export async function getConfig(): Promise<PublicConfigResponse> {
+  await delay(100)
+  return PublicConfigResponseSchema.parse(configFixture)
+}
 
 export async function getBalances(): Promise<BalanceView> {
   await delay(200)

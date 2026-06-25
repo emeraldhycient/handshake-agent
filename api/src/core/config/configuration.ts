@@ -9,7 +9,8 @@
  * in config.
  */
 export interface AssetPricing {
-  baseRate: number;
+  /** Base mid-market rate per 1 unit of the crypto asset, keyed by fiat code. */
+  baseRates: Record<string, number>;
   /** Platform spread for BUY quotes (marks up the rate; user gets less crypto). */
   buySpreadBps: number;
   /** Platform spread for SELL quotes (marks down the rate; user gets less fiat). */
@@ -23,28 +24,31 @@ export interface PricingConfig {
   assets: Record<string, AssetPricing>;
 }
 
-/** Per-KYC-tier transaction limits (NGN). All values are admin-tunable later. */
+/** Per-KYC-tier transaction limits for a single fiat currency. All values are admin-tunable later. */
 export interface TierLimits {
-  /** Maximum fiat amount (NGN) per single transaction. */
+  /** Maximum fiat amount per single transaction. */
   perTxFiatMax: number;
-  /** Maximum cumulative fiat amount (NGN) within a rolling 24-hour window. */
+  /** Maximum cumulative fiat amount within a rolling 24-hour window. */
   dailyFiatMax: number;
   /** Maximum number of transactions within a rolling 24-hour window. */
   dailyTxCountMax: number;
 }
 
 /**
- * KYC-tier limit map. `unverified` has no entry — any transaction attempt
- * fails the KYC check before limits are consulted.
+ * KYC-tier limit set for a single fiat currency. `unverified` has no entry —
+ * any transaction attempt fails the KYC check before limits are consulted.
  *
  * TODO(config-admin): once the DB-admin AppSetting layer is built, these
  * defaults should be overridable at runtime without a deploy (root CLAUDE.md §7).
  */
-export interface LimitsConfig {
+export interface FiatLimits {
   tier_1: TierLimits;
   tier_2: TierLimits;
   tier_3: TierLimits;
 }
+
+/** Per-fiat, per-KYC-tier limits, keyed by fiat code (e.g. 'NGN'). Admin-tunable. */
+export type LimitsConfig = Record<string, FiatLimits>;
 
 /** PIN authentication configuration (task 4.3, root CLAUDE.md §7). */
 export interface PinConfig {
@@ -137,17 +141,19 @@ export interface BeneficiaryConfig {
  */
 export interface ComplianceConfig {
   /**
-   * NGN-equivalent threshold above which a Travel Rule data-capture flag
-   * must be set on a send proposal (FATF Travel Rule / CBN circular).
-   * Expressed in NGN major units (e.g. 1_000_000 = ₦1,000,000).
+   * Travel-Rule data-capture threshold per fiat code, in major units.
+   * Keyed by the fiat currency code returned by AssetRegistry.defaultFiat()
+   * (e.g. { NGN: 1_000_000 } = ₦1,000,000 per FATF Travel Rule / CBN circular).
    *
-   * The full TravelRuleData capture happens at execution (Task N3b); for
-   * proposals this flag triggers a note to the user that additional information
-   * will be required at execution time.
+   * When the crypto-equivalent fiat value of a send proposal reaches or exceeds
+   * the threshold for the base fiat, the proposal sets requiresTravelRule=true.
+   * The full TravelRuleData capture happens at execution (Task N3b).
+   *
+   * Adding a new fiat = add a key here; no code change required.
    *
    * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
    */
-  travelRuleThresholdNgn: number;
+  travelRuleThresholds: Record<string, number>;
 
   /**
    * Denylist of crypto addresses that MockSanctionsScreener flags as
@@ -378,12 +384,12 @@ export default (): AppConfig => ({
     maxDriftBps: 50,
   },
   compliance: {
-    // FATF Travel Rule / CBN circular threshold: ₦1,000,000 equivalent.
-    // Above this NGN value the send proposal sets requiresTravelRule:true.
+    // FATF Travel Rule / CBN circular threshold per fiat code.
+    // Above this fiat-equivalent value the send proposal sets requiresTravelRule:true.
     // Full TravelRuleData capture happens at execution (Task N3b).
     // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
     // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
-    travelRuleThresholdNgn: 1_000_000,
+    travelRuleThresholds: { NGN: 1_000_000 },
     // Empty by default — no addresses flagged. Populate in config to test the
     // blocked path with MockSanctionsScreener (see mock-sanctions.screener.ts).
     sanctionsDenylist: [] as string[],
@@ -395,13 +401,13 @@ export default (): AppConfig => ({
       // buySpreadBps=150 matches the old global spreadBps so existing BUY quotes are unchanged.
       // sellSpreadBps is independently tunable — set to 150 as the conservative default.
       USDT: {
-        baseRate: 1600,
+        baseRates: { NGN: 1600 },
         buySpreadBps: 150,
         sellSpreadBps: 150,
         cryptoDecimals: 6,
       },
       BTC: {
-        baseRate: 100_000_000,
+        baseRates: { NGN: 100_000_000 },
         buySpreadBps: 150,
         sellSpreadBps: 150,
         cryptoDecimals: 8,
@@ -414,23 +420,25 @@ export default (): AppConfig => ({
     ttlSeconds: 300,
   },
   limits: {
-    // Tier 1 — basic KYC: moderate daily limits to reduce exposure (NGN).
-    tier_1: {
-      perTxFiatMax: 50_000,
-      dailyFiatMax: 200_000,
-      dailyTxCountMax: 10,
-    },
-    // Tier 2 — enhanced KYC: higher throughput for regular users.
-    tier_2: {
-      perTxFiatMax: 500_000,
-      dailyFiatMax: 2_000_000,
-      dailyTxCountMax: 30,
-    },
-    // Tier 3 — full KYC: high-volume / business users.
-    tier_3: {
-      perTxFiatMax: 5_000_000,
-      dailyFiatMax: 20_000_000,
-      dailyTxCountMax: 100,
+    NGN: {
+      // Tier 1 — basic KYC: moderate daily limits to reduce exposure (NGN).
+      tier_1: {
+        perTxFiatMax: 50_000,
+        dailyFiatMax: 200_000,
+        dailyTxCountMax: 10,
+      },
+      // Tier 2 — enhanced KYC: higher throughput for regular users.
+      tier_2: {
+        perTxFiatMax: 500_000,
+        dailyFiatMax: 2_000_000,
+        dailyTxCountMax: 30,
+      },
+      // Tier 3 — full KYC: high-volume / business users.
+      tier_3: {
+        perTxFiatMax: 5_000_000,
+        dailyFiatMax: 20_000_000,
+        dailyTxCountMax: 100,
+      },
     },
   },
   auth: {

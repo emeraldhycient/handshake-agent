@@ -8,12 +8,15 @@
  *      with the correct messages, and returns the mocked intent.
  *   2. With an empty (missing) key, `extractIntent` throws an error matching
  *      `/ANTHROPIC_API_KEY/`.
+ *   3. `buildSystemPrompt()` renders enabled assets and default fiat from the
+ *      AssetRegistry — no hardcoded basket.
  */
 
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import type { Intent } from '@handshake-agent/contracts';
 import { IntentSchema } from '@handshake-agent/contracts';
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
 
 // ---------------------------------------------------------------------------
 // Mock @langchain/anthropic BEFORE importing the module under test.
@@ -61,6 +64,14 @@ function makeConfigService(
   } as unknown as ConfigService;
 }
 
+/** Minimal AssetRegistry stub backed by a catalog with USDT + NGN. */
+function makeAssetRegistry(): AssetRegistry {
+  return {
+    defaultFiat: jest.fn().mockReturnValue('NGN'),
+    enabledCryptoAssets: jest.fn().mockReturnValue(['USDT']),
+  } as unknown as AssetRegistry;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -83,6 +94,10 @@ describe('AnthropicLlmProvider', () => {
           {
             provide: ConfigService,
             useValue: makeConfigService('sk-ant-test-key'),
+          },
+          {
+            provide: AssetRegistry,
+            useValue: makeAssetRegistry(),
           },
         ],
       }).compile();
@@ -143,6 +158,23 @@ describe('AnthropicLlmProvider', () => {
       await provider.extractIntent('second call');
       expect(MockChatAnthropic).toHaveBeenCalledTimes(1);
     });
+
+    describe('buildSystemPrompt()', () => {
+      it('contains the catalog-enabled crypto asset (USDT)', () => {
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).toContain('USDT');
+      });
+
+      it('contains the default fiat from the registry (NGN)', () => {
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).toContain('NGN');
+      });
+
+      it('does NOT contain the old hardcoded asset basket line', () => {
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).not.toContain('Only "USDT" and "BTC"');
+      });
+    });
   });
 
   describe('when ANTHROPIC_API_KEY is empty / not set', () => {
@@ -155,6 +187,10 @@ describe('AnthropicLlmProvider', () => {
           {
             provide: ConfigService,
             useValue: makeConfigService(undefined),
+          },
+          {
+            provide: AssetRegistry,
+            useValue: makeAssetRegistry(),
           },
         ],
       }).compile();

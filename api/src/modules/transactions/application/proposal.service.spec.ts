@@ -89,7 +89,14 @@ function makeKycGate(
     // Fix-C: fiatAmount is now a string (exact NGN decimal).
     assertCanTransact: jest.fn<
       Promise<void>,
-      [{ userId: string; fiatAmount: string; asset: string }]
+      [
+        {
+          userId: string;
+          fiatAmount: string;
+          fiatCurrency: string;
+          asset: string;
+        },
+      ]
     >(),
   };
   if (throws) {
@@ -841,12 +848,17 @@ function makeBeneficiaryServiceSend(
 function makeAssetRegistrySend(opts?: {
   network?: string;
   addressValid?: boolean;
+  defaultFiat?: string;
 }): jest.Mocked<
-  Pick<AssetRegistry, 'defaultNetworkFor' | 'validateAddress' | 'asset'>
+  Pick<
+    AssetRegistry,
+    'defaultNetworkFor' | 'validateAddress' | 'asset' | 'defaultFiat'
+  >
 > {
   return {
     defaultNetworkFor: jest.fn().mockReturnValue(opts?.network ?? 'TRON'),
     validateAddress: jest.fn().mockReturnValue(opts?.addressValid !== false),
+    defaultFiat: jest.fn().mockReturnValue(opts?.defaultFiat ?? 'NGN'),
     asset: jest.fn().mockReturnValue({
       baseRate: 1600,
       symbol: 'USDT',
@@ -874,8 +886,10 @@ function makeComplianceService(
 /** Stub ConfigService that returns compliance + pricing config. */
 const STUB_CONFIG_SERVICE = {
   get: jest.fn((key: string) => {
-    if (key === 'compliance') return { travelRuleThresholdNgn: 1_000_000 };
-    if (key === 'pricing') return { assets: { USDT: { baseRate: 1600 } } };
+    if (key === 'compliance')
+      return { travelRuleThresholds: { NGN: 1_000_000 } };
+    if (key === 'pricing')
+      return { assets: { USDT: { baseRates: { NGN: 1600 } } } };
     return undefined;
   }),
 };
@@ -888,7 +902,7 @@ function makeSendSvc(opts?: {
   beneficiaryService?: Pick<BeneficiaryService, 'getById'>;
   assetRegistry?: Pick<
     AssetRegistry,
-    'defaultNetworkFor' | 'validateAddress' | 'asset'
+    'defaultNetworkFor' | 'validateAddress' | 'asset' | 'defaultFiat'
   >;
   ledgerRepo?: ILedgerRepository;
   complianceService?: Pick<ComplianceService, 'screenSendDestination'>;
@@ -1017,6 +1031,45 @@ describe('ProposalService.createSendProposal', () => {
         cryptoAmount: '700',
         totalDebit: '701',
       }),
+    });
+
+    await svc.createSendProposal({
+      ...BASE_SEND_INPUT,
+      intent: { ...BASE_SEND_INPUT.intent, cryptoAmount: '700' },
+    });
+
+    const createArg = (
+      proposalRepo.create as jest.Mock<
+        Promise<{ id: string }>,
+        [CreateProposalData]
+      >
+    ).mock.calls[0][0];
+    expect(createArg.parameters['requiresTravelRule']).toBe(true);
+  });
+
+  it('flags travel rule using the base-fiat threshold from travelRuleThresholds[defaultFiat()]', async () => {
+    // 700 USDT × ₦1600 = ₦1,120,000 ≥ travelRuleThresholds.NGN (1_000_000)
+    // Verifies that the threshold is looked up via travelRuleThresholds[baseFiat]
+    // (per-fiat map, Task 9) rather than a scalar threshold field.
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeSendSvc({
+      proposalRepo,
+      ledgerRepo: makeLedgerRepo('1000.0'),
+      quotesService: makeQuotesServiceWithSend({
+        ...STUB_SEND_QUOTE,
+        cryptoAmount: '700',
+        totalDebit: '701',
+      }),
+      assetRegistry: makeAssetRegistrySend({ defaultFiat: 'NGN' }),
+      configService: {
+        get: jest.fn((key: string) => {
+          if (key === 'compliance')
+            return { travelRuleThresholds: { NGN: 1_000_000 } };
+          if (key === 'pricing')
+            return { assets: { USDT: { baseRates: { NGN: 1600 } } } };
+          return undefined;
+        }),
+      },
     });
 
     await svc.createSendProposal({
@@ -1271,9 +1324,10 @@ describe('ProposalService.createSendProposal', () => {
     // Math.round(1600.45) = 1600 → would produce 16000 (wrong by 4.5 NGN).
     const configWithFractionalRate = {
       get: jest.fn((key: string) => {
-        if (key === 'compliance') return { travelRuleThresholdNgn: 1_000_000 };
+        if (key === 'compliance')
+          return { travelRuleThresholds: { NGN: 1_000_000 } };
         if (key === 'pricing')
-          return { assets: { USDT: { baseRate: 1600.45 } } };
+          return { assets: { USDT: { baseRates: { NGN: 1600.45 } } } };
         return undefined;
       }),
     };

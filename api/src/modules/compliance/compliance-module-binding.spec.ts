@@ -31,7 +31,7 @@ function makeConfigService(sanctionsMockMode: string): ConfigService {
       if (key === 'BLOCKRADAR_API_KEY') return 'test-key';
       if (key === 'compliance') {
         return {
-          travelRuleThresholdNgn: 1_000_000,
+          travelRuleThresholds: { NGN: 1_000_000 },
           sanctionsDenylist: [] as string[],
         };
       }

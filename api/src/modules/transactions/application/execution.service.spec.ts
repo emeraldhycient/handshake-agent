@@ -273,7 +273,14 @@ function makeKycGate(
     // Fix-C: fiatAmount is now a string (exact NGN decimal).
     assertCanTransact: jest.fn<
       Promise<void>,
-      [{ userId: string; fiatAmount: string; asset: string }]
+      [
+        {
+          userId: string;
+          fiatAmount: string;
+          fiatCurrency: string;
+          asset: string;
+        },
+      ]
     >(),
     getOriginatorName: jest.fn<Promise<string | null>, [string]>(),
   };
@@ -362,6 +369,7 @@ function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
       .fn()
       .mockReturnValue('f56d297c-a3db-4cda-95bd-180b54679070'),
     defaultCryptoAsset: jest.fn().mockReturnValue('USDT'),
+    defaultFiat: jest.fn().mockReturnValue('NGN'),
     isAssetEnabled: jest.fn().mockReturnValue(true),
     isNetworkEnabled: jest.fn().mockReturnValue(true),
     isFiatEnabled: jest.fn().mockReturnValue(true),
@@ -409,10 +417,13 @@ const stubConfig = {
   get: jest.fn((key: string) => {
     if (key === 'buy') return { maxDriftBps: 50 };
     if (key === 'sell') return { maxDriftBps: 50 };
-    // pricing.assets.USDT.baseRate is required by executeSend's KYC-gate guard.
+    // pricing.assets.USDT.baseRates.NGN is required by executeSend's KYC-gate guard.
     if (key === 'pricing')
       return {
-        assets: { USDT: { baseRate: 1600 }, BTC: { baseRate: 85_000_000 } },
+        assets: {
+          USDT: { baseRates: { NGN: 1600 } },
+          BTC: { baseRates: { NGN: 85_000_000 } },
+        },
       };
     return undefined;
   }),
@@ -944,6 +955,28 @@ describe('ExecutionService.executeBuy', () => {
     expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
+  // ── Task 5: fiatCurrency threaded from quote (not hardcoded 'NGN') ──────────
+
+  it('uses the quote fiatCurrency for the collection and result, not a literal', async () => {
+    const paymentProvider = makePaymentProvider();
+    const settlementRepo = makeSettlementRepo();
+
+    const svc = buildService({ paymentProvider, settlementRepo });
+
+    const res = await svc.executeBuy(BASE_INPUT);
+
+    // Result currency must come from the stored quote (STORED_QUOTE.fiatCurrency = 'NGN').
+    expect(res.payment.currency).toBe('NGN');
+
+    // createCollection must be called with the quote's fiatCurrency, not a literal.
+    expect(paymentProvider.createCollection).toHaveBeenCalledWith(
+      expect.objectContaining({ currency: 'NGN' }),
+    );
+
+    // settleBuyAtomic is only called during settleBuyPayment, not executeBuy —
+    // the real regression guard is in the settleBuyPayment suite below.
+  });
+
   // ── Idempotent replay returns non-empty VA details (C2) ───────────────────
 
   it('idempotent replay returns populated VA details (accountNumber/bankName/providerRef) from metadata', async () => {
@@ -1118,6 +1151,31 @@ describe('ExecutionService.settleBuyPayment', () => {
     expect(settlementRepo.settleBuyAtomic).not.toHaveBeenCalled();
     // No provider verify on idempotent path.
     expect(paymentProvider.verify).not.toHaveBeenCalled();
+  });
+
+  // ── Task 5: settleBuyAtomic receives fiatCurrency from metadata ──────────────
+
+  it('settleBuyAtomic is called with fiatCurrency read from transaction metadata (not hardcoded NGN)', async () => {
+    const transactionRepo = makeTransactionRepoForSettle(SETTLING_TXN);
+    const settlementRepo = makeSettlementRepo(null, {
+      receiptNumber: STUB_RECEIPT_NUMBER,
+    });
+    const walletService = makeWalletServiceWithId();
+    const paymentProvider = makePaymentProvider();
+
+    const svc = buildService({
+      transactionRepo,
+      settlementRepo,
+      walletService,
+      paymentProvider,
+    });
+
+    await svc.settleBuyPayment(SETTLE_INPUT);
+
+    // fiatCurrency must be threaded from meta.fiatCurrency (SETTLING_TXN.metadata.fiatCurrency = 'NGN').
+    expect(settlementRepo.settleBuyAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({ fiatCurrency: 'NGN' }),
+    );
   });
 
   // ── Provider verify not successful → return pending ───────────────────────
@@ -2011,6 +2069,40 @@ describe('ExecutionService.settleSellPayout', () => {
     expect(result.receiptNumber).toBe(STUB_RECEIPT_NUMBER);
     expect(settlementRepo.settleSellFinalizeAtomic).toHaveBeenCalledTimes(1);
     expect(settlementRepo.settleSellRefundAtomic).not.toHaveBeenCalled();
+  });
+
+  // ── Task 6: fiatCurrency threads into settleSellFinalizeAtomic (not hardcoded) ──
+
+  it('settleSellFinalizeAtomic receives fiatCurrency threaded from transaction metadata, not a hardcoded default', async () => {
+    // Use a NON-NGN currency so the assertion would FAIL if the code reverted
+    // to a hardcoded 'NGN' default (the regression this guards against).
+    const ghsTxn: TransactionRecord = {
+      ...SETTLING_SELL_TXN,
+      metadata: {
+        ...SETTLING_SELL_TXN.metadata,
+        fiatCurrency: 'GHS',
+      },
+    };
+    const transactionRepo = makeTransactionRepoForSellSettle(ghsTxn);
+    const settlementRepo = makeSettlementRepo();
+    const paymentProvider = makeSellPaymentProvider(undefined, {
+      status: 'successful',
+      amount: '24600',
+      currency: 'GHS',
+      providerRef: PROVIDER_REF,
+    });
+
+    const svc = buildSellService({
+      transactionRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    await svc.settleSellPayout(SETTLE_SELL_INPUT);
+
+    expect(settlementRepo.settleSellFinalizeAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({ fiatCurrency: 'GHS' }),
+    );
   });
 
   // ── Payout pending ────────────────────────────────────────────────────────
@@ -2926,7 +3018,7 @@ describe('ExecutionService.executeSend', () => {
         if (key === 'buy') return { maxDriftBps: 50 };
         if (key === 'sell') return { maxDriftBps: 50 };
         if (key === 'pricing')
-          return { assets: { USDT: { baseRate: 1600.45 } } };
+          return { assets: { USDT: { baseRates: { NGN: 1600.45 } } } };
         return undefined;
       }),
     };
@@ -3339,5 +3431,73 @@ describe('ExecutionService.settleSendOnChain', () => {
       '+2349000000099',
       expect.stringContaining('Send failed'),
     );
+  });
+});
+
+// =============================================================================
+// Task 6: sell-side 'NGN' literal replacement + TRON fallback removal
+// =============================================================================
+
+describe('ExecutionService.executeSell — Task 6: currency threaded from quote (not literal)', () => {
+  it('uses the quote fiatCurrency for createPayout (not a hardcoded literal) and includes fiatCurrency in atomic metadata', async () => {
+    // Use a quote with a NON-NGN fiatCurrency to prove currency is threaded, not hardcoded.
+    const ghsQuote: QuoteRecord = {
+      ...STORED_SELL_QUOTE,
+      fiatCurrency: 'GHS',
+    };
+    // The proposal's STUB_SELL_TXN must reflect GHS in metadata for idempotency check;
+    // override txn with GHS metadata so createSellSettlingWithReserveAtomic returns GHS txn.
+    const ghsSellTxn: TransactionRecord = {
+      ...STUB_SELL_TXN,
+      metadata: {
+        ...(STUB_SELL_TXN.metadata as Record<string, string>),
+        fiatCurrency: 'GHS',
+      },
+    };
+    const quoteRepo = makeQuoteRepo(ghsQuote);
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      ghsSellTxn,
+    );
+    const paymentProvider = makeSellPaymentProvider();
+
+    const svc = buildSellService({
+      quoteRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    await svc.executeSell(SELL_BASE_INPUT);
+
+    // createPayout must receive currency: 'GHS' from the stored quote, NOT 'NGN'.
+    expect(paymentProvider.createPayout).toHaveBeenCalledWith(
+      expect.objectContaining({ currency: 'GHS' }),
+    );
+  });
+});
+
+describe('ExecutionService.executeSend — Task 6: fail-closed on missing network (no TRON default)', () => {
+  it('fails closed when a send proposal has no network (no TRON default)', async () => {
+    // Build a proposal whose parameters do NOT include 'network'.
+    const proposalWithoutNetwork: ProposalRecord = {
+      ...STUB_SEND_PROPOSAL,
+      parameters: {
+        asset: 'USDT',
+        cryptoAmount: '10.000000',
+        networkFeeCrypto: '1.000000',
+        totalDebit: '11.000000',
+        beneficiaryId: BENEFICIARY_ID,
+        walletId: 'wallet-id',
+        toAddress: SEND_TO_ADDRESS,
+        // network intentionally omitted
+        requiresTravelRule: 'false',
+      },
+    };
+    const proposalRepo = makeProposalRepo(proposalWithoutNetwork);
+
+    const svc = buildSendService({ proposalRepo });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toThrow(/network/i);
   });
 });

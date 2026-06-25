@@ -161,6 +161,9 @@ export function WalletPage({
         <QrPlaceholder size={86} className="flex-none" />
 
         {/* Address block */}
+        {/* WN: deposit asset/network + copy are hardcoded mock display. Templatize
+            from useConfig() (GET /config — gateway.getConfig) when the real deposit
+            flow lands; deferred this PR (FE is mock-driven, no capability logic yet). */}
         <div className="min-w-0 flex-1">
           <p className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
             USDT deposit · TRON

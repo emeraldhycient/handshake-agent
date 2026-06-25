@@ -29,6 +29,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   BalanceSource,
   CompensationReason,
+  FiatCurrency,
   LedgerAccountType,
   ReceiptDeliveryStatus,
   SettlementOutboxStatus,
@@ -608,15 +609,25 @@ async function upsertVelocityCounterInSettle(
   params: {
     userId: string;
     counterType: VelocityCounterType;
+    fiatCurrency: string;
     delta: string;
     now: Date;
   },
 ): Promise<void> {
   const { userId, counterType, delta, now } = params;
+  // Cast string → generated FiatCurrency enum at the infrastructure boundary
+  // (application layer uses `string` to stay free of Prisma imports — §3.2).
+  const fiatCurrencyEnum = params.fiatCurrency as FiatCurrency;
   const windowEnd = new Date(now.getTime() + WINDOW_24H_MS_SETTLE);
 
   const existing = await tx.velocityCounter.findUnique({
-    where: { userId_counterType: { userId, counterType } },
+    where: {
+      userId_counterType_fiatCurrency: {
+        userId,
+        counterType,
+        fiatCurrency: fiatCurrencyEnum,
+      },
+    },
     select: { windowEnd: true, currentValue: true },
   });
 
@@ -625,10 +636,17 @@ async function upsertVelocityCounterInSettle(
 
   if (windowExpired) {
     await tx.velocityCounter.upsert({
-      where: { userId_counterType: { userId, counterType } },
+      where: {
+        userId_counterType_fiatCurrency: {
+          userId,
+          counterType,
+          fiatCurrency: fiatCurrencyEnum,
+        },
+      },
       create: {
         userId,
         counterType,
+        fiatCurrency: fiatCurrencyEnum,
         currentValue: delta,
         windowStart: now,
         windowEnd,
@@ -641,7 +659,13 @@ async function upsertVelocityCounterInSettle(
     });
   } else {
     await tx.velocityCounter.update({
-      where: { userId_counterType: { userId, counterType } },
+      where: {
+        userId_counterType_fiatCurrency: {
+          userId,
+          counterType,
+          fiatCurrency: fiatCurrencyEnum,
+        },
+      },
       data: {
         currentValue: { increment: delta as unknown as number },
       },
@@ -651,18 +675,25 @@ async function upsertVelocityCounterInSettle(
 
 async function writeVelocityIncrementsInSettle(
   tx: Prisma.TransactionClient,
-  increment: { userId: string; fiatAmountStr: string; now: Date },
+  increment: {
+    userId: string;
+    fiatCurrency: string;
+    fiatAmountStr: string;
+    now: Date;
+  },
 ): Promise<void> {
-  const { userId, fiatAmountStr, now } = increment;
+  const { userId, fiatCurrency, fiatAmountStr, now } = increment;
   await upsertVelocityCounterInSettle(tx, {
     userId,
     counterType: VelocityCounterType.amount_24h,
+    fiatCurrency,
     delta: fiatAmountStr,
     now,
   });
   await upsertVelocityCounterInSettle(tx, {
     userId,
     counterType: VelocityCounterType.count_24h,
+    fiatCurrency,
     delta: '1',
     now,
   });
@@ -707,6 +738,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       cryptoAmount,
       processingFee,
       asset,
+      fiatCurrency,
       providerRef,
       now,
       year,
@@ -734,6 +766,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           cryptoAmount,
           processingFee,
           asset,
+          fiatCurrency,
           postedAt: now,
           accountStates,
         });
@@ -1054,6 +1087,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       cryptoAmount,
       netFiatAmount,
       asset,
+      fiatCurrency,
       providerRef,
       now,
       year,
@@ -1076,6 +1110,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           cryptoAmount,
           netFiatAmount,
           asset,
+          fiatCurrency,
           postedAt: now,
           accountStates,
         });

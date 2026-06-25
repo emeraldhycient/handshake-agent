@@ -30,17 +30,19 @@ export interface SettleBuyAtomicInput {
   userId: string;
   /** Blockradar / WalletPrismaRepository id of the user's crypto wallet. */
   walletId: string;
-  /** Gross NGN the user paid (decimal string, e.g. "10000"). */
+  /** Gross fiat the user paid in `fiatCurrency` (decimal string, NGN example: "10000"). */
   fiatAmount: string;
   /** Crypto amount to credit to the user (decimal string, e.g. "6.123456"). */
   cryptoAmount: string;
-  /** NGN processing fee portion of fiatAmount (decimal string, e.g. "100"). */
+  /** Processing fee portion of fiatAmount in `fiatCurrency` (decimal string, NGN example: "100"). */
   processingFee: string;
   /**
    * The crypto asset symbol (e.g. 'USDT', 'USDC'). Threaded through to the
    * ledger builder so all crypto legs key by this asset, not a hardcoded literal.
    */
   asset: string;
+  /** The fiat currency code (e.g. 'NGN'); threaded to the ledger builder for the fiat legs. */
+  fiatCurrency: string;
   /** Provider reference returned by payment provider verify (e.g. flw_ref). */
   providerRef: string;
   /** Timestamp to use for postedAt / completedAt / issuedAt (from CLOCK). */
@@ -102,6 +104,8 @@ export interface CreateSellSettlingWithReserveInput {
   /** Velocity counters to upsert atomically (V1). */
   velocityIncrement: {
     userId: string;
+    /** Fiat currency code for the counter's window (e.g. 'NGN'). */
+    fiatCurrency: string;
     fiatAmountStr: string;
     now: Date;
   };
@@ -132,13 +136,15 @@ export interface SettleSellFinalizeInput {
   walletId: string;
   /** Crypto amount that was reserved (same as at executeSell). */
   cryptoAmount: string;
-  /** Net NGN the user receives after spread + fee. */
+  /** Net fiat the user receives in `fiatCurrency` after spread + fee. */
   netFiatAmount: string;
   /**
    * The crypto asset symbol (e.g. 'USDT', 'USDC'). Threaded through to the
    * ledger builder so crypto legs key by this asset.
    */
   asset: string;
+  /** The fiat currency code (e.g. 'NGN'); threaded to the ledger builder for the fiat legs. */
+  fiatCurrency: string;
   /** Flutterwave transfer id returned by verifyPayout. */
   providerRef: string;
   /** Timestamp to use for postedAt / completedAt / issuedAt (from CLOCK). */
@@ -219,6 +225,8 @@ export interface CreateSendSettlingWithReserveInput {
   /** Velocity counters to upsert atomically (V1). */
   velocityIncrement: {
     userId: string;
+    /** Fiat currency code for the counter's window (e.g. 'NGN'). */
+    fiatCurrency: string;
     fiatAmountStr: string;
     now: Date;
   };

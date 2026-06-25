@@ -20,6 +20,7 @@ import { FlutterwaveWebhookModule } from './modules/treasury/flutterwave-webhook
 import { BlockradarWebhookModule } from './modules/wallets/blockradar-webhook.module';
 import { ComplianceModule } from './modules/compliance/compliance.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { PublicConfigModule } from './modules/config/config.module';
 import { JobsModule } from './core/jobs/jobs.module';
 
 @Module({
@@ -58,6 +59,7 @@ import { JobsModule } from './core/jobs/jobs.module';
     // boots without a live Redis; existing e2e suites never enqueue, so they pass.
     JobsModule,
     AdminModule,
+    PublicConfigModule,
   ],
   // Global Zod validation: every request DTO is checked against its contract schema.
   providers: [{ provide: APP_PIPE, useClass: ZodValidationPipe }],

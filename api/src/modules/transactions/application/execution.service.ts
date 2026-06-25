@@ -37,6 +37,8 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import type { FiatCurrency } from '@handshake-agent/contracts';
+
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import { PinService } from '../../../core/auth/pin.service';
 import { SessionService } from '../../../core/auth/session.service';
@@ -119,7 +121,7 @@ export interface ExecuteBuyResult {
     bankName: string;
     providerRef: string;
     amount: string;
-    currency: 'NGN';
+    currency: string;
   };
 }
 
@@ -340,7 +342,7 @@ export class ExecutionService {
     const freshQuote = await this.quotesService.quoteBuy({
       asset: storedQuote.asset as 'USDT' | 'BTC',
       fiatAmount: storedQuote.fiatAmount,
-      fiatCurrency: storedQuote.fiatCurrency as 'NGN',
+      fiatCurrency: storedQuote.fiatCurrency as FiatCurrency,
     });
 
     const storedRate = Number(storedQuote.fxRate);
@@ -361,6 +363,7 @@ export class ExecutionService {
     await this.kycGate.assertCanTransact({
       userId,
       fiatAmount: storedQuote.fiatAmount,
+      fiatCurrency: storedQuote.fiatCurrency,
       asset: storedQuote.asset,
     });
 
@@ -438,6 +441,7 @@ export class ExecutionService {
       // Date.now()) so the window boundary is deterministic in tests.
       velocityIncrement: {
         userId,
+        fiatCurrency: storedQuote.fiatCurrency,
         fiatAmountStr: storedQuote.fiatAmount,
         now,
       },
@@ -461,7 +465,7 @@ export class ExecutionService {
     // TODO: when KycProfile is queryable from the engine, use real firstname/lastname.
     const collection = await this.paymentProvider.createCollection({
       amount: storedQuote.fiatAmount,
-      currency: 'NGN',
+      currency: storedQuote.fiatCurrency,
       reference: idempotencyKey,
       customer: {
         // Safe fallback: use a synthetic email derived from userId.
@@ -505,7 +509,7 @@ export class ExecutionService {
         bankName: collection.bankName,
         providerRef: collection.providerRef,
         amount: storedQuote.fiatAmount,
-        currency: 'NGN',
+        currency: storedQuote.fiatCurrency,
       },
     };
   }
@@ -568,7 +572,10 @@ export class ExecutionService {
     const verifiedAmount = toScaled(verifyResult.amount);
     const expectedAmount = toScaled(expectedFiatAmount);
 
-    if (verifiedAmount < expectedAmount || verifyResult.currency !== 'NGN') {
+    if (
+      verifiedAmount < expectedAmount ||
+      verifyResult.currency !== meta.fiatCurrency
+    ) {
       // Mismatch — leave in settling; operator/webhook will retry.
       return { transactionId: txn.id, status: 'pending', userId: txn.userId };
     }
@@ -601,6 +608,8 @@ export class ExecutionService {
       processingFee: meta.processingFeeAmount ?? '0',
       // WN-4: thread settleAsset so ledger legs key by asset, not a hardcoded literal.
       asset: settleAsset,
+      // Task 5: fiatCurrency is always present in buy metadata (written at executeBuy).
+      fiatCurrency: meta.fiatCurrency,
       providerRef: verifyResult.providerRef,
       now,
       year,
@@ -681,7 +690,7 @@ export class ExecutionService {
     const freshQuote = await this.quotesService.quoteSell({
       asset: storedQuote.asset as 'USDT',
       cryptoAmount: storedQuote.cryptoAmount,
-      fiatCurrency: storedQuote.fiatCurrency as 'NGN',
+      fiatCurrency: storedQuote.fiatCurrency as FiatCurrency,
     });
 
     const storedRate = Number(storedQuote.fxRate);
@@ -698,10 +707,11 @@ export class ExecutionService {
 
     // ── Step 3: KYC gate (server-side, always) ──────────────────────────────
     // Fix-C: pass the exact decimal string — no Number() conversion at the gate.
-    // storedQuote.fiatAmount for a sell quote holds the netFiatAmount (NGN out).
+    // storedQuote.fiatAmount for a sell quote holds the netFiatAmount (fiat out).
     await this.kycGate.assertCanTransact({
       userId,
       fiatAmount: storedQuote.fiatAmount,
+      fiatCurrency: storedQuote.fiatCurrency,
       asset: storedQuote.asset,
     });
 
@@ -843,6 +853,7 @@ export class ExecutionService {
         confirmedAt: now,
         velocityIncrement: {
           userId,
+          fiatCurrency: storedQuote.fiatCurrency,
           fiatAmountStr: storedQuote.fiatAmount,
           now,
         },
@@ -853,10 +864,10 @@ export class ExecutionService {
         now,
       });
 
-    // ── Step 10: Initiate NGN payout ─────────────────────────────────────────
+    // ── Step 10: Initiate fiat payout ────────────────────────────────────────
     const payout = await this.paymentProvider.createPayout({
       amount: storedQuote.fiatAmount,
-      currency: 'NGN',
+      currency: storedQuote.fiatCurrency,
       reference: idempotencyKey,
       bankAccount: {
         // These are guaranteed non-null by the guard in step 8 of the gauntlet.
@@ -970,6 +981,8 @@ export class ExecutionService {
           cryptoAmount,
           netFiatAmount,
           asset: sellAsset,
+          // Task 6: thread fiatCurrency from metadata (no legacy rows pre-launch — fail-closed, no default).
+          fiatCurrency: meta.fiatCurrency,
           providerRef: verifyResult.providerRef,
           now,
           year,
@@ -981,6 +994,7 @@ export class ExecutionService {
         receiptNumber,
         cryptoAmount,
         netFiatAmount,
+        fiatCurrency: meta.fiatCurrency,
       });
 
       return {
@@ -1105,7 +1119,12 @@ export class ExecutionService {
     const beneficiaryId = params.beneficiaryId;
     const walletId = params.walletId;
     const toAddress = params.toAddress ?? '';
-    const network = params.network ?? 'TRON';
+    const network = params.network;
+    if (!network) {
+      throw new ProposalNotExecutableError(
+        'proposal parameters missing network',
+      );
+    }
     const requiresTravelRule = params.requiresTravelRule === 'true';
 
     if (!beneficiaryId) {
@@ -1127,10 +1146,11 @@ export class ExecutionService {
     // which silently bypasses the KYC tier gate for any amount. Fail loudly on
     // misconfiguration rather than allowing a silent gate bypass.
     const pricingConfig = this.config.get<PricingConfig>('pricing');
-    const baseRate = pricingConfig?.assets?.[asset]?.baseRate;
+    const baseFiat = this.assetRegistry.defaultFiat();
+    const baseRate = pricingConfig?.assets?.[asset]?.baseRates?.[baseFiat];
     if (!baseRate || baseRate <= 0) {
       throw new InternalServerErrorException(
-        `pricing config missing or invalid baseRate for asset '${asset}' — cannot compute NGN-equivalent for KYC gate`,
+        `pricing config missing or invalid baseRates.${baseFiat} for asset '${asset}' — cannot compute ${baseFiat}-equivalent for KYC gate`,
       );
     }
     // Fix-C: compute NGN equivalent using BigInt to avoid float drift.
@@ -1159,6 +1179,7 @@ export class ExecutionService {
     await this.kycGate.assertCanTransact({
       userId,
       fiatAmount: ngnEquivalentStr,
+      fiatCurrency: baseFiat,
       asset,
     });
 
@@ -1327,6 +1348,7 @@ export class ExecutionService {
         confirmedAt: now,
         velocityIncrement: {
           userId,
+          fiatCurrency: baseFiat,
           fiatAmountStr: String(ngnEquivalent),
           now,
         },
@@ -1442,10 +1464,15 @@ export class ExecutionService {
     const meta = txn.metadata as Record<string, string>;
     const walletId = meta.walletId;
     // asset is in metadata but not needed for network-wallet lookup (WN-1).
-    const network = meta.network ?? 'TRON';
+    const network = meta.network;
 
     if (!walletId) {
       // Missing wallet info in metadata — fail-safe: leave pending.
+      return { status: 'pending' };
+    }
+
+    if (!network) {
+      // Missing network in metadata — fail-safe: leave pending (consistent with walletId guard above).
       return { status: 'pending' };
     }
 
@@ -1652,6 +1679,8 @@ export class ExecutionService {
     receiptNumber: string;
     cryptoAmount: string;
     netFiatAmount: string;
+    /** Fiat currency code threaded from transaction metadata (e.g. 'NGN'). */
+    fiatCurrency: string;
   }): Promise<void> {
     try {
       if (
@@ -1671,7 +1700,7 @@ export class ExecutionService {
         params.cryptoAmount,
       );
       const formattedFiat = this.assetRegistry.formatFiat(
-        'NGN',
+        params.fiatCurrency,
         params.netFiatAmount,
       );
       const body =
@@ -1775,7 +1804,8 @@ export class ExecutionService {
         bankName: meta.bankName ?? '',
         providerRef: meta.providerRef ?? txn.processorTxRef ?? '',
         amount: fiatAmount,
-        currency: 'NGN',
+        // Task 6: thread fiatCurrency from metadata (buy path always writes it at executeBuy).
+        currency: meta.fiatCurrency,
       },
     };
   }

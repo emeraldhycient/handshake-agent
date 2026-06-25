@@ -408,17 +408,19 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
     // Verify velocity counters were written to the DB.
     const amountCounter = await prisma.velocityCounter.findUnique({
       where: {
-        userId_counterType: {
+        userId_counterType_fiatCurrency: {
           userId: velocityUser.id,
           counterType: 'amount_24h',
+          fiatCurrency: 'NGN',
         },
       },
     });
     const countCounter = await prisma.velocityCounter.findUnique({
       where: {
-        userId_counterType: {
+        userId_counterType_fiatCurrency: {
           userId: velocityUser.id,
           counterType: 'count_24h',
+          fiatCurrency: 'NGN',
         },
       },
     });
@@ -466,9 +468,10 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
     // Velocity counter should now be at 200_000.
     const amountCounter = await prisma.velocityCounter.findUnique({
       where: {
-        userId_counterType: {
+        userId_counterType_fiatCurrency: {
           userId: capUser.id,
           counterType: 'amount_24h',
+          fiatCurrency: 'NGN',
         },
       },
     });
@@ -505,6 +508,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
         await gate.assertCanTransact({
           userId: capUser.id,
           fiatAmount: '10000',
+          fiatCurrency: 'NGN',
           asset: 'USDT',
         });
       })(),
@@ -645,7 +649,11 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
     // After the buy, the counter should be reset to just the new amount (not 199_000+10_000).
     const amountCounter = await prisma.velocityCounter.findUnique({
       where: {
-        userId_counterType: { userId: resetUser.id, counterType: 'amount_24h' },
+        userId_counterType_fiatCurrency: {
+          userId: resetUser.id,
+          counterType: 'amount_24h',
+          fiatCurrency: 'NGN',
+        },
       },
     });
     expect(Number(amountCounter!.currentValue)).toBe(10_000); // reset, not 209_000

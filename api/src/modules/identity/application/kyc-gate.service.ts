@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import type {
   AppConfig,
+  FiatLimits,
   LimitsConfig,
   TierLimits,
 } from '../../../core/config/configuration';
@@ -23,17 +24,28 @@ import { VELOCITY_REPOSITORY } from './ports/velocity.repository.port';
 type VerifiedTier = 'tier_1' | 'tier_2' | 'tier_3';
 
 /**
- * Narrows a raw `kycTier` string to one of the three verified tier keys and
- * returns the corresponding limit config. TypeScript verifies the union; the
- * runtime guard is the previous `kycTier === 'unverified'` block.
+ * Resolves the per-fiat, per-KYC-tier limit for a given transaction currency.
  *
- * Throws if an unexpected value somehow slips through — defensive, not reachable
- * under correct schema constraints.
+ * Fails closed: if no limits are configured for `fiatCurrency`, throws immediately
+ * rather than silently allowing the transaction. This ensures that adding a new
+ * fiat currency to the catalog requires an explicit config entry before it can be
+ * used in transactions.
+ *
+ * Narrows a raw `kycTier` string to one of the three verified tier keys;
+ * the runtime guard is the previous `kycTier === 'unverified'` block.
  */
-function getTierLimits(tier: string, limits: LimitsConfig): TierLimits {
+function getTierLimits(
+  tier: string,
+  fiatCurrency: string,
+  limits: LimitsConfig,
+): TierLimits {
+  const fiatLimits: FiatLimits | undefined = limits[fiatCurrency];
+  if (!fiatLimits) {
+    throw new Error(`KycGate: no limits configured for fiat ${fiatCurrency}`);
+  }
   const verifiedTiers: VerifiedTier[] = ['tier_1', 'tier_2', 'tier_3'];
   if ((verifiedTiers as string[]).includes(tier)) {
-    return limits[tier as VerifiedTier];
+    return fiatLimits[tier as VerifiedTier];
   }
   // Unreachable in practice: `unverified` is blocked above; schema enforces the enum.
   throw new Error(`Unexpected kycTier value after verification gate: ${tier}`);
@@ -60,11 +72,13 @@ function buildDisplayName(
 export interface AssertCanTransactInput {
   userId: string;
   /**
-   * Exact NGN amount as a decimal string (e.g. "10000" or "5000.50").
+   * Exact fiat amount in `fiatCurrency` as a decimal string (e.g. "10000" or "5000.50").
    * String — not `number` — to prevent IEEE-754 float drift at the money boundary
    * (Fix-C: BigInt-exact comparison with toScaled from the ledger domain).
    */
   fiatAmount: string;
+  /** ISO fiat currency code for this transaction (e.g. 'NGN'). Used to resolve per-fiat tier limits. */
+  fiatCurrency: string;
   asset: string;
 }
 
@@ -121,7 +135,7 @@ export class KycGateService {
    * Resolves (void) on success; throws a `GateError` subclass on any failure.
    */
   async assertCanTransact(input: AssertCanTransactInput): Promise<void> {
-    const { userId, fiatAmount } = input;
+    const { userId, fiatAmount, fiatCurrency } = input;
 
     const user = await this.identityRepo.loadUser(userId);
     if (user === null) {
@@ -142,10 +156,14 @@ export class KycGateService {
     }
 
     // 3. Resolve tier limits from config (never hardcoded in the service).
-    // getTierLimits narrows kycTier to the verified-tier union; TypeScript can
-    // verify the set rather than relying on a raw `as` cast.
+    // getTierLimits looks up limits[fiatCurrency] first (fail-closed for unconfigured
+    // currencies), then narrows kycTier to the verified-tier union.
     const limits = this.config.get<LimitsConfig>('limits');
-    const tierLimits: TierLimits = getTierLimits(user.kycTier, limits);
+    const tierLimits: TierLimits = getTierLimits(
+      user.kycTier,
+      fiatCurrency,
+      limits,
+    );
 
     // Fix-C: all fiat comparisons use BigInt-scaled integers via toScaled() from
     // the ledger domain. This matches the 10^18 scale used by the ledger and avoids
@@ -163,12 +181,17 @@ export class KycGateService {
         Number(fiatAmount),
         tierLimits.perTxFiatMax,
         user.kycTier,
+        fiatCurrency,
       );
     }
 
-    // 5. Velocity checks — load rolling 24-h usage.
+    // 5. Velocity checks — load rolling 24-h usage, scoped to the transaction's fiat currency.
     const asOf = this.clock.now();
-    const usage = await this.velocityRepo.getDailyUsage(userId, asOf);
+    const usage = await this.velocityRepo.getDailyUsage(
+      userId,
+      asOf,
+      fiatCurrency,
+    );
 
     // DailyUsage.fiatTotal is now a decimal string (Fix-C); scale both before adding.
     const scaledDailyUsed = toScaled(usage.fiatTotal);
@@ -182,6 +205,7 @@ export class KycGateService {
         Number(usage.fiatTotal) + Number(fiatAmount),
         tierLimits.dailyFiatMax,
         user.kycTier,
+        fiatCurrency,
       );
     }
 
@@ -191,6 +215,7 @@ export class KycGateService {
         usage.txCount + 1,
         tierLimits.dailyTxCountMax,
         user.kycTier,
+        fiatCurrency,
       );
     }
   }

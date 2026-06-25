@@ -23,8 +23,9 @@ export class ConfigRateProvider implements IRateProvider {
   ): Promise<RateQuote> {
     const pricing = this.config.get<PricingConfig>('pricing');
     const assetPricing = pricing?.assets[asset];
+    const baseRate = assetPricing?.baseRates?.[fiatCurrency];
 
-    if (!pricing || !assetPricing) {
+    if (!pricing || !assetPricing || baseRate === undefined) {
       return Promise.reject(
         new Error(
           `No pricing configured for asset ${asset} in ${fiatCurrency}`,
@@ -33,7 +34,7 @@ export class ConfigRateProvider implements IRateProvider {
     }
 
     return Promise.resolve({
-      baseRate: assetPricing.baseRate,
+      baseRate,
       buySpreadBps: assetPricing.buySpreadBps,
       sellSpreadBps: assetPricing.sellSpreadBps,
       processingFeeBps: pricing.processingFeeBps,

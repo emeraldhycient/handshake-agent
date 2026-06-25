@@ -3,10 +3,13 @@ import { Injectable } from '@nestjs/common';
 // The generated Prisma client is the ONLY sanctioned DB door (CLAUDE.md §3.2).
 // This is the infrastructure layer — the only place it is allowed.
 import { PrismaService } from '../../../core/prisma/prisma.service';
-// VelocityCounterType is re-exported from the main client entry point (which also
+// VelocityCounterType and FiatCurrency are re-exported from the main client entry point (which also
 // re-exports all enums via `export * from "./enums"`). Import from client.ts so
 // the module resolver resolves the same path used everywhere else in infrastructure.
-import { VelocityCounterType } from '../../../../generated/prisma/client';
+import {
+  FiatCurrency,
+  VelocityCounterType,
+} from '../../../../generated/prisma/client';
 // Fix-C: reuse the ledger's toScaled for exact-decimal string accumulation so
 // the velocity repo and the gate use the same arithmetic domain.
 import { toScaled } from '../../transactions/domain/ledger';
@@ -34,12 +37,21 @@ import type {
 export class VelocityPrismaRepository implements IVelocityRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getDailyUsage(userId: string, asOf: Date): Promise<DailyUsage> {
+  async getDailyUsage(
+    userId: string,
+    asOf: Date,
+    fiatCurrency: string,
+  ): Promise<DailyUsage> {
     const windowCutoff = new Date(asOf.getTime() - 24 * 60 * 60 * 1000);
+    // Cast string → generated FiatCurrency enum at the infrastructure boundary
+    // (port uses `string` to keep application layer free of Prisma imports — §3.2).
+    const fiatCurrencyEnum = fiatCurrency as FiatCurrency;
 
     const rows = await this.prisma.velocityCounter.findMany({
       where: {
         userId,
+        // WN task 10/11: per-currency isolation — only rows for the given currency.
+        fiatCurrency: fiatCurrencyEnum,
         counterType: {
           in: [VelocityCounterType.amount_24h, VelocityCounterType.count_24h],
         },

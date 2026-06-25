@@ -12,6 +12,7 @@
 import { Injectable } from '@nestjs/common';
 
 import {
+  FiatCurrency,
   TransactionType,
   VelocityCounterType,
 } from '../../../../generated/prisma/client';
@@ -116,15 +117,25 @@ async function upsertVelocityCounter(
   params: {
     userId: string;
     counterType: VelocityCounterType;
+    fiatCurrency: string;
     delta: string; // decimal string, e.g. "10000" or "1"
     now: Date;
   },
 ): Promise<void> {
   const { userId, counterType, delta, now } = params;
+  // Cast string → generated FiatCurrency enum at the infrastructure boundary
+  // (application layer uses `string` to stay free of Prisma imports — §3.2).
+  const fiatCurrencyEnum = params.fiatCurrency as FiatCurrency;
   const windowEnd = new Date(now.getTime() + WINDOW_24H_MS);
 
   const existing = await tx.velocityCounter.findUnique({
-    where: { userId_counterType: { userId, counterType } },
+    where: {
+      userId_counterType_fiatCurrency: {
+        userId,
+        counterType,
+        fiatCurrency: fiatCurrencyEnum,
+      },
+    },
     select: { windowEnd: true, currentValue: true },
   });
 
@@ -134,10 +145,17 @@ async function upsertVelocityCounter(
   if (windowExpired) {
     // Fresh window: upsert with a reset value.
     await tx.velocityCounter.upsert({
-      where: { userId_counterType: { userId, counterType } },
+      where: {
+        userId_counterType_fiatCurrency: {
+          userId,
+          counterType,
+          fiatCurrency: fiatCurrencyEnum,
+        },
+      },
       create: {
         userId,
         counterType,
+        fiatCurrency: fiatCurrencyEnum,
         currentValue: delta,
         windowStart: now,
         windowEnd,
@@ -152,7 +170,13 @@ async function upsertVelocityCounter(
     // Active window: accumulate by incrementing with Prisma Decimal helper.
     // `increment` on a Decimal column is string-safe in Prisma 7.
     await tx.velocityCounter.update({
-      where: { userId_counterType: { userId, counterType } },
+      where: {
+        userId_counterType_fiatCurrency: {
+          userId,
+          counterType,
+          fiatCurrency: fiatCurrencyEnum,
+        },
+      },
       data: {
         currentValue: { increment: delta as unknown as number },
       },
@@ -168,16 +192,18 @@ async function writeVelocityIncrements(
   tx: Prisma.TransactionClient,
   increment: VelocityIncrementData,
 ): Promise<void> {
-  const { userId, fiatAmountStr, now } = increment;
+  const { userId, fiatCurrency, fiatAmountStr, now } = increment;
   await upsertVelocityCounter(tx, {
     userId,
     counterType: VelocityCounterType.amount_24h,
+    fiatCurrency,
     delta: fiatAmountStr,
     now,
   });
   await upsertVelocityCounter(tx, {
     userId,
     counterType: VelocityCounterType.count_24h,
+    fiatCurrency,
     delta: '1',
     now,
   });
