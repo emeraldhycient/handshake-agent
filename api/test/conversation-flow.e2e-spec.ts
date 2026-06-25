@@ -102,8 +102,8 @@ const fakeWalletRecord: WalletRecord = {
   status: 'active',
 };
 const fakeWalletService = {
-  getOrProvisionWallet: jest.fn().mockResolvedValue(fakeWalletRecord),
-  getOrProvisionUsdtTronWallet: jest.fn().mockResolvedValue(fakeWalletRecord),
+  // WN-2: per-network wallet API (shim removed)
+  getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(fakeWalletRecord),
 } as unknown as WalletService;
 
 /**
@@ -281,9 +281,9 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       quoteId: 'quote-test-id',
       confirmation: fakeConfirmation,
     });
-    (fakeWalletService.getOrProvisionWallet as jest.Mock).mockResolvedValue(
-      fakeWalletRecord,
-    );
+    (
+      fakeWalletService.getOrProvisionNetworkWallet as jest.Mock
+    ).mockResolvedValue(fakeWalletRecord);
   });
 
   // ── Happy path ─────────────────────────────────────────────────────────────
@@ -428,10 +428,9 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
 
     await svc.handleInbound(msg);
 
-    // WalletService was called with userId + asset/network from registry defaults
-    expect(fakeWalletService.getOrProvisionWallet).toHaveBeenCalledWith(
+    // WalletService was called with userId + network from registry (WN-2 per-network API)
+    expect(fakeWalletService.getOrProvisionNetworkWallet).toHaveBeenCalledWith(
       userId,
-      'USDT',
       'TRON',
     );
 

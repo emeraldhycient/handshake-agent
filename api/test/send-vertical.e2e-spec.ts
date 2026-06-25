@@ -367,9 +367,8 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
     beneficiaryId: string;
   }> {
     // Provision wallet (creates WalletPrisma row).
-    const wallet = await walletService.getOrProvisionWallet(
+    const wallet = await walletService.getOrProvisionNetworkWallet(
       userId,
-      'USDT',
       'TRON',
     );
 
@@ -884,9 +883,8 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         },
       });
 
-      const wallet = await walletService.getOrProvisionWallet(
+      const wallet = await walletService.getOrProvisionNetworkWallet(
         userId,
-        'USDT',
         'TRON',
       );
 

@@ -266,7 +266,7 @@ export class ProposalService {
    * Sell-proposal use-case (task S4a, PRD §4).
    *
    * Flow:
-   *   1. Resolve the user's USDT/TRON wallet (getOrProvisionWallet).
+   *   1. Resolve the user's (user, network) wallet (getOrProvisionNetworkWallet).
    *   2. Quote the sell (quoteSell — no side effects).
    *   3. Balance check via the ledger (authoritative running balance).
    *      → throws InsufficientBalanceError if balance < cryptoAmount.
@@ -285,11 +285,12 @@ export class ProposalService {
     const { userId, conversationId, intent, beneficiaryId } = input;
     const now = this.clock.now();
 
-    // 1. Resolve the user's USDT/TRON wallet.
+    // 1. Resolve the user's (user, network) wallet — network derived from intent asset.
+    // Asset for ledger / quote comes from intent.asset (not the wallet record, which
+    // no longer carries an asset field — WN-1 per-network model).
     const network = this.assetRegistry.defaultNetworkFor(intent.asset);
-    const wallet = await this.walletService.getOrProvisionWallet(
+    const wallet = await this.walletService.getOrProvisionNetworkWallet(
       userId,
-      intent.asset,
       network,
     );
 
@@ -403,7 +404,7 @@ export class ProposalService {
    * Send-proposal use-case (task N3a, PRD §4).
    *
    * Flow (all guards BEFORE persisting — §3.1):
-   *   1. Resolve the user's USDT/TRON wallet (getOrProvisionWallet).
+   *   1. Resolve the user's (user, network) wallet (getOrProvisionNetworkWallet).
    *   2. Quote the send (quoteSend — reads config fee; no side effects).
    *      totalDebit = cryptoAmount + networkFeeCrypto
    *   3. Balance check: ledger balance ≥ totalDebit (BigInt exact).
@@ -430,11 +431,11 @@ export class ProposalService {
     const { userId, conversationId, intent, beneficiaryId } = input;
     const now = this.clock.now();
 
-    // 1. Resolve the user's USDT/TRON wallet.
+    // 1. Resolve the user's (user, network) wallet — network derived from intent asset.
+    // Asset for ledger / quoting comes from intent.asset (not the wallet record — WN-1).
     const network = this.assetRegistry.defaultNetworkFor(intent.asset);
-    const wallet = await this.walletService.getOrProvisionWallet(
+    const wallet = await this.walletService.getOrProvisionNetworkWallet(
       userId,
-      intent.asset,
       network,
     );
 

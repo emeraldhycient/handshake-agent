@@ -2,7 +2,6 @@ import { Inject, Injectable } from '@nestjs/common';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
-import { UnsupportedNetworkForAssetError } from '../../../core/catalog/catalog-errors';
 import {
   WALLET_PROVIDER,
   type IWalletProvider,
@@ -98,44 +97,6 @@ export class WalletService {
       ),
     );
     return wallets;
-  }
-
-  /**
-   * @deprecated Use `getOrProvisionNetworkWallet(userId, network)` instead.
-   *
-   * Backward-compat shim: resolves asset→network (asserts the asset supports
-   * that network via the registry) and delegates to `getOrProvisionNetworkWallet`.
-   * Kept so existing callers (proposals, execution, conversations) compile until
-   * WN-2 migrates them to the per-network API.
-   *
-   * @throws {UnsupportedAssetError}            when the asset is not registered or disabled.
-   * @throws {UnsupportedNetworkError}           when the network is not registered or disabled.
-   * @throws {UnsupportedNetworkForAssetError}   when the asset does not list the network.
-   */
-  async getOrProvisionWallet(
-    userId: string,
-    asset: string,
-    network: string,
-  ): Promise<WalletRecord> {
-    // Validate asset is registered and lists the network (backward-compat guard).
-    const assetMeta = this.assetRegistry.asset(asset);
-    this.assetRegistry.network(network); // throws UnsupportedNetworkError if absent/disabled
-    if (!assetMeta.networks.includes(network)) {
-      throw new UnsupportedNetworkForAssetError(network, asset);
-    }
-
-    return this.getOrProvisionNetworkWallet(userId, network);
-  }
-
-  /**
-   * Returns the user's USDT-on-TRON custodial wallet, provisioning it on first
-   * call. Thin delegate to `getOrProvisionNetworkWallet` using the registry default
-   * asset and network (task X3 backward-compat shim for callers not yet updated).
-   */
-  async getOrProvisionUsdtTronWallet(userId: string): Promise<WalletRecord> {
-    const asset = this.assetRegistry.defaultCryptoAsset();
-    const network = this.assetRegistry.defaultNetworkFor(asset);
-    return this.getOrProvisionNetworkWallet(userId, network);
   }
 
   /**

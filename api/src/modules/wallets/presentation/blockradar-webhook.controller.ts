@@ -378,6 +378,21 @@ export class BlockradarWebhookController {
         return;
       }
 
+      // ── 3b. Asset guard — only credit enabled/known assets (WN-2) ─────────
+      // A per-network address receives ANY token on its chain. If the deposited
+      // asset is not registered/enabled in the catalog, log and ack — do NOT
+      // credit an unknown token to the ledger (no crash, no credit).
+      if (!this.assetRegistry.isAssetEnabled(params.assetSymbol)) {
+        this.logger.warn(
+          {
+            assetSymbol: params.assetSymbol,
+            recipientAddress: params.recipientAddress,
+          },
+          'Blockradar webhook: deposited asset not supported in catalog — ignoring deposit',
+        );
+        return;
+      }
+
       // ── 4. Atomic settlement ───────────────────────────────────────────────
       const result = await this.settlementRepo.settleDepositAtomic({
         walletId: wallet.id,

@@ -451,9 +451,8 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
     const { WalletService } =
       await import('../src/modules/wallets/application/wallet.service');
     const walletService = moduleRef.get(WalletService);
-    const wallet = await walletService.getOrProvisionWallet(
+    const wallet = await walletService.getOrProvisionNetworkWallet(
       userId,
-      'USDT',
       'TRON',
     );
 

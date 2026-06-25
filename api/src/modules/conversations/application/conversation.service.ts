@@ -841,9 +841,10 @@ export class ConversationService implements IInboundHandler {
     const assetMeta = this.assetRegistry.asset(defaultAsset);
     const networkMeta = this.assetRegistry.network(defaultNetwork);
 
-    const wallet = await this.walletService.getOrProvisionWallet(
+    // WN-1: wallet is per-(user,network); asset for display comes from the registry
+    // (defaultAsset), not the wallet record itself.
+    const wallet = await this.walletService.getOrProvisionNetworkWallet(
       guard.user.id,
-      defaultAsset,
       defaultNetwork,
     );
 

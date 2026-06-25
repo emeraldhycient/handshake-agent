@@ -311,25 +311,26 @@ function makePinService(
 }
 
 function makeWalletService(): jest.Mocked<
-  Pick<WalletService, 'getOrProvisionWallet'>
+  Pick<WalletService, 'getOrProvisionNetworkWallet'>
 > {
   const walletRecord = {
     id: 'wallet-id',
     userId: USER_ID,
-    asset: 'USDT',
     network: 'TRON',
     address: 'TTestAddress123',
     providerReference: 'blockradar-ref-001',
     status: 'active',
   };
   return {
-    getOrProvisionWallet: jest.fn().mockResolvedValue(walletRecord),
+    getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(walletRecord),
   };
 }
 
 function makeWalletServiceWithWithdraw(
   providerReference = 'blockradar-tx-ref-001',
-): jest.Mocked<Pick<WalletService, 'getOrProvisionWallet' | 'withdraw'>> {
+): jest.Mocked<
+  Pick<WalletService, 'getOrProvisionNetworkWallet' | 'withdraw'>
+> {
   const walletRecord: WalletRecord = {
     id: 'wallet-id',
     userId: USER_ID,
@@ -339,7 +340,7 @@ function makeWalletServiceWithWithdraw(
     status: 'active',
   };
   return {
-    getOrProvisionWallet: jest.fn().mockResolvedValue(walletRecord),
+    getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(walletRecord),
     withdraw: jest.fn().mockResolvedValue({
       providerReference,
       status: 'pending' as const,
@@ -432,7 +433,9 @@ function buildService(
     kycGate?: jest.Mocked<Pick<KycGateService, 'assertCanTransact'>>;
     directiveService?: jest.Mocked<Pick<DirectiveService, 'consume'>>;
     pinService?: jest.Mocked<Pick<PinService, 'verifyPin'>>;
-    walletService?: jest.Mocked<Pick<WalletService, 'getOrProvisionWallet'>>;
+    walletService?: jest.Mocked<
+      Pick<WalletService, 'getOrProvisionNetworkWallet'>
+    >;
     paymentProvider?: jest.Mocked<
       Pick<IPaymentProvider, 'createCollection' | 'verify'>
     >;
@@ -566,10 +569,9 @@ describe('ExecutionService.executeBuy', () => {
       }),
     );
 
-    // Wallet was provisioned via generic method with asset/network from registry.
-    expect(walletService.getOrProvisionWallet).toHaveBeenCalledWith(
+    // Wallet was provisioned via per-network method with network from registry (WN-2).
+    expect(walletService.getOrProvisionNetworkWallet).toHaveBeenCalledWith(
       USER_ID,
-      'USDT',
       'TRON',
     );
 
@@ -1025,10 +1027,10 @@ const WALLET_RECORD = {
 };
 
 function makeWalletServiceWithId(): jest.Mocked<
-  Pick<WalletService, 'getOrProvisionWallet'>
+  Pick<WalletService, 'getOrProvisionNetworkWallet'>
 > {
   return {
-    getOrProvisionWallet: jest.fn().mockResolvedValue(WALLET_RECORD),
+    getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(WALLET_RECORD),
   };
 }
 
@@ -1074,10 +1076,9 @@ describe('ExecutionService.settleBuyPayment', () => {
     // verify was called with the reference.
     expect(paymentProvider.verify).toHaveBeenCalledWith(IDEMPOTENCY_KEY);
 
-    // wallet provisioned via generic method with asset/network from registry.
-    expect(walletService.getOrProvisionWallet).toHaveBeenCalledWith(
+    // wallet provisioned via per-network method with network from registry (WN-2).
+    expect(walletService.getOrProvisionNetworkWallet).toHaveBeenCalledWith(
       USER_ID,
-      'USDT',
       'TRON',
     );
 
@@ -1476,7 +1477,9 @@ function buildSellService(
     kycGate?: jest.Mocked<Pick<KycGateService, 'assertCanTransact'>>;
     directiveService?: jest.Mocked<Pick<DirectiveService, 'consume'>>;
     pinService?: jest.Mocked<Pick<PinService, 'verifyPin'>>;
-    walletService?: jest.Mocked<Pick<WalletService, 'getOrProvisionWallet'>>;
+    walletService?: jest.Mocked<
+      Pick<WalletService, 'getOrProvisionNetworkWallet'>
+    >;
     paymentProvider?: ReturnType<typeof makeSellPaymentProvider>;
     beneficiaryService?: ReturnType<typeof makeBeneficiaryService>;
     ledgerRepo?: ReturnType<typeof makeLedgerRepo>;
@@ -2344,7 +2347,7 @@ function buildSendService(
     directiveService?: jest.Mocked<Pick<DirectiveService, 'consume'>>;
     pinService?: jest.Mocked<Pick<PinService, 'verifyPin'>>;
     walletService?: jest.Mocked<
-      Pick<WalletService, 'getOrProvisionWallet' | 'withdraw'>
+      Pick<WalletService, 'getOrProvisionNetworkWallet' | 'withdraw'>
     >;
     beneficiaryService?: ReturnType<typeof makeBeneficiaryServiceForSend>;
     ledgerRepo?: ReturnType<typeof makeLedgerRepo>;

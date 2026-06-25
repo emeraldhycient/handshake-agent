@@ -222,9 +222,8 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
     userId = user.id;
 
     // Provision the wallet (needed for FK constraints on LedgerEntry)
-    const wallet = await walletService.getOrProvisionWallet(
+    const wallet = await walletService.getOrProvisionNetworkWallet(
       userId,
-      'USDT',
       'TRON',
     );
     walletId = wallet.id;

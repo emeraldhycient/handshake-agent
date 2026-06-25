@@ -305,9 +305,8 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
     beneficiaryId: string;
   }> {
     // Provision wallet via WalletService (creates WalletPrisma row).
-    const wallet = await walletService.getOrProvisionWallet(
+    const wallet = await walletService.getOrProvisionNetworkWallet(
       userId,
-      'USDT',
       'TRON',
     );
 
