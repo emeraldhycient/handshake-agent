@@ -28,6 +28,8 @@ import type {
   CatalogNetwork,
 } from '../config/configuration';
 
+import type { PublicConfigResponse } from '@handshake-agent/contracts';
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -301,6 +303,52 @@ export class AssetRegistry {
     if (!this.isCapabilityEnabled(capability)) {
       throw new CapabilityDisabledError(capability);
     }
+  }
+
+  // ── Public config view ────────────────────────────────────────────────
+
+  /**
+   * Projects ONLY enabled entries to the non-secret `PublicConfigResponse`
+   * shape, stripping ALL secret / infra fields:
+   *   - `providers` (contains Blockradar `assetId`)
+   *   - `masterWalletId`
+   *   - `amlBlockchain`
+   *   - `addressPattern`
+   *   - `networkFeeCrypto`
+   *
+   * This method is pure (no DB, no network calls, no side effects) and is
+   * consumed by PublicConfigController to produce `GET /config` responses.
+   * The controller additionally runs the result through
+   * `PublicConfigResponseSchema.parse()` to strip any future drift before
+   * sending over the wire.
+   */
+  publicView(): PublicConfigResponse {
+    const fiats = Object.values(this.catalog.fiats)
+      .filter((f) => f.enabled)
+      .map(({ code, displayName, symbol, decimals }) => ({
+        code,
+        displayName,
+        symbol,
+        decimals,
+      }));
+
+    const assets = Object.values(this.catalog.assets)
+      .filter((a) => a.enabled)
+      .map(({ symbol, displayName, decimals, networks }) => ({
+        symbol,
+        displayName,
+        decimals,
+        // Only include enabled networks for this asset.
+        networks: networks.filter((n) => this.isNetworkEnabled(n)),
+      }));
+
+    const networks = Object.values(this.catalog.networks)
+      .filter((n) => n.enabled)
+      .map(({ id, displayName }) => ({ id, displayName }));
+
+    const capabilities = { ...this.catalog.capabilities };
+
+    return { fiats, assets, networks, capabilities };
   }
 
   // ── Display formatters ────────────────────────────────────────────────

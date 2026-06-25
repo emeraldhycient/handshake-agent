@@ -20,6 +20,7 @@ import { FlutterwaveWebhookModule } from './modules/treasury/flutterwave-webhook
 import { BlockradarWebhookModule } from './modules/wallets/blockradar-webhook.module';
 import { ComplianceModule } from './modules/compliance/compliance.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { PublicConfigModule } from './modules/config/config.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { AdminModule } from './modules/admin/admin.module';
     BlockradarWebhookModule,
     ComplianceModule,
     AdminModule,
+    PublicConfigModule,
   ],
   // Global Zod validation: every request DTO is checked against its contract schema.
   providers: [{ provide: APP_PIPE, useClass: ZodValidationPipe }],
