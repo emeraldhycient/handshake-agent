@@ -875,7 +875,8 @@ function makeComplianceService(
 const STUB_CONFIG_SERVICE = {
   get: jest.fn((key: string) => {
     if (key === 'compliance') return { travelRuleThresholdNgn: 1_000_000 };
-    if (key === 'pricing') return { assets: { USDT: { baseRate: 1600 } } };
+    if (key === 'pricing')
+      return { assets: { USDT: { baseRates: { NGN: 1600 } } } };
     return undefined;
   }),
 };
@@ -1273,7 +1274,7 @@ describe('ProposalService.createSendProposal', () => {
       get: jest.fn((key: string) => {
         if (key === 'compliance') return { travelRuleThresholdNgn: 1_000_000 };
         if (key === 'pricing')
-          return { assets: { USDT: { baseRate: 1600.45 } } };
+          return { assets: { USDT: { baseRates: { NGN: 1600.45 } } } };
         return undefined;
       }),
     };

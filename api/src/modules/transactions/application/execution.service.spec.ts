@@ -409,10 +409,13 @@ const stubConfig = {
   get: jest.fn((key: string) => {
     if (key === 'buy') return { maxDriftBps: 50 };
     if (key === 'sell') return { maxDriftBps: 50 };
-    // pricing.assets.USDT.baseRate is required by executeSend's KYC-gate guard.
+    // pricing.assets.USDT.baseRates.NGN is required by executeSend's KYC-gate guard.
     if (key === 'pricing')
       return {
-        assets: { USDT: { baseRate: 1600 }, BTC: { baseRate: 85_000_000 } },
+        assets: {
+          USDT: { baseRates: { NGN: 1600 } },
+          BTC: { baseRates: { NGN: 85_000_000 } },
+        },
       };
     return undefined;
   }),
@@ -3007,7 +3010,7 @@ describe('ExecutionService.executeSend', () => {
         if (key === 'buy') return { maxDriftBps: 50 };
         if (key === 'sell') return { maxDriftBps: 50 };
         if (key === 'pricing')
-          return { assets: { USDT: { baseRate: 1600.45 } } };
+          return { assets: { USDT: { baseRates: { NGN: 1600.45 } } } };
         return undefined;
       }),
     };

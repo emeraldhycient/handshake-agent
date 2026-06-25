@@ -467,10 +467,11 @@ export class ProposalService {
     // where SCALE = 10^18. This gives the NGN value scaled to 10^18 units,
     // then we convert back to a decimal string for the gate.
     const pricingConfig = this.configService.get<PricingConfig>('pricing');
-    const baseRate = pricingConfig?.assets?.[intent.asset]?.baseRate;
+    // TODO(WN): use AssetRegistry.defaultFiat() once Task 9 lands
+    const baseRate = pricingConfig?.assets?.[intent.asset]?.baseRates?.['NGN'];
     if (baseRate === undefined) {
       throw new Error(
-        `ProposalService: missing pricing.assets.${intent.asset}.baseRate in config — cannot compute NGN value for KYC gate.`,
+        `ProposalService: missing pricing.assets.${intent.asset}.baseRates.NGN in config — cannot compute NGN value for KYC gate.`,
       );
     }
     // Compute NGN equivalent: cryptoAmount × baseRate, BigInt-exact (Fix-C).

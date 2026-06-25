@@ -9,7 +9,8 @@
  * in config.
  */
 export interface AssetPricing {
-  baseRate: number;
+  /** Base mid-market rate per 1 unit of the crypto asset, keyed by fiat code. */
+  baseRates: Record<string, number>;
   /** Platform spread for BUY quotes (marks up the rate; user gets less crypto). */
   buySpreadBps: number;
   /** Platform spread for SELL quotes (marks down the rate; user gets less fiat). */
@@ -395,13 +396,13 @@ export default (): AppConfig => ({
       // buySpreadBps=150 matches the old global spreadBps so existing BUY quotes are unchanged.
       // sellSpreadBps is independently tunable — set to 150 as the conservative default.
       USDT: {
-        baseRate: 1600,
+        baseRates: { NGN: 1600 },
         buySpreadBps: 150,
         sellSpreadBps: 150,
         cryptoDecimals: 6,
       },
       BTC: {
-        baseRate: 100_000_000,
+        baseRates: { NGN: 100_000_000 },
         buySpreadBps: 150,
         sellSpreadBps: 150,
         cryptoDecimals: 8,
