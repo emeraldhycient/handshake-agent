@@ -161,6 +161,12 @@ All keyed by the catalog fiat **`code`**. JSON defaults ship **NGN entries only*
 - Loosening the narrow enums.
 - Multi-currency precision beyond 2 dp (no 0-/3-dp currency at launch).
 - Cross-currency velocity aggregation.
+- **FE copy-templatization (deferred).** This PR delivers the config-discovery
+  primitive (`gateway.getConfig` / `useConfig` / `qk.config` + mock) and the backend
+  `GET /config` endpoint, but no component consumes it yet. Driving the mock-driven FE
+  copy (e.g. the wallet-page deposit panel's hardcoded "USDT deposit · TRON" labels)
+  from `useConfig()` is deferred to when the real deposit/chat flow is built — today the
+  FE is mock-driven and there is no capability-gating logic to bind to.
 
 ## Test strategy
 
