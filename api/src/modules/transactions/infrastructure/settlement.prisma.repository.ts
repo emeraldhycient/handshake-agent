@@ -707,6 +707,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       cryptoAmount,
       processingFee,
       asset,
+      fiatCurrency,
       providerRef,
       now,
       year,
@@ -734,6 +735,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           cryptoAmount,
           processingFee,
           asset,
+          fiatCurrency,
           postedAt: now,
           accountStates,
         });
@@ -1054,6 +1056,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       cryptoAmount,
       netFiatAmount,
       asset,
+      fiatCurrency,
       providerRef,
       now,
       year,
@@ -1076,6 +1079,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           cryptoAmount,
           netFiatAmount,
           asset,
+          fiatCurrency,
           postedAt: now,
           accountStates,
         });

@@ -601,6 +601,8 @@ export class ExecutionService {
       processingFee: meta.processingFeeAmount ?? '0',
       // WN-4: thread settleAsset so ledger legs key by asset, not a hardcoded literal.
       asset: settleAsset,
+      // Task 4: thread fiatCurrency to the ledger builder for the fiat legs.
+      fiatCurrency: meta.fiatCurrency ?? 'NGN',
       providerRef: verifyResult.providerRef,
       now,
       year,
@@ -970,6 +972,8 @@ export class ExecutionService {
           cryptoAmount,
           netFiatAmount,
           asset: sellAsset,
+          // Task 4: thread fiatCurrency to the ledger builder for the fiat legs.
+          fiatCurrency: meta.fiatCurrency ?? 'NGN',
           providerRef: verifyResult.providerRef,
           now,
           year,
