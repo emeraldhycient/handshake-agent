@@ -366,7 +366,7 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
 
     // ── WalletBalance credited with the exact cryptoAmount ───────────────────
     const wallet = await prisma.wallet.findFirst({
-      where: { userId, asset: 'USDT' },
+      where: { userId, network: 'TRON' },
     });
     expect(wallet).not.toBeNull();
 
@@ -425,7 +425,7 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
     });
 
     const wallet = await prisma.wallet.findFirst({
-      where: { userId, asset: 'USDT' },
+      where: { userId, network: 'TRON' },
     });
     const balanceCountAfterFirst = await prisma.walletBalance.count({
       where: { walletId: wallet!.id },

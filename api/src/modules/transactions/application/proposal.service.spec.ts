@@ -175,9 +175,9 @@ const STUB_BENEFICIARY_RECORD = {
 
 function makeWalletService(
   wallet = STUB_WALLET_RECORD,
-): jest.Mocked<Pick<WalletService, 'getOrProvisionWallet'>> {
+): jest.Mocked<Pick<WalletService, 'getOrProvisionNetworkWallet'>> {
   return {
-    getOrProvisionWallet: jest.fn().mockResolvedValue(wallet),
+    getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(wallet),
   };
 }
 
@@ -255,7 +255,7 @@ function makeSellSvc(opts?: {
   kycGate?: Pick<KycGateService, 'assertCanTransact'>;
   quoteRepo?: IQuoteRepository;
   proposalRepo?: IProposalRepository;
-  walletService?: Pick<WalletService, 'getOrProvisionWallet'>;
+  walletService?: Pick<WalletService, 'getOrProvisionNetworkWallet'>;
   beneficiaryService?: Pick<BeneficiaryService, 'getById'>;
   assetRegistry?: Pick<AssetRegistry, 'defaultNetworkFor'>;
   ledgerRepo?: ILedgerRepository;
@@ -828,8 +828,8 @@ function makeQuotesServiceWithSend(
 
 function makeWalletServiceSend(
   wallet = STUB_SEND_WALLET_RECORD,
-): jest.Mocked<Pick<WalletService, 'getOrProvisionWallet'>> {
-  return { getOrProvisionWallet: jest.fn().mockResolvedValue(wallet) };
+): jest.Mocked<Pick<WalletService, 'getOrProvisionNetworkWallet'>> {
+  return { getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(wallet) };
 }
 
 function makeBeneficiaryServiceSend(
@@ -884,7 +884,7 @@ function makeSendSvc(opts?: {
   quotesService?: Pick<QuotesService, 'quoteBuy' | 'quoteSell' | 'quoteSend'>;
   kycGate?: Pick<KycGateService, 'assertCanTransact'>;
   proposalRepo?: IProposalRepository;
-  walletService?: Pick<WalletService, 'getOrProvisionWallet'>;
+  walletService?: Pick<WalletService, 'getOrProvisionNetworkWallet'>;
   beneficiaryService?: Pick<BeneficiaryService, 'getById'>;
   assetRegistry?: Pick<
     AssetRegistry,

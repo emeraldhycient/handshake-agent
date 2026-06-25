@@ -215,7 +215,6 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
     const wallet = await prisma.wallet.create({
       data: {
         userId,
-        asset: 'USDT',
         network: 'TRON',
         address: DEPOSIT_ADDRESS,
         providerReference: 'blockradar-ref-e2e-001',

@@ -1,5 +1,5 @@
 /**
- * Unit tests for WalletService (task 5.1, updated for task X3).
+ * Unit tests for WalletService (WN-1 refactor: wallet per network, not per asset).
  *
  * All external dependencies are mocked:
  *   - WALLET_PROVIDER → mock IWalletProvider
@@ -12,10 +12,7 @@
 
 import type { Clock } from '../../../core/common/clock';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
-import {
-  UnsupportedAssetError,
-  UnsupportedNetworkForAssetError,
-} from '../../../core/catalog/catalog-errors';
+import { UnsupportedNetworkError } from '../../../core/catalog/catalog-errors';
 import type {
   IWalletProvider,
   GetWithdrawalStatusOutput,
@@ -35,11 +32,11 @@ const USER_ID = 'user-uuid-aaaa';
 const PROVIDER_REF = 'blockradar-child-id-1';
 const ON_CHAIN_ADDRESS = 'TRX_ADDR_ABCDEF';
 const USDT_BLOCKRADAR_ASSET_ID = 'f56d297c-a3db-4cda-95bd-180b54679070';
+const MASTER_WALLET_ID = 'master-wallet-uuid-tron';
 
 const EXISTING_WALLET: WalletRecord = {
   id: 'wallet-uuid-1111',
   userId: USER_ID,
-  asset: 'USDT',
   network: 'TRON',
   address: ON_CHAIN_ADDRESS,
   providerReference: PROVIDER_REF,
@@ -83,7 +80,7 @@ function makeRepo(
   existing: WalletRecord | null = null,
 ): jest.Mocked<IWalletRepository> {
   return {
-    findByUserAssetNetwork: jest.fn().mockResolvedValue(existing),
+    findByUserNetwork: jest.fn().mockResolvedValue(existing),
     findByAddress: jest.fn().mockResolvedValue(null),
     create: jest.fn().mockResolvedValue(EXISTING_WALLET),
   };
@@ -95,7 +92,8 @@ function makeClock(): jest.Mocked<Clock> {
 
 /**
  * Minimal AssetRegistry stub — provides what WalletService needs:
- * asset(), network(), assetProviderId(), defaultCryptoAsset(), defaultNetworkFor().
+ * asset(), network(), assetProviderId(), defaultCryptoAsset(), defaultNetworkFor(),
+ * networkMasterWalletId(), enabledNetworks().
  */
 function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
   return {
@@ -113,6 +111,9 @@ function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
       displayName: 'TRON (TRC-20)',
       addressPattern: '^T[1-9A-HJ-NP-Za-km-z]{33}$',
       enabled: true,
+      networkFeeCrypto: { USDT: '1' },
+      amlBlockchain: 'tron',
+      masterWalletId: MASTER_WALLET_ID,
     }),
     assetProviderId: jest.fn().mockReturnValue(USDT_BLOCKRADAR_ASSET_ID),
     defaultCryptoAsset: jest.fn().mockReturnValue('USDT'),
@@ -126,6 +127,8 @@ function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
     formatCrypto: jest.fn(),
     formatFiat: jest.fn(),
     validateAddress: jest.fn().mockReturnValue(true),
+    networkMasterWalletId: jest.fn().mockReturnValue(MASTER_WALLET_ID),
+    enabledNetworks: jest.fn().mockReturnValue(['TRON']),
   } as unknown as jest.Mocked<AssetRegistry>;
 }
 
@@ -134,9 +137,9 @@ function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
 // ---------------------------------------------------------------------------
 
 describe('WalletService', () => {
-  // ── getOrProvisionWallet ─────────────────────────────────────────────────
+  // ── getOrProvisionNetworkWallet ───────────────────────────────────────────
 
-  describe('getOrProvisionWallet', () => {
+  describe('getOrProvisionNetworkWallet', () => {
     it('returns existing wallet when found; does NOT call the provider', async () => {
       const provider = makeProvider();
       const repo = makeRepo(EXISTING_WALLET);
@@ -147,18 +150,10 @@ describe('WalletService', () => {
         makeAssetRegistry(),
       );
 
-      const result = await service.getOrProvisionWallet(
-        USER_ID,
-        'USDT',
-        'TRON',
-      );
+      const result = await service.getOrProvisionNetworkWallet(USER_ID, 'TRON');
 
       expect(result).toEqual(EXISTING_WALLET);
-      expect(repo.findByUserAssetNetwork).toHaveBeenCalledWith(
-        USER_ID,
-        'USDT',
-        'TRON',
-      );
+      expect(repo.findByUserNetwork).toHaveBeenCalledWith(USER_ID, 'TRON');
       expect(provider.provisionAddress).not.toHaveBeenCalled();
       expect(repo.create).not.toHaveBeenCalled();
     });
@@ -181,18 +176,14 @@ describe('WalletService', () => {
         clock,
         makeAssetRegistry(),
       );
-      const result = await service.getOrProvisionWallet(
-        USER_ID,
-        'USDT',
-        'TRON',
-      );
+      const result = await service.getOrProvisionNetworkWallet(USER_ID, 'TRON');
 
       expect(provider.provisionAddress).toHaveBeenCalledWith({
         userRef: USER_ID,
+        network: 'TRON',
       });
       expect(repo.create).toHaveBeenCalledWith({
         userId: USER_ID,
-        asset: 'USDT',
         network: 'TRON',
         address: ON_CHAIN_ADDRESS,
         providerReference: PROVIDER_REF,
@@ -212,14 +203,12 @@ describe('WalletService', () => {
         makeAssetRegistry(),
       );
 
-      const result1 = await service.getOrProvisionWallet(
+      const result1 = await service.getOrProvisionNetworkWallet(
         USER_ID,
-        'USDT',
         'TRON',
       );
-      const result2 = await service.getOrProvisionWallet(
+      const result2 = await service.getOrProvisionNetworkWallet(
         USER_ID,
-        'USDT',
         'TRON',
       );
 
@@ -229,7 +218,7 @@ describe('WalletService', () => {
       expect(repo.create).not.toHaveBeenCalled();
     });
 
-    it('queries the repo with the provided asset and network', async () => {
+    it('queries the repo with user and network', async () => {
       const provider = makeProvider();
       const repo = makeRepo(EXISTING_WALLET);
       const service = new WalletService(
@@ -239,78 +228,128 @@ describe('WalletService', () => {
         makeAssetRegistry(),
       );
 
-      await service.getOrProvisionWallet(USER_ID, 'USDT', 'TRON');
+      await service.getOrProvisionNetworkWallet(USER_ID, 'TRON');
 
-      expect(repo.findByUserAssetNetwork).toHaveBeenCalledWith(
-        USER_ID,
-        'USDT',
-        'TRON',
+      expect(repo.findByUserNetwork).toHaveBeenCalledWith(USER_ID, 'TRON');
+    });
+
+    it('throws UnsupportedNetworkError when network is not registered or disabled', async () => {
+      const provider = makeProvider();
+      const repo = makeRepo(null);
+      const registry = makeAssetRegistry();
+      registry.network.mockImplementation((id: string) => {
+        throw new UnsupportedNetworkError(id);
+      });
+
+      const service = new WalletService(provider, repo, makeClock(), registry);
+
+      await expect(
+        service.getOrProvisionNetworkWallet(USER_ID, 'ETH'),
+      ).rejects.toBeInstanceOf(UnsupportedNetworkError);
+      expect(provider.provisionAddress).not.toHaveBeenCalled();
+    });
+
+    it('passes network to provisionAddress so provider uses correct master wallet', async () => {
+      const provider = makeProvider();
+      const repo = makeRepo(null);
+      const service = new WalletService(
+        provider,
+        repo,
+        makeClock(),
+        makeAssetRegistry(),
       );
-    });
 
-    it('throws UnsupportedAssetError when asset is not registered', async () => {
-      const provider = makeProvider();
-      const repo = makeRepo(null);
-      const registry = makeAssetRegistry();
-      // Override asset() to throw for an unknown asset
-      registry.asset.mockImplementation((sym: string) => {
-        throw new UnsupportedAssetError(sym);
-      });
+      await service.getOrProvisionNetworkWallet(USER_ID, 'TRON');
 
-      const service = new WalletService(provider, repo, makeClock(), registry);
-
-      await expect(
-        service.getOrProvisionWallet(USER_ID, 'BTC', 'BITCOIN'),
-      ).rejects.toBeInstanceOf(UnsupportedAssetError);
-      // Provider must NOT be called when validation fails
-      expect(provider.provisionAddress).not.toHaveBeenCalled();
-    });
-
-    it('throws UnsupportedNetworkForAssetError when the network is not listed for the asset', async () => {
-      const provider = makeProvider();
-      const repo = makeRepo(null);
-      const registry = makeAssetRegistry();
-      // USDT asset does NOT list 'ETH' as a supported network
-      registry.asset.mockReturnValue({
-        symbol: 'USDT',
-        displayName: 'USDT',
-        kind: 'crypto',
-        decimals: 6,
-        networks: ['TRON'], // ETH is not here
-        providers: {},
-        enabled: true,
-      });
-
-      const service = new WalletService(provider, repo, makeClock(), registry);
-
-      await expect(
-        service.getOrProvisionWallet(USER_ID, 'USDT', 'ETH'),
-      ).rejects.toBeInstanceOf(UnsupportedNetworkForAssetError);
-      expect(provider.provisionAddress).not.toHaveBeenCalled();
+      expect(provider.provisionAddress).toHaveBeenCalledWith(
+        expect.objectContaining({ network: 'TRON' }),
+      );
     });
   });
 
-  // ── getOrProvisionUsdtTronWallet (thin delegate shim) ────────────────────
+  // ── provisionAllEnabledNetworks ───────────────────────────────────────────
 
-  describe('getOrProvisionUsdtTronWallet', () => {
-    it('delegates to getOrProvisionWallet with USDT/TRON from registry defaults', async () => {
+  describe('provisionAllEnabledNetworks', () => {
+    it('calls getOrProvisionNetworkWallet for each enabled network', async () => {
       const provider = makeProvider();
       const repo = makeRepo(EXISTING_WALLET);
       const registry = makeAssetRegistry();
+      registry.enabledNetworks.mockReturnValue(['TRON']);
+
       const service = new WalletService(provider, repo, makeClock(), registry);
 
-      const result = await service.getOrProvisionUsdtTronWallet(USER_ID);
+      const results = await service.provisionAllEnabledNetworks(USER_ID);
 
-      expect(result).toEqual(EXISTING_WALLET);
-      // Registry defaults consulted
-      expect(registry.defaultCryptoAsset).toHaveBeenCalled();
-      expect(registry.defaultNetworkFor).toHaveBeenCalledWith('USDT');
-      // Repo queried with USDT/TRON
-      expect(repo.findByUserAssetNetwork).toHaveBeenCalledWith(
-        USER_ID,
-        'USDT',
-        'TRON',
-      );
+      expect(registry.enabledNetworks).toHaveBeenCalled();
+      expect(repo.findByUserNetwork).toHaveBeenCalledWith(USER_ID, 'TRON');
+      expect(results).toHaveLength(1);
+      expect(results[0]).toEqual(EXISTING_WALLET);
+    });
+
+    it('provisions wallets for multiple networks and returns all', async () => {
+      const provider = makeProvider();
+      const walletTron: WalletRecord = { ...EXISTING_WALLET, id: 'w-tron' };
+      const walletEth: WalletRecord = {
+        ...EXISTING_WALLET,
+        id: 'w-eth',
+        network: 'ETH',
+      };
+
+      // repo returns a specific wallet per network
+      const repo = makeRepo(null);
+      repo.findByUserNetwork
+        .mockResolvedValueOnce(walletTron) // first call: TRON
+        .mockResolvedValueOnce(walletEth); // second call: ETH
+
+      const registry = makeAssetRegistry();
+      registry.enabledNetworks.mockReturnValue(['TRON', 'ETH']);
+
+      const service = new WalletService(provider, repo, makeClock(), registry);
+
+      const results = await service.provisionAllEnabledNetworks(USER_ID);
+
+      expect(results).toHaveLength(2);
+      expect(results).toContainEqual(walletTron);
+      expect(results).toContainEqual(walletEth);
+      // Provider should NOT have been called since both wallets already existed
+      expect(provider.provisionAddress).not.toHaveBeenCalled();
+    });
+
+    it('provisions missing wallets (idempotent across networks)', async () => {
+      const provider = makeProvider();
+      const walletTron: WalletRecord = { ...EXISTING_WALLET, id: 'w-tron' };
+
+      const repo = makeRepo(null);
+      // TRON: no existing wallet → provisions
+      repo.findByUserNetwork.mockResolvedValueOnce(null);
+      repo.create.mockResolvedValueOnce(walletTron);
+
+      const registry = makeAssetRegistry();
+      registry.enabledNetworks.mockReturnValue(['TRON']);
+
+      const service = new WalletService(provider, repo, makeClock(), registry);
+
+      const results = await service.provisionAllEnabledNetworks(USER_ID);
+
+      expect(provider.provisionAddress).toHaveBeenCalledWith({
+        userRef: USER_ID,
+        network: 'TRON',
+      });
+      expect(results).toHaveLength(1);
+      expect(results[0]).toEqual(walletTron);
+    });
+
+    it('returns an empty array when no networks are enabled', async () => {
+      const provider = makeProvider();
+      const repo = makeRepo(null);
+      const registry = makeAssetRegistry();
+      registry.enabledNetworks.mockReturnValue([]);
+
+      const service = new WalletService(provider, repo, makeClock(), registry);
+
+      const results = await service.provisionAllEnabledNetworks(USER_ID);
+
+      expect(results).toHaveLength(0);
       expect(provider.provisionAddress).not.toHaveBeenCalled();
     });
   });
@@ -318,7 +357,7 @@ describe('WalletService', () => {
   // ── getBalance ───────────────────────────────────────────────────────────
 
   describe('getBalance', () => {
-    it('delegates to the provider using wallet.providerReference and registry assetId', async () => {
+    it('delegates to the provider using wallet.providerReference, registry assetId, and wallet.network', async () => {
       const provider = makeProvider();
       const repo = makeRepo(EXISTING_WALLET);
       const service = new WalletService(
@@ -328,12 +367,13 @@ describe('WalletService', () => {
         makeAssetRegistry(),
       );
 
-      const result = await service.getBalance(EXISTING_WALLET);
+      const result = await service.getBalance(EXISTING_WALLET, 'USDT');
 
-      // getBalance must pass both the providerReference AND the resolved assetId
+      // getBalance must pass providerReference, the resolved assetId, and the network
       expect(provider.getBalance).toHaveBeenCalledWith(
         PROVIDER_REF,
         USDT_BLOCKRADAR_ASSET_ID,
+        'TRON',
       );
       expect(result).toEqual({ amount: '5.000000', decimals: 6 });
     });
@@ -351,7 +391,7 @@ describe('WalletService', () => {
         makeAssetRegistry(),
       );
 
-      const result = await service.getBalance(EXISTING_WALLET);
+      const result = await service.getBalance(EXISTING_WALLET, 'USDT');
 
       expect(result.amount).toBe('100.000001');
       expect(result.decimals).toBe(6);
@@ -361,7 +401,7 @@ describe('WalletService', () => {
   // ── getWithdrawalStatus ───────────────────────────────────────────────────
 
   describe('getWithdrawalStatus', () => {
-    it('delegates to provider.getWithdrawalStatus with wallet.providerReference and reference', async () => {
+    it('delegates to provider.getWithdrawalStatus with wallet.providerReference, reference, and network', async () => {
       const provider = makeProvider();
       const service = new WalletService(
         provider,
@@ -375,6 +415,7 @@ describe('WalletService', () => {
       expect(provider.getWithdrawalStatus).toHaveBeenCalledWith({
         reference: 'idem-key-123',
         addressId: PROVIDER_REF, // wallet.providerReference
+        network: 'TRON', // wallet.network
       });
     });
 

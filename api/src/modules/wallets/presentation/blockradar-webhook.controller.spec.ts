@@ -78,7 +78,6 @@ function makeWalletRecord(): WalletRecord {
   return {
     id: WALLET_ID,
     userId: USER_ID,
-    asset: ASSET_SYMBOL,
     network: NETWORK,
     address: RECIPIENT_ADDRESS,
     providerReference: 'blockradar-ref-001',
@@ -132,8 +131,10 @@ function makeSender(): jest.Mocked<Pick<IWhatsAppSender, 'sendText'>> {
   };
 }
 
-function makeAssetRegistry(): jest.Mocked<
-  Pick<AssetRegistry, 'asset' | 'network' | 'formatCrypto'>
+function makeAssetRegistry(
+  assetEnabled = true,
+): jest.Mocked<
+  Pick<AssetRegistry, 'asset' | 'network' | 'formatCrypto' | 'isAssetEnabled'>
 > {
   return {
     asset: jest.fn().mockReturnValue({
@@ -154,6 +155,8 @@ function makeAssetRegistry(): jest.Mocked<
     formatCrypto: jest
       .fn()
       .mockImplementation((_sym: string, amount: string) => `${amount} USDT`),
+    // WN-2: isAssetEnabled gates unsupported token deposits
+    isAssetEnabled: jest.fn().mockReturnValue(assetEnabled),
   };
 }
 
@@ -210,6 +213,8 @@ function makeController(
     settleSendResult?: 'completed' | 'failed' | 'pending' | 'throw';
     waAddress?: string | null;
     apiKey?: string;
+    /** Set to false to simulate an unsupported deposited asset (WN-2). */
+    assetEnabled?: boolean;
   } = {},
 ) {
   const walletRepo = makeWalletRepo(
@@ -222,7 +227,7 @@ function makeController(
     overrides.waAddress !== undefined ? overrides.waAddress : WA_ADDRESS,
   );
   const sender = makeSender();
-  const assetRegistry = makeAssetRegistry();
+  const assetRegistry = makeAssetRegistry(overrides.assetEnabled !== false);
   const config = makeConfigService(overrides.apiKey ?? API_KEY);
   const executionService = makeExecutionService(
     overrides.settleSendResult ?? 'completed',
@@ -441,6 +446,130 @@ describe('BlockradarWebhookController', () => {
 
       expect(result).toEqual({ status: 'ok' });
       expect(settlementRepo.settleDepositAtomic).not.toHaveBeenCalled();
+    });
+
+    // ── WN-2: asset from webhook payload — correct asset credited (not wallet field) ──
+
+    it('WN-2: deposit.success with supported USDT → settleDepositAtomic called with payload asset symbol', async () => {
+      const { controller, settlementRepo } = makeController();
+
+      const body = depositSuccessBody({
+        asset: { symbol: 'USDT', network: { name: NETWORK } },
+      });
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      await controller.handleWebhook(body, rawBody, sig);
+
+      // Asset in settleDepositAtomic MUST come from the webhook payload, not wallet
+      expect(settlementRepo.settleDepositAtomic).toHaveBeenCalledWith(
+        expect.objectContaining({ asset: 'USDT' }),
+      );
+    });
+
+    it('WN-2: deposit.success with a different supported asset on same address → credits payload asset', async () => {
+      // Same recipient address (same network wallet), but different asset symbol
+      const { controller, settlementRepo } = makeController();
+
+      const body = depositSuccessBody({
+        asset: { symbol: 'USDC', network: { name: NETWORK } },
+      });
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      await controller.handleWebhook(body, rawBody, sig);
+
+      // Asset must be the payload symbol, NOT USDT from any wallet field
+      expect(settlementRepo.settleDepositAtomic).toHaveBeenCalledWith(
+        expect.objectContaining({ asset: 'USDC' }),
+      );
+    });
+
+    it('WN-2: unsupported asset deposit → 200 ack, NO credit, NO receipt', async () => {
+      // Asset not enabled in catalog → log and ack without crediting
+      const { controller, settlementRepo, sender } = makeController({
+        assetEnabled: false,
+      });
+
+      const body = depositSuccessBody({
+        asset: { symbol: 'UNKNOWN_TOKEN', network: { name: NETWORK } },
+      });
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      const result = await controller.handleWebhook(body, rawBody, sig);
+
+      expect(result).toEqual({ status: 'ok' });
+      // No credit
+      expect(settlementRepo.settleDepositAtomic).not.toHaveBeenCalled();
+      // No receipt
+      expect(sender.sendText).not.toHaveBeenCalled();
+    });
+
+    // ── WN-4: deposit robustness — missing asset + network mismatch ───────────
+
+    it('WN-4: deposit.success missing asset.symbol → 200 ack, NO credit', async () => {
+      // Payload has no asset.symbol field — must ack without crediting
+      const { controller, settlementRepo, sender } = makeController();
+
+      const body = depositSuccessBody({
+        asset: { network: { name: NETWORK } }, // no symbol
+      });
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      const result = await controller.handleWebhook(body, rawBody, sig);
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(settlementRepo.settleDepositAtomic).not.toHaveBeenCalled();
+      expect(sender.sendText).not.toHaveBeenCalled();
+    });
+
+    it('WN-4: deposit.success with null asset → 200 ack, NO credit', async () => {
+      // Payload has no asset object at all
+      const { controller, settlementRepo, sender } = makeController();
+
+      const body = depositSuccessBody({ asset: null });
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      const result = await controller.handleWebhook(body, rawBody, sig);
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(settlementRepo.settleDepositAtomic).not.toHaveBeenCalled();
+      expect(sender.sendText).not.toHaveBeenCalled();
+    });
+
+    it('WN-4: deposit.success where payload network does not match wallet.network → 200 ack, NO credit', async () => {
+      // wallet.network = 'TRON' (from makeWalletRecord), payload says 'ETH'
+      const { controller, settlementRepo, sender } = makeController();
+
+      const body = depositSuccessBody({
+        asset: { symbol: ASSET_SYMBOL, network: { name: 'ETH' } },
+      });
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      const result = await controller.handleWebhook(body, rawBody, sig);
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(settlementRepo.settleDepositAtomic).not.toHaveBeenCalled();
+      expect(sender.sendText).not.toHaveBeenCalled();
+    });
+
+    it('WN-4: deposit.success where payload network matches wallet.network → credits normally', async () => {
+      // wallet.network = 'TRON' (from makeWalletRecord), payload says 'TRON' → OK
+      const { controller, settlementRepo } = makeController();
+
+      const body = depositSuccessBody({
+        asset: { symbol: ASSET_SYMBOL, network: { name: NETWORK } }, // NETWORK = 'TRON'
+      });
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      await controller.handleWebhook(body, rawBody, sig);
+
+      expect(settlementRepo.settleDepositAtomic).toHaveBeenCalled();
     });
   });
 

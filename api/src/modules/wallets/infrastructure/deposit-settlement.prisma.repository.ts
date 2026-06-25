@@ -31,6 +31,7 @@ import {
   DepositStatus,
   LedgerAccountType,
   ReceiptDeliveryStatus,
+  SupportedAsset,
   TransactionStatus,
   TransactionType,
 } from '../../../../generated/prisma/client';
@@ -241,9 +242,11 @@ export class DepositSettlementPrismaRepository implements IDepositSettlementRepo
         );
 
         // ── 3. Build ledger entries (pure domain function) ────────────────────
+        // WN-4: pass asset so crypto legs key by asset, not a hardcoded literal.
         const drafts: LedgerEntryDraft[] = buildDepositLedgerEntries({
           walletId,
           cryptoAmount,
+          asset,
           postedAt,
           accountStates,
         });
@@ -300,9 +303,12 @@ export class DepositSettlementPrismaRepository implements IDepositSettlementRepo
         }
 
         // ── 6. Create WalletBalance snapshot ─────────────────────────────────
+        // WN-1: WalletBalance now requires asset (per-asset balance on the network wallet).
         await tx.walletBalance.create({
           data: {
             walletId,
+            // Cast the incoming asset string to the Prisma enum — validated above via AssetRegistry.
+            asset: asset as SupportedAsset,
             amount: cryptoAmount as unknown as Prisma.Decimal,
             assetDecimals,
             source: BalanceSource.deposit_webhook,

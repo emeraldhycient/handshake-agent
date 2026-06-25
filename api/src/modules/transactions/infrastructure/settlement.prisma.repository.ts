@@ -107,8 +107,10 @@ const USDT_ASSET_DECIMALS = 6;
 async function fetchAccountStates(
   prisma: PrismaService,
   walletId: string,
+  asset: string,
 ): Promise<Record<AccountKey, AccountState>> {
   // Use string literals that match both the domain enum and the Prisma enum values.
+  // WN-4: currency for crypto legs is the passed `asset`, not a hardcoded literal.
   const accounts: Array<{
     accountType: string;
     accountId: string;
@@ -132,12 +134,12 @@ async function fetchAccountStates(
     {
       accountType: 'user_wallet',
       accountId: walletId,
-      currency: 'USDT',
+      currency: asset,
     },
     {
       accountType: 'treasury_reserve',
       accountId: ACCOUNT_IDS.USDT_TREASURY,
-      currency: 'USDT',
+      currency: asset,
     },
   ];
 
@@ -174,7 +176,9 @@ async function fetchAccountStates(
 async function fetchSellReserveAccountStates(
   prisma: PrismaService,
   walletId: string,
+  asset: string,
 ): Promise<Record<string, AccountState>> {
+  // WN-4: currency for crypto legs is the passed `asset`, not a hardcoded literal.
   const accounts: Array<{
     accountType: string;
     accountId: string;
@@ -183,12 +187,12 @@ async function fetchSellReserveAccountStates(
     {
       accountType: 'user_wallet',
       accountId: walletId,
-      currency: 'USDT',
+      currency: asset,
     },
     {
       accountType: 'clearing',
       accountId: ACCOUNT_IDS.USDT_SELL_CLEARING,
-      currency: 'USDT',
+      currency: asset,
     },
   ];
 
@@ -201,7 +205,9 @@ async function fetchSellReserveAccountStates(
  */
 async function fetchSellFinalizeAccountStates(
   prisma: PrismaService,
+  asset: string,
 ): Promise<Record<string, AccountState>> {
+  // WN-4: currency for crypto legs is the passed `asset`, not a hardcoded literal.
   const accounts: Array<{
     accountType: string;
     accountId: string;
@@ -210,12 +216,12 @@ async function fetchSellFinalizeAccountStates(
     {
       accountType: 'clearing',
       accountId: ACCOUNT_IDS.USDT_SELL_CLEARING,
-      currency: 'USDT',
+      currency: asset,
     },
     {
       accountType: 'treasury_reserve',
       accountId: ACCOUNT_IDS.USDT_TREASURY,
-      currency: 'USDT',
+      currency: asset,
     },
     {
       accountType: 'treasury_reserve',
@@ -239,7 +245,9 @@ async function fetchSellFinalizeAccountStates(
 async function fetchSellRefundAccountStates(
   prisma: PrismaService,
   walletId: string,
+  asset: string,
 ): Promise<Record<string, AccountState>> {
+  // WN-4: currency for crypto legs is the passed `asset`, not a hardcoded literal.
   const accounts: Array<{
     accountType: string;
     accountId: string;
@@ -248,12 +256,12 @@ async function fetchSellRefundAccountStates(
     {
       accountType: 'clearing',
       accountId: ACCOUNT_IDS.USDT_SELL_CLEARING,
-      currency: 'USDT',
+      currency: asset,
     },
     {
       accountType: 'user_wallet',
       accountId: walletId,
-      currency: 'USDT',
+      currency: asset,
     },
   ];
 
@@ -300,7 +308,9 @@ async function fetchAccountStatesByList(
 async function fetchSendReserveAccountStates(
   prisma: PrismaService,
   walletId: string,
+  asset: string,
 ): Promise<Record<string, AccountState>> {
+  // WN-4: currency for crypto legs is the passed `asset`, not a hardcoded literal.
   const accounts: Array<{
     accountType: string;
     accountId: string;
@@ -309,12 +319,12 @@ async function fetchSendReserveAccountStates(
     {
       accountType: 'user_wallet',
       accountId: walletId,
-      currency: 'USDT',
+      currency: asset,
     },
     {
       accountType: 'clearing',
       accountId: ACCOUNT_IDS.USDT_SEND_CLEARING,
-      currency: 'USDT',
+      currency: asset,
     },
   ];
 
@@ -328,7 +338,9 @@ async function fetchSendReserveAccountStates(
  */
 async function fetchSendFinalizeAccountStates(
   prisma: PrismaService,
+  asset: string,
 ): Promise<Record<string, AccountState>> {
+  // WN-4: currency for crypto legs is the passed `asset`, not a hardcoded literal.
   const accounts: Array<{
     accountType: string;
     accountId: string;
@@ -337,17 +349,17 @@ async function fetchSendFinalizeAccountStates(
     {
       accountType: 'clearing',
       accountId: ACCOUNT_IDS.USDT_SEND_CLEARING,
-      currency: 'USDT',
+      currency: asset,
     },
     {
       accountType: 'treasury_reserve',
       accountId: ACCOUNT_IDS.USDT_NETWORK_OUT,
-      currency: 'USDT',
+      currency: asset,
     },
     {
       accountType: 'treasury_reserve',
       accountId: ACCOUNT_IDS.USDT_FEES,
-      currency: 'USDT',
+      currency: asset,
     },
   ];
 
@@ -361,7 +373,9 @@ async function fetchSendFinalizeAccountStates(
 async function fetchSendRefundAccountStates(
   prisma: PrismaService,
   walletId: string,
+  asset: string,
 ): Promise<Record<string, AccountState>> {
+  // WN-4: currency for crypto legs is the passed `asset`, not a hardcoded literal.
   const accounts: Array<{
     accountType: string;
     accountId: string;
@@ -370,12 +384,12 @@ async function fetchSendRefundAccountStates(
     {
       accountType: 'clearing',
       accountId: ACCOUNT_IDS.USDT_SEND_CLEARING,
-      currency: 'USDT',
+      currency: asset,
     },
     {
       accountType: 'user_wallet',
       accountId: walletId,
-      currency: 'USDT',
+      currency: asset,
     },
   ];
 
@@ -391,12 +405,16 @@ function buildSendReceiptContent(input: {
   userId: string;
   cryptoAmount: string;
   networkFeeCrypto: string;
+  /** WN-4: crypto asset symbol (e.g. 'USDT', 'USDC'). */
+  asset: string;
   toAddress: string;
   onChainTxHash: string;
   issuedAt: Date;
 }): { htmlContent: string; itemized: Record<string, unknown> } {
+  const { asset } = input;
   const itemized = {
-    asset: 'USDT',
+    // WN-4: asset from input, not a hardcoded literal.
+    asset,
     cryptoAmount: input.cryptoAmount,
     networkFeeCrypto: input.networkFeeCrypto,
     toAddress: input.toAddress,
@@ -412,8 +430,8 @@ function buildSendReceiptContent(input: {
 <p>Receipt Number: ${input.receiptNumber}</p>
 <p>Transaction ID: ${input.transactionId}</p>
 <p>User ID: ${input.userId}</p>
-<p>Amount Sent: ${input.cryptoAmount} USDT</p>
-<p>Network Fee: ${input.networkFeeCrypto} USDT</p>
+<p>Amount Sent: ${input.cryptoAmount} ${asset}</p>
+<p>Network Fee: ${input.networkFeeCrypto} ${asset}</p>
 <p>To Address: ${input.toAddress}</p>
 <p>On-chain Tx Hash: ${input.onChainTxHash}</p>
 <p>Issued At: ${input.issuedAt.toISOString()}</p>
@@ -432,10 +450,14 @@ function buildSellReceiptContent(input: {
   userId: string;
   cryptoAmount: string;
   netFiatAmount: string;
+  /** WN-4: crypto asset symbol (e.g. 'USDT', 'USDC'). */
+  asset: string;
   issuedAt: Date;
 }): { htmlContent: string; itemized: Record<string, unknown> } {
+  const { asset } = input;
   const itemized = {
-    asset: 'USDT',
+    // WN-4: asset from input, not a hardcoded literal.
+    asset,
     cryptoAmount: input.cryptoAmount,
     fiatCurrency: 'NGN',
     netFiatAmount: input.netFiatAmount,
@@ -450,7 +472,7 @@ function buildSellReceiptContent(input: {
 <p>Receipt Number: ${input.receiptNumber}</p>
 <p>Transaction ID: ${input.transactionId}</p>
 <p>User ID: ${input.userId}</p>
-<p>Asset Sold: ${input.cryptoAmount} USDT</p>
+<p>Asset Sold: ${input.cryptoAmount} ${asset}</p>
 <p>NGN Payout: ${input.netFiatAmount}</p>
 <p>Issued At: ${input.issuedAt.toISOString()}</p>
 </body>
@@ -470,10 +492,14 @@ function buildReceiptContent(input: {
   fiatAmount: string;
   cryptoAmount: string;
   processingFee: string;
+  /** WN-4: crypto asset symbol (e.g. 'USDT', 'USDC'). */
+  asset: string;
   issuedAt: Date;
 }): { htmlContent: string; itemized: Record<string, unknown> } {
+  const { asset } = input;
   const itemized = {
-    asset: 'USDT',
+    // WN-4: asset from input, not a hardcoded literal.
+    asset,
     fiatAmount: input.fiatAmount,
     fiatCurrency: 'NGN',
     cryptoAmount: input.cryptoAmount,
@@ -489,8 +515,8 @@ function buildReceiptContent(input: {
 <p>Receipt Number: ${input.receiptNumber}</p>
 <p>Transaction ID: ${input.transactionId}</p>
 <p>User ID: ${input.userId}</p>
-<p>Asset: USDT</p>
-<p>Crypto Amount: ${input.cryptoAmount} USDT</p>
+<p>Asset: ${asset}</p>
+<p>Crypto Amount: ${input.cryptoAmount} ${asset}</p>
 <p>Fiat Amount: NGN ${input.fiatAmount}</p>
 <p>Processing Fee: NGN ${input.processingFee}</p>
 <p>Total Paid: NGN ${input.fiatAmount}</p>
@@ -680,6 +706,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       fiatAmount,
       cryptoAmount,
       processingFee,
+      asset,
       providerRef,
       now,
       year,
@@ -691,18 +718,22 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         // ── 1. Read current account states (inside transaction for isolation) ─
         // Cast the interactive tx client to PrismaService for our helper —
         // both have the same Prisma model API at runtime (safe boundary cast).
+        // WN-4: pass asset so crypto leg states are read with the correct currency key.
         const accountStates = await fetchAccountStates(
           tx as unknown as PrismaService,
           walletId,
+          asset,
         );
 
         // ── 2. Build ledger entries (pure domain function, Task 4.4) ─────────
+        // WN-4: pass asset so crypto legs key by asset, not a hardcoded literal.
         const drafts: LedgerEntryDraft[] = buildBuyLedgerEntries({
           userId,
           walletId,
           fiatAmount,
           cryptoAmount,
           processingFee,
+          asset,
           postedAt: now,
           accountStates,
         });
@@ -731,9 +762,12 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         // ── 4. Upsert WalletBalance (credit user USDT) ────────────────────────
         // We use create (not upsert) because WalletBalance is an append-only
         // snapshot log; the latest entry by syncedAt is the live balance.
+        // WN-1: WalletBalance now requires asset (per-asset balance on the network wallet).
         await tx.walletBalance.create({
           data: {
             walletId,
+            // Buy settlements always credit USDT at launch (ADR-0006).
+            asset: SupportedAsset.USDT,
             // amount is the credited USDT (new snapshot after credit).
             // In a real system this would be baseBalance + cryptoAmount;
             // for the settlement skeleton we record the credited amount
@@ -781,6 +815,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           SELECT nextval('hs_receipt_seq')`;
         const receiptNumber = formatReceiptNumber(year, seqResult[0].nextval);
 
+        // WN-4: pass asset so the receipt shows the correct asset symbol.
         const { htmlContent, itemized } = buildReceiptContent({
           receiptNumber,
           transactionId,
@@ -788,6 +823,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           fiatAmount,
           cryptoAmount,
           processingFee,
+          asset,
           issuedAt: now,
         });
 
@@ -862,6 +898,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
   async createSellSettlingWithReserveAtomic(
     input: CreateSellSettlingWithReserveInput,
   ): Promise<CreateSellSettlingWithReserveOutput> {
+    const { asset } = input;
     const {
       txnData,
       proposalId,
@@ -905,15 +942,19 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         // ── d. Read sell reserve account states inside the tx ─────────────────
         // Cast the interactive tx client to PrismaService for our helper —
         // both have the same Prisma model API at runtime (safe boundary cast).
+        // WN-4: pass asset so crypto leg states are read with the correct currency key.
         const accountStates = await fetchSellReserveAccountStates(
           tx as unknown as PrismaService,
           walletId,
+          asset,
         );
 
         // ── e. Build and insert reserve LedgerEntry rows ──────────────────────
+        // WN-4: pass asset so crypto legs key by asset, not a hardcoded literal.
         const drafts: LedgerEntryDraft[] = buildSellReserveEntries({
           walletId,
           cryptoAmount,
+          asset,
           postedAt: now,
           accountStates,
         });
@@ -955,17 +996,21 @@ export class SettlementPrismaRepository implements ISettlementRepository {
    *   2. buildSellReserveEntries → insert 2 LedgerEntry rows (USDT: user→clearing).
    */
   async postSellReserveAtomic(input: PostSellReserveInput): Promise<void> {
-    const { transactionId, walletId, cryptoAmount, now } = input;
+    const { transactionId, walletId, cryptoAmount, asset, now } = input;
 
     await this.prisma.$transaction(async (tx) => {
+      // WN-4: pass asset so crypto leg states are read with the correct currency key.
       const accountStates = await fetchSellReserveAccountStates(
         tx as unknown as PrismaService,
         walletId,
+        asset,
       );
 
+      // WN-4: pass asset so crypto legs key by asset, not a hardcoded literal.
       const drafts: LedgerEntryDraft[] = buildSellReserveEntries({
         walletId,
         cryptoAmount,
+        asset,
         postedAt: now,
         accountStates,
       });
@@ -1008,6 +1053,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       walletId,
       cryptoAmount,
       netFiatAmount,
+      asset,
       providerRef,
       now,
       year,
@@ -1017,15 +1063,19 @@ export class SettlementPrismaRepository implements ISettlementRepository {
     return this.prisma.$transaction(
       async (tx) => {
         // ── 1. Read current account states ────────────────────────────────────
+        // WN-4: pass asset so crypto leg states are read with the correct currency key.
         const accountStates = await fetchSellFinalizeAccountStates(
           tx as unknown as PrismaService,
+          asset,
         );
 
         // ── 2. Build and insert LedgerEntry rows ──────────────────────────────
+        // WN-4: pass asset so crypto legs key by asset, not a hardcoded literal.
         const drafts: LedgerEntryDraft[] = buildSellFinalizeEntries({
           walletId,
           cryptoAmount,
           netFiatAmount,
+          asset,
           postedAt: now,
           accountStates,
         });
@@ -1082,12 +1132,14 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           seqResultSell[0].nextval,
         );
 
+        // WN-4: pass asset so the receipt shows the correct asset symbol.
         const { htmlContent, itemized } = buildSellReceiptContent({
           receiptNumber,
           transactionId,
           userId,
           cryptoAmount,
           netFiatAmount,
+          asset,
           issuedAt: now,
         });
 
@@ -1135,20 +1187,24 @@ export class SettlementPrismaRepository implements ISettlementRepository {
    *   4. Create CompensationRecord (status=pending, reason=settlement_failed).
    */
   async settleSellRefundAtomic(input: SettleSellRefundInput): Promise<void> {
-    const { transactionId, userId, walletId, cryptoAmount, now } = input;
+    const { transactionId, userId, walletId, cryptoAmount, asset, now } = input;
 
     await this.prisma.$transaction(
       async (tx) => {
         // ── 1. Read current account states ────────────────────────────────────
+        // WN-4: pass asset so crypto leg states are read with the correct currency key.
         const accountStates = await fetchSellRefundAccountStates(
           tx as unknown as PrismaService,
           walletId,
+          asset,
         );
 
         // ── 2. Build and insert LedgerEntry rows ──────────────────────────────
+        // WN-4: pass asset so crypto legs key by asset, not a hardcoded literal.
         const drafts: LedgerEntryDraft[] = buildSellRefundEntries({
           walletId,
           cryptoAmount,
+          asset,
           postedAt: now,
           accountStates,
         });
@@ -1235,6 +1291,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       velocityIncrement,
       walletId,
       totalDebit,
+      asset,
       now,
       travelRule,
     } = input;
@@ -1273,15 +1330,19 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         await writeVelocityIncrementsInSettle(tx, velocityIncrement);
 
         // ── d. Read send reserve account states inside the tx ─────────────────
+        // WN-4: pass asset so crypto leg states are read with the correct currency key.
         const accountStates = await fetchSendReserveAccountStates(
           tx as unknown as PrismaService,
           walletId,
+          asset,
         );
 
         // ── e. Build and insert reserve LedgerEntry rows ──────────────────────
+        // WN-4: pass asset so crypto legs key by asset, not a hardcoded literal.
         const drafts: LedgerEntryDraft[] = buildSendReserveEntries({
           walletId,
           totalDebit,
+          asset,
           postedAt: now,
           accountStates,
         });
@@ -1374,6 +1435,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       walletId,
       cryptoAmount,
       networkFeeCrypto,
+      asset,
       onChainTxHash,
       now,
       year,
@@ -1383,15 +1445,19 @@ export class SettlementPrismaRepository implements ISettlementRepository {
     return this.prisma.$transaction(
       async (tx) => {
         // ── 1. Read current account states ────────────────────────────────────
+        // WN-4: pass asset so crypto leg states are read with the correct currency key.
         const accountStates = await fetchSendFinalizeAccountStates(
           tx as unknown as PrismaService,
+          asset,
         );
 
         // ── 2. Build and insert LedgerEntry rows ──────────────────────────────
+        // WN-4: pass asset so crypto legs key by asset, not a hardcoded literal.
         const drafts: LedgerEntryDraft[] = buildSendFinalizeEntries({
           walletId,
           cryptoAmount,
           networkFeeCrypto,
+          asset,
           postedAt: now,
           accountStates,
         });
@@ -1456,12 +1522,14 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         const meta = (txnRow?.metadata ?? {}) as Record<string, unknown>;
         const toAddress = (meta.toAddress as string | undefined) ?? '';
 
+        // WN-4: pass asset so the receipt shows the correct asset symbol.
         const { htmlContent, itemized } = buildSendReceiptContent({
           receiptNumber,
           transactionId,
           userId,
           cryptoAmount,
           networkFeeCrypto,
+          asset,
           toAddress,
           onChainTxHash,
           issuedAt: now,
@@ -1511,21 +1579,32 @@ export class SettlementPrismaRepository implements ISettlementRepository {
    *   4. Create CompensationRecord (status=pending, reason=settlement_failed).
    */
   async settleSendRefundAtomic(input: SettleSendRefundInput): Promise<void> {
-    const { transactionId, userId, walletId, totalDebit, failureReason, now } =
-      input;
+    const {
+      transactionId,
+      userId,
+      walletId,
+      totalDebit,
+      asset,
+      failureReason,
+      now,
+    } = input;
 
     await this.prisma.$transaction(
       async (tx) => {
         // ── 1. Read current account states ────────────────────────────────────
+        // WN-4: pass asset so crypto leg states are read with the correct currency key.
         const accountStates = await fetchSendRefundAccountStates(
           tx as unknown as PrismaService,
           walletId,
+          asset,
         );
 
         // ── 2. Build and insert LedgerEntry rows ──────────────────────────────
+        // WN-4: pass asset so crypto legs key by asset, not a hardcoded literal.
         const drafts: LedgerEntryDraft[] = buildSendRefundEntries({
           walletId,
           totalDebit,
+          asset,
           postedAt: now,
           accountStates,
         });
@@ -1565,7 +1644,8 @@ export class SettlementPrismaRepository implements ISettlementRepository {
               reason: CompensationReason.settlement_failed,
               // The refund amount is the totalDebit (cryptoAmount + networkFeeCrypto).
               amount: totalDebit as unknown as Prisma.Decimal,
-              currency: 'USDT',
+              // WN-4: use the actual asset so the compensation record is correct.
+              currency: asset,
               approvalComment: failureReason,
             },
           });

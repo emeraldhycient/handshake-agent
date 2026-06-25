@@ -96,6 +96,16 @@ export const envSchema = z.object({
     (v) => (v === '' ? undefined : v),
     z.string().url().optional(),
   ),
+
+  // --- Admin API (WN-5 / CLAUDE.md §4 admin module) ---
+  // Bearer token for POST /admin/wallets/backfill-networks (and future admin
+  // endpoints). Fail-closed: when unset (empty string / missing), AdminTokenGuard
+  // denies every request with 403 — the endpoint ships disabled and unexploitable
+  // by default. Set to a long random secret to enable.
+  //
+  // Swap seam: when the admin UI + proper admin-session auth is built, replace
+  // AdminTokenGuard with a session/role guard — this env var can then be removed.
+  ADMIN_API_TOKEN: z.string().optional().default(''),
 });
 
 export type Env = z.infer<typeof envSchema>;

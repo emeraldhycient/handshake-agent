@@ -446,13 +446,14 @@ export class ExecutionService {
     // ── Step 8: Side effects ─────────────────────────────────────────────────
     // These call external sandboxes through ports — never touch the DB directly.
 
-    // 8a. Provision / retrieve the user's custodial wallet for the buy asset.
+    // 8a. Provision / retrieve the user's (user, network) custodial wallet.
     // Idempotent: returns the existing wallet if already provisioned.
     // Asset is sourced from the stored quote; network from the registry default
     // for that asset — catalog is the single source of truth (task X3).
+    // WN-1: wallet is per-(user,network); asset for ledger comes from the quote.
     const buyAsset = storedQuote.asset;
     const buyNetwork = this.assetRegistry.defaultNetworkFor(buyAsset);
-    await this.walletService.getOrProvisionWallet(userId, buyAsset, buyNetwork);
+    await this.walletService.getOrProvisionNetworkWallet(userId, buyNetwork);
 
     // 8b. Open a Flutterwave NGN virtual-account collection.
     // Customer details: sourced from user KYC if available; safe fallbacks used
@@ -572,18 +573,18 @@ export class ExecutionService {
       return { transactionId: txn.id, status: 'pending', userId: txn.userId };
     }
 
-    // ── Step 5: Resolve the user's USDT wallet ────────────────────────────────
+    // ── Step 5: Resolve the user's (user, network) wallet ────────────────────────────────
     // Asset is sourced from the transaction metadata; network from the registry
     // default for that asset — catalog is the single source of truth (task X3).
     // Fallback to defaultCryptoAsset() covers older transactions written before
     // the asset field was added to metadata; remove once all txns carry meta.asset.
+    // WN-1: wallet is per-(user,network); asset for ledger credit comes from metadata.
     const settleAsset =
       (meta.asset as string | undefined) ??
       this.assetRegistry.defaultCryptoAsset();
     const settleNetwork = this.assetRegistry.defaultNetworkFor(settleAsset);
-    const wallet = await this.walletService.getOrProvisionWallet(
+    const wallet = await this.walletService.getOrProvisionNetworkWallet(
       txn.userId,
-      settleAsset,
       settleNetwork,
     );
 
@@ -598,6 +599,8 @@ export class ExecutionService {
       fiatAmount: expectedFiatAmount,
       cryptoAmount: meta.cryptoAmount ?? '0',
       processingFee: meta.processingFeeAmount ?? '0',
+      // WN-4: thread settleAsset so ledger legs key by asset, not a hardcoded literal.
+      asset: settleAsset,
       providerRef: verifyResult.providerRef,
       now,
       year,
@@ -703,12 +706,12 @@ export class ExecutionService {
     });
 
     // ── Step 4: Re-check balance via ledger (TOCTOU guard) ──────────────────
-    // Resolve the wallet to look up its authoritative ledger balance.
+    // Resolve the (user, network) wallet for ledger balance lookup.
+    // WN-1: wallet is per-(user,network); asset for balance query comes from quote.
     const sellAsset = storedQuote.asset;
     const sellNetwork = this.assetRegistry.defaultNetworkFor(sellAsset);
-    const wallet = await this.walletService.getOrProvisionWallet(
+    const wallet = await this.walletService.getOrProvisionNetworkWallet(
       userId,
-      sellAsset,
       sellNetwork,
     );
 
@@ -845,6 +848,8 @@ export class ExecutionService {
         },
         walletId: wallet.id,
         cryptoAmount: storedQuote.cryptoAmount,
+        // WN-4: thread storedQuote.asset so ledger legs key by asset, not a hardcoded literal.
+        asset: storedQuote.asset,
         now,
       });
 
@@ -948,6 +953,10 @@ export class ExecutionService {
     const walletId = meta.walletId ?? '';
     const cryptoAmount = meta.cryptoAmount ?? '0';
     const netFiatAmount = meta.netFiatAmount ?? '0';
+    // WN-4: asset from transaction metadata so ledger legs key by asset.
+    const sellAsset =
+      (meta.asset as string | undefined) ??
+      this.assetRegistry.defaultCryptoAsset();
     const now = this.clock.now();
     const year = now.getFullYear().toString();
 
@@ -960,6 +969,7 @@ export class ExecutionService {
           walletId,
           cryptoAmount,
           netFiatAmount,
+          asset: sellAsset,
           providerRef: verifyResult.providerRef,
           now,
           year,
@@ -987,6 +997,7 @@ export class ExecutionService {
       userId: txn.userId,
       walletId,
       cryptoAmount,
+      asset: sellAsset,
       failureReason: `payout verifyPayout returned status '${verifyResult.status}'`,
       now,
     });
@@ -1321,6 +1332,8 @@ export class ExecutionService {
         },
         walletId,
         totalDebit,
+        // WN-4: thread asset so ledger legs key by asset, not a hardcoded literal.
+        asset,
         now,
         // SPEC DEVIATION fix: persist TravelRuleData atomically when threshold exceeded.
         // originatorName comes from KycProfile (getOriginatorName above); null when
@@ -1343,10 +1356,10 @@ export class ExecutionService {
       });
 
     // ── Step 11: Initiate on-chain withdrawal ────────────────────────────────
-    // Load the full wallet record (idempotent — already provisioned at propose time).
-    const walletRecord = await this.walletService.getOrProvisionWallet(
+    // Load the (user, network) wallet record (idempotent — already provisioned at propose time).
+    // WN-1: network comes from proposal params; asset for withdrawal comes from params (not wallet).
+    const walletRecord = await this.walletService.getOrProvisionNetworkWallet(
       userId,
-      asset,
       network,
     );
     const assetId = this.assetRegistry.assetProviderId(asset, 'blockradar');
@@ -1428,7 +1441,7 @@ export class ExecutionService {
 
     const meta = txn.metadata as Record<string, string>;
     const walletId = meta.walletId;
-    const asset = meta.asset ?? 'USDT';
+    // asset is in metadata but not needed for network-wallet lookup (WN-1).
     const network = meta.network ?? 'TRON';
 
     if (!walletId) {
@@ -1436,10 +1449,10 @@ export class ExecutionService {
       return { status: 'pending' };
     }
 
-    // Load the wallet record to get the providerReference (Blockradar child address id).
-    const wallet = await this.walletService.getOrProvisionWallet(
+    // Load the (user, network) wallet record to get providerReference (Blockradar child address id).
+    // WN-1: wallet is per-(user,network); asset for withdrawal status comes from metadata.
+    const wallet = await this.walletService.getOrProvisionNetworkWallet(
       txn.userId,
-      asset,
       network,
     );
 
@@ -1480,6 +1493,10 @@ export class ExecutionService {
     const cryptoAmount = meta.cryptoAmount ?? '0';
     const networkFeeCrypto = meta.networkFeeCrypto ?? '0';
     const totalDebit = meta.totalDebit ?? '0';
+    // WN-4: asset from transaction metadata so ledger legs key by asset.
+    const sendAsset =
+      (meta.asset as string | undefined) ??
+      this.assetRegistry.defaultCryptoAsset();
     const now = this.clock.now();
     const year = now.getFullYear().toString();
 
@@ -1493,6 +1510,7 @@ export class ExecutionService {
           walletId,
           cryptoAmount,
           networkFeeCrypto,
+          asset: sendAsset,
           onChainTxHash: txHash,
           now,
           year,
@@ -1520,6 +1538,7 @@ export class ExecutionService {
       userId: txn.userId,
       walletId,
       totalDebit,
+      asset: sendAsset,
       failureReason: 'on-chain withdrawal failed',
       now,
     });

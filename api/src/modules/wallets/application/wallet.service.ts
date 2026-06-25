@@ -2,7 +2,6 @@ import { Inject, Injectable } from '@nestjs/common';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
-import { UnsupportedNetworkForAssetError } from '../../../core/catalog/catalog-errors';
 import {
   WALLET_PROVIDER,
   type IWalletProvider,
@@ -26,6 +25,10 @@ const WALLET_STATUS_ACTIVE = 'active';
  * Invariant (§3.1): this service only manages the custodial address record
  * and balance reads. The execution engine (Task 4.5) is responsible for
  * crediting / debiting this wallet — this service does NOT move money.
+ *
+ * WN-1 model: one wallet per (user, network). A Blockradar child address
+ * receives ALL assets on its chain, so asset is NOT part of the wallet identity.
+ * Per-asset balances are tracked in WalletBalance records.
  */
 @Injectable()
 export class WalletService {
@@ -40,50 +43,36 @@ export class WalletService {
   ) {}
 
   /**
-   * Returns the user's custodial wallet for the given asset and network,
-   * provisioning it on first call (idempotent — a second call for the same
-   * user/asset/network triple returns the existing row without contacting the
-   * provider again).
+   * Returns the user's custodial wallet for the given network, provisioning it
+   * on first call (idempotent — a second call for the same user/network pair
+   * returns the existing row without contacting the provider again).
    *
-   * Validates that the asset is enabled in the registry and that the network
-   * is enabled and registered for that asset before provisioning.
+   * Validates that the network is enabled in the registry before provisioning.
    *
-   * @throws {UnsupportedAssetError}            when the asset is not registered or disabled.
-   * @throws {UnsupportedNetworkError}           when the network is not registered or disabled.
-   * @throws {UnsupportedNetworkForAssetError}   when the asset does not list the network.
+   * @throws {UnsupportedNetworkError} when the network is not registered or disabled.
    */
-  async getOrProvisionWallet(
+  async getOrProvisionNetworkWallet(
     userId: string,
-    asset: string,
     network: string,
   ): Promise<WalletRecord> {
-    // Validate via registry — throws typed errors on failure.
-    const assetMeta = this.assetRegistry.asset(asset);
-    this.assetRegistry.network(network); // throws UnsupportedNetworkError if absent/disabled
-    if (!assetMeta.networks.includes(network)) {
-      // The network is registered globally but not listed for this asset.
-      throw new UnsupportedNetworkForAssetError(network, asset);
-    }
+    // Validate via registry — throws UnsupportedNetworkError on failure.
+    this.assetRegistry.network(network);
 
-    const existing = await this.repo.findByUserAssetNetwork(
-      userId,
-      asset,
-      network,
-    );
+    const existing = await this.repo.findByUserNetwork(userId, network);
 
     if (existing !== null) {
       return existing;
     }
 
-    // Provision a new child address at the WaaS provider.
+    // Provision a new child address at the WaaS provider for this network.
     const provisioned = await this.provider.provisionAddress({
       userRef: userId,
+      network,
     });
 
     // Persist and return.
     return this.repo.create({
       userId,
-      asset,
       network,
       address: provisioned.address,
       providerReference: provisioned.providerReference,
@@ -93,27 +82,39 @@ export class WalletService {
   }
 
   /**
-   * Returns the user's USDT-on-TRON custodial wallet, provisioning it on first
-   * call. Thin delegate to `getOrProvisionWallet` using the registry default
-   * asset and network (task X3 backward-compat shim for callers not yet updated).
+   * Provisions wallets for all enabled networks in the registry (idempotent).
+   * Iterates `AssetRegistry.enabledNetworks()` and calls
+   * `getOrProvisionNetworkWallet` for each. New networks are covered by config
+   * entry alone — no code change here (registry-driven §7).
+   *
+   * Used at KYC completion to pre-provision all receive addresses.
    */
-  async getOrProvisionUsdtTronWallet(userId: string): Promise<WalletRecord> {
-    const asset = this.assetRegistry.defaultCryptoAsset();
-    const network = this.assetRegistry.defaultNetworkFor(asset);
-    return this.getOrProvisionWallet(userId, asset, network);
+  async provisionAllEnabledNetworks(userId: string): Promise<WalletRecord[]> {
+    const networks = this.assetRegistry.enabledNetworks();
+    const wallets = await Promise.all(
+      networks.map((network) =>
+        this.getOrProvisionNetworkWallet(userId, network),
+      ),
+    );
+    return wallets;
   }
 
   /**
-   * Reads the current balance for the given wallet from the provider.
-   * Delegates to the `WALLET_PROVIDER` port using the wallet's `providerReference`
-   * and the provider-specific asset id resolved from the registry.
+   * Reads the current balance for a specific asset on the given wallet from the
+   * provider. Delegates to the `WALLET_PROVIDER` port using the wallet's
+   * `providerReference`, the provider-specific asset id resolved from the
+   * registry, and the wallet's network for master-wallet resolution.
    */
-  async getBalance(wallet: WalletRecord): Promise<GetBalanceOutput> {
-    const assetId = this.assetRegistry.assetProviderId(
-      wallet.asset,
-      'blockradar',
+  async getBalance(
+    wallet: WalletRecord,
+    asset: string,
+  ): Promise<GetBalanceOutput> {
+    const assetId = this.assetRegistry.assetProviderId(asset, 'blockradar');
+    return this.provider.getBalance(
+      wallet.providerReference,
+      assetId,
+      wallet.network,
     );
-    return this.provider.getBalance(wallet.providerReference, assetId);
   }
 
   /**
@@ -142,6 +143,7 @@ export class WalletService {
       toAddress,
       amount,
       assetId,
+      network: wallet.network,
       reference,
     });
   }
@@ -152,7 +154,8 @@ export class WalletService {
    *
    * Used by the reconciler to safely handle missed webhooks. The `wallet` is
    * needed to scope the provider query to the correct child address (the
-   * `providerReference` field is the Blockradar child address id).
+   * `providerReference` field is the Blockradar child address id) and to resolve
+   * the correct master wallet id via `wallet.network`.
    *
    * This method never throws: the provider implementation returns `{ status: 'pending' }`
    * on any error so the reconciler leaves the outbox row open rather than refunding.
@@ -167,6 +170,7 @@ export class WalletService {
     return this.provider.getWithdrawalStatus({
       reference,
       addressId: wallet.providerReference,
+      network: wallet.network,
     });
   }
 }

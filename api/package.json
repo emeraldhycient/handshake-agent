@@ -20,7 +20,8 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json --passWithNoTests",
-    "send:test": "ts-node --project tsconfig.json -r tsconfig-paths/register scripts/send-test-message.ts"
+    "send:test": "ts-node --project tsconfig.json -r tsconfig-paths/register scripts/send-test-message.ts",
+    "backfill:wallet-networks": "node dist/api/src/cli/backfill-wallet-networks.js"
   },
   "dependencies": {
     "@handshake-agent/contracts": "workspace:*",

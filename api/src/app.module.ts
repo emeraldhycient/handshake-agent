@@ -19,6 +19,7 @@ import { WhatsAppModule } from './modules/whatsapp/whatsapp.module';
 import { FlutterwaveWebhookModule } from './modules/treasury/flutterwave-webhook.module';
 import { BlockradarWebhookModule } from './modules/wallets/blockradar-webhook.module';
 import { ComplianceModule } from './modules/compliance/compliance.module';
+import { AdminModule } from './modules/admin/admin.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { ComplianceModule } from './modules/compliance/compliance.module';
     FlutterwaveWebhookModule,
     BlockradarWebhookModule,
     ComplianceModule,
+    AdminModule,
   ],
   // Global Zod validation: every request DTO is checked against its contract schema.
   providers: [{ provide: APP_PIPE, useClass: ZodValidationPipe }],

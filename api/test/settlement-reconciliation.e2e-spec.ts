@@ -401,9 +401,8 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
 
   it('reconciles a missed sell webhook: pending processor_payout outbox row → settleSellPayout → completed', async () => {
     // Provision wallet + seed sell balance.
-    const wallet = await walletService.getOrProvisionWallet(
+    const wallet = await walletService.getOrProvisionNetworkWallet(
       userId,
-      'USDT',
       'TRON',
     );
     await seedUsdtBalance(wallet.id, '50');
@@ -490,9 +489,8 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       status: 'pending',
     });
 
-    const wallet = await walletService.getOrProvisionWallet(
+    const wallet = await walletService.getOrProvisionNetworkWallet(
       userId,
-      'USDT',
       'TRON',
     );
     await seedUsdtBalance(wallet.id, '50');
@@ -571,9 +569,8 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       status: 'failed',
     });
 
-    const wallet = await walletService.getOrProvisionWallet(
+    const wallet = await walletService.getOrProvisionNetworkWallet(
       userId,
-      'USDT',
       'TRON',
     );
     await seedUsdtBalance(wallet.id, '50');
@@ -646,9 +643,8 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       onChainTxHash: FAKE_TX_HASH,
     });
 
-    const wallet = await walletService.getOrProvisionWallet(
+    const wallet = await walletService.getOrProvisionNetworkWallet(
       userId,
-      'USDT',
       'TRON',
     );
     await seedUsdtBalance(wallet.id, '50');

@@ -1,7 +1,7 @@
 /**
- * Unit tests for KycController (K3).
+ * Unit tests for KycController (K3 + WN-3).
  *
- * All dependencies (HandoffTokenService, KycService) are mocked.
+ * All dependencies (HandoffTokenService, KycService, WalletService) are mocked.
  * The ThrottlerGuard is bypassed in unit tests.
  *
  * Covers:
@@ -12,10 +12,13 @@
  *   - contact not found → ContactNotFoundError → BadRequestException (400)
  *   - KYC rejected → KycRejectedError → UnprocessableEntityException (422)
  *   - other errors re-thrown
+ *   - WN-3: provisionAllEnabledNetworks called for every enabled network after KYC
+ *   - WN-3: provisioning failure does NOT fail KYC completion (best-effort)
  */
 
 import {
   BadRequestException,
+  Logger,
   UnprocessableEntityException,
 } from '@nestjs/common';
 
@@ -27,6 +30,7 @@ import {
 import { ContactNotFoundError, KycRejectedError } from '../domain/kyc-errors';
 import type { HandoffTokenService } from '../application/handoff-token.service';
 import type { KycService } from '../application/kyc.service';
+import type { WalletService } from '../../wallets/application/wallet.service';
 import { KycController } from './kyc.controller';
 import type { KycCompleteDto } from './dto/kyc-complete.dto';
 
@@ -76,6 +80,18 @@ function makeKycService(
   return svc;
 }
 
+function makeWalletService(
+  provisionResult: unknown[] | Error = [],
+): jest.Mocked<Pick<WalletService, 'provisionAllEnabledNetworks'>> {
+  const svc = { provisionAllEnabledNetworks: jest.fn() };
+  if (provisionResult instanceof Error) {
+    svc.provisionAllEnabledNetworks.mockRejectedValue(provisionResult);
+  } else {
+    svc.provisionAllEnabledNetworks.mockResolvedValue(provisionResult);
+  }
+  return svc;
+}
+
 function buildController(
   handoffTokenService: jest.Mocked<
     Pick<HandoffTokenService, 'consumeKycToken' | 'mintKycToken'>
@@ -83,10 +99,16 @@ function buildController(
   kycService: jest.Mocked<
     Pick<KycService, 'completeVerification'>
   > = makeKycService(),
+  walletService: jest.Mocked<
+    Pick<WalletService, 'provisionAllEnabledNetworks'>
+  > = makeWalletService(),
 ): KycController {
+  // Suppress logger output during tests.
+  jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
   return new KycController(
     handoffTokenService as unknown as HandoffTokenService,
     kycService as unknown as KycService,
+    walletService as unknown as WalletService,
   );
 }
 
@@ -205,5 +227,70 @@ describe('KycController.complete', () => {
     await expect(controller.complete(validDto)).rejects.toThrow(
       'unexpected boom',
     );
+  });
+
+  // ---------------------------------------------------------------------------
+  // WN-3: Eager wallet provisioning on KYC completion
+  // ---------------------------------------------------------------------------
+
+  describe('WN-3: eager wallet provisioning', () => {
+    it('calls provisionAllEnabledNetworks with the userId returned by completeVerification', async () => {
+      const walletService = makeWalletService([]);
+      const controller = buildController(
+        makeHandoffTokenService(),
+        makeKycService(),
+        walletService,
+      );
+
+      await controller.complete(validDto);
+
+      expect(walletService.provisionAllEnabledNetworks).toHaveBeenCalledWith(
+        USER_ID,
+      );
+    });
+
+    it('still returns { userId, status: verified } even when provisionAllEnabledNetworks fails (best-effort)', async () => {
+      const walletService = makeWalletService(
+        new Error('Blockradar unavailable'),
+      );
+      const controller = buildController(
+        makeHandoffTokenService(),
+        makeKycService(),
+        walletService,
+      );
+
+      // KYC response must succeed regardless of provisioning failure.
+      const result = await controller.complete(validDto);
+
+      expect(result).toEqual({ userId: USER_ID, status: 'verified' });
+    });
+
+    it('does NOT call provisionAllEnabledNetworks when KYC verification fails', async () => {
+      const walletService = makeWalletService([]);
+      const controller = buildController(
+        makeHandoffTokenService(),
+        makeKycService(new KycRejectedError('NIN mismatch')),
+        walletService,
+      );
+
+      await expect(controller.complete(validDto)).rejects.toThrow(
+        UnprocessableEntityException,
+      );
+      expect(walletService.provisionAllEnabledNetworks).not.toHaveBeenCalled();
+    });
+
+    it('does NOT call provisionAllEnabledNetworks when token consumption fails', async () => {
+      const walletService = makeWalletService([]);
+      const controller = buildController(
+        makeHandoffTokenService(new HandoffTokenNotFoundError()),
+        makeKycService(),
+        walletService,
+      );
+
+      await expect(controller.complete(validDto)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(walletService.provisionAllEnabledNetworks).not.toHaveBeenCalled();
+    });
   });
 });

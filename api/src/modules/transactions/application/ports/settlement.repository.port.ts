@@ -28,14 +28,19 @@ export const SETTLEMENT_REPOSITORY = Symbol('SETTLEMENT_REPOSITORY');
 export interface SettleBuyAtomicInput {
   transactionId: string;
   userId: string;
-  /** Blockradar / WalletPrismaRepository id of the user's USDT wallet. */
+  /** Blockradar / WalletPrismaRepository id of the user's crypto wallet. */
   walletId: string;
   /** Gross NGN the user paid (decimal string, e.g. "10000"). */
   fiatAmount: string;
-  /** USDT to credit to the user (decimal string, e.g. "6.123456"). */
+  /** Crypto amount to credit to the user (decimal string, e.g. "6.123456"). */
   cryptoAmount: string;
   /** NGN processing fee portion of fiatAmount (decimal string, e.g. "100"). */
   processingFee: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Threaded through to the
+   * ledger builder so all crypto legs key by this asset, not a hardcoded literal.
+   */
+  asset: string;
   /** Provider reference returned by payment provider verify (e.g. flw_ref). */
   providerRef: string;
   /** Timestamp to use for postedAt / completedAt / issuedAt (from CLOCK). */
@@ -55,10 +60,15 @@ export interface SettleBuyAtomicOutput {
 
 export interface PostSellReserveInput {
   transactionId: string;
-  /** Blockradar / WalletPrismaRepository id of the user's USDT wallet. */
+  /** Blockradar / WalletPrismaRepository id of the user's crypto wallet. */
   walletId: string;
-  /** USDT the user is selling (same as at executeSell). */
+  /** Crypto amount the user is selling (same as at executeSell). */
   cryptoAmount: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Threaded through to the
+   * ledger builder so crypto legs key by this asset.
+   */
+  asset: string;
   /** Timestamp to use for postedAt (from CLOCK). */
   now: Date;
 }
@@ -95,10 +105,15 @@ export interface CreateSellSettlingWithReserveInput {
     fiatAmountStr: string;
     now: Date;
   };
-  /** Blockradar / WalletPrismaRepository id of the user's USDT wallet. */
+  /** Blockradar / WalletPrismaRepository id of the user's crypto wallet. */
   walletId: string;
-  /** USDT the user is selling (decimal string, e.g. "16.000000"). */
+  /** Crypto amount the user is selling (decimal string, e.g. "16.000000"). */
   cryptoAmount: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Threaded through to the
+   * ledger builder so crypto legs key by this asset.
+   */
+  asset: string;
   now: Date;
 }
 
@@ -113,12 +128,17 @@ export interface CreateSellSettlingWithReserveOutput {
 export interface SettleSellFinalizeInput {
   transactionId: string;
   userId: string;
-  /** Blockradar / WalletPrismaRepository id of the user's USDT wallet. */
+  /** Blockradar / WalletPrismaRepository id of the user's crypto wallet. */
   walletId: string;
-  /** USDT that was reserved (same as at executeSell). */
+  /** Crypto amount that was reserved (same as at executeSell). */
   cryptoAmount: string;
   /** Net NGN the user receives after spread + fee. */
   netFiatAmount: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Threaded through to the
+   * ledger builder so crypto legs key by this asset.
+   */
+  asset: string;
   /** Flutterwave transfer id returned by verifyPayout. */
   providerRef: string;
   /** Timestamp to use for postedAt / completedAt / issuedAt (from CLOCK). */
@@ -139,10 +159,15 @@ export interface SettleSellFinalizeOutput {
 export interface SettleSellRefundInput {
   transactionId: string;
   userId: string;
-  /** Blockradar / WalletPrismaRepository id of the user's USDT wallet. */
+  /** Blockradar / WalletPrismaRepository id of the user's crypto wallet. */
   walletId: string;
-  /** USDT that was reserved and must be refunded. */
+  /** Crypto amount that was reserved and must be refunded. */
   cryptoAmount: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Threaded through to the
+   * ledger builder so crypto legs key by this asset.
+   */
+  asset: string;
   /** Reason string for CompensationRecord (e.g. 'settlement_failed'). */
   failureReason: string;
   /** Timestamp to use for postedAt / failedAt (from CLOCK). */
@@ -197,10 +222,15 @@ export interface CreateSendSettlingWithReserveInput {
     fiatAmountStr: string;
     now: Date;
   };
-  /** Blockradar / WalletPrismaRepository id of the user's USDT wallet. */
+  /** Blockradar / WalletPrismaRepository id of the user's crypto wallet. */
   walletId: string;
   /** totalDebit = cryptoAmount + networkFeeCrypto */
   totalDebit: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Threaded through to the
+   * ledger builder so crypto legs key by this asset.
+   */
+  asset: string;
   now: Date;
   /**
    * When set, the repository must persist a TravelRuleData row inside the
@@ -224,6 +254,11 @@ export interface SettleSendFinalizeInput {
   walletId: string;
   cryptoAmount: string;
   networkFeeCrypto: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Threaded through to the
+   * ledger builder so crypto legs key by this asset.
+   */
+  asset: string;
   /** The on-chain tx hash from Blockradar withdraw. */
   onChainTxHash: string;
   /** Timestamp to use for postedAt / completedAt / issuedAt (from CLOCK). */
@@ -247,6 +282,11 @@ export interface SettleSendRefundInput {
   walletId: string;
   /** totalDebit (same as at reserve). */
   totalDebit: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Threaded through to the
+   * ledger builder so crypto legs key by this asset.
+   */
+  asset: string;
   failureReason: string;
   /** Timestamp to use for postedAt / failedAt (from CLOCK). */
   now: Date;

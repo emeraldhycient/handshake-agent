@@ -226,6 +226,19 @@ export interface CatalogNetwork {
    * e.g. TRON → "tron", Ethereum → "ethereum", BSC → "bsc"
    */
   amlBlockchain?: string;
+  /**
+   * Blockradar master wallet id for this network. Used by BlockradarProvider to
+   * resolve the correct master wallet when provisioning child addresses and
+   * performing balance / withdrawal operations.
+   *
+   * Config-driven for multi-network extensibility: adding a new network only
+   * requires an entry here — no code changes in BlockradarProvider.
+   *
+   * At launch: TRON → env `BLOCKRADAR_MASTER_WALLET_ID` (the env var value is
+   * injected into the catalog defaults in configuration.ts). Absent = error at
+   * runtime (fail-closed: callers must configure a master wallet id per network).
+   */
+  masterWalletId?: string;
 }
 
 /**
@@ -334,6 +347,14 @@ export default (): AppConfig => ({
         // Blockradar AML lookup blockchain param for TRON addresses.
         // See BlockradarAmlScreener (compliance/infrastructure).
         amlBlockchain: 'tron',
+        // TRON master wallet id: resolved from env at boot.
+        // BLOCKRADAR_MASTER_WALLET_TRON overrides BLOCKRADAR_MASTER_WALLET_ID
+        // so multi-network deployments can have per-network keys while keeping
+        // the legacy single-network variable working at launch.
+        masterWalletId:
+          process.env['BLOCKRADAR_MASTER_WALLET_TRON'] ??
+          process.env['BLOCKRADAR_MASTER_WALLET_ID'] ??
+          '',
       },
     },
     capabilities: {

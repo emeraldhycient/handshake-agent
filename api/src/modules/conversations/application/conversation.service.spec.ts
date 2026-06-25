@@ -78,7 +78,6 @@ const FIXED_WALLET_ADDRESS = 'TRX_USDT_ADDR_ABC123';
 const stubWalletRecord = (): WalletRecord => ({
   id: 'wallet-id-1',
   userId: 'user-id-1',
-  asset: 'USDT',
   network: 'TRON',
   address: FIXED_WALLET_ADDRESS,
   providerReference: 'blockradar-ref-1',
@@ -411,9 +410,9 @@ function makeDirectiveService(
 
 function makeWalletService(
   wallet: WalletRecord = stubWalletRecord(),
-): jest.Mocked<Pick<WalletService, 'getOrProvisionWallet'>> {
+): jest.Mocked<Pick<WalletService, 'getOrProvisionNetworkWallet'>> {
   return {
-    getOrProvisionWallet: jest.fn().mockResolvedValue(wallet),
+    getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(wallet),
   };
 }
 
@@ -503,7 +502,9 @@ function buildService(
     replyRepo?: jest.Mocked<IReplyRepository>;
     configService?: jest.Mocked<ConfigService>;
     directiveService?: jest.Mocked<Pick<DirectiveService, 'issue'>>;
-    walletService?: jest.Mocked<Pick<WalletService, 'getOrProvisionWallet'>>;
+    walletService?: jest.Mocked<
+      Pick<WalletService, 'getOrProvisionNetworkWallet'>
+    >;
     assetRegistry?: jest.Mocked<AssetRegistry>;
     handoffTokenService?: jest.Mocked<
       Pick<HandoffTokenService, 'mintKycToken' | 'consumeKycToken'>
@@ -1031,7 +1032,7 @@ describe('ConversationService.handleInbound', () => {
 
   // ── receive_crypto: linked user → deposit address ─────────────────────────
 
-  it('linked user + receive_crypto → calls getOrProvisionWallet with USDT/TRON, reply contains address + TRON + warning', async () => {
+  it('linked user + receive_crypto → calls getOrProvisionNetworkWallet with network from registry, reply contains address + TRON + warning', async () => {
     const agentPort = makeAgentPort({ action: 'receive_crypto' });
     const walletService = makeWalletService();
     const { svc, sender, proposalService } = buildService({
@@ -1041,10 +1042,9 @@ describe('ConversationService.handleInbound', () => {
 
     await svc.handleInbound(baseMsg());
 
-    // WalletService must be called with userId + asset/network from registry defaults
-    expect(walletService.getOrProvisionWallet).toHaveBeenCalledWith(
+    // WalletService called with userId + network resolved from registry (WN-2)
+    expect(walletService.getOrProvisionNetworkWallet).toHaveBeenCalledWith(
       'user-id-1',
-      'USDT',
       'TRON',
     );
 
@@ -1110,7 +1110,7 @@ describe('ConversationService.handleInbound', () => {
     await svc.handleInbound(baseMsg());
 
     // WalletService must NOT be called for unlinked contact
-    expect(walletService.getOrProvisionWallet).not.toHaveBeenCalled();
+    expect(walletService.getOrProvisionNetworkWallet).not.toHaveBeenCalled();
 
     // K3: CTA URL sent
     expect(sender.sendCtaUrl).toHaveBeenCalledTimes(1);
@@ -1147,7 +1147,7 @@ describe('ConversationService.handleInbound', () => {
 
     await svc.handleInbound(baseMsg());
 
-    expect(walletService.getOrProvisionWallet).not.toHaveBeenCalled();
+    expect(walletService.getOrProvisionNetworkWallet).not.toHaveBeenCalled();
 
     const sentText = captureFirstSentText(sender);
     expect(sentText).toContain('re-verif');
