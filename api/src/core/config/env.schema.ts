@@ -97,6 +97,12 @@ export const envSchema = z.object({
     z.string().url().optional(),
   ),
 
+  // --- Job queue (BQ-1: BullMQ / Redis) ---
+  // URL for the Redis instance backing BullMQ. Uses lazyConnect so the app
+  // boots even when Redis is absent (see JobsModule comments). In staging/prod,
+  // point this at the real Redis; in local dev the default works with a local Redis.
+  REDIS_URL: z.string().default('redis://localhost:6379'),
+
   // --- Admin API (WN-5 / CLAUDE.md §4 admin module) ---
   // Bearer token for POST /admin/wallets/backfill-networks (and future admin
   // endpoints). Fail-closed: when unset (empty string / missing), AdminTokenGuard

@@ -20,6 +20,7 @@ import { FlutterwaveWebhookModule } from './modules/treasury/flutterwave-webhook
 import { BlockradarWebhookModule } from './modules/wallets/blockradar-webhook.module';
 import { ComplianceModule } from './modules/compliance/compliance.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { JobsModule } from './core/jobs/jobs.module';
 
 @Module({
   imports: [
@@ -53,6 +54,9 @@ import { AdminModule } from './modules/admin/admin.module';
     FlutterwaveWebhookModule,
     BlockradarWebhookModule,
     ComplianceModule,
+    // JobsModule: BullMQ / Redis capability (BQ-1). Uses lazyConnect so the app
+    // boots without a live Redis; existing e2e suites never enqueue, so they pass.
+    JobsModule,
     AdminModule,
   ],
   // Global Zod validation: every request DTO is checked against its contract schema.
