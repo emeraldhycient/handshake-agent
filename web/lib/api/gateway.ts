@@ -33,11 +33,16 @@ import type {
   ReceiptView,
   ChatAction,
 } from "@/lib/schemas"
+import {
+  PublicConfigResponseSchema,
+  type PublicConfigResponse,
+} from "@handshake-agent/contracts"
 import { z } from "zod"
 
 // ─── Type alias for the gateway contract ─────────────────────────────────────
 
 export interface Gateway {
+  getConfig(): Promise<PublicConfigResponse>
   getBalances(): Promise<BalanceView>
   getWalletAssets(): Promise<WalletAsset[]>
   getActivity(): Promise<ActivityGroup[]>
@@ -68,6 +73,11 @@ export interface Gateway {
 //   POST /api/transactions
 
 const realGateway: Gateway = {
+  async getConfig() {
+    const { data } = await api.get("/config")
+    return PublicConfigResponseSchema.parse(data)
+  },
+
   async getBalances() {
     const { data } = await api.get("/wallets/balances")
     return BalanceViewSchema.parse(data)

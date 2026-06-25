@@ -11,6 +11,19 @@ import { qk } from "./keys"
 
 // ─── Read hooks ───────────────────────────────────────────────────────────────
 
+/**
+ * Supported currencies, networks, and assets from the /config endpoint.
+ * Drives which services are enabled — do NOT hardcode the basket in components.
+ * Cached for 5 min; re-fetched in the background.
+ */
+export function useConfig() {
+  return useQuery({
+    queryKey: qk.config,
+    queryFn: () => gateway.getConfig(),
+    staleTime: 5 * 60_000,
+  })
+}
+
 /** Wallet summary (total + asset breakdown). Refreshed every 15 s. */
 export function useBalances() {
   return useQuery({

@@ -5,6 +5,7 @@
  * `invalidateQueries` can match precisely by prefix.
  */
 export const qk = {
+  config: ["config"] as const,
   balances: ["balances"] as const,
   walletAssets: ["walletAssets"] as const,
   activity: ["activity"] as const,
