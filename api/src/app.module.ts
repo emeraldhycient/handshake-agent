@@ -21,6 +21,7 @@ import { BlockradarWebhookModule } from './modules/wallets/blockradar-webhook.mo
 import { ComplianceModule } from './modules/compliance/compliance.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { PublicConfigModule } from './modules/config/config.module';
+import { JobsModule } from './core/jobs/jobs.module';
 
 @Module({
   imports: [
@@ -54,6 +55,9 @@ import { PublicConfigModule } from './modules/config/config.module';
     FlutterwaveWebhookModule,
     BlockradarWebhookModule,
     ComplianceModule,
+    // JobsModule: BullMQ / Redis capability (BQ-1). Uses lazyConnect so the app
+    // boots without a live Redis; existing e2e suites never enqueue, so they pass.
+    JobsModule,
     AdminModule,
     PublicConfigModule,
   ],

@@ -1,16 +1,25 @@
 import { Module } from '@nestjs/common';
+import { BullModule } from '@nestjs/bullmq';
+import { BullBoardModule } from '@bull-board/nestjs';
+import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
+import { ExpressAdapter } from '@bull-board/express';
 
 import { WalletsModule } from '../wallets/wallets.module';
 import { IdentityModule } from '../identity/identity.module';
 import { AdminTokenGuard } from './guards/admin-token.guard';
 import { AdminWalletsController } from './presentation/admin-wallets.controller';
 import { WalletBackfillService } from '../wallets/application/wallet-backfill.service';
+import { BullBoardBasicAuthMiddleware } from './bull-board.middleware';
+import { ECHO_QUEUE_NAME } from '../../core/jobs/echo-queue.constants';
+import { WALLET_BACKFILL_QUEUE_NAME } from '../wallets/application/wallet-backfill-queue.constants';
 
 /**
- * Admin feature module (WN-5, CLAUDE.md §4 — listed as a planned module).
+ * Admin feature module (WN-5, BQ-1, BQ-2, CLAUDE.md §4 — listed as a planned module).
  *
- * Provides the internal admin surface for operator/ops tasks.
- * At launch: the wallet network backfill endpoint (POST /admin/wallets/backfill-networks).
+ * Provides the internal admin surface for operator/ops tasks:
+ *   - POST /admin/wallets/backfill-networks — enqueue async backfill (BQ-2).
+ *   - GET  /admin/wallets/backfill-runs/:id — poll BackfillRun status (BQ-2).
+ *   - GET  /admin/queues (Bull Board dashboard, BQ-1) — queue monitoring.
  *
  * Why WalletBackfillService lives here (not in WalletsModule):
  *   WalletBackfillService requires USER_LISTER (IUserLister) — the port whose
@@ -19,28 +28,53 @@ import { WalletBackfillService } from '../wallets/application/wallet-backfill.se
  *   (IdentityModule already imports WalletsModule for WN-3). AdminModule is
  *   the composition root that safely imports both and provides all dependencies.
  *
- * DI wiring:
- *   - WalletsModule: exports WalletService, WALLET_PROVIDER, WALLET_REPOSITORY.
- *     All three are injected into WalletBackfillService.
- *   - IdentityModule: exports USER_LISTER (ActiveUserListerPrismaAdapter) and
- *     AssetRegistry (via CatalogModule, which is global). USER_LISTER is injected
- *     into WalletBackfillService.
- *   - CatalogModule is global — AssetRegistry is available without import.
- *   - ConfigModule is global — ConfigService available for AdminTokenGuard.
- *   - PrismaModule is global — PrismaService available without import.
+ * Bull Board (BQ-1, BQ-2):
+ *   Mounted at /admin/queues via @bull-board/nestjs + ExpressAdapter. Protected
+ *   by BullBoardBasicAuthMiddleware (HTTP Basic auth, password = ADMIN_API_TOKEN).
+ *   Both the echo queue and the wallet-backfill queue are registered.
  *
- * Guard swap seam (admin UI):
- *   When proper admin-session auth lands, replace AdminTokenGuard here and on
- *   AdminWalletsController with the session guard. The module/controller/service
- *   shape stays identical.
+ * DI wiring:
+ *   - WalletsModule: exports WalletService, WALLET_PROVIDER, WALLET_REPOSITORY,
+ *     BACKFILL_RUN_REPOSITORY.
+ *   - IdentityModule: exports USER_LISTER (ActiveUserListerPrismaAdapter).
+ *   - CatalogModule is global — AssetRegistry available without import.
+ *   - ConfigModule is global — ConfigService available for guards and middleware.
+ *   - PrismaModule is global — PrismaService available without import.
+ *   - JobsModule is imported at AppModule level with BullModule re-exported —
+ *     BullBoardModule.forFeature() and @InjectQueue() resolve queues from BullModule.
  */
 @Module({
-  imports: [WalletsModule, IdentityModule],
+  imports: [
+    WalletsModule,
+    IdentityModule,
+    // Register the wallet-backfill queue in AdminModule so @InjectQueue resolves
+    // for AdminWalletsController. BullModule.forRoot() is already set up by
+    // JobsModule (imported at AppModule level); this registerQueue call adds the
+    // Queue instance to AdminModule's DI scope without duplicating the connection.
+    BullModule.registerQueue({ name: WALLET_BACKFILL_QUEUE_NAME }),
+    // Bull Board root: ExpressAdapter + fail-closed Basic-auth middleware.
+    BullBoardModule.forRoot({
+      route: '/admin/queues',
+      adapter: ExpressAdapter,
+      middleware: BullBoardBasicAuthMiddleware,
+    }),
+    // Register all queues with Bull Board so they appear in the dashboard.
+    BullBoardModule.forFeature({
+      name: ECHO_QUEUE_NAME,
+      adapter: BullMQAdapter,
+    }),
+    BullBoardModule.forFeature({
+      name: WALLET_BACKFILL_QUEUE_NAME,
+      adapter: BullMQAdapter,
+    }),
+  ],
   controllers: [AdminWalletsController],
   providers: [
     AdminTokenGuard,
+    BullBoardBasicAuthMiddleware,
     // WalletBackfillService is provided here (not in WalletsModule) so it can
     // receive USER_LISTER from IdentityModule without creating a cycle.
+    // Still needed by the coordinator processor via WorkerModule.
     WalletBackfillService,
   ],
 })
