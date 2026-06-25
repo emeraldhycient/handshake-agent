@@ -215,6 +215,17 @@ export interface CatalogNetwork {
    * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
    */
   networkFeeCrypto: Record<string, string>;
+  /**
+   * The `blockchain` query-param value expected by the Blockradar AML lookup
+   * API (`GET /v1/aml/lookup?address=&blockchain=`).
+   *
+   * Config-driven for multi-network extensibility: new networks only need an
+   * entry here — no code changes required.  Absent = BlockradarAmlScreener
+   * throws (fail-closed; unknown network must not be silently skipped).
+   *
+   * e.g. TRON → "tron", Ethereum → "ethereum", BSC → "bsc"
+   */
+  amlBlockchain?: string;
 }
 
 /**
@@ -320,6 +331,9 @@ export default (): AppConfig => ({
         networkFeeCrypto: {
           USDT: '1',
         },
+        // Blockradar AML lookup blockchain param for TRON addresses.
+        // See BlockradarAmlScreener (compliance/infrastructure).
+        amlBlockchain: 'tron',
       },
     },
     capabilities: {

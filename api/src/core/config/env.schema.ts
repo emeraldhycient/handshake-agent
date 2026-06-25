@@ -80,6 +80,12 @@ export const envSchema = z.object({
   // Flip to 'false' once a real NIN/BVN provider is wired in IdentityModule.
   KYC_MOCK_MODE: z.enum(['true', 'false']).default('true'),
 
+  // --- Sanctions / AML (compliance) ---
+  // When 'true' (default), MockSanctionsScreener is active — no live Blockradar
+  // AML calls. Set to 'false' to activate BlockradarAmlScreener (requires AML
+  // enabled on the Blockradar plan and a valid BLOCKRADAR_API_KEY).
+  SANCTIONS_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+
   // --- Web App (K3 KYC web handoff) ---
   // Base URL for the web application. Used to build the KYC CTA URL:
   //   `${WEB_APP_BASE_URL}/kyc?t=<token>`
