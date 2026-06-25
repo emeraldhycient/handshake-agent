@@ -2060,6 +2060,40 @@ describe('ExecutionService.settleSellPayout', () => {
     expect(settlementRepo.settleSellRefundAtomic).not.toHaveBeenCalled();
   });
 
+  // ── Task 6: fiatCurrency threads into settleSellFinalizeAtomic (not hardcoded) ──
+
+  it('settleSellFinalizeAtomic receives fiatCurrency threaded from transaction metadata, not a hardcoded default', async () => {
+    // Use a NON-NGN currency so the assertion would FAIL if the code reverted
+    // to a hardcoded 'NGN' default (the regression this guards against).
+    const ghsTxn: TransactionRecord = {
+      ...SETTLING_SELL_TXN,
+      metadata: {
+        ...SETTLING_SELL_TXN.metadata,
+        fiatCurrency: 'GHS',
+      },
+    };
+    const transactionRepo = makeTransactionRepoForSellSettle(ghsTxn);
+    const settlementRepo = makeSettlementRepo();
+    const paymentProvider = makeSellPaymentProvider(undefined, {
+      status: 'successful',
+      amount: '24600',
+      currency: 'GHS',
+      providerRef: PROVIDER_REF,
+    });
+
+    const svc = buildSellService({
+      transactionRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    await svc.settleSellPayout(SETTLE_SELL_INPUT);
+
+    expect(settlementRepo.settleSellFinalizeAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({ fiatCurrency: 'GHS' }),
+    );
+  });
+
   // ── Payout pending ────────────────────────────────────────────────────────
 
   it('payout still pending → returns pending, no settle or refund', async () => {
