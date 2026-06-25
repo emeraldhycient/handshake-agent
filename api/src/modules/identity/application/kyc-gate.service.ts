@@ -184,9 +184,13 @@ export class KycGateService {
       );
     }
 
-    // 5. Velocity checks — load rolling 24-h usage.
+    // 5. Velocity checks — load rolling 24-h usage, scoped to the transaction's fiat currency.
     const asOf = this.clock.now();
-    const usage = await this.velocityRepo.getDailyUsage(userId, asOf);
+    const usage = await this.velocityRepo.getDailyUsage(
+      userId,
+      asOf,
+      fiatCurrency,
+    );
 
     // DailyUsage.fiatTotal is now a decimal string (Fix-C); scale both before adding.
     const scaledDailyUsed = toScaled(usage.fiatTotal);

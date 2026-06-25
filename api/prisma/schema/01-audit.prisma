@@ -294,12 +294,14 @@ enum TravelRuleTrigger {
 }
 
 /// Real-time per-user velocity counters consulted by the engine to enforce limits
-/// and detect structuring. One row per (user, counterType), rolled over per window.
+/// and detect structuring. One row per (user, counterType, fiatCurrency), rolled over per window.
 /// (Single source of truth — supersedes the engine's TransactionVelocityRecord.)
 model VelocityCounter {
   id           String              @id @default(uuid(7)) @db.Uuid
   userId       String              @db.Uuid
   counterType  VelocityCounterType
+  /// Fiat currency this counter tracks (e.g. NGN, USD). Per-currency isolation — no cross-currency aggregation.
+  fiatCurrency FiatCurrency        @default(NGN)
   /// Fiat-equivalent total for AMOUNT_*; transaction count for COUNT_* (exact precision).
   currentValue Decimal             @db.Decimal(38, 18)
   windowStart  DateTime            @db.Timestamptz
@@ -309,7 +311,7 @@ model VelocityCounter {
 
   user User @relation(fields: [userId], references: [id])
 
-  @@unique([userId, counterType])
+  @@unique([userId, counterType, fiatCurrency])
   @@index([userId, windowEnd])
   @@index([updatedAt])
   @@map("velocity_counters")

@@ -104,6 +104,8 @@ export interface CreateSellSettlingWithReserveInput {
   /** Velocity counters to upsert atomically (V1). */
   velocityIncrement: {
     userId: string;
+    /** Fiat currency code for the counter's window (e.g. 'NGN'). */
+    fiatCurrency: string;
     fiatAmountStr: string;
     now: Date;
   };
@@ -223,6 +225,8 @@ export interface CreateSendSettlingWithReserveInput {
   /** Velocity counters to upsert atomically (V1). */
   velocityIncrement: {
     userId: string;
+    /** Fiat currency code for the counter's window (e.g. 'NGN'). */
+    fiatCurrency: string;
     fiatAmountStr: string;
     now: Date;
   };

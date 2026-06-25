@@ -74,6 +74,8 @@ export interface TransactionRecord {
  */
 export interface VelocityIncrementData {
   userId: string;
+  /** Fiat currency code for the counter's window (e.g. 'NGN'). */
+  fiatCurrency: string;
   /**
    * Fiat amount for amount_24h counter (as a string to avoid float precision
    * loss — Prisma Decimal accepts a string without rounding).

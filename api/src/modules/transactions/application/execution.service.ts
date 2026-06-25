@@ -441,6 +441,7 @@ export class ExecutionService {
       // Date.now()) so the window boundary is deterministic in tests.
       velocityIncrement: {
         userId,
+        fiatCurrency: storedQuote.fiatCurrency,
         fiatAmountStr: storedQuote.fiatAmount,
         now,
       },
@@ -852,6 +853,7 @@ export class ExecutionService {
         confirmedAt: now,
         velocityIncrement: {
           userId,
+          fiatCurrency: storedQuote.fiatCurrency,
           fiatAmountStr: storedQuote.fiatAmount,
           now,
         },
@@ -1346,6 +1348,7 @@ export class ExecutionService {
         confirmedAt: now,
         velocityIncrement: {
           userId,
+          fiatCurrency: baseFiat,
           fiatAmountStr: String(ngnEquivalent),
           now,
         },
