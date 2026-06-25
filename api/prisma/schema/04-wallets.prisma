@@ -8,7 +8,8 @@
 model Wallet {
   id                String         @id @default(uuid(7)) @db.Uuid
   userId            String         @db.Uuid
-  asset             SupportedAsset
+  /// Network this wallet covers. One child address per (user, network) — all
+  /// assets on that chain share this address (Blockradar child-address model).
   network           Network
   /// On-chain receive address (Blockradar child address). Validated before storage.
   address           String         @unique
@@ -28,9 +29,9 @@ model Wallet {
   withdrawalPolicies WithdrawalPolicy[]
   syncLogs           WalletSyncLog[]
 
-  @@unique([userId, asset, network])
+  @@unique([userId, network])
   @@index([userId])
-  @@index([asset, network, status])
+  @@index([network, status])
   @@map("wallets")
 }
 
@@ -44,9 +45,12 @@ enum WalletStatus {
 }
 
 /// Cached balance snapshot (provider reads are expensive; staleTime-bounded).
+/// Each row is per-asset on the network wallet (one wallet covers all assets on its chain).
 model WalletBalance {
   id            String        @id @default(uuid(7)) @db.Uuid
   walletId      String        @db.Uuid
+  /// Which asset this balance snapshot is for (e.g. USDT, BTC).
+  asset         SupportedAsset
   /// Asset-native amount; engine-precision Decimal (38,18) per repo convention.
   amount        Decimal       @db.Decimal(38, 18)
   /// Asset decimal precision at snapshot (e.g. USDT=6, BTC=8) — denormalized for audit.
@@ -57,7 +61,7 @@ model WalletBalance {
 
   wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
 
-  @@index([walletId, syncedAt])
+  @@index([walletId, asset, syncedAt])
   @@map("wallet_balances")
 }
 

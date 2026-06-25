@@ -731,9 +731,12 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         // ── 4. Upsert WalletBalance (credit user USDT) ────────────────────────
         // We use create (not upsert) because WalletBalance is an append-only
         // snapshot log; the latest entry by syncedAt is the live balance.
+        // WN-1: WalletBalance now requires asset (per-asset balance on the network wallet).
         await tx.walletBalance.create({
           data: {
             walletId,
+            // Buy settlements always credit USDT at launch (ADR-0006).
+            asset: SupportedAsset.USDT,
             // amount is the credited USDT (new snapshot after credit).
             // In a real system this would be baseBalance + cryptoAmount;
             // for the settlement skeleton we record the credited amount

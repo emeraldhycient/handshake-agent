@@ -96,7 +96,6 @@ const FAKE_WALLET_ADDRESS = 'TRXFakeAddress_e2e_test_ABC';
 const fakeWalletRecord: WalletRecord = {
   id: 'wallet-e2e-id-1',
   userId: '', // will be overridden in the test if needed
-  asset: 'USDT',
   network: 'TRON',
   address: FAKE_WALLET_ADDRESS,
   providerReference: 'blockradar-ref-e2e',

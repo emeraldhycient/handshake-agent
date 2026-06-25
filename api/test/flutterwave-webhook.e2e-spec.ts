@@ -433,7 +433,7 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
     });
 
     const wallet = await prisma.wallet.findFirst({
-      where: { userId, asset: 'USDT' },
+      where: { userId, network: 'TRON' },
     });
     const balanceCountAfterFirst = await prisma.walletBalance.count({
       where: { walletId: wallet!.id },

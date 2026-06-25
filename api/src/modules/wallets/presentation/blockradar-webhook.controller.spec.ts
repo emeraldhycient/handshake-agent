@@ -78,7 +78,6 @@ function makeWalletRecord(): WalletRecord {
   return {
     id: WALLET_ID,
     userId: USER_ID,
-    asset: ASSET_SYMBOL,
     network: NETWORK,
     address: RECIPIENT_ADDRESS,
     providerReference: 'blockradar-ref-001',

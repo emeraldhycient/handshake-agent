@@ -8,6 +8,12 @@ export const WALLET_PROVIDER = Symbol('WALLET_PROVIDER');
 export interface ProvisionAddressInput {
   /** Opaque user reference written into the provider's metadata for audit traceability. */
   userRef: string;
+  /**
+   * Network to provision the child address on. Used to resolve the correct
+   * Blockradar master wallet id (per-network mapping from AssetRegistry).
+   * e.g. "TRON"
+   */
+  network: string;
 }
 
 export interface ProvisionAddressOutput {
@@ -36,6 +42,11 @@ export interface WithdrawInput {
   /** Provider-specific asset id (from AssetRegistry.assetProviderId). */
   assetId: string;
   /**
+   * Network the wallet lives on (e.g. "TRON"). Used to resolve the correct
+   * Blockradar master wallet id for the URL.
+   */
+  network: string;
+  /**
    * Optional caller-supplied idempotency key. If provided, Blockradar uses it
    * as the `reference` field to deduplicate concurrent or retried withdrawals.
    */
@@ -63,6 +74,11 @@ export interface GetWithdrawalStatusInput {
    * avoids cross-wallet reference collisions.
    */
   addressId?: string;
+  /**
+   * Network the wallet lives on (e.g. "TRON"). Used to resolve the correct
+   * Blockradar master wallet id for the URL. Defaults to fail-safe pending when absent.
+   */
+  network?: string;
 }
 
 export interface GetWithdrawalStatusOutput {
@@ -87,8 +103,13 @@ export interface IWalletProvider {
    *
    * @param addressId - The provider-scoped child address id (providerReference on WalletRecord).
    * @param assetId   - The provider-specific asset id (from AssetRegistry.assetProviderId).
+   * @param network   - Network the wallet lives on (e.g. "TRON"). Used to resolve the correct master wallet id.
    */
-  getBalance(addressId: string, assetId: string): Promise<GetBalanceOutput>;
+  getBalance(
+    addressId: string,
+    assetId: string,
+    network: string,
+  ): Promise<GetBalanceOutput>;
 
   /**
    * Initiates an on-chain withdrawal from the given child address to an external address.

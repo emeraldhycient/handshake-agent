@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import type { AxiosError } from 'axios';
 
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import type {
   IWalletProvider,
   ProvisionAddressInput,
@@ -101,9 +102,13 @@ interface BlockradarAddressTransactionsResponse {
 /**
  * Blockradar WaaS adapter — implements `IWalletProvider`.
  *
- * All configuration (base URL, API key, master wallet id, asset id) is read
- * from ConfigService so tests can stub it without real network calls. Mirrors
- * the `CloudApiSender` pattern (modules/whatsapp/infrastructure/).
+ * All configuration (base URL, API key, per-network master wallet ids) is read
+ * from ConfigService / AssetRegistry so tests can stub it without real network
+ * calls. Mirrors the `CloudApiSender` pattern (modules/whatsapp/infrastructure/).
+ *
+ * WN-1: master wallet id is now resolved per-network from the AssetRegistry
+ * (catalog.networks[network].masterWalletId). A new network only needs an entry
+ * in the catalog — no code change here (registry-driven §7).
  *
  * Auth: Blockradar uses `x-api-key` header (NOT Bearer).
  */
@@ -111,22 +116,19 @@ interface BlockradarAddressTransactionsResponse {
 export class BlockradarProvider implements IWalletProvider {
   private readonly baseUrl: string;
   private readonly apiKeyHeader: string;
-  private readonly masterWalletId: string;
 
   constructor(
     private readonly http: HttpService,
     // Bare ConfigService so env keys (BLOCKRADAR_*) can be read without
-    // type-narrowing issues. The usdtTronAssetId previously read from the
-    // providers.blockradar config section has been removed — the catalog
-    // (AssetRegistry) is now the single source of truth (task X3).
+    // type-narrowing issues.
     private readonly config: ConfigService,
+    // AssetRegistry for per-network master wallet id resolution (WN-1).
+    private readonly assetRegistry: AssetRegistry,
   ) {
     this.baseUrl =
       this.config.get<string>('BLOCKRADAR_BASE_URL') ??
       'https://api.blockradar.co/v1';
     this.apiKeyHeader = this.config.get<string>('BLOCKRADAR_API_KEY') ?? '';
-    this.masterWalletId =
-      this.config.get<string>('BLOCKRADAR_MASTER_WALLET_ID') ?? '';
   }
 
   // ---------------------------------------------------------------------------
@@ -136,7 +138,8 @@ export class BlockradarProvider implements IWalletProvider {
   async provisionAddress(
     input: ProvisionAddressInput,
   ): Promise<ProvisionAddressOutput> {
-    const url = `${this.baseUrl}/wallets/${this.masterWalletId}/addresses`;
+    const masterWalletId = this.resolveMasterWalletId(input.network);
+    const url = `${this.baseUrl}/wallets/${masterWalletId}/addresses`;
     const body = {
       metadata: { userRef: input.userRef },
     };
@@ -162,8 +165,10 @@ export class BlockradarProvider implements IWalletProvider {
   async getBalance(
     addressId: string,
     assetId: string,
+    network: string,
   ): Promise<GetBalanceOutput> {
-    const url = `${this.baseUrl}/wallets/${this.masterWalletId}/addresses/${addressId}/balance`;
+    const masterWalletId = this.resolveMasterWalletId(network);
+    const url = `${this.baseUrl}/wallets/${masterWalletId}/addresses/${addressId}/balance`;
     const params = { assetId };
 
     try {
@@ -190,13 +195,16 @@ export class BlockradarProvider implements IWalletProvider {
    * Endpoint (confirmed docs.blockradar.co/llms-full.txt, task N1):
    *   POST /wallets/{masterWalletId}/addresses/{addressId}/withdraw
    *
+   * WN-1: masterWalletId is now resolved per-network from the AssetRegistry.
+   *
    * The call returns immediately with PENDING status; Blockradar delivers
    * the final status (SUCCESS | FAILED) via webhook. The execution engine
    * updates the settlement record on webhook receipt (§3.1).
    */
   async withdraw(input: WithdrawInput): Promise<WithdrawOutput> {
-    const { addressId, toAddress, amount, assetId, reference } = input;
-    const url = `${this.baseUrl}/wallets/${this.masterWalletId}/addresses/${addressId}/withdraw`;
+    const { addressId, toAddress, amount, assetId, network, reference } = input;
+    const masterWalletId = this.resolveMasterWalletId(network);
+    const url = `${this.baseUrl}/wallets/${masterWalletId}/addresses/${addressId}/withdraw`;
 
     // Build body; only include reference when the caller supplied one so the
     // request stays minimal when no idempotency key is provided.
@@ -234,6 +242,8 @@ export class BlockradarProvider implements IWalletProvider {
    * Endpoint (confirmed docs.blockradar.co):
    *   GET /wallets/{masterWalletId}/addresses/{addressId}/transactions
    *
+   * WN-1: masterWalletId is now resolved per-network from the AssetRegistry.
+   *
    * The `reference` field on each transaction item is the value the caller
    * supplied when initiating the withdrawal. We filter client-side because
    * Blockradar does not document a `?reference=` query parameter.
@@ -244,7 +254,7 @@ export class BlockradarProvider implements IWalletProvider {
   async getWithdrawalStatus(
     input: GetWithdrawalStatusInput,
   ): Promise<GetWithdrawalStatusOutput> {
-    const { reference, addressId } = input;
+    const { reference, addressId, network } = input;
 
     // addressId is required to scope the request; without it we cannot query.
     // Return pending so the row is not refunded on a missing addressId.
@@ -252,7 +262,20 @@ export class BlockradarProvider implements IWalletProvider {
       return { status: 'pending' };
     }
 
-    const url = `${this.baseUrl}/wallets/${this.masterWalletId}/addresses/${addressId}/transactions`;
+    // network is required to resolve the master wallet id; without it fail-safe pending.
+    if (!network) {
+      return { status: 'pending' };
+    }
+
+    let masterWalletId: string;
+    try {
+      masterWalletId = this.resolveMasterWalletId(network);
+    } catch {
+      // No configured master wallet for this network — fail-safe pending.
+      return { status: 'pending' };
+    }
+
+    const url = `${this.baseUrl}/wallets/${masterWalletId}/addresses/${addressId}/transactions`;
 
     try {
       const response = await firstValueFrom(
@@ -285,6 +308,16 @@ export class BlockradarProvider implements IWalletProvider {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Resolves the Blockradar master wallet id for the given network from the
+   * AssetRegistry catalog. Throws a clear error if no master wallet id is
+   * configured for the network (fail-closed — misconfiguration must not
+   * silently fallback to a wrong wallet).
+   */
+  private resolveMasterWalletId(network: string): string {
+    return this.assetRegistry.networkMasterWalletId(network);
+  }
 
   /**
    * Maps Blockradar's uppercase status strings to the port's lowercase union.

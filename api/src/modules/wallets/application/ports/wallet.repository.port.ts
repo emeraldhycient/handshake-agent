@@ -7,12 +7,13 @@ export const WALLET_REPOSITORY = Symbol('WALLET_REPOSITORY');
 /**
  * Application-level wallet record — NOT the Prisma-generated type.
  * Infrastructure maps DB rows to this shape; the application layer never sees Prisma types.
+ *
+ * One wallet per (user, network). All assets on the network share this address
+ * (Blockradar child-address model: a child address receives ALL tokens on its chain).
  */
 export interface WalletRecord {
   id: string;
   userId: string;
-  /** Asset identifier, e.g. "USDT". */
-  asset: string;
   /** Network identifier, e.g. "TRON". */
   network: string;
   /** On-chain receive address. */
@@ -25,7 +26,6 @@ export interface WalletRecord {
 
 export interface CreateWalletData {
   userId: string;
-  asset: string;
   network: string;
   address: string;
   providerReference: string;
@@ -35,12 +35,11 @@ export interface CreateWalletData {
 
 export interface IWalletRepository {
   /**
-   * Returns the wallet for the given user / asset / network combination,
+   * Returns the wallet for the given user / network combination,
    * or null if it has not been provisioned yet.
    */
-  findByUserAssetNetwork(
+  findByUserNetwork(
     userId: string,
-    asset: string,
     network: string,
   ): Promise<WalletRecord | null>;
 
@@ -52,7 +51,7 @@ export interface IWalletRepository {
 
   /**
    * Persists a new wallet record and returns the created WalletRecord.
-   * Callers must ensure no duplicate (userId, asset, network) exists before calling.
+   * Callers must ensure no duplicate (userId, network) exists before calling.
    */
   create(data: CreateWalletData): Promise<WalletRecord>;
 }

@@ -333,7 +333,6 @@ function makeWalletServiceWithWithdraw(
   const walletRecord: WalletRecord = {
     id: 'wallet-id',
     userId: USER_ID,
-    asset: 'USDT',
     network: 'TRON',
     address: 'TTestAddress123',
     providerReference: 'blockradar-ref-001',

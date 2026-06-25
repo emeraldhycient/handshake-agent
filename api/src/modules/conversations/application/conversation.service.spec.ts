@@ -78,7 +78,6 @@ const FIXED_WALLET_ADDRESS = 'TRX_USDT_ADDR_ABC123';
 const stubWalletRecord = (): WalletRecord => ({
   id: 'wallet-id-1',
   userId: 'user-id-1',
-  asset: 'USDT',
   network: 'TRON',
   address: FIXED_WALLET_ADDRESS,
   providerReference: 'blockradar-ref-1',

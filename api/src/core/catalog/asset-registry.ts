@@ -211,6 +211,39 @@ export class AssetRegistry {
   }
 
   /**
+   * Returns an array of all enabled network ids in the catalog.
+   * Used by `provisionAllEnabledNetworks` to iterate over supported networks
+   * without hardcoding them in the service (registry-driven extensibility, §7).
+   */
+  enabledNetworks(): string[] {
+    return Object.entries(this.catalog.networks)
+      .filter(([, net]) => net.enabled)
+      .map(([id]) => id);
+  }
+
+  /**
+   * Returns the Blockradar master wallet id configured for the given network.
+   *
+   * Resolves from `catalog.networks[networkId].masterWalletId` which is populated
+   * from env at boot (BLOCKRADAR_MASTER_WALLET_TRON or BLOCKRADAR_MASTER_WALLET_ID
+   * for TRON; other networks use BLOCKRADAR_MASTER_WALLET_<NETWORK>). New networks
+   * only need a config entry — no code change here.
+   *
+   * @throws {UnsupportedNetworkError} when the network is not registered or disabled.
+   * @throws {Error} when the network has no configured master wallet id.
+   */
+  networkMasterWalletId(networkId: string): string {
+    const meta = this.network(networkId); // throws UnsupportedNetworkError if absent/disabled
+    if (!meta.masterWalletId) {
+      throw new Error(
+        `AssetRegistry: network "${networkId}" has no configured master wallet id. ` +
+          `Set BLOCKRADAR_MASTER_WALLET_${networkId} or BLOCKRADAR_MASTER_WALLET_ID in env.`,
+      );
+    }
+    return meta.masterWalletId;
+  }
+
+  /**
    * Validates an on-chain address against the network's configured regex pattern.
    * Uses a pre-compiled RegExp cached in the constructor — no per-call compilation.
    * @throws {UnsupportedNetworkError} when the network is not registered or disabled.

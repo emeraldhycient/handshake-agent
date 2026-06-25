@@ -1,10 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
-import {
-  SupportedAsset,
-  Network,
-  WalletStatus,
-} from '../../../../generated/prisma/client';
+import { Network, WalletStatus } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   IWalletRepository,
@@ -17,30 +13,28 @@ import type {
  * application-level `WalletRecord` type; the application layer never sees
  * Prisma-generated types (clean-arch §4.1, CLAUDE.md §3.2).
  *
- * Uses generated Prisma enums (`SupportedAsset`, `Network`, `WalletStatus`)
- * directly — no `as never` casts (brief instruction).
+ * WN-1: wallet is per (user, network) — `asset` field removed from Wallet.
+ * Uses generated Prisma enums (`Network`, `WalletStatus`) directly — no
+ * `as never` casts (brief instruction).
  */
 @Injectable()
 export class WalletPrismaRepository implements IWalletRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findByUserAssetNetwork(
+  async findByUserNetwork(
     userId: string,
-    asset: string,
     network: string,
   ): Promise<WalletRecord | null> {
     const row = await this.prisma.wallet.findUnique({
       where: {
-        userId_asset_network: {
+        userId_network: {
           userId,
-          asset: asset as SupportedAsset,
           network: network as Network,
         },
       },
       select: {
         id: true,
         userId: true,
-        asset: true,
         network: true,
         address: true,
         providerReference: true,
@@ -59,7 +53,6 @@ export class WalletPrismaRepository implements IWalletRepository {
       select: {
         id: true,
         userId: true,
-        asset: true,
         network: true,
         address: true,
         providerReference: true,
@@ -76,7 +69,6 @@ export class WalletPrismaRepository implements IWalletRepository {
     const row = await this.prisma.wallet.create({
       data: {
         userId: data.userId,
-        asset: data.asset as SupportedAsset,
         network: data.network as Network,
         address: data.address,
         providerReference: data.providerReference,
@@ -86,7 +78,6 @@ export class WalletPrismaRepository implements IWalletRepository {
       select: {
         id: true,
         userId: true,
-        asset: true,
         network: true,
         address: true,
         providerReference: true,
@@ -104,7 +95,6 @@ export class WalletPrismaRepository implements IWalletRepository {
   private toRecord(row: {
     id: string;
     userId: string;
-    asset: SupportedAsset;
     network: Network;
     address: string;
     providerReference: string;
@@ -113,7 +103,6 @@ export class WalletPrismaRepository implements IWalletRepository {
     return {
       id: row.id,
       userId: row.userId,
-      asset: row.asset,
       network: row.network,
       address: row.address,
       providerReference: row.providerReference,

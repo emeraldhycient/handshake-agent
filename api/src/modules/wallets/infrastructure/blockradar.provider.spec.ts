@@ -1,17 +1,16 @@
 /**
- * Unit tests for BlockradarProvider (task 5.1, updated for task X3, N1).
+ * Unit tests for BlockradarProvider (WN-1: per-network master wallet id).
  *
  * HttpService is mocked — no real network calls.
  * ConfigService is stubbed to return fixed env/config values.
+ * AssetRegistry is stubbed to return per-network masterWalletId.
  *
- * Key change (X3): getBalance(addressId, assetId) now takes assetId as an
- * explicit parameter — the caller (WalletService) resolves it from the
- * AssetRegistry. BlockradarProvider no longer reads usdtTronAssetId from
- * the providers config section; the catalog is the single source of truth.
- *
- * Key change (N1): withdraw() added — on-chain USDT transfer via
- * POST /wallets/{masterWalletId}/addresses/{addressId}/withdraw.
- * Confirmed endpoint against docs.blockradar.co/llms-full.txt.
+ * Key changes (WN-1):
+ * - provisionAddress now takes { userRef, network } and resolves the master
+ *   wallet id per-network from AssetRegistry.
+ * - getBalance now takes (addressId, assetId, network) — same per-network URL.
+ * - withdraw and getWithdrawalStatus now use per-network master wallet URL.
+ * - All URLs tested with MASTER_WALLET_ID resolved from the stub registry.
  *
  * TDD: written before the implementation to drive the design.
  */
@@ -21,6 +20,7 @@ import { ConfigService } from '@nestjs/config';
 import { of, throwError } from 'rxjs';
 import type { AxiosResponse } from 'axios';
 
+import type { AssetRegistry } from '../../../core/catalog/asset-registry';
 import { BlockradarProvider } from './blockradar.provider';
 
 // ---------------------------------------------------------------------------
@@ -37,13 +37,27 @@ function makeConfig(): ConfigService {
   const values: Record<string, unknown> = {
     BLOCKRADAR_BASE_URL: BASE_URL,
     BLOCKRADAR_API_KEY: API_KEY,
-    BLOCKRADAR_MASTER_WALLET_ID: MASTER_WALLET_ID,
-    // Note: providers.blockradar.usdtTronAssetId is intentionally absent —
-    // the catalog (AssetRegistry) is now the single source of truth (task X3).
+    // Note: BLOCKRADAR_MASTER_WALLET_ID is NO LONGER read directly by the provider
+    // — the provider resolves the master wallet id per-network from AssetRegistry.
+    // This env var is still read by configuration.ts to populate the catalog,
+    // but BlockradarProvider only reads BLOCKRADAR_BASE_URL and BLOCKRADAR_API_KEY.
   };
   return {
     get: (key: string) => values[key],
   } as unknown as ConfigService;
+}
+
+/**
+ * Minimal AssetRegistry stub that returns MASTER_WALLET_ID for TRON.
+ * Throws for unknown networks to test fail-safe / error paths.
+ */
+function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
+  return {
+    networkMasterWalletId: jest.fn().mockImplementation((network: string) => {
+      if (network === 'TRON') return MASTER_WALLET_ID;
+      throw new Error(`No master wallet id for network "${network}"`);
+    }),
+  } as unknown as jest.Mocked<AssetRegistry>;
 }
 
 function axiosOk<T>(data: T): AxiosResponse<T> {
@@ -63,13 +77,15 @@ function axiosOk<T>(data: T): AxiosResponse<T> {
 describe('BlockradarProvider', () => {
   let http: jest.Mocked<HttpService>;
   let provider: BlockradarProvider;
+  let assetRegistry: jest.Mocked<AssetRegistry>;
 
   beforeEach(() => {
     http = {
       post: jest.fn(),
       get: jest.fn(),
     } as unknown as jest.Mocked<HttpService>;
-    provider = new BlockradarProvider(http, makeConfig());
+    assetRegistry = makeAssetRegistry();
+    provider = new BlockradarProvider(http, makeConfig(), assetRegistry);
   });
 
   // ── provisionAddress ─────────────────────────────────────────────────────
@@ -83,10 +99,24 @@ describe('BlockradarProvider', () => {
       },
     };
 
+    it('resolves master wallet id from AssetRegistry for the given network', async () => {
+      http.post.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      await provider.provisionAddress({
+        userRef: 'user-uuid-1',
+        network: 'TRON',
+      });
+
+      expect(assetRegistry.networkMasterWalletId).toHaveBeenCalledWith('TRON');
+    });
+
     it('POSTs to /wallets/{masterWalletId}/addresses with x-api-key header', async () => {
       http.post.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
 
-      await provider.provisionAddress({ userRef: 'user-uuid-1' });
+      await provider.provisionAddress({
+        userRef: 'user-uuid-1',
+        network: 'TRON',
+      });
 
       expect(http.post).toHaveBeenCalledTimes(1);
       const [url, , config] = http.post.mock.calls[0] as [
@@ -102,7 +132,10 @@ describe('BlockradarProvider', () => {
     it('sends metadata with the userRef in the request body', async () => {
       http.post.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
 
-      await provider.provisionAddress({ userRef: 'user-uuid-1' });
+      await provider.provisionAddress({
+        userRef: 'user-uuid-1',
+        network: 'TRON',
+      });
 
       const [, body] = http.post.mock.calls[0] as [
         string,
@@ -116,6 +149,7 @@ describe('BlockradarProvider', () => {
 
       const result = await provider.provisionAddress({
         userRef: 'user-uuid-1',
+        network: 'TRON',
       });
 
       expect(result.providerReference).toBe('child-address-id-1');
@@ -134,7 +168,7 @@ describe('BlockradarProvider', () => {
       http.post.mockReturnValue(throwError(() => axiosErr));
 
       await expect(
-        provider.provisionAddress({ userRef: 'user-uuid-1' }),
+        provider.provisionAddress({ userRef: 'user-uuid-1', network: 'TRON' }),
       ).rejects.toThrow(/Blockradar provisionAddress error/);
     });
 
@@ -149,7 +183,7 @@ describe('BlockradarProvider', () => {
       http.post.mockReturnValue(throwError(() => axiosErr));
 
       await expect(
-        provider.provisionAddress({ userRef: 'user-uuid-1' }),
+        provider.provisionAddress({ userRef: 'user-uuid-1', network: 'TRON' }),
       ).rejects.toThrow(/Invalid API key/);
     });
 
@@ -157,8 +191,19 @@ describe('BlockradarProvider', () => {
       http.post.mockReturnValue(throwError(() => new Error('Network timeout')));
 
       await expect(
-        provider.provisionAddress({ userRef: 'user-uuid-1' }),
+        provider.provisionAddress({ userRef: 'user-uuid-1', network: 'TRON' }),
       ).rejects.toThrow('Network timeout');
+    });
+
+    it('throws when network has no configured master wallet id', async () => {
+      assetRegistry.networkMasterWalletId.mockImplementation((n: string) => {
+        throw new Error(`No master wallet id for network "${n}"`);
+      });
+
+      await expect(
+        provider.provisionAddress({ userRef: 'user-uuid-1', network: 'ETH' }),
+      ).rejects.toThrow(/No master wallet id/);
+      expect(http.post).not.toHaveBeenCalled();
     });
   });
 
@@ -174,11 +219,26 @@ describe('BlockradarProvider', () => {
       },
     };
 
+    it('resolves master wallet id from AssetRegistry for the given network', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      await provider.getBalance(
+        'child-address-id-1',
+        USDT_TRON_ASSET_ID,
+        'TRON',
+      );
+
+      expect(assetRegistry.networkMasterWalletId).toHaveBeenCalledWith('TRON');
+    });
+
     it('GETs /wallets/{masterWalletId}/addresses/{addressId}/balance with the passed assetId as query param', async () => {
       http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
 
-      // X3: assetId is now passed explicitly by the caller (from AssetRegistry)
-      await provider.getBalance('child-address-id-1', USDT_TRON_ASSET_ID);
+      await provider.getBalance(
+        'child-address-id-1',
+        USDT_TRON_ASSET_ID,
+        'TRON',
+      );
 
       expect(http.get).toHaveBeenCalledTimes(1);
       const [url, config] = http.get.mock.calls[0] as [
@@ -197,7 +257,7 @@ describe('BlockradarProvider', () => {
       http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
       const OTHER_ASSET_ID = 'other-asset-uuid-9999';
 
-      await provider.getBalance('child-address-id-1', OTHER_ASSET_ID);
+      await provider.getBalance('child-address-id-1', OTHER_ASSET_ID, 'TRON');
 
       const [, config] = http.get.mock.calls[0] as [
         string,
@@ -212,6 +272,7 @@ describe('BlockradarProvider', () => {
       const result = await provider.getBalance(
         'child-address-id-1',
         USDT_TRON_ASSET_ID,
+        'TRON',
       );
 
       expect(result.amount).toBe('10.500000');
@@ -229,7 +290,7 @@ describe('BlockradarProvider', () => {
       http.get.mockReturnValue(throwError(() => axiosErr));
 
       await expect(
-        provider.getBalance('bad-id', USDT_TRON_ASSET_ID),
+        provider.getBalance('bad-id', USDT_TRON_ASSET_ID, 'TRON'),
       ).rejects.toThrow(/Blockradar getBalance error/);
     });
 
@@ -237,7 +298,7 @@ describe('BlockradarProvider', () => {
       http.get.mockReturnValue(throwError(() => new Error('ECONNREFUSED')));
 
       await expect(
-        provider.getBalance('child-address-id-1', USDT_TRON_ASSET_ID),
+        provider.getBalance('child-address-id-1', USDT_TRON_ASSET_ID, 'TRON'),
       ).rejects.toThrow('ECONNREFUSED');
     });
   });
@@ -267,6 +328,20 @@ describe('BlockradarProvider', () => {
       },
     };
 
+    it('resolves master wallet id from AssetRegistry for the given network', async () => {
+      http.post.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      await provider.withdraw({
+        addressId: ADDRESS_ID,
+        toAddress: TO_ADDRESS,
+        amount: AMOUNT,
+        assetId: USDT_TRON_ASSET_ID,
+        network: 'TRON',
+      });
+
+      expect(assetRegistry.networkMasterWalletId).toHaveBeenCalledWith('TRON');
+    });
+
     it('POSTs to /wallets/{masterWalletId}/addresses/{addressId}/withdraw with x-api-key', async () => {
       http.post.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
 
@@ -275,6 +350,7 @@ describe('BlockradarProvider', () => {
         toAddress: TO_ADDRESS,
         amount: AMOUNT,
         assetId: USDT_TRON_ASSET_ID,
+        network: 'TRON',
       });
 
       expect(http.post).toHaveBeenCalledTimes(1);
@@ -298,6 +374,7 @@ describe('BlockradarProvider', () => {
         toAddress: TO_ADDRESS,
         amount: AMOUNT,
         assetId: USDT_TRON_ASSET_ID,
+        network: 'TRON',
       });
 
       const [, body] = http.post.mock.calls[0] as [
@@ -323,6 +400,7 @@ describe('BlockradarProvider', () => {
         toAddress: TO_ADDRESS,
         amount: AMOUNT,
         assetId: USDT_TRON_ASSET_ID,
+        network: 'TRON',
         reference: REFERENCE,
       });
 
@@ -341,6 +419,7 @@ describe('BlockradarProvider', () => {
         toAddress: TO_ADDRESS,
         amount: AMOUNT,
         assetId: USDT_TRON_ASSET_ID,
+        network: 'TRON',
       });
 
       expect(result.providerReference).toBe('provider-tx-id-abc');
@@ -359,6 +438,7 @@ describe('BlockradarProvider', () => {
         toAddress: TO_ADDRESS,
         amount: AMOUNT,
         assetId: USDT_TRON_ASSET_ID,
+        network: 'TRON',
       });
 
       expect(result.status).toBe('success');
@@ -376,6 +456,7 @@ describe('BlockradarProvider', () => {
         toAddress: TO_ADDRESS,
         amount: AMOUNT,
         assetId: USDT_TRON_ASSET_ID,
+        network: 'TRON',
       });
 
       expect(result.status).toBe('failed');
@@ -397,6 +478,7 @@ describe('BlockradarProvider', () => {
           toAddress: TO_ADDRESS,
           amount: AMOUNT,
           assetId: USDT_TRON_ASSET_ID,
+          network: 'TRON',
         }),
       ).rejects.toThrow(/Blockradar withdraw error/);
     });
@@ -417,6 +499,7 @@ describe('BlockradarProvider', () => {
           toAddress: TO_ADDRESS,
           amount: AMOUNT,
           assetId: USDT_TRON_ASSET_ID,
+          network: 'TRON',
         }),
       ).rejects.toThrow(/Invalid API key/);
     });
@@ -430,6 +513,7 @@ describe('BlockradarProvider', () => {
           toAddress: TO_ADDRESS,
           amount: AMOUNT,
           assetId: USDT_TRON_ASSET_ID,
+          network: 'TRON',
         }),
       ).rejects.toThrow('Network timeout');
     });
@@ -458,9 +542,47 @@ describe('BlockradarProvider', () => {
     ) => ({ data: items });
 
     it('returns pending when addressId is absent (fail-safe)', async () => {
-      const result = await provider.getWithdrawalStatus({ reference: REF });
+      const result = await provider.getWithdrawalStatus({
+        reference: REF,
+        network: 'TRON',
+      });
       expect(result.status).toBe('pending');
       expect(http.get).not.toHaveBeenCalled();
+    });
+
+    it('returns pending when network is absent (fail-safe)', async () => {
+      const result = await provider.getWithdrawalStatus({
+        reference: REF,
+        addressId: ADDRESS_ID,
+      });
+      expect(result.status).toBe('pending');
+      expect(http.get).not.toHaveBeenCalled();
+    });
+
+    it('returns pending when network has no master wallet id (fail-safe)', async () => {
+      assetRegistry.networkMasterWalletId.mockImplementation((n: string) => {
+        throw new Error(`No master wallet id for network "${n}"`);
+      });
+
+      const result = await provider.getWithdrawalStatus({
+        reference: REF,
+        addressId: ADDRESS_ID,
+        network: 'UNKNOWN',
+      });
+      expect(result.status).toBe('pending');
+      expect(http.get).not.toHaveBeenCalled();
+    });
+
+    it('resolves master wallet id from AssetRegistry for the given network', async () => {
+      http.get.mockReturnValue(of(axiosOk(makeTransactionsList([]))));
+
+      await provider.getWithdrawalStatus({
+        reference: REF,
+        addressId: ADDRESS_ID,
+        network: 'TRON',
+      });
+
+      expect(assetRegistry.networkMasterWalletId).toHaveBeenCalledWith('TRON');
     });
 
     it('GETs /wallets/{masterWalletId}/addresses/{addressId}/transactions with x-api-key', async () => {
@@ -469,6 +591,7 @@ describe('BlockradarProvider', () => {
       await provider.getWithdrawalStatus({
         reference: REF,
         addressId: ADDRESS_ID,
+        network: 'TRON',
       });
 
       const [url, config] = http.get.mock.calls[0] as [
@@ -495,6 +618,7 @@ describe('BlockradarProvider', () => {
       const result = await provider.getWithdrawalStatus({
         reference: REF,
         addressId: ADDRESS_ID,
+        network: 'TRON',
       });
 
       expect(result.status).toBe('pending');
@@ -519,6 +643,7 @@ describe('BlockradarProvider', () => {
       const result = await provider.getWithdrawalStatus({
         reference: REF,
         addressId: ADDRESS_ID,
+        network: 'TRON',
       });
 
       expect(result.status).toBe('success');
@@ -539,6 +664,7 @@ describe('BlockradarProvider', () => {
       const result = await provider.getWithdrawalStatus({
         reference: REF,
         addressId: ADDRESS_ID,
+        network: 'TRON',
       });
 
       expect(result.status).toBe('failed');
@@ -559,6 +685,7 @@ describe('BlockradarProvider', () => {
       const result = await provider.getWithdrawalStatus({
         reference: REF,
         addressId: ADDRESS_ID,
+        network: 'TRON',
       });
 
       expect(result.status).toBe('pending');
@@ -577,6 +704,7 @@ describe('BlockradarProvider', () => {
       const result = await provider.getWithdrawalStatus({
         reference: REF,
         addressId: ADDRESS_ID,
+        network: 'TRON',
       });
 
       expect(result.status).toBe('pending');
@@ -588,6 +716,7 @@ describe('BlockradarProvider', () => {
       const result = await provider.getWithdrawalStatus({
         reference: REF,
         addressId: ADDRESS_ID,
+        network: 'TRON',
       });
 
       expect(result.status).toBe('pending');
