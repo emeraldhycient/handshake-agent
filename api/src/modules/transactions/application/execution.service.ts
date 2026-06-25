@@ -688,7 +688,7 @@ export class ExecutionService {
     const freshQuote = await this.quotesService.quoteSell({
       asset: storedQuote.asset as 'USDT',
       cryptoAmount: storedQuote.cryptoAmount,
-      fiatCurrency: storedQuote.fiatCurrency as 'NGN',
+      fiatCurrency: storedQuote.fiatCurrency as FiatCurrency,
     });
 
     const storedRate = Number(storedQuote.fxRate);
@@ -860,10 +860,10 @@ export class ExecutionService {
         now,
       });
 
-    // ── Step 10: Initiate NGN payout ─────────────────────────────────────────
+    // ── Step 10: Initiate fiat payout ────────────────────────────────────────
     const payout = await this.paymentProvider.createPayout({
       amount: storedQuote.fiatAmount,
-      currency: 'NGN',
+      currency: storedQuote.fiatCurrency,
       reference: idempotencyKey,
       bankAccount: {
         // These are guaranteed non-null by the guard in step 8 of the gauntlet.
@@ -977,8 +977,8 @@ export class ExecutionService {
           cryptoAmount,
           netFiatAmount,
           asset: sellAsset,
-          // Task 4: thread fiatCurrency to the ledger builder for the fiat legs.
-          fiatCurrency: meta.fiatCurrency ?? 'NGN',
+          // Task 6: thread fiatCurrency from metadata (no legacy rows pre-launch — fail-closed, no default).
+          fiatCurrency: meta.fiatCurrency,
           providerRef: verifyResult.providerRef,
           now,
           year,
@@ -990,6 +990,7 @@ export class ExecutionService {
         receiptNumber,
         cryptoAmount,
         netFiatAmount,
+        fiatCurrency: meta.fiatCurrency,
       });
 
       return {
@@ -1114,7 +1115,12 @@ export class ExecutionService {
     const beneficiaryId = params.beneficiaryId;
     const walletId = params.walletId;
     const toAddress = params.toAddress ?? '';
-    const network = params.network ?? 'TRON';
+    const network = params.network;
+    if (!network) {
+      throw new ProposalNotExecutableError(
+        'proposal parameters missing network',
+      );
+    }
     const requiresTravelRule = params.requiresTravelRule === 'true';
 
     if (!beneficiaryId) {
@@ -1451,10 +1457,15 @@ export class ExecutionService {
     const meta = txn.metadata as Record<string, string>;
     const walletId = meta.walletId;
     // asset is in metadata but not needed for network-wallet lookup (WN-1).
-    const network = meta.network ?? 'TRON';
+    const network = meta.network;
 
     if (!walletId) {
       // Missing wallet info in metadata — fail-safe: leave pending.
+      return { status: 'pending' };
+    }
+
+    if (!network) {
+      // Missing network in metadata — fail-safe: leave pending (consistent with walletId guard above).
       return { status: 'pending' };
     }
 
@@ -1661,6 +1672,8 @@ export class ExecutionService {
     receiptNumber: string;
     cryptoAmount: string;
     netFiatAmount: string;
+    /** Fiat currency code threaded from transaction metadata (e.g. 'NGN'). */
+    fiatCurrency: string;
   }): Promise<void> {
     try {
       if (
@@ -1680,7 +1693,7 @@ export class ExecutionService {
         params.cryptoAmount,
       );
       const formattedFiat = this.assetRegistry.formatFiat(
-        'NGN',
+        params.fiatCurrency,
         params.netFiatAmount,
       );
       const body =
@@ -1784,7 +1797,8 @@ export class ExecutionService {
         bankName: meta.bankName ?? '',
         providerRef: meta.providerRef ?? txn.processorTxRef ?? '',
         amount: fiatAmount,
-        currency: 'NGN',
+        // Task 6: thread fiatCurrency from metadata (buy path always writes it at executeBuy).
+        currency: meta.fiatCurrency,
       },
     };
   }

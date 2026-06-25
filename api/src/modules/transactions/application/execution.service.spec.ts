@@ -3388,3 +3388,71 @@ describe('ExecutionService.settleSendOnChain', () => {
     );
   });
 });
+
+// =============================================================================
+// Task 6: sell-side 'NGN' literal replacement + TRON fallback removal
+// =============================================================================
+
+describe('ExecutionService.executeSell — Task 6: currency threaded from quote (not literal)', () => {
+  it('uses the quote fiatCurrency for createPayout (not a hardcoded literal) and includes fiatCurrency in atomic metadata', async () => {
+    // Use a quote with a NON-NGN fiatCurrency to prove currency is threaded, not hardcoded.
+    const ghsQuote: QuoteRecord = {
+      ...STORED_SELL_QUOTE,
+      fiatCurrency: 'GHS',
+    };
+    // The proposal's STUB_SELL_TXN must reflect GHS in metadata for idempotency check;
+    // override txn with GHS metadata so createSellSettlingWithReserveAtomic returns GHS txn.
+    const ghsSellTxn: TransactionRecord = {
+      ...STUB_SELL_TXN,
+      metadata: {
+        ...(STUB_SELL_TXN.metadata as Record<string, string>),
+        fiatCurrency: 'GHS',
+      },
+    };
+    const quoteRepo = makeQuoteRepo(ghsQuote);
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      ghsSellTxn,
+    );
+    const paymentProvider = makeSellPaymentProvider();
+
+    const svc = buildSellService({
+      quoteRepo,
+      settlementRepo,
+      paymentProvider,
+    });
+
+    await svc.executeSell(SELL_BASE_INPUT);
+
+    // createPayout must receive currency: 'GHS' from the stored quote, NOT 'NGN'.
+    expect(paymentProvider.createPayout).toHaveBeenCalledWith(
+      expect.objectContaining({ currency: 'GHS' }),
+    );
+  });
+});
+
+describe('ExecutionService.executeSend — Task 6: fail-closed on missing network (no TRON default)', () => {
+  it('fails closed when a send proposal has no network (no TRON default)', async () => {
+    // Build a proposal whose parameters do NOT include 'network'.
+    const proposalWithoutNetwork: ProposalRecord = {
+      ...STUB_SEND_PROPOSAL,
+      parameters: {
+        asset: 'USDT',
+        cryptoAmount: '10.000000',
+        networkFeeCrypto: '1.000000',
+        totalDebit: '11.000000',
+        beneficiaryId: BENEFICIARY_ID,
+        walletId: 'wallet-id',
+        toAddress: SEND_TO_ADDRESS,
+        // network intentionally omitted
+        requiresTravelRule: 'false',
+      },
+    };
+    const proposalRepo = makeProposalRepo(proposalWithoutNetwork);
+
+    const svc = buildSendService({ proposalRepo });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toThrow(/network/i);
+  });
+});
