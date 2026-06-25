@@ -70,6 +70,8 @@ function freshInput(
     cryptoAmount: '3.06',
     // WN-4: asset required; default to 'USDT' so existing USDT-path tests stay green.
     asset: 'USDT',
+    // Task 2: fiatCurrency required; default to 'NGN' so existing NGN-path tests stay green.
+    fiatCurrency: 'NGN',
     postedAt: new Date('2025-01-01T00:00:00Z'),
     accountStates: {},
     ...overrides,
@@ -1441,6 +1443,48 @@ describe('buildSendRefundEntries', () => {
 
 const USDC = 'USDC';
 
+// ---------------------------------------------------------------------------
+// Task 2: fiatCurrency threading — NGN unchanged + non-NGN (USD) threading
+// ---------------------------------------------------------------------------
+
+describe('Task 2: buildBuyLedgerEntries — fiatCurrency threading', () => {
+  const baseInput = {
+    userId: 'u1',
+    walletId: 'w1',
+    fiatAmount: '5000',
+    cryptoAmount: '3.06',
+    processingFee: '50',
+    asset: 'USDT',
+    postedAt: new Date('2026-06-25T00:00:00Z'),
+    accountStates: {},
+  } as const;
+
+  it('labels NGN fiat legs with the threaded fiatCurrency (unchanged for NGN)', () => {
+    const entries = buildBuyLedgerEntries({
+      ...baseInput,
+      fiatCurrency: 'NGN',
+    });
+    const fiatLegs = entries.filter((e) => e.currency === 'NGN');
+    expect(fiatLegs.length).toBeGreaterThan(0);
+    expect(fiatLegs.map((e) => e.accountId)).toEqual(
+      expect.arrayContaining(['ngn_processor', 'ngn_treasury']),
+    );
+  });
+
+  it('threads a non-NGN fiatCurrency into leg currency and account ids (no NGN literal)', () => {
+    const entries = buildBuyLedgerEntries({
+      ...baseInput,
+      fiatCurrency: 'USD',
+    });
+    const fiatLegs = entries.filter((e) => e.currency === 'USD');
+    expect(fiatLegs.length).toBeGreaterThan(0);
+    expect(entries.some((e) => e.currency === 'NGN')).toBe(false);
+    expect(fiatLegs.map((e) => e.accountId)).toEqual(
+      expect.arrayContaining(['usd_processor', 'usd_treasury']),
+    );
+  });
+});
+
 describe('WN-4: buildBuyLedgerEntries — non-USDT asset (USDC)', () => {
   it('crypto legs keyed by USDC, not USDT', () => {
     const entries = buildBuyLedgerEntries({
@@ -1450,6 +1494,7 @@ describe('WN-4: buildBuyLedgerEntries — non-USDT asset (USDC)', () => {
       processingFee: '100',
       cryptoAmount: '4.9',
       asset: USDC,
+      fiatCurrency: 'NGN',
       postedAt: new Date('2025-01-01T00:00:00Z'),
       accountStates: {},
     });
@@ -1474,6 +1519,7 @@ describe('WN-4: buildBuyLedgerEntries — non-USDT asset (USDC)', () => {
       processingFee: '100',
       cryptoAmount: '3.06',
       asset: 'USDT',
+      fiatCurrency: 'NGN',
       postedAt: new Date('2025-01-01T00:00:00Z'),
       accountStates: {},
     });
