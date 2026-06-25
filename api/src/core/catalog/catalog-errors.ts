@@ -17,8 +17,12 @@ export class UnsupportedAssetError extends Error {
 }
 
 export class UnsupportedFiatError extends Error {
-  constructor(code: string) {
-    super(`Unsupported or disabled fiat currency "${code}"`);
+  constructor(code: string, detail?: string) {
+    super(
+      detail
+        ? `Unsupported or disabled fiat currency "${code}": ${detail}`
+        : `Unsupported or disabled fiat currency "${code}"`,
+    );
     this.name = 'UnsupportedFiatError';
   }
 }

@@ -422,7 +422,7 @@ export class ProposalService {
    *   7. Sanctions screening:
    *      - complianceService.screenSendDestination → if !passed → SanctionsBlockedError
    *   8. Travel-Rule flag:
-   *      - if NGN value ≥ compliance.travelRuleThresholdNgn → requiresTravelRule = true
+   *      - if fiat-equivalent value ≥ compliance.travelRuleThresholds[defaultFiat()] → requiresTravelRule = true
    *   9. Persist Proposal(type=send, pending). No Quote row for send (it is not an FX quote).
    *  10. Return { proposalId, quoteId: null, confirmation } parsed through contract schema,
    *      with the destination address masked.
@@ -469,11 +469,12 @@ export class ProposalService {
     // where SCALE = 10^18. This gives the NGN value scaled to 10^18 units,
     // then we convert back to a decimal string for the gate.
     const pricingConfig = this.configService.get<PricingConfig>('pricing');
-    // TODO(WN): use AssetRegistry.defaultFiat() once Task 9 lands
-    const baseRate = pricingConfig?.assets?.[intent.asset]?.baseRates?.['NGN'];
+    const baseFiat = this.assetRegistry.defaultFiat();
+    const baseRate =
+      pricingConfig?.assets?.[intent.asset]?.baseRates?.[baseFiat];
     if (baseRate === undefined) {
       throw new Error(
-        `ProposalService: missing pricing.assets.${intent.asset}.baseRates.NGN in config — cannot compute NGN value for KYC gate.`,
+        `ProposalService: missing pricing.assets.${intent.asset}.baseRates.${baseFiat} in config — cannot compute ${baseFiat} value for KYC gate.`,
       );
     }
     // Compute NGN equivalent: cryptoAmount × baseRate, BigInt-exact (Fix-C).
@@ -506,14 +507,13 @@ export class ProposalService {
     await this.kycGate.assertCanTransact({
       userId,
       fiatAmount: ngnEquivalentStr,
-      // TODO(WN): AssetRegistry.defaultFiat() (Task 9)
-      fiatCurrency: 'NGN',
+      fiatCurrency: baseFiat,
       asset: intent.asset,
     });
 
     // Keep a numeric form only for the Travel Rule threshold comparison and metadata
     // storage (those are approximate uses, not money-gate comparisons — Fix-C scope).
-    const ngnValue = Number(intent.cryptoAmount) * baseRate;
+    const fiatValue = Number(intent.cryptoAmount) * baseRate;
 
     // 5. Beneficiary lookup — must exist, belong to user, and be a crypto_address.
     const beneficiary = await this.beneficiaryService.getById(
@@ -570,16 +570,17 @@ export class ProposalService {
       );
     }
 
-    // 8. Travel-Rule flag — if NGN-equivalent ≥ configured threshold, flag it.
+    // 8. Travel-Rule flag — if fiat-equivalent ≥ configured threshold, flag it.
     const complianceConfig =
       this.configService.get<ComplianceConfig>('compliance');
-    const travelRuleThreshold = complianceConfig?.travelRuleThresholdNgn;
+    const travelRuleThreshold =
+      complianceConfig?.travelRuleThresholds?.[baseFiat];
     if (travelRuleThreshold === undefined) {
       throw new Error(
-        'ProposalService: missing compliance.travelRuleThresholdNgn in config — cannot evaluate Travel Rule requirement.',
+        `ProposalService: missing compliance.travelRuleThresholds.${baseFiat} in config — cannot evaluate Travel Rule requirement.`,
       );
     }
-    const requiresTravelRule = ngnValue >= travelRuleThreshold;
+    const requiresTravelRule = fiatValue >= travelRuleThreshold;
 
     // 9. Persist the Proposal (type=send, pending; no Quote row — not an FX quote).
     const expiresAt = new Date(now.getTime() + sendQuote.expiresInSec * 1000);

@@ -1144,11 +1144,11 @@ export class ExecutionService {
     // which silently bypasses the KYC tier gate for any amount. Fail loudly on
     // misconfiguration rather than allowing a silent gate bypass.
     const pricingConfig = this.config.get<PricingConfig>('pricing');
-    // TODO(WN): use AssetRegistry.defaultFiat() once Task 9 lands
-    const baseRate = pricingConfig?.assets?.[asset]?.baseRates?.['NGN'];
+    const baseFiat = this.assetRegistry.defaultFiat();
+    const baseRate = pricingConfig?.assets?.[asset]?.baseRates?.[baseFiat];
     if (!baseRate || baseRate <= 0) {
       throw new InternalServerErrorException(
-        `pricing config missing or invalid baseRates.NGN for asset '${asset}' — cannot compute NGN-equivalent for KYC gate`,
+        `pricing config missing or invalid baseRates.${baseFiat} for asset '${asset}' — cannot compute ${baseFiat}-equivalent for KYC gate`,
       );
     }
     // Fix-C: compute NGN equivalent using BigInt to avoid float drift.
@@ -1177,8 +1177,7 @@ export class ExecutionService {
     await this.kycGate.assertCanTransact({
       userId,
       fiatAmount: ngnEquivalentStr,
-      // TODO(WN): AssetRegistry.defaultFiat() (Task 9)
-      fiatCurrency: 'NGN',
+      fiatCurrency: baseFiat,
       asset,
     });
 

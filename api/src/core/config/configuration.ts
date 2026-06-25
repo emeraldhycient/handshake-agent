@@ -141,17 +141,19 @@ export interface BeneficiaryConfig {
  */
 export interface ComplianceConfig {
   /**
-   * NGN-equivalent threshold above which a Travel Rule data-capture flag
-   * must be set on a send proposal (FATF Travel Rule / CBN circular).
-   * Expressed in NGN major units (e.g. 1_000_000 = ₦1,000,000).
+   * Travel-Rule data-capture threshold per fiat code, in major units.
+   * Keyed by the fiat currency code returned by AssetRegistry.defaultFiat()
+   * (e.g. { NGN: 1_000_000 } = ₦1,000,000 per FATF Travel Rule / CBN circular).
    *
-   * The full TravelRuleData capture happens at execution (Task N3b); for
-   * proposals this flag triggers a note to the user that additional information
-   * will be required at execution time.
+   * When the crypto-equivalent fiat value of a send proposal reaches or exceeds
+   * the threshold for the base fiat, the proposal sets requiresTravelRule=true.
+   * The full TravelRuleData capture happens at execution (Task N3b).
+   *
+   * Adding a new fiat = add a key here; no code change required.
    *
    * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
    */
-  travelRuleThresholdNgn: number;
+  travelRuleThresholds: Record<string, number>;
 
   /**
    * Denylist of crypto addresses that MockSanctionsScreener flags as
@@ -382,12 +384,12 @@ export default (): AppConfig => ({
     maxDriftBps: 50,
   },
   compliance: {
-    // FATF Travel Rule / CBN circular threshold: ₦1,000,000 equivalent.
-    // Above this NGN value the send proposal sets requiresTravelRule:true.
+    // FATF Travel Rule / CBN circular threshold per fiat code.
+    // Above this fiat-equivalent value the send proposal sets requiresTravelRule:true.
     // Full TravelRuleData capture happens at execution (Task N3b).
     // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
     // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
-    travelRuleThresholdNgn: 1_000_000,
+    travelRuleThresholds: { NGN: 1_000_000 },
     // Empty by default — no addresses flagged. Populate in config to test the
     // blocked path with MockSanctionsScreener (see mock-sanctions.screener.ts).
     sanctionsDenylist: [] as string[],

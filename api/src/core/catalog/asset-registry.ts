@@ -181,6 +181,22 @@ export class AssetRegistry {
   }
 
   /**
+   * Returns the code of the first enabled fiat in the catalog — the base/settlement
+   * fiat used to value crypto-only flows (send/swap) for the KYC + Travel-Rule gates.
+   * @throws {UnsupportedFiatError} when no enabled fiat is registered.
+   */
+  defaultFiat(): string {
+    const code = Object.values(this.catalog.fiats).find((f) => f.enabled)?.code;
+    if (!code) {
+      throw new UnsupportedFiatError(
+        'default',
+        'no enabled fiat registered in the catalog',
+      );
+    }
+    return code;
+  }
+
+  /**
    * Returns `true` if the fiat is registered AND enabled; `false` otherwise.
    */
   isFiatEnabled(code: string): boolean {
