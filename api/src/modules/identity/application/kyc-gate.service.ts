@@ -181,6 +181,7 @@ export class KycGateService {
         Number(fiatAmount),
         tierLimits.perTxFiatMax,
         user.kycTier,
+        fiatCurrency,
       );
     }
 
@@ -204,6 +205,7 @@ export class KycGateService {
         Number(usage.fiatTotal) + Number(fiatAmount),
         tierLimits.dailyFiatMax,
         user.kycTier,
+        fiatCurrency,
       );
     }
 
@@ -213,6 +215,7 @@ export class KycGateService {
         usage.txCount + 1,
         tierLimits.dailyTxCountMax,
         user.kycTier,
+        fiatCurrency,
       );
     }
   }

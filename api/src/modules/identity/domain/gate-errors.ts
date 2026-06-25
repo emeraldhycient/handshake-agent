@@ -50,10 +50,11 @@ export class TierLimitExceededError extends GateError {
     readonly requestedAmount: number,
     readonly limitAmount: number,
     readonly tier: string,
+    readonly fiatCurrency: string,
   ) {
     super(
-      `Transaction blocked: requested amount ${requestedAmount} NGN exceeds ` +
-        `the per-transaction limit of ${limitAmount} NGN for tier ${tier}.`,
+      `Transaction blocked: requested amount ${requestedAmount} ${fiatCurrency} exceeds ` +
+        `the per-transaction limit of ${limitAmount} ${fiatCurrency} for tier ${tier}.`,
     );
   }
 }
@@ -67,11 +68,12 @@ export class VelocityExceededError extends GateError {
     readonly used: number,
     readonly limit: number,
     readonly tier: string,
+    readonly fiatCurrency: string,
   ) {
     super(
       kind === 'fiat'
-        ? `Transaction blocked: daily spend of ${used} NGN would exceed the ` +
-            `daily limit of ${limit} NGN for tier ${tier}.`
+        ? `Transaction blocked: daily spend of ${used} ${fiatCurrency} would exceed the ` +
+            `daily limit of ${limit} ${fiatCurrency} for tier ${tier}.`
         : `Transaction blocked: daily transaction count of ${used} would exceed ` +
             `the daily limit of ${limit} for tier ${tier}.`,
     );

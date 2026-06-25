@@ -260,12 +260,12 @@ describe('KycGateService.assertCanTransact', () => {
   it('all gate errors extend GateError', () => {
     expect(new SimSwapBlockedError()).toBeInstanceOf(GateError);
     expect(new KycNotVerifiedError('status')).toBeInstanceOf(GateError);
-    expect(new TierLimitExceededError(1, 2, 'tier_1')).toBeInstanceOf(
+    expect(new TierLimitExceededError(1, 2, 'tier_1', 'NGN')).toBeInstanceOf(
       GateError,
     );
-    expect(new VelocityExceededError('fiat', 1, 2, 'tier_1')).toBeInstanceOf(
-      GateError,
-    );
+    expect(
+      new VelocityExceededError('fiat', 1, 2, 'tier_1', 'NGN'),
+    ).toBeInstanceOf(GateError);
   });
 
   // ── Order of checks (sim-swap fires before KYC) ───────────────────────────
@@ -368,6 +368,74 @@ describe('KycGateService.assertCanTransact', () => {
         fiatCurrency: 'USD',
       }),
     ).rejects.toThrow(/USD/);
+  });
+
+  // ── Task 12: currency-aware error messages ────────────────────────────────
+
+  it('TierLimitExceededError message names the transaction currency (NGN)', async () => {
+    const svc = makeService(makeUser(), '0', 0);
+    const err = await svc
+      .assertCanTransact({
+        userId: 'user-id-1',
+        fiatAmount: '60000',
+        asset: 'USDT',
+        fiatCurrency: 'NGN',
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TierLimitExceededError);
+    expect(String((err as Error).message)).toContain('NGN');
+  });
+
+  it('VelocityExceededError (fiat) message names the transaction currency (NGN)', async () => {
+    // 195_000 used + 10_000 requested = 205_000 > 200_000 (tier_1 dailyFiatMax)
+    const svc = makeService(makeUser(), '195000', 2);
+    const err = await svc
+      .assertCanTransact({ ...BASE_INPUT, fiatAmount: '10000' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(VelocityExceededError);
+    expect(String((err as Error).message)).toContain('NGN');
+  });
+
+  it('VelocityExceededError (count) message does not require a currency in the message (count errors are currency-neutral)', async () => {
+    // Count errors don't carry a fiat amount in the message — no currency expected.
+    const svc = makeService(makeUser(), '0', 10);
+    const err = await svc
+      .assertCanTransact(BASE_INPUT)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(VelocityExceededError);
+    expect((err as VelocityExceededError).kind).toBe('count');
+  });
+
+  it('TierLimitExceededError preserves numeric payload fields (backward-compat)', async () => {
+    const svc = makeService(makeUser(), '0', 0);
+    const err = await svc
+      .assertCanTransact({
+        userId: 'user-id-1',
+        fiatAmount: '60000',
+        asset: 'USDT',
+        fiatCurrency: 'NGN',
+      })
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: 'TIER_LIMIT_EXCEEDED',
+      requestedAmount: 60_000,
+      limitAmount: 50_000,
+      tier: 'tier_1',
+      fiatCurrency: 'NGN',
+    });
+  });
+
+  it('VelocityExceededError (fiat) preserves numeric payload fields (backward-compat)', async () => {
+    const svc = makeService(makeUser(), '195000', 2);
+    const err = await svc
+      .assertCanTransact({ ...BASE_INPUT, fiatAmount: '10000' })
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: 'VELOCITY_EXCEEDED',
+      kind: 'fiat',
+      tier: 'tier_1',
+      fiatCurrency: 'NGN',
+    });
   });
 });
 
