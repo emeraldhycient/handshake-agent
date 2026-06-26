@@ -1356,4 +1356,55 @@ describe('ProposalService.createSendProposal', () => {
     // 10 × 1600.45 = 16004.5 — exact decimal scaling must produce this, not 16000.
     expect(fiatAmount).toBe('16004.5');
   });
+
+  // ── Fail-closed: 0 / negative baseRate must throw (money-gate bypass guard) ──
+
+  it('throws (fails closed) on a 0 baseRate without calling the KYC gate', async () => {
+    // A misconfigured baseRate of 0 makes the NGN-equivalent 0, which would
+    // silently bypass the KYC / velocity / Travel-Rule gate for any amount.
+    // The guard must fail closed BEFORE the gate is ever called with 0.
+    const kycGate = makeKycGate();
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const configZeroRate = {
+      get: jest.fn((key: string) => {
+        if (key === 'compliance')
+          return { travelRuleThresholds: { NGN: 1_000_000 } };
+        if (key === 'pricing')
+          return { assets: { USDT: { baseRates: { NGN: 0 } } } };
+        return undefined;
+      }),
+    };
+    const svc = makeSendSvc({
+      kycGate,
+      proposalRepo,
+      configService: configZeroRate,
+    });
+
+    await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
+      'missing pricing.assets.USDT.baseRates.NGN',
+    );
+    // The gate must never run with a zeroed amount — the throw precedes it.
+    expect(kycGate.assertCanTransact).not.toHaveBeenCalled();
+    // And no Proposal is persisted (§3.1 — guards before persistence).
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('throws (fails closed) on a negative baseRate without calling the KYC gate', async () => {
+    const kycGate = makeKycGate();
+    const configNegativeRate = {
+      get: jest.fn((key: string) => {
+        if (key === 'compliance')
+          return { travelRuleThresholds: { NGN: 1_000_000 } };
+        if (key === 'pricing')
+          return { assets: { USDT: { baseRates: { NGN: -1600 } } } };
+        return undefined;
+      }),
+    };
+    const svc = makeSendSvc({ kycGate, configService: configNegativeRate });
+
+    await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
+      'missing pricing.assets.USDT.baseRates.NGN',
+    );
+    expect(kycGate.assertCanTransact).not.toHaveBeenCalled();
+  });
 });

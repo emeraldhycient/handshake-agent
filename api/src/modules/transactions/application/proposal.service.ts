@@ -472,7 +472,10 @@ export class ProposalService {
     const baseFiat = this.assetRegistry.defaultFiat();
     const baseRate =
       pricingConfig?.assets?.[intent.asset]?.baseRates?.[baseFiat];
-    if (baseRate === undefined) {
+    // Fail closed on a 0 / negative (or absent) baseRate: a zero rate would zero
+    // the NGN-equivalent and silently bypass the KYC / velocity / Travel-Rule
+    // gate. Harmonized with ExecutionService's `!baseRate || baseRate <= 0` guard.
+    if (!baseRate || baseRate <= 0) {
       throw new Error(
         `ProposalService: missing pricing.assets.${intent.asset}.baseRates.${baseFiat} in config — cannot compute ${baseFiat} value for KYC gate.`,
       );
