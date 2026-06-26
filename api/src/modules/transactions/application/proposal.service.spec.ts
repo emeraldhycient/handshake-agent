@@ -42,7 +42,10 @@ import type {
 } from './ports/proposal.repository.port';
 import type { ILedgerRepository } from './ports/ledger.repository.port';
 import { ProposalService } from './proposal.service';
-import { InsufficientBalanceError } from '../domain/execution-errors';
+import {
+  InsufficientBalanceError,
+  BaseRateMisconfiguredError,
+} from '../domain/execution-errors';
 import {
   BeneficiaryNotFoundError,
   BeneficiaryWrongTypeError,
@@ -1381,7 +1384,7 @@ describe('ProposalService.createSendProposal', () => {
     });
 
     await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
-      'missing pricing.assets.USDT.baseRates.NGN',
+      BaseRateMisconfiguredError,
     );
     // The gate must never run with a zeroed amount — the throw precedes it.
     expect(kycGate.assertCanTransact).not.toHaveBeenCalled();
@@ -1403,7 +1406,7 @@ describe('ProposalService.createSendProposal', () => {
     const svc = makeSendSvc({ kycGate, configService: configNegativeRate });
 
     await expect(svc.createSendProposal(BASE_SEND_INPUT)).rejects.toThrow(
-      'missing pricing.assets.USDT.baseRates.NGN',
+      BaseRateMisconfiguredError,
     );
     expect(kycGate.assertCanTransact).not.toHaveBeenCalled();
   });

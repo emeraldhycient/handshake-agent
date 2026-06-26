@@ -44,6 +44,7 @@ import { QUOTE_REPOSITORY } from './ports/quote.repository.port';
 import type { ILedgerRepository } from './ports/ledger.repository.port';
 import { LEDGER_REPOSITORY } from './ports/ledger.repository.port';
 import { toScaled } from '../domain/ledger';
+import { resolveBaseRate } from './resolve-base-rate';
 
 export interface CreateBuyProposalInput {
   userId: string;
@@ -470,16 +471,10 @@ export class ProposalService {
     // then we convert back to a decimal string for the gate.
     const pricingConfig = this.configService.get<PricingConfig>('pricing');
     const baseFiat = this.assetRegistry.defaultFiat();
-    const baseRate =
-      pricingConfig?.assets?.[intent.asset]?.baseRates?.[baseFiat];
-    // Fail closed on a 0 / negative (or absent) baseRate: a zero rate would zero
-    // the NGN-equivalent and silently bypass the KYC / velocity / Travel-Rule
-    // gate. Harmonized with ExecutionService's `!baseRate || baseRate <= 0` guard.
-    if (!baseRate || baseRate <= 0) {
-      throw new Error(
-        `ProposalService: missing pricing.assets.${intent.asset}.baseRates.${baseFiat} in config — cannot compute ${baseFiat} value for KYC gate.`,
-      );
-    }
+    // Fail closed on a missing / 0 / negative baseRate via the shared guard: a
+    // zero rate would zero the fiat-equivalent and silently bypass the KYC /
+    // velocity / Travel-Rule gate (§3.1 / §3.3). Same guard as ExecutionService.
+    const baseRate = resolveBaseRate(pricingConfig, intent.asset, baseFiat);
     // Compute NGN equivalent: cryptoAmount × baseRate, BigInt-exact (Fix-C).
     // baseRate is an integer NGN-per-USDT rate from config (e.g. 1600).
     // toScaled(cryptoAmount) returns the 10^18-scaled representation of cryptoAmount.

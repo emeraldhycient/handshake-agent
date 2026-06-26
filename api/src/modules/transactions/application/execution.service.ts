@@ -99,6 +99,7 @@ import {
   InsufficientBalanceError,
 } from '../domain/execution-errors';
 import { toScaled } from '../domain/ledger';
+import { resolveBaseRate } from './resolve-base-rate';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1142,17 +1143,13 @@ export class ExecutionService {
 
     // ── Step 2: KYC gate (server-side, always) ──────────────────────────────
     // No quote on send — use cryptoAmount × baseRate for NGN-equivalent.
-    // IMPORTANT 3: baseRate must be > 0. A zero baseRate causes ngnEquivalent=0
-    // which silently bypasses the KYC tier gate for any amount. Fail loudly on
-    // misconfiguration rather than allowing a silent gate bypass.
+    // IMPORTANT 3: baseRate must be > 0. A zero/negative baseRate causes
+    // ngnEquivalent=0 which silently bypasses the KYC tier gate for any amount.
+    // resolveBaseRate fails closed on misconfiguration — the SAME shared guard
+    // used by ProposalService so the money gate cannot be bypassed either way.
     const pricingConfig = this.config.get<PricingConfig>('pricing');
     const baseFiat = this.assetRegistry.defaultFiat();
-    const baseRate = pricingConfig?.assets?.[asset]?.baseRates?.[baseFiat];
-    if (!baseRate || baseRate <= 0) {
-      throw new InternalServerErrorException(
-        `pricing config missing or invalid baseRates.${baseFiat} for asset '${asset}' — cannot compute ${baseFiat}-equivalent for KYC gate`,
-      );
-    }
+    const baseRate = resolveBaseRate(pricingConfig, asset, baseFiat);
     // Fix-C: compute NGN equivalent using BigInt to avoid float drift.
     // baseRate is an integer NGN-per-USDT config value (e.g. 1600).
     // toScaled(cryptoAmount) returns 10^18-scaled USDT; multiplying by an integer

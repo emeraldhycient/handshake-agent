@@ -84,6 +84,26 @@ export class InsufficientBalanceError extends Error {
 }
 
 /**
+ * Thrown when the per-fiat baseRate resolved from pricing config is missing,
+ * zero, or negative. A 0/negative rate would zero the fiat-equivalent and
+ * silently bypass the KYC / velocity / Travel-Rule money gate, so both the
+ * proposal builder and the execution engine fail closed on misconfiguration
+ * rather than letting an ungated amount through (CLAUDE.md §3.1 / §3.3).
+ * Code: ENGINE_BASE_RATE_MISCONFIGURED
+ */
+export class BaseRateMisconfiguredError extends Error {
+  readonly code = 'ENGINE_BASE_RATE_MISCONFIGURED' as const;
+
+  constructor(asset: string, fiat: string) {
+    super(
+      `pricing config has missing or invalid baseRates.${fiat} for asset '${asset}' — cannot compute ${fiat}-equivalent for the KYC gate`,
+    );
+    this.name = 'BaseRateMisconfiguredError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
  * Thrown by the settlement kernel when RECEIPT_SIGNING_KEY is empty.
  * The kernel is fail-closed: no unsigned receipt is ever written.
  * Code: RECEIPT_NOT_SIGNABLE

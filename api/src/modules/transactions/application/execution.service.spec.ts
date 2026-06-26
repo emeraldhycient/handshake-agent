@@ -51,6 +51,7 @@ import {
   QuoteDriftError,
   SettlementInvalidStatusError,
   InsufficientBalanceError,
+  BaseRateMisconfiguredError,
 } from '../domain/execution-errors';
 import { DirectiveReplayError } from '../domain/directive-errors';
 import { PinInvalidError } from '../../../core/auth/domain/pin-errors';
@@ -2978,6 +2979,10 @@ describe('ExecutionService.executeSend', () => {
       undefined,
       STUB_SEND_TXN,
     );
+    // Hold the auth mocks so we can assert the config error fails closed at
+    // Step 2 — BEFORE any single-use directive is consumed or PIN is attempted.
+    const directiveService = makeDirectiveService(STUB_SEND_GRANT);
+    const pinService = makePinService();
     const svc = new ExecutionService(
       makeProposalRepo(STUB_SEND_PROPOSAL),
       makeQuoteRepo(null),
@@ -2986,8 +2991,8 @@ describe('ExecutionService.executeSend', () => {
       defaultSettlementRepo,
       makeQuotesService() as unknown as QuotesService,
       makeKycGate() as unknown as KycGateService,
-      makeDirectiveService(STUB_SEND_GRANT) as unknown as DirectiveService,
-      makePinService() as unknown as PinService,
+      directiveService as unknown as DirectiveService,
+      pinService as unknown as PinService,
       makeWalletServiceWithWithdraw() as unknown as WalletService,
       makePaymentProvider() as unknown as IPaymentProvider,
       zeroRateConfig as never,
@@ -3001,11 +3006,18 @@ describe('ExecutionService.executeSend', () => {
       makeSessionService() as never,
     );
 
-    // Should throw a config error — must NOT silently proceed with fiatAmount=0.
-    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toThrow(/baseRate/i);
+    // Should throw the shared fail-closed config error — must NOT silently
+    // proceed with fiatAmount=0 (same BaseRateMisconfiguredError as ProposalService).
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toThrow(
+      BaseRateMisconfiguredError,
+    );
     expect(
       defaultSettlementRepo.createSendSettlingWithReserveAtomic,
     ).not.toHaveBeenCalled();
+    // A pure config error must not burn the single-use step-up directive or a
+    // PIN attempt — the guard precedes both (gauntlet Steps 6 and 7).
+    expect(directiveService.consume).not.toHaveBeenCalled();
+    expect(pinService.verifyPin).not.toHaveBeenCalled();
   });
 
   // ── Fix-2: exact rate scaling — fractional baseRate handled exactly ────────
