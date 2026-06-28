@@ -38,7 +38,7 @@ export type LoginRequestResponse = z.infer<typeof LoginRequestResponseSchema>;
 export const LoginVerifyRequestSchema = z.object({
   email: z.string().email().max(254),
   otp: z.string().min(4).max(10),
-  deviceFingerprint: z.string().min(1).max(200),
+  deviceFingerprint: z.string().min(8).max(200),
 });
 export type LoginVerifyRequest = z.infer<typeof LoginVerifyRequestSchema>;
 

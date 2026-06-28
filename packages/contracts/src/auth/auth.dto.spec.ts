@@ -37,6 +37,9 @@ describe("auth contracts", () => {
 
   it("login request requires an email", () => {
     expect(() => LoginRequestSchema.parse({})).toThrow();
+    expect(LoginRequestSchema.parse({ email: "a@b.com" }).email).toBe(
+      "a@b.com",
+    );
   });
 
   it("login verify requires email, otp, deviceFingerprint", () => {
@@ -46,9 +49,10 @@ describe("auth contracts", () => {
     const ok = LoginVerifyRequestSchema.parse({
       email: "a@b.com",
       otp: "123456",
-      deviceFingerprint: "fp-1",
+      deviceFingerprint: "fp-123456",
     });
     expect(ok.otp).toBe("123456");
+    expect(ok.deviceFingerprint).toBe("fp-123456");
   });
 
   it("login verify response carries tokens and a user projection", () => {
