@@ -1,5 +1,6 @@
 /**
- * KYC API client — the only place that calls POST /kyc/complete.
+ * KYC API client — calls POST /kyc/complete (handoff-token flow) and
+ * POST /kyc/submit (session-auth flow).
  *
  * Parses the request body through the contracts Zod schema before sending,
  * and parses the response after. The axios instance's request interceptor
@@ -8,8 +9,10 @@
 import {
   KycCompleteRequestSchema,
   KycCompleteResponseSchema,
+  KycSubmitRequestSchema,
   type KycCompleteRequest,
   type KycCompleteResponse,
+  type KycSubmitRequest,
 } from "@handshake-agent/contracts/dto"
 import { api } from "./client"
 
@@ -19,5 +22,14 @@ export async function submitKycComplete(
   // Parse body through the schema (UX gate — server is the security gate per §3.3)
   const validated = KycCompleteRequestSchema.parse(body)
   const { data } = await api.post("/kyc/complete", validated)
+  return KycCompleteResponseSchema.parse(data)
+}
+
+export async function submitKycSession(
+  body: KycSubmitRequest
+): Promise<KycCompleteResponse> {
+  // Parse body through the schema (UX gate — server is the security gate per §3.3)
+  const validated = KycSubmitRequestSchema.parse(body)
+  const { data } = await api.post("/kyc/submit", validated)
   return KycCompleteResponseSchema.parse(data)
 }

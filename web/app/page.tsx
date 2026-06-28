@@ -1,5 +1,6 @@
 import { AdaptiveExperience } from "@/components/shared/adaptive-experience"
 import { RequireAuth } from "@/components/auth/RequireAuth"
+import { RequireVerified } from "@/components/auth/RequireVerified"
 
 /**
  * `/` root route — auto-selects the right surface by viewport.
@@ -7,12 +8,15 @@ import { RequireAuth } from "@/components/auth/RequireAuth"
  * At lg+ → desktop dashboard.
  * No manual choice needed.
  *
- * Gated: unauthenticated users are redirected to /login by RequireAuth.
+ * Gated: unauthenticated users → /login (RequireAuth).
+ *        authenticated but unverified → /onboarding (RequireVerified).
  */
 export default function Home() {
   return (
     <RequireAuth>
-      <AdaptiveExperience />
+      <RequireVerified>
+        <AdaptiveExperience />
+      </RequireVerified>
     </RequireAuth>
   )
 }

@@ -94,12 +94,17 @@ export function LoginForm({ className }: LoginFormProps) {
 
   async function onStep2Submit(values: OtpForm) {
     try {
-      await loginVerify.mutateAsync({
+      const result = await loginVerify.mutateAsync({
         email,
         otp: values.otp,
         deviceFingerprint: getDeviceFingerprint(),
       })
-      router.push("/")
+      // Route unverified users to onboarding; verified users go to the app.
+      if (result.user?.kycStatus === "verified") {
+        router.push("/")
+      } else {
+        router.push("/onboarding")
+      }
     } catch {
       // Error surfaces via loginVerify.error — rendered below.
     }

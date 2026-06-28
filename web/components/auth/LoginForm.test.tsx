@@ -185,7 +185,7 @@ describe("LoginForm", () => {
     })
   })
 
-  it("step 2: success navigates to '/'", async () => {
+  it("step 2: success navigates to '/' when user is already verified", async () => {
     const user = userEvent.setup()
     mockLoginRequest.mockResolvedValueOnce({ status: "otp_sent" })
     mockLoginVerify.mockResolvedValueOnce({
@@ -194,9 +194,9 @@ describe("LoginForm", () => {
       user: {
         userId: "11111111-1111-1111-1111-111111111111",
         email: VALID_EMAIL,
-        kycStatus: "none",
-        kycTier: "0",
-        hasPin: false,
+        kycStatus: "verified",
+        kycTier: "1",
+        hasPin: true,
       },
     })
     renderForm()
