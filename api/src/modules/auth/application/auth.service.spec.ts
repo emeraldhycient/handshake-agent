@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 
 import {
   InvalidOtpError,
+  InvalidRefreshTokenError,
   InvalidVerificationTokenError,
 } from '../domain/auth-errors';
 import { AuthService } from './auth.service';
@@ -52,7 +53,16 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
     >(() => Promise.resolve(null)),
     markEmailVerified: jest.fn(() => Promise.resolve(undefined)),
     bindDevice: jest.fn(() => Promise.resolve({ deviceId: 'd1' })),
-    loadMe: jest.fn(() =>
+    loadMe: jest.fn<
+      Promise<{
+        userId: string;
+        email: string;
+        kycStatus: string;
+        kycTier: string;
+        hasPin: boolean;
+      } | null>,
+      [string]
+    >(() =>
       Promise.resolve({
         userId: 'u1',
         email: 'a@b.com',
@@ -64,8 +74,14 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
   };
   const sessionRepo = {
     create: jest.fn(() => Promise.resolve({ sessionId: 's1' })),
-    findActiveByAccessHash: jest.fn(() => Promise.resolve(null)),
-    findActiveByRefreshHash: jest.fn(() => Promise.resolve(null)),
+    findActiveByAccessHash: jest.fn<
+      Promise<{ id: string; userId: string; deviceId: string } | null>,
+      [string, Date]
+    >(() => Promise.resolve(null)),
+    findActiveByRefreshHash: jest.fn<
+      Promise<{ id: string; userId: string; deviceId: string } | null>,
+      [string, Date]
+    >(() => Promise.resolve(null)),
     rotate: jest.fn(() => Promise.resolve(undefined)),
     revoke: jest.fn(() => Promise.resolve(undefined)),
   };
@@ -291,5 +307,68 @@ describe('AuthService.loginVerify', () => {
         deviceFingerprint: 'fp',
       }),
     ).rejects.toBeInstanceOf(InvalidOtpError);
+  });
+});
+
+describe('AuthService.refresh', () => {
+  it('rotates a valid refresh token and returns a new pair', async () => {
+    const { service, sessionRepo, tokenService } = makeDeps();
+    sessionRepo.findActiveByRefreshHash.mockResolvedValueOnce({
+      id: 's1',
+      userId: 'u1',
+      deviceId: 'd1',
+    });
+    tokenService.signAccessToken.mockReturnValueOnce('new.access');
+    tokenService.generateOpaqueToken.mockReturnValueOnce('new.refresh');
+    const res = await service.refresh({ refreshToken: 'old.refresh' });
+    expect(sessionRepo.findActiveByRefreshHash).toHaveBeenCalledWith(
+      'hash(old.refresh)',
+      expect.any(Date),
+    );
+    expect(sessionRepo.rotate).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        accessTokenHash: 'hash(new.access)',
+        refreshTokenHash: 'hash(new.refresh)',
+      }),
+    );
+    expect(res).toEqual({
+      accessToken: 'new.access',
+      refreshToken: 'new.refresh',
+    });
+  });
+
+  it('throws InvalidRefreshTokenError when the token is unknown', async () => {
+    const { service } = makeDeps();
+    await expect(
+      service.refresh({ refreshToken: 'nope' }),
+    ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
+  });
+});
+
+describe('AuthService.logout + me', () => {
+  it('logout revokes the session', async () => {
+    const { service, sessionRepo } = makeDeps();
+    await service.logout('s1');
+    expect(sessionRepo.revoke).toHaveBeenCalledWith('s1', expect.any(Date));
+  });
+
+  it('me returns the projection', async () => {
+    const { service } = makeDeps();
+    expect(await service.me('u1')).toEqual({
+      userId: 'u1',
+      email: 'a@b.com',
+      kycStatus: 'not_started',
+      kycTier: 'unverified',
+      hasPin: false,
+    });
+  });
+
+  it('me throws when the user is missing', async () => {
+    const { service, userRepo } = makeDeps();
+    userRepo.loadMe.mockResolvedValueOnce(null);
+    await expect(service.me('ghost')).rejects.toBeInstanceOf(
+      InvalidRefreshTokenError,
+    );
   });
 });

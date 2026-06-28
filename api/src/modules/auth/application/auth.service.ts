@@ -9,6 +9,8 @@ import type {
   LoginVerifyRequest,
   LoginVerifyResponse,
   MeResponse,
+  RefreshRequest,
+  RefreshResponse,
   SignupRequest,
   SignupResponse,
   VerifyEmailRequest,
@@ -17,6 +19,7 @@ import type {
 
 import {
   InvalidOtpError,
+  InvalidRefreshTokenError,
   InvalidVerificationTokenError,
 } from '../domain/auth-errors';
 import {
@@ -163,6 +166,34 @@ export class AuthService {
       refreshToken,
       user: me as MeResponse,
     };
+  }
+
+  async refresh(input: RefreshRequest): Promise<RefreshResponse> {
+    const now = new Date();
+    const session = await this.sessions.findActiveByRefreshHash(
+      this.tokens.hash(input.refreshToken),
+      now,
+    );
+    if (session === null) throw new InvalidRefreshTokenError();
+
+    const accessToken = this.tokens.signAccessToken(session.userId);
+    const refreshToken = this.tokens.generateOpaqueToken();
+    await this.sessions.rotate(session.id, {
+      accessTokenHash: this.tokens.hash(accessToken),
+      refreshTokenHash: this.tokens.hash(refreshToken),
+      now,
+    });
+    return { accessToken, refreshToken };
+  }
+
+  async logout(sessionId: string): Promise<void> {
+    await this.sessions.revoke(sessionId, new Date());
+  }
+
+  async me(userId: string): Promise<MeResponse> {
+    const me = await this.users.loadMe(userId);
+    if (me === null) throw new InvalidRefreshTokenError();
+    return me;
   }
 
   private constantTimeEquals(a: string, b: string): boolean {
