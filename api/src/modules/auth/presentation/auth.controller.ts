@@ -96,7 +96,7 @@ export class AuthController {
         err instanceof InvalidRefreshTokenError
       ) {
         // Generic: never reveal which factor failed.
-        throw new UnauthorizedException(err.message);
+        throw new UnauthorizedException('Authentication failed');
       }
       if (err instanceof TokenSigningDisabledError) {
         throw new BadRequestException('Auth is not configured');
