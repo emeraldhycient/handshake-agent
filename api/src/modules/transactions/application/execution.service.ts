@@ -838,6 +838,9 @@ export class ExecutionService {
             asset: storedQuote.asset,
             cryptoAmount: storedQuote.cryptoAmount,
             netFiatAmount: storedQuote.fiatAmount,
+            // Mirrors executeBuy: persist fiatCurrency so settleSellPayout can thread
+            // it into buildSellFinalizeEntries (read fail-closed, no default at finalize).
+            fiatCurrency: storedQuote.fiatCurrency,
             beneficiaryId,
             walletId: wallet.id,
             // providerRef is written atomically here because we pass idempotencyKey
