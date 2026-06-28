@@ -1,14 +1,24 @@
+import { timingSafeEqual } from 'node:crypto';
+
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import type {
+  LoginRequest,
+  LoginRequestResponse,
+  LoginVerifyRequest,
+  LoginVerifyResponse,
+  MeResponse,
   SignupRequest,
   SignupResponse,
   VerifyEmailRequest,
   VerifyEmailResponse,
 } from '@handshake-agent/contracts';
 
-import { InvalidVerificationTokenError } from '../domain/auth-errors';
+import {
+  InvalidOtpError,
+  InvalidVerificationTokenError,
+} from '../domain/auth-errors';
 import {
   AUTH_CHALLENGE_REPOSITORY,
   type IAuthChallengeRepository,
@@ -78,5 +88,85 @@ export class AuthService {
     await this.challenges.consume(challenge.id, now);
     await this.users.markEmailVerified(challenge.userId, now);
     return { verified: true };
+  }
+
+  async loginRequest(input: LoginRequest): Promise<LoginRequestResponse> {
+    const user = await this.users.findByEmail(input.email);
+    // No enumeration: always return otp_sent; only actually send to verified users.
+    if (user !== null && user.emailVerifiedAt !== null) {
+      const length = this.config.get<number>('auth.otp.length') ?? 6;
+      const ttl = this.config.get<number>('auth.otp.ttlSeconds') ?? 300;
+      const otp = this.tokens.generateNumericOtp(length);
+      await this.challenges.upsert({
+        userId: user.id,
+        type: 'otp_email',
+        challengeHash: this.tokens.hash(otp),
+        expiresAt: new Date(Date.now() + ttl * 1000),
+      });
+      await this.email.sendLoginOtp(user.email, otp);
+      if (this.devExpose()) return { status: 'otp_sent', devOtp: otp };
+    }
+    return { status: 'otp_sent' };
+  }
+
+  async loginVerify(
+    input: LoginVerifyRequest & { userAgent?: string; ip?: string },
+  ): Promise<LoginVerifyResponse> {
+    const now = new Date();
+    const user = await this.users.findByEmail(input.email);
+    if (user === null || user.emailVerifiedAt === null)
+      throw new InvalidOtpError();
+
+    const challenge = await this.challenges.findActiveByUserAndType(
+      user.id,
+      'otp_email',
+      now,
+    );
+    const maxAttempts = this.config.get<number>('auth.otp.maxAttempts') ?? 5;
+    if (challenge === null || challenge.attemptCount >= maxAttempts) {
+      throw new InvalidOtpError();
+    }
+
+    if (
+      !this.constantTimeEquals(
+        this.tokens.hash(input.otp),
+        challenge.challengeHash,
+      )
+    ) {
+      await this.challenges.incrementAttempt(challenge.id);
+      throw new InvalidOtpError();
+    }
+
+    await this.challenges.consume(challenge.id, now);
+    const { deviceId } = await this.users.bindDevice({
+      userId: user.id,
+      fingerprint: input.deviceFingerprint,
+      userAgent: input.userAgent,
+      ip: input.ip,
+    });
+
+    const accessToken = this.tokens.signAccessToken(user.id);
+    const refreshToken = this.tokens.generateOpaqueToken();
+    const refreshTtl =
+      this.config.get<number>('auth.jwt.refreshTtlSeconds') ?? 2592000;
+    await this.sessions.create({
+      userId: user.id,
+      deviceId,
+      accessTokenHash: this.tokens.hash(accessToken),
+      refreshTokenHash: this.tokens.hash(refreshToken),
+      expiresAt: new Date(Date.now() + refreshTtl * 1000),
+    });
+
+    const me = await this.users.loadMe(user.id);
+    return {
+      accessToken,
+      refreshToken,
+      user: me as MeResponse,
+    };
+  }
+
+  private constantTimeEquals(a: string, b: string): boolean {
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(Buffer.from(a), Buffer.from(b));
   }
 }
