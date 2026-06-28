@@ -1,5 +1,3 @@
-"use client"
-
 import { DashboardExperience } from "@/components/desktop/dashboard-experience"
 import { RequireAuth } from "@/components/auth/RequireAuth"
 

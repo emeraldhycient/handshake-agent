@@ -220,10 +220,8 @@ export function LoginForm({ className }: LoginFormProps) {
       )}
 
       {devOtp && (
-        <div className="border-warning bg-warning/10 rounded-md border px-3 py-2 text-sm">
-          <span className="text-warning-foreground font-semibold">
-            Dev OTP:{" "}
-          </span>
+        <div className="rounded-md border border-warn bg-warn/10 px-3 py-2 text-sm">
+          <span className="font-semibold text-warn-foreground">Dev OTP: </span>
           <span className="font-mono">{devOtp}</span>
         </div>
       )}

@@ -65,8 +65,8 @@ export function SignupForm({ className }: SignupFormProps) {
         </p>
 
         {devToken && (
-          <div className="border-warning bg-warning/10 mt-4 w-full rounded-lg border-2 px-4 py-3 text-left">
-            <p className="text-warning-foreground mb-2 text-xs font-semibold tracking-wide uppercase">
+          <div className="mt-4 w-full rounded-lg border-2 border-warn bg-warn/10 px-4 py-3 text-left">
+            <p className="mb-2 text-xs font-semibold tracking-wide text-warn-foreground uppercase">
               Dev only
             </p>
             <Link
