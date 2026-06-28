@@ -1,0 +1,11 @@
+{
+  "//": "Dev-only: run the API live via ts-node. The source-only @handshake-agent/contracts package is type:module, but the API compiles to CommonJS; force the contracts .ts files to CJS for the ts-node runtime so require() works. Not used by build/typecheck/test.",
+  "extends": "./tsconfig.json",
+  "ts-node": {
+    "transpileOnly": true,
+    "files": true,
+    "moduleTypes": {
+      "../packages/contracts/**/*.ts": "cjs"
+    }
+  }
+}

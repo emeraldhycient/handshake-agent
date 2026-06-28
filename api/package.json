@@ -12,6 +12,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "pnpm build && node dist/api/src/main",
     "start:dev": "nest start --watch",
+    "dev": "ts-node --project tsconfig.dev.json -r tsconfig-paths/register src/main.ts",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/api/src/main",
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",
