@@ -22,6 +22,7 @@ import { ComplianceModule } from './modules/compliance/compliance.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { PublicConfigModule } from './modules/config/config.module';
 import { JobsModule } from './core/jobs/jobs.module';
+import { WebAuthModule } from './modules/auth/auth.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { JobsModule } from './core/jobs/jobs.module';
     CatalogModule,
     AgentModule,
     IdentityModule,
+    WebAuthModule,
     QuotesModule,
     TransactionsModule,
     ConversationsModule,
