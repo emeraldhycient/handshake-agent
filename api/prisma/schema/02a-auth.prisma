@@ -1,0 +1,35 @@
+// =============================================================================
+// Web-auth challenges (AUTH). Single-use, hashed OTP / email-verification codes
+// with TTL + attempt limits. Codes are NEVER stored in plaintext (root §3.5).
+// One active challenge per (userId, type); a re-issue overwrites the prior row.
+// =============================================================================
+
+/// A pending auth challenge (login OTP or email-verification token) for a user.
+model AuthChallenge {
+  id            String            @id @default(uuid(7)) @db.Uuid
+  userId        String            @db.Uuid
+  type          AuthChallengeType
+  /// SHA-256 hash of the OTP/token — never plaintext.
+  challengeHash String
+  /// Incremented on each failed verify; at maxAttempts the challenge is dead.
+  attemptCount  Int               @default(0)
+  issuedAt      DateTime          @default(now()) @db.Timestamptz
+  expiresAt     DateTime          @db.Timestamptz
+  /// Set when successfully consumed; a consumed challenge cannot be reused.
+  verifiedAt    DateTime?         @db.Timestamptz
+  createdAt     DateTime          @default(now()) @db.Timestamptz
+  updatedAt     DateTime          @updatedAt @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type])
+  @@index([expiresAt])
+  @@map("auth_challenges")
+}
+
+enum AuthChallengeType {
+  email_verification
+  otp_email
+
+  @@map("auth_challenge_type")
+}
