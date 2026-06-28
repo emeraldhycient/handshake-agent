@@ -33,7 +33,13 @@ import { WebAuthModule } from './modules/auth/auth.module';
     }),
     // ThrottlerModule registered globally so ThrottlerGuard resolves in any module
     // (e.g. KycController in IdentityModule). v6-style: named throttlers, ttl in ms.
-    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 60 }]),
+    // 'auth' throttler: tighter window for sensitive auth endpoints (signup,
+    // verify-email, login/request, login/verify). Limit=30 comfortably exceeds
+    // the auth e2e's ~12 auth-route calls per suite run (one IP, one instance).
+    ThrottlerModule.forRoot([
+      { name: 'default', ttl: 60_000, limit: 60 },
+      { name: 'auth', ttl: 60_000, limit: 30 },
+    ]),
     // ScheduleModule enables @Cron / @Interval decorators in provider classes.
     // Registered globally so any module's service can use @Cron without re-importing.
     ScheduleModule.forRoot(),

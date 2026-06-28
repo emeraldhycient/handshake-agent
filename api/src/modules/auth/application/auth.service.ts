@@ -40,6 +40,23 @@ import {
 } from './ports/email-provider.port';
 import { TokenService } from './token.service';
 
+/**
+ * Dummy hash used as the comparison target when loginVerify runs on an
+ * unknown/unverified user path. It ensures every code path performs an
+ * identical constantTimeEquals call so latency does not reveal whether an
+ * email is registered or verified (timing/enumeration oracle defence).
+ * Value is a fixed 64-char lowercase hex string (SHA-256 output length).
+ */
+const DUMMY_CHALLENGE_HASH =
+  '0000000000000000000000000000000000000000000000000000000000000000' as const;
+
+/**
+ * Throwaway UUID used as the userId argument when performing a dummy DB lookup
+ * on the unknown-user path of loginVerify. The result is always null and is
+ * discarded; the call exists solely to equalise DB round-trip latency.
+ */
+const DUMMY_USER_ID = '00000000-0000-0000-0000-000000000000' as const;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -117,25 +134,35 @@ export class AuthService {
   ): Promise<LoginVerifyResponse> {
     const now = new Date();
     const user = await this.users.findByEmail(input.email);
-    if (user === null || user.emailVerifiedAt === null)
-      throw new InvalidOtpError();
+
+    // Determine whether this is a valid, verified user. For unknown/unverified
+    // users we still perform a challenge lookup and a constant-time compare so
+    // that response latency does not leak whether the email is registered or
+    // verified (timing oracle defence).
+    const isRealUser = user !== null && user.emailVerifiedAt !== null;
+    const lookupUserId = isRealUser ? user.id : DUMMY_USER_ID;
 
     const challenge = await this.challenges.findActiveByUserAndType(
-      user.id,
+      lookupUserId,
       'otp_email',
       now,
     );
+
     const maxAttempts = this.config.get<number>('auth.otp.maxAttempts') ?? 5;
+    const storedHash = challenge?.challengeHash ?? DUMMY_CHALLENGE_HASH;
+    const otpMatches = this.constantTimeEquals(
+      this.tokens.hash(input.otp),
+      storedHash,
+    );
+
+    // All rejection conditions: unknown/unverified user, no active challenge,
+    // exhausted attempts, or wrong code. We gate the incrementAttempt call
+    // inside the real-user + real-challenge + wrong-code branch only.
+    if (!isRealUser) throw new InvalidOtpError();
     if (challenge === null || challenge.attemptCount >= maxAttempts) {
       throw new InvalidOtpError();
     }
-
-    if (
-      !this.constantTimeEquals(
-        this.tokens.hash(input.otp),
-        challenge.challengeHash,
-      )
-    ) {
+    if (!otpMatches) {
       await this.challenges.incrementAttempt(challenge.id);
       throw new InvalidOtpError();
     }

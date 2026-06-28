@@ -52,25 +52,93 @@ describe('AuthChallengePrismaRepository (integration, Testcontainers Postgres)',
     ).toBeNull();
   });
 
-  it('upsert replaces the prior active challenge for the same (user,type)', async () => {
+  it('upsert replaces the prior active otp_email challenge hash but PRESERVES attemptCount', async () => {
+    // Security invariant: re-issuing a login OTP must not reset the guess
+    // counter — otherwise repeated login/request calls each grant a fresh
+    // 5-attempt window, bypassing the brute-force guard.
     const userId = await seedUser();
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 60_000);
+
+    // First issue
     await repo.upsert({
       userId,
       type: 'otp_email',
       challengeHash: 'old',
       expiresAt,
     });
+
+    // Simulate two wrong guesses (bumps counter to 2)
+    const first = await repo.findActiveByUserAndType(userId, 'otp_email', now);
+    await repo.incrementAttempt(first!.id);
+    await repo.incrementAttempt(first!.id);
+    const afterGuesses = await repo.findActiveByUserAndType(
+      userId,
+      'otp_email',
+      now,
+    );
+    expect(afterGuesses?.attemptCount).toBe(2);
+
+    // Re-issue (user requests a new OTP)
     await repo.upsert({
       userId,
       type: 'otp_email',
       challengeHash: 'new',
       expiresAt,
     });
-    const byUser = await repo.findActiveByUserAndType(userId, 'otp_email', now);
-    expect(byUser?.challengeHash).toBe('new');
-    expect(byUser?.attemptCount).toBe(0);
+
+    const reissued = await repo.findActiveByUserAndType(
+      userId,
+      'otp_email',
+      now,
+    );
+    // New hash is active
+    expect(reissued?.challengeHash).toBe('new');
+    // Guess budget carries over — NOT reset to 0
+    expect(reissued?.attemptCount).toBe(2);
+  });
+
+  it('upsert for email_verification resets attemptCount to 0 on re-issue', async () => {
+    // email_verification tokens are opaque + long-lived (not short numeric OTPs),
+    // so resetting the counter on re-issue is safe and expected.
+    const userId = await seedUser();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 86_400_000);
+
+    await repo.upsert({
+      userId,
+      type: 'email_verification',
+      challengeHash: 'h-ev-old',
+      expiresAt,
+    });
+    const first = await repo.findActiveByHashAndType(
+      'h-ev-old',
+      'email_verification',
+      now,
+    );
+    // Bump counter to confirm it exists
+    await repo.incrementAttempt(first!.id);
+
+    // Re-issue
+    await repo.upsert({
+      userId,
+      type: 'email_verification',
+      challengeHash: 'h-ev-new',
+      expiresAt,
+    });
+    const reissued = await repo.findActiveByHashAndType(
+      'h-ev-new',
+      'email_verification',
+      now,
+    );
+    expect(reissued).not.toBeNull();
+    // Counter was reset (email_verification policy)
+    const full = await repo.findActiveByUserAndType(
+      userId,
+      'email_verification',
+      now,
+    );
+    expect(full?.attemptCount).toBe(0);
   });
 
   it('expired challenges are not returned', async () => {

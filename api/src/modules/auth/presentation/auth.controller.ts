@@ -9,7 +9,7 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 
 import type {
   LoginRequestResponse,
@@ -44,24 +44,28 @@ export class AuthController {
 
   @Post('signup')
   @HttpCode(HttpStatus.ACCEPTED)
+  @Throttle({ auth: { limit: 30, ttl: 60_000 } })
   async signup(@Body() dto: SignupDto): Promise<SignupResponse> {
     return this.guard(() => this.auth.signup(dto));
   }
 
   @Post('verify-email')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ auth: { limit: 30, ttl: 60_000 } })
   async verifyEmail(@Body() dto: VerifyEmailDto): Promise<VerifyEmailResponse> {
     return this.guard(() => this.auth.verifyEmail(dto));
   }
 
   @Post('login/request')
   @HttpCode(HttpStatus.ACCEPTED)
+  @Throttle({ auth: { limit: 30, ttl: 60_000 } })
   async loginRequest(@Body() dto: LoginDto): Promise<LoginRequestResponse> {
     return this.guard(() => this.auth.loginRequest(dto));
   }
 
   @Post('login/verify')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ auth: { limit: 30, ttl: 60_000 } })
   async loginVerify(@Body() dto: LoginVerifyDto): Promise<LoginVerifyResponse> {
     return this.guard(() => this.auth.loginVerify(dto));
   }

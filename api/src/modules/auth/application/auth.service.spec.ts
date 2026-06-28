@@ -297,16 +297,45 @@ describe('AuthService.loginVerify', () => {
     expect(challengeRepo.incrementAttempt).not.toHaveBeenCalled();
   });
 
-  it('throws InvalidOtpError when no challenge or user is unverified', async () => {
-    const { service, userRepo } = makeDeps();
+  it('throws InvalidOtpError for an unknown user — and still performs a challenge lookup + constant-time compare (timing oracle defence)', async () => {
+    // Structural assertion: even when findByEmail returns null the service must
+    // call findActiveByUserAndType (with the dummy UUID) so that DB latency is
+    // not meaningfully different from the real-user path.
+    const { service, userRepo, challengeRepo } = makeDeps();
     userRepo.findByEmail.mockResolvedValueOnce(null);
     await expect(
       service.loginVerify({
-        email: 'x@b.com',
-        otp: '1',
+        email: 'ghost@b.com',
+        otp: '123456',
         deviceFingerprint: 'fp',
       }),
     ).rejects.toBeInstanceOf(InvalidOtpError);
+    // The dummy lookup must have fired
+    expect(challengeRepo.findActiveByUserAndType).toHaveBeenCalledTimes(1);
+    // incrementAttempt must NOT be called on unknown-user paths
+    expect(challengeRepo.incrementAttempt).not.toHaveBeenCalled();
+  });
+
+  it('throws InvalidOtpError for an unverified user — and still performs a challenge lookup + constant-time compare (timing oracle defence)', async () => {
+    const { service, userRepo, challengeRepo } = makeDeps();
+    userRepo.findByEmail.mockResolvedValueOnce({
+      id: 'u-unverified',
+      email: 'unverified@b.com',
+      emailVerifiedAt: null, // not verified
+      kycStatus: 'not_started',
+      kycTier: 'unverified',
+      pinHash: '',
+    });
+    await expect(
+      service.loginVerify({
+        email: 'unverified@b.com',
+        otp: '123456',
+        deviceFingerprint: 'fp',
+      }),
+    ).rejects.toBeInstanceOf(InvalidOtpError);
+    // The dummy lookup must have fired (unverified user → dummy UUID path)
+    expect(challengeRepo.findActiveByUserAndType).toHaveBeenCalledTimes(1);
+    expect(challengeRepo.incrementAttempt).not.toHaveBeenCalled();
   });
 });
 
