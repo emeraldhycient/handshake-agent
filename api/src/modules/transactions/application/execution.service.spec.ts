@@ -1651,6 +1651,39 @@ describe('ExecutionService.executeSell', () => {
     /* eslint-enable @typescript-eslint/no-unsafe-assignment */
   });
 
+  // ── Multi-currency: fiatCurrency threaded into atomic metadata ──────────────
+
+  it('includes fiatCurrency from the stored quote in atomic metadata write so settleSellPayout can build finalize ledger entries', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
+    const paymentProvider = makeSellPaymentProvider();
+
+    const svc = buildSellService({ settlementRepo, paymentProvider });
+
+    await svc.executeSell(SELL_BASE_INPUT);
+
+    // fiatCurrency must be persisted in the sell metadata (mirroring executeBuy) so
+    // that settleSellPayout can thread it into buildSellFinalizeEntries. Without it,
+    // finalize reads meta.fiatCurrency === undefined and the ledger build crashes on
+    // fiatCurrency.toLowerCase().
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    expect(
+      settlementRepo.createSellSettlingWithReserveAtomic,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        txnData: expect.objectContaining({
+          metadata: expect.objectContaining({
+            fiatCurrency: 'NGN',
+          }),
+        }),
+      }),
+    );
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+  });
+
   // ── Proposal not found ─────────────────────────────────────────────────────
 
   it('proposal not found → ProposalNotExecutableError, no Transaction', async () => {
