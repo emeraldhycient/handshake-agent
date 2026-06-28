@@ -41,7 +41,10 @@ export const AgentTurnOutcomeSchema = z.discriminatedUnion('kind', [
       SendProposalConfirmationSchema,
     ]),
   }),
-  z.object({ kind: z.literal('not_supported'), action: z.string() }),
+  z.object({
+    kind: z.literal('not_supported'),
+    action: z.enum(['check_balance', 'swap', 'buy_ticket', 'unknown']),
+  }),
 ])
 export type AgentTurnOutcome = z.infer<typeof AgentTurnOutcomeSchema>
 

@@ -153,6 +153,16 @@ describe('AgentTurnOutcomeSchema', () => {
     ).toThrow()
   })
 
+  it('rejects a not_supported outcome with an arbitrary model-emitted action string', () => {
+    // Ensures raw LLM output cannot pass through as-is — only enum members are valid.
+    expect(() =>
+      AgentTurnOutcomeSchema.parse({
+        kind: 'not_supported',
+        action: 'unexpected_string',
+      }),
+    ).toThrow()
+  })
+
   it('rejects a proposal outcome missing proposalId', () => {
     expect(() =>
       AgentTurnOutcomeSchema.parse({

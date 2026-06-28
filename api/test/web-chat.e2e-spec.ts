@@ -314,4 +314,67 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
     expect(dbMessage!.channel).toBe('web');
     expect(dbMessage!.text).toBe('receive USDT');
   }, 120_000);
+
+  // ===========================================================================
+  // KYC-FAILURE PATH — user with no KYC → outcome.kind === 'needs_kyc'
+  // ===========================================================================
+
+  it('signup → verify-email → login (no KYC) → POST /chat/messages → 200 needs_kyc outcome', async () => {
+    // Use a distinct email to avoid state collision with the happy-path test above.
+    const email = `unverified_chat_${Date.now()}@test.com`;
+
+    // 1. Signup
+    const signup = await request(app.getHttpServer())
+      .post('/auth/signup')
+      .send({ email, phone: '+2348029999002' })
+      .expect(202);
+    const signupBody = signup.body as { status: string; devToken: string };
+    expect(signupBody.status).toBe('pending_verification');
+    const devToken = signupBody.devToken;
+    expect(devToken).toBeDefined();
+
+    // 2. Verify email
+    await request(app.getHttpServer())
+      .post('/auth/verify-email')
+      .send({ token: devToken })
+      .expect(200)
+      .expect((r) => expect(r.body).toEqual({ verified: true }));
+
+    // 3. Login request
+    const lr = await request(app.getHttpServer())
+      .post('/auth/login/request')
+      .send({ email })
+      .expect(202);
+    const lrBody = lr.body as { status: string; devOtp: string };
+    const otp = lrBody.devOtp;
+    expect(otp).toMatch(/^[0-9]{6}$/);
+
+    // 4. Login verify → accessToken (NO KYC submit step)
+    const lv = await request(app.getHttpServer())
+      .post('/auth/login/verify')
+      .send({ email, otp, deviceFingerprint: 'e2e-wc-unverified-fingerprint' })
+      .expect(200);
+    const lvBody = lv.body as { accessToken: string };
+    expect(lvBody.accessToken).toBeDefined();
+    const { accessToken } = lvBody;
+
+    // 5. POST /chat/messages — LLM fake returns receive_crypto which requires KYC.
+    //    Without KYC, the service short-circuits to needs_kyc.
+    const chat = await request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ text: 'receive USDT' })
+      .expect(200);
+
+    const chatBody = chat.body as {
+      reply: { text: string };
+      outcome: { kind: string };
+      conversationId: string;
+      messageId: string;
+    };
+
+    expect(chatBody.outcome.kind).toBe('needs_kyc');
+    expect(chatBody.conversationId).toBeDefined();
+    expect(chatBody.messageId).toBeDefined();
+  }, 120_000);
 });

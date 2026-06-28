@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type {
   WebChatResponse,
   AgentTurnOutcome,
@@ -74,6 +74,8 @@ export interface HandleMessageInput {
 
 @Injectable()
 export class WebChatService {
+  private readonly logger = new Logger(WebChatService.name);
+
   constructor(
     @Inject(AGENT_PORT)
     private readonly agentPort: IAgentPort,
@@ -264,9 +266,21 @@ export class WebChatService {
 
       case 'check_balance':
       case 'swap':
-      case 'buy_ticket':
-      default: {
+      case 'buy_ticket': {
         outcome = { kind: 'not_supported', action: intent.action };
+        summaryText = 'That feature is not yet available.';
+        break;
+      }
+
+      default: {
+        // Unrecognized intent action — future model may emit new intents
+        // before this service is updated. Log it and fail safe (not_supported).
+        // Never pass the raw model string to clients; use the sentinel 'unknown'.
+        this.logger.warn(
+          { action: (intent as { action: string }).action },
+          'Unrecognized intent action — treating as not_supported',
+        );
+        outcome = { kind: 'not_supported', action: 'unknown' };
         summaryText = 'That feature is not yet available.';
         break;
       }
