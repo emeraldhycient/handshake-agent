@@ -278,6 +278,7 @@ describe('AuthService.loginVerify', () => {
         deviceFingerprint: 'fp-1',
       }),
     ).rejects.toBeInstanceOf(InvalidOtpError);
+    expect(challengeRepo.incrementAttempt).not.toHaveBeenCalled();
   });
 
   it('throws InvalidOtpError when no challenge or user is unverified', async () => {
