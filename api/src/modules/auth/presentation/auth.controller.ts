@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  NotFoundException,
   Post,
   UnauthorizedException,
   UseGuards,
@@ -26,6 +27,7 @@ import {
   InvalidRefreshTokenError,
   InvalidVerificationTokenError,
   TokenSigningDisabledError,
+  UserNotFoundError,
 } from '../domain/auth-errors';
 import { CurrentUser } from './current-user.decorator';
 import { JwtAuthGuard, type AuthenticatedUser } from './jwt-auth.guard';
@@ -101,6 +103,10 @@ export class AuthController {
       ) {
         // Generic: never reveal which factor failed.
         throw new UnauthorizedException('Authentication failed');
+      }
+      if (err instanceof UserNotFoundError) {
+        // Valid session, missing account — not an auth failure, so not 401.
+        throw new NotFoundException(err.message);
       }
       if (err instanceof TokenSigningDisabledError) {
         throw new BadRequestException('Auth is not configured');

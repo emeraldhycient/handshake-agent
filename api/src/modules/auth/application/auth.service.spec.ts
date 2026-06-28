@@ -4,6 +4,7 @@ import {
   InvalidOtpError,
   InvalidRefreshTokenError,
   InvalidVerificationTokenError,
+  UserNotFoundError,
 } from '../domain/auth-errors';
 import { AuthService } from './auth.service';
 
@@ -393,11 +394,9 @@ describe('AuthService.logout + me', () => {
     });
   });
 
-  it('me throws when the user is missing', async () => {
+  it('me throws UserNotFoundError when the user account is missing (not an auth failure)', async () => {
     const { service, userRepo } = makeDeps();
     userRepo.loadMe.mockResolvedValueOnce(null);
-    await expect(service.me('ghost')).rejects.toBeInstanceOf(
-      InvalidRefreshTokenError,
-    );
+    await expect(service.me('ghost')).rejects.toBeInstanceOf(UserNotFoundError);
   });
 });

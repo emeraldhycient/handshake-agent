@@ -21,6 +21,7 @@ import {
   InvalidOtpError,
   InvalidRefreshTokenError,
   InvalidVerificationTokenError,
+  UserNotFoundError,
 } from '../domain/auth-errors';
 import {
   AUTH_CHALLENGE_REPOSITORY,
@@ -219,7 +220,10 @@ export class AuthService {
 
   async me(userId: string): Promise<MeResponse> {
     const me = await this.users.loadMe(userId);
-    if (me === null) throw new InvalidRefreshTokenError();
+    // A valid session whose user no longer exists is a missing account, not a
+    // token failure — distinct error so the controller maps it to 404, never
+    // 401 (which the web client would treat as expired and retry in a loop).
+    if (me === null) throw new UserNotFoundError();
     return me;
   }
 

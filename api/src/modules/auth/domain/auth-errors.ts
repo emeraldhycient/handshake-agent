@@ -32,3 +32,18 @@ export class InvalidRefreshTokenError extends AuthDomainError {
     this.name = 'InvalidRefreshTokenError';
   }
 }
+
+/**
+ * The session is valid but the underlying user account no longer exists
+ * (e.g. deleted). Distinct from {@link InvalidRefreshTokenError}: this is not
+ * an authentication failure, so it must not be reported as 401 (which the web
+ * client treats as an expired-token signal and retries — a silent loop).
+ */
+export class UserNotFoundError extends AuthDomainError {
+  readonly code = 'USER_NOT_FOUND' as const;
+
+  constructor() {
+    super('User account not found');
+    this.name = 'UserNotFoundError';
+  }
+}
