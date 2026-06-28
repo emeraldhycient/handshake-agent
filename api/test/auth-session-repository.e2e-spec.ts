@@ -57,6 +57,7 @@ describe('AuthSessionPrismaRepository (integration, Testcontainers Postgres)', (
       now,
     });
     expect(await repo.findActiveByRefreshHash('r1', now)).toBeNull();
+    expect(await repo.findActiveByAccessHash('a1', now)).toBeNull();
     expect((await repo.findActiveByRefreshHash('r2', now))?.id).toBe(sessionId);
   });
 
@@ -71,6 +72,7 @@ describe('AuthSessionPrismaRepository (integration, Testcontainers Postgres)', (
     });
     await repo.revoke(sessionId, now, 'logout');
     expect(await repo.findActiveByAccessHash('a', now)).toBeNull();
+    expect(await repo.findActiveByRefreshHash('r', now)).toBeNull();
   });
 
   it('expired sessions do not resolve', async () => {
