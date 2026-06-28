@@ -13,4 +13,6 @@ export const qk = {
   events: ["events"] as const,
   notifications: ["notifications"] as const,
   searchCatalog: ["searchCatalog"] as const,
+  auth: ["auth"] as const,
+  me: ["auth", "me"] as const,
 } as const
