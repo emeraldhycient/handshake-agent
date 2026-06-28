@@ -65,6 +65,12 @@ describe('AuthUserPrismaRepository (integration, Testcontainers Postgres)', () =
     expect(second.deviceId).toBe(first.deviceId); // upsert, not duplicate
     const user = await prisma.user.findUnique({ where: { id: userId } });
     expect(user?.pinnedDeviceId).toBe(first.deviceId);
+
+    // Binding a DIFFERENT device must NOT overwrite the existing pin (§3.4).
+    const third = await repo.bindDevice({ userId, fingerprint: 'fp-abc' });
+    expect(third.deviceId).not.toBe(first.deviceId); // a new device row was created
+    const userAfter = await prisma.user.findUnique({ where: { id: userId } });
+    expect(userAfter?.pinnedDeviceId).toBe(first.deviceId); // pin survives — not overwritten
   });
 
   it('loadMe projects kyc + hasPin', async () => {
