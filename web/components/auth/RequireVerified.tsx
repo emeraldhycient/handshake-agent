@@ -18,10 +18,7 @@ import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { useAuthStore } from "@/lib/store/auth-store"
 import { useMe } from "@/lib/query/auth"
-
-interface RequireVerifiedProps {
-  children: React.ReactNode
-}
+import type { RequireVerifiedProps } from "@/types/components"
 
 export function RequireVerified({ children }: RequireVerifiedProps) {
   const router = useRouter()

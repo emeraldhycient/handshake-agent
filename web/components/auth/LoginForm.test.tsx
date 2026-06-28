@@ -185,6 +185,50 @@ describe("LoginForm", () => {
     })
   })
 
+  it("step 2: success navigates to '/onboarding' when kycStatus is not 'verified'", async () => {
+    const user = userEvent.setup()
+    mockLoginRequest.mockResolvedValueOnce({ status: "otp_sent" })
+    mockLoginVerify.mockResolvedValueOnce({
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      user: {
+        userId: "11111111-1111-1111-1111-111111111111",
+        email: VALID_EMAIL,
+        kycStatus: "none",
+        kycTier: "0",
+        hasPin: false,
+      },
+    })
+    renderForm()
+
+    // Step 1
+    await user.type(
+      screen.getByRole("textbox", { name: /email/i }),
+      VALID_EMAIL
+    )
+    await user.click(screen.getByRole("button", { name: /get otp|send otp/i }))
+
+    // Step 2
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: /otp|one.time/i })
+      ).toBeInTheDocument()
+    })
+
+    await user.type(
+      screen.getByRole("textbox", { name: /otp|one.time/i }),
+      VALID_OTP
+    )
+
+    await user.click(
+      screen.getByRole("button", { name: /verify|log in|sign in/i })
+    )
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith("/onboarding")
+    })
+  })
+
   it("step 2: success navigates to '/' when user is already verified", async () => {
     const user = userEvent.setup()
     mockLoginRequest.mockResolvedValueOnce({ status: "otp_sent" })

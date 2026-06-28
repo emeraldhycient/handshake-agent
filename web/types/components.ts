@@ -275,6 +275,11 @@ export interface LoginFormProps {
   className?: string
 }
 
+/** Props for RequireVerified — wraps children that require verified KYC status. */
+export interface RequireVerifiedProps {
+  children: React.ReactNode
+}
+
 // ─── Phase 15 mobile components ───────────────────────────────────────────────
 
 /** 15.1 — presentational; no state */
