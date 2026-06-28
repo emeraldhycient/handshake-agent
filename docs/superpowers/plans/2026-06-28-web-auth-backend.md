@@ -927,14 +927,14 @@ git commit -m "feat(api): add auth TokenService + domain errors"
 
 - Create: `api/src/modules/auth/application/ports/auth-challenge.repository.port.ts`
 - Create: `api/src/modules/auth/infrastructure/auth-challenge.prisma.repository.ts`
-- Test: `api/src/modules/auth/infrastructure/auth-challenge.prisma.repository.spec.ts` (Testcontainers integration)
+- Test: `api/test/auth-challenge-repository.e2e-spec.ts` (Testcontainers, **e2e lane** — `test:e2e`)
 
 **Interfaces:**
 
 - Produces: `AUTH_CHALLENGE_REPOSITORY` + `IAuthChallengeRepository` (canonical types); `AuthChallengePrismaRepository`.
 - Consumes: `PrismaService`.
 
-> **Testcontainers note:** integration repo tests in this repo spin up real Postgres. Follow the existing pattern in any `*.prisma.repository.spec.ts` under `api/src` (search for one with `@testcontainers/postgresql` + `PrismaService`). Reuse that harness verbatim (container start in `beforeAll`, `prisma.$executeRaw`/`migrate deploy` setup, truncate between tests). The steps below show the assertions, not the harness boilerplate — copy the harness from the nearest existing example.
+> **Repository-test convention (verified):** in this repo, repository integration tests live in `api/test/<name>-repository.e2e-spec.ts` (the **e2e lane**, `jest-e2e.json`, run with `test:e2e`) and use a **real Postgres** via `startTestPostgres()` from `api/test/helpers/pg-testcontainer.ts` (one fresh container per file, `prisma migrate deploy` applied). The canonical example is `api/test/identity-repository.e2e-spec.ts` — mirror its structure: import `PrismaClient` from `../generated/prisma/client`, construct the repo with `new Repo(prisma as unknown as PrismaService)`, `jest.setTimeout(180_000)`, container in `beforeAll`, `stop()` in `afterAll`, seed rows with `prisma.user.create({ data: {} })`. (Unit `*.prisma.repository.spec.ts` files in `src` use a _mocked_ PrismaService and are NOT how repos are integration-tested here.) The full test file is given below — write it verbatim.
 
 - [ ] **Step 1: Write the port** — `api/src/modules/auth/application/ports/auth-challenge.repository.port.ts`
 
@@ -977,90 +977,118 @@ export interface IAuthChallengeRepository {
 }
 ```
 
-- [ ] **Step 2: Write the failing integration test** — `api/src/modules/auth/infrastructure/auth-challenge.prisma.repository.spec.ts`
-
-Using the copied Testcontainers harness, assert:
+- [ ] **Step 2: Write the failing integration test** — `api/test/auth-challenge-repository.e2e-spec.ts`
 
 ```ts
-// (harness sets up `prisma: PrismaService` against a real container + a seeded user)
-it("upsert then findActiveByHashAndType returns the row; consume makes it inactive", async () => {
-  const repo = new AuthChallengePrismaRepository(prisma);
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + 60_000);
-  await repo.upsert({
-    userId,
-    type: "email_verification",
-    challengeHash: "h1",
-    expiresAt,
+import { PrismaClient } from "../generated/prisma/client";
+import { AuthChallengePrismaRepository } from "../src/modules/auth/infrastructure/auth-challenge.prisma.repository";
+import type { PrismaService } from "../src/core/prisma/prisma.service";
+import { startTestPostgres } from "./helpers/pg-testcontainer";
+
+jest.setTimeout(180_000);
+
+describe("AuthChallengePrismaRepository (integration, Testcontainers Postgres)", () => {
+  let prisma: PrismaClient;
+  let stop: () => Promise<void>;
+  let repo: AuthChallengePrismaRepository;
+
+  beforeAll(async () => {
+    ({ prisma, stop } = await startTestPostgres());
+    // PrismaClient → PrismaService boundary cast (same API surface) — matches
+    // the identity-repository.e2e-spec.ts pattern.
+    repo = new AuthChallengePrismaRepository(
+      prisma as unknown as PrismaService,
+    );
   });
 
-  const found = await repo.findActiveByHashAndType(
-    "h1",
-    "email_verification",
-    now,
-  );
-  expect(found).toMatchObject({ userId });
-
-  await repo.consume(found!.id, now);
-  expect(
-    await repo.findActiveByHashAndType("h1", "email_verification", now),
-  ).toBeNull();
-});
-
-it("upsert replaces the prior active challenge for the same (user,type)", async () => {
-  const repo = new AuthChallengePrismaRepository(prisma);
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + 60_000);
-  await repo.upsert({
-    userId,
-    type: "otp_email",
-    challengeHash: "old",
-    expiresAt,
+  afterAll(async () => {
+    await stop?.();
   });
-  await repo.upsert({
-    userId,
-    type: "otp_email",
-    challengeHash: "new",
-    expiresAt,
-  });
-  const byUser = await repo.findActiveByUserAndType(userId, "otp_email", now);
-  expect(byUser?.challengeHash).toBe("new");
-  expect(byUser?.attemptCount).toBe(0);
-});
 
-it("expired challenges are not returned", async () => {
-  const repo = new AuthChallengePrismaRepository(prisma);
-  const past = new Date(Date.now() - 1000);
-  await repo.upsert({
-    userId,
-    type: "otp_email",
-    challengeHash: "h",
-    expiresAt: past,
-  });
-  expect(
-    await repo.findActiveByUserAndType(userId, "otp_email", new Date()),
-  ).toBeNull();
-});
+  async function seedUser(): Promise<string> {
+    const user = await prisma.user.create({ data: {} });
+    return user.id;
+  }
 
-it("incrementAttempt bumps the counter", async () => {
-  const repo = new AuthChallengePrismaRepository(prisma);
-  const now = new Date();
-  await repo.upsert({
-    userId,
-    type: "otp_email",
-    challengeHash: "h",
-    expiresAt: new Date(now.getTime() + 60_000),
+  it("upsert then findActiveByHashAndType returns the row; consume makes it inactive", async () => {
+    const userId = await seedUser();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 60_000);
+    await repo.upsert({
+      userId,
+      type: "email_verification",
+      challengeHash: "h1",
+      expiresAt,
+    });
+
+    const found = await repo.findActiveByHashAndType(
+      "h1",
+      "email_verification",
+      now,
+    );
+    expect(found).toMatchObject({ userId });
+
+    await repo.consume(found!.id, now);
+    expect(
+      await repo.findActiveByHashAndType("h1", "email_verification", now),
+    ).toBeNull();
   });
-  const c = await repo.findActiveByUserAndType(userId, "otp_email", now);
-  await repo.incrementAttempt(c!.id);
-  const after = await repo.findActiveByUserAndType(userId, "otp_email", now);
-  expect(after?.attemptCount).toBe(1);
+
+  it("upsert replaces the prior active challenge for the same (user,type)", async () => {
+    const userId = await seedUser();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 60_000);
+    await repo.upsert({
+      userId,
+      type: "otp_email",
+      challengeHash: "old",
+      expiresAt,
+    });
+    await repo.upsert({
+      userId,
+      type: "otp_email",
+      challengeHash: "new",
+      expiresAt,
+    });
+    const byUser = await repo.findActiveByUserAndType(userId, "otp_email", now);
+    expect(byUser?.challengeHash).toBe("new");
+    expect(byUser?.attemptCount).toBe(0);
+  });
+
+  it("expired challenges are not returned", async () => {
+    const userId = await seedUser();
+    const past = new Date(Date.now() - 1000);
+    await repo.upsert({
+      userId,
+      type: "otp_email",
+      challengeHash: "h",
+      expiresAt: past,
+    });
+    expect(
+      await repo.findActiveByUserAndType(userId, "otp_email", new Date()),
+    ).toBeNull();
+  });
+
+  it("incrementAttempt bumps the counter", async () => {
+    const userId = await seedUser();
+    const now = new Date();
+    await repo.upsert({
+      userId,
+      type: "otp_email",
+      challengeHash: "h",
+      expiresAt: new Date(now.getTime() + 60_000),
+    });
+    const c = await repo.findActiveByUserAndType(userId, "otp_email", now);
+    await repo.incrementAttempt(c!.id);
+    const after = await repo.findActiveByUserAndType(userId, "otp_email", now);
+    expect(after?.attemptCount).toBe(1);
+  });
 });
 ```
 
 - [ ] **Step 3: Run it to confirm failure**
 
-Run: `pnpm --filter @handshake-agent/api test -- auth-challenge.prisma.repository`
+Run: `pnpm --filter @handshake-agent/api test:e2e -- auth-challenge-repository`
 Expected: FAIL — adapter not found.
 
 - [ ] **Step 4: Write the adapter** — `api/src/modules/auth/infrastructure/auth-challenge.prisma.repository.ts`
@@ -1144,13 +1172,13 @@ export class AuthChallengePrismaRepository implements IAuthChallengeRepository {
 
 - [ ] **Step 5: Run tests to verify pass**
 
-Run: `pnpm --filter @handshake-agent/api test -- auth-challenge.prisma.repository`
+Run: `pnpm --filter @handshake-agent/api test:e2e -- auth-challenge-repository`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add api/src/modules/auth/application/ports/auth-challenge.repository.port.ts api/src/modules/auth/infrastructure/auth-challenge.prisma.repository.ts api/src/modules/auth/infrastructure/auth-challenge.prisma.repository.spec.ts
+git add api/src/modules/auth/application/ports/auth-challenge.repository.port.ts api/src/modules/auth/infrastructure/auth-challenge.prisma.repository.ts api/test/auth-challenge-repository.e2e-spec.ts
 git commit -m "feat(api): add AuthChallenge repository (port + prisma)"
 ```
 
@@ -1162,7 +1190,7 @@ git commit -m "feat(api): add AuthChallenge repository (port + prisma)"
 
 - Create: `api/src/modules/auth/application/ports/auth-user.repository.port.ts`
 - Create: `api/src/modules/auth/infrastructure/auth-user.prisma.repository.ts`
-- Test: `api/src/modules/auth/infrastructure/auth-user.prisma.repository.spec.ts` (Testcontainers)
+- Test: `api/test/auth-user-repository.e2e-spec.ts` (Testcontainers, **e2e lane** — mirror `api/test/identity-repository.e2e-spec.ts`)
 
 **Interfaces:**
 
@@ -1222,74 +1250,92 @@ export interface IAuthUserRepository {
 }
 ```
 
-- [ ] **Step 2: Write the failing integration test** — assertions (with the copied harness):
+- [ ] **Step 2: Write the failing integration test** — `api/test/auth-user-repository.e2e-spec.ts`
 
 ```ts
-it("createSignup creates a provisional user + pending whatsapp CI; idempotent on email", async () => {
-  const repo = new AuthUserPrismaRepository(prisma);
-  const a = await repo.createSignup({
-    email: "New@Test.com",
-    phone: "+2348011111111",
-  });
-  expect(a.created).toBe(true);
+import { PrismaClient } from "../generated/prisma/client";
+import { AuthUserPrismaRepository } from "../src/modules/auth/infrastructure/auth-user.prisma.repository";
+import type { PrismaService } from "../src/core/prisma/prisma.service";
+import { startTestPostgres } from "./helpers/pg-testcontainer";
 
-  const user = await prisma.user.findUnique({ where: { id: a.userId } });
-  expect(user?.email).toBe("new@test.com"); // lowercased
-  expect(user?.status).toBe("provisional");
+jest.setTimeout(180_000);
 
-  const ci = await prisma.channelIdentity.findFirst({
-    where: { userId: a.userId, channel: "whatsapp" },
-  });
-  expect(ci?.verificationStatus).toBe("pending");
+describe("AuthUserPrismaRepository (integration, Testcontainers Postgres)", () => {
+  let prisma: PrismaClient;
+  let stop: () => Promise<void>;
+  let repo: AuthUserPrismaRepository;
 
-  const again = await repo.createSignup({
-    email: "new@test.com",
-    phone: "+2348011111111",
+  beforeAll(async () => {
+    ({ prisma, stop } = await startTestPostgres());
+    repo = new AuthUserPrismaRepository(prisma as unknown as PrismaService);
   });
-  expect(again.created).toBe(false);
-  expect(again.userId).toBe(a.userId);
-});
 
-it("findByEmail is case-insensitive on the stored lowercase; markEmailVerified sets it", async () => {
-  const repo = new AuthUserPrismaRepository(prisma);
-  const { userId } = await repo.createSignup({
-    email: "v@test.com",
-    phone: "+2348012222222",
+  afterAll(async () => {
+    await stop?.();
   });
-  expect((await repo.findByEmail("V@test.com"))?.emailVerifiedAt).toBeNull();
-  await repo.markEmailVerified(userId, new Date());
-  expect(
-    (await repo.findByEmail("v@test.com"))?.emailVerifiedAt,
-  ).not.toBeNull();
-});
 
-it("bindDevice upserts by fingerprint and pins on first bind", async () => {
-  const repo = new AuthUserPrismaRepository(prisma);
-  const { userId } = await repo.createSignup({
-    email: "d@test.com",
-    phone: "+2348013333333",
-  });
-  const first = await repo.bindDevice({ userId, fingerprint: "fp-xyz" });
-  const second = await repo.bindDevice({ userId, fingerprint: "fp-xyz" });
-  expect(second.deviceId).toBe(first.deviceId); // upsert, not duplicate
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  expect(user?.pinnedDeviceId).toBe(first.deviceId);
-});
+  it("createSignup creates a provisional user + pending whatsapp CI; idempotent on email", async () => {
+    const a = await repo.createSignup({
+      email: "New@Test.com",
+      phone: "+2348011111111",
+    });
+    expect(a.created).toBe(true);
 
-it("loadMe projects kyc + hasPin", async () => {
-  const repo = new AuthUserPrismaRepository(prisma);
-  const { userId } = await repo.createSignup({
-    email: "m@test.com",
-    phone: "+2348014444444",
+    const user = await prisma.user.findUnique({ where: { id: a.userId } });
+    expect(user?.email).toBe("new@test.com"); // lowercased
+    expect(user?.status).toBe("provisional");
+
+    const ci = await prisma.channelIdentity.findFirst({
+      where: { userId: a.userId, channel: "whatsapp" },
+    });
+    expect(ci?.verificationStatus).toBe("pending");
+
+    const again = await repo.createSignup({
+      email: "new@test.com",
+      phone: "+2348011111111",
+    });
+    expect(again.created).toBe(false);
+    expect(again.userId).toBe(a.userId);
   });
-  const me = await repo.loadMe(userId);
-  expect(me).toMatchObject({ userId, email: "m@test.com", hasPin: false });
+
+  it("findByEmail is case-insensitive on the stored lowercase; markEmailVerified sets it", async () => {
+    const { userId } = await repo.createSignup({
+      email: "v@test.com",
+      phone: "+2348012222222",
+    });
+    expect((await repo.findByEmail("V@test.com"))?.emailVerifiedAt).toBeNull();
+    await repo.markEmailVerified(userId, new Date());
+    expect(
+      (await repo.findByEmail("v@test.com"))?.emailVerifiedAt,
+    ).not.toBeNull();
+  });
+
+  it("bindDevice upserts by fingerprint and pins on first bind", async () => {
+    const { userId } = await repo.createSignup({
+      email: "d@test.com",
+      phone: "+2348013333333",
+    });
+    const first = await repo.bindDevice({ userId, fingerprint: "fp-xyz" });
+    const second = await repo.bindDevice({ userId, fingerprint: "fp-xyz" });
+    expect(second.deviceId).toBe(first.deviceId); // upsert, not duplicate
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    expect(user?.pinnedDeviceId).toBe(first.deviceId);
+  });
+
+  it("loadMe projects kyc + hasPin", async () => {
+    const { userId } = await repo.createSignup({
+      email: "m@test.com",
+      phone: "+2348014444444",
+    });
+    const me = await repo.loadMe(userId);
+    expect(me).toMatchObject({ userId, email: "m@test.com", hasPin: false });
+  });
 });
 ```
 
 - [ ] **Step 3: Run it to confirm failure**
 
-Run: `pnpm --filter @handshake-agent/api test -- auth-user.prisma.repository`
+Run: `pnpm --filter @handshake-agent/api test:e2e -- auth-user-repository`
 Expected: FAIL — adapter not found.
 
 - [ ] **Step 4: Write the adapter** — `api/src/modules/auth/infrastructure/auth-user.prisma.repository.ts`
@@ -1439,13 +1485,13 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
 
 - [ ] **Step 5: Run tests to verify pass**
 
-Run: `pnpm --filter @handshake-agent/api test -- auth-user.prisma.repository`
+Run: `pnpm --filter @handshake-agent/api test:e2e -- auth-user-repository`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add api/src/modules/auth/application/ports/auth-user.repository.port.ts api/src/modules/auth/infrastructure/auth-user.prisma.repository.ts api/src/modules/auth/infrastructure/auth-user.prisma.repository.spec.ts
+git add api/src/modules/auth/application/ports/auth-user.repository.port.ts api/src/modules/auth/infrastructure/auth-user.prisma.repository.ts api/test/auth-user-repository.e2e-spec.ts
 git commit -m "feat(api): add auth user repository (port + prisma)"
 ```
 
@@ -1457,7 +1503,7 @@ git commit -m "feat(api): add auth user repository (port + prisma)"
 
 - Create: `api/src/modules/auth/application/ports/auth-session.repository.port.ts`
 - Create: `api/src/modules/auth/infrastructure/auth-session.prisma.repository.ts`
-- Test: `api/src/modules/auth/infrastructure/auth-session.prisma.repository.spec.ts` (Testcontainers)
+- Test: `api/test/auth-session-repository.e2e-spec.ts` (Testcontainers, **e2e lane** — mirror `api/test/identity-repository.e2e-spec.ts`)
 
 **Interfaces:**
 
@@ -1497,73 +1543,101 @@ export interface IAuthSessionRepository {
 }
 ```
 
-- [ ] **Step 2: Write the failing integration test** — assertions (copied harness, seeded user + device):
+- [ ] **Step 2: Write the failing integration test** — `api/test/auth-session-repository.e2e-spec.ts`
 
 ```ts
-it("create then findActiveByAccessHash / findActiveByRefreshHash return the session", async () => {
-  const repo = new AuthSessionPrismaRepository(prisma);
-  const now = new Date();
-  const { sessionId } = await repo.create({
-    userId,
-    deviceId,
-    accessTokenHash: "ah",
-    refreshTokenHash: "rh",
-    expiresAt: new Date(now.getTime() + 60_000),
-  });
-  expect((await repo.findActiveByAccessHash("ah", now))?.id).toBe(sessionId);
-  expect((await repo.findActiveByRefreshHash("rh", now))?.userId).toBe(userId);
-});
+import { PrismaClient } from "../generated/prisma/client";
+import { AuthSessionPrismaRepository } from "../src/modules/auth/infrastructure/auth-session.prisma.repository";
+import type { PrismaService } from "../src/core/prisma/prisma.service";
+import { startTestPostgres } from "./helpers/pg-testcontainer";
 
-it("rotate swaps the hashes; old hashes no longer resolve", async () => {
-  const repo = new AuthSessionPrismaRepository(prisma);
-  const now = new Date();
-  const { sessionId } = await repo.create({
-    userId,
-    deviceId,
-    accessTokenHash: "a1",
-    refreshTokenHash: "r1",
-    expiresAt: new Date(now.getTime() + 60_000),
-  });
-  await repo.rotate(sessionId, {
-    accessTokenHash: "a2",
-    refreshTokenHash: "r2",
-    now,
-  });
-  expect(await repo.findActiveByRefreshHash("r1", now)).toBeNull();
-  expect((await repo.findActiveByRefreshHash("r2", now))?.id).toBe(sessionId);
-});
+jest.setTimeout(180_000);
 
-it("revoke makes the session inactive", async () => {
-  const repo = new AuthSessionPrismaRepository(prisma);
-  const now = new Date();
-  const { sessionId } = await repo.create({
-    userId,
-    deviceId,
-    accessTokenHash: "a",
-    refreshTokenHash: "r",
-    expiresAt: new Date(now.getTime() + 60_000),
-  });
-  await repo.revoke(sessionId, now, "logout");
-  expect(await repo.findActiveByAccessHash("a", now)).toBeNull();
-});
+describe("AuthSessionPrismaRepository (integration, Testcontainers Postgres)", () => {
+  let prisma: PrismaClient;
+  let stop: () => Promise<void>;
+  let repo: AuthSessionPrismaRepository;
+  let userId: string;
+  let deviceId: string;
 
-it("expired sessions do not resolve", async () => {
-  const repo = new AuthSessionPrismaRepository(prisma);
-  const past = new Date(Date.now() - 1000);
-  await repo.create({
-    userId,
-    deviceId,
-    accessTokenHash: "x",
-    refreshTokenHash: "y",
-    expiresAt: past,
+  beforeAll(async () => {
+    ({ prisma, stop } = await startTestPostgres());
+    repo = new AuthSessionPrismaRepository(prisma as unknown as PrismaService);
+    const user = await prisma.user.create({ data: {} });
+    userId = user.id;
+    const device = await prisma.device.create({
+      data: { userId, fingerprint: "fp-session-test", trustState: "bound" },
+    });
+    deviceId = device.id;
   });
-  expect(await repo.findActiveByAccessHash("x", new Date())).toBeNull();
+
+  afterAll(async () => {
+    await stop?.();
+  });
+
+  it("create then findActiveByAccessHash / findActiveByRefreshHash return the session", async () => {
+    const now = new Date();
+    const { sessionId } = await repo.create({
+      userId,
+      deviceId,
+      accessTokenHash: "ah",
+      refreshTokenHash: "rh",
+      expiresAt: new Date(now.getTime() + 60_000),
+    });
+    expect((await repo.findActiveByAccessHash("ah", now))?.id).toBe(sessionId);
+    expect((await repo.findActiveByRefreshHash("rh", now))?.userId).toBe(
+      userId,
+    );
+  });
+
+  it("rotate swaps the hashes; old hashes no longer resolve", async () => {
+    const now = new Date();
+    const { sessionId } = await repo.create({
+      userId,
+      deviceId,
+      accessTokenHash: "a1",
+      refreshTokenHash: "r1",
+      expiresAt: new Date(now.getTime() + 60_000),
+    });
+    await repo.rotate(sessionId, {
+      accessTokenHash: "a2",
+      refreshTokenHash: "r2",
+      now,
+    });
+    expect(await repo.findActiveByRefreshHash("r1", now)).toBeNull();
+    expect((await repo.findActiveByRefreshHash("r2", now))?.id).toBe(sessionId);
+  });
+
+  it("revoke makes the session inactive", async () => {
+    const now = new Date();
+    const { sessionId } = await repo.create({
+      userId,
+      deviceId,
+      accessTokenHash: "a",
+      refreshTokenHash: "r",
+      expiresAt: new Date(now.getTime() + 60_000),
+    });
+    await repo.revoke(sessionId, now, "logout");
+    expect(await repo.findActiveByAccessHash("a", now)).toBeNull();
+  });
+
+  it("expired sessions do not resolve", async () => {
+    const past = new Date(Date.now() - 1000);
+    await repo.create({
+      userId,
+      deviceId,
+      accessTokenHash: "x",
+      refreshTokenHash: "y",
+      expiresAt: past,
+    });
+    expect(await repo.findActiveByAccessHash("x", new Date())).toBeNull();
+  });
 });
 ```
 
 - [ ] **Step 3: Run it to confirm failure**
 
-Run: `pnpm --filter @handshake-agent/api test -- auth-session.prisma.repository`
+Run: `pnpm --filter @handshake-agent/api test:e2e -- auth-session-repository`
 Expected: FAIL — adapter not found.
 
 - [ ] **Step 4: Write the adapter** — `api/src/modules/auth/infrastructure/auth-session.prisma.repository.ts`
@@ -1658,13 +1732,13 @@ export class AuthSessionPrismaRepository implements IAuthSessionRepository {
 
 - [ ] **Step 5: Run tests to verify pass**
 
-Run: `pnpm --filter @handshake-agent/api test -- auth-session.prisma.repository`
+Run: `pnpm --filter @handshake-agent/api test:e2e -- auth-session-repository`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add api/src/modules/auth/application/ports/auth-session.repository.port.ts api/src/modules/auth/infrastructure/auth-session.prisma.repository.ts api/src/modules/auth/infrastructure/auth-session.prisma.repository.spec.ts
+git add api/src/modules/auth/application/ports/auth-session.repository.port.ts api/src/modules/auth/infrastructure/auth-session.prisma.repository.ts api/test/auth-session-repository.e2e-spec.ts
 git commit -m "feat(api): add auth session repository (port + prisma)"
 ```
 
