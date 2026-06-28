@@ -9,6 +9,40 @@ import { render, screen, waitFor } from "@testing-library/react"
 import { describe, expect, it, afterEach, vi } from "vitest"
 import Home from "./page"
 
+// RequireAuth uses useRouter — mock next/navigation so tests don't error.
+vi.mock("next/navigation", () => ({
+  useRouter: vi.fn(() => ({ push: vi.fn() })),
+}))
+
+// Stub the auth store so RequireAuth passes through (treats user as authenticated).
+vi.mock("@/lib/store/auth-store", () => ({
+  useAuthStore: vi.fn(
+    (
+      selector?: (s: {
+        accessToken: string | null
+        refreshToken: string | null
+      }) => unknown
+    ) => {
+      const state = {
+        accessToken: "stub-token",
+        refreshToken: "stub-refresh",
+        status: "authenticated",
+        user: null,
+      }
+      return selector ? selector(state) : state
+    }
+  ),
+  defaultAuthStore: {
+    getState: vi.fn(() => ({
+      refreshToken: null,
+      accessToken: "stub-token",
+      setTokens: vi.fn(),
+      setUser: vi.fn(),
+      clear: vi.fn(),
+    })),
+  },
+}))
+
 function makeWrapper() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },

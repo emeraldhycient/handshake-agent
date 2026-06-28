@@ -258,6 +258,23 @@ export interface KycFormProps {
   token: string
 }
 
+// ─── Auth forms ──────────────────────────────────────────────────────────────
+
+/** Props for SignupForm — no required props; self-contained. */
+export interface SignupFormProps {
+  className?: string
+}
+
+/** Props for VerifyEmailForm — token comes from the URL query param. */
+export interface VerifyEmailFormProps {
+  token: string
+}
+
+/** Props for LoginForm — no required props; self-contained. */
+export interface LoginFormProps {
+  className?: string
+}
+
 // ─── Phase 15 mobile components ───────────────────────────────────────────────
 
 /** 15.1 — presentational; no state */
