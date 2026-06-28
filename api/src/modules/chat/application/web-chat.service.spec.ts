@@ -341,6 +341,80 @@ describe('WebChatService', () => {
     });
   });
 
+  // ── sell_crypto, unverified → needs_kyc ───────────────────────────────────
+
+  it('sell_crypto intent, unverified user → needs_kyc', async () => {
+    fakeIdentityRepo.loadUser.mockResolvedValue(UNVERIFIED_USER);
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'sell_crypto',
+      asset: 'USDT',
+      cryptoAmount: '5',
+      fiatCurrency: 'NGN',
+    });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'sell',
+    });
+    expect(result.outcome).toEqual({ kind: 'needs_kyc' });
+  });
+
+  // ── send_crypto, unverified → needs_kyc ───────────────────────────────────
+
+  it('send_crypto intent, unverified user → needs_kyc', async () => {
+    fakeIdentityRepo.loadUser.mockResolvedValue(UNVERIFIED_USER);
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'send_crypto',
+      asset: 'USDT',
+      cryptoAmount: '2',
+      toAddress: 'TYyyy',
+      network: 'tron',
+    });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'send',
+    });
+    expect(result.outcome).toEqual({ kind: 'needs_kyc' });
+  });
+
+  // ── send_crypto, verified + beneficiary → proposal ────────────────────────
+
+  it('send_crypto, verified, beneficiary exists → proposal outcome', async () => {
+    fakeBeneficiaryService.getDefault.mockResolvedValue({
+      id: 'bene-crypto-1',
+    });
+    const sendConf = {
+      proposalId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+      asset: 'USDT',
+      cryptoAmount: '2',
+      network: 'tron',
+      networkFeeCrypto: '1.0',
+      totalDebit: '3.0',
+      toAddressMasked: 'TYyyy...Zzzz',
+      beneficiaryLabel: 'My wallet',
+      expiresAt: new Date().toISOString(),
+    };
+    fakeProposalService.createSendProposal.mockResolvedValue({
+      proposalId: sendConf.proposalId,
+      confirmation: sendConf,
+    });
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'send_crypto',
+      asset: 'USDT',
+      cryptoAmount: '2',
+      toAddress: 'TYyyyZzzz',
+      network: 'tron',
+    });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'send 2 USDT',
+    });
+    expect(result.outcome).toMatchObject({
+      kind: 'proposal',
+      txType: 'send',
+      proposalId: sendConf.proposalId,
+    });
+  });
+
   // ── send_crypto, verified, no default beneficiary → needs_beneficiary ──────
 
   it('send_crypto, verified, no default beneficiary → needs_beneficiary (crypto_address)', async () => {
