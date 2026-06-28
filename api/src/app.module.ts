@@ -23,6 +23,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { PublicConfigModule } from './modules/config/config.module';
 import { JobsModule } from './core/jobs/jobs.module';
 import { WebAuthModule } from './modules/auth/auth.module';
+import { ChatModule } from './modules/chat/chat.module';
 
 @Module({
   imports: [
@@ -68,6 +69,7 @@ import { WebAuthModule } from './modules/auth/auth.module';
     JobsModule,
     AdminModule,
     PublicConfigModule,
+    ChatModule,
   ],
   // Global Zod validation: every request DTO is checked against its contract schema.
   providers: [{ provide: APP_PIPE, useClass: ZodValidationPipe }],
