@@ -62,6 +62,7 @@ export class KycPrismaRepository implements IKycRepository {
         data: {
           status: UserStatus.active,
           kycStatus: KycStatus.verified,
+          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           kycTier: KycTier.tier_1,
           pinHash,
         },
@@ -74,6 +75,7 @@ export class KycPrismaRepository implements IKycRepository {
         data: {
           userId: user.id,
           status: KycStatus.verified,
+          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           tier: KycTier.tier_1,
           nin: nin ?? null,
           bvn: bvn ?? null,
@@ -129,6 +131,7 @@ export class KycPrismaRepository implements IKycRepository {
         create: {
           userId,
           status: KycStatus.verified,
+          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           tier: KycTier.tier_1,
           nin: nin ?? null,
           bvn: bvn ?? null,
@@ -139,6 +142,7 @@ export class KycPrismaRepository implements IKycRepository {
         },
         update: {
           status: KycStatus.verified,
+          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           tier: KycTier.tier_1,
           nin: nin ?? null,
           bvn: bvn ?? null,
@@ -154,6 +158,7 @@ export class KycPrismaRepository implements IKycRepository {
         where: { id: userId },
         data: {
           kycStatus: KycStatus.verified,
+          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           kycTier: KycTier.tier_1,
           status: UserStatus.active,
           pinHash,
