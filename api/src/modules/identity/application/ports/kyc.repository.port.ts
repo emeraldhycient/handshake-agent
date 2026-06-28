@@ -36,6 +36,29 @@ export interface CompleteVerificationAtomicResult {
 }
 
 // ---------------------------------------------------------------------------
+// Input / output shapes for completeVerificationForUserAtomic
+// (web-native user path — User already exists from email signup)
+// ---------------------------------------------------------------------------
+
+export interface CompleteVerificationForUserAtomicInput {
+  /** The already-existing User row to upgrade. */
+  userId: string;
+  nin?: string;
+  bvn?: string;
+  firstName: string;
+  lastName: string;
+  dateOfBirth?: string;
+  /** scrypt hash of the raw PIN — the ONLY form that reaches the DB. */
+  pinHash: string;
+  /** Timestamp used for verifiedAt on the KycProfile. */
+  now: Date;
+}
+
+export interface CompleteVerificationForUserAtomicResult {
+  userId: string;
+}
+
+// ---------------------------------------------------------------------------
 // Port interface
 // ---------------------------------------------------------------------------
 
@@ -55,4 +78,18 @@ export interface IKycRepository {
   completeVerificationAtomic(
     input: CompleteVerificationAtomicInput,
   ): Promise<CompleteVerificationAtomicResult>;
+
+  /**
+   * Atomically (one $transaction):
+   *   1. Upserts a KycProfile (status=verified, tier=tier_1, identity fields, verifiedAt=now).
+   *   2. Updates User: kycStatus=verified, kycTier=tier_1, status=active, pinHash.
+   *
+   * Returns { userId } of the updated User.
+   *
+   * Pre-condition: the caller has confirmed the User is not already verified
+   * (idempotent check is in the service layer).
+   */
+  completeVerificationForUserAtomic(
+    input: CompleteVerificationForUserAtomicInput,
+  ): Promise<CompleteVerificationForUserAtomicResult>;
 }

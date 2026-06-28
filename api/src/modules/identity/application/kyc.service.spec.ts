@@ -9,7 +9,10 @@
  */
 
 import type { IKycProvider, KycVerifyResult } from './ports/kyc-provider.port';
-import type { IIdentityRepository } from './ports/identity.repository.port';
+import type {
+  IIdentityRepository,
+  UserRecord,
+} from './ports/identity.repository.port';
 import type { IKycRepository } from './ports/kyc.repository.port';
 import type { PinService } from '../../../core/auth/pin.service';
 import { ContactNotFoundError, KycRejectedError } from '../domain/kyc-errors';
@@ -81,6 +84,9 @@ function makeIdentityRepo(
 function makeKycRepo(): jest.Mocked<IKycRepository> {
   return {
     completeVerificationAtomic: jest
+      .fn()
+      .mockResolvedValue({ userId: USER_ID }),
+    completeVerificationForUserAtomic: jest
       .fn()
       .mockResolvedValue({ userId: USER_ID }),
   };
@@ -294,5 +300,189 @@ describe('KycService.completeVerification', () => {
     expect(Object.keys(call)).not.toContain('pin');
     // The hashed form must be present under 'pinHash'
     expect(call.pinHash).toBe(PIN_HASH);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests for KycService.completeVerificationForUser (web-native user path)
+// ---------------------------------------------------------------------------
+
+const WEB_USER_ID = 'web-user-uuid-42';
+
+const VALID_WEB_INPUT = {
+  userId: WEB_USER_ID,
+  nin: '11223344556',
+  bvn: undefined,
+  firstName: 'Chidi',
+  lastName: 'Okeke',
+  dateOfBirth: '1992-07-14',
+  pin: '5678',
+};
+
+/** Unverified user record (kycStatus != 'verified') returned by loadUser. */
+const UNVERIFIED_USER: UserRecord = {
+  id: WEB_USER_ID,
+  status: 'pending',
+  kycStatus: 'pending',
+  kycTier: 'unverified',
+  simSwapDetectedAt: null,
+};
+
+/** Already-verified user record returned by loadUser. */
+const VERIFIED_USER: UserRecord = {
+  id: WEB_USER_ID,
+  status: 'active',
+  kycStatus: 'verified',
+  kycTier: 'tier_1',
+  simSwapDetectedAt: null,
+};
+
+describe('KycService.completeVerificationForUser', () => {
+  // ── Happy path ────────────────────────────────────────────────────────────
+
+  it('approved provider + unverified user → calls completeVerificationForUserAtomic with hashed PIN; returns userId', async () => {
+    const identityRepo = makeIdentityRepo({
+      loadUser: jest.fn().mockResolvedValue(UNVERIFIED_USER),
+    });
+    const kycRepo = makeKycRepo();
+    const pinService = makePinService();
+
+    const { svc, kycProvider } = buildService({
+      identityRepo,
+      kycRepo,
+      pinService,
+    });
+
+    const result = await svc.completeVerificationForUser(VALID_WEB_INPUT);
+
+    // Provider called with identity fields
+    expect(kycProvider.verify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nin: VALID_WEB_INPUT.nin,
+        firstName: VALID_WEB_INPUT.firstName,
+        lastName: VALID_WEB_INPUT.lastName,
+      }),
+    );
+
+    // hashPin was called with the raw PIN
+    expect(pinService.hashPin).toHaveBeenCalledWith(VALID_WEB_INPUT.pin);
+
+    // Atomic repo was called with hashed PIN and correct fields
+    expect(kycRepo.completeVerificationForUserAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: WEB_USER_ID,
+        nin: VALID_WEB_INPUT.nin,
+        firstName: VALID_WEB_INPUT.firstName,
+        lastName: VALID_WEB_INPUT.lastName,
+        pinHash: PIN_HASH,
+        now: expect.any(Date) as Date,
+      }),
+    );
+
+    expect(result).toEqual({ userId: USER_ID });
+  });
+
+  // ── Raw PIN is never persisted — only the hash ────────────────────────────
+
+  it('completeVerificationForUserAtomic is never called with the raw PIN — only the hash', async () => {
+    const identityRepo = makeIdentityRepo({
+      loadUser: jest.fn().mockResolvedValue(UNVERIFIED_USER),
+    });
+    const kycRepo = makeKycRepo();
+
+    const { svc } = buildService({ identityRepo, kycRepo });
+
+    await svc.completeVerificationForUser(VALID_WEB_INPUT);
+
+    const mockCalls = (
+      kycRepo.completeVerificationForUserAtomic as jest.MockedFunction<
+        IKycRepository['completeVerificationForUserAtomic']
+      >
+    ).mock.calls;
+    const call = mockCalls[0][0];
+
+    // The atomic input must NOT contain a 'pin' key
+    expect(Object.keys(call)).not.toContain('pin');
+    // The hashed form must be present under 'pinHash'
+    expect(call.pinHash).toBe(PIN_HASH);
+  });
+
+  // ── Idempotent when already verified ─────────────────────────────────────
+
+  it('user already verified → returns userId immediately without calling provider or atomic repo', async () => {
+    const identityRepo = makeIdentityRepo({
+      loadUser: jest.fn().mockResolvedValue(VERIFIED_USER),
+    });
+    const kycProvider = makeKycProvider({
+      approved: true,
+      tier: 'tier_1',
+      reference: 'ref-1',
+    });
+    const kycRepo = makeKycRepo();
+
+    const { svc } = buildService({ identityRepo, kycProvider, kycRepo });
+
+    const result = await svc.completeVerificationForUser(VALID_WEB_INPUT);
+
+    // Returns the userId from the loaded user
+    expect(result).toEqual({ userId: WEB_USER_ID });
+
+    // Provider must NOT have been called
+    expect(kycProvider.verify).not.toHaveBeenCalled();
+
+    // Atomic repo must NOT have been called
+    expect(kycRepo.completeVerificationForUserAtomic).not.toHaveBeenCalled();
+  });
+
+  // ── KycRejectedError ──────────────────────────────────────────────────────
+
+  it('provider rejected → throws KycRejectedError; atomic repo NOT called', async () => {
+    const identityRepo = makeIdentityRepo({
+      loadUser: jest.fn().mockResolvedValue(UNVERIFIED_USER),
+    });
+    const rejectedProvider = makeKycProvider({
+      approved: false,
+      tier: 'unverified',
+      reference: 'ref-rejected',
+      reason: 'NIN mismatch',
+    });
+    const kycRepo = makeKycRepo();
+
+    const { svc } = buildService({
+      identityRepo,
+      kycProvider: rejectedProvider,
+      kycRepo,
+    });
+
+    await expect(
+      svc.completeVerificationForUser(VALID_WEB_INPUT),
+    ).rejects.toBeInstanceOf(KycRejectedError);
+
+    expect(kycRepo.completeVerificationForUserAtomic).not.toHaveBeenCalled();
+  });
+
+  it('KycRejectedError carries the rejection reason from the provider', async () => {
+    const identityRepo = makeIdentityRepo({
+      loadUser: jest.fn().mockResolvedValue(UNVERIFIED_USER),
+    });
+    const rejectedProvider = makeKycProvider({
+      approved: false,
+      tier: 'unverified',
+      reference: 'ref-x',
+      reason: 'BVN liveness failed',
+    });
+
+    const { svc } = buildService({
+      identityRepo,
+      kycProvider: rejectedProvider,
+    });
+
+    const err = await svc
+      .completeVerificationForUser(VALID_WEB_INPUT)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(KycRejectedError);
+    expect((err as KycRejectedError).reason).toBe('BVN liveness failed');
+    expect((err as KycRejectedError).code).toBe('KYC_REJECTED');
   });
 });

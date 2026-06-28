@@ -47,6 +47,17 @@ export interface CompleteVerificationResult {
   userId: string;
 }
 
+export interface CompleteVerificationForUserInput {
+  userId: string;
+  nin?: string;
+  bvn?: string;
+  firstName: string;
+  lastName: string;
+  dateOfBirth?: string;
+  /** Raw PIN — hashed immediately; never reaches persistence or logs. */
+  pin: string;
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -132,5 +143,56 @@ export class KycService {
 
     // ── Step 5: Return ────────────────────────────────────────────────────────
     return { userId };
+  }
+
+  /**
+   * Verifies an already-existing web User and sets their transaction PIN.
+   *
+   * Idempotent: if the User already has kycStatus='verified', returns { userId }
+   * without re-running verification or persistence.
+   *
+   * @throws {KycRejectedError} — provider did not approve.
+   */
+  async completeVerificationForUser(
+    input: CompleteVerificationForUserInput,
+  ): Promise<CompleteVerificationResult> {
+    const { userId, nin, bvn, firstName, lastName, dateOfBirth, pin } = input;
+
+    // ── Idempotent check ──────────────────────────────────────────────────────
+    // Load the User to check current kycStatus. If already verified, return early.
+    const user = await this.identityRepo.loadUser(userId);
+    if (user !== null && user.kycStatus === 'verified') {
+      return { userId };
+    }
+
+    // ── KYC provider call ─────────────────────────────────────────────────────
+    const verifyInput: KycVerifyInput = {
+      nin,
+      bvn,
+      firstName,
+      lastName,
+      dateOfBirth,
+    };
+    const result = await this.kycProvider.verify(verifyInput);
+    if (!result.approved) {
+      throw new KycRejectedError(result.reason);
+    }
+
+    // ── Hash the PIN — the ONLY form persisted (NFR-1) ───────────────────────
+    const pinHash = await this.pinService.hashPin(pin);
+
+    // ── Atomic write ──────────────────────────────────────────────────────────
+    const atomicResult = await this.kycRepo.completeVerificationForUserAtomic({
+      userId,
+      nin,
+      bvn,
+      firstName,
+      lastName,
+      dateOfBirth,
+      pinHash,
+      now: new Date(),
+    });
+
+    return { userId: atomicResult.userId };
   }
 }

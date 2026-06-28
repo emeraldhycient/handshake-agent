@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { AuthModule } from '../../core/auth/auth.module';
+import { WebAuthModule } from '../auth/auth.module';
 import { WalletsModule } from '../wallets/wallets.module';
 import { CLOCK, SystemClock } from '../../core/common/clock';
 import { IDENTITY_REPOSITORY } from './application/ports/identity.repository.port';
@@ -47,7 +48,7 @@ import { KycController } from './presentation/kyc.controller';
  * the composition root that imports both and resolves the binding.
  */
 @Module({
-  imports: [AuthModule, WalletsModule],
+  imports: [AuthModule, WebAuthModule, WalletsModule],
   controllers: [KycController],
   providers: [
     IdentityService,
