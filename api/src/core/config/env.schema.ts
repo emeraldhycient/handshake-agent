@@ -112,6 +112,13 @@ export const envSchema = z.object({
   // Swap seam: when the admin UI + proper admin-session auth is built, replace
   // AdminTokenGuard with a session/role guard — this env var can then be removed.
   ADMIN_API_TOKEN: z.string().optional().default(''),
+
+  // --- Auth (web sessions) ---
+  // JWT_SECRET is a SECRET — empty disables token issuance (fail-closed in
+  // TokenService), mirroring ADMIN_API_TOKEN. TTLs live in the config JSON layer
+  // (configuration.ts auth.*), not here.
+  JWT_SECRET: z.string().optional().default(''),
+  AUTH_DEV_EXPOSE_OTP: z.enum(['true', 'false']).default('false'),
 });
 
 export type Env = z.infer<typeof envSchema>;

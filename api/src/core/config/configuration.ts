@@ -75,9 +75,33 @@ export interface StepUpConfig {
   ttlSeconds: number;
 }
 
+export interface JwtConfig {
+  /** Access-token validity (seconds). Short — refresh rotates. */
+  accessTtlSeconds: number;
+  /** Refresh-token validity (seconds) — also the Session row lifetime. */
+  refreshTtlSeconds: number;
+}
+
+export interface OtpConfig {
+  /** Login OTP validity (seconds). */
+  ttlSeconds: number;
+  /** Number of digits in a login OTP. */
+  length: number;
+  /** Max wrong-OTP attempts before the challenge is invalidated. */
+  maxAttempts: number;
+}
+
+export interface EmailTokenConfig {
+  /** Email-verification link validity (seconds). */
+  ttlSeconds: number;
+}
+
 export interface AuthConfig {
   pin: PinConfig;
   stepUp: StepUpConfig;
+  jwt: JwtConfig;
+  otp: OtpConfig;
+  emailToken: EmailTokenConfig;
 }
 
 /** Directive-grant configuration (task 4.2, ADR-0005/0006). */
@@ -454,6 +478,21 @@ export default (): AppConfig => ({
       // Admin-tunable later (DB-admin AppSetting layer, root CLAUDE.md §7).
       // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
       ttlSeconds: 900,
+    },
+    jwt: {
+      // 1-hour access token; 30-day refresh. Admin-tunable later (DB-admin layer, §7).
+      accessTtlSeconds: 60 * 60,
+      refreshTtlSeconds: 30 * 24 * 60 * 60,
+    },
+    otp: {
+      // 5-minute OTP, 6 digits, 5 attempts. Admin-tunable later (§7).
+      ttlSeconds: 5 * 60,
+      length: 6,
+      maxAttempts: 5,
+    },
+    emailToken: {
+      // 24-hour email-verification link. Admin-tunable later (§7).
+      ttlSeconds: 24 * 60 * 60,
     },
   },
   beneficiary: {

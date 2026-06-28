@@ -13,6 +13,13 @@ async function bootstrap() {
     rawBody: true,
   });
   app.useLogger(app.get(Logger)); // structured logging via pino
+  // Web app (separate origin) calls the API with a Bearer token. Allow its
+  // origin + the Authorization/Idempotency-Key headers it sends.
+  app.enableCors({
+    origin: process.env.WEB_APP_BASE_URL ?? 'http://localhost:3000',
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
+  });
   app.use(helmet()); // security headers
   app.enableShutdownHooks(); // graceful shutdown (Prisma $disconnect, etc.)
   await app.listen(process.env.PORT ?? 3000);

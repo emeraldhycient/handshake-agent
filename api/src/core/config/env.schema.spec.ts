@@ -131,3 +131,29 @@ describe('validateEnv', () => {
     );
   });
 });
+
+// --- Auth env keys (Task 2: web-auth config groundwork) ---
+
+describe('env.schema auth keys', () => {
+  it('defaults JWT_SECRET to empty string and AUTH_DEV_EXPOSE_OTP to false', () => {
+    const env = validateEnv({ ...validRaw });
+    expect(env.JWT_SECRET).toBe('');
+    expect(env.AUTH_DEV_EXPOSE_OTP).toBe('false');
+  });
+
+  it('accepts a provided JWT_SECRET and dev-expose flag', () => {
+    const env = validateEnv({
+      ...validRaw,
+      JWT_SECRET: 's3cret',
+      AUTH_DEV_EXPOSE_OTP: 'true',
+    });
+    expect(env.JWT_SECRET).toBe('s3cret');
+    expect(env.AUTH_DEV_EXPOSE_OTP).toBe('true');
+  });
+
+  it('rejects an invalid AUTH_DEV_EXPOSE_OTP value', () => {
+    expect(() =>
+      validateEnv({ ...validRaw, AUTH_DEV_EXPOSE_OTP: 'maybe' }),
+    ).toThrow();
+  });
+});
