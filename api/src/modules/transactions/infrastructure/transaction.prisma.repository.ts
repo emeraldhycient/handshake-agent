@@ -31,6 +31,25 @@ import type {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * RFC 4122 UUID pattern (versions 1–8, case-insensitive).
+ * Used as a guard before any query against a `@db.Uuid` column: Postgres
+ * rejects non-UUID strings with "invalid input syntax for type uuid", which
+ * would surface as a 500 when e.g. a Blockradar manual-withdraw reference
+ * (not a UUID) reaches findByIdempotencyKey.
+ */
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Returns true when `value` is a syntactically valid UUID.
+ * A false return means querying a `@db.Uuid` column with this value would
+ * throw; callers must return null early rather than forwarding to Prisma.
+ */
+function isValidUuid(value: string): boolean {
+  return UUID_REGEX.test(value);
+}
+
 const TRANSACTION_SELECT = {
   id: true,
   proposalId: true,
@@ -218,6 +237,10 @@ export class TransactionPrismaRepository implements ITransactionRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async findById(id: string): Promise<TransactionRecord | null> {
+    // Guard: Transaction.id is @db.Uuid — a non-UUID value would cause Postgres
+    // to throw "invalid input syntax for type uuid". Return null safely instead.
+    if (!isValidUuid(id)) return null;
+
     const row = await this.prisma.transaction.findUnique({
       where: { id },
       select: TRANSACTION_SELECT,
@@ -227,6 +250,12 @@ export class TransactionPrismaRepository implements ITransactionRepository {
   }
 
   async findByIdempotencyKey(key: string): Promise<TransactionRecord | null> {
+    // Guard: Transaction.idempotencyKey is @db.Uuid — external references
+    // (e.g. a Blockradar manual-withdraw reference that is not a UUID) must
+    // be short-circuited here to avoid a Postgres "invalid input syntax" error
+    // that would surface as a 500 in the webhook handler.
+    if (!isValidUuid(key)) return null;
+
     const row = await this.prisma.transaction.findUnique({
       where: { idempotencyKey: key },
       select: TRANSACTION_SELECT,
