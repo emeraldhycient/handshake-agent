@@ -485,6 +485,19 @@ export class ConversationService implements IInboundHandler {
       return { replyText: guard.reply, flowSent: false };
     }
 
+    // Currency liveness gate: emit a graceful reply for supported-but-not-live fiats
+    // (e.g. GHS, RWF). Never build a proposal for a non-live currency (§3.1 — no fake quote).
+    const buyFiatCurrency = (intent as { fiatCurrency?: string }).fiatCurrency;
+    if (
+      buyFiatCurrency &&
+      !this.assetRegistry.isCurrencyLive(buyFiatCurrency)
+    ) {
+      return {
+        replyText: `We settle in NGN for now — ${buyFiatCurrency} isn't available yet.`,
+        flowSent: false,
+      };
+    }
+
     // Happy path: create a buy proposal (deterministic engine; model proposes, engine disposes — §3.1).
     const { proposalId, confirmation } =
       await this.proposalService.createBuyProposal({
@@ -538,6 +551,19 @@ export class ConversationService implements IInboundHandler {
     }
 
     const { user } = guard;
+
+    // Currency liveness gate: emit a graceful reply for supported-but-not-live fiats.
+    // Must come BEFORE the beneficiary lookup — never reach that for a non-live currency.
+    const sellFiatCurrency = (intent as { fiatCurrency?: string }).fiatCurrency;
+    if (
+      sellFiatCurrency &&
+      !this.assetRegistry.isCurrencyLive(sellFiatCurrency)
+    ) {
+      return {
+        replyText: `We settle in NGN for now — ${sellFiatCurrency} isn't available yet.`,
+        flowSent: false,
+      };
+    }
 
     // Resolve default bank beneficiary — must exist before creating the proposal.
     const beneficiary = await this.beneficiaryService.getDefault(

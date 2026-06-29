@@ -59,6 +59,7 @@ const fakeAssetRegistry = {
   network: jest.fn().mockReturnValue({ displayName: 'TRON' }),
   formatCrypto: jest.fn((sym: string, amt: string) => `${amt} ${sym}`),
   formatFiat: jest.fn((_code: string, amt: string) => `₦${amt}`),
+  isCurrencyLive: jest.fn().mockReturnValue(true),
 };
 
 // ---------------------------------------------------------------------------
@@ -463,6 +464,93 @@ describe('WebChatService', () => {
       txType: 'sell',
       proposalId: 'p-sell',
     });
+  });
+
+  // ── buy_crypto with non-live currency → currency_not_live (never a proposal) ──
+
+  it('buy_crypto with non-live fiatCurrency (RWF) → currency_not_live, no proposal', async () => {
+    // RWF is in FiatCurrencySchema but not enabled in config (enabled: false).
+    fakeAssetRegistry.isCurrencyLive.mockReturnValueOnce(false);
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'buy_crypto',
+      asset: 'USDT',
+      fiatAmount: '50000',
+      fiatCurrency: 'RWF',
+    });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'buy 50000 RWF of USDT',
+    });
+
+    expect(result.outcome).toEqual({
+      kind: 'currency_not_live',
+      currency: 'RWF',
+    });
+    expect(fakeProposalService.createBuyProposal).not.toHaveBeenCalled();
+  });
+
+  it('buy_crypto with live fiatCurrency (NGN) → normal proposal path', async () => {
+    fakeAssetRegistry.isCurrencyLive.mockReturnValueOnce(true);
+    const buyConf = {
+      proposalId: 'prop-live',
+      asset: 'USDT',
+      fiatAmount: '5000',
+      fiatCurrency: 'NGN',
+      cryptoAmount: '5.0',
+      fxRate: '1000',
+      spreadBps: 50,
+      processingFeeBps: 100,
+      processingFeeAmount: '50.00',
+      totalFiat: '5050.00',
+      expiresAt: new Date().toISOString(),
+    };
+    fakeProposalService.createBuyProposal.mockResolvedValue({
+      proposalId: 'prop-live',
+      quoteId: 'q-live',
+      confirmation: buyConf,
+    });
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'buy_crypto',
+      asset: 'USDT',
+      fiatAmount: '5000',
+      fiatCurrency: 'NGN',
+    });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'buy 5000 NGN of USDT',
+    });
+
+    expect(result.outcome).toMatchObject({
+      kind: 'proposal',
+      txType: 'buy',
+      proposalId: 'prop-live',
+    });
+  });
+
+  // ── sell_crypto with non-live currency → currency_not_live ─────────────────
+
+  it('sell_crypto with non-live fiatCurrency (RWF) → currency_not_live, no proposal', async () => {
+    fakeAssetRegistry.isCurrencyLive.mockReturnValueOnce(false);
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'sell_crypto',
+      asset: 'USDT',
+      cryptoAmount: '5',
+      fiatCurrency: 'RWF',
+    });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'sell 5 USDT for RWF',
+    });
+
+    expect(result.outcome).toEqual({
+      kind: 'currency_not_live',
+      currency: 'RWF',
+    });
+    expect(fakeProposalService.createSellProposal).not.toHaveBeenCalled();
+    expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
   });
 
   // ── sell_crypto, unverified → needs_kyc ───────────────────────────────────

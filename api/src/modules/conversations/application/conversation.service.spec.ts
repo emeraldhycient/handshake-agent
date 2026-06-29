@@ -513,6 +513,7 @@ function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
     ),
     isAssetEnabled: jest.fn(() => true),
     isFiatEnabled: jest.fn(() => true),
+    isCurrencyLive: jest.fn(() => true),
     isNetworkEnabled: jest.fn(() => true),
     isCapabilityEnabled: jest.fn(() => true),
     requireCapability: jest.fn(),
@@ -1663,6 +1664,58 @@ describe('ConversationService.handleInbound', () => {
     // Text fallback sent
     const sentText = captureFirstSentText(sender);
     expect(sentText).toMatch(/address|wallet|send/i);
+  });
+
+  // ── currency_not_live: buy_crypto with non-live fiat → graceful text, no proposal ──
+
+  it('buy_crypto with non-live fiatCurrency (RWF) → graceful text reply, no proposal, no beneficiary lookup', async () => {
+    const assetRegistry = makeAssetRegistry();
+    (assetRegistry.isCurrencyLive as jest.Mock) = jest
+      .fn()
+      .mockReturnValue(false);
+
+    const { svc, sender, proposalService } = buildService({
+      agentPort: makeAgentPort({
+        action: 'buy_crypto',
+        asset: 'USDT',
+        fiatAmount: '50000',
+        fiatCurrency: 'RWF',
+      }),
+      assetRegistry,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(proposalService.createBuyProposal).not.toHaveBeenCalled();
+    // A graceful message must be sent — it should mention the currency is not available.
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toMatch(/RWF|not available|settle/i);
+    // Must NOT say "only NGN" — that's the old hard-rejection pattern.
+    expect(sentText).not.toMatch(/only NGN/i);
+  });
+
+  it('sell_crypto with non-live fiatCurrency (GHS) → graceful text reply, no proposal', async () => {
+    const assetRegistry = makeAssetRegistry();
+    (assetRegistry.isCurrencyLive as jest.Mock) = jest
+      .fn()
+      .mockReturnValue(false);
+
+    const { svc, sender, proposalService, beneficiaryService } = buildService({
+      agentPort: makeAgentPort({
+        action: 'sell_crypto',
+        asset: 'USDT',
+        cryptoAmount: '5',
+        fiatCurrency: 'GHS',
+      }),
+      assetRegistry,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(proposalService.createSellProposal).not.toHaveBeenCalled();
+    expect(beneficiaryService.getDefault).not.toHaveBeenCalled();
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toMatch(/GHS|not available|settle/i);
   });
 
   // ── query_transactions (linked user) → text list + download CTA ────────────

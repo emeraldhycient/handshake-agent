@@ -209,6 +209,14 @@ export class WebChatService {
           summaryText = 'KYC required';
           break;
         }
+        if (!this.assetRegistry.isCurrencyLive(intent.fiatCurrency)) {
+          outcome = {
+            kind: 'currency_not_live',
+            currency: intent.fiatCurrency,
+          };
+          summaryText = `${intent.fiatCurrency} isn't available for settlement yet.`;
+          break;
+        }
         const { proposalId, confirmation } =
           await this.proposalService.createBuyProposal({
             userId,
@@ -223,6 +231,14 @@ export class WebChatService {
         if (user.kycStatus !== 'verified') {
           outcome = { kind: 'needs_kyc' };
           summaryText = 'KYC required';
+          break;
+        }
+        if (!this.assetRegistry.isCurrencyLive(intent.fiatCurrency)) {
+          outcome = {
+            kind: 'currency_not_live',
+            currency: intent.fiatCurrency,
+          };
+          summaryText = `${intent.fiatCurrency} isn't available for settlement yet.`;
           break;
         }
         const sellBeneficiary = input.beneficiaryId

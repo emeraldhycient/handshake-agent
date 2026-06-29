@@ -68,6 +68,7 @@ function makeAssetRegistry(): AssetRegistry {
   return {
     defaultFiat: jest.fn().mockReturnValue('NGN'),
     enabledCryptoAssets: jest.fn().mockReturnValue(['USDT']),
+    enabledFiats: jest.fn().mockReturnValue(['NGN']),
   } as unknown as AssetRegistry;
 }
 
@@ -195,6 +196,37 @@ describe('AnthropicLlmProvider', () => {
         // bare "what's my balance" → { action: 'check_balance' }.
         expect(prompt).toContain('check_balance: user wants to check');
         expect(prompt).toContain('set "asset"');
+      });
+
+      it('lists the currently live/enabled fiats from the registry', () => {
+        // The prompt must name the enabled fiats so the model knows what can
+        // settle today (NGN only at launch).
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).toContain('NGN');
+        // enabledFiats() was called — confirms dynamic rendering (no hardcoded value).
+        const registry = makeAssetRegistry();
+        // Cast through unknown: ConfigService mock satisfies the shape but the generic
+        // param `true` cannot be inferred from a plain object mock — the cast is safe
+        // here because we are only asserting on `registry.enabledFiats` being called.
+        new AnthropicLlmProvider(
+          makeConfigService(
+            'sk-test',
+          ) as unknown as import('@nestjs/config').ConfigService<
+            import('../../../core/config/env.schema').Env,
+            true
+          >,
+          registry,
+        ).buildSystemPrompt();
+        expect(registry.enabledFiats).toHaveBeenCalled();
+      });
+
+      it('instructs the model to extract any supported fiat (not only enabled ones)', () => {
+        // The model must pass-through whatever fiat the user names — the ENGINE
+        // decides liveness, not the model. The prompt must not tell the model to
+        // reject or refuse non-NGN fiats.
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).not.toMatch(/only (accept|use|support|NGN)/i);
+        expect(prompt).toMatch(/extract.*fiat|fiat.*extract/i);
       });
     });
   });

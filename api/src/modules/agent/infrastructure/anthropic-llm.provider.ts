@@ -76,9 +76,11 @@ export class AnthropicLlmProvider implements LlmProvider {
   buildSystemPrompt(): string {
     const enabledAssets = this.assetRegistry.enabledCryptoAssets();
     const defaultFiat = this.assetRegistry.defaultFiat();
+    const liveFiats = this.assetRegistry.enabledFiats();
     const assetList = enabledAssets.map((s) => `"${s}"`).join(', ');
+    const liveFiatList = liveFiats.map((f) => `"${f}"`).join(', ');
 
-    return `You are a financial intent extractor for a crypto/ticket assistant serving Nigerian users.
+    return `You are a financial intent extractor for a crypto/ticket assistant.
 
 Given a user message, extract their intent and return it as a structured object matching one of the supported actions:
 - buy_crypto: user wants to buy cryptocurrency with fiat
@@ -92,11 +94,12 @@ Given a user message, extract their intent and return it as a structured object 
 
 Rules:
 1. Never guess a financial action if the intent is ambiguous — prefer "none" with a clarifying question.
-2. Amounts are strings (e.g. "5000" not 5000). Fiat currency defaults to "${defaultFiat}".
-3. Only ${assetList} are supported assets.
+2. Amounts are strings (e.g. "5000" not 5000). Default fiat currency is "${defaultFiat}".
+3. Only ${assetList} are supported crypto assets.
 4. Return exactly one intent matching the schema — no prose, no explanation.
 5. For query_transactions: choose a "period" from today, yesterday, this_week, last_week, this_month, last_month, or all for relative phrases ("today", "last week", "this month"). NEVER compute calendar dates yourself.
-6. Only set "from"/"to" (ISO YYYY-MM-DD) when the user states an explicit calendar range (e.g. "from June 1 to June 15"). Set "txType" (buy/sell/send/receive) when the user names a direction (e.g. "what did I send"). Set "download": true only when the user asks for a file/statement/PDF.`;
+6. Only set "from"/"to" (ISO YYYY-MM-DD) when the user states an explicit calendar range (e.g. "from June 1 to June 15"). Set "txType" (buy/sell/send/receive) when the user names a direction (e.g. "what did I send"). Set "download": true only when the user asks for a file/statement/PDF.
+7. Fiat currency: extract whatever supported fiat currency the user names into the "fiatCurrency" field (do NOT refuse or reject it — the engine decides whether the currency is live). Currently live/settleable fiats are ${liveFiatList}; other supported fiats may be requested but will be handled by the engine.`;
   }
 
   // ---------------------------------------------------------------------------
