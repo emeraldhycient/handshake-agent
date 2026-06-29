@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { useStore } from "zustand"
 import { defaultChatStore } from "@/lib/store/chat-store"
+import { useAuthStore } from "@/lib/store/auth-store"
 import {
   buildConfirmForQuote,
   buildTicketConfirm,
@@ -23,6 +24,7 @@ import type { ChatMessage, TicketOption, ChatAction } from "@/lib/schemas"
 
 export function MobileShell({ store: injectedStore }: MobileShellProps) {
   const state = useStore(injectedStore ?? defaultChatStore)
+  const authStatus = useAuthStore((s) => s.status)
   const [tab, setTab] = useState<MobileTabId>("chat")
 
   function handleConfirm(message: ChatMessage) {
@@ -64,8 +66,22 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
             chips={state.chips.m}
             value={state.input.m}
             onChange={(v) => state.setInput("m", v)}
-            onSubmit={() => state.send("m", state.input.m)}
-            onChip={(a) => state.send("m", chipLabel(a), a)}
+            onSubmit={() => {
+              if (authStatus === "authenticated") {
+                void state.sendToAgent("m", state.input.m)
+              } else {
+                state.send("m", state.input.m)
+              }
+              state.setInput("m", "")
+            }}
+            onChip={(a) => {
+              const label = chipLabel(a)
+              if (authStatus === "authenticated") {
+                void state.sendToAgent("m", label)
+              } else {
+                state.send("m", label, a)
+              }
+            }}
             density="mobile"
           />
         </>

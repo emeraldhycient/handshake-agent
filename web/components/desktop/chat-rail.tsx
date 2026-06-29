@@ -2,6 +2,7 @@
 
 import { useStore } from "zustand"
 import { defaultChatStore } from "@/lib/store/chat-store"
+import { useAuthStore } from "@/lib/store/auth-store"
 import {
   buildConfirmForQuote,
   buildTicketConfirm,
@@ -36,6 +37,7 @@ import type { ChatMessage, TicketOption } from "@/lib/schemas"
  */
 export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
   const state = useStore(injectedStore ?? defaultChatStore)
+  const authStatus = useAuthStore((s) => s.status)
 
   // ── Quote confirm ──────────────────────────────────────────────────────────
   function handleConfirm(message: ChatMessage) {
@@ -95,8 +97,22 @@ export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
         chips={state.chips.d}
         value={state.input.d}
         onChange={(v) => state.setInput("d", v)}
-        onSubmit={() => state.send("d", state.input.d)}
-        onChip={(a) => state.send("d", chipLabel(a), a)}
+        onSubmit={() => {
+          if (authStatus === "authenticated") {
+            void state.sendToAgent("d", state.input.d)
+          } else {
+            state.send("d", state.input.d)
+          }
+          state.setInput("d", "")
+        }}
+        onChip={(a) => {
+          const label = chipLabel(a)
+          if (authStatus === "authenticated") {
+            void state.sendToAgent("d", label)
+          } else {
+            state.send("d", label, a)
+          }
+        }}
         density="desktop"
       />
 

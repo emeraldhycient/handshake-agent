@@ -7,9 +7,10 @@
  * may ever produce a receipt. This test suite explicitly proves that invariant.
  */
 
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import { buildBuyConfirm } from "@/lib/chat/flow"
 import { createChatStore } from "./chat-store"
+import type { WebChatResponse } from "@handshake-agent/contracts"
 
 /** Synchronous scheduler — no setTimeout in tests */
 const immediate = (fn: () => void) => fn()
@@ -308,5 +309,141 @@ describe("chat store", () => {
 
     // Success overlay is still open — auto-dismiss hasn't fired yet
     expect(store.getState().successOpen).toBe(true)
+  })
+})
+
+// ─── sendToAgent ──────────────────────────────────────────────────────────────
+
+function makeResponse(outcome: WebChatResponse["outcome"]): WebChatResponse {
+  return {
+    reply: { text: "ok" },
+    outcome,
+    conversationId: "00000000-0000-0000-0000-000000000001",
+    messageId: "00000000-0000-0000-0000-000000000002",
+  }
+}
+
+describe("sendToAgent", () => {
+  let store: ReturnType<typeof createChatStore>
+  let mockApi: ReturnType<
+    typeof vi.fn<(body: { text: string }) => Promise<WebChatResponse>>
+  >
+
+  beforeEach(() => {
+    mockApi = vi.fn<(body: { text: string }) => Promise<WebChatResponse>>()
+    store = createChatStore({ schedule: immediate, chatApi: mockApi })
+  })
+
+  it("clarification outcome → text message + typing cleared", async () => {
+    mockApi.mockResolvedValue(
+      makeResponse({ kind: "clarification", text: "Please clarify?" })
+    )
+    await store.getState().sendToAgent("m", "do something")
+    const thread = store.getState().threads.m
+    const last = thread.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") expect(last.text).toBe("Please clarify?")
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("receive outcome → receive-kind message", async () => {
+    mockApi.mockResolvedValue(
+      makeResponse({
+        kind: "receive",
+        deposit: {
+          asset: "USDT",
+          network: "TRON",
+          address: "TXabcdef1234",
+          minAmount: "10",
+          etaText: "~5 min",
+        },
+      })
+    )
+    await store.getState().sendToAgent("m", "receive USDT")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("receive")
+    if (last.kind === "receive") {
+      expect(last.asset).toBe("USDT")
+      expect(last.network).toBe("TRON")
+      expect(last.address).toBe("TXabcdef1234")
+    }
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("proposal outcome → quote-kind message + pendingProposalId stashed", async () => {
+    const proposalId = "11111111-1111-1111-1111-111111111111"
+    mockApi.mockResolvedValue(
+      makeResponse({
+        kind: "proposal",
+        txType: "buy",
+        proposalId,
+        confirmation: {
+          proposalId,
+          asset: "USDT",
+          fiatAmount: "50000",
+          fiatCurrency: "NGN",
+          cryptoAmount: "31.25",
+          fxRate: "1600",
+          spreadBps: 150,
+          processingFeeBps: 50,
+          processingFeeAmount: "250",
+          totalFiat: "50250",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        },
+      })
+    )
+    await store.getState().sendToAgent("m", "buy 50000 USDT")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("quote")
+    expect(store.getState().pendingProposalId).toBe(proposalId)
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("needs_kyc outcome → text message about verification", async () => {
+    mockApi.mockResolvedValue(makeResponse({ kind: "needs_kyc" }))
+    await store.getState().sendToAgent("m", "buy crypto")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") expect(last.text).toContain("verification")
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("needs_beneficiary outcome → text message", async () => {
+    mockApi.mockResolvedValue(
+      makeResponse({
+        kind: "needs_beneficiary",
+        beneficiaryType: "bank_account",
+      })
+    )
+    await store.getState().sendToAgent("m", "sell")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("not_supported outcome → 'not supported' text message", async () => {
+    mockApi.mockResolvedValue(
+      makeResponse({ kind: "not_supported", action: "swap" })
+    )
+    await store.getState().sendToAgent("m", "swap ETH to BTC")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") expect(last.text).toContain("not supported")
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("error path → fallback error message + typing cleared", async () => {
+    mockApi.mockRejectedValue(new Error("Network error"))
+    await store.getState().sendToAgent("m", "something")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") expect(last.text).toContain("trouble")
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("typing is never left stuck — even on error", async () => {
+    mockApi.mockRejectedValue(new Error("500"))
+    await store.getState().sendToAgent("m", "send")
+    expect(store.getState().typing.m).toBe(false)
   })
 })

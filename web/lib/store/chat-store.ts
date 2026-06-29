@@ -30,6 +30,13 @@ import type {
   ChatSurface,
   ConfirmPayload,
 } from "@/lib/schemas"
+import { sendChatMessage as defaultSendChatMessage } from "@/lib/api/chat"
+import type {
+  WebChatResponse,
+  BuyProposalConfirmation,
+  SellProposalConfirmation,
+  SendProposalConfirmation,
+} from "@handshake-agent/contracts"
 
 // Re-export chipLabel so components can import it from the store module if needed.
 export { chipLabel }
@@ -63,8 +70,12 @@ interface ChatState {
   successText: string
   successSurface: OverlaySurface
 
+  // Live agent proposal tracking
+  pendingProposalId: string | null
+
   // Actions
   send(surface: ChatSurface, text: string, action?: ChatAction): void
+  sendToAgent(surface: ChatSurface, text: string): Promise<void>
   setInput(surface: ChatSurface, value: string): void
   openConfirm(surface: ChatSurface, payload: ConfirmPayload): void
   cancel(): void
@@ -81,6 +92,11 @@ interface ChatState {
 interface CreateChatStoreOptions {
   /** Inject a custom scheduler. Default: `(fn) => setTimeout(fn, 680)`. */
   schedule?: Scheduler
+  /**
+   * Inject a mock API function for testing `sendToAgent` without module-level
+   * mocking. Defaults to the real `sendChatMessage` from `@/lib/api/chat`.
+   */
+  chatApi?: (body: { text: string }) => Promise<WebChatResponse>
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -95,6 +111,7 @@ interface CreateChatStoreOptions {
  */
 export function createChatStore(options: CreateChatStoreOptions = {}) {
   const schedule: Scheduler = options.schedule ?? ((fn) => setTimeout(fn, 680))
+  const chatApiFn = options.chatApi ?? defaultSendChatMessage
 
   // Per-store monotonic counter — deterministic, no Math.random / Date.
   let _idCounter = 0
@@ -132,7 +149,188 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
     successText: "",
     successSurface: "m",
 
+    pendingProposalId: null,
+
     // ── Actions ────────────────────────────────────────────────────────────────
+
+    async sendToAgent(surface, text) {
+      const trimmed = text.trim()
+      if (!trimmed) return
+
+      const userMsg: ChatMessage = {
+        id: nextId(),
+        role: "user",
+        kind: "text",
+        text: trimmed,
+      }
+
+      set((s) => ({
+        threads: { ...s.threads, [surface]: [...s.threads[surface], userMsg] },
+        chips: { ...s.chips, [surface]: [] },
+        typing: { ...s.typing, [surface]: true },
+      }))
+
+      try {
+        const response = await chatApiFn({ text: trimmed })
+        const { outcome } = response
+
+        const messages: ChatMessage[] = []
+
+        if (outcome.kind === "clarification") {
+          messages.push({
+            id: nextId(),
+            role: "assistant",
+            kind: "text",
+            text: outcome.text,
+          })
+        } else if (outcome.kind === "receive") {
+          const d = outcome.deposit
+          messages.push({
+            id: nextId(),
+            role: "assistant",
+            kind: "receive",
+            asset: d.asset,
+            network: d.network,
+            address: d.address,
+            minDeposit: d.minAmount ?? "—",
+            creditedEta: d.etaText ?? "~30 min",
+          })
+        } else if (outcome.kind === "proposal") {
+          const c = outcome.confirmation
+          const rows: Array<{ label: string; value: string }> = []
+          let receiveAmt = ""
+          let receiveSub = ""
+          let totalLabel = "Total"
+          let totalValue = ""
+          const lockSeconds = Math.max(
+            0,
+            Math.round((new Date(c.expiresAt).getTime() - Date.now()) / 1000)
+          )
+
+          if (outcome.txType === "buy") {
+            const b = c as BuyProposalConfirmation
+            receiveAmt = b.cryptoAmount + " " + b.asset
+            receiveSub = "You receive"
+            rows.push({
+              label: "You pay",
+              value: b.fiatCurrency + " " + b.fiatAmount,
+            })
+            rows.push({
+              label: "Rate",
+              value: "1 " + b.asset + " = " + b.fiatCurrency + " " + b.fxRate,
+            })
+            rows.push({
+              label: "Fee",
+              value: b.fiatCurrency + " " + b.processingFeeAmount,
+            })
+            totalLabel = "Total charged"
+            totalValue = b.fiatCurrency + " " + b.totalFiat
+          } else if (outcome.txType === "sell") {
+            const s = c as SellProposalConfirmation
+            receiveAmt = s.fiatCurrency + " " + s.netFiatAmount
+            receiveSub = "You receive"
+            rows.push({
+              label: "You sell",
+              value: s.cryptoAmount + " " + s.asset,
+            })
+            rows.push({
+              label: "Rate",
+              value: "1 " + s.asset + " = " + s.fiatCurrency + " " + s.fxRate,
+            })
+            rows.push({
+              label: "Fee",
+              value: s.fiatCurrency + " " + s.processingFeeAmount,
+            })
+            if (s.beneficiaryLabel) {
+              rows.push({ label: "To", value: s.beneficiaryLabel })
+            }
+            totalLabel = "Net payout"
+            totalValue = s.fiatCurrency + " " + s.netFiatAmount
+          } else if (outcome.txType === "send") {
+            const sn = c as SendProposalConfirmation
+            receiveAmt = sn.cryptoAmount + " " + sn.asset
+            receiveSub = "Amount sent"
+            rows.push({ label: "To", value: sn.toAddressMasked })
+            if (sn.beneficiaryLabel) {
+              rows.push({ label: "Beneficiary", value: sn.beneficiaryLabel })
+            }
+            rows.push({ label: "Network", value: sn.network })
+            rows.push({
+              label: "Network fee",
+              value: sn.networkFeeCrypto + " " + sn.asset,
+            })
+            totalLabel = "Total debit"
+            totalValue = sn.totalDebit + " " + sn.asset
+          }
+
+          messages.push({
+            id: nextId(),
+            role: "assistant",
+            kind: "quote",
+            // send is a valid ChatAction; buy and sell are also valid
+            action: outcome.txType as ChatAction,
+            receiveAmt,
+            receiveSub,
+            rows,
+            totalLabel,
+            totalValue,
+            lockSeconds,
+          })
+
+          // Stash proposalId for the future execute phase.
+          set({ pendingProposalId: outcome.proposalId })
+        } else if (outcome.kind === "needs_kyc") {
+          messages.push({
+            id: nextId(),
+            role: "assistant",
+            kind: "text",
+            text: "You need to complete verification first.",
+          })
+        } else if (outcome.kind === "needs_beneficiary") {
+          messages.push({
+            id: nextId(),
+            role: "assistant",
+            kind: "text",
+            text: `Please add a ${
+              outcome.beneficiaryType === "bank_account"
+                ? "bank account"
+                : "crypto address"
+            } first.`,
+          })
+        } else if (outcome.kind === "not_supported") {
+          messages.push({
+            id: nextId(),
+            role: "assistant",
+            kind: "text",
+            text: "That's not supported yet.",
+          })
+        }
+
+        set((s) => ({
+          threads: {
+            ...s.threads,
+            [surface]: [...s.threads[surface], ...messages],
+          },
+          typing: { ...s.typing, [surface]: false },
+          chips: { ...s.chips, [surface]: startChips() },
+        }))
+      } catch {
+        const errMsg: ChatMessage = {
+          id: nextId(),
+          role: "assistant",
+          kind: "text",
+          text: "I'm having trouble reaching the assistant right now — please try again.",
+        }
+        set((s) => ({
+          threads: {
+            ...s.threads,
+            [surface]: [...s.threads[surface], errMsg],
+          },
+          typing: { ...s.typing, [surface]: false },
+          chips: { ...s.chips, [surface]: startChips() },
+        }))
+      }
+    },
 
     send(surface, text, explicitAction) {
       const trimmed = text.trim()
