@@ -116,6 +116,7 @@ enum IntentAction {
   swap
   buy_ticket
   check_balance
+  query_transactions
   none
 
   @@map("intent_action")
