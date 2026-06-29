@@ -27,6 +27,7 @@ export function PinPad({
   onFaceId,
   onCancel,
   error,
+  errorText,
 }: PinPadProps) {
   // Emit-only: the shell wraps this in a focus-trap dialog (see FocusTrap). PinPad must not Esc-dismiss —
   // a PIN gate is dismissed only via Cancel.
@@ -54,7 +55,7 @@ export function PinPad({
             onBack={onBack}
             onFaceId={onFaceId}
             onCancel={onCancel}
-            error={error}
+            error={errorText ?? error}
           />
         </div>
       ) : (
@@ -66,7 +67,7 @@ export function PinPad({
           onBack={onBack}
           onFaceId={onFaceId}
           onCancel={onCancel}
-          error={error}
+          error={errorText ?? error}
         />
       )}
     </div>

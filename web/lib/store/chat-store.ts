@@ -666,17 +666,14 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           const payInMsg: ChatMessage = {
             id: nextId(),
             role: "assistant",
-            kind: "receipt",
-            title: "Transfer required",
-            subtitle: `Send ${formatNGN(p.amount)} to complete your purchase`,
-            amount: formatNGN(p.amount),
-            rows: [
-              { label: "Account number", value: p.accountNumber },
-              { label: "Bank", value: p.bankName },
-              { label: "Reference", value: p.providerRef },
-              { label: "Status", value: "Pending payment" },
-            ],
-            txRef: `REF · ${p.providerRef}`,
+            kind: "pay_in",
+            transactionId: result.transactionId,
+            accountNumber: p.accountNumber,
+            bankName: p.bankName,
+            providerRef: p.providerRef,
+            amount: p.amount,
+            currency: p.currency,
+            status: "pending",
           }
 
           set((s) => ({

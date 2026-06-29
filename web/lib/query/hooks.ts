@@ -6,6 +6,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { gateway } from "@/lib/api/gateway"
+import { getTransaction } from "@/lib/api/chat"
 import type { ChatAction } from "@/lib/schemas"
 import { qk } from "./keys"
 
@@ -88,6 +89,31 @@ export function useSearchCatalog() {
     queryKey: qk.searchCatalog,
     queryFn: () => gateway.getSearchCatalog(),
     staleTime: 300_000,
+  })
+}
+
+/**
+ * Poll a transaction's status — used by PayInCardLive after executeProposal
+ * returns status:"settling". Refetches every 4 s until status === "completed"
+ * or the query is disabled.
+ *
+ * Pass `enabled: false` to pause polling (e.g. once completed).
+ */
+export function useTransactionStatus(
+  transactionId: string | null,
+  options?: { enabled?: boolean }
+) {
+  const isCompleted = false // caller can derive this from data and pass enabled
+  return useQuery({
+    queryKey: qk.transactionStatus(transactionId ?? ""),
+    queryFn: () => getTransaction(transactionId!),
+    enabled: !!transactionId && options?.enabled !== false && !isCompleted,
+    staleTime: 0,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      if (status === "completed" || status === "failed") return false
+      return 4_000
+    },
   })
 }
 

@@ -315,6 +315,178 @@ describe("chat store", () => {
   })
 })
 
+// ─── buy execute flow (authenticated path) ───────────────────────────────────
+
+describe("buy execute flow (authenticated path)", () => {
+  const proposalId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+  function makeAuthApi() {
+    return vi.fn<
+      (
+        id: string
+      ) => Promise<
+        import("@handshake-agent/contracts").AuthorizeProposalResponse
+      >
+    >(() =>
+      Promise.resolve({
+        directiveId: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        nonce: "n0nce_secret",
+        expiresAt: new Date(Date.now() + 30_000).toISOString(),
+      })
+    )
+  }
+
+  it("confirmToPin (authenticated) calls authorizeApi and opens pin pad", async () => {
+    const authorizeApi = makeAuthApi()
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+    })
+    const { openConfirm, confirmToPin } = store.getState()
+    openConfirm("m", buildBuyConfirm())
+    store.setState({ pendingProposalId: proposalId })
+    await confirmToPin()
+
+    expect(authorizeApi).toHaveBeenCalledWith(proposalId)
+    expect(store.getState().pinOpen).toBe(true)
+    expect(store.getState().confirmOpen).toBe(false)
+    expect(store.getState()._directiveId).toBe(
+      "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    )
+  })
+
+  it("confirmToPin failure surfaces error on confirm sheet, does NOT open pin", async () => {
+    const authorizeApi = vi.fn<
+      (
+        id: string
+      ) => Promise<
+        import("@handshake-agent/contracts").AuthorizeProposalResponse
+      >
+    >(() => Promise.reject(new Error("Unauthorized")))
+    const store = createChatStore({ schedule: immediate, authorizeApi })
+    store.getState().openConfirm("m", buildBuyConfirm())
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+
+    expect(store.getState().pinOpen).toBe(false)
+    expect(store.getState().confirmOpen).toBe(true)
+    expect(store.getState().pinError).toBe("Unauthorized")
+  })
+
+  it("pinComplete (settling) appends pay_in card and starts polling", async () => {
+    const transactionId = "tttttttt-tttt-tttt-tttt-tttttttttttt"
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn<
+      (
+        id: string,
+        body: {
+          directiveId: string
+          nonce: string
+          pin: string
+          deviceFingerprint?: string
+          idempotencyKey: string
+        }
+      ) => Promise<import("@handshake-agent/contracts").ExecuteProposalResponse>
+    >(() =>
+      Promise.resolve({
+        transactionId,
+        status: "settling" as const,
+        payment: {
+          accountNumber: "0123456789",
+          bankName: "Test Bank",
+          providerRef: "REF001",
+          amount: "50250",
+          currency: "NGN",
+        },
+      })
+    )
+    const pollApi = vi.fn<
+      (
+        id: string
+      ) => Promise<
+        import("@handshake-agent/contracts").TransactionStatusResponse
+      >
+    >(() =>
+      Promise.resolve({
+        id: transactionId,
+        type: "buy",
+        status: "settling",
+        createdAt: new Date().toISOString(),
+      })
+    )
+
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+      pollApi,
+    })
+    store.getState().openConfirm("m", buildBuyConfirm())
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    const msgs = store.getState().threads.m
+    const payIn = msgs.find((m) => m.kind === "pay_in")
+    expect(payIn).toBeDefined()
+    if (payIn?.kind === "pay_in") {
+      expect(payIn.accountNumber).toBe("0123456789")
+      expect(payIn.bankName).toBe("Test Bank")
+      expect(payIn.providerRef).toBe("REF001")
+      expect(payIn.transactionId).toBe(transactionId)
+    }
+    expect(store.getState().pinOpen).toBe(false)
+    expect(store.getState().pending).toBeNull()
+  })
+
+  it("pinComplete (completed) appends receipt and opens success overlay", async () => {
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.resolve({
+        transactionId: "tx-complete",
+        status: "completed" as const,
+      })
+    )
+
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+    })
+    store.getState().openConfirm("m", buildBuyConfirm())
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    const msgs = store.getState().threads.m
+    expect(msgs.some((m) => m.kind === "receipt")).toBe(true)
+    expect(store.getState().successOpen).toBe(true)
+    expect(store.getState().pinOpen).toBe(false)
+  })
+
+  it("pinComplete wrong PIN shows error on pin pad and re-opens it", async () => {
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() => Promise.reject(new Error("Incorrect PIN")))
+
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+    })
+    store.getState().openConfirm("m", buildBuyConfirm())
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "9999" })
+    await store.getState().pinComplete()
+
+    expect(store.getState().pinOpen).toBe(true)
+    expect(store.getState().pin).toBe("")
+    expect(store.getState().pinError).toBe("Incorrect PIN")
+  })
+})
+
 // ─── sendToAgent ──────────────────────────────────────────────────────────────
 
 function makeResponse(outcome: WebChatResponse["outcome"]): WebChatResponse {

@@ -121,7 +121,7 @@ export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
         open={showConfirm}
         payload={state.pending}
         density="desktop"
-        onConfirm={state.confirmToPin}
+        onConfirm={() => void state.confirmToPin()}
         onCancel={state.cancel}
       />
 
@@ -134,8 +134,9 @@ export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
             density="desktop"
             onDigit={state.pressPin}
             onBack={state.pinBack}
-            onFaceId={state.pinComplete}
+            onFaceId={() => void state.pinComplete()}
             onCancel={state.cancel}
+            errorText={state.pinError ?? undefined}
           />
         </FocusTrap>
       )}

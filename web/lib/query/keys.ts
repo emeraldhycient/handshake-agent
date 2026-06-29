@@ -15,4 +15,5 @@ export const qk = {
   searchCatalog: ["searchCatalog"] as const,
   auth: ["auth"] as const,
   me: ["auth", "me"] as const,
+  transactionStatus: (id: string) => ["transaction", id, "status"] as const,
 } as const

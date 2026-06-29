@@ -96,7 +96,7 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
         open={showConfirm}
         payload={state.pending}
         density="mobile"
-        onConfirm={state.confirmToPin}
+        onConfirm={() => void state.confirmToPin()}
         onCancel={state.cancel}
       />
 
@@ -108,8 +108,9 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
             density="mobile"
             onDigit={state.pressPin}
             onBack={state.pinBack}
-            onFaceId={state.pinComplete}
+            onFaceId={() => void state.pinComplete()}
             onCancel={state.cancel}
+            errorText={state.pinError ?? undefined}
           />
         </FocusTrap>
       )}

@@ -13,6 +13,7 @@ import type {
   TicketsView,
   TicketOption,
   ReceiptView,
+  PayInView,
   ChatMessage,
   ChatAction,
   ConfirmPayload,
@@ -186,6 +187,16 @@ export interface PinPadProps {
   onCancel: () => void
   /** Error message shown below the dots after a wrong PIN / expired directive. */
   error?: string | null
+  /** Alias for `error` — preferred when passed from the store's `pinError` field. */
+  errorText?: string
+}
+
+// ─── Pay-in card (Phase 4) ────────────────────────────────────────────────────
+
+/** 11.6 — Bank transfer card shown while a buy order is settling */
+export type PayInCardProps = PayInView & {
+  density: Density
+  className?: string
 }
 
 /** 13.3 */
