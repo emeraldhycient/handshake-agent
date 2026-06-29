@@ -1,5 +1,6 @@
 export * from './buy-order.dto'
 export * from './config.dto'
 export * from './kyc-complete.dto'
+export * from './transaction.dto'
 export * from './wallet-backfill.dto'
 export * from './wallet.dto'

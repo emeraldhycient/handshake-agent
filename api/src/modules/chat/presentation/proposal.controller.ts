@@ -21,6 +21,7 @@ import {
   Post,
   Get,
   Param,
+  Query,
   Body,
   UseGuards,
   Inject,
@@ -34,8 +35,10 @@ import {
 import type {
   AuthorizeProposalResponse,
   ExecuteProposalResponse,
+  TransactionListResponse,
   TransactionStatusResponse,
 } from '@handshake-agent/contracts';
+import { TransactionListResponseSchema } from '@handshake-agent/contracts';
 
 import {
   JwtAuthGuard,
@@ -86,6 +89,10 @@ import { ExecuteProposalDto } from './dto/proposal.dto';
 
 // The executable proposal statuses (must match the engine's own check).
 const EXECUTABLE_STATUSES = new Set<string>(['pending', 'confirmed']);
+
+// Pagination limits for GET /transactions
+const DEFAULT_LIMIT = 25;
+const MAX_LIMIT = 100;
 
 @Controller('chat/proposals')
 @UseGuards(JwtAuthGuard)
@@ -287,6 +294,48 @@ export class TransactionStatusController {
     @Inject(SETTLEMENT_REPOSITORY)
     private readonly settlementRepo: ISettlementRepository,
   ) {}
+
+  @Get()
+  async list(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('limit') limitRaw?: string,
+    @Query('cursor') cursor?: string,
+  ): Promise<TransactionListResponse> {
+    const limit = Math.min(
+      Math.max(Number(limitRaw) || DEFAULT_LIMIT, 1),
+      MAX_LIMIT,
+    );
+    const rows = await this.transactionRepo.findByUserId(user.userId, {
+      limit,
+      cursor,
+    });
+    const items = rows.map((t) => {
+      const meta = t.metadata;
+      const str = (k: string) =>
+        typeof meta[k] === 'string' ? meta[k] : undefined;
+      const counterparty =
+        str('destination') ?? str('counterparty') ?? str('senderAddress');
+      return {
+        id: t.id,
+        type: t.type,
+        status: t.status,
+        ...(str('asset') ? { asset: str('asset') } : {}),
+        ...(str('cryptoAmount') ? { cryptoAmount: str('cryptoAmount') } : {}),
+        ...(str('fiatAmount') ? { fiatAmount: str('fiatAmount') } : {}),
+        ...(str('fiatCurrency') ? { fiatCurrency: str('fiatCurrency') } : {}),
+        ...(counterparty ? { counterparty } : {}),
+        createdAt: t.createdAt.toISOString(),
+      };
+    });
+    const nextCursor =
+      rows.length === limit
+        ? rows[rows.length - 1].createdAt.toISOString()
+        : undefined;
+    return TransactionListResponseSchema.parse({
+      items,
+      ...(nextCursor ? { nextCursor } : {}),
+    });
+  }
 
   @Get(':id')
   async getStatus(

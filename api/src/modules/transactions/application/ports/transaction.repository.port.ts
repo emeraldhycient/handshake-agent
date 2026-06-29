@@ -154,4 +154,14 @@ export interface ITransactionRepository {
    * createCollection so idempotent replay can reconstruct the full result (C2).
    */
   mergeMetadata(id: string, extra: Record<string, unknown>): Promise<void>;
+
+  /**
+   * Lists a user's transactions newest-first for the activity feed.
+   * Keyset paginated on (createdAt desc, id desc); `cursor` is the last seen
+   * createdAt ISO string. Returns up to `limit` records.
+   */
+  findByUserId(
+    userId: string,
+    opts: { limit: number; cursor?: string },
+  ): Promise<TransactionRecord[]>;
 }
