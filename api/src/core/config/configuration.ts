@@ -317,6 +317,21 @@ export interface ReconciliationConfig {
   batchSize: number;
 }
 
+/**
+ * Statement / transaction-history configuration (CLAUDE.md §7).
+ * All values are admin-tunable later via the DB-admin AppSetting layer.
+ */
+export interface StatementConfig {
+  /** TTL (seconds) for a signed statement download link. Default 900 (15 min). */
+  linkTtlSeconds: number;
+  /** Max history window in days; longer requests are clamped. Default 365. */
+  maxWindowDays: number;
+  /** Max rows returned to the chat card / statement. Default 100 (truncation surfaced). */
+  rowCap: number;
+  /** Fixed offset (minutes) for local day boundaries. WAT = UTC+1, no DST → 60. */
+  timezoneOffsetMinutes: number;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
@@ -328,6 +343,7 @@ export interface AppConfig {
   catalog: CatalogConfig;
   beneficiary: BeneficiaryConfig;
   reconciliation: ReconciliationConfig;
+  statement: StatementConfig;
 }
 
 export default (): AppConfig => ({
@@ -512,5 +528,13 @@ export default (): AppConfig => ({
     gracePeriodSec: 120,
     // Process at most 20 rows per tick to bound settlement-engine load.
     batchSize: 20,
+  },
+  statement: {
+    // 15-minute signed-link validity, 1-year max history window, 100-row page cap,
+    // and WAT (UTC+1, no DST) day boundaries. Admin-tunable later (DB-admin layer, §7).
+    linkTtlSeconds: 900,
+    maxWindowDays: 365,
+    rowCap: 100,
+    timezoneOffsetMinutes: 60,
   },
 });

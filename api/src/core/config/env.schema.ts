@@ -74,6 +74,10 @@ export const envSchema = z.object({
   // settlement kernel throws ReceiptNotSignableError before inserting a receipt
   // (fail-closed — no unsigned receipt is ever written).
   RECEIPT_SIGNING_KEY: z.string().optional().default(''),
+  // HMAC-SHA256 key for signing statement download links. Empty is tolerated at
+  // boot but StatementTokenService.sign() throws StatementNotSignableError and the
+  // public download endpoint returns 503 (fail-closed — no unsigned link is issued).
+  STATEMENT_SIGNING_KEY: z.string().optional().default(''),
 
   // --- KYC (task K1) ---
   // When 'true', the MockKycProvider is active (the only adapter at launch).
@@ -109,6 +113,13 @@ export const envSchema = z.object({
   // Coerce '' → undefined so an empty placeholder passes boot-time validation
   // (same pattern as ANTHROPIC_API_KEY above).
   WEB_APP_BASE_URL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().url().optional(),
+  ),
+  // Public base URL of THIS api (used to build absolute statement download links
+  // for both web and WhatsApp). Coerce '' → undefined; when unset the token
+  // service falls back to `http://localhost:${PORT}` (dev only).
+  PUBLIC_API_BASE_URL: z.preprocess(
     (v) => (v === '' ? undefined : v),
     z.string().url().optional(),
   ),
