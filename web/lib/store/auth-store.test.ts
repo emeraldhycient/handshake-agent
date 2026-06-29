@@ -161,14 +161,25 @@ describe("auth store", () => {
     expect(localStorage.getItem(REFRESH_KEY)).toBe("new-refresh")
   })
 
-  it("setTokens on an anonymous store does not change status", () => {
+  it("setTokens transitions status to authenticated (a valid token = a session)", () => {
+    // Reload-time rehydration and the axios silent-refresh both call setTokens;
+    // they MUST mark the session authenticated, or the chat composer falls back
+    // to the mock agent path. (It still does not populate user — that is fetched
+    // separately via /auth/me.)
     const store = createAuthStore()
 
     store.getState().setTokens("access", "refresh")
 
     const s = store.getState()
-    expect(s.status).toBe("anonymous")
+    expect(s.status).toBe("authenticated")
     expect(s.user).toBeNull()
+  })
+
+  it("setAccessToken transitions status to authenticated", () => {
+    const store = createAuthStore()
+    store.getState().setAccessToken("fresh-access")
+    expect(store.getState().status).toBe("authenticated")
+    expect(store.getState().accessToken).toBe("fresh-access")
   })
 
   // ─── setUser ────────────────────────────────────────────────────────────────
@@ -182,7 +193,11 @@ describe("auth store", () => {
       user: mockUser,
     })
 
-    const updatedUser: MeResponse = { ...mockUser, hasPin: true, kycTier: "tier2" }
+    const updatedUser: MeResponse = {
+      ...mockUser,
+      hasPin: true,
+      kycTier: "tier2",
+    }
     store.getState().setUser(updatedUser)
 
     const s = store.getState()
