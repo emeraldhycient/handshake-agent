@@ -44,6 +44,10 @@ import {
   ProposalController,
   TransactionStatusController,
 } from './presentation/proposal.controller';
+import {
+  TransactionHistoryController,
+  StatementDownloadController,
+} from './presentation/transaction-history.controller';
 
 @Module({
   imports: [
@@ -58,6 +62,10 @@ import {
   controllers: [
     ChatController,
     ProposalController,
+    // History + statement routes must precede TransactionStatusController so the
+    // literal `transactions/history` path resolves before `transactions/:id`.
+    TransactionHistoryController,
+    StatementDownloadController,
     TransactionStatusController,
   ],
   providers: [
