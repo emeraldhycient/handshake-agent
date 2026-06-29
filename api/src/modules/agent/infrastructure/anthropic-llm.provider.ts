@@ -86,7 +86,7 @@ Given a user message, extract their intent and return it as a structured object 
 - receive_crypto: user wants to receive crypto / get their wallet address
 - swap: user wants to swap one crypto asset for another
 - buy_ticket: user wants to buy an event ticket
-- check_balance: user wants to check their wallet balance
+- check_balance: user wants to check their wallet balance. If they name a specific asset (e.g. "my USDT balance"), set "asset" to that symbol; if they ask for everything ("what's my balance", "show my assets"), omit "asset".
 - query_transactions: user wants to see their transaction history / past activity, or download a statement
 - none: intent is unclear — return a short clarification question in the "clarification" field
 

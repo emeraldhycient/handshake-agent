@@ -754,6 +754,54 @@ describe("sendToAgent", () => {
     expect(store.getState().typing.m).toBe(false)
   })
 
+  it("balance outcome → balance card with formatted total + asset rows", async () => {
+    mockApi.mockResolvedValue(
+      makeResponse({
+        kind: "balance",
+        fiatCurrency: "NGN",
+        totalFiatValue: "16800.00",
+        balances: [
+          {
+            asset: "USDT",
+            network: "TRON",
+            amount: "10.5",
+            fiatValue: "16800.00",
+          },
+        ],
+      })
+    )
+    await store.getState().sendToAgent("m", "what's my balance")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("balance")
+    if (last.kind === "balance") {
+      expect(last.total).toContain("₦16,800.00")
+      expect(last.assets).toHaveLength(1)
+      expect(last.assets[0].sym).toBe("USDT")
+      expect(last.assets[0].name).toBe("Tether USD")
+      expect(last.assets[0].amount).toBe("10.5 USDT")
+      expect(last.assets[0].value).toBe("₦16,800.00")
+    }
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("balance outcome with no fiatValue → value/total fall back to em dash", async () => {
+    mockApi.mockResolvedValue(
+      makeResponse({
+        kind: "balance",
+        fiatCurrency: "NGN",
+        asset: "USDT",
+        balances: [{ asset: "USDT", network: "TRON", amount: "10.5" }],
+      })
+    )
+    await store.getState().sendToAgent("m", "my USDT balance")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("balance")
+    if (last.kind === "balance") {
+      expect(last.total).toBe("—")
+      expect(last.assets[0].value).toBe("—")
+    }
+  })
+
   it("error path → fallback error message + typing cleared", async () => {
     mockApi.mockRejectedValue(new Error("Network error"))
     await store.getState().sendToAgent("m", "something")

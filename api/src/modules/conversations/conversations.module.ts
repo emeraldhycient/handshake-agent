@@ -6,6 +6,7 @@ import { TransactionsModule } from '../transactions/transactions.module';
 import { WhatsAppSenderModule } from '../whatsapp/whatsapp-sender.module';
 import { WalletsModule } from '../wallets/wallets.module';
 import { BeneficiariesModule } from '../beneficiaries/beneficiaries.module';
+import { BalancesModule } from '../balances/balances.module';
 
 import {
   ConversationService,
@@ -15,6 +16,7 @@ import {
   HANDOFF_TOKEN_SERVICE,
   BENEFICIARY_SERVICE,
   TRANSACTION_HISTORY_SERVICE,
+  BALANCE_SERVICE,
 } from './application/conversation.service';
 import { CONVERSATION_REPOSITORY } from './application/ports/conversation.repository.port';
 import { MESSAGE_REPOSITORY } from './application/ports/message.repository.port';
@@ -31,6 +33,7 @@ import { WalletService } from '../wallets/application/wallet.service';
 import { HandoffTokenService } from '../identity/application/handoff-token.service';
 import { BeneficiaryService } from '../beneficiaries/application/beneficiary.service';
 import { TransactionHistoryService } from '../transactions/application/transaction-history.service';
+import { BalanceService } from '../balances/application/balance.service';
 
 /**
  * Conversations feature module.
@@ -61,6 +64,7 @@ import { TransactionHistoryService } from '../transactions/application/transacti
     WhatsAppSenderModule,
     WalletsModule,
     BeneficiariesModule,
+    BalancesModule,
   ],
   providers: [
     ConversationService,
@@ -83,6 +87,8 @@ import { TransactionHistoryService } from '../transactions/application/transacti
       provide: TRANSACTION_HISTORY_SERVICE,
       useExisting: TransactionHistoryService,
     },
+    // Expose BalanceService under our local BALANCE_SERVICE token (read-only).
+    { provide: BALANCE_SERVICE, useExisting: BalanceService },
     { provide: INBOUND_HANDLER, useExisting: ConversationService },
     {
       provide: CONVERSATION_REPOSITORY,

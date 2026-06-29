@@ -18,6 +18,7 @@ import type {
   WebChatResponse,
   AgentTurnOutcome,
   ChatHistoryResponse,
+  BalanceSnapshot,
 } from '@handshake-agent/contracts';
 
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
@@ -49,6 +50,7 @@ import type { ProposalService } from '../../transactions/application/proposal.se
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
+import type { BalanceService } from '../../balances/application/balance.service';
 
 // ---------------------------------------------------------------------------
 // DI tokens for proposal / wallet / beneficiary services.
@@ -61,6 +63,7 @@ export const WEB_CHAT_BENEFICIARY_SERVICE = Symbol(
   'WEB_CHAT_BENEFICIARY_SERVICE',
 );
 export const WEB_CHAT_HISTORY_SERVICE = Symbol('WEB_CHAT_HISTORY_SERVICE');
+export const WEB_CHAT_BALANCE_SERVICE = Symbol('WEB_CHAT_BALANCE_SERVICE');
 
 // ---------------------------------------------------------------------------
 // Input type
@@ -99,6 +102,8 @@ export class WebChatService {
     private readonly beneficiaryService: BeneficiaryService,
     @Inject(WEB_CHAT_HISTORY_SERVICE)
     private readonly historyService: TransactionHistoryService,
+    @Inject(WEB_CHAT_BALANCE_SERVICE)
+    private readonly balanceService: BalanceService,
     @Inject(IDENTITY_REPOSITORY)
     private readonly identityRepo: IIdentityRepository,
     @Inject(CONVERSATION_REPOSITORY)
@@ -293,7 +298,23 @@ export class WebChatService {
         break;
       }
 
-      case 'check_balance':
+      case 'check_balance': {
+        // Read-only (§3.1): no proposal, no engine. KYC-gated like the other
+        // surfaces — an unverified user has no provisioned wallets to read.
+        if (user.kycStatus !== 'verified') {
+          outcome = { kind: 'needs_kyc' };
+          summaryText = 'KYC required';
+          break;
+        }
+        const snapshot = await this.balanceService.getBalances(
+          userId,
+          intent.asset,
+        );
+        outcome = { kind: 'balance', ...snapshot };
+        summaryText = this.buildBalanceSummary(snapshot);
+        break;
+      }
+
       case 'swap':
       case 'buy_ticket': {
         outcome = { kind: 'not_supported', action: intent.action };
@@ -379,5 +400,31 @@ export class WebChatService {
     if (raw === null || raw === undefined) return null;
     const parsed = AgentTurnOutcomeSchema.safeParse(raw);
     return parsed.success ? parsed.data : null;
+  }
+
+  /**
+   * Builds the plain-text balance reply from a snapshot using registry formatters
+   * (no hardcoded symbols / number formatting). The mid-market fiat value is shown
+   * as an approximate figure; the FX spread is never surfaced (user rule).
+   */
+  private buildBalanceSummary(snapshot: BalanceSnapshot): string {
+    if (snapshot.balances.length === 0) {
+      return snapshot.asset
+        ? `You don't hold any ${snapshot.asset} yet.`
+        : "You don't have any assets yet.";
+    }
+
+    const lines = snapshot.balances.map((b) => {
+      const crypto = this.assetRegistry.formatCrypto(b.asset, b.amount);
+      const fiat = b.fiatValue
+        ? ` (≈ ${this.assetRegistry.formatFiat(snapshot.fiatCurrency, b.fiatValue)})`
+        : '';
+      return `• ${crypto}${fiat}`;
+    });
+
+    const header = snapshot.asset
+      ? `Your ${snapshot.asset} balance:`
+      : 'Your balances:';
+    return `${header}\n${lines.join('\n')}`;
   }
 }

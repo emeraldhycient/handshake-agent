@@ -222,6 +222,12 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
           'https://app.example.com/transactions/statement/download?token=x',
       }),
     } as unknown as import('../src/modules/transactions/application/transaction-history.service').TransactionHistoryService;
+    const fakeBalanceService = {
+      getBalances: jest.fn().mockResolvedValue({
+        fiatCurrency: 'NGN',
+        balances: [],
+      }),
+    } as unknown as import('../src/modules/balances/application/balance.service').BalanceService;
 
     svc = new ConversationService(
       identityService,
@@ -239,6 +245,7 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       fakeHandoffTokenService,
       fakeBeneficiaryService,
       fakeHistoryService,
+      fakeBalanceService,
     );
 
     // Seed a Tier-1 verified User + ChannelIdentity

@@ -18,6 +18,7 @@ import type {
 } from "@handshake-agent/contracts"
 import type { ChatAction, ChatMessage } from "@/lib/schemas"
 import { formatNGN } from "@/lib/format"
+import { ASSET_NAMES, ASSET_TINTS } from "@/lib/constants"
 
 export interface MappedOutcome {
   /** Assistant messages to append for this turn. */
@@ -155,6 +156,22 @@ export function mapOutcomeToMessages(
       role: "assistant",
       kind: "needs_beneficiary",
       beneficiaryType: outcome.beneficiaryType,
+    })
+  } else if (outcome.kind === "balance") {
+    messages.push({
+      id: makeId(),
+      role: "assistant",
+      kind: "balance",
+      total: outcome.totalFiatValue
+        ? "≈ " + formatNGN(outcome.totalFiatValue)
+        : "—",
+      assets: outcome.balances.map((b) => ({
+        sym: b.asset,
+        name: ASSET_NAMES[b.asset] ?? b.asset,
+        amount: `${b.amount} ${b.asset}`,
+        value: b.fiatValue ? formatNGN(b.fiatValue) : "—",
+        tint: ASSET_TINTS[b.asset] ?? ASSET_TINTS.NGN,
+      })),
     })
   } else if (outcome.kind === "not_supported") {
     messages.push({
