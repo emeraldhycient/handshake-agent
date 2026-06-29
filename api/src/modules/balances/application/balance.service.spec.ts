@@ -74,6 +74,11 @@ function makeService(overrides?: {
             cryptoDecimals: 6,
           }),
     ),
+    getValuationRate: jest.fn((asset: string) =>
+      overrides?.rejectRate
+        ? Promise.reject(new Error('no valuation rate'))
+        : Promise.resolve({ baseRate: rateByAsset[asset] }),
+    ),
   };
 
   const assetRegistry = {

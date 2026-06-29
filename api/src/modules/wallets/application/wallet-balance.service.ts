@@ -12,11 +12,33 @@ import {
 } from '../../quotes/application/ports/rate-provider.port';
 import { valueAtSellRate } from '../../quotes/domain/quote-pricing';
 import { WalletService } from './wallet.service';
+import {
+  WALLET_REPOSITORY,
+  type IWalletRepository,
+} from './ports/wallet.repository.port';
+import {
+  LEDGER_REPOSITORY,
+  type ILedgerRepository,
+} from '../../transactions/application/ports/ledger.repository.port';
+
+/** Ledger account type for a user's custodial wallet (mirrors LedgerAccountType.user_wallet). */
+const USER_WALLET_ACCOUNT = 'user_wallet';
 
 /**
  * Read-only valuation/summary service for the web wallet surfaces.
- * Never moves money (§3.1) — it reads custodial balances and values them at the
- * realizable sell rate. Reaches pricing only through the IRateProvider port.
+ * Never moves money (§3.1) — it reads the LEDGER (authoritative custodial balance)
+ * and values assets at the realizable sell rate.
+ *
+ * Amount source: ILedgerRepository.getAccountBalance — the custodial ledger is
+ * the single source of truth for balances. On-chain provider.getBalance
+ * (Blockradar) is intentionally NOT used here: credited deposits appear in the
+ * ledger before an on-chain sync, so using the ledger ensures the wallet page
+ * reflects the deposited amount immediately.
+ *
+ * Cycle-free dependency: ILedgerRepository and IWalletRepository are injected
+ * as port tokens bound locally in WalletsModule (same self-binding pattern
+ * BalancesModule uses). No TransactionsModule import is needed — PrismaService
+ * is global and LedgerPrismaRepository is registered as a local provider.
  */
 @Injectable()
 export class WalletBalanceService {
@@ -24,6 +46,10 @@ export class WalletBalanceService {
     private readonly wallets: WalletService,
     private readonly registry: AssetRegistry,
     @Inject(RATE_PROVIDER) private readonly rates: IRateProvider,
+    @Inject(WALLET_REPOSITORY)
+    private readonly walletRepo: IWalletRepository,
+    @Inject(LEDGER_REPOSITORY)
+    private readonly ledgerRepo: ILedgerRepository,
   ) {}
 
   async getBalances(userId: string): Promise<WalletBalancesResponse> {
@@ -35,24 +61,25 @@ export class WalletBalanceService {
       symbols.map(async (symbol) => {
         const meta = this.registry.asset(symbol);
         const network = this.registry.defaultNetworkFor(symbol);
-        const wallet = await this.wallets.getOrProvisionNetworkWallet(
-          userId,
-          network,
-        );
-        // Blockradar getBalance 404s ("asset not found or not active") for an
-        // asset the child address holds none of. Tolerate it per-asset — treat
-        // as zero — so one un-funded asset never 500s the whole wallet page.
-        let amount = '0';
-        try {
-          const balance = await this.wallets.getBalance(wallet, symbol);
-          amount = balance.amount;
-        } catch {
-          amount = '0';
-        }
-        // Valuation is best-effort: an asset with no configured FX rate (e.g. a
-        // swap-only asset like TRX with no NGN price) is returned with its
-        // amount but no fiatValue, rather than failing the whole page — mirrors
-        // the chat balance tool's valuate().
+
+        // LEDGER read: find the existing wallet (read-only — never provision here)
+        // then query the ledger for the authoritative balance. No wallet → '0'.
+        const wallet = await this.walletRepo.findByUserNetwork(userId, network);
+        const amount = wallet
+          ? await this.ledgerRepo.getAccountBalance(
+              USER_WALLET_ACCOUNT,
+              wallet.id,
+              symbol,
+            )
+          : '0';
+
+        // Valuation is best-effort. Priority:
+        //   1. Try getRate (fiat-tradeable assets, e.g. USDT): applies sell spread
+        //      so the displayed value is the realizable sell amount.
+        //   2. Fall back to getValuationRate (swap-only, e.g. TRX): fiatTradeable=false
+        //      makes getRate throw, but getValuationRate bypasses that gate and
+        //      returns a baseRate for display at mid-market (no spread).
+        //   3. Both throw → fiatValue: undefined (truly unpriced asset), never 500s.
         let fiatValue: string | undefined;
         try {
           const rate = await this.rates.getRate(
@@ -65,7 +92,17 @@ export class WalletBalanceService {
             rate.sellSpreadBps,
           );
         } catch {
-          fiatValue = undefined;
+          // getRate failed — either no config or not fiat-tradeable. Try valuation rate.
+          try {
+            const vRate = await this.rates.getValuationRate(
+              symbol as SupportedAsset,
+              fiat as FiatCurrency,
+            );
+            // Mid-market display (spread=0) for non-tradeable assets.
+            fiatValue = valueAtSellRate(amount, vRate.baseRate, 0);
+          } catch {
+            fiatValue = undefined;
+          }
         }
         return {
           symbol: symbol as SupportedAsset,

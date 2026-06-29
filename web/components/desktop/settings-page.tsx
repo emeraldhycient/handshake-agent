@@ -1,10 +1,12 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { Switch } from "@/components/ui/switch"
+import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { AvatarPlaceholder } from "@/components/shared"
-import { useProfile } from "@/lib/query/auth"
+import { useProfile, useLogout } from "@/lib/query/auth"
 import { useConfig } from "@/lib/query/hooks"
 import { formatFiatAmount } from "@/lib/format/money"
 import { LANGUAGES } from "@/lib/constants"
@@ -31,9 +33,17 @@ export function SettingsPage({ className }: { className?: string }) {
   const [language, setLanguage] = useState<Language>("English")
   const profile = useProfile()
   const config = useConfig()
+  const logout = useLogout()
+  const router = useRouter()
   const fiatSymbol =
     config.data?.fiats.find((f) => f.code === profile.data?.fiatCurrency)
       ?.symbol ?? ""
+
+  function handleLogout() {
+    logout.mutate(undefined, {
+      onSettled: () => router.push("/login"),
+    })
+  }
 
   return (
     <div
@@ -181,6 +191,17 @@ export function SettingsPage({ className }: { className?: string }) {
           </span>
         </div>
       )}
+
+      {/* ── Logout ─────────────────────────────────────────────────────────── */}
+      <Button
+        variant="outline"
+        className="border-danger/30 text-danger hover:bg-danger/5 hover:text-danger w-full rounded-[14px] font-semibold"
+        onClick={handleLogout}
+        disabled={logout.isPending}
+        aria-label="Log out"
+      >
+        {logout.isPending ? "Logging out…" : "Log out"}
+      </Button>
     </div>
   )
 }

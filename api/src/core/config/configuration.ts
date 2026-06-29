@@ -16,6 +16,15 @@ export interface AssetPricing {
   /** Platform spread for SELL quotes (marks down the rate; user gets less fiat). */
   sellSpreadBps: number;
   cryptoDecimals: number;
+  /**
+   * Whether this asset can be bought/sold for fiat via the buy/sell flows.
+   * Defaults to `true` when absent (all existing assets are fiat-tradeable).
+   * Set to `false` for valuation-only assets (e.g. TRX) that have a baseRate
+   * for wallet display purposes but must NOT be buyable/sellable in fiat.
+   * ConfigRateProvider.getRate() throws when fiatTradeable === false so the
+   * buy/sell proposal flows fail-closed without any per-asset code in the engine.
+   */
+  fiatTradeable?: boolean;
 }
 
 export interface PricingConfig {
@@ -596,6 +605,19 @@ export default (): AppConfig => ({
         buySpreadBps: 150,
         sellSpreadBps: 150,
         cryptoDecimals: 8,
+      },
+      // TRX: valuation-only rate for the wallet balance display.
+      // fiatTradeable: false blocks the ConfigRateProvider from returning a
+      // rate for buy/sell flows — those flows call getRate() and will receive
+      // an error, keeping TRX swap-only at runtime. The baseRate is used only
+      // by the wallet balance display path (WalletBalanceService) which catches
+      // valuation errors gracefully and never routes through getRate for a trade.
+      TRX: {
+        baseRates: { NGN: 520 },
+        buySpreadBps: 0,
+        sellSpreadBps: 0,
+        cryptoDecimals: 6,
+        fiatTradeable: false,
       },
     },
   },

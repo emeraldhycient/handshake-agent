@@ -103,10 +103,17 @@ export class BalanceService {
   }
 
   /**
-   * Sell-rate fiat valuation of a crypto amount: effectiveRate = baseRate × (1 − sellSpreadBps/10000).
-   * Returns `undefined` (rather than throwing) when the asset cannot be priced so one
-   * unpriced asset never sinks the whole snapshot. Uses the shared `valueAtSellRate`
-   * helper from quote-pricing so the formula stays identical to the web wallet endpoint.
+   * Sell-rate fiat valuation of a crypto amount.
+   *
+   * Priority:
+   *   1. getRate (fiat-tradeable assets, e.g. USDT): applies sell spread so the
+   *      displayed value is the realizable sell amount.
+   *   2. getValuationRate fallback (swap-only assets, e.g. TRX): getRate throws
+   *      for fiatTradeable=false; getValuationRate bypasses that gate and returns
+   *      a baseRate for mid-market display (spread=0).
+   *   3. Both throw → returns undefined (truly unpriced asset, never sinks snapshot).
+   *
+   * Uses `valueAtSellRate` so the formula stays identical to the web wallet endpoint.
    * `valueAtSellRate` always floors to 2 d.p. (fiat minor units).
    */
   private async valuate(
@@ -122,7 +129,18 @@ export class BalanceService {
       if (!Number.isFinite(baseRate)) return undefined;
       return valueAtSellRate(amount, baseRate, sellSpreadBps);
     } catch {
-      return undefined;
+      // getRate failed — try valuation rate (bypasses fiatTradeable gate for
+      // swap-only assets like TRX that have a baseRate but no fiat trade).
+      try {
+        const vRate = await this.rateProvider.getValuationRate(
+          asset as SupportedAsset,
+          fiatCurrency as FiatCurrency,
+        );
+        if (!Number.isFinite(vRate.baseRate)) return undefined;
+        return valueAtSellRate(amount, vRate.baseRate, 0);
+      } catch {
+        return undefined;
+      }
     }
   }
 }

@@ -13,7 +13,7 @@
  * silent refresh).
  */
 
-import { useMutation, useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
   LoginRequest,
   LoginVerifyRequest,
@@ -23,6 +23,7 @@ import type {
 import {
   fetchMe,
   fetchProfile,
+  logout,
   submitLoginRequest,
   submitLoginVerify,
   submitSignup,
@@ -75,5 +76,29 @@ export function useProfile() {
     queryFn: fetchProfile,
     enabled: !!accessToken,
     staleTime: 60_000,
+  })
+}
+
+/**
+ * Log the current user out.
+ *
+ * Calls POST /auth/logout (best-effort — ignores network errors so the client
+ * always clears), then wipes the Zustand auth store and invalidates all cached
+ * queries. Callers redirect to /login after `mutate()` resolves.
+ */
+export function useLogout() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      try {
+        await logout()
+      } catch {
+        // Best-effort: clear the client session regardless of network outcome.
+      }
+    },
+    onSettled: () => {
+      defaultAuthStore.getState().clear()
+      queryClient.clear()
+    },
   })
 }

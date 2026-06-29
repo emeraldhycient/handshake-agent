@@ -6,9 +6,23 @@ import { SettingsPage } from "./settings-page"
 import { useProfile } from "@/lib/query/auth"
 import type { ProfileResponse } from "@handshake-agent/contracts"
 
+// Mock next/navigation so useRouter() works in tests.
+const mockRouterPush = vi.fn()
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockRouterPush }),
+}))
+
 // useProfile is mocked so we can drive the four branches directly; useConfig
 // (for the fiat symbol) still resolves through the real mock gateway.
-vi.mock("@/lib/query/auth", () => ({ useProfile: vi.fn() }))
+vi.mock("@/lib/query/auth", () => ({
+  useProfile: vi.fn(),
+  useLogout: vi.fn(() => ({
+    mutate: vi.fn((_: unknown, opts?: { onSettled?: () => void }) => {
+      opts?.onSettled?.()
+    }),
+    isPending: false,
+  })),
+}))
 const mockedUseProfile = vi.mocked(useProfile)
 
 const profileData: ProfileResponse = {
@@ -107,5 +121,25 @@ describe("SettingsPage", () => {
     const pidgin = screen.getByRole("button", { name: /Pidgin/i })
     await user.click(pidgin)
     expect(pidgin).toHaveAttribute("data-active", "true")
+  })
+
+  it("renders a Log out button", () => {
+    mockedUseProfile.mockReturnValue(
+      asQuery({ isLoading: false, isError: false, data: profileData })
+    )
+    render(<SettingsPage />, { wrapper: makeWrapper() })
+    expect(screen.getByRole("button", { name: /Log out/i })).toBeInTheDocument()
+  })
+
+  it("calls the logout mutation and redirects to /login on click", async () => {
+    mockedUseProfile.mockReturnValue(
+      asQuery({ isLoading: false, isError: false, data: profileData })
+    )
+    const user = userEvent.setup()
+    render(<SettingsPage />, { wrapper: makeWrapper() })
+
+    await user.click(screen.getByRole("button", { name: /Log out/i }))
+    // The mock mutate() calls onSettled() synchronously, which pushes /login.
+    expect(mockRouterPush).toHaveBeenCalledWith("/login")
   })
 })

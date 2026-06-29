@@ -13,6 +13,8 @@ import {
 } from './application/ports/swap-provider.port';
 import { WALLET_REPOSITORY } from './application/ports/wallet.repository.port';
 import { BACKFILL_RUN_REPOSITORY } from './application/ports/backfill-run.repository.port';
+import { LEDGER_REPOSITORY } from '../transactions/application/ports/ledger.repository.port';
+import { LedgerPrismaRepository } from '../transactions/infrastructure/ledger.prisma.repository';
 import { WalletService } from './application/wallet.service';
 import { WalletBalanceService } from './application/wallet-balance.service';
 import { BlockradarProvider } from './infrastructure/blockradar.provider';
@@ -103,6 +105,12 @@ export function selectSwapProvider(
     },
     { provide: WALLET_REPOSITORY, useClass: WalletPrismaRepository },
     { provide: BACKFILL_RUN_REPOSITORY, useClass: PrismaBackfillRunRepository },
+    // LEDGER_REPOSITORY: bound locally here so WalletBalanceService can read
+    // authoritative ledger balances without importing TransactionsModule (which
+    // itself imports WalletsModule — that would create a cycle). PrismaService
+    // is global, so LedgerPrismaRepository has no unmet dependencies.
+    // This mirrors the self-binding pattern already used in BalancesModule.
+    { provide: LEDGER_REPOSITORY, useClass: LedgerPrismaRepository },
     { provide: CLOCK, useClass: SystemClock },
     // CatalogSyncService: discovers assets from the active wallet provider on
     // boot and merges them into AssetRegistry's dynamic overlay.
