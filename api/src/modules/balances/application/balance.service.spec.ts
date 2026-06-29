@@ -33,11 +33,14 @@ function makeService(overrides?: {
   walletByNetwork?: Record<string, typeof USDT_WALLET | null>;
   rateByAsset?: Record<string, number>;
   rejectRate?: boolean;
+  /** Override the network returned for a given asset symbol (default: 'TRON' for USDT, sym for others). */
+  networkForAsset?: Record<string, string>;
 }) {
   const enabledAssets = overrides?.enabledAssets ?? ['USDT'];
   const balanceByAsset = overrides?.balanceByAsset ?? { USDT: '10.5' };
   const walletByNetwork = overrides?.walletByNetwork ?? { TRON: USDT_WALLET };
   const rateByAsset = overrides?.rateByAsset ?? { USDT: 1600 };
+  const networkForAsset = overrides?.networkForAsset ?? {};
 
   const walletRepo = {
     findByUserNetwork: jest.fn((_userId: string, network: string) =>
@@ -75,9 +78,10 @@ function makeService(overrides?: {
 
   const assetRegistry = {
     enabledCryptoAssets: jest.fn(() => enabledAssets),
-    defaultNetworkFor: jest.fn((sym: string) =>
-      sym === 'USDT' ? 'TRON' : sym,
-    ),
+    defaultNetworkFor: jest.fn((sym: string) => {
+      if (networkForAsset[sym]) return networkForAsset[sym];
+      return sym === 'USDT' ? 'TRON' : sym;
+    }),
     defaultFiat: jest.fn(() => 'NGN'),
     fiat: jest.fn(() => ({ decimals: 2 })),
   } as unknown as AssetRegistry;
@@ -190,5 +194,70 @@ describe('BalanceService', () => {
       'wallet-usdt',
       'USDT',
     );
+  });
+
+  // ── Multi-asset (discovered): USDT + TRX ─────────────────────────────────
+
+  it('lists both USDT and TRX when the registry returns them as enabled (2-asset discovered wallet)', async () => {
+    // Simulates a TRON wallet with USDT (stablecoin) and TRX (native) discovered
+    // by CatalogSyncService — both appear in enabledCryptoAssets().
+    const { service } = makeService({
+      enabledAssets: ['USDT', 'TRX'],
+      balanceByAsset: { USDT: '10.5', TRX: '200' },
+      // Both assets live on TRON — one wallet per network (WN-1 model).
+      // networkForAsset maps TRX → 'TRON' so the wallet lookup hits the right key.
+      networkForAsset: { TRX: 'TRON' },
+      walletByNetwork: { TRON: USDT_WALLET },
+      rateByAsset: { USDT: 1600, TRX: 240 },
+    });
+
+    const snapshot = await service.getBalances('user-1');
+
+    expect(snapshot.balances).toHaveLength(2);
+
+    const usdtLine = snapshot.balances.find((b) => b.asset === 'USDT');
+    const trxLine = snapshot.balances.find((b) => b.asset === 'TRX');
+
+    expect(usdtLine).toBeDefined();
+    expect(usdtLine?.amount).toBe('10.5');
+    // sellSpreadBps=100 → effectiveRate = 1600 × (1 − 0.01) = 1584; 10.5 × 1584 = 16632.00
+    expect(usdtLine?.fiatValue).toBe('16632.00');
+
+    expect(trxLine).toBeDefined();
+    expect(trxLine?.amount).toBe('200');
+    // effectiveRate = 240 × 0.99 = 237.6; 200 × 237.6 = 47520.00
+    expect(trxLine?.fiatValue).toBe('47520.00');
+
+    // Total: 16632 + 47520 = 64152
+    expect(snapshot.totalFiatValue).toBe('64152.00');
+  });
+
+  it('omits fiatValue for an unpriced discovered asset without crashing the snapshot', async () => {
+    // TRX has no configured rate → valuate() returns undefined for TRX.
+    // USDT is priced normally. The snapshot must return both lines, with TRX
+    // having no fiatValue and totalFiatValue reflecting only the priced asset.
+    const { service } = makeService({
+      enabledAssets: ['USDT', 'TRX'],
+      balanceByAsset: { USDT: '10.5', TRX: '200' },
+      networkForAsset: { TRX: 'TRON' },
+      walletByNetwork: { TRON: USDT_WALLET },
+      // TRX has no rate entry — rateProvider will resolve baseRate as undefined,
+      // which isFinite() rejects, causing valuate() to return undefined.
+      rateByAsset: { USDT: 1600 }, // TRX intentionally absent
+    });
+
+    const snapshot = await service.getBalances('user-1');
+
+    const usdtLine = snapshot.balances.find((b) => b.asset === 'USDT');
+    const trxLine = snapshot.balances.find((b) => b.asset === 'TRX');
+
+    // USDT is priced — fiatValue present.
+    expect(usdtLine?.fiatValue).toBe('16632.00');
+
+    // TRX has no rate — fiatValue MUST be absent (not null, not '0', not a crash).
+    expect(trxLine?.fiatValue).toBeUndefined();
+
+    // totalFiatValue only reflects the priced asset.
+    expect(snapshot.totalFiatValue).toBe('16632.00');
   });
 });

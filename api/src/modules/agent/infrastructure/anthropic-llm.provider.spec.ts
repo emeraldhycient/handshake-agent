@@ -228,6 +228,37 @@ describe('AnthropicLlmProvider', () => {
         expect(prompt).not.toMatch(/only (accept|use|support|NGN)/i);
         expect(prompt).toMatch(/extract.*fiat|fiat.*extract/i);
       });
+
+      it('lists ALL discovered assets (USDT + TRX) when the registry returns both', () => {
+        // When CatalogSyncService discovers TRX alongside USDT, enabledCryptoAssets()
+        // returns both. The system prompt MUST enumerate all of them so the model
+        // recognises user requests for either asset.
+        const registry = {
+          defaultFiat: jest.fn().mockReturnValue('NGN'),
+          enabledCryptoAssets: jest.fn().mockReturnValue(['USDT', 'TRX']),
+          enabledFiats: jest.fn().mockReturnValue(['NGN']),
+        } as unknown as AssetRegistry;
+
+        const multiAssetProvider = new AnthropicLlmProvider(
+          makeConfigService(
+            'sk-test',
+          ) as unknown as import('@nestjs/config').ConfigService<
+            import('../../../core/config/env.schema').Env,
+            true
+          >,
+          registry,
+        );
+
+        const prompt = multiAssetProvider.buildSystemPrompt();
+
+        // Both assets must appear in the prompt asset list.
+        expect(prompt).toContain('"USDT"');
+        expect(prompt).toContain('"TRX"');
+        // The rule line must reference the full discovered set.
+        expect(prompt).toMatch(/"USDT".*"TRX"|"TRX".*"USDT"/);
+        // enabledCryptoAssets() must be called — confirms dynamic rendering.
+        expect(registry.enabledCryptoAssets).toHaveBeenCalled();
+      });
     });
   });
 

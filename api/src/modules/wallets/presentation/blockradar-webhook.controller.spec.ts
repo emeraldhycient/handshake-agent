@@ -506,6 +506,44 @@ describe('BlockradarWebhookController', () => {
       expect(sender.sendText).not.toHaveBeenCalled();
     });
 
+    it('WN-2: discovered non-USDT asset (TRX) deposit credits the payload asset symbol', async () => {
+      // A TRON address receives TRX (native asset, discovered by CatalogSyncService).
+      // isAssetEnabled('TRX') returns true (discovered+enabled).
+      // settleDepositAtomic must be called with asset:'TRX' — not defaulted to USDT.
+      // This confirms the deposit-credit path accepts any discovered/enabled asset.
+      const { controller, settlementRepo, sender } = makeController({
+        // TRX is enabled in the registry (discovered asset)
+        assetEnabled: true,
+      });
+
+      const TRX_SYMBOL = 'TRX';
+      const TRX_AMOUNT = '500';
+      const body = depositSuccessBody({
+        amount: TRX_AMOUNT,
+        asset: { symbol: TRX_SYMBOL, network: { name: NETWORK } },
+      });
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      const result = await controller.handleWebhook(body, rawBody, sig);
+
+      expect(result).toEqual({ status: 'ok' });
+
+      // Must credit TRX with the payload amount — never defaults to USDT.
+      expect(settlementRepo.settleDepositAtomic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          walletId: WALLET_ID,
+          userId: USER_ID,
+          cryptoAmount: TRX_AMOUNT,
+          asset: TRX_SYMBOL, // TRX, not USDT
+          txHash: TX_HASH,
+        }),
+      );
+
+      // Receipt must be sent.
+      expect(sender.sendText).toHaveBeenCalled();
+    });
+
     // ── WN-4: deposit robustness — missing asset + network mismatch ───────────
 
     it('WN-4: deposit.success missing asset.symbol → 200 ack, NO credit', async () => {
