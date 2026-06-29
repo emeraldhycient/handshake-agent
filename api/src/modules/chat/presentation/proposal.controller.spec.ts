@@ -13,6 +13,7 @@ import {
   UnauthorizedException,
   UnprocessableEntityException,
   ForbiddenException,
+  BadGatewayException,
 } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 
@@ -38,6 +39,7 @@ import {
   ProposalExpiredError,
   ProposalNotExecutableError,
   QuoteDriftError,
+  ProviderUnavailableError,
 } from '../../transactions/domain/execution-errors';
 import { KycNotVerifiedError } from '../../identity/domain/gate-errors';
 
@@ -465,6 +467,18 @@ describe('ProposalController.execute', () => {
     await expect(
       controller.execute('proposal-uuid', validBody as never, TEST_USER),
     ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('maps ProviderUnavailableError to 502 (clear message, not a raw 500)', async () => {
+    mockProposalRepo.findById.mockResolvedValue(makeProposal());
+    mockProposalRepo.getType.mockResolvedValue('buy');
+    mockExecutionService.executeBuy.mockRejectedValue(
+      new ProviderUnavailableError('createCollection'),
+    );
+
+    await expect(
+      controller.execute('proposal-uuid', validBody as never, TEST_USER),
+    ).rejects.toThrow(BadGatewayException);
   });
 });
 

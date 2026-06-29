@@ -29,6 +29,7 @@ import {
   UnauthorizedException,
   UnprocessableEntityException,
   ForbiddenException,
+  BadGatewayException,
 } from '@nestjs/common';
 
 import type {
@@ -74,6 +75,7 @@ import {
   ProposalExpiredError,
   ProposalNotExecutableError,
   QuoteDriftError,
+  ProviderUnavailableError,
 } from '../../transactions/domain/execution-errors';
 import {
   KycNotVerifiedError,
@@ -260,6 +262,15 @@ export class ProposalController {
         err instanceof SimSwapBlockedError
       ) {
         throw new ForbiddenException('Transaction not permitted');
+      }
+
+      // External provider (Flutterwave / Blockradar) call failed → 502.
+      // A transient provider outage must not surface as an opaque 500; return a
+      // clear, retryable message. The engine has already logged the raw cause.
+      if (err instanceof ProviderUnavailableError) {
+        throw new BadGatewayException(
+          'Payment provider is temporarily unavailable. Please try again in a moment.',
+        );
       }
 
       // Unexpected errors bubble up to the global exception filter.

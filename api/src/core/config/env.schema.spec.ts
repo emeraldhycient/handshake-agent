@@ -130,6 +130,44 @@ describe('validateEnv', () => {
       /KYC_MOCK_MODE/,
     );
   });
+
+  // --- Payments / Wallet provider mock toggles ---
+
+  it('defaults PAYMENTS_MOCK_MODE to "true" when omitted (safe default)', () => {
+    const env = validateEnv(validRaw);
+
+    expect(env.PAYMENTS_MOCK_MODE).toBe('true');
+  });
+
+  it('accepts PAYMENTS_MOCK_MODE=false (activates the real Flutterwave adapter)', () => {
+    const env = validateEnv({ ...validRaw, PAYMENTS_MOCK_MODE: 'false' });
+
+    expect(env.PAYMENTS_MOCK_MODE).toBe('false');
+  });
+
+  it('throws when PAYMENTS_MOCK_MODE is not "true" or "false"', () => {
+    expect(() =>
+      validateEnv({ ...validRaw, PAYMENTS_MOCK_MODE: 'yes' }),
+    ).toThrow(/PAYMENTS_MOCK_MODE/);
+  });
+
+  it('defaults WALLET_MOCK_MODE to "true" when omitted (safe default)', () => {
+    const env = validateEnv(validRaw);
+
+    expect(env.WALLET_MOCK_MODE).toBe('true');
+  });
+
+  it('accepts WALLET_MOCK_MODE=false (activates the real Blockradar adapter)', () => {
+    const env = validateEnv({ ...validRaw, WALLET_MOCK_MODE: 'false' });
+
+    expect(env.WALLET_MOCK_MODE).toBe('false');
+  });
+
+  it('throws when WALLET_MOCK_MODE is not "true" or "false"', () => {
+    expect(() =>
+      validateEnv({ ...validRaw, WALLET_MOCK_MODE: 'maybe' }),
+    ).toThrow(/WALLET_MOCK_MODE/);
+  });
 });
 
 // --- Auth env keys (Task 2: web-auth config groundwork) ---
