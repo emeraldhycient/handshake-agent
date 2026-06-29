@@ -109,6 +109,27 @@ describe('WalletBalanceService', () => {
     expect(out.totalFiatValue).toBe('0.00');
   });
 
+  it('tolerates a missing FX rate (unpriced asset like TRX) — no fiatValue, excluded from total', async () => {
+    const wallets = {
+      getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(wallet),
+      getBalance: jest.fn().mockResolvedValue({ amount: '200', decimals: 6 }),
+    } as unknown as WalletService;
+    const rates = {
+      getRate: jest
+        .fn()
+        .mockRejectedValue(
+          new Error('No pricing configured for asset TRX in NGN'),
+        ),
+    } as unknown as IRateProvider;
+    const svc = new WalletBalanceService(wallets, makeRegistry(), rates);
+
+    const out = await svc.getBalances('u1');
+    expect(out.assets).toHaveLength(1);
+    expect(out.assets[0].amount).toBe('200');
+    expect(out.assets[0].fiatValue).toBeUndefined();
+    expect(out.totalFiatValue).toBe('0.00');
+  });
+
   it('sums multiple assets exactly (floored per-asset values, no rounding drift)', async () => {
     const wallets = {
       getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(wallet),

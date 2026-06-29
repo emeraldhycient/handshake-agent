@@ -12,7 +12,9 @@ export const WalletAssetBalanceSchema = z.object({
   network: z.string(),
   amount: CryptoAmountSchema,
   decimals: z.number().int().nonnegative(),
-  fiatValue: FiatAmountSchema,
+  // Optional: an asset with no configured FX rate (e.g. a swap-only asset like
+  // TRX with no NGN price) is shown with its amount but no fiat valuation.
+  fiatValue: FiatAmountSchema.optional(),
 });
 export type WalletAssetBalance = z.infer<typeof WalletAssetBalanceSchema>;
 

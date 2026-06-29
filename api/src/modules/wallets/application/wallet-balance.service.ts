@@ -49,22 +49,31 @@ export class WalletBalanceService {
         } catch {
           amount = '0';
         }
-        const rate = await this.rates.getRate(
-          symbol as SupportedAsset,
-          fiat as FiatCurrency,
-        );
-        const fiatValue = valueAtSellRate(
-          amount,
-          rate.baseRate,
-          rate.sellSpreadBps,
-        );
+        // Valuation is best-effort: an asset with no configured FX rate (e.g. a
+        // swap-only asset like TRX with no NGN price) is returned with its
+        // amount but no fiatValue, rather than failing the whole page — mirrors
+        // the chat balance tool's valuate().
+        let fiatValue: string | undefined;
+        try {
+          const rate = await this.rates.getRate(
+            symbol as SupportedAsset,
+            fiat as FiatCurrency,
+          );
+          fiatValue = valueAtSellRate(
+            amount,
+            rate.baseRate,
+            rate.sellSpreadBps,
+          );
+        } catch {
+          fiatValue = undefined;
+        }
         return {
           symbol: symbol as SupportedAsset,
           displayName: meta.displayName,
           network,
           amount,
           decimals: meta.decimals,
-          fiatValue,
+          ...(fiatValue !== undefined ? { fiatValue } : {}),
         };
       }),
     );
@@ -74,7 +83,8 @@ export class WalletBalanceService {
     // floored to 2dp by valueAtSellRate, so float accumulation + rounding
     // (.toFixed) could add a stray 0.01 once multiple assets are enabled.
     const totalMinor = assets.reduce(
-      (sum, a) => sum + Math.round(Number(a.fiatValue) * 100),
+      (sum, a) =>
+        sum + (a.fiatValue ? Math.round(Number(a.fiatValue) * 100) : 0),
       0,
     );
     const totalFiatValue = (totalMinor / 100).toFixed(2);
