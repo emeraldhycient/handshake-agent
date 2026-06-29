@@ -20,6 +20,7 @@ describe('QueryTransactionsIntent', () => {
       download: true,
     })
     expect(parsed.from).toBe('2026-06-01')
+    expect(parsed.to).toBe('2026-06-15')
     expect(parsed.txType).toBe('send')
     expect(parsed.download).toBe(true)
   })
