@@ -18,6 +18,7 @@ import { WalletsModule } from '../wallets/wallets.module';
 import { BeneficiariesModule } from '../beneficiaries/beneficiaries.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { WebAuthModule } from '../auth/auth.module';
+import { AuthModule } from '../../core/auth/auth.module';
 
 import { ProposalService } from '../transactions/application/proposal.service';
 import { WalletService } from '../wallets/application/wallet.service';
@@ -52,6 +53,7 @@ import {
     BeneficiariesModule, // exports BeneficiaryService
     TransactionsModule, // exports ProposalService
     WebAuthModule, // exports JwtAuthGuard
+    AuthModule, // core auth — exports SessionService (device-bound step-up, §3.4)
   ],
   controllers: [
     ChatController,

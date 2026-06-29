@@ -81,6 +81,22 @@ export class SessionService {
   }
 
   /**
+   * Resolves the Device id for (userId, fingerprint), or null when the
+   * fingerprint is absent or matches no device owned by the user.
+   *
+   * Used by the web execute path to bind a send step-up to the acting browser
+   * from the client-supplied fingerprint (§3.4). Fail-safe: returns null rather
+   * than throwing so callers can fall back to the pinned device.
+   */
+  async findDeviceIdByFingerprint(
+    userId: string,
+    fingerprint: string | undefined,
+  ): Promise<string | null> {
+    if (!fingerprint) return null;
+    return this.sessionRepo.findDeviceIdByFingerprint(userId, fingerprint);
+  }
+
+  /**
    * Asserts that the session for (userId, deviceId) has a step-up that is
    * still within the configured TTL window.
    *

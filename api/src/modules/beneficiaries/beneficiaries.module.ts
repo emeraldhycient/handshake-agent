@@ -15,13 +15,20 @@
 
 import { Module } from '@nestjs/common';
 
+import { WebAuthModule } from '../auth/auth.module';
 import { BeneficiaryService } from './application/beneficiary.service';
 import { BENEFICIARY_REPOSITORY } from './application/ports/beneficiary.repository.port';
 import { BANK_NAME_ENQUIRY } from './application/ports/name-enquiry.port';
 import { BeneficiaryPrismaRepository } from './infrastructure/beneficiary.prisma.repository';
 import { MockNameEnquiry } from './infrastructure/mock-name-enquiry';
+import { BeneficiaryController } from './presentation/beneficiary.controller';
 
 @Module({
+  // WebAuthModule exports JwtAuthGuard so the web beneficiary endpoints can
+  // require a verified session (§3.3). It does not import BeneficiariesModule,
+  // so there is no dependency cycle.
+  imports: [WebAuthModule],
+  controllers: [BeneficiaryController],
   providers: [
     BeneficiaryService,
     {

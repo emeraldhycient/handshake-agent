@@ -146,4 +146,17 @@ export class SessionPrismaRepository implements ISessionRepository {
     });
     return row?.pinnedDeviceId ?? null;
   }
+
+  async findDeviceIdByFingerprint(
+    userId: string,
+    fingerprint: string,
+  ): Promise<string | null> {
+    // fingerprint is globally unique; the userId clause ensures we never bind a
+    // step-up to a device the requesting user does not own.
+    const device = await this.prisma.device.findFirst({
+      where: { fingerprint, userId },
+      select: { id: true },
+    });
+    return device?.id ?? null;
+  }
 }

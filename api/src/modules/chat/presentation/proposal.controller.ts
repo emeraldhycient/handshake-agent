@@ -59,6 +59,7 @@ import {
 } from '../../transactions/application/ports/settlement.repository.port';
 import { DirectiveService } from '../../transactions/application/directive.service';
 import { ExecutionService } from '../../transactions/application/execution.service';
+import { SessionService } from '../../../core/auth/session.service';
 
 import {
   PinInvalidError,
@@ -76,6 +77,7 @@ import {
   ProposalNotExecutableError,
   QuoteDriftError,
   ProviderUnavailableError,
+  InsufficientBalanceError,
 } from '../../transactions/domain/execution-errors';
 import {
   KycNotVerifiedError,
@@ -83,6 +85,8 @@ import {
   VelocityExceededError,
   SimSwapBlockedError,
 } from '../../identity/domain/gate-errors';
+import { BeneficiaryCoolingOffError } from '../../beneficiaries/domain/beneficiary-errors';
+import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
 
 import { ExecuteProposalDto } from './dto/proposal.dto';
 
@@ -97,6 +101,7 @@ export class ProposalController {
     private readonly proposalRepo: IProposalRepository,
     private readonly directiveService: DirectiveService,
     private readonly executionService: ExecutionService,
+    private readonly sessionService: SessionService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -200,12 +205,30 @@ export class ProposalController {
         };
       }
 
-      // send via web is not yet supported (deviceId resolution is non-trivial
-      // for the web surface — deferred; WhatsApp handles send flows).
       if (proposalType === 'send') {
-        throw new UnprocessableEntityException(
-          'send via web is not yet supported',
-        );
+        // Resolve the acting device from the client-supplied fingerprint so the
+        // step-up is bound to it (§3.4). When the fingerprint matches no device
+        // (or is absent), executeSend falls back to the user's pinned device.
+        const deviceId =
+          (await this.sessionService.findDeviceIdByFingerprint(
+            user.userId,
+            body.deviceFingerprint,
+          )) ?? undefined;
+
+        const result = await this.executionService.executeSend({
+          userId: user.userId,
+          proposalId,
+          directiveId: body.directiveId,
+          nonce: body.nonce,
+          pin: body.pin,
+          idempotencyKey: body.idempotencyKey,
+          deviceId,
+        });
+        return {
+          transactionId: result.transactionId,
+          status: result.status,
+          onChain: { providerRef: result.onChain.providerRef },
+        };
       }
 
       // Unknown type — treat as unprocessable.
@@ -254,12 +277,22 @@ export class ProposalController {
         throw new ConflictException('Proposal is not executable');
       }
 
-      // KYC / velocity / SIM-swap gate → 403.
+      // Insufficient crypto balance (sell/send) or beneficiary still in its
+      // first-use cooling-off window (send) → 422 with the engine's message.
+      if (
+        err instanceof InsufficientBalanceError ||
+        err instanceof BeneficiaryCoolingOffError
+      ) {
+        throw new UnprocessableEntityException(err.message);
+      }
+
+      // KYC / velocity / SIM-swap / sanctions gate → 403.
       if (
         err instanceof KycNotVerifiedError ||
         err instanceof TierLimitExceededError ||
         err instanceof VelocityExceededError ||
-        err instanceof SimSwapBlockedError
+        err instanceof SimSwapBlockedError ||
+        err instanceof SanctionsBlockedError
       ) {
         throw new ForbiddenException('Transaction not permitted');
       }
