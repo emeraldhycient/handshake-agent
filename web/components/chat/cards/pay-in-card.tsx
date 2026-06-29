@@ -1,9 +1,12 @@
 "use client"
 
+import { useEffect } from "react"
+
 import { cn } from "@/lib/utils"
 import { StatusPill } from "@/components/shared/status-pill"
 import { DetailRows } from "@/components/shared/detail-rows"
 import { useTransactionStatus } from "@/lib/query/hooks"
+import { useChatStore } from "@/lib/store/chat-store"
 import type { PayInCardProps } from "@/types/components"
 import type { QuoteRow } from "@/lib/schemas"
 
@@ -123,10 +126,13 @@ export function PayInCard({
 }
 
 /**
- * PayInCardLive — wrapper that polls transaction status via TanStack Query
- * and passes the live status into the pure PayInCard presentational component.
+ * PayInCardLive — the SINGLE settlement watcher (C4). Polls transaction status
+ * via the TanStack Query hook (which stops on "completed"/"failed" and unsubscribes
+ * on unmount), renders the live status pill, and hands terminal results to the
+ * store so it appends the receipt (completed) or surfaces the failure (failed).
  *
- * Polling stops automatically once status reaches "completed" or "failed".
+ * There is no second poller: the store's setInterval — which polled forever on a
+ * failed settlement and swallowed the failure — was removed in favour of this hook.
  */
 export function PayInCardLive({
   transactionId,
@@ -136,10 +142,19 @@ export function PayInCardLive({
   const { data } = useTransactionStatus(transactionId, {
     enabled: initialStatus !== "completed" && initialStatus !== "failed",
   })
+  const resolveSettlement = useChatStore((s) => s.resolveSettlement)
 
   // Derive live status: prefer polled data, fall back to the prop from the store.
   const liveStatus =
     (data?.status as PayInCardProps["status"] | undefined) ?? initialStatus
+
+  // When the poll reaches a terminal status, notify the store. resolveSettlement
+  // is idempotent + guarded on the tracked tx, so repeated effect fires are safe.
+  useEffect(() => {
+    if (data && (data.status === "completed" || data.status === "failed")) {
+      resolveSettlement(data)
+    }
+  }, [data, resolveSettlement])
 
   return (
     <PayInCard {...rest} transactionId={transactionId} status={liveStatus} />

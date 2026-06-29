@@ -56,9 +56,6 @@ export { chipLabel }
 /** Milliseconds before the success overlay auto-dismisses. Matches prototype (line 1352). */
 const SUCCESS_DISMISS_MS = 1150
 
-/** Poll interval (ms) for settling transactions. */
-const POLL_INTERVAL_MS = 3000
-
 // ─── Scheduler type ───────────────────────────────────────────────────────────
 
 /** A function that schedules `fn` to run after a typing delay (or immediately in tests). */
@@ -79,7 +76,6 @@ interface ChatApis {
       idempotencyKey: string
     }
   ) => Promise<ExecuteProposalResponse>
-  pollApi?: (transactionId: string) => Promise<TransactionStatusResponse>
 }
 
 // ─── State interface ──────────────────────────────────────────────────────────
@@ -114,8 +110,11 @@ interface ChatState {
   _nonce: string | null
   _idempotencyKey: string | null
 
-  // Settling: track the transaction being polled
+  // Settling: track the transaction being polled by the live PayInCardLive hook,
+  // plus the surface its pay_in card was appended to so resolveSettlement can put
+  // the completion/failure message on the right thread.
   _pollingTransactionId: string | null
+  _settlingSurface: OverlaySurface | null
 
   // Actions
   send(surface: ChatSurface, text: string, action?: ChatAction): void
@@ -136,6 +135,14 @@ interface ChatState {
   pinBack(): void
   /** THE ONLY method that appends a receipt-kind message. */
   pinComplete(): Promise<void>
+  /**
+   * Resolve a settling buy when the live PayInCardLive poll reports a terminal
+   * status. completed → append the receipt + open success; failed → surface the
+   * failure in-thread. No-op for non-terminal statuses or an untracked tx
+   * (idempotent — guards repeated hook fires). C4: the single settlement watcher
+   * is the TanStack Query hook; this is its callback, not a second poller.
+   */
+  resolveSettlement(tx: TransactionStatusResponse): void
   reset(surface: ChatSurface): void
 }
 
@@ -151,7 +158,6 @@ interface CreateChatStoreOptions {
   chatApi?: (body: ChatMessageRequest) => Promise<WebChatResponse>
   authorizeApi?: ChatApis["authorizeApi"]
   executeApi?: ChatApis["executeApi"]
-  pollApi?: ChatApis["pollApi"]
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -183,12 +189,6 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
     if (options.executeApi) return options.executeApi
     return (proposalId, body) =>
       import("@/lib/api/chat").then((m) => m.executeProposal(proposalId, body))
-  }
-
-  const getPollFn = (): ChatApis["pollApi"] => {
-    if (options.pollApi) return options.pollApi
-    return (txId: string) =>
-      import("@/lib/api/chat").then((m) => m.getTransaction(txId))
   }
 
   // Per-store monotonic counter — deterministic, no Math.random / Date.
@@ -235,6 +235,7 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
     _nonce: null,
     _idempotencyKey: null,
     _pollingTransactionId: null,
+    _settlingSurface: null,
 
     // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -679,6 +680,12 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             status: "pending",
           }
 
+          // C4: hand polling off to the live PayInCardLive TanStack Query hook —
+          // the single settlement watcher (stops on completed/failed, clears on
+          // unmount). The store NO LONGER runs a setInterval (which leaked: it
+          // polled forever on a failed settlement and swallowed the failure).
+          // Record the tx id + surface so resolveSettlement (the hook's callback)
+          // can append the terminal receipt/failure to the right thread.
           set((s) => ({
             threads: {
               ...s.threads,
@@ -692,62 +699,8 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             _nonce: null,
             _idempotencyKey: null,
             _pollingTransactionId: result.transactionId,
+            _settlingSurface: overlaySurface,
           }))
-
-          // Poll until completed. We use setInterval here so tests can spy/clear.
-          const pollFn = getPollFn()!
-          const intervalId = setInterval(() => {
-            void pollFn(result.transactionId).then((tx) => {
-              if (tx.status === "completed") {
-                clearInterval(intervalId)
-
-                // Replace the pay-in card with a completed receipt by appending
-                // a new receipt message (append-only thread — no mutation).
-                const completedReceipt: ChatMessage = {
-                  id: nextId(),
-                  role: "assistant",
-                  kind: "receipt",
-                  title: "Purchase complete",
-                  subtitle: "USDT credited to your wallet",
-                  amount: tx.cryptoAmount
-                    ? `+ ${tx.cryptoAmount} ${tx.asset ?? ""}`
-                    : "+ USDT",
-                  rows: [
-                    {
-                      label: "Paid",
-                      value: tx.fiatAmount ? formatNGN(tx.fiatAmount) : "—",
-                    },
-                    {
-                      label: "Date",
-                      value: new Date(tx.createdAt).toLocaleString("en-NG"),
-                    },
-                  ],
-                  txRef: tx.receiptNumber
-                    ? `REF · ${tx.receiptNumber}`
-                    : `TX · ${tx.id.slice(0, 8)}`,
-                }
-
-                set((s) => ({
-                  threads: {
-                    ...s.threads,
-                    [overlaySurface]: [
-                      ...s.threads[overlaySurface],
-                      completedReceipt,
-                    ],
-                  },
-                  chips: { ...s.chips, [overlaySurface]: startChips() },
-                  _pollingTransactionId: null,
-                  successOpen: true,
-                  successText: "Purchase complete",
-                  successSurface: overlaySurface,
-                }))
-
-                setTimeout(() => {
-                  set({ successOpen: false })
-                }, SUCCESS_DISMISS_MS)
-              }
-            })
-          }, POLL_INTERVAL_MS)
         } else {
           // ── Immediate completion path ────────────────────────────────────────
           const successLabels: Record<ChatAction, string> = {
@@ -801,6 +754,86 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           pinError: message,
         })
       }
+    },
+
+    resolveSettlement(tx) {
+      const { _pollingTransactionId, _settlingSurface } = get()
+
+      // Guard: only the currently-tracked settling tx, only on a terminal status.
+      // Clearing the tracking on resolve makes repeated hook fires no-ops.
+      if (
+        _settlingSurface === null ||
+        tx.id !== _pollingTransactionId ||
+        (tx.status !== "completed" && tx.status !== "failed")
+      ) {
+        return
+      }
+      const surface = _settlingSurface
+
+      if (tx.status === "completed") {
+        const completedReceipt: ChatMessage = {
+          id: nextId(),
+          role: "assistant",
+          kind: "receipt",
+          title: "Purchase complete",
+          subtitle: "USDT credited to your wallet",
+          amount: tx.cryptoAmount
+            ? `+ ${tx.cryptoAmount} ${tx.asset ?? ""}`
+            : "+ USDT",
+          rows: [
+            {
+              label: "Paid",
+              value: tx.fiatAmount ? formatNGN(tx.fiatAmount) : "—",
+            },
+            {
+              label: "Date",
+              value: new Date(tx.createdAt).toLocaleString("en-NG"),
+            },
+          ],
+          txRef: tx.receiptNumber
+            ? `REF · ${tx.receiptNumber}`
+            : `TX · ${tx.id.slice(0, 8)}`,
+        }
+
+        set((s) => ({
+          threads: {
+            ...s.threads,
+            [surface]: [...s.threads[surface], completedReceipt],
+          },
+          chips: { ...s.chips, [surface]: startChips() },
+          _pollingTransactionId: null,
+          _settlingSurface: null,
+          successOpen: true,
+          successText: "Purchase complete",
+          successSurface: surface,
+        }))
+
+        setTimeout(() => {
+          set({ successOpen: false })
+        }, SUCCESS_DISMISS_MS)
+        return
+      }
+
+      // status === "failed": surface it in-thread (never swallow / poll forever).
+      const failureMsg: ChatMessage = {
+        id: nextId(),
+        role: "assistant",
+        kind: "text",
+        text:
+          `⚠️ We couldn't confirm your payment for transaction ` +
+          `TX · ${tx.id.slice(0, 8)}. If you were debited, contact support — ` +
+          `your funds are safe and have not been credited.`,
+      }
+
+      set((s) => ({
+        threads: {
+          ...s.threads,
+          [surface]: [...s.threads[surface], failureMsg],
+        },
+        chips: { ...s.chips, [surface]: startChips() },
+        _pollingTransactionId: null,
+        _settlingSurface: null,
+      }))
     },
 
     reset(surface) {

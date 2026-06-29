@@ -13,6 +13,7 @@ import { createChatStore } from "./chat-store"
 import type {
   WebChatResponse,
   ChatMessageRequest,
+  TransactionStatusResponse,
 } from "@handshake-agent/contracts"
 
 /** Synchronous scheduler — no setTimeout in tests */
@@ -373,7 +374,7 @@ describe("buy execute flow (authenticated path)", () => {
     expect(store.getState().pinError).toBe("Unauthorized")
   })
 
-  it("pinComplete (settling) appends pay_in card and starts polling", async () => {
+  it("pinComplete (settling) appends pay_in card and hands off to the live poller (no store interval)", async () => {
     const transactionId = "tttttttt-tttt-tttt-tttt-tttttttttttt"
     const authorizeApi = makeAuthApi()
     const executeApi = vi.fn<
@@ -400,26 +401,15 @@ describe("buy execute flow (authenticated path)", () => {
         },
       })
     )
-    const pollApi = vi.fn<
-      (
-        id: string
-      ) => Promise<
-        import("@handshake-agent/contracts").TransactionStatusResponse
-      >
-    >(() =>
-      Promise.resolve({
-        id: transactionId,
-        type: "buy",
-        status: "settling",
-        createdAt: new Date().toISOString(),
-      })
-    )
 
+    // C4: the store no longer owns a setInterval poller — polling is the
+    // PayInCardLive TanStack Query hook's job (stops on completed/failed, clears
+    // on unmount). The store only records the settling tx + surface so the hook's
+    // resolveSettlement callback can append the receipt to the right thread.
     const store = createChatStore({
       schedule: immediate,
       authorizeApi,
       executeApi,
-      pollApi,
     })
     store.getState().openConfirm("m", buildBuyConfirm())
     store.setState({ pendingProposalId: proposalId })
@@ -438,6 +428,10 @@ describe("buy execute flow (authenticated path)", () => {
     }
     expect(store.getState().pinOpen).toBe(false)
     expect(store.getState().pending).toBeNull()
+    // The live-poll handoff: the settling tx + its surface are tracked so the
+    // component-driven hook can resolve completion/failure onto the right thread.
+    expect(store.getState()._pollingTransactionId).toBe(transactionId)
+    expect(store.getState()._settlingSurface).toBe("m")
   })
 
   it("I8: pinComplete sends a STABLE idempotencyKey (= proposalId) so a retry cannot double-execute", async () => {
@@ -522,6 +516,83 @@ describe("buy execute flow (authenticated path)", () => {
     expect(store.getState().pinOpen).toBe(true)
     expect(store.getState().pin).toBe("")
     expect(store.getState().pinError).toBe("Incorrect PIN")
+  })
+})
+
+// ─── settlement resolution (C4: single poller + failed-state handling) ────────
+
+describe("resolveSettlement (C4)", () => {
+  const transactionId = "tttttttt-tttt-tttt-tttt-tttttttttttt"
+
+  /** A store already tracking a settling buy (pay_in card live on surface "m"). */
+  function settlingStore() {
+    const store = createChatStore({ schedule: immediate })
+    store.setState({
+      _pollingTransactionId: transactionId,
+      _settlingSurface: "m",
+    })
+    return store
+  }
+
+  function tx(
+    status: TransactionStatusResponse["status"]
+  ): TransactionStatusResponse {
+    return {
+      id: transactionId,
+      type: "buy",
+      status,
+      cryptoAmount: "6.5",
+      asset: "USDT",
+      fiatAmount: "10000",
+      fiatCurrency: "NGN",
+      createdAt: "2026-06-29T00:00:00.000Z",
+    }
+  }
+
+  it("completed → appends a receipt, opens success overlay, stops tracking", () => {
+    const store = settlingStore()
+    store.getState().resolveSettlement(tx("completed"))
+
+    const msgs = store.getState().threads.m
+    expect(msgs.some((m) => m.kind === "receipt")).toBe(true)
+    expect(store.getState().successOpen).toBe(true)
+    // Tracking is cleared so nothing polls/resolves this tx again.
+    expect(store.getState()._pollingTransactionId).toBeNull()
+  })
+
+  it("failed → surfaces the failure to the user, does NOT open success, stops tracking", () => {
+    const store = settlingStore()
+    store.getState().resolveSettlement(tx("failed"))
+
+    const msgs = store.getState().threads.m
+    // The failure is surfaced in-thread (not swallowed, not polled forever).
+    expect(
+      msgs.some(
+        (m) =>
+          m.kind === "text" &&
+          /fail|couldn't|support/i.test((m as { text: string }).text)
+      )
+    ).toBe(true)
+    expect(store.getState().successOpen).toBe(false)
+    expect(store.getState()._pollingTransactionId).toBeNull()
+  })
+
+  it("is idempotent: a second resolve for the same tx is a no-op (guards repeated hook fires)", () => {
+    const store = settlingStore()
+    store.getState().resolveSettlement(tx("completed"))
+    const countAfterFirst = store.getState().threads.m.length
+
+    store.getState().resolveSettlement(tx("completed"))
+    expect(store.getState().threads.m.length).toBe(countAfterFirst)
+  })
+
+  it("ignores non-terminal statuses (still settling → keep tracking, no message)", () => {
+    const store = settlingStore()
+    const before = store.getState().threads.m.length
+
+    store.getState().resolveSettlement(tx("settling"))
+    expect(store.getState().threads.m.length).toBe(before)
+    expect(store.getState()._pollingTransactionId).toBe(transactionId)
   })
 })
 
