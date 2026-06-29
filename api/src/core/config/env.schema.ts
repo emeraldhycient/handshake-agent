@@ -165,6 +165,21 @@ export const envSchema = z.object({
   // (configuration.ts auth.*), not here.
   JWT_SECRET: z.string().optional().default(''),
   AUTH_DEV_EXPOSE_OTP: z.enum(['true', 'false']).default('false'),
+
+  // --- Email delivery (Resend) ---
+  // Empty/absent → MockEmailProvider (log-only). Non-empty → ResendEmailProvider
+  // (real delivery). Coerce '' → undefined so an empty placeholder passes boot-time
+  // validation (same pattern as ANTHROPIC_API_KEY).
+  RESEND_API_KEY: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  // Sender address in "Name <addr>" or plain "addr" form. Falls back to a safe
+  // default when unset; provide a verified domain in production.
+  EMAIL_FROM: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(1).optional(),
+  ),
 });
 
 export type Env = z.infer<typeof envSchema>;
