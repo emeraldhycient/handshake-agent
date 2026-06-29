@@ -38,9 +38,7 @@ export function WalletPage({
   const deposit = useDepositAddress()
   const { canSwap } = useCapabilities()
 
-  const actions = canSwap
-    ? ACTIONS
-    : ACTIONS.filter((a) => a.action !== "swap")
+  const actions = canSwap ? ACTIONS : ACTIONS.filter((a) => a.action !== "swap")
 
   // ── Loading state ──────────────────────────────────────────────────────────
   if (assets.isLoading) {
@@ -121,7 +119,8 @@ export function WalletPage({
               aria-label={label}
               className={cn(
                 "rounded-[11px] font-bold",
-                primary && "bg-accent text-accent-foreground hover:bg-accent-deep"
+                primary &&
+                  "bg-accent text-accent-foreground hover:bg-accent-deep"
               )}
               onClick={() => onQuickAction(action, chipLabel(action))}
             >
@@ -205,8 +204,8 @@ export function WalletPage({
                 {deposit.data.address}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Only send {deposit.data.asset} on {deposit.data.network} to
-                this address.
+                Only send {deposit.data.asset} on {deposit.data.network} to this
+                address.
               </p>
             </>
           )}

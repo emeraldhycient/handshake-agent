@@ -79,9 +79,7 @@ describe("WalletPage", () => {
     const user = userEvent.setup()
     render(<WalletPage onQuickAction={onQuickAction} />, { wrapper })
     await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: /Send/i })
-      ).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: /Send/i })).toBeInTheDocument()
     })
     await user.click(screen.getByRole("button", { name: /Send/i }))
     expect(onQuickAction).toHaveBeenCalledWith("send", expect.any(String))
