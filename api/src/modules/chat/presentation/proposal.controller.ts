@@ -165,6 +165,16 @@ export class ProposalController {
 
     const proposalType = proposal.type;
 
+    // I8: the execute idempotency key MUST be stable per proposal, not taken from
+    // the request body. The web client mints a fresh uuid on every confirm attempt
+    // AND the axios interceptor stamps a fresh Idempotency-Key header per request,
+    // so a body-keyed dedup never fired — a retry created a SECOND real-money
+    // transaction. Deriving the key from the (single-use) proposalId — exactly as
+    // the WhatsApp flow surface does — makes retries collapse onto the engine's
+    // findByIdempotencyKey check (at-most-once per proposal, §3.1 / NFR-7). The
+    // client-supplied body.idempotencyKey is never trusted for this (§3.3).
+    const idempotencyKey = proposalId;
+
     try {
       if (proposalType === 'buy') {
         const result = await this.executionService.executeBuy({
@@ -173,7 +183,7 @@ export class ProposalController {
           directiveId: body.directiveId,
           nonce: body.nonce,
           pin: body.pin,
-          idempotencyKey: body.idempotencyKey,
+          idempotencyKey,
         });
         return {
           transactionId: result.transactionId,
@@ -189,7 +199,7 @@ export class ProposalController {
           directiveId: body.directiveId,
           nonce: body.nonce,
           pin: body.pin,
-          idempotencyKey: body.idempotencyKey,
+          idempotencyKey,
         });
         return {
           transactionId: result.transactionId,

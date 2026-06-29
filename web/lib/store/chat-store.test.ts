@@ -440,6 +440,44 @@ describe("buy execute flow (authenticated path)", () => {
     expect(store.getState().pending).toBeNull()
   })
 
+  it("I8: pinComplete sends a STABLE idempotencyKey (= proposalId) so a retry cannot double-execute", async () => {
+    const authorizeApi = makeAuthApi()
+    let capturedKey: string | undefined
+    const executeApi = vi.fn(
+      (
+        _id: string,
+        body: {
+          directiveId: string
+          nonce: string
+          pin: string
+          deviceFingerprint?: string
+          idempotencyKey: string
+        }
+      ) => {
+        capturedKey = body.idempotencyKey
+        return Promise.resolve({
+          transactionId: "tx-complete",
+          status: "completed" as const,
+        })
+      }
+    )
+
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+    })
+    store.getState().openConfirm("m", buildBuyConfirm())
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    // The key is the proposalId — stable across attempts, not a fresh per-confirm
+    // uuid — so the server dedups a retried confirm instead of re-charging.
+    expect(capturedKey).toBe(proposalId)
+  })
+
   it("pinComplete (completed) appends receipt and opens success overlay", async () => {
     const authorizeApi = makeAuthApi()
     const executeApi = vi.fn(() =>

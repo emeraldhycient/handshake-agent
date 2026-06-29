@@ -548,8 +548,11 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           pinError: null,
           _directiveId: result.directiveId,
           _nonce: result.nonce,
-          // Generate idempotencyKey once per confirm attempt — reused on retry
-          _idempotencyKey: crypto.randomUUID(),
+          // I8: the execute idempotency key is STABLE per proposal (= proposalId),
+          // not a fresh uuid per attempt. A retry of the same proposal therefore
+          // sends the same key, and the server (which derives the same key from
+          // proposalId, never trusting this value) dedups it — no double-execute.
+          _idempotencyKey: pendingProposalId,
         })
       } catch (err) {
         // Show error on the confirm sheet; do NOT open the PIN pad.

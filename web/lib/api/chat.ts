@@ -48,8 +48,10 @@ export async function authorizeProposal(
 
 /**
  * Execute a proposal — submits the PIN + directive credentials.
- * idempotencyKey must be generated fresh once per confirm attempt (caller's
- * responsibility) so retries re-use the same key and stay idempotent.
+ * idempotencyKey is STABLE per proposal (= proposalId) so every retry of the
+ * same proposal carries the same key (I8). The server is authoritative: it
+ * derives the same key from proposalId and never trusts this value, so a
+ * retried confirm is deduped instead of double-executing.
  *
  * PIN travels only over TLS; never log the body.
  */

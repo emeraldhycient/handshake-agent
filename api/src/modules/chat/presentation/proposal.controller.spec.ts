@@ -339,11 +339,60 @@ describe('ProposalController.execute', () => {
         directiveId: validBody.directiveId,
         nonce: validBody.nonce,
         pin: validBody.pin,
-        idempotencyKey: validBody.idempotencyKey,
+        // I8: the engine receives the stable per-proposal key, not the body key.
+        idempotencyKey: 'proposal-uuid',
       }),
     );
     expect(result.transactionId).toBe('txn-uuid');
     expect(result.payment).toBeDefined();
+  });
+
+  it('I8: uses a STABLE per-proposal idempotency key (proposalId), ignoring the client body key, so a retry cannot double-execute', async () => {
+    mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'buy' }));
+    mockExecutionService.executeBuy.mockResolvedValue({
+      transactionId: 'txn-uuid',
+      status: 'settling',
+      payment: {
+        accountNumber: '1',
+        bankName: 'b',
+        providerRef: 'r',
+        amount: '1',
+        currency: 'NGN',
+      },
+    });
+
+    // Two confirm attempts for the SAME proposal, each carrying a DIFFERENT
+    // client-supplied key — exactly the web bug: the FE mints a fresh uuid per
+    // confirm AND the axios interceptor stamps a fresh Idempotency-Key header,
+    // so the prior body-keyed dedup never fired and both attempts executed.
+    await controller.execute(
+      'proposal-uuid',
+      { ...validBody, idempotencyKey: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' },
+      TEST_USER,
+    );
+    await controller.execute(
+      'proposal-uuid',
+      { ...validBody, idempotencyKey: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' },
+      TEST_USER,
+    );
+
+    // Both attempts must reach the engine with the SAME stable key (= proposalId,
+    // matching the WhatsApp surface) so the engine's findByIdempotencyKey dedups
+    // the second attempt instead of creating a second real-money transaction.
+    expect(mockExecutionService.executeBuy).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        proposalId: 'proposal-uuid',
+        idempotencyKey: 'proposal-uuid',
+      }),
+    );
+    expect(mockExecutionService.executeBuy).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        proposalId: 'proposal-uuid',
+        idempotencyKey: 'proposal-uuid',
+      }),
+    );
   });
 
   it('dispatches sell and returns payout', async () => {
