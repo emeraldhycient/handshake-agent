@@ -140,6 +140,17 @@ describe('Transaction list — e2e (GET /transactions)', () => {
       getWithdrawalStatus: jest
         .fn()
         .mockResolvedValue({ status: 'pending' as const }),
+      listWalletAssets: jest.fn().mockResolvedValue([
+        {
+          assetId: 'e2e-usdt-tron-asset-id',
+          symbol: 'USDT',
+          name: 'Tether USD',
+          network: 'TRON',
+          contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+          decimals: 6,
+          isMainnet: false,
+        },
+      ]),
     };
 
     fakePaymentProvider = {

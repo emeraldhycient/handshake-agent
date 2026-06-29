@@ -393,17 +393,24 @@ export default (): AppConfig => ({
   // BTC is intentionally NOT registered — Blockradar has no BTC WaaS (ADR-0006).
   catalog: {
     assets: {
+      // USDT is the only static catalog entry at launch.
+      // The Blockradar asset id (providers.blockradar.assetId) is intentionally
+      // NOT hardcoded here — it varies per wallet (testnet vs mainnet) and is
+      // discovered at boot via CatalogSyncService → provider.listWalletAssets().
+      // The sync merges the real runtime assetId into AssetRegistry's
+      // discoveredProviderIds overlay; assetProviderId('USDT', 'blockradar')
+      // returns the discovered value first.
+      //
+      // Static pricing (pricing.assets.USDT) and limits remain keyed by symbol —
+      // those values are independent of the Blockradar asset UUID.
       USDT: {
         symbol: 'USDT',
         displayName: 'USDT',
         kind: 'crypto',
         decimals: 6,
         networks: ['TRON'],
-        // The Blockradar asset id in the catalog is the canonical source of truth
-        // for USDT-on-TRON (task X3 — providers.blockradar.usdtTronAssetId removed).
-        providers: {
-          blockradar: { assetId: 'f56d297c-a3db-4cda-95bd-180b54679070' },
-        },
+        // providers intentionally empty — populated at boot by CatalogSyncService.
+        providers: {},
         enabled: true,
       },
     },

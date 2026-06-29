@@ -65,4 +65,34 @@ describe('MockWalletProvider', () => {
 
     expect(out.status).toBe('pending');
   });
+
+  describe('listWalletAssets', () => {
+    it('returns a non-empty array (static mock set — no network call)', async () => {
+      const assets = await provider.listWalletAssets('any-master-wallet-id');
+      expect(assets.length).toBeGreaterThan(0);
+    });
+
+    it('includes USDT on TRON', async () => {
+      const assets = await provider.listWalletAssets('any-master-wallet-id');
+      const usdt = assets.find((a) => a.symbol === 'USDT');
+      expect(usdt).toBeDefined();
+      expect(usdt?.network).toBe('TRON');
+      expect(usdt?.decimals).toBe(6);
+      expect(usdt?.assetId).toBeTruthy();
+    });
+
+    it('includes TRX (native) on TRON with null contractAddress', async () => {
+      const assets = await provider.listWalletAssets('any-master-wallet-id');
+      const trx = assets.find((a) => a.symbol === 'TRX');
+      expect(trx).toBeDefined();
+      expect(trx?.network).toBe('TRON');
+      expect(trx?.contractAddress).toBeNull();
+    });
+
+    it('accepts any masterWalletId (static response, ignores the argument)', async () => {
+      const assets1 = await provider.listWalletAssets('wallet-a');
+      const assets2 = await provider.listWalletAssets('wallet-b');
+      expect(assets1).toEqual(assets2);
+    });
+  });
 });

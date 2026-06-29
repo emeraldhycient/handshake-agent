@@ -73,6 +73,9 @@ function makeProvider(
     getWithdrawalStatus: jest.fn().mockResolvedValue({
       status: 'pending' as const,
     }),
+    // listWalletAssets stub — called by CatalogSyncService, not WalletService;
+    // present to satisfy the IWalletProvider interface.
+    listWalletAssets: jest.fn().mockResolvedValue([]),
   };
 }
 

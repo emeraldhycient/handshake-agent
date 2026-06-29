@@ -29,6 +29,7 @@ import type {
 } from '../config/configuration';
 
 import type { PublicConfigResponse } from '@handshake-agent/contracts';
+import type { DiscoveredAsset } from '../../modules/wallets/application/ports/wallet-provider.port';
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -75,6 +76,32 @@ export class AssetRegistry {
    */
   private readonly addressRegExps: Map<string, RegExp>;
 
+  /**
+   * Overlay of provider asset ids discovered at runtime by CatalogSyncService.
+   * Keyed by SYMBOL (upper-case) → provider name → assetId.
+   *
+   * This overlay is checked FIRST in `assetProviderId()`.  The config-layer
+   * providers map (CatalogAsset.providers) acts as a static fallback for cases
+   * where the sync has not yet run or returned nothing.
+   *
+   * Using a separate overlay (rather than mutating `catalog`) means the static
+   * config type remains immutable after construction, and the sync can safely
+   * call `mergeDiscoveredAssets()` concurrently without locking.
+   */
+  private readonly discoveredProviderIds: Map<string, Record<string, string>> =
+    new Map();
+
+  /**
+   * Overlay of discovered asset metadata (decimals, name, networks list).
+   * Populated by CatalogSyncService so assets found on-chain but absent from
+   * the static config are still accessible (enabled=true by default when discovered).
+   *
+   * Keyed by symbol (upper-case). Only populated for assets NOT already in the
+   * static catalog — discovered assets that match a static entry enrich the
+   * provider-id overlay only.
+   */
+  private readonly discoveredAssets: Map<string, CatalogAsset> = new Map();
+
   constructor(private readonly config: ConfigService) {
     const catalog = this.config.get<CatalogConfig>('catalog');
     if (!catalog) {
@@ -94,18 +121,83 @@ export class AssetRegistry {
     );
   }
 
+  // ── Dynamic asset sync ────────────────────────────────────────────────────
+
+  /**
+   * Merges provider-discovered assets into the registry.
+   * Called by CatalogSyncService on boot (OnModuleInit) and on admin refresh.
+   *
+   * For each discovered asset:
+   *   - If the symbol already exists in the static config catalog, the discovered
+   *     `assetId` is stored in the `discoveredProviderIds` overlay so that
+   *     `assetProviderId(symbol, 'blockradar')` returns the real runtime id.
+   *   - If the symbol is NOT in the static catalog, a synthetic CatalogAsset entry
+   *     is built from the discovered metadata and stored in `discoveredAssets`,
+   *     making `asset(symbol)` and `enabledCryptoAssets()` see it.
+   *
+   * Assets with a network not present in `catalog.networks` are skipped with a
+   * debug note (the network must be configured statically — NETWORKS stay config).
+   */
+  mergeDiscoveredAssets(assets: DiscoveredAsset[]): void {
+    for (const discovered of assets) {
+      const sym = discovered.symbol.toUpperCase();
+      const networkId = discovered.network.toUpperCase();
+
+      // Skip assets on networks not registered in the static config.
+      // Networks stay config-driven; dynamic network discovery is not in scope.
+      if (!this.catalog.networks[networkId]) {
+        continue;
+      }
+
+      // Update the provider-id overlay for 'blockradar'.
+      const existing = this.discoveredProviderIds.get(sym) ?? {};
+      existing['blockradar'] = discovered.assetId;
+      this.discoveredProviderIds.set(sym, existing);
+
+      // If the symbol is not in the static catalog, synthesise a CatalogAsset.
+      if (!this.catalog.assets[sym] && !this.discoveredAssets.has(sym)) {
+        const synthetic: CatalogAsset = {
+          symbol: sym,
+          displayName: discovered.name,
+          kind: 'crypto',
+          decimals: discovered.decimals,
+          networks: [networkId],
+          // providers populated via the discoveredProviderIds overlay
+          providers: {},
+          enabled: true,
+        };
+        this.discoveredAssets.set(sym, synthetic);
+      } else if (this.discoveredAssets.has(sym)) {
+        // Accumulate networks for the synthetic entry (multi-network asset).
+        const synth = this.discoveredAssets.get(sym)!;
+        if (!synth.networks.includes(networkId)) {
+          synth.networks = [...synth.networks, networkId];
+        }
+      }
+    }
+  }
+
   // ── Asset lookups ──────────────────────────────────────────────────────
 
   /**
    * Returns metadata for the given asset symbol.
-   * @throws {UnsupportedAssetError} when the symbol is not registered or is disabled.
+   *
+   * Resolution order:
+   *   1. Static config catalog (catalog.assets[symbol]) — config-layer entry wins.
+   *   2. Discovered assets overlay (discoveredAssets) — synthesised at sync time for
+   *      assets found on-chain but absent from the static config.
+   *
+   * @throws {UnsupportedAssetError} when the symbol is not in either source or is disabled.
    */
   asset(symbol: string): AssetMeta {
-    const meta = this.catalog.assets[symbol];
-    if (!meta || !meta.enabled) {
-      throw new UnsupportedAssetError(symbol);
+    const staticMeta = this.catalog.assets[symbol];
+    if (staticMeta) {
+      if (!staticMeta.enabled) throw new UnsupportedAssetError(symbol);
+      return staticMeta;
     }
-    return meta;
+    const discovered = this.discoveredAssets.get(symbol);
+    if (discovered && discovered.enabled) return discovered;
+    throw new UnsupportedAssetError(symbol);
   }
 
   /**
@@ -113,36 +205,60 @@ export class AssetRegistry {
    * Safe to call without try/catch.
    */
   isAssetEnabled(symbol: string): boolean {
-    const meta = this.catalog.assets[symbol];
-    return !!meta?.enabled;
+    const staticMeta = this.catalog.assets[symbol];
+    if (staticMeta !== undefined) return !!staticMeta.enabled;
+    return !!this.discoveredAssets.get(symbol)?.enabled;
   }
 
   /**
    * Returns the provider-specific id (e.g. Blockradar asset UUID) for the asset.
+   *
+   * Resolution order for the provider id:
+   *   1. discoveredProviderIds overlay — populated by CatalogSyncService at boot
+   *      (the correct runtime id from the actual Blockradar wallet).
+   *   2. Static config catalog providers map — fallback for when the sync has not
+   *      yet run (e.g. test environments that stub the registry directly).
+   *
    * @throws {UnsupportedAssetError} when the asset is not registered, disabled,
-   *   or the requested provider entry is absent.
+   *   or the requested provider entry is absent in both sources.
    */
   assetProviderId(symbol: string, provider: string): string {
-    const meta = this.asset(symbol); // throws UnsupportedAssetError if absent/disabled
-    const providerMeta = meta.providers[provider];
-    if (!providerMeta) {
-      throw new UnsupportedAssetError(
-        symbol,
-        `no provider binding for "${provider}"`,
-      );
+    this.asset(symbol); // throws UnsupportedAssetError if absent/disabled
+
+    // 1. Check the dynamic overlay first (runtime-discovered ids take precedence).
+    const overlayProviders = this.discoveredProviderIds.get(symbol);
+    if (overlayProviders?.[provider] !== undefined) {
+      return overlayProviders[provider];
     }
-    return providerMeta.assetId;
+
+    // 2. Fall back to the static config providers map.
+    const staticMeta = this.catalog.assets[symbol];
+    const providerMeta: AssetProviderConfig | undefined =
+      staticMeta?.providers[provider];
+    if (providerMeta) {
+      return providerMeta.assetId;
+    }
+
+    throw new UnsupportedAssetError(
+      symbol,
+      `no provider binding for "${provider}"`,
+    );
   }
 
   /**
    * Returns the symbol of the first enabled crypto asset in the catalog.
+   * Checks static config assets first, then discovered assets.
    * Used where a flow needs "the" launch asset without a hardcoded literal.
    * @throws {UnsupportedAssetError} when no enabled crypto asset is registered.
    */
   defaultCryptoAsset(): string {
-    const symbol = Object.values(this.catalog.assets).find(
-      (a) => a.enabled && a.kind === 'crypto',
-    )?.symbol;
+    const symbol =
+      Object.values(this.catalog.assets).find(
+        (a) => a.enabled && a.kind === 'crypto',
+      )?.symbol ??
+      Array.from(this.discoveredAssets.values()).find(
+        (a) => a.enabled && a.kind === 'crypto',
+      )?.symbol;
     if (!symbol) {
       throw new UnsupportedAssetError(
         'default',
@@ -280,13 +396,20 @@ export class AssetRegistry {
 
   /**
    * Returns an array of symbols for all enabled crypto assets in the catalog.
+   * Includes both statically configured and dynamically discovered assets.
+   * Discovered assets that duplicate a static entry are not double-counted.
    * Used by the system-prompt builder and any UI that must enumerate supported
    * assets without hardcoding a list (registry-driven extensibility, §7).
    */
   enabledCryptoAssets(): string[] {
-    return Object.values(this.catalog.assets)
+    const staticSymbols = Object.values(this.catalog.assets)
       .filter((a) => a.enabled && a.kind === 'crypto')
       .map((a) => a.symbol);
+    const discoveredSymbols = Array.from(this.discoveredAssets.values())
+      .filter((a) => a.enabled && a.kind === 'crypto')
+      .map((a) => a.symbol)
+      .filter((sym) => !this.catalog.assets[sym]);
+    return [...staticSymbols, ...discoveredSymbols];
   }
 
   /**
@@ -342,15 +465,23 @@ export class AssetRegistry {
    * Returns the symbol of the first enabled crypto asset whose default network
    * is the given `networkId`, or `null` when no such asset is registered.
    *
+   * Checks static config assets first, then discovered assets.
    * Derives everything from the registry data — no hardcoded literals.
    */
   defaultAssetForNetwork(networkId: string): string | null {
-    const asset = Object.values(this.catalog.assets).find((a) => {
+    const staticAsset = Object.values(this.catalog.assets).find((a) => {
       if (!a.enabled || a.kind !== 'crypto') return false;
       const enabled = a.networks.filter((n) => this.isNetworkEnabled(n));
       return enabled[0] === networkId;
     });
-    return asset ? asset.symbol : null;
+    if (staticAsset) return staticAsset.symbol;
+
+    const discovered = Array.from(this.discoveredAssets.values()).find((a) => {
+      if (!a.enabled || a.kind !== 'crypto') return false;
+      const enabled = a.networks.filter((n) => this.isNetworkEnabled(n));
+      return enabled[0] === networkId;
+    });
+    return discovered ? discovered.symbol : null;
   }
 
   // ── Capability flags ──────────────────────────────────────────────────
@@ -400,7 +531,7 @@ export class AssetRegistry {
         decimals,
       }));
 
-    const assets = Object.values(this.catalog.assets)
+    const staticAssets = Object.values(this.catalog.assets)
       .filter((a) => a.enabled)
       .map(({ symbol, displayName, decimals, networks }) => ({
         symbol,
@@ -409,6 +540,18 @@ export class AssetRegistry {
         // Only include enabled networks for this asset.
         networks: networks.filter((n) => this.isNetworkEnabled(n)),
       }));
+
+    const staticSymbolSet = new Set(Object.keys(this.catalog.assets));
+    const discoveredPublicAssets = Array.from(this.discoveredAssets.values())
+      .filter((a) => a.enabled && !staticSymbolSet.has(a.symbol))
+      .map(({ symbol, displayName, decimals, networks }) => ({
+        symbol,
+        displayName,
+        decimals,
+        networks: networks.filter((n) => this.isNetworkEnabled(n)),
+      }));
+
+    const assets = [...staticAssets, ...discoveredPublicAssets];
 
     const networks = Object.values(this.catalog.networks)
       .filter((n) => n.enabled)

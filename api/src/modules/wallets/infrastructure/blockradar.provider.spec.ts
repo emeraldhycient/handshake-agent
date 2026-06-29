@@ -519,6 +519,198 @@ describe('BlockradarProvider', () => {
     });
   });
 
+  // ── listWalletAssets ─────────────────────────────────────────────────────
+  //
+  // Endpoint: GET /wallets/{masterWalletId}/assets
+  // Header: x-api-key
+  // Response: { data: [{ id, asset: { id, name, symbol, address, decimals,
+  //   network, blockchain: { slug, name } } }] }
+  //
+  // Mapping:
+  //   assetId       ← data[n].asset.id
+  //   symbol        ← data[n].asset.symbol.toUpperCase()
+  //   name          ← data[n].asset.name
+  //   network       ← data[n].asset.blockchain.slug.toUpperCase()
+  //   contractAddress ← data[n].asset.address || null
+  //   decimals      ← data[n].asset.decimals
+  //   isMainnet     ← data[n].asset.network === 'mainnet'
+
+  describe('listWalletAssets', () => {
+    const MASTER_WALLET = 'master-wallet-uuid';
+
+    const SUCCESS_BODY = {
+      statusCode: 200,
+      message: 'Assets fetched successfully',
+      data: [
+        {
+          id: 'wallet-asset-join-id-1',
+          asset: {
+            id: 'asset-uuid-usdt-tron',
+            name: 'Tether USD',
+            symbol: 'USDT',
+            address: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+            decimals: 6,
+            network: 'testnet',
+            blockchain: {
+              slug: 'tron',
+              name: 'TRON',
+            },
+          },
+        },
+        {
+          id: 'wallet-asset-join-id-2',
+          asset: {
+            id: 'asset-uuid-trx-native',
+            name: 'TRON',
+            symbol: 'TRX',
+            address: '', // native — empty string
+            decimals: 6,
+            network: 'testnet',
+            blockchain: {
+              slug: 'tron',
+              name: 'TRON',
+            },
+          },
+        },
+      ],
+    };
+
+    it('GETs /wallets/{masterWalletId}/assets with x-api-key header', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(http.get).toHaveBeenCalledTimes(1);
+      const [url, config] = http.get.mock.calls[0] as [
+        string,
+        { headers: Record<string, string> },
+      ];
+      expect(url).toBe(`${BASE_URL}/wallets/${MASTER_WALLET}/assets`);
+      expect(config.headers['x-api-key']).toBe(API_KEY);
+    });
+
+    it('maps data[n].asset.id → assetId', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].assetId).toBe('asset-uuid-usdt-tron');
+      expect(result[1].assetId).toBe('asset-uuid-trx-native');
+    });
+
+    it('maps data[n].asset.symbol.toUpperCase() → symbol', async () => {
+      // Provide a lower-case symbol to verify normalisation.
+      const body = {
+        ...SUCCESS_BODY,
+        data: [
+          {
+            ...SUCCESS_BODY.data[0],
+            asset: { ...SUCCESS_BODY.data[0].asset, symbol: 'usdt' },
+          },
+        ],
+      };
+      http.get.mockReturnValue(of(axiosOk(body)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].symbol).toBe('USDT');
+    });
+
+    it('maps data[n].asset.blockchain.slug.toUpperCase() → network', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      // "tron" slug → "TRON" network
+      expect(result[0].network).toBe('TRON');
+      expect(result[1].network).toBe('TRON');
+    });
+
+    it('maps data[n].asset.address → contractAddress (non-empty string)', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].contractAddress).toBe(
+        'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+      );
+    });
+
+    it('maps empty address string → contractAddress null (native asset)', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      // TRX has address: '' → should be null
+      expect(result[1].contractAddress).toBeNull();
+    });
+
+    it('maps data[n].asset.decimals → decimals', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].decimals).toBe(6);
+    });
+
+    it('maps asset.network === "mainnet" → isMainnet true', async () => {
+      const mainnetBody = {
+        ...SUCCESS_BODY,
+        data: [
+          {
+            ...SUCCESS_BODY.data[0],
+            asset: { ...SUCCESS_BODY.data[0].asset, network: 'mainnet' },
+          },
+        ],
+      };
+      http.get.mockReturnValue(of(axiosOk(mainnetBody)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].isMainnet).toBe(true);
+    });
+
+    it('maps asset.network === "testnet" → isMainnet false', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].isMainnet).toBe(false);
+    });
+
+    it('returns empty array when data is empty', async () => {
+      http.get.mockReturnValue(of(axiosOk({ data: [] })));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result).toEqual([]);
+    });
+
+    it('throws a descriptive error on non-2xx response', async () => {
+      const axiosErr = Object.assign(new Error('Unauthorized'), {
+        response: {
+          status: 401,
+          data: { message: 'Invalid API key' },
+        },
+        isAxiosError: true,
+      });
+      http.get.mockReturnValue(throwError(() => axiosErr));
+
+      await expect(provider.listWalletAssets(MASTER_WALLET)).rejects.toThrow(
+        /Blockradar listWalletAssets error/,
+      );
+    });
+
+    it('does not call AssetRegistry.networkMasterWalletId (caller supplies the id directly)', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      await provider.listWalletAssets(MASTER_WALLET);
+
+      // listWalletAssets takes masterWalletId directly — no registry lookup needed.
+      expect(assetRegistry.networkMasterWalletId).not.toHaveBeenCalled();
+    });
+  });
+
   // ── getWithdrawalStatus ───────────────────────────────────────────────────
   //
   // Endpoint (docs.blockradar.co):

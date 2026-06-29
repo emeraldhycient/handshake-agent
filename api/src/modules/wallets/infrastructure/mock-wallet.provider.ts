@@ -8,6 +8,7 @@ import type {
   WithdrawInput,
   WithdrawOutput,
   GetWithdrawalStatusOutput,
+  DiscoveredAsset,
 } from '../application/ports/wallet-provider.port';
 
 /**
@@ -64,5 +65,37 @@ export class MockWalletProvider implements IWalletProvider {
   getWithdrawalStatus(): Promise<GetWithdrawalStatusOutput> {
     // Fail-safe pending: a mock has no real on-chain outcome to report.
     return Promise.resolve({ status: 'pending' });
+  }
+
+  /**
+   * Returns a static, plausible asset set for TRON — USDT and TRX — with
+   * fake but well-formed UUIDs.  Tests and WALLET_MOCK_MODE boots get a
+   * predictable catalog without a real Blockradar call.
+   *
+   * These ids intentionally look different from the old hardcoded
+   * 'f56d297c-…' so tests confirm the catalog now uses discovered ids.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  listWalletAssets(_masterWalletId: string): Promise<DiscoveredAsset[]> {
+    return Promise.resolve([
+      {
+        assetId: 'mock-usdt-tron-asset-id-0000000000001',
+        symbol: 'USDT',
+        name: 'Tether USD',
+        network: 'TRON',
+        contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+        decimals: 6,
+        isMainnet: false, // testnet wallet in mock/dev mode
+      },
+      {
+        assetId: 'mock-trx-tron-asset-id-00000000000002',
+        symbol: 'TRX',
+        name: 'TRON',
+        network: 'TRON',
+        contractAddress: null, // native asset, no contract address
+        decimals: 6,
+        isMainnet: false,
+      },
+    ]);
   }
 }

@@ -18,6 +18,7 @@ import { PrismaBackfillRunRepository } from './infrastructure/backfill-run.prism
 import { WebAuthModule } from '../auth/auth.module';
 import { QuotesModule } from '../quotes/quotes.module';
 import { WalletController } from './presentation/wallet.controller';
+import { CatalogSyncService } from '../../core/catalog/catalog-sync.service';
 
 /**
  * Selects the active wallet adapter from the layered config.
@@ -71,6 +72,12 @@ export function selectWalletProvider(
     { provide: WALLET_REPOSITORY, useClass: WalletPrismaRepository },
     { provide: BACKFILL_RUN_REPOSITORY, useClass: PrismaBackfillRunRepository },
     { provide: CLOCK, useClass: SystemClock },
+    // CatalogSyncService: discovers assets from the active wallet provider on
+    // boot and merges them into AssetRegistry's dynamic overlay.
+    // Registered here (not in CatalogModule) to avoid a circular dependency:
+    // CatalogModule is @Global and WalletsModule already depends on it;
+    // putting the sync here keeps the dependency arrow unidirectional.
+    CatalogSyncService,
   ],
   exports: [
     WalletService,

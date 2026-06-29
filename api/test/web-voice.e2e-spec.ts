@@ -155,6 +155,17 @@ describe('Web voice — e2e (AppModule, Testcontainers Postgres)', () => {
         status: 'confirmed',
         txHash: 'fake-hash',
       }),
+      listWalletAssets: jest.fn().mockResolvedValue([
+        {
+          assetId: 'e2e-usdt-tron-asset-id',
+          symbol: 'USDT',
+          name: 'Tether USD',
+          network: 'TRON',
+          contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+          decimals: 6,
+          isMainnet: false,
+        },
+      ]),
     };
 
     fakePaymentProvider = {

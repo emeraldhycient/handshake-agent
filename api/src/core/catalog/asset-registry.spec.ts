@@ -3,6 +3,11 @@
  *
  * TDD: written before the implementation. No DB, no network calls.
  * The registry reads solely from a stubbed ConfigService.
+ *
+ * Extended to cover:
+ *   - mergeDiscoveredAssets(): dynamic provider-id overlay + synthetic asset creation
+ *   - assetProviderId() resolution order (discovered overlay first, then static config)
+ *   - USDT catalog entry now has empty providers{} (no hardcoded assetId)
  */
 
 import { ConfigService } from '@nestjs/config';
@@ -14,9 +19,12 @@ import {
   UnsupportedNetworkError,
   CapabilityDisabledError,
 } from './catalog-errors';
+import type { DiscoveredAsset } from '../../modules/wallets/application/ports/wallet-provider.port';
 
 // ---------------------------------------------------------------------------
 // Stub config matching the JSON-defaults shape defined in configuration.ts §catalog
+// NOTE: providers is intentionally EMPTY for USDT — the hardcoded assetId has
+// been removed from configuration.ts; the runtime id comes from CatalogSyncService.
 // ---------------------------------------------------------------------------
 
 const STUB_CATALOG = {
@@ -27,9 +35,8 @@ const STUB_CATALOG = {
       kind: 'crypto' as const,
       decimals: 6,
       networks: ['TRON'],
-      providers: {
-        blockradar: { assetId: 'f56d297c-a3db-4cda-95bd-180b54679070' },
-      },
+      // Intentionally empty — assetId is discovered at boot, not hardcoded.
+      providers: {},
       enabled: true,
     },
     // Registered but explicitly disabled — should throw UnsupportedAssetError.
@@ -169,10 +176,58 @@ describe('AssetRegistry', () => {
   // ── assetProviderId() ────────────────────────────────────────────────────
 
   describe('assetProviderId()', () => {
-    it('returns the Blockradar asset id for USDT', () => {
+    it('returns the discovered Blockradar asset id for USDT after mergeDiscoveredAssets', () => {
+      // Since providers is empty in the stub config, the id must come from the
+      // dynamic overlay populated by mergeDiscoveredAssets.
+      registry.mergeDiscoveredAssets([
+        {
+          assetId: 'runtime-usdt-asset-id-xyz',
+          symbol: 'USDT',
+          name: 'Tether USD',
+          network: 'TRON',
+          contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+          decimals: 6,
+          isMainnet: false,
+        },
+      ]);
+
       expect(registry.assetProviderId('USDT', 'blockradar')).toBe(
-        'f56d297c-a3db-4cda-95bd-180b54679070',
+        'runtime-usdt-asset-id-xyz',
       );
+    });
+
+    it('throws UnsupportedAssetError when no provider id is available (no static entry, no sync)', () => {
+      // USDT stub has empty providers{} and sync has not run — must throw.
+      expect(() => registry.assetProviderId('USDT', 'blockradar')).toThrow(
+        UnsupportedAssetError,
+      );
+    });
+
+    it('discovered id overwrites any previously merged id (last sync wins)', () => {
+      registry.mergeDiscoveredAssets([
+        {
+          assetId: 'first-id',
+          symbol: 'USDT',
+          name: 'Tether USD',
+          network: 'TRON',
+          contractAddress: null,
+          decimals: 6,
+          isMainnet: false,
+        },
+      ]);
+      registry.mergeDiscoveredAssets([
+        {
+          assetId: 'second-id',
+          symbol: 'USDT',
+          name: 'Tether USD',
+          network: 'TRON',
+          contractAddress: null,
+          decimals: 6,
+          isMainnet: false,
+        },
+      ]);
+
+      expect(registry.assetProviderId('USDT', 'blockradar')).toBe('second-id');
     });
 
     it('throws UnsupportedAssetError for an unknown asset', () => {
@@ -182,9 +237,38 @@ describe('AssetRegistry', () => {
     });
 
     it('throws UnsupportedAssetError when the provider entry is missing', () => {
-      // USDT exists but has no 'stripe' provider binding
+      // USDT exists but has no 'stripe' provider binding (neither static nor discovered)
       expect(() => registry.assetProviderId('USDT', 'stripe')).toThrow(
         UnsupportedAssetError,
+      );
+    });
+
+    it('falls back to static config providers when discovered overlay has no entry', () => {
+      // Build a stub with a static provider entry to verify fallback path.
+      const configWithStaticId = {
+        get: (key: string) => {
+          if (key === 'catalog') {
+            return {
+              ...STUB_CATALOG,
+              assets: {
+                ...STUB_CATALOG.assets,
+                USDT: {
+                  ...STUB_CATALOG.assets.USDT,
+                  providers: { blockradar: { assetId: 'static-fallback-id' } },
+                },
+              },
+            };
+          }
+          return undefined;
+        },
+      };
+      const registryWithStatic = new AssetRegistry(
+        configWithStaticId as unknown as ConfigService,
+      );
+
+      // No mergeDiscoveredAssets call — should fall back to static config.
+      expect(registryWithStatic.assetProviderId('USDT', 'blockradar')).toBe(
+        'static-fallback-id',
       );
     });
   });
@@ -456,6 +540,113 @@ describe('AssetRegistry', () => {
       expect(() => registry.formatFiat('EUR', '100')).toThrow(
         UnsupportedFiatError,
       );
+    });
+  });
+
+  // ── mergeDiscoveredAssets() ──────────────────────────────────────────────
+
+  describe('mergeDiscoveredAssets()', () => {
+    const DISCOVERED_USDT: DiscoveredAsset = {
+      assetId: 'runtime-usdt-id-abc',
+      symbol: 'USDT',
+      name: 'Tether USD',
+      network: 'TRON',
+      contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+      decimals: 6,
+      isMainnet: false,
+    };
+
+    const DISCOVERED_TRX: DiscoveredAsset = {
+      assetId: 'runtime-trx-id-def',
+      symbol: 'TRX',
+      name: 'TRON',
+      network: 'TRON',
+      contractAddress: null,
+      decimals: 6,
+      isMainnet: false,
+    };
+
+    it('makes assetProviderId(USDT, blockradar) return the discovered id', () => {
+      registry.mergeDiscoveredAssets([DISCOVERED_USDT]);
+
+      expect(registry.assetProviderId('USDT', 'blockradar')).toBe(
+        'runtime-usdt-id-abc',
+      );
+    });
+
+    it('makes a discovered-only asset (TRX) accessible via asset()', () => {
+      registry.mergeDiscoveredAssets([DISCOVERED_TRX]);
+
+      const meta = registry.asset('TRX');
+      expect(meta.symbol).toBe('TRX');
+      expect(meta.decimals).toBe(6);
+      expect(meta.kind).toBe('crypto');
+    });
+
+    it('makes a discovered-only asset accessible via enabledCryptoAssets()', () => {
+      registry.mergeDiscoveredAssets([DISCOVERED_TRX]);
+
+      expect(registry.enabledCryptoAssets()).toContain('TRX');
+    });
+
+    it('does not duplicate a static asset in enabledCryptoAssets()', () => {
+      registry.mergeDiscoveredAssets([DISCOVERED_USDT, DISCOVERED_TRX]);
+
+      const assets = registry.enabledCryptoAssets();
+      const usdtCount = assets.filter((s) => s === 'USDT').length;
+      expect(usdtCount).toBe(1);
+    });
+
+    it('skips assets whose network is not in the static catalog', () => {
+      const ethAsset: DiscoveredAsset = {
+        assetId: 'eth-asset-id',
+        symbol: 'WETH',
+        name: 'Wrapped Ether',
+        network: 'ETH', // ETH is not in STUB_CATALOG.networks
+        contractAddress: '0xC02aaA39b223FE8D0A0e5C4F27ead9083C756Cc2',
+        decimals: 18,
+        isMainnet: true,
+      };
+
+      // Should not throw — just skips the unknown-network asset.
+      expect(() => registry.mergeDiscoveredAssets([ethAsset])).not.toThrow();
+      // WETH should NOT be in the registry (network not configured).
+      expect(registry.isAssetEnabled('WETH')).toBe(false);
+    });
+
+    it('is idempotent — merging the same assets twice does not duplicate them', () => {
+      registry.mergeDiscoveredAssets([DISCOVERED_TRX]);
+      registry.mergeDiscoveredAssets([DISCOVERED_TRX]);
+
+      const assets = registry.enabledCryptoAssets();
+      const trxCount = assets.filter((s) => s === 'TRX').length;
+      expect(trxCount).toBe(1);
+    });
+
+    it('discovered asset is found by isAssetEnabled()', () => {
+      registry.mergeDiscoveredAssets([DISCOVERED_TRX]);
+      expect(registry.isAssetEnabled('TRX')).toBe(true);
+    });
+
+    it('defaultAssetForNetwork returns discovered asset when static catalog has no match', () => {
+      // Build a registry with no static assets on TRON (to test discovered fallback).
+      const emptyAssetsConfig = {
+        get: (key: string) => {
+          if (key === 'catalog') {
+            return {
+              ...STUB_CATALOG,
+              assets: {}, // no static assets
+            };
+          }
+          return undefined;
+        },
+      };
+      const emptyRegistry = new AssetRegistry(
+        emptyAssetsConfig as unknown as ConfigService,
+      );
+      emptyRegistry.mergeDiscoveredAssets([DISCOVERED_USDT]);
+
+      expect(emptyRegistry.defaultAssetForNetwork('TRON')).toBe('USDT');
     });
   });
 

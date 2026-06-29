@@ -14,6 +14,7 @@ import type {
   WithdrawOutput,
   GetWithdrawalStatusInput,
   GetWithdrawalStatusOutput,
+  DiscoveredAsset,
 } from '../application/ports/wallet-provider.port';
 
 // ---------------------------------------------------------------------------
@@ -97,6 +98,38 @@ interface AddressTransactionItem {
 
 interface BlockradarAddressTransactionsResponse {
   data: AddressTransactionItem[];
+}
+
+// ---------------------------------------------------------------------------
+// listWalletAssets — GET /v1/wallets/{walletId}/assets
+// Response: { data: Array<{ id, asset: { id, name, symbol, address, decimals,
+//   network (mainnet|testnet), blockchain: { slug, name, ... } } }> }
+// ---------------------------------------------------------------------------
+
+interface BlockradarAssetItem {
+  /** Wallet-asset join record id (not the asset UUID we need). */
+  id: string;
+  asset: {
+    /** Provider-assigned asset UUID — used as assetId in balance/withdraw calls. */
+    id: string;
+    name: string;
+    symbol: string;
+    /** On-chain contract/token address — empty string for native assets. */
+    address: string;
+    decimals: number;
+    /** "mainnet" | "testnet" — indicates the asset's network environment. */
+    network: string;
+    blockchain: {
+      /** Lowercase slug, e.g. "tron", "bsc". Used to derive the catalog network key. */
+      slug: string;
+      /** Display name, e.g. "TRON". */
+      name: string;
+    };
+  };
+}
+
+interface BlockradarListAssetsResponse {
+  data: BlockradarAssetItem[];
 }
 
 /**
@@ -302,6 +335,50 @@ export class BlockradarProvider implements IWalletProvider {
     } catch {
       // Any provider error → fail-safe pending so reconciler does not refund.
       return { status: 'pending' };
+    }
+  }
+
+  /**
+   * Lists all assets available under the given master wallet.
+   *
+   * Endpoint: GET {BLOCKRADAR_BASE_URL}/wallets/{masterWalletId}/assets
+   * Auth: x-api-key header.
+   *
+   * Maps each item to a `DiscoveredAsset` using:
+   *   assetId       ← data[n].asset.id           (the UUID used for balance/withdraw)
+   *   symbol        ← data[n].asset.symbol.toUpperCase()
+   *   name          ← data[n].asset.name
+   *   network       ← data[n].asset.blockchain.slug.toUpperCase()  (e.g. "tron" → "TRON")
+   *   contractAddress ← data[n].asset.address || null
+   *   decimals      ← data[n].asset.decimals
+   *   isMainnet     ← data[n].asset.network === 'mainnet'
+   *
+   * @throws Error (with provider message) on non-2xx responses.
+   */
+  async listWalletAssets(masterWalletId: string): Promise<DiscoveredAsset[]> {
+    const url = `${this.baseUrl}/wallets/${masterWalletId}/assets`;
+
+    try {
+      const response = await firstValueFrom(
+        this.http.get<BlockradarListAssetsResponse>(url, {
+          headers: this.headers(),
+        }),
+      );
+
+      const items: BlockradarAssetItem[] = response.data.data ?? [];
+      return items.map((item) => ({
+        assetId: item.asset.id,
+        symbol: item.asset.symbol.toUpperCase(),
+        name: item.asset.name,
+        // Normalise blockchain slug to uppercase for catalog key alignment (e.g. "tron" → "TRON").
+        network: item.asset.blockchain.slug.toUpperCase(),
+        // Empty string means native asset (no contract address); normalise to null.
+        contractAddress: item.asset.address || null,
+        decimals: item.asset.decimals,
+        isMainnet: item.asset.network === 'mainnet',
+      }));
+    } catch (err: unknown) {
+      throw this.wrapError('listWalletAssets', err);
     }
   }
 
