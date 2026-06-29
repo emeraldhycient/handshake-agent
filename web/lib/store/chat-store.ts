@@ -36,6 +36,7 @@ import type {
   BuyProposalConfirmation,
   SellProposalConfirmation,
   SendProposalConfirmation,
+  ChatMessageRequest,
 } from "@handshake-agent/contracts"
 
 // Re-export chipLabel so components can import it from the store module if needed.
@@ -75,7 +76,11 @@ interface ChatState {
 
   // Actions
   send(surface: ChatSurface, text: string, action?: ChatAction): void
-  sendToAgent(surface: ChatSurface, text: string): Promise<void>
+  sendToAgent(
+    surface: ChatSurface,
+    text: string,
+    beneficiaryId?: string
+  ): Promise<void>
   setInput(surface: ChatSurface, value: string): void
   openConfirm(surface: ChatSurface, payload: ConfirmPayload): void
   cancel(): void
@@ -96,7 +101,7 @@ interface CreateChatStoreOptions {
    * Inject a mock API function for testing `sendToAgent` without module-level
    * mocking. Defaults to the real `sendChatMessage` from `@/lib/api/chat`.
    */
-  chatApi?: (body: { text: string }) => Promise<WebChatResponse>
+  chatApi?: (body: ChatMessageRequest) => Promise<WebChatResponse>
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -153,7 +158,7 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
 
     // ── Actions ────────────────────────────────────────────────────────────────
 
-    async sendToAgent(surface, text) {
+    async sendToAgent(surface, text, beneficiaryId) {
       const trimmed = text.trim()
       if (!trimmed) return
 
@@ -171,7 +176,9 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
       }))
 
       try {
-        const response = await chatApiFn({ text: trimmed })
+        const response = await chatApiFn(
+          beneficiaryId ? { text: trimmed, beneficiaryId } : { text: trimmed }
+        )
         const { outcome } = response
 
         const messages: ChatMessage[] = []
@@ -208,6 +215,7 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           )
 
           if (outcome.txType === "buy") {
+            // outcome.txType === 'buy' guarantees the server sent BuyProposalConfirmation (schema-validated at ingress)
             const b = c as BuyProposalConfirmation
             receiveAmt = b.cryptoAmount + " " + b.asset
             receiveSub = "You receive"
@@ -226,6 +234,7 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             totalLabel = "Total charged"
             totalValue = b.fiatCurrency + " " + b.totalFiat
           } else if (outcome.txType === "sell") {
+            // outcome.txType === 'sell' guarantees the server sent SellProposalConfirmation (schema-validated at ingress)
             const s = c as SellProposalConfirmation
             receiveAmt = s.fiatCurrency + " " + s.netFiatAmount
             receiveSub = "You receive"
@@ -247,6 +256,7 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             totalLabel = "Net payout"
             totalValue = s.fiatCurrency + " " + s.netFiatAmount
           } else if (outcome.txType === "send") {
+            // outcome.txType === 'send' guarantees the server sent SendProposalConfirmation (schema-validated at ingress)
             const sn = c as SendProposalConfirmation
             receiveAmt = sn.cryptoAmount + " " + sn.asset
             receiveSub = "Amount sent"

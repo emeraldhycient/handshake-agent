@@ -10,7 +10,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { buildBuyConfirm } from "@/lib/chat/flow"
 import { createChatStore } from "./chat-store"
-import type { WebChatResponse } from "@handshake-agent/contracts"
+import type {
+  WebChatResponse,
+  ChatMessageRequest,
+} from "@handshake-agent/contracts"
 
 /** Synchronous scheduler — no setTimeout in tests */
 const immediate = (fn: () => void) => fn()
@@ -326,11 +329,11 @@ function makeResponse(outcome: WebChatResponse["outcome"]): WebChatResponse {
 describe("sendToAgent", () => {
   let store: ReturnType<typeof createChatStore>
   let mockApi: ReturnType<
-    typeof vi.fn<(body: { text: string }) => Promise<WebChatResponse>>
+    typeof vi.fn<(body: ChatMessageRequest) => Promise<WebChatResponse>>
   >
 
   beforeEach(() => {
-    mockApi = vi.fn<(body: { text: string }) => Promise<WebChatResponse>>()
+    mockApi = vi.fn<(body: ChatMessageRequest) => Promise<WebChatResponse>>()
     store = createChatStore({ schedule: immediate, chatApi: mockApi })
   })
 
@@ -408,7 +411,7 @@ describe("sendToAgent", () => {
     expect(store.getState().typing.m).toBe(false)
   })
 
-  it("needs_beneficiary outcome → text message", async () => {
+  it("needs_beneficiary outcome (bank_account) → text message containing 'bank account'", async () => {
     mockApi.mockResolvedValue(
       makeResponse({
         kind: "needs_beneficiary",
@@ -418,6 +421,21 @@ describe("sendToAgent", () => {
     await store.getState().sendToAgent("m", "sell")
     const last = store.getState().threads.m.at(-1)!
     expect(last.kind).toBe("text")
+    if (last.kind === "text") expect(last.text).toContain("bank account")
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("needs_beneficiary outcome (crypto_address) → text message containing 'crypto address'", async () => {
+    mockApi.mockResolvedValue(
+      makeResponse({
+        kind: "needs_beneficiary",
+        beneficiaryType: "crypto_address",
+      })
+    )
+    await store.getState().sendToAgent("m", "send")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") expect(last.text).toContain("crypto address")
     expect(store.getState().typing.m).toBe(false)
   })
 
