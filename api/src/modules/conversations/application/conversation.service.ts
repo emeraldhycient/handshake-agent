@@ -944,7 +944,7 @@ export class ConversationService implements IInboundHandler {
     const header = `Your transactions (${result.window.label}):`;
     const more =
       result.totalCount > shown.length
-        ? `\n…and ${result.totalCount - shown.length} more — download the statement for the full list.`
+        ? `\n…and ${result.totalCount - shown.length} more — download the statement or narrow the date range to see more.`
         : '';
     return `${header}\n${lines.join('\n')}${more}`;
   }

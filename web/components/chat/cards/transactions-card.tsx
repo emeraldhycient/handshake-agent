@@ -69,8 +69,8 @@ export function TransactionsCard({
 
       {truncated && (
         <p className="px-4 pb-1 text-[11.5px] text-muted-foreground-subtle">
-          Showing the latest {rows.length} of {totalCount}. Download for the
-          full list.
+          Showing the latest {rows.length} of {totalCount}. Narrow the date
+          range to see the rest.
         </p>
       )}
 

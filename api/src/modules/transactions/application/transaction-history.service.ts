@@ -133,18 +133,31 @@ export class TransactionHistoryService {
         (await this.settlementRepo.findReceiptNumber(row.id)) ?? undefined;
     }
 
+    // Format via the registry, but FALL BACK to the raw value when the asset/fiat
+    // is unregistered or disabled — the catalog is admin-tunable, and a legacy or
+    // since-disabled row must not throw (UnsupportedAsset/FiatError) and 500 the
+    // user's entire history. A read-only own-data view must be resilient.
+    const cryptoDisplay =
+      asset && cryptoRaw
+        ? this.assets.isAssetEnabled(asset)
+          ? this.assets.formatCrypto(asset, cryptoRaw)
+          : `${cryptoRaw} ${asset}`
+        : undefined;
+    const fiatDisplay =
+      fiatCurrency && fiatRaw
+        ? this.assets.isFiatEnabled(fiatCurrency)
+          ? this.assets.formatFiat(fiatCurrency, fiatRaw)
+          : `${fiatCurrency} ${fiatRaw}`
+        : undefined;
+
     return {
       id: row.id,
       type: row.type,
       status: row.status,
       direction: INFLOW_TYPES.has(row.type) ? 'in' : 'out',
       ...(asset ? { asset } : {}),
-      ...(asset && cryptoRaw
-        ? { cryptoAmount: this.assets.formatCrypto(asset, cryptoRaw) }
-        : {}),
-      ...(fiatCurrency && fiatRaw
-        ? { fiatAmount: this.assets.formatFiat(fiatCurrency, fiatRaw) }
-        : {}),
+      ...(cryptoDisplay ? { cryptoAmount: cryptoDisplay } : {}),
+      ...(fiatDisplay ? { fiatAmount: fiatDisplay } : {}),
       ...(fiatCurrency ? { fiatCurrency } : {}),
       createdAt: row.createdAt.toISOString(),
       ...(receiptNumber ? { receiptNumber } : {}),

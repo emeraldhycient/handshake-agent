@@ -125,6 +125,30 @@ describe('TransactionHistoryService.query', () => {
     expect(res.downloadUrl).toContain('token=tok');
   });
 
+  it('falls back to raw amount for an unregistered/disabled asset (no throw)', async () => {
+    const btcRow = {
+      id: 't9',
+      userId: 'u1',
+      type: 'buy',
+      status: 'completed',
+      // BTC is NOT in the tiny test catalog (unregistered/disabled) — must not throw.
+      metadata: {
+        asset: 'BTC',
+        cryptoAmount: '0.5',
+        fiatAmount: '40000',
+        fiatCurrency: 'XAF',
+      },
+      createdAt: new Date('2026-06-11T10:00:00.000Z'),
+    };
+    const { svc } = makeService([btcRow], 1);
+    const res = await svc.query('u1', { period: 'all' });
+    expect(res.items[0]).toMatchObject({
+      id: 't9',
+      cryptoAmount: '0.5 BTC', // raw fallback, not formatted
+      fiatAmount: 'XAF 40000', // raw fallback for unregistered fiat
+    });
+  });
+
   it('sets truncated when total exceeds the returned page', async () => {
     const { svc } = makeService([buyRow, sendRow], 5); // rowCap=2, total=5
     const res = await svc.query('u1', { period: 'all' });
