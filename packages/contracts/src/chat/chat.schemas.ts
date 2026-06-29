@@ -3,6 +3,7 @@ import { BuyProposalConfirmationSchema } from '../tools/execute-buy.tool'
 import { SellProposalConfirmationSchema } from '../tools/execute-sell.tool'
 import { SendProposalConfirmationSchema } from '../tools/execute-send.tool'
 import { TransactionHistoryResponseSchema } from '../transactions/transaction-history.schema'
+import { FiatCurrencySchema } from '../common'
 
 // Request body sent from the web chat UI to POST /agent/chat.
 export const ChatMessageRequestSchema = z.object({
@@ -72,6 +73,13 @@ export const AgentTurnOutcomeSchema = z.discriminatedUnion('kind', [
     kind: z.literal('not_supported'),
     // check_balance is now a supported capability — no longer routed here.
     action: z.enum(['swap', 'buy_ticket', 'unknown']),
+  }),
+  // Emitted when the user requests a currency that is in the FiatCurrencySchema
+  // supported set but has `enabled: false` in the catalog config (not yet live).
+  // The web UI renders a "this currency isn't available yet" message.
+  z.object({
+    kind: z.literal('currency_not_live'),
+    currency: FiatCurrencySchema,
   }),
   TransactionHistoryResponseSchema.extend({ kind: z.literal('transactions') }),
 ])

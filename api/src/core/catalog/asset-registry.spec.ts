@@ -51,6 +51,21 @@ const STUB_CATALOG = {
       decimals: 2,
       enabled: true,
     },
+    // Supported but NOT live — matches the multi-currency foundation pattern.
+    RWF: {
+      code: 'RWF',
+      displayName: 'Rwandan Franc',
+      symbol: 'FRw',
+      decimals: 0,
+      enabled: false,
+    },
+    GHS: {
+      code: 'GHS',
+      displayName: 'Ghanaian Cedi',
+      symbol: 'GH₵',
+      decimals: 2,
+      enabled: false,
+    },
   },
   networks: {
     TRON: {
@@ -441,6 +456,56 @@ describe('AssetRegistry', () => {
       expect(() => registry.formatFiat('EUR', '100')).toThrow(
         UnsupportedFiatError,
       );
+    });
+  });
+
+  // ── isCurrencyLive() ─────────────────────────────────────────────────────
+  // Tests the new multi-currency foundation helpers.
+
+  describe('isCurrencyLive()', () => {
+    it('returns true for NGN (the only live currency)', () => {
+      expect(registry.isCurrencyLive('NGN')).toBe(true);
+    });
+
+    it('returns false for RWF (registered but not yet live)', () => {
+      expect(registry.isCurrencyLive('RWF')).toBe(false);
+    });
+
+    it('returns false for GHS (registered but not yet live)', () => {
+      expect(registry.isCurrencyLive('GHS')).toBe(false);
+    });
+
+    it('returns false for a currency code not in the catalog at all', () => {
+      expect(registry.isCurrencyLive('EUR')).toBe(false);
+    });
+  });
+
+  // ── enabledFiats() ───────────────────────────────────────────────────────
+
+  describe('enabledFiats()', () => {
+    it('returns only the live (enabled:true) fiat codes', () => {
+      expect(registry.enabledFiats()).toEqual(['NGN']);
+    });
+
+    it('does not include disabled fiats', () => {
+      const live = registry.enabledFiats();
+      expect(live).not.toContain('RWF');
+      expect(live).not.toContain('GHS');
+    });
+  });
+
+  // ── supportedFiats() ─────────────────────────────────────────────────────
+
+  describe('supportedFiats()', () => {
+    it('returns all fiat codes registered in the catalog, enabled or not', () => {
+      const supported = registry.supportedFiats();
+      expect(supported).toContain('NGN');
+      expect(supported).toContain('RWF');
+      expect(supported).toContain('GHS');
+    });
+
+    it('returns all three entries from the stub catalog', () => {
+      expect(registry.supportedFiats()).toHaveLength(3);
     });
   });
 });

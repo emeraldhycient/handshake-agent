@@ -206,6 +206,45 @@ export class AssetRegistry {
     return !!meta?.enabled;
   }
 
+  /**
+   * Returns `true` if the fiat code is registered AND enabled in the catalog.
+   * Semantically equivalent to `isFiatEnabled` but named for the multi-currency
+   * foundation where "live" means the currency can settle real transactions.
+   *
+   * Non-live currencies are in the FiatCurrencySchema supported set (contracts)
+   * but have `enabled: false` in config — their flows surface `currency_not_live`.
+   */
+  isCurrencyLive(code: string): boolean {
+    const meta = this.catalog.fiats[code];
+    return !!meta?.enabled;
+  }
+
+  /**
+   * Returns the fiat codes for all currencies that are currently LIVE
+   * (i.e. registered in the catalog with `enabled: true`).
+   *
+   * Use this when you need to enumerate what the system can settle today.
+   * For the full supported set (including not-yet-live currencies), use
+   * `supportedFiats()`.
+   */
+  enabledFiats(): string[] {
+    return Object.values(this.catalog.fiats)
+      .filter((f) => f.enabled)
+      .map((f) => f.code);
+  }
+
+  /**
+   * Returns the fiat codes for ALL currencies registered in the catalog,
+   * regardless of their `enabled` flag. This is the config-layer equivalent
+   * of the `FiatCurrencySchema` enum in `@handshake-agent/contracts`.
+   *
+   * Use this when you need to recognise a currency without asserting liveness
+   * (e.g. to emit `currency_not_live` rather than rejecting as unknown).
+   */
+  supportedFiats(): string[] {
+    return Object.keys(this.catalog.fiats);
+  }
+
   // ── Network lookups ───────────────────────────────────────────────────
 
   /**

@@ -203,6 +203,37 @@ describe('AgentTurnOutcomeSchema', () => {
     }
   })
 
+  it('accepts a currency_not_live outcome with a supported-but-not-live currency', () => {
+    const result = AgentTurnOutcomeSchema.parse({
+      kind: 'currency_not_live',
+      currency: 'GHS',
+    })
+    expect(result.kind).toBe('currency_not_live')
+    if (result.kind === 'currency_not_live') {
+      expect(result.currency).toBe('GHS')
+    }
+  })
+
+  it('accepts currency_not_live for every supported non-NGN fiat', () => {
+    const nonLive = ['GHS', 'KES', 'UGX', 'TZS', 'RWF', 'ZAR', 'USD'] as const
+    for (const currency of nonLive) {
+      const result = AgentTurnOutcomeSchema.parse({ kind: 'currency_not_live', currency })
+      expect(result.kind).toBe('currency_not_live')
+    }
+  })
+
+  it('rejects currency_not_live when currency is not in the FiatCurrencySchema enum', () => {
+    expect(() =>
+      AgentTurnOutcomeSchema.parse({ kind: 'currency_not_live', currency: 'EUR' }),
+    ).toThrow()
+  })
+
+  it('rejects currency_not_live when currency field is missing', () => {
+    expect(() =>
+      AgentTurnOutcomeSchema.parse({ kind: 'currency_not_live' }),
+    ).toThrow()
+  })
+
   it('rejects an unknown kind', () => {
     expect(() =>
       AgentTurnOutcomeSchema.parse({ kind: 'unknown_kind' }),

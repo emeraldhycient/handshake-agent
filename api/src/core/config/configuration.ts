@@ -408,12 +408,66 @@ export default (): AppConfig => ({
       },
     },
     fiats: {
+      // ── Live at launch ──────────────────────────────────────────────────
       NGN: {
         code: 'NGN',
         displayName: 'Naira',
         symbol: '₦',
         decimals: 2,
         enabled: true,
+      },
+      // ── Supported but NOT yet live (enabled: false) ─────────────────────
+      // Flip `enabled` to true once the Flutterwave collection + disbursement
+      // for that market is live-tested and the compliance review is complete.
+      // No code change required — only a config/DB-admin flag flip (CLAUDE.md §7).
+      GHS: {
+        code: 'GHS',
+        displayName: 'Ghanaian Cedi',
+        symbol: 'GH₵',
+        decimals: 2,
+        enabled: false,
+      },
+      KES: {
+        code: 'KES',
+        displayName: 'Kenyan Shilling',
+        symbol: 'KSh',
+        decimals: 2,
+        enabled: false,
+      },
+      UGX: {
+        code: 'UGX',
+        displayName: 'Ugandan Shilling',
+        symbol: 'USh',
+        decimals: 0,
+        enabled: false,
+      },
+      TZS: {
+        code: 'TZS',
+        displayName: 'Tanzanian Shilling',
+        symbol: 'TSh',
+        decimals: 0,
+        enabled: false,
+      },
+      RWF: {
+        code: 'RWF',
+        displayName: 'Rwandan Franc',
+        symbol: 'FRw',
+        decimals: 0,
+        enabled: false,
+      },
+      ZAR: {
+        code: 'ZAR',
+        displayName: 'South African Rand',
+        symbol: 'R',
+        decimals: 2,
+        enabled: false,
+      },
+      USD: {
+        code: 'USD',
+        displayName: 'US Dollar',
+        symbol: '$',
+        decimals: 2,
+        enabled: false,
       },
     },
     networks: {
@@ -464,12 +518,25 @@ export default (): AppConfig => ({
     maxDriftBps: 50,
   },
   compliance: {
-    // FATF Travel Rule / CBN circular threshold per fiat code.
+    // FATF Travel Rule threshold per fiat code, in major units.
     // Above this fiat-equivalent value the send proposal sets requiresTravelRule:true.
     // Full TravelRuleData capture happens at execution (Task N3b).
+    // Non-live currencies have thresholds defined here so they are ready when enabled;
+    // they are never reached in practice while the currency has enabled:false in catalog.
     // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
     // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
-    travelRuleThresholds: { NGN: 1_000_000 },
+    travelRuleThresholds: {
+      NGN: 1_000_000, // CBN circular: ₦1,000,000
+      // Non-live: placeholders aligned to FATF Travel Rule equivalents (~USD 1,000).
+      // Update with local regulator thresholds before enabling each currency.
+      GHS: 15_000, // ~GH₵15,000 ≈ USD 1,000 (indicative)
+      KES: 130_000, // ~KSh130,000 ≈ USD 1,000 (indicative)
+      UGX: 3_700_000, // ~USh3,700,000 ≈ USD 1,000 (indicative)
+      TZS: 2_600_000, // ~TSh2,600,000 ≈ USD 1,000 (indicative)
+      RWF: 1_300_000, // ~FRw1,300,000 ≈ USD 1,000 (indicative)
+      ZAR: 18_000, // ~R18,000 ≈ USD 1,000 (indicative)
+      USD: 1_000, // Standard FATF threshold
+    },
     // Empty by default — no addresses flagged. Populate in config to test the
     // blocked path with MockSanctionsScreener (see mock-sanctions.screener.ts).
     sanctionsDenylist: [] as string[],
