@@ -362,6 +362,7 @@ function makeMsgRepo(
     findByExternalId: jest.fn().mockResolvedValue(existing),
     create: jest.fn().mockResolvedValue(created),
     updateStatus: jest.fn().mockResolvedValue(undefined),
+    findWebHistory: jest.fn().mockResolvedValue([]),
   };
 }
 

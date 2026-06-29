@@ -4,6 +4,7 @@ import { useState } from "react"
 import { useStore } from "zustand"
 import { defaultChatStore } from "@/lib/store/chat-store"
 import { useAuthStore } from "@/lib/store/auth-store"
+import { useChatHistory } from "@/hooks/use-chat-history"
 import {
   buildConfirmForQuote,
   buildTicketConfirm,
@@ -23,8 +24,11 @@ import type { MobileShellProps, MobileTabId } from "@/types/components"
 import type { ChatMessage, TicketOption, ChatAction } from "@/lib/schemas"
 
 export function MobileShell({ store: injectedStore }: MobileShellProps) {
-  const state = useStore(injectedStore ?? defaultChatStore)
+  const store = injectedStore ?? defaultChatStore
+  const state = useStore(store)
   const authStatus = useAuthStore((s) => s.status)
+  // Rehydrate the thread from server history on mount (authenticated only).
+  useChatHistory("m", store)
   const [tab, setTab] = useState<MobileTabId>("chat")
 
   function handleConfirm(message: ChatMessage) {

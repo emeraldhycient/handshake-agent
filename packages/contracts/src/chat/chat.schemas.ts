@@ -57,6 +57,41 @@ export const WebChatResponseSchema = z.object({
 })
 export type WebChatResponse = z.infer<typeof WebChatResponseSchema>
 
+// ---------------------------------------------------------------------------
+// Chat history (GET /chat/messages) — used to rehydrate the web thread on reload.
+// One item per persisted turn: the user's text + the rendered agent outcome.
+// `outcome` is nullable because a turn may have been persisted before its reply
+// resolved (or pre-date outcome persistence) — the UI then shows only the user
+// bubble. Reuses AgentTurnOutcomeSchema so the FE maps history exactly as it maps
+// a live POST /chat/messages response.
+// ---------------------------------------------------------------------------
+export const ChatHistoryItemSchema = z.object({
+  messageId: z.string().uuid(),
+  userText: z.string(),
+  outcome: AgentTurnOutcomeSchema.nullable(),
+  createdAt: z.string().datetime(), // ISO string
+})
+export type ChatHistoryItem = z.infer<typeof ChatHistoryItemSchema>
+
+// Paginated history response. `messages` are oldest→newest (render order).
+// `nextCursor` is the messageId to pass as `?before=` to load the previous
+// (older) page; null when the first turn has been reached.
+export const ChatHistoryResponseSchema = z.object({
+  conversationId: z.string().uuid().nullable(),
+  messages: z.array(ChatHistoryItemSchema),
+  nextCursor: z.string().uuid().nullable(),
+  hasMore: z.boolean(),
+})
+export type ChatHistoryResponse = z.infer<typeof ChatHistoryResponseSchema>
+
+// Query params for GET /chat/messages. `limit` arrives as a string from the URL,
+// so coerce it; `before` is a messageId cursor for loading older turns.
+export const ChatHistoryQuerySchema = z.object({
+  before: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+})
+export type ChatHistoryQuery = z.infer<typeof ChatHistoryQuerySchema>
+
 // Shared payment sub-object reused by execute and status responses.
 const PaymentDetailsSchema = z.object({
   accountNumber: z.string(),

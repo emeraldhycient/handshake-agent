@@ -44,6 +44,7 @@ const fakeMessageRepo = {
   create: jest.fn(),
   findByExternalId: jest.fn(),
   updateStatus: jest.fn(),
+  findWebHistory: jest.fn(),
 };
 const fakeIntentRepo = { create: jest.fn() };
 const fakeReplyRepo = { create: jest.fn(), updateStatus: jest.fn() };
@@ -479,5 +480,138 @@ describe('WebChatService', () => {
       'conv-1',
       expect.any(Date),
     );
+  });
+
+  // ── reply persists the rendered outcome (for thread reconstruction) ─────────
+
+  it('persists the rendered outcome on the reply so history can rebuild the thread', async () => {
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'none',
+      clarification: 'Did you mean buy or sell?',
+    });
+    await service.handleMessage({ userId: 'user-1', text: 'blah' });
+    expect(fakeReplyRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        messageId: 'msg-1',
+        outcome: { kind: 'clarification', text: 'Did you mean buy or sell?' },
+      }),
+    );
+  });
+
+  // ── getHistory ─────────────────────────────────────────────────────────────
+
+  describe('getHistory', () => {
+    it('returns an empty history when the user has no conversation yet', async () => {
+      fakeConversationRepo.findByUserId.mockResolvedValue(null);
+      const result = await service.getHistory({ userId: 'user-1', limit: 30 });
+      expect(result).toEqual({
+        conversationId: null,
+        messages: [],
+        nextCursor: null,
+        hasMore: false,
+      });
+      expect(fakeMessageRepo.findWebHistory).not.toHaveBeenCalled();
+    });
+
+    it('maps turns to oldest→newest items and reconstructs the outcome', async () => {
+      // Repo returns newest-first (DESC).
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm2',
+          userText: 'second',
+          createdAt: new Date('2026-06-29T10:01:00.000Z'),
+          reply: { text: 'r2', outcome: { kind: 'needs_kyc' } },
+        },
+        {
+          id: 'm1',
+          userText: 'first',
+          createdAt: new Date('2026-06-29T10:00:00.000Z'),
+          reply: { text: 'r1', outcome: { kind: 'clarification', text: 'hi' } },
+        },
+      ]);
+      const result = await service.getHistory({ userId: 'user-1', limit: 30 });
+      expect(fakeMessageRepo.findWebHistory).toHaveBeenCalledWith('conv-1', {
+        before: undefined,
+        limit: 30,
+      });
+      expect(result.conversationId).toBe('conv-1');
+      expect(result.hasMore).toBe(false);
+      expect(result.nextCursor).toBeNull();
+      expect(result.messages.map((m) => m.messageId)).toEqual(['m1', 'm2']);
+      expect(result.messages[0]).toEqual({
+        messageId: 'm1',
+        userText: 'first',
+        outcome: { kind: 'clarification', text: 'hi' },
+        createdAt: '2026-06-29T10:00:00.000Z',
+      });
+      expect(result.messages[1].outcome).toEqual({ kind: 'needs_kyc' });
+    });
+
+    it('sets hasMore and nextCursor when more than `limit` turns exist', async () => {
+      // limit=1, repo returns limit+1 rows (DESC). Page keeps the newest; cursor
+      // points at the oldest kept row so the next page loads older turns.
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm2',
+          userText: 'second',
+          createdAt: new Date('2026-06-29T10:01:00.000Z'),
+          reply: { text: 'r2', outcome: { kind: 'needs_kyc' } },
+        },
+        {
+          id: 'm1',
+          userText: 'first',
+          createdAt: new Date('2026-06-29T10:00:00.000Z'),
+          reply: { text: 'r1', outcome: { kind: 'needs_kyc' } },
+        },
+      ]);
+      const result = await service.getHistory({ userId: 'user-1', limit: 1 });
+      expect(result.messages.map((m) => m.messageId)).toEqual(['m2']);
+      expect(result.hasMore).toBe(true);
+      expect(result.nextCursor).toBe('m2');
+    });
+
+    it('threads the before-cursor through to the repository', async () => {
+      fakeMessageRepo.findWebHistory.mockResolvedValue([]);
+      await service.getHistory({
+        userId: 'user-1',
+        before: 'cursor-x',
+        limit: 5,
+      });
+      expect(fakeMessageRepo.findWebHistory).toHaveBeenCalledWith('conv-1', {
+        before: 'cursor-x',
+        limit: 5,
+      });
+    });
+
+    it('yields a null outcome when the reply or its outcome is missing or invalid', async () => {
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm3',
+          userText: 'no reply yet',
+          createdAt: new Date('2026-06-29T10:02:00.000Z'),
+          reply: null,
+        },
+        {
+          id: 'm2',
+          userText: 'reply without outcome',
+          createdAt: new Date('2026-06-29T10:01:00.000Z'),
+          reply: { text: 'r', outcome: null },
+        },
+        {
+          id: 'm1',
+          userText: 'corrupt outcome',
+          createdAt: new Date('2026-06-29T10:00:00.000Z'),
+          reply: { text: 'r', outcome: { kind: 'totally-bogus' } },
+        },
+      ]);
+      const result = await service.getHistory({ userId: 'user-1', limit: 30 });
+      expect(result.messages.every((m) => m.outcome === null)).toBe(true);
+      expect(result.messages.map((m) => m.userText)).toEqual([
+        'corrupt outcome',
+        'reply without outcome',
+        'no reply yet',
+      ]);
+    });
   });
 });

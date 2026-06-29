@@ -29,6 +29,7 @@ import {
   chipLabel,
 } from "@/lib/chat/flow"
 import { parseIntent } from "@/lib/chat/intent"
+import { mapOutcomeToMessages } from "@/lib/chat/agent-outcome"
 import { GREETING_M, GREETING_D } from "@/lib/constants"
 import { formatNGN } from "@/lib/format"
 import type {
@@ -40,10 +41,8 @@ import type {
 import { sendChatMessage as defaultSendChatMessage } from "@/lib/api/chat"
 import type {
   WebChatResponse,
-  BuyProposalConfirmation,
-  SellProposalConfirmation,
-  SendProposalConfirmation,
   ChatMessageRequest,
+  ChatHistoryItem,
   AuthorizeProposalResponse,
   ExecuteProposalResponse,
   TransactionStatusResponse,
@@ -117,6 +116,10 @@ interface ChatState {
   // Settling: track the transaction being polled
   _pollingTransactionId: string | null
 
+  // Per-surface flag: server history is hydrated once so re-renders / tab
+  // switches don't re-append the thread.
+  historyHydrated: Record<ChatSurface, boolean>
+
   // Actions
   send(surface: ChatSurface, text: string, action?: ChatAction): void
   sendToAgent(
@@ -124,6 +127,13 @@ interface ChatState {
     text: string,
     beneficiaryId?: string
   ): Promise<void>
+  /**
+   * Rebuild the thread from persisted server history (GET /chat/messages).
+   * Idempotent per surface. Maps each turn with the same `mapOutcomeToMessages`
+   * the live send uses, so reloaded cards match live cards. Never appends a
+   * receipt (§3.1) and never touches overlay/pin state.
+   */
+  hydrateHistory(surface: ChatSurface, items: ChatHistoryItem[]): void
   setInput(surface: ChatSurface, value: string): void
   openConfirm(surface: ChatSurface, payload: ConfirmPayload): void
   cancel(): void
@@ -235,8 +245,46 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
     _nonce: null,
     _idempotencyKey: null,
     _pollingTransactionId: null,
+    historyHydrated: { m: false, d: false },
 
     // ── Actions ────────────────────────────────────────────────────────────────
+
+    hydrateHistory(surface, items) {
+      if (get().historyHydrated[surface]) return
+
+      const built: ChatMessage[] = []
+      let lastProposalId: string | null = null
+      for (const item of items) {
+        built.push({
+          id: nextId(),
+          role: "user",
+          kind: "text",
+          text: item.userText,
+        })
+        if (item.outcome) {
+          const { messages, proposalId } = mapOutcomeToMessages(
+            item.outcome,
+            nextId
+          )
+          built.push(...messages)
+          if (proposalId) lastProposalId = proposalId
+        }
+      }
+
+      set((s) => {
+        // Keep the greeting at index 0; insert reconstructed history after it,
+        // before any messages already added live this session.
+        const [greeting, ...rest] = s.threads[surface]
+        return {
+          threads: {
+            ...s.threads,
+            [surface]: [greeting, ...built, ...rest],
+          },
+          historyHydrated: { ...s.historyHydrated, [surface]: true },
+          ...(lastProposalId ? { pendingProposalId: lastProposalId } : {}),
+        }
+      })
+    },
 
     async sendToAgent(surface, text, beneficiaryId) {
       const trimmed = text.trim()
@@ -261,140 +309,12 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
         )
         const { outcome } = response
 
-        const messages: ChatMessage[] = []
-
-        if (outcome.kind === "clarification") {
-          messages.push({
-            id: nextId(),
-            role: "assistant",
-            kind: "text",
-            text: outcome.text,
-          })
-        } else if (outcome.kind === "receive") {
-          const d = outcome.deposit
-          messages.push({
-            id: nextId(),
-            role: "assistant",
-            kind: "receive",
-            asset: d.asset,
-            network: d.network,
-            address: d.address,
-            minDeposit: d.minAmount ?? "—",
-            creditedEta: d.etaText ?? "~30 min",
-          })
-        } else if (outcome.kind === "proposal") {
-          const c = outcome.confirmation
-          const rows: Array<{ label: string; value: string }> = []
-          let receiveAmt = ""
-          let receiveSub = ""
-          let totalLabel = "Total"
-          let totalValue = ""
-          const lockSeconds = Math.max(
-            0,
-            Math.round((new Date(c.expiresAt).getTime() - Date.now()) / 1000)
-          )
-
-          if (outcome.txType === "buy") {
-            // outcome.txType === 'buy' guarantees the server sent BuyProposalConfirmation (schema-validated at ingress)
-            const b = c as BuyProposalConfirmation
-            receiveAmt = b.cryptoAmount + " " + b.asset
-            receiveSub = "You receive"
-            rows.push({
-              label: "You pay",
-              value: formatNGN(b.fiatAmount),
-            })
-            rows.push({
-              label: "Rate",
-              value: "1 " + b.asset + " = " + formatNGN(b.fxRate),
-            })
-            rows.push({
-              label: "Fee",
-              value: formatNGN(b.processingFeeAmount),
-            })
-            totalLabel = "Total charged"
-            totalValue = formatNGN(b.totalFiat)
-          } else if (outcome.txType === "sell") {
-            // outcome.txType === 'sell' guarantees the server sent SellProposalConfirmation (schema-validated at ingress)
-            const s = c as SellProposalConfirmation
-            receiveAmt = s.fiatCurrency + " " + s.netFiatAmount
-            receiveSub = "You receive"
-            rows.push({
-              label: "You sell",
-              value: s.cryptoAmount + " " + s.asset,
-            })
-            rows.push({
-              label: "Rate",
-              value: "1 " + s.asset + " = " + s.fiatCurrency + " " + s.fxRate,
-            })
-            rows.push({
-              label: "Fee",
-              value: s.fiatCurrency + " " + s.processingFeeAmount,
-            })
-            if (s.beneficiaryLabel) {
-              rows.push({ label: "To", value: s.beneficiaryLabel })
-            }
-            totalLabel = "Net payout"
-            totalValue = s.fiatCurrency + " " + s.netFiatAmount
-          } else if (outcome.txType === "send") {
-            // outcome.txType === 'send' guarantees the server sent SendProposalConfirmation (schema-validated at ingress)
-            const sn = c as SendProposalConfirmation
-            receiveAmt = sn.cryptoAmount + " " + sn.asset
-            receiveSub = "Amount sent"
-            rows.push({ label: "To", value: sn.toAddressMasked })
-            if (sn.beneficiaryLabel) {
-              rows.push({ label: "Beneficiary", value: sn.beneficiaryLabel })
-            }
-            rows.push({ label: "Network", value: sn.network })
-            rows.push({
-              label: "Network fee",
-              value: sn.networkFeeCrypto + " " + sn.asset,
-            })
-            totalLabel = "Total debit"
-            totalValue = sn.totalDebit + " " + sn.asset
-          }
-
-          messages.push({
-            id: nextId(),
-            role: "assistant",
-            kind: "quote",
-            // send is a valid ChatAction; buy and sell are also valid
-            action: outcome.txType as ChatAction,
-            receiveAmt,
-            receiveSub,
-            rows,
-            totalLabel,
-            totalValue,
-            lockSeconds,
-            expiresAt: c.expiresAt,
-          })
-
+        // Shared mapping — identical to the reload/hydration path so a live reply
+        // and a reloaded reply render the same. Never produces a receipt (§3.1).
+        const { messages, proposalId } = mapOutcomeToMessages(outcome, nextId)
+        if (proposalId) {
           // Stash proposalId for the future execute phase.
-          set({ pendingProposalId: outcome.proposalId })
-        } else if (outcome.kind === "needs_kyc") {
-          messages.push({
-            id: nextId(),
-            role: "assistant",
-            kind: "text",
-            text: "You need to complete verification first.",
-          })
-        } else if (outcome.kind === "needs_beneficiary") {
-          messages.push({
-            id: nextId(),
-            role: "assistant",
-            kind: "text",
-            text: `Please add a ${
-              outcome.beneficiaryType === "bank_account"
-                ? "bank account"
-                : "crypto address"
-            } first.`,
-          })
-        } else if (outcome.kind === "not_supported") {
-          messages.push({
-            id: nextId(),
-            role: "assistant",
-            kind: "text",
-            text: "That's not supported yet.",
-          })
+          set({ pendingProposalId: proposalId })
         }
 
         set((s) => ({

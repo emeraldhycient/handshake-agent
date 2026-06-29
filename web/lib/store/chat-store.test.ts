@@ -13,6 +13,8 @@ import { createChatStore } from "./chat-store"
 import type {
   WebChatResponse,
   ChatMessageRequest,
+  ChatHistoryItem,
+  BuyProposalConfirmation,
 } from "@handshake-agent/contracts"
 
 /** Synchronous scheduler — no setTimeout in tests */
@@ -635,5 +637,138 @@ describe("sendToAgent", () => {
     mockApi.mockRejectedValue(new Error("500"))
     await store.getState().sendToAgent("m", "send")
     expect(store.getState().typing.m).toBe(false)
+  })
+})
+
+// ─── hydrateHistory ─────────────────────────────────────────────────────────
+
+const buyConfirmation: BuyProposalConfirmation = {
+  proposalId: "11111111-1111-1111-1111-111111111111",
+  asset: "USDT",
+  fiatAmount: "50000",
+  fiatCurrency: "NGN",
+  cryptoAmount: "31.25",
+  fxRate: "1600",
+  spreadBps: 150,
+  processingFeeBps: 50,
+  processingFeeAmount: "250",
+  totalFiat: "50250",
+  expiresAt: new Date(Date.now() + 60000).toISOString(),
+}
+
+function historyItem(over: Partial<ChatHistoryItem> = {}): ChatHistoryItem {
+  return {
+    messageId: "00000000-0000-0000-0000-000000000010",
+    userText: "hi",
+    outcome: null,
+    createdAt: "2026-06-29T10:00:00.000Z",
+    ...over,
+  }
+}
+
+describe("hydrateHistory", () => {
+  let store: ReturnType<typeof createChatStore>
+
+  beforeEach(() => {
+    store = createChatStore({ schedule: immediate })
+  })
+
+  it("rebuilds the thread after the greeting, oldest→newest, restoring proposalId", () => {
+    const items: ChatHistoryItem[] = [
+      historyItem({
+        messageId: "00000000-0000-0000-0000-000000000001",
+        userText: "where do I receive USDT?",
+        outcome: {
+          kind: "receive",
+          deposit: { asset: "USDT", network: "TRON", address: "TXabc" },
+        },
+      }),
+      historyItem({
+        messageId: "00000000-0000-0000-0000-000000000002",
+        userText: "buy 50000 USDT",
+        outcome: {
+          kind: "proposal",
+          txType: "buy",
+          proposalId: buyConfirmation.proposalId,
+          confirmation: buyConfirmation,
+        },
+      }),
+    ]
+    store.getState().hydrateHistory("m", items)
+    const t = store.getState().threads.m
+
+    // greeting + (user, receive) + (user, quote)
+    expect(t).toHaveLength(5)
+    expect(t[0].role).toBe("assistant") // greeting preserved at index 0
+    expect(t[1]).toMatchObject({
+      role: "user",
+      kind: "text",
+      text: "where do I receive USDT?",
+    })
+    expect(t[2].kind).toBe("receive")
+    expect(t[3]).toMatchObject({ role: "user", text: "buy 50000 USDT" })
+    expect(t[4].kind).toBe("quote")
+    expect(store.getState().pendingProposalId).toBe(buyConfirmation.proposalId)
+  })
+
+  it("appends only a user bubble when the outcome is null", () => {
+    store
+      .getState()
+      .hydrateHistory("m", [
+        historyItem({ userText: "stuck turn", outcome: null }),
+      ])
+    const t = store.getState().threads.m
+    expect(t).toHaveLength(2)
+    expect(t[1]).toMatchObject({
+      role: "user",
+      kind: "text",
+      text: "stuck turn",
+    })
+  })
+
+  it("never appends a receipt-kind message (invariant preserved)", () => {
+    store.getState().hydrateHistory("m", [
+      historyItem({
+        outcome: {
+          kind: "proposal",
+          txType: "buy",
+          proposalId: buyConfirmation.proposalId,
+          confirmation: buyConfirmation,
+        },
+      }),
+    ])
+    expect(store.getState().threads.m.some((m) => m.kind === "receipt")).toBe(
+      false
+    )
+  })
+
+  it("is idempotent — a second hydrate is a no-op", () => {
+    const items = [historyItem({ userText: "once" })]
+    store.getState().hydrateHistory("m", items)
+    const len1 = store.getState().threads.m.length
+    store.getState().hydrateHistory("m", items)
+    expect(store.getState().threads.m.length).toBe(len1)
+  })
+
+  it("preserves messages already in the thread, inserting history after the greeting", () => {
+    // A live mock send adds user + assistant messages before history arrives.
+    store.getState().send("m", "Check my balance", "balance")
+    const beforeLen = store.getState().threads.m.length
+    store
+      .getState()
+      .hydrateHistory("m", [historyItem({ userText: "from history" })])
+    const t = store.getState().threads.m
+    expect(t.length).toBe(beforeLen + 1) // one user bubble inserted
+    // The history bubble sits right after the greeting, before the live send.
+    expect(t[1]).toMatchObject({ role: "user", text: "from history" })
+    expect(t.some((m) => m.kind === "balance")).toBe(true)
+  })
+
+  it("hydrates surfaces independently", () => {
+    store
+      .getState()
+      .hydrateHistory("m", [historyItem({ userText: "mobile only" })])
+    expect(store.getState().threads.d).toHaveLength(1) // desktop untouched (greeting only)
+    expect(store.getState().threads.m).toHaveLength(2)
   })
 })
