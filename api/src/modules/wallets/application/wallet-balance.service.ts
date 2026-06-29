@@ -39,7 +39,16 @@ export class WalletBalanceService {
           userId,
           network,
         );
-        const { amount } = await this.wallets.getBalance(wallet, symbol);
+        // Blockradar getBalance 404s ("asset not found or not active") for an
+        // asset the child address holds none of. Tolerate it per-asset — treat
+        // as zero — so one un-funded asset never 500s the whole wallet page.
+        let amount = '0';
+        try {
+          const balance = await this.wallets.getBalance(wallet, symbol);
+          amount = balance.amount;
+        } catch {
+          amount = '0';
+        }
         const rate = await this.rates.getRate(
           symbol as SupportedAsset,
           fiat as FiatCurrency,

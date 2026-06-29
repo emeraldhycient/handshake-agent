@@ -76,6 +76,39 @@ describe('WalletBalanceService', () => {
     expect(out.totalFiatValue).toBe('48461.49');
   });
 
+  it('tolerates a per-asset getBalance failure (Blockradar 404) as zero — never 500s the page', async () => {
+    const wallets = {
+      getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(wallet),
+      getBalance: jest
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            'Blockradar getBalance error (HTTP 404): Asset not found or not active',
+          ),
+        ),
+    } as unknown as WalletService;
+    const rates = {
+      getRate: jest.fn().mockResolvedValue({
+        baseRate: 1650,
+        sellSpreadBps: 200,
+        buySpreadBps: 150,
+        processingFeeBps: 0,
+        expiresInSec: 30,
+        cryptoDecimals: 6,
+      }),
+    } as unknown as IRateProvider;
+    const svc = new WalletBalanceService(wallets, makeRegistry(), rates);
+
+    const out = await svc.getBalances('u1');
+    expect(out.assets).toHaveLength(1);
+    expect(out.assets[0]).toMatchObject({
+      symbol: 'USDT',
+      amount: '0',
+      fiatValue: '0.00',
+    });
+    expect(out.totalFiatValue).toBe('0.00');
+  });
+
   it('sums multiple assets exactly (floored per-asset values, no rounding drift)', async () => {
     const wallets = {
       getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(wallet),
