@@ -40,7 +40,7 @@ describe("WalletTab", () => {
     expect(screen.getByText("Bitcoin")).toBeInTheDocument()
   })
 
-  it("shows all four quick action buttons", async () => {
+  it("shows the enabled quick actions and hides Swap when swap is off", async () => {
     render(<WalletTab onQuickAction={() => {}} />, { wrapper: makeWrapper() })
     await waitFor(
       () =>
@@ -51,7 +51,10 @@ describe("WalletTab", () => {
     )
     expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /receive/i })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /swap/i })).toBeInTheDocument()
+    // Swap is hidden: the default config has crypto.swap disabled.
+    expect(
+      screen.queryByRole("button", { name: /swap/i })
+    ).not.toBeInTheDocument()
   })
 
   it("fires onQuickAction('buy', chipLabel('buy')) when Buy is clicked", async () => {

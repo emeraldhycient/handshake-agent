@@ -17,8 +17,8 @@ import { QuotesController } from './presentation/quotes.controller';
     { provide: RATE_PROVIDER, useClass: ConfigRateProvider },
     { provide: CLOCK, useClass: SystemClock },
   ],
-  // RATE_PROVIDER is exported so read-only consumers (e.g. BalancesModule's
-  // mid-market valuation) can inject the rate source without re-binding it.
+  // RATE_PROVIDER is exported so read-only consumers (the wallet balance
+  // valuation) can inject the rate source without re-binding it.
   exports: [QuotesService, RATE_PROVIDER],
 })
 export class QuotesModule {}

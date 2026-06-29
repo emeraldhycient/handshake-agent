@@ -24,6 +24,7 @@ import { AuthModule } from '../../core/auth/auth.module';
 import { ProposalService } from '../transactions/application/proposal.service';
 import { WalletService } from '../wallets/application/wallet.service';
 import { BeneficiaryService } from '../beneficiaries/application/beneficiary.service';
+import { TransactionHistoryService } from '../transactions/application/transaction-history.service';
 import { BalanceService } from '../balances/application/balance.service';
 
 import { CONVERSATION_REPOSITORY } from '../conversations/application/ports/conversation.repository.port';
@@ -40,6 +41,7 @@ import {
   WEB_CHAT_PROPOSAL_SERVICE,
   WEB_CHAT_WALLET_SERVICE,
   WEB_CHAT_BENEFICIARY_SERVICE,
+  WEB_CHAT_HISTORY_SERVICE,
   WEB_CHAT_BALANCE_SERVICE,
 } from './application/web-chat.service';
 import { ChatController } from './presentation/chat.controller';
@@ -47,6 +49,10 @@ import {
   ProposalController,
   TransactionStatusController,
 } from './presentation/proposal.controller';
+import {
+  TransactionHistoryController,
+  StatementDownloadController,
+} from './presentation/transaction-history.controller';
 
 @Module({
   imports: [
@@ -62,6 +68,10 @@ import {
   controllers: [
     ChatController,
     ProposalController,
+    // History + statement routes must precede TransactionStatusController so the
+    // literal `transactions/history` path resolves before `transactions/:id`.
+    TransactionHistoryController,
+    StatementDownloadController,
     TransactionStatusController,
   ],
   providers: [
@@ -70,6 +80,10 @@ import {
     { provide: WEB_CHAT_PROPOSAL_SERVICE, useExisting: ProposalService },
     { provide: WEB_CHAT_WALLET_SERVICE, useExisting: WalletService },
     { provide: WEB_CHAT_BENEFICIARY_SERVICE, useExisting: BeneficiaryService },
+    {
+      provide: WEB_CHAT_HISTORY_SERVICE,
+      useExisting: TransactionHistoryService,
+    },
     { provide: WEB_CHAT_BALANCE_SERVICE, useExisting: BalanceService },
     // Conversation repository bindings — ConversationsModule does not export these
     // tokens so ChatModule provides its own instances backed by the same Prisma classes.

@@ -31,6 +31,7 @@ import { JwtAuthGuard } from './presentation/jwt-auth.guard';
     { provide: AUTH_SESSION_REPOSITORY, useClass: AuthSessionPrismaRepository },
   ],
   // Exported so later modules (web chat/exec) can apply JwtAuthGuard + resolve sessions.
-  exports: [JwtAuthGuard, TokenService, AUTH_SESSION_REPOSITORY],
+  // AuthService is exported so the identity ProfileService can reuse its `me()` projection.
+  exports: [JwtAuthGuard, TokenService, AUTH_SESSION_REPOSITORY, AuthService],
 })
 export class WebAuthModule {}

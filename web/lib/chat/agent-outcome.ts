@@ -180,6 +180,24 @@ export function mapOutcomeToMessages(
       kind: "text",
       text: "That's not supported yet.",
     })
+  } else if (outcome.kind === "transactions") {
+    messages.push({
+      id: makeId(),
+      role: "assistant",
+      kind: "transactions",
+      windowLabel: outcome.window.label,
+      rows: outcome.items.map((it) => ({
+        id: it.id,
+        type: it.type,
+        status: it.status,
+        direction: it.direction,
+        amount: `${it.direction === "in" ? "+" : "-"}${it.cryptoAmount ?? it.fiatAmount ?? ""}`,
+        sub: it.createdAt.slice(0, 10),
+      })),
+      totalCount: outcome.totalCount,
+      truncated: outcome.truncated,
+      downloadUrl: outcome.downloadUrl,
+    })
   }
 
   return { messages, proposalId }

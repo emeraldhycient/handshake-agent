@@ -21,6 +21,8 @@ import { HandoffTokenPrismaRepository } from './infrastructure/handoff-token.pri
 import { ActiveUserListerPrismaAdapter } from './infrastructure/active-user-lister.prisma';
 import { MockKycProvider } from './infrastructure/mock-kyc.provider';
 import { KycController } from './presentation/kyc.controller';
+import { ProfileService } from './application/profile.service';
+import { ProfileController } from './presentation/profile.controller';
 
 /**
  * Identity feature module. PrismaModule is global, so PrismaService is already
@@ -49,8 +51,9 @@ import { KycController } from './presentation/kyc.controller';
  */
 @Module({
   imports: [AuthModule, WebAuthModule, WalletsModule],
-  controllers: [KycController],
+  controllers: [KycController, ProfileController],
   providers: [
+    ProfileService,
     IdentityService,
     KycGateService,
     KycService,

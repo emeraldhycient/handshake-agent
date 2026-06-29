@@ -212,6 +212,16 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       listForUser: jest.fn().mockResolvedValue([]),
     } as unknown as import('../src/modules/beneficiaries/application/beneficiary.service').BeneficiaryService;
 
+    const fakeHistoryService = {
+      query: jest.fn().mockResolvedValue({
+        window: { from: 'F', to: 'T', label: 'All' },
+        items: [],
+        totalCount: 0,
+        truncated: false,
+        downloadUrl:
+          'https://app.example.com/transactions/statement/download?token=x',
+      }),
+    } as unknown as import('../src/modules/transactions/application/transaction-history.service').TransactionHistoryService;
     const fakeBalanceService = {
       getBalances: jest.fn().mockResolvedValue({
         fiatCurrency: 'NGN',
@@ -234,6 +244,7 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       fakeAssetRegistry,
       fakeHandoffTokenService,
       fakeBeneficiaryService,
+      fakeHistoryService,
       fakeBalanceService,
     );
 

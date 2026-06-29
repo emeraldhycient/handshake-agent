@@ -1,26 +1,23 @@
 /**
  * Gateway — single import point for all API calls.
  *
- * NEXT_PUBLIC_USE_MOCK (default "true") controls which implementation is used:
+ * NEXT_PUBLIC_USE_MOCK controls which implementation is used. The default is
+ * the REAL gateway (the real backend) — set NEXT_PUBLIC_USE_MOCK="true" to use
+ * the in-memory mock (the test suite forces this in vitest.setup.ts; local dev
+ * can opt in via web/.env.local):
  *   "true"  → mock/index.ts (in-memory, no network)
- *   "false" → realGateway (Axios → real backend)
+ *   other   → realGateway (Axios → real backend) — the default
  *
  * Components and query hooks import `gateway`, never `mock` directly.
  */
 
 import { api } from "./client"
 import * as mock from "./mock/index"
-import {
-  BalanceViewSchema,
-  WalletAssetSchema,
-  ActivityGroupSchema,
-  DepositViewSchema,
-  EventListItemSchema,
-  AppNotificationSchema,
-  SearchResultSchema,
-  QuoteViewSchema,
-  ReceiptViewSchema,
-} from "@/lib/schemas"
+import { mapWalletBalances, mapWalletAssets } from "./mappers/wallet"
+import { mapTransactions } from "./mappers/transactions"
+import { mapNotifications } from "./mappers/notifications"
+import { mapDepositAddress } from "./mappers/deposit"
+import { QuoteViewSchema, ReceiptViewSchema } from "@/lib/schemas"
 import type {
   BalanceView,
   WalletAsset,
@@ -36,8 +33,11 @@ import type {
 import {
   PublicConfigResponseSchema,
   type PublicConfigResponse,
+  WalletBalancesResponseSchema,
+  DepositAddressResponseSchema,
+  TransactionListResponseSchema,
+  NotificationListResponseSchema,
 } from "@handshake-agent/contracts"
-import { z } from "zod"
 
 // ─── Type alias for the gateway contract ─────────────────────────────────────
 
@@ -60,17 +60,16 @@ export interface Gateway {
 
 // ─── Real gateway (wraps the Axios client) ────────────────────────────────────
 //
-// Endpoint paths are conventional REST routes. When the real API is wired up,
-// adjust them to match the backend router. Paths kept minimal here:
-//   GET  /api/wallets/balances
-//   GET  /api/wallets/assets
-//   GET  /api/activity
-//   GET  /api/wallets/deposit-address
-//   GET  /api/events
-//   GET  /api/notifications
-//   GET  /api/search/catalog
-//   POST /api/quotes
-//   POST /api/transactions
+// Each data read fetches a structured contract DTO, validates it with Zod, and
+// maps it to the presentation "view" shape via lib/api/mappers/*. Events and the
+// search catalog have no backend yet (ticketing is deferred and hidden via the
+// /config capabilities), so they delegate to the mock.
+//   GET  /config
+//   GET  /wallets/balances        → BalanceView / WalletAsset[]
+//   GET  /transactions            → ActivityGroup[]
+//   GET  /wallets/deposit-address → DepositView
+//   GET  /notifications           → AppNotification[]
+//   POST /quotes · POST /transactions (chat flow — unchanged)
 
 const realGateway: Gateway = {
   async getConfig() {
@@ -80,37 +79,31 @@ const realGateway: Gateway = {
 
   async getBalances() {
     const { data } = await api.get("/wallets/balances")
-    return BalanceViewSchema.parse(data)
+    return mapWalletBalances(WalletBalancesResponseSchema.parse(data))
   },
 
   async getWalletAssets() {
-    const { data } = await api.get("/wallets/assets")
-    return z.array(WalletAssetSchema).parse(data)
+    const { data } = await api.get("/wallets/balances")
+    return mapWalletAssets(WalletBalancesResponseSchema.parse(data))
   },
 
   async getActivity() {
-    const { data } = await api.get("/activity")
-    return z.array(ActivityGroupSchema).parse(data)
+    const { data } = await api.get("/transactions")
+    return mapTransactions(TransactionListResponseSchema.parse(data))
   },
 
   async getDepositAddress() {
     const { data } = await api.get("/wallets/deposit-address")
-    return DepositViewSchema.parse(data)
+    return mapDepositAddress(DepositAddressResponseSchema.parse(data))
   },
 
-  async getEvents() {
-    const { data } = await api.get("/events")
-    return z.array(EventListItemSchema).parse(data)
-  },
+  // Not yet backed by a real endpoint — hidden by /config capabilities.
+  getEvents: mock.getEvents,
+  getSearchCatalog: mock.getSearchCatalog,
 
   async getNotifications() {
     const { data } = await api.get("/notifications")
-    return z.array(AppNotificationSchema).parse(data)
-  },
-
-  async getSearchCatalog() {
-    const { data } = await api.get("/search/catalog")
-    return z.array(SearchResultSchema).parse(data)
+    return mapNotifications(NotificationListResponseSchema.parse(data))
   },
 
   async createQuote(action: ChatAction) {
@@ -140,6 +133,7 @@ const realGateway: Gateway = {
 // satisfies the Gateway contract — any missing method is a compile-time error.
 const mockGateway: Gateway = mock
 
-const USE_MOCK = (process.env.NEXT_PUBLIC_USE_MOCK ?? "true") !== "false"
+// Real by default; the mock is opt-in via NEXT_PUBLIC_USE_MOCK="true".
+const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === "true"
 
 export const gateway: Gateway = USE_MOCK ? mockGateway : realGateway

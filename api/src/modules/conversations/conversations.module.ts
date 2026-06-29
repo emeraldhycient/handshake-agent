@@ -15,6 +15,7 @@ import {
   WALLET_SERVICE,
   HANDOFF_TOKEN_SERVICE,
   BENEFICIARY_SERVICE,
+  TRANSACTION_HISTORY_SERVICE,
   BALANCE_SERVICE,
 } from './application/conversation.service';
 import { CONVERSATION_REPOSITORY } from './application/ports/conversation.repository.port';
@@ -31,6 +32,7 @@ import { DirectiveService } from '../transactions/application/directive.service'
 import { WalletService } from '../wallets/application/wallet.service';
 import { HandoffTokenService } from '../identity/application/handoff-token.service';
 import { BeneficiaryService } from '../beneficiaries/application/beneficiary.service';
+import { TransactionHistoryService } from '../transactions/application/transaction-history.service';
 import { BalanceService } from '../balances/application/balance.service';
 
 /**
@@ -80,6 +82,11 @@ import { BalanceService } from '../balances/application/balance.service';
     { provide: HANDOFF_TOKEN_SERVICE, useExisting: HandoffTokenService },
     // Expose BeneficiaryService under our local BENEFICIARY_SERVICE token (W1).
     { provide: BENEFICIARY_SERVICE, useExisting: BeneficiaryService },
+    // Expose TransactionHistoryService under TRANSACTION_HISTORY_SERVICE (read-only history).
+    {
+      provide: TRANSACTION_HISTORY_SERVICE,
+      useExisting: TransactionHistoryService,
+    },
     // Expose BalanceService under our local BALANCE_SERVICE token (read-only).
     { provide: BALANCE_SERVICE, useExisting: BalanceService },
     { provide: INBOUND_HANDLER, useExisting: ConversationService },

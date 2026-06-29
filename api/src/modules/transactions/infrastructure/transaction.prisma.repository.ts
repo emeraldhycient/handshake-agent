@@ -342,6 +342,22 @@ export class TransactionPrismaRepository implements ITransactionRepository {
     });
   }
 
+  async findByUserId(
+    userId: string,
+    opts: { limit: number; cursor?: string },
+  ): Promise<TransactionRecord[]> {
+    const rows = await this.prisma.transaction.findMany({
+      where: {
+        userId,
+        ...(opts.cursor ? { id: { lt: opts.cursor } } : {}),
+      },
+      select: TRANSACTION_SELECT,
+      orderBy: { id: 'desc' },
+      take: opts.limit,
+    });
+    return rows.map(toRecord);
+  }
+
   async updateStatus(
     id: string,
     status: TransactionStatus,
@@ -374,5 +390,34 @@ export class TransactionPrismaRepository implements ITransactionRepository {
           : {}),
       },
     });
+  }
+
+  async listByUserInRange(input: {
+    userId: string;
+    from: Date;
+    to: Date;
+    types?: string[];
+    limit: number;
+  }): Promise<{ rows: TransactionRecord[]; total: number }> {
+    const where: Prisma.TransactionWhereInput = {
+      userId: input.userId,
+      createdAt: { gte: input.from, lte: input.to },
+      ...(input.types && input.types.length > 0
+        ? { type: { in: input.types as TransactionType[] } }
+        : {}),
+    };
+
+    // One round-trip: the capped page (newest first) + the exact total count.
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.transaction.findMany({
+        where,
+        select: TRANSACTION_SELECT,
+        orderBy: { createdAt: 'desc' },
+        take: input.limit,
+      }),
+      this.prisma.transaction.count({ where }),
+    ]);
+
+    return { rows: rows.map(toRecord), total };
   }
 }

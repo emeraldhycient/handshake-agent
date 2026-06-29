@@ -29,10 +29,14 @@ import {
   MeResponseSchema,
   type MeResponse,
 } from "@handshake-agent/contracts/auth"
+import {
+  ProfileResponseSchema,
+  type ProfileResponse,
+} from "@handshake-agent/contracts"
 import { api } from "./client"
 
 export async function submitSignup(
-  body: SignupRequest,
+  body: SignupRequest
 ): Promise<SignupResponse> {
   const validated = SignupRequestSchema.parse(body)
   const { data } = await api.post("/auth/signup", validated)
@@ -40,7 +44,7 @@ export async function submitSignup(
 }
 
 export async function submitVerifyEmail(
-  body: VerifyEmailRequest,
+  body: VerifyEmailRequest
 ): Promise<VerifyEmailResponse> {
   const validated = VerifyEmailRequestSchema.parse(body)
   const { data } = await api.post("/auth/verify-email", validated)
@@ -48,7 +52,7 @@ export async function submitVerifyEmail(
 }
 
 export async function submitLoginRequest(
-  body: LoginRequest,
+  body: LoginRequest
 ): Promise<LoginRequestResponse> {
   const validated = LoginRequestSchema.parse(body)
   const { data } = await api.post("/auth/login/request", validated)
@@ -56,7 +60,7 @@ export async function submitLoginRequest(
 }
 
 export async function submitLoginVerify(
-  body: LoginVerifyRequest,
+  body: LoginVerifyRequest
 ): Promise<LoginVerifyResponse> {
   const validated = LoginVerifyRequestSchema.parse(body)
   const { data } = await api.post("/auth/login/verify", validated)
@@ -64,7 +68,7 @@ export async function submitLoginVerify(
 }
 
 export async function refreshSession(
-  refreshToken: string,
+  refreshToken: string
 ): Promise<RefreshResponse> {
   const body: RefreshRequest = { refreshToken }
   const validated = RefreshRequestSchema.parse(body)
@@ -75,6 +79,11 @@ export async function refreshSession(
 export async function fetchMe(): Promise<MeResponse> {
   const { data } = await api.get("/auth/me")
   return MeResponseSchema.parse(data)
+}
+
+export async function fetchProfile(): Promise<ProfileResponse> {
+  const { data } = await api.get("/profile")
+  return ProfileResponseSchema.parse(data)
 }
 
 export async function logout(): Promise<void> {

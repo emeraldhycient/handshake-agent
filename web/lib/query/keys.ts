@@ -15,6 +15,7 @@ export const qk = {
   searchCatalog: ["searchCatalog"] as const,
   auth: ["auth"] as const,
   me: ["auth", "me"] as const,
+  profile: ["auth", "profile"] as const,
   transactionStatus: (id: string) => ["transaction", id, "status"] as const,
   chatHistory: ["chatHistory"] as const,
   beneficiaries: (type: "bank_account" | "crypto_address") =>

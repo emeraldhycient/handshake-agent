@@ -13,6 +13,7 @@ import {
   WEB_CHAT_PROPOSAL_SERVICE,
   WEB_CHAT_WALLET_SERVICE,
   WEB_CHAT_BENEFICIARY_SERVICE,
+  WEB_CHAT_HISTORY_SERVICE,
   WEB_CHAT_BALANCE_SERVICE,
 } from './web-chat.service';
 import { AGENT_PORT } from '../../agent/application/ports/agent.port';
@@ -35,6 +36,7 @@ const fakeProposalService = {
 };
 const fakeWalletService = { getOrProvisionNetworkWallet: jest.fn() };
 const fakeBeneficiaryService = { getDefault: jest.fn() };
+const fakeHistoryService = { query: jest.fn() };
 const fakeBalanceService = { getBalances: jest.fn() };
 const fakeIdentityRepo = { loadUser: jest.fn() };
 const fakeConversationRepo = {
@@ -139,6 +141,7 @@ describe('WebChatService', () => {
           provide: WEB_CHAT_BENEFICIARY_SERVICE,
           useValue: fakeBeneficiaryService,
         },
+        { provide: WEB_CHAT_HISTORY_SERVICE, useValue: fakeHistoryService },
         { provide: WEB_CHAT_BALANCE_SERVICE, useValue: fakeBalanceService },
         { provide: IDENTITY_REPOSITORY, useValue: fakeIdentityRepo },
         { provide: CONVERSATION_REPOSITORY, useValue: fakeConversationRepo },
@@ -251,6 +254,33 @@ describe('WebChatService', () => {
       expect(result.outcome).toEqual({ kind: 'not_supported', action });
     },
   );
+
+  // ── query_transactions → transactions outcome ─────────────────────────────
+
+  it('query_transactions intent → transactions outcome', async () => {
+    fakeHistoryService.query.mockResolvedValue({
+      window: { from: 'F', to: 'T', label: 'This month' },
+      items: [],
+      totalCount: 0,
+      truncated: false,
+      downloadUrl:
+        'https://api.example.com/transactions/statement/download?token=tok',
+    });
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'query_transactions',
+      period: 'this_month',
+      download: false,
+    });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'my transactions this month',
+    });
+    expect(result.outcome.kind).toBe('transactions');
+    expect(fakeHistoryService.query).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ period: 'this_month' }),
+    );
+  });
 
   // ── check_balance, verified → balance outcome ──────────────────────────────
 

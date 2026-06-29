@@ -201,6 +201,8 @@ function makeTransactionRepo(
     createSettlingWithProposal: jest.fn().mockResolvedValue(created),
     updateStatus: jest.fn().mockResolvedValue(undefined),
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
+    listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+    findByUserId: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -668,6 +670,8 @@ describe('ExecutionService.executeBuy', () => {
       }),
       updateStatus: jest.fn().mockResolvedValue(undefined),
       mergeMetadata: jest.fn().mockResolvedValue(undefined),
+      listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+      findByUserId: jest.fn().mockResolvedValue([]),
     };
 
     const svc = buildService({
@@ -724,6 +728,8 @@ describe('ExecutionService.executeBuy', () => {
       }),
       updateStatus: jest.fn().mockResolvedValue(undefined),
       mergeMetadata: jest.fn().mockResolvedValue(undefined),
+      listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+      findByUserId: jest.fn().mockResolvedValue([]),
     };
 
     const svc = buildService({
@@ -1109,6 +1115,8 @@ function makeTransactionRepoForSettle(
     createSettlingWithProposal: jest.fn().mockResolvedValue(SETTLING_TXN),
     updateStatus: jest.fn().mockResolvedValue(undefined),
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
+    listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+    findByUserId: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -1981,6 +1989,8 @@ describe('ExecutionService.executeSell', () => {
       createSettlingWithProposal: jest.fn().mockResolvedValue(STUB_SELL_TXN),
       updateStatus: jest.fn().mockResolvedValue(undefined),
       mergeMetadata: jest.fn().mockResolvedValue(undefined),
+      listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+      findByUserId: jest.fn().mockResolvedValue([]),
     };
     const settlementRepo = makeSettlementRepo(
       null,
@@ -2051,6 +2061,8 @@ function makeTransactionRepoForSellSettle(
     createSettlingWithProposal: jest.fn(),
     updateStatus: jest.fn(),
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
+    listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+    findByUserId: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -2471,6 +2483,8 @@ function makeTransactionRepoForSend(
     createSettlingWithProposal: jest.fn().mockResolvedValue(created),
     updateStatus: jest.fn().mockResolvedValue(undefined),
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
+    listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+    findByUserId: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -3181,6 +3195,8 @@ describe('ExecutionService.executeSend', () => {
       createSettlingWithProposal: jest.fn().mockResolvedValue(STUB_SEND_TXN),
       updateStatus: jest.fn().mockResolvedValue(undefined),
       mergeMetadata: jest.fn().mockResolvedValue(undefined),
+      listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+      findByUserId: jest.fn().mockResolvedValue([]),
     };
     const settlementRepo = makeSettlementRepo(
       null,
@@ -3361,6 +3377,8 @@ function makeTransactionRepoForSendSettle(
     createSettlingWithProposal: jest.fn(),
     updateStatus: jest.fn(),
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
+    listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+    findByUserId: jest.fn().mockResolvedValue([]),
   };
 }
 

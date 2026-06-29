@@ -2,6 +2,7 @@ import {
   computeBuyQuote,
   computeSellQuote,
   QuotePricingError,
+  valueAtSellRate,
 } from './quote-pricing';
 
 describe('computeBuyQuote', () => {
@@ -170,6 +171,19 @@ describe('computeSellQuote', () => {
 
     expect(with200.netFiat).toBeLessThan(with150.netFiat);
     expect(with200.effectiveRate).toBeLessThan(with150.effectiveRate);
+  });
+});
+
+describe('valueAtSellRate', () => {
+  it('values crypto at the sell-spread-reduced rate, floored to 2dp', () => {
+    // baseRate 1650, sellSpread 200bps → effective 1617; 29.97 × 1617 = 48461.49
+    expect(valueAtSellRate('29.97', 1650, 200)).toBe('48461.49');
+  });
+  it('returns 0.00 for a zero balance', () => {
+    expect(valueAtSellRate('0', 1650, 200)).toBe('0.00');
+  });
+  it('throws on a non-positive base rate', () => {
+    expect(() => valueAtSellRate('1', 0, 200)).toThrow();
   });
 });
 

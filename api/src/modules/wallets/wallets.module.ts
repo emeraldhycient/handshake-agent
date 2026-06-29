@@ -10,10 +10,14 @@ import {
 import { WALLET_REPOSITORY } from './application/ports/wallet.repository.port';
 import { BACKFILL_RUN_REPOSITORY } from './application/ports/backfill-run.repository.port';
 import { WalletService } from './application/wallet.service';
+import { WalletBalanceService } from './application/wallet-balance.service';
 import { BlockradarProvider } from './infrastructure/blockradar.provider';
 import { MockWalletProvider } from './infrastructure/mock-wallet.provider';
 import { WalletPrismaRepository } from './infrastructure/wallet.prisma.repository';
 import { PrismaBackfillRunRepository } from './infrastructure/backfill-run.prisma.repository';
+import { WebAuthModule } from '../auth/auth.module';
+import { QuotesModule } from '../quotes/quotes.module';
+import { WalletController } from './presentation/wallet.controller';
 
 /**
  * Selects the active wallet adapter from the layered config.
@@ -51,9 +55,11 @@ export function selectWalletProvider(
  * and WorkerModule processors can inject it.
  */
 @Module({
-  imports: [HttpModule],
+  imports: [HttpModule, WebAuthModule, QuotesModule],
+  controllers: [WalletController],
   providers: [
     WalletService,
+    WalletBalanceService,
     // Both adapters registered so the factory can inject either (mock default).
     MockWalletProvider,
     BlockradarProvider,

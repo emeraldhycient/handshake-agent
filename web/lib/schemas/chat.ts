@@ -176,6 +176,26 @@ export const SettlingViewSchema = z.object({
   status: z.enum(["pending", "settling", "completed", "failed"]),
 })
 export type SettlingView = z.infer<typeof SettlingViewSchema>
+// transactions (history list)
+export const TransactionRowSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  status: z.string(),
+  direction: z.enum(["in", "out"]),
+  amount: z.string(), // pre-formatted signed display, e.g. "+29.97 USDT"
+  sub: z.string(), // secondary line (date)
+})
+export type TransactionRow = z.infer<typeof TransactionRowSchema>
+
+export const TransactionsViewSchema = z.object({
+  kind: z.literal("transactions"),
+  windowLabel: z.string(),
+  rows: z.array(TransactionRowSchema),
+  totalCount: z.number(),
+  truncated: z.boolean(),
+  downloadUrl: z.string(),
+})
+export type TransactionsView = z.infer<typeof TransactionsViewSchema>
 
 // ─── ChatMessage discriminated union ──────────────────────────────────────────
 
@@ -193,6 +213,7 @@ export const ChatMessageSchema = z.discriminatedUnion("kind", [
   MessageBaseSchema.merge(PayInViewSchema),
   MessageBaseSchema.merge(NeedsBeneficiaryViewSchema),
   MessageBaseSchema.merge(SettlingViewSchema),
+  MessageBaseSchema.merge(TransactionsViewSchema),
 ])
 
 export type ChatMessage = z.infer<typeof ChatMessageSchema>

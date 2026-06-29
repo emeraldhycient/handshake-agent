@@ -25,6 +25,7 @@ import { JobsModule } from './core/jobs/jobs.module';
 import { WebAuthModule } from './modules/auth/auth.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { DomainExceptionFilter } from './core/common/domain-exception.filter';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -71,6 +72,7 @@ import { DomainExceptionFilter } from './core/common/domain-exception.filter';
     AdminModule,
     PublicConfigModule,
     ChatModule,
+    NotificationsModule,
   ],
   providers: [
     // Global Zod validation: every request DTO is checked against its contract schema.

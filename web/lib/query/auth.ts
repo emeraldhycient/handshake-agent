@@ -22,6 +22,7 @@ import type {
 } from "@handshake-agent/contracts/auth"
 import {
   fetchMe,
+  fetchProfile,
   submitLoginRequest,
   submitLoginVerify,
   submitSignup,
@@ -63,5 +64,16 @@ export function useMe() {
     queryKey: qk.me,
     queryFn: fetchMe,
     enabled: !!accessToken,
+  })
+}
+
+/** Settings profile (email, name, phone, KYC tier + limits). Cached 60 s. */
+export function useProfile() {
+  const accessToken = useAuthStore((s) => s.accessToken)
+  return useQuery({
+    queryKey: qk.profile,
+    queryFn: fetchProfile,
+    enabled: !!accessToken,
+    staleTime: 60_000,
   })
 }

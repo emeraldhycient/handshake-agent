@@ -62,6 +62,7 @@ import {
   PROPOSAL_SERVICE,
   DIRECTIVE_SERVICE,
 } from './conversation.service';
+import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { WalletRecord } from '../../wallets/application/ports/wallet.repository.port';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
@@ -536,6 +537,7 @@ function buildService(
     beneficiaryService?: jest.Mocked<
       Pick<BeneficiaryService, 'getDefault' | 'listForUser'>
     >;
+    historyService?: jest.Mocked<Pick<TransactionHistoryService, 'query'>>;
     balanceService?: { getBalances: jest.Mock };
   } = {},
 ) {
@@ -555,6 +557,7 @@ function buildService(
     overrides.handoffTokenService ?? makeHandoffTokenService();
   const beneficiaryService =
     overrides.beneficiaryService ?? makeBeneficiaryService();
+  const historyService = overrides.historyService ?? makeHistoryService();
   const balanceService = overrides.balanceService ?? makeBalanceService();
 
   // Build the service directly (not via Nest DI) since all deps are mocks.
@@ -573,6 +576,7 @@ function buildService(
     assetRegistry,
     handoffTokenService as unknown as HandoffTokenService,
     beneficiaryService as unknown as BeneficiaryService,
+    historyService as unknown as TransactionHistoryService,
     balanceService as unknown as BalanceService,
   );
 
@@ -592,7 +596,23 @@ function buildService(
     assetRegistry,
     handoffTokenService,
     beneficiaryService,
+    historyService,
     balanceService,
+  };
+}
+
+function makeHistoryService(): jest.Mocked<
+  Pick<TransactionHistoryService, 'query'>
+> {
+  return {
+    query: jest.fn().mockResolvedValue({
+      window: { from: 'F', to: 'T', label: 'Today' },
+      items: [],
+      totalCount: 0,
+      truncated: false,
+      downloadUrl:
+        'https://api.example.com/transactions/statement/download?token=tok',
+    }),
   };
 }
 
@@ -1623,5 +1643,51 @@ describe('ConversationService.handleInbound', () => {
     // Text fallback sent
     const sentText = captureFirstSentText(sender);
     expect(sentText).toMatch(/address|wallet|send/i);
+  });
+
+  // ── query_transactions (linked user) → text list + download CTA ────────────
+
+  it('query_transactions (linked user) → sends a text list + a download CTA', async () => {
+    const { svc, sender } = buildService({
+      agentPort: {
+        run: jest.fn().mockResolvedValue({
+          action: 'query_transactions',
+          period: 'today',
+          download: true,
+        }),
+      } as unknown as jest.Mocked<IAgentPort>,
+      historyService: {
+        query: jest.fn().mockResolvedValue({
+          window: { from: 'F', to: 'T', label: 'Today' },
+          items: [
+            {
+              id: 't1',
+              type: 'buy',
+              status: 'completed',
+              direction: 'in',
+              cryptoAmount: '29.97 USDT',
+              createdAt: '2026-06-29T09:00:00.000Z',
+            },
+          ],
+          totalCount: 1,
+          truncated: false,
+          downloadUrl:
+            'https://api.example.com/transactions/statement/download?token=tok',
+        }),
+      } as unknown as jest.Mocked<Pick<TransactionHistoryService, 'query'>>,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(sender.sendText).toHaveBeenCalled();
+    expect(sender.sendCtaUrl).toHaveBeenCalledTimes(1);
+    const ctaArg = (
+      sender.sendCtaUrl as jest.Mock<
+        ReturnType<typeof sender.sendCtaUrl>,
+        [Parameters<typeof sender.sendCtaUrl>[0]]
+      >
+    ).mock.calls[0][0];
+    expect(ctaArg.buttonText).toBe('Download');
+    expect(ctaArg.url).toContain('token=tok');
   });
 });

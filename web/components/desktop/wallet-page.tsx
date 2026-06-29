@@ -5,8 +5,8 @@ import { Money } from "@/components/shared/money"
 import { QrPlaceholder } from "@/components/shared/qr-placeholder"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { DEPOSIT_ADDRESS } from "@/lib/constants"
-import { useWalletAssets } from "@/lib/query/hooks"
+import { useWalletAssets, useDepositAddress } from "@/lib/query/hooks"
+import { useCapabilities } from "@/lib/query/capabilities"
 import { cn } from "@/lib/utils"
 import type { PageWithQuickActionProps } from "@/types/components"
 
@@ -22,6 +22,8 @@ export function WalletPage({
   className,
 }: PageWithQuickActionProps) {
   const assets = useWalletAssets()
+  const deposit = useDepositAddress()
+  const { canSwap } = useCapabilities()
 
   // ── Loading state ──────────────────────────────────────────────────────────
   if (assets.isLoading) {
@@ -116,14 +118,16 @@ export function WalletPage({
           >
             Receive
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="rounded-[11px] font-bold"
-            onClick={() => onQuickAction("swap", "Swap 10 USDT to naira")}
-          >
-            Swap
-          </Button>
+          {canSwap && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="rounded-[11px] font-bold"
+              onClick={() => onQuickAction("swap", "Swap 10 USDT to naira")}
+            >
+              Swap
+            </Button>
+          )}
         </div>
       </div>
 
@@ -160,20 +164,30 @@ export function WalletPage({
         {/* QR placeholder */}
         <QrPlaceholder size={86} className="flex-none" />
 
-        {/* Address block */}
-        {/* WN: deposit asset/network + copy are hardcoded mock display. Templatize
-            from useConfig() (GET /config — gateway.getConfig) when the real deposit
-            flow lands; deferred this PR (FE is mock-driven, no capability logic yet). */}
+        {/* Address block — real deposit address from GET /wallets/deposit-address */}
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
-            USDT deposit · TRON
-          </p>
-          <p className="mt-1.5 font-mono text-[13px] break-all text-foreground">
-            {DEPOSIT_ADDRESS}
-          </p>
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            Only send USDT (TRC-20) to this address.
-          </p>
+          {deposit.isLoading ? (
+            <>
+              <Skeleton className="h-3 w-32" />
+              <Skeleton className="mt-1.5 h-4 w-full" />
+            </>
+          ) : deposit.isError || !deposit.data ? (
+            <p className="text-danger text-xs font-semibold">
+              Could not load your deposit address.
+            </p>
+          ) : (
+            <>
+              <p className="text-xs font-bold tracking-widest text-muted-foreground uppercase">
+                {deposit.data.asset} deposit · {deposit.data.network}
+              </p>
+              <p className="mt-1.5 font-mono text-[13px] break-all text-foreground">
+                {deposit.data.address}
+              </p>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                Only send {deposit.data.asset} to this address.
+              </p>
+            </>
+          )}
         </div>
 
         {/* CTA */}
