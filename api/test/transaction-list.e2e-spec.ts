@@ -301,5 +301,9 @@ describe('Transaction list — e2e (GET /transactions)', () => {
 
     expect(Array.isArray(body.items)).toBe(true);
     expect(body.items[0]).toMatchObject({ type: 'buy', asset: 'USDT' });
+
+    // When fewer than `limit` items are returned (only 1 seeded, default limit 25)
+    // nextCursor must be absent — there is no next page.
+    expect(body.nextCursor).toBeUndefined();
   }, 120_000);
 });

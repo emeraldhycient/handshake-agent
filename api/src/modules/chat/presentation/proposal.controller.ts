@@ -328,9 +328,7 @@ export class TransactionStatusController {
       };
     });
     const nextCursor =
-      rows.length === limit
-        ? rows[rows.length - 1].createdAt.toISOString()
-        : undefined;
+      rows.length === limit ? rows[rows.length - 1].id : undefined;
     return TransactionListResponseSchema.parse({
       items,
       ...(nextCursor ? { nextCursor } : {}),

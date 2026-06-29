@@ -86,9 +86,8 @@ describe('TransactionPrismaRepository.findByUserId (integration, Testcontainers 
     const rows = await repo.findByUserId(userId, { limit: 10 });
 
     expect(rows).toHaveLength(2);
-    expect(rows[0].createdAt.getTime()).toBeGreaterThanOrEqual(
-      rows[1].createdAt.getTime(),
-    ); // desc
+    // uuid7 is time-ordered; desc ordering means the larger id (later-created) is first.
+    expect(rows[0].id > rows[1].id).toBe(true);
     expect(rows.every((r) => r.userId === userId)).toBe(true);
   });
 
@@ -96,21 +95,78 @@ describe('TransactionPrismaRepository.findByUserId (integration, Testcontainers 
     // The user already has 2 rows from the previous test; request only 1.
     const rows = await repo.findByUserId(userId, { limit: 1 });
     expect(rows).toHaveLength(1);
-    // Should be the newest one (11:00)
-    expect(rows[0].createdAt.toISOString()).toBe('2026-06-29T11:00:00.000Z');
   });
 
-  it('findByUserId respects the cursor (keyset pagination)', async () => {
-    // cursor = the createdAt of the newest row → only rows BEFORE it are returned
-    const cursor = '2026-06-29T11:00:00.000Z';
+  it('findByUserId respects the cursor (keyset pagination on id)', async () => {
+    // Fetch all rows first, then use the id of the first (newest) row as cursor.
+    // Rows with id < that cursor (i.e. older rows) should be returned.
+    const allRows = await repo.findByUserId(userId, { limit: 10 });
+    expect(allRows.length).toBeGreaterThanOrEqual(2);
+
+    const cursor = allRows[0].id; // newest row's id
     const rows = await repo.findByUserId(userId, { limit: 10, cursor });
-    expect(rows).toHaveLength(1);
-    expect(rows[0].createdAt.toISOString()).toBe('2026-06-29T10:00:00.000Z');
+    // Must include only rows older than the cursor (id < cursor in uuid7 ordering).
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    expect(rows.every((r) => r.id < cursor)).toBe(true);
   });
 
   it('findByUserId returns empty array when no transactions exist for user', async () => {
     const emptyUser = await prisma.user.create({ data: {} });
     const rows = await repo.findByUserId(emptyUser.id, { limit: 10 });
     expect(rows).toHaveLength(0);
+  });
+
+  it('findByUserId does not drop rows when two transactions share the same createdAt (tie-breaker via uuid7 id)', async () => {
+    // Seed a fresh user to isolate this test from previous seeds.
+    const tieUser = await prisma.user.create({ data: {} });
+    const sameCreatedAt = new Date('2026-06-29T12:00:00.000Z');
+    const meta = {
+      asset: 'USDT',
+      cryptoAmount: '1',
+      fiatAmount: '1000',
+      fiatCurrency: 'NGN',
+    };
+
+    // Create two transactions with the EXACT same createdAt millisecond.
+    // With the old createdAt-cursor approach this would silently drop one row.
+    const txA = await prisma.transaction.create({
+      data: {
+        userId: tieUser.id,
+        type: 'buy',
+        status: 'completed',
+        idempotencyKey: randomUUID(),
+        requestChecksum: 'd'.repeat(64),
+        metadata: meta,
+        createdAt: sameCreatedAt,
+      },
+    });
+
+    const txB = await prisma.transaction.create({
+      data: {
+        userId: tieUser.id,
+        type: 'buy',
+        status: 'completed',
+        idempotencyKey: randomUUID(),
+        requestChecksum: 'e'.repeat(64),
+        metadata: meta,
+        createdAt: sameCreatedAt,
+      },
+    });
+
+    // Fetch page 1 with limit 1 — gets the newer id (uuid7 desc order).
+    const page1 = await repo.findByUserId(tieUser.id, { limit: 1 });
+    expect(page1).toHaveLength(1);
+
+    // The cursor is the last-seen id from page 1.
+    const cursor = page1[0].id;
+
+    // Fetch page 2 using that cursor — must return the other row.
+    const page2 = await repo.findByUserId(tieUser.id, { limit: 1, cursor });
+    expect(page2).toHaveLength(1);
+
+    // Together, both distinct rows appear exactly once — no row is dropped.
+    const allIds = [page1[0].id, page2[0].id].sort();
+    const expectedIds = [txA.id, txB.id].sort();
+    expect(allIds).toEqual(expectedIds);
   });
 });

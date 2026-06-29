@@ -157,8 +157,8 @@ export interface ITransactionRepository {
 
   /**
    * Lists a user's transactions newest-first for the activity feed.
-   * Keyset paginated on (createdAt desc, id desc); `cursor` is the last seen
-   * createdAt ISO string. Returns up to `limit` records.
+   * Keyset-paginated on `id` (uuid7 — time-ordered + unique, so no timestamp-collision row loss);
+   * `cursor` is the last-seen transaction id. Returns up to `limit` records.
    */
   findByUserId(
     userId: string,

@@ -349,10 +349,10 @@ export class TransactionPrismaRepository implements ITransactionRepository {
     const rows = await this.prisma.transaction.findMany({
       where: {
         userId,
-        ...(opts.cursor ? { createdAt: { lt: new Date(opts.cursor) } } : {}),
+        ...(opts.cursor ? { id: { lt: opts.cursor } } : {}),
       },
       select: TRANSACTION_SELECT,
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: { id: 'desc' },
       take: opts.limit,
     });
     return rows.map(toRecord);
