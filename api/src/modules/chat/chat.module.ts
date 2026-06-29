@@ -39,6 +39,10 @@ import {
   WEB_CHAT_BENEFICIARY_SERVICE,
 } from './application/web-chat.service';
 import { ChatController } from './presentation/chat.controller';
+import {
+  ProposalController,
+  TransactionStatusController,
+} from './presentation/proposal.controller';
 
 @Module({
   imports: [
@@ -49,7 +53,11 @@ import { ChatController } from './presentation/chat.controller';
     TransactionsModule, // exports ProposalService
     WebAuthModule, // exports JwtAuthGuard
   ],
-  controllers: [ChatController],
+  controllers: [
+    ChatController,
+    ProposalController,
+    TransactionStatusController,
+  ],
   providers: [
     WebChatService,
     // Alias domain services under local DI tokens (symbol injection in WebChatService).

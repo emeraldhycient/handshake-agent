@@ -80,6 +80,8 @@ import { LedgerPrismaRepository } from './infrastructure/ledger.prisma.repositor
     DirectiveService,
     ExecutionService,
     PROPOSAL_REPOSITORY,
+    TRANSACTION_REPOSITORY,
+    SETTLEMENT_REPOSITORY,
   ],
 })
 export class TransactionsModule {}

@@ -102,6 +102,12 @@ export interface CreateSettlingWithProposalData {
 
 export interface ITransactionRepository {
   /**
+   * Looks up a Transaction by its primary key (id).
+   * Returns null if no transaction exists for that id.
+   */
+  findById(id: string): Promise<TransactionRecord | null>;
+
+  /**
    * Looks up a Transaction by its idempotency key.
    * Returns null if no transaction exists for that key.
    */

@@ -194,6 +194,7 @@ function makeTransactionRepo(
   created: TransactionRecord = STUB_TXN,
 ): jest.Mocked<ITransactionRepository> {
   return {
+    findById: jest.fn().mockResolvedValue(null),
     findByIdempotencyKey: jest.fn().mockResolvedValue(existing),
     create: jest.fn().mockResolvedValue(created),
     createSettlingWithProposal: jest.fn().mockResolvedValue(created),
@@ -1073,6 +1074,7 @@ function makeTransactionRepoForSettle(
   txn: TransactionRecord | null = SETTLING_TXN,
 ): jest.Mocked<ITransactionRepository> {
   return {
+    findById: jest.fn().mockResolvedValue(null),
     findByIdempotencyKey: jest.fn().mockResolvedValue(txn),
     create: jest.fn().mockResolvedValue(SETTLING_TXN),
     createSettlingWithProposal: jest.fn().mockResolvedValue(SETTLING_TXN),
@@ -2001,6 +2003,7 @@ function makeTransactionRepoForSellSettle(
   txn: TransactionRecord | null,
 ): jest.Mocked<ITransactionRepository> {
   return {
+    findById: jest.fn().mockResolvedValue(null),
     findByIdempotencyKey: jest.fn().mockResolvedValue(txn),
     create: jest.fn(),
     createSettlingWithProposal: jest.fn(),
@@ -2420,6 +2423,7 @@ function makeTransactionRepoForSend(
   created: TransactionRecord = STUB_SEND_TXN,
 ): jest.Mocked<ITransactionRepository> {
   return {
+    findById: jest.fn().mockResolvedValue(null),
     findByIdempotencyKey: jest.fn().mockResolvedValue(existing),
     create: jest.fn().mockResolvedValue(created),
     createSettlingWithProposal: jest.fn().mockResolvedValue(created),
@@ -3298,6 +3302,7 @@ function makeTransactionRepoForSendSettle(
   txn: TransactionRecord | null,
 ): jest.Mocked<ITransactionRepository> {
   return {
+    findById: jest.fn().mockResolvedValue(null),
     findByIdempotencyKey: jest.fn().mockResolvedValue(txn),
     create: jest.fn(),
     createSettlingWithProposal: jest.fn(),

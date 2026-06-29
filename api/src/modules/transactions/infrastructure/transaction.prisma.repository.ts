@@ -217,6 +217,15 @@ async function writeVelocityIncrements(
 export class TransactionPrismaRepository implements ITransactionRepository {
   constructor(private readonly prisma: PrismaService) {}
 
+  async findById(id: string): Promise<TransactionRecord | null> {
+    const row = await this.prisma.transaction.findUnique({
+      where: { id },
+      select: TRANSACTION_SELECT,
+    });
+
+    return row === null ? null : toRecord(row);
+  }
+
   async findByIdempotencyKey(key: string): Promise<TransactionRecord | null> {
     const row = await this.prisma.transaction.findUnique({
       where: { idempotencyKey: key },
