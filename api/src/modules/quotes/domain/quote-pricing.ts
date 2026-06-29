@@ -94,6 +94,27 @@ export function computeSellQuote(params: SellQuoteParams): SellQuoteBreakdown {
   return { effectiveRate, fiatBeforeFee, processingFeeAmount, netFiat };
 }
 
+/**
+ * Values a crypto holding in fiat at the realizable SELL rate.
+ * effectiveRate = baseRate × (1 − sellSpreadBps/10000); fee-exclusive.
+ * Floored to 2 d.p. so a displayed valuation never overstates realizable value.
+ */
+export function valueAtSellRate(
+  amount: string,
+  baseRate: number,
+  sellSpreadBps: number,
+): string {
+  const qty = Number(amount);
+  if (!Number.isFinite(qty) || qty < 0) {
+    throw new QuotePricingError('amount must be a non-negative number');
+  }
+  if (baseRate <= 0) {
+    throw new QuotePricingError('baseRate must be positive');
+  }
+  const effectiveRate = roundTo(baseRate * (1 - sellSpreadBps / 10000), 6);
+  return floorTo(qty * effectiveRate, 2).toFixed(2);
+}
+
 export function computeBuyQuote(params: BuyQuoteParams): BuyQuoteBreakdown {
   const {
     fiatAmount,

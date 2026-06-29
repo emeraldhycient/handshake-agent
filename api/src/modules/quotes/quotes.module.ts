@@ -17,6 +17,6 @@ import { QuotesController } from './presentation/quotes.controller';
     { provide: RATE_PROVIDER, useClass: ConfigRateProvider },
     { provide: CLOCK, useClass: SystemClock },
   ],
-  exports: [QuotesService],
+  exports: [QuotesService, RATE_PROVIDER],
 })
 export class QuotesModule {}
