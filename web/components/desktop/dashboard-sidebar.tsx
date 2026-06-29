@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import { AvatarPlaceholder, BrandMark } from "@/components/shared"
+import { useCapabilities } from "@/lib/query/capabilities"
 import type { DashboardSidebarProps } from "@/types/components"
 import type { DashboardPage } from "@/lib/schemas"
 
@@ -27,6 +28,10 @@ export function DashboardSidebar({
   onNavigate,
   className,
 }: DashboardSidebarProps) {
+  // Tickets is hidden until the ticketing capability is enabled in /config.
+  const { canTickets } = useCapabilities()
+  const items = NAV_ITEMS.filter((i) => i.page !== "tickets" || canTickets)
+
   return (
     <aside
       className={cn(
@@ -46,7 +51,7 @@ export function DashboardSidebar({
         className="mt-7 flex flex-col gap-[3px]"
         aria-label="Dashboard navigation"
       >
-        {NAV_ITEMS.map(({ page, label }) => {
+        {items.map(({ page, label }) => {
           const isActive = page === active
           return (
             <button

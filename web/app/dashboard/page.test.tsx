@@ -81,7 +81,7 @@ function wrapper({ children }: { children: React.ReactNode }) {
 }
 
 describe("/dashboard page", () => {
-  it("renders all 5 sidebar nav items", () => {
+  it("renders the core sidebar nav items (Tickets hidden when ticketing is off)", () => {
     render(<DashboardPage />, { wrapper })
     expect(
       screen.getByRole("button", { name: /overview/i })
@@ -90,10 +90,13 @@ describe("/dashboard page", () => {
     expect(
       screen.getByRole("button", { name: /activity/i })
     ).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /tickets/i })).toBeInTheDocument()
     expect(
       screen.getByRole("button", { name: /settings/i })
     ).toBeInTheDocument()
+    // Tickets is hidden — no ticketing capability in the default config.
+    expect(
+      screen.queryByRole("button", { name: /tickets/i })
+    ).not.toBeInTheDocument()
   })
 
   it("renders the overview page headline by default", async () => {
