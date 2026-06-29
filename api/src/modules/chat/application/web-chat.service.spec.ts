@@ -244,6 +244,96 @@ describe('WebChatService', () => {
     ).toBe('TXxxx');
   });
 
+  // ── receive_crypto, verified, USDT asset → deposit labelled USDT ──────────
+
+  it('receive_crypto with explicit USDT asset → outcome.deposit.asset is USDT', async () => {
+    fakeWalletService.getOrProvisionNetworkWallet.mockResolvedValue({
+      id: 'w1',
+      userId: 'user-1',
+      network: 'tron',
+      address: 'TXxxx',
+      providerReference: 'ref',
+      status: 'active',
+      provisionedAt: new Date(),
+    });
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'receive_crypto',
+      asset: 'USDT',
+      network: 'tron',
+    });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'I want to receive USDT',
+    });
+    expect(result.outcome.kind).toBe('receive');
+    const deposit = (
+      result.outcome as { kind: 'receive'; deposit: { asset: string } }
+    ).deposit;
+    expect(deposit.asset).toBe('USDT');
+  });
+
+  // ── receive_crypto, verified, TRX asset → deposit labelled TRX ────────────
+
+  it('receive_crypto with explicit TRX asset → outcome.deposit.asset is TRX (same address)', async () => {
+    fakeWalletService.getOrProvisionNetworkWallet.mockResolvedValue({
+      id: 'w1',
+      userId: 'user-1',
+      network: 'tron',
+      address: 'TXxxx',
+      providerReference: 'ref',
+      status: 'active',
+      provisionedAt: new Date(),
+    });
+    // Agent named TRX — the outcome must reflect TRX, not default to USDT.
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'receive_crypto',
+      asset: 'TRX',
+      network: 'tron',
+    });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'I want to receive TRX',
+    });
+    expect(result.outcome.kind).toBe('receive');
+    const deposit = (
+      result.outcome as {
+        kind: 'receive';
+        deposit: { asset: string; address: string };
+      }
+    ).deposit;
+    // Label must be TRX; address is the same TRON address (shared on TRON).
+    expect(deposit.asset).toBe('TRX');
+    expect(deposit.address).toBe('TXxxx');
+  });
+
+  // ── receive_crypto, no asset in intent → falls back to default ─────────────
+
+  it('receive_crypto with no asset in intent → outcome.deposit.asset is the registry default', async () => {
+    fakeWalletService.getOrProvisionNetworkWallet.mockResolvedValue({
+      id: 'w1',
+      userId: 'user-1',
+      network: 'tron',
+      address: 'TXxxx',
+      providerReference: 'ref',
+      status: 'active',
+      provisionedAt: new Date(),
+    });
+    // No asset field — model did not name one.
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'receive_crypto',
+    });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'I want to receive',
+    });
+    expect(result.outcome.kind).toBe('receive');
+    const deposit = (
+      result.outcome as { kind: 'receive'; deposit: { asset: string } }
+    ).deposit;
+    // fakeAssetRegistry.defaultCryptoAsset returns 'USDT'
+    expect(deposit.asset).toBe('USDT');
+  });
+
   // ── buy_ticket → not_supported ────────────────────────────────────────────
 
   it('buy_ticket intent → not_supported outcome', async () => {

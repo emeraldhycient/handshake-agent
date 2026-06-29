@@ -174,7 +174,7 @@ describe('WalletBalanceService', () => {
     expect(out.totalFiatValue).toBe('97461.49');
   });
 
-  it('returns the deposit address for the default network', async () => {
+  it('returns the deposit address for the default network when no asset is specified', async () => {
     const wallets = {
       getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(wallet),
       getBalance: jest.fn(),
@@ -188,5 +188,49 @@ describe('WalletBalanceService', () => {
       networkLabel: 'TRON (TRC-20)',
       address: 'TADDR',
     });
+  });
+
+  it('returns deposit address labelled USDT when asset=USDT is requested', async () => {
+    const wallets = {
+      getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(wallet),
+      getBalance: jest.fn(),
+    } as unknown as WalletService;
+    const rates = { getRate: jest.fn() } as unknown as IRateProvider;
+    const svc = new WalletBalanceService(wallets, makeRegistry(), rates);
+    const out = await svc.getDepositAddress('u1', undefined, 'USDT');
+    expect(out).toMatchObject({
+      asset: 'USDT',
+      network: 'TRON',
+      networkLabel: 'TRON (TRC-20)',
+      address: 'TADDR',
+    });
+  });
+
+  it('returns deposit address labelled TRX when asset=TRX is requested (same TRON address)', async () => {
+    // On TRON, USDT and TRX share one address — the label must reflect the requested asset.
+    const wallets = {
+      getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(wallet),
+      getBalance: jest.fn(),
+    } as unknown as WalletService;
+    const rates = { getRate: jest.fn() } as unknown as IRateProvider;
+    // A registry that knows TRX lives on TRON too
+    const registryWithTrx = {
+      ...makeRegistry(),
+      defaultCryptoAsset: () => 'USDT',
+      defaultNetworkFor: (asset: string) => (asset === 'TRX' ? 'TRON' : 'TRON'),
+      asset: (s: string) => ({
+        symbol: s,
+        displayName: s === 'TRX' ? 'TRON' : 'Tether USD',
+        decimals: s === 'TRX' ? 6 : 6,
+        networks: ['TRON'],
+      }),
+      network: (id: string) => ({ id, displayName: 'TRON (TRC-20)' }),
+    } as unknown as import('../../../core/catalog/asset-registry').AssetRegistry;
+    const svc = new WalletBalanceService(wallets, registryWithTrx, rates);
+    const out = await svc.getDepositAddress('u1', undefined, 'TRX');
+    // The address is the same TRON address but the asset label must be TRX
+    expect(out.asset).toBe('TRX');
+    expect(out.address).toBe('TADDR');
+    expect(out.network).toBe('TRON');
   });
 });

@@ -1542,6 +1542,71 @@ describe('ConversationService.handleInbound', () => {
     expect(sentText).toContain('TRONnet');
   });
 
+  // ── receive_crypto: asset threaded from intent (bug fix) ──────────────────
+
+  it('receive_crypto with asset=TRX in intent → reply uses TRX displayName ("TRX-coin"), not USDT displayName ("USD-coin")', async () => {
+    // Agent named TRX — the reply must use TRX metadata, not the default USDT.
+    // Use CLEARLY DISTINCT display names so the assertion distinguishes them.
+    const agentPort = makeAgentPort({ action: 'receive_crypto', asset: 'TRX' });
+    const walletService = makeWalletService();
+
+    const assetRegistry = makeAssetRegistry();
+    (assetRegistry.asset as jest.Mock).mockImplementation((symbol: string) => ({
+      symbol,
+      // Distinct sentinel names — 'TRX-coin' vs 'USD-coin' — so we can assert
+      // the right one appears and the wrong one does NOT.
+      displayName: symbol === 'TRX' ? 'TRX-coin' : 'USD-coin',
+      kind: 'crypto',
+      decimals: 6,
+      networks: ['TRON'],
+      providers: {},
+      enabled: true,
+    }));
+    (assetRegistry.defaultNetworkFor as jest.Mock).mockReturnValue('TRON');
+    (assetRegistry.network as jest.Mock).mockImplementation((id: string) => ({
+      id,
+      displayName: 'TRON (TRC-20)',
+      addressPattern: '^T[1-9A-HJ-NP-Za-km-z]{33}$',
+      enabled: true,
+    }));
+
+    const { svc, sender } = buildService({
+      agentPort,
+      walletService,
+      assetRegistry,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    const sentText = captureFirstSentText(sender);
+    // Reply must use the TRX display name, not the USDT default.
+    expect(sentText).toContain('TRX-coin');
+    expect(sentText).not.toContain('USD-coin');
+    // The address is still the same TRON wallet address.
+    expect(sentText).toContain(FIXED_WALLET_ADDRESS);
+  });
+
+  it('receive_crypto with no asset in intent → reply falls back to default asset (USDT)', async () => {
+    // Model did not name an asset — intent has no `asset` field.
+    const agentPort = makeAgentPort({ action: 'receive_crypto' });
+    const walletService = makeWalletService();
+    const assetRegistry = makeAssetRegistry();
+
+    const { svc, sender } = buildService({
+      agentPort,
+      walletService,
+      assetRegistry,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    const sentText = captureFirstSentText(sender);
+    // Default registry stub's asset displayName for USDT is 'USDT' (makeAssetRegistry).
+    expect(sentText).toContain(FIXED_WALLET_ADDRESS);
+    // Should not throw and should produce a reply.
+    expect(sentText.length).toBeGreaterThan(0);
+  });
+
   // Token references (ensure that exported symbols are used consistently)
   it('exports match the correct Symbol tokens', () => {
     expect(AGENT_PORT).toBeDefined();

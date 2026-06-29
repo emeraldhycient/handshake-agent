@@ -344,7 +344,14 @@ export class ConversationService implements IInboundHandler {
         return { replyText, flowSent };
       }
       case 'receive_crypto': {
-        const replyText = await this.handleReceive(identity, msg.fromAddress);
+        // Thread the asset named in the intent (may be undefined when the
+        // model did not specify one — handleReceive falls back to the default).
+        const receiveAsset = (intent as { asset?: string }).asset;
+        const replyText = await this.handleReceive(
+          identity,
+          msg.fromAddress,
+          receiveAsset,
+        );
         return { replyText, flowSent: false };
       }
       case 'query_transactions': {
@@ -996,6 +1003,7 @@ export class ConversationService implements IInboundHandler {
   private async handleReceive(
     identity: ResolvedIdentity,
     channelAddress: string,
+    requestedAsset?: string,
   ): Promise<string> {
     const guard = this.requireActiveUser(identity, channelAddress);
     if ('needsKyc' in guard) {
@@ -1008,20 +1016,22 @@ export class ConversationService implements IInboundHandler {
       return guard.reply;
     }
 
-    // Happy path: read-only — provision the default crypto wallet if needed and
-    // return the address. No proposal, no directive, no execution engine — receiving
+    // Happy path: read-only — provision the crypto wallet if needed and return
+    // the address. No proposal, no directive, no execution engine — receiving
     // is purely informational (§3.1).
-    // Asset and network are derived from the registry — no hardcoded literals (task X3).
-    const defaultAsset = this.assetRegistry.defaultCryptoAsset();
-    const defaultNetwork = this.assetRegistry.defaultNetworkFor(defaultAsset);
-    const assetMeta = this.assetRegistry.asset(defaultAsset);
-    const networkMeta = this.assetRegistry.network(defaultNetwork);
+    // Use the asset named in the intent; fall back to registry default when absent.
+    // On TRON, USDT and TRX share one address — only the label changes.
+    const resolvedAsset =
+      requestedAsset ?? this.assetRegistry.defaultCryptoAsset();
+    const resolvedNetwork = this.assetRegistry.defaultNetworkFor(resolvedAsset);
+    const assetMeta = this.assetRegistry.asset(resolvedAsset);
+    const networkMeta = this.assetRegistry.network(resolvedNetwork);
 
-    // WN-1: wallet is per-(user,network); asset for display comes from the registry
-    // (defaultAsset), not the wallet record itself.
+    // WN-1: wallet is per-(user,network); asset for display comes from the
+    // resolved intent asset, not the wallet record itself.
     const wallet = await this.walletService.getOrProvisionNetworkWallet(
       guard.user.id,
-      defaultNetwork,
+      resolvedNetwork,
     );
 
     return (

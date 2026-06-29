@@ -100,13 +100,17 @@ export class WalletBalanceService {
   async getDepositAddress(
     userId: string,
     network?: string,
+    asset?: string,
   ): Promise<DepositAddressResponse> {
-    const asset = this.registry.defaultCryptoAsset();
-    const net = network ?? this.registry.defaultNetworkFor(asset);
+    // Use the caller-supplied asset when present; fall back to the registry
+    // default. On TRON, USDT and TRX share the same address — the distinction
+    // is purely in the label, not the wallet provisioning step.
+    const resolvedAsset = asset ?? this.registry.defaultCryptoAsset();
+    const net = network ?? this.registry.defaultNetworkFor(resolvedAsset);
     const netMeta = this.registry.network(net);
     const wallet = await this.wallets.getOrProvisionNetworkWallet(userId, net);
     return {
-      asset: asset as SupportedAsset,
+      asset: resolvedAsset as SupportedAsset,
       network: net,
       networkLabel: netMeta.displayName,
       address: wallet.address,

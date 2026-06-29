@@ -182,20 +182,24 @@ export class WebChatService {
           summaryText = 'KYC required';
           break;
         }
-        const defaultAsset = this.assetRegistry.defaultCryptoAsset();
-        const defaultNetwork =
-          this.assetRegistry.defaultNetworkFor(defaultAsset);
-        const assetMeta = this.assetRegistry.asset(defaultAsset);
-        const networkMeta = this.assetRegistry.network(defaultNetwork);
+        // Use the asset named in the intent; fall back to registry default when
+        // the model did not specify one. On TRON, USDT and TRX share one address —
+        // we always provision the same network wallet; only the label changes.
+        const requestedAsset =
+          intent.asset ?? this.assetRegistry.defaultCryptoAsset();
+        const receiveNetwork =
+          this.assetRegistry.defaultNetworkFor(requestedAsset);
+        const assetMeta = this.assetRegistry.asset(requestedAsset);
+        const networkMeta = this.assetRegistry.network(receiveNetwork);
         const wallet = await this.walletService.getOrProvisionNetworkWallet(
           userId,
-          defaultNetwork,
+          receiveNetwork,
         );
         outcome = {
           kind: 'receive',
           deposit: {
-            asset: defaultAsset,
-            network: defaultNetwork,
+            asset: requestedAsset,
+            network: receiveNetwork,
             address: wallet.address,
           },
         };
