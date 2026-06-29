@@ -155,6 +155,20 @@ describe('WebChatService', () => {
     ).rejects.toThrow(NotFoundException);
   });
 
+  // ── agent / LLM failure → AgentUnavailableError (I1/I2) ─────────────────────
+
+  it('wraps an agent/LLM failure in AgentUnavailableError (never an opaque 500)', async () => {
+    // The agent call is the one external, flaky dependency in this flow. When it
+    // throws (provider down, timeout, invalid Intent), the service must surface a
+    // typed AgentUnavailableError so the global filter maps it to a 5xx with a
+    // clean message — not let the raw provider error bubble to an opaque 500.
+    fakeAgentPort.run.mockRejectedValue(new Error('anthropic 529 overloaded'));
+
+    await expect(
+      service.handleMessage({ userId: 'user-1', text: 'buy 5 USDT' }),
+    ).rejects.toMatchObject({ code: 'AGENT_UNAVAILABLE' });
+  });
+
   // ── none intent → clarification ────────────────────────────────────────────
 
   it('none intent → clarification outcome', async () => {

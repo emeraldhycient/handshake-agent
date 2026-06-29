@@ -133,10 +133,16 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
       }),
     };
 
+    // Unique address per call — the wallet table has a UNIQUE(address) constraint,
+    // so a constant address would collide once a second user provisions a wallet.
+    let addrCounter = 0;
     fakeWalletProvider = {
-      provisionAddress: jest.fn().mockResolvedValue({
-        address: 'TWebChatFakeAddr12345678',
-        providerReference: 'fake-ref-web-chat',
+      provisionAddress: jest.fn().mockImplementation(() => {
+        addrCounter += 1;
+        return Promise.resolve({
+          address: `TWebChatFakeAddr${addrCounter}`,
+          providerReference: `fake-ref-web-chat-${addrCounter}`,
+        });
       }),
       getBalance: jest.fn().mockResolvedValue({ balances: [] }),
       withdraw: jest.fn().mockResolvedValue({
@@ -377,4 +383,100 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
     expect(chatBody.conversationId).toBeDefined();
     expect(chatBody.messageId).toBeDefined();
   }, 120_000);
+
+  // ===========================================================================
+  // I1/I2 — domain/agent errors map to a clean status, never an opaque 500
+  // ===========================================================================
+
+  /** signup → verify → login → kyc; returns a Bearer token for a verified user. */
+  async function authVerifiedUser(opts: {
+    email: string;
+    phone: string;
+    nin: string;
+  }): Promise<string> {
+    const { email, phone, nin } = opts;
+    const su = await request(app.getHttpServer())
+      .post('/auth/signup')
+      .send({ email, phone })
+      .expect(202);
+    const devToken = (su.body as { devToken: string }).devToken;
+    await request(app.getHttpServer())
+      .post('/auth/verify-email')
+      .send({ token: devToken })
+      .expect(200);
+    const lr = await request(app.getHttpServer())
+      .post('/auth/login/request')
+      .send({ email })
+      .expect(202);
+    const otp = (lr.body as { devOtp: string }).devOtp;
+    const lv = await request(app.getHttpServer())
+      .post('/auth/login/verify')
+      .send({ email, otp, deviceFingerprint: `fp-${email}` })
+      .expect(200);
+    const accessToken = (lv.body as { accessToken: string }).accessToken;
+    await request(app.getHttpServer())
+      .post('/kyc/submit')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ firstName: 'Test', lastName: 'User', nin, pin: '1234' })
+      .expect(200);
+    return accessToken;
+  }
+
+  it('POST /chat/messages → agent/LLM failure → 503 with a clean message (NOT an opaque 500)', async () => {
+    const token = await authVerifiedUser({
+      email: `agentfail_${Date.now()}@test.com`,
+      phone: '+2348029999010',
+      nin: '22334455710',
+    });
+
+    // The agent call throws this turn (provider overloaded). The raw error — which
+    // here carries a fake secret — must NOT reach the client.
+    fakeLlmProvider.extractIntent.mockRejectedValueOnce(
+      new Error('anthropic 529 overloaded — apikey sk-secret-leak'),
+    );
+
+    const res = await request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ text: 'buy 5 USDT' })
+      .expect(503);
+
+    const body = res.body as { statusCode: number; message: string };
+    expect(body.statusCode).toBe(503);
+    expect(body.message).toMatch(/temporarily unavailable/i);
+    // No internal leakage of the underlying provider error.
+    expect(JSON.stringify(body)).not.toMatch(/anthropic|sk-secret-leak|529/);
+  }, 60_000);
+
+  it('POST /chat/messages → sell with zero balance → 422 (InsufficientBalanceError mapped, NOT 500)', async () => {
+    const token = await authVerifiedUser({
+      email: `sellpoor_${Date.now()}@test.com`,
+      phone: '+2348029999011',
+      nin: '22334455711',
+    });
+
+    // Agent returns a sell intent this turn; the user has zero USDT, so the
+    // proposal builder raises InsufficientBalanceError inside /chat/messages.
+    fakeLlmProvider.extractIntent.mockResolvedValueOnce({
+      action: 'sell_crypto',
+      asset: 'USDT',
+      cryptoAmount: '5',
+      fiatCurrency: 'NGN',
+    });
+
+    const res = await request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        text: 'sell 5 USDT',
+        beneficiaryId: '11111111-1111-1111-1111-111111111111',
+      })
+      .expect(422);
+
+    const body = res.body as { statusCode: number; message: string };
+    expect(body.statusCode).toBe(422);
+    expect(body.message).toBe('Insufficient balance for this transaction.');
+    // The raw domain message reveals exact balances — it must not be exposed.
+    expect(JSON.stringify(body)).not.toContain('have 0');
+  }, 60_000);
 });

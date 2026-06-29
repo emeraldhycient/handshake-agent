@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { APP_PIPE } from '@nestjs/core';
+import { APP_PIPE, APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -24,6 +24,7 @@ import { PublicConfigModule } from './modules/config/config.module';
 import { JobsModule } from './core/jobs/jobs.module';
 import { WebAuthModule } from './modules/auth/auth.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { DomainExceptionFilter } from './core/common/domain-exception.filter';
 
 @Module({
   imports: [
@@ -71,7 +72,12 @@ import { ChatModule } from './modules/chat/chat.module';
     PublicConfigModule,
     ChatModule,
   ],
-  // Global Zod validation: every request DTO is checked against its contract schema.
-  providers: [{ provide: APP_PIPE, useClass: ZodValidationPipe }],
+  providers: [
+    // Global Zod validation: every request DTO is checked against its contract schema.
+    { provide: APP_PIPE, useClass: ZodValidationPipe },
+    // Global error mapping: domain errors → correct HTTP status + clean message,
+    // never an opaque 500 or leaked internal detail (I1/I2).
+    { provide: APP_FILTER, useClass: DomainExceptionFilter },
+  ],
 })
 export class AppModule {}

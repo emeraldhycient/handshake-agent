@@ -16,6 +16,7 @@ import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type {
   WebChatResponse,
   AgentTurnOutcome,
+  Intent,
 } from '@handshake-agent/contracts';
 
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
@@ -23,6 +24,7 @@ import {
   AGENT_PORT,
   type IAgentPort,
 } from '../../agent/application/ports/agent.port';
+import { AgentUnavailableError } from '../../agent/domain/agent-errors';
 import {
   IDENTITY_REPOSITORY,
   type IIdentityRepository,
@@ -130,7 +132,7 @@ export class WebChatService {
     });
 
     // 4. Run agent — receives a validated Intent.
-    const intent = await this.agentPort.run(text);
+    const intent = await this.runAgent(text, correlationId);
 
     // 5. Persist intent record.
     await this.intentRepo.create({
@@ -301,5 +303,25 @@ export class WebChatService {
       conversationId: conversation.id,
       messageId: message.id,
     };
+  }
+
+  /**
+   * Runs the agent for a turn, converting any failure into a typed
+   * AgentUnavailableError. The agent/LLM call is the one flaky external
+   * dependency in this flow (provider error, timeout, or Intent validation
+   * failure); surfacing a typed error lets the global filter map it to a clean
+   * 5xx instead of letting the raw provider error bubble out as an opaque 500
+   * (I1/I2).
+   */
+  private async runAgent(text: string, correlationId: string): Promise<Intent> {
+    try {
+      return await this.agentPort.run(text);
+    } catch (err: unknown) {
+      this.logger.error(
+        { correlationId, err },
+        'Agent run failed — surfacing as AgentUnavailableError',
+      );
+      throw new AgentUnavailableError();
+    }
   }
 }
