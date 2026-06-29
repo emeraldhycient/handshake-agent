@@ -87,13 +87,16 @@ Given a user message, extract their intent and return it as a structured object 
 - swap: user wants to swap one crypto asset for another
 - buy_ticket: user wants to buy an event ticket
 - check_balance: user wants to check their wallet balance
+- query_transactions: user wants to see their transaction history / past activity, or download a statement
 - none: intent is unclear — return a short clarification question in the "clarification" field
 
 Rules:
 1. Never guess a financial action if the intent is ambiguous — prefer "none" with a clarifying question.
 2. Amounts are strings (e.g. "5000" not 5000). Fiat currency defaults to "${defaultFiat}".
 3. Only ${assetList} are supported assets.
-4. Return exactly one intent matching the schema — no prose, no explanation.`;
+4. Return exactly one intent matching the schema — no prose, no explanation.
+5. For query_transactions: choose a "period" from today, yesterday, this_week, last_week, this_month, last_month, or all for relative phrases ("today", "last week", "this month"). NEVER compute calendar dates yourself.
+6. Only set "from"/"to" (ISO YYYY-MM-DD) when the user states an explicit calendar range (e.g. "from June 1 to June 15"). Set "txType" (buy/sell/send/receive) when the user names a direction (e.g. "what did I send"). Set "download": true only when the user asks for a file/statement/PDF.`;
   }
 
   // ---------------------------------------------------------------------------

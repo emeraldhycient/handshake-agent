@@ -180,6 +180,13 @@ describe('AnthropicLlmProvider', () => {
         const prompt = provider.buildSystemPrompt();
         expect(prompt).not.toContain('Only "USDT" and "BTC"');
       });
+
+      it('documents the query_transactions action and the no-date-math rule', () => {
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).toContain('query_transactions');
+        expect(prompt).toMatch(/never compute (calendar )?dates/i);
+        expect(prompt).toContain('download');
+      });
     });
   });
 
