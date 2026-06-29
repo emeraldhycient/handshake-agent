@@ -50,6 +50,7 @@ function makeService(overrides?: {
           : walletByNetwork[network],
       ),
     ),
+    findByUser: jest.fn().mockResolvedValue(Object.values(walletByNetwork)),
     findByAddress: jest.fn(),
     create: jest.fn(),
   };
