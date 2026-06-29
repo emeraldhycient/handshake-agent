@@ -3,7 +3,9 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi, afterEach } from "vitest"
 import type { PublicConfigResponse } from "@handshake-agent/contracts"
+import type { MeResponse } from "@handshake-agent/contracts/auth"
 import { gateway } from "@/lib/api/gateway"
+import { defaultAuthStore } from "@/lib/store/auth-store"
 import { DashboardSidebar } from "./dashboard-sidebar"
 import type { DashboardPage } from "@/lib/schemas"
 
@@ -97,5 +99,48 @@ describe("DashboardSidebar", () => {
       wrapper: makeWrapper(),
     })
     expect(screen.getByText(/verified account/i)).toBeInTheDocument()
+  })
+
+  it("shows the full name when the auth store has a KYC-profiled user", () => {
+    const meFixture: MeResponse = {
+      userId: "11111111-1111-1111-1111-111111111111",
+      email: "amara@example.com",
+      kycStatus: "verified",
+      kycTier: "tier_1",
+      hasPin: true,
+      firstName: "Amara",
+      lastName: "Okeke",
+    }
+    defaultAuthStore.getState().setUser(meFixture)
+
+    render(<DashboardSidebar active="overview" onNavigate={() => {}} />, {
+      wrapper: makeWrapper(),
+    })
+    expect(screen.getByText("Amara Okeke")).toBeInTheDocument()
+    // Email shown as secondary line when name is present
+    expect(screen.getByText("amara@example.com")).toBeInTheDocument()
+
+    defaultAuthStore.getState().clear()
+  })
+
+  it("falls back to the email local-part when no name is on the KYC profile", () => {
+    const meFixture: MeResponse = {
+      userId: "11111111-1111-1111-1111-111111111111",
+      email: "amara@example.com",
+      kycStatus: "not_started",
+      kycTier: "unverified",
+      hasPin: false,
+      firstName: null,
+      lastName: null,
+    }
+    defaultAuthStore.getState().setUser(meFixture)
+
+    render(<DashboardSidebar active="overview" onNavigate={() => {}} />, {
+      wrapper: makeWrapper(),
+    })
+    // The email's local-part "amara" is used when no full name is set.
+    expect(screen.getByText("amara")).toBeInTheDocument()
+
+    defaultAuthStore.getState().clear()
   })
 })

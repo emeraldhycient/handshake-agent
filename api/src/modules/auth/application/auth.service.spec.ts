@@ -61,6 +61,8 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
         kycStatus: string;
         kycTier: string;
         hasPin: boolean;
+        firstName: string | null;
+        lastName: string | null;
       } | null>,
       [string]
     >(() =>
@@ -70,6 +72,8 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
         kycStatus: 'not_started',
         kycTier: 'unverified',
         hasPin: false,
+        firstName: null,
+        lastName: null,
       }),
     ),
   };
@@ -258,6 +262,8 @@ describe('AuthService.loginVerify', () => {
         kycStatus: 'not_started',
         kycTier: 'unverified',
         hasPin: false,
+        firstName: null,
+        lastName: null,
       },
     });
   });
@@ -391,7 +397,25 @@ describe('AuthService.logout + me', () => {
       kycStatus: 'not_started',
       kycTier: 'unverified',
       hasPin: false,
+      firstName: null,
+      lastName: null,
     });
+  });
+
+  it('me returns firstName and lastName when a KYC profile exists', async () => {
+    const { service, userRepo } = makeDeps();
+    userRepo.loadMe.mockResolvedValueOnce({
+      userId: 'u1',
+      email: 'a@b.com',
+      kycStatus: 'verified',
+      kycTier: 'tier_1',
+      hasPin: true,
+      firstName: 'Amara',
+      lastName: 'Okeke',
+    });
+    expect(await service.me('u1')).toEqual(
+      expect.objectContaining({ firstName: 'Amara', lastName: 'Okeke' }),
+    );
   });
 
   it('me throws UserNotFoundError when the user account is missing (not an auth failure)', async () => {

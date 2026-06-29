@@ -48,6 +48,9 @@ export const MeResponseSchema = z.object({
   kycStatus: z.string(),
   kycTier: z.string(),
   hasPin: z.boolean(),
+  /** From KycProfile — null when no KYC profile exists yet. */
+  firstName: z.string().nullable().optional(),
+  lastName: z.string().nullable().optional(),
 });
 export type MeResponse = z.infer<typeof MeResponseSchema>;
 

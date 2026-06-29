@@ -68,12 +68,53 @@ describe("auth contracts", () => {
       },
     });
     expect(v.user.hasPin).toBe(false);
+    expect(v.user.firstName).toBeUndefined();
   });
 
-  it("me response shape", () => {
+  it("me response shape — rejects missing required fields", () => {
     expect(() =>
       MeResponseSchema.parse({ userId: "x", email: "a@b.com" }),
     ).toThrow();
+  });
+
+  it("me response accepts firstName + lastName when present", () => {
+    const v = MeResponseSchema.parse({
+      userId: "11111111-1111-1111-1111-111111111111",
+      email: "a@b.com",
+      kycStatus: "not_started",
+      kycTier: "unverified",
+      hasPin: false,
+      firstName: "Amara",
+      lastName: "Okeke",
+    });
+    expect(v.firstName).toBe("Amara");
+    expect(v.lastName).toBe("Okeke");
+  });
+
+  it("me response accepts null firstName/lastName (no KYC profile yet)", () => {
+    const v = MeResponseSchema.parse({
+      userId: "11111111-1111-1111-1111-111111111111",
+      email: "a@b.com",
+      kycStatus: "not_started",
+      kycTier: "unverified",
+      hasPin: false,
+      firstName: null,
+      lastName: null,
+    });
+    expect(v.firstName).toBeNull();
+    expect(v.lastName).toBeNull();
+  });
+
+  it("me response accepts omitted firstName/lastName (optional)", () => {
+    const v = MeResponseSchema.parse({
+      userId: "11111111-1111-1111-1111-111111111111",
+      email: "a@b.com",
+      kycStatus: "not_started",
+      kycTier: "unverified",
+      hasPin: false,
+    });
+    expect(v.firstName).toBeUndefined();
+    expect(v.lastName).toBeUndefined();
   });
 
   it("refresh request requires a token", () => {

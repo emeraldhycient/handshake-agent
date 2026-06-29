@@ -15,6 +15,9 @@ export interface MeProjection {
   kycStatus: string;
   kycTier: string;
   hasPin: boolean;
+  /** Null when the user has no KYC profile yet. */
+  firstName: string | null;
+  lastName: string | null;
 }
 
 export interface IAuthUserRepository {

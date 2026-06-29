@@ -20,6 +20,8 @@ const mockUser: MeResponse = {
   kycStatus: "approved",
   kycTier: "tier1",
   hasPin: false,
+  firstName: null,
+  lastName: null,
 }
 
 // ─── Suite ────────────────────────────────────────────────────────────────────

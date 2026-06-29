@@ -126,6 +126,12 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
         kycStatus: true,
         kycTier: true,
         pinHash: true,
+        kycProfile: {
+          select: {
+            firstName: true,
+            lastName: true,
+          },
+        },
       },
     });
     if (row === null || row.email === null) return null;
@@ -135,6 +141,8 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
       kycStatus: row.kycStatus,
       kycTier: row.kycTier,
       hasPin: row.pinHash !== null,
+      firstName: row.kycProfile?.firstName ?? null,
+      lastName: row.kycProfile?.lastName ?? null,
     };
   }
 }
