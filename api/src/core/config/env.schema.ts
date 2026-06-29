@@ -149,6 +149,14 @@ export const envSchema = z.object({
   // AdminTokenGuard with a session/role guard — this env var can then be removed.
   ADMIN_API_TOKEN: z.string().optional().default(''),
 
+  // --- Swap provider (Blockradar crypto-to-crypto swaps) ---
+  // When 'true' (default), MockSwapProvider is active — deterministic fake quotes /
+  // execute responses, NO live Blockradar calls (safe for local dev, tests, and CI
+  // without real credentials). Set to 'false' to activate BlockradarSwapProvider
+  // (requires a valid BLOCKRADAR_API_KEY and at least 2 enabled assets in the
+  // catalog). Mirrors WALLET_MOCK_MODE / PAYMENTS_MOCK_MODE.
+  SWAP_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+
   // --- Media (speech-to-text + document extraction) ---
   // Mock adapters are the only active ones until real keys are provided (mirror KYC_MOCK_MODE).
   TRANSCRIPTION_MOCK_MODE: z.enum(['true', 'false']).default('true'),

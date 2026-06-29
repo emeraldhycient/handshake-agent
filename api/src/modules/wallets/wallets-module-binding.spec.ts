@@ -1,29 +1,36 @@
 /**
- * Unit tests for WalletsModule WALLET_PROVIDER binding selection.
+ * Unit tests for WalletsModule provider binding selection.
  *
- * The factory logic in WalletsModule is: when WALLET_MOCK_MODE === 'false',
- * return the real BlockradarProvider; otherwise (default 'true', or any other
- * value) return MockWalletProvider.
+ * Tests both WALLET_PROVIDER (WALLET_MOCK_MODE) and SWAP_PROVIDER (SWAP_MOCK_MODE)
+ * factory helpers.
  *
  * Mirrors the TreasuryModule / ComplianceModule binding tests: exercise the
- * exported `selectWalletProvider` helper the module uses directly — fast and
- * hermetic, no full DI boot.
+ * exported `selectWalletProvider` / `selectSwapProvider` helpers the module
+ * uses directly — fast and hermetic, no full DI boot.
  */
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 
 import type { AssetRegistry } from '../../core/catalog/asset-registry';
-import { selectWalletProvider } from './wallets.module';
+import { selectWalletProvider, selectSwapProvider } from './wallets.module';
 import { MockWalletProvider } from './infrastructure/mock-wallet.provider';
 import { BlockradarProvider } from './infrastructure/blockradar.provider';
+import { MockSwapProvider } from './infrastructure/mock-swap.provider';
+import { BlockradarSwapProvider } from './infrastructure/blockradar-swap.provider';
 
-function makeConfigService(walletMockMode: string): ConfigService {
+function makeConfigService(
+  overrides: Record<string, string> = {},
+): ConfigService {
   return {
     get: (key: string) => {
-      if (key === 'WALLET_MOCK_MODE') return walletMockMode;
-      if (key === 'BLOCKRADAR_BASE_URL') return 'https://api.blockradar.co/v1';
-      if (key === 'BLOCKRADAR_API_KEY') return 'test-key';
-      return undefined;
+      const values: Record<string, string> = {
+        BLOCKRADAR_BASE_URL: 'https://api.blockradar.co/v1',
+        BLOCKRADAR_API_KEY: 'test-key',
+        WALLET_MOCK_MODE: 'true',
+        SWAP_MOCK_MODE: 'true',
+        ...overrides,
+      };
+      return values[key];
     },
   } as unknown as ConfigService;
 }
@@ -38,8 +45,8 @@ function makeAssetRegistry(): AssetRegistry {
   } as unknown as AssetRegistry;
 }
 
-function resolve(walletMockMode: string) {
-  const config = makeConfigService(walletMockMode);
+function resolveWallet(walletMockMode: string) {
+  const config = makeConfigService({ WALLET_MOCK_MODE: walletMockMode });
   const mock = new MockWalletProvider();
   const real = new BlockradarProvider(
     makeHttpService(),
@@ -49,22 +56,53 @@ function resolve(walletMockMode: string) {
   return selectWalletProvider(mock, real, config);
 }
 
+function resolveSwap(swapMockMode: string) {
+  const config = makeConfigService({ SWAP_MOCK_MODE: swapMockMode });
+  const mock = new MockSwapProvider(config);
+  const real = new BlockradarSwapProvider(
+    makeHttpService(),
+    config,
+    makeAssetRegistry(),
+  );
+  return selectSwapProvider(mock, real, config);
+}
+
 describe('WalletsModule — WALLET_PROVIDER factory binding', () => {
   it('selects MockWalletProvider when WALLET_MOCK_MODE=true (default)', () => {
-    expect(resolve('true')).toBeInstanceOf(MockWalletProvider);
+    expect(resolveWallet('true')).toBeInstanceOf(MockWalletProvider);
   });
 
   it('selects MockWalletProvider for any non-"false" value (default safe)', () => {
-    expect(resolve('')).toBeInstanceOf(MockWalletProvider);
+    expect(resolveWallet('')).toBeInstanceOf(MockWalletProvider);
   });
 
   it('selects the real BlockradarProvider when WALLET_MOCK_MODE=false', () => {
-    expect(resolve('false')).toBeInstanceOf(BlockradarProvider);
+    expect(resolveWallet('false')).toBeInstanceOf(BlockradarProvider);
   });
 
   it('the selected provider satisfies the port (has provisionAddress + withdraw)', () => {
-    const real = resolve('false');
+    const real = resolveWallet('false');
     expect(typeof real.provisionAddress).toBe('function');
     expect(typeof real.withdraw).toBe('function');
+  });
+});
+
+describe('WalletsModule — SWAP_PROVIDER factory binding', () => {
+  it('selects MockSwapProvider when SWAP_MOCK_MODE=true (default)', () => {
+    expect(resolveSwap('true')).toBeInstanceOf(MockSwapProvider);
+  });
+
+  it('selects MockSwapProvider for any non-"false" value (default safe)', () => {
+    expect(resolveSwap('')).toBeInstanceOf(MockSwapProvider);
+  });
+
+  it('selects the real BlockradarSwapProvider when SWAP_MOCK_MODE=false', () => {
+    expect(resolveSwap('false')).toBeInstanceOf(BlockradarSwapProvider);
+  });
+
+  it('the selected provider satisfies the port (has getQuote + execute)', () => {
+    const real = resolveSwap('false');
+    expect(typeof real.getQuote).toBe('function');
+    expect(typeof real.execute).toBe('function');
   });
 });

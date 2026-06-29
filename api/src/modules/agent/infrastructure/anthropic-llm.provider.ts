@@ -86,7 +86,7 @@ Given a user message, extract their intent and return it as a structured object 
 - buy_crypto: user wants to buy cryptocurrency with fiat
 - send_crypto: user wants to send crypto to someone
 - receive_crypto: user wants to receive crypto / get their wallet address
-- swap: user wants to swap one crypto asset for another
+- swap: user wants to swap one crypto asset for another crypto asset (crypto-to-crypto only, no fiat). Extract fromAsset (the asset to swap out of), toAsset (the asset to receive), and amount (of fromAsset to swap). Both fromAsset and toAsset must be supported crypto assets.
 - buy_ticket: user wants to buy an event ticket
 - check_balance: user wants to check their wallet balance. If they name a specific asset (e.g. "my USDT balance"), set "asset" to that symbol; if they ask for everything ("what's my balance", "show my assets"), omit "asset".
 - query_transactions: user wants to see their transaction history / past activity, or download a statement

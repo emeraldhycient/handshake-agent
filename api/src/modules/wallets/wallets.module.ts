@@ -7,12 +7,18 @@ import {
   WALLET_PROVIDER,
   type IWalletProvider,
 } from './application/ports/wallet-provider.port';
+import {
+  SWAP_PROVIDER,
+  type ISwapProvider,
+} from './application/ports/swap-provider.port';
 import { WALLET_REPOSITORY } from './application/ports/wallet.repository.port';
 import { BACKFILL_RUN_REPOSITORY } from './application/ports/backfill-run.repository.port';
 import { WalletService } from './application/wallet.service';
 import { WalletBalanceService } from './application/wallet-balance.service';
 import { BlockradarProvider } from './infrastructure/blockradar.provider';
 import { MockWalletProvider } from './infrastructure/mock-wallet.provider';
+import { BlockradarSwapProvider } from './infrastructure/blockradar-swap.provider';
+import { MockSwapProvider } from './infrastructure/mock-swap.provider';
 import { WalletPrismaRepository } from './infrastructure/wallet.prisma.repository';
 import { PrismaBackfillRunRepository } from './infrastructure/backfill-run.prisma.repository';
 import { WebAuthModule } from '../auth/auth.module';
@@ -39,6 +45,24 @@ export function selectWalletProvider(
 }
 
 /**
+ * Selects the active swap adapter from the layered config.
+ *
+ *   SWAP_MOCK_MODE=true  (env-schema default) → MockSwapProvider
+ *   SWAP_MOCK_MODE=false                       → BlockradarSwapProvider (live)
+ *
+ * Default is mock (safe): only an explicit 'false' activates real Blockradar
+ * swap calls. Mirrors selectWalletProvider / selectPaymentProvider. Exported so
+ * the binding decision can be unit-tested without booting the full DI graph.
+ */
+export function selectSwapProvider(
+  mock: MockSwapProvider,
+  real: BlockradarSwapProvider,
+  config: ConfigService,
+): ISwapProvider {
+  return config.get<string>('SWAP_MOCK_MODE') === 'false' ? real : mock;
+}
+
+/**
  * Wallets feature module. Wires the Blockradar WaaS adapter, the Prisma
  * repository, WalletService, and the BackfillRun repository (BQ-2).
  *
@@ -61,13 +85,21 @@ export function selectWalletProvider(
   providers: [
     WalletService,
     WalletBalanceService,
-    // Both adapters registered so the factory can inject either (mock default).
+    // Both wallet adapters registered so the factory can inject either (mock default).
     MockWalletProvider,
     BlockradarProvider,
     {
       provide: WALLET_PROVIDER,
       useFactory: selectWalletProvider,
       inject: [MockWalletProvider, BlockradarProvider, ConfigService],
+    },
+    // Both swap adapters registered so the factory can inject either (mock default).
+    MockSwapProvider,
+    BlockradarSwapProvider,
+    {
+      provide: SWAP_PROVIDER,
+      useFactory: selectSwapProvider,
+      inject: [MockSwapProvider, BlockradarSwapProvider, ConfigService],
     },
     { provide: WALLET_REPOSITORY, useClass: WalletPrismaRepository },
     { provide: BACKFILL_RUN_REPOSITORY, useClass: PrismaBackfillRunRepository },
@@ -82,6 +114,7 @@ export function selectWalletProvider(
   exports: [
     WalletService,
     WALLET_PROVIDER,
+    SWAP_PROVIDER,
     WALLET_REPOSITORY,
     BACKFILL_RUN_REPOSITORY,
   ],

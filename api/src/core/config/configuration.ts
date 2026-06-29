@@ -509,7 +509,11 @@ export default (): AppConfig => ({
       'crypto.sell': true,
       'crypto.send': true,
       'crypto.receive': true,
-      'crypto.swap': false, // Deferred — no DEX integration at launch.
+      // Enabled: BlockradarSwapProvider (SWAP_MOCK_MODE=true → MockSwapProvider,
+      // SWAP_MOCK_MODE=false → real Blockradar). Requires ≥2 enabled assets in the
+      // catalog (USDT + TRX at launch). Engine gates on KYC + limits + sanctions
+      // before calling the provider (root CLAUDE.md §3.1 / §3.3).
+      'crypto.swap': true,
     },
     // Validity window for send quotes (30 seconds — same as buy/sell).
     // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).

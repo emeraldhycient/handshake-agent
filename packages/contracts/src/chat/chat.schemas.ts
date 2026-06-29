@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { BuyProposalConfirmationSchema } from '../tools/execute-buy.tool'
 import { SellProposalConfirmationSchema } from '../tools/execute-sell.tool'
 import { SendProposalConfirmationSchema } from '../tools/execute-send.tool'
+import { SwapProposalConfirmationSchema } from '../tools/execute-swap.tool'
 import { TransactionHistoryResponseSchema } from '../transactions/transaction-history.schema'
 import { FiatCurrencySchema } from '../common'
 
@@ -57,13 +58,14 @@ export const AgentTurnOutcomeSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('proposal'),
-    txType: z.enum(['buy', 'sell', 'send']),
+    txType: z.enum(['buy', 'sell', 'send', 'swap']),
     proposalId: z.string().uuid(),
     // Union so each txType renders the correct itemized breakdown component.
     confirmation: z.union([
       BuyProposalConfirmationSchema,
       SellProposalConfirmationSchema,
       SendProposalConfirmationSchema,
+      SwapProposalConfirmationSchema,
     ]),
   }),
   // balance is `kind` + the snapshot fields, merged so the discriminant stays
