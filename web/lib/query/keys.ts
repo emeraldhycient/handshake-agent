@@ -15,4 +15,5 @@ export const qk = {
   searchCatalog: ["searchCatalog"] as const,
   auth: ["auth"] as const,
   me: ["auth", "me"] as const,
+  profile: ["auth", "profile"] as const,
 } as const
