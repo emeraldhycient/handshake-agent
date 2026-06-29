@@ -68,6 +68,7 @@ import type { AssetRegistry } from '../../../core/catalog/asset-registry';
 import type { HandoffTokenService } from '../../identity/application/handoff-token.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
+import type { BalanceService } from '../../balances/application/balance.service';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -417,6 +418,28 @@ function makeWalletService(
   };
 }
 
+function makeBalanceService(
+  snapshot: {
+    fiatCurrency: string;
+    asset?: string;
+    totalFiatValue?: string;
+    balances: Array<{
+      asset: string;
+      network: string;
+      amount: string;
+      fiatValue?: string;
+    }>;
+  } = {
+    fiatCurrency: 'NGN',
+    totalFiatValue: '16800.00',
+    balances: [
+      { asset: 'USDT', network: 'TRON', amount: '10.5', fiatValue: '16800.00' },
+    ],
+  },
+): { getBalances: jest.Mock } {
+  return { getBalances: jest.fn().mockResolvedValue(snapshot) };
+}
+
 function makeHandoffTokenService(
   mintOutput: { token: string; url: string } | Error = {
     token: 'raw-token-hex',
@@ -513,6 +536,7 @@ function buildService(
     beneficiaryService?: jest.Mocked<
       Pick<BeneficiaryService, 'getDefault' | 'listForUser'>
     >;
+    balanceService?: { getBalances: jest.Mock };
   } = {},
 ) {
   const identityService = overrides.identityService ?? makeIdentityService();
@@ -531,6 +555,7 @@ function buildService(
     overrides.handoffTokenService ?? makeHandoffTokenService();
   const beneficiaryService =
     overrides.beneficiaryService ?? makeBeneficiaryService();
+  const balanceService = overrides.balanceService ?? makeBalanceService();
 
   // Build the service directly (not via Nest DI) since all deps are mocks.
   const svc = new ConversationService(
@@ -548,6 +573,7 @@ function buildService(
     assetRegistry,
     handoffTokenService as unknown as HandoffTokenService,
     beneficiaryService as unknown as BeneficiaryService,
+    balanceService as unknown as BalanceService,
   );
 
   return {
@@ -566,6 +592,7 @@ function buildService(
     assetRegistry,
     handoffTokenService,
     beneficiaryService,
+    balanceService,
   };
 }
 
@@ -923,6 +950,56 @@ describe('ConversationService.handleInbound', () => {
 
     const sentText = captureFirstSentText(sender);
     expect(sentText).toContain('not supported yet');
+  });
+
+  // ── check_balance (W-balance) ─────────────────────────────────────────────
+
+  it('check_balance (all assets), verified user → text reply listing holdings, no proposal', async () => {
+    const agentPort = makeAgentPort({ action: 'check_balance' });
+    const { svc, sender, balanceService, proposalService } = buildService({
+      agentPort,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(balanceService.getBalances).toHaveBeenCalledWith(
+      'user-id-1',
+      undefined,
+    );
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toContain('USDT');
+    // Read-only: no proposal is ever created for a balance check.
+    expect(proposalService.createBuyProposal).not.toHaveBeenCalled();
+  });
+
+  it('check_balance scoped to USDT → passes the asset to the balance service', async () => {
+    const agentPort = makeAgentPort({ action: 'check_balance', asset: 'USDT' });
+    const { svc, balanceService } = buildService({ agentPort });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(balanceService.getBalances).toHaveBeenCalledWith(
+      'user-id-1',
+      'USDT',
+    );
+  });
+
+  it('check_balance, unlinked contact → KYC handoff, balance service NOT called', async () => {
+    const identityService = makeIdentityService({
+      resolveByChannel: jest.fn().mockResolvedValue({
+        kind: 'contact',
+        contact: { id: 'contact-id-1' },
+      }),
+    });
+    const agentPort = makeAgentPort({ action: 'check_balance' });
+    const { svc, balanceService } = buildService({
+      identityService,
+      agentPort,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(balanceService.getBalances).not.toHaveBeenCalled();
   });
 
   // ── ProposalService throws → failure path ─────────────────────────────────

@@ -143,6 +143,54 @@ describe('AgentTurnOutcomeSchema', () => {
     }
   })
 
+  it('accepts a balance outcome for all assets', () => {
+    const result = AgentTurnOutcomeSchema.parse({
+      kind: 'balance',
+      fiatCurrency: 'NGN',
+      totalFiatValue: '16800.00',
+      balances: [
+        { asset: 'USDT', network: 'TRON', amount: '10.5', fiatValue: '16800.00' },
+      ],
+    })
+    expect(result.kind).toBe('balance')
+    if (result.kind === 'balance') {
+      expect(result.balances).toHaveLength(1)
+      expect(result.balances[0].asset).toBe('USDT')
+      expect(result.asset).toBeUndefined()
+    }
+  })
+
+  it('accepts a balance outcome scoped to a single asset', () => {
+    const result = AgentTurnOutcomeSchema.parse({
+      kind: 'balance',
+      fiatCurrency: 'NGN',
+      asset: 'USDT',
+      balances: [{ asset: 'USDT', network: 'TRON', amount: '10.5' }],
+    })
+    if (result.kind === 'balance') {
+      expect(result.asset).toBe('USDT')
+      // fiatValue is optional on a balance line.
+      expect(result.balances[0].fiatValue).toBeUndefined()
+    }
+  })
+
+  it('accepts a balance outcome with an empty balances list', () => {
+    const result = AgentTurnOutcomeSchema.parse({
+      kind: 'balance',
+      fiatCurrency: 'NGN',
+      balances: [],
+    })
+    if (result.kind === 'balance') {
+      expect(result.balances).toEqual([])
+    }
+  })
+
+  it('rejects a balance outcome missing fiatCurrency', () => {
+    expect(() =>
+      AgentTurnOutcomeSchema.parse({ kind: 'balance', balances: [] }),
+    ).toThrow()
+  })
+
   it('accepts a not_supported outcome', () => {
     const result = AgentTurnOutcomeSchema.parse({
       kind: 'not_supported',

@@ -11,6 +11,29 @@ export const ChatMessageRequestSchema = z.object({
 })
 export type ChatMessageRequest = z.infer<typeof ChatMessageRequestSchema>
 
+// One asset's balance line within a balance snapshot.
+// `amount` is a human-scaled crypto amount string (e.g. "10.5"); `fiatValue` is a
+// mid-market valuation in the snapshot's `fiatCurrency` (decimal string), omitted
+// when the asset cannot be priced. The FX spread is NEVER surfaced here (§ user rule).
+export const BalanceLineSchema = z.object({
+  asset: z.string(),
+  network: z.string(),
+  amount: z.string(),
+  fiatValue: z.string().optional(),
+})
+export type BalanceLine = z.infer<typeof BalanceLineSchema>
+
+// Read-only portfolio snapshot the balance service returns. The web-chat / WhatsApp
+// layers spread this into a `balance` outcome (adding `kind`). `asset` echoes the
+// single asset when the user scoped their request; absent = all supported assets.
+export const BalanceSnapshotSchema = z.object({
+  fiatCurrency: z.string(),
+  asset: z.string().optional(),
+  totalFiatValue: z.string().optional(),
+  balances: z.array(BalanceLineSchema),
+})
+export type BalanceSnapshot = z.infer<typeof BalanceSnapshotSchema>
+
 // Discriminated union describing what the agent turn resolved to.
 // The web UI branches on `kind` to decide which confirmation component to render.
 export const AgentTurnOutcomeSchema = z.discriminatedUnion('kind', [
@@ -41,9 +64,13 @@ export const AgentTurnOutcomeSchema = z.discriminatedUnion('kind', [
       SendProposalConfirmationSchema,
     ]),
   }),
+  // balance is `kind` + the snapshot fields, merged so the discriminant stays
+  // a direct member (z.discriminatedUnion requires the literal in each branch).
+  z.object({ kind: z.literal('balance') }).merge(BalanceSnapshotSchema),
   z.object({
     kind: z.literal('not_supported'),
-    action: z.enum(['check_balance', 'swap', 'buy_ticket', 'unknown']),
+    // check_balance is now a supported capability — no longer routed here.
+    action: z.enum(['swap', 'buy_ticket', 'unknown']),
   }),
 ])
 export type AgentTurnOutcome = z.infer<typeof AgentTurnOutcomeSchema>

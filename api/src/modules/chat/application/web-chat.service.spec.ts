@@ -13,6 +13,7 @@ import {
   WEB_CHAT_PROPOSAL_SERVICE,
   WEB_CHAT_WALLET_SERVICE,
   WEB_CHAT_BENEFICIARY_SERVICE,
+  WEB_CHAT_BALANCE_SERVICE,
 } from './web-chat.service';
 import { AGENT_PORT } from '../../agent/application/ports/agent.port';
 import { IDENTITY_REPOSITORY } from '../../identity/application/ports/identity.repository.port';
@@ -34,6 +35,7 @@ const fakeProposalService = {
 };
 const fakeWalletService = { getOrProvisionNetworkWallet: jest.fn() };
 const fakeBeneficiaryService = { getDefault: jest.fn() };
+const fakeBalanceService = { getBalances: jest.fn() };
 const fakeIdentityRepo = { loadUser: jest.fn() };
 const fakeConversationRepo = {
   findByUserId: jest.fn(),
@@ -53,6 +55,8 @@ const fakeAssetRegistry = {
   defaultNetworkFor: jest.fn().mockReturnValue('tron'),
   asset: jest.fn().mockReturnValue({ displayName: 'USDT' }),
   network: jest.fn().mockReturnValue({ displayName: 'TRON' }),
+  formatCrypto: jest.fn((sym: string, amt: string) => `${amt} ${sym}`),
+  formatFiat: jest.fn((_code: string, amt: string) => `₦${amt}`),
 };
 
 // ---------------------------------------------------------------------------
@@ -135,6 +139,7 @@ describe('WebChatService', () => {
           provide: WEB_CHAT_BENEFICIARY_SERVICE,
           useValue: fakeBeneficiaryService,
         },
+        { provide: WEB_CHAT_BALANCE_SERVICE, useValue: fakeBalanceService },
         { provide: IDENTITY_REPOSITORY, useValue: fakeIdentityRepo },
         { provide: CONVERSATION_REPOSITORY, useValue: fakeConversationRepo },
         { provide: MESSAGE_REPOSITORY, useValue: fakeMessageRepo },
@@ -219,9 +224,9 @@ describe('WebChatService', () => {
     ).toBe('TXxxx');
   });
 
-  // ── check_balance / swap / buy_ticket → not_supported ─────────────────────
+  // ── swap / buy_ticket → not_supported ─────────────────────────────────────
 
-  it.each(['check_balance', 'swap', 'buy_ticket'])(
+  it.each(['swap', 'buy_ticket'])(
     '%s intent → not_supported outcome',
     async (action) => {
       fakeAgentPort.run.mockResolvedValue({ action });
@@ -232,6 +237,80 @@ describe('WebChatService', () => {
       expect(result.outcome).toEqual({ kind: 'not_supported', action });
     },
   );
+
+  // ── check_balance, verified → balance outcome ──────────────────────────────
+
+  it('check_balance intent (all assets), verified → balance outcome', async () => {
+    fakeBalanceService.getBalances.mockResolvedValue({
+      fiatCurrency: 'NGN',
+      totalFiatValue: '16800.00',
+      balances: [
+        {
+          asset: 'USDT',
+          network: 'TRON',
+          amount: '10.5',
+          fiatValue: '16800.00',
+        },
+      ],
+    });
+    fakeAgentPort.run.mockResolvedValue({ action: 'check_balance' });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: "what's my balance",
+    });
+
+    expect(fakeBalanceService.getBalances).toHaveBeenCalledWith(
+      'user-1',
+      undefined,
+    );
+    expect(result.outcome).toMatchObject({
+      kind: 'balance',
+      fiatCurrency: 'NGN',
+      totalFiatValue: '16800.00',
+    });
+    expect(
+      (result.outcome as { kind: 'balance'; balances: unknown[] }).balances,
+    ).toHaveLength(1);
+    // The reply text surfaces the holding (no FX-spread line).
+    expect(result.reply.text).toContain('USDT');
+  });
+
+  it('check_balance intent scoped to USDT → passes the asset through', async () => {
+    fakeBalanceService.getBalances.mockResolvedValue({
+      fiatCurrency: 'NGN',
+      asset: 'USDT',
+      balances: [{ asset: 'USDT', network: 'TRON', amount: '10.5' }],
+    });
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'check_balance',
+      asset: 'USDT',
+    });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: "what's my USDT balance",
+    });
+
+    expect(fakeBalanceService.getBalances).toHaveBeenCalledWith(
+      'user-1',
+      'USDT',
+    );
+    expect(result.outcome).toMatchObject({ kind: 'balance', asset: 'USDT' });
+  });
+
+  it('check_balance intent, unverified user → needs_kyc', async () => {
+    fakeIdentityRepo.loadUser.mockResolvedValue(UNVERIFIED_USER);
+    fakeAgentPort.run.mockResolvedValue({ action: 'check_balance' });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'balance',
+    });
+
+    expect(result.outcome).toEqual({ kind: 'needs_kyc' });
+    expect(fakeBalanceService.getBalances).not.toHaveBeenCalled();
+  });
 
   // ── buy_crypto, unverified → needs_kyc ────────────────────────────────────
 
