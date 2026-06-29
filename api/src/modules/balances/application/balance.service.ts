@@ -8,7 +8,10 @@
  *
  * The ledger is the single source of truth for balances (the WalletBalance snapshot
  * is provider-derived; the ledger derives from settled entries). Valuation uses the
- * mid-market base rate so the figure is honest and the FX spread is never surfaced.
+ * realizable SELL rate (baseRate × (1 − sellSpreadBps/10000)) so the figure matches
+ * the web wallet tab (D2 product decision). The FX spread is folded in and never
+ * surfaced as a line item — the displayed value is what the user would receive if
+ * they sold right now.
  */
 
 import { Inject, Injectable } from '@nestjs/common';
@@ -32,6 +35,7 @@ import {
   RATE_PROVIDER,
   type IRateProvider,
 } from '../../quotes/application/ports/rate-provider.port';
+import { valueAtSellRate } from '../../quotes/domain/quote-pricing';
 
 /** Ledger account type for a user's custodial wallet (mirrors LedgerAccountType.user_wallet). */
 const USER_WALLET_ACCOUNT = 'user_wallet';
@@ -76,12 +80,7 @@ export class BalanceService {
           )
         : '0';
 
-      const fiatValue = await this.valuate(
-        sym,
-        fiatCurrency,
-        amount,
-        fiatDecimals,
-      );
+      const fiatValue = await this.valuate(sym, fiatCurrency, amount);
       if (fiatValue !== undefined) {
         anyPriced = true;
         totalFiat += parseFloat(fiatValue);
@@ -104,24 +103,24 @@ export class BalanceService {
   }
 
   /**
-   * Mid-market fiat valuation of a crypto amount. Returns `undefined` (rather than
-   * throwing) when the asset cannot be priced so one unpriced asset never sinks the
-   * whole snapshot. Number math is fine here — this is a display estimate, not a
-   * settlement figure (the engine never reads this).
+   * Sell-rate fiat valuation of a crypto amount: effectiveRate = baseRate × (1 − sellSpreadBps/10000).
+   * Returns `undefined` (rather than throwing) when the asset cannot be priced so one
+   * unpriced asset never sinks the whole snapshot. Uses the shared `valueAtSellRate`
+   * helper from quote-pricing so the formula stays identical to the web wallet endpoint.
+   * `valueAtSellRate` always floors to 2 d.p. (fiat minor units).
    */
   private async valuate(
     asset: string,
     fiatCurrency: string,
     amount: string,
-    decimals: number,
   ): Promise<string | undefined> {
     try {
-      const { baseRate } = await this.rateProvider.getRate(
+      const { baseRate, sellSpreadBps } = await this.rateProvider.getRate(
         asset as SupportedAsset,
         fiatCurrency as FiatCurrency,
       );
       if (!Number.isFinite(baseRate)) return undefined;
-      return (parseFloat(amount) * baseRate).toFixed(decimals);
+      return valueAtSellRate(amount, baseRate, sellSpreadBps);
     } catch {
       return undefined;
     }

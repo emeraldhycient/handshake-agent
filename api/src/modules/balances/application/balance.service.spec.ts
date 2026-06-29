@@ -7,7 +7,8 @@
  * Invariants exercised:
  *   - §3.1 read-only: never provisions a wallet, never moves money.
  *   - The ledger is the authoritative balance source (getAccountBalance).
- *   - Valuation uses the mid-market base rate; failures degrade gracefully.
+ *   - Valuation uses the realizable SELL rate (baseRate × (1 − sellSpreadBps/10000)),
+ *     matching the web wallet endpoint (D2). Failures degrade gracefully.
  */
 
 import { BalanceService } from './balance.service';
@@ -97,11 +98,13 @@ function makeService(overrides?: {
 // ---------------------------------------------------------------------------
 
 describe('BalanceService', () => {
-  it('returns every enabled asset with its ledger balance and mid-market value', async () => {
+  it('returns every enabled asset with its ledger balance valued at the sell rate', async () => {
     const { service } = makeService();
 
     const snapshot = await service.getBalances('user-1');
 
+    // sellSpreadBps=100 → effectiveRate = 1600 × (1 − 100/10000) = 1584
+    // 10.5 × 1584 = 16632.00 (floored to 2 d.p.)
     expect(snapshot.fiatCurrency).toBe('NGN');
     expect(snapshot.asset).toBeUndefined();
     expect(snapshot.balances).toEqual([
@@ -109,10 +112,10 @@ describe('BalanceService', () => {
         asset: 'USDT',
         network: 'TRON',
         amount: '10.5',
-        fiatValue: '16800.00',
+        fiatValue: '16632.00',
       },
     ]);
-    expect(snapshot.totalFiatValue).toBe('16800.00');
+    expect(snapshot.totalFiatValue).toBe('16632.00');
   });
 
   it('scopes to a single asset and echoes it when asset is given', async () => {
@@ -142,6 +145,7 @@ describe('BalanceService', () => {
 
     const snapshot = await service.getBalances('user-1');
 
+    // 0 × effectiveRate = 0.00 regardless of spread
     expect(snapshot.balances[0].amount).toBe('0');
     expect(snapshot.balances[0].fiatValue).toBe('0.00');
     // Read-only: the wallet repo only has read methods; create is never called.
@@ -171,8 +175,9 @@ describe('BalanceService', () => {
     const snapshot = await service.getBalances('user-1');
 
     expect(snapshot.balances).toHaveLength(2);
-    // 10 * 1600 + 5 * 1600 = 24000
-    expect(snapshot.totalFiatValue).toBe('24000.00');
+    // sellSpreadBps=100 → effectiveRate = 1584 for both assets
+    // 10 × 1584 + 5 × 1584 = 15840 + 7920 = 23760
+    expect(snapshot.totalFiatValue).toBe('23760.00');
   });
 
   it('reads the authoritative ledger balance for the user_wallet account', async () => {
