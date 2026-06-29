@@ -114,9 +114,6 @@ export function OverviewPage({
             as="div"
             className="mt-0.5 text-[40px] font-extrabold tracking-tight tabular-nums"
           />
-          <p className="mt-0.5 text-[13.5px] text-success-bright">
-            +₦1,210 (1.7%) today · ≈ $43.50
-          </p>
         </div>
         {/* Action buttons */}
         <div className="flex gap-[10px]">

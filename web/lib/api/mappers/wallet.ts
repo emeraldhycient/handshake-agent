@@ -3,13 +3,8 @@ import { ASSET_TINTS } from "@/lib/constants"
 import { formatFiatAmount, formatCryptoAmount } from "@/lib/format/money"
 import type { BalanceView, WalletAsset } from "@/lib/schemas"
 
-// Per-asset 24h change has no backend source (no price history). Kept as a
-// labelled placeholder per the product decision to keep demo values visible.
-const PLACEHOLDER_CHANGE: Record<string, string> = {
-  USDT: "+0.1%",
-  BTC: "+2.4%",
-}
-const changeFor = (sym: string) => PLACEHOLDER_CHANGE[sym] ?? "—"
+// Per-asset 24h change has no backend source — always "—" until a price-history
+// endpoint is available. Never show fake numbers.
 const tintFor = (sym: string) => ASSET_TINTS[sym] ?? ASSET_TINTS.USDT
 
 export function mapWalletBalances(res: WalletBalancesResponse): BalanceView {
@@ -35,7 +30,7 @@ export function mapWalletAssets(res: WalletBalancesResponse): WalletAsset[] {
     sub: `${a.symbol} · ${a.network}`,
     amount: formatCryptoAmount(a.amount, a.symbol),
     value: a.fiatValue ? formatFiatAmount(a.fiatValue, res.fiatSymbol) : "—",
-    change: changeFor(a.symbol),
+    change: "—",
     tint: tintFor(a.symbol),
   }))
 }

@@ -156,3 +156,25 @@ export class SwapSameAssetError extends Error {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+/**
+ * Thrown by BlockradarSwapProvider when the provider returns HTTP 404 for the
+ * swap quote or execute endpoint, indicating that the swap feature is not active
+ * for this wallet/account (e.g. testnet limitation, feature disabled on the
+ * Blockradar account, or wallet not yet enrolled for swaps).
+ *
+ * This is structurally different from `ProviderUnavailableError` (transient
+ * network/5xx issue): a 404 means "this capability is not available on this
+ * account right now" and the caller should surface a graceful "Swap isn't
+ * available right now" message — NOT a retryable 502 bad-gateway.
+ * Code: SWAP_PROVIDER_UNAVAILABLE
+ */
+export class SwapUnavailableError extends Error {
+  readonly code = 'SWAP_PROVIDER_UNAVAILABLE' as const;
+
+  constructor(message?: string) {
+    super(message ?? 'Swap is not available on this account at this time');
+    this.name = 'SwapUnavailableError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

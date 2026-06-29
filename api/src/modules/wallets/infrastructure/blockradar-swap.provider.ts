@@ -12,6 +12,7 @@ import type {
   ExecuteSwapInput,
   ExecuteSwapOutput,
 } from '../application/ports/swap-provider.port';
+import { SwapUnavailableError } from '../../transactions/domain/execution-errors';
 
 // ---------------------------------------------------------------------------
 // Blockradar response shapes (confirmed docs.blockradar.co)
@@ -241,14 +242,29 @@ export class BlockradarSwapProvider implements ISwapProvider {
   /**
    * Translates an Axios rejection into a descriptive Error.
    * Blockradar returns error bodies with a `message` field on non-2xx responses.
+   *
+   * HTTP 404 is treated as `SwapUnavailableError` — Blockradar uses 404 to
+   * indicate the wallet is not found or not enrolled for the swap feature (e.g.
+   * testnet accounts, feature not yet activated on this Blockradar account).
+   * This is structurally different from a transient outage; the caller (web-chat /
+   * WhatsApp) should surface "Swap isn't available right now" rather than a 502.
    */
   private wrapError(operation: string, err: unknown): Error {
     const axiosErr = err as AxiosError<BlockradarErrorBody>;
+    const httpStatus = axiosErr?.response?.status;
     const body = axiosErr?.response?.data;
+
+    if (httpStatus === 404) {
+      // Blockradar 404 on swap endpoints = wallet not found or swap not active.
+      const providerMsg = body?.message ?? 'Wallet not found or not active';
+      return new SwapUnavailableError(
+        `Swap not available on this account: ${providerMsg}`,
+      );
+    }
+
     if (body?.message) {
-      const status = axiosErr.response?.status ?? 'unknown';
       return new Error(
-        `Blockradar swap ${operation} error (HTTP ${status}): ${body.message}`,
+        `Blockradar swap ${operation} error (HTTP ${httpStatus ?? 'unknown'}): ${body.message}`,
       );
     }
     return err instanceof Error ? err : new Error(String(err));

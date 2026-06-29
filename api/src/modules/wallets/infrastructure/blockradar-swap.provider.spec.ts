@@ -18,6 +18,7 @@ import type { AxiosError, AxiosResponse } from 'axios';
 
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
 import { BlockradarSwapProvider } from './blockradar-swap.provider';
+import { SwapUnavailableError } from '../../transactions/domain/execution-errors';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -288,6 +289,39 @@ describe('BlockradarSwapProvider', () => {
         'Blockradar swap getQuote error (HTTP 422): Insufficient balance',
       );
     });
+
+    it('throws SwapUnavailableError on HTTP 404 (wallet not found or swap not active)', async () => {
+      http.post.mockReturnValue(
+        throwError(() => axiosErr(404, 'Wallet not found or not active')),
+      );
+
+      const rejection = provider.getQuote({
+        addressId: ADDRESS_ID,
+        fromAssetId: FROM_ASSET_ID,
+        toAssetId: TO_ASSET_ID,
+        amount: '100',
+      });
+
+      await expect(rejection).rejects.toBeInstanceOf(SwapUnavailableError);
+      await expect(rejection).rejects.toThrow('Wallet not found or not active');
+    });
+
+    it('builds URL using masterWalletId and addressId (Blockradar UUIDs, not on-chain addresses)', async () => {
+      http.post.mockReturnValue(of(axiosOk(QUOTE_RESPONSE)));
+
+      const blockradarAddressUuid = 'br-addr-uuid-1234';
+      await provider.getQuote({
+        addressId: blockradarAddressUuid,
+        fromAssetId: FROM_ASSET_ID,
+        toAssetId: TO_ASSET_ID,
+        amount: '100',
+      });
+
+      const [url] = http.post.mock.calls[0] as [string, ...unknown[]];
+      expect(url).toBe(
+        `${BASE_URL}/wallets/${MASTER_WALLET_ID}/addresses/${blockradarAddressUuid}/swaps/quote`,
+      );
+    });
   });
 
   // ── execute ─────────────────────────────────────────────────────────────────
@@ -468,6 +502,22 @@ describe('BlockradarSwapProvider', () => {
       ).rejects.toThrow(
         'Blockradar swap execute error (HTTP 400): Invalid asset pair',
       );
+    });
+
+    it('throws SwapUnavailableError on HTTP 404 during execute', async () => {
+      http.post.mockReturnValue(
+        throwError(() => axiosErr(404, 'Wallet not found or not active')),
+      );
+
+      const rejection = provider.execute({
+        addressId: ADDRESS_ID,
+        fromAssetId: FROM_ASSET_ID,
+        toAssetId: TO_ASSET_ID,
+        amount: '100',
+        reference: 'ref-001',
+      });
+
+      await expect(rejection).rejects.toBeInstanceOf(SwapUnavailableError);
     });
   });
 });

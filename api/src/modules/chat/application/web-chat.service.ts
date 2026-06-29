@@ -53,6 +53,10 @@ import type { WalletService } from '../../wallets/application/wallet.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
 import type { BalanceService } from '../../balances/application/balance.service';
+import {
+  InsufficientBalanceError,
+  SwapUnavailableError,
+} from '../../transactions/domain/execution-errors';
 
 // ---------------------------------------------------------------------------
 // DI tokens for proposal / wallet / beneficiary services.
@@ -348,20 +352,43 @@ export class WebChatService {
           summaryText = 'KYC required';
           break;
         }
-        const { proposalId: swapPid, confirmation: swapConf } =
-          await this.proposalService.createSwapProposal({
-            userId,
-            fromAsset: intent.fromAsset,
-            toAsset: intent.toAsset,
-            amount: intent.amount,
-          });
-        outcome = {
-          kind: 'proposal',
-          txType: 'swap',
-          proposalId: swapPid,
-          confirmation: swapConf,
-        };
-        summaryText = 'Your swap proposal is ready. Please review and confirm.';
+        try {
+          const { proposalId: swapPid, confirmation: swapConf } =
+            await this.proposalService.createSwapProposal({
+              userId,
+              fromAsset: intent.fromAsset,
+              toAsset: intent.toAsset,
+              amount: intent.amount,
+            });
+          outcome = {
+            kind: 'proposal',
+            txType: 'swap',
+            proposalId: swapPid,
+            confirmation: swapConf,
+          };
+          summaryText =
+            'Your swap proposal is ready. Please review and confirm.';
+        } catch (swapErr) {
+          if (swapErr instanceof SwapUnavailableError) {
+            // Blockradar returned 404: swap not active on this account/testnet.
+            // Surface gracefully — do not 500.
+            this.logger.warn(
+              { err: swapErr.message },
+              'Swap unavailable from provider — surfacing not_supported to user',
+            );
+            outcome = { kind: 'not_supported', action: 'swap' };
+            summaryText =
+              "Swap isn't available right now. Please try again later or contact support.";
+          } else if (swapErr instanceof InsufficientBalanceError) {
+            outcome = {
+              kind: 'clarification',
+              text: swapErr.message,
+            };
+            summaryText = swapErr.message;
+          } else {
+            throw swapErr;
+          }
+        }
         break;
       }
 

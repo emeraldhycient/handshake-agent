@@ -97,9 +97,6 @@ export function WalletTab({ onQuickAction }: WalletTabProps) {
         <div className="mt-0.5 text-[34px] font-extrabold tracking-[-0.02em] tabular-nums">
           {balances.total}
         </div>
-        <div className="mt-0.5 text-[13px] text-success-bright">
-          +₦1,210 (1.7%) today
-        </div>
         <div className="mt-[18px] flex gap-[9px]">
           {actions.map(({ action, glyph, label }) => (
             <button
