@@ -99,6 +99,15 @@ export const envSchema = z.object({
   // adapter via factory).
   PAYMENTS_MOCK_MODE: z.enum(['true', 'false']).default('true'),
 
+  // --- Bank name-enquiry (BeneficiariesModule) ---
+  // When 'true' (default), MockNameEnquiry is active — deterministic fake
+  // resolved names, NO live Flutterwave calls (safe for local dev / tests and
+  // CI without real keys). Set to 'false' to activate FlutterwaveNameEnquiry
+  // (POST /accounts/resolve; requires a valid FLUTTERWAVE_SECRET_KEY).
+  // Mirrors PAYMENTS_MOCK_MODE / SANCTIONS_MOCK_MODE. BeneficiariesModule
+  // selects the adapter via factory (selectNameEnquiryProvider).
+  NAME_ENQUIRY_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+
   // --- Wallet provider (Blockradar WaaS; USDT-on-TRON) ---
   // When 'true' (default), MockWalletProvider is active — deterministic fake
   // addresses / balances / withdrawals, NO live Blockradar calls. Set to 'false'
