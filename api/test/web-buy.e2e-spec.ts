@@ -10,7 +10,7 @@
  *   3. POST /chat/proposals/:proposalId/authorize → { directiveId, nonce, expiresAt }
  *   4. POST /chat/proposals/:proposalId/execute { directiveId, nonce, pin, idempotencyKey }
  *      → { transactionId, status: 'settling', payment }
- *   5. POST /webhooks/flutterwave { event: 'charge.completed', tx_ref: idempotencyKey }
+ *   5. POST /webhooks/flutterwave { event: 'charge.completed', tx_ref: proposalId }
  *      → 200 { status: 'ok' }
  *   6. GET /transactions/:transactionId → { status: 'completed', receiptNumber, payment }
  *
@@ -351,6 +351,9 @@ describe('Web buy — e2e (authorize → execute → settle → status)', () => 
     const { directiveId, nonce } = authBody;
 
     // ── Step 3: POST /chat/proposals/:proposalId/execute ─────────────────────
+    // I8: the server derives a STABLE idempotency key from proposalId and never
+    // trusts this body value — so the provider reference (tx_ref) the webhook
+    // echoes back is the proposalId, not this uuid.
     const idempotencyKey = randomUUID();
 
     const execRes = await request(app.getHttpServer())
@@ -378,12 +381,13 @@ describe('Web buy — e2e (authorize → execute → settle → status)', () => 
     const { transactionId } = execBody;
 
     // ── Step 4: POST /webhooks/flutterwave (payment settled) ─────────────────
-    // tx_ref = idempotencyKey (how settleBuyPayment looks up the transaction)
+    // tx_ref = the engine's stable reference (= proposalId, I8) — that is what
+    // createCollection was given and what settleBuyPayment looks the txn up by.
     const flwBody = {
       event: 'charge.completed',
       data: {
         status: 'successful',
-        tx_ref: idempotencyKey,
+        tx_ref: proposalId,
         amount: 5000,
         currency: 'NGN',
         flw_ref: FAKE_FLW_REF,
