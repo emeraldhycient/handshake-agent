@@ -168,4 +168,14 @@ export interface ITransactionRepository {
     types?: string[];
     limit: number;
   }): Promise<{ rows: TransactionRecord[]; total: number }>;
+
+  /**
+   * Lists a user's transactions newest-first for the activity feed.
+   * Keyset-paginated on `id` (uuid7 — time-ordered + unique, so no timestamp-collision row loss);
+   * `cursor` is the last-seen transaction id. Returns up to `limit` records.
+   */
+  findByUserId(
+    userId: string,
+    opts: { limit: number; cursor?: string },
+  ): Promise<TransactionRecord[]>;
 }

@@ -5,6 +5,7 @@ import { Money } from "@/components/shared/money"
 import { StatusPill } from "@/components/shared/status-pill"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useBalances, useWalletAssets, useActivity } from "@/lib/query/hooks"
+import { useCapabilities } from "@/lib/query/capabilities"
 import { cn } from "@/lib/utils"
 import type { ChatAction } from "@/lib/schemas"
 import type { PageWithQuickActionProps } from "@/types/components"
@@ -34,6 +35,11 @@ export function OverviewPage({
   const balances = useBalances()
   const assets = useWalletAssets()
   const activity = useActivity()
+  const { canSwap } = useCapabilities()
+  // Swap is hidden until the crypto.swap capability is enabled in /config.
+  const heroActions = canSwap
+    ? HERO_ACTIONS
+    : HERO_ACTIONS.filter((a) => a.action !== "swap")
 
   const isLoading = balances.isLoading || assets.isLoading || activity.isLoading
   const isError = balances.isError || assets.isError || activity.isError
@@ -104,7 +110,7 @@ export function OverviewPage({
             Total balance
           </p>
           <Money
-            value="₦72,340.00"
+            value={balanceData?.total ?? "—"}
             as="div"
             className="mt-0.5 text-[40px] font-extrabold tracking-tight tabular-nums"
           />
@@ -114,7 +120,7 @@ export function OverviewPage({
         </div>
         {/* Action buttons */}
         <div className="flex gap-[10px]">
-          {HERO_ACTIONS.map(({ action, label, primary }) => (
+          {heroActions.map(({ action, label, primary }) => (
             <button
               key={action}
               type="button"

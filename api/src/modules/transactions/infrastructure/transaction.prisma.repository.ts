@@ -342,6 +342,22 @@ export class TransactionPrismaRepository implements ITransactionRepository {
     });
   }
 
+  async findByUserId(
+    userId: string,
+    opts: { limit: number; cursor?: string },
+  ): Promise<TransactionRecord[]> {
+    const rows = await this.prisma.transaction.findMany({
+      where: {
+        userId,
+        ...(opts.cursor ? { id: { lt: opts.cursor } } : {}),
+      },
+      select: TRANSACTION_SELECT,
+      orderBy: { id: 'desc' },
+      take: opts.limit,
+    });
+    return rows.map(toRecord);
+  }
+
   async updateStatus(
     id: string,
     status: TransactionStatus,

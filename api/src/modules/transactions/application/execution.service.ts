@@ -841,6 +841,11 @@ export class ExecutionService {
             asset: storedQuote.asset,
             cryptoAmount: storedQuote.cryptoAmount,
             netFiatAmount: storedQuote.fiatAmount,
+            // Required by settleSellPayout → buildSellFinalizeEntries (reads
+            // meta.fiatCurrency). The older createSettlingWithProposal path and
+            // the buy path both persist it; this atomic path must too, or the
+            // sell finalize crashes on `fiatCurrency.toLowerCase()`.
+            fiatCurrency: storedQuote.fiatCurrency,
             beneficiaryId,
             walletId: wallet.id,
             // providerRef is written atomically here because we pass idempotencyKey

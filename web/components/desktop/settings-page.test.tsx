@@ -1,64 +1,111 @@
-import { render, screen } from "@testing-library/react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi, afterEach } from "vitest"
 import { SettingsPage } from "./settings-page"
+import { useProfile } from "@/lib/query/auth"
+import type { ProfileResponse } from "@handshake-agent/contracts"
+
+// useProfile is mocked so we can drive the four branches directly; useConfig
+// (for the fiat symbol) still resolves through the real mock gateway.
+vi.mock("@/lib/query/auth", () => ({ useProfile: vi.fn() }))
+const mockedUseProfile = vi.mocked(useProfile)
+
+const profileData: ProfileResponse = {
+  email: "amara@example.com",
+  fullName: "Amara Okeke",
+  phone: "+2348011112222",
+  kycStatus: "verified",
+  kycTier: "tier_1",
+  fiatCurrency: "NGN",
+  limits: { perTxFiatMax: 50000, dailyFiatMax: 200000, dailyTxCountMax: 10 },
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const asQuery = (v: unknown) => v as any
+
+function makeWrapper() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  )
+  return wrapper
+}
 
 describe("SettingsPage", () => {
-  it("renders the page headline", () => {
-    render(<SettingsPage />)
+  afterEach(() => vi.restoreAllMocks())
+
+  it("renders a loading skeleton while the profile loads", () => {
+    mockedUseProfile.mockReturnValue(
+      asQuery({ isLoading: true, isError: false, data: undefined })
+    )
+    render(<SettingsPage />, { wrapper: makeWrapper() })
     expect(screen.getByText(/Settings/i)).toBeInTheDocument()
+    expect(screen.queryByText(/Amara Okeke/)).not.toBeInTheDocument()
   })
 
-  it("renders the profile card", () => {
-    render(<SettingsPage />)
-    expect(screen.getByText(/Amara Okeke/i)).toBeInTheDocument()
-    expect(screen.getByText(/\+234 802/)).toBeInTheDocument()
-    expect(screen.getByText(/Verified · Tier 3/i)).toBeInTheDocument()
+  it("renders an error state when the profile fails", () => {
+    mockedUseProfile.mockReturnValue(
+      asQuery({ isLoading: false, isError: true, data: undefined })
+    )
+    render(<SettingsPage />, { wrapper: makeWrapper() })
+    expect(screen.getByText(/Could not load your profile/i)).toBeInTheDocument()
   })
 
-  it("renders the Security section with Transaction PIN row", () => {
-    render(<SettingsPage />)
-    expect(screen.getByText(/Security/i)).toBeInTheDocument()
+  it("renders name, phone, tier badge, and the real daily limit", async () => {
+    mockedUseProfile.mockReturnValue(
+      asQuery({ isLoading: false, isError: false, data: profileData })
+    )
+    render(<SettingsPage />, { wrapper: makeWrapper() })
+    expect(screen.getByText("Amara Okeke")).toBeInTheDocument()
+    expect(screen.getByText("+2348011112222")).toBeInTheDocument()
+    expect(screen.getByText(/Verified · Tier 1/i)).toBeInTheDocument()
+    expect(screen.getByText(/Daily transfer limit/i)).toBeInTheDocument()
+    // Limit is formatted with the ₦ symbol once /config resolves.
+    await waitFor(() =>
+      expect(screen.getByText(/₦200,000/)).toBeInTheDocument()
+    )
+  })
+
+  it("falls back to the email when no name is present", () => {
+    mockedUseProfile.mockReturnValue(
+      asQuery({
+        isLoading: false,
+        isError: false,
+        data: { ...profileData, fullName: null, phone: null },
+      })
+    )
+    render(<SettingsPage />, { wrapper: makeWrapper() })
+    expect(screen.getByText("amara@example.com")).toBeInTheDocument()
+  })
+
+  it("renders the Security + Language sections (UI-only)", () => {
+    mockedUseProfile.mockReturnValue(
+      asQuery({ isLoading: false, isError: false, data: profileData })
+    )
+    render(<SettingsPage />, { wrapper: makeWrapper() })
     expect(screen.getByText(/Transaction PIN/i)).toBeInTheDocument()
-  })
-
-  it("renders Face ID toggle (ui/switch)", () => {
-    render(<SettingsPage />)
     expect(screen.getByRole("switch", { name: /Face ID/i })).toBeInTheDocument()
-  })
-
-  it("toggles Face ID switch on click", async () => {
-    const user = userEvent.setup()
-    render(<SettingsPage />)
-    const toggle = screen.getByRole("switch", { name: /Face ID/i })
-    // Initial state — on (checked by default)
-    expect(toggle).toBeChecked()
-    await user.click(toggle)
-    expect(toggle).not.toBeChecked()
-  })
-
-  it("renders Language section with 5 pills", () => {
-    render(<SettingsPage />)
-    expect(screen.getByText(/Language/i)).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /English/i })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /Pidgin/i })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /Hausa/i })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /Yoruba/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /Igbo/i })).toBeInTheDocument()
   })
 
-  it("selects a language pill on click", async () => {
+  it("toggles the Face ID switch and selects a language pill", async () => {
+    mockedUseProfile.mockReturnValue(
+      asQuery({ isLoading: false, isError: false, data: profileData })
+    )
     const user = userEvent.setup()
-    render(<SettingsPage />)
-    const pidginBtn = screen.getByRole("button", { name: /Pidgin/i })
-    await user.click(pidginBtn)
-    // After click, data-active should be true on Pidgin
-    expect(pidginBtn).toHaveAttribute("data-active", "true")
-  })
+    render(<SettingsPage />, { wrapper: makeWrapper() })
 
-  it("renders the Tier-3 daily limit", () => {
-    render(<SettingsPage />)
-    expect(screen.getByText(/₦5,000,000/)).toBeInTheDocument()
-    expect(screen.getByText(/Daily transfer limit/i)).toBeInTheDocument()
+    const toggle = screen.getByRole("switch", { name: /Face ID/i })
+    expect(toggle).toBeChecked()
+    await user.click(toggle)
+    expect(toggle).not.toBeChecked()
+
+    const pidgin = screen.getByRole("button", { name: /Pidgin/i })
+    await user.click(pidgin)
+    expect(pidgin).toHaveAttribute("data-active", "true")
   })
 })

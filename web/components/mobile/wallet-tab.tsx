@@ -3,6 +3,7 @@
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useBalances, useWalletAssets } from "@/lib/query/hooks"
+import { useCapabilities } from "@/lib/query/capabilities"
 import { chipLabel } from "@/lib/chat/flow"
 import type { WalletTabProps } from "@/types/components"
 import type { ChatAction } from "@/lib/schemas"
@@ -17,6 +18,11 @@ const QUICK_ACTIONS: { action: ChatAction; glyph: string; label: string }[] = [
 export function WalletTab({ onQuickAction }: WalletTabProps) {
   const balancesQuery = useBalances()
   const assetsQuery = useWalletAssets()
+  const { canSwap } = useCapabilities()
+  // Swap is hidden until the crypto.swap capability is enabled in /config.
+  const actions = canSwap
+    ? QUICK_ACTIONS
+    : QUICK_ACTIONS.filter((a) => a.action !== "swap")
 
   if (balancesQuery.isLoading || assetsQuery.isLoading) {
     return (
@@ -95,7 +101,7 @@ export function WalletTab({ onQuickAction }: WalletTabProps) {
           +₦1,210 (1.7%) today
         </div>
         <div className="mt-[18px] flex gap-[9px]">
-          {QUICK_ACTIONS.map(({ action, glyph, label }) => (
+          {actions.map(({ action, glyph, label }) => (
             <button
               key={action}
               type="button"

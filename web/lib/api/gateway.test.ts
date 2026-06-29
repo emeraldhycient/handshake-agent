@@ -12,7 +12,7 @@ describe("gateway", () => {
     }
   })
 
-  it("with default USE_MOCK=true, getBalances() deep-equals mock.getBalances()", async () => {
+  it("uses the mock gateway in tests — getBalances() deep-equals mock.getBalances()", async () => {
     const [fromGateway, fromMock] = await Promise.all([
       gateway.getBalances(),
       mock.getBalances(),
