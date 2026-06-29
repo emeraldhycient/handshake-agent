@@ -33,7 +33,6 @@ import {
   LedgerAccountType,
   ReceiptDeliveryStatus,
   SettlementOutboxStatus,
-  SupportedAsset,
   TransactionStatus,
   TravelRulePartyType,
   TravelRuleTrigger,
@@ -954,7 +953,8 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           data: {
             walletId,
             // Buy settlements always credit USDT at launch (ADR-0006).
-            asset: SupportedAsset.USDT,
+            // asset is now String (TEXT) — no Prisma enum import needed.
+            asset: 'USDT',
             // amount is the credited USDT (new snapshot after credit).
             // In a real system this would be baseBalance + cryptoAmount;
             // for the settlement skeleton we record the credited amount
@@ -1581,8 +1581,8 @@ export class SettlementPrismaRepository implements ISettlementRepository {
               beneficiaryAddress: travelRule.beneficiaryAddress,
               // beneficiaryAccountNumber: '' — on-chain sends do not have account numbers.
               beneficiaryAccountNumber: '',
-              // asset is typed as SupportedAsset in the schema; engine string matches at runtime.
-              asset: travelRule.asset as SupportedAsset,
+              // asset is String (TEXT) — any catalog asset persists without migration.
+              asset: travelRule.asset,
               amount: travelRule.cryptoAmount,
               amountFiat: travelRule.ngnEquivalent as unknown as Prisma.Decimal,
               triggeringFactor: TravelRuleTrigger.amount_threshold,

@@ -259,7 +259,8 @@ model TravelRuleData {
   beneficiaryName          String?
   beneficiaryAddress       String?
   beneficiaryAccountNumber String
-  asset                    SupportedAsset
+  /// TEXT — validated by AssetRegistry at app layer (dynamic catalog).
+  asset                    String
   /// Snapshot amounts: asset amount byte-stable as string; fiat equivalent as Decimal.
   amount                   String
   amountFiat               Decimal             @db.Decimal(38, 2)

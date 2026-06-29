@@ -31,7 +31,6 @@ import {
   DepositStatus,
   LedgerAccountType,
   ReceiptDeliveryStatus,
-  SupportedAsset,
   TransactionStatus,
   TransactionType,
 } from '../../../../generated/prisma/client';
@@ -307,8 +306,9 @@ export class DepositSettlementPrismaRepository implements IDepositSettlementRepo
         await tx.walletBalance.create({
           data: {
             walletId,
-            // Cast the incoming asset string to the Prisma enum — validated above via AssetRegistry.
-            asset: asset as SupportedAsset,
+            // asset is String (TEXT) — any Blockradar-discovered asset persists without migration.
+            // Validated above via AssetRegistry before reaching this point.
+            asset,
             amount: cryptoAmount as unknown as Prisma.Decimal,
             assetDecimals,
             source: BalanceSource.deposit_webhook,

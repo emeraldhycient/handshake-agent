@@ -442,6 +442,85 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
     expect(capturedSentMessages).toHaveLength(0);
   });
 
+  // ── TRX deposit regression (asset columns TEXT, not enum) ────────────────
+  //
+  // Before the 20260629200000_asset_columns_text_dynamic_catalog migration the
+  // `wallet_balances.asset` column was a Postgres enum (`supported_asset` with
+  // values USDT and BTC). Any Blockradar-discovered asset NOT in that enum —
+  // e.g. TRX — would cause:
+  //   "Invalid value for argument 'asset'. Expected SupportedAsset."
+  // The column is now TEXT, validated at the app layer by AssetRegistry.
+  // This test proves a TRX deposit credits WalletBalance with asset='TRX'.
+
+  it('TRX deposit: WalletBalance is created with asset="TRX" (TEXT column, not enum)', async () => {
+    // Merge TRX as a discovered asset so AssetRegistry accepts it.
+    const assetRegistry = new AssetRegistry(new StubConfigService() as never);
+    assetRegistry.mergeDiscoveredAssets([
+      {
+        assetId: 'mock-trx-asset-id',
+        symbol: 'TRX',
+        name: 'TRON',
+        network: 'TRON',
+        contractAddress: null,
+        decimals: 6,
+        isMainnet: false,
+      },
+    ]);
+
+    // Re-wire the controller with the updated registry.
+    const ps = prisma as unknown as PrismaService;
+    const config = new StubConfigService() as never;
+    const walletRepo = new WalletPrismaRepository(ps);
+    const settlementRepo = new DepositSettlementPrismaRepository(
+      ps,
+      config,
+      assetRegistry,
+    );
+    const identityRepo = new IdentityPrismaRepository(ps);
+    const identityService = new IdentityService(identityRepo);
+    const fakeExecutionService = {
+      settleSendOnChain: jest.fn().mockResolvedValue({ status: 'pending' }),
+    };
+    const trxController = new BlockradarWebhookController(
+      config,
+      walletRepo,
+      settlementRepo,
+      identityService,
+      fakeSender,
+      assetRegistry,
+      fakeExecutionService as never,
+    );
+
+    const txHash = `0x${randomUUID().replace(/-/g, '')}`;
+    const body = {
+      event: 'deposit.success',
+      data: {
+        hash: txHash,
+        amount: '50',
+        recipientAddress: DEPOSIT_ADDRESS,
+        senderAddress: 'TSenderAddress1234567890123456789',
+        asset: { symbol: 'TRX', network: { name: NETWORK_NAME } },
+        confirmations: 20,
+        status: 'confirmed',
+        id: `webhook-id-${txHash.slice(0, 8)}`,
+      },
+    };
+    const { rawBody, sig } = signBody(body);
+
+    const result = await trxController.handleWebhook(body, rawBody, sig);
+    expect(result).toEqual({ status: 'ok' });
+
+    // The regression: WalletBalance must be created with asset='TRX'
+    // (before the fix this threw "Invalid value for argument 'asset'. Expected SupportedAsset.")
+    const balance = await prisma.walletBalance.findFirst({
+      where: { walletId, asset: 'TRX' },
+      orderBy: { syncedAt: 'desc' },
+    });
+    expect(balance).not.toBeNull();
+    expect(balance!.asset).toBe('TRX');
+    expect(parseFloat(balance!.amount.toString())).toBe(50);
+  });
+
   // ── Invalid signature ──────────────────────────────────────────────────────
 
   it('invalid signature → 401, nothing written to DB', async () => {

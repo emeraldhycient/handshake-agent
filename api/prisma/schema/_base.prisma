@@ -44,14 +44,11 @@ datasource db {
 
 // --- Shared symbolic enums (mirror @handshake-agent/contracts/src/common.ts) ---
 
-/// Tradable assets. Launch scope is USDT; BTC is a forward value, flag-off until a
-/// BTC-capable custody path exists (Blockradar has no native BTC — ADR-0006).
-enum SupportedAsset {
-  USDT
-  BTC
-
-  @@map("supported_asset")
-}
+// NOTE: SupportedAsset is intentionally NOT a Prisma enum. Asset columns use
+// String (TEXT) so any asset discovered from the Blockradar catalog (USDT, BTC,
+// TRX, future assets) persists without a DB migration. Validation happens at the
+// app layer via AssetRegistry / contracts SupportedAssetSchema. This supports the
+// "dynamic asset catalog" design goal (CLAUDE.md §7).
 
 /// Fiat currencies. NGN only at launch (PRD §12).
 enum FiatCurrency {

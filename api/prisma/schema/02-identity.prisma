@@ -211,7 +211,8 @@ model Beneficiary {
   bankCode            String?
   // Crypto-address fields (type = crypto_address)
   cryptoAddress       String?
-  cryptoAsset         SupportedAsset?
+  /// TEXT — validated by AssetRegistry at app layer (dynamic catalog).
+  cryptoAsset         String?
   cryptoNetwork       Network?
   verificationStatus  VerificationStatus @default(pending)
   /// Cooling-off expiry for first crypto send; null once verified or for bank accounts.
