@@ -234,6 +234,14 @@ const stubBuyProposalOutput = (): CreateBuyProposalOutput => ({
 // ---------------------------------------------------------------------------
 
 /**
+ * Builds an InboundMessage with optional field overrides (extraction, text, etc.).
+ * Useful for tests that exercise paths other than the plain-text/agent path.
+ */
+function makeMsg(overrides: Partial<InboundMessage> = {}): InboundMessage {
+  return { ...baseMsg(), ...overrides };
+}
+
+/**
  * Extracts the text body (second argument) from the first sendText call.
  * The cast through `unknown` avoids the unsafe-member-access lint rule on
  * `mock.calls` which is typed `any[][]` in Jest's public typings.
@@ -318,12 +326,19 @@ function makeProposalService(
 
 function makeBeneficiaryService(
   defaultBeneficiary: BeneficiaryRecord | null = null,
-): jest.Mocked<Pick<BeneficiaryService, 'getDefault' | 'listForUser'>> {
+): jest.Mocked<
+  Pick<
+    BeneficiaryService,
+    'getDefault' | 'listForUser' | 'addCryptoAddress' | 'addBankAccount'
+  >
+> {
   return {
     getDefault: jest.fn().mockResolvedValue(defaultBeneficiary),
     listForUser: jest
       .fn()
       .mockResolvedValue(defaultBeneficiary ? [defaultBeneficiary] : []),
+    addCryptoAddress: jest.fn().mockResolvedValue({ id: 'ben-crypto-new-1' }),
+    addBankAccount: jest.fn().mockResolvedValue({ id: 'ben-bank-new-1' }),
   };
 }
 
@@ -503,6 +518,8 @@ function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
     requireCapability: jest.fn(),
     assetProviderId: jest.fn(),
     validateAddress: jest.fn(() => true),
+    inferNetworkForAddress: jest.fn(() => 'TRON'),
+    defaultAssetForNetwork: jest.fn(() => 'USDT'),
   } as unknown as jest.Mocked<AssetRegistry>;
 }
 
@@ -535,7 +552,10 @@ function buildService(
       Pick<HandoffTokenService, 'mintKycToken' | 'consumeKycToken'>
     >;
     beneficiaryService?: jest.Mocked<
-      Pick<BeneficiaryService, 'getDefault' | 'listForUser'>
+      Pick<
+        BeneficiaryService,
+        'getDefault' | 'listForUser' | 'addCryptoAddress' | 'addBankAccount'
+      >
     >;
     historyService?: jest.Mocked<Pick<TransactionHistoryService, 'query'>>;
     balanceService?: { getBalances: jest.Mock };
@@ -1689,5 +1709,144 @@ describe('ConversationService.handleInbound', () => {
     ).mock.calls[0][0];
     expect(ctaArg.buttonText).toBe('Download');
     expect(ctaArg.url).toContain('token=tok');
+  });
+
+  // ── Task 18: extracted image/document routing ─────────────────────────────
+
+  it('(T18) saves an extracted crypto address as a beneficiary and confirms', async () => {
+    const assetRegistry = makeAssetRegistry();
+    (assetRegistry.inferNetworkForAddress as jest.Mock).mockReturnValue('TRON');
+    (assetRegistry.defaultAssetForNetwork as jest.Mock).mockReturnValue('USDT');
+    const beneficiaryService = makeBeneficiaryService();
+    (beneficiaryService.addCryptoAddress as jest.Mock).mockResolvedValue({
+      id: 'b1',
+    });
+
+    const { svc, sender, agentPort } = buildService({
+      assetRegistry,
+      beneficiaryService,
+    });
+
+    await svc.handleInbound(
+      makeMsg({
+        extraction: {
+          kind: 'crypto_address',
+          address: 'TXYZAbcdefghij1234567890abcd',
+        },
+      }),
+    );
+
+    expect(beneficiaryService.addCryptoAddress).toHaveBeenCalledWith(
+      expect.objectContaining({ network: 'TRON', asset: 'USDT' }),
+    );
+    expect(sender.sendText).toHaveBeenCalledWith(
+      FIXED_FROM,
+      expect.stringMatching(/payout address/i),
+    );
+    // Agent must NOT run for an extraction message
+    expect(agentPort.run).not.toHaveBeenCalled();
+  });
+
+  it('(T18) replies with a polite failure when the address is not a supported network', async () => {
+    const assetRegistry = makeAssetRegistry();
+    (assetRegistry.inferNetworkForAddress as jest.Mock).mockReturnValue(null);
+    const beneficiaryService = makeBeneficiaryService();
+
+    const { svc, sender } = buildService({ assetRegistry, beneficiaryService });
+
+    await svc.handleInbound(
+      makeMsg({ extraction: { kind: 'crypto_address', address: 'garbage' } }),
+    );
+
+    expect(beneficiaryService.addCryptoAddress).not.toHaveBeenCalled();
+    expect(sender.sendText).toHaveBeenCalledWith(
+      FIXED_FROM,
+      expect.stringMatching(/valid wallet/i),
+    );
+  });
+
+  it('(T18) does not run the agent for an extraction message with kind=none', async () => {
+    const { svc, agentPort, sender } = buildService();
+
+    await svc.handleInbound(makeMsg({ extraction: { kind: 'none' } }));
+
+    expect(agentPort.run).not.toHaveBeenCalled();
+    expect(sender.sendText).toHaveBeenCalledWith(
+      FIXED_FROM,
+      expect.stringMatching(/couldn't find/i),
+    );
+  });
+
+  it('(T18) sends the KYC handoff when an unlinked contact sends an image with an extracted address', async () => {
+    const identityService = makeIdentityService({
+      resolveByChannel: jest.fn().mockResolvedValue({
+        kind: 'contact',
+        contact: {
+          id: 'contact-id-img-1',
+          primaryChannel: 'whatsapp',
+          primaryAddress: FIXED_FROM,
+          status: 'active',
+          linkedUserId: null,
+        },
+      }),
+    });
+
+    const convRepo = makeConvRepo(null);
+    convRepo.findByContactId.mockResolvedValue(null);
+    convRepo.create.mockResolvedValue({
+      ...baseConv(),
+      userId: null,
+      contactId: 'contact-id-img-1',
+    });
+
+    const beneficiaryService = makeBeneficiaryService();
+    const handoffTokenService = makeHandoffTokenService();
+
+    const { svc, sender } = buildService({
+      identityService,
+      convRepo,
+      beneficiaryService,
+      handoffTokenService,
+    });
+
+    await svc.handleInbound(
+      makeMsg({
+        extraction: {
+          kind: 'crypto_address',
+          address: 'TXYZAbcdefghij1234567890abcd',
+        },
+      }),
+    );
+
+    // KYC handoff must be triggered — sendCtaUrl (CTA branch) OR sendText with KYC content (text fallback)
+    const ctaCalled = (sender.sendCtaUrl as jest.Mock).mock.calls.length > 0;
+    const kycText = (sender.sendText as jest.Mock).mock.calls.some(
+      ([, text]: [string, string]) => /verify|identity|link|kyc/i.test(text),
+    );
+    expect(ctaCalled || kycText).toBe(true);
+    // Beneficiary must NOT be saved for an unlinked contact
+    expect(beneficiaryService.addCryptoAddress).not.toHaveBeenCalled();
+  });
+
+  it('(T18) echoes bank details without auto-saving when no bankCode is present', async () => {
+    const beneficiaryService = makeBeneficiaryService();
+
+    const { svc, sender } = buildService({ beneficiaryService });
+
+    await svc.handleInbound(
+      makeMsg({
+        extraction: {
+          kind: 'bank_account',
+          accountNumber: '0123456789',
+          bankName: 'GTBank',
+        },
+      }),
+    );
+
+    expect(beneficiaryService.addBankAccount).not.toHaveBeenCalled();
+    expect(sender.sendText).toHaveBeenCalledWith(
+      FIXED_FROM,
+      expect.stringMatching(/0123456789|account/i),
+    );
   });
 });

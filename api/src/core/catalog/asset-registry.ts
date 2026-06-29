@@ -285,6 +285,35 @@ export class AssetRegistry {
     return re ? re.test(address) : false;
   }
 
+  /**
+   * Returns the id of the first registered network whose `addressPattern`
+   * matches the given address, or `null` when no network matches.
+   *
+   * Reuses the pre-compiled RegExps built in the constructor — no per-call
+   * `new RegExp` construction. No hardcoded network/asset literals.
+   */
+  inferNetworkForAddress(address: string): string | null {
+    for (const [id, re] of this.addressRegExps.entries()) {
+      if (re.test(address)) return id;
+    }
+    return null;
+  }
+
+  /**
+   * Returns the symbol of the first enabled crypto asset whose default network
+   * is the given `networkId`, or `null` when no such asset is registered.
+   *
+   * Derives everything from the registry data — no hardcoded literals.
+   */
+  defaultAssetForNetwork(networkId: string): string | null {
+    const asset = Object.values(this.catalog.assets).find((a) => {
+      if (!a.enabled || a.kind !== 'crypto') return false;
+      const enabled = a.networks.filter((n) => this.isNetworkEnabled(n));
+      return enabled[0] === networkId;
+    });
+    return asset ? asset.symbol : null;
+  }
+
   // ── Capability flags ──────────────────────────────────────────────────
 
   /**

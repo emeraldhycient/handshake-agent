@@ -681,6 +681,62 @@ function makeResponse(outcome: WebChatResponse["outcome"]): WebChatResponse {
   }
 }
 
+// ─── sendVoiceToAgent ─────────────────────────────────────────────────────────
+
+describe("sendVoiceToAgent", () => {
+  it("sendVoiceToAgent appends the transcript as the user bubble + the outcome", async () => {
+    const proposalId = "33333333-3333-3333-3333-333333333333"
+    const voiceApi = vi.fn().mockResolvedValue({
+      reply: { text: "ok" },
+      transcript: "buy 50000 naira of usdt",
+      conversationId: "11111111-1111-1111-1111-111111111111",
+      messageId: "22222222-2222-2222-2222-222222222222",
+      outcome: {
+        kind: "proposal",
+        txType: "buy",
+        proposalId,
+        confirmation: {
+          proposalId,
+          asset: "USDT",
+          fiatAmount: "50000",
+          fiatCurrency: "NGN",
+          cryptoAmount: "31.25",
+          fxRate: "1600",
+          spreadBps: 150,
+          processingFeeBps: 50,
+          processingFeeAmount: "250",
+          totalFiat: "50250",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        },
+      },
+    })
+    const store = createChatStore({ schedule: (fn) => fn(), voiceApi })
+    await store
+      .getState()
+      .sendVoiceToAgent("m", new Blob(["x"], { type: "audio/webm" }))
+    const thread = store.getState().threads.m
+    const user = thread.find((m) => m.role === "user")
+    expect(user?.kind === "text" ? user.text : undefined).toBe(
+      "buy 50000 naira of usdt"
+    )
+    expect(thread.some((m) => m.kind === "quote")).toBe(true)
+    expect(store.getState().pendingProposalId).toBe(proposalId)
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("sendVoiceToAgent error path → fallback error message + typing cleared", async () => {
+    const voiceApi = vi.fn().mockRejectedValue(new Error("Network error"))
+    const store = createChatStore({ schedule: (fn) => fn(), voiceApi })
+    await store
+      .getState()
+      .sendVoiceToAgent("m", new Blob(["x"], { type: "audio/webm" }))
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") expect(last.text).toContain("trouble")
+    expect(store.getState().typing.m).toBe(false)
+  })
+})
+
 describe("sendToAgent", () => {
   let store: ReturnType<typeof createChatStore>
   let mockApi: ReturnType<

@@ -10,6 +10,8 @@
  * mapping lives in `whatsapp-inbound.mapper.ts`.
  */
 
+import type { DocumentExtractionResult } from '@handshake-agent/contracts';
+
 /** DI token for the inbound message handler. */
 export const INBOUND_HANDLER = Symbol('INBOUND_HANDLER');
 
@@ -26,12 +28,16 @@ export type InboundMessage = {
   phoneNumberId: string;
   /** The sender's WhatsApp display name; undefined when Meta omits contacts. */
   waName: string | undefined;
-  /** The raw text body the user sent. */
+  /** The raw text body the user sent. Text is required; image/doc events set a placeholder. */
   text: string;
   /** Unix timestamp in seconds as a string. */
   timestamp: string;
   /** Fixed channel tag so consumers can route across channels. */
   channel: 'whatsapp';
+  /** 'voice' when the text was produced by transcribing an audio message. */
+  inputModality?: 'text' | 'voice';
+  /** Present for image/document messages — a candidate to route (not money). */
+  extraction?: DocumentExtractionResult;
 };
 
 /**

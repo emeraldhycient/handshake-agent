@@ -159,6 +159,12 @@ export interface ChatComposerProps {
   onSubmit: () => void
   onChip: (a: ChatAction) => void
   density: Density
+  recording: boolean
+  recordSeconds: number
+  canRecord: boolean
+  onRecordStart: () => void
+  onRecordStop: () => void
+  onRecordCancel: () => void
 }
 
 /** 12.4 */

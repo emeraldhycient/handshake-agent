@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { fetchChatHistory } from "./chat"
+import { fetchChatHistory, sendVoiceNote } from "./chat"
 import { api } from "./client"
 
 vi.mock("./client", () => ({ api: { get: vi.fn(), post: vi.fn() } }))
@@ -49,5 +49,24 @@ describe("fetchChatHistory", () => {
   it("throws when the response fails schema validation (UX gate)", async () => {
     getMock.mockResolvedValue({ data: { messages: "not-an-array" } })
     await expect(fetchChatHistory()).rejects.toThrow()
+  })
+})
+
+describe("sendVoiceNote", () => {
+  it("posts the blob as multipart and parses the response", async () => {
+    ;(api.post as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: {
+        reply: { text: "ok" },
+        outcome: { kind: "clarification", text: "hi" },
+        conversationId: "11111111-1111-1111-1111-111111111111",
+        messageId: "22222222-2222-2222-2222-222222222222",
+        transcript: "hello",
+      },
+    })
+    const res = await sendVoiceNote(new Blob(["x"], { type: "audio/webm" }))
+    expect(res.transcript).toBe("hello")
+    const [url, body] = (api.post as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toBe("/chat/voice")
+    expect(body).toBeInstanceOf(FormData)
   })
 })

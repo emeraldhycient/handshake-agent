@@ -53,6 +53,10 @@ LangGraph.js **v1** (`@langchain/langgraph@1.4.4`, `@langchain/core@1.2.0`, `@la
 - Do not instantiate a checkpointer here (would re-couple to the DB). Keep the `ToolGateway` binding swappable for later extraction to a standalone service.
 - ESM-under-CJS: always `import` these packages (tsc downlevels); never hand-write `require()`.
 
+## The media module (`modules/media/`)
+
+Exposes `TRANSCRIPTION_PORT` (speech→text via OpenAI-compatible Whisper; mocked by default via `TRANSCRIPTION_MOCK_MODE=true`, real adapter on `false` with `TRANSCRIPTION_API_KEY`) and `DOCUMENT_EXTRACTION_PORT` (image/document→structured data via Claude vision; mocked by default via `MEDIA_EXTRACTION_MODE=true`, real adapter reuses `ANTHROPIC_API_KEY`). Integrated into the web `POST /chat/voice` endpoint (transcribe→WebChatService) and WhatsApp inbound multimedia handler (`WhatsAppInboundService.ingest`: audio→transcript→agent intent; image/document→extract→beneficiary save). Config keys (TRANSCRIPTION_MODEL, TRANSCRIPTION_BASE_URL, MEDIA_EXTRACTION_MODEL) live in `.env.example` and are validated at boot.
+
 ## Commands
 
 ```bash

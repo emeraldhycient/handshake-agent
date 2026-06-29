@@ -15,6 +15,7 @@ import {
   ExecuteProposalResponseSchema,
   TransactionStatusResponseSchema,
   ChatHistoryResponseSchema,
+  VoiceChatResponseSchema,
 } from "@handshake-agent/contracts"
 import type {
   ChatMessageRequest,
@@ -24,6 +25,7 @@ import type {
   ExecuteProposalResponse,
   TransactionStatusResponse,
   ChatHistoryResponse,
+  VoiceChatResponse,
 } from "@handshake-agent/contracts"
 import { api } from "./client"
 
@@ -91,4 +93,21 @@ export async function fetchChatHistory(params?: {
 }): Promise<ChatHistoryResponse> {
   const { data } = await api.get("/chat/messages", { params })
   return ChatHistoryResponseSchema.parse(data)
+}
+
+/**
+ * Uploads a recorded voice note to POST /chat/voice. Lets axios set the
+ * multipart boundary (do not hand-set Content-Type). Response parsed via schema.
+ */
+export async function sendVoiceNote(blob: Blob): Promise<VoiceChatResponse> {
+  const form = new FormData()
+  // Filename extension hints the server mime; the Blob's type is authoritative.
+  const ext = blob.type.includes("mp4")
+    ? "mp4"
+    : blob.type.includes("ogg")
+      ? "ogg"
+      : "webm"
+  form.append("audio", blob, `voice-note.${ext}`)
+  const { data } = await api.post("/chat/voice", form)
+  return VoiceChatResponseSchema.parse(data)
 }

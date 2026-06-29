@@ -121,6 +121,13 @@ export const ChatHistoryQuerySchema = z.object({
 })
 export type ChatHistoryQuery = z.infer<typeof ChatHistoryQuerySchema>
 
+// Voice-note chat response — the web POST /chat/voice envelope. Identical to the
+// text response plus the transcript the STT produced (shown as the user's bubble).
+export const VoiceChatResponseSchema = WebChatResponseSchema.extend({
+  transcript: z.string(),
+})
+export type VoiceChatResponse = z.infer<typeof VoiceChatResponseSchema>
+
 // Shared payment sub-object reused by execute and status responses.
 const PaymentDetailsSchema = z.object({
   accountNumber: z.string(),

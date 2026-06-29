@@ -20,6 +20,7 @@ import { ConfirmSheet } from "@/components/chat/overlays/confirm-sheet"
 import { PinPad } from "@/components/chat/overlays/pin-pad"
 import { SuccessOverlay } from "@/components/chat/overlays/success-overlay"
 import { FocusTrap } from "@/components/shared/focus-trap"
+import { useVoiceRecorder } from "@/hooks/use-voice-recorder"
 import type { MobileShellProps, MobileTabId } from "@/types/components"
 import type { ChatMessage, TicketOption, ChatAction } from "@/lib/schemas"
 
@@ -30,6 +31,7 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
   // Rehydrate the thread from server history on mount (authenticated only).
   useChatHistory("m", store)
   const [tab, setTab] = useState<MobileTabId>("chat")
+  const recorder = useVoiceRecorder()
 
   function handleConfirm(message: ChatMessage) {
     if (message.kind !== "quote") return
@@ -87,6 +89,15 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
               }
             }}
             density="mobile"
+            recording={recorder.status === "recording"}
+            recordSeconds={recorder.seconds}
+            canRecord={recorder.status !== "unsupported"}
+            onRecordStart={() => void recorder.start()}
+            onRecordStop={async () => {
+              const blob = await recorder.stop()
+              if (blob) void state.sendVoiceToAgent("m", blob)
+            }}
+            onRecordCancel={() => recorder.cancel()}
           />
         </>
       )}

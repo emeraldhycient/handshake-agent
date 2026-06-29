@@ -17,6 +17,7 @@ import { SuccessOverlay } from "@/components/chat/overlays/success-overlay"
 import { FocusTrap } from "@/components/shared/focus-trap"
 import { BrandMark } from "@/components/shared"
 import { cn } from "@/lib/utils"
+import { useVoiceRecorder } from "@/hooks/use-voice-recorder"
 import type { ChatRailProps } from "@/types/components"
 import type { ChatMessage, TicketOption } from "@/lib/schemas"
 
@@ -42,6 +43,7 @@ export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
   const authStatus = useAuthStore((s) => s.status)
   // Rehydrate the thread from server history on mount (authenticated only).
   useChatHistory("d", store)
+  const recorder = useVoiceRecorder()
 
   // ── Quote confirm ──────────────────────────────────────────────────────────
   function handleConfirm(message: ChatMessage) {
@@ -116,6 +118,15 @@ export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
           }
         }}
         density="desktop"
+        recording={recorder.status === "recording"}
+        recordSeconds={recorder.seconds}
+        canRecord={recorder.status !== "unsupported"}
+        onRecordStart={() => void recorder.start()}
+        onRecordStop={async () => {
+          const blob = await recorder.stop()
+          if (blob) void state.sendVoiceToAgent("d", blob)
+        }}
+        onRecordCancel={() => recorder.cancel()}
       />
 
       {/* ── Confirm overlay (surface-guarded) ─────────────────────────────── */}

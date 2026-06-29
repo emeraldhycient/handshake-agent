@@ -8,8 +8,10 @@ import { useChatHistory } from "./use-chat-history"
 
 vi.mock("@/lib/api/chat", () => ({
   fetchChatHistory: vi.fn(),
-  // chat-store imports sendChatMessage; keep it present so the module mock is complete.
+  // chat-store imports sendChatMessage + sendVoiceNote; keep both present so the
+  // module mock is complete (createChatStore reads defaultSendVoiceNote at init).
   sendChatMessage: vi.fn(),
+  sendVoiceNote: vi.fn(),
 }))
 const fetchMock = fetchChatHistory as unknown as ReturnType<typeof vi.fn>
 

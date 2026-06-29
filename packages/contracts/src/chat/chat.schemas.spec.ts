@@ -6,6 +6,7 @@ import {
   ChatHistoryItemSchema,
   ChatHistoryResponseSchema,
   ChatHistoryQuerySchema,
+  VoiceChatResponseSchema,
   AuthorizeProposalResponseSchema,
   ExecuteProposalRequestSchema,
   ExecuteProposalResponseSchema,
@@ -396,6 +397,21 @@ describe('ChatHistoryQuerySchema', () => {
 
   it('rejects a non-UUID before-cursor', () => {
     expect(() => ChatHistoryQuerySchema.parse({ before: 'nope' })).toThrow()
+  })
+})
+
+describe('VoiceChatResponseSchema', () => {
+  it('VoiceChatResponseSchema requires a transcript on top of the chat envelope', () => {
+    const base = {
+      reply: { text: 'ok' },
+      outcome: { kind: 'clarification', text: 'hi' },
+      conversationId: '11111111-1111-1111-1111-111111111111',
+      messageId: '22222222-2222-2222-2222-222222222222',
+    }
+    expect(() => VoiceChatResponseSchema.parse(base)).toThrow()
+    expect(
+      VoiceChatResponseSchema.parse({ ...base, transcript: 'buy usdt' }).transcript,
+    ).toBe('buy usdt')
   })
 })
 

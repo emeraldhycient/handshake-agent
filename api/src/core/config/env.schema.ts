@@ -140,6 +140,16 @@ export const envSchema = z.object({
   // AdminTokenGuard with a session/role guard — this env var can then be removed.
   ADMIN_API_TOKEN: z.string().optional().default(''),
 
+  // --- Media (speech-to-text + document extraction) ---
+  // Mock adapters are the only active ones until real keys are provided (mirror KYC_MOCK_MODE).
+  TRANSCRIPTION_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+  TRANSCRIPTION_API_KEY: z.string().optional().default(''),
+  TRANSCRIPTION_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
+  TRANSCRIPTION_MODEL: z.string().min(1).default('whisper-1'),
+  MEDIA_EXTRACTION_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+  // Vision extraction reuses ANTHROPIC_API_KEY; only the model id is separate.
+  MEDIA_EXTRACTION_MODEL: z.string().min(1).default('claude-opus-4-8'),
+
   // --- Auth (web sessions) ---
   // JWT_SECRET is a SECRET — empty disables token issuance (fail-closed in
   // TokenService), mirroring ADMIN_API_TOKEN. TTLs live in the config JSON layer

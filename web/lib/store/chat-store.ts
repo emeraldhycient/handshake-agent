@@ -38,9 +38,13 @@ import type {
   ChatSurface,
   ConfirmPayload,
 } from "@/lib/schemas"
-import { sendChatMessage as defaultSendChatMessage } from "@/lib/api/chat"
+import {
+  sendChatMessage as defaultSendChatMessage,
+  sendVoiceNote as defaultSendVoiceNote,
+} from "@/lib/api/chat"
 import type {
   WebChatResponse,
+  VoiceChatResponse,
   ChatMessageRequest,
   ChatHistoryItem,
   AuthorizeProposalResponse,
@@ -226,6 +230,12 @@ interface ChatState {
    * card once the user adds or picks a payout destination.
    */
   resolveBeneficiary(surface: ChatSurface, beneficiaryId: string): Promise<void>
+  /**
+   * Transcribe a recorded voice note (POST /chat/voice) and route the transcript
+   * through the same agent path as text: appends the transcript as the user
+   * bubble + the mapped outcome. Never appends a receipt (§3.1).
+   */
+  sendVoiceToAgent(surface: ChatSurface, blob: Blob): Promise<void>
   setInput(surface: ChatSurface, value: string): void
   openConfirm(surface: ChatSurface, payload: ConfirmPayload): void
   cancel(): void
@@ -261,6 +271,11 @@ interface CreateChatStoreOptions {
   chatApi?: (body: ChatMessageRequest) => Promise<WebChatResponse>
   authorizeApi?: ChatApis["authorizeApi"]
   executeApi?: ChatApis["executeApi"]
+  /**
+   * Inject a mock voice API function for testing `sendVoiceToAgent` without
+   * module-level mocking. Defaults to `sendVoiceNote` from `@/lib/api/chat`.
+   */
+  voiceApi?: (blob: Blob) => Promise<VoiceChatResponse>
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -276,6 +291,7 @@ interface CreateChatStoreOptions {
 export function createChatStore(options: CreateChatStoreOptions = {}) {
   const schedule: Scheduler = options.schedule ?? ((fn) => setTimeout(fn, 680))
   const chatApiFn = options.chatApi ?? defaultSendChatMessage
+  const voiceApiFn = options.voiceApi ?? defaultSendVoiceNote
 
   // Lazy-import the real API functions so tests can inject mocks without
   // bundling the axios client. These are only called when the injected
@@ -413,10 +429,7 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
         // Shared mapping — identical to the reload/hydration path so a live reply
         // and a reloaded reply render the same. Never produces a receipt (§3.1).
         const { messages, proposalId } = mapOutcomeToMessages(outcome, nextId)
-        if (proposalId) {
-          // Stash proposalId for the future execute phase.
-          set({ pendingProposalId: proposalId })
-        }
+        const pendingProposalId = proposalId ?? undefined
 
         set((s) => ({
           threads: {
@@ -425,6 +438,53 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           },
           typing: { ...s.typing, [surface]: false },
           chips: { ...s.chips, [surface]: startChips() },
+          ...(pendingProposalId ? { pendingProposalId } : {}),
+        }))
+      } catch {
+        const errMsg: ChatMessage = {
+          id: nextId(),
+          role: "assistant",
+          kind: "text",
+          text: "I'm having trouble reaching the assistant right now — please try again.",
+        }
+        set((s) => ({
+          threads: {
+            ...s.threads,
+            [surface]: [...s.threads[surface], errMsg],
+          },
+          typing: { ...s.typing, [surface]: false },
+          chips: { ...s.chips, [surface]: startChips() },
+        }))
+      }
+    },
+
+    async sendVoiceToAgent(surface, blob) {
+      set((s) => ({
+        chips: { ...s.chips, [surface]: [] },
+        typing: { ...s.typing, [surface]: true },
+      }))
+
+      try {
+        const response = await voiceApiFn(blob)
+        const userMsg: ChatMessage = {
+          id: nextId(),
+          role: "user",
+          kind: "text",
+          text: response.transcript,
+        }
+        const { messages, proposalId } = mapOutcomeToMessages(
+          response.outcome,
+          nextId
+        )
+        const pendingProposalId = proposalId ?? undefined
+        set((s) => ({
+          threads: {
+            ...s.threads,
+            [surface]: [...s.threads[surface], userMsg, ...messages],
+          },
+          typing: { ...s.typing, [surface]: false },
+          chips: { ...s.chips, [surface]: startChips() },
+          ...(pendingProposalId ? { pendingProposalId } : {}),
         }))
       } catch {
         const errMsg: ChatMessage = {

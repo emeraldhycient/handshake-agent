@@ -20,6 +20,7 @@ import { TransactionsModule } from '../transactions/transactions.module';
 import { BalancesModule } from '../balances/balances.module';
 import { WebAuthModule } from '../auth/auth.module';
 import { AuthModule } from '../../core/auth/auth.module';
+import { MediaModule } from '../media/media.module';
 
 import { ProposalService } from '../transactions/application/proposal.service';
 import { WalletService } from '../wallets/application/wallet.service';
@@ -45,6 +46,7 @@ import {
   WEB_CHAT_BALANCE_SERVICE,
 } from './application/web-chat.service';
 import { ChatController } from './presentation/chat.controller';
+import { VoiceChatController } from './presentation/voice-chat.controller';
 import {
   ProposalController,
   TransactionStatusController,
@@ -64,9 +66,11 @@ import {
     BalancesModule, // exports BalanceService
     WebAuthModule, // exports JwtAuthGuard
     AuthModule, // core auth — exports SessionService (device-bound step-up, §3.4)
+    MediaModule, // exports TRANSCRIPTION_PORT
   ],
   controllers: [
     ChatController,
+    VoiceChatController,
     ProposalController,
     // History + statement routes must precede TransactionStatusController so the
     // literal `transactions/history` path resolves before `transactions/:id`.

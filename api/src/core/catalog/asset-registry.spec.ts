@@ -387,6 +387,33 @@ describe('AssetRegistry', () => {
     });
   });
 
+  // ── inferNetworkForAddress() ─────────────────────────────────────────────
+
+  describe('inferNetworkForAddress()', () => {
+    it('returns the network id when the address matches a registered pattern', () => {
+      // Valid TRC-20 address: T + 33 Base58 chars (from validateAddress tests)
+      expect(
+        registry.inferNetworkForAddress('TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE'),
+      ).toBe('TRON');
+    });
+
+    it('returns null for a gibberish address that matches no pattern', () => {
+      expect(registry.inferNetworkForAddress('not-an-address')).toBeNull();
+    });
+  });
+
+  // ── defaultAssetForNetwork() ──────────────────────────────────────────────
+
+  describe('defaultAssetForNetwork()', () => {
+    it('returns the symbol of the first enabled asset on the given network', () => {
+      expect(registry.defaultAssetForNetwork('TRON')).toBe('USDT');
+    });
+
+    it('returns null for an unknown network id', () => {
+      expect(registry.defaultAssetForNetwork('unknown')).toBeNull();
+    });
+  });
+
   // ── formatFiat() ─────────────────────────────────────────────────────────
   // These assertions must be deterministic across all Node ICU builds
   // (small-icu in Alpine/Docker CI, full ICU in local dev). The formatter

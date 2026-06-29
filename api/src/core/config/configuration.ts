@@ -332,6 +332,45 @@ export interface StatementConfig {
   timezoneOffsetMinutes: number;
 }
 
+/** Voice note upload limits. Admin-tunable later (DB-admin AppSetting layer, §7). */
+export interface VoiceConfig {
+  /**
+   * Maximum allowed voice note upload size in bytes.
+   * Default: 15 MB. Enforced by the voice endpoint (Task 9) before transcription.
+   * Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   */
+  maxUploadBytes: number;
+  /**
+   * Allowed MIME types for voice note uploads.
+   * Enforced by the voice endpoint (Task 9) before transcription.
+   * Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   */
+  allowedMimeTypes: string[];
+}
+
+/** WhatsApp media size limits. Admin-tunable later (DB-admin AppSetting layer, §7). */
+export interface WhatsAppMediaConfig {
+  /**
+   * Maximum allowed WhatsApp media payload size in bytes.
+   * Default: 25 MB (Meta's stated per-message media limit).
+   * Enforced by the WhatsApp media client (Task 14) before download/processing.
+   * Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   */
+  maxMediaBytes: number;
+}
+
+/**
+ * Media configuration (voice note uploads + WhatsApp media).
+ * All values are admin-tunable later via the DB-admin AppSetting layer (§7).
+ */
+export interface MediaConfig {
+  voice: VoiceConfig;
+  whatsapp: WhatsAppMediaConfig;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
@@ -344,6 +383,7 @@ export interface AppConfig {
   beneficiary: BeneficiaryConfig;
   reconciliation: ReconciliationConfig;
   statement: StatementConfig;
+  media: MediaConfig;
 }
 
 export default (): AppConfig => ({
@@ -536,5 +576,28 @@ export default (): AppConfig => ({
     maxWindowDays: 365,
     rowCap: 100,
     timezoneOffsetMinutes: 60,
+  },
+  media: {
+    voice: {
+      // 15 MB — reasonable ceiling for a voice note before transcription.
+      // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+      // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+      maxUploadBytes: 15_000_000,
+      // Accepted voice note MIME types. Task 9 (POST /chat/voice) validates against this list.
+      allowedMimeTypes: [
+        'audio/webm',
+        'audio/mp4',
+        'audio/mpeg',
+        'audio/ogg',
+        'audio/wav',
+      ],
+    },
+    whatsapp: {
+      // 25 MB — Meta's per-message media limit (audio/image/document/video).
+      // Enforced by the WhatsApp media client (Task 14) before download/processing.
+      // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+      // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+      maxMediaBytes: 25_000_000,
+    },
   },
 });

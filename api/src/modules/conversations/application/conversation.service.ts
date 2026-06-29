@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { DocumentExtractionResult } from '@handshake-agent/contracts';
 
 import type {
   IInboundHandler,
@@ -177,6 +178,28 @@ export class ConversationService implements IInboundHandler {
         correlationId,
       });
       messageId = message.id;
+
+      // Image/document path: a vision-extracted candidate (never an agent run, never a money move).
+      // Must come BEFORE agentPort.run so the agent never sees extraction messages (§3.1).
+      if (msg.extraction) {
+        const replyText = await this.handleExtractedMedia(
+          msg.extraction,
+          identity,
+          msg,
+        );
+        const reply = await this.replyRepo.create({
+          conversationId: conversation.id,
+          messageId: message.id,
+          text: replyText,
+          correlationId,
+        });
+        await this.sender.sendText(msg.fromAddress, replyText);
+        await this.replyRepo.updateStatus(reply.id, 'sent', {
+          sentAt: new Date(),
+        });
+        await this.messageRepo.updateStatus(message.id, 'processed');
+        return;
+      }
 
       // Step 5: Run the NLU agent — emits a validated structured intent, never moves money.
       const intent = await this.agentPort.run(msg.text);
@@ -1076,6 +1099,111 @@ export class ConversationService implements IInboundHandler {
       `Expires at: ${c.expiresAt}\n` +
       `Reply CONFIRM to proceed.`
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: extracted-media handler (Task 18)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Routes a vision-extracted candidate (address / bank account / none) to the
+   * appropriate persistence path.
+   *
+   * SACROSANCT (§3.1): this is a candidate the vision model proposes — it never
+   * moves money. `addCryptoAddress` validates the address and applies a
+   * cooling-off; any actual send/sell still requires the full proposal → confirm
+   * → PIN path. The agent is NOT run for extraction messages.
+   */
+  private async handleExtractedMedia(
+    extraction: DocumentExtractionResult,
+    identity: ResolvedIdentity,
+    msg: InboundMessage,
+  ): Promise<string> {
+    // Guard: all paths that persist data require a linked, verified user.
+    const guard = this.requireActiveUser(identity, msg.fromAddress);
+    if ('needsKyc' in guard) {
+      return this.sendKycHandoff(guard.channelAddress);
+    }
+    if ('needsReverify' in guard) {
+      return this.reverifyFallbackReply();
+    }
+    if ('reply' in guard) {
+      return guard.reply;
+    }
+    const { user } = guard;
+
+    if (extraction.kind === 'crypto_address') {
+      // Network is carried by the extraction (vision model named it) or inferred
+      // server-side via the registry pattern match — never hardcoded here.
+      const network =
+        extraction.network ??
+        this.assetRegistry.inferNetworkForAddress(extraction.address);
+      if (!network) {
+        return 'I read an address but it does not look like a valid wallet for a network we support.';
+      }
+      const asset = this.assetRegistry.defaultAssetForNetwork(network);
+      if (!asset) {
+        return 'I read a wallet address but we do not support that network yet.';
+      }
+      try {
+        await this.beneficiaryService.addCryptoAddress({
+          userId: user.id,
+          address: extraction.address,
+          network,
+          asset,
+          label: 'From image',
+        });
+      } catch {
+        return 'I read a wallet address but could not validate it. Please double-check and try again.';
+      }
+      const networkMeta = this.assetRegistry.network(network);
+      const masked = this.maskAddress(extraction.address);
+      return (
+        `Saved this wallet (${networkMeta.displayName}, ${masked}) as a payout address. ` +
+        `Say "send 10 USDT to it" to send.`
+      );
+    }
+
+    if (extraction.kind === 'bank_account') {
+      if (extraction.bankCode) {
+        // We have enough to run name-enquiry — save the beneficiary immediately.
+        try {
+          const saved = await this.beneficiaryService.addBankAccount({
+            userId: user.id,
+            accountNumber: extraction.accountNumber,
+            bankCode: extraction.bankCode,
+            // The BeneficiaryService overwrites this with the bank-resolved name.
+            accountName: extraction.bankName ?? '',
+            label: extraction.bankName ?? 'From image',
+          });
+          const displayName = saved.accountHolderName ?? 'your account';
+          return `Saved ${displayName} (•••${extraction.accountNumber.slice(-4)}) as a payout account.`;
+        } catch {
+          return (
+            'I read bank details but could not verify the account. ' +
+            'Please add it from the payout-account form.'
+          );
+        }
+      }
+      // No bankCode — echo the partial details so the user knows what was read,
+      // but do NOT save (name-enquiry requires a bankCode).
+      const bank = extraction.bankName ? ` at ${extraction.bankName}` : '';
+      return (
+        `I read account •••${extraction.accountNumber.slice(-4)}${bank}. ` +
+        `Add it as a payout account and I'll use it.`
+      );
+    }
+
+    // kind === 'none'
+    return "I couldn't find a wallet address or bank details in that image.";
+  }
+
+  /**
+   * Masks a crypto address for display: first 4 … last 4 characters.
+   * Short addresses (≤ 10 chars) are shown as-is — defensive for unusual cases.
+   */
+  private maskAddress(addr: string): string {
+    return addr.length <= 10 ? addr : `${addr.slice(0, 4)}…${addr.slice(-4)}`;
   }
 
   // ---------------------------------------------------------------------------
