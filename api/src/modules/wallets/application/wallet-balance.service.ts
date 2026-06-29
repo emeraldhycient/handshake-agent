@@ -28,6 +28,7 @@ export class WalletBalanceService {
 
   async getBalances(userId: string): Promise<WalletBalancesResponse> {
     const fiat = this.registry.defaultFiat();
+    const fiatSymbol = this.registry.fiat(fiat).symbol;
     const symbols = this.registry.enabledCryptoAssets();
 
     const assets = await Promise.all(
@@ -69,7 +70,12 @@ export class WalletBalanceService {
     );
     const totalFiatValue = (totalMinor / 100).toFixed(2);
 
-    return { fiatCurrency: fiat as FiatCurrency, totalFiatValue, assets };
+    return {
+      fiatCurrency: fiat as FiatCurrency,
+      fiatSymbol,
+      totalFiatValue,
+      assets,
+    };
   }
 
   async getDepositAddress(

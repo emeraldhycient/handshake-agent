@@ -8,6 +8,7 @@ describe("WalletBalancesResponseSchema", () => {
   it("parses a valid balances payload", () => {
     const ok = {
       fiatCurrency: "NGN",
+      fiatSymbol: "₦",
       totalFiatValue: "49150.00",
       assets: [
         {

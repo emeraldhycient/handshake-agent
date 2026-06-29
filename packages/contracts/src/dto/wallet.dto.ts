@@ -18,6 +18,9 @@ export type WalletAssetBalance = z.infer<typeof WalletAssetBalanceSchema>;
 
 export const WalletBalancesResponseSchema = z.object({
   fiatCurrency: FiatCurrencySchema,
+  // Display symbol for fiatCurrency (e.g. "₦") — reference data from the
+  // catalog so the FE money formatter needs no separate /config lookup.
+  fiatSymbol: z.string(),
   totalFiatValue: FiatAmountSchema,
   assets: z.array(WalletAssetBalanceSchema),
 });

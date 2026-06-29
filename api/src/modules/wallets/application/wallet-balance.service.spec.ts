@@ -16,6 +16,7 @@ const makeRegistry = () =>
     }),
     defaultNetworkFor: () => 'TRON',
     network: (id: string) => ({ id, displayName: 'TRON (TRC-20)' }),
+    fiat: () => ({ symbol: '₦', decimals: 2 }),
   }) as unknown as AssetRegistry;
 
 // Two enabled assets on distinct networks — exercises the total summation.
@@ -32,6 +33,7 @@ const makeMultiRegistry = () =>
     }),
     defaultNetworkFor: (s: string) => (s === 'USDT' ? 'TRON' : 'BTC'),
     network: (id: string) => ({ id, displayName: id }),
+    fiat: () => ({ symbol: '₦', decimals: 2 }),
   }) as unknown as AssetRegistry;
 
 const wallet = {
@@ -63,6 +65,7 @@ describe('WalletBalanceService', () => {
 
     const out = await svc.getBalances('u1');
     expect(out.fiatCurrency).toBe('NGN');
+    expect(out.fiatSymbol).toBe('₦');
     expect(out.assets).toHaveLength(1);
     expect(out.assets[0]).toMatchObject({
       symbol: 'USDT',
