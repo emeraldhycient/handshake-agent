@@ -1,6 +1,7 @@
 "use client"
 
 import { cn } from "@/lib/utils"
+import { formatNGN } from "@/lib/format"
 import { StatusPill } from "@/components/shared/status-pill"
 import { DetailRows } from "@/components/shared/detail-rows"
 import { useTransactionStatus } from "@/lib/query/hooks"
@@ -21,7 +22,6 @@ export function PayInCard({
   bankName,
   providerRef,
   amount,
-  currency,
   status,
   density,
   className,
@@ -32,7 +32,9 @@ export function PayInCard({
     { label: "Account number", value: accountNumber },
     { label: "Bank", value: bankName },
     { label: "Reference", value: providerRef },
-    { label: "Amount", value: `${currency} ${amount}` },
+    // Product is NGN-only; formatNGN renders "₦20,000.00" consistent with the
+    // quote/receipt cards (the `currency` prop is always "NGN").
+    { label: "Amount", value: formatNGN(amount) },
   ]
 
   const isPending = status === "pending" || status === "settling"
