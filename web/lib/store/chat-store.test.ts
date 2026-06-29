@@ -926,12 +926,14 @@ describe("sendToAgent", () => {
     const last = store.getState().threads.m.at(-1)!
     expect(last.kind).toBe("balance")
     if (last.kind === "balance") {
-      expect(last.total).toContain("₦16,800.00")
+      // total prefixes the outcome's fiatCurrency code (not a hardcoded ₦ symbol)
+      expect(last.total).toContain("NGN")
+      expect(last.total).toContain("16800.00")
       expect(last.assets).toHaveLength(1)
       expect(last.assets[0].sym).toBe("USDT")
       expect(last.assets[0].name).toBe("Tether USD")
       expect(last.assets[0].amount).toBe("10.5 USDT")
-      expect(last.assets[0].value).toBe("₦16,800.00")
+      expect(last.assets[0].value).toBe("NGN 16800.00")
     }
     expect(store.getState().typing.m).toBe(false)
   })

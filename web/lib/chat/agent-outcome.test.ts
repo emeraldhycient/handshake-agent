@@ -152,4 +152,29 @@ describe("mapOutcomeToMessages", () => {
       expect(messages[0].text).toContain("not supported")
     }
   })
+
+  it("maps currency_not_live (RWF) to a friendly assistant text mentioning the currency", () => {
+    const { messages, proposalId } = mapOutcomeToMessages(
+      { kind: "currency_not_live", currency: "RWF" },
+      makeIder()
+    )
+    expect(proposalId).toBeNull()
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ role: "assistant", kind: "text" })
+    if (messages[0].kind === "text") {
+      expect(messages[0].text).toContain("RWF")
+      expect(messages[0].text).toContain("NGN")
+    }
+  })
+
+  it("maps currency_not_live (GHS) to a text that names GHS specifically", () => {
+    const { messages } = mapOutcomeToMessages(
+      { kind: "currency_not_live", currency: "GHS" },
+      makeIder()
+    )
+    expect(messages).toHaveLength(1)
+    if (messages[0].kind === "text") {
+      expect(messages[0].text).toContain("GHS")
+    }
+  })
 })

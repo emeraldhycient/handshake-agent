@@ -158,18 +158,21 @@ export function mapOutcomeToMessages(
       beneficiaryType: outcome.beneficiaryType,
     })
   } else if (outcome.kind === "balance") {
+    // Use the outcome's fiatCurrency rather than hardcoding NGN, so the card
+    // renders correctly if a non-NGN currency is ever live (CLAUDE.md §3.6).
+    const fiatCcy = outcome.fiatCurrency
     messages.push({
       id: makeId(),
       role: "assistant",
       kind: "balance",
       total: outcome.totalFiatValue
-        ? "≈ " + formatNGN(outcome.totalFiatValue)
+        ? "≈ " + fiatCcy + " " + outcome.totalFiatValue
         : "—",
       assets: outcome.balances.map((b) => ({
         sym: b.asset,
         name: ASSET_NAMES[b.asset] ?? b.asset,
         amount: `${b.amount} ${b.asset}`,
-        value: b.fiatValue ? formatNGN(b.fiatValue) : "—",
+        value: b.fiatValue ? fiatCcy + " " + b.fiatValue : "—",
         tint: ASSET_TINTS[b.asset] ?? ASSET_TINTS.NGN,
       })),
     })
@@ -179,6 +182,13 @@ export function mapOutcomeToMessages(
       role: "assistant",
       kind: "text",
       text: "That's not supported yet.",
+    })
+  } else if (outcome.kind === "currency_not_live") {
+    messages.push({
+      id: makeId(),
+      role: "assistant",
+      kind: "text",
+      text: `We settle in NGN for now — ${outcome.currency} isn't live yet. Want to continue in NGN?`,
     })
   } else if (outcome.kind === "transactions") {
     messages.push({
