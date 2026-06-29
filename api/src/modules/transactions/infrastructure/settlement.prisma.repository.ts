@@ -41,6 +41,7 @@ import {
 import type { Prisma } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { hmacHex } from '../../../core/crypto/hmac';
+import { acquireAccountAdvisoryLocks } from '../../../core/crypto/advisory-lock';
 import {
   buildBuyLedgerEntries,
   buildSellReserveEntries,
@@ -900,6 +901,28 @@ export class SettlementPrismaRepository implements ISettlementRepository {
 
     return this.prisma.$transaction(
       async (tx) => {
+        // ── 0. Advisory locks — serialize concurrent settlements to same accounts ─
+        // Acquires pg_advisory_xact_lock for every account this buy settlement
+        // touches so concurrent buys for the same user cannot race on sequence
+        // allocation and produce P2002 (unique constraint on accountType, accountId,
+        // sequence). Locks are auto-released at transaction commit/rollback.
+        await acquireAccountAdvisoryLocks(tx, [
+          {
+            accountType: 'processor_settlement',
+            accountId: ACCOUNT_IDS.NGN_PROCESSOR,
+          },
+          {
+            accountType: 'treasury_reserve',
+            accountId: ACCOUNT_IDS.NGN_TREASURY,
+          },
+          { accountType: 'platform_float', accountId: ACCOUNT_IDS.NGN_FEES },
+          { accountType: 'user_wallet', accountId: walletId },
+          {
+            accountType: 'treasury_reserve',
+            accountId: ACCOUNT_IDS.USDT_TREASURY,
+          },
+        ]);
+
         // ── 1. Read current account states (inside transaction for isolation) ─
         // Cast the interactive tx client to PrismaService for our helper —
         // both have the same Prisma model API at runtime (safe boundary cast).
@@ -1047,10 +1070,12 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         return { receiptNumber };
       },
       {
-        // Serializable isolation guards the ledger-sequence reads (balanceAfter)
-        // against phantom reads under concurrent settlements. Receipt number is
-        // now sequence-derived (nextval), so isolation is defence-in-depth here.
-        isolationLevel: 'Serializable',
+        // ReadCommitted (Postgres default) — the advisory lock acquired at the
+        // START of this transaction serializes concurrent settlements for the
+        // same account. SSI (Serializable) can roll back the loser instead of
+        // blocking it, manifesting as P2002 when Prisma retries. The advisory
+        // lock + ReadCommitted pairing avoids both P2002 and SSI rollback.
+        isolationLevel: 'ReadCommitted',
       },
     );
   }
@@ -1126,6 +1151,15 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         // ── c. Upsert velocity counters atomically (V1) ───────────────────────
         await writeVelocityIncrementsInSettle(tx, velocityIncrement);
 
+        // ── c2. Advisory locks — serialize concurrent sell reserves to same account ─
+        await acquireAccountAdvisoryLocks(tx, [
+          { accountType: 'user_wallet', accountId: walletId },
+          {
+            accountType: 'clearing',
+            accountId: ACCOUNT_IDS.USDT_SELL_CLEARING,
+          },
+        ]);
+
         // ── d. Read sell reserve account states inside the tx ─────────────────
         // Cast the interactive tx client to PrismaService for our helper —
         // both have the same Prisma model API at runtime (safe boundary cast).
@@ -1166,9 +1200,9 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         return created;
       },
       {
-        // Serializable isolation prevents balanceAfter sequence races when
-        // multiple sell executes run concurrently for the same user.
-        isolationLevel: 'Serializable',
+        // ReadCommitted — the advisory lock (c2 above) serializes concurrent
+        // sell reserves for the same account without SSI rollback risk.
+        isolationLevel: 'ReadCommitted',
       },
     );
 
@@ -1186,6 +1220,12 @@ export class SettlementPrismaRepository implements ISettlementRepository {
     const { transactionId, walletId, cryptoAmount, asset, now } = input;
 
     await this.prisma.$transaction(async (tx) => {
+      // Advisory locks — serialize concurrent sell reserves for the same account.
+      await acquireAccountAdvisoryLocks(tx, [
+        { accountType: 'user_wallet', accountId: walletId },
+        { accountType: 'clearing', accountId: ACCOUNT_IDS.USDT_SELL_CLEARING },
+      ]);
+
       // WN-4: pass asset so crypto leg states are read with the correct currency key.
       const accountStates = await fetchSellReserveAccountStates(
         tx as unknown as PrismaService,
@@ -1250,6 +1290,26 @@ export class SettlementPrismaRepository implements ISettlementRepository {
 
     return this.prisma.$transaction(
       async (tx) => {
+        // ── 0. Advisory locks — serialize concurrent sell finalizations ────────
+        await acquireAccountAdvisoryLocks(tx, [
+          {
+            accountType: 'clearing',
+            accountId: ACCOUNT_IDS.USDT_SELL_CLEARING,
+          },
+          {
+            accountType: 'treasury_reserve',
+            accountId: ACCOUNT_IDS.USDT_TREASURY,
+          },
+          {
+            accountType: 'treasury_reserve',
+            accountId: ACCOUNT_IDS.NGN_TREASURY,
+          },
+          {
+            accountType: 'processor_settlement',
+            accountId: ACCOUNT_IDS.NGN_PAYOUT,
+          },
+        ]);
+
         // ── 1. Read current account states ────────────────────────────────────
         // WN-4: pass asset so crypto leg states are read with the correct currency key.
         const accountStates = await fetchSellFinalizeAccountStates(
@@ -1362,7 +1422,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
 
         return { receiptNumber };
       },
-      { isolationLevel: 'Serializable' },
+      { isolationLevel: 'ReadCommitted' },
     );
   }
 
@@ -1380,6 +1440,15 @@ export class SettlementPrismaRepository implements ISettlementRepository {
 
     await this.prisma.$transaction(
       async (tx) => {
+        // ── 0. Advisory locks — serialize concurrent sell refunds for same account ─
+        await acquireAccountAdvisoryLocks(tx, [
+          {
+            accountType: 'clearing',
+            accountId: ACCOUNT_IDS.USDT_SELL_CLEARING,
+          },
+          { accountType: 'user_wallet', accountId: walletId },
+        ]);
+
         // ── 1. Read current account states ────────────────────────────────────
         // WN-4: pass asset so crypto leg states are read with the correct currency key.
         const accountStates = await fetchSellRefundAccountStates(
@@ -1451,7 +1520,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           // which Prisma's $transaction prevents in normal operation.
         }
       },
-      { isolationLevel: 'Serializable' },
+      { isolationLevel: 'ReadCommitted' },
     );
   }
 
@@ -1517,6 +1586,15 @@ export class SettlementPrismaRepository implements ISettlementRepository {
 
         // ── c. Upsert velocity counters atomically (V1) ───────────────────────
         await writeVelocityIncrementsInSettle(tx, velocityIncrement);
+
+        // ── c2. Advisory locks — serialize concurrent send reserves for same account ─
+        await acquireAccountAdvisoryLocks(tx, [
+          { accountType: 'user_wallet', accountId: walletId },
+          {
+            accountType: 'clearing',
+            accountId: ACCOUNT_IDS.USDT_SEND_CLEARING,
+          },
+        ]);
 
         // ── d. Read send reserve account states inside the tx ─────────────────
         // WN-4: pass asset so crypto leg states are read with the correct currency key.
@@ -1596,9 +1674,9 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         return created;
       },
       {
-        // Serializable isolation prevents balanceAfter sequence races when
-        // multiple send executes run concurrently for the same user.
-        isolationLevel: 'Serializable',
+        // ReadCommitted — the advisory lock (c2 above) serializes concurrent
+        // send reserves for the same account without SSI rollback risk.
+        isolationLevel: 'ReadCommitted',
       },
     );
 
@@ -1633,6 +1711,19 @@ export class SettlementPrismaRepository implements ISettlementRepository {
 
     return this.prisma.$transaction(
       async (tx) => {
+        // ── 0. Advisory locks — serialize concurrent send finalizations ────────
+        await acquireAccountAdvisoryLocks(tx, [
+          {
+            accountType: 'clearing',
+            accountId: ACCOUNT_IDS.USDT_SEND_CLEARING,
+          },
+          {
+            accountType: 'treasury_reserve',
+            accountId: ACCOUNT_IDS.USDT_NETWORK_OUT,
+          },
+          { accountType: 'treasury_reserve', accountId: ACCOUNT_IDS.USDT_FEES },
+        ]);
+
         // ── 1. Read current account states ────────────────────────────────────
         // WN-4: pass asset so crypto leg states are read with the correct currency key.
         const accountStates = await fetchSendFinalizeAccountStates(
@@ -1754,7 +1845,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
 
         return { receiptNumber };
       },
-      { isolationLevel: 'Serializable' },
+      { isolationLevel: 'ReadCommitted' },
     );
   }
 
@@ -1780,6 +1871,15 @@ export class SettlementPrismaRepository implements ISettlementRepository {
 
     await this.prisma.$transaction(
       async (tx) => {
+        // ── 0. Advisory locks — serialize concurrent send refunds for same account ─
+        await acquireAccountAdvisoryLocks(tx, [
+          {
+            accountType: 'clearing',
+            accountId: ACCOUNT_IDS.USDT_SEND_CLEARING,
+          },
+          { accountType: 'user_wallet', accountId: walletId },
+        ]);
+
         // ── 1. Read current account states ────────────────────────────────────
         // WN-4: pass asset so crypto leg states are read with the correct currency key.
         const accountStates = await fetchSendRefundAccountStates(
@@ -1843,7 +1943,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           // prior attempt. Safe to ignore (same logic as settleSellRefundAtomic).
         }
       },
-      { isolationLevel: 'Serializable' },
+      { isolationLevel: 'ReadCommitted' },
     );
   }
 
@@ -1910,6 +2010,12 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         // ── c. Upsert velocity counters atomically ────────────────────────────
         await writeVelocityIncrementsInSettle(tx, velocityIncrement);
 
+        // ── c2. Advisory locks — serialize concurrent swap reserves for same account ─
+        await acquireAccountAdvisoryLocks(tx, [
+          { accountType: 'user_wallet', accountId: walletId },
+          { accountType: 'clearing', accountId: ACCOUNT_IDS.SWAP_CLEARING },
+        ]);
+
         // ── d. Read swap reserve account states inside the tx ─────────────────
         const accountStates = await fetchSwapReserveAccountStates(
           tx as unknown as PrismaService,
@@ -1945,7 +2051,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
 
         return toTransactionRecord(created);
       },
-      { isolationLevel: 'Serializable' },
+      { isolationLevel: 'ReadCommitted' },
     );
 
     return { txn: row };
@@ -1977,6 +2083,14 @@ export class SettlementPrismaRepository implements ISettlementRepository {
 
     return this.prisma.$transaction(
       async (tx) => {
+        // ── 0. Advisory locks — serialize concurrent swap finalizations ────────
+        await acquireAccountAdvisoryLocks(tx, [
+          { accountType: 'clearing', accountId: ACCOUNT_IDS.SWAP_CLEARING },
+          { accountType: 'treasury_reserve', accountId: ACCOUNT_IDS.SWAP_OUT },
+          { accountType: 'treasury_reserve', accountId: ACCOUNT_IDS.SWAP_IN },
+          { accountType: 'user_wallet', accountId: walletId },
+        ]);
+
         // ── 1. Read account states ─────────────────────────────────────────────
         const accountStates = await fetchSwapFinalizeAccountStates(
           tx as unknown as PrismaService,
@@ -2079,7 +2193,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
 
         return { receiptNumber };
       },
-      { isolationLevel: 'Serializable' },
+      { isolationLevel: 'ReadCommitted' },
     );
   }
 
@@ -2103,6 +2217,12 @@ export class SettlementPrismaRepository implements ISettlementRepository {
 
     await this.prisma.$transaction(
       async (tx) => {
+        // ── 0. Advisory locks — serialize concurrent swap refunds for same account ─
+        await acquireAccountAdvisoryLocks(tx, [
+          { accountType: 'clearing', accountId: ACCOUNT_IDS.SWAP_CLEARING },
+          { accountType: 'user_wallet', accountId: walletId },
+        ]);
+
         // ── 1. Read current account states ────────────────────────────────────
         const accountStates = await fetchSwapRefundAccountStates(
           tx as unknown as PrismaService,
@@ -2161,7 +2281,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           // Duplicate unique constraint — compensation already recorded.
         }
       },
-      { isolationLevel: 'Serializable' },
+      { isolationLevel: 'ReadCommitted' },
     );
   }
 }

@@ -37,6 +37,7 @@ import {
 import type { Prisma } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { hmacHex } from '../../../core/crypto/hmac';
+import { acquireAccountAdvisoryLocks } from '../../../core/crypto/advisory-lock';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import {
   LedgerAccountType as DomainLedgerAccountType,
@@ -223,7 +224,26 @@ export class DepositSettlementPrismaRepository implements IDepositSettlementRepo
 
     return this.prisma.$transaction(
       async (tx) => {
+        // ── 0. Advisory locks — serialize concurrent deposits to same account ──
+        // Must be acquired BEFORE any read so the serialized transaction sees
+        // the committed state of any concurrent deposit that beat it to the lock.
+        // pg_advisory_xact_lock blocks until no other transaction holds the lock
+        // for this account; the lock auto-releases at commit/rollback.
+        //
+        // We use READ COMMITTED isolation (see outer $transaction options) and
+        // rely on the advisory lock — not SSI — for sequence serializability.
+        // Under Serializable isolation the advisory lock is redundant with SSI
+        // but SSI can roll back the loser instead of blocking it, which is
+        // observable as a P2002 when Prisma retries the transaction. The advisory
+        // lock + READ COMMITTED pairing avoids both the P2002 and the SSI rollback.
+        await acquireAccountAdvisoryLocks(tx, [
+          { accountType: 'user_wallet', accountId: walletId },
+          { accountType: 'clearing', accountId: CLEARING_ACCOUNT_ID },
+        ]);
+
         // ── 1. Idempotency check ─────────────────────────────────────────────
+        // Checked AFTER acquiring the lock so we see the committed state of any
+        // concurrent deposit for the same txHash that beat us to the lock.
         const existing = await tx.depositConfirmation.findUnique({
           where: { txHash },
           select: { id: true },
@@ -389,10 +409,14 @@ export class DepositSettlementPrismaRepository implements IDepositSettlementRepo
         };
       },
       {
-        // Serializable isolation guards the ledger-sequence reads (balanceAfter)
-        // against phantom reads under concurrent deposits. The receipt number is
-        // now sequence-derived (nextval), so isolation is defence-in-depth here.
-        isolationLevel: 'Serializable',
+        // ReadCommitted (Postgres default) — the advisory lock acquired at the
+        // START of this transaction serializes concurrent deposits for the same
+        // account, so reads inside see committed state without needing SSI.
+        // Switching from Serializable: SSI can roll back the loser transaction
+        // instead of blocking it, which manifests as P2002 when Prisma retries.
+        // The advisory lock provides the same serializability guarantee without
+        // the rollback risk.
+        isolationLevel: 'ReadCommitted',
       },
     );
   }
