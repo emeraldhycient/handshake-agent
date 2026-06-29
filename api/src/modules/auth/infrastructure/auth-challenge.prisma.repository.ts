@@ -17,25 +17,44 @@ export class AuthChallengePrismaRepository implements IAuthChallengeRepository {
     expiresAt: Date;
   }): Promise<void> {
     const { userId, type, challengeHash, expiresAt } = input;
+    const now = new Date();
+    const issuedAt = now;
 
-    // For otp_email re-issues we preserve the existing attemptCount so that
-    // repeated login/request calls cannot grant unlimited fresh 5-guess windows.
-    // For email_verification we reset to 0 (opaque token, low abuse surface).
-    const updateData =
-      type === 'otp_email'
-        ? { challengeHash, expiresAt, verifiedAt: null, issuedAt: new Date() }
+    // attemptCount carry-over policy (security invariant — see the port doc):
+    // - email_verification: always reset to 0 on re-issue (opaque, low abuse).
+    // - otp_email: preserve the counter ONLY while the prior window is still
+    //   ACTIVE (unexpired AND unconsumed). Preserving it across an expired or
+    //   consumed window would let an attacker exhaust the guess budget once and
+    //   permanently lock out any known email (C2). Re-issuing after expiry or
+    //   consumption — or when no prior row exists — starts a clean window at 0.
+    // Read + upsert run in one transaction so the active-window decision and the
+    // write cannot interleave with a concurrent re-issue for the same key.
+    await this.prisma.$transaction(async (tx) => {
+      let preserveAttemptCount = false;
+      if (type === 'otp_email') {
+        const prior = await tx.authChallenge.findUnique({
+          where: { userId_type: { userId, type } },
+          select: { expiresAt: true, verifiedAt: true },
+        });
+        preserveAttemptCount =
+          prior !== null && prior.verifiedAt === null && prior.expiresAt > now;
+      }
+
+      const update = preserveAttemptCount
+        ? { challengeHash, expiresAt, verifiedAt: null, issuedAt }
         : {
             challengeHash,
             expiresAt,
             attemptCount: 0,
             verifiedAt: null,
-            issuedAt: new Date(),
+            issuedAt,
           };
 
-    await this.prisma.authChallenge.upsert({
-      where: { userId_type: { userId, type } },
-      create: { userId, type, challengeHash, expiresAt },
-      update: updateData,
+      await tx.authChallenge.upsert({
+        where: { userId_type: { userId, type } },
+        create: { userId, type, challengeHash, expiresAt },
+        update,
+      });
     });
   }
 

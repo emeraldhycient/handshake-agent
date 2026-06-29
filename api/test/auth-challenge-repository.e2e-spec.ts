@@ -98,6 +98,81 @@ describe('AuthChallengePrismaRepository (integration, Testcontainers Postgres)',
     expect(reissued?.attemptCount).toBe(2);
   });
 
+  it('upsert for otp_email RESETS attemptCount when re-issued after the prior EXPIRED', async () => {
+    // C2 regression: preserving attemptCount across an EXPIRED challenge lets an
+    // attacker permanently lock out any known email — exhaust the 5-guess budget
+    // on one OTP, wait for it to expire, and every OTP the victim re-issues is
+    // born already at the cap (findActiveByUserAndType returns it, attemptCount
+    // >= max → InvalidOtp forever). The guess budget must only carry over while
+    // the window is still ACTIVE; an expired window resets to 0.
+    const userId = await seedUser();
+    const now = new Date();
+
+    // Issue an OTP that is already expired, then exhaust its guess budget.
+    await repo.upsert({
+      userId,
+      type: 'otp_email',
+      challengeHash: 'expired',
+      expiresAt: new Date(now.getTime() - 1_000),
+    });
+    const expiredRow = await prisma.authChallenge.findUnique({
+      where: { userId_type: { userId, type: 'otp_email' } },
+      select: { id: true },
+    });
+    await repo.incrementAttempt(expiredRow!.id);
+    await repo.incrementAttempt(expiredRow!.id);
+    await repo.incrementAttempt(expiredRow!.id);
+
+    // Victim re-issues a fresh login OTP after the prior window has expired.
+    await repo.upsert({
+      userId,
+      type: 'otp_email',
+      challengeHash: 'fresh',
+      expiresAt: new Date(now.getTime() + 60_000),
+    });
+
+    const reissued = await repo.findActiveByUserAndType(
+      userId,
+      'otp_email',
+      now,
+    );
+    expect(reissued?.challengeHash).toBe('fresh');
+    // Budget reset — the prior window had expired, so this is a clean window.
+    expect(reissued?.attemptCount).toBe(0);
+  });
+
+  it('upsert for otp_email RESETS attemptCount when re-issued after the prior was CONSUMED', async () => {
+    // A consumed challenge (successful login) must not bleed its counter into the
+    // next login attempt — only a still-active, unconsumed window preserves it.
+    const userId = await seedUser();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 60_000);
+
+    await repo.upsert({
+      userId,
+      type: 'otp_email',
+      challengeHash: 'c1',
+      expiresAt,
+    });
+    const active = await repo.findActiveByUserAndType(userId, 'otp_email', now);
+    await repo.incrementAttempt(active!.id);
+    await repo.consume(active!.id, now);
+
+    await repo.upsert({
+      userId,
+      type: 'otp_email',
+      challengeHash: 'c2',
+      expiresAt,
+    });
+    const reissued = await repo.findActiveByUserAndType(
+      userId,
+      'otp_email',
+      now,
+    );
+    expect(reissued?.challengeHash).toBe('c2');
+    expect(reissued?.attemptCount).toBe(0);
+  });
+
   it('upsert for email_verification resets attemptCount to 0 on re-issue', async () => {
     // email_verification tokens are opaque + long-lived (not short numeric OTPs),
     // so resetting the counter on re-issue is safe and expected.
