@@ -12,6 +12,7 @@ import type {
   DepositView,
   TicketsView,
   TicketOption,
+  TransactionsView,
   ReceiptView,
   PayInView,
   SettlingView,
@@ -122,6 +123,12 @@ export type ReceiveCardProps = DepositView & {
 export type TicketsCardProps = TicketsView & {
   density: Density
   onSelect: (opt: TicketOption) => void
+  className?: string
+}
+
+/** Transaction-history list card. */
+export type TransactionsCardProps = TransactionsView & {
+  density: Density
   className?: string
 }
 
