@@ -13,6 +13,7 @@ import {
   WEB_CHAT_PROPOSAL_SERVICE,
   WEB_CHAT_WALLET_SERVICE,
   WEB_CHAT_BENEFICIARY_SERVICE,
+  WEB_CHAT_HISTORY_SERVICE,
 } from './web-chat.service';
 import { AGENT_PORT } from '../../agent/application/ports/agent.port';
 import { IDENTITY_REPOSITORY } from '../../identity/application/ports/identity.repository.port';
@@ -34,6 +35,7 @@ const fakeProposalService = {
 };
 const fakeWalletService = { getOrProvisionNetworkWallet: jest.fn() };
 const fakeBeneficiaryService = { getDefault: jest.fn() };
+const fakeHistoryService = { query: jest.fn() };
 const fakeIdentityRepo = { loadUser: jest.fn() };
 const fakeConversationRepo = {
   findByUserId: jest.fn(),
@@ -135,6 +137,7 @@ describe('WebChatService', () => {
           provide: WEB_CHAT_BENEFICIARY_SERVICE,
           useValue: fakeBeneficiaryService,
         },
+        { provide: WEB_CHAT_HISTORY_SERVICE, useValue: fakeHistoryService },
         { provide: IDENTITY_REPOSITORY, useValue: fakeIdentityRepo },
         { provide: CONVERSATION_REPOSITORY, useValue: fakeConversationRepo },
         { provide: MESSAGE_REPOSITORY, useValue: fakeMessageRepo },
@@ -232,6 +235,33 @@ describe('WebChatService', () => {
       expect(result.outcome).toEqual({ kind: 'not_supported', action });
     },
   );
+
+  // ── query_transactions → transactions outcome ─────────────────────────────
+
+  it('query_transactions intent → transactions outcome', async () => {
+    fakeHistoryService.query.mockResolvedValue({
+      window: { from: 'F', to: 'T', label: 'This month' },
+      items: [],
+      totalCount: 0,
+      truncated: false,
+      downloadUrl:
+        'https://api.example.com/transactions/statement/download?token=tok',
+    });
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'query_transactions',
+      period: 'this_month',
+      download: false,
+    });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'my transactions this month',
+    });
+    expect(result.outcome.kind).toBe('transactions');
+    expect(fakeHistoryService.query).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ period: 'this_month' }),
+    );
+  });
 
   // ── buy_crypto, unverified → needs_kyc ────────────────────────────────────
 

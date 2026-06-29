@@ -23,6 +23,7 @@ import { AuthModule } from '../../core/auth/auth.module';
 import { ProposalService } from '../transactions/application/proposal.service';
 import { WalletService } from '../wallets/application/wallet.service';
 import { BeneficiaryService } from '../beneficiaries/application/beneficiary.service';
+import { TransactionHistoryService } from '../transactions/application/transaction-history.service';
 
 import { CONVERSATION_REPOSITORY } from '../conversations/application/ports/conversation.repository.port';
 import { MESSAGE_REPOSITORY } from '../conversations/application/ports/message.repository.port';
@@ -38,6 +39,7 @@ import {
   WEB_CHAT_PROPOSAL_SERVICE,
   WEB_CHAT_WALLET_SERVICE,
   WEB_CHAT_BENEFICIARY_SERVICE,
+  WEB_CHAT_HISTORY_SERVICE,
 } from './application/web-chat.service';
 import { ChatController } from './presentation/chat.controller';
 import {
@@ -74,6 +76,10 @@ import {
     { provide: WEB_CHAT_PROPOSAL_SERVICE, useExisting: ProposalService },
     { provide: WEB_CHAT_WALLET_SERVICE, useExisting: WalletService },
     { provide: WEB_CHAT_BENEFICIARY_SERVICE, useExisting: BeneficiaryService },
+    {
+      provide: WEB_CHAT_HISTORY_SERVICE,
+      useExisting: TransactionHistoryService,
+    },
     // Conversation repository bindings — ConversationsModule does not export these
     // tokens so ChatModule provides its own instances backed by the same Prisma classes.
     // PrismaService is global (registered via PrismaModule in AppModule) so it is

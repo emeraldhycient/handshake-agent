@@ -48,6 +48,7 @@ import {
 import type { ProposalService } from '../../transactions/application/proposal.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
 
 // ---------------------------------------------------------------------------
 // DI tokens for proposal / wallet / beneficiary services.
@@ -59,6 +60,7 @@ export const WEB_CHAT_WALLET_SERVICE = Symbol('WEB_CHAT_WALLET_SERVICE');
 export const WEB_CHAT_BENEFICIARY_SERVICE = Symbol(
   'WEB_CHAT_BENEFICIARY_SERVICE',
 );
+export const WEB_CHAT_HISTORY_SERVICE = Symbol('WEB_CHAT_HISTORY_SERVICE');
 
 // ---------------------------------------------------------------------------
 // Input type
@@ -95,6 +97,8 @@ export class WebChatService {
     private readonly walletService: WalletService,
     @Inject(WEB_CHAT_BENEFICIARY_SERVICE)
     private readonly beneficiaryService: BeneficiaryService,
+    @Inject(WEB_CHAT_HISTORY_SERVICE)
+    private readonly historyService: TransactionHistoryService,
     @Inject(IDENTITY_REPOSITORY)
     private readonly identityRepo: IIdentityRepository,
     @Inject(CONVERSATION_REPOSITORY)
@@ -271,6 +275,21 @@ export class WebChatService {
           confirmation: snc,
         };
         summaryText = 'Your send proposal is ready. Please review and confirm.';
+        break;
+      }
+
+      case 'query_transactions': {
+        const result = await this.historyService.query(userId, {
+          period: intent.period,
+          from: intent.from,
+          to: intent.to,
+          txType: intent.txType,
+        });
+        outcome = { kind: 'transactions', ...result };
+        summaryText =
+          result.totalCount > 0
+            ? `Found ${result.totalCount} transaction(s) for ${result.window.label}.`
+            : `No transactions for ${result.window.label}.`;
         break;
       }
 
