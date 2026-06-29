@@ -375,4 +375,33 @@ export class TransactionPrismaRepository implements ITransactionRepository {
       },
     });
   }
+
+  async listByUserInRange(input: {
+    userId: string;
+    from: Date;
+    to: Date;
+    types?: string[];
+    limit: number;
+  }): Promise<{ rows: TransactionRecord[]; total: number }> {
+    const where: Prisma.TransactionWhereInput = {
+      userId: input.userId,
+      createdAt: { gte: input.from, lte: input.to },
+      ...(input.types && input.types.length > 0
+        ? { type: { in: input.types as TransactionType[] } }
+        : {}),
+    };
+
+    // One round-trip: the capped page (newest first) + the exact total count.
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.transaction.findMany({
+        where,
+        select: TRANSACTION_SELECT,
+        orderBy: { createdAt: 'desc' },
+        take: input.limit,
+      }),
+      this.prisma.transaction.count({ where }),
+    ]);
+
+    return { rows: rows.map(toRecord), total };
+  }
 }

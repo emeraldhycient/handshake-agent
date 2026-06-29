@@ -154,4 +154,18 @@ export interface ITransactionRepository {
    * createCollection so idempotent replay can reconstruct the full result (C2).
    */
   mergeMetadata(id: string, extra: Record<string, unknown>): Promise<void>;
+
+  /**
+   * Read-only history query: transactions for a user within [from, to], optionally
+   * filtered by type. Returns the page (capped at `limit`, newest first) AND the
+   * exact total count of matching rows in the window. Used by TransactionHistoryService
+   * — never mutates. Scoped to `userId` (the security boundary for read-only own data).
+   */
+  listByUserInRange(input: {
+    userId: string;
+    from: Date;
+    to: Date;
+    types?: string[];
+    limit: number;
+  }): Promise<{ rows: TransactionRecord[]; total: number }>;
 }
