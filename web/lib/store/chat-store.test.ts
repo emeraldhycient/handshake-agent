@@ -468,6 +468,91 @@ describe("buy execute flow (authenticated path)", () => {
     expect(store.getState().pinOpen).toBe(false)
   })
 
+  it("pinComplete (sell settling) appends a settling card with the payout reference", async () => {
+    const transactionId = "ssssssss-ssss-ssss-ssss-ssssssssssss"
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.resolve({
+        transactionId,
+        status: "settling" as const,
+        payout: { providerRef: "payout-ref-1" },
+      })
+    )
+    const pollApi = vi.fn(() =>
+      Promise.resolve({
+        id: transactionId,
+        type: "sell",
+        status: "settling",
+        createdAt: new Date().toISOString(),
+      })
+    )
+
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+      pollApi,
+    })
+    store.getState().openConfirm("m", { ...buildBuyConfirm(), action: "send" })
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    const settling = store
+      .getState()
+      .threads.m.find((m) => m.kind === "settling")
+    expect(settling).toBeDefined()
+    if (settling?.kind === "settling") {
+      expect(settling.txType).toBe("sell")
+      expect(settling.reference).toBe("payout-ref-1")
+      expect(settling.transactionId).toBe(transactionId)
+    }
+    expect(store.getState().pinOpen).toBe(false)
+  })
+
+  it("pinComplete (send settling) appends a settling card with the on-chain reference", async () => {
+    const transactionId = "nnnnnnnn-nnnn-nnnn-nnnn-nnnnnnnnnnnn"
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.resolve({
+        transactionId,
+        status: "settling" as const,
+        onChain: { providerRef: "onchain-ref-1" },
+      })
+    )
+    const pollApi = vi.fn(() =>
+      Promise.resolve({
+        id: transactionId,
+        type: "send",
+        status: "settling",
+        createdAt: new Date().toISOString(),
+      })
+    )
+
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+      pollApi,
+    })
+    store.getState().openConfirm("m", { ...buildBuyConfirm(), action: "send" })
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    const settling = store
+      .getState()
+      .threads.m.find((m) => m.kind === "settling")
+    expect(settling).toBeDefined()
+    if (settling?.kind === "settling") {
+      expect(settling.txType).toBe("send")
+      expect(settling.reference).toBe("onchain-ref-1")
+    }
+    expect(store.getState().pinOpen).toBe(false)
+  })
+
   it("pinComplete wrong PIN shows error on pin pad and re-opens it", async () => {
     const authorizeApi = makeAuthApi()
     const executeApi = vi.fn(() => Promise.reject(new Error("Incorrect PIN")))
@@ -585,32 +670,77 @@ describe("sendToAgent", () => {
     expect(store.getState().typing.m).toBe(false)
   })
 
-  it("needs_beneficiary outcome (bank_account) → text message containing 'bank account'", async () => {
+  it("needs_beneficiary outcome (bank_account) → needs_beneficiary card", async () => {
     mockApi.mockResolvedValue(
       makeResponse({
         kind: "needs_beneficiary",
         beneficiaryType: "bank_account",
       })
     )
-    await store.getState().sendToAgent("m", "sell")
+    await store.getState().sendToAgent("m", "sell 10 usdt")
     const last = store.getState().threads.m.at(-1)!
-    expect(last.kind).toBe("text")
-    if (last.kind === "text") expect(last.text).toContain("bank account")
+    expect(last.kind).toBe("needs_beneficiary")
+    if (last.kind === "needs_beneficiary")
+      expect(last.beneficiaryType).toBe("bank_account")
     expect(store.getState().typing.m).toBe(false)
   })
 
-  it("needs_beneficiary outcome (crypto_address) → text message containing 'crypto address'", async () => {
+  it("needs_beneficiary outcome (crypto_address) → needs_beneficiary card", async () => {
     mockApi.mockResolvedValue(
       makeResponse({
         kind: "needs_beneficiary",
         beneficiaryType: "crypto_address",
       })
     )
-    await store.getState().sendToAgent("m", "send")
+    await store.getState().sendToAgent("m", "send 5 usdt")
     const last = store.getState().threads.m.at(-1)!
-    expect(last.kind).toBe("text")
-    if (last.kind === "text") expect(last.text).toContain("crypto address")
+    expect(last.kind).toBe("needs_beneficiary")
+    if (last.kind === "needs_beneficiary")
+      expect(last.beneficiaryType).toBe("crypto_address")
     expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("resolveBeneficiary re-sends the last money request with the beneficiaryId", async () => {
+    // First turn: needs_beneficiary for "sell 10 usdt".
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "needs_beneficiary",
+        beneficiaryType: "bank_account",
+      })
+    )
+    await store.getState().sendToAgent("m", "sell 10 usdt")
+
+    // Second turn (after adding a beneficiary): proposal renders.
+    const proposalId = "22222222-2222-2222-2222-222222222222"
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "proposal",
+        txType: "sell",
+        proposalId,
+        confirmation: {
+          proposalId,
+          asset: "USDT",
+          cryptoAmount: "10",
+          fiatCurrency: "NGN",
+          fxRate: "1600",
+          processingFeeAmount: "80",
+          netFiatAmount: "15920",
+          beneficiaryLabel: "My GTB",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        },
+      })
+    )
+
+    await store.getState().resolveBeneficiary("m", "ben-123")
+
+    // The re-send used the stored last text + the beneficiaryId.
+    expect(mockApi).toHaveBeenLastCalledWith({
+      text: "sell 10 usdt",
+      beneficiaryId: "ben-123",
+    })
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("quote")
+    expect(store.getState().pendingProposalId).toBe(proposalId)
   })
 
   it("not_supported outcome → 'not supported' text message", async () => {

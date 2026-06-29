@@ -5,7 +5,7 @@ import { defaultChatStore } from "@/lib/store/chat-store"
 import { useAuthStore } from "@/lib/store/auth-store"
 import { useChatHistory } from "@/hooks/use-chat-history"
 import {
-  buildConfirmForQuote,
+  buildConfirmFromQuote,
   buildTicketConfirm,
   chipLabel,
 } from "@/lib/chat/flow"
@@ -46,10 +46,7 @@ export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
   // ── Quote confirm ──────────────────────────────────────────────────────────
   function handleConfirm(message: ChatMessage) {
     if (message.kind !== "quote") return
-    const payload = buildConfirmForQuote(
-      message.action as "buy" | "send" | "swap"
-    )
-    state.openConfirm("d", payload)
+    state.openConfirm("d", buildConfirmFromQuote(message))
   }
 
   // ── Ticket selection ───────────────────────────────────────────────────────
@@ -94,6 +91,7 @@ export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
         density="desktop"
         onConfirm={handleConfirm}
         onSelectTicket={handleSelectTicket}
+        onResolveBeneficiary={(id) => void state.resolveBeneficiary("d", id)}
       />
 
       {/* ── Composer (chips + input) ───────────────────────────────────────── */}

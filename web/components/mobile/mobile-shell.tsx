@@ -6,7 +6,7 @@ import { defaultChatStore } from "@/lib/store/chat-store"
 import { useAuthStore } from "@/lib/store/auth-store"
 import { useChatHistory } from "@/hooks/use-chat-history"
 import {
-  buildConfirmForQuote,
+  buildConfirmFromQuote,
   buildTicketConfirm,
   chipLabel,
 } from "@/lib/chat/flow"
@@ -33,12 +33,9 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
 
   function handleConfirm(message: ChatMessage) {
     if (message.kind !== "quote") return
-    // message.action is "buy" | "send" | "swap" | "ticket" | "balance" | "receive"
-    // after the kind === "quote" guard, only buy/send/swap are valid quote actions.
-    const payload = buildConfirmForQuote(
-      message.action as "buy" | "send" | "swap"
-    )
-    state.openConfirm("m", payload)
+    // Build the confirm sheet from the live quote so it shows the real
+    // itemized breakdown (buy / sell / send).
+    state.openConfirm("m", buildConfirmFromQuote(message))
   }
 
   function handleSelectTicket(opt: TicketOption) {
@@ -65,6 +62,9 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
             density="mobile"
             onConfirm={handleConfirm}
             onSelectTicket={handleSelectTicket}
+            onResolveBeneficiary={(id) =>
+              void state.resolveBeneficiary("m", id)
+            }
           />
           <ChatComposer
             chips={state.chips.m}

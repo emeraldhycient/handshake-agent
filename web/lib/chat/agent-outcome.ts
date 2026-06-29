@@ -148,15 +148,13 @@ export function mapOutcomeToMessages(
       text: "You need to complete verification first.",
     })
   } else if (outcome.kind === "needs_beneficiary") {
+    // Inline add/select-beneficiary card; on resolve the store re-asks the
+    // agent with the chosen beneficiaryId so the proposal can be created.
     messages.push({
       id: makeId(),
       role: "assistant",
-      kind: "text",
-      text: `Please add a ${
-        outcome.beneficiaryType === "bank_account"
-          ? "bank account"
-          : "crypto address"
-      } first.`,
+      kind: "needs_beneficiary",
+      beneficiaryType: outcome.beneficiaryType,
     })
   } else if (outcome.kind === "not_supported") {
     messages.push({

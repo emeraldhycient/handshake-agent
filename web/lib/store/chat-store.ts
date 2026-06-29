@@ -58,6 +58,83 @@ const SUCCESS_DISMISS_MS = 1150
 /** Poll interval (ms) for settling transactions. */
 const POLL_INTERVAL_MS = 3000
 
+// ─── Completion-receipt helpers (shared by buy / sell / send) ─────────────────
+
+const COMPLETION_SUCCESS_LABEL: Record<ChatAction, string> = {
+  buy: "Purchase complete",
+  sell: "Sale complete",
+  send: "Transfer sent",
+  swap: "Swap complete",
+  ticket: "Ticket confirmed",
+  receive: "Deposit address shown",
+  balance: "Balance loaded",
+}
+
+/**
+ * Builds the kind:"receipt" body (sans id/role) for a completed transaction.
+ * Buy uses the on-chain amounts the status endpoint returns; sell/send fall
+ * back to the confirmed proposal amounts (`pending`) since the sell payout /
+ * send total are not echoed on the status payload.
+ */
+function buildCompletionReceipt(
+  action: ChatAction,
+  pending: ConfirmPayload,
+  tx: TransactionStatusResponse
+) {
+  const date = new Date(tx.createdAt).toLocaleString("en-NG")
+  const txRef = tx.receiptNumber
+    ? `REF · ${tx.receiptNumber}`
+    : `TX · ${tx.id.slice(0, 8)}`
+
+  if (action === "sell") {
+    return {
+      kind: "receipt" as const,
+      title: "Sale complete",
+      subtitle: "Funds sent to your bank account",
+      amount: pending.totalValue,
+      rows: [
+        ...pending.rows.filter((r) => r.label !== "Rate").slice(0, 2),
+        { label: "Date", value: date },
+      ],
+      txRef,
+    }
+  }
+
+  if (action === "send") {
+    return {
+      kind: "receipt" as const,
+      title: "Transfer sent",
+      subtitle: "Your crypto is on its way",
+      amount: pending.heroAmount,
+      rows: [
+        pending.toValue
+          ? { label: "To", value: pending.toValue }
+          : (pending.rows[0] ?? { label: "Sent", value: pending.heroAmount }),
+        { label: "Date", value: date },
+      ],
+      txRef,
+    }
+  }
+
+  // buy
+  return {
+    kind: "receipt" as const,
+    title: "Purchase complete",
+    subtitle: "USDT credited to your wallet",
+    amount: tx.cryptoAmount
+      ? `+ ${tx.cryptoAmount} ${tx.asset ?? ""}`
+      : pending.heroAmount,
+    rows: [
+      {
+        label: "Paid",
+        value: tx.fiatAmount ? formatNGN(tx.fiatAmount) : pending.totalValue,
+      },
+      { label: "Date", value: date },
+    ],
+    txRef,
+  }
+}
+
 // ─── Scheduler type ───────────────────────────────────────────────────────────
 
 /** A function that schedules `fn` to run after a typing delay (or immediately in tests). */
@@ -120,6 +197,10 @@ interface ChatState {
   // switches don't re-append the thread.
   historyHydrated: Record<ChatSurface, boolean>
 
+  // The last money-intent text the user sent — re-sent (with a beneficiaryId)
+  // by resolveBeneficiary after they add a payout destination.
+  _lastIntentText: string | null
+
   // Actions
   send(surface: ChatSurface, text: string, action?: ChatAction): void
   sendToAgent(
@@ -134,6 +215,12 @@ interface ChatState {
    * receipt (§3.1) and never touches overlay/pin state.
    */
   hydrateHistory(surface: ChatSurface, items: ChatHistoryItem[]): void
+  /**
+   * Re-sends the last money request with a newly added/selected beneficiaryId
+   * so the sell/send proposal can be created. Called from the needs_beneficiary
+   * card once the user adds or picks a payout destination.
+   */
+  resolveBeneficiary(surface: ChatSurface, beneficiaryId: string): Promise<void>
   setInput(surface: ChatSurface, value: string): void
   openConfirm(surface: ChatSurface, payload: ConfirmPayload): void
   cancel(): void
@@ -246,6 +333,7 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
     _idempotencyKey: null,
     _pollingTransactionId: null,
     historyHydrated: { m: false, d: false },
+    _lastIntentText: null,
 
     // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -289,6 +377,10 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
     async sendToAgent(surface, text, beneficiaryId) {
       const trimmed = text.trim()
       if (!trimmed) return
+
+      // Remember the text so resolveBeneficiary can re-send it once the user
+      // adds the payout destination a sell/send needs.
+      set({ _lastIntentText: trimmed })
 
       const userMsg: ChatMessage = {
         id: nextId(),
@@ -341,6 +433,12 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           chips: { ...s.chips, [surface]: startChips() },
         }))
       }
+    },
+
+    async resolveBeneficiary(surface, beneficiaryId) {
+      const { _lastIntentText } = get()
+      if (!_lastIntentText) return
+      await get().sendToAgent(surface, _lastIntentText, beneficiaryId)
     },
 
     send(surface, text, explicitAction) {
@@ -530,15 +628,7 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           role: "assistant",
         }
 
-        const successLabels: Record<ChatAction, string> = {
-          buy: "Purchase complete",
-          send: "Transfer sent",
-          swap: "Swap complete",
-          ticket: "Ticket confirmed",
-          receive: "Deposit address shown",
-          balance: "Balance loaded",
-        }
-        const successText = successLabels[pending.action] ?? "Done"
+        const successText = COMPLETION_SUCCESS_LABEL[pending.action] ?? "Done"
 
         set((s) => ({
           threads: {
@@ -580,26 +670,56 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           idempotencyKey: _idempotencyKey,
         })
 
-        if (result.status === "settling" && result.payment) {
-          // ── Pay-in card path ─────────────────────────────────────────────────
-          const p = result.payment
-          const payInMsg: ChatMessage = {
-            id: nextId(),
-            role: "assistant",
-            kind: "pay_in",
-            transactionId: result.transactionId,
-            accountNumber: p.accountNumber,
-            bankName: p.bankName,
-            providerRef: p.providerRef,
-            amount: p.amount,
-            currency: p.currency,
-            status: "pending",
+        if (result.status === "settling") {
+          // ── In-flight card (buy → pay-in; sell/send → settling) ──────────────
+          let inFlight: ChatMessage
+          if (result.payment) {
+            const p = result.payment
+            inFlight = {
+              id: nextId(),
+              role: "assistant",
+              kind: "pay_in",
+              transactionId: result.transactionId,
+              accountNumber: p.accountNumber,
+              bankName: p.bankName,
+              providerRef: p.providerRef,
+              amount: p.amount,
+              currency: p.currency,
+              status: "pending",
+            }
+          } else if (result.payout) {
+            inFlight = {
+              id: nextId(),
+              role: "assistant",
+              kind: "settling",
+              txType: "sell",
+              transactionId: result.transactionId,
+              title: "Payout processing",
+              subtitle: "Sending the funds to your bank account.",
+              rows: pending.rows,
+              reference: result.payout.providerRef,
+              status: "pending",
+            }
+          } else {
+            // send — result.onChain
+            inFlight = {
+              id: nextId(),
+              role: "assistant",
+              kind: "settling",
+              txType: "send",
+              transactionId: result.transactionId,
+              title: "Transfer processing",
+              subtitle: "Broadcasting your transfer on-chain.",
+              rows: pending.rows,
+              reference: result.onChain?.providerRef ?? "",
+              status: "pending",
+            }
           }
 
           set((s) => ({
             threads: {
               ...s.threads,
-              [overlaySurface]: [...s.threads[overlaySurface], payInMsg],
+              [overlaySurface]: [...s.threads[overlaySurface], inFlight],
             },
             chips: { ...s.chips, [overlaySurface]: startChips() },
             pending: null,
@@ -611,37 +731,20 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             _pollingTransactionId: result.transactionId,
           }))
 
-          // Poll until completed. We use setInterval here so tests can spy/clear.
+          // Poll until completed/failed. setInterval so tests can spy/clear.
           const pollFn = getPollFn()!
+          const action = pending.action
+          const txId = result.transactionId
           const intervalId = setInterval(() => {
-            void pollFn(result.transactionId).then((tx) => {
+            void pollFn(txId).then((tx) => {
               if (tx.status === "completed") {
                 clearInterval(intervalId)
 
-                // Replace the pay-in card with a completed receipt by appending
-                // a new receipt message (append-only thread — no mutation).
+                // Append a completed receipt (append-only thread — no mutation).
                 const completedReceipt: ChatMessage = {
+                  ...buildCompletionReceipt(action, pending, tx),
                   id: nextId(),
                   role: "assistant",
-                  kind: "receipt",
-                  title: "Purchase complete",
-                  subtitle: "USDT credited to your wallet",
-                  amount: tx.cryptoAmount
-                    ? `+ ${tx.cryptoAmount} ${tx.asset ?? ""}`
-                    : "+ USDT",
-                  rows: [
-                    {
-                      label: "Paid",
-                      value: tx.fiatAmount ? formatNGN(tx.fiatAmount) : "—",
-                    },
-                    {
-                      label: "Date",
-                      value: new Date(tx.createdAt).toLocaleString("en-NG"),
-                    },
-                  ],
-                  txRef: tx.receiptNumber
-                    ? `REF · ${tx.receiptNumber}`
-                    : `TX · ${tx.id.slice(0, 8)}`,
                 }
 
                 set((s) => ({
@@ -655,27 +758,35 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
                   chips: { ...s.chips, [overlaySurface]: startChips() },
                   _pollingTransactionId: null,
                   successOpen: true,
-                  successText: "Purchase complete",
+                  successText: COMPLETION_SUCCESS_LABEL[action] ?? "Done",
                   successSurface: overlaySurface,
                 }))
 
                 setTimeout(() => {
                   set({ successOpen: false })
                 }, SUCCESS_DISMISS_MS)
+              } else if (tx.status === "failed") {
+                clearInterval(intervalId)
+                const failMsg: ChatMessage = {
+                  id: nextId(),
+                  role: "assistant",
+                  kind: "text",
+                  text: "This transaction could not be completed. No funds have left your wallet — please try again.",
+                }
+                set((s) => ({
+                  threads: {
+                    ...s.threads,
+                    [overlaySurface]: [...s.threads[overlaySurface], failMsg],
+                  },
+                  chips: { ...s.chips, [overlaySurface]: startChips() },
+                  _pollingTransactionId: null,
+                }))
               }
             })
           }, POLL_INTERVAL_MS)
         } else {
           // ── Immediate completion path ────────────────────────────────────────
-          const successLabels: Record<ChatAction, string> = {
-            buy: "Purchase complete",
-            send: "Transfer sent",
-            swap: "Swap complete",
-            ticket: "Ticket confirmed",
-            receive: "Deposit address shown",
-            balance: "Balance loaded",
-          }
-          const successText = successLabels[pending.action] ?? "Done"
+          const successText = COMPLETION_SUCCESS_LABEL[pending.action] ?? "Done"
 
           const receipt: ChatMessage = {
             ...buildReceipt(pending.action, pending.meta),

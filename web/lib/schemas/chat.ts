@@ -4,6 +4,7 @@ import { z } from "zod"
 
 export const ChatActionSchema = z.enum([
   "buy",
+  "sell",
   "send",
   "receive",
   "swap",
@@ -153,6 +154,29 @@ export const PayInViewSchema = z.object({
 })
 export type PayInView = z.infer<typeof PayInViewSchema>
 
+// needs_beneficiary — prompt + inline add/select UI shown when a sell/send
+// requires a saved payout destination the user doesn't have yet.
+export const NeedsBeneficiaryViewSchema = z.object({
+  kind: z.literal("needs_beneficiary"),
+  beneficiaryType: z.enum(["bank_account", "crypto_address"]),
+})
+export type NeedsBeneficiaryView = z.infer<typeof NeedsBeneficiaryViewSchema>
+
+// settling — outbound-settlement card shown while a sell payout or send
+// withdrawal is in flight (the sell/send analogue of pay_in, which is inbound).
+export const SettlingViewSchema = z.object({
+  kind: z.literal("settling"),
+  txType: z.enum(["sell", "send"]),
+  transactionId: z.string(),
+  title: z.string(),
+  subtitle: z.string(),
+  rows: z.array(QuoteRowSchema),
+  /** Provider reference for the outbound transfer (payout id / on-chain ref). */
+  reference: z.string(),
+  status: z.enum(["pending", "settling", "completed", "failed"]),
+})
+export type SettlingView = z.infer<typeof SettlingViewSchema>
+
 // ─── ChatMessage discriminated union ──────────────────────────────────────────
 
 // Each variant merges the shared base (id, role) with its kind object.
@@ -167,6 +191,8 @@ export const ChatMessageSchema = z.discriminatedUnion("kind", [
   MessageBaseSchema.merge(DepositViewSchema),
   MessageBaseSchema.merge(TicketsViewSchema),
   MessageBaseSchema.merge(PayInViewSchema),
+  MessageBaseSchema.merge(NeedsBeneficiaryViewSchema),
+  MessageBaseSchema.merge(SettlingViewSchema),
 ])
 
 export type ChatMessage = z.infer<typeof ChatMessageSchema>

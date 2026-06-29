@@ -14,6 +14,8 @@ import type {
   TicketOption,
   ReceiptView,
   PayInView,
+  SettlingView,
+  NeedsBeneficiaryView,
   ChatMessage,
   ChatAction,
   ConfirmPayload,
@@ -138,6 +140,8 @@ export interface ChatMessageViewProps {
   density: Density
   onConfirm: (m: ChatMessage) => void
   onSelectTicket: (opt: TicketOption) => void
+  /** Resolve a needs_beneficiary card — re-asks the sell/send with the new id. */
+  onResolveBeneficiary: (beneficiaryId: string) => void
 }
 
 /** 12.3 */
@@ -157,6 +161,7 @@ export interface ChatThreadProps {
   density: Density
   onConfirm: (m: ChatMessage) => void
   onSelectTicket: (opt: TicketOption) => void
+  onResolveBeneficiary: (beneficiaryId: string) => void
 }
 
 // ─── Phase 13 overlay components ──────────────────────────────────────────────
@@ -196,6 +201,20 @@ export interface PinPadProps {
 /** 11.6 — Bank transfer card shown while a buy order is settling */
 export type PayInCardProps = PayInView & {
   density: Density
+  className?: string
+}
+
+/** Outbound-settlement card shown while a sell payout / send withdrawal is in flight */
+export type SettlingCardProps = SettlingView & {
+  density: Density
+  className?: string
+}
+
+/** Inline add/select-beneficiary card shown for a needs_beneficiary outcome */
+export type NeedsBeneficiaryCardProps = NeedsBeneficiaryView & {
+  density: Density
+  /** Called with the chosen/added beneficiary id once the user resolves it. */
+  onResolve: (beneficiaryId: string) => void
   className?: string
 }
 
