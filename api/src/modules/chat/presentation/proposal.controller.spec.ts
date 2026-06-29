@@ -232,6 +232,21 @@ describe('ProposalController.authorize', () => {
     );
   });
 
+  it('uses request_pin ref for sell proposals', async () => {
+    mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'sell' }));
+    mockDirectiveService.issue.mockResolvedValue({
+      directiveId: 'dir-uuid',
+      nonce: 'abc123',
+      expiresAt: new Date(),
+    });
+
+    await controller.authorize('proposal-uuid', TEST_USER);
+
+    expect(mockDirectiveService.issue).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: 'request_pin' }),
+    );
+  });
+
   it('uses request_step_up ref for send proposals', async () => {
     mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'send' }));
     mockProposalRepo.getType.mockResolvedValue('send');

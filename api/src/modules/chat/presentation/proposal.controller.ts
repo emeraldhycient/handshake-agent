@@ -34,6 +34,7 @@ import {
 import type {
   AuthorizeProposalResponse,
   ExecuteProposalResponse,
+  TransactionStatusResponse,
 } from '@handshake-agent/contracts';
 
 import {
@@ -92,10 +93,6 @@ export class ProposalController {
   constructor(
     @Inject(PROPOSAL_REPOSITORY)
     private readonly proposalRepo: IProposalRepository,
-    @Inject(TRANSACTION_REPOSITORY)
-    private readonly transactionRepo: ITransactionRepository,
-    @Inject(SETTLEMENT_REPOSITORY)
-    private readonly settlementRepo: ISettlementRepository,
     private readonly directiveService: DirectiveService,
     private readonly executionService: ExecutionService,
   ) {}
@@ -138,11 +135,10 @@ export class ProposalController {
     @Param('proposalId') proposalId: string,
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<AuthorizeProposalResponse> {
-    await this.loadExecutable(proposalId, user.userId);
+    const proposal = await this.loadExecutable(proposalId, user.userId);
 
-    const proposalType = await this.proposalRepo.getType(proposalId);
     // send requires a step-up directive; buy/sell use PIN.
-    const ref = proposalType === 'send' ? 'request_step_up' : 'request_pin';
+    const ref = proposal.type === 'send' ? 'request_step_up' : 'request_pin';
 
     const { directiveId, nonce, expiresAt } = await this.directiveService.issue(
       {
@@ -165,9 +161,9 @@ export class ProposalController {
     @Body() body: ExecuteProposalDto,
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<ExecuteProposalResponse> {
-    await this.loadExecutable(proposalId, user.userId);
+    const proposal = await this.loadExecutable(proposalId, user.userId);
 
-    const proposalType = await this.proposalRepo.getType(proposalId);
+    const proposalType = proposal.type;
 
     try {
       if (proposalType === 'buy') {
@@ -296,7 +292,7 @@ export class TransactionStatusController {
   async getStatus(
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedUser,
-  ) {
+  ): Promise<TransactionStatusResponse> {
     const transaction = await this.transactionRepo.findById(id);
 
     if (transaction === null || transaction.userId !== user.userId) {
