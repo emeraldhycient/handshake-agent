@@ -165,8 +165,13 @@ export interface ConfirmSheetProps {
   open: boolean
   payload: ConfirmPayload | null
   density: Density
-  onConfirm: () => void
+  /** May be async — triggers authorizeProposal in the authenticated flow. */
+  onConfirm: () => void | Promise<void>
   onCancel: () => void
+  /** Error message shown when authorize fails (wrong state, expired, etc.). */
+  error?: string | null
+  /** True while authorizeProposal is in flight — disables the CTA. */
+  authorizing?: boolean
 }
 
 /** 13.2 */
@@ -179,6 +184,8 @@ export interface PinPadProps {
   onBack: () => void
   onFaceId: () => void
   onCancel: () => void
+  /** Error message shown below the dots after a wrong PIN / expired directive. */
+  error?: string | null
 }
 
 /** 13.3 */

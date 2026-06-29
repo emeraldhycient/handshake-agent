@@ -6,6 +6,12 @@
  * and open the success overlay. No other action on this path (send, openConfirm,
  * confirmToPin, pressPin before the 4th digit) may ever produce a receipt.
  *
+ * Real buy flow (authenticated):
+ *   openConfirm → confirmToPin (calls authorizeProposal, stores directiveId+nonce)
+ *   → pressPin × 4 → pinComplete (calls executeProposal with PIN)
+ *   → on settle: appends pay-in card, polls getTransaction
+ *   → on completed: appends full receipt card, opens success overlay
+ *
  * Architecture notes:
  * - `createChatStore` is the testable vanilla factory (no React dependency).
  *   Tests inject `schedule: (fn) => fn()` so timers run synchronously.
@@ -24,6 +30,7 @@ import {
 } from "@/lib/chat/flow"
 import { parseIntent } from "@/lib/chat/intent"
 import { GREETING_M, GREETING_D } from "@/lib/constants"
+import { formatNGN } from "@/lib/format"
 import type {
   ChatAction,
   ChatMessage,
@@ -37,7 +44,11 @@ import type {
   SellProposalConfirmation,
   SendProposalConfirmation,
   ChatMessageRequest,
+  AuthorizeProposalResponse,
+  ExecuteProposalResponse,
+  TransactionStatusResponse,
 } from "@handshake-agent/contracts"
+import { getDeviceFingerprint } from "@/lib/device"
 
 // Re-export chipLabel so components can import it from the store module if needed.
 export { chipLabel }
@@ -45,10 +56,31 @@ export { chipLabel }
 /** Milliseconds before the success overlay auto-dismisses. Matches prototype (line 1352). */
 const SUCCESS_DISMISS_MS = 1150
 
+/** Poll interval (ms) for settling transactions. */
+const POLL_INTERVAL_MS = 3000
+
 // ─── Scheduler type ───────────────────────────────────────────────────────────
 
 /** A function that schedules `fn` to run after a typing delay (or immediately in tests). */
 type Scheduler = (fn: () => void) => void
+
+// ─── API adapters injected for testing ────────────────────────────────────────
+
+interface ChatApis {
+  chatApi?: (body: ChatMessageRequest) => Promise<WebChatResponse>
+  authorizeApi?: (proposalId: string) => Promise<AuthorizeProposalResponse>
+  executeApi?: (
+    proposalId: string,
+    body: {
+      directiveId: string
+      nonce: string
+      pin: string
+      deviceFingerprint?: string
+      idempotencyKey: string
+    }
+  ) => Promise<ExecuteProposalResponse>
+  pollApi?: (transactionId: string) => Promise<TransactionStatusResponse>
+}
 
 // ─── State interface ──────────────────────────────────────────────────────────
 
@@ -71,8 +103,19 @@ interface ChatState {
   successText: string
   successSurface: OverlaySurface
 
+  // PIN error state — shown on the pin pad after a wrong PIN / expired directive
+  pinError: string | null
+
   // Live agent proposal tracking
   pendingProposalId: string | null
+
+  // Authorize step — stored between confirmToPin and pinComplete
+  _directiveId: string | null
+  _nonce: string | null
+  _idempotencyKey: string | null
+
+  // Settling: track the transaction being polled
+  _pollingTransactionId: string | null
 
   // Actions
   send(surface: ChatSurface, text: string, action?: ChatAction): void
@@ -84,11 +127,15 @@ interface ChatState {
   setInput(surface: ChatSurface, value: string): void
   openConfirm(surface: ChatSurface, payload: ConfirmPayload): void
   cancel(): void
-  confirmToPin(): void
+  /**
+   * Calls authorizeProposal (authenticated flow) or falls back to PIN immediately
+   * (mock/unauthenticated flow). Updates _directiveId + _nonce on success.
+   */
+  confirmToPin(): Promise<void>
   pressPin(digit: string): void
   pinBack(): void
   /** THE ONLY method that appends a receipt-kind message. */
-  pinComplete(): void
+  pinComplete(): Promise<void>
   reset(surface: ChatSurface): void
 }
 
@@ -98,10 +145,13 @@ interface CreateChatStoreOptions {
   /** Inject a custom scheduler. Default: `(fn) => setTimeout(fn, 680)`. */
   schedule?: Scheduler
   /**
-   * Inject a mock API function for testing `sendToAgent` without module-level
-   * mocking. Defaults to the real `sendChatMessage` from `@/lib/api/chat`.
+   * Inject mock API functions for testing without module-level mocking.
+   * Defaults to the real implementations from `@/lib/api/chat`.
    */
   chatApi?: (body: ChatMessageRequest) => Promise<WebChatResponse>
+  authorizeApi?: ChatApis["authorizeApi"]
+  executeApi?: ChatApis["executeApi"]
+  pollApi?: ChatApis["pollApi"]
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -117,6 +167,29 @@ interface CreateChatStoreOptions {
 export function createChatStore(options: CreateChatStoreOptions = {}) {
   const schedule: Scheduler = options.schedule ?? ((fn) => setTimeout(fn, 680))
   const chatApiFn = options.chatApi ?? defaultSendChatMessage
+
+  // Lazy-import the real API functions so tests can inject mocks without
+  // bundling the axios client. These are only called when the injected
+  // override is absent — i.e. in the real app.
+  const getAuthorizeFn = (): ChatApis["authorizeApi"] => {
+    if (options.authorizeApi) return options.authorizeApi
+    // Dynamic require to stay CJS-safe in tests; in the real app this is
+    // bundled as ESM.  We import the module and pull the named export.
+    return (proposalId: string) =>
+      import("@/lib/api/chat").then((m) => m.authorizeProposal(proposalId))
+  }
+
+  const getExecuteFn = (): ChatApis["executeApi"] => {
+    if (options.executeApi) return options.executeApi
+    return (proposalId, body) =>
+      import("@/lib/api/chat").then((m) => m.executeProposal(proposalId, body))
+  }
+
+  const getPollFn = (): ChatApis["pollApi"] => {
+    if (options.pollApi) return options.pollApi
+    return (txId: string) =>
+      import("@/lib/api/chat").then((m) => m.getTransaction(txId))
+  }
 
   // Per-store monotonic counter — deterministic, no Math.random / Date.
   let _idCounter = 0
@@ -154,7 +227,14 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
     successText: "",
     successSurface: "m",
 
+    pinError: null,
+
     pendingProposalId: null,
+
+    _directiveId: null,
+    _nonce: null,
+    _idempotencyKey: null,
+    _pollingTransactionId: null,
 
     // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -221,18 +301,18 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             receiveSub = "You receive"
             rows.push({
               label: "You pay",
-              value: b.fiatCurrency + " " + b.fiatAmount,
+              value: formatNGN(b.fiatAmount),
             })
             rows.push({
               label: "Rate",
-              value: "1 " + b.asset + " = " + b.fiatCurrency + " " + b.fxRate,
+              value: "1 " + b.asset + " = " + formatNGN(b.fxRate),
             })
             rows.push({
               label: "Fee",
-              value: b.fiatCurrency + " " + b.processingFeeAmount,
+              value: formatNGN(b.processingFeeAmount),
             })
             totalLabel = "Total charged"
-            totalValue = b.fiatCurrency + " " + b.totalFiat
+            totalValue = formatNGN(b.totalFiat)
           } else if (outcome.txType === "sell") {
             // outcome.txType === 'sell' guarantees the server sent SellProposalConfirmation (schema-validated at ingress)
             const s = c as SellProposalConfirmation
@@ -285,6 +365,7 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             totalLabel,
             totalValue,
             lockSeconds,
+            expiresAt: c.expiresAt,
           })
 
           // Stash proposalId for the future execute phase.
@@ -418,6 +499,10 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
         pending: payload,
         overlaySurface: surface,
         confirmOpen: true,
+        pinError: null,
+        _directiveId: null,
+        _nonce: null,
+        _idempotencyKey: null,
       })
     },
 
@@ -427,11 +512,53 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
         pinOpen: false,
         pin: "",
         pending: null,
+        pinError: null,
+        _directiveId: null,
+        _nonce: null,
+        _idempotencyKey: null,
       })
     },
 
-    confirmToPin() {
-      set({ confirmOpen: false, pinOpen: true, pin: "" })
+    /**
+     * Transition from confirm sheet to PIN pad.
+     *
+     * Authenticated path: calls authorizeProposal(pendingProposalId) first.
+     * On success, stores directiveId + nonce + fresh idempotencyKey, then
+     * opens the PIN pad. On failure, surface the error on the confirm sheet
+     * and keep it open so the user can retry or cancel.
+     *
+     * Mock/unauthenticated path: pendingProposalId is null → open PIN directly.
+     */
+    async confirmToPin() {
+      const { pendingProposalId } = get()
+
+      // Mock/offline path (no live proposal): skip authorize, open PIN directly.
+      if (!pendingProposalId) {
+        set({ confirmOpen: false, pinOpen: true, pin: "", pinError: null })
+        return
+      }
+
+      try {
+        const authorizeFn = getAuthorizeFn()!
+        const result = await authorizeFn(pendingProposalId)
+        set({
+          confirmOpen: false,
+          pinOpen: true,
+          pin: "",
+          pinError: null,
+          _directiveId: result.directiveId,
+          _nonce: result.nonce,
+          // Generate idempotencyKey once per confirm attempt — reused on retry
+          _idempotencyKey: crypto.randomUUID(),
+        })
+      } catch (err) {
+        // Show error on the confirm sheet; do NOT open the PIN pad.
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Authorization failed. Please try again."
+        set({ pinError: message })
+      }
     },
 
     pressPin(digit) {
@@ -444,7 +571,7 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
       const next = pin + digit
       set({ pin: next })
       if (next.length === 4) {
-        get().pinComplete()
+        void get().pinComplete()
       }
     },
 
@@ -455,52 +582,225 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
     /**
      * THE ONLY path that appends a receipt-kind message and opens success.
      * Called automatically when the 4th PIN digit is pressed.
-     * No other action may call this or replicate its effect.
+     *
+     * Authenticated path: calls executeProposal with PIN + directive credentials.
+     * - status:"settling" + payment → appends pay-in card, starts polling.
+     * - status:"completed" → appends full receipt, opens success overlay.
+     * - Wrong PIN / expired / locked → clears PIN, shows error on PIN pad, keeps proposal.
+     *
+     * Mock/offline path (_directiveId is null): appends fixture receipt immediately.
      */
-    pinComplete() {
-      const { pending, overlaySurface } = get()
+    async pinComplete() {
+      const {
+        pending,
+        overlaySurface,
+        pendingProposalId,
+        _directiveId,
+        _nonce,
+        _idempotencyKey,
+        pin,
+      } = get()
       if (!pending) return
 
-      const receipt: ChatMessage = {
-        ...buildReceipt(pending.action, pending.meta),
-        id: nextId(),
-        role: "assistant",
+      // ── Mock/offline path ────────────────────────────────────────────────────
+      if (!pendingProposalId || !_directiveId || !_nonce || !_idempotencyKey) {
+        const receipt: ChatMessage = {
+          ...buildReceipt(pending.action, pending.meta),
+          id: nextId(),
+          role: "assistant",
+        }
+
+        const successLabels: Record<ChatAction, string> = {
+          buy: "Purchase complete",
+          send: "Transfer sent",
+          swap: "Swap complete",
+          ticket: "Ticket confirmed",
+          receive: "Deposit address shown",
+          balance: "Balance loaded",
+        }
+        const successText = successLabels[pending.action] ?? "Done"
+
+        set((s) => ({
+          threads: {
+            ...s.threads,
+            [overlaySurface]: [...s.threads[overlaySurface], receipt],
+          },
+          chips: { ...s.chips, [overlaySurface]: startChips() },
+          pinOpen: false,
+          pin: "",
+          confirmOpen: false,
+          pending: null,
+          pendingProposalId: null,
+          pinError: null,
+          _directiveId: null,
+          _nonce: null,
+          _idempotencyKey: null,
+          successOpen: true,
+          successText,
+          successSurface: overlaySurface,
+        }))
+
+        setTimeout(() => {
+          set({ successOpen: false })
+        }, SUCCESS_DISMISS_MS)
+        return
       }
 
-      // Success label derived from the action.
-      const successLabels: Record<ChatAction, string> = {
-        buy: "Purchase complete",
-        send: "Transfer sent",
-        swap: "Swap complete",
-        ticket: "Ticket confirmed",
-        receive: "Deposit address shown",
-        balance: "Balance loaded",
+      // ── Authenticated path ───────────────────────────────────────────────────
+      // Close the PIN pad immediately (provides instant feedback)
+      set({ pinOpen: false, pin: "" })
+
+      try {
+        const executeFn = getExecuteFn()!
+        const result = await executeFn(pendingProposalId, {
+          directiveId: _directiveId,
+          nonce: _nonce,
+          pin,
+          deviceFingerprint: getDeviceFingerprint(),
+          idempotencyKey: _idempotencyKey,
+        })
+
+        if (result.status === "settling" && result.payment) {
+          // ── Pay-in card path ─────────────────────────────────────────────────
+          const p = result.payment
+          const payInMsg: ChatMessage = {
+            id: nextId(),
+            role: "assistant",
+            kind: "receipt",
+            title: "Transfer required",
+            subtitle: `Send ${formatNGN(p.amount)} to complete your purchase`,
+            amount: formatNGN(p.amount),
+            rows: [
+              { label: "Account number", value: p.accountNumber },
+              { label: "Bank", value: p.bankName },
+              { label: "Reference", value: p.providerRef },
+              { label: "Status", value: "Pending payment" },
+            ],
+            txRef: `REF · ${p.providerRef}`,
+          }
+
+          set((s) => ({
+            threads: {
+              ...s.threads,
+              [overlaySurface]: [...s.threads[overlaySurface], payInMsg],
+            },
+            chips: { ...s.chips, [overlaySurface]: startChips() },
+            pending: null,
+            confirmOpen: false,
+            pinError: null,
+            _directiveId: null,
+            _nonce: null,
+            _idempotencyKey: null,
+            _pollingTransactionId: result.transactionId,
+          }))
+
+          // Poll until completed. We use setInterval here so tests can spy/clear.
+          const pollFn = getPollFn()!
+          const intervalId = setInterval(() => {
+            void pollFn(result.transactionId).then((tx) => {
+              if (tx.status === "completed") {
+                clearInterval(intervalId)
+
+                // Replace the pay-in card with a completed receipt by appending
+                // a new receipt message (append-only thread — no mutation).
+                const completedReceipt: ChatMessage = {
+                  id: nextId(),
+                  role: "assistant",
+                  kind: "receipt",
+                  title: "Purchase complete",
+                  subtitle: "USDT credited to your wallet",
+                  amount: tx.cryptoAmount
+                    ? `+ ${tx.cryptoAmount} ${tx.asset ?? ""}`
+                    : "+ USDT",
+                  rows: [
+                    {
+                      label: "Paid",
+                      value: tx.fiatAmount ? formatNGN(tx.fiatAmount) : "—",
+                    },
+                    {
+                      label: "Date",
+                      value: new Date(tx.createdAt).toLocaleString("en-NG"),
+                    },
+                  ],
+                  txRef: tx.receiptNumber
+                    ? `REF · ${tx.receiptNumber}`
+                    : `TX · ${tx.id.slice(0, 8)}`,
+                }
+
+                set((s) => ({
+                  threads: {
+                    ...s.threads,
+                    [overlaySurface]: [
+                      ...s.threads[overlaySurface],
+                      completedReceipt,
+                    ],
+                  },
+                  chips: { ...s.chips, [overlaySurface]: startChips() },
+                  _pollingTransactionId: null,
+                  successOpen: true,
+                  successText: "Purchase complete",
+                  successSurface: overlaySurface,
+                }))
+
+                setTimeout(() => {
+                  set({ successOpen: false })
+                }, SUCCESS_DISMISS_MS)
+              }
+            })
+          }, POLL_INTERVAL_MS)
+        } else {
+          // ── Immediate completion path ────────────────────────────────────────
+          const successLabels: Record<ChatAction, string> = {
+            buy: "Purchase complete",
+            send: "Transfer sent",
+            swap: "Swap complete",
+            ticket: "Ticket confirmed",
+            receive: "Deposit address shown",
+            balance: "Balance loaded",
+          }
+          const successText = successLabels[pending.action] ?? "Done"
+
+          const receipt: ChatMessage = {
+            ...buildReceipt(pending.action, pending.meta),
+            id: nextId(),
+            role: "assistant",
+          }
+
+          set((s) => ({
+            threads: {
+              ...s.threads,
+              [overlaySurface]: [...s.threads[overlaySurface], receipt],
+            },
+            chips: { ...s.chips, [overlaySurface]: startChips() },
+            pending: null,
+            confirmOpen: false,
+            pendingProposalId: null,
+            pinError: null,
+            _directiveId: null,
+            _nonce: null,
+            _idempotencyKey: null,
+            successOpen: true,
+            successText,
+            successSurface: overlaySurface,
+          }))
+
+          setTimeout(() => {
+            set({ successOpen: false })
+          }, SUCCESS_DISMISS_MS)
+        }
+      } catch (err) {
+        // Wrong PIN / locked / expired directive — re-open PIN pad so user can retry.
+        // Keep the proposal alive; don't clear pendingProposalId.
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Incorrect PIN or expired session. Please try again."
+        set({
+          pinOpen: true,
+          pin: "",
+          pinError: message,
+        })
       }
-      const successText = successLabels[pending.action] ?? "Done"
-
-      set((s) => ({
-        threads: {
-          ...s.threads,
-          [overlaySurface]: [...s.threads[overlaySurface], receipt],
-        },
-        chips: { ...s.chips, [overlaySurface]: startChips() },
-        pinOpen: false,
-        pin: "",
-        confirmOpen: false,
-        pending: null,
-        successOpen: true,
-        successText,
-        successSurface: overlaySurface,
-      }))
-
-      // Auto-dismiss the success overlay after SUCCESS_DISMISS_MS (matches prototype).
-      // We use a plain setTimeout here (not the injected `schedule`) so that
-      // the injected synchronous scheduler used in tests does not immediately
-      // dismiss the overlay — tests can assert `successOpen === true` after
-      // pressing 4 digits, and separately assert auto-dismiss via a dedicated test.
-      setTimeout(() => {
-        set({ successOpen: false })
-      }, SUCCESS_DISMISS_MS)
     },
 
     reset(surface) {

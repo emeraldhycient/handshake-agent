@@ -10,10 +10,18 @@
 import {
   ChatMessageRequestSchema,
   WebChatResponseSchema,
+  AuthorizeProposalResponseSchema,
+  ExecuteProposalRequestSchema,
+  ExecuteProposalResponseSchema,
+  TransactionStatusResponseSchema,
 } from "@handshake-agent/contracts"
 import type {
   ChatMessageRequest,
   WebChatResponse,
+  AuthorizeProposalResponse,
+  ExecuteProposalRequest,
+  ExecuteProposalResponse,
+  TransactionStatusResponse,
 } from "@handshake-agent/contracts"
 import { api } from "./client"
 
@@ -24,4 +32,46 @@ export async function sendChatMessage(
   const validated = ChatMessageRequestSchema.parse(body)
   const { data } = await api.post("/chat/messages", validated)
   return WebChatResponseSchema.parse(data)
+}
+
+/**
+ * Authorize a proposal — returns a short-lived directiveId + nonce pair.
+ * Called immediately when the user taps "Confirm with PIN".
+ * The nonce is single-use and must never be logged.
+ */
+export async function authorizeProposal(
+  proposalId: string
+): Promise<AuthorizeProposalResponse> {
+  const { data } = await api.post(`/chat/proposals/${proposalId}/authorize`)
+  return AuthorizeProposalResponseSchema.parse(data)
+}
+
+/**
+ * Execute a proposal — submits the PIN + directive credentials.
+ * idempotencyKey must be generated fresh once per confirm attempt (caller's
+ * responsibility) so retries re-use the same key and stay idempotent.
+ *
+ * PIN travels only over TLS; never log the body.
+ */
+export async function executeProposal(
+  proposalId: string,
+  body: ExecuteProposalRequest
+): Promise<ExecuteProposalResponse> {
+  const validated = ExecuteProposalRequestSchema.parse(body)
+  const { data } = await api.post(
+    `/chat/proposals/${proposalId}/execute`,
+    validated
+  )
+  return ExecuteProposalResponseSchema.parse(data)
+}
+
+/**
+ * Poll transaction status — used after execute returns status:"settling"
+ * to drive the TanStack Query refetchInterval until status === "completed".
+ */
+export async function getTransaction(
+  transactionId: string
+): Promise<TransactionStatusResponse> {
+  const { data } = await api.get(`/transactions/${transactionId}`)
+  return TransactionStatusResponseSchema.parse(data)
 }
