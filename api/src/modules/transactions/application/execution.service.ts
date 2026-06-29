@@ -368,12 +368,21 @@ export class ExecutionService {
       asset: storedQuote.asset,
     });
 
-    // ── Step 4: Consume directive grant (authorizes this exact proposal) ─────
-    // NOTE: The directive is consumed before the idempotency check so idempotent
-    // replay (step 6/7) applies to in-process retry holding a valid directive,
-    // not a fresh re-submit.
-    // Throws DirectiveReplayError, DirectiveExpiredError, DirectiveSignatureError,
-    // DirectiveProposalMismatchError on any failure — let them propagate.
+    // ── Step 4: Verify PIN (BEFORE consuming the one-shot directive) ─────────
+    // I5: the directive is single-use. Consuming it before the PIN check means a
+    // wrong-PIN typo permanently burns the grant and blocks a legitimate retry.
+    // Verifying PIN first fails closed on a bad PIN WITHOUT spending the directive.
+    // PIN has its own lockout, so this does not weaken brute-force resistance, and
+    // every other invariant is preserved: the directive is still single-use
+    // (consumed once, on the success path below), still expires, and is still
+    // bound to this exact proposal.
+    await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 5: Consume directive grant (authorizes this exact proposal) ─────
+    // Still consumed before the idempotency check (step 6/7) so idempotent replay
+    // applies to an in-process retry holding a valid directive, not a fresh
+    // re-submit. Throws DirectiveReplayError, DirectiveExpiredError,
+    // DirectiveSignatureError, DirectiveProposalMismatchError — let them propagate.
     const grant = await this.directiveService.consume({
       directiveId,
       nonce,
@@ -386,11 +395,6 @@ export class ExecutionService {
         `directive ref '${grant.directiveRef}' is not '${REQUIRED_DIRECTIVE_REF}'`,
       );
     }
-
-    // ── Step 5: Verify PIN ───────────────────────────────────────────────────
-    // TODO(SEC): wire session step-up (Session.stepUpCompletedAt) — deferred.
-    // PIN + the consumed signed directive are the authorizers for now.
-    await this.pinService.verifyPin(userId, pin);
 
     // ── Step 6: Idempotency check ────────────────────────────────────────────
     // Check AFTER auth so we don't reveal idempotent results to unauthenticated callers.
@@ -741,10 +745,17 @@ export class ExecutionService {
       );
     }
 
-    // ── Step 5: Consume directive grant ──────────────────────────────────────
-    // NOTE: The directive is consumed before the idempotency check so idempotent
-    // replay (step 7/8) applies to in-process retry holding a valid directive,
-    // not a fresh re-submit.
+    // ── Step 5: Verify PIN (BEFORE consuming the one-shot directive) ─────────
+    // I5: verify PIN first so a wrong-PIN typo does not burn the single-use
+    // directive and block a legitimate retry. The directive stays single-use
+    // (consumed once on success), still expires, and is still bound to this
+    // proposal — only the wrong-PIN-spends-the-grant footgun is removed.
+    await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 6: Consume directive grant ──────────────────────────────────────
+    // Still consumed before the idempotency check (step 7/8) so idempotent replay
+    // applies to an in-process retry holding a valid directive, not a fresh
+    // re-submit.
     const grant = await this.directiveService.consume({
       directiveId,
       nonce,
@@ -756,9 +767,6 @@ export class ExecutionService {
         `directive ref '${grant.directiveRef}' is not '${REQUIRED_DIRECTIVE_REF}'`,
       );
     }
-
-    // ── Step 6: Verify PIN ───────────────────────────────────────────────────
-    await this.pinService.verifyPin(userId, pin);
 
     // ── Step 7: Idempotency check ────────────────────────────────────────────
     const existing =
@@ -1233,10 +1241,18 @@ export class ExecutionService {
       );
     }
 
-    // ── Step 6: Consume directive grant ──────────────────────────────────────
-    // NOTE: The directive is consumed before the idempotency check so idempotent
-    // replay (step 8/9) applies to in-process retry holding a valid directive,
-    // not a fresh re-submit.
+    // ── Step 6: Verify PIN (BEFORE consuming the one-shot step-up directive) ─
+    // I5: verify PIN first so a wrong-PIN typo does not burn the single-use
+    // step-up grant and block a legitimate retry. The directive stays single-use
+    // (consumed once on success), still expires, and is still bound to this
+    // proposal; the device-bound step-up below is only recorded once BOTH PIN and
+    // the directive have passed.
+    await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 7: Consume directive grant ──────────────────────────────────────
+    // Still consumed before the idempotency check (step 8/9) so idempotent replay
+    // applies to an in-process retry holding a valid directive, not a fresh
+    // re-submit.
     const grant = await this.directiveService.consume({
       directiveId,
       nonce,
@@ -1248,9 +1264,6 @@ export class ExecutionService {
         `directive ref '${grant.directiveRef}' is not '${REQUIRED_SEND_DIRECTIVE_REF}'`,
       );
     }
-
-    // ── Step 7: Verify PIN ───────────────────────────────────────────────────
-    await this.pinService.verifyPin(userId, pin);
 
     // ── Step 7b: Record device-bound step-up (Fix G, §3.4) ──────────────────
     // Resolve the acting device: use the explicit deviceId from input when

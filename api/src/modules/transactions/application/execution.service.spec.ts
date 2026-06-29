@@ -7,8 +7,8 @@
  *   3. Wrong owner / bad status → ProposalNotExecutableError.
  *   4. Drift exceeded → QuoteDriftError, no Transaction.
  *   5. KYC gate throws → propagates, no Transaction.
- *   6. Directive consume throws (replay) → propagates, PIN NOT checked after.
- *   7. PIN invalid → propagates, no collection/outbox.
+ *   6. Directive consume throws (replay) → propagates after PIN check, no Transaction.
+ *   7. PIN invalid → propagates WITHOUT consuming the directive (I5), no collection/outbox.
  *   8. Idempotent replay → returns existing result, no new side effects.
  *
  * Call ORDER is asserted to guarantee security invariants.
@@ -689,9 +689,10 @@ describe('ExecutionService.executeBuy', () => {
     expect(callOrder.indexOf('pin')).toBeLessThan(
       callOrder.indexOf('create_txn'),
     );
-    // Directive comes before PIN.
-    expect(callOrder.indexOf('directive')).toBeLessThan(
-      callOrder.indexOf('pin'),
+    // I5: PIN comes BEFORE the directive is consumed — a wrong PIN must not burn
+    // the single-use directive.
+    expect(callOrder.indexOf('pin')).toBeLessThan(
+      callOrder.indexOf('directive'),
     );
   });
 
@@ -860,7 +861,7 @@ describe('ExecutionService.executeBuy', () => {
 
   // ── Directive consume throws (replay) ─────────────────────────────────────
 
-  it('directive consume throws replay → propagates; PIN NOT called; no Transaction', async () => {
+  it('directive consume throws replay → DirectiveReplayError propagates; no Transaction (replay protection intact after I5 reorder)', async () => {
     const replayError = new DirectiveReplayError();
     const pinService = makePinService();
     const transactionRepo = makeTransactionRepo();
@@ -874,29 +875,37 @@ describe('ExecutionService.executeBuy', () => {
     await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
       DirectiveReplayError,
     );
-    // PIN must NOT be called after directive failure.
-    expect(pinService.verifyPin).not.toHaveBeenCalled();
+    // I5 reorder: PIN is now verified BEFORE the directive consume, so PIN IS
+    // checked here — but a replayed directive is still rejected at consume and
+    // NO transaction is created. Single-use replay protection is fully intact.
+    expect(pinService.verifyPin).toHaveBeenCalledTimes(1);
     expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
   // ── PIN invalid ───────────────────────────────────────────────────────────
 
-  it('PIN invalid → propagates; no collection/outbox created', async () => {
+  it('I5: wrong PIN propagates WITHOUT consuming the one-shot directive (legitimate retry survives); no collection/outbox', async () => {
     const pinError = new PinInvalidError(4);
     const paymentProvider = makePaymentProvider();
     const outboxRepo = makeOutboxRepo();
     const transactionRepo = makeTransactionRepo();
+    const directiveService = makeDirectiveService();
 
     const svc = buildService({
       pinService: makePinService(pinError),
       paymentProvider,
       outboxRepo,
       transactionRepo,
+      directiveService,
     });
 
     await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
       PinInvalidError,
     );
+    // I5: PIN is verified BEFORE the directive is consumed, so a wrong-PIN typo
+    // must NOT burn the single-use directive — the user can retry the SAME
+    // directive instead of being forced to re-authorize from scratch.
+    expect(directiveService.consume).not.toHaveBeenCalled();
     expect(paymentProvider.createCollection).not.toHaveBeenCalled();
     expect(outboxRepo.create).not.toHaveBeenCalled();
     expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
@@ -1817,12 +1826,15 @@ describe('ExecutionService.executeSell', () => {
     expect(
       settlementRepo.createSellSettlingWithReserveAtomic,
     ).not.toHaveBeenCalled();
-    expect(pinService.verifyPin).not.toHaveBeenCalled();
+    // I5 reorder: PIN is verified before the directive consume, so PIN IS checked
+    // here — but the replayed directive is still rejected and no Transaction is
+    // created. Replay protection is intact.
+    expect(pinService.verifyPin).toHaveBeenCalledTimes(1);
   });
 
   // ── PIN invalid ───────────────────────────────────────────────────────────
 
-  it('wrong PIN → PinInvalidError, no collection/outbox', async () => {
+  it('I5: wrong PIN propagates WITHOUT consuming the one-shot directive (legitimate retry survives); no collection/outbox', async () => {
     const pinService = makePinService(new PinInvalidError(4));
     const settlementRepo = makeSettlementRepo(
       null,
@@ -1830,12 +1842,20 @@ describe('ExecutionService.executeSell', () => {
       STUB_SELL_TXN,
     );
     const outboxRepo = makeOutboxRepo();
+    const directiveService = makeDirectiveService(STUB_SELL_GRANT);
 
-    const svc = buildSellService({ pinService, settlementRepo, outboxRepo });
+    const svc = buildSellService({
+      pinService,
+      settlementRepo,
+      outboxRepo,
+      directiveService,
+    });
 
     await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
       PinInvalidError,
     );
+    // I5: PIN before directive consume — a wrong PIN must not burn the directive.
+    expect(directiveService.consume).not.toHaveBeenCalled();
     expect(
       settlementRepo.createSellSettlingWithReserveAtomic,
     ).not.toHaveBeenCalled();
@@ -1911,7 +1931,7 @@ describe('ExecutionService.executeSell', () => {
 
   // ── Gauntlet order: balance → directive → pin → idempotency → atomic create ──
 
-  it('asserts balance-check → directive.consume → pin.verify → idempotency → atomic create, in order', async () => {
+  it('asserts balance-check → pin.verify → directive.consume → idempotency → atomic create, in order (I5: PIN before directive)', async () => {
     const callOrder: string[] = [];
 
     const ledgerRepo = {
@@ -1970,12 +1990,14 @@ describe('ExecutionService.executeSell', () => {
     await svc.executeSell(SELL_BASE_INPUT);
 
     expect(callOrder.indexOf('balance_check')).toBeLessThan(
-      callOrder.indexOf('directive'),
-    );
-    expect(callOrder.indexOf('directive')).toBeLessThan(
       callOrder.indexOf('pin'),
     );
+    // I5: PIN is verified before the directive is consumed.
     expect(callOrder.indexOf('pin')).toBeLessThan(
+      callOrder.indexOf('directive'),
+    );
+    // Directive is still consumed before the idempotency check.
+    expect(callOrder.indexOf('directive')).toBeLessThan(
       callOrder.indexOf('idempotency'),
     );
     expect(callOrder.indexOf('idempotency')).toBeLessThan(
@@ -2711,7 +2733,7 @@ describe('ExecutionService.executeSend', () => {
 
   // ── PIN invalid ────────────────────────────────────────────────────────────
 
-  it('wrong PIN → PinInvalidError, no Transaction, no withdraw', async () => {
+  it('I5: wrong PIN propagates WITHOUT consuming the one-shot step-up directive (legitimate retry survives); no Transaction, no withdraw', async () => {
     const pinService = makePinService(new PinInvalidError(4));
     const walletService = makeWalletServiceWithWithdraw();
     const settlementRepo = makeSettlementRepo(
@@ -2720,12 +2742,21 @@ describe('ExecutionService.executeSend', () => {
       undefined,
       STUB_SEND_TXN,
     );
+    const directiveService = makeDirectiveService(STUB_SEND_GRANT);
 
-    const svc = buildSendService({ pinService, walletService, settlementRepo });
+    const svc = buildSendService({
+      pinService,
+      walletService,
+      settlementRepo,
+      directiveService,
+    });
 
     await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
       PinInvalidError,
     );
+    // I5: PIN before step-up directive consume — a wrong PIN must not burn the
+    // one-shot step-up grant.
+    expect(directiveService.consume).not.toHaveBeenCalled();
     expect(
       settlementRepo.createSendSettlingWithReserveAtomic,
     ).not.toHaveBeenCalled();
@@ -3088,7 +3119,7 @@ describe('ExecutionService.executeSend', () => {
 
   // ── Gauntlet order ─────────────────────────────────────────────────────────
 
-  it('gauntlet order: balance→cooling-off→sanctions→directive→pin→idempotency→atomic', async () => {
+  it('gauntlet order: balance→cooling-off→sanctions→pin→directive→idempotency→atomic (I5: PIN before directive)', async () => {
     const callOrder: string[] = [];
 
     const ledgerRepo = {
@@ -3168,12 +3199,14 @@ describe('ExecutionService.executeSend', () => {
       callOrder.indexOf('sanctions'),
     );
     expect(callOrder.indexOf('sanctions')).toBeLessThan(
-      callOrder.indexOf('directive'),
-    );
-    expect(callOrder.indexOf('directive')).toBeLessThan(
       callOrder.indexOf('pin'),
     );
+    // I5: PIN is verified before the step-up directive is consumed.
     expect(callOrder.indexOf('pin')).toBeLessThan(
+      callOrder.indexOf('directive'),
+    );
+    // Directive is still consumed before the idempotency check.
+    expect(callOrder.indexOf('directive')).toBeLessThan(
       callOrder.indexOf('idempotency'),
     );
     expect(callOrder.indexOf('idempotency')).toBeLessThan(
