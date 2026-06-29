@@ -33,6 +33,7 @@ const fakeProposalService = {
   createBuyProposal: jest.fn(),
   createSellProposal: jest.fn(),
   createSendProposal: jest.fn(),
+  createSwapProposal: jest.fn(),
 };
 const fakeWalletService = { getOrProvisionNetworkWallet: jest.fn() };
 const fakeBeneficiaryService = { getDefault: jest.fn() };
@@ -60,6 +61,7 @@ const fakeAssetRegistry = {
   formatCrypto: jest.fn((sym: string, amt: string) => `${amt} ${sym}`),
   formatFiat: jest.fn((_code: string, amt: string) => `₦${amt}`),
   isCurrencyLive: jest.fn().mockReturnValue(true),
+  isCapabilityEnabled: jest.fn().mockReturnValue(true),
 };
 
 // ---------------------------------------------------------------------------
@@ -242,19 +244,115 @@ describe('WebChatService', () => {
     ).toBe('TXxxx');
   });
 
-  // ── swap / buy_ticket → not_supported ─────────────────────────────────────
+  // ── buy_ticket → not_supported ────────────────────────────────────────────
 
-  it.each(['swap', 'buy_ticket'])(
-    '%s intent → not_supported outcome',
-    async (action) => {
-      fakeAgentPort.run.mockResolvedValue({ action });
-      const result = await service.handleMessage({
-        userId: 'user-1',
-        text: action,
-      });
-      expect(result.outcome).toEqual({ kind: 'not_supported', action });
-    },
-  );
+  it('buy_ticket intent → not_supported outcome', async () => {
+    fakeAgentPort.run.mockResolvedValue({ action: 'buy_ticket' });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'buy_ticket',
+    });
+    expect(result.outcome).toEqual({
+      kind: 'not_supported',
+      action: 'buy_ticket',
+    });
+  });
+
+  // ── swap, capability disabled → not_supported ──────────────────────────────
+
+  it('swap intent, crypto.swap capability disabled → not_supported outcome', async () => {
+    fakeAssetRegistry.isCapabilityEnabled.mockReturnValueOnce(false);
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'swap 10 USDT to TRX',
+    });
+    expect(result.outcome).toEqual({ kind: 'not_supported', action: 'swap' });
+    expect(fakeProposalService.createSwapProposal).not.toHaveBeenCalled();
+  });
+
+  // ── swap, unverified user → needs_kyc ─────────────────────────────────────
+
+  it('swap intent, unverified user → needs_kyc', async () => {
+    fakeIdentityRepo.loadUser.mockResolvedValue(UNVERIFIED_USER);
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'swap 10 USDT to TRX',
+    });
+    expect(result.outcome).toEqual({ kind: 'needs_kyc' });
+    expect(fakeProposalService.createSwapProposal).not.toHaveBeenCalled();
+  });
+
+  // ── swap, verified, capability live → proposal ─────────────────────────────
+
+  it('swap intent, verified user, capability live → swap proposal outcome', async () => {
+    const swapConf = {
+      proposalId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      fromAmount: '10',
+      toAmount: '12345.67',
+      rate: '1234.567',
+      networkFee: '0.5',
+      transactionFee: '0.1',
+      estimatedArrivalSec: 30,
+      expiresAt: new Date(Date.now() + 120_000).toISOString(),
+    };
+    fakeProposalService.createSwapProposal.mockResolvedValue({
+      proposalId: swapConf.proposalId,
+      quoteId: 'q-swap-1',
+      confirmation: swapConf,
+    });
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'swap 10 USDT to TRX',
+    });
+    expect(result.outcome).toMatchObject({
+      kind: 'proposal',
+      txType: 'swap',
+      proposalId: swapConf.proposalId,
+    });
+    expect(fakeProposalService.createSwapProposal).toHaveBeenCalledWith({
+      userId: 'user-1',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
+  });
+
+  // ── swap, fromAsset === toAsset → graceful (engine throws SwapSameAssetError) ─
+
+  it('swap intent, fromAsset === toAsset → proposal service throws, propagates', async () => {
+    fakeProposalService.createSwapProposal.mockRejectedValue(
+      new Error('Cannot swap USDT to USDT'),
+    );
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'USDT',
+      amount: '10',
+    });
+    await expect(
+      service.handleMessage({ userId: 'user-1', text: 'swap 10 USDT to USDT' }),
+    ).rejects.toThrow();
+  });
 
   // ── query_transactions → transactions outcome ─────────────────────────────
 

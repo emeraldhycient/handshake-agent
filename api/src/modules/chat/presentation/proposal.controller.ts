@@ -248,6 +248,25 @@ export class ProposalController {
         };
       }
 
+      if (proposalType === 'swap') {
+        // Swap uses PIN authorization (same as buy/sell — no on-chain withdrawal
+        // initiated by the user; the provider swaps within its own custody).
+        // idempotencyKey is derived from proposalId for at-most-once (I8).
+        const result = await this.executionService.executeSwap({
+          userId: user.userId,
+          proposalId,
+          directiveId: body.directiveId,
+          nonce: body.nonce,
+          pin: body.pin,
+          idempotencyKey,
+        });
+        return {
+          transactionId: result.transactionId,
+          status: result.status,
+          swap: { providerSwapId: result.swap.providerSwapId },
+        };
+      }
+
       // Unknown type — treat as unprocessable.
       throw new UnprocessableEntityException(
         `proposal type '${proposalType ?? 'unknown'}' is not executable via this endpoint`,

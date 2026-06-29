@@ -174,6 +174,7 @@ export const ExecuteProposalResponseSchema = z.object({
   payment: PaymentDetailsSchema.optional(),
   payout: z.object({ providerRef: z.string() }).optional(),
   onChain: z.object({ providerRef: z.string() }).optional(),
+  swap: z.object({ providerSwapId: z.string() }).optional(),
 })
 export type ExecuteProposalResponse = z.infer<typeof ExecuteProposalResponseSchema>
 

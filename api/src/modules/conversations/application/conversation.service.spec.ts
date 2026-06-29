@@ -38,6 +38,7 @@ import type {
   CreateBuyProposalOutput,
   CreateSellProposalOutput,
   CreateSendProposalOutput,
+  CreateSwapProposalOutput,
 } from '../../transactions/application/proposal.service';
 import type { DirectiveService } from '../../transactions/application/directive.service';
 import type {
@@ -291,20 +292,44 @@ function makeAgentPort(
   return { run: jest.fn().mockResolvedValue(intent) };
 }
 
+function stubSwapProposalOutput(): CreateSwapProposalOutput {
+  return {
+    proposalId: 'swap-proposal-id-1',
+    quoteId: 'swap-quote-id-1',
+    confirmation: {
+      proposalId: 'swap-proposal-id-1',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      fromAmount: '10',
+      toAmount: '12345.67',
+      rate: '1234.567',
+      networkFee: '0.5',
+      transactionFee: '0.1',
+      estimatedArrivalSec: 30,
+      expiresAt: new Date(Date.now() + 120_000).toISOString(),
+    },
+  };
+}
+
 function makeProposalService(
   output: CreateBuyProposalOutput | Error = stubBuyProposalOutput(),
   sellOutput: CreateSellProposalOutput | Error = stubSellProposalOutput(),
   sendOutput: CreateSendProposalOutput | Error = stubSendProposalOutput(),
+  swapOutput: CreateSwapProposalOutput | Error = stubSwapProposalOutput(),
 ): jest.Mocked<
   Pick<
     ProposalService,
-    'createBuyProposal' | 'createSellProposal' | 'createSendProposal'
+    | 'createBuyProposal'
+    | 'createSellProposal'
+    | 'createSendProposal'
+    | 'createSwapProposal'
   >
 > {
   const svc = {
     createBuyProposal: jest.fn(),
     createSellProposal: jest.fn(),
     createSendProposal: jest.fn(),
+    createSwapProposal: jest.fn(),
   };
   if (output instanceof Error) {
     svc.createBuyProposal.mockRejectedValue(output);
@@ -320,6 +345,11 @@ function makeProposalService(
     svc.createSendProposal.mockRejectedValue(sendOutput);
   } else {
     svc.createSendProposal.mockResolvedValue(sendOutput);
+  }
+  if (swapOutput instanceof Error) {
+    svc.createSwapProposal.mockRejectedValue(swapOutput);
+  } else {
+    svc.createSwapProposal.mockResolvedValue(swapOutput);
   }
   return svc;
 }
@@ -535,7 +565,10 @@ function buildService(
     proposalService?: jest.Mocked<
       Pick<
         ProposalService,
-        'createBuyProposal' | 'createSellProposal' | 'createSendProposal'
+        | 'createBuyProposal'
+        | 'createSellProposal'
+        | 'createSendProposal'
+        | 'createSwapProposal'
       >
     >;
     sender?: jest.Mocked<IWhatsAppSender>;
@@ -976,21 +1009,153 @@ describe('ConversationService.handleInbound', () => {
     expect(sentText).toBe(clarification);
   });
 
-  // ── Unsupported action (swap) ─────────────────────────────────────────────
+  // ── swap, capability disabled → "not supported yet" ──────────────────────
 
-  it('swap intent → sends "not supported yet" reply', async () => {
+  it('swap intent, crypto.swap capability disabled → sends "not supported yet" reply, no proposal', async () => {
     const agentPort = makeAgentPort({
       action: 'swap',
       fromAsset: 'USDT',
-      toAsset: 'BTC',
+      toAsset: 'TRX',
       amount: '10',
     });
-    const { svc, sender } = buildService({ agentPort });
+    const assetRegistry = makeAssetRegistry();
+    // Override isCapabilityEnabled to return false for the swap capability.
+    assetRegistry.isCapabilityEnabled.mockReturnValueOnce(false);
+    const proposalService = makeProposalService();
+    const { svc, sender } = buildService({
+      agentPort,
+      assetRegistry,
+      proposalService,
+    });
 
     await svc.handleInbound(baseMsg());
 
     const sentText = captureFirstSentText(sender);
-    expect(sentText).toContain('not supported yet');
+    expect(sentText).toContain('not supported');
+    expect(proposalService.createSwapProposal).not.toHaveBeenCalled();
+  });
+
+  // ── swap, capability live, verified user → proposal + flow/text confirmation ──
+
+  it('swap intent, capability live, verified user, FLOW_ID empty → text confirmation, createSwapProposal called', async () => {
+    const swapOut = stubSwapProposalOutput();
+    const agentPort = makeAgentPort({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
+    const proposalService = makeProposalService(
+      stubBuyProposalOutput(),
+      stubSellProposalOutput(),
+      stubSendProposalOutput(),
+      swapOut,
+    );
+    const { svc, sender } = buildService({
+      agentPort,
+      proposalService,
+      configService: makeConfigService({
+        flowId: '',
+        signingKey: FIXED_SIGNING_KEY,
+      }),
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(proposalService.createSwapProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-id-1',
+        conversationId: FIXED_CONV_ID,
+        fromAsset: 'USDT',
+        toAsset: 'TRX',
+        amount: '10',
+      }),
+    );
+    // Text fallback: contains swap summary fields
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toContain('swap');
+    expect(sender.sendFlow).not.toHaveBeenCalled();
+  });
+
+  it('swap intent, capability live, verified user, FLOW_ID set → sendFlow with swap data, directive request_pin', async () => {
+    const swapOut = stubSwapProposalOutput();
+    const agentPort = makeAgentPort({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
+    const proposalService = makeProposalService(
+      stubBuyProposalOutput(),
+      stubSellProposalOutput(),
+      stubSendProposalOutput(),
+      swapOut,
+    );
+    const directiveService = makeDirectiveService();
+    const { svc, sender } = buildService({
+      agentPort,
+      proposalService,
+      directiveService,
+      configService: makeConfigService({
+        flowId: FIXED_FLOW_ID,
+        signingKey: FIXED_SIGNING_KEY,
+      }),
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(proposalService.createSwapProposal).toHaveBeenCalled();
+    expect(directiveService.issue).toHaveBeenCalledWith({
+      proposalId: swapOut.proposalId,
+      userId: 'user-id-1',
+      ref: 'request_pin',
+    });
+    expect(sender.sendFlow).toHaveBeenCalledTimes(1);
+    expect(sender.sendText).not.toHaveBeenCalledWith(
+      FIXED_FROM,
+      expect.stringContaining('Reply CONFIRM'),
+    );
+  });
+
+  // ── swap, unlinked contact → KYC handoff, no proposal ────────────────────
+
+  it('swap intent, unlinked contact → KYC handoff, createSwapProposal not called', async () => {
+    const identityService = makeIdentityService({
+      resolveByChannel: jest.fn().mockResolvedValue({
+        kind: 'contact',
+        contact: {
+          id: 'contact-id-1',
+          primaryChannel: 'whatsapp',
+          primaryAddress: FIXED_FROM,
+          status: 'active',
+          linkedUserId: null,
+        },
+      }),
+    });
+    const convRepo = makeConvRepo(null);
+    convRepo.findByContactId.mockResolvedValue(null);
+    convRepo.create.mockResolvedValue({
+      ...baseConv(),
+      userId: null,
+      contactId: 'contact-id-1',
+    });
+    const agentPort = makeAgentPort({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
+    const proposalService = makeProposalService();
+    const { svc } = buildService({
+      identityService,
+      convRepo,
+      agentPort,
+      proposalService,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(proposalService.createSwapProposal).not.toHaveBeenCalled();
   });
 
   // ── check_balance (W-balance) ─────────────────────────────────────────────

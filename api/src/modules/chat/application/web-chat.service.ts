@@ -333,7 +333,34 @@ export class WebChatService {
         break;
       }
 
-      case 'swap':
+      case 'swap': {
+        if (!this.assetRegistry.isCapabilityEnabled('crypto.swap')) {
+          outcome = { kind: 'not_supported', action: 'swap' };
+          summaryText = 'That feature is not yet available.';
+          break;
+        }
+        if (user.kycStatus !== 'verified') {
+          outcome = { kind: 'needs_kyc' };
+          summaryText = 'KYC required';
+          break;
+        }
+        const { proposalId: swapPid, confirmation: swapConf } =
+          await this.proposalService.createSwapProposal({
+            userId,
+            fromAsset: intent.fromAsset,
+            toAsset: intent.toAsset,
+            amount: intent.amount,
+          });
+        outcome = {
+          kind: 'proposal',
+          txType: 'swap',
+          proposalId: swapPid,
+          confirmation: swapConf,
+        };
+        summaryText = 'Your swap proposal is ready. Please review and confirm.';
+        break;
+      }
+
       case 'buy_ticket': {
         outcome = { kind: 'not_supported', action: intent.action };
         summaryText = 'That feature is not yet available.';

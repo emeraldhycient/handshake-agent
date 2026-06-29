@@ -135,6 +135,7 @@ const mockExecutionService = {
   executeBuy: jest.fn(),
   executeSell: jest.fn(),
   executeSend: jest.fn(),
+  executeSwap: jest.fn(),
 };
 
 const mockSessionService = {
@@ -628,6 +629,61 @@ describe('ProposalController.execute', () => {
     await expect(
       controller.execute('proposal-uuid', validBody as never, TEST_USER),
     ).rejects.toThrow(BadGatewayException);
+  });
+
+  // ── swap dispatch ──────────────────────────────────────────────────────────
+
+  it('dispatches swap → executeSwap and returns swap providerSwapId', async () => {
+    mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'swap' }));
+    mockExecutionService.executeSwap.mockResolvedValue({
+      transactionId: 'txn-swap-1',
+      status: 'settling',
+      swap: { providerSwapId: 'blockradar-swap-001' },
+    });
+
+    const result = await controller.execute(
+      'proposal-uuid',
+      validBody,
+      TEST_USER,
+    );
+
+    expect(mockExecutionService.executeSwap).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: TEST_USER.userId,
+        proposalId: 'proposal-uuid',
+        idempotencyKey: 'proposal-uuid',
+        directiveId: validBody.directiveId,
+        nonce: validBody.nonce,
+        pin: validBody.pin,
+      }),
+    );
+    expect(result.transactionId).toBe('txn-swap-1');
+    expect(result.status).toBe('settling');
+    expect(
+      (result as { swap?: { providerSwapId: string } }).swap?.providerSwapId,
+    ).toBe('blockradar-swap-001');
+  });
+
+  it('swap: maps ProviderUnavailableError → 502', async () => {
+    mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'swap' }));
+    mockExecutionService.executeSwap.mockRejectedValue(
+      new ProviderUnavailableError('swapExecute'),
+    );
+
+    await expect(
+      controller.execute('proposal-uuid', validBody as never, TEST_USER),
+    ).rejects.toThrow(BadGatewayException);
+  });
+
+  it('swap: maps InsufficientBalanceError → 422', async () => {
+    mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'swap' }));
+    mockExecutionService.executeSwap.mockRejectedValue(
+      new InsufficientBalanceError('1.0', '10.0', 'USDT'),
+    );
+
+    await expect(
+      controller.execute('proposal-uuid', validBody as never, TEST_USER),
+    ).rejects.toThrow(UnprocessableEntityException);
   });
 });
 

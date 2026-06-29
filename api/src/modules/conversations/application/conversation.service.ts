@@ -363,6 +363,15 @@ export class ConversationService implements IInboundHandler {
         );
         return { replyText, flowSent: false };
       }
+      case 'swap': {
+        const { replyText, flowSent } = await this.handleSwap(
+          intent,
+          identity,
+          conversation,
+          msg,
+        );
+        return { replyText, flowSent };
+      }
       case 'none': {
         return {
           replyText: intent.clarification ?? 'Could you clarify your request?',
@@ -370,7 +379,7 @@ export class ConversationService implements IInboundHandler {
         };
       }
       default: {
-        // swap / buy_ticket — deferred.
+        // buy_ticket — deferred.
         return {
           replyText: this.notSupportedReply(intent.action),
           flowSent: false,
@@ -696,6 +705,87 @@ export class ConversationService implements IInboundHandler {
       textFallback: this.buildSendConfirmationText(confirmation),
       flowSentSummary:
         'A secure confirmation form has been sent. Please complete it to proceed with your send.',
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: swap handler
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handles a `swap` intent:
+   *   1. Capability gate: if crypto.swap is disabled → not-supported reply.
+   *   2. Guard: requires active user (KYC + reverification check).
+   *   3. Create swap proposal → send confirmation Flow (request_pin directive).
+   *      - If FLOW_ID unset → text confirmation fallback.
+   *
+   * §3.1: model only proposes; the engine (ExecutionService.executeSwap) disposes.
+   * The swap uses `request_pin` (same as buy/sell) — no on-chain withdrawal initiated
+   * by the user (the provider swaps within its own custody).
+   */
+  private async handleSwap(
+    intent: RoutableIntent,
+    identity: ResolvedIdentity,
+    conversation: ConversationRecord,
+    msg: InboundMessage,
+  ): Promise<{ replyText: string; flowSent: boolean }> {
+    // 1. Capability gate — check before any user resolution (fail cheap).
+    if (!this.assetRegistry.isCapabilityEnabled('crypto.swap')) {
+      return {
+        replyText: this.notSupportedReply('swap'),
+        flowSent: false,
+      };
+    }
+
+    // 2. Guard: requires an active, KYC-verified user.
+    const guard = this.requireActiveUser(identity, msg.fromAddress);
+    if ('needsKyc' in guard) {
+      const replyText = await this.sendKycHandoff(guard.channelAddress);
+      return { replyText, flowSent: false };
+    }
+    if ('needsReverify' in guard) {
+      return { replyText: this.reverifyFallbackReply(), flowSent: false };
+    }
+    if ('reply' in guard) {
+      return { replyText: guard.reply, flowSent: false };
+    }
+
+    const { user } = guard;
+
+    // 3. Create the swap proposal (fromAsset === toAsset guard runs in the engine).
+    const fromAsset = (intent as { fromAsset?: string }).fromAsset ?? '';
+    const toAsset = (intent as { toAsset?: string }).toAsset ?? '';
+    const amount = (intent as { amount?: string }).amount ?? '';
+
+    const { proposalId, confirmation } =
+      await this.proposalService.createSwapProposal({
+        userId: user.id,
+        conversationId: conversation.id,
+        fromAsset,
+        toAsset,
+        amount,
+      });
+
+    return this.sendConfirmationFlow({
+      proposalId,
+      userId: user.id,
+      to: msg.fromAddress,
+      directiveRef: 'request_pin',
+      screen: 'SWAP_CONFIRM',
+      flowData: {
+        proposalId,
+        fromAsset: confirmation.fromAsset,
+        toAsset: confirmation.toAsset,
+        fromAmount: confirmation.fromAmount,
+        toAmount: confirmation.toAmount,
+        rate: confirmation.rate,
+        networkFee: confirmation.networkFee,
+        transactionFee: confirmation.transactionFee,
+        estimatedArrivalSec: confirmation.estimatedArrivalSec,
+      },
+      textFallback: this.buildSwapConfirmationText(confirmation),
+      flowSentSummary:
+        'A secure confirmation form has been sent. Please complete it to proceed with your swap.',
     });
   }
 
@@ -1122,6 +1212,35 @@ export class ConversationService implements IInboundHandler {
       `Network fee: ${this.assetRegistry.formatCrypto(c.asset, c.networkFeeCrypto)}\n` +
       `Total debit: ${this.assetRegistry.formatCrypto(c.asset, c.totalDebit)}\n` +
       `To${destLabel}: ${c.toAddressMasked}\n` +
+      `Expires at: ${c.expiresAt}\n` +
+      `Reply CONFIRM to proceed.`
+    );
+  }
+
+  /**
+   * Builds the itemized swap confirmation text via registry formatters.
+   */
+  private buildSwapConfirmationText(c: {
+    fromAsset: string;
+    toAsset: string;
+    fromAmount: string;
+    toAmount: string;
+    rate: string;
+    networkFee: string;
+    transactionFee: string;
+    estimatedArrivalSec: number;
+    expiresAt: string;
+  }): string {
+    const fromMeta = this.assetRegistry.asset(c.fromAsset);
+    const toMeta = this.assetRegistry.asset(c.toAsset);
+    return (
+      `Here is your swap summary:\n` +
+      `You swap: ${this.assetRegistry.formatCrypto(c.fromAsset, c.fromAmount)} (${fromMeta.displayName})\n` +
+      `You receive: ${this.assetRegistry.formatCrypto(c.toAsset, c.toAmount)} (${toMeta.displayName})\n` +
+      `Rate: 1 ${c.fromAsset} = ${c.rate} ${c.toAsset}\n` +
+      `Network fee: ${this.assetRegistry.formatCrypto(c.fromAsset, c.networkFee)}\n` +
+      `Transaction fee: ${this.assetRegistry.formatCrypto(c.fromAsset, c.transactionFee)}\n` +
+      `Est. arrival: ${c.estimatedArrivalSec}s\n` +
       `Expires at: ${c.expiresAt}\n` +
       `Reply CONFIRM to proceed.`
     );
