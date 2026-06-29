@@ -1,13 +1,16 @@
 "use client"
 
+import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusPill } from "@/components/shared/status-pill"
+import { TransactionDetailModal } from "@/components/shared/transaction-detail-modal"
 import { useActivity } from "@/lib/query/hooks"
 import type { ActivityTabProps } from "@/types/components"
 
 export function ActivityTab({ className }: ActivityTabProps) {
   const { data: groups, isLoading, isError } = useActivity()
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   if (isLoading) {
     return (
@@ -97,10 +100,15 @@ export function ActivityTab({ className }: ActivityTabProps) {
             </div>
             <div className="overflow-hidden rounded-[18px] border border-border bg-card">
               {group.items.map((item, i) => (
-                <div
+                <button
                   key={item.id}
+                  type="button"
+                  data-tx-id={item.id}
+                  aria-label={`View details for ${item.title}`}
+                  onClick={() => setSelectedId(item.id)}
                   className={cn(
-                    "flex items-center gap-3 px-[15px] py-[13px]",
+                    "flex w-full cursor-pointer items-center gap-3 px-[15px] py-[13px] text-left",
+                    "transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none",
                     i > 0 && "border-t border-border"
                   )}
                 >
@@ -129,12 +137,18 @@ export function ActivityTab({ className }: ActivityTabProps) {
                       </StatusPill>
                     </div>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </div>
         ))}
       </div>
+
+      {/* ── Transaction detail modal ─────────────────────────────────────────── */}
+      <TransactionDetailModal
+        transactionId={selectedId}
+        onClose={() => setSelectedId(null)}
+      />
     </div>
   )
 }

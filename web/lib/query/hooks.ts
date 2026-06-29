@@ -6,7 +6,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { gateway } from "@/lib/api/gateway"
-import { getTransaction } from "@/lib/api/chat"
+import { getTransaction, getTransactionDetail } from "@/lib/api/chat"
 import type { ChatAction } from "@/lib/schemas"
 import { qk } from "./keys"
 
@@ -114,6 +114,20 @@ export function useTransactionStatus(
       if (status === "completed" || status === "failed") return false
       return 4_000
     },
+  })
+}
+
+/**
+ * Fetch the full detail for a single transaction — used by TransactionDetailModal.
+ * One-shot query (no refetchInterval). Enabled only when `transactionId` is set.
+ * `staleTime: Infinity` — the detail page shows historical data; it doesn't change.
+ */
+export function useTransactionDetail(transactionId: string | null) {
+  return useQuery({
+    queryKey: qk.transactionDetail(transactionId ?? ""),
+    queryFn: () => getTransactionDetail(transactionId!),
+    enabled: !!transactionId,
+    staleTime: Infinity,
   })
 }
 

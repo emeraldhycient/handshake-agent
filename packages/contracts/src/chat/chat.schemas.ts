@@ -178,17 +178,32 @@ export const ExecuteProposalResponseSchema = z.object({
 })
 export type ExecuteProposalResponse = z.infer<typeof ExecuteProposalResponseSchema>
 
-// Transaction status response — returned by GET /transactions/:id/status.
+// Transaction status response — returned by GET /transactions/:id.
+// Includes all detail fields available from the transaction's metadata so the
+// FE can render a complete receipt without a second request.
 export const TransactionStatusResponseSchema = z.object({
   id: z.string().uuid(),
   type: z.string(),
   status: z.string(),
+  /** 'in' for deposits/buys/receives; 'out' for sells/sends */
+  direction: z.enum(['in', 'out']).optional(),
   receiptNumber: z.string().optional(),
   payment: PaymentDetailsSchema.optional(),
   asset: z.string().optional(),
+  network: z.string().optional(),
   cryptoAmount: z.string().optional(),
   fiatAmount: z.string().optional(),
   fiatCurrency: z.string().optional(),
+  /** On-chain transaction hash (deposits, sends) */
+  txHash: z.string().optional(),
+  /** Block number at which the tx was confirmed */
+  blockNumber: z.number().int().nonnegative().optional(),
+  /** Number of block confirmations */
+  confirmations: z.number().int().nonnegative().optional(),
+  /** Counterparty address or identifier (send destination, deposit sender) */
+  counterparty: z.string().optional(),
+  /** Network fee paid (formatted display string) */
+  fees: z.string().optional(),
   createdAt: z.string().datetime(),
 })
 export type TransactionStatusResponse = z.infer<typeof TransactionStatusResponseSchema>

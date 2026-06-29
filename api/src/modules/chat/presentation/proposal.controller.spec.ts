@@ -785,4 +785,102 @@ describe('TransactionStatusController', () => {
 
     expect(result.payment).toBeUndefined();
   });
+
+  // ── New full-detail fields ─────────────────────────────────────────────────
+
+  it('returns direction=in for a deposit (buy) transaction', async () => {
+    mockTransactionRepo.findById.mockResolvedValue(
+      makeTransaction({ type: 'buy' }),
+    );
+
+    const result = await controller.getStatus('txn-uuid', TEST_USER);
+
+    expect(result.direction).toBe('in');
+  });
+
+  it('returns direction=out for a sell transaction', async () => {
+    mockTransactionRepo.findById.mockResolvedValue(
+      makeTransaction({
+        type: 'sell',
+        metadata: { asset: 'USDT', fiatAmount: '8000', fiatCurrency: 'NGN' },
+      }),
+    );
+
+    const result = await controller.getStatus('txn-uuid', TEST_USER);
+
+    expect(result.direction).toBe('out');
+  });
+
+  it('returns txHash, blockNumber, confirmations, network, and counterparty from metadata', async () => {
+    mockTransactionRepo.findById.mockResolvedValue(
+      makeTransaction({
+        type: 'deposit',
+        metadata: {
+          asset: 'USDT',
+          cryptoAmount: '12.00',
+          network: 'tron',
+          txHash: 'abc123def456',
+          blockNumber: 68_421_042,
+          confirmations: 21,
+          senderAddress: 'TQn9YgkXgk7r',
+          fees: '0.00 USDT',
+        },
+      }),
+    );
+
+    const result = await controller.getStatus('txn-uuid', TEST_USER);
+
+    expect(result.network).toBe('tron');
+    expect(result.txHash).toBe('abc123def456');
+    expect(result.blockNumber).toBe(68_421_042);
+    expect(result.confirmations).toBe(21);
+    expect(result.counterparty).toBe('TQn9YgkXgk7r');
+    expect(result.fees).toBe('0.00 USDT');
+  });
+
+  it('uses destination as counterparty for send transactions', async () => {
+    mockTransactionRepo.findById.mockResolvedValue(
+      makeTransaction({
+        type: 'send',
+        metadata: {
+          asset: 'USDT',
+          cryptoAmount: '26.00',
+          network: 'tron',
+          destination: 'TXyzABCDEFGH',
+          txHash: 'send-hash-001',
+        },
+      }),
+    );
+
+    const result = await controller.getStatus('txn-uuid', TEST_USER);
+
+    expect(result.counterparty).toBe('TXyzABCDEFGH');
+    expect(result.txHash).toBe('send-hash-001');
+  });
+
+  it('omits on-chain fields when not present in metadata', async () => {
+    mockTransactionRepo.findById.mockResolvedValue(
+      makeTransaction({
+        type: 'buy',
+        metadata: {
+          asset: 'USDT',
+          fiatAmount: '5000',
+          fiatCurrency: 'NGN',
+          cryptoAmount: '4.5',
+          accountNumber: '1234',
+          bankName: 'Bank',
+          providerRef: 'ref',
+        },
+      }),
+    );
+
+    const result = await controller.getStatus('txn-uuid', TEST_USER);
+
+    expect(result.txHash).toBeUndefined();
+    expect(result.blockNumber).toBeUndefined();
+    expect(result.confirmations).toBeUndefined();
+    expect(result.network).toBeUndefined();
+    expect(result.fees).toBeUndefined();
+    expect(result.counterparty).toBeUndefined();
+  });
 });

@@ -93,6 +93,9 @@ import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors
 
 import { ExecuteProposalDto } from './dto/proposal.dto';
 
+// Inflow transaction types — used to derive `direction` when not already in metadata.
+const INFLOW_TYPES = new Set(['buy', 'deposit', 'receive', 'reward', 'refund']);
+
 // The executable proposal statuses (must match the engine's own check).
 const EXECUTABLE_STATUSES = new Set<string>(['pending', 'confirmed']);
 
@@ -440,13 +443,37 @@ export class TransactionStatusController {
       receiptNumber = found ?? undefined;
     }
 
+    // Derive direction: prefer an explicit metadata flag, fall back to type heuristic.
+    const direction: 'in' | 'out' = INFLOW_TYPES.has(transaction.type)
+      ? 'in'
+      : 'out';
+
+    // Counterparty: prefer destination (send), then senderAddress (deposit).
+    const counterparty =
+      typeof meta.destination === 'string'
+        ? meta.destination
+        : typeof meta.senderAddress === 'string'
+          ? meta.senderAddress
+          : undefined;
+
+    // On-chain fields — present for deposits (from Blockradar webhook) and sends.
+    const txHash = typeof meta.txHash === 'string' ? meta.txHash : undefined;
+    const blockNumber =
+      typeof meta.blockNumber === 'number' ? meta.blockNumber : undefined;
+    const confirmations =
+      typeof meta.confirmations === 'number' ? meta.confirmations : undefined;
+    const network = typeof meta.network === 'string' ? meta.network : undefined;
+    const fees = typeof meta.fees === 'string' ? meta.fees : undefined;
+
     return {
       id: transaction.id,
       type: transaction.type,
       status: transaction.status,
+      direction,
       ...(receiptNumber !== undefined ? { receiptNumber } : {}),
       ...(payment !== undefined ? { payment } : {}),
       ...(typeof meta.asset === 'string' ? { asset: meta.asset } : {}),
+      ...(network !== undefined ? { network } : {}),
       ...(typeof meta.cryptoAmount === 'string'
         ? { cryptoAmount: meta.cryptoAmount }
         : {}),
@@ -456,6 +483,11 @@ export class TransactionStatusController {
       ...(typeof meta.fiatCurrency === 'string'
         ? { fiatCurrency: meta.fiatCurrency }
         : {}),
+      ...(txHash !== undefined ? { txHash } : {}),
+      ...(blockNumber !== undefined ? { blockNumber } : {}),
+      ...(confirmations !== undefined ? { confirmations } : {}),
+      ...(counterparty !== undefined ? { counterparty } : {}),
+      ...(fees !== undefined ? { fees } : {}),
       createdAt: transaction.createdAt.toISOString(),
     };
   }

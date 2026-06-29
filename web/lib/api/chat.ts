@@ -83,6 +83,19 @@ export async function getTransaction(
 }
 
 /**
+ * Fetch the full detail for a single transaction by id.
+ * Used by the TransactionDetailModal — called once on open, not polled.
+ * Re-uses the same endpoint as getTransaction; kept as a named alias so
+ * callers can distinguish polling vs. one-shot detail intent.
+ */
+export async function getTransactionDetail(
+  transactionId: string
+): Promise<TransactionStatusResponse> {
+  const { data } = await api.get(`/transactions/${transactionId}`)
+  return TransactionStatusResponseSchema.parse(data)
+}
+
+/**
  * Fetch the authenticated user's conversation history (oldest→newest), used to
  * rehydrate the chat thread on reload. `before` is a messageId cursor for the
  * previous (older) page. Response is parsed through the contracts schema.

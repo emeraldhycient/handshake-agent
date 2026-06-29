@@ -4,9 +4,63 @@ import { useState } from "react"
 import { Money } from "@/components/shared/money"
 import { StatusPill } from "@/components/shared/status-pill"
 import { Skeleton } from "@/components/ui/skeleton"
+import { TransactionDetailModal } from "@/components/shared/transaction-detail-modal"
 import { useActivity } from "@/lib/query/hooks"
 import type { ActivityItem } from "@/lib/schemas"
 import { cn } from "@/lib/utils"
+
+// ─── Activity item row ────────────────────────────────────────────────────────
+
+interface ActivityRowProps {
+  item: ActivityItem
+  idx: number
+  /** Called when the user clicks the row — parallel tx-detail work handles routing. */
+  onSelect?: (id: string) => void
+}
+
+function ActivityRow({ item, idx, onSelect }: ActivityRowProps) {
+  return (
+    <button
+      key={item.id}
+      type="button"
+      data-tx-id={item.id}
+      aria-label={`View details for ${item.title}`}
+      onClick={() => onSelect?.(item.id)}
+      className={cn(
+        "flex w-full cursor-pointer items-center gap-[13px] px-[18px] py-[14px] text-left",
+        "transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none",
+        idx > 0 && "border-t border-border"
+      )}
+    >
+      {/* Icon */}
+      <div
+        className="flex h-9 w-9 flex-none items-center justify-center rounded-[10px] text-[17px] font-bold"
+        style={{ backgroundColor: item.tint, color: item.col }}
+        aria-hidden="true"
+      >
+        {item.icon}
+      </div>
+      {/* Body */}
+      <div className="min-w-0 flex-1">
+        <p className="text-[14.5px] font-bold text-foreground">{item.title}</p>
+        <p className="text-[12.5px] text-muted-foreground tabular-nums">
+          {item.sub}
+        </p>
+      </div>
+      {/* Amount + status */}
+      <div className="text-right">
+        <Money
+          value={item.amount}
+          as="p"
+          className="text-[14.5px] font-bold text-foreground"
+        />
+        <StatusPill tone={item.statusTone} className="mt-[3px] text-[10.5px]">
+          {item.status}
+        </StatusPill>
+      </div>
+    </button>
+  )
+}
 
 // ─── Filter definitions ───────────────────────────────────────────────────────
 
@@ -34,9 +88,14 @@ function matchesFilter(item: ActivityItem, filter: ActivityFilter): boolean {
  * Port of prototype lines 721–744.
  * Local filter state (All/Received/Sent/Tickets) filters items by dir.
  * Four async branches: loading / error / empty / data.
+ *
+ * Clicking a row opens TransactionDetailModal with the full on-chain detail:
+ * amount, asset, network, tx hash, block/confirmations, status, timestamp,
+ * direction, fees, counterparty, and receipt number.
  */
 export function ActivityPage({ className }: { className?: string }) {
   const [activeFilter, setActiveFilter] = useState<ActivityFilter>("all")
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const activity = useActivity()
 
   // ── Loading state ──────────────────────────────────────────────────────────
@@ -143,48 +202,22 @@ export function ActivityPage({ className }: { className?: string }) {
           </p>
           <div className="overflow-hidden rounded-[16px] border border-border bg-card">
             {g.items.map((item, idx) => (
-              <div
+              <ActivityRow
                 key={item.id}
-                className={cn(
-                  "flex items-center gap-[13px] px-[18px] py-[14px]",
-                  idx > 0 && "border-t border-border"
-                )}
-              >
-                {/* Icon */}
-                <div
-                  className="flex h-9 w-9 flex-none items-center justify-center rounded-[10px] text-[17px] font-bold"
-                  style={{ backgroundColor: item.tint, color: item.col }}
-                >
-                  {item.icon}
-                </div>
-                {/* Body */}
-                <div className="min-w-0 flex-1">
-                  <p className="text-[14.5px] font-bold text-foreground">
-                    {item.title}
-                  </p>
-                  <p className="text-[12.5px] text-muted-foreground tabular-nums">
-                    {item.sub}
-                  </p>
-                </div>
-                {/* Amount + status */}
-                <div className="text-right">
-                  <Money
-                    value={item.amount}
-                    as="p"
-                    className="text-[14.5px] font-bold text-foreground"
-                  />
-                  <StatusPill
-                    tone={item.statusTone}
-                    className="mt-[3px] text-[10.5px]"
-                  >
-                    {item.status}
-                  </StatusPill>
-                </div>
-              </div>
+                item={item}
+                idx={idx}
+                onSelect={setSelectedId}
+              />
             ))}
           </div>
         </div>
       ))}
+
+      {/* ── Transaction detail modal ─────────────────────────────────────────── */}
+      <TransactionDetailModal
+        transactionId={selectedId}
+        onClose={() => setSelectedId(null)}
+      />
     </div>
   )
 }

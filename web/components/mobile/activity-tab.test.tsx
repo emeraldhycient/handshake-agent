@@ -1,10 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi, afterEach } from "vitest"
 import { ActivityTab } from "./activity-tab"
 
 // ─── Per-test mock control for the error-branch tests ────────────────────────
 import * as gatewayModule from "@/lib/api/gateway"
+import * as chatApi from "@/lib/api/chat"
 
 function makeWrapper() {
   const client = new QueryClient({
@@ -86,5 +88,31 @@ describe("ActivityTab", () => {
         expect(screen.getByText("Could not load activity")).toBeInTheDocument(),
       { timeout: 3000 }
     )
+  })
+
+  it("clicking a row opens the TransactionDetailModal", async () => {
+    // Make detail fetch hang so the dialog loading state is visible
+    vi.spyOn(chatApi, "getTransactionDetail").mockReturnValue(
+      new Promise(() => {})
+    )
+    const user = userEvent.setup()
+    render(<ActivityTab />, { wrapper: makeWrapper() })
+
+    // Wait for data to load
+    await waitFor(() => expect(screen.getByText("Today")).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+
+    // Click the first row (Bought USDT) by exact aria-label
+    const row = screen.getByRole("button", {
+      name: "View details for Bought USDT",
+    })
+    await user.click(row)
+
+    // Dialog should open with the generic loading title
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument()
+    })
+    expect(screen.getByText("Transaction Detail")).toBeInTheDocument()
   })
 })

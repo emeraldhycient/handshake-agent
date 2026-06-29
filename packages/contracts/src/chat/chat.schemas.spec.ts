@@ -718,4 +718,60 @@ describe('TransactionStatusResponseSchema', () => {
       }),
     ).toThrow()
   })
+
+  it('accepts full on-chain detail fields (deposit/send transaction)', () => {
+    const result = TransactionStatusResponseSchema.parse({
+      ...validStatusResponse,
+      type: 'deposit',
+      direction: 'in',
+      asset: 'USDT',
+      network: 'tron',
+      cryptoAmount: '12.00',
+      txHash: 'abc123def456abc123def456abc123def456abc123def456abc123def456abc123',
+      blockNumber: 68_421_042,
+      confirmations: 21,
+      counterparty: 'TQn9YgkXgk7r',
+      fees: '0.00 USDT',
+    })
+    expect(result.direction).toBe('in')
+    expect(result.network).toBe('tron')
+    expect(result.txHash).toBe('abc123def456abc123def456abc123def456abc123def456abc123def456abc123')
+    expect(result.blockNumber).toBe(68_421_042)
+    expect(result.confirmations).toBe(21)
+    expect(result.counterparty).toBe('TQn9YgkXgk7r')
+    expect(result.fees).toBe('0.00 USDT')
+  })
+
+  it('accepts send transaction with outbound direction and fees', () => {
+    const result = TransactionStatusResponseSchema.parse({
+      ...validStatusResponse,
+      type: 'send',
+      direction: 'out',
+      asset: 'USDT',
+      network: 'tron',
+      cryptoAmount: '26.00',
+      counterparty: 'TXyzABCDEFGH',
+      fees: '1.00 USDT',
+    })
+    expect(result.direction).toBe('out')
+    expect(result.fees).toBe('1.00 USDT')
+  })
+
+  it('rejects direction values other than in/out', () => {
+    expect(() =>
+      TransactionStatusResponseSchema.parse({
+        ...validStatusResponse,
+        direction: 'unknown',
+      }),
+    ).toThrow()
+  })
+
+  it('rejects negative blockNumber', () => {
+    expect(() =>
+      TransactionStatusResponseSchema.parse({
+        ...validStatusResponse,
+        blockNumber: -1,
+      }),
+    ).toThrow()
+  })
 })
