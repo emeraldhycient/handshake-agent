@@ -28,6 +28,7 @@ describe("ChatThread", () => {
         density="mobile"
         onConfirm={noop}
         onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     expect(screen.getByText("Today")).toBeInTheDocument()
@@ -46,6 +47,7 @@ describe("ChatThread", () => {
         density="mobile"
         onConfirm={noop}
         onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     expect(screen.getByText("Hello from user")).toBeInTheDocument()
@@ -61,6 +63,7 @@ describe("ChatThread", () => {
         density="mobile"
         onConfirm={noop}
         onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     expect(screen.getByTestId("typing")).toBeInTheDocument()
@@ -74,6 +77,7 @@ describe("ChatThread", () => {
         density="mobile"
         onConfirm={noop}
         onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     expect(screen.queryByTestId("typing")).not.toBeInTheDocument()
@@ -90,6 +94,7 @@ describe("ChatThread", () => {
         density="mobile"
         onConfirm={noop}
         onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     for (let i = 0; i < 5; i++) {
@@ -119,6 +124,7 @@ describe("ChatThread", () => {
         density="mobile"
         onConfirm={onConfirm}
         onSelectTicket={onSelectTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     await userEvent.click(

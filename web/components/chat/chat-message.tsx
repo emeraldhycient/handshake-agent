@@ -4,6 +4,9 @@ import { BalanceCard } from "@/components/chat/cards/balance-card"
 import { ReceiveCard } from "@/components/chat/cards/receive-card"
 import { TicketsCard } from "@/components/chat/cards/tickets-card"
 import { ReceiptCard } from "@/components/chat/cards/receipt-card"
+import { PayInCardLive } from "@/components/chat/cards/pay-in-card"
+import { SettlingCardLive } from "@/components/chat/cards/settling-card"
+import { NeedsBeneficiaryCard } from "@/components/chat/cards/needs-beneficiary-card"
 import type { ChatMessageViewProps } from "@/types/components"
 
 /**
@@ -16,6 +19,7 @@ export function ChatMessageView({
   density,
   onConfirm,
   onSelectTicket,
+  onResolveBeneficiary,
 }: ChatMessageViewProps) {
   const isUser = message.kind === "text" && message.role === "user"
 
@@ -75,6 +79,21 @@ export function ChatMessageView({
 
           case "receipt":
             return <ReceiptCard {...message} density={density} />
+
+          case "pay_in":
+            return <PayInCardLive {...message} density={density} />
+
+          case "settling":
+            return <SettlingCardLive {...message} density={density} />
+
+          case "needs_beneficiary":
+            return (
+              <NeedsBeneficiaryCard
+                {...message}
+                density={density}
+                onResolve={onResolveBeneficiary}
+              />
+            )
 
           default: {
             // Exhaustiveness check: TypeScript will error here if a new kind is

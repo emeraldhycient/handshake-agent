@@ -1,18 +1,41 @@
 import { Module } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
 
 import { CLOCK, SystemClock } from '../../core/common/clock';
-import { WALLET_PROVIDER } from './application/ports/wallet-provider.port';
+import {
+  WALLET_PROVIDER,
+  type IWalletProvider,
+} from './application/ports/wallet-provider.port';
 import { WALLET_REPOSITORY } from './application/ports/wallet.repository.port';
 import { BACKFILL_RUN_REPOSITORY } from './application/ports/backfill-run.repository.port';
 import { WalletService } from './application/wallet.service';
 import { WalletBalanceService } from './application/wallet-balance.service';
 import { BlockradarProvider } from './infrastructure/blockradar.provider';
+import { MockWalletProvider } from './infrastructure/mock-wallet.provider';
 import { WalletPrismaRepository } from './infrastructure/wallet.prisma.repository';
 import { PrismaBackfillRunRepository } from './infrastructure/backfill-run.prisma.repository';
 import { WebAuthModule } from '../auth/auth.module';
 import { QuotesModule } from '../quotes/quotes.module';
 import { WalletController } from './presentation/wallet.controller';
+
+/**
+ * Selects the active wallet adapter from the layered config.
+ *
+ *   WALLET_MOCK_MODE=true  (env-schema default) → MockWalletProvider
+ *   WALLET_MOCK_MODE=false                       → BlockradarProvider (live)
+ *
+ * Default is mock (safe): only an explicit 'false' activates real Blockradar
+ * calls. Mirrors KYC_MOCK_MODE / SANCTIONS_MOCK_MODE. Exported so the binding
+ * decision can be unit-tested without booting the full DI graph.
+ */
+export function selectWalletProvider(
+  mock: MockWalletProvider,
+  real: BlockradarProvider,
+  config: ConfigService,
+): IWalletProvider {
+  return config.get<string>('WALLET_MOCK_MODE') === 'false' ? real : mock;
+}
 
 /**
  * Wallets feature module. Wires the Blockradar WaaS adapter, the Prisma
@@ -37,7 +60,14 @@ import { WalletController } from './presentation/wallet.controller';
   providers: [
     WalletService,
     WalletBalanceService,
-    { provide: WALLET_PROVIDER, useClass: BlockradarProvider },
+    // Both adapters registered so the factory can inject either (mock default).
+    MockWalletProvider,
+    BlockradarProvider,
+    {
+      provide: WALLET_PROVIDER,
+      useFactory: selectWalletProvider,
+      inject: [MockWalletProvider, BlockradarProvider, ConfigService],
+    },
     { provide: WALLET_REPOSITORY, useClass: WalletPrismaRepository },
     { provide: BACKFILL_RUN_REPOSITORY, useClass: PrismaBackfillRunRepository },
     { provide: CLOCK, useClass: SystemClock },

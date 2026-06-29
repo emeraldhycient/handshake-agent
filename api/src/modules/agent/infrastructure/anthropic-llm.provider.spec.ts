@@ -15,7 +15,6 @@
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import type { Intent } from '@handshake-agent/contracts';
-import { IntentSchema } from '@handshake-agent/contracts';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 
 // ---------------------------------------------------------------------------
@@ -81,7 +80,10 @@ describe('AnthropicLlmProvider', () => {
     jest.clearAllMocks();
     MockChatAnthropic.mockImplementation(() => mockChatAnthropicInstance);
     mockWithStructuredOutput.mockReturnValue({ invoke: mockInvoke });
-    mockInvoke.mockResolvedValue(cannedIntent);
+    // The structured tool now wraps the intent union in an object
+    // ({ intent }) so the Anthropic tool input_schema has a root object type;
+    // the provider unwraps `.intent`.
+    mockInvoke.mockResolvedValue({ intent: cannedIntent });
   });
 
   describe('when ANTHROPIC_API_KEY is provided', () => {
@@ -124,11 +126,15 @@ describe('AnthropicLlmProvider', () => {
       );
     });
 
-    it('calls withStructuredOutput(IntentSchema, { name: "extract_intent" })', async () => {
+    it('calls withStructuredOutput with the intent-wrapping schema and { name: "extract_intent" }', async () => {
       await provider.extractIntent('buy 5000 naira of usdt');
-      expect(mockWithStructuredOutput).toHaveBeenCalledWith(IntentSchema, {
-        name: 'extract_intent',
-      });
+      // Anthropic tool input_schema must be a root object, so the union is
+      // wrapped: z.object({ intent: IntentSchema }). Assert the wrapper shape
+      // (has an `intent` key) + the tool name.
+      const call = mockWithStructuredOutput.mock.calls[0] as unknown[];
+      const schemaArg = call[0] as { shape?: Record<string, unknown> };
+      expect(schemaArg.shape).toHaveProperty('intent');
+      expect(call[1]).toEqual({ name: 'extract_intent' });
     });
 
     it('invokes the structured model with system + user messages', async () => {
@@ -173,6 +179,15 @@ describe('AnthropicLlmProvider', () => {
       it('does NOT contain the old hardcoded asset basket line', () => {
         const prompt = provider.buildSystemPrompt();
         expect(prompt).not.toContain('Only "USDT" and "BTC"');
+      });
+
+      it('instructs the model to set the optional asset on check_balance', () => {
+        const prompt = provider.buildSystemPrompt();
+        // The check_balance bullet must explain the optional asset so that
+        // "my USDT balance" → { action: 'check_balance', asset: 'USDT' } and a
+        // bare "what's my balance" → { action: 'check_balance' }.
+        expect(prompt).toContain('check_balance: user wants to check');
+        expect(prompt).toContain('set "asset"');
       });
     });
   });

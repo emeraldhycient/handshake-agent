@@ -13,9 +13,12 @@
 import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { AgentTurnOutcomeSchema } from '@handshake-agent/contracts';
 import type {
   WebChatResponse,
   AgentTurnOutcome,
+  ChatHistoryResponse,
+  BalanceSnapshot,
 } from '@handshake-agent/contracts';
 
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
@@ -46,6 +49,7 @@ import {
 import type { ProposalService } from '../../transactions/application/proposal.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import type { BalanceService } from '../../balances/application/balance.service';
 
 // ---------------------------------------------------------------------------
 // DI tokens for proposal / wallet / beneficiary services.
@@ -57,6 +61,7 @@ export const WEB_CHAT_WALLET_SERVICE = Symbol('WEB_CHAT_WALLET_SERVICE');
 export const WEB_CHAT_BENEFICIARY_SERVICE = Symbol(
   'WEB_CHAT_BENEFICIARY_SERVICE',
 );
+export const WEB_CHAT_BALANCE_SERVICE = Symbol('WEB_CHAT_BALANCE_SERVICE');
 
 // ---------------------------------------------------------------------------
 // Input type
@@ -66,6 +71,14 @@ export interface HandleMessageInput {
   userId: string;
   text: string;
   beneficiaryId?: string;
+}
+
+export interface GetHistoryInput {
+  userId: string;
+  /** Message-id cursor: return only turns strictly older than this id. */
+  before?: string;
+  /** Page size (validated/defaulted at the presentation boundary). */
+  limit: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +98,8 @@ export class WebChatService {
     private readonly walletService: WalletService,
     @Inject(WEB_CHAT_BENEFICIARY_SERVICE)
     private readonly beneficiaryService: BeneficiaryService,
+    @Inject(WEB_CHAT_BALANCE_SERVICE)
+    private readonly balanceService: BalanceService,
     @Inject(IDENTITY_REPOSITORY)
     private readonly identityRepo: IIdentityRepository,
     @Inject(CONVERSATION_REPOSITORY)
@@ -264,7 +279,23 @@ export class WebChatService {
         break;
       }
 
-      case 'check_balance':
+      case 'check_balance': {
+        // Read-only (§3.1): no proposal, no engine. KYC-gated like the other
+        // surfaces — an unverified user has no provisioned wallets to read.
+        if (user.kycStatus !== 'verified') {
+          outcome = { kind: 'needs_kyc' };
+          summaryText = 'KYC required';
+          break;
+        }
+        const snapshot = await this.balanceService.getBalances(
+          userId,
+          intent.asset,
+        );
+        outcome = { kind: 'balance', ...snapshot };
+        summaryText = this.buildBalanceSummary(snapshot);
+        break;
+      }
+
       case 'swap':
       case 'buy_ticket': {
         outcome = { kind: 'not_supported', action: intent.action };
@@ -286,12 +317,14 @@ export class WebChatService {
       }
     }
 
-    // 7. Persist reply.
+    // 7. Persist reply — including the rendered outcome so the web thread can be
+    //    reconstructed on reload (GET /chat/messages) without re-running the agent.
     await this.replyRepo.create({
       conversationId: conversation.id,
       messageId: message.id,
       text: summaryText,
       correlationId,
+      outcome,
     });
 
     // 8. Return response envelope.
@@ -301,5 +334,78 @@ export class WebChatService {
       conversationId: conversation.id,
       messageId: message.id,
     };
+  }
+
+  /**
+   * Paginated conversation history for the authenticated user's web thread.
+   * Reuses the persisted reply outcome so the FE maps each turn exactly as it
+   * maps a live POST /chat/messages response. Returns turns oldest→newest;
+   * `nextCursor` loads the previous (older) page via `?before=`.
+   */
+  async getHistory(input: GetHistoryInput): Promise<ChatHistoryResponse> {
+    const conversation = await this.conversationRepo.findByUserId(input.userId);
+    if (conversation === null) {
+      return {
+        conversationId: null,
+        messages: [],
+        nextCursor: null,
+        hasMore: false,
+      };
+    }
+
+    // Repo returns newest-first and fetches limit+1 so we can detect more pages.
+    const turns = await this.messageRepo.findWebHistory(conversation.id, {
+      before: input.before,
+      limit: input.limit,
+    });
+    const hasMore = turns.length > input.limit;
+    const page = hasMore ? turns.slice(0, input.limit) : turns;
+    const nextCursor = hasMore ? page[page.length - 1].id : null;
+
+    const messages = [...page].reverse().map((turn) => ({
+      messageId: turn.id,
+      userText: turn.userText,
+      outcome: this.parseStoredOutcome(turn.reply?.outcome),
+      createdAt: turn.createdAt.toISOString(),
+    }));
+
+    return { conversationId: conversation.id, messages, nextCursor, hasMore };
+  }
+
+  /**
+   * Defensively re-validate a stored outcome JSON blob against the contract.
+   * Returns null for missing/legacy/corrupt rows so the FE renders the user
+   * bubble alone rather than failing the whole history load.
+   */
+  private parseStoredOutcome(raw: unknown): AgentTurnOutcome | null {
+    if (raw === null || raw === undefined) return null;
+    const parsed = AgentTurnOutcomeSchema.safeParse(raw);
+    return parsed.success ? parsed.data : null;
+  }
+
+  /**
+   * Builds the plain-text balance reply from a snapshot using registry formatters
+   * (no hardcoded symbols / number formatting). The mid-market fiat value is shown
+   * as an approximate figure; the FX spread is never surfaced (user rule).
+   */
+  private buildBalanceSummary(snapshot: BalanceSnapshot): string {
+    if (snapshot.balances.length === 0) {
+      return snapshot.asset
+        ? `You don't hold any ${snapshot.asset} yet.`
+        : "You don't have any assets yet.";
+    }
+
+    const lines = snapshot.balances.map((b) => {
+      const crypto = this.assetRegistry.formatCrypto(b.asset, b.amount);
+      const fiat = b.fiatValue
+        ? ` (≈ ${this.assetRegistry.formatFiat(snapshot.fiatCurrency, b.fiatValue)})`
+        : '';
+      return `• ${crypto}${fiat}`;
+    });
+
+    const header = snapshot.asset
+      ? `Your ${snapshot.asset} balance:`
+      : 'Your balances:';
+    return `${header}\n${lines.join('\n')}`;
   }
 }

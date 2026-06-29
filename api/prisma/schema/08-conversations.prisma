@@ -132,6 +132,10 @@ model ConversationReply {
   text           String
   /// Array of channel-neutral UiDirective objects (Zod-validated from contracts).
   directives     Json[]
+  /// Rendered AgentTurnOutcome (contracts) for the web surface, persisted so the
+  /// web thread can be reconstructed on reload (GET /chat/messages). Null for
+  /// replies created before outcome persistence or on non-web channels.
+  outcome        Json?
   /// Reference to a HandoffToken row when the reply routes to web; never the raw token.
   handoffTokenId String?     @db.Uuid
   /// Approved WhatsApp template ref when out-of-window (enforces 24h policy at edge).

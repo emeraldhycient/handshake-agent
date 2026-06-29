@@ -1,23 +1,25 @@
+"use client"
+
+import { useState, useEffect, useRef } from "react"
 import { cn } from "@/lib/utils"
 import { Money } from "@/components/shared/money"
 import { DetailRows } from "@/components/shared/detail-rows"
 import { StatusPill } from "@/components/shared/status-pill"
+import { formatCountdown } from "@/lib/format"
 import type { QuoteCardProps } from "@/types/components"
 
 /**
  * QuoteCard — chat message card for a crypto buy/send/swap quote.
  * Mobile prototype: lines 164–197. Desktop prototype: lines 823–838.
  * density prop controls sizing/padding/radii only — both variants render the same data.
+ *
+ * Live countdown: driven from `expiresAt` (ISO string from the server) when
+ * present, falling back to `lockSeconds` for the mock/offline flow.
+ * Ticks every 1 second via setInterval (cleaned up on unmount).
+ * At 0 seconds: badge shows "Expired" and the CTA is disabled.
+ *
  * No hex literals. No data fetching. Pure presentational.
  */
-
-/** Format lockSeconds as m:ss (e.g. 60 → "1:00", 58 → "0:58"). */
-function formatLock(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = seconds % 60
-  return `${m}:${s.toString().padStart(2, "0")}`
-}
-
 export function QuoteCard({
   receiveAmt,
   receiveSub,
@@ -25,11 +27,51 @@ export function QuoteCard({
   totalLabel,
   totalValue,
   lockSeconds,
+  expiresAt,
   density,
   onConfirm,
   className,
 }: QuoteCardProps) {
   const isMobile = density === "mobile"
+
+  // ── Live countdown state ────────────────────────────────────────────────────
+  // Compute the initial remaining seconds from expiresAt when available,
+  // otherwise fall back to lockSeconds (mock flow).
+  function computeRemaining(): number {
+    if (expiresAt) {
+      return Math.max(
+        0,
+        Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000)
+      )
+    }
+    return Math.max(0, lockSeconds)
+  }
+
+  const [remaining, setRemaining] = useState<number>(computeRemaining)
+  // Track whether the timer has been cleared so cleanup is idempotent
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    // No countdown needed if there's no expiry source or already at 0
+    if (!expiresAt && lockSeconds <= 0) return
+
+    intervalRef.current = setInterval(() => {
+      setRemaining(computeRemaining())
+    }, 1000)
+
+    return () => {
+      if (intervalRef.current !== null) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expiresAt, lockSeconds])
+
+  const isExpired = remaining <= 0
+  const countdownLabel = isExpired
+    ? "Expired"
+    : `Locked ${formatCountdown(remaining)}`
 
   return (
     <div
@@ -57,7 +99,7 @@ export function QuoteCard({
           Quote
         </span>
         <StatusPill
-          tone="warn"
+          tone={isExpired ? "neutral" : "warn"}
           className={cn(
             "font-semibold",
             isMobile
@@ -65,7 +107,7 @@ export function QuoteCard({
               : "px-2 py-[2px] text-[11px]"
           )}
         >
-          Locked {formatLock(lockSeconds)}
+          {countdownLabel}
         </StatusPill>
       </div>
 
@@ -137,24 +179,31 @@ export function QuoteCard({
         />
       </div>
 
-      {/* CTA */}
+      {/* CTA — disabled when expired */}
       <div className={cn(isMobile ? "px-4 pb-4" : "px-[15px] pb-[15px]")}>
         <button
           type="button"
           onClick={onConfirm}
+          disabled={isExpired}
+          aria-disabled={isExpired}
           className={cn(
-            "w-full cursor-pointer border-none bg-accent font-bold text-accent-foreground",
+            "w-full cursor-pointer border-none font-bold",
             "shadow-cta",
             isMobile
               ? "rounded-[14px] py-3.5 text-[15px]"
-              : "rounded-[12px] py-3 text-[14px]"
+              : "rounded-[12px] py-3 text-[14px]",
+            isExpired
+              ? "cursor-not-allowed bg-muted text-muted-foreground"
+              : "bg-accent text-accent-foreground"
           )}
         >
-          Review &amp; confirm
+          {isExpired ? "Quote expired" : "Review & confirm"}
         </button>
         {isMobile && (
           <p className="mt-[9px] text-center text-[11.5px] text-muted-foreground-subtle">
-            Rate locked {lockSeconds}s · No hidden fees
+            {isExpired
+              ? "Request a new quote to continue"
+              : `Rate locked ${formatCountdown(remaining)} · No hidden fees`}
           </p>
         )}
       </div>

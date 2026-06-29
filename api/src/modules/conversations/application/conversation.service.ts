@@ -21,6 +21,8 @@ import type { DirectiveService } from '../../transactions/application/directive.
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { HandoffTokenService } from '../../identity/application/handoff-token.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import type { BalanceService } from '../../balances/application/balance.service';
+import type { BalanceSnapshot } from '@handshake-agent/contracts';
 import { signFlowToken } from '../../whatsapp/application/flow-token';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 
@@ -56,6 +58,9 @@ export const HANDOFF_TOKEN_SERVICE = Symbol('HANDOFF_TOKEN_SERVICE');
 
 /** DI token for BeneficiaryService — injected by symbol to avoid coupling at module level (W1). */
 export const BENEFICIARY_SERVICE = Symbol('BENEFICIARY_SERVICE');
+
+/** DI token for BalanceService — injected by symbol (read-only balance snapshot). */
+export const BALANCE_SERVICE = Symbol('BALANCE_SERVICE');
 
 const SAFE_FALLBACK = 'Sorry, something went wrong — please try again.';
 
@@ -118,6 +123,8 @@ export class ConversationService implements IInboundHandler {
     private readonly handoffTokenService: HandoffTokenService,
     @Inject(BENEFICIARY_SERVICE)
     private readonly beneficiaryService: BeneficiaryService,
+    @Inject(BALANCE_SERVICE)
+    private readonly balanceService: BalanceService,
   ) {}
 
   async handleInbound(msg: InboundMessage): Promise<void> {
@@ -303,6 +310,14 @@ export class ConversationService implements IInboundHandler {
         const replyText = await this.handleReceive(identity, msg.fromAddress);
         return { replyText, flowSent: false };
       }
+      case 'check_balance': {
+        const replyText = await this.handleCheckBalance(
+          intent,
+          identity,
+          msg.fromAddress,
+        );
+        return { replyText, flowSent: false };
+      }
       case 'none': {
         return {
           replyText: intent.clarification ?? 'Could you clarify your request?',
@@ -310,7 +325,7 @@ export class ConversationService implements IInboundHandler {
         };
       }
       default: {
-        // swap / buy_ticket / check_balance — deferred.
+        // swap / buy_ticket — deferred.
         return {
           replyText: this.notSupportedReply(intent.action),
           flowSent: false,
@@ -852,6 +867,67 @@ export class ConversationService implements IInboundHandler {
       `Your ${assetMeta.displayName} deposit address (${networkMeta.displayName}):\n${wallet.address}\n\n` +
       `Only send ${assetMeta.displayName} on the ${networkMeta.displayName} to this address. Other assets or networks will be lost.`
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: check_balance handler (read-only — §3.1)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handles a `check_balance` intent: requires an active (KYC-verified) user, then
+   * reads the balance snapshot (all assets, or one if `intent.asset` is set) and
+   * renders it as a plain-text list. No proposal, no directive, no engine — reading
+   * a balance never moves money (§3.1).
+   */
+  private async handleCheckBalance(
+    intent: RoutableIntent,
+    identity: ResolvedIdentity,
+    channelAddress: string,
+  ): Promise<string> {
+    const guard = this.requireActiveUser(identity, channelAddress);
+    if ('needsKyc' in guard) {
+      return this.sendKycHandoff(guard.channelAddress);
+    }
+    if ('needsReverify' in guard) {
+      return this.reverifyFallbackReply();
+    }
+    if ('reply' in guard) {
+      return guard.reply;
+    }
+
+    // `asset` is optional on the check_balance intent; absent = all assets.
+    const asset = (intent as { asset?: string }).asset;
+    const snapshot = await this.balanceService.getBalances(
+      guard.user.id,
+      asset,
+    );
+    return this.buildBalanceText(snapshot);
+  }
+
+  /**
+   * Renders a balance snapshot as a WhatsApp text/list reply via registry
+   * formatters (no hardcoded symbols). The mid-market fiat value is shown as an
+   * approximate figure; the FX spread is never surfaced (user rule).
+   */
+  private buildBalanceText(snapshot: BalanceSnapshot): string {
+    if (snapshot.balances.length === 0) {
+      return snapshot.asset
+        ? `You don't hold any ${snapshot.asset} yet.`
+        : "You don't have any assets yet. Send funds to your wallet to get started.";
+    }
+
+    const lines = snapshot.balances.map((b) => {
+      const crypto = this.assetRegistry.formatCrypto(b.asset, b.amount);
+      const fiat = b.fiatValue
+        ? ` (≈ ${this.assetRegistry.formatFiat(snapshot.fiatCurrency, b.fiatValue)})`
+        : '';
+      return `• ${crypto}${fiat}`;
+    });
+
+    const header = snapshot.asset
+      ? `Your ${snapshot.asset} balance:`
+      : 'Here are your balances:';
+    return `${header}\n${lines.join('\n')}`;
   }
 
   /**

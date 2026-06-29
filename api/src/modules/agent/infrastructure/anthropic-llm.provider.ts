@@ -1,9 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { z } from 'zod';
 // ESM-under-CJS: always use `import` for @langchain packages (tsc downlevels to require).
 // Never hand-write require() — see root CLAUDE.md §6.
 import { ChatAnthropic } from '@langchain/anthropic';
 import { IntentSchema, type Intent } from '@handshake-agent/contracts';
+
+// The Anthropic tool API requires a tool's `input_schema` to be a root JSON
+// object (`"type": "object"`). IntentSchema is a discriminated UNION, which
+// serialises to a root-level `anyOf` with no `type` — Anthropic rejects it
+// ("tools.0.custom.input_schema.type: Field required"). Wrapping the union in
+// an object gives the tool a valid root object schema; we unwrap `.intent`.
+const ExtractIntentSchema = z.object({ intent: IntentSchema });
 import type { LlmProvider } from '../core/ports/llm-provider.port';
 import type { Env } from '../../../core/config/env.schema';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
@@ -44,14 +52,16 @@ export class AnthropicLlmProvider implements LlmProvider {
   async extractIntent(userText: string): Promise<Intent> {
     const model = this.getOrCreateModel();
 
-    const structured = model.withStructuredOutput(IntentSchema, {
+    const structured = model.withStructuredOutput(ExtractIntentSchema, {
       name: 'extract_intent',
     });
 
-    return structured.invoke([
+    const result = (await structured.invoke([
       { role: 'system', content: this.buildSystemPrompt() },
       { role: 'user', content: userText },
-    ]) as Promise<Intent>;
+    ])) as { intent: Intent };
+
+    return result.intent;
   }
 
   /**
@@ -76,7 +86,7 @@ Given a user message, extract their intent and return it as a structured object 
 - receive_crypto: user wants to receive crypto / get their wallet address
 - swap: user wants to swap one crypto asset for another
 - buy_ticket: user wants to buy an event ticket
-- check_balance: user wants to check their wallet balance
+- check_balance: user wants to check their wallet balance. If they name a specific asset (e.g. "my USDT balance"), set "asset" to that symbol; if they ask for everything ("what's my balance", "show my assets"), omit "asset".
 - none: intent is unclear — return a short clarification question in the "clarification" field
 
 Rules:

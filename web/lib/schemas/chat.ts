@@ -4,6 +4,7 @@ import { z } from "zod"
 
 export const ChatActionSchema = z.enum([
   "buy",
+  "sell",
   "send",
   "receive",
   "swap",
@@ -65,6 +66,9 @@ export const TextViewSchema = z.object({
 export type TextView = { kind: "text"; text: string }
 
 // quote  — includes `action` so shells know which confirm builder to invoke.
+// `expiresAt` is an ISO string from the server (proposal's expiry); the quote
+// card drives its live countdown from this. `lockSeconds` is kept for the mock
+// / offline flow which doesn't have a server-issued expiry.
 export const QuoteViewSchema = z.object({
   kind: z.literal("quote"),
   action: ChatActionSchema,
@@ -74,6 +78,8 @@ export const QuoteViewSchema = z.object({
   totalLabel: z.string(),
   totalValue: z.string(),
   lockSeconds: z.number(),
+  /** ISO datetime string — the proposal's server-issued expiry. Drives the live countdown. */
+  expiresAt: z.string().optional(),
 })
 export type QuoteView = z.infer<typeof QuoteViewSchema>
 
@@ -134,6 +140,43 @@ export const TicketsViewSchema = z.object({
 })
 export type TicketsView = z.infer<typeof TicketsViewSchema>
 
+// pay_in — bank transfer card shown while a buy order is settling
+export const PayInViewSchema = z.object({
+  kind: z.literal("pay_in"),
+  transactionId: z.string(),
+  accountNumber: z.string(),
+  bankName: z.string(),
+  providerRef: z.string(),
+  amount: z.string(),
+  currency: z.string(),
+  /** Current polling status of the underlying transaction. */
+  status: z.enum(["pending", "settling", "completed", "failed"]),
+})
+export type PayInView = z.infer<typeof PayInViewSchema>
+
+// needs_beneficiary — prompt + inline add/select UI shown when a sell/send
+// requires a saved payout destination the user doesn't have yet.
+export const NeedsBeneficiaryViewSchema = z.object({
+  kind: z.literal("needs_beneficiary"),
+  beneficiaryType: z.enum(["bank_account", "crypto_address"]),
+})
+export type NeedsBeneficiaryView = z.infer<typeof NeedsBeneficiaryViewSchema>
+
+// settling — outbound-settlement card shown while a sell payout or send
+// withdrawal is in flight (the sell/send analogue of pay_in, which is inbound).
+export const SettlingViewSchema = z.object({
+  kind: z.literal("settling"),
+  txType: z.enum(["sell", "send"]),
+  transactionId: z.string(),
+  title: z.string(),
+  subtitle: z.string(),
+  rows: z.array(QuoteRowSchema),
+  /** Provider reference for the outbound transfer (payout id / on-chain ref). */
+  reference: z.string(),
+  status: z.enum(["pending", "settling", "completed", "failed"]),
+})
+export type SettlingView = z.infer<typeof SettlingViewSchema>
+
 // ─── ChatMessage discriminated union ──────────────────────────────────────────
 
 // Each variant merges the shared base (id, role) with its kind object.
@@ -147,6 +190,9 @@ export const ChatMessageSchema = z.discriminatedUnion("kind", [
   MessageBaseSchema.merge(BalanceViewSchema),
   MessageBaseSchema.merge(DepositViewSchema),
   MessageBaseSchema.merge(TicketsViewSchema),
+  MessageBaseSchema.merge(PayInViewSchema),
+  MessageBaseSchema.merge(NeedsBeneficiaryViewSchema),
+  MessageBaseSchema.merge(SettlingViewSchema),
 ])
 
 export type ChatMessage = z.infer<typeof ChatMessageSchema>

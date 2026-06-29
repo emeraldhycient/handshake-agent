@@ -53,6 +53,7 @@ function makeRepo(
     touchOrCreate: jest.fn(),
     recordStepUp: jest.fn(),
     findPinnedDeviceId: jest.fn(),
+    findDeviceIdByFingerprint: jest.fn(),
     ...overrides,
   } as jest.Mocked<ISessionRepository>;
 }
@@ -90,6 +91,46 @@ describe('SessionService', () => {
         FIXED_NOW,
       );
       expect(result).toBe(STUB_SESSION);
+    });
+  });
+
+  describe('findDeviceIdByFingerprint', () => {
+    it('delegates to repo and returns the resolved device id', async () => {
+      const repo = makeRepo({
+        findDeviceIdByFingerprint: jest.fn().mockResolvedValue(DEVICE_ID),
+      });
+      const svc = new SessionService(repo, makeConfig() as never, makeClock());
+
+      const result = await svc.findDeviceIdByFingerprint(USER_ID, 'web-fp-1');
+
+      expect(repo.findDeviceIdByFingerprint).toHaveBeenCalledWith(
+        USER_ID,
+        'web-fp-1',
+      );
+      expect(result).toBe(DEVICE_ID);
+    });
+
+    it('returns null when the fingerprint is undefined (no lookup)', async () => {
+      const repo = makeRepo({
+        findDeviceIdByFingerprint: jest.fn(),
+      });
+      const svc = new SessionService(repo, makeConfig() as never, makeClock());
+
+      const result = await svc.findDeviceIdByFingerprint(USER_ID, undefined);
+
+      expect(result).toBeNull();
+      expect(repo.findDeviceIdByFingerprint).not.toHaveBeenCalled();
+    });
+
+    it('returns null when no device matches the fingerprint', async () => {
+      const repo = makeRepo({
+        findDeviceIdByFingerprint: jest.fn().mockResolvedValue(null),
+      });
+      const svc = new SessionService(repo, makeConfig() as never, makeClock());
+
+      const result = await svc.findDeviceIdByFingerprint(USER_ID, 'unknown-fp');
+
+      expect(result).toBeNull();
     });
   });
 
