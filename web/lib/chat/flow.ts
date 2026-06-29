@@ -16,6 +16,7 @@ import type {
   ReceiptView,
   TextView,
   QuoteView,
+  SwapView,
   BalanceView,
   DepositView,
   TicketsView,
@@ -305,6 +306,37 @@ export function buildSwapConfirm(): ConfirmPayload {
     ],
     totalLabel: "You receive",
     totalValue: SWAP_RECEIVE_NGN,
+    cta: "Confirm with PIN",
+    action: "swap",
+  }
+}
+
+/**
+ * Builds a ConfirmPayload from a LIVE swap message (agent flow) so the confirm
+ * sheet shows the real itemized breakdown — not the static mock fixture.
+ * FX spread is never surfaced (CLAUDE.md §3.1 / execute-swap.tool.ts).
+ */
+export function buildConfirmFromSwap(swap: SwapView): ConfirmPayload {
+  return {
+    title: "Confirm swap",
+    subtitle: "Review the conversion before you confirm.",
+    heroLabel: "You receive",
+    heroAmount: `${swap.toAmount} ${swap.toAsset}`,
+    heroSub: `from ${swap.fromAmount} ${swap.fromAsset}`,
+    rows: [
+      { label: "You swap", value: `${swap.fromAmount} ${swap.fromAsset}` },
+      {
+        label: "Rate",
+        value: `1 ${swap.fromAsset} = ${swap.rate} ${swap.toAsset}`,
+      },
+      { label: "Network fee", value: `${swap.networkFee} ${swap.fromAsset}` },
+      {
+        label: "Transaction fee",
+        value: `${swap.transactionFee} ${swap.fromAsset}`,
+      },
+    ],
+    totalLabel: "Total debit",
+    totalValue: `${swap.fromAmount} ${swap.fromAsset}`,
     cta: "Confirm with PIN",
     action: "swap",
   }

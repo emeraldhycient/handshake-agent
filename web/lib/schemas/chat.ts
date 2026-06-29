@@ -176,6 +176,35 @@ export const SettlingViewSchema = z.object({
   status: z.enum(["pending", "settling", "completed", "failed"]),
 })
 export type SettlingView = z.infer<typeof SettlingViewSchema>
+
+// swap — confirmation card for a live swap proposal returned by the engine.
+// Distinct from the generic QuoteView so it carries typed crypto-specific fields
+// (fromAsset, toAsset, ETA) rather than generic NGN fiat rows.
+// FX spread is NEVER surfaced here (CLAUDE.md §3.1 / execute-swap.tool.ts).
+export const SwapViewSchema = z.object({
+  kind: z.literal("swap"),
+  /** Asset being swapped out of. */
+  fromAsset: z.string(),
+  /** Asset being swapped into. */
+  toAsset: z.string(),
+  /** Human-scaled amount being swapped out (decimal string). */
+  fromAmount: z.string(),
+  /** Estimated amount to be received (decimal string). */
+  toAmount: z.string(),
+  /** Effective exchange rate string, e.g. "0.0000095" meaning 1 fromAsset = rate toAsset. */
+  rate: z.string(),
+  /** On-chain network fee in fromAsset (decimal string). */
+  networkFee: z.string(),
+  /** Provider transaction fee in fromAsset (decimal string). */
+  transactionFee: z.string(),
+  /** Estimated arrival in seconds. */
+  estimatedArrivalSec: z.number().int().nonnegative(),
+  /** ISO 8601 expiry timestamp for the proposal — drives the live countdown. */
+  expiresAt: z.string(),
+  /** Lock duration in seconds — fallback when expiresAt is absent (mock flow). */
+  lockSeconds: z.number(),
+})
+export type SwapView = z.infer<typeof SwapViewSchema>
 // transactions (history list)
 export const TransactionRowSchema = z.object({
   id: z.string(),
@@ -214,6 +243,7 @@ export const ChatMessageSchema = z.discriminatedUnion("kind", [
   MessageBaseSchema.merge(NeedsBeneficiaryViewSchema),
   MessageBaseSchema.merge(SettlingViewSchema),
   MessageBaseSchema.merge(TransactionsViewSchema),
+  MessageBaseSchema.merge(SwapViewSchema),
 ])
 
 export type ChatMessage = z.infer<typeof ChatMessageSchema>

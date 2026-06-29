@@ -7,6 +7,7 @@ import { useAuthStore } from "@/lib/store/auth-store"
 import { useChatHistory } from "@/hooks/use-chat-history"
 import {
   buildConfirmFromQuote,
+  buildConfirmFromSwap,
   buildTicketConfirm,
   chipLabel,
 } from "@/lib/chat/flow"
@@ -34,6 +35,11 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
   const recorder = useVoiceRecorder()
 
   function handleConfirm(message: ChatMessage) {
+    if (message.kind === "swap") {
+      // Live swap proposal — build confirm from the typed swap fields.
+      state.openConfirm("m", buildConfirmFromSwap(message))
+      return
+    }
     if (message.kind !== "quote") return
     // Build the confirm sheet from the live quote so it shows the real
     // itemized breakdown (buy / sell / send).

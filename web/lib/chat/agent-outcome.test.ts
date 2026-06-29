@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import type {
   AgentTurnOutcome,
   BuyProposalConfirmation,
+  SwapProposalConfirmation,
 } from "@handshake-agent/contracts"
 import { mapOutcomeToMessages } from "./agent-outcome"
 
@@ -113,6 +114,45 @@ describe("mapOutcomeToMessages", () => {
     const { messages, proposalId } = mapOutcomeToMessages(outcome, makeIder())
     expect(proposalId).toBe("33333333-3333-3333-3333-333333333333")
     expect(messages[0]).toMatchObject({ kind: "quote", action: "send" })
+  })
+
+  it("maps a swap proposal to a swap card message and returns its proposalId", () => {
+    const swapConfirmation: SwapProposalConfirmation = {
+      proposalId: "44444444-4444-4444-4444-444444444444",
+      fromAsset: "USDT",
+      toAsset: "BTC",
+      fromAmount: "100",
+      toAmount: "0.00095",
+      rate: "0.0000095",
+      networkFee: "1",
+      transactionFee: "0.5",
+      estimatedArrivalSec: 120,
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    }
+    const outcome: AgentTurnOutcome = {
+      kind: "proposal",
+      txType: "swap",
+      proposalId: swapConfirmation.proposalId,
+      confirmation: swapConfirmation,
+    }
+    const { messages, proposalId } = mapOutcomeToMessages(outcome, makeIder())
+    expect(proposalId).toBe(swapConfirmation.proposalId)
+    expect(messages).toHaveLength(1)
+    const msg = messages[0]
+    expect(msg).toMatchObject({
+      role: "assistant",
+      kind: "swap",
+      fromAsset: "USDT",
+      toAsset: "BTC",
+      fromAmount: "100",
+      toAmount: "0.00095",
+      rate: "0.0000095",
+      networkFee: "1",
+      transactionFee: "0.5",
+      estimatedArrivalSec: 120,
+    })
+    // FX spread must never appear in the message
+    expect((msg as Record<string, unknown>)["spreadBps"]).toBeUndefined()
   })
 
   it("maps needs_kyc to a verification text", () => {

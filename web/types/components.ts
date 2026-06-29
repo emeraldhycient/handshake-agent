@@ -16,6 +16,7 @@ import type {
   ReceiptView,
   PayInView,
   SettlingView,
+  SwapView,
   NeedsBeneficiaryView,
   ChatMessage,
   ChatAction,
@@ -220,6 +221,13 @@ export type PayInCardProps = PayInView & {
 /** Outbound-settlement card shown while a sell payout / send withdrawal is in flight */
 export type SettlingCardProps = SettlingView & {
   density: Density
+  className?: string
+}
+
+/** Swap confirmation card for a live swap proposal from the engine. */
+export type SwapCardProps = SwapView & {
+  density: Density
+  onConfirm: () => void
   className?: string
 }
 

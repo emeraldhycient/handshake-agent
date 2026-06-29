@@ -8,6 +8,7 @@ import { PayInCardLive } from "@/components/chat/cards/pay-in-card"
 import { SettlingCardLive } from "@/components/chat/cards/settling-card"
 import { NeedsBeneficiaryCard } from "@/components/chat/cards/needs-beneficiary-card"
 import { TransactionsCard } from "@/components/chat/cards/transactions-card"
+import { SwapCard } from "@/components/chat/cards/swap-card"
 import type { ChatMessageViewProps } from "@/types/components"
 
 /**
@@ -97,6 +98,15 @@ export function ChatMessageView({
             )
           case "transactions":
             return <TransactionsCard {...message} density={density} />
+
+          case "swap":
+            return (
+              <SwapCard
+                {...message}
+                density={density}
+                onConfirm={() => onConfirm(message)}
+              />
+            )
 
           default: {
             // Exhaustiveness check: TypeScript will error here if a new kind is

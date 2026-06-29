@@ -6,6 +6,7 @@ import { useAuthStore } from "@/lib/store/auth-store"
 import { useChatHistory } from "@/hooks/use-chat-history"
 import {
   buildConfirmFromQuote,
+  buildConfirmFromSwap,
   buildTicketConfirm,
   chipLabel,
 } from "@/lib/chat/flow"
@@ -45,8 +46,13 @@ export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
   useChatHistory("d", store)
   const recorder = useVoiceRecorder()
 
-  // ── Quote confirm ──────────────────────────────────────────────────────────
+  // ── Quote / swap confirm ───────────────────────────────────────────────────
   function handleConfirm(message: ChatMessage) {
+    if (message.kind === "swap") {
+      // Live swap proposal — build confirm from the typed swap fields.
+      state.openConfirm("d", buildConfirmFromSwap(message))
+      return
+    }
     if (message.kind !== "quote") return
     state.openConfirm("d", buildConfirmFromQuote(message))
   }

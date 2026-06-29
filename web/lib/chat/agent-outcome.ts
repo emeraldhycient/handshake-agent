@@ -15,6 +15,7 @@ import type {
   BuyProposalConfirmation,
   SellProposalConfirmation,
   SendProposalConfirmation,
+  SwapProposalConfirmation,
 } from "@handshake-agent/contracts"
 import type { ChatAction, ChatMessage } from "@/lib/schemas"
 import { formatNGN } from "@/lib/format"
@@ -55,90 +56,113 @@ export function mapOutcomeToMessages(
     })
   } else if (outcome.kind === "proposal") {
     const c = outcome.confirmation
-    const rows: Array<{ label: string; value: string }> = []
-    let receiveAmt = ""
-    let receiveSub = ""
-    let totalLabel = "Total"
-    let totalValue = ""
     const lockSeconds = Math.max(
       0,
       Math.round((new Date(c.expiresAt).getTime() - Date.now()) / 1000)
     )
 
-    if (outcome.txType === "buy") {
-      // outcome.txType === 'buy' guarantees the server sent BuyProposalConfirmation (schema-validated at ingress)
-      const b = c as BuyProposalConfirmation
-      receiveAmt = b.cryptoAmount + " " + b.asset
-      receiveSub = "You receive"
-      rows.push({
-        label: "You pay",
-        value: formatNGN(b.fiatAmount),
+    if (outcome.txType === "swap") {
+      // outcome.txType === 'swap' guarantees the server sent SwapProposalConfirmation (schema-validated at ingress).
+      // Emit a dedicated `swap` kind message so SwapCard renders typed crypto fields
+      // (fromAsset→toAsset, per-asset amounts, ETA) — no FX spread line (§3.1).
+      const sw = c as SwapProposalConfirmation
+      messages.push({
+        id: makeId(),
+        role: "assistant",
+        kind: "swap",
+        fromAsset: sw.fromAsset,
+        toAsset: sw.toAsset,
+        fromAmount: sw.fromAmount,
+        toAmount: sw.toAmount,
+        rate: sw.rate,
+        networkFee: sw.networkFee,
+        transactionFee: sw.transactionFee,
+        estimatedArrivalSec: sw.estimatedArrivalSec,
+        expiresAt: sw.expiresAt,
+        lockSeconds,
       })
-      rows.push({
-        label: "Rate",
-        value: "1 " + b.asset + " = " + formatNGN(b.fxRate),
-      })
-      rows.push({
-        label: "Fee",
-        value: formatNGN(b.processingFeeAmount),
-      })
-      totalLabel = "Total charged"
-      totalValue = formatNGN(b.totalFiat)
-    } else if (outcome.txType === "sell") {
-      // outcome.txType === 'sell' guarantees the server sent SellProposalConfirmation (schema-validated at ingress)
-      const s = c as SellProposalConfirmation
-      receiveAmt = s.fiatCurrency + " " + s.netFiatAmount
-      receiveSub = "You receive"
-      rows.push({
-        label: "You sell",
-        value: s.cryptoAmount + " " + s.asset,
-      })
-      rows.push({
-        label: "Rate",
-        value: "1 " + s.asset + " = " + s.fiatCurrency + " " + s.fxRate,
-      })
-      rows.push({
-        label: "Fee",
-        value: s.fiatCurrency + " " + s.processingFeeAmount,
-      })
-      if (s.beneficiaryLabel) {
-        rows.push({ label: "To", value: s.beneficiaryLabel })
-      }
-      totalLabel = "Net payout"
-      totalValue = s.fiatCurrency + " " + s.netFiatAmount
-    } else if (outcome.txType === "send") {
-      // outcome.txType === 'send' guarantees the server sent SendProposalConfirmation (schema-validated at ingress)
-      const sn = c as SendProposalConfirmation
-      receiveAmt = sn.cryptoAmount + " " + sn.asset
-      receiveSub = "Amount sent"
-      rows.push({ label: "To", value: sn.toAddressMasked })
-      if (sn.beneficiaryLabel) {
-        rows.push({ label: "Beneficiary", value: sn.beneficiaryLabel })
-      }
-      rows.push({ label: "Network", value: sn.network })
-      rows.push({
-        label: "Network fee",
-        value: sn.networkFeeCrypto + " " + sn.asset,
-      })
-      totalLabel = "Total debit"
-      totalValue = sn.totalDebit + " " + sn.asset
-    }
+    } else {
+      const rows: Array<{ label: string; value: string }> = []
+      let receiveAmt = ""
+      let receiveSub = ""
+      let totalLabel = "Total"
+      let totalValue = ""
 
-    messages.push({
-      id: makeId(),
-      role: "assistant",
-      kind: "quote",
-      // send is a valid ChatAction; buy and sell are also valid
-      action: outcome.txType as ChatAction,
-      receiveAmt,
-      receiveSub,
-      rows,
-      totalLabel,
-      totalValue,
-      lockSeconds,
-      // ISO expiry drives the live quote countdown (and "expired" state on reload).
-      expiresAt: c.expiresAt,
-    })
+      if (outcome.txType === "buy") {
+        // outcome.txType === 'buy' guarantees the server sent BuyProposalConfirmation (schema-validated at ingress)
+        const b = c as BuyProposalConfirmation
+        receiveAmt = b.cryptoAmount + " " + b.asset
+        receiveSub = "You receive"
+        rows.push({
+          label: "You pay",
+          value: formatNGN(b.fiatAmount),
+        })
+        rows.push({
+          label: "Rate",
+          value: "1 " + b.asset + " = " + formatNGN(b.fxRate),
+        })
+        rows.push({
+          label: "Fee",
+          value: formatNGN(b.processingFeeAmount),
+        })
+        totalLabel = "Total charged"
+        totalValue = formatNGN(b.totalFiat)
+      } else if (outcome.txType === "sell") {
+        // outcome.txType === 'sell' guarantees the server sent SellProposalConfirmation (schema-validated at ingress)
+        const s = c as SellProposalConfirmation
+        receiveAmt = s.fiatCurrency + " " + s.netFiatAmount
+        receiveSub = "You receive"
+        rows.push({
+          label: "You sell",
+          value: s.cryptoAmount + " " + s.asset,
+        })
+        rows.push({
+          label: "Rate",
+          value: "1 " + s.asset + " = " + s.fiatCurrency + " " + s.fxRate,
+        })
+        rows.push({
+          label: "Fee",
+          value: s.fiatCurrency + " " + s.processingFeeAmount,
+        })
+        if (s.beneficiaryLabel) {
+          rows.push({ label: "To", value: s.beneficiaryLabel })
+        }
+        totalLabel = "Net payout"
+        totalValue = s.fiatCurrency + " " + s.netFiatAmount
+      } else if (outcome.txType === "send") {
+        // outcome.txType === 'send' guarantees the server sent SendProposalConfirmation (schema-validated at ingress)
+        const sn = c as SendProposalConfirmation
+        receiveAmt = sn.cryptoAmount + " " + sn.asset
+        receiveSub = "Amount sent"
+        rows.push({ label: "To", value: sn.toAddressMasked })
+        if (sn.beneficiaryLabel) {
+          rows.push({ label: "Beneficiary", value: sn.beneficiaryLabel })
+        }
+        rows.push({ label: "Network", value: sn.network })
+        rows.push({
+          label: "Network fee",
+          value: sn.networkFeeCrypto + " " + sn.asset,
+        })
+        totalLabel = "Total debit"
+        totalValue = sn.totalDebit + " " + sn.asset
+      }
+
+      messages.push({
+        id: makeId(),
+        role: "assistant",
+        kind: "quote",
+        // send is a valid ChatAction; buy and sell are also valid
+        action: outcome.txType as ChatAction,
+        receiveAmt,
+        receiveSub,
+        rows,
+        totalLabel,
+        totalValue,
+        lockSeconds,
+        // ISO expiry drives the live quote countdown (and "expired" state on reload).
+        expiresAt: c.expiresAt,
+      })
+    }
 
     proposalId = outcome.proposalId
   } else if (outcome.kind === "needs_kyc") {
