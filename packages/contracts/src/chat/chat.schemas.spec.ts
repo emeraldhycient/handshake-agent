@@ -3,6 +3,10 @@ import {
   ChatMessageRequestSchema,
   AgentTurnOutcomeSchema,
   WebChatResponseSchema,
+  AuthorizeProposalResponseSchema,
+  ExecuteProposalRequestSchema,
+  ExecuteProposalResponseSchema,
+  TransactionStatusResponseSchema,
 } from './chat.schemas'
 
 // Valid BuyProposalConfirmation fixture for use in proposal/buy tests.
@@ -206,6 +210,280 @@ describe('WebChatResponseSchema', () => {
         outcome: { kind: 'needs_kyc' },
         conversationId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
         messageId: 'not-a-uuid',
+      }),
+    ).toThrow()
+  })
+})
+
+describe('AuthorizeProposalResponseSchema', () => {
+  const validAuthorizeResponse = {
+    directiveId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    nonce: 'abc123nonce',
+    expiresAt: '2026-06-29T12:00:00.000Z',
+  }
+
+  it('accepts a valid authorize response', () => {
+    const result = AuthorizeProposalResponseSchema.parse(validAuthorizeResponse)
+    expect(result.directiveId).toBe('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+    expect(result.nonce).toBe('abc123nonce')
+    expect(result.expiresAt).toBe('2026-06-29T12:00:00.000Z')
+  })
+
+  it('rejects when directiveId is missing', () => {
+    const { directiveId: _omitted, ...withoutDirectiveId } = validAuthorizeResponse
+    expect(() => AuthorizeProposalResponseSchema.parse(withoutDirectiveId)).toThrow()
+  })
+
+  it('rejects when directiveId is not a UUID', () => {
+    expect(() =>
+      AuthorizeProposalResponseSchema.parse({ ...validAuthorizeResponse, directiveId: 'not-a-uuid' }),
+    ).toThrow()
+  })
+
+  it('rejects when nonce is an empty string', () => {
+    expect(() =>
+      AuthorizeProposalResponseSchema.parse({ ...validAuthorizeResponse, nonce: '' }),
+    ).toThrow()
+  })
+
+  it('rejects when expiresAt is not a valid ISO datetime string', () => {
+    expect(() =>
+      AuthorizeProposalResponseSchema.parse({ ...validAuthorizeResponse, expiresAt: 'not-a-date' }),
+    ).toThrow()
+  })
+
+  it('rejects when expiresAt is missing', () => {
+    const { expiresAt: _omitted, ...withoutExpiresAt } = validAuthorizeResponse
+    expect(() => AuthorizeProposalResponseSchema.parse(withoutExpiresAt)).toThrow()
+  })
+})
+
+describe('ExecuteProposalRequestSchema', () => {
+  const validExecuteRequest = {
+    directiveId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+    nonce: 'xyz789nonce',
+    pin: '1234',
+    idempotencyKey: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+  }
+
+  it('accepts a valid execute request without optional deviceFingerprint', () => {
+    const result = ExecuteProposalRequestSchema.parse(validExecuteRequest)
+    expect(result.directiveId).toBe('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb')
+    expect(result.nonce).toBe('xyz789nonce')
+    expect(result.pin).toBe('1234')
+    expect(result.idempotencyKey).toBe('cccccccc-cccc-cccc-cccc-cccccccccccc')
+    expect(result.deviceFingerprint).toBeUndefined()
+  })
+
+  it('accepts a valid execute request with optional deviceFingerprint', () => {
+    const result = ExecuteProposalRequestSchema.parse({
+      ...validExecuteRequest,
+      deviceFingerprint: 'fp-abc123',
+    })
+    expect(result.deviceFingerprint).toBe('fp-abc123')
+  })
+
+  it('accepts an 8-character pin (upper boundary)', () => {
+    const result = ExecuteProposalRequestSchema.parse({ ...validExecuteRequest, pin: '12345678' })
+    expect(result.pin).toBe('12345678')
+  })
+
+  it('rejects when directiveId is missing', () => {
+    const { directiveId: _omitted, ...withoutDirectiveId } = validExecuteRequest
+    expect(() => ExecuteProposalRequestSchema.parse(withoutDirectiveId)).toThrow()
+  })
+
+  it('rejects when directiveId is not a UUID', () => {
+    expect(() =>
+      ExecuteProposalRequestSchema.parse({ ...validExecuteRequest, directiveId: 'bad-id' }),
+    ).toThrow()
+  })
+
+  it('rejects when nonce is an empty string', () => {
+    expect(() =>
+      ExecuteProposalRequestSchema.parse({ ...validExecuteRequest, nonce: '' }),
+    ).toThrow()
+  })
+
+  it('rejects when pin is shorter than 4 characters', () => {
+    expect(() =>
+      ExecuteProposalRequestSchema.parse({ ...validExecuteRequest, pin: '123' }),
+    ).toThrow()
+  })
+
+  it('rejects when pin is longer than 8 characters', () => {
+    expect(() =>
+      ExecuteProposalRequestSchema.parse({ ...validExecuteRequest, pin: '123456789' }),
+    ).toThrow()
+  })
+
+  it('rejects when idempotencyKey is not a UUID', () => {
+    expect(() =>
+      ExecuteProposalRequestSchema.parse({ ...validExecuteRequest, idempotencyKey: 'not-a-uuid' }),
+    ).toThrow()
+  })
+
+  it('rejects when idempotencyKey is missing', () => {
+    const { idempotencyKey: _omitted, ...withoutKey } = validExecuteRequest
+    expect(() => ExecuteProposalRequestSchema.parse(withoutKey)).toThrow()
+  })
+})
+
+describe('ExecuteProposalResponseSchema', () => {
+  const validPayment = {
+    accountNumber: '1234567890',
+    bankName: 'Test Bank',
+    providerRef: 'flw-ref-001',
+    amount: '5000',
+    currency: 'NGN',
+  }
+
+  const validExecuteResponse = {
+    transactionId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    status: 'settling' as const,
+  }
+
+  it('accepts a valid execute response with status settling and no optional fields', () => {
+    const result = ExecuteProposalResponseSchema.parse(validExecuteResponse)
+    expect(result.transactionId).toBe('dddddddd-dddd-dddd-dddd-dddddddddddd')
+    expect(result.status).toBe('settling')
+    expect(result.payment).toBeUndefined()
+    expect(result.payout).toBeUndefined()
+    expect(result.onChain).toBeUndefined()
+  })
+
+  it('accepts a valid execute response with status completed', () => {
+    const result = ExecuteProposalResponseSchema.parse({ ...validExecuteResponse, status: 'completed' })
+    expect(result.status).toBe('completed')
+  })
+
+  it('accepts a valid execute response with optional payment field', () => {
+    const result = ExecuteProposalResponseSchema.parse({ ...validExecuteResponse, payment: validPayment })
+    expect(result.payment?.accountNumber).toBe('1234567890')
+    expect(result.payment?.bankName).toBe('Test Bank')
+  })
+
+  it('accepts a valid execute response with optional payout field', () => {
+    const result = ExecuteProposalResponseSchema.parse({
+      ...validExecuteResponse,
+      payout: { providerRef: 'blockradar-ref-001' },
+    })
+    expect(result.payout?.providerRef).toBe('blockradar-ref-001')
+  })
+
+  it('accepts a valid execute response with optional onChain field', () => {
+    const result = ExecuteProposalResponseSchema.parse({
+      ...validExecuteResponse,
+      onChain: { providerRef: 'txhash-abc123' },
+    })
+    expect(result.onChain?.providerRef).toBe('txhash-abc123')
+  })
+
+  it('rejects when transactionId is missing', () => {
+    const { transactionId: _omitted, ...withoutId } = validExecuteResponse
+    expect(() => ExecuteProposalResponseSchema.parse(withoutId)).toThrow()
+  })
+
+  it('rejects when transactionId is not a UUID', () => {
+    expect(() =>
+      ExecuteProposalResponseSchema.parse({ ...validExecuteResponse, transactionId: 'not-a-uuid' }),
+    ).toThrow()
+  })
+
+  it('rejects when status is an unexpected string', () => {
+    expect(() =>
+      ExecuteProposalResponseSchema.parse({ ...validExecuteResponse, status: 'pending' }),
+    ).toThrow()
+  })
+
+  it('rejects when payment is present but missing a required subfield', () => {
+    const incompletePayment = { accountNumber: '1234567890', bankName: 'Test Bank' }
+    expect(() =>
+      ExecuteProposalResponseSchema.parse({ ...validExecuteResponse, payment: incompletePayment }),
+    ).toThrow()
+  })
+})
+
+describe('TransactionStatusResponseSchema', () => {
+  const validStatusResponse = {
+    id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+    type: 'buy',
+    status: 'completed',
+    createdAt: '2026-06-29T12:00:00.000Z',
+  }
+
+  it('accepts a valid status response with only required fields', () => {
+    const result = TransactionStatusResponseSchema.parse(validStatusResponse)
+    expect(result.id).toBe('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee')
+    expect(result.type).toBe('buy')
+    expect(result.status).toBe('completed')
+    expect(result.createdAt).toBe('2026-06-29T12:00:00.000Z')
+    expect(result.receiptNumber).toBeUndefined()
+    expect(result.payment).toBeUndefined()
+    expect(result.asset).toBeUndefined()
+  })
+
+  it('accepts a valid status response with all optional fields', () => {
+    const result = TransactionStatusResponseSchema.parse({
+      ...validStatusResponse,
+      receiptNumber: 'RCPT-001',
+      payment: {
+        accountNumber: '1234567890',
+        bankName: 'Test Bank',
+        providerRef: 'flw-ref-001',
+        amount: '5000',
+        currency: 'NGN',
+      },
+      asset: 'USDT',
+      cryptoAmount: '4.5',
+      fiatAmount: '5000',
+      fiatCurrency: 'NGN',
+    })
+    expect(result.receiptNumber).toBe('RCPT-001')
+    expect(result.payment?.bankName).toBe('Test Bank')
+    expect(result.asset).toBe('USDT')
+    expect(result.cryptoAmount).toBe('4.5')
+    expect(result.fiatAmount).toBe('5000')
+    expect(result.fiatCurrency).toBe('NGN')
+  })
+
+  it('rejects when id is missing', () => {
+    const { id: _omitted, ...withoutId } = validStatusResponse
+    expect(() => TransactionStatusResponseSchema.parse(withoutId)).toThrow()
+  })
+
+  it('rejects when id is not a UUID', () => {
+    expect(() =>
+      TransactionStatusResponseSchema.parse({ ...validStatusResponse, id: 'not-a-uuid' }),
+    ).toThrow()
+  })
+
+  it('rejects when type is missing', () => {
+    const { type: _omitted, ...withoutType } = validStatusResponse
+    expect(() => TransactionStatusResponseSchema.parse(withoutType)).toThrow()
+  })
+
+  it('rejects when status is missing', () => {
+    const { status: _omitted, ...withoutStatus } = validStatusResponse
+    expect(() => TransactionStatusResponseSchema.parse(withoutStatus)).toThrow()
+  })
+
+  it('rejects when createdAt is not a valid ISO datetime string', () => {
+    expect(() =>
+      TransactionStatusResponseSchema.parse({ ...validStatusResponse, createdAt: 'not-a-date' }),
+    ).toThrow()
+  })
+
+  it('rejects when createdAt is missing', () => {
+    const { createdAt: _omitted, ...withoutCreatedAt } = validStatusResponse
+    expect(() => TransactionStatusResponseSchema.parse(withoutCreatedAt)).toThrow()
+  })
+
+  it('rejects when payment is present but missing required subfields', () => {
+    expect(() =>
+      TransactionStatusResponseSchema.parse({
+        ...validStatusResponse,
+        payment: { accountNumber: '1234567890' },
       }),
     ).toThrow()
   })
