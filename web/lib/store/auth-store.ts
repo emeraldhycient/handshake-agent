@@ -110,7 +110,11 @@ export function createAuthStore() {
     },
 
     setAccessToken(token) {
-      set({ accessToken: token })
+      // Holding a valid access token means the session is authenticated — this
+      // path runs on silent refresh (axios interceptor) and on reload-time
+      // rehydration, so it MUST transition status, otherwise the chat composer
+      // (which gates the real agent on status) silently falls back to the mock.
+      set({ accessToken: token, status: "authenticated" })
     },
 
     setTokens(accessToken, refreshToken) {
@@ -119,7 +123,7 @@ export function createAuthStore() {
       } catch {
         // Best-effort.
       }
-      set({ accessToken, refreshToken })
+      set({ accessToken, refreshToken, status: "authenticated" })
     },
 
     setUser(user) {
@@ -165,7 +169,7 @@ export type AuthStore = ReturnType<typeof createAuthStore>
 export function useAuthStore(): AuthState
 export function useAuthStore<U>(selector: (state: AuthState) => U): U
 export function useAuthStore<U>(
-  selector?: (state: AuthState) => U,
+  selector?: (state: AuthState) => U
 ): U | AuthState {
   if (selector) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
