@@ -133,6 +133,24 @@ export interface SellConfig {
   maxDriftBps: number;
 }
 
+/** Swap-execution configuration (CLAUDE.md §7). */
+export interface SwapConfig {
+  /**
+   * Maximum allowed swap rate drift in basis points between the quote stored at
+   * proposal time and the re-quote at execution time. If drift exceeds this the
+   * engine throws QuoteDriftError and the user must re-propose.
+   * Admin-tunable later (DB-admin AppSetting layer, root §7).
+   */
+  maxDriftBps: number;
+  /**
+   * Platform spread folded INTO the displayed swap rate (bps).
+   * Folded by the proposal builder before returning SwapProposalConfirmation —
+   * NEVER surfaced as a separate line item (root CLAUDE.md §3.1).
+   * Admin-tunable later (DB-admin AppSetting layer, root §7).
+   */
+  spreadBps: number;
+}
+
 /**
  * Beneficiary module configuration (Fix E, CLAUDE.md §7).
  * Controls the MockNameEnquiry adapter and crypto cooling-off period.
@@ -378,6 +396,7 @@ export interface AppConfig {
   directive: DirectiveConfig;
   buy: BuyConfig;
   sell: SellConfig;
+  swap: SwapConfig;
   compliance: ComplianceConfig;
   catalog: CatalogConfig;
   beneficiary: BeneficiaryConfig;
@@ -527,6 +546,14 @@ export default (): AppConfig => ({
   sell: {
     // 50 bps = 0.5% allowed drift. Admin-tunable later (DB-admin AppSetting layer).
     maxDriftBps: 50,
+  },
+  swap: {
+    // 50 bps = 0.5% allowed drift on the re-quote at execute time.
+    // Admin-tunable later (DB-admin AppSetting layer, root §7).
+    maxDriftBps: 50,
+    // 100 bps = 1% platform spread folded into the displayed rate (never a line item).
+    // Admin-tunable later (DB-admin AppSetting layer, root §7).
+    spreadBps: 100,
   },
   compliance: {
     // FATF Travel Rule threshold per fiat code, in major units.

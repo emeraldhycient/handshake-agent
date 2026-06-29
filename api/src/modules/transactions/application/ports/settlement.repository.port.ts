@@ -301,6 +301,89 @@ export interface SettleSendRefundInput {
 }
 
 // ---------------------------------------------------------------------------
+// Swap — atomic create Transaction + reserve (execute phase)
+// ---------------------------------------------------------------------------
+
+/**
+ * All the data needed to atomically create the swap Transaction row AND post
+ * the fromAsset reserve ledger entries in a single $transaction.
+ *
+ * Eliminates any double-spend window by combining create + reserve in one write.
+ */
+export interface CreateSwapSettlingWithReserveInput {
+  txnData: {
+    proposalId: string;
+    userId: string;
+    type: 'swap';
+    status: 'settling';
+    idempotencyKey: string;
+    requestChecksum: string;
+    fxRateSnapshot: string | null;
+    metadata: Record<string, unknown>;
+    pinVerifiedAt: Date;
+  };
+  proposalId: string;
+  confirmedAt: Date;
+  velocityIncrement: {
+    userId: string;
+    fiatCurrency: string;
+    fiatAmountStr: string;
+    now: Date;
+  };
+  /** Blockradar / WalletPrismaRepository id of the user's crypto wallet. */
+  walletId: string;
+  /** fromAsset amount to reserve (decimal string, e.g. "100"). */
+  fromAmount: string;
+  /** The fromAsset symbol (e.g. 'USDT'). */
+  fromAsset: string;
+  now: Date;
+}
+
+export interface CreateSwapSettlingWithReserveOutput {
+  txn: import('./transaction.repository.port').TransactionRecord;
+}
+
+// ---------------------------------------------------------------------------
+// Swap — finalize (provider swap confirmed)
+// ---------------------------------------------------------------------------
+
+export interface SettleSwapFinalizeInput {
+  transactionId: string;
+  userId: string;
+  walletId: string;
+  /** Amount of fromAsset that was reserved. */
+  fromAmount: string;
+  /** The fromAsset symbol (e.g. 'USDT'). */
+  fromAsset: string;
+  /** Amount of toAsset to credit to the user. */
+  toAmount: string;
+  /** The toAsset symbol (e.g. 'TRX'). */
+  toAsset: string;
+  /** On-chain tx hash from the swap provider. */
+  onChainTxHash: string;
+  now: Date;
+  year: string;
+}
+
+export interface SettleSwapFinalizeOutput {
+  receiptNumber: string;
+}
+
+// ---------------------------------------------------------------------------
+// Swap — refund (provider swap failed)
+// ---------------------------------------------------------------------------
+
+export interface SettleSwapRefundInput {
+  transactionId: string;
+  userId: string;
+  walletId: string;
+  fromAmount: string;
+  fromAsset: string;
+  failureReason: string;
+  now: Date;
+}
+
+// ---------------------------------------------------------------------------
 // Port interface
 // ---------------------------------------------------------------------------
 
@@ -411,4 +494,36 @@ export interface ISettlementRepository {
    *   4. CompensationRecord created (status=pending, reason=settlement_failed).
    */
   settleSendRefundAtomic(input: SettleSendRefundInput): Promise<void>;
+
+  /**
+   * ATOMICALLY creates the swap Transaction row, marks the Proposal 'executing',
+   * upserts VelocityCounter rows, and posts the fromAsset reserve ledger entries
+   * (user_wallet → swap_clearing) — all in a SINGLE `prisma.$transaction` (C1).
+   *
+   * Uses `isolationLevel: 'Serializable'` to prevent balanceAfter sequence races.
+   */
+  createSwapSettlingWithReserveAtomic(
+    input: CreateSwapSettlingWithReserveInput,
+  ): Promise<CreateSwapSettlingWithReserveOutput>;
+
+  /**
+   * Atomically finalizes a swap after provider confirmation:
+   *   1. Read account states inside $transaction.
+   *   2. buildSwapFinalizeEntries → insert 4 LedgerEntry rows (from + to legs).
+   *   3. Transaction → completed (processorTxRef = onChainTxHash).
+   *   4. SettlementOutbox(swap) → completed.
+   *   5. Mint signed Receipt.
+   */
+  settleSwapFinalizeAtomic(
+    input: SettleSwapFinalizeInput,
+  ): Promise<SettleSwapFinalizeOutput>;
+
+  /**
+   * Atomically refunds a swap reserve after provider failure:
+   *   1. Read account states (swap_clearing, user_wallet) inside $transaction.
+   *   2. buildSwapRefundEntries → insert 2 LedgerEntry rows (reverses the reserve).
+   *   3. Transaction → failed.
+   *   4. CompensationRecord created (status=pending, reason=settlement_failed).
+   */
+  settleSwapRefundAtomic(input: SettleSwapRefundInput): Promise<void>;
 }

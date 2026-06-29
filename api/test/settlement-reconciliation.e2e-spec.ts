@@ -287,6 +287,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
           Promise.resolve({ passed: true, complianceEventId: '' }),
       } as never,
       config,
+      undefined as never, // swapProvider: not needed on send/sell path in this suite
     );
 
     const fakePaymentProvider = makeFakePaymentProvider('successful');
@@ -318,6 +319,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
         }),
       } as never,
       sessionService, // required for executeSend (Fix G §3.4)
+      undefined, // swapProvider: not needed on send/sell path in this suite
     );
 
     reconciler = new SettlementReconciliationService(

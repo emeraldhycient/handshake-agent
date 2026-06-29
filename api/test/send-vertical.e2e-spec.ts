@@ -203,6 +203,7 @@ function buildSendExecutionService(
     undefined, // whatsAppSender (optional)
     complianceService,
     sessionService,
+    undefined, // swapProvider: not needed on send path
   );
 }
 
@@ -317,6 +318,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
       ledgerRepo,
       complianceService,
       config,
+      undefined as never, // swapProvider: not needed on send proposal path
     );
 
     // Seed a KYC-verified (Tier 1) user with a PIN + a bound device (Fix G).

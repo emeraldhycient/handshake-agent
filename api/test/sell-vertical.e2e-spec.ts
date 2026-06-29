@@ -257,6 +257,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
           Promise.resolve({ passed: true, complianceEventId: '' }),
       } as never,
       config,
+      undefined as never, // swapProvider: not needed on sell proposal path
     );
 
     const fakePaymentProvider = makeFakePaymentProvider('successful');
@@ -282,6 +283,8 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
       undefined, // whatsAppSender (optional)
       // complianceService: sell path does not run sanctions — pass undefined
       undefined,
+      undefined, // sessionService: not needed on sell path
+      undefined, // swapProvider: not needed on sell path
     );
 
     // Seed a KYC-verified (Tier 1) user with a PIN.
@@ -607,6 +610,8 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         undefined, // identityService (optional)
         undefined, // whatsAppSender (optional)
         undefined, // complianceService (sell path has no sanctions gate)
+        undefined, // sessionService: not needed on sell path
+        undefined, // swapProvider: not needed on sell path
       );
 
       // Phase 1
@@ -703,6 +708,8 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         undefined, // identityService (optional)
         undefined, // whatsAppSender (optional)
         undefined, // complianceService (sell path has no sanctions gate)
+        undefined, // sessionService: not needed on sell path
+        undefined, // swapProvider: not needed on sell path
       );
 
       await svc.executeSell({
@@ -772,6 +779,8 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         undefined, // identityService (optional)
         undefined, // whatsAppSender (optional)
         undefined, // complianceService (sell path has no sanctions gate)
+        undefined, // sessionService: not needed on sell path
+        undefined, // swapProvider: not needed on sell path
       );
 
       // Phase 1: execute

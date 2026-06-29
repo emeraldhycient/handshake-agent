@@ -893,3 +893,205 @@ export function buildSendRefundEntries(
 
   return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
 }
+
+// ── Swap — Phase 1: Reserve (fromAsset held while swap is in-flight) ──────────
+
+/** Input to buildSwapReserveEntries. */
+export interface BuildSwapReserveInput {
+  /** accountId for the user_wallet fromAsset account. */
+  walletId: string;
+  /** Amount of fromAsset to reserve (decimal string, e.g. "100"). */
+  fromAmount: string;
+  /** The fromAsset symbol (e.g. 'USDT'). */
+  fromAsset: string;
+  postedAt: Date;
+  accountStates: Record<AccountKey, AccountState>;
+}
+
+/**
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for the RESERVE
+ * phase of a crypto-to-crypto SWAP (exactly 2 fromAsset entries).
+ *
+ * The fromAmount is moved from the user's wallet into the swap clearing account
+ * so it cannot be double-spent while the provider swap is in-flight.
+ *
+ * Account mapping (credit positive, debit negative; fromAsset sum = 0):
+ *  − user_wallet  / walletId          / fromAsset  −fromAmount  (hold from user)
+ *  + clearing     / swap_clearing     / fromAsset  +fromAmount  (in clearing)
+ */
+export function buildSwapReserveEntries(
+  input: BuildSwapReserveInput,
+): LedgerEntryDraft[] {
+  const { walletId, fromAmount, fromAsset, postedAt, accountStates } = input;
+
+  assertPositiveDecimal(fromAmount, 'fromAmount');
+
+  const scaledFrom = toScaled(fromAmount);
+  const posFrom = fromScaled(scaledFrom);
+  const negFrom = fromScaled(-scaledFrom);
+
+  const specs: EntrySpec[] = [
+    {
+      accountType: LedgerAccountType.user_wallet,
+      accountId: walletId,
+      currency: fromAsset,
+      amount: negFrom,
+      description: `Swap reserve: ${fromAsset} ${fromAmount} held from user wallet`,
+    },
+    {
+      accountType: LedgerAccountType.clearing,
+      accountId: 'swap_clearing',
+      currency: fromAsset,
+      amount: posFrom,
+      description: `Swap reserve: ${fromAsset} ${fromAmount} moved to swap clearing`,
+    },
+  ];
+
+  return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
+}
+
+// ── Swap — Phase 2a: Finalize (toAsset credited, fromAsset leaves clearing) ──
+
+/** Input to buildSwapFinalizeEntries. */
+export interface BuildSwapFinalizeInput {
+  /** accountId for the user_wallet (used for both fromAsset and toAsset legs). */
+  walletId: string;
+  /** Amount of fromAsset that was reserved and now leaves clearing. */
+  fromAmount: string;
+  /** The fromAsset symbol (e.g. 'USDT'). */
+  fromAsset: string;
+  /** Amount of toAsset credited to the user. */
+  toAmount: string;
+  /** The toAsset symbol (e.g. 'TRX'). */
+  toAsset: string;
+  postedAt: Date;
+  accountStates: Record<AccountKey, AccountState>;
+}
+
+/**
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for the FINALIZE
+ * phase of a completed swap (2 fromAsset + 2 toAsset = 4 entries).
+ *
+ * fromAsset flow: clearing → treasury_reserve (fromAsset leaves the platform)
+ * toAsset flow:  treasury_reserve → user_wallet (toAsset credited to user)
+ *
+ * Account mapping:
+ *  fromAsset legs (sum = 0):
+ *    − clearing        / swap_clearing     / fromAsset  −fromAmount  (leave clearing)
+ *    + treasury_reserve/ swap_out          / fromAsset  +fromAmount  (provider received)
+ *  toAsset legs (sum = 0):
+ *    − treasury_reserve/ swap_in           / toAsset    −toAmount    (from treasury)
+ *    + user_wallet     / walletId          / toAsset    +toAmount    (credit user)
+ */
+export function buildSwapFinalizeEntries(
+  input: BuildSwapFinalizeInput,
+): LedgerEntryDraft[] {
+  const {
+    walletId,
+    fromAmount,
+    fromAsset,
+    toAmount,
+    toAsset,
+    postedAt,
+    accountStates,
+  } = input;
+
+  assertPositiveDecimal(fromAmount, 'fromAmount');
+  assertPositiveDecimal(toAmount, 'toAmount');
+
+  const scaledFrom = toScaled(fromAmount);
+  const posFrom = fromScaled(scaledFrom);
+  const negFrom = fromScaled(-scaledFrom);
+
+  const scaledTo = toScaled(toAmount);
+  const posTo = fromScaled(scaledTo);
+  const negTo = fromScaled(-scaledTo);
+
+  const specs: EntrySpec[] = [
+    // fromAsset leg 1: clearing → treasury_reserve/swap_out
+    {
+      accountType: LedgerAccountType.clearing,
+      accountId: 'swap_clearing',
+      currency: fromAsset,
+      amount: negFrom,
+      description: `Swap finalize: ${fromAsset} ${fromAmount} leaves clearing (sent to provider)`,
+    },
+    {
+      accountType: LedgerAccountType.treasury_reserve,
+      accountId: 'swap_out',
+      currency: fromAsset,
+      amount: posFrom,
+      description: `Swap finalize: ${fromAsset} ${fromAmount} booked to swap_out treasury`,
+    },
+    // toAsset leg: treasury_reserve/swap_in → user_wallet
+    {
+      accountType: LedgerAccountType.treasury_reserve,
+      accountId: 'swap_in',
+      currency: toAsset,
+      amount: negTo,
+      description: `Swap finalize: ${toAsset} ${toAmount} sourced from swap_in treasury`,
+    },
+    {
+      accountType: LedgerAccountType.user_wallet,
+      accountId: walletId,
+      currency: toAsset,
+      amount: posTo,
+      description: `Swap finalize: ${toAsset} ${toAmount} credited to user wallet`,
+    },
+  ];
+
+  return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
+}
+
+// ── Swap — Phase 2b: Refund (fromAsset returned to user on failure) ──────────
+
+/** Input to buildSwapRefundEntries. */
+export interface BuildSwapRefundInput {
+  /** accountId for the user_wallet fromAsset account. */
+  walletId: string;
+  /** Amount of fromAsset to refund (same as reserve). */
+  fromAmount: string;
+  /** The fromAsset symbol (e.g. 'USDT'). */
+  fromAsset: string;
+  postedAt: Date;
+  accountStates: Record<AccountKey, AccountState>;
+}
+
+/**
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for the REFUND
+ * phase of a failed swap (2 fromAsset entries; mirrors reserve in reverse).
+ *
+ * Account mapping (credit positive, debit negative; fromAsset sum = 0):
+ *  − clearing    / swap_clearing  / fromAsset  −fromAmount  (leave clearing)
+ *  + user_wallet / walletId       / fromAsset  +fromAmount  (refund to user)
+ */
+export function buildSwapRefundEntries(
+  input: BuildSwapRefundInput,
+): LedgerEntryDraft[] {
+  const { walletId, fromAmount, fromAsset, postedAt, accountStates } = input;
+
+  assertPositiveDecimal(fromAmount, 'fromAmount');
+
+  const scaledFrom = toScaled(fromAmount);
+  const posFrom = fromScaled(scaledFrom);
+  const negFrom = fromScaled(-scaledFrom);
+
+  const specs: EntrySpec[] = [
+    {
+      accountType: LedgerAccountType.clearing,
+      accountId: 'swap_clearing',
+      currency: fromAsset,
+      amount: negFrom,
+      description: `Swap refund: ${fromAsset} ${fromAmount} leaves clearing`,
+    },
+    {
+      accountType: LedgerAccountType.user_wallet,
+      accountId: walletId,
+      currency: fromAsset,
+      amount: posFrom,
+      description: `Swap refund: ${fromAsset} ${fromAmount} returned to user wallet`,
+    },
+  ];
+
+  return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
+}

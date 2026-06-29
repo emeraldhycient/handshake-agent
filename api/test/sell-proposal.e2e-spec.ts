@@ -182,6 +182,7 @@ describe('LedgerPrismaRepository.getAccountBalance + ProposalService.createSellP
           Promise.resolve({ passed: true, complianceEventId: '' }),
       } as never,
       new StubConfigService() as never,
+      undefined as never, // swapProvider: not needed on sell proposal path
     );
 
     // Seed a KYC-verified user

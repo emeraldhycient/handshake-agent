@@ -56,6 +56,10 @@ describe('SupportedAssetSchema', () => {
     expect(SupportedAssetSchema.parse('BTC')).toBe('BTC')
   })
 
+  it('accepts TRX (TRON native — primary swap target)', () => {
+    expect(SupportedAssetSchema.parse('TRX')).toBe('TRX')
+  })
+
   it('rejects ETH', () => {
     expect(() => SupportedAssetSchema.parse('ETH')).toThrow()
   })

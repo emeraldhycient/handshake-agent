@@ -2,7 +2,9 @@ import { z } from 'zod'
 
 // SupportedAsset: the full set of crypto assets this system recognises.
 // Which are actually LIVE is governed by the catalog `enabled` flag (config-gated).
-export const SupportedAssetSchema = z.enum(['USDT', 'BTC'])
+// TRX is included as the TRON network-fee currency — a primary swap target
+// for users wanting USDT→TRX to fund on-chain activity.
+export const SupportedAssetSchema = z.enum(['USDT', 'BTC', 'TRX'])
 export type SupportedAsset = z.infer<typeof SupportedAssetSchema>
 
 // FiatCurrency: the SUPPORTED currency set for the entire platform.

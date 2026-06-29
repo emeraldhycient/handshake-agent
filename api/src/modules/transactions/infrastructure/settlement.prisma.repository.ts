@@ -50,6 +50,9 @@ import {
   buildSendReserveEntries,
   buildSendFinalizeEntries,
   buildSendRefundEntries,
+  buildSwapReserveEntries,
+  buildSwapFinalizeEntries,
+  buildSwapRefundEntries,
 } from '../domain/ledger';
 import type {
   AccountKey,
@@ -67,6 +70,11 @@ import type {
   CreateSellSettlingWithReserveInput,
   CreateSellSettlingWithReserveOutput,
   CreateSendSettlingWithReserveInput,
+  CreateSwapSettlingWithReserveInput,
+  CreateSwapSettlingWithReserveOutput,
+  SettleSwapFinalizeInput,
+  SettleSwapFinalizeOutput,
+  SettleSwapRefundInput,
   CreateSendSettlingWithReserveOutput,
   SettleSendFinalizeInput,
   SettleSendFinalizeOutput,
@@ -90,6 +98,12 @@ const ACCOUNT_IDS = {
   USDT_SEND_CLEARING: 'usdt_send_clearing',
   USDT_NETWORK_OUT: 'usdt_network_out',
   USDT_FEES: 'usdt_fees',
+  /** Swap clearing: fromAsset held while the swap is in flight. */
+  SWAP_CLEARING: 'swap_clearing',
+  /** Treasury leg: fromAsset outflow (to provider). */
+  SWAP_OUT: 'swap_out',
+  /** Treasury leg: toAsset inflow (from provider). */
+  SWAP_IN: 'swap_in',
 } as const;
 
 /** USDT has 6 decimal places (Tether standard on TRON). */
@@ -398,6 +412,105 @@ async function fetchSendRefundAccountStates(
 }
 
 /**
+ * Builds the account-state map for swap RESERVE phase accounts:
+ * user_wallet (fromAsset), clearing/swap_clearing (fromAsset).
+ */
+async function fetchSwapReserveAccountStates(
+  prisma: PrismaService,
+  walletId: string,
+  fromAsset: string,
+): Promise<Record<string, AccountState>> {
+  const accounts: Array<{
+    accountType: string;
+    accountId: string;
+    currency: string;
+  }> = [
+    {
+      accountType: 'user_wallet',
+      accountId: walletId,
+      currency: fromAsset,
+    },
+    {
+      accountType: 'clearing',
+      accountId: ACCOUNT_IDS.SWAP_CLEARING,
+      currency: fromAsset,
+    },
+  ];
+
+  return fetchAccountStatesByList(prisma, accounts);
+}
+
+/**
+ * Builds the account-state map for swap FINALIZE phase accounts:
+ * clearing/swap_clearing (fromAsset), treasury_reserve/swap_out (fromAsset),
+ * treasury_reserve/swap_in (toAsset), user_wallet (toAsset).
+ */
+async function fetchSwapFinalizeAccountStates(
+  prisma: PrismaService,
+  walletId: string,
+  fromAsset: string,
+  toAsset: string,
+): Promise<Record<string, AccountState>> {
+  const accounts: Array<{
+    accountType: string;
+    accountId: string;
+    currency: string;
+  }> = [
+    {
+      accountType: 'clearing',
+      accountId: ACCOUNT_IDS.SWAP_CLEARING,
+      currency: fromAsset,
+    },
+    {
+      accountType: 'treasury_reserve',
+      accountId: ACCOUNT_IDS.SWAP_OUT,
+      currency: fromAsset,
+    },
+    {
+      accountType: 'treasury_reserve',
+      accountId: ACCOUNT_IDS.SWAP_IN,
+      currency: toAsset,
+    },
+    {
+      accountType: 'user_wallet',
+      accountId: walletId,
+      currency: toAsset,
+    },
+  ];
+
+  return fetchAccountStatesByList(prisma, accounts);
+}
+
+/**
+ * Builds the account-state map for swap REFUND phase accounts:
+ * clearing/swap_clearing (fromAsset), user_wallet (fromAsset).
+ */
+async function fetchSwapRefundAccountStates(
+  prisma: PrismaService,
+  walletId: string,
+  fromAsset: string,
+): Promise<Record<string, AccountState>> {
+  const accounts: Array<{
+    accountType: string;
+    accountId: string;
+    currency: string;
+  }> = [
+    {
+      accountType: 'clearing',
+      accountId: ACCOUNT_IDS.SWAP_CLEARING,
+      currency: fromAsset,
+    },
+    {
+      accountType: 'user_wallet',
+      accountId: walletId,
+      currency: fromAsset,
+    },
+  ];
+
+  return fetchAccountStatesByList(prisma, accounts);
+}
+
+/**
  * Builds the deterministic HTML content and itemized JSON for a SEND receipt.
  */
 function buildSendReceiptContent(input: {
@@ -543,6 +656,47 @@ function buildReceiptContent(input: {
 function formatReceiptNumber(year: string, seqVal: bigint): string {
   const seq = seqVal.toString().padStart(6, '0');
   return `HS-${year}-${seq}`;
+}
+
+/**
+ * Builds the deterministic HTML content and itemized JSON for a SWAP receipt.
+ */
+function buildSwapReceiptContent(input: {
+  receiptNumber: string;
+  transactionId: string;
+  userId: string;
+  fromAmount: string;
+  fromAsset: string;
+  toAmount: string;
+  toAsset: string;
+  onChainTxHash: string;
+  issuedAt: Date;
+}): { htmlContent: string; itemized: Record<string, unknown> } {
+  const itemized = {
+    fromAsset: input.fromAsset,
+    toAsset: input.toAsset,
+    fromAmount: input.fromAmount,
+    toAmount: input.toAmount,
+    onChainTxHash: input.onChainTxHash,
+    type: 'swap',
+  };
+
+  const htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Receipt ${input.receiptNumber}</title></head>
+<body>
+<h1>Handshake Swap Receipt</h1>
+<p>Receipt Number: ${input.receiptNumber}</p>
+<p>Transaction ID: ${input.transactionId}</p>
+<p>User ID: ${input.userId}</p>
+<p>From: ${input.fromAmount} ${input.fromAsset}</p>
+<p>To: ${input.toAmount} ${input.toAsset}</p>
+<p>On-chain Tx Hash: ${input.onChainTxHash}</p>
+<p>Issued At: ${input.issuedAt.toISOString()}</p>
+</body>
+</html>`;
+
+  return { htmlContent, itemized };
 }
 
 // ---------------------------------------------------------------------------
@@ -1687,6 +1841,324 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         } catch {
           // Duplicate unique constraint — compensation already recorded on a
           // prior attempt. Safe to ignore (same logic as settleSellRefundAtomic).
+        }
+      },
+      { isolationLevel: 'Serializable' },
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Swap settlement methods
+  // ---------------------------------------------------------------------------
+
+  /**
+   * ATOMICALLY creates the swap Transaction row, marks the Proposal 'executing',
+   * upserts VelocityCounter rows, AND posts the fromAsset reserve ledger entries
+   * (user_wallet → swap_clearing) — all in ONE `prisma.$transaction` (C1).
+   *
+   * Steps:
+   *   a. Create Transaction row (status='settling', type='swap').
+   *   b. Update Proposal → 'executing' (+ confirmedAt).
+   *   c. Upsert VelocityCounter rows.
+   *   d. Read swap reserve account states (user_wallet + clearing) inside the tx.
+   *   e. buildSwapReserveEntries → insert 2 LedgerEntry rows (fromAsset: user→clearing).
+   */
+  async createSwapSettlingWithReserveAtomic(
+    input: CreateSwapSettlingWithReserveInput,
+  ): Promise<CreateSwapSettlingWithReserveOutput> {
+    const {
+      txnData,
+      proposalId,
+      confirmedAt,
+      velocityIncrement,
+      walletId,
+      fromAmount,
+      fromAsset,
+      now,
+    } = input;
+
+    const row = await this.prisma.$transaction(
+      async (tx) => {
+        // ── a. Create Transaction row ─────────────────────────────────────────
+        const created = await tx.transaction.create({
+          data: {
+            userId: txnData.userId,
+            proposalId: txnData.proposalId,
+            type: txnData.type,
+            status: txnData.status,
+            idempotencyKey: txnData.idempotencyKey,
+            requestChecksum: txnData.requestChecksum,
+            fxRateSnapshot:
+              txnData.fxRateSnapshot !== null
+                ? (txnData.fxRateSnapshot as unknown as Prisma.Decimal)
+                : null,
+            metadata: txnData.metadata as unknown as Prisma.InputJsonValue,
+            pinVerifiedAt: txnData.pinVerifiedAt,
+          },
+          select: TRANSACTION_SELECT_SELL,
+        });
+
+        // ── b. Flip the Proposal to 'executing' ───────────────────────────────
+        await tx.proposal.update({
+          where: { id: proposalId },
+          data: {
+            status: 'executing',
+            confirmedAt,
+          },
+        });
+
+        // ── c. Upsert velocity counters atomically ────────────────────────────
+        await writeVelocityIncrementsInSettle(tx, velocityIncrement);
+
+        // ── d. Read swap reserve account states inside the tx ─────────────────
+        const accountStates = await fetchSwapReserveAccountStates(
+          tx as unknown as PrismaService,
+          walletId,
+          fromAsset,
+        );
+
+        // ── e. Build and insert reserve LedgerEntry rows ──────────────────────
+        const drafts: LedgerEntryDraft[] = buildSwapReserveEntries({
+          walletId,
+          fromAmount,
+          fromAsset,
+          postedAt: now,
+          accountStates,
+        });
+
+        for (const draft of drafts) {
+          await tx.ledgerEntry.create({
+            data: {
+              transactionId: created.id,
+              accountType: draft.accountType,
+              accountId: draft.accountId,
+              currency: draft.currency,
+              amount: draft.amount as unknown as Prisma.Decimal,
+              direction: draft.direction,
+              description: draft.description,
+              balanceAfter: draft.balanceAfter as unknown as Prisma.Decimal,
+              sequence: draft.sequence,
+              postedAt: draft.postedAt,
+            },
+          });
+        }
+
+        return toTransactionRecord(created);
+      },
+      { isolationLevel: 'Serializable' },
+    );
+
+    return { txn: row };
+  }
+
+  /**
+   * Atomically finalizes a swap after provider confirmation:
+   *   1. Read account states.
+   *   2. buildSwapFinalizeEntries → insert 4 LedgerEntry rows (from + to legs).
+   *   3. Transaction → completed.
+   *   4. SettlementOutbox(swap) → completed.
+   *   5. Mint signed Receipt.
+   */
+  async settleSwapFinalizeAtomic(
+    input: SettleSwapFinalizeInput,
+  ): Promise<SettleSwapFinalizeOutput> {
+    const {
+      transactionId,
+      userId,
+      walletId,
+      fromAmount,
+      fromAsset,
+      toAmount,
+      toAsset,
+      onChainTxHash,
+      now,
+      year,
+    } = input;
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        // ── 1. Read account states ─────────────────────────────────────────────
+        const accountStates = await fetchSwapFinalizeAccountStates(
+          tx as unknown as PrismaService,
+          walletId,
+          fromAsset,
+          toAsset,
+        );
+
+        // ── 2. Build and insert LedgerEntry rows ──────────────────────────────
+        const drafts: LedgerEntryDraft[] = buildSwapFinalizeEntries({
+          walletId,
+          fromAmount,
+          fromAsset,
+          toAmount,
+          toAsset,
+          postedAt: now,
+          accountStates,
+        });
+
+        for (const draft of drafts) {
+          await tx.ledgerEntry.create({
+            data: {
+              transactionId,
+              accountType: draft.accountType,
+              accountId: draft.accountId,
+              currency: draft.currency,
+              amount: draft.amount as unknown as Prisma.Decimal,
+              direction: draft.direction,
+              description: draft.description,
+              balanceAfter: draft.balanceAfter as unknown as Prisma.Decimal,
+              sequence: draft.sequence,
+              postedAt: draft.postedAt,
+            },
+          });
+        }
+
+        // ── 3. Update Transaction → completed ─────────────────────────────────
+        await tx.transaction.update({
+          where: { id: transactionId },
+          data: {
+            status: TransactionStatus.completed,
+            processorTxRef: onChainTxHash,
+            completedAt: now,
+          },
+        });
+
+        // ── 4. Update SettlementOutbox → completed ────────────────────────────
+        // Upsert-style: the outbox row may not exist in all test paths.
+        try {
+          await tx.settlementOutbox.updateMany({
+            where: { transactionId, status: SettlementOutboxStatus.pending },
+            data: {
+              status: SettlementOutboxStatus.completed,
+              lastAttemptAt: now,
+            },
+          });
+        } catch {
+          // No outbox row — non-fatal in swap finalize (webhook-driven).
+        }
+
+        // ── 5. Mint signed Receipt ────────────────────────────────────────────
+        const signingKey = this.signingKey;
+        if (!signingKey) {
+          throw new ReceiptNotSignableError();
+        }
+
+        const receiptSeq = await tx.receipt.count();
+        const receiptNumber = formatReceiptNumber(year, BigInt(receiptSeq + 1));
+
+        const { htmlContent, itemized } = buildSwapReceiptContent({
+          receiptNumber,
+          transactionId,
+          userId,
+          fromAmount,
+          fromAsset,
+          toAmount,
+          toAsset,
+          onChainTxHash,
+          issuedAt: now,
+        });
+
+        const contentHash = createHash('sha256')
+          .update(htmlContent, 'utf8')
+          .digest('hex');
+        const signatureHash = hmacHex('sha256', signingKey, htmlContent);
+
+        await tx.receipt.create({
+          data: {
+            transactionId,
+            userId,
+            receiptNumber,
+            itemized: itemized as unknown as Prisma.InputJsonValue,
+            htmlContent,
+            contentHash,
+            signatureHash,
+            deliveryStatus: ReceiptDeliveryStatus.pending,
+            issuedAt: now,
+          },
+        });
+
+        return { receiptNumber };
+      },
+      { isolationLevel: 'Serializable' },
+    );
+  }
+
+  /**
+   * Atomically refunds a swap reserve after provider failure:
+   *   1. Read clearing + user_wallet account states.
+   *   2. buildSwapRefundEntries → insert 2 LedgerEntry rows (reverses the reserve).
+   *   3. Transaction → failed.
+   *   4. CompensationRecord created.
+   */
+  async settleSwapRefundAtomic(input: SettleSwapRefundInput): Promise<void> {
+    const {
+      transactionId,
+      userId,
+      walletId,
+      fromAmount,
+      fromAsset,
+      failureReason,
+      now,
+    } = input;
+
+    await this.prisma.$transaction(
+      async (tx) => {
+        // ── 1. Read current account states ────────────────────────────────────
+        const accountStates = await fetchSwapRefundAccountStates(
+          tx as unknown as PrismaService,
+          walletId,
+          fromAsset,
+        );
+
+        // ── 2. Build and insert LedgerEntry rows ──────────────────────────────
+        const drafts: LedgerEntryDraft[] = buildSwapRefundEntries({
+          walletId,
+          fromAmount,
+          fromAsset,
+          postedAt: now,
+          accountStates,
+        });
+
+        for (const draft of drafts) {
+          await tx.ledgerEntry.create({
+            data: {
+              transactionId,
+              accountType: draft.accountType,
+              accountId: draft.accountId,
+              currency: draft.currency,
+              amount: draft.amount as unknown as Prisma.Decimal,
+              direction: draft.direction,
+              description: draft.description,
+              balanceAfter: draft.balanceAfter as unknown as Prisma.Decimal,
+              sequence: draft.sequence,
+              postedAt: draft.postedAt,
+            },
+          });
+        }
+
+        // ── 3. Update Transaction → failed ────────────────────────────────────
+        await tx.transaction.update({
+          where: { id: transactionId },
+          data: {
+            status: TransactionStatus.failed,
+            completedAt: now,
+          },
+        });
+
+        // ── 4. Create CompensationRecord ──────────────────────────────────────
+        try {
+          await tx.compensationRecord.create({
+            data: {
+              originatingTransactionId: transactionId,
+              userId,
+              reason: CompensationReason.settlement_failed,
+              amount: fromAmount as unknown as Prisma.Decimal,
+              currency: fromAsset,
+              approvalComment: failureReason,
+            },
+          });
+        } catch {
+          // Duplicate unique constraint — compensation already recorded.
         }
       },
       { isolationLevel: 'Serializable' },

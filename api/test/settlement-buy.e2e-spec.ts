@@ -230,6 +230,7 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
           Promise.resolve({ passed: true, complianceEventId: '' }),
       } as never,
       config,
+      undefined as never, // swapProvider: not needed on buy proposal path
     );
 
     executionService = new ExecutionService(
@@ -253,6 +254,8 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
       undefined, // identityService (optional)
       undefined, // whatsAppSender (optional)
       undefined, // complianceService (buy path has no sanctions gate)
+      undefined, // sessionService: not needed on buy path
+      undefined, // swapProvider: not needed on buy path
     );
 
     // Seed a verified user with a PIN.

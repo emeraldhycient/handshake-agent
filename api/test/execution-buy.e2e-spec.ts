@@ -230,6 +230,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
           Promise.resolve({ passed: true, complianceEventId: '' }),
       } as never,
       config,
+      undefined as never, // swapProvider: not needed on buy proposal path
     );
 
     const settlementRepo = new SettlementPrismaRepository(ps, config);
@@ -257,6 +258,8 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       // complianceService: buy path does not run sanctions — pass undefined
       // (executeSend is not called in buy tests; executeBuy has no compliance gate).
       undefined,
+      undefined, // sessionService: not needed on buy path
+      undefined, // swapProvider: not needed on buy path
     );
 
     // Seed a User that is KYC-verified (Tier 1) and has a PIN set.

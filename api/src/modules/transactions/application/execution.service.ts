@@ -56,8 +56,13 @@ import type {
   AppConfig,
   BuyConfig,
   SellConfig,
+  SwapConfig,
   PricingConfig,
 } from '../../../core/config/configuration';
+import {
+  SWAP_PROVIDER,
+  type ISwapProvider,
+} from '../../wallets/application/ports/swap-provider.port';
 import { BeneficiaryCoolingOffError } from '../../beneficiaries/domain/beneficiary-errors';
 import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
 import { ComplianceService } from '../../compliance/application/compliance.service';
@@ -234,6 +239,45 @@ export interface QuerySendWithdrawalStatusOutput {
   onChainTxHash?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Swap types
+// ---------------------------------------------------------------------------
+
+export interface ExecuteSwapServiceInput {
+  userId: string;
+  proposalId: string;
+  directiveId: string;
+  nonce: string;
+  pin: string;
+  idempotencyKey: string;
+}
+
+export interface ExecuteSwapResult {
+  transactionId: string;
+  status: 'settling';
+  swap: {
+    providerSwapId: string;
+  };
+}
+
+export interface SettleSwapInput {
+  /** The idempotency key used at executeSwap (= reference passed to SWAP_PROVIDER.execute). */
+  reference: string;
+  /** true = provider swap confirmed; false = provider swap failed. */
+  success: boolean;
+  /** Actual amount of toAsset received — required when success=true. */
+  toAmount?: string;
+  /** On-chain tx hash from the provider — may be present on success. */
+  hash?: string;
+}
+
+export interface SettleSwapResult {
+  transactionId: string;
+  status: 'completed' | 'failed' | 'pending';
+  receiptNumber?: string;
+  userId?: string;
+}
+
 // The directive ref required to authorize a send execution (step-up auth).
 const REQUIRED_SEND_DIRECTIVE_REF = 'request_step_up';
 
@@ -251,6 +295,7 @@ const REQUIRED_DIRECTIVE_REF = 'request_pin';
 export class ExecutionService {
   private readonly maxBuyDriftBps: number;
   private readonly maxSellDriftBps: number;
+  private readonly maxSwapDriftBps: number;
   private readonly logger = new Logger(ExecutionService.name);
 
   constructor(
@@ -293,11 +338,16 @@ export class ExecutionService {
     // NOT @Optional — NestJS DI will throw at boot if AuthModule is not
     // imported. The runtime guard in executeSend enforces the invariant.
     private readonly sessionService?: SessionService,
+    @Optional()
+    @Inject(SWAP_PROVIDER)
+    private readonly swapProvider?: ISwapProvider,
   ) {
     const buyConfig = this.config.get<BuyConfig>('buy');
     this.maxBuyDriftBps = buyConfig.maxDriftBps;
     const sellConfig = this.config.get<SellConfig>('sell');
     this.maxSellDriftBps = sellConfig.maxDriftBps;
+    const swapConfig = this.config.get<SwapConfig>('swap');
+    this.maxSwapDriftBps = swapConfig?.maxDriftBps ?? 50;
   }
 
   /**
@@ -1596,6 +1646,327 @@ export class ExecutionService {
     await this.notifySendFailed({
       userId: txn.userId,
       cryptoAmount,
+    });
+
+    return {
+      transactionId: txn.id,
+      status: 'failed',
+      userId: txn.userId,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Swap execution
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Executes a swap order after running the full server-side validation gauntlet.
+   *
+   * TWO-PHASE SWAP:
+   *   Phase 1 (this method): reserve fromAsset (user_wallet → swap_clearing) to
+   *   prevent double-spend while the provider swap is in flight. Transaction = 'settling'.
+   *   Phase 2 (settleSwap): on provider confirmation, finalize (credit toAsset +
+   *   debit treasury_reserve/swap_in); on failure, refund (clearing → user_wallet).
+   *
+   * Validation gauntlet (ORDER IS SECURITY-CRITICAL):
+   *   1. Load Proposal(swap, status pending|confirmed, owner, not expired).
+   *   2. Re-quote drift check against stored rate.
+   *   3. Verify PIN (BEFORE consuming directive — I5 invariant).
+   *   4. DirectiveService.consume (ref must be request_pin).
+   *   5. Idempotency check (after auth, before writes).
+   *   6. Atomic write: Transaction(settling) + reserve ledger + Proposal→executing.
+   *   7. SWAP_PROVIDER.execute → providerSwapId.
+   *   8. Enqueue SettlementOutbox(swap).
+   */
+  async executeSwap(
+    input: ExecuteSwapServiceInput,
+  ): Promise<ExecuteSwapResult> {
+    const { userId, proposalId, directiveId, nonce, pin, idempotencyKey } =
+      input;
+    const now = this.clock.now();
+
+    // Fail-CLOSED: SWAP_PROVIDER must be wired.
+    if (this.swapProvider === undefined) {
+      throw new Error(
+        'ExecutionService: SWAP_PROVIDER is not wired — cannot execute swap',
+      );
+    }
+
+    // ── Step 1: Load and validate proposal ──────────────────────────────────
+    const proposal = await this.proposalRepo.findById(proposalId);
+
+    if (proposal === null) {
+      throw new ProposalNotExecutableError('not found');
+    }
+    if (proposal.userId !== userId) {
+      throw new ProposalNotExecutableError('userId mismatch');
+    }
+    if (!EXECUTABLE_STATUSES.has(proposal.status)) {
+      throw new ProposalNotExecutableError(
+        `status '${proposal.status}' is not executable`,
+      );
+    }
+    if (proposal.expiresAt <= now) {
+      throw new ProposalExpiredError();
+    }
+    if (proposal.type !== 'swap') {
+      throw new ProposalNotExecutableError(
+        `proposal type '${proposal.type}' is not 'swap'`,
+      );
+    }
+
+    const params = proposal.parameters as Record<string, string>;
+    const fromAsset = params.fromAsset;
+    const toAsset = params.toAsset;
+    const fromAmount = params.fromAmount;
+    const fromAssetId = params.fromAssetId;
+    const toAssetId = params.toAssetId;
+    const storedRate = Number(params.rate ?? '0');
+    const walletId = params.walletId;
+    const addressId = walletId; // wallet.providerReference — stored as walletId in params
+
+    if (!walletId) {
+      throw new ProposalNotExecutableError(
+        'proposal parameters missing walletId',
+      );
+    }
+
+    // ── Step 2: Re-quote drift check ─────────────────────────────────────────
+    // Re-fetch a fresh quote from the provider to detect slippage.
+    // Use stored fromAssetId / toAssetId (from proposal params).
+    const freshQuote = await this.callProvider('swapGetQuote', () =>
+      this.swapProvider!.getQuote({
+        addressId,
+        fromAssetId,
+        toAssetId,
+        amount: fromAmount,
+      }),
+    );
+
+    const freshRate = Number(freshQuote.rate ?? '0');
+    const driftBps =
+      storedRate > 0
+        ? (Math.abs(freshRate - storedRate) / storedRate) * 10_000
+        : 0;
+
+    if (driftBps > this.maxSwapDriftBps) {
+      throw new QuoteDriftError(driftBps, this.maxSwapDriftBps);
+    }
+
+    // ── Step 3: Verify PIN (BEFORE consuming the one-shot directive) ─────────
+    // I5: verify PIN first so a wrong-PIN typo does not burn the single-use
+    // directive and block a legitimate retry.
+    await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 4: Consume directive grant ──────────────────────────────────────
+    const grant = await this.directiveService.consume({
+      directiveId,
+      nonce,
+      proposalId,
+    });
+
+    if (grant.directiveRef !== REQUIRED_DIRECTIVE_REF) {
+      throw new ProposalNotExecutableError(
+        `directive ref '${grant.directiveRef}' is not '${REQUIRED_DIRECTIVE_REF}'`,
+      );
+    }
+
+    // ── Step 5: Idempotency check ────────────────────────────────────────────
+    const existing =
+      await this.transactionRepo.findByIdempotencyKey(idempotencyKey);
+    if (existing !== null) {
+      const meta = existing.metadata as Record<string, string>;
+      return {
+        transactionId: existing.id,
+        status: 'settling',
+        swap: {
+          providerSwapId: meta.providerSwapId ?? '',
+        },
+      };
+    }
+
+    // ── Step 6: Atomic write ─────────────────────────────────────────────────
+    // create Transaction(swap, settling) + reserve fromAsset (user_wallet→swap_clearing)
+    // + mark Proposal→executing — all in a SINGLE DB $transaction (C1).
+    const pricingConfig = this.config.get<PricingConfig>('pricing');
+    const baseFiat = this.assetRegistry.defaultFiat();
+    const baseRate = resolveBaseRate(pricingConfig, fromAsset, baseFiat);
+    const LEDGER_SCALE = 10n ** 18n;
+    const scaledFromAmount = toScaled(fromAmount);
+    const scaledNgn18 =
+      (scaledFromAmount * toScaled(String(baseRate))) / LEDGER_SCALE;
+    const isNeg = scaledNgn18 < 0n;
+    const abs = isNeg ? -scaledNgn18 : scaledNgn18;
+    const whole = abs / LEDGER_SCALE;
+    const frac = abs % LEDGER_SCALE;
+    const fracStr =
+      frac === 0n
+        ? ''
+        : '.' + frac.toString().padStart(18, '0').replace(/0+$/, '');
+    const ngnEquivalentStr = (isNeg ? '-' : '') + whole.toString() + fracStr;
+
+    const requestChecksum = this.buildRequestChecksum({
+      userId,
+      proposalId,
+      asset: fromAsset,
+      fiatAmount: ngnEquivalentStr,
+      fxRate: params.rate ?? '0',
+    });
+
+    const { txn } =
+      await this.settlementRepo.createSwapSettlingWithReserveAtomic({
+        txnData: {
+          proposalId,
+          userId,
+          type: 'swap',
+          status: 'settling',
+          idempotencyKey,
+          requestChecksum,
+          fxRateSnapshot: params.rate ?? null,
+          metadata: {
+            fromAsset,
+            toAsset,
+            fromAmount,
+            toAmount: params.toAmount ?? '0',
+            walletId,
+          },
+          pinVerifiedAt: now,
+        },
+        proposalId,
+        confirmedAt: now,
+        velocityIncrement: {
+          userId,
+          fiatCurrency: baseFiat,
+          fiatAmountStr: ngnEquivalentStr,
+          now,
+        },
+        walletId,
+        fromAmount,
+        fromAsset,
+        now,
+      });
+
+    // ── Step 7: Execute swap via provider ────────────────────────────────────
+    const swapOutput = await this.callProvider('swapExecute', () =>
+      this.swapProvider!.execute({
+        addressId,
+        fromAssetId,
+        toAssetId,
+        amount: fromAmount,
+        reference: idempotencyKey,
+      }),
+    );
+
+    const providerSwapId = swapOutput.providerSwapId;
+
+    // Persist providerSwapId into Transaction metadata for idempotent replay.
+    await this.transactionRepo.mergeMetadata(txn.id, { providerSwapId });
+
+    // ── Step 8: Enqueue SettlementOutbox ────────────────────────────────────
+    await this.outboxRepo.create({
+      transactionId: txn.id,
+      settlementType: 'swap',
+      payload: {
+        reference: idempotencyKey,
+        fromAsset,
+        toAsset,
+        fromAmount,
+        providerSwapId,
+      },
+      idempotencyKey,
+      status: 'pending',
+      processorRef: providerSwapId,
+    });
+
+    return {
+      transactionId: txn.id,
+      status: 'settling',
+      swap: { providerSwapId },
+    };
+  }
+
+  /**
+   * Phase 2 of a swap: credits toAsset (on success) or refunds fromAsset (on failure).
+   *
+   * Called by the Blockradar swap webhook or a polling job after the provider
+   * confirms or rejects the swap.
+   *
+   * Flow (§3.1 preserved — model proposes, engine disposes):
+   *   1. Load Transaction by idempotencyKey (reference).
+   *   2. Idempotent path: already completed → return existing receipt.
+   *   3. Guard: status must be 'settling'.
+   *   4. Route on success flag:
+   *      - success=true  → settleSwapFinalizeAtomic (credit toAsset).
+   *      - success=false → settleSwapRefundAtomic (refund fromAsset).
+   */
+  async settleSwap(input: SettleSwapInput): Promise<SettleSwapResult> {
+    const { reference, success, toAmount, hash } = input;
+
+    // ── Step 1: Load Transaction by idempotencyKey ───────────────────────────
+    const txn = await this.transactionRepo.findByIdempotencyKey(reference);
+    if (txn === null) {
+      throw new ProposalNotExecutableError(
+        `no transaction found for reference '${reference}'`,
+      );
+    }
+
+    // ── Step 2: Idempotent path ──────────────────────────────────────────────
+    if (txn.status === 'completed') {
+      const receiptNumber = await this.settlementRepo.findReceiptNumber(txn.id);
+      return {
+        transactionId: txn.id,
+        status: 'completed',
+        userId: txn.userId,
+        ...(receiptNumber !== null ? { receiptNumber } : {}),
+      };
+    }
+
+    // ── Step 3: Guard ─────────────────────────────────────────────────────────
+    if (txn.status !== 'settling') {
+      throw new SettlementInvalidStatusError(txn.status);
+    }
+
+    const meta = txn.metadata as Record<string, string>;
+    const walletId = meta.walletId ?? '';
+    const fromAmount = meta.fromAmount ?? '0';
+    const fromAsset = meta.fromAsset ?? '';
+    const toAsset = meta.toAsset ?? '';
+    const now = this.clock.now();
+    const year = now.getFullYear().toString();
+
+    if (success) {
+      // ── Step 4a: Finalize — credit toAsset ──────────────────────────────────
+      const { receiptNumber } =
+        await this.settlementRepo.settleSwapFinalizeAtomic({
+          transactionId: txn.id,
+          userId: txn.userId,
+          walletId,
+          fromAmount,
+          fromAsset,
+          toAmount: toAmount ?? '0',
+          toAsset,
+          onChainTxHash: hash ?? '',
+          now,
+          year,
+        });
+
+      return {
+        transactionId: txn.id,
+        status: 'completed',
+        userId: txn.userId,
+        receiptNumber,
+      };
+    }
+
+    // ── Step 4b: Failure → refund fromAsset ─────────────────────────────────
+    await this.settlementRepo.settleSwapRefundAtomic({
+      transactionId: txn.id,
+      userId: txn.userId,
+      walletId,
+      fromAmount,
+      fromAsset,
+      failureReason: 'swap provider returned failure',
+      now,
     });
 
     return {

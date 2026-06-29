@@ -224,6 +224,7 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
       ledgerRepo,
       complianceService,
       config,
+      undefined as never, // swapProvider: not needed on send proposal path
     );
 
     // Seed a KYC-verified user

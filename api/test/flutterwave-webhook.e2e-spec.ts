@@ -244,6 +244,7 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
           Promise.resolve({ passed: true, complianceEventId: '' }),
       } as never,
       config,
+      undefined as never, // swapProvider: not needed on buy proposal path
     );
 
     // Payment provider fake: verifyWebhookSignature checks WEBHOOK_SECRET;
@@ -290,6 +291,8 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
       undefined, // identityService (optional)
       undefined, // whatsAppSender (optional)
       undefined, // complianceService (webhook/buy path has no sanctions gate)
+      undefined, // sessionService: not needed on buy path
+      undefined, // swapProvider: not needed on this path
     );
 
     // Wire the controller under test.

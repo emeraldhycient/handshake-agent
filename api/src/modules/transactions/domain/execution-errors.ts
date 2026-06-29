@@ -138,3 +138,21 @@ export class ProviderUnavailableError extends Error {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+/**
+ * Thrown by ProposalService.createSwapProposal when fromAsset === toAsset.
+ * This rule lives in the ENGINE, not the intent schema (the swap intent schema
+ * intentionally omits .refine() to stay compatible with z.discriminatedUnion).
+ * Code: SWAP_SAME_ASSET
+ */
+export class SwapSameAssetError extends Error {
+  readonly code = 'SWAP_SAME_ASSET' as const;
+
+  constructor(asset: string) {
+    super(
+      `Cannot swap ${asset} for ${asset}: fromAsset and toAsset must differ`,
+    );
+    this.name = 'SwapSameAssetError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
