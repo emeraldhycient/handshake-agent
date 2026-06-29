@@ -22,7 +22,7 @@ describe("WalletBalancesResponseSchema", () => {
     };
     expect(WalletBalancesResponseSchema.parse(ok)).toEqual(ok);
   });
-  it("rejects a non-2dp fiat total", () => {
+  it("rejects amounts with more than 2 decimal places", () => {
     expect(() =>
       WalletBalancesResponseSchema.parse({
         fiatCurrency: "NGN",

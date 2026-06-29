@@ -18,6 +18,22 @@ const makeRegistry = () =>
     network: (id: string) => ({ id, displayName: 'TRON (TRC-20)' }),
   }) as unknown as AssetRegistry;
 
+// Two enabled assets on distinct networks — exercises the total summation.
+const makeMultiRegistry = () =>
+  ({
+    enabledCryptoAssets: () => ['USDT', 'BTC'],
+    defaultCryptoAsset: () => 'USDT',
+    defaultFiat: () => 'NGN',
+    asset: (s: string) => ({
+      symbol: s,
+      displayName: s === 'USDT' ? 'Tether USD' : 'Bitcoin',
+      decimals: s === 'USDT' ? 6 : 8,
+      networks: [s === 'USDT' ? 'TRON' : 'BTC'],
+    }),
+    defaultNetworkFor: (s: string) => (s === 'USDT' ? 'TRON' : 'BTC'),
+    network: (id: string) => ({ id, displayName: id }),
+  }) as unknown as AssetRegistry;
+
 const wallet = {
   id: 'w1',
   userId: 'u1',
@@ -55,6 +71,50 @@ describe('WalletBalanceService', () => {
       fiatValue: '48461.49',
     });
     expect(out.totalFiatValue).toBe('48461.49');
+  });
+
+  it('sums multiple assets exactly (floored per-asset values, no rounding drift)', async () => {
+    const wallets = {
+      getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(wallet),
+      getBalance: jest.fn().mockImplementation((_w: unknown, asset: string) =>
+        Promise.resolve({
+          amount: asset === 'USDT' ? '29.97' : '0.5',
+          decimals: asset === 'USDT' ? 6 : 8,
+        }),
+      ),
+    } as unknown as WalletService;
+    const rates = {
+      getRate: jest.fn().mockImplementation((asset: string) =>
+        Promise.resolve(
+          asset === 'USDT'
+            ? {
+                baseRate: 1650,
+                sellSpreadBps: 200,
+                buySpreadBps: 150,
+                processingFeeBps: 0,
+                expiresInSec: 30,
+                cryptoDecimals: 6,
+              }
+            : {
+                baseRate: 100000,
+                sellSpreadBps: 200,
+                buySpreadBps: 150,
+                processingFeeBps: 0,
+                expiresInSec: 30,
+                cryptoDecimals: 8,
+              },
+        ),
+      ),
+    } as unknown as IRateProvider;
+    const svc = new WalletBalanceService(wallets, makeMultiRegistry(), rates);
+
+    const out = await svc.getBalances('u1');
+    // USDT: 29.97 × (1650 × 0.98) = 48461.49 ; BTC: 0.5 × (100000 × 0.98) = 49000.00
+    expect(out.assets.map((a) => a.fiatValue)).toEqual([
+      '48461.49',
+      '49000.00',
+    ]);
+    expect(out.totalFiatValue).toBe('97461.49');
   });
 
   it('returns the deposit address for the default network', async () => {

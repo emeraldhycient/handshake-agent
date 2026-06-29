@@ -2,6 +2,7 @@ import {
   computeBuyQuote,
   computeSellQuote,
   QuotePricingError,
+  valueAtSellRate,
 } from './quote-pricing';
 
 describe('computeBuyQuote', () => {
@@ -172,8 +173,6 @@ describe('computeSellQuote', () => {
     expect(with200.effectiveRate).toBeLessThan(with150.effectiveRate);
   });
 });
-
-import { valueAtSellRate } from './quote-pricing';
 
 describe('valueAtSellRate', () => {
   it('values crypto at the sell-spread-reduced rate, floored to 2dp', () => {

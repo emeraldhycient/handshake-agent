@@ -59,9 +59,15 @@ export class WalletBalanceService {
       }),
     );
 
-    const totalFiatValue = assets
-      .reduce((sum, a) => sum + Number(a.fiatValue), 0)
-      .toFixed(2);
+    // Sum in integer minor units (kobo) so the total is exact and never
+    // overstates realizable value: each per-asset fiatValue is already
+    // floored to 2dp by valueAtSellRate, so float accumulation + rounding
+    // (.toFixed) could add a stray 0.01 once multiple assets are enabled.
+    const totalMinor = assets.reduce(
+      (sum, a) => sum + Math.round(Number(a.fiatValue) * 100),
+      0,
+    );
+    const totalFiatValue = (totalMinor / 100).toFixed(2);
 
     return { fiatCurrency: fiat as FiatCurrency, totalFiatValue, assets };
   }
