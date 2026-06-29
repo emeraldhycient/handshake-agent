@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { BuyProposalConfirmationSchema } from '../tools/execute-buy.tool'
 import { SellProposalConfirmationSchema } from '../tools/execute-sell.tool'
 import { SendProposalConfirmationSchema } from '../tools/execute-send.tool'
+import { TransactionHistoryResponseSchema } from '../transactions/transaction-history.schema'
 
 // Request body sent from the web chat UI to POST /agent/chat.
 export const ChatMessageRequestSchema = z.object({
@@ -45,6 +46,7 @@ export const AgentTurnOutcomeSchema = z.discriminatedUnion('kind', [
     kind: z.literal('not_supported'),
     action: z.enum(['check_balance', 'swap', 'buy_ticket', 'unknown']),
   }),
+  TransactionHistoryResponseSchema.extend({ kind: z.literal('transactions') }),
 ])
 export type AgentTurnOutcome = z.infer<typeof AgentTurnOutcomeSchema>
 
