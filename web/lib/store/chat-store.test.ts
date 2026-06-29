@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { buildBuyConfirm } from "@/lib/chat/flow"
 import { createChatStore } from "./chat-store"
+import { ApiError } from "@/lib/api/client"
 import type {
   WebChatResponse,
   ChatMessageRequest,
@@ -735,6 +736,39 @@ describe("sendVoiceToAgent", () => {
     if (last.kind === "text") expect(last.text).toContain("trouble")
     expect(store.getState().typing.m).toBe(false)
   })
+
+  it("sendVoiceToAgent 422 ApiError → surfaces the server message, not generic fallback", async () => {
+    const voiceApi = vi
+      .fn()
+      .mockRejectedValue(new ApiError("Audio file too large", 422))
+    const store = createChatStore({ schedule: (fn) => fn(), voiceApi })
+    await store
+      .getState()
+      .sendVoiceToAgent("m", new Blob(["x"], { type: "audio/webm" }))
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") {
+      expect(last.text).toBe("Audio file too large")
+      expect(last.text).not.toContain("trouble reaching the assistant")
+    }
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("sendVoiceToAgent 500 ApiError → shows generic fallback", async () => {
+    const voiceApi = vi
+      .fn()
+      .mockRejectedValue(new ApiError("Internal Server Error", 500))
+    const store = createChatStore({ schedule: (fn) => fn(), voiceApi })
+    await store
+      .getState()
+      .sendVoiceToAgent("m", new Blob(["x"], { type: "audio/webm" }))
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") {
+      expect(last.text).toContain("trouble reaching the assistant")
+    }
+    expect(store.getState().typing.m).toBe(false)
+  })
 })
 
 describe("sendToAgent", () => {
@@ -968,6 +1002,53 @@ describe("sendToAgent", () => {
   it("typing is never left stuck — even on error", async () => {
     mockApi.mockRejectedValue(new Error("500"))
     await store.getState().sendToAgent("m", "send")
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  // ─── 4xx business error vs 5xx/network error distinction ─────────────────────
+
+  it("4xx ApiError → surfaces the server message, not the generic fallback", async () => {
+    mockApi.mockRejectedValue(new ApiError("Insufficient USDT balance", 422))
+    await store.getState().sendToAgent("m", "sell 1000 usdt")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") {
+      expect(last.text).toBe("Insufficient USDT balance")
+      expect(last.text).not.toContain("trouble reaching the assistant")
+    }
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("5xx ApiError → shows generic fallback (not the raw server message)", async () => {
+    mockApi.mockRejectedValue(new ApiError("Internal Server Error", 500))
+    await store.getState().sendToAgent("m", "sell 1000 usdt")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") {
+      expect(last.text).toContain("trouble reaching the assistant")
+    }
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("non-ApiError network error → shows generic fallback", async () => {
+    mockApi.mockRejectedValue(new Error("Network Error"))
+    await store.getState().sendToAgent("m", "buy 100 usdt")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") {
+      expect(last.text).toContain("trouble reaching the assistant")
+    }
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("400 ApiError → surfaces the server validation message", async () => {
+    mockApi.mockRejectedValue(new ApiError("RWF isn't live yet", 400))
+    await store.getState().sendToAgent("m", "buy RWF")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") {
+      expect(last.text).toBe("RWF isn't live yet")
+    }
     expect(store.getState().typing.m).toBe(false)
   })
 })

@@ -32,6 +32,7 @@ import { parseIntent } from "@/lib/chat/intent"
 import { mapOutcomeToMessages } from "@/lib/chat/agent-outcome"
 import { GREETING_M, GREETING_D } from "@/lib/constants"
 import { formatNGN } from "@/lib/format"
+import { ApiError } from "@/lib/api/client"
 import type {
   ChatAction,
   ChatMessage,
@@ -137,6 +138,28 @@ function buildCompletionReceipt(
     ],
     txRef,
   }
+}
+
+// ─── Error classification ─────────────────────────────────────────────────────
+
+const GENERIC_AGENT_ERROR =
+  "I'm having trouble reaching the assistant right now — please try again."
+
+/**
+ * Extracts the user-facing error message from a caught value.
+ *
+ * 4xx ApiError → surface the server's clean message (e.g. "Insufficient USDT
+ * balance", "RWF isn't live yet"). These are domain exceptions the backend has
+ * already formatted for the user.
+ *
+ * 5xx ApiError or plain Error (network failure) → return the generic fallback
+ * so the user never sees a raw stack trace or opaque server error string.
+ */
+function chatErrorMessage(err: unknown): string {
+  if (err instanceof ApiError && err.status !== undefined && err.status < 500) {
+    return err.message
+  }
+  return GENERIC_AGENT_ERROR
 }
 
 // ─── Scheduler type ───────────────────────────────────────────────────────────
@@ -440,12 +463,12 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           chips: { ...s.chips, [surface]: startChips() },
           ...(pendingProposalId ? { pendingProposalId } : {}),
         }))
-      } catch {
+      } catch (err) {
         const errMsg: ChatMessage = {
           id: nextId(),
           role: "assistant",
           kind: "text",
-          text: "I'm having trouble reaching the assistant right now — please try again.",
+          text: chatErrorMessage(err),
         }
         set((s) => ({
           threads: {
@@ -486,12 +509,12 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           chips: { ...s.chips, [surface]: startChips() },
           ...(pendingProposalId ? { pendingProposalId } : {}),
         }))
-      } catch {
+      } catch (err) {
         const errMsg: ChatMessage = {
           id: nextId(),
           role: "assistant",
           kind: "text",
-          text: "I'm having trouble reaching the assistant right now — please try again.",
+          text: chatErrorMessage(err),
         }
         set((s) => ({
           threads: {
