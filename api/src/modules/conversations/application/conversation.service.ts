@@ -23,6 +23,11 @@ import type { HandoffTokenService } from '../../identity/application/handoff-tok
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { signFlowToken } from '../../whatsapp/application/flow-token';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
+import type {
+  QueryTransactionsIntent,
+  TransactionHistoryResponse,
+} from '@handshake-agent/contracts';
 
 import {
   CONVERSATION_REPOSITORY,
@@ -57,7 +62,15 @@ export const HANDOFF_TOKEN_SERVICE = Symbol('HANDOFF_TOKEN_SERVICE');
 /** DI token for BeneficiaryService — injected by symbol to avoid coupling at module level (W1). */
 export const BENEFICIARY_SERVICE = Symbol('BENEFICIARY_SERVICE');
 
+/** DI token for TransactionHistoryService — injected by symbol (read-only history). */
+export const TRANSACTION_HISTORY_SERVICE = Symbol(
+  'TRANSACTION_HISTORY_SERVICE',
+);
+
 const SAFE_FALLBACK = 'Sorry, something went wrong — please try again.';
+
+/** Max history lines rendered in a WhatsApp text reply (the full set is in the PDF). */
+const MAX_WA_HISTORY_LINES = 20;
 
 // ---------------------------------------------------------------------------
 // Internal resolved-identity shapes
@@ -118,6 +131,8 @@ export class ConversationService implements IInboundHandler {
     private readonly handoffTokenService: HandoffTokenService,
     @Inject(BENEFICIARY_SERVICE)
     private readonly beneficiaryService: BeneficiaryService,
+    @Inject(TRANSACTION_HISTORY_SERVICE)
+    private readonly historyService: TransactionHistoryService,
   ) {}
 
   async handleInbound(msg: InboundMessage): Promise<void> {
@@ -302,6 +317,14 @@ export class ConversationService implements IInboundHandler {
       case 'receive_crypto': {
         const replyText = await this.handleReceive(identity, msg.fromAddress);
         return { replyText, flowSent: false };
+      }
+      case 'query_transactions': {
+        const { replyText, flowSent } = await this.handleTransactionHistory(
+          intent as unknown as QueryTransactionsIntent,
+          identity,
+          msg,
+        );
+        return { replyText, flowSent };
       }
       case 'none': {
         return {
@@ -852,6 +875,78 @@ export class ConversationService implements IInboundHandler {
       `Your ${assetMeta.displayName} deposit address (${networkMeta.displayName}):\n${wallet.address}\n\n` +
       `Only send ${assetMeta.displayName} on the ${networkMeta.displayName} to this address. Other assets or networks will be lost.`
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: query_transactions handler (read-only history)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handles a `query_transactions` intent: read-only history for a linked user.
+   * Renders the list as text and hands off the PDF via a signed download link
+   * (sendCtaUrl). No KYC/PIN gate — this moves no money (§3.1/§3.3).
+   */
+  private async handleTransactionHistory(
+    intent: QueryTransactionsIntent,
+    identity: ResolvedIdentity,
+    msg: InboundMessage,
+  ): Promise<{ replyText: string; flowSent: boolean }> {
+    const guard = this.requireActiveUser(identity, msg.fromAddress);
+    if ('needsKyc' in guard) {
+      const replyText = await this.sendKycHandoff(guard.channelAddress);
+      return { replyText, flowSent: false };
+    }
+    if ('needsReverify' in guard) {
+      return { replyText: this.reverifyFallbackReply(), flowSent: false };
+    }
+    if ('reply' in guard) {
+      return { replyText: guard.reply, flowSent: false };
+    }
+
+    const result = await this.historyService.query(guard.user.id, {
+      period: intent.period,
+      from: intent.from,
+      to: intent.to,
+      txType: intent.txType,
+    });
+
+    if (result.totalCount === 0) {
+      return {
+        replyText: `No transactions for ${result.window.label}.`,
+        flowSent: false,
+      };
+    }
+
+    // Send the list, then a CTA URL to the signed PDF. Returning flowSent:true
+    // tells handleInbound NOT to re-send replyText (we've already dispatched).
+    await this.sender.sendText(msg.fromAddress, this.buildHistoryText(result));
+    await this.sender.sendCtaUrl({
+      to: msg.fromAddress,
+      body: `Download your statement (${result.window.label})`,
+      buttonText: 'Download',
+      url: result.downloadUrl,
+    });
+    return {
+      replyText: `Sent your ${result.window.label} statement.`,
+      flowSent: true,
+    };
+  }
+
+  /** Builds a plain-text history list (date · type · ±amount · status). */
+  private buildHistoryText(result: TransactionHistoryResponse): string {
+    const shown = result.items.slice(0, MAX_WA_HISTORY_LINES);
+    const lines = shown.map((it) => {
+      const sign = it.direction === 'in' ? '+' : '-';
+      const amount = it.cryptoAmount ?? it.fiatAmount ?? '';
+      const day = it.createdAt.slice(0, 10);
+      return `${day}  ${it.type.toUpperCase()}  ${sign}${amount}  [${it.status}]`;
+    });
+    const header = `Your transactions (${result.window.label}):`;
+    const more =
+      result.totalCount > shown.length
+        ? `\n…and ${result.totalCount - shown.length} more — download the statement for the full list.`
+        : '';
+    return `${header}\n${lines.join('\n')}${more}`;
   }
 
   /**
