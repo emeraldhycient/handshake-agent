@@ -97,6 +97,7 @@ import {
   QuoteDriftError,
   SettlementInvalidStatusError,
   InsufficientBalanceError,
+  ProviderUnavailableError,
 } from '../domain/execution-errors';
 import { toScaled } from '../domain/ledger';
 import { resolveBaseRate } from './resolve-base-rate';
@@ -468,18 +469,20 @@ export class ExecutionService {
     // Customer details: sourced from user KYC if available; safe fallbacks used
     // for optional fields (KYC names may be null — noted, not blocking).
     // TODO: when KycProfile is queryable from the engine, use real firstname/lastname.
-    const collection = await this.paymentProvider.createCollection({
-      amount: storedQuote.fiatAmount,
-      currency: storedQuote.fiatCurrency,
-      reference: idempotencyKey,
-      customer: {
-        // Safe fallback: use a synthetic email derived from userId.
-        // Real email will come from User.verifiedEmail in a future iteration.
-        email: `user+${userId}@handshake.internal`,
-        firstname: 'Handshake',
-        lastname: 'User',
-      },
-    });
+    const collection = await this.callProvider('createCollection', () =>
+      this.paymentProvider.createCollection({
+        amount: storedQuote.fiatAmount,
+        currency: storedQuote.fiatCurrency,
+        reference: idempotencyKey,
+        customer: {
+          // Safe fallback: use a synthetic email derived from userId.
+          // Real email will come from User.verifiedEmail in a future iteration.
+          email: `user+${userId}@handshake.internal`,
+          firstname: 'Handshake',
+          lastname: 'User',
+        },
+      }),
+    );
 
     // 8c. Persist VA details into Transaction metadata so idempotent replay
     // can return the real VA without calling the provider again (C2).
@@ -874,20 +877,22 @@ export class ExecutionService {
       });
 
     // ── Step 10: Initiate fiat payout ────────────────────────────────────────
-    const payout = await this.paymentProvider.createPayout({
-      amount: storedQuote.fiatAmount,
-      currency: storedQuote.fiatCurrency,
-      reference: idempotencyKey,
-      bankAccount: {
-        // These are guaranteed non-null by the guard in step 8 of the gauntlet.
-
-        accountNumber: beneficiary.accountNumber,
-
-        bankCode: beneficiary.bankCode,
-
-        accountName: beneficiary.accountHolderName,
-      },
-    });
+    // Capture the guard-narrowed (non-null per step 8) bank details into a local
+    // BEFORE the callProvider closure: a closure re-widens `beneficiary.*` back
+    // to `string | null`, so the literal must be built in the narrowed scope.
+    const payoutBankAccount = {
+      accountNumber: beneficiary.accountNumber,
+      bankCode: beneficiary.bankCode,
+      accountName: beneficiary.accountHolderName,
+    };
+    const payout = await this.callProvider('createPayout', () =>
+      this.paymentProvider.createPayout({
+        amount: storedQuote.fiatAmount,
+        currency: storedQuote.fiatCurrency,
+        reference: idempotencyKey,
+        bankAccount: payoutBankAccount,
+      }),
+    );
 
     // Persist providerRef into Transaction metadata for idempotent replay.
     await this.transactionRepo.mergeMetadata(txn.id, {
@@ -1395,12 +1400,14 @@ export class ExecutionService {
       network,
     );
     const assetId = this.assetRegistry.assetProviderId(asset, 'blockradar');
-    const withdrawOutput = await this.walletService.withdraw(
-      walletRecord,
-      toAddress,
-      cryptoAmount,
-      assetId,
-      idempotencyKey,
+    const withdrawOutput = await this.callProvider('withdraw', () =>
+      this.walletService.withdraw(
+        walletRecord,
+        toAddress,
+        cryptoAmount,
+        assetId,
+        idempotencyKey,
+      ),
     );
     const providerRef = withdrawOutput.providerReference;
 
@@ -1763,6 +1770,29 @@ export class ExecutionService {
         { userId: params.userId, err },
         'notifySellFailed: failed to send WhatsApp notice (swallowed)',
       );
+    }
+  }
+
+  /**
+   * Runs an external provider side-effect call (Flutterwave / Blockradar) and
+   * translates ANY failure — non-2xx, network error, or any rejection — into a
+   * typed {@link ProviderUnavailableError}. The calling surface (chat /
+   * WhatsApp) maps that to a clear "provider temporarily unavailable" message
+   * so a transient provider failure never leaks an opaque 500. The original
+   * error is logged (provider messages may include sensitive request context,
+   * so only the operation name is logged, not the raw error body — §secrets).
+   */
+  private async callProvider<T>(
+    operation: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      this.logger.error(
+        `provider call '${operation}' failed: ${err instanceof Error ? err.message : 'unknown error'}`,
+      );
+      throw new ProviderUnavailableError(operation, err);
     }
   }
 

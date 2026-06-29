@@ -212,6 +212,13 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       listForUser: jest.fn().mockResolvedValue([]),
     } as unknown as import('../src/modules/beneficiaries/application/beneficiary.service').BeneficiaryService;
 
+    const fakeBalanceService = {
+      getBalances: jest.fn().mockResolvedValue({
+        fiatCurrency: 'NGN',
+        balances: [],
+      }),
+    } as unknown as import('../src/modules/balances/application/balance.service').BalanceService;
+
     svc = new ConversationService(
       identityService,
       fakeAgentPort,
@@ -227,6 +234,7 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       fakeAssetRegistry,
       fakeHandoffTokenService,
       fakeBeneficiaryService,
+      fakeBalanceService,
     );
 
     // Seed a Tier-1 verified User + ChannelIdentity

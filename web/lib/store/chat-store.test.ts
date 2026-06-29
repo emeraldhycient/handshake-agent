@@ -14,6 +14,8 @@ import type {
   WebChatResponse,
   ChatMessageRequest,
   TransactionStatusResponse,
+  ChatHistoryItem,
+  BuyProposalConfirmation,
 } from "@handshake-agent/contracts"
 
 /** Synchronous scheduler — no setTimeout in tests */
@@ -498,6 +500,76 @@ describe("buy execute flow (authenticated path)", () => {
     expect(store.getState().pinOpen).toBe(false)
   })
 
+  it("pinComplete (sell settling) appends a settling card with the payout reference", async () => {
+    const transactionId = "ssssssss-ssss-ssss-ssss-ssssssssssss"
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.resolve({
+        transactionId,
+        status: "settling" as const,
+        payout: { providerRef: "payout-ref-1" },
+      })
+    )
+
+    // C4: the store no longer polls — the live SettlingCardLive hook does. This
+    // test only asserts the settling card is appended on the settling response.
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+    })
+    store.getState().openConfirm("m", { ...buildBuyConfirm(), action: "send" })
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    const settling = store
+      .getState()
+      .threads.m.find((m) => m.kind === "settling")
+    expect(settling).toBeDefined()
+    if (settling?.kind === "settling") {
+      expect(settling.txType).toBe("sell")
+      expect(settling.reference).toBe("payout-ref-1")
+      expect(settling.transactionId).toBe(transactionId)
+    }
+    expect(store.getState().pinOpen).toBe(false)
+  })
+
+  it("pinComplete (send settling) appends a settling card with the on-chain reference", async () => {
+    const transactionId = "nnnnnnnn-nnnn-nnnn-nnnn-nnnnnnnnnnnn"
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.resolve({
+        transactionId,
+        status: "settling" as const,
+        onChain: { providerRef: "onchain-ref-1" },
+      })
+    )
+
+    // C4: the store no longer polls — the live SettlingCardLive hook does.
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+    })
+    store.getState().openConfirm("m", { ...buildBuyConfirm(), action: "send" })
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    const settling = store
+      .getState()
+      .threads.m.find((m) => m.kind === "settling")
+    expect(settling).toBeDefined()
+    if (settling?.kind === "settling") {
+      expect(settling.txType).toBe("send")
+      expect(settling.reference).toBe("onchain-ref-1")
+    }
+    expect(store.getState().pinOpen).toBe(false)
+  })
+
   it("pinComplete wrong PIN shows error on pin pad and re-opens it", async () => {
     const authorizeApi = makeAuthApi()
     const executeApi = vi.fn(() => Promise.reject(new Error("Incorrect PIN")))
@@ -530,6 +602,8 @@ describe("resolveSettlement (C4)", () => {
     store.setState({
       _pollingTransactionId: transactionId,
       _settlingSurface: "m",
+      _settlingAction: "buy",
+      _settlingPending: buildBuyConfirm(),
     })
     return store
   }
@@ -570,7 +644,7 @@ describe("resolveSettlement (C4)", () => {
       msgs.some(
         (m) =>
           m.kind === "text" &&
-          /fail|couldn't|support/i.test((m as { text: string }).text)
+          /could not be completed|no funds/i.test((m as { text: string }).text)
       )
     ).toBe(true)
     expect(store.getState().successOpen).toBe(false)
@@ -692,32 +766,77 @@ describe("sendToAgent", () => {
     expect(store.getState().typing.m).toBe(false)
   })
 
-  it("needs_beneficiary outcome (bank_account) → text message containing 'bank account'", async () => {
+  it("needs_beneficiary outcome (bank_account) → needs_beneficiary card", async () => {
     mockApi.mockResolvedValue(
       makeResponse({
         kind: "needs_beneficiary",
         beneficiaryType: "bank_account",
       })
     )
-    await store.getState().sendToAgent("m", "sell")
+    await store.getState().sendToAgent("m", "sell 10 usdt")
     const last = store.getState().threads.m.at(-1)!
-    expect(last.kind).toBe("text")
-    if (last.kind === "text") expect(last.text).toContain("bank account")
+    expect(last.kind).toBe("needs_beneficiary")
+    if (last.kind === "needs_beneficiary")
+      expect(last.beneficiaryType).toBe("bank_account")
     expect(store.getState().typing.m).toBe(false)
   })
 
-  it("needs_beneficiary outcome (crypto_address) → text message containing 'crypto address'", async () => {
+  it("needs_beneficiary outcome (crypto_address) → needs_beneficiary card", async () => {
     mockApi.mockResolvedValue(
       makeResponse({
         kind: "needs_beneficiary",
         beneficiaryType: "crypto_address",
       })
     )
-    await store.getState().sendToAgent("m", "send")
+    await store.getState().sendToAgent("m", "send 5 usdt")
     const last = store.getState().threads.m.at(-1)!
-    expect(last.kind).toBe("text")
-    if (last.kind === "text") expect(last.text).toContain("crypto address")
+    expect(last.kind).toBe("needs_beneficiary")
+    if (last.kind === "needs_beneficiary")
+      expect(last.beneficiaryType).toBe("crypto_address")
     expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("resolveBeneficiary re-sends the last money request with the beneficiaryId", async () => {
+    // First turn: needs_beneficiary for "sell 10 usdt".
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "needs_beneficiary",
+        beneficiaryType: "bank_account",
+      })
+    )
+    await store.getState().sendToAgent("m", "sell 10 usdt")
+
+    // Second turn (after adding a beneficiary): proposal renders.
+    const proposalId = "22222222-2222-2222-2222-222222222222"
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "proposal",
+        txType: "sell",
+        proposalId,
+        confirmation: {
+          proposalId,
+          asset: "USDT",
+          cryptoAmount: "10",
+          fiatCurrency: "NGN",
+          fxRate: "1600",
+          processingFeeAmount: "80",
+          netFiatAmount: "15920",
+          beneficiaryLabel: "My GTB",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        },
+      })
+    )
+
+    await store.getState().resolveBeneficiary("m", "ben-123")
+
+    // The re-send used the stored last text + the beneficiaryId.
+    expect(mockApi).toHaveBeenLastCalledWith({
+      text: "sell 10 usdt",
+      beneficiaryId: "ben-123",
+    })
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("quote")
+    expect(store.getState().pendingProposalId).toBe(proposalId)
   })
 
   it("not_supported outcome → 'not supported' text message", async () => {
@@ -729,6 +848,54 @@ describe("sendToAgent", () => {
     expect(last.kind).toBe("text")
     if (last.kind === "text") expect(last.text).toContain("not supported")
     expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("balance outcome → balance card with formatted total + asset rows", async () => {
+    mockApi.mockResolvedValue(
+      makeResponse({
+        kind: "balance",
+        fiatCurrency: "NGN",
+        totalFiatValue: "16800.00",
+        balances: [
+          {
+            asset: "USDT",
+            network: "TRON",
+            amount: "10.5",
+            fiatValue: "16800.00",
+          },
+        ],
+      })
+    )
+    await store.getState().sendToAgent("m", "what's my balance")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("balance")
+    if (last.kind === "balance") {
+      expect(last.total).toContain("₦16,800.00")
+      expect(last.assets).toHaveLength(1)
+      expect(last.assets[0].sym).toBe("USDT")
+      expect(last.assets[0].name).toBe("Tether USD")
+      expect(last.assets[0].amount).toBe("10.5 USDT")
+      expect(last.assets[0].value).toBe("₦16,800.00")
+    }
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("balance outcome with no fiatValue → value/total fall back to em dash", async () => {
+    mockApi.mockResolvedValue(
+      makeResponse({
+        kind: "balance",
+        fiatCurrency: "NGN",
+        asset: "USDT",
+        balances: [{ asset: "USDT", network: "TRON", amount: "10.5" }],
+      })
+    )
+    await store.getState().sendToAgent("m", "my USDT balance")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("balance")
+    if (last.kind === "balance") {
+      expect(last.total).toBe("—")
+      expect(last.assets[0].value).toBe("—")
+    }
   })
 
   it("error path → fallback error message + typing cleared", async () => {
@@ -744,5 +911,138 @@ describe("sendToAgent", () => {
     mockApi.mockRejectedValue(new Error("500"))
     await store.getState().sendToAgent("m", "send")
     expect(store.getState().typing.m).toBe(false)
+  })
+})
+
+// ─── hydrateHistory ─────────────────────────────────────────────────────────
+
+const buyConfirmation: BuyProposalConfirmation = {
+  proposalId: "11111111-1111-1111-1111-111111111111",
+  asset: "USDT",
+  fiatAmount: "50000",
+  fiatCurrency: "NGN",
+  cryptoAmount: "31.25",
+  fxRate: "1600",
+  spreadBps: 150,
+  processingFeeBps: 50,
+  processingFeeAmount: "250",
+  totalFiat: "50250",
+  expiresAt: new Date(Date.now() + 60000).toISOString(),
+}
+
+function historyItem(over: Partial<ChatHistoryItem> = {}): ChatHistoryItem {
+  return {
+    messageId: "00000000-0000-0000-0000-000000000010",
+    userText: "hi",
+    outcome: null,
+    createdAt: "2026-06-29T10:00:00.000Z",
+    ...over,
+  }
+}
+
+describe("hydrateHistory", () => {
+  let store: ReturnType<typeof createChatStore>
+
+  beforeEach(() => {
+    store = createChatStore({ schedule: immediate })
+  })
+
+  it("rebuilds the thread after the greeting, oldest→newest, restoring proposalId", () => {
+    const items: ChatHistoryItem[] = [
+      historyItem({
+        messageId: "00000000-0000-0000-0000-000000000001",
+        userText: "where do I receive USDT?",
+        outcome: {
+          kind: "receive",
+          deposit: { asset: "USDT", network: "TRON", address: "TXabc" },
+        },
+      }),
+      historyItem({
+        messageId: "00000000-0000-0000-0000-000000000002",
+        userText: "buy 50000 USDT",
+        outcome: {
+          kind: "proposal",
+          txType: "buy",
+          proposalId: buyConfirmation.proposalId,
+          confirmation: buyConfirmation,
+        },
+      }),
+    ]
+    store.getState().hydrateHistory("m", items)
+    const t = store.getState().threads.m
+
+    // greeting + (user, receive) + (user, quote)
+    expect(t).toHaveLength(5)
+    expect(t[0].role).toBe("assistant") // greeting preserved at index 0
+    expect(t[1]).toMatchObject({
+      role: "user",
+      kind: "text",
+      text: "where do I receive USDT?",
+    })
+    expect(t[2].kind).toBe("receive")
+    expect(t[3]).toMatchObject({ role: "user", text: "buy 50000 USDT" })
+    expect(t[4].kind).toBe("quote")
+    expect(store.getState().pendingProposalId).toBe(buyConfirmation.proposalId)
+  })
+
+  it("appends only a user bubble when the outcome is null", () => {
+    store
+      .getState()
+      .hydrateHistory("m", [
+        historyItem({ userText: "stuck turn", outcome: null }),
+      ])
+    const t = store.getState().threads.m
+    expect(t).toHaveLength(2)
+    expect(t[1]).toMatchObject({
+      role: "user",
+      kind: "text",
+      text: "stuck turn",
+    })
+  })
+
+  it("never appends a receipt-kind message (invariant preserved)", () => {
+    store.getState().hydrateHistory("m", [
+      historyItem({
+        outcome: {
+          kind: "proposal",
+          txType: "buy",
+          proposalId: buyConfirmation.proposalId,
+          confirmation: buyConfirmation,
+        },
+      }),
+    ])
+    expect(store.getState().threads.m.some((m) => m.kind === "receipt")).toBe(
+      false
+    )
+  })
+
+  it("is idempotent — a second hydrate is a no-op", () => {
+    const items = [historyItem({ userText: "once" })]
+    store.getState().hydrateHistory("m", items)
+    const len1 = store.getState().threads.m.length
+    store.getState().hydrateHistory("m", items)
+    expect(store.getState().threads.m.length).toBe(len1)
+  })
+
+  it("preserves messages already in the thread, inserting history after the greeting", () => {
+    // A live mock send adds user + assistant messages before history arrives.
+    store.getState().send("m", "Check my balance", "balance")
+    const beforeLen = store.getState().threads.m.length
+    store
+      .getState()
+      .hydrateHistory("m", [historyItem({ userText: "from history" })])
+    const t = store.getState().threads.m
+    expect(t.length).toBe(beforeLen + 1) // one user bubble inserted
+    // The history bubble sits right after the greeting, before the live send.
+    expect(t[1]).toMatchObject({ role: "user", text: "from history" })
+    expect(t.some((m) => m.kind === "balance")).toBe(true)
+  })
+
+  it("hydrates surfaces independently", () => {
+    store
+      .getState()
+      .hydrateHistory("m", [historyItem({ userText: "mobile only" })])
+    expect(store.getState().threads.d).toHaveLength(1) // desktop untouched (greeting only)
+    expect(store.getState().threads.m).toHaveLength(2)
   })
 })

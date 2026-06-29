@@ -18,6 +18,11 @@ export class ReplyPrismaRepository implements IReplyRepository {
         text: data.text,
         correlationId: data.correlationId,
         directives: [],
+        // Persist the rendered outcome (web surface) as JSON when provided; the
+        // WhatsApp path omits it and the column stays null.
+        ...(data.outcome !== undefined
+          ? { outcome: data.outcome as never }
+          : {}),
       },
       select: {
         id: true,

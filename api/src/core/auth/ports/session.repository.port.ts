@@ -61,4 +61,14 @@ export interface ISessionRepository {
    * is bound. Used to resolve the acting device when not explicitly supplied.
    */
   findPinnedDeviceId(userId: string): Promise<string | null>;
+
+  /**
+   * Resolves the Device id for the given userId + fingerprint, or null when no
+   * device with that fingerprint belongs to the user. Used to bind a step-up to
+   * the acting browser/device from the client-supplied fingerprint (§3.4).
+   */
+  findDeviceIdByFingerprint(
+    userId: string,
+    fingerprint: string,
+  ): Promise<string | null>;
 }

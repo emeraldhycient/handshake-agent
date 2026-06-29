@@ -3,8 +3,9 @@
 import { useStore } from "zustand"
 import { defaultChatStore } from "@/lib/store/chat-store"
 import { useAuthStore } from "@/lib/store/auth-store"
+import { useChatHistory } from "@/hooks/use-chat-history"
 import {
-  buildConfirmForQuote,
+  buildConfirmFromQuote,
   buildTicketConfirm,
   chipLabel,
 } from "@/lib/chat/flow"
@@ -36,16 +37,16 @@ import type { ChatMessage, TicketOption } from "@/lib/schemas"
  * (no real setTimeout delays). Defaults to the module singleton.
  */
 export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
-  const state = useStore(injectedStore ?? defaultChatStore)
+  const store = injectedStore ?? defaultChatStore
+  const state = useStore(store)
   const authStatus = useAuthStore((s) => s.status)
+  // Rehydrate the thread from server history on mount (authenticated only).
+  useChatHistory("d", store)
 
   // ── Quote confirm ──────────────────────────────────────────────────────────
   function handleConfirm(message: ChatMessage) {
     if (message.kind !== "quote") return
-    const payload = buildConfirmForQuote(
-      message.action as "buy" | "send" | "swap"
-    )
-    state.openConfirm("d", payload)
+    state.openConfirm("d", buildConfirmFromQuote(message))
   }
 
   // ── Ticket selection ───────────────────────────────────────────────────────
@@ -90,6 +91,7 @@ export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
         density="desktop"
         onConfirm={handleConfirm}
         onSelectTicket={handleSelectTicket}
+        onResolveBeneficiary={(id) => void state.resolveBeneficiary("d", id)}
       />
 
       {/* ── Composer (chips + input) ───────────────────────────────────────── */}

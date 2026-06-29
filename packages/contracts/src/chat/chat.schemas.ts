@@ -11,6 +11,29 @@ export const ChatMessageRequestSchema = z.object({
 })
 export type ChatMessageRequest = z.infer<typeof ChatMessageRequestSchema>
 
+// One asset's balance line within a balance snapshot.
+// `amount` is a human-scaled crypto amount string (e.g. "10.5"); `fiatValue` is a
+// mid-market valuation in the snapshot's `fiatCurrency` (decimal string), omitted
+// when the asset cannot be priced. The FX spread is NEVER surfaced here (§ user rule).
+export const BalanceLineSchema = z.object({
+  asset: z.string(),
+  network: z.string(),
+  amount: z.string(),
+  fiatValue: z.string().optional(),
+})
+export type BalanceLine = z.infer<typeof BalanceLineSchema>
+
+// Read-only portfolio snapshot the balance service returns. The web-chat / WhatsApp
+// layers spread this into a `balance` outcome (adding `kind`). `asset` echoes the
+// single asset when the user scoped their request; absent = all supported assets.
+export const BalanceSnapshotSchema = z.object({
+  fiatCurrency: z.string(),
+  asset: z.string().optional(),
+  totalFiatValue: z.string().optional(),
+  balances: z.array(BalanceLineSchema),
+})
+export type BalanceSnapshot = z.infer<typeof BalanceSnapshotSchema>
+
 // Discriminated union describing what the agent turn resolved to.
 // The web UI branches on `kind` to decide which confirmation component to render.
 export const AgentTurnOutcomeSchema = z.discriminatedUnion('kind', [
@@ -41,9 +64,13 @@ export const AgentTurnOutcomeSchema = z.discriminatedUnion('kind', [
       SendProposalConfirmationSchema,
     ]),
   }),
+  // balance is `kind` + the snapshot fields, merged so the discriminant stays
+  // a direct member (z.discriminatedUnion requires the literal in each branch).
+  z.object({ kind: z.literal('balance') }).merge(BalanceSnapshotSchema),
   z.object({
     kind: z.literal('not_supported'),
-    action: z.enum(['check_balance', 'swap', 'buy_ticket', 'unknown']),
+    // check_balance is now a supported capability — no longer routed here.
+    action: z.enum(['swap', 'buy_ticket', 'unknown']),
   }),
 ])
 export type AgentTurnOutcome = z.infer<typeof AgentTurnOutcomeSchema>
@@ -56,6 +83,41 @@ export const WebChatResponseSchema = z.object({
   messageId: z.string().uuid(),
 })
 export type WebChatResponse = z.infer<typeof WebChatResponseSchema>
+
+// ---------------------------------------------------------------------------
+// Chat history (GET /chat/messages) — used to rehydrate the web thread on reload.
+// One item per persisted turn: the user's text + the rendered agent outcome.
+// `outcome` is nullable because a turn may have been persisted before its reply
+// resolved (or pre-date outcome persistence) — the UI then shows only the user
+// bubble. Reuses AgentTurnOutcomeSchema so the FE maps history exactly as it maps
+// a live POST /chat/messages response.
+// ---------------------------------------------------------------------------
+export const ChatHistoryItemSchema = z.object({
+  messageId: z.string().uuid(),
+  userText: z.string(),
+  outcome: AgentTurnOutcomeSchema.nullable(),
+  createdAt: z.string().datetime(), // ISO string
+})
+export type ChatHistoryItem = z.infer<typeof ChatHistoryItemSchema>
+
+// Paginated history response. `messages` are oldest→newest (render order).
+// `nextCursor` is the messageId to pass as `?before=` to load the previous
+// (older) page; null when the first turn has been reached.
+export const ChatHistoryResponseSchema = z.object({
+  conversationId: z.string().uuid().nullable(),
+  messages: z.array(ChatHistoryItemSchema),
+  nextCursor: z.string().uuid().nullable(),
+  hasMore: z.boolean(),
+})
+export type ChatHistoryResponse = z.infer<typeof ChatHistoryResponseSchema>
+
+// Query params for GET /chat/messages. `limit` arrives as a string from the URL,
+// so coerce it; `before` is a messageId cursor for loading older turns.
+export const ChatHistoryQuerySchema = z.object({
+  before: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+})
+export type ChatHistoryQuery = z.infer<typeof ChatHistoryQuerySchema>
 
 // Shared payment sub-object reused by execute and status responses.
 const PaymentDetailsSchema = z.object({

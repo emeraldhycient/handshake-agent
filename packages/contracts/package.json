@@ -30,6 +30,12 @@
       "import": "./src/dto/index.ts",
       "require": "./src/dto/index.ts",
       "default": "./src/dto/index.ts"
+    },
+    "./beneficiaries": {
+      "types": "./src/beneficiaries/index.ts",
+      "import": "./src/beneficiaries/index.ts",
+      "require": "./src/beneficiaries/index.ts",
+      "default": "./src/beneficiaries/index.ts"
     }
   },
   "scripts": {

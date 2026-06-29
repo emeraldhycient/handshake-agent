@@ -14,6 +14,7 @@ import {
   ExecuteProposalRequestSchema,
   ExecuteProposalResponseSchema,
   TransactionStatusResponseSchema,
+  ChatHistoryResponseSchema,
 } from "@handshake-agent/contracts"
 import type {
   ChatMessageRequest,
@@ -22,6 +23,7 @@ import type {
   ExecuteProposalRequest,
   ExecuteProposalResponse,
   TransactionStatusResponse,
+  ChatHistoryResponse,
 } from "@handshake-agent/contracts"
 import { api } from "./client"
 
@@ -76,4 +78,17 @@ export async function getTransaction(
 ): Promise<TransactionStatusResponse> {
   const { data } = await api.get(`/transactions/${transactionId}`)
   return TransactionStatusResponseSchema.parse(data)
+}
+
+/**
+ * Fetch the authenticated user's conversation history (oldest→newest), used to
+ * rehydrate the chat thread on reload. `before` is a messageId cursor for the
+ * previous (older) page. Response is parsed through the contracts schema.
+ */
+export async function fetchChatHistory(params?: {
+  before?: string
+  limit?: number
+}): Promise<ChatHistoryResponse> {
+  const { data } = await api.get("/chat/messages", { params })
+  return ChatHistoryResponseSchema.parse(data)
 }

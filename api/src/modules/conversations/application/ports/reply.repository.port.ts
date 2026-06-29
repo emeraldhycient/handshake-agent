@@ -15,6 +15,12 @@ export interface CreateReplyData {
   messageId: string;
   text: string;
   correlationId: string;
+  /**
+   * Rendered AgentTurnOutcome (contracts) for the web surface. Persisted as JSON
+   * so GET /chat/messages can reconstruct the thread cards on reload. Optional:
+   * the WhatsApp reply path does not set it.
+   */
+  outcome?: unknown;
 }
 
 export interface IReplyRepository {

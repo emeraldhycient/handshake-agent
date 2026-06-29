@@ -13,6 +13,7 @@ import {
   UnauthorizedException,
   UnprocessableEntityException,
   ForbiddenException,
+  BadGatewayException,
 } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 
@@ -38,8 +39,13 @@ import {
   ProposalExpiredError,
   ProposalNotExecutableError,
   QuoteDriftError,
+  ProviderUnavailableError,
+  InsufficientBalanceError,
 } from '../../transactions/domain/execution-errors';
 import { KycNotVerifiedError } from '../../identity/domain/gate-errors';
+import { BeneficiaryCoolingOffError } from '../../beneficiaries/domain/beneficiary-errors';
+import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
+import { SessionService } from '../../../core/auth/session.service';
 
 // ---------------------------------------------------------------------------
 // Fake providers
@@ -131,6 +137,10 @@ const mockExecutionService = {
   executeSend: jest.fn(),
 };
 
+const mockSessionService = {
+  findDeviceIdByFingerprint: jest.fn(),
+};
+
 // ---------------------------------------------------------------------------
 // Test user
 // ---------------------------------------------------------------------------
@@ -155,6 +165,7 @@ async function buildModule(): Promise<TestingModule> {
         { provide: SETTLEMENT_REPOSITORY, useValue: mockSettlementRepo },
         { provide: DirectiveService, useValue: mockDirectiveService },
         { provide: ExecutionService, useValue: mockExecutionService },
+        { provide: SessionService, useValue: mockSessionService },
       ],
     })
       // JwtAuthGuard has its own dependencies (TokenService, IAuthSessionRepository).
@@ -413,13 +424,104 @@ describe('ProposalController.execute', () => {
     expect(result.payout).toEqual({ providerRef: 'flw-transfer-001' });
   });
 
-  it('returns 422 for send (not yet supported on web)', async () => {
-    mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'send' }));
-    mockProposalRepo.getType.mockResolvedValue('send');
+  it('maps sell InsufficientBalanceError → 422', async () => {
+    mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'sell' }));
+    mockExecutionService.executeSell.mockRejectedValue(
+      new InsufficientBalanceError('1.0', '5.0', 'USDT'),
+    );
 
     await expect(
       controller.execute('proposal-uuid', validBody as never, TEST_USER),
     ).rejects.toThrow(UnprocessableEntityException);
+  });
+
+  it('dispatches send (resolving deviceFingerprint→deviceId) and returns onChain', async () => {
+    mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'send' }));
+    mockSessionService.findDeviceIdByFingerprint.mockResolvedValue(
+      'device-uuid',
+    );
+    mockExecutionService.executeSend.mockResolvedValue({
+      transactionId: 'txn-send',
+      status: 'settling',
+      onChain: { providerRef: 'blockradar-ref-001' },
+    });
+
+    const sendBody = { ...validBody, deviceFingerprint: 'web-fp-1' };
+    const result = await controller.execute(
+      'proposal-uuid',
+      sendBody,
+      TEST_USER,
+    );
+
+    expect(mockSessionService.findDeviceIdByFingerprint).toHaveBeenCalledWith(
+      TEST_USER.userId,
+      'web-fp-1',
+    );
+    expect(mockExecutionService.executeSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: TEST_USER.userId,
+        proposalId: 'proposal-uuid',
+        directiveId: validBody.directiveId,
+        nonce: validBody.nonce,
+        pin: validBody.pin,
+        idempotencyKey: validBody.idempotencyKey,
+        deviceId: 'device-uuid',
+      }),
+    );
+    expect(result.transactionId).toBe('txn-send');
+    expect(result.onChain).toEqual({ providerRef: 'blockradar-ref-001' });
+  });
+
+  it('passes deviceId undefined for send when fingerprint resolves to no device', async () => {
+    mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'send' }));
+    mockSessionService.findDeviceIdByFingerprint.mockResolvedValue(null);
+    mockExecutionService.executeSend.mockResolvedValue({
+      transactionId: 'txn-send',
+      status: 'settling',
+      onChain: { providerRef: 'blockradar-ref-001' },
+    });
+
+    await controller.execute('proposal-uuid', validBody, TEST_USER);
+
+    expect(mockExecutionService.executeSend).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: undefined }),
+    );
+  });
+
+  it('maps send InsufficientBalanceError → 422', async () => {
+    mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'send' }));
+    mockSessionService.findDeviceIdByFingerprint.mockResolvedValue(null);
+    mockExecutionService.executeSend.mockRejectedValue(
+      new InsufficientBalanceError('1.0', '5.0', 'USDT'),
+    );
+
+    await expect(
+      controller.execute('proposal-uuid', validBody as never, TEST_USER),
+    ).rejects.toThrow(UnprocessableEntityException);
+  });
+
+  it('maps send BeneficiaryCoolingOffError → 422', async () => {
+    mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'send' }));
+    mockSessionService.findDeviceIdByFingerprint.mockResolvedValue(null);
+    mockExecutionService.executeSend.mockRejectedValue(
+      new BeneficiaryCoolingOffError('ben-1', new Date(Date.now() + 60_000)),
+    );
+
+    await expect(
+      controller.execute('proposal-uuid', validBody as never, TEST_USER),
+    ).rejects.toThrow(UnprocessableEntityException);
+  });
+
+  it('maps send SanctionsBlockedError → 403', async () => {
+    mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'send' }));
+    mockSessionService.findDeviceIdByFingerprint.mockResolvedValue(null);
+    mockExecutionService.executeSend.mockRejectedValue(
+      new SanctionsBlockedError('Taddr', 'flagged', 'evt-1', 'ref-1'),
+    );
+
+    await expect(
+      controller.execute('proposal-uuid', validBody as never, TEST_USER),
+    ).rejects.toThrow(ForbiddenException);
   });
 
   it('maps PinInvalidError to 401', async () => {
@@ -514,6 +616,18 @@ describe('ProposalController.execute', () => {
     await expect(
       controller.execute('proposal-uuid', validBody as never, TEST_USER),
     ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('maps ProviderUnavailableError to 502 (clear message, not a raw 500)', async () => {
+    mockProposalRepo.findById.mockResolvedValue(makeProposal());
+    mockProposalRepo.getType.mockResolvedValue('buy');
+    mockExecutionService.executeBuy.mockRejectedValue(
+      new ProviderUnavailableError('createCollection'),
+    );
+
+    await expect(
+      controller.execute('proposal-uuid', validBody as never, TEST_USER),
+    ).rejects.toThrow(BadGatewayException);
   });
 });
 

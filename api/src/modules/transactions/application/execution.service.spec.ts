@@ -52,6 +52,7 @@ import {
   SettlementInvalidStatusError,
   InsufficientBalanceError,
   BaseRateMisconfiguredError,
+  ProviderUnavailableError,
 } from '../domain/execution-errors';
 import { DirectiveReplayError } from '../domain/directive-errors';
 import { PinInvalidError } from '../../../core/auth/domain/pin-errors';
@@ -909,6 +910,25 @@ describe('ExecutionService.executeBuy', () => {
     expect(paymentProvider.createCollection).not.toHaveBeenCalled();
     expect(outboxRepo.create).not.toHaveBeenCalled();
     expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+  });
+
+  // ── Payment provider failure (graceful mapping) ───────────────────────────
+
+  it('createCollection failure → ProviderUnavailableError (mapped to a clear error, not a raw 500)', async () => {
+    // The real Flutterwave adapter throws a descriptive Error on a non-2xx /
+    // network failure. The engine must translate ANY such failure into a typed
+    // ProviderUnavailableError so the chat surface returns a clear message
+    // instead of leaking an opaque 500.
+    const providerError = new Error(
+      'Flutterwave createCollection error (HTTP 503): service unavailable',
+    );
+    const paymentProvider = makePaymentProvider(providerError);
+
+    const svc = buildService({ paymentProvider });
+
+    await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
   });
 
   // ── Idempotent replay ─────────────────────────────────────────────────────

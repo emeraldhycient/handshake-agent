@@ -119,3 +119,22 @@ export class ReceiptNotSignableError extends Error {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+/**
+ * Thrown when an external provider side-effect call (Flutterwave collection /
+ * payout, Blockradar withdrawal, etc.) fails — a non-2xx response, a network
+ * error, or any rejection from the adapter. The engine translates the raw
+ * provider error into this typed error so the calling surface (chat / WhatsApp)
+ * can return a clear "provider temporarily unavailable" message instead of
+ * leaking an opaque 500. The original error is preserved as `cause` for logs.
+ * Code: ENGINE_PROVIDER_UNAVAILABLE
+ */
+export class ProviderUnavailableError extends Error {
+  readonly code = 'ENGINE_PROVIDER_UNAVAILABLE' as const;
+
+  constructor(operation: string, cause?: unknown) {
+    super(`Payment/wallet provider call '${operation}' failed`, { cause });
+    this.name = 'ProviderUnavailableError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

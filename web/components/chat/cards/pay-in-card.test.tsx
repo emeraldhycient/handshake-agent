@@ -17,13 +17,11 @@ vi.mock("@/lib/query/hooks", () => ({
 
 vi.mock("@/lib/store/chat-store", () => ({
   useChatStore: (
-    selector: (s: {
-      resolveSettlement: typeof mockResolveSettlement
-    }) => unknown
+    selector: (s: { resolveSettlement: typeof mockResolveSettlement }) => unknown
   ) => selector({ resolveSettlement: mockResolveSettlement }),
 }))
 
-import { PayInCardLive } from "./pay-in-card"
+import { PayInCard, PayInCardLive } from "./pay-in-card"
 
 const TX_ID = "tttttttt-tttt-tttt-tttt-tttttttttttt"
 
@@ -95,5 +93,19 @@ describe("PayInCardLive (C4: single settlement watcher)", () => {
       TX_ID,
       expect.objectContaining({ enabled: false })
     )
+  })
+})
+
+describe("PayInCard", () => {
+  it("renders the amount with the ₦ symbol, thousands separators, and 2dp", () => {
+    render(<PayInCard {...baseProps} amount="20000" currency="NGN" />)
+
+    expect(screen.getByText("₦20,000.00")).toBeInTheDocument()
+  })
+
+  it("does not render the raw, unformatted '<currency> <amount>' form", () => {
+    render(<PayInCard {...baseProps} amount="20000" currency="NGN" />)
+
+    expect(screen.queryByText("NGN 20000")).not.toBeInTheDocument()
   })
 })

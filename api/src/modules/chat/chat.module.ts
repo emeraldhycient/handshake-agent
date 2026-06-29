@@ -17,11 +17,14 @@ import { IdentityModule } from '../identity/identity.module';
 import { WalletsModule } from '../wallets/wallets.module';
 import { BeneficiariesModule } from '../beneficiaries/beneficiaries.module';
 import { TransactionsModule } from '../transactions/transactions.module';
+import { BalancesModule } from '../balances/balances.module';
 import { WebAuthModule } from '../auth/auth.module';
+import { AuthModule } from '../../core/auth/auth.module';
 
 import { ProposalService } from '../transactions/application/proposal.service';
 import { WalletService } from '../wallets/application/wallet.service';
 import { BeneficiaryService } from '../beneficiaries/application/beneficiary.service';
+import { BalanceService } from '../balances/application/balance.service';
 
 import { CONVERSATION_REPOSITORY } from '../conversations/application/ports/conversation.repository.port';
 import { MESSAGE_REPOSITORY } from '../conversations/application/ports/message.repository.port';
@@ -37,6 +40,7 @@ import {
   WEB_CHAT_PROPOSAL_SERVICE,
   WEB_CHAT_WALLET_SERVICE,
   WEB_CHAT_BENEFICIARY_SERVICE,
+  WEB_CHAT_BALANCE_SERVICE,
 } from './application/web-chat.service';
 import { ChatController } from './presentation/chat.controller';
 import {
@@ -51,7 +55,9 @@ import {
     WalletsModule, // exports WalletService
     BeneficiariesModule, // exports BeneficiaryService
     TransactionsModule, // exports ProposalService
+    BalancesModule, // exports BalanceService
     WebAuthModule, // exports JwtAuthGuard
+    AuthModule, // core auth — exports SessionService (device-bound step-up, §3.4)
   ],
   controllers: [
     ChatController,
@@ -64,6 +70,7 @@ import {
     { provide: WEB_CHAT_PROPOSAL_SERVICE, useExisting: ProposalService },
     { provide: WEB_CHAT_WALLET_SERVICE, useExisting: WalletService },
     { provide: WEB_CHAT_BENEFICIARY_SERVICE, useExisting: BeneficiaryService },
+    { provide: WEB_CHAT_BALANCE_SERVICE, useExisting: BalanceService },
     // Conversation repository bindings — ConversationsModule does not export these
     // tokens so ChatModule provides its own instances backed by the same Prisma classes.
     // PrismaService is global (registered via PrismaModule in AppModule) so it is

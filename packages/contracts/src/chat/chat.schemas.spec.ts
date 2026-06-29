@@ -3,6 +3,9 @@ import {
   ChatMessageRequestSchema,
   AgentTurnOutcomeSchema,
   WebChatResponseSchema,
+  ChatHistoryItemSchema,
+  ChatHistoryResponseSchema,
+  ChatHistoryQuerySchema,
   AuthorizeProposalResponseSchema,
   ExecuteProposalRequestSchema,
   ExecuteProposalResponseSchema,
@@ -140,6 +143,54 @@ describe('AgentTurnOutcomeSchema', () => {
     }
   })
 
+  it('accepts a balance outcome for all assets', () => {
+    const result = AgentTurnOutcomeSchema.parse({
+      kind: 'balance',
+      fiatCurrency: 'NGN',
+      totalFiatValue: '16800.00',
+      balances: [
+        { asset: 'USDT', network: 'TRON', amount: '10.5', fiatValue: '16800.00' },
+      ],
+    })
+    expect(result.kind).toBe('balance')
+    if (result.kind === 'balance') {
+      expect(result.balances).toHaveLength(1)
+      expect(result.balances[0].asset).toBe('USDT')
+      expect(result.asset).toBeUndefined()
+    }
+  })
+
+  it('accepts a balance outcome scoped to a single asset', () => {
+    const result = AgentTurnOutcomeSchema.parse({
+      kind: 'balance',
+      fiatCurrency: 'NGN',
+      asset: 'USDT',
+      balances: [{ asset: 'USDT', network: 'TRON', amount: '10.5' }],
+    })
+    if (result.kind === 'balance') {
+      expect(result.asset).toBe('USDT')
+      // fiatValue is optional on a balance line.
+      expect(result.balances[0].fiatValue).toBeUndefined()
+    }
+  })
+
+  it('accepts a balance outcome with an empty balances list', () => {
+    const result = AgentTurnOutcomeSchema.parse({
+      kind: 'balance',
+      fiatCurrency: 'NGN',
+      balances: [],
+    })
+    if (result.kind === 'balance') {
+      expect(result.balances).toEqual([])
+    }
+  })
+
+  it('rejects a balance outcome missing fiatCurrency', () => {
+    expect(() =>
+      AgentTurnOutcomeSchema.parse({ kind: 'balance', balances: [] }),
+    ).toThrow()
+  })
+
   it('accepts a not_supported outcome', () => {
     const result = AgentTurnOutcomeSchema.parse({
       kind: 'not_supported',
@@ -212,6 +263,139 @@ describe('WebChatResponseSchema', () => {
         messageId: 'not-a-uuid',
       }),
     ).toThrow()
+  })
+})
+
+describe('ChatHistoryItemSchema', () => {
+  const validItem = {
+    messageId: '11111111-1111-1111-1111-111111111111',
+    userText: 'buy 50000 naira of USDT',
+    outcome: { kind: 'needs_kyc' as const },
+    createdAt: '2026-06-29T12:00:00.000Z',
+  }
+
+  it('accepts a history item with a reconstructable outcome', () => {
+    const result = ChatHistoryItemSchema.parse(validItem)
+    expect(result.messageId).toBe('11111111-1111-1111-1111-111111111111')
+    expect(result.userText).toBe('buy 50000 naira of USDT')
+    expect(result.outcome?.kind).toBe('needs_kyc')
+    expect(result.createdAt).toBe('2026-06-29T12:00:00.000Z')
+  })
+
+  it('accepts a history item whose outcome is null (turn never resolved)', () => {
+    const result = ChatHistoryItemSchema.parse({ ...validItem, outcome: null })
+    expect(result.outcome).toBeNull()
+  })
+
+  it('accepts a proposal outcome carrying its itemized confirmation', () => {
+    const result = ChatHistoryItemSchema.parse({
+      ...validItem,
+      outcome: {
+        kind: 'proposal',
+        txType: 'buy',
+        proposalId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+        confirmation: validBuyConfirmation,
+      },
+    })
+    expect(result.outcome?.kind).toBe('proposal')
+  })
+
+  it('rejects a non-UUID messageId', () => {
+    expect(() =>
+      ChatHistoryItemSchema.parse({ ...validItem, messageId: 'not-a-uuid' }),
+    ).toThrow()
+  })
+
+  it('rejects a non-ISO createdAt', () => {
+    expect(() =>
+      ChatHistoryItemSchema.parse({ ...validItem, createdAt: 'yesterday' }),
+    ).toThrow()
+  })
+
+  it('rejects an outcome with an invalid kind', () => {
+    expect(() =>
+      ChatHistoryItemSchema.parse({ ...validItem, outcome: { kind: 'bogus' } }),
+    ).toThrow()
+  })
+})
+
+describe('ChatHistoryResponseSchema', () => {
+  const validItem = {
+    messageId: '11111111-1111-1111-1111-111111111111',
+    userText: 'where do I receive USDT?',
+    outcome: {
+      kind: 'receive' as const,
+      deposit: { asset: 'USDT', network: 'TRON', address: 'TXxx' },
+    },
+    createdAt: '2026-06-29T12:00:00.000Z',
+  }
+
+  it('accepts a populated, paginated history response', () => {
+    const result = ChatHistoryResponseSchema.parse({
+      conversationId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+      messages: [validItem],
+      nextCursor: '11111111-1111-1111-1111-111111111111',
+      hasMore: true,
+    })
+    expect(result.messages).toHaveLength(1)
+    expect(result.conversationId).toBe('dddddddd-dddd-dddd-dddd-dddddddddddd')
+    expect(result.nextCursor).toBe('11111111-1111-1111-1111-111111111111')
+    expect(result.hasMore).toBe(true)
+  })
+
+  it('accepts an empty history for a user with no conversation yet', () => {
+    const result = ChatHistoryResponseSchema.parse({
+      conversationId: null,
+      messages: [],
+      nextCursor: null,
+      hasMore: false,
+    })
+    expect(result.conversationId).toBeNull()
+    expect(result.messages).toEqual([])
+    expect(result.nextCursor).toBeNull()
+    expect(result.hasMore).toBe(false)
+  })
+
+  it('rejects when hasMore is missing', () => {
+    expect(() =>
+      ChatHistoryResponseSchema.parse({
+        conversationId: null,
+        messages: [],
+        nextCursor: null,
+      }),
+    ).toThrow()
+  })
+})
+
+describe('ChatHistoryQuerySchema', () => {
+  it('defaults limit when omitted', () => {
+    const result = ChatHistoryQuerySchema.parse({})
+    expect(result.limit).toBe(30)
+    expect(result.before).toBeUndefined()
+  })
+
+  it('coerces a string limit from a query param', () => {
+    const result = ChatHistoryQuerySchema.parse({ limit: '10' })
+    expect(result.limit).toBe(10)
+  })
+
+  it('accepts a UUID before-cursor', () => {
+    const result = ChatHistoryQuerySchema.parse({
+      before: '11111111-1111-1111-1111-111111111111',
+    })
+    expect(result.before).toBe('11111111-1111-1111-1111-111111111111')
+  })
+
+  it('rejects a limit above the max', () => {
+    expect(() => ChatHistoryQuerySchema.parse({ limit: '101' })).toThrow()
+  })
+
+  it('rejects a limit below 1', () => {
+    expect(() => ChatHistoryQuerySchema.parse({ limit: '0' })).toThrow()
+  })
+
+  it('rejects a non-UUID before-cursor', () => {
+    expect(() => ChatHistoryQuerySchema.parse({ before: 'nope' })).toThrow()
   })
 })
 

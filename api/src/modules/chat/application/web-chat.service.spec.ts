@@ -13,6 +13,7 @@ import {
   WEB_CHAT_PROPOSAL_SERVICE,
   WEB_CHAT_WALLET_SERVICE,
   WEB_CHAT_BENEFICIARY_SERVICE,
+  WEB_CHAT_BALANCE_SERVICE,
 } from './web-chat.service';
 import { AGENT_PORT } from '../../agent/application/ports/agent.port';
 import { IDENTITY_REPOSITORY } from '../../identity/application/ports/identity.repository.port';
@@ -34,6 +35,7 @@ const fakeProposalService = {
 };
 const fakeWalletService = { getOrProvisionNetworkWallet: jest.fn() };
 const fakeBeneficiaryService = { getDefault: jest.fn() };
+const fakeBalanceService = { getBalances: jest.fn() };
 const fakeIdentityRepo = { loadUser: jest.fn() };
 const fakeConversationRepo = {
   findByUserId: jest.fn(),
@@ -44,6 +46,7 @@ const fakeMessageRepo = {
   create: jest.fn(),
   findByExternalId: jest.fn(),
   updateStatus: jest.fn(),
+  findWebHistory: jest.fn(),
 };
 const fakeIntentRepo = { create: jest.fn() };
 const fakeReplyRepo = { create: jest.fn(), updateStatus: jest.fn() };
@@ -52,6 +55,8 @@ const fakeAssetRegistry = {
   defaultNetworkFor: jest.fn().mockReturnValue('tron'),
   asset: jest.fn().mockReturnValue({ displayName: 'USDT' }),
   network: jest.fn().mockReturnValue({ displayName: 'TRON' }),
+  formatCrypto: jest.fn((sym: string, amt: string) => `${amt} ${sym}`),
+  formatFiat: jest.fn((_code: string, amt: string) => `₦${amt}`),
 };
 
 // ---------------------------------------------------------------------------
@@ -134,6 +139,7 @@ describe('WebChatService', () => {
           provide: WEB_CHAT_BENEFICIARY_SERVICE,
           useValue: fakeBeneficiaryService,
         },
+        { provide: WEB_CHAT_BALANCE_SERVICE, useValue: fakeBalanceService },
         { provide: IDENTITY_REPOSITORY, useValue: fakeIdentityRepo },
         { provide: CONVERSATION_REPOSITORY, useValue: fakeConversationRepo },
         { provide: MESSAGE_REPOSITORY, useValue: fakeMessageRepo },
@@ -232,9 +238,9 @@ describe('WebChatService', () => {
     ).toBe('TXxxx');
   });
 
-  // ── check_balance / swap / buy_ticket → not_supported ─────────────────────
+  // ── swap / buy_ticket → not_supported ─────────────────────────────────────
 
-  it.each(['check_balance', 'swap', 'buy_ticket'])(
+  it.each(['swap', 'buy_ticket'])(
     '%s intent → not_supported outcome',
     async (action) => {
       fakeAgentPort.run.mockResolvedValue({ action });
@@ -245,6 +251,80 @@ describe('WebChatService', () => {
       expect(result.outcome).toEqual({ kind: 'not_supported', action });
     },
   );
+
+  // ── check_balance, verified → balance outcome ──────────────────────────────
+
+  it('check_balance intent (all assets), verified → balance outcome', async () => {
+    fakeBalanceService.getBalances.mockResolvedValue({
+      fiatCurrency: 'NGN',
+      totalFiatValue: '16800.00',
+      balances: [
+        {
+          asset: 'USDT',
+          network: 'TRON',
+          amount: '10.5',
+          fiatValue: '16800.00',
+        },
+      ],
+    });
+    fakeAgentPort.run.mockResolvedValue({ action: 'check_balance' });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: "what's my balance",
+    });
+
+    expect(fakeBalanceService.getBalances).toHaveBeenCalledWith(
+      'user-1',
+      undefined,
+    );
+    expect(result.outcome).toMatchObject({
+      kind: 'balance',
+      fiatCurrency: 'NGN',
+      totalFiatValue: '16800.00',
+    });
+    expect(
+      (result.outcome as { kind: 'balance'; balances: unknown[] }).balances,
+    ).toHaveLength(1);
+    // The reply text surfaces the holding (no FX-spread line).
+    expect(result.reply.text).toContain('USDT');
+  });
+
+  it('check_balance intent scoped to USDT → passes the asset through', async () => {
+    fakeBalanceService.getBalances.mockResolvedValue({
+      fiatCurrency: 'NGN',
+      asset: 'USDT',
+      balances: [{ asset: 'USDT', network: 'TRON', amount: '10.5' }],
+    });
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'check_balance',
+      asset: 'USDT',
+    });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: "what's my USDT balance",
+    });
+
+    expect(fakeBalanceService.getBalances).toHaveBeenCalledWith(
+      'user-1',
+      'USDT',
+    );
+    expect(result.outcome).toMatchObject({ kind: 'balance', asset: 'USDT' });
+  });
+
+  it('check_balance intent, unverified user → needs_kyc', async () => {
+    fakeIdentityRepo.loadUser.mockResolvedValue(UNVERIFIED_USER);
+    fakeAgentPort.run.mockResolvedValue({ action: 'check_balance' });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'balance',
+    });
+
+    expect(result.outcome).toEqual({ kind: 'needs_kyc' });
+    expect(fakeBalanceService.getBalances).not.toHaveBeenCalled();
+  });
 
   // ── buy_crypto, unverified → needs_kyc ────────────────────────────────────
 
@@ -493,5 +573,138 @@ describe('WebChatService', () => {
       'conv-1',
       expect.any(Date),
     );
+  });
+
+  // ── reply persists the rendered outcome (for thread reconstruction) ─────────
+
+  it('persists the rendered outcome on the reply so history can rebuild the thread', async () => {
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'none',
+      clarification: 'Did you mean buy or sell?',
+    });
+    await service.handleMessage({ userId: 'user-1', text: 'blah' });
+    expect(fakeReplyRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        messageId: 'msg-1',
+        outcome: { kind: 'clarification', text: 'Did you mean buy or sell?' },
+      }),
+    );
+  });
+
+  // ── getHistory ─────────────────────────────────────────────────────────────
+
+  describe('getHistory', () => {
+    it('returns an empty history when the user has no conversation yet', async () => {
+      fakeConversationRepo.findByUserId.mockResolvedValue(null);
+      const result = await service.getHistory({ userId: 'user-1', limit: 30 });
+      expect(result).toEqual({
+        conversationId: null,
+        messages: [],
+        nextCursor: null,
+        hasMore: false,
+      });
+      expect(fakeMessageRepo.findWebHistory).not.toHaveBeenCalled();
+    });
+
+    it('maps turns to oldest→newest items and reconstructs the outcome', async () => {
+      // Repo returns newest-first (DESC).
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm2',
+          userText: 'second',
+          createdAt: new Date('2026-06-29T10:01:00.000Z'),
+          reply: { text: 'r2', outcome: { kind: 'needs_kyc' } },
+        },
+        {
+          id: 'm1',
+          userText: 'first',
+          createdAt: new Date('2026-06-29T10:00:00.000Z'),
+          reply: { text: 'r1', outcome: { kind: 'clarification', text: 'hi' } },
+        },
+      ]);
+      const result = await service.getHistory({ userId: 'user-1', limit: 30 });
+      expect(fakeMessageRepo.findWebHistory).toHaveBeenCalledWith('conv-1', {
+        before: undefined,
+        limit: 30,
+      });
+      expect(result.conversationId).toBe('conv-1');
+      expect(result.hasMore).toBe(false);
+      expect(result.nextCursor).toBeNull();
+      expect(result.messages.map((m) => m.messageId)).toEqual(['m1', 'm2']);
+      expect(result.messages[0]).toEqual({
+        messageId: 'm1',
+        userText: 'first',
+        outcome: { kind: 'clarification', text: 'hi' },
+        createdAt: '2026-06-29T10:00:00.000Z',
+      });
+      expect(result.messages[1].outcome).toEqual({ kind: 'needs_kyc' });
+    });
+
+    it('sets hasMore and nextCursor when more than `limit` turns exist', async () => {
+      // limit=1, repo returns limit+1 rows (DESC). Page keeps the newest; cursor
+      // points at the oldest kept row so the next page loads older turns.
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm2',
+          userText: 'second',
+          createdAt: new Date('2026-06-29T10:01:00.000Z'),
+          reply: { text: 'r2', outcome: { kind: 'needs_kyc' } },
+        },
+        {
+          id: 'm1',
+          userText: 'first',
+          createdAt: new Date('2026-06-29T10:00:00.000Z'),
+          reply: { text: 'r1', outcome: { kind: 'needs_kyc' } },
+        },
+      ]);
+      const result = await service.getHistory({ userId: 'user-1', limit: 1 });
+      expect(result.messages.map((m) => m.messageId)).toEqual(['m2']);
+      expect(result.hasMore).toBe(true);
+      expect(result.nextCursor).toBe('m2');
+    });
+
+    it('threads the before-cursor through to the repository', async () => {
+      fakeMessageRepo.findWebHistory.mockResolvedValue([]);
+      await service.getHistory({
+        userId: 'user-1',
+        before: 'cursor-x',
+        limit: 5,
+      });
+      expect(fakeMessageRepo.findWebHistory).toHaveBeenCalledWith('conv-1', {
+        before: 'cursor-x',
+        limit: 5,
+      });
+    });
+
+    it('yields a null outcome when the reply or its outcome is missing or invalid', async () => {
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm3',
+          userText: 'no reply yet',
+          createdAt: new Date('2026-06-29T10:02:00.000Z'),
+          reply: null,
+        },
+        {
+          id: 'm2',
+          userText: 'reply without outcome',
+          createdAt: new Date('2026-06-29T10:01:00.000Z'),
+          reply: { text: 'r', outcome: null },
+        },
+        {
+          id: 'm1',
+          userText: 'corrupt outcome',
+          createdAt: new Date('2026-06-29T10:00:00.000Z'),
+          reply: { text: 'r', outcome: { kind: 'totally-bogus' } },
+        },
+      ]);
+      const result = await service.getHistory({ userId: 'user-1', limit: 30 });
+      expect(result.messages.every((m) => m.outcome === null)).toBe(true);
+      expect(result.messages.map((m) => m.userText)).toEqual([
+        'corrupt outcome',
+        'reply without outcome',
+        'no reply yet',
+      ]);
+    });
   });
 });

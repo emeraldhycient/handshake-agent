@@ -86,6 +86,22 @@ export const envSchema = z.object({
   // enabled on the Blockradar plan and a valid BLOCKRADAR_API_KEY).
   SANCTIONS_MOCK_MODE: z.enum(['true', 'false']).default('true'),
 
+  // --- Payment provider (Flutterwave NGN pay-in / pay-out) ---
+  // When 'true' (default), MockPaymentProvider is active — deterministic fake
+  // virtual accounts / payouts, NO live Flutterwave calls (safe for local dev,
+  // tests, and CI without real keys). Set to 'false' to activate the real
+  // FlutterwaveProvider (requires a valid FLUTTERWAVE_SECRET_KEY). Mirrors the
+  // KYC_MOCK_MODE / SANCTIONS_MOCK_MODE pattern (TreasuryModule selects the
+  // adapter via factory).
+  PAYMENTS_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+
+  // --- Wallet provider (Blockradar WaaS; USDT-on-TRON) ---
+  // When 'true' (default), MockWalletProvider is active — deterministic fake
+  // addresses / balances / withdrawals, NO live Blockradar calls. Set to 'false'
+  // to activate the real BlockradarProvider (requires a valid BLOCKRADAR_API_KEY
+  // + master wallet id). WalletsModule selects the adapter via factory.
+  WALLET_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+
   // --- Web App (K3 KYC web handoff) ---
   // Base URL for the web application. Used to build the KYC CTA URL:
   //   `${WEB_APP_BASE_URL}/kyc?t=<token>`

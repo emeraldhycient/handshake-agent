@@ -133,15 +133,15 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
       }),
     };
 
-    // Unique address per call — the wallet table has a UNIQUE(address) constraint,
-    // so a constant address would collide once a second user provisions a wallet.
-    let addrCounter = 0;
+    // Unique address per call — multiple users provision wallets across the
+    // history tests, so a fixed address would violate the wallet unique constraint.
+    let addrSeq = 0;
     fakeWalletProvider = {
       provisionAddress: jest.fn().mockImplementation(() => {
-        addrCounter += 1;
+        addrSeq += 1;
         return Promise.resolve({
-          address: `TWebChatFakeAddr${addrCounter}`,
-          providerReference: `fake-ref-web-chat-${addrCounter}`,
+          address: `TWebChatFakeAddr${addrSeq.toString().padStart(8, '0')}`,
+          providerReference: `fake-ref-web-chat-${addrSeq}`,
         });
       }),
       getBalance: jest.fn().mockResolvedValue({ balances: [] }),
@@ -479,4 +479,182 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
     // The raw domain message reveals exact balances — it must not be exposed.
     expect(JSON.stringify(body)).not.toContain('have 0');
   }, 60_000);
+
+  // ===========================================================================
+  // CHAT HISTORY — GET /chat/messages
+  // ===========================================================================
+
+  // Register → verify → login → KYC; returns a Bearer token + userId.
+  let userSeq = 5000;
+  async function registerVerifiedUser(
+    prefix: string,
+  ): Promise<{ accessToken: string; userId: string }> {
+    const n = userSeq++;
+    const email = `${prefix}_${n}_${Date.now()}@test.com`;
+    const phone = `+23480299${n.toString().padStart(5, '0')}`;
+
+    const signup = await request(app.getHttpServer())
+      .post('/auth/signup')
+      .send({ email, phone })
+      .expect(202);
+    const devToken = (signup.body as { devToken: string }).devToken;
+
+    await request(app.getHttpServer())
+      .post('/auth/verify-email')
+      .send({ token: devToken })
+      .expect(200);
+
+    const lr = await request(app.getHttpServer())
+      .post('/auth/login/request')
+      .send({ email })
+      .expect(202);
+    const otp = (lr.body as { devOtp: string }).devOtp;
+
+    const lv = await request(app.getHttpServer())
+      .post('/auth/login/verify')
+      .send({ email, otp, deviceFingerprint: `e2e-hist-fingerprint-${n}` })
+      .expect(200);
+    const accessToken = (lv.body as { accessToken: string }).accessToken;
+
+    const ks = await request(app.getHttpServer())
+      .post('/kyc/submit')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        firstName: 'Hist',
+        lastName: 'User',
+        nin: '22334455667',
+        pin: '1234',
+      })
+      .expect(200);
+    const userId = (ks.body as { userId: string }).userId;
+
+    return { accessToken, userId };
+  }
+
+  it('GET /chat/messages without Bearer token → 401', async () => {
+    await request(app.getHttpServer()).get('/chat/messages').expect(401);
+  }, 30_000);
+
+  it('returns an empty history for a verified user who has not chatted', async () => {
+    const { accessToken } = await registerVerifiedUser('hist_empty');
+
+    const res = await request(app.getHttpServer())
+      .get('/chat/messages')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+
+    expect(res.body).toEqual({
+      conversationId: null,
+      messages: [],
+      nextCursor: null,
+      hasMore: false,
+    });
+  }, 120_000);
+
+  it('reconstructs the thread oldest→newest with persisted outcomes', async () => {
+    const { accessToken } = await registerVerifiedUser('hist_thread');
+
+    // Turn 1 — default LLM fake → receive_crypto → receive outcome.
+    await request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ text: 'receive USDT' })
+      .expect(200);
+
+    // Turn 2 — reconfigure the LLM fake for the next call only → clarification.
+    fakeLlmProvider.extractIntent.mockResolvedValueOnce({
+      action: 'none',
+      clarification: 'Did you mean buy or sell?',
+    } as never);
+    await request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ text: 'do a thing' })
+      .expect(200);
+
+    const res = await request(app.getHttpServer())
+      .get('/chat/messages')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+
+    const body = res.body as {
+      conversationId: string | null;
+      hasMore: boolean;
+      nextCursor: string | null;
+      messages: Array<{
+        messageId: string;
+        userText: string;
+        createdAt: string;
+        outcome: {
+          kind: string;
+          deposit?: { address: string };
+          text?: string;
+        } | null;
+      }>;
+    };
+
+    expect(body.conversationId).toBeTruthy();
+    expect(body.hasMore).toBe(false);
+    expect(body.nextCursor).toBeNull();
+    expect(body.messages).toHaveLength(2);
+
+    // Oldest first.
+    expect(body.messages[0].userText).toBe('receive USDT');
+    expect(body.messages[0].outcome?.kind).toBe('receive');
+    expect(body.messages[0].outcome?.deposit?.address).toBeTruthy();
+
+    expect(body.messages[1].userText).toBe('do a thing');
+    expect(body.messages[1].outcome?.kind).toBe('clarification');
+    expect(body.messages[1].outcome?.text).toBe('Did you mean buy or sell?');
+
+    // The reply row physically carries the rendered outcome JSON.
+    const replies = await prisma.conversationReply.findMany({
+      where: { conversationId: body.conversationId! },
+    });
+    expect(replies.length).toBeGreaterThanOrEqual(2);
+    expect(replies.every((r) => r.outcome !== null)).toBe(true);
+  }, 120_000);
+
+  it('paginates with ?limit and ?before (newest page first, then older)', async () => {
+    const { accessToken } = await registerVerifiedUser('hist_page');
+
+    await request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ text: 'first message' })
+      .expect(200);
+    await request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ text: 'second message' })
+      .expect(200);
+
+    // First page (limit 1) → newest turn only, with a cursor to older turns.
+    const page1 = await request(app.getHttpServer())
+      .get('/chat/messages?limit=1')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+    const p1 = page1.body as {
+      hasMore: boolean;
+      nextCursor: string | null;
+      messages: Array<{ userText: string }>;
+    };
+    expect(p1.messages).toHaveLength(1);
+    expect(p1.messages[0].userText).toBe('second message');
+    expect(p1.hasMore).toBe(true);
+    expect(p1.nextCursor).toBeTruthy();
+
+    // Older page via the cursor → the previous turn.
+    const page2 = await request(app.getHttpServer())
+      .get(`/chat/messages?limit=1&before=${p1.nextCursor}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+    const p2 = page2.body as {
+      hasMore: boolean;
+      messages: Array<{ userText: string }>;
+    };
+    expect(p2.messages).toHaveLength(1);
+    expect(p2.messages[0].userText).toBe('first message');
+    expect(p2.hasMore).toBe(false);
+  }, 120_000);
 });

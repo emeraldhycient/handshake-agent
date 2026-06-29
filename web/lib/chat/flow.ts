@@ -174,6 +174,12 @@ export function buildResponse(action: ChatAction): {
           } satisfies QuoteView,
         ],
       }
+
+    default:
+      // The mock/offline flow never produces these actions (parseIntent does
+      // not emit them — e.g. 'sell' is an authenticated-only flow). Fail loudly
+      // rather than silently returning nothing.
+      throw new Error(`buildResponse: no mock response for action "${action}"`)
   }
 }
 
@@ -199,6 +205,48 @@ export function buildConfirmForQuote(
       const _x: never = action
       throw new Error(`buildConfirmForQuote: no builder for "${_x}"`)
     }
+  }
+}
+
+/**
+ * Builds a ConfirmPayload from a LIVE quote message (agent flow) so the confirm
+ * sheet shows the real itemized breakdown — not the static mock fixtures. Used
+ * for buy / sell / send proposals returned by the backend.
+ */
+export function buildConfirmFromQuote(quote: QuoteView): ConfirmPayload {
+  const action = quote.action
+  const title =
+    action === "sell"
+      ? "Confirm sale"
+      : action === "send"
+        ? "Confirm transfer"
+        : "Confirm purchase"
+  const subtitle =
+    action === "send"
+      ? "Sending crypto is irreversible. Confirm the address."
+      : "Check every detail — this can't be undone."
+
+  // For send the agent puts the destination address in the first row ("To").
+  const toRow =
+    action === "send" ? quote.rows.find((r) => r.label === "To") : undefined
+
+  return {
+    title,
+    subtitle,
+    heroLabel: quote.receiveSub,
+    heroAmount: quote.receiveAmt,
+    heroSub: "",
+    ...(toRow ? { toLabel: "To", toValue: toRow.value } : {}),
+    ...(action === "send"
+      ? {
+          warn: "First time sending to this address? Double-check it — on-chain transfers cannot be reversed.",
+        }
+      : {}),
+    rows: quote.rows,
+    totalLabel: quote.totalLabel,
+    totalValue: quote.totalValue,
+    cta: "Confirm with PIN",
+    action,
   }
 }
 
@@ -363,6 +411,7 @@ export function buildReceipt(
 
 const CHIP_LABELS: Record<ChatAction, string> = {
   buy: "Buy ₦50,000 of USDT",
+  sell: "Sell 10 USDT",
   balance: "Check my balance",
   send: "Send 25 USDT",
   ticket: "Buy an event ticket",

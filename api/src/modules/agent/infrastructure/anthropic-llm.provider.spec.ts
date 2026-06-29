@@ -180,6 +180,15 @@ describe('AnthropicLlmProvider', () => {
         const prompt = provider.buildSystemPrompt();
         expect(prompt).not.toContain('Only "USDT" and "BTC"');
       });
+
+      it('instructs the model to set the optional asset on check_balance', () => {
+        const prompt = provider.buildSystemPrompt();
+        // The check_balance bullet must explain the optional asset so that
+        // "my USDT balance" → { action: 'check_balance', asset: 'USDT' } and a
+        // bare "what's my balance" → { action: 'check_balance' }.
+        expect(prompt).toContain('check_balance: user wants to check');
+        expect(prompt).toContain('set "asset"');
+      });
     });
   });
 
