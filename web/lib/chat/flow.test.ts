@@ -30,7 +30,7 @@ describe("flow", () => {
       receiveAmt: "29.97 USDT",
       totalValue: "₦50,000.00",
     })
-    expect((messages[1] as QuoteView).rows).toHaveLength(5)
+    expect((messages[1] as QuoteView).rows).toHaveLength(4)
   })
 
   it("buy quote has receiveSub, full rows, totalLabel, action, lockSeconds", () => {
@@ -41,9 +41,12 @@ describe("flow", () => {
       label: "Exchange rate",
       value: "₦1,640.00 / USDT",
     })
-    expect(q.rows[2]).toEqual({ label: "FX spread (0.9%)", value: "₦450.00" })
-    expect(q.rows[3]).toEqual({ label: "Processing fee", value: "₦250.00" })
-    expect(q.rows[4]).toEqual({
+    // FX spread is never shown to users — it is folded into the effective rate
+    expect(q.rows.every((r) => !r.label.toLowerCase().includes("spread"))).toBe(
+      true
+    )
+    expect(q.rows[2]).toEqual({ label: "Processing fee", value: "₦250.00" })
+    expect(q.rows[3]).toEqual({
       label: "Network fee · USDT on TRON",
       value: "₦150.00",
     })
@@ -101,14 +104,18 @@ describe("flow", () => {
     expect(q.action).toBe("swap")
     expect(q.receiveAmt).toBe("₦16,320")
     expect(q.receiveSub).toBe("≈ from 10.00 USDT")
-    expect(q.rows).toHaveLength(4)
+    // Spread row removed — never shown to users
+    expect(q.rows).toHaveLength(3)
     expect(q.rows[0]).toEqual({ label: "You swap", value: "10.00 USDT" })
     expect(q.rows[1]).toEqual({
       label: "Exchange rate",
       value: "₦1,640.00 / USDT",
     })
-    expect(q.rows[2]).toEqual({ label: "Spread (0.8%)", value: "₦80.00" })
-    expect(q.rows[3]).toEqual({ label: "Handshake fee", value: "₦0.00" })
+    // FX spread is never shown to users — it is folded into the effective rate
+    expect(q.rows.every((r) => !r.label.toLowerCase().includes("spread"))).toBe(
+      true
+    )
+    expect(q.rows[2]).toEqual({ label: "Handshake fee", value: "₦0.00" })
     expect(q.totalLabel).toBe("You receive")
     expect(q.totalValue).toBe("₦16,320")
     expect(q.lockSeconds).toBe(60)
@@ -170,7 +177,8 @@ describe("flow", () => {
     expect(c.heroLabel).toBe("You receive")
     expect(c.heroAmount).toBe("29.97 USDT")
     expect(c.heroSub).toBe("into your Handshake USDT wallet")
-    expect(c.rows).toHaveLength(3)
+    // FX spread is never shown to users — it is folded into the effective rate
+    expect(c.rows).toHaveLength(4)
     expect(c.rows[0]).toEqual({
       label: "You pay (debited from bank)",
       value: "₦50,000.00",
@@ -179,7 +187,14 @@ describe("flow", () => {
       label: "Exchange rate",
       value: "₦1,640.00 / USDT",
     })
-    expect(c.rows[2]).toEqual({ label: "FX spread + fees", value: "₦850.00" })
+    expect(c.rows.every((r) => !r.label.toLowerCase().includes("spread"))).toBe(
+      true
+    )
+    expect(c.rows[2]).toEqual({ label: "Processing fee", value: "₦250.00" })
+    expect(c.rows[3]).toEqual({
+      label: "Network fee · USDT on TRON",
+      value: "₦150.00",
+    })
     expect(c.totalLabel).toBe("Total to pay")
     expect(c.totalValue).toBe("₦50,000.00")
     expect(c.cta).toBe("Confirm with PIN")
@@ -236,13 +251,17 @@ describe("flow", () => {
     expect(c.heroLabel).toBe("You receive")
     expect(c.heroAmount).toBe("₦16,320")
     expect(c.heroSub).toBe("into your naira balance")
+    // FX spread is never shown to users — it is folded into the effective rate
     expect(c.rows).toHaveLength(3)
     expect(c.rows[0]).toEqual({ label: "You swap", value: "10.00 USDT" })
     expect(c.rows[1]).toEqual({
       label: "Exchange rate",
       value: "₦1,640.00 / USDT",
     })
-    expect(c.rows[2]).toEqual({ label: "Spread + fees", value: "₦80.00" })
+    expect(c.rows.every((r) => !r.label.toLowerCase().includes("spread"))).toBe(
+      true
+    )
+    expect(c.rows[2]).toEqual({ label: "Handshake fee", value: "₦0.00" })
     expect(c.totalLabel).toBe("You receive")
     expect(c.totalValue).toBe("₦16,320")
     expect(c.cta).toBe("Confirm with PIN")

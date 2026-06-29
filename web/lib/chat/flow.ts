@@ -63,7 +63,6 @@ export function buildResponse(action: ChatAction): {
             rows: [
               { label: "You pay", value: PAY_NGN_50K },
               { label: "Exchange rate", value: RATE },
-              { label: "FX spread (0.9%)", value: "₦450.00" },
               { label: "Processing fee", value: "₦250.00" },
               { label: "Network fee · USDT on TRON", value: "₦150.00" },
             ],
@@ -167,7 +166,6 @@ export function buildResponse(action: ChatAction): {
             rows: [
               { label: "You swap", value: SWAP_AMOUNT_USDT },
               { label: "Exchange rate", value: RATE },
-              { label: "Spread (0.8%)", value: "₦80.00" },
               { label: "Handshake fee", value: "₦0.00" },
             ],
             totalLabel: "You receive",
@@ -214,7 +212,8 @@ export function buildBuyConfirm(): ConfirmPayload {
     rows: [
       { label: "You pay (debited from bank)", value: PAY_NGN_50K },
       { label: "Exchange rate", value: RATE },
-      { label: "FX spread + fees", value: "₦850.00" },
+      { label: "Processing fee", value: "₦250.00" },
+      { label: "Network fee · USDT on TRON", value: "₦150.00" },
     ],
     totalLabel: "Total to pay",
     totalValue: PAY_NGN_50K,
@@ -254,7 +253,7 @@ export function buildSwapConfirm(): ConfirmPayload {
     rows: [
       { label: "You swap", value: SWAP_AMOUNT_USDT },
       { label: "Exchange rate", value: RATE },
-      { label: "Spread + fees", value: "₦80.00" },
+      { label: "Handshake fee", value: "₦0.00" },
     ],
     totalLabel: "You receive",
     totalValue: SWAP_RECEIVE_NGN,

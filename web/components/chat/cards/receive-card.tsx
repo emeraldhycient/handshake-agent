@@ -1,12 +1,12 @@
+import { QRCodeSVG } from "qrcode.react"
 import { cn } from "@/lib/utils"
-import { QrPlaceholder } from "@/components/shared/qr-placeholder"
 import type { ReceiveCardProps } from "@/types/components"
 
 /**
  * ReceiveCard — chat message card for a deposit address.
  * Mobile prototype: lines 222–253. Desktop prototype: lines 851–864.
  * Mobile shows min-deposit + credited-eta chips; desktop omits them (compact).
- * No hex literals. QR via shared QrPlaceholder atom. Copy button has aria-label.
+ * No hex literals. Real scannable QR via qrcode.react. Copy button has aria-label.
  */
 export function ReceiveCard({
   asset,
@@ -51,14 +51,21 @@ export function ReceiveCard({
         </p>
       )}
 
-      {/* QR code */}
+      {/* QR code — real, scannable QR encoding the deposit address */}
       <div
         className={cn(
           "flex justify-center",
           isMobile ? "px-4 pb-1.5" : "px-[15px] py-1.5"
         )}
       >
-        <QrPlaceholder size={isMobile ? 150 : 130} />
+        <QRCodeSVG
+          data-testid="qr"
+          value={address}
+          size={isMobile ? 150 : 130}
+          bgColor="transparent"
+          fgColor="currentColor"
+          className="text-foreground"
+        />
       </div>
 
       {isMobile && (
