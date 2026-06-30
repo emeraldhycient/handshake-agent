@@ -527,7 +527,7 @@ describe('BlockradarProvider', () => {
   //   network, blockchain: { slug, name } } }] }
   //
   // Mapping:
-  //   assetId       ← data[n].asset.id
+  //   assetId       ← data[n].id   (wallet-asset id; NOT data[n].asset.id)
   //   symbol        ← data[n].asset.symbol.toUpperCase()
   //   name          ← data[n].asset.name
   //   network       ← data[n].asset.blockchain.slug.toUpperCase()
@@ -589,13 +589,15 @@ describe('BlockradarProvider', () => {
       expect(config.headers['x-api-key']).toBe(API_KEY);
     });
 
-    it('maps data[n].asset.id → assetId', async () => {
+    it('maps data[n].id (wallet-asset id) → assetId, NOT data[n].asset.id', async () => {
       http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
 
       const result = await provider.listWalletAssets(MASTER_WALLET);
 
-      expect(result[0].assetId).toBe('asset-uuid-usdt-tron');
-      expect(result[1].assetId).toBe('asset-uuid-trx-native');
+      // The wallet-scoped withdraw/balance endpoints reject asset.id (the global
+      // catalog id) — they require the top-level wallet-asset join id.
+      expect(result[0].assetId).toBe('wallet-asset-join-id-1');
+      expect(result[1].assetId).toBe('wallet-asset-join-id-2');
     });
 
     it('maps data[n].asset.symbol.toUpperCase() → symbol', async () => {

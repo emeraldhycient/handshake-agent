@@ -107,10 +107,10 @@ interface BlockradarAddressTransactionsResponse {
 // ---------------------------------------------------------------------------
 
 interface BlockradarAssetItem {
-  /** Wallet-asset join record id (not the asset UUID we need). */
+  /** Wallet-asset association id — THIS is the assetId balance/withdraw/swap need. */
   id: string;
   asset: {
-    /** Provider-assigned asset UUID — used as assetId in balance/withdraw calls. */
+    /** Global catalog asset UUID — NOT accepted by wallet-scoped withdraw/balance. */
     id: string;
     name: string;
     symbol: string;
@@ -345,7 +345,7 @@ export class BlockradarProvider implements IWalletProvider {
    * Auth: x-api-key header.
    *
    * Maps each item to a `DiscoveredAsset` using:
-   *   assetId       ← data[n].asset.id           (the UUID used for balance/withdraw)
+   *   assetId       ← data[n].id                 (wallet-asset id used for balance/withdraw)
    *   symbol        ← data[n].asset.symbol.toUpperCase()
    *   name          ← data[n].asset.name
    *   network       ← data[n].asset.blockchain.slug.toUpperCase()  (e.g. "tron" → "TRON")
@@ -367,7 +367,11 @@ export class BlockradarProvider implements IWalletProvider {
 
       const items: BlockradarAssetItem[] = response.data.data ?? [];
       return items.map((item) => ({
-        assetId: item.asset.id,
+        // The TOP-LEVEL `id` is the wallet-asset association id that the
+        // balance/withdraw/swap endpoints expect (scoped to this wallet).
+        // `asset.id` is the GLOBAL catalog id and is rejected by withdraw
+        // ("Asset with ID … not found"). Verified live against Blockradar.
+        assetId: item.id,
         symbol: item.asset.symbol.toUpperCase(),
         name: item.asset.name,
         // Normalise blockchain slug to uppercase for catalog key alignment (e.g. "tron" → "TRON").
