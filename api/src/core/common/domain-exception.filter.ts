@@ -104,6 +104,17 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.UNPROCESSABLE_ENTITY,
     message: 'The quote changed. Please re-quote and try again.',
   },
+  SWAP_SAME_ASSET: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'Choose two different assets to swap.',
+  },
+  // Swap unavailable is a non-retryable "capability not offered right now"
+  // condition — 422, NOT a retryable 502/503 that invites endless retries.
+  SWAP_PROVIDER_UNAVAILABLE: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message:
+      "Swap isn't available right now. Please try again later or contact support.",
+  },
   ENGINE_PROPOSAL_NOT_EXECUTABLE: {
     status: HttpStatus.CONFLICT,
     message: 'This proposal can no longer be processed.',

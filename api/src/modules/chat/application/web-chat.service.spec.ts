@@ -23,6 +23,10 @@ import { MESSAGE_REPOSITORY } from '../../conversations/application/ports/messag
 import { INTENT_REPOSITORY } from '../../conversations/application/ports/intent.repository.port';
 import { REPLY_REPOSITORY } from '../../conversations/application/ports/reply.repository.port';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import {
+  SwapSameAssetError,
+  SwapUnavailableError,
+} from '../../transactions/domain/execution-errors';
 
 // ---------------------------------------------------------------------------
 // Fake providers
@@ -427,11 +431,14 @@ describe('WebChatService', () => {
     });
   });
 
-  // ── swap, fromAsset === toAsset → graceful (engine throws SwapSameAssetError) ─
+  // ── swap, fromAsset === toAsset → graceful clarification (no opaque 500) ──────
 
-  it('swap intent, fromAsset === toAsset → proposal service throws, propagates', async () => {
+  it('swap intent, fromAsset === toAsset → graceful clarification, not an error', async () => {
+    // The engine throws SwapSameAssetError for an identical from/to asset. This is
+    // an ordinary user-input mistake, not a server fault — surface it inline as a
+    // clarification so the chat thread guides the user, never an opaque 500.
     fakeProposalService.createSwapProposal.mockRejectedValue(
-      new Error('Cannot swap USDT to USDT'),
+      new SwapSameAssetError('USDT'),
     );
     fakeAgentPort.run.mockResolvedValue({
       action: 'swap',
@@ -439,9 +446,53 @@ describe('WebChatService', () => {
       toAsset: 'USDT',
       amount: '10',
     });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'swap 10 USDT to USDT',
+    });
+    expect(result.outcome).toMatchObject({ kind: 'clarification' });
+    expect(
+      (result.outcome as { kind: 'clarification'; text: string }).text,
+    ).toMatch(/two different assets/i);
+  });
+
+  // ── swap, provider not available → not_supported (graceful) ──────────────────
+
+  it('swap intent, SwapUnavailableError from provider → not_supported (not a 500)', async () => {
+    fakeProposalService.createSwapProposal.mockRejectedValue(
+      new SwapUnavailableError(),
+    );
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'swap 10 USDT to TRX',
+    });
+    expect(result.outcome).toMatchObject({
+      kind: 'not_supported',
+      action: 'swap',
+    });
+  });
+
+  // ── swap, unexpected error → still propagates to the global filter ────────────
+
+  it('swap intent, unexpected error → propagates (mapped to 500 by the filter)', async () => {
+    fakeProposalService.createSwapProposal.mockRejectedValue(
+      new Error('unexpected boom'),
+    );
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
     await expect(
-      service.handleMessage({ userId: 'user-1', text: 'swap 10 USDT to USDT' }),
-    ).rejects.toThrow();
+      service.handleMessage({ userId: 'user-1', text: 'swap 10 USDT to TRX' }),
+    ).rejects.toThrow('unexpected boom');
   });
 
   // ── query_transactions → transactions outcome ─────────────────────────────

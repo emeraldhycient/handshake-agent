@@ -55,6 +55,7 @@ import type { TransactionHistoryService } from '../../transactions/application/t
 import type { BalanceService } from '../../balances/application/balance.service';
 import {
   InsufficientBalanceError,
+  SwapSameAssetError,
   SwapUnavailableError,
 } from '../../transactions/domain/execution-errors';
 
@@ -379,6 +380,12 @@ export class WebChatService {
             outcome = { kind: 'not_supported', action: 'swap' };
             summaryText =
               "Swap isn't available right now. Please try again later or contact support.";
+          } else if (swapErr instanceof SwapSameAssetError) {
+            // Ordinary user-input mistake (e.g. the model emits "swap USDT for
+            // USDT") — surface inline as a clarification, never an opaque 500.
+            const sameAssetText = 'Choose two different assets to swap.';
+            outcome = { kind: 'clarification', text: sameAssetText };
+            summaryText = sameAssetText;
           } else if (swapErr instanceof InsufficientBalanceError) {
             outcome = {
               kind: 'clarification',

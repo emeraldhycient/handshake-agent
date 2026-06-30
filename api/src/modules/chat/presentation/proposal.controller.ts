@@ -81,6 +81,7 @@ import {
   QuoteDriftError,
   ProviderUnavailableError,
   InsufficientBalanceError,
+  SwapUnavailableError,
 } from '../../transactions/domain/execution-errors';
 import {
   KycNotVerifiedError,
@@ -334,6 +335,16 @@ export class ProposalController {
         err instanceof SanctionsBlockedError
       ) {
         throw new ForbiddenException('Transaction not permitted');
+      }
+
+      // Swap not available on this account (e.g. provider 404 / not enrolled) is a
+      // PERMANENT, non-retryable condition — surface a graceful 422, not a
+      // retryable 502 that invites the user to keep tapping Confirm. Must be
+      // checked BEFORE ProviderUnavailableError so it is not clobbered into a 502.
+      if (err instanceof SwapUnavailableError) {
+        throw new UnprocessableEntityException(
+          "Swap isn't available right now. Please try again later or contact support.",
+        );
       }
 
       // External provider (Flutterwave / Blockradar) call failed → 502.
