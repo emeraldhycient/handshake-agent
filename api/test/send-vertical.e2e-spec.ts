@@ -61,6 +61,7 @@ import { ComplianceService } from '../src/modules/compliance/application/complia
 import { MockSanctionsScreener } from '../src/modules/compliance/infrastructure/mock-sanctions.screener';
 import { ConfigRateProvider } from '../src/modules/quotes/infrastructure/config-rate.provider';
 import { AssetRegistry } from '../src/core/catalog/asset-registry';
+import { seedRegistryAssets } from './helpers/seed-registry-assets';
 
 // Ports/types
 import type { PrismaService } from '../src/core/prisma/prisma.service';
@@ -162,6 +163,7 @@ function buildSendExecutionService(
 ): ExecutionService {
   const clock = { now: () => new Date() };
   const assetRegistry = new AssetRegistry(config as never);
+  seedRegistryAssets(assetRegistry);
   const rateProvider = new ConfigRateProvider(config as never);
   const quotesService = new QuotesService(rateProvider, clock, assetRegistry);
   const kycGate = new KycGateService(
@@ -239,6 +241,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
     const config = new StubConfigService() as never;
     const clock = { now: () => new Date() };
     const assetRegistry = new AssetRegistry(config);
+    seedRegistryAssets(assetRegistry);
 
     // Repos
     const proposalRepo = new ProposalPrismaRepository(ps);
