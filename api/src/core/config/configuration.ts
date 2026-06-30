@@ -398,6 +398,32 @@ export interface MediaConfig {
   whatsapp: WhatsAppMediaConfig;
 }
 
+/**
+ * Ticketing-vertical configuration (Phase 4 wave 2). Admin-tunable via the
+ * DB-admin AppSetting layer (§7). `enabled` is fail-closed (default off) — the
+ * vertical ships disabled until an operator flips the flag (no deploy required).
+ */
+export interface TicketingConfig {
+  /** Service-registry enablement flag for the ticketing vertical (§7). */
+  enabled: boolean;
+  /** Handshake platform commission per ticket order, in basis points. */
+  commissionBps: number;
+}
+
+/**
+ * Embedded-agent configuration (Phase 4 wave 2). Admin-tunable via the DB-admin
+ * AppSetting layer (§7). The system prompt is intentionally NOT a config value —
+ * it is read-only and never editable (§3.1/§6); the ANTHROPIC_API_KEY is a secret
+ * and stays env-only. `modelId` defaults to the AGENT_MODEL env value so the agent
+ * behaves identically with no override.
+ */
+export interface AgentConfig {
+  /** Enablement flag; when false AgentService throws AgentUnavailableError (§3.1). */
+  enabled: boolean;
+  /** The Anthropic model id used for intent extraction (mirrors env AGENT_MODEL). */
+  modelId: string;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
@@ -412,6 +438,8 @@ export interface AppConfig {
   reconciliation: ReconciliationConfig;
   statement: StatementConfig;
   media: MediaConfig;
+  ticketing: TicketingConfig;
+  agent: AgentConfig;
 }
 
 export default (): AppConfig => ({
@@ -731,5 +759,21 @@ export default (): AppConfig => ({
       // Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
       maxMediaBytes: 25_000_000,
     },
+  },
+  // ── Ticketing vertical (Phase 4 wave 2, CLAUDE.md §7) ──────────────────────
+  // Fail-closed: ships DISABLED until an operator flips the flag (no deploy).
+  // commissionBps is 0 by default; admin-tunable via the DB-admin AppSetting layer.
+  ticketing: {
+    enabled: false,
+    commissionBps: 0,
+  },
+  // ── Embedded agent (Phase 4 wave 2, CLAUDE.md §7) ──────────────────────────
+  // enabled defaults true (current behaviour). modelId mirrors the AGENT_MODEL env
+  // value (same env-derived pattern as catalog.networks.TRON.masterWalletId above)
+  // so the agent behaves IDENTICALLY with no DB override. The system prompt is NOT
+  // a config value (read-only, §3.1/§6); the ANTHROPIC_API_KEY stays env-only.
+  agent: {
+    enabled: true,
+    modelId: process.env['AGENT_MODEL'] ?? 'claude-opus-4-8',
   },
 });

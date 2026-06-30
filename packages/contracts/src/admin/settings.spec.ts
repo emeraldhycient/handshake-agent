@@ -13,6 +13,8 @@ const SETTING_CATEGORIES = [
   "KYC",
   "Compliance",
   "Beneficiary",
+  "Tickets",
+  "Agent",
 ] as const;
 const SETTING_SCOPES = ["global", "tier", "provider"] as const;
 const SETTING_VALUE_TYPES = [
@@ -56,6 +58,42 @@ describe("SETTING_REGISTRY", () => {
     expect(keys.has("compliance.travelRuleThresholds.NGN")).toBe(true);
     expect(keys.has("catalog.capabilities.crypto.buy")).toBe(true);
     expect(keys.has("beneficiary.cryptoCoolingOffSeconds")).toBe(true);
+  });
+
+  it("registers the Tickets enablement + commission tunables (Phase 4 wave 2)", () => {
+    const enabled = entry("ticketing.enabled");
+    expect(enabled.category).toBe("Tickets");
+    expect(enabled.valueType).toBe("boolean");
+    expect(enabled.editable).toBe(true);
+    expect(enabled.secret).toBe(false);
+
+    const commission = entry("ticketing.commissionBps");
+    expect(commission.category).toBe("Tickets");
+    expect(commission.valueType).toBe("number");
+    expect(commission.min).toBe(0);
+    expect(commission.max).toBe(10_000);
+  });
+
+  it("registers the Agent enablement + model-id tunables, never the system prompt or api key (Phase 4 wave 2)", () => {
+    const enabled = entry("agent.enabled");
+    expect(enabled.category).toBe("Agent");
+    expect(enabled.valueType).toBe("boolean");
+
+    const modelId = entry("agent.modelId");
+    expect(modelId.category).toBe("Agent");
+    expect(modelId.valueType).toBe("string");
+    expect(modelId.editable).toBe(true);
+    expect(modelId.secret).toBe(false);
+
+    // The system prompt and the Anthropic API key are NEVER admin-editable (§3.1/§6).
+    const keys = SETTING_REGISTRY.map((e) => e.key);
+    expect(keys).not.toContain("agent.systemPrompt");
+    expect(
+      keys.some((k) => k.toLowerCase().includes("anthropic")),
+    ).toBe(false);
+    expect(
+      keys.some((k) => k.toLowerCase().includes("api_key")),
+    ).toBe(false);
   });
 
   it("registers the sanctions denylist as a Compliance string[] (Phase 3C)", () => {

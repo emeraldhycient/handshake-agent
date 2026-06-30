@@ -22,7 +22,9 @@ export type SettingCategory =
   | "Catalog"
   | "KYC"
   | "Compliance"
-  | "Beneficiary";
+  | "Beneficiary"
+  | "Tickets"
+  | "Agent";
 
 export interface SettingRegistryEntry {
   /** Full dot-path into AppConfig, e.g. "pricing.processingFeeBps". */
@@ -98,7 +100,8 @@ const flag = (
   key: string,
   label: string,
   description: string,
-): SettingRegistryEntry => s(key, "Catalog", "boolean", label, description);
+  category: SettingCategory = "Catalog",
+): SettingRegistryEntry => s(key, category, "boolean", label, description);
 
 // Per-asset pricing entries (root CLAUDE.md §3.1: spreads are NEVER a line item,
 // but they ARE admin-tunable). USDT/BTC/TRX are the money-path assets at launch.
@@ -302,6 +305,41 @@ export const SETTING_REGISTRY: readonly SettingRegistryEntry[] = [
     "Config",
     "Statement timezone offset (minutes)",
     "Fixed offset in minutes for local day boundaries (WAT = UTC+1, no DST => 60).",
+  ),
+
+  // ── Tickets (Phase 4 wave 2) ─────────────────────────────────────────────────
+  // Enablement flag + platform commission for the ticketing vertical. The flag is
+  // fail-closed (default off); flipping it enables the vertical without a deploy (§7).
+  flag(
+    "ticketing.enabled",
+    "Tickets enabled",
+    "Enable the event-ticketing vertical (discover + buy tickets).",
+    "Tickets",
+  ),
+  bps(
+    "ticketing.commissionBps",
+    "Tickets",
+    "Ticketing commission (bps)",
+    "Handshake platform commission per ticket order, in basis points.",
+  ),
+
+  // ── Agent (Phase 4 wave 2) ───────────────────────────────────────────────────
+  // The embedded LangGraph agent's enablement flag + model id are admin-tunable
+  // (§7). When disabled, AgentService throws AgentUnavailableError before any LLM
+  // call. The SYSTEM PROMPT is intentionally NOT registered — it is read-only and
+  // never editable (§3.1/§6); the ANTHROPIC_API_KEY is a secret and stays env-only.
+  flag(
+    "agent.enabled",
+    "Agent enabled",
+    "Enable the embedded NLU agent (intent extraction). When off, the assistant is unavailable.",
+    "Agent",
+  ),
+  s(
+    "agent.modelId",
+    "Agent",
+    "string",
+    "Agent model id",
+    "The Anthropic model id the agent uses for intent extraction (e.g. claude-opus-4-8).",
   ),
 ];
 

@@ -525,6 +525,41 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "View the non-secret WhatsApp configuration",
   ),
 
+  // Tickets — read-only ticket-order oversight (Phase 4 wave 2). Enablement +
+  // commission are tuned via /admin/settings; this surface only LISTS orders.
+  r(
+    "api_route",
+    "GET /admin/tickets/orders",
+    "read",
+    "Tickets",
+    "List ticket orders",
+  ),
+
+  // Agent — read-only config view + conversation/intent logs (Phase 4 wave 2).
+  // The model id / enablement flag are edited via /admin/settings; the system
+  // prompt is read-only and never editable (§3.1/§6). No write routes here.
+  r(
+    "api_route",
+    "GET /admin/agent/config",
+    "read",
+    "Agent",
+    "View the agent's read-only configuration (model id + enablement + prompt preview)",
+  ),
+  r(
+    "api_route",
+    "GET /admin/agent/conversations",
+    "read",
+    "Agent",
+    "List agent conversations",
+  ),
+  r(
+    "api_route",
+    "GET /admin/agent/conversations/:id",
+    "read",
+    "Agent",
+    "View an agent conversation's messages, intents, and replies",
+  ),
+
   // Web pages (nav/page gating — UX only; the API still enforces api_route perms)
   r(
     "web_page",
@@ -594,6 +629,14 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Comms",
     "WhatsApp configuration page",
   ),
+  r("web_page", "/admin/tickets", "read", "Tickets", "Ticket orders page"),
+  r(
+    "web_page",
+    "/admin/agent",
+    "read",
+    "Agent",
+    "Agent config + conversation logs page",
+  ),
   // Menu items (nav groups)
   r("menu_item", "menu.access", "read", "Access", "Access & RBAC nav group"),
   r("menu_item", "menu.audit", "read", "Audit", "Audit nav group"),
@@ -631,6 +674,8 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Notifications nav group",
   ),
   r("menu_item", "menu.whatsapp", "read", "Comms", "WhatsApp nav group"),
+  r("menu_item", "menu.tickets", "read", "Tickets", "Tickets nav group"),
+  r("menu_item", "menu.agent", "read", "Agent", "Agent nav group"),
 ];
 
 // ── Built-in roles ─────────────────────────────────────────────────────────────
@@ -691,6 +736,8 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Compliance: ["read"],
       Beneficiaries: ["read", "write"],
       Comms: ["read", "write"],
+      Tickets: ["read"],
+      Agent: ["read"],
     },
   ),
   role(
@@ -721,5 +768,6 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
     KYC: ["read"],
     Beneficiaries: ["read"],
     Comms: ["read"],
+    Agent: ["read"],
   }),
 ];

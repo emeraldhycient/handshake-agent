@@ -254,6 +254,32 @@ describe("PERMISSION_CATALOG", () => {
     }
   });
 
+  it("registers the Tickets oversight route + nav (Phase 4 wave 2)", () => {
+    const ids = new Set(PERMISSION_CATALOG.map(permissionId));
+    expect(ids.has("api_route:GET /admin/tickets/orders:read")).toBe(true);
+    expect(ids.has("web_page:/admin/tickets:read")).toBe(true);
+    expect(ids.has("menu_item:menu.tickets:read")).toBe(true);
+    for (const e of PERMISSION_CATALOG.filter((x) => x.category === "Tickets")) {
+      expect(e.category).toBe("Tickets");
+    }
+  });
+
+  it("registers the Agent config + conversation-log routes + nav (Phase 4 wave 2)", () => {
+    const ids = new Set(PERMISSION_CATALOG.map(permissionId));
+    expect(ids.has("api_route:GET /admin/agent/config:read")).toBe(true);
+    expect(ids.has("api_route:GET /admin/agent/conversations:read")).toBe(true);
+    expect(ids.has("api_route:GET /admin/agent/conversations/:id:read")).toBe(
+      true,
+    );
+    expect(ids.has("web_page:/admin/agent:read")).toBe(true);
+    expect(ids.has("menu_item:menu.agent:read")).toBe(true);
+    for (const e of PERMISSION_CATALOG.filter((x) => x.category === "Agent")) {
+      expect(e.category).toBe("Agent");
+      // Agent surfaces are read-only — no write/execute/delete (§3.1/§6).
+      expect(e.action).toBe("read");
+    }
+  });
+
   it("registers the Beneficiaries oversight routes + nav (Phase 3 sub-area D)", () => {
     const ids = new Set(PERMISSION_CATALOG.map(permissionId));
     expect(ids.has("api_route:GET /admin/beneficiaries:read")).toBe(true);
@@ -510,6 +536,36 @@ describe("BUILTIN_ROLES", () => {
     expect(support.grants(tmplWrite)).toBe(false);
     expect(finance.grants(tmplRead)).toBe(false);
     expect(superAdmin.grants(tmplWrite)).toBe(true);
+  });
+
+  it("grants Tickets read to ops only; none to support/finance/compliance (Phase 4 wave 2)", () => {
+    const ticketsRead = PERMISSION_CATALOG.find(
+      (e) => permissionId(e) === "api_route:GET /admin/tickets/orders:read",
+    )!;
+    const ops = BUILTIN_ROLES.find((r) => r.name === "ops")!;
+    const support = BUILTIN_ROLES.find((r) => r.name === "support")!;
+    const finance = BUILTIN_ROLES.find((r) => r.name === "finance")!;
+    const compliance = BUILTIN_ROLES.find((r) => r.name === "compliance")!;
+
+    expect(ops.grants(ticketsRead)).toBe(true);
+    expect(support.grants(ticketsRead)).toBe(false);
+    expect(finance.grants(ticketsRead)).toBe(false);
+    expect(compliance.grants(ticketsRead)).toBe(false);
+  });
+
+  it("grants Agent read to ops + support; none to finance/compliance (Phase 4 wave 2)", () => {
+    const agentConfig = PERMISSION_CATALOG.find(
+      (e) => permissionId(e) === "api_route:GET /admin/agent/config:read",
+    )!;
+    const ops = BUILTIN_ROLES.find((r) => r.name === "ops")!;
+    const support = BUILTIN_ROLES.find((r) => r.name === "support")!;
+    const finance = BUILTIN_ROLES.find((r) => r.name === "finance")!;
+    const compliance = BUILTIN_ROLES.find((r) => r.name === "compliance")!;
+
+    expect(ops.grants(agentConfig)).toBe(true);
+    expect(support.grants(agentConfig)).toBe(true);
+    expect(finance.grants(agentConfig)).toBe(false);
+    expect(compliance.grants(agentConfig)).toBe(false);
   });
 
   it("grants Compliance read+write+execute to compliance, read-only to ops, none to finance/support (Phase 3C)", () => {

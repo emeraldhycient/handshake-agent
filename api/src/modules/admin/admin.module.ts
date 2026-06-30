@@ -11,6 +11,7 @@ import { TransactionsModule } from '../transactions/transactions.module';
 import { BeneficiariesModule } from '../beneficiaries/beneficiaries.module';
 import { ComplianceModule } from '../compliance/compliance.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { ConversationsModule } from '../conversations/conversations.module';
 import { AuthModule } from '../../core/auth/auth.module';
 import { PIN_REPOSITORY } from '../../core/auth/ports/pin.repository.port';
 import { PinPrismaRepository } from '../../core/auth/infrastructure/pin.prisma.repository';
@@ -47,6 +48,8 @@ import { AdminTreasuryController } from './presentation/admin-treasury.controlle
 import { AdminBeneficiariesController } from './presentation/admin-beneficiaries.controller';
 import { AdminNotificationsController } from './presentation/admin-notifications.controller';
 import { AdminWhatsAppController } from './presentation/admin-whatsapp.controller';
+import { AdminTicketsController } from './presentation/admin-tickets.controller';
+import { AdminAgentController } from './presentation/admin-agent.controller';
 import { AdminSessionGuard } from './presentation/admin-session.guard';
 import { PermissionGuard } from './presentation/permission.guard';
 import { AdminStepUpGuard } from './presentation/admin-step-up.guard';
@@ -71,6 +74,10 @@ import { AdminTreasuryService } from './application/admin-treasury.service';
 import { AdminBeneficiaryService } from './application/admin-beneficiary.service';
 import { AdminNotificationTemplateService } from './application/admin-notification-template.service';
 import { AdminWhatsAppConfigService } from './application/admin-whatsapp-config.service';
+import { AdminTicketService } from './application/admin-ticket.service';
+import { AdminAgentService } from './application/admin-agent.service';
+import { TICKET_ORDER_READ_REPOSITORY } from './application/ports/ticket-order-read.repository.port';
+import { TicketOrderReadPrismaRepository } from './infrastructure/ticket-order-read.prisma.repository';
 import { ADMIN_USER_REPOSITORY } from './application/ports/admin-user.repository.port';
 import { ADMIN_SESSION_REPOSITORY } from './application/ports/admin-session.repository.port';
 import { ROLE_REPOSITORY } from './application/ports/role.repository.port';
@@ -139,6 +146,11 @@ import type { Env } from '../../core/config/env.schema';
     // NOTIFICATION_TEMPLATE_REPOSITORY token that AdminNotificationTemplateService
     // injects for the template console. AuditService + ConfigService are global.
     NotificationsModule,
+    // Phase 4, wave 2 (Agent): ConversationsModule exports
+    // CONVERSATION_LOG_READ_REPOSITORY for the agent conversation-log surfaces.
+    // EffectiveConfigService is global (agent.modelId / agent.enabled). The ticket
+    // read repo is bound locally below (no tickets module exists yet).
+    ConversationsModule,
     // AdminTokenService injects JwtService for admin session-token sign/verify.
     JwtModule.register({}),
     // Register the wallet-backfill queue in AdminModule so @InjectQueue resolves
@@ -180,6 +192,8 @@ import type { Env } from '../../core/config/env.schema';
     AdminBeneficiariesController,
     AdminNotificationsController,
     AdminWhatsAppController,
+    AdminTicketsController,
+    AdminAgentController,
   ],
   providers: [
     AdminTokenGuard,
@@ -251,6 +265,13 @@ import type { Env } from '../../core/config/env.schema';
     // Neither service moves money (§3.1).
     AdminNotificationTemplateService,
     AdminWhatsAppConfigService,
+    // Phase 4, wave 2 (READ-ONLY): tickets oversight + agent config/conversation
+    // logs. AdminTicketService reads the locally-bound TICKET_ORDER_READ_REPOSITORY
+    // (no tickets module exists). AdminAgentService reads CONVERSATION_LOG_READ_REPOSITORY
+    // from the imported ConversationsModule + the global EffectiveConfigService.
+    // Neither service moves money (§3.1); the agent system prompt stays read-only (§6).
+    AdminTicketService,
+    AdminAgentService,
     AdminSessionGuard,
     PermissionGuard,
     AdminStepUpGuard,
@@ -292,6 +313,13 @@ import type { Env } from '../../core/config/env.schema';
     {
       provide: BENEFICIARY_REPOSITORY,
       useClass: BeneficiaryPrismaRepository,
+    },
+    // Phase 4, wave 2: TICKET_ORDER_READ_REPOSITORY is bound locally — there is no
+    // tickets module yet, so the admin layer owns this read (PrismaService is
+    // global). Mirrors the local LEDGER_REPOSITORY / TREASURY_READ_REPOSITORY binds.
+    {
+      provide: TICKET_ORDER_READ_REPOSITORY,
+      useClass: TicketOrderReadPrismaRepository,
     },
   ],
 })
