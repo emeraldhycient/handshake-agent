@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils"
 import { AvatarPlaceholder, BrandMark } from "@/components/shared"
 import { useCapabilities } from "@/lib/query/capabilities"
-import { useMe } from "@/lib/query/auth"
+import { useMe, useProfile } from "@/lib/query/auth"
 import { useAuthStore } from "@/lib/store/auth-store"
 import type { DashboardSidebarProps } from "@/types/components"
 import type { DashboardPage } from "@/lib/schemas"
@@ -60,6 +60,12 @@ export function DashboardSidebar({
     user?.lastName,
     user?.email
   )
+
+  // Real KYC tier for the verified badge — never hardcode it (it varies per
+  // user; the engine gates limits on the actual tier). "tier_1" → "Tier 1".
+  const profile = useProfile()
+  const kycTier = profile.data?.kycTier
+  const tierLabel = kycTier ? kycTier.replace(/^tier_/, "Tier ") : null
 
   return (
     <aside
@@ -140,7 +146,7 @@ export function DashboardSidebar({
           Verified account
         </div>
         <p className="text-[12.5px] leading-snug text-primary-foreground/65">
-          Identity confirmed · Tier 3 limits unlocked
+          Identity confirmed{tierLabel ? ` · ${tierLabel} limits` : ""}
         </p>
       </div>
 
