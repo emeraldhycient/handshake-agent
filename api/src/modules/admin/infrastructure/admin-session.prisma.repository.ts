@@ -15,6 +15,7 @@ export class AdminSessionPrismaRepository implements IAdminSessionRepository {
   async create(input: CreateAdminSessionInput): Promise<AdminSessionRecord> {
     const row = await this.prisma.adminSession.create({
       data: {
+        ...(input.id ? { id: input.id } : {}),
         adminUserId: input.adminUserId,
         tokenHash: input.tokenHash,
         expiresAt: input.expiresAt,

@@ -5,6 +5,12 @@
 export const ADMIN_SESSION_REPOSITORY = Symbol('ADMIN_SESSION_REPOSITORY');
 
 export interface CreateAdminSessionInput {
+  /**
+   * Optional caller-supplied row id. When provided, the caller controls the id
+   * so it can be embedded as the JWT `sub` and re-checked by AdminSessionGuard
+   * (`session.id === token.sub`). When omitted, the DB generates it.
+   */
+  id?: string;
   adminUserId: string;
   tokenHash: string;
   expiresAt: Date;

@@ -65,6 +65,19 @@ describe('AdminSessionPrismaRepository (integration)', () => {
     expect(session.userAgent).toBe('jest');
   });
 
+  it('persists a caller-supplied id (so it can bind a JWT sub)', async () => {
+    const id = randomUUID();
+    const session = await repo.create({
+      id,
+      adminUserId,
+      tokenHash: 'th-with-id',
+      expiresAt: new Date(Date.now() + HOUR),
+    });
+    expect(session.id).toBe(id);
+    const found = await repo.findActiveByTokenHash('th-with-id', new Date());
+    expect(found?.id).toBe(id);
+  });
+
   it('findActiveByTokenHash returns an unrevoked, unexpired session', async () => {
     await repo.create({
       adminUserId,
