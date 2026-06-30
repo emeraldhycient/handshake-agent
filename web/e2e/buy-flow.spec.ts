@@ -23,8 +23,8 @@ test("mobile: buy flow — chip → quote → confirm → PIN → success", asyn
 }) => {
   await page.goto("/app")
 
-  // Tap the "Buy ₦50,000 of USDT" chip in the composer chips row.
-  await page.getByRole("button", { name: "Buy ₦50,000 of USDT" }).click()
+  // Tap the amount-free "Buy USDT" chip in the composer chips row.
+  await page.getByRole("button", { name: "Buy USDT" }).click()
 
   // The store dispatches action "buy" → 680 ms later the agent replies with
   // a quote message containing "29.97 USDT". Wait for it.
