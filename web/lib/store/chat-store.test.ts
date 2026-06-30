@@ -669,6 +669,35 @@ describe("resolveSettlement (C4)", () => {
     expect(store.getState().threads.m.length).toBe(before)
     expect(store.getState()._pollingTransactionId).toBe(transactionId)
   })
+
+  it("buy receipt 'Paid' row uses the tx fiatCurrency symbol — NGN renders ₦ (audit #29)", () => {
+    const store = settlingStore()
+    store.getState().resolveSettlement(tx("completed"))
+
+    const receipt = store
+      .getState()
+      .threads.m.find((m) => m.kind === "receipt") as
+      | { rows: { label: string; value: string }[] }
+      | undefined
+    const paid = receipt?.rows.find((r) => r.label === "Paid")
+    expect(paid?.value).toBe("₦10,000.00")
+  })
+
+  it("buy receipt 'Paid' row drives the symbol from a NON-NGN fiatCurrency, never hardcoded ₦ (audit #29)", () => {
+    const store = settlingStore()
+    store
+      .getState()
+      .resolveSettlement({ ...tx("completed"), fiatCurrency: "GHS" })
+
+    const receipt = store
+      .getState()
+      .threads.m.find((m) => m.kind === "receipt") as
+      | { rows: { label: string; value: string }[] }
+      | undefined
+    const paid = receipt?.rows.find((r) => r.label === "Paid")
+    expect(paid?.value).toBe("GH₵10,000.00")
+    expect(paid?.value).not.toContain("₦")
+  })
 })
 
 // ─── sendToAgent ──────────────────────────────────────────────────────────────

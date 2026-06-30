@@ -17,7 +17,9 @@ vi.mock("@/lib/query/hooks", () => ({
 
 vi.mock("@/lib/store/chat-store", () => ({
   useChatStore: (
-    selector: (s: { resolveSettlement: typeof mockResolveSettlement }) => unknown
+    selector: (s: {
+      resolveSettlement: typeof mockResolveSettlement
+    }) => unknown
   ) => selector({ resolveSettlement: mockResolveSettlement }),
 }))
 
@@ -97,7 +99,7 @@ describe("PayInCardLive (C4: single settlement watcher)", () => {
 })
 
 describe("PayInCard", () => {
-  it("renders the amount with the ₦ symbol, thousands separators, and 2dp", () => {
+  it("renders the NGN amount with the ₦ symbol, thousands separators, and 2dp", () => {
     render(<PayInCard {...baseProps} amount="20000" currency="NGN" />)
 
     expect(screen.getByText("₦20,000.00")).toBeInTheDocument()
@@ -107,5 +109,26 @@ describe("PayInCard", () => {
     render(<PayInCard {...baseProps} amount="20000" currency="NGN" />)
 
     expect(screen.queryByText("NGN 20000")).not.toBeInTheDocument()
+  })
+
+  it("drives the symbol from the payment currency — GHS renders GH₵, never ₦ (audit #18)", () => {
+    render(<PayInCard {...baseProps} amount="20000" currency="GHS" />)
+
+    expect(screen.getByText("GH₵20,000.00")).toBeInTheDocument()
+    expect(screen.queryByText(/₦20,000\.00$/)).not.toBeInTheDocument()
+  })
+
+  it("KES renders KSh, not the hardcoded naira symbol", () => {
+    render(<PayInCard {...baseProps} amount="1500" currency="KES" />)
+
+    expect(screen.getByText("KSh1,500.00")).toBeInTheDocument()
+  })
+
+  it("falls back to the currency code for an unknown symbol (still not ₦)", () => {
+    render(<PayInCard {...baseProps} amount="1000" currency="XOF" />)
+
+    // No hardcoded ₦; the code prefixes the amount when no symbol is known.
+    expect(screen.getByText("XOF 1,000.00")).toBeInTheDocument()
+    expect(screen.queryByText("₦1,000.00")).not.toBeInTheDocument()
   })
 })

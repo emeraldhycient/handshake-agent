@@ -3,7 +3,7 @@
 import { useEffect } from "react"
 
 import { cn } from "@/lib/utils"
-import { formatNGN } from "@/lib/format"
+import { formatFiat } from "@/lib/format"
 import { StatusPill } from "@/components/shared/status-pill"
 import { DetailRows } from "@/components/shared/detail-rows"
 import { useTransactionStatus } from "@/lib/query/hooks"
@@ -25,6 +25,7 @@ export function PayInCard({
   bankName,
   providerRef,
   amount,
+  currency,
   status,
   density,
   className,
@@ -35,9 +36,10 @@ export function PayInCard({
     { label: "Account number", value: accountNumber },
     { label: "Bank", value: bankName },
     { label: "Reference", value: providerRef },
-    // Product is NGN-only; formatNGN renders "₦20,000.00" consistent with the
-    // quote/receipt cards (the `currency` prop is always "NGN").
-    { label: "Amount", value: formatNGN(amount) },
+    // Drive the symbol from the payment's currency — never hardcode ₦. The
+    // instant a non-NGN fiat is live this must show e.g. "GH₵20,000.00", not a
+    // naira amount on a real bank-transfer instruction (audit #18, CLAUDE.md §3.6).
+    { label: "Amount", value: formatFiat(amount, currency) },
   ]
 
   const isPending = status === "pending" || status === "settling"

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { formatNGN, formatCountdown, formatCrypto } from "./format"
+import {
+  formatNGN,
+  formatFiat,
+  fiatSymbolFor,
+  formatCountdown,
+  formatCrypto,
+} from "./format"
 
 describe("formatNGN", () => {
   it("formats a number with ₦ prefix, commas, and 2 decimal places", () => {
@@ -19,6 +25,37 @@ describe("formatNGN", () => {
   it("handles string numeric input", () => {
     expect(formatNGN("1000")).toBe("₦1,000.00")
     expect(formatNGN("0.5")).toBe("₦0.50")
+  })
+})
+
+describe("fiatSymbolFor", () => {
+  it("resolves known fiat symbols from the code", () => {
+    expect(fiatSymbolFor("NGN")).toBe("₦")
+    expect(fiatSymbolFor("GHS")).toBe("GH₵")
+    expect(fiatSymbolFor("KES")).toBe("KSh")
+    expect(fiatSymbolFor("USD")).toBe("$")
+  })
+
+  it("falls back to the code itself for an unknown currency", () => {
+    expect(fiatSymbolFor("XOF")).toBe("XOF")
+  })
+})
+
+describe("formatFiat (multi-currency precise formatter)", () => {
+  it("prefixes a known symbol with no space, 2dp + thousands", () => {
+    expect(formatFiat(20000, "NGN")).toBe("₦20,000.00")
+    expect(formatFiat("1500", "KES")).toBe("KSh1,500.00")
+    expect(formatFiat("20000", "GHS")).toBe("GH₵20,000.00")
+  })
+
+  it("uses the code with a trailing space for an unknown currency", () => {
+    expect(formatFiat("1000", "XOF")).toBe("XOF 1,000.00")
+  })
+
+  it("returns '<prefix>—' for non-finite values", () => {
+    expect(formatFiat("abc", "NGN")).toBe("₦—")
+    expect(formatFiat(NaN, "GHS")).toBe("GH₵—")
+    expect(formatFiat(Infinity, "XOF")).toBe("XOF —")
   })
 })
 

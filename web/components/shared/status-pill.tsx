@@ -15,6 +15,7 @@ const pillVariants = cva(
       tone: {
         success: "bg-success-muted text-success",
         warn: "bg-warn-muted text-warn",
+        danger: "bg-danger-muted text-danger",
         info: "bg-info-muted text-info",
         neutral: "bg-muted text-muted-foreground",
       } satisfies Record<StatusTone, string>,

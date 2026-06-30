@@ -28,6 +28,15 @@ export interface MappedOutcome {
   proposalId: string | null
 }
 
+/**
+ * The live settlement fiat at launch. Sourced from one named constant so the
+ * `currency_not_live` copy never hardcodes the currency in two places (where it
+ * could drift). When a second market goes live this is the single point to
+ * update (audit #28 — mirrors the balance branch's use of `outcome.fiatCurrency`
+ * rather than a hardcoded literal).
+ */
+export const LIVE_SETTLEMENT_FIAT = "NGN"
+
 export function mapOutcomeToMessages(
   outcome: AgentTurnOutcome,
   makeId: () => string
@@ -208,11 +217,14 @@ export function mapOutcomeToMessages(
       text: "That's not supported yet.",
     })
   } else if (outcome.kind === "currency_not_live") {
+    // Source the live settlement currency from the single named constant rather
+    // than hardcoding it twice in user-facing financial copy (audit #28).
+    const live = LIVE_SETTLEMENT_FIAT
     messages.push({
       id: makeId(),
       role: "assistant",
       kind: "text",
-      text: `We settle in NGN for now — ${outcome.currency} isn't live yet. Want to continue in NGN?`,
+      text: `We settle in ${live} for now — ${outcome.currency} isn't live yet. Want to continue in ${live}?`,
     })
   } else if (outcome.kind === "transactions") {
     messages.push({

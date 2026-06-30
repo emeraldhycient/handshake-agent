@@ -24,6 +24,16 @@ vi.mock("@/lib/api/auth", () => ({
     kycTier: "1",
     hasPin: true,
   }),
+  // Sidebar verified-badge reads the real tier via useProfile → fetchProfile.
+  fetchProfile: vi.fn().mockResolvedValue({
+    email: "user@example.com",
+    fullName: "Ada Tester",
+    phone: null,
+    kycStatus: "verified",
+    kycTier: "tier_1",
+    fiatCurrency: "NGN",
+    limits: null,
+  }),
   submitSignup: vi.fn(),
   submitVerifyEmail: vi.fn(),
   submitLoginRequest: vi.fn(),

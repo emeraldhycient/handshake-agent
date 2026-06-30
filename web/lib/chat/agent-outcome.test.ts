@@ -4,7 +4,7 @@ import type {
   BuyProposalConfirmation,
   SwapProposalConfirmation,
 } from "@handshake-agent/contracts"
-import { mapOutcomeToMessages } from "./agent-outcome"
+import { mapOutcomeToMessages, LIVE_SETTLEMENT_FIAT } from "./agent-outcome"
 
 /** Deterministic id generator for assertions. */
 function makeIder() {
@@ -215,6 +215,23 @@ describe("mapOutcomeToMessages", () => {
     expect(messages).toHaveLength(1)
     if (messages[0].kind === "text") {
       expect(messages[0].text).toContain("GHS")
+    }
+  })
+
+  it("sources the live settlement currency from LIVE_SETTLEMENT_FIAT, not a hardcoded literal (audit #28)", () => {
+    // The live settlement fiat appears in the copy and comes from a single
+    // named constant — so it cannot drift between the two mentions.
+    expect(LIVE_SETTLEMENT_FIAT).toBe("NGN")
+    const { messages } = mapOutcomeToMessages(
+      { kind: "currency_not_live", currency: "GHS" },
+      makeIder()
+    )
+    if (messages[0].kind === "text") {
+      // Both occurrences of the live fiat in the sentence are the constant.
+      const occurrences = (
+        messages[0].text.match(new RegExp(LIVE_SETTLEMENT_FIAT, "g")) ?? []
+      ).length
+      expect(occurrences).toBe(2)
     }
   })
 })

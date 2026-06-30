@@ -45,8 +45,15 @@ const TITLE: Record<string, (asset?: string) => string> = {
 const titleCase = (s: string) =>
   s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ")
 
+// Terminal-failure statuses get the distinct `danger` tone so a failed/refunded
+// transaction never looks like one still in flight (audit #24). The backend
+// status is a free-form string, so match the known terminal-failure values;
+// everything else in-flight (pending / settling) stays `warn`.
+const FAILURE_STATUSES = new Set(["failed", "refunded", "reversed"])
+
 function toneFor(status: string): StatusTone {
   if (status === "completed") return "success"
+  if (FAILURE_STATUSES.has(status.toLowerCase())) return "danger"
   return "warn"
 }
 

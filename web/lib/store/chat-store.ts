@@ -31,7 +31,7 @@ import {
 import { parseIntent } from "@/lib/chat/intent"
 import { mapOutcomeToMessages } from "@/lib/chat/agent-outcome"
 import { GREETING_M, GREETING_D } from "@/lib/constants"
-import { formatNGN } from "@/lib/format"
+import { formatFiat } from "@/lib/format"
 import { ApiError } from "@/lib/api/client"
 import type {
   ChatAction,
@@ -132,7 +132,13 @@ function buildCompletionReceipt(
     rows: [
       {
         label: "Paid",
-        value: tx.fiatAmount ? formatNGN(tx.fiatAmount) : pending.totalValue,
+        // Drive the symbol from the transaction's fiatCurrency — never hardcode
+        // ₦. Once a non-NGN fiat is live the paid amount must render with that
+        // currency's symbol (audit #29). Default NGN when the status payload
+        // omits it (current launch fiat).
+        value: tx.fiatAmount
+          ? formatFiat(tx.fiatAmount, tx.fiatCurrency ?? "NGN")
+          : pending.totalValue,
       },
       { label: "Date", value: date },
     ],
