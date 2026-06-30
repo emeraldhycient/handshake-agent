@@ -129,6 +129,8 @@ export class FlutterwaveProvider implements IPaymentProvider {
   private readonly baseUrl: string;
   private readonly authHeader: string;
   private readonly webhookSecret: string;
+  /** Optional sandbox scenario key; sent as X-Scenario-Key on collections when set. */
+  private readonly scenarioKey: string;
 
   constructor(
     private readonly http: HttpService,
@@ -141,6 +143,8 @@ export class FlutterwaveProvider implements IPaymentProvider {
     this.authHeader = `Bearer ${secretKey}`;
     this.webhookSecret =
       this.config.get<string>('FLUTTERWAVE_WEBHOOK_SECRET') ?? '';
+    this.scenarioKey =
+      this.config.get<string>('FLUTTERWAVE_SCENARIO_KEY') ?? '';
   }
 
   // ---------------------------------------------------------------------------
@@ -161,10 +165,18 @@ export class FlutterwaveProvider implements IPaymentProvider {
       is_permanent: false,
     };
 
+    // In sandbox, X-Scenario-Key tells Flutterwave which scenario to simulate
+    // (e.g. "scenario:successful" → simulate the pay-in and fire the webhook).
+    // Only sent when configured; production leaves FLUTTERWAVE_SCENARIO_KEY empty.
+    const headers = this.headers();
+    if (this.scenarioKey) {
+      headers['X-Scenario-Key'] = this.scenarioKey;
+    }
+
     try {
       const response = await firstValueFrom(
         this.http.post<CreateVirtualAccountResponse>(url, body, {
-          headers: this.headers(),
+          headers,
         }),
       );
 

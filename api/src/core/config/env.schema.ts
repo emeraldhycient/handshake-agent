@@ -64,6 +64,10 @@ export const envSchema = z.object({
     .default('https://api.flutterwave.com/v3'),
   // Dashboard "secret hash" — verifies collection/transfer webhooks (verif-hash equality, v3).
   FLUTTERWAVE_WEBHOOK_SECRET: z.string().optional().default(''),
+  // Optional SANDBOX scenario key (e.g. "scenario:successful"). When set, sent as
+  // the X-Scenario-Key header on collection requests so Flutterwave's sandbox
+  // simulates the pay-in and fires the webhook. MUST be empty in production.
+  FLUTTERWAVE_SCENARIO_KEY: z.string().optional().default(''),
 
   // --- Engine ---
   // HMAC-SHA256 key for DirectiveGrant signing (ADR-0005/0006). Required before the
