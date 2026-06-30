@@ -538,5 +538,43 @@ describe('BlockradarSwapProvider', () => {
 
       await expect(rejection).rejects.toBeInstanceOf(SwapUnavailableError);
     });
+
+    it('preserves the HTTP status STRUCTURALLY on a non-404 rejection (engine refund-vs-leave branching, §3.1)', async () => {
+      // The execution engine branches on definitive (4xx) vs ambiguous (5xx /
+      // none) provider failures to decide whether a swap reserve refund is safe.
+      // A 422 must expose its status structurally, not only in the message.
+      http.post.mockReturnValue(
+        throwError(() => axiosErr(422, 'Insufficient balance')),
+      );
+
+      await expect(
+        provider.execute({
+          addressId: ADDRESS_ID,
+          fromAssetId: FROM_ASSET_ID,
+          toAssetId: TO_ASSET_ID,
+          amount: '100',
+          reference: 'ref-001',
+        }),
+      ).rejects.toMatchObject({ httpStatus: 422 });
+    });
+
+    it('preserves the HTTP status STRUCTURALLY on a 404 SwapUnavailableError (definitive → refund-safe, §3.1)', async () => {
+      // A 404 swap rejection means the provider never performed the swap — the
+      // engine treats it as a definitive (refund-safe) failure, so the
+      // SwapUnavailableError must also carry the structured httpStatus.
+      http.post.mockReturnValue(
+        throwError(() => axiosErr(404, 'Wallet not found or not active')),
+      );
+
+      await expect(
+        provider.execute({
+          addressId: ADDRESS_ID,
+          fromAssetId: FROM_ASSET_ID,
+          toAssetId: TO_ASSET_ID,
+          amount: '100',
+          reference: 'ref-001',
+        }),
+      ).rejects.toMatchObject({ httpStatus: 404 });
+    });
   });
 });

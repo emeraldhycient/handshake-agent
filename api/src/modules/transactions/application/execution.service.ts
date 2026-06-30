@@ -46,6 +46,7 @@ import { KycGateService } from '../../identity/application/kyc-gate.service';
 import { IdentityService } from '../../identity/application/identity.service';
 import { QuotesService } from '../../quotes/application/quotes.service';
 import { WalletService } from '../../wallets/application/wallet.service';
+import type { WithdrawOutput } from '../../wallets/application/ports/wallet-provider.port';
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import {
@@ -62,6 +63,7 @@ import type {
 import {
   SWAP_PROVIDER,
   type ISwapProvider,
+  type ExecuteSwapOutput,
 } from '../../wallets/application/ports/swap-provider.port';
 import { BeneficiaryCoolingOffError } from '../../beneficiaries/domain/beneficiary-errors';
 import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
@@ -1455,15 +1457,43 @@ export class ExecutionService {
       network,
     );
     const assetId = this.assetRegistry.assetProviderId(asset, 'blockradar');
-    const withdrawOutput = await this.callProvider('withdraw', () =>
-      this.walletService.withdraw(
-        walletRecord,
-        toAddress,
-        cryptoAmount,
-        assetId,
-        idempotencyKey,
-      ),
-    );
+
+    // FUNDS-SAFETY (§3.1): the reserve (Step 10, user_wallet → clearing) is already
+    // committed. If the withdraw is DEFINITIVELY rejected by the provider (HTTP
+    // 4xx — the request was rejected and NEVER broadcast on-chain) we must refund
+    // the reserve and fail the transaction HERE: the Phase-2 webhook will never
+    // fire for a request that was never accepted, and the reconciler's
+    // querySendWithdrawalStatus is fail-safe 'pending' so it would never refund —
+    // the user's funds would be stranded in clearing forever. For an AMBIGUOUS
+    // failure (5xx / timeout / no HTTP status) the withdrawal MIGHT be in-flight,
+    // so refunding would risk a double-spend (refund + the on-chain send landing);
+    // we leave the tx 'settling' for the reconciler (current behaviour).
+    let withdrawOutput: WithdrawOutput;
+    try {
+      withdrawOutput = await this.callProvider('withdraw', () =>
+        this.walletService.withdraw(
+          walletRecord,
+          toAddress,
+          cryptoAmount,
+          assetId,
+          idempotencyKey,
+        ),
+      );
+    } catch (err: unknown) {
+      if (this.isDefinitiveProviderRejection(err)) {
+        await this.settlementRepo.settleSendRefundAtomic({
+          transactionId: txn.id,
+          userId,
+          walletId,
+          totalDebit,
+          asset,
+          failureReason:
+            'on-chain withdrawal rejected by provider (definitive 4xx) — reserve refunded',
+          now,
+        });
+      }
+      throw err;
+    }
     const providerRef = withdrawOutput.providerReference;
 
     // ── Step 12: Persist providerRef into Transaction metadata ───────────────
@@ -1847,15 +1877,38 @@ export class ExecutionService {
       });
 
     // ── Step 7: Execute swap via provider ────────────────────────────────────
-    const swapOutput = await this.callProvider('swapExecute', () =>
-      this.swapProvider!.execute({
-        addressId,
-        fromAssetId,
-        toAssetId,
-        amount: fromAmount,
-        reference: idempotencyKey,
-      }),
-    );
+    // FUNDS-SAFETY (§3.1): same reserve-then-callProvider shape as executeSend.
+    // The reserve (Step 6, user_wallet → swap_clearing) is already committed. On a
+    // DEFINITIVE rejection (HTTP 4xx — the provider rejected the request and never
+    // performed the swap) refund the reserve and fail HERE. On an AMBIGUOUS failure
+    // (5xx / timeout / no status) the swap MIGHT be in-flight; leave it 'settling'
+    // for the reconciler rather than risk a double-spend.
+    let swapOutput: ExecuteSwapOutput;
+    try {
+      swapOutput = await this.callProvider('swapExecute', () =>
+        this.swapProvider!.execute({
+          addressId,
+          fromAssetId,
+          toAssetId,
+          amount: fromAmount,
+          reference: idempotencyKey,
+        }),
+      );
+    } catch (err: unknown) {
+      if (this.isDefinitiveProviderRejection(err)) {
+        await this.settlementRepo.settleSwapRefundAtomic({
+          transactionId: txn.id,
+          userId,
+          walletId,
+          fromAmount,
+          fromAsset,
+          failureReason:
+            'swap rejected by provider (definitive 4xx) — reserve refunded',
+          now,
+        });
+      }
+      throw err;
+    }
 
     const providerSwapId = swapOutput.providerSwapId;
 
@@ -2147,6 +2200,43 @@ export class ExecutionService {
         'notifySellFailed: failed to send WhatsApp notice (swallowed)',
       );
     }
+  }
+
+  /**
+   * Returns true when a provider rejection is DEFINITIVE — the request was
+   * rejected by the provider with an HTTP 4xx status and was therefore NEVER
+   * broadcast on-chain. Only definitive rejections are safe to compensate
+   * (refund a committed reserve): an AMBIGUOUS failure (5xx, network timeout, or
+   * no HTTP status at all) might mean the side-effect IS in-flight, so refunding
+   * would risk a double-spend (refund + the on-chain action both landing). The
+   * caller leaves ambiguous failures for the reconciler. (CLAUDE.md §3.1.)
+   */
+  private isDefinitiveProviderRejection(err: unknown): boolean {
+    const status = this.extractHttpStatus(err);
+    return status !== undefined && status >= 400 && status < 500;
+  }
+
+  /**
+   * Extracts the HTTP status from a provider error. The wallet/swap provider
+   * adapters attach it structurally as `httpStatus` (see
+   * `BlockradarProvider.wrapError`). `callProvider` re-wraps the original error
+   * as the `cause` of a {@link ProviderUnavailableError}, so the status may live
+   * on the error itself or on its `cause`. Returns undefined when no numeric
+   * status is present — which the caller treats as an ambiguous failure.
+   */
+  private extractHttpStatus(err: unknown): number | undefined {
+    const statusOf = (candidate: unknown): number | undefined => {
+      if (
+        typeof candidate === 'object' &&
+        candidate !== null &&
+        'httpStatus' in candidate &&
+        typeof candidate.httpStatus === 'number'
+      ) {
+        return candidate.httpStatus;
+      }
+      return undefined;
+    };
+    return statusOf(err) ?? statusOf((err as { cause?: unknown })?.cause);
   }
 
   /**
