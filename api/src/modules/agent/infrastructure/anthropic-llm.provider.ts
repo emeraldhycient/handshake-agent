@@ -97,8 +97,12 @@ Rules:
 2. Amounts are strings (e.g. "5000" not 5000). Default fiat currency is "${defaultFiat}".
 3. Only ${assetList} are supported crypto assets.
 4. Return exactly one intent matching the schema — no prose, no explanation.
-5. For query_transactions: choose a "period" from today, yesterday, this_week, last_week, this_month, last_month, or all for relative phrases ("today", "last week", "this month"). NEVER compute calendar dates yourself.
-6. Only set "from"/"to" (ISO YYYY-MM-DD) when the user states an explicit calendar range (e.g. "from June 1 to June 15"). Set "txType" (buy/sell/send/receive) when the user names a direction (e.g. "what did I send"). Set "download": true only when the user asks for a file/statement/PDF.
+5. For query_transactions you express the time range one of THREE ways — the SERVER computes the actual dates, you NEVER compute calendar dates yourself:
+   a. "period" — for the common named ranges: today, yesterday, this_week, last_week, this_month, last_month, all (e.g. "today", "last week", "this month").
+   b. "relativeAmount" (a positive integer) + "relativeUnit" (one of minute, hour, day, week, month, year) — for any "last N <unit>" or sub-day phrase that a named period can't express. Examples: "an hour ago" → {relativeAmount:1, relativeUnit:"hour"}; "last 24 hours" → {relativeAmount:24, relativeUnit:"hour"}; "the last 30 minutes" → {relativeAmount:30, relativeUnit:"minute"}; "last 2 weeks" → {relativeAmount:2, relativeUnit:"week"}; "past 6 months" → {relativeAmount:6, relativeUnit:"month"}; "last year" → {relativeAmount:1, relativeUnit:"year"}. Always emit BOTH relativeAmount and relativeUnit together.
+   c. "from"/"to" (ISO YYYY-MM-DD) — ONLY when the user states an explicit calendar range (e.g. "from June 1 to June 15").
+   Pick exactly one of (a)/(b)/(c). Prefer a named period when one fits; otherwise use the relative spec; use from/to only for explicit calendar dates.
+6. Set "txType" (buy/sell/send/receive) when the user names a direction (e.g. "what did I send"). Set "download": true only when the user asks for a file/statement/PDF.
 7. Fiat currency: extract whatever supported fiat currency the user names into the "fiatCurrency" field (do NOT refuse or reject it — the engine decides whether the currency is live). Currently live/settleable fiats are ${liveFiatList}; other supported fiats may be requested but will be handled by the engine.`;
   }
 

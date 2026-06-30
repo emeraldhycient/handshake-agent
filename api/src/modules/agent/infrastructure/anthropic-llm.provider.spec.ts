@@ -189,6 +189,19 @@ describe('AnthropicLlmProvider', () => {
         expect(prompt).toContain('download');
       });
 
+      it('documents the relative-duration spec for flexible ranges (sub-day → year)', () => {
+        const prompt = provider.buildSystemPrompt();
+        // The relative-spec field names the model must emit.
+        expect(prompt).toContain('relativeAmount');
+        expect(prompt).toContain('relativeUnit');
+        // The unit vocabulary spans sub-day through year.
+        expect(prompt).toMatch(/minute/);
+        expect(prompt).toMatch(/hour/);
+        expect(prompt).toMatch(/week|month|year/);
+        // At least one worked example so the model maps NL → spec.
+        expect(prompt).toMatch(/last 2 weeks|6 months|24 hours|an hour ago/i);
+      });
+
       it('instructs the model to set the optional asset on check_balance', () => {
         const prompt = provider.buildSystemPrompt();
         // The check_balance bullet must explain the optional asset so that
