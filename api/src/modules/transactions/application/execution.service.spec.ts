@@ -53,6 +53,7 @@ import {
   InsufficientBalanceError,
   BaseRateMisconfiguredError,
   ProviderUnavailableError,
+  SwapUnavailableError,
 } from '../domain/execution-errors';
 import { DirectiveReplayError } from '../domain/directive-errors';
 import { PinInvalidError } from '../../../core/auth/domain/pin-errors';
@@ -943,6 +944,39 @@ describe('ExecutionService.executeBuy', () => {
     await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
       ProviderUnavailableError,
     );
+  });
+
+  it('createCollection failure → marks the Transaction failed (no zombie settling buy), no outbox row, re-throws', async () => {
+    // FUNDS-SAFETY (§3.1): the buy reserve posts NO ledger entry (the user pays
+    // NGN later), so a createCollection failure means no funds moved. But the
+    // settling Transaction + consumed proposal/velocity are committed at Step 7.
+    // Leaving it 'settling' with no VA is a zombie buy the user can never pay for
+    // and the reconciler cannot act on (no outbox row). The engine must mark the
+    // Transaction failed so the idempotent-replay path does not return an empty
+    // payment block. No reserve refund is needed (the buy never debited the user).
+    const providerError = new Error(
+      'Flutterwave createCollection error (HTTP 503): service unavailable',
+    );
+    const paymentProvider = makePaymentProvider(providerError);
+    const transactionRepo = makeTransactionRepo();
+    const outboxRepo = makeOutboxRepo();
+
+    const svc = buildService({ paymentProvider, transactionRepo, outboxRepo });
+
+    await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // Transaction marked failed so it is not a zombie 'settling' buy.
+    expect(transactionRepo.updateStatus).toHaveBeenCalledTimes(1);
+    const [failedId, failedStatus, failedFields] =
+      transactionRepo.updateStatus.mock.calls[0];
+    expect(failedId).toBe(TXN_ID);
+    expect(failedStatus).toBe('failed');
+    expect(failedFields?.failedAt).toBeInstanceOf(Date);
+    // No VA was persisted and no outbox row was enqueued.
+    expect(transactionRepo.mergeMetadata).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
   });
 
   // ── Idempotent replay ─────────────────────────────────────────────────────
@@ -2041,6 +2075,104 @@ describe('ExecutionService.executeSell', () => {
     expect(callOrder.indexOf('idempotency')).toBeLessThan(
       callOrder.indexOf('atomic_create'),
     );
+  });
+
+  // ── FUNDS-SAFETY: synchronous createPayout rejection (§3.1) ─────────────────
+  // The USDT reserve (Step 9, user_wallet → clearing) is committed BEFORE the
+  // fiat payout is initiated (Step 10). When createPayout throws synchronously
+  // the engine must compensate ONLY on a DEFINITIVE rejection (HTTP 4xx — the
+  // payout request was rejected and NEVER processed). On an AMBIGUOUS failure
+  // (5xx / timeout / no status) the transfer MIGHT be in flight, so refunding
+  // would risk a double-payout — those are left 'settling' for the reconciler.
+
+  it('createPayout rejected with a definitive 4xx → refunds the reserve, no outbox row, re-throws', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
+    const outboxRepo = makeOutboxRepo();
+    // Mirrors the processor adapter on a 422 "invalid bank account": a definitive
+    // client rejection that was NEVER processed/disbursed.
+    const paymentProvider = makeSellPaymentProvider(
+      Object.assign(
+        new Error('Flutterwave createPayout error (HTTP 422): invalid account'),
+        { httpStatus: 422 },
+      ),
+    );
+
+    const svc = buildSellService({
+      settlementRepo,
+      outboxRepo,
+      paymentProvider,
+    });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // The reserve must be refunded (clearing → user_wallet) and the tx marked failed.
+    expect(settlementRepo.settleSellRefundAtomic).toHaveBeenCalledTimes(1);
+    expect(settlementRepo.settleSellRefundAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transactionId: SELL_TXN_ID,
+        userId: USER_ID,
+        walletId: 'wallet-id',
+        cryptoAmount: '16.000000',
+        asset: 'USDT',
+      }),
+    );
+    // No processor_payout outbox row — the payout never happened.
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('createPayout fails with an ambiguous 5xx → leaves tx settling (NO refund), no outbox row, re-throws', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
+    const outboxRepo = makeOutboxRepo();
+    const paymentProvider = makeSellPaymentProvider(
+      Object.assign(
+        new Error('Flutterwave createPayout error (HTTP 503): upstream down'),
+        { httpStatus: 503 },
+      ),
+    );
+
+    const svc = buildSellService({
+      settlementRepo,
+      outboxRepo,
+      paymentProvider,
+    });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // Ambiguous — the payout may be in flight; refunding risks a double-payout.
+    expect(settlementRepo.settleSellRefundAtomic).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('createPayout fails with a network error (no HTTP status) → leaves tx settling (NO refund), re-throws', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
+    const paymentProvider = makeSellPaymentProvider(
+      new Error('socket hang up'),
+    );
+
+    const svc = buildSellService({ settlementRepo, paymentProvider });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // No HTTP status → ambiguous → never refund.
+    expect(settlementRepo.settleSellRefundAtomic).not.toHaveBeenCalled();
   });
 });
 
@@ -4078,6 +4210,49 @@ describe('ExecutionService.executeSwap', () => {
     expect(outboxRepo.create).not.toHaveBeenCalled();
   });
 
+  // ── SwapUnavailableError must propagate unchanged (#21/#22) ──────────────────
+  // BlockradarSwapProvider maps HTTP 404 (swap not enrolled) to a typed
+  // SwapUnavailableError so callers can show a graceful "not available" message.
+  // callProvider must NOT clobber it into a retryable ProviderUnavailableError —
+  // the execute path must match the proposal path's graceful semantics.
+
+  it('swapGetQuote throws SwapUnavailableError → propagates unchanged (not wrapped as a retryable 502)', async () => {
+    const swapProvider = makeSwapProviderMock();
+    swapProvider.getQuote.mockRejectedValue(
+      new SwapUnavailableError('Swap is not available on this account'),
+    );
+    const settlementRepo = makeSwapSettlementRepo();
+
+    const svc = buildSwapService({ swapProvider, settlementRepo });
+
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toBeInstanceOf(
+      SwapUnavailableError,
+    );
+    // The quote pre-check runs BEFORE the reserve — no debit, no refund needed.
+    expect(
+      settlementRepo.createSwapSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('swapExecute throws SwapUnavailableError → propagates unchanged (no clobber to ProviderUnavailableError)', async () => {
+    const swapProvider = makeSwapProviderMock();
+    swapProvider.execute.mockRejectedValue(
+      new SwapUnavailableError('Swap not enrolled on this account'),
+    );
+    const settlementRepo = makeSwapSettlementRepo();
+    const outboxRepo = makeOutboxRepo();
+
+    const svc = buildSwapService({ swapProvider, settlementRepo, outboxRepo });
+
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toBeInstanceOf(
+      SwapUnavailableError,
+    );
+    // SwapUnavailableError carries no httpStatus → not a definitive 4xx → no
+    // refund (the reserve was committed; this surfaces as a non-retryable error
+    // and the reconciler will not act on an in-flight that never happened).
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
   it('throws ProposalExpiredError when proposal is expired', async () => {
     const expiredProposal: ProposalRecord = {
       ...STUB_SWAP_PROPOSAL,
@@ -4141,6 +4316,54 @@ describe('ExecutionService.settleSwap', () => {
     expect(settlementRepo.settleSwapRefundAtomic).toHaveBeenCalledWith(
       expect.objectContaining({ fromAmount: '40', fromAsset: 'USDT' }),
     );
+  });
+
+  // ── FUNDS-SAFETY: malformed success payload with missing/zero toAmount (#12) ──
+  // A swap.success webhook that omits or zeroes the converted-amount field must
+  // NEVER credit 0 / strand. The reserve is preserved (no finalize, no refund)
+  // and the row stays 'settling' so a corrected retry can finalize it.
+
+  it('success=true but toAmount is undefined → returns pending, preserves reserve (no finalize, no refund)', async () => {
+    const txnWithSettling: TransactionRecord = {
+      ...STUB_SWAP_TXN,
+      status: 'settling',
+    };
+    const transactionRepo = makeTransactionRepo(txnWithSettling, STUB_SWAP_TXN);
+    transactionRepo.findByIdempotencyKey.mockResolvedValue(txnWithSettling);
+    const settlementRepo = makeSwapSettlementRepo();
+
+    const svc = buildSwapService({ transactionRepo, settlementRepo });
+    const result = await svc.settleSwap({
+      reference: SWAP_IDEMPOTENCY_KEY,
+      success: true,
+      // toAmount intentionally omitted (malformed provider payload)
+    });
+
+    expect(result.status).toBe('pending');
+    // Never credit 0 and never refund — the reserve must be preserved.
+    expect(settlementRepo.settleSwapFinalizeAtomic).not.toHaveBeenCalled();
+    expect(settlementRepo.settleSwapRefundAtomic).not.toHaveBeenCalled();
+  });
+
+  it('success=true but toAmount is "0" → returns pending, preserves reserve (never credits 0)', async () => {
+    const txnWithSettling: TransactionRecord = {
+      ...STUB_SWAP_TXN,
+      status: 'settling',
+    };
+    const transactionRepo = makeTransactionRepo(txnWithSettling, STUB_SWAP_TXN);
+    transactionRepo.findByIdempotencyKey.mockResolvedValue(txnWithSettling);
+    const settlementRepo = makeSwapSettlementRepo();
+
+    const svc = buildSwapService({ transactionRepo, settlementRepo });
+    const result = await svc.settleSwap({
+      reference: SWAP_IDEMPOTENCY_KEY,
+      success: true,
+      toAmount: '0',
+    });
+
+    expect(result.status).toBe('pending');
+    expect(settlementRepo.settleSwapFinalizeAtomic).not.toHaveBeenCalled();
+    expect(settlementRepo.settleSwapRefundAtomic).not.toHaveBeenCalled();
   });
 
   it('idempotent path: returns completed without re-settling', async () => {

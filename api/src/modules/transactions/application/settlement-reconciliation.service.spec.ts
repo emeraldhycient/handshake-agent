@@ -106,6 +106,12 @@ describe('SettlementReconciliationService', () => {
       querySendWithdrawalStatus: jest
         .fn()
         .mockResolvedValue({ status: 'pending' }),
+      settleSwap: jest.fn().mockResolvedValue({
+        transactionId: 'txn-1',
+        status: 'completed',
+      }),
+      // querySwapStatus: default pending (fail-safe — no provider status query).
+      querySwapStatus: jest.fn().mockReturnValue({ status: 'pending' }),
     } as unknown as jest.Mocked<ExecutionService>;
 
     service = new SettlementReconciliationService(
@@ -299,6 +305,81 @@ describe('SettlementReconciliationService', () => {
     expect(outboxRepo.markAttempt).toHaveBeenCalledWith(row.id);
     expect(executionService.settleBuyPayment).toHaveBeenCalledWith({
       reference: 'ref-buy-1',
+    });
+    expect(outboxRepo.complete).toHaveBeenCalledWith(row.id);
+  });
+
+  // ── swap → querySwapStatus + settleSwap (#8/#11) ──────────────────────────
+
+  it('handles a pending swap row — markAttempt is called, the row is NOT skipped as unknown', async () => {
+    const row = makeRecord({
+      settlementType: 'swap',
+      payload: { reference: 'ref-swap-1' },
+      idempotencyKey: 'ref-swap-1',
+    });
+    outboxRepo.findPending.mockResolvedValue([row]);
+
+    await service.tick();
+
+    // The swap type must be HANDLED (markAttempt) — not skipped as unknown.
+    expect(outboxRepo.markAttempt).toHaveBeenCalledWith(row.id);
+    // Fail-safe pending (no confirmed toAmount) → no settle, row stays open.
+    expect(executionService.settleSwap).not.toHaveBeenCalled();
+    expect(outboxRepo.complete).not.toHaveBeenCalled();
+  });
+
+  it('finalizes a swap row when querySwapStatus returns success (webhook-confirmed toAmount/hash in payload)', async () => {
+    const row = makeRecord({
+      settlementType: 'swap',
+      payload: {
+        reference: 'ref-swap-2',
+        toAmount: '62500',
+        hash: 'tron_swap_hash_xyz',
+      },
+      idempotencyKey: 'ref-swap-2',
+    });
+    outboxRepo.findPending.mockResolvedValue([row]);
+    (executionService.querySwapStatus as unknown as jest.Mock).mockReturnValue({
+      status: 'success',
+      toAmount: '62500',
+      hash: 'tron_swap_hash_xyz',
+    });
+    executionService.settleSwap.mockResolvedValue({
+      transactionId: 'txn-swap-2',
+      status: 'completed',
+    });
+
+    await service.tick();
+
+    expect(executionService.settleSwap).toHaveBeenCalledWith({
+      reference: 'ref-swap-2',
+      success: true,
+      toAmount: '62500',
+      hash: 'tron_swap_hash_xyz',
+    });
+    expect(outboxRepo.complete).toHaveBeenCalledWith(row.id);
+  });
+
+  it('refunds a swap row when querySwapStatus returns failed', async () => {
+    const row = makeRecord({
+      settlementType: 'swap',
+      payload: { reference: 'ref-swap-3' },
+      idempotencyKey: 'ref-swap-3',
+    });
+    outboxRepo.findPending.mockResolvedValue([row]);
+    (executionService.querySwapStatus as unknown as jest.Mock).mockReturnValue({
+      status: 'failed',
+    });
+    executionService.settleSwap.mockResolvedValue({
+      transactionId: 'txn-swap-3',
+      status: 'failed',
+    });
+
+    await service.tick();
+
+    expect(executionService.settleSwap).toHaveBeenCalledWith({
+      reference: 'ref-swap-3',
+      success: false,
     });
     expect(outboxRepo.complete).toHaveBeenCalledWith(row.id);
   });

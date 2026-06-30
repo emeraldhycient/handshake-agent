@@ -46,6 +46,7 @@ const HANDLED_TYPES = new Set([
   'processor_payout',
   'onchain_send',
   'processor_collection',
+  'swap',
 ]);
 
 // Statuses returned by settle methods that indicate the row is fully drained.
@@ -280,6 +281,66 @@ export class SettlementReconciliationService {
       );
       if (TERMINAL_STATUSES.has(result.status)) {
         terminalStatus = result.status;
+      }
+    } else if (row.settlementType === 'swap') {
+      // Swap phase 2: recover a missed Blockradar swap webhook (#8/#11).
+      //
+      // The swap provider exposes no terminal-status query, so querySwapStatus is
+      // fail-safe 'pending' unless a previously-processed webhook recorded the
+      // converted amount + hash into this outbox payload. We MUST NOT blind-refund
+      // a missed swap webhook: a swap that completed on-chain would credit nothing
+      // while the toAsset is already gone. Mirror the onchain_send decision tree:
+      //   'success' → settleSwap(success=true, toAmount, hash)
+      //   'failed'  → settleSwap(success=false) — refund
+      //   'pending' → leave the row open (markAttempt only, no complete)
+      const swapStatus = this.executionService.querySwapStatus(row.payload);
+
+      this.logger.log(
+        { outboxId: row.id, swapStatus: swapStatus.status },
+        'settlement-reconciliation: swap status',
+      );
+
+      if (swapStatus.status === 'success') {
+        const result = await this.executionService.settleSwap({
+          reference,
+          success: true,
+          toAmount: swapStatus.toAmount,
+          hash: swapStatus.hash,
+        });
+        this.logger.log(
+          {
+            outboxId: row.id,
+            txnId: result.transactionId,
+            status: result.status,
+          },
+          'settlement-reconciliation: settleSwap(success) result',
+        );
+        if (TERMINAL_STATUSES.has(result.status)) {
+          terminalStatus = result.status;
+        }
+      } else if (swapStatus.status === 'failed') {
+        const result = await this.executionService.settleSwap({
+          reference,
+          success: false,
+        });
+        this.logger.log(
+          {
+            outboxId: row.id,
+            txnId: result.transactionId,
+            status: result.status,
+          },
+          'settlement-reconciliation: settleSwap(failed) result',
+        );
+        if (TERMINAL_STATUSES.has(result.status)) {
+          terminalStatus = result.status;
+        }
+      } else {
+        // status === 'pending' — cannot confirm. Leave the row open: markAttempt
+        // was already called above; the webhook or a later tick will finalize.
+        this.logger.log(
+          { outboxId: row.id },
+          'settlement-reconciliation: swap still pending — leaving row open',
+        );
       }
     }
 

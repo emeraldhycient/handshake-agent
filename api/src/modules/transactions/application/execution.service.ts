@@ -105,6 +105,7 @@ import {
   SettlementInvalidStatusError,
   InsufficientBalanceError,
   ProviderUnavailableError,
+  SwapUnavailableError,
 } from '../domain/execution-errors';
 import { toScaled } from '../domain/ledger';
 import { resolveBaseRate } from './resolve-base-rate';
@@ -278,6 +279,20 @@ export interface SettleSwapResult {
   status: 'completed' | 'failed' | 'pending';
   receiptNumber?: string;
   userId?: string;
+}
+
+/**
+ * Output of `querySwapStatus` — used by the reconciler to decide whether to
+ * finalize, refund, or leave a pending `swap` outbox row open after a missed
+ * Blockradar swap webhook.
+ */
+export interface QuerySwapStatusOutput {
+  /** Normalised swap status. */
+  status: 'pending' | 'success' | 'failed';
+  /** Converted toAsset amount — present only on confirmed success. */
+  toAmount?: string;
+  /** On-chain tx hash — present only on confirmed success. */
+  hash?: string;
 }
 
 // The directive ref required to authorize a send execution (step-up auth).
@@ -521,20 +536,38 @@ export class ExecutionService {
     // Customer details: sourced from user KYC if available; safe fallbacks used
     // for optional fields (KYC names may be null — noted, not blocking).
     // TODO: when KycProfile is queryable from the engine, use real firstname/lastname.
-    const collection = await this.callProvider('createCollection', () =>
-      this.paymentProvider.createCollection({
-        amount: storedQuote.fiatAmount,
-        currency: storedQuote.fiatCurrency,
-        reference: idempotencyKey,
-        customer: {
-          // Safe fallback: use a synthetic email derived from userId.
-          // Real email will come from User.verifiedEmail in a future iteration.
-          email: `user+${userId}@handshake.internal`,
-          firstname: 'Handshake',
-          lastname: 'User',
-        },
-      }),
-    );
+    // FUNDS-SAFETY (§3.1): the buy reserve (Step 7) posts NO ledger entry — the
+    // user pays NGN later — so a createCollection failure means NO funds moved
+    // and there is nothing to refund. But the settling Transaction + consumed
+    // proposal/velocity are already committed; leaving it 'settling' with no VA
+    // is a zombie buy the user can never pay for and the reconciler cannot act on
+    // (no outbox row). Mark the Transaction failed on ANY createCollection
+    // failure (4xx OR 5xx — no double-spend risk because nothing was debited) so
+    // the idempotent-replay path does not return an empty payment block.
+    let collection: Awaited<ReturnType<IPaymentProvider['createCollection']>>;
+    try {
+      collection = await this.callProvider('createCollection', () =>
+        this.paymentProvider.createCollection({
+          amount: storedQuote.fiatAmount,
+          currency: storedQuote.fiatCurrency,
+          reference: idempotencyKey,
+          customer: {
+            // Safe fallback: use a synthetic email derived from userId.
+            // Real email will come from User.verifiedEmail in a future iteration.
+            email: `user+${userId}@handshake.internal`,
+            firstname: 'Handshake',
+            lastname: 'User',
+          },
+        }),
+      );
+    } catch (err: unknown) {
+      await this.transactionRepo.updateStatus(txn.id, 'failed', {
+        failedAt: now,
+        failureReason:
+          'virtual-account creation failed at execute (no funds moved)',
+      });
+      throw err;
+    }
 
     // 8c. Persist VA details into Transaction metadata so idempotent replay
     // can return the real VA without calling the provider again (C2).
@@ -942,14 +975,41 @@ export class ExecutionService {
       bankCode: beneficiary.bankCode,
       accountName: beneficiary.accountHolderName,
     };
-    const payout = await this.callProvider('createPayout', () =>
-      this.paymentProvider.createPayout({
-        amount: storedQuote.fiatAmount,
-        currency: storedQuote.fiatCurrency,
-        reference: idempotencyKey,
-        bankAccount: payoutBankAccount,
-      }),
-    );
+
+    // FUNDS-SAFETY (§3.1): the reserve (Step 9, user_wallet → clearing) is already
+    // committed. If createPayout is DEFINITIVELY rejected by the provider (HTTP
+    // 4xx — the request was rejected and the transfer was NEVER processed) we must
+    // refund the reserve and fail the transaction HERE: settleSellPayout is only
+    // ever reached via a webhook for a payout that was created, so for a rejected
+    // request it never fires, and no outbox row was enqueued — the user's USDT
+    // would be stranded in clearing forever. For an AMBIGUOUS failure (5xx /
+    // timeout / no HTTP status) the transfer MIGHT be in flight, so refunding
+    // would risk a double-payout; leave the tx 'settling' for the reconciler.
+    let payout: Awaited<ReturnType<IPaymentProvider['createPayout']>>;
+    try {
+      payout = await this.callProvider('createPayout', () =>
+        this.paymentProvider.createPayout({
+          amount: storedQuote.fiatAmount,
+          currency: storedQuote.fiatCurrency,
+          reference: idempotencyKey,
+          bankAccount: payoutBankAccount,
+        }),
+      );
+    } catch (err: unknown) {
+      if (this.isDefinitiveProviderRejection(err)) {
+        await this.settlementRepo.settleSellRefundAtomic({
+          transactionId: txn.id,
+          userId,
+          walletId: wallet.id,
+          cryptoAmount: storedQuote.cryptoAmount,
+          asset: storedQuote.asset,
+          failureReason:
+            'payout rejected by provider (definitive 4xx) — reserve refunded',
+          now,
+        });
+      }
+      throw err;
+    }
 
     // Persist providerRef into Transaction metadata for idempotent replay.
     await this.transactionRepo.mergeMetadata(txn.id, {
@@ -1988,6 +2048,24 @@ export class ExecutionService {
     const year = now.getFullYear().toString();
 
     if (success) {
+      // FUNDS-SAFETY (§3.1, #12): a swap.success payload that omits or zeroes the
+      // converted-amount field is MALFORMED. Crediting toAmount '0' would either
+      // throw inside the finalize $transaction (assertPositiveDecimal) — stranding
+      // the reserve in 'settling' — or credit nothing while completing the tx.
+      // Treat it as not-yet-settleable: preserve the reserve (no finalize, no
+      // refund) and return 'pending' so a corrected retry/webhook can finalize.
+      if (toAmount === undefined || toScaled(toAmount) <= 0n) {
+        this.logger.warn(
+          { transactionId: txn.id, reference, toAmount },
+          'settleSwap: success payload missing/zero toAmount — leaving reserve, returning pending',
+        );
+        return {
+          transactionId: txn.id,
+          status: 'pending',
+          userId: txn.userId,
+        };
+      }
+
       // ── Step 4a: Finalize — credit toAsset ──────────────────────────────────
       const { receiptNumber } =
         await this.settlementRepo.settleSwapFinalizeAtomic({
@@ -1996,7 +2074,8 @@ export class ExecutionService {
           walletId,
           fromAmount,
           fromAsset,
-          toAmount: toAmount ?? '0',
+          // Guarded above: toAmount is defined and positive on this path.
+          toAmount,
           toAsset,
           onChainTxHash: hash ?? '',
           now,
@@ -2027,6 +2106,47 @@ export class ExecutionService {
       status: 'failed',
       userId: txn.userId,
     };
+  }
+
+  /**
+   * Queries the terminal status of a swap for the reconciler (#8/#11) — used to
+   * safely handle a MISSED Blockradar swap webhook before deciding to finalize,
+   * refund, or leave a pending `swap` outbox row open.
+   *
+   * Invariant (§3.1): this method is READ-ONLY — it never moves money. The
+   * reconciler routes based on the result and calls `settleSwap` to act.
+   *
+   * The swap provider port exposes no terminal-status query (Blockradar swaps
+   * are webhook-driven only). So this method is FAIL-SAFE 'pending': it can
+   * confirm `success` only when a previously-processed webhook recorded the
+   * converted amount + hash into the outbox payload. Without that confirmation it
+   * returns 'pending' — NEVER 'failed'. This is deliberate: blind-refunding a
+   * swap that actually completed on-chain would credit nothing while the toAsset
+   * is already gone (platform loss), so an unconfirmable swap MUST stay open for
+   * a later webhook/retry rather than be refunded. (CLAUDE.md §3.1.)
+   *
+   * @param payload the SettlementOutbox payload for this swap row (may carry a
+   *   webhook-confirmed `toAmount`/`hash`).
+   */
+  querySwapStatus(
+    payload?: Record<string, unknown> | null,
+  ): QuerySwapStatusOutput {
+    const toAmount = payload?.toAmount;
+    const hash = payload?.hash;
+    if (
+      typeof toAmount === 'string' &&
+      toAmount.length > 0 &&
+      toScaled(toAmount) > 0n
+    ) {
+      return {
+        status: 'success',
+        toAmount,
+        ...(typeof hash === 'string' && hash.length > 0 ? { hash } : {}),
+      };
+    }
+    // No webhook-confirmed converted amount → cannot confirm. Fail-safe pending:
+    // leave the row open for the webhook or a later tick (never blind-refund).
+    return { status: 'pending' };
   }
 
   // ---------------------------------------------------------------------------
@@ -2255,6 +2375,17 @@ export class ExecutionService {
     try {
       return await fn();
     } catch (err: unknown) {
+      // #21/#22: SwapUnavailableError (Blockradar 404 / no-route) is a typed,
+      // NON-retryable "swap not available on this account" signal — it must NOT
+      // be clobbered into a retryable ProviderUnavailableError (502). Let it
+      // propagate unchanged so the execute path matches the proposal path's
+      // graceful semantics (web-chat surfaces a "swap isn't available" message).
+      if (err instanceof SwapUnavailableError) {
+        this.logger.warn(
+          `provider call '${operation}' returned SwapUnavailableError — propagating unchanged`,
+        );
+        throw err;
+      }
       this.logger.error(
         `provider call '${operation}' failed: ${err instanceof Error ? err.message : 'unknown error'}`,
       );
