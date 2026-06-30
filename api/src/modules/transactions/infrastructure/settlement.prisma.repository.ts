@@ -53,6 +53,7 @@ import {
   buildSwapReserveEntries,
   buildSwapFinalizeEntries,
   buildSwapRefundEntries,
+  toScaled,
 } from '../domain/ledger';
 import type {
   AccountKey,
@@ -853,6 +854,114 @@ async function writeVelocityIncrementsInSettle(
   });
 }
 
+/**
+ * Decrements an EXISTING active velocity counter (BUG 2 — reverse the reserve's
+ * increment when a tx fails + refunds). Decimal-safe via the ledger's `toScaled`.
+ *
+ * Rules (consistent with how KycGate reads velocity via getDailyUsage):
+ *  - No-op when the counter row does not exist or its window has already expired
+ *    (the spend it represented has aged out of the 24h window — nothing to undo,
+ *    and we must NOT resurrect a stale window or create a negative row).
+ *  - Clamp at 0 so a reversal can never drive a counter negative (defence against
+ *    a double-reversal or a reversal larger than the live counter).
+ *  - windowStart / windowEnd are left untouched: we only adjust currentValue.
+ */
+async function decrementVelocityCounterInSettle(
+  tx: Prisma.TransactionClient,
+  params: {
+    userId: string;
+    counterType: VelocityCounterType;
+    fiatCurrency: string;
+    delta: string;
+    now: Date;
+  },
+): Promise<void> {
+  const { userId, counterType, delta, now } = params;
+  const fiatCurrencyEnum = params.fiatCurrency as FiatCurrency;
+
+  const existing = await tx.velocityCounter.findUnique({
+    where: {
+      userId_counterType_fiatCurrency: {
+        userId,
+        counterType,
+        fiatCurrency: fiatCurrencyEnum,
+      },
+    },
+    select: { windowEnd: true, currentValue: true },
+  });
+
+  // Nothing to reverse: no counter, or its window already expired (the increment
+  // has aged out of the rolling 24h window KycGate reads).
+  if (existing === null || existing.windowEnd.getTime() <= now.getTime()) {
+    return;
+  }
+
+  const currentScaled = toScaled(
+    (existing.currentValue as { toString(): string }).toString(),
+  );
+  const deltaScaled = toScaled(delta);
+  // Clamp at 0 — a reversal must never drive the counter negative.
+  const nextScaled =
+    currentScaled - deltaScaled < 0n ? 0n : currentScaled - deltaScaled;
+
+  await tx.velocityCounter.update({
+    where: {
+      userId_counterType_fiatCurrency: {
+        userId,
+        counterType,
+        fiatCurrency: fiatCurrencyEnum,
+      },
+    },
+    data: {
+      currentValue: fromScaledDecimalString(nextScaled),
+    },
+  });
+}
+
+/**
+ * Reverses BOTH velocity counters (amount_24h and count_24h) for a failed +
+ * refunded tx so it stops consuming the user's daily spend/limit (BUG 2).
+ */
+async function reverseVelocityIncrementsInSettle(
+  tx: Prisma.TransactionClient,
+  reversal: {
+    userId: string;
+    fiatCurrency: string;
+    fiatAmountStr: string;
+    now: Date;
+  },
+): Promise<void> {
+  const { userId, fiatCurrency, fiatAmountStr, now } = reversal;
+  await decrementVelocityCounterInSettle(tx, {
+    userId,
+    counterType: VelocityCounterType.amount_24h,
+    fiatCurrency,
+    delta: fiatAmountStr,
+    now,
+  });
+  await decrementVelocityCounterInSettle(tx, {
+    userId,
+    counterType: VelocityCounterType.count_24h,
+    fiatCurrency,
+    delta: '1',
+    now,
+  });
+}
+
+/** Reconstructs a canonical decimal string from a 10^18-scaled bigint (mirror of ledger.fromScaled). */
+function fromScaledDecimalString(scaled: bigint): string {
+  const SCALE = 10n ** 18n;
+  const isNeg = scaled < 0n;
+  const abs = isNeg ? -scaled : scaled;
+  const whole = abs / SCALE;
+  const frac = abs % SCALE;
+  if (frac === 0n) {
+    return (isNeg ? '-' : '') + whole.toString();
+  }
+  const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
+  return (isNeg ? '-' : '') + whole.toString() + '.' + fracStr;
+}
+
 // ---------------------------------------------------------------------------
 // Repository
 // ---------------------------------------------------------------------------
@@ -922,6 +1031,28 @@ export class SettlementPrismaRepository implements ISettlementRepository {
             accountId: ACCOUNT_IDS.USDT_TREASURY,
           },
         ]);
+
+        // ── 0b. In-atomic idempotency re-check (BUG 1: concurrent settle) ──────
+        // The ExecutionService idempotency guard reads status OUTSIDE this atomic.
+        // Two concurrent settleBuyPayment for the same buy (overlapping reconciler
+        // ticks, or a webhook + a tick) both observe status='settling' and both
+        // call settleBuyAtomic. The advisory lock above serializes them, but
+        // WITHOUT this re-check the second runner re-posts a full ledger set
+        // (double credit) and a second Receipt — colliding on the unique
+        // Receipt.transactionId (P2002) or the (accountType, accountId, sequence)
+        // ledger constraint. Re-read status under the lock: if a peer already
+        // completed this buy, no-op and return its receipt number. (CLAUDE.md §3.1)
+        const current = await tx.transaction.findUnique({
+          where: { id: transactionId },
+          select: { status: true },
+        });
+        if (current?.status === TransactionStatus.completed) {
+          const existing = await tx.receipt.findUnique({
+            where: { transactionId },
+            select: { receiptNumber: true },
+          });
+          return { receiptNumber: existing?.receiptNumber ?? '' };
+        }
 
         // ── 1. Read current account states (inside transaction for isolation) ─
         // Cast the interactive tx client to PrismaService for our helper —
@@ -1436,7 +1567,15 @@ export class SettlementPrismaRepository implements ISettlementRepository {
    *   4. Create CompensationRecord (status=pending, reason=settlement_failed).
    */
   async settleSellRefundAtomic(input: SettleSellRefundInput): Promise<void> {
-    const { transactionId, userId, walletId, cryptoAmount, asset, now } = input;
+    const {
+      transactionId,
+      userId,
+      walletId,
+      cryptoAmount,
+      asset,
+      now,
+      velocityReversal,
+    } = input;
 
     await this.prisma.$transaction(
       async (tx) => {
@@ -1448,6 +1587,13 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           },
           { accountType: 'user_wallet', accountId: walletId },
         ]);
+
+        // ── 0b. Reverse velocity (BUG 2) — a failed+refunded tx must not keep
+        // consuming the user's daily spend/limit. Decrements the same counters
+        // the reserve incremented; no-op if the window has aged out.
+        if (velocityReversal !== undefined) {
+          await reverseVelocityIncrementsInSettle(tx, velocityReversal);
+        }
 
         // ── 1. Read current account states ────────────────────────────────────
         // WN-4: pass asset so crypto leg states are read with the correct currency key.
@@ -1867,6 +2013,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       asset,
       failureReason,
       now,
+      velocityReversal,
     } = input;
 
     await this.prisma.$transaction(
@@ -1879,6 +2026,11 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           },
           { accountType: 'user_wallet', accountId: walletId },
         ]);
+
+        // ── 0b. Reverse velocity (BUG 2) — see settleSellRefundAtomic. ─────────
+        if (velocityReversal !== undefined) {
+          await reverseVelocityIncrementsInSettle(tx, velocityReversal);
+        }
 
         // ── 1. Read current account states ────────────────────────────────────
         // WN-4: pass asset so crypto leg states are read with the correct currency key.
@@ -2238,6 +2390,7 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       fromAsset,
       failureReason,
       now,
+      velocityReversal,
     } = input;
 
     await this.prisma.$transaction(
@@ -2247,6 +2400,11 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           { accountType: 'clearing', accountId: ACCOUNT_IDS.SWAP_CLEARING },
           { accountType: 'user_wallet', accountId: walletId },
         ]);
+
+        // ── 0b. Reverse velocity (BUG 2) — see settleSellRefundAtomic. ─────────
+        if (velocityReversal !== undefined) {
+          await reverseVelocityIncrementsInSettle(tx, velocityReversal);
+        }
 
         // ── 1. Read current account states ────────────────────────────────────
         const accountStates = await fetchSwapRefundAccountStates(

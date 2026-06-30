@@ -1452,6 +1452,10 @@ const STUB_SELL_TXN: TransactionRecord = {
     asset: 'USDT',
     cryptoAmount: '16.000000',
     netFiatAmount: '24600',
+    fiatCurrency: 'NGN',
+    // BUG 2 — velocity contribution persisted at reserve, read back on refund.
+    velocityFiatAmount: '24600',
+    velocityFiatCurrency: 'NGN',
     beneficiaryId: BENEFICIARY_ID,
     walletId: 'wallet-id',
     providerRef: PROVIDER_REF,
@@ -1725,6 +1729,36 @@ describe('ExecutionService.executeSell', () => {
         txnData: expect.objectContaining({
           metadata: expect.objectContaining({
             providerRef: SELL_IDEMPOTENCY_KEY,
+          }),
+        }),
+      }),
+    );
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+  });
+
+  // ── BUG 2: velocity contribution persisted to metadata for later reversal ──
+
+  it('persists velocityFiatAmount + velocityFiatCurrency in atomic metadata so a later refund can reverse the daily-spend it consumed', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
+    const paymentProvider = makeSellPaymentProvider();
+
+    const svc = buildSellService({ settlementRepo, paymentProvider });
+
+    await svc.executeSell(SELL_BASE_INPUT);
+
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    expect(
+      settlementRepo.createSellSettlingWithReserveAtomic,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        txnData: expect.objectContaining({
+          metadata: expect.objectContaining({
+            velocityFiatAmount: expect.any(String),
+            velocityFiatCurrency: 'NGN',
           }),
         }),
       }),
@@ -2351,6 +2385,19 @@ describe('ExecutionService.settleSellPayout', () => {
     expect(result.status).toBe('failed');
     expect(settlementRepo.settleSellRefundAtomic).toHaveBeenCalledTimes(1);
     expect(settlementRepo.settleSellFinalizeAtomic).not.toHaveBeenCalled();
+
+    // BUG 2 — the refund reverses the velocity this sell consumed at reserve,
+    // using the exact amount/currency persisted in metadata.
+    expect(settlementRepo.settleSellRefundAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest objectContaining matcher is typed `any`
+        velocityReversal: expect.objectContaining({
+          userId: USER_ID,
+          fiatCurrency: 'NGN',
+          fiatAmountStr: '24600',
+        }),
+      }),
+    );
   });
 
   // ── Idempotent: already completed ─────────────────────────────────────────
@@ -2557,6 +2604,9 @@ const STUB_SEND_TXN: TransactionRecord = {
     toAddress: SEND_TO_ADDRESS,
     network: 'TRON',
     providerRef: SEND_PROVIDER_REF,
+    // BUG 2 — velocity contribution persisted at reserve, read back on refund.
+    velocityFiatAmount: '16000',
+    velocityFiatCurrency: 'NGN',
   },
   processorTxRef: null,
   pinVerifiedAt: FIXED_NOW,
@@ -3664,6 +3714,18 @@ describe('ExecutionService.settleSendOnChain', () => {
     expect(result.status).toBe('failed');
     expect(settlementRepo.settleSendRefundAtomic).toHaveBeenCalledTimes(1);
     expect(settlementRepo.settleSendFinalizeAtomic).not.toHaveBeenCalled();
+
+    // BUG 2 — the refund reverses the velocity this send consumed at reserve.
+    expect(settlementRepo.settleSendRefundAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest objectContaining matcher is typed `any`
+        velocityReversal: expect.objectContaining({
+          userId: USER_ID,
+          fiatCurrency: 'NGN',
+          fiatAmountStr: '16000',
+        }),
+      }),
+    );
   });
 
   // ── Already completed → idempotent ────────────────────────────────────────
@@ -3901,6 +3963,9 @@ const STUB_SWAP_TXN: TransactionRecord = {
     toAmount: '62500',
     walletId: 'wallet-id',
     providerSwapId: SWAP_PROVIDER_REF,
+    // BUG 2 — velocity contribution persisted at reserve, read back on refund.
+    velocityFiatAmount: '64000',
+    velocityFiatCurrency: 'NGN',
   },
   processorTxRef: null,
   pinVerifiedAt: FIXED_NOW,
@@ -4315,6 +4380,18 @@ describe('ExecutionService.settleSwap', () => {
     expect(result.status).toBe('failed');
     expect(settlementRepo.settleSwapRefundAtomic).toHaveBeenCalledWith(
       expect.objectContaining({ fromAmount: '40', fromAsset: 'USDT' }),
+    );
+
+    // BUG 2 — the refund reverses the velocity this swap consumed at reserve.
+    expect(settlementRepo.settleSwapRefundAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest objectContaining matcher is typed `any`
+        velocityReversal: expect.objectContaining({
+          userId: USER_ID,
+          fiatCurrency: 'NGN',
+          fiatAmountStr: '64000',
+        }),
+      }),
     );
   });
 

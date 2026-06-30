@@ -459,6 +459,63 @@ describe('SettlementReconciliationService', () => {
     );
   });
 
+  // ── Re-entrancy guard: overlapping ticks (BUG 1, candidate b) ─────────────
+
+  it('skips an overlapping tick while the previous tick is still running', async () => {
+    const row = makeRecord({
+      settlementType: 'processor_collection',
+      payload: { reference: 'ref-buy-reentrant' },
+      idempotencyKey: 'ref-buy-reentrant',
+    });
+
+    // Hold the first tick inside processRow until we release it, so the second
+    // tick fires while the first is still running.
+    let releaseSettle!: () => void;
+    const settleGate = new Promise<void>((resolve) => {
+      releaseSettle = resolve;
+    });
+    outboxRepo.findPending.mockResolvedValue([row]);
+    executionService.settleBuyPayment.mockImplementation(async () => {
+      await settleGate;
+      return { transactionId: 'txn-1', status: 'completed' };
+    });
+
+    // Start tick 1 (does not resolve until we release the gate).
+    const tick1 = service.tick();
+    // Allow tick1 to reach the awaited settle call.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Tick 2 fires while tick1 is mid-flight — it must skip immediately.
+    await service.tick();
+
+    // The overlapping tick did no work: findPending called exactly once (tick1).
+    expect(outboxRepo.findPending).toHaveBeenCalledTimes(1);
+
+    // Release tick1 and let it finish.
+    releaseSettle();
+    await tick1;
+
+    // settleBuyPayment was driven exactly once (no concurrent double-process).
+    expect(executionService.settleBuyPayment).toHaveBeenCalledTimes(1);
+
+    // After tick1 finishes, the guard is released — a later tick runs normally.
+    await service.tick();
+    expect(outboxRepo.findPending).toHaveBeenCalledTimes(2);
+  });
+
+  it('releases the re-entrancy guard even when a tick throws before draining', async () => {
+    // findPending throws → tick body fails before the per-row try/catch.
+    outboxRepo.findPending.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(service.tick()).rejects.toThrow('db down');
+
+    // Guard released in finally → the next tick proceeds (not wedged).
+    outboxRepo.findPending.mockResolvedValue([]);
+    await expect(service.tick()).resolves.toBeUndefined();
+    expect(outboxRepo.findPending).toHaveBeenCalledTimes(2);
+  });
+
   // ── Unknown settlement type: log warn + skip ──────────────────────────────
 
   it('skips a row with an unknown settlementType without throwing', async () => {

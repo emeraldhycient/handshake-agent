@@ -92,6 +92,7 @@ import {
 import {
   SETTLEMENT_REPOSITORY,
   type ISettlementRepository,
+  type VelocityReversal,
 } from './ports/settlement.repository.port';
 import {
   LEDGER_REPOSITORY,
@@ -939,6 +940,11 @@ export class ExecutionService {
             // the buy path both persist it; this atomic path must too, or the
             // sell finalize crashes on `fiatCurrency.toLowerCase()`.
             fiatCurrency: storedQuote.fiatCurrency,
+            // BUG 2 — persist the EXACT velocity contribution made at reserve so
+            // a later refund (settleSellPayout failure path) can reverse it
+            // byte-for-byte, even if config/rates drift between execute & settle.
+            velocityFiatAmount: storedQuote.fiatAmount,
+            velocityFiatCurrency: storedQuote.fiatCurrency,
             beneficiaryId,
             walletId: wallet.id,
             // providerRef is written atomically here because we pass idempotencyKey
@@ -1006,6 +1012,14 @@ export class ExecutionService {
           failureReason:
             'payout rejected by provider (definitive 4xx) — reserve refunded',
           now,
+          // BUG 2 — reverse the velocity incremented in the atomic above so a
+          // definitively-rejected sell does not consume the user's daily limit.
+          velocityReversal: {
+            userId,
+            fiatCurrency: storedQuote.fiatCurrency,
+            fiatAmountStr: storedQuote.fiatAmount,
+            now,
+          },
         });
       }
       throw err;
@@ -1145,6 +1159,8 @@ export class ExecutionService {
       asset: sellAsset,
       failureReason: `payout verifyPayout returned status '${verifyResult.status}'`,
       now,
+      // BUG 2 — reverse the daily-spend velocity this sell consumed at reserve.
+      velocityReversal: this.buildVelocityReversal(txn.userId, meta, now),
     });
 
     // ── Step 6b: Notify (failure) — errors are swallowed, never break settlement.
@@ -1473,6 +1489,12 @@ export class ExecutionService {
             walletId,
             toAddress,
             network,
+            // BUG 2 — persist the EXACT velocity contribution made at reserve so
+            // the refund path (settleSendOnChain failure / execute 4xx) can
+            // reverse it byte-for-byte. Send has no quote; the NGN-equivalent is
+            // computed here from cryptoAmount × baseRate.
+            velocityFiatAmount: String(ngnEquivalent),
+            velocityFiatCurrency: baseFiat,
           },
           pinVerifiedAt: now,
         },
@@ -1550,6 +1572,14 @@ export class ExecutionService {
           failureReason:
             'on-chain withdrawal rejected by provider (definitive 4xx) — reserve refunded',
           now,
+          // BUG 2 — reverse the velocity incremented in the atomic above so a
+          // definitively-rejected send does not consume the user's daily limit.
+          velocityReversal: {
+            userId,
+            fiatCurrency: baseFiat,
+            fiatAmountStr: String(ngnEquivalent),
+            now,
+          },
         });
       }
       throw err;
@@ -1730,6 +1760,8 @@ export class ExecutionService {
       asset: sendAsset,
       failureReason: 'on-chain withdrawal failed',
       now,
+      // BUG 2 — reverse the daily-spend velocity this send consumed at reserve.
+      velocityReversal: this.buildVelocityReversal(txn.userId, meta, now),
     });
 
     // ── Step 5b: Notify (failure) — errors are swallowed, never break settlement.
@@ -1919,6 +1951,10 @@ export class ExecutionService {
             fromAmount,
             toAmount: params.toAmount ?? '0',
             walletId,
+            // BUG 2 — persist the EXACT velocity contribution made at reserve so
+            // the refund path (settleSwap failure / execute 4xx) can reverse it.
+            velocityFiatAmount: ngnEquivalentStr,
+            velocityFiatCurrency: baseFiat,
           },
           pinVerifiedAt: now,
         },
@@ -1965,6 +2001,14 @@ export class ExecutionService {
           failureReason:
             'swap rejected by provider (definitive 4xx) — reserve refunded',
           now,
+          // BUG 2 — reverse the velocity incremented in the atomic above so a
+          // definitively-rejected swap does not consume the user's daily limit.
+          velocityReversal: {
+            userId,
+            fiatCurrency: baseFiat,
+            fiatAmountStr: ngnEquivalentStr,
+            now,
+          },
         });
       }
       throw err;
@@ -2099,6 +2143,8 @@ export class ExecutionService {
       fromAsset,
       failureReason: 'swap provider returned failure',
       now,
+      // BUG 2 — reverse the daily-spend velocity this swap consumed at reserve.
+      velocityReversal: this.buildVelocityReversal(txn.userId, meta, now),
     });
 
     return {
@@ -2391,6 +2437,34 @@ export class ExecutionService {
       );
       throw new ProviderUnavailableError(operation, err);
     }
+  }
+
+  /**
+   * Builds the velocity reversal for a refund from a Transaction's metadata
+   * (BUG 2). At reserve we persisted `velocityFiatAmount` + `velocityFiatCurrency`
+   * — the EXACT counter contribution this tx made — so the refund can decrement
+   * the same amount even if config/rates drift between execute and settle.
+   *
+   * Returns undefined for legacy rows that pre-date these metadata fields: a
+   * refund then simply skips the reversal (no-op) rather than guessing an amount
+   * and risking an over- or under-reversal of the user's daily counter.
+   */
+  private buildVelocityReversal(
+    userId: string,
+    meta: Record<string, unknown>,
+    now: Date,
+  ): VelocityReversal | undefined {
+    const fiatAmountStr = meta.velocityFiatAmount;
+    const fiatCurrency = meta.velocityFiatCurrency;
+    if (
+      typeof fiatAmountStr !== 'string' ||
+      fiatAmountStr.length === 0 ||
+      typeof fiatCurrency !== 'string' ||
+      fiatCurrency.length === 0
+    ) {
+      return undefined;
+    }
+    return { userId, fiatCurrency, fiatAmountStr, now };
   }
 
   /**

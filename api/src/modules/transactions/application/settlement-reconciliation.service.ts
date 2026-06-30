@@ -61,6 +61,20 @@ export class SettlementReconciliationService {
   private readonly logger = new Logger(SettlementReconciliationService.name);
   private readonly reconciliationConfig: ReconciliationConfig;
 
+  /**
+   * Re-entrancy guard (BUG 1, candidate b). The @Cron tick fires on a fixed
+   * schedule regardless of whether the previous tick has finished. A slow batch
+   * (provider latency, large backlog) can run longer than the tick interval, so
+   * a new tick would start while the previous one is still draining the SAME
+   * pending rows — driving two concurrent settle calls for one reference. The
+   * settle atomics are now idempotent under their advisory lock (so this is not
+   * the sole defence), but skipping a re-entrant tick avoids the wasted work and
+   * the concurrency entirely. In-process flag is sufficient: a single API
+   * instance owns the cron; if the deployment is scaled the settle idempotency
+   * (in-atomic status re-check) remains the cross-instance guarantee.
+   */
+  private isRunning = false;
+
   constructor(
     @Inject(SETTLEMENT_OUTBOX_REPOSITORY)
     private readonly outboxRepo: ISettlementOutboxRepository,
@@ -88,57 +102,73 @@ export class SettlementReconciliationService {
    */
   @Cron('*/2 * * * *', { name: 'settlement-reconciliation' })
   async tick(): Promise<void> {
-    const { gracePeriodSec, batchSize } = this.reconciliationConfig;
-
-    const pending = await this.outboxRepo.findPending({
-      olderThanSec: gracePeriodSec,
-      limit: batchSize,
-    });
-
-    if (pending.length === 0) {
-      this.logger.debug(
-        'settlement-reconciliation: no pending rows past grace window',
+    // Re-entrancy guard (BUG 1, candidate b): if the previous tick is still
+    // draining, skip this one rather than concurrently re-process the same
+    // pending rows. The flag is released in `finally` so a thrown batch never
+    // wedges the reconciler permanently.
+    if (this.isRunning) {
+      this.logger.warn(
+        'settlement-reconciliation: previous tick still running — skipping this tick',
       );
       return;
     }
+    this.isRunning = true;
 
-    this.logger.log(
-      `settlement-reconciliation: processing ${pending.length} pending outbox row(s)`,
-    );
+    try {
+      const { gracePeriodSec, batchSize } = this.reconciliationConfig;
 
-    let processed = 0;
-    let skipped = 0;
+      const pending = await this.outboxRepo.findPending({
+        olderThanSec: gracePeriodSec,
+        limit: batchSize,
+      });
 
-    for (const row of pending) {
-      if (!HANDLED_TYPES.has(row.settlementType)) {
-        this.logger.warn(
-          { outboxId: row.id, settlementType: row.settlementType },
-          'settlement-reconciliation: unknown settlementType — skipped',
+      if (pending.length === 0) {
+        this.logger.debug(
+          'settlement-reconciliation: no pending rows past grace window',
         );
-        skipped++;
-        continue;
+        return;
       }
 
-      try {
-        await this.processRow(row);
-        processed++;
-      } catch (err: unknown) {
-        this.logger.error(
-          {
-            outboxId: row.id,
-            settlementType: row.settlementType,
-            transactionId: row.transactionId,
-            err,
-          },
-          'settlement-reconciliation: row failed — continuing batch',
-        );
-        // Do NOT rethrow — one failing row must not abort the rest of the batch.
+      this.logger.log(
+        `settlement-reconciliation: processing ${pending.length} pending outbox row(s)`,
+      );
+
+      let processed = 0;
+      let skipped = 0;
+
+      for (const row of pending) {
+        if (!HANDLED_TYPES.has(row.settlementType)) {
+          this.logger.warn(
+            { outboxId: row.id, settlementType: row.settlementType },
+            'settlement-reconciliation: unknown settlementType — skipped',
+          );
+          skipped++;
+          continue;
+        }
+
+        try {
+          await this.processRow(row);
+          processed++;
+        } catch (err: unknown) {
+          this.logger.error(
+            {
+              outboxId: row.id,
+              settlementType: row.settlementType,
+              transactionId: row.transactionId,
+              err,
+            },
+            'settlement-reconciliation: row failed — continuing batch',
+          );
+          // Do NOT rethrow — one failing row must not abort the rest of the batch.
+        }
       }
+
+      this.logger.log(
+        `settlement-reconciliation: done — processed=${processed} skipped=${skipped} total=${pending.length}`,
+      );
+    } finally {
+      this.isRunning = false;
     }
-
-    this.logger.log(
-      `settlement-reconciliation: done — processed=${processed} skipped=${skipped} total=${pending.length}`,
-    );
   }
 
   // ---------------------------------------------------------------------------
