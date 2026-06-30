@@ -173,7 +173,25 @@ export class KycGateService {
     const scaledTxAmount = toScaled(fiatAmount);
     const scaledPerTxMax = toScaled(String(tierLimits.perTxFiatMax));
 
-    // 4. Per-transaction amount check (BigInt-exact).
+    // 4a. Positive-amount guard — fail closed on a non-positive fiat-equivalent
+    // (finding #20). BUY/SELL are protected incidentally by the quote domain,
+    // but SEND/SWAP route their fiat-equivalent straight through this gate, so a
+    // zero/negative amount would otherwise pass BOTH the tier and velocity checks
+    // (and increment the velocity counters with a 0 contribution). The money gate
+    // must never pass a non-positive amount regardless of which path called it
+    // (§3.1 / §3.3). Reuse TierLimitExceededError so the global filter maps it to
+    // a clean 403 (a non-positive amount is not a permitted transaction value);
+    // requestedAmount carries the offending value, limitAmount the per-tx cap.
+    if (scaledTxAmount <= 0n) {
+      throw new TierLimitExceededError(
+        Number(fiatAmount),
+        tierLimits.perTxFiatMax,
+        user.kycTier,
+        fiatCurrency,
+      );
+    }
+
+    // 4b. Per-transaction amount check (BigInt-exact).
     if (scaledTxAmount > scaledPerTxMax) {
       // Expose the original values for the error payload; convert back to numbers
       // via Number() only for the error object (not for the comparison itself).

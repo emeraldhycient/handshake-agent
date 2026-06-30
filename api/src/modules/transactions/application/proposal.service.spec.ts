@@ -1554,6 +1554,60 @@ describe('ProposalService.createSwapProposal', () => {
     ).rejects.toThrow(SwapSameAssetError);
   });
 
+  it('SwapSameAssetError carries the stable SWAP_SAME_ASSET code (finding #17)', async () => {
+    // The stable code lets the global DomainExceptionFilter map this to a clean
+    // 422 instead of an opaque 500.
+    const svc = makeSwapSvc();
+    await expect(
+      svc.createSwapProposal({
+        ...BASE_SWAP_INPUT,
+        fromAsset: 'USDT',
+        toAsset: 'USDT',
+      }),
+    ).rejects.toMatchObject({ code: 'SWAP_SAME_ASSET' });
+  });
+
+  it('fails closed when swap.spreadBps drives the effective rate to <= 0 (finding #27)', async () => {
+    // A spread >= 100% (spreadBps >= 10000) would yield a 0/negative effective
+    // rate and a 0/negative toAmount — a 0-value swap that bypasses the gate.
+    // The engine must fail closed on this misconfiguration rather than quote 0.
+    const configService = {
+      get: jest.fn((key: string) => {
+        if (key === 'swap') return { spreadBps: 10000, maxDriftBps: 50 };
+        if (key === 'pricing')
+          return { assets: { USDT: { baseRates: { NGN: 1600 } } } };
+        if (key === 'compliance')
+          return { travelRuleThresholds: { NGN: 1_000_000 } };
+        return undefined;
+      }),
+    };
+    const proposalRepo = makeProposalRepo(FIXED_SWAP_PROPOSAL_ID);
+    const svc = makeSwapSvc({ configService, proposalRepo });
+
+    await expect(svc.createSwapProposal(BASE_SWAP_INPUT)).rejects.toThrow(
+      BaseRateMisconfiguredError,
+    );
+    // Never persists a 0-value swap proposal.
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when swap.spreadBps exceeds 100% (negative effective rate)', async () => {
+    const configService = {
+      get: jest.fn((key: string) => {
+        if (key === 'swap') return { spreadBps: 12000, maxDriftBps: 50 };
+        if (key === 'pricing')
+          return { assets: { USDT: { baseRates: { NGN: 1600 } } } };
+        if (key === 'compliance')
+          return { travelRuleThresholds: { NGN: 1_000_000 } };
+        return undefined;
+      }),
+    };
+    const svc = makeSwapSvc({ configService });
+    await expect(svc.createSwapProposal(BASE_SWAP_INPUT)).rejects.toThrow(
+      BaseRateMisconfiguredError,
+    );
+  });
+
   it('rejects when ledger balance < fromAmount (InsufficientBalanceError)', async () => {
     const ledgerRepo = makeLedgerRepo('10.0'); // balance 10, need 40
     const svc = makeSwapSvc({ ledgerRepo });

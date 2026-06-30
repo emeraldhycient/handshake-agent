@@ -33,6 +33,7 @@ import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.
 import { WalletService } from '../../wallets/application/wallet.service';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import {
+  BaseRateMisconfiguredError,
   InsufficientBalanceError,
   SwapSameAssetError,
 } from '../domain/execution-errors';
@@ -727,11 +728,27 @@ export class ProposalService {
     const swapConfig = this.configService.get<SwapConfig>('swap');
     const spreadBps = swapConfig?.spreadBps ?? 0;
     // effective rate = provider rate × (1 - spreadBps / 10000)
-    // Use BigInt arithmetic to avoid float drift on the rate.
+    // Exact integer/BigInt math — multiply by the integer (10000 - spreadBps)
+    // then divide by 10000, instead of float-converting `1 - spreadBps/10000`
+    // to a string (which introduced float drift and could not represent the
+    // misconfiguration boundary precisely — finding #27).
     const providerRateScaled = toScaled(swapQuote.rate);
     const SCALE = 10n ** 18n;
+    const SPREAD_DENOM = 10_000n;
+    const spreadMultiplierNum = SPREAD_DENOM - BigInt(spreadBps);
+    // Fail closed if the spread drives the effective rate to <= 0 (spreadBps
+    // >= 100%, i.e. >= 10000). A 0/negative rate would otherwise quote a
+    // 0/negative toAmount — a 0-value swap that bypasses the KYC/velocity gate
+    // and debits the user for nothing (§3.1). Treat it as a pricing
+    // misconfiguration rather than producing a degenerate quote.
+    if (spreadMultiplierNum <= 0n || providerRateScaled <= 0n) {
+      throw new BaseRateMisconfiguredError(
+        fromAsset,
+        this.assetRegistry.defaultFiat(),
+      );
+    }
     const effectiveRateScaled =
-      (providerRateScaled * toScaled(String(1 - spreadBps / 10_000))) / SCALE;
+      (providerRateScaled * spreadMultiplierNum) / SPREAD_DENOM;
     // Convert back to a decimal string (2dp for rates).
     const isNegRate = effectiveRateScaled < 0n;
     const absRate = isNegRate ? -effectiveRateScaled : effectiveRateScaled;
