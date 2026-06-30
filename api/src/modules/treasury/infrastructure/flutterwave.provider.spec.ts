@@ -234,6 +234,32 @@ describe('FlutterwaveProvider', () => {
       await expect(provider.createCollection(INPUT)).rejects.toThrow(/401/);
     });
 
+    it('attaches httpStatus STRUCTURALLY on a non-2xx (so the engine refunds on a definitive 4xx, not a 5xx/network)', async () => {
+      const axiosErr = Object.assign(new Error('Bad Request'), {
+        response: {
+          status: 400,
+          data: {
+            status: 'error',
+            message: 'merchant is not enabled to make transfers',
+          },
+        },
+        isAxiosError: true,
+      });
+      http.post.mockReturnValue(throwError(() => axiosErr));
+
+      await expect(provider.createCollection(INPUT)).rejects.toMatchObject({
+        httpStatus: 400,
+      });
+    });
+
+    it('does NOT attach httpStatus on a network error (no axios response) — ambiguous, leave settling', async () => {
+      http.post.mockReturnValue(throwError(() => new Error('ECONNRESET')));
+      const netErr = await provider
+        .createCollection(INPUT)
+        .catch((e: unknown) => e);
+      expect((netErr as { httpStatus?: number }).httpStatus).toBeUndefined();
+    });
+
     it('re-throws non-Flutterwave errors as-is', async () => {
       http.post.mockReturnValue(throwError(() => new Error('Network timeout')));
 

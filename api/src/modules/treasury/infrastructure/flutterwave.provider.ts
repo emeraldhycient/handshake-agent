@@ -333,15 +333,26 @@ export class FlutterwaveProvider implements IPaymentProvider {
   /**
    * Translates an Axios rejection into a descriptive Error. Flutterwave v3
    * returns error bodies with a `message` field on non-2xx responses.
+   *
+   * The HTTP status is preserved STRUCTURALLY (as an `httpStatus` property), not
+   * only in the message, so the execution engine can distinguish a DEFINITIVE
+   * client rejection (4xx — collection/payout NOT created) from an ambiguous
+   * 5xx/network failure and refund the reserve safely (no double-spend). Mirrors
+   * BlockradarProvider.wrapError; consumed by ExecutionService.extractHttpStatus.
+   * Network errors (no axios `response`) leave httpStatus undefined → ambiguous.
    */
   private wrapError(operation: string, err: unknown): Error {
     const axiosErr = err as AxiosError<FlutterwaveErrorBody>;
     const body = axiosErr?.response?.data;
+    const httpStatus = axiosErr?.response?.status;
     if (body?.message) {
-      const status = axiosErr.response?.status ?? 'unknown';
-      return new Error(
-        `Flutterwave ${operation} error (HTTP ${status}): ${body.message}`,
+      const wrapped = new Error(
+        `Flutterwave ${operation} error (HTTP ${httpStatus ?? 'unknown'}): ${body.message}`,
       );
+      if (httpStatus !== undefined) {
+        Object.assign(wrapped, { httpStatus });
+      }
+      return wrapped;
     }
     return err instanceof Error ? err : new Error(String(err));
   }
