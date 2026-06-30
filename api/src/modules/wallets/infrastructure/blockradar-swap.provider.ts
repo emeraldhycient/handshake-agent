@@ -243,22 +243,30 @@ export class BlockradarSwapProvider implements ISwapProvider {
    * Translates an Axios rejection into a descriptive Error.
    * Blockradar returns error bodies with a `message` field on non-2xx responses.
    *
-   * HTTP 404 is treated as `SwapUnavailableError` — Blockradar uses 404 to
-   * indicate the wallet is not found or not enrolled for the swap feature (e.g.
-   * testnet accounts, feature not yet activated on this Blockradar account).
-   * This is structurally different from a transient outage; the caller (web-chat /
-   * WhatsApp) should surface "Swap isn't available right now" rather than a 502.
+   * Two non-transient cases become `SwapUnavailableError` so the caller
+   * (web-chat / WhatsApp) surfaces a graceful "Swap isn't available right now"
+   * instead of a 500/502:
+   *   - HTTP 404: wallet not found / swap feature not enrolled on this account
+   *     (e.g. testnet, feature not yet activated).
+   *   - HTTP 400 on getQuote: Blockradar's "No swap quotes available" response —
+   *     no route/liquidity for this pair+amount. No funds move at quote time, so
+   *     this is an availability outcome, not a server error.
+   * A 5xx stays a plain Error (transient outage → retryable / 502 upstream).
    */
   private wrapError(operation: string, err: unknown): Error {
     const axiosErr = err as AxiosError<BlockradarErrorBody>;
     const httpStatus = axiosErr?.response?.status;
     const body = axiosErr?.response?.data;
 
-    if (httpStatus === 404) {
-      // Blockradar 404 on swap endpoints = wallet not found or swap not active.
-      const providerMsg = body?.message ?? 'Wallet not found or not active';
+    if (
+      httpStatus === 404 ||
+      (operation === 'getQuote' && httpStatus === 400)
+    ) {
+      // 404 = wallet not found / swap not active; getQuote 400 = no quote
+      // available for this pair+amount. Both mean the user cannot swap now.
+      const providerMsg = body?.message ?? 'Swap not available';
       return new SwapUnavailableError(
-        `Swap not available on this account: ${providerMsg}`,
+        `Swap unavailable (${operation}): ${providerMsg}`,
       );
     }
 

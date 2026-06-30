@@ -306,6 +306,25 @@ describe('BlockradarSwapProvider', () => {
       await expect(rejection).rejects.toThrow('Wallet not found or not active');
     });
 
+    it('throws SwapUnavailableError on HTTP 400 (no swap quotes available — no route/liquidity)', async () => {
+      // Blockradar returns 400 "No swap quotes available" when no quote can be
+      // produced for the pair+amount (e.g. testnet, unsupported pair). No funds
+      // move at quote time → degrade gracefully, not an opaque 500.
+      http.post.mockReturnValue(
+        throwError(() => axiosErr(400, 'No swap quotes available')),
+      );
+
+      const rejection = provider.getQuote({
+        addressId: ADDRESS_ID,
+        fromAssetId: FROM_ASSET_ID,
+        toAssetId: TO_ASSET_ID,
+        amount: '100',
+      });
+
+      await expect(rejection).rejects.toBeInstanceOf(SwapUnavailableError);
+      await expect(rejection).rejects.toThrow('No swap quotes available');
+    });
+
     it('builds URL using masterWalletId and addressId (Blockradar UUIDs, not on-chain addresses)', async () => {
       http.post.mockReturnValue(of(axiosOk(QUOTE_RESPONSE)));
 
