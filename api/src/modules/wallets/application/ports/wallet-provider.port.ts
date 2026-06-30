@@ -165,7 +165,14 @@ export interface IWalletProvider {
    * delivers the final status via webhook. The deterministic execution engine (§3.1)
    * holds the idempotency key and updates the settlement record on webhook receipt.
    *
-   * @throws Error (with provider message) on non-2xx responses.
+   * @throws Error (with provider message) on non-2xx responses. On a response-bearing
+   *   rejection the thrown error carries the originating HTTP status STRUCTURALLY as a
+   *   numeric `httpStatus` property (NOT only in the message string); on a network error
+   *   with no HTTP response, `httpStatus` is absent (undefined). The execution engine
+   *   reads `httpStatus` to distinguish a DEFINITIVE client rejection (4xx — request
+   *   rejected, never broadcast → safe to refund the reserve) from an AMBIGUOUS failure
+   *   (5xx / network — the withdrawal may be in-flight → leave for the reconciler).
+   *   This is the funds-safety distinction in CLAUDE.md §3.1.
    */
   withdraw(input: WithdrawInput): Promise<WithdrawOutput>;
 

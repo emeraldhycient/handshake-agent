@@ -223,6 +223,7 @@ enum SettlementType {
   processor_payout
   onchain_send
   compensation
+  swap
 
   @@map("settlement_type")
 }
