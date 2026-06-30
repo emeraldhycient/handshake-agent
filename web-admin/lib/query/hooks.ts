@@ -11,20 +11,35 @@ import type {
   AdminEndUserStatusRequest,
   AdminEndUserTierRequest,
   AdminInvitationCreateRequest,
+  AdminTxnMarkFailedRequest,
+  AdminTxnSearchQuery,
   AdminUserStatusRequest,
   AdminUserUpdateRoleRequest,
+  AmlRuleCreateRequest,
+  AmlRuleUpdateRequest,
   AuditLogQuery,
+  ComplianceDispositionRequest,
+  ComplianceReportDraftRequest,
+  ComplianceReportSubmitRequest,
   KycApproveRequest,
   KycRejectRequest,
   RoleCreateRequest,
   RoleUpdateRequest,
+  TreasuryAlertAcknowledgeRequest,
   UpdateSettingRequest,
 } from "@handshake-agent/contracts"
 
 import * as admin from "@/lib/api/admin"
+import * as beneficiaries from "@/lib/api/beneficiaries"
+import * as compliance from "@/lib/api/compliance"
 import * as kyc from "@/lib/api/kyc"
+import * as ledger from "@/lib/api/ledger"
 import * as settings from "@/lib/api/settings"
+import * as transactions from "@/lib/api/transactions"
+import * as treasury from "@/lib/api/treasury"
 import * as users from "@/lib/api/users"
+import type { ComplianceEventQuery } from "@/lib/api/compliance"
+import type { LedgerHistoryQuery } from "@/lib/api/ledger"
 import { qk } from "./keys"
 
 // ─── Read hooks ─────────────────────────────────────────────────────────────────
@@ -143,6 +158,143 @@ export function useKycSubmission(userId: string | null) {
     queryKey: qk.kycSubmission(userId ?? ""),
     queryFn: () => kyc.getKycSubmission(userId as string),
     enabled: userId !== null,
+    staleTime: 15_000,
+  })
+}
+
+// ─── Transactions + ledger read hooks ─────────────────────────────────────────────
+
+/** Search / filter / paginate the engine's transactions. Keyed by the query. */
+export function useTransactions(query: AdminTxnSearchQuery) {
+  return useQuery({
+    queryKey: qk.transactions(query),
+    queryFn: () => transactions.listTransactions(query),
+    staleTime: 15_000,
+  })
+}
+
+/** One transaction's detail (ledger legs + lifecycle timeline). */
+export function useTransactionDetail(id: string | null) {
+  return useQuery({
+    queryKey: qk.transaction(id ?? ""),
+    queryFn: () => transactions.getTransaction(id as string),
+    enabled: id !== null,
+    staleTime: 15_000,
+  })
+}
+
+/** An account's posted ledger entries. Disabled until the account triple is set. */
+export function useLedgerHistory(query: LedgerHistoryQuery | null) {
+  return useQuery({
+    queryKey: qk.ledgerHistory(
+      query ?? { accountType: "", accountId: "", currency: "" }
+    ),
+    queryFn: () => ledger.listLedgerHistory(query as LedgerHistoryQuery),
+    enabled: query !== null,
+    staleTime: 15_000,
+  })
+}
+
+// ─── Compliance read hooks ────────────────────────────────────────────────────────
+
+/** The flagged-event queue. Keyed by the filter. */
+export function useComplianceEvents(query: ComplianceEventQuery) {
+  return useQuery({
+    queryKey: qk.complianceEvents(query),
+    queryFn: () => compliance.listComplianceEvents(query),
+    staleTime: 15_000,
+  })
+}
+
+/** One compliance event's detail (raw screening payload + disposition note). */
+export function useComplianceEvent(id: string | null) {
+  return useQuery({
+    queryKey: qk.complianceEvent(id ?? ""),
+    queryFn: () => compliance.getComplianceEvent(id as string),
+    enabled: id !== null,
+    staleTime: 15_000,
+  })
+}
+
+/** The immutable sanctions screening-run history. */
+export function useSanctions() {
+  return useQuery({
+    queryKey: qk.sanctions,
+    queryFn: () => compliance.listSanctions(),
+    staleTime: 30_000,
+  })
+}
+
+/** The admin-tunable AML engine rules. 30 s stale. */
+export function useAmlRules() {
+  return useQuery({
+    queryKey: qk.amlRules,
+    queryFn: () => compliance.listAmlRules(),
+    staleTime: 30_000,
+  })
+}
+
+/** Qualifying-transfer Travel-Rule capture (read-only). */
+export function useTravelRule() {
+  return useQuery({
+    queryKey: qk.travelRule,
+    queryFn: () => compliance.listTravelRule(),
+    staleTime: 30_000,
+  })
+}
+
+/** SAR/STR compliance reports. */
+export function useComplianceReports() {
+  return useQuery({
+    queryKey: qk.complianceReports,
+    queryFn: () => compliance.listComplianceReports(),
+    staleTime: 15_000,
+  })
+}
+
+// ─── Treasury read hooks ──────────────────────────────────────────────────────────
+
+/** Aggregated custodial balances by network + asset. */
+export function useTreasuryBalances() {
+  return useQuery({
+    queryKey: qk.treasuryBalances,
+    queryFn: () => treasury.listTreasuryBalances(),
+    staleTime: 15_000,
+  })
+}
+
+/** Real-time exposure-vs-limit snapshots. */
+export function useTreasuryExposure() {
+  return useQuery({
+    queryKey: qk.treasuryExposure,
+    queryFn: () => treasury.listTreasuryExposure(),
+    staleTime: 15_000,
+  })
+}
+
+/** Exposure-threshold breach alerts. */
+export function useTreasuryAlerts() {
+  return useQuery({
+    queryKey: qk.treasuryAlerts,
+    queryFn: () => treasury.listTreasuryAlerts(),
+    staleTime: 15_000,
+  })
+}
+
+/** Active per-wallet withdrawal policies (read-only). */
+export function useWithdrawalPolicies() {
+  return useQuery({
+    queryKey: qk.withdrawalPolicies,
+    queryFn: () => treasury.listWithdrawalPolicies(),
+    staleTime: 60_000,
+  })
+}
+
+/** End-user beneficiaries (payout destinations), optionally scoped to a user. */
+export function useAdminBeneficiaries(userId?: string) {
+  return useQuery({
+    queryKey: qk.adminBeneficiaries(userId),
+    queryFn: () => beneficiaries.listBeneficiaries(userId),
     staleTime: 15_000,
   })
 }
@@ -352,6 +504,152 @@ export function useRejectKyc() {
     }) => kyc.rejectKyc(userId, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["admin", "kyc"] })
+    },
+  })
+}
+
+// ─── Transaction-triage mutations ─────────────────────────────────────────────────
+// Sensitive (may 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps in
+// `useStepUpRetry`). On success they invalidate the transactions prefix so the
+// list + detail re-resolve.
+
+export function useMarkFailed() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string
+      input: AdminTxnMarkFailedRequest
+    }) => transactions.markTransactionFailed(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["admin", "transactions"],
+      })
+    },
+  })
+}
+
+export function useRetrySettlement() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => transactions.retryTransaction(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["admin", "transactions"],
+      })
+    },
+  })
+}
+
+// ─── Ledger mutation ──────────────────────────────────────────────────────────────
+// Verify is read-only on the server (re-sums legs) but modelled as a mutation
+// since it's an explicit on-demand action; it invalidates nothing.
+
+export function useVerifyLedger() {
+  return useMutation({
+    mutationFn: (transactionId: string) => ledger.verifyLedger(transactionId),
+  })
+}
+
+// ─── Compliance mutations ─────────────────────────────────────────────────────────
+// Sensitive (may 403 with ADMIN_STEP_UP_REQUIRED). On success they invalidate the
+// compliance prefix so the affected list/detail re-resolve.
+
+export function useDisposeEvent() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string
+      input: ComplianceDispositionRequest
+    }) => compliance.disposeComplianceEvent(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "compliance"] })
+    },
+  })
+}
+
+export function useCreateAmlRule() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: AmlRuleCreateRequest) =>
+      compliance.createAmlRule(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.amlRules })
+    },
+  })
+}
+
+export function useUpdateAmlRule() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: AmlRuleUpdateRequest }) =>
+      compliance.updateAmlRule(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.amlRules })
+    },
+  })
+}
+
+export function useDraftReport() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: ComplianceReportDraftRequest) =>
+      compliance.draftComplianceReport(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.complianceReports })
+    },
+  })
+}
+
+export function useSubmitReport() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string
+      input: ComplianceReportSubmitRequest
+    }) => compliance.submitComplianceReport(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.complianceReports })
+    },
+  })
+}
+
+// ─── Treasury + beneficiary mutations ─────────────────────────────────────────────
+// Sensitive (may 403 with ADMIN_STEP_UP_REQUIRED). On success they invalidate
+// their prefix so the affected list re-resolves.
+
+export function useAcknowledgeAlert() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string
+      input: TreasuryAlertAcknowledgeRequest
+    }) => treasury.acknowledgeTreasuryAlert(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.treasuryAlerts })
+    },
+  })
+}
+
+export function useOverrideCoolingOff() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => beneficiaries.overrideCoolingOff(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["admin", "beneficiaries"],
+      })
     },
   })
 }

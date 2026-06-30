@@ -5,10 +5,13 @@
  */
 import type { ReactNode } from "react"
 import type {
+  AdminBeneficiary,
   AdminEndUserDetail,
   AdminEndUserDevice,
   AdminEndUserListItem,
   AdminUser,
+  AmlRule,
+  ComplianceReport,
   EffectiveSetting,
   KycSubmissionDetail,
   Role,
@@ -116,4 +119,46 @@ export interface KycSubmissionProps {
 
 export interface KycReviewActionsProps {
   submission: KycSubmissionDetail
+}
+
+// ─── Transactions page ───────────────────────────────────────────────────────────
+
+export interface TransactionDetailProps {
+  /** The selected transaction's id, or null when the drawer is closed. */
+  transactionId: string | null
+  onOpenChange: (open: boolean) => void
+}
+
+// ─── Compliance page ─────────────────────────────────────────────────────────────
+
+export interface ComplianceEventDetailProps {
+  /** The selected event's id, or null when the drawer is closed. */
+  eventId: string | null
+  onOpenChange: (open: boolean) => void
+}
+
+export interface AmlRuleDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** Editing an existing rule, or null to create a new one. */
+  rule: AmlRule | null
+}
+
+export interface ComplianceReportDraftDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}
+
+export interface ComplianceReportSubmitDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** The drafted report being submitted, or null when the dialog is closed. */
+  report: ComplianceReport | null
+}
+
+// ─── Beneficiary oversight (in user detail) ────────────────────────────────────────
+
+export interface BeneficiaryOverrideProps {
+  /** The beneficiary whose first-use cooling-off lock can be cleared. */
+  beneficiary: AdminBeneficiary
 }

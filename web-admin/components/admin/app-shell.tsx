@@ -7,7 +7,10 @@
  * `adminMe.menus` (UX only; the API still enforces every route). The dashboard
  * link always shows. `menu.access` → the Access group (Admins / Roles /
  * Sessions); `menu.users` → the Users group; `menu.kyc` → the KYC group;
- * `menu.audit` → the Audit group; `menu.config` → the Config group (Settings).
+ * `menu.transactions` → Transactions; `menu.ledger` → Ledger; `menu.compliance`
+ * → Compliance; `menu.treasury` → Treasury; `menu.beneficiaries` →
+ * Beneficiaries; `menu.audit` → the Audit group; `menu.config` → the Config
+ * group (Settings).
  *
  * Pure presentation + the menu list derived from useAdminMe(); no data writes.
  */
@@ -57,6 +60,31 @@ const NAV_GROUPS: readonly NavGroup[] = [
     menu: "menu.kyc",
     label: "KYC",
     items: [{ href: "/kyc", label: "KYC review" }],
+  },
+  {
+    menu: "menu.transactions",
+    label: "Transactions",
+    items: [{ href: "/transactions", label: "Transactions" }],
+  },
+  {
+    menu: "menu.ledger",
+    label: "Ledger",
+    items: [{ href: "/ledger", label: "Ledger" }],
+  },
+  {
+    menu: "menu.compliance",
+    label: "Compliance",
+    items: [{ href: "/compliance", label: "Compliance" }],
+  },
+  {
+    menu: "menu.treasury",
+    label: "Treasury",
+    items: [{ href: "/treasury", label: "Treasury" }],
+  },
+  {
+    menu: "menu.beneficiaries",
+    label: "Beneficiaries",
+    items: [{ href: "/beneficiaries", label: "Beneficiaries" }],
   },
   {
     menu: "menu.audit",
