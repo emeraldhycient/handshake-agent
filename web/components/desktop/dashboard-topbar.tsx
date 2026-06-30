@@ -26,13 +26,16 @@ function greetingPrefix(): string {
  * Build the greeting string.
  * - If a name is known: "Good afternoon, Amara"
  * - Otherwise: "Good afternoon" (no name — never hardcoded placeholder)
+ *
+ * Greets by FIRST name only: the full name wraps onto multiple lines in the
+ * narrow topbar column. Falls back to the last name, then a name-free greeting.
  */
 function buildGreeting(
   firstName: string | null | undefined,
   lastName: string | null | undefined
 ): string {
-  const name = [firstName, lastName].filter(Boolean).join(" ").trim()
-  return name ? `${greetingPrefix()}, ${name}` : greetingPrefix()
+  const firstToken = (firstName || lastName || "").trim().split(/\s+/)[0]
+  return firstToken ? `${greetingPrefix()}, ${firstToken}` : greetingPrefix()
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -185,7 +188,7 @@ export function DashboardTopbar({
 
             {/* Error branch */}
             {!searchLoading && searchError && (
-              <p className="text-danger px-[11px] py-[10px] text-[13.5px]">
+              <p className="px-[11px] py-[10px] text-[13.5px] text-danger">
                 Couldn&apos;t load results
               </p>
             )}
@@ -312,7 +315,7 @@ export function DashboardTopbar({
 
             {/* Error branch */}
             {!notifLoading && notifError && (
-              <p className="text-danger px-4 py-6 text-sm">
+              <p className="px-4 py-6 text-sm text-danger">
                 Couldn&apos;t load notifications
               </p>
             )}

@@ -14,9 +14,10 @@ export function ChatHeader({ className }: ChatHeaderProps) {
       )}
     >
       <div className="flex items-center gap-3">
-        {/* Brand avatar with online indicator */}
+        {/* Brand avatar with online indicator — the animated spark mark
+            (honors prefers-reduced-motion: renders static when motion is off). */}
         <div className="relative h-[42px] w-[42px] flex-none">
-          <BrandMark size={42} className="shadow-lg" />
+          <BrandMark size={42} variant="spark" className="shadow-lg" />
           <div
             className={cn(
               "absolute -right-0.5 -bottom-0.5",
