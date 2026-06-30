@@ -110,4 +110,26 @@ export interface IBeneficiaryRepository {
     userId: string,
     type: 'bank_account' | 'crypto_address',
   ): Promise<BeneficiaryRecord | null>;
+
+  // ── Admin oversight (Phase 3, sub-area D) ───────────────────────────────────
+
+  /**
+   * Lists active (not soft-deleted) beneficiaries across ALL users, newest-first,
+   * capped at `page.limit`. Used by the admin beneficiary-oversight surface; the
+   * per-user `listForUser` is the end-user path.
+   */
+  listAll(page: { limit: number }): Promise<BeneficiaryRecord[]>;
+
+  /**
+   * Returns the beneficiary by id alone (no user scoping), or null when absent
+   * or soft-deleted. Used by the admin cooling-off override.
+   */
+  findById(beneficiaryId: string): Promise<BeneficiaryRecord | null>;
+
+  /**
+   * Clears a beneficiary's first-use cooling-off lock (sets
+   * `firstUseLockedUntil = null`). The admin override; the full trail lives in
+   * the AuditLog. Never moves money (§3.1).
+   */
+  clearCoolingOff(beneficiaryId: string): Promise<void>;
 }

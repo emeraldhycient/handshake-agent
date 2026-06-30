@@ -107,7 +107,9 @@ describe("PERMISSION_CATALOG", () => {
     expect(ids.has("api_route:POST /admin/kyc/:userId/approve:write")).toBe(
       true,
     );
-    expect(ids.has("api_route:POST /admin/kyc/:userId/reject:write")).toBe(true);
+    expect(ids.has("api_route:POST /admin/kyc/:userId/reject:write")).toBe(
+      true,
+    );
     expect(ids.has("web_page:/admin/kyc:read")).toBe(true);
     expect(ids.has("menu_item:menu.kyc:read")).toBe(true);
     for (const e of PERMISSION_CATALOG.filter((x) => x.category === "KYC")) {
@@ -133,9 +135,9 @@ describe("PERMISSION_CATALOG", () => {
     expect(
       ids.has("api_route:POST /admin/transactions/:id/mark-failed:execute"),
     ).toBe(true);
-    expect(ids.has("api_route:POST /admin/transactions/:id/retry:execute")).toBe(
-      true,
-    );
+    expect(
+      ids.has("api_route:POST /admin/transactions/:id/retry:execute"),
+    ).toBe(true);
     for (const e of PERMISSION_CATALOG.filter(
       (x) =>
         x.resourceType === "api_route" &&
@@ -167,12 +169,14 @@ describe("PERMISSION_CATALOG", () => {
       true,
     );
     expect(
-      ids.has(
-        "api_route:POST /admin/compliance/events/:id/disposition:write",
-      ),
+      ids.has("api_route:POST /admin/compliance/events/:id/disposition:write"),
     ).toBe(true);
-    expect(ids.has("api_route:GET /admin/compliance/sanctions:read")).toBe(true);
-    expect(ids.has("api_route:GET /admin/compliance/aml-rules:read")).toBe(true);
+    expect(ids.has("api_route:GET /admin/compliance/sanctions:read")).toBe(
+      true,
+    );
+    expect(ids.has("api_route:GET /admin/compliance/aml-rules:read")).toBe(
+      true,
+    );
     expect(ids.has("api_route:POST /admin/compliance/aml-rules:write")).toBe(
       true,
     );
@@ -183,7 +187,9 @@ describe("PERMISSION_CATALOG", () => {
       true,
     );
     expect(ids.has("api_route:GET /admin/compliance/reports:read")).toBe(true);
-    expect(ids.has("api_route:POST /admin/compliance/reports:write")).toBe(true);
+    expect(ids.has("api_route:POST /admin/compliance/reports:write")).toBe(
+      true,
+    );
     expect(
       ids.has("api_route:POST /admin/compliance/reports/:id/submit:execute"),
     ).toBe(true);
@@ -193,6 +199,44 @@ describe("PERMISSION_CATALOG", () => {
       (x) => x.category === "Compliance",
     )) {
       expect(e.category).toBe("Compliance");
+    }
+  });
+
+  it("registers the Treasury oversight routes + nav (Phase 3 sub-area D)", () => {
+    const ids = new Set(PERMISSION_CATALOG.map(permissionId));
+    expect(ids.has("api_route:GET /admin/treasury/balances:read")).toBe(true);
+    expect(ids.has("api_route:GET /admin/treasury/exposure:read")).toBe(true);
+    expect(ids.has("api_route:GET /admin/treasury/alerts:read")).toBe(true);
+    expect(
+      ids.has("api_route:POST /admin/treasury/alerts/:id/acknowledge:write"),
+    ).toBe(true);
+    expect(
+      ids.has("api_route:GET /admin/treasury/withdrawal-policies:read"),
+    ).toBe(true);
+    // The legacy folded treasury wallet-ops nav already exists; assert it stands.
+    expect(ids.has("web_page:/admin/treasury:read")).toBe(true);
+    expect(ids.has("menu_item:menu.treasury:read")).toBe(true);
+    for (const e of PERMISSION_CATALOG.filter(
+      (x) => x.category === "Treasury",
+    )) {
+      expect(e.category).toBe("Treasury");
+    }
+  });
+
+  it("registers the Beneficiaries oversight routes + nav (Phase 3 sub-area D)", () => {
+    const ids = new Set(PERMISSION_CATALOG.map(permissionId));
+    expect(ids.has("api_route:GET /admin/beneficiaries:read")).toBe(true);
+    expect(
+      ids.has(
+        "api_route:POST /admin/beneficiaries/:id/cooling-off-override:write",
+      ),
+    ).toBe(true);
+    expect(ids.has("web_page:/admin/beneficiaries:read")).toBe(true);
+    expect(ids.has("menu_item:menu.beneficiaries:read")).toBe(true);
+    for (const e of PERMISSION_CATALOG.filter(
+      (x) => x.category === "Beneficiaries",
+    )) {
+      expect(e.category).toBe("Beneficiaries");
     }
   });
 });
@@ -268,7 +312,8 @@ describe("BUILTIN_ROLES", () => {
       (e) => permissionId(e) === "api_route:GET /admin/users:read",
     )!;
     const usersWrite = PERMISSION_CATALOG.find(
-      (e) => permissionId(e) === "api_route:PATCH /admin/users/:id/status:write",
+      (e) =>
+        permissionId(e) === "api_route:PATCH /admin/users/:id/status:write",
     )!;
     const compliance = BUILTIN_ROLES.find((r) => r.name === "compliance")!;
     const ops = BUILTIN_ROLES.find((r) => r.name === "ops")!;
@@ -289,7 +334,8 @@ describe("BUILTIN_ROLES", () => {
       (e) => permissionId(e) === "api_route:GET /admin/kyc/queue:read",
     )!;
     const kycWrite = PERMISSION_CATALOG.find(
-      (e) => permissionId(e) === "api_route:POST /admin/kyc/:userId/approve:write",
+      (e) =>
+        permissionId(e) === "api_route:POST /admin/kyc/:userId/approve:write",
     )!;
     const compliance = BUILTIN_ROLES.find((r) => r.name === "compliance")!;
     const support = BUILTIN_ROLES.find((r) => r.name === "support")!;
@@ -326,7 +372,8 @@ describe("BUILTIN_ROLES", () => {
     )!;
     const txnRetry = PERMISSION_CATALOG.find(
       (e) =>
-        permissionId(e) === "api_route:POST /admin/transactions/:id/retry:execute",
+        permissionId(e) ===
+        "api_route:POST /admin/transactions/:id/retry:execute",
     )!;
     const superAdmin = BUILTIN_ROLES.find((r) => r.name === "super_admin")!;
     const finance = BUILTIN_ROLES.find((r) => r.name === "finance")!;
@@ -364,6 +411,51 @@ describe("BUILTIN_ROLES", () => {
     expect(ops.grants(ledgerVerify)).toBe(false);
     expect(compliance.grants(ledgerRead)).toBe(false);
     expect(support.grants(ledgerRead)).toBe(false);
+  });
+
+  it("grants Treasury read+write to finance + ops; not to compliance/support (Phase 3D)", () => {
+    const balancesRead = PERMISSION_CATALOG.find(
+      (e) => permissionId(e) === "api_route:GET /admin/treasury/balances:read",
+    )!;
+    const ackWrite = PERMISSION_CATALOG.find(
+      (e) =>
+        permissionId(e) ===
+        "api_route:POST /admin/treasury/alerts/:id/acknowledge:write",
+    )!;
+    const finance = BUILTIN_ROLES.find((r) => r.name === "finance")!;
+    const ops = BUILTIN_ROLES.find((r) => r.name === "ops")!;
+    const compliance = BUILTIN_ROLES.find((r) => r.name === "compliance")!;
+    const support = BUILTIN_ROLES.find((r) => r.name === "support")!;
+
+    expect(finance.grants(balancesRead)).toBe(true);
+    expect(finance.grants(ackWrite)).toBe(true);
+    expect(ops.grants(balancesRead)).toBe(true);
+    expect(ops.grants(ackWrite)).toBe(true);
+    expect(compliance.grants(balancesRead)).toBe(false);
+    expect(support.grants(balancesRead)).toBe(false);
+  });
+
+  it("grants Beneficiaries read+write to compliance + ops, read-only to support, none to finance (Phase 3D)", () => {
+    const benRead = PERMISSION_CATALOG.find(
+      (e) => permissionId(e) === "api_route:GET /admin/beneficiaries:read",
+    )!;
+    const overrideWrite = PERMISSION_CATALOG.find(
+      (e) =>
+        permissionId(e) ===
+        "api_route:POST /admin/beneficiaries/:id/cooling-off-override:write",
+    )!;
+    const compliance = BUILTIN_ROLES.find((r) => r.name === "compliance")!;
+    const ops = BUILTIN_ROLES.find((r) => r.name === "ops")!;
+    const support = BUILTIN_ROLES.find((r) => r.name === "support")!;
+    const finance = BUILTIN_ROLES.find((r) => r.name === "finance")!;
+
+    expect(compliance.grants(benRead)).toBe(true);
+    expect(compliance.grants(overrideWrite)).toBe(true);
+    expect(ops.grants(benRead)).toBe(true);
+    expect(ops.grants(overrideWrite)).toBe(true);
+    expect(support.grants(benRead)).toBe(true);
+    expect(support.grants(overrideWrite)).toBe(false);
+    expect(finance.grants(benRead)).toBe(false);
   });
 
   it("grants Compliance read+write+execute to compliance, read-only to ops, none to finance/support (Phase 3C)", () => {

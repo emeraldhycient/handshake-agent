@@ -24,6 +24,10 @@ import { DEPOSIT_SETTLEMENT_REPOSITORY } from '../wallets/application/ports/depo
 import { DepositSettlementPrismaRepository } from '../wallets/infrastructure/deposit-settlement.prisma.repository';
 import { LEDGER_REPOSITORY } from '../transactions/application/ports/ledger.repository.port';
 import { LedgerPrismaRepository } from '../transactions/infrastructure/ledger.prisma.repository';
+import { TREASURY_READ_REPOSITORY } from '../treasury/application/ports/treasury-read.repository.port';
+import { TreasuryReadPrismaRepository } from '../treasury/infrastructure/treasury-read.prisma.repository';
+import { BENEFICIARY_REPOSITORY } from '../beneficiaries/application/ports/beneficiary.repository.port';
+import { BeneficiaryPrismaRepository } from '../beneficiaries/infrastructure/beneficiary.prisma.repository';
 
 // ── Admin RBAC console (Task 11) ──────────────────────────────────────────────
 import { AdminAuthController } from './presentation/admin-auth.controller';
@@ -38,6 +42,8 @@ import { AdminTransactionsController } from './presentation/admin-transactions.c
 import { AdminTxnTriageController } from './presentation/admin-txn-triage.controller';
 import { AdminLedgerController } from './presentation/admin-ledger.controller';
 import { AdminComplianceController } from './presentation/admin-compliance.controller';
+import { AdminTreasuryController } from './presentation/admin-treasury.controller';
+import { AdminBeneficiariesController } from './presentation/admin-beneficiaries.controller';
 import { AdminSessionGuard } from './presentation/admin-session.guard';
 import { PermissionGuard } from './presentation/permission.guard';
 import { AdminStepUpGuard } from './presentation/admin-step-up.guard';
@@ -58,6 +64,8 @@ import { AdminTxnOversightService } from './application/admin-txn-oversight.serv
 import { AdminTxnTriageService } from './application/admin-txn-triage.service';
 import { AdminLedgerService } from './application/admin-ledger.service';
 import { AdminComplianceService } from './application/admin-compliance.service';
+import { AdminTreasuryService } from './application/admin-treasury.service';
+import { AdminBeneficiaryService } from './application/admin-beneficiary.service';
 import { ADMIN_USER_REPOSITORY } from './application/ports/admin-user.repository.port';
 import { ADMIN_SESSION_REPOSITORY } from './application/ports/admin-session.repository.port';
 import { ROLE_REPOSITORY } from './application/ports/role.repository.port';
@@ -159,6 +167,8 @@ import type { Env } from '../../core/config/env.schema';
     AdminTxnTriageController,
     AdminLedgerController,
     AdminComplianceController,
+    AdminTreasuryController,
+    AdminBeneficiariesController,
   ],
   providers: [
     AdminTokenGuard,
@@ -214,6 +224,16 @@ import type { Env } from '../../core/config/env.schema';
     // compliance repository ports come from the imported ComplianceModule;
     // AuditService is global. Never moves money (§3.1).
     AdminComplianceService,
+    // Phase 3, sub-area D (READ-ONLY oversight + one step-up write each):
+    //   - AdminTreasuryService: aggregated balances, exposure snapshots, alerts
+    //     (acknowledge = the write), withdrawal policies. Reaches data via the
+    //     locally-bound TREASURY_READ_REPOSITORY below.
+    //   - AdminBeneficiaryService: beneficiary listing + cooling-off override
+    //     (the write). Reaches data via the locally-bound BENEFICIARY_REPOSITORY
+    //     below (BeneficiariesModule does not export the token). Neither service
+    //     moves money (§3.1); both audit their write as admin_override.
+    AdminTreasuryService,
+    AdminBeneficiaryService,
     AdminSessionGuard,
     PermissionGuard,
     AdminStepUpGuard,
@@ -242,6 +262,19 @@ import type { Env } from '../../core/config/env.schema';
     {
       provide: PIN_REPOSITORY,
       useClass: PinPrismaRepository,
+    },
+    // Phase 3, sub-area D: TREASURY_READ_REPOSITORY + BENEFICIARY_REPOSITORY are
+    // bound locally here (PrismaService is global). The treasury read repo has no
+    // home module yet; the beneficiary repo lives in BeneficiariesModule but that
+    // module does not export the token (it exports the service). Mirrors the local
+    // LEDGER_REPOSITORY / PIN_REPOSITORY bindings above.
+    {
+      provide: TREASURY_READ_REPOSITORY,
+      useClass: TreasuryReadPrismaRepository,
+    },
+    {
+      provide: BENEFICIARY_REPOSITORY,
+      useClass: BeneficiaryPrismaRepository,
     },
   ],
 })

@@ -97,6 +97,9 @@ describe('BeneficiaryService', () => {
       addCryptoAddress: jest.fn(),
       getById: jest.fn(),
       getDefault: jest.fn(),
+      listAll: jest.fn(),
+      findById: jest.fn(),
+      clearCoolingOff: jest.fn(),
     };
 
     nameEnquiry = {

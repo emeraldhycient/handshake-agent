@@ -203,7 +203,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   ),
 
   // Users — end-user management & device/SIM-swap admin (Phase 2)
-  r("api_route", "GET /admin/users", "read", "Users", "List / search end users"),
+  r(
+    "api_route",
+    "GET /admin/users",
+    "read",
+    "Users",
+    "List / search end users",
+  ),
   r(
     "api_route",
     "GET /admin/users/:id",
@@ -255,7 +261,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   ),
 
   // KYC — review queue & approve/reject (Phase 2)
-  r("api_route", "GET /admin/kyc/queue", "read", "KYC", "List the KYC review queue"),
+  r(
+    "api_route",
+    "GET /admin/kyc/queue",
+    "read",
+    "KYC",
+    "List the KYC review queue",
+  ),
   r(
     "api_route",
     "GET /admin/kyc/:userId",
@@ -409,6 +421,63 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Submit a drafted SAR/STR compliance report",
   ),
 
+  // Treasury — aggregated-balance / exposure / alert / withdrawal-policy oversight
+  // (Phase 3, sub-area D). All reads; only the alert acknowledge is a write (step-up
+  // -gated at the controller). Nothing here moves money (§3.1).
+  r(
+    "api_route",
+    "GET /admin/treasury/balances",
+    "read",
+    "Treasury",
+    "List aggregated custodial balances by network + asset",
+  ),
+  r(
+    "api_route",
+    "GET /admin/treasury/exposure",
+    "read",
+    "Treasury",
+    "List real-time treasury exposure-vs-limit snapshots",
+  ),
+  r(
+    "api_route",
+    "GET /admin/treasury/alerts",
+    "read",
+    "Treasury",
+    "List treasury exposure-threshold alerts",
+  ),
+  r(
+    "api_route",
+    "POST /admin/treasury/alerts/:id/acknowledge",
+    "write",
+    "Treasury",
+    "Acknowledge a treasury exposure alert",
+  ),
+  r(
+    "api_route",
+    "GET /admin/treasury/withdrawal-policies",
+    "read",
+    "Treasury",
+    "List active per-wallet withdrawal policies",
+  ),
+
+  // Beneficiaries — saved-payout-destination oversight + first-use cooling-off
+  // override (Phase 3, sub-area D). The override is step-up-gated at the controller
+  // and audited; it clears the cooling-off lock but never moves money (§3.1).
+  r(
+    "api_route",
+    "GET /admin/beneficiaries",
+    "read",
+    "Beneficiaries",
+    "List end-user beneficiaries (payout destinations)",
+  ),
+  r(
+    "api_route",
+    "POST /admin/beneficiaries/:id/cooling-off-override",
+    "write",
+    "Beneficiaries",
+    "Clear a beneficiary's first-use cooling-off lock",
+  ),
+
   // Web pages (nav/page gating — UX only; the API still enforces api_route perms)
   r(
     "web_page",
@@ -457,6 +526,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Compliance",
     "Compliance console page",
   ),
+  r(
+    "web_page",
+    "/admin/beneficiaries",
+    "read",
+    "Beneficiaries",
+    "Beneficiary oversight page",
+  ),
   // Menu items (nav groups)
   r("menu_item", "menu.access", "read", "Access", "Access & RBAC nav group"),
   r("menu_item", "menu.audit", "read", "Audit", "Audit nav group"),
@@ -478,6 +554,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "read",
     "Compliance",
     "Compliance nav group",
+  ),
+  r(
+    "menu_item",
+    "menu.beneficiaries",
+    "read",
+    "Beneficiaries",
+    "Beneficiaries nav group",
   ),
 ];
 
@@ -532,11 +615,12 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
     "Operations: oversight and treasury actions; no access management.",
     {
       Audit: ["read"],
-      Treasury: ["read", "execute"],
+      Treasury: ["read", "write", "execute"],
       Config: ["read"],
       Users: ["read", "write"],
       Transactions: ["read"],
       Compliance: ["read"],
+      Beneficiaries: ["read", "write"],
     },
   ),
   role(
@@ -548,6 +632,7 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       KYC: ["read", "write"],
       Transactions: ["read"],
       Compliance: ["read", "write", "execute"],
+      Beneficiaries: ["read", "write"],
     },
   ),
   role(
@@ -555,7 +640,7 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
     "Finance: pricing/economics, treasury, ledger, audit visibility.",
     {
       Audit: ["read"],
-      Treasury: ["read", "execute"],
+      Treasury: ["read", "write", "execute"],
       Config: ["read", "write"],
       Transactions: ["read", "execute"],
       Ledger: ["read", "execute"],
@@ -564,5 +649,6 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
   role("support", "Support: read-only visibility into users and activity.", {
     Users: ["read"],
     KYC: ["read"],
+    Beneficiaries: ["read"],
   }),
 ];

@@ -164,6 +164,33 @@ export class BeneficiaryPrismaRepository implements IBeneficiaryRepository {
     });
     return row ? toRecord(row) : null;
   }
+
+  // ── Admin oversight (Phase 3, sub-area D) ───────────────────────────────────
+
+  async listAll(page: { limit: number }): Promise<BeneficiaryRecord[]> {
+    const rows = await this.prisma.beneficiary.findMany({
+      where: { deletedAt: null },
+      select: SELECT,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: page.limit,
+    });
+    return rows.map(toRecord);
+  }
+
+  async findById(beneficiaryId: string): Promise<BeneficiaryRecord | null> {
+    const row = await this.prisma.beneficiary.findFirst({
+      where: { id: beneficiaryId, deletedAt: null },
+      select: SELECT,
+    });
+    return row ? toRecord(row) : null;
+  }
+
+  async clearCoolingOff(beneficiaryId: string): Promise<void> {
+    await this.prisma.beneficiary.update({
+      where: { id: beneficiaryId },
+      data: { firstUseLockedUntil: null },
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
