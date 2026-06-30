@@ -24,7 +24,10 @@ import type {
 import type { Clock } from '../../../core/common/clock';
 import type { PinService } from '../../../core/auth/pin.service';
 import type { SessionService } from '../../../core/auth/session.service';
-import type { KycGateService } from '../../identity/application/kyc-gate.service';
+import type {
+  KycGateService,
+  OriginatorIdentity,
+} from '../../identity/application/kyc-gate.service';
 import type { QuotesService } from '../../quotes/application/quotes.service';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
 import type { WalletService } from '../../wallets/application/wallet.service';
@@ -281,7 +284,10 @@ function makeKycGate(
   throws?: Error,
   originatorName: string | null = null,
 ): jest.Mocked<
-  Pick<KycGateService, 'assertCanTransact' | 'getOriginatorName'>
+  Pick<
+    KycGateService,
+    'assertCanTransact' | 'getOriginatorName' | 'getOriginatorIdentity'
+  >
 > {
   const svc = {
     // Fix-C: fiatAmount is now a string (exact NGN decimal).
@@ -297,6 +303,7 @@ function makeKycGate(
       ]
     >(),
     getOriginatorName: jest.fn<Promise<string | null>, [string]>(),
+    getOriginatorIdentity: jest.fn<Promise<OriginatorIdentity>, [string]>(),
   };
   if (throws) {
     svc.assertCanTransact.mockRejectedValue(throws);
@@ -304,6 +311,12 @@ function makeKycGate(
     svc.assertCanTransact.mockResolvedValue(undefined);
   }
   svc.getOriginatorName.mockResolvedValue(originatorName);
+  // Default: no captured name/email → executeBuy substitutes safe placeholders.
+  svc.getOriginatorIdentity.mockResolvedValue({
+    firstName: null,
+    lastName: null,
+    email: null,
+  });
   return svc;
 }
 
@@ -617,6 +630,54 @@ describe('ExecutionService.executeBuy', () => {
         transactionId: TXN_ID,
         settlementType: 'processor_collection',
         status: 'pending',
+      }),
+    );
+  });
+
+  // ── Customer attribution on the collection (real KYC identity) ────────────
+
+  it('threads the real KYC firstName/lastName/email into createCollection.customer', async () => {
+    const kycGate = makeKycGate();
+    kycGate.getOriginatorIdentity.mockResolvedValue({
+      firstName: 'Adaeze',
+      lastName: 'Okonkwo',
+      email: 'adaeze@example.com',
+    });
+    const paymentProvider = makePaymentProvider();
+
+    const svc = buildService({ kycGate, paymentProvider });
+    await svc.executeBuy(BASE_INPUT);
+
+    // Originator identity is resolved for the transacting user.
+    expect(kycGate.getOriginatorIdentity).toHaveBeenCalledWith(USER_ID);
+
+    // The real KYC name + verified email reach the payment provider — not the
+    // "Handshake User" / synthetic-email placeholders.
+    expect(paymentProvider.createCollection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customer: {
+          firstname: 'Adaeze',
+          lastname: 'Okonkwo',
+          email: 'adaeze@example.com',
+        },
+      }),
+    );
+  });
+
+  it('falls back to safe placeholders when the KYC name/email are null', async () => {
+    // makeKycGate defaults getOriginatorIdentity to all-null.
+    const paymentProvider = makePaymentProvider();
+
+    const svc = buildService({ paymentProvider });
+    await svc.executeBuy(BASE_INPUT);
+
+    expect(paymentProvider.createCollection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customer: {
+          firstname: 'Handshake',
+          lastname: 'User',
+          email: `user+${USER_ID}@handshake.internal`,
+        },
       }),
     );
   });
