@@ -9,6 +9,7 @@ import { WalletsModule } from '../wallets/wallets.module';
 import { IdentityModule } from '../identity/identity.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { BeneficiariesModule } from '../beneficiaries/beneficiaries.module';
+import { ComplianceModule } from '../compliance/compliance.module';
 import { AuthModule } from '../../core/auth/auth.module';
 import { PIN_REPOSITORY } from '../../core/auth/ports/pin.repository.port';
 import { PinPrismaRepository } from '../../core/auth/infrastructure/pin.prisma.repository';
@@ -36,6 +37,7 @@ import { AdminKycReviewController } from './presentation/admin-kyc-review.contro
 import { AdminTransactionsController } from './presentation/admin-transactions.controller';
 import { AdminTxnTriageController } from './presentation/admin-txn-triage.controller';
 import { AdminLedgerController } from './presentation/admin-ledger.controller';
+import { AdminComplianceController } from './presentation/admin-compliance.controller';
 import { AdminSessionGuard } from './presentation/admin-session.guard';
 import { PermissionGuard } from './presentation/permission.guard';
 import { AdminStepUpGuard } from './presentation/admin-step-up.guard';
@@ -55,6 +57,7 @@ import { AdminKycReviewService } from './application/admin-kyc-review.service';
 import { AdminTxnOversightService } from './application/admin-txn-oversight.service';
 import { AdminTxnTriageService } from './application/admin-txn-triage.service';
 import { AdminLedgerService } from './application/admin-ledger.service';
+import { AdminComplianceService } from './application/admin-compliance.service';
 import { ADMIN_USER_REPOSITORY } from './application/ports/admin-user.repository.port';
 import { ADMIN_SESSION_REPOSITORY } from './application/ports/admin-session.repository.port';
 import { ROLE_REPOSITORY } from './application/ports/role.repository.port';
@@ -115,6 +118,10 @@ import type { Env } from '../../core/config/env.schema';
     TransactionsModule,
     BeneficiariesModule,
     AuthModule,
+    // Phase 3, sub-area C: ComplianceModule exports the compliance repository
+    // tokens (events/sanctions/aml-rules/travel-rule/reports) that
+    // AdminComplianceService injects. AuditService is global.
+    ComplianceModule,
     // AdminTokenService injects JwtService for admin session-token sign/verify.
     JwtModule.register({}),
     // Register the wallet-backfill queue in AdminModule so @InjectQueue resolves
@@ -151,6 +158,7 @@ import type { Env } from '../../core/config/env.schema';
     AdminTransactionsController,
     AdminTxnTriageController,
     AdminLedgerController,
+    AdminComplianceController,
   ],
   providers: [
     AdminTokenGuard,
@@ -201,6 +209,11 @@ import type { Env } from '../../core/config/env.schema';
     // TransactionsModule (exported there); AuditService is global.
     AdminTxnTriageService,
     AdminLedgerService,
+    // Phase 3, sub-area C (COMPLIANCE CONSOLE): flagged-event disposition,
+    // AML-rule CRUD, Travel-Rule + sanctions reads, SAR/STR reports. Its
+    // compliance repository ports come from the imported ComplianceModule;
+    // AuditService is global. Never moves money (§3.1).
+    AdminComplianceService,
     AdminSessionGuard,
     PermissionGuard,
     AdminStepUpGuard,

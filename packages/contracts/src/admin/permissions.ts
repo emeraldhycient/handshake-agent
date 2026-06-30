@@ -328,6 +328,87 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Verify a transaction's double-entry integrity",
   ),
 
+  // Compliance — flagged-event disposition, AML-rule CRUD, Travel-Rule, SAR/STR,
+  // sanctions visibility (Phase 3, sub-area C). The disposition + AML writes and the
+  // report submit are step-up-gated at the controller. Nothing here moves money.
+  r(
+    "api_route",
+    "GET /admin/compliance/events",
+    "read",
+    "Compliance",
+    "List flagged compliance events",
+  ),
+  r(
+    "api_route",
+    "GET /admin/compliance/events/:id",
+    "read",
+    "Compliance",
+    "View a compliance event's detail",
+  ),
+  r(
+    "api_route",
+    "POST /admin/compliance/events/:id/disposition",
+    "write",
+    "Compliance",
+    "Dispose of a flagged compliance event",
+  ),
+  r(
+    "api_route",
+    "GET /admin/compliance/sanctions",
+    "read",
+    "Compliance",
+    "List sanctions screening records",
+  ),
+  r(
+    "api_route",
+    "GET /admin/compliance/aml-rules",
+    "read",
+    "Compliance",
+    "List AML rules",
+  ),
+  r(
+    "api_route",
+    "POST /admin/compliance/aml-rules",
+    "write",
+    "Compliance",
+    "Create an AML rule",
+  ),
+  r(
+    "api_route",
+    "PATCH /admin/compliance/aml-rules/:id",
+    "write",
+    "Compliance",
+    "Edit an AML rule (bumps its version)",
+  ),
+  r(
+    "api_route",
+    "GET /admin/compliance/travel-rule",
+    "read",
+    "Compliance",
+    "List captured Travel Rule data",
+  ),
+  r(
+    "api_route",
+    "GET /admin/compliance/reports",
+    "read",
+    "Compliance",
+    "List SAR/STR compliance reports",
+  ),
+  r(
+    "api_route",
+    "POST /admin/compliance/reports",
+    "write",
+    "Compliance",
+    "Draft a SAR/STR compliance report",
+  ),
+  r(
+    "api_route",
+    "POST /admin/compliance/reports/:id/submit",
+    "execute",
+    "Compliance",
+    "Submit a drafted SAR/STR compliance report",
+  ),
+
   // Web pages (nav/page gating — UX only; the API still enforces api_route perms)
   r(
     "web_page",
@@ -369,6 +450,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Transactions oversight page",
   ),
   r("web_page", "/admin/ledger", "read", "Ledger", "Ledger oversight page"),
+  r(
+    "web_page",
+    "/admin/compliance",
+    "read",
+    "Compliance",
+    "Compliance console page",
+  ),
   // Menu items (nav groups)
   r("menu_item", "menu.access", "read", "Access", "Access & RBAC nav group"),
   r("menu_item", "menu.audit", "read", "Audit", "Audit nav group"),
@@ -384,6 +472,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Transactions nav group",
   ),
   r("menu_item", "menu.ledger", "read", "Ledger", "Ledger nav group"),
+  r(
+    "menu_item",
+    "menu.compliance",
+    "read",
+    "Compliance",
+    "Compliance nav group",
+  ),
 ];
 
 // ── Built-in roles ─────────────────────────────────────────────────────────────
@@ -441,6 +536,7 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Config: ["read"],
       Users: ["read", "write"],
       Transactions: ["read"],
+      Compliance: ["read"],
     },
   ),
   role(
@@ -451,6 +547,7 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Users: ["read", "write"],
       KYC: ["read", "write"],
       Transactions: ["read"],
+      Compliance: ["read", "write", "execute"],
     },
   ),
   role(

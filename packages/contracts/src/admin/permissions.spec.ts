@@ -159,6 +159,42 @@ describe("PERMISSION_CATALOG", () => {
       expect(e.category).toBe("Ledger");
     }
   });
+
+  it("registers the Compliance console routes + nav (Phase 3 sub-area C)", () => {
+    const ids = new Set(PERMISSION_CATALOG.map(permissionId));
+    expect(ids.has("api_route:GET /admin/compliance/events:read")).toBe(true);
+    expect(ids.has("api_route:GET /admin/compliance/events/:id:read")).toBe(
+      true,
+    );
+    expect(
+      ids.has(
+        "api_route:POST /admin/compliance/events/:id/disposition:write",
+      ),
+    ).toBe(true);
+    expect(ids.has("api_route:GET /admin/compliance/sanctions:read")).toBe(true);
+    expect(ids.has("api_route:GET /admin/compliance/aml-rules:read")).toBe(true);
+    expect(ids.has("api_route:POST /admin/compliance/aml-rules:write")).toBe(
+      true,
+    );
+    expect(
+      ids.has("api_route:PATCH /admin/compliance/aml-rules/:id:write"),
+    ).toBe(true);
+    expect(ids.has("api_route:GET /admin/compliance/travel-rule:read")).toBe(
+      true,
+    );
+    expect(ids.has("api_route:GET /admin/compliance/reports:read")).toBe(true);
+    expect(ids.has("api_route:POST /admin/compliance/reports:write")).toBe(true);
+    expect(
+      ids.has("api_route:POST /admin/compliance/reports/:id/submit:execute"),
+    ).toBe(true);
+    expect(ids.has("web_page:/admin/compliance:read")).toBe(true);
+    expect(ids.has("menu_item:menu.compliance:read")).toBe(true);
+    for (const e of PERMISSION_CATALOG.filter(
+      (x) => x.category === "Compliance",
+    )) {
+      expect(e.category).toBe("Compliance");
+    }
+  });
 });
 
 describe("BUILTIN_ROLES", () => {
@@ -328,5 +364,37 @@ describe("BUILTIN_ROLES", () => {
     expect(ops.grants(ledgerVerify)).toBe(false);
     expect(compliance.grants(ledgerRead)).toBe(false);
     expect(support.grants(ledgerRead)).toBe(false);
+  });
+
+  it("grants Compliance read+write+execute to compliance, read-only to ops, none to finance/support (Phase 3C)", () => {
+    const eventsRead = PERMISSION_CATALOG.find(
+      (e) => permissionId(e) === "api_route:GET /admin/compliance/events:read",
+    )!;
+    const disposition = PERMISSION_CATALOG.find(
+      (e) =>
+        permissionId(e) ===
+        "api_route:POST /admin/compliance/events/:id/disposition:write",
+    )!;
+    const submitReport = PERMISSION_CATALOG.find(
+      (e) =>
+        permissionId(e) ===
+        "api_route:POST /admin/compliance/reports/:id/submit:execute",
+    )!;
+    const compliance = BUILTIN_ROLES.find((r) => r.name === "compliance")!;
+    const ops = BUILTIN_ROLES.find((r) => r.name === "ops")!;
+    const finance = BUILTIN_ROLES.find((r) => r.name === "finance")!;
+    const support = BUILTIN_ROLES.find((r) => r.name === "support")!;
+
+    // compliance: full read + write + execute.
+    expect(compliance.grants(eventsRead)).toBe(true);
+    expect(compliance.grants(disposition)).toBe(true);
+    expect(compliance.grants(submitReport)).toBe(true);
+    // ops: read-only.
+    expect(ops.grants(eventsRead)).toBe(true);
+    expect(ops.grants(disposition)).toBe(false);
+    expect(ops.grants(submitReport)).toBe(false);
+    // finance/support: no compliance access.
+    expect(finance.grants(eventsRead)).toBe(false);
+    expect(support.grants(eventsRead)).toBe(false);
   });
 });

@@ -58,6 +58,14 @@ describe("SETTING_REGISTRY", () => {
     expect(keys.has("beneficiary.cryptoCoolingOffSeconds")).toBe(true);
   });
 
+  it("registers the sanctions denylist as a Compliance string[] (Phase 3C)", () => {
+    const denylist = entry("compliance.sanctionsDenylist");
+    expect(denylist.category).toBe("Compliance");
+    expect(denylist.valueType).toBe("string[]");
+    expect(denylist.editable).toBe(true);
+    expect(denylist.secret).toBe(false);
+  });
+
   it("never registers security-infra (auth.*) or secret keys", () => {
     for (const e of SETTING_REGISTRY) {
       expect(e.key.startsWith("auth.")).toBe(false);
@@ -107,6 +115,14 @@ describe("settingSchemaFor", () => {
     const schema = settingSchemaFor("limits.NGN.tier_1.perTxFiatMax");
     expect(schema.parse(50_000)).toBe(50_000);
     expect(() => schema.parse(-5)).toThrow();
+  });
+
+  it("builds an array-of-strings schema for the sanctions denylist", () => {
+    const schema = settingSchemaFor("compliance.sanctionsDenylist");
+    expect(schema.parse(["addr1", "addr2"])).toEqual(["addr1", "addr2"]);
+    expect(schema.parse([])).toEqual([]);
+    expect(() => schema.parse("not-an-array")).toThrow();
+    expect(() => schema.parse([1, 2])).toThrow();
   });
 
   it("throws for an unknown key", () => {

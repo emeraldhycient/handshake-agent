@@ -176,6 +176,16 @@ export const SETTING_REGISTRY: readonly SettingRegistryEntry[] = [
     "Travel Rule threshold (NGN)",
     "Fiat-equivalent NGN value at or above which a send proposal sets requiresTravelRule=true (CBN circular / FATF Travel Rule).",
   ),
+  // The sanctions denylist is edited via the existing /admin/settings API (no new
+  // endpoint): a string[] of addresses/identifiers blocked by sanctions screening.
+  s(
+    "compliance.sanctionsDenylist",
+    "Compliance",
+    "string[]",
+    "Sanctions denylist",
+    "Addresses/identifiers blocked by sanctions screening.",
+    { min: 0, max: 0 },
+  ),
 
   // ── Catalog capability flags (fail-closed: absent === false) ────────────────
   flag(

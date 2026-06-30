@@ -10,5 +10,6 @@ export * from "./kyc-review.dto";
 export * from "./admin-txn.dto";
 export * from "./txn-action.dto";
 export * from "./admin-ledger.dto";
+export * from "./compliance.dto";
 export * from "./audit.dto";
 export * from "./session.dto";
