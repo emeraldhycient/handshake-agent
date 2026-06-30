@@ -42,6 +42,12 @@
       "import": "./src/media/index.ts",
       "require": "./src/media/index.ts",
       "default": "./src/media/index.ts"
+    },
+    "./admin": {
+      "types": "./src/admin/index.ts",
+      "import": "./src/admin/index.ts",
+      "require": "./src/admin/index.ts",
+      "default": "./src/admin/index.ts"
     }
   },
   "scripts": {
