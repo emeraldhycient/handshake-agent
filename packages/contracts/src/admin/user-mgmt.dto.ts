@@ -99,6 +99,21 @@ export type AdminEndUserBeneficiary = z.infer<
   typeof AdminEndUserBeneficiarySchema
 >;
 
+// Recent double-entry ledger lines for the user's wallet account — a summary in
+// the detail view; the full per-account ledger viewer is a later phase.
+export const AdminEndUserLedgerEntrySchema = z.object({
+  id: z.string().uuid(),
+  transactionId: z.string(),
+  currency: z.string(),
+  amount: z.string(),
+  direction: z.enum(["debit", "credit"]),
+  balanceAfter: z.string(),
+  postedAt: z.string(),
+});
+export type AdminEndUserLedgerEntry = z.infer<
+  typeof AdminEndUserLedgerEntrySchema
+>;
+
 export const AdminEndUserDetailSchema = z.object({
   id: z.string().uuid(),
   email: z.string().nullable(),
@@ -110,6 +125,7 @@ export const AdminEndUserDetailSchema = z.object({
   devices: z.array(AdminEndUserDeviceSchema),
   balances: z.array(AdminEndUserBalanceSchema),
   recentTransactions: z.array(AdminEndUserTxnSchema),
+  recentLedger: z.array(AdminEndUserLedgerEntrySchema),
   beneficiaries: z.array(AdminEndUserBeneficiarySchema),
 });
 export type AdminEndUserDetail = z.infer<typeof AdminEndUserDetailSchema>;

@@ -55,6 +55,16 @@ const beneficiary = {
   verificationStatus: "verified",
 };
 
+const ledgerEntry = {
+  id: ID,
+  transactionId: ID,
+  currency: "USDT",
+  amount: "100.50",
+  direction: "credit" as const,
+  balanceAfter: "100.50",
+  postedAt: "2026-06-30T12:00:00.000Z",
+};
+
 const detail = {
   id: ID,
   email: "user@example.com",
@@ -66,6 +76,7 @@ const detail = {
   devices: [device],
   balances: [balance],
   recentTransactions: [txn],
+  recentLedger: [ledgerEntry],
   beneficiaries: [beneficiary],
 };
 

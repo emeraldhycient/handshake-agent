@@ -95,6 +95,12 @@ function makeRepo(initialState?: PinState | null): {
       }
       return Promise.resolve();
     }),
+    clearPin: jest.fn().mockImplementation(() => {
+      state.current = state.current
+        ? { pinHash: null, pinFailureCount: 0, pinLockedUntil: null }
+        : null;
+      return Promise.resolve();
+    }),
   } as jest.Mocked<IPinRepository>;
 
   return { repo, state };
