@@ -278,6 +278,38 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Reject a KYC submission",
   ),
 
+  // Transactions — read-only oversight of the deterministic engine (Phase 3)
+  r(
+    "api_route",
+    "GET /admin/transactions",
+    "read",
+    "Transactions",
+    "List / search transactions",
+  ),
+  r(
+    "api_route",
+    "GET /admin/transactions/:id",
+    "read",
+    "Transactions",
+    "View a transaction's detail (legs + timeline)",
+  ),
+
+  // Ledger — read-only double-entry history + integrity verification (Phase 3)
+  r(
+    "api_route",
+    "GET /admin/ledger",
+    "read",
+    "Ledger",
+    "Read an account's ledger history",
+  ),
+  r(
+    "api_route",
+    "POST /admin/ledger/verify/:transactionId",
+    "execute",
+    "Ledger",
+    "Verify a transaction's double-entry integrity",
+  ),
+
   // Web pages (nav/page gating — UX only; the API still enforces api_route perms)
   r(
     "web_page",
@@ -311,6 +343,14 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   ),
   r("web_page", "/admin/users", "read", "Users", "End-user management page"),
   r("web_page", "/admin/kyc", "read", "KYC", "KYC review queue page"),
+  r(
+    "web_page",
+    "/admin/transactions",
+    "read",
+    "Transactions",
+    "Transactions oversight page",
+  ),
+  r("web_page", "/admin/ledger", "read", "Ledger", "Ledger oversight page"),
   // Menu items (nav groups)
   r("menu_item", "menu.access", "read", "Access", "Access & RBAC nav group"),
   r("menu_item", "menu.audit", "read", "Audit", "Audit nav group"),
@@ -318,6 +358,14 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   r("menu_item", "menu.config", "read", "Config", "Config nav group"),
   r("menu_item", "menu.users", "read", "Users", "Users nav group"),
   r("menu_item", "menu.kyc", "read", "KYC", "KYC nav group"),
+  r(
+    "menu_item",
+    "menu.transactions",
+    "read",
+    "Transactions",
+    "Transactions nav group",
+  ),
+  r("menu_item", "menu.ledger", "read", "Ledger", "Ledger nav group"),
 ];
 
 // ── Built-in roles ─────────────────────────────────────────────────────────────
@@ -374,6 +422,7 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Treasury: ["read", "execute"],
       Config: ["read"],
       Users: ["read", "write"],
+      Transactions: ["read"],
     },
   ),
   role(
@@ -383,6 +432,7 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Audit: ["read"],
       Users: ["read", "write"],
       KYC: ["read", "write"],
+      Transactions: ["read"],
     },
   ),
   role(
@@ -392,6 +442,8 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Audit: ["read"],
       Treasury: ["read", "execute"],
       Config: ["read", "write"],
+      Transactions: ["read"],
+      Ledger: ["read", "execute"],
     },
   ),
   role("support", "Support: read-only visibility into users and activity.", {

@@ -114,6 +114,32 @@ describe("PERMISSION_CATALOG", () => {
       expect(e.category).toBe("KYC");
     }
   });
+
+  it("registers the Transactions oversight routes + nav (Phase 3)", () => {
+    const ids = new Set(PERMISSION_CATALOG.map(permissionId));
+    expect(ids.has("api_route:GET /admin/transactions:read")).toBe(true);
+    expect(ids.has("api_route:GET /admin/transactions/:id:read")).toBe(true);
+    expect(ids.has("web_page:/admin/transactions:read")).toBe(true);
+    expect(ids.has("menu_item:menu.transactions:read")).toBe(true);
+    for (const e of PERMISSION_CATALOG.filter(
+      (x) => x.category === "Transactions",
+    )) {
+      expect(e.category).toBe("Transactions");
+    }
+  });
+
+  it("registers the Ledger oversight routes + nav (Phase 3)", () => {
+    const ids = new Set(PERMISSION_CATALOG.map(permissionId));
+    expect(ids.has("api_route:GET /admin/ledger:read")).toBe(true);
+    expect(
+      ids.has("api_route:POST /admin/ledger/verify/:transactionId:execute"),
+    ).toBe(true);
+    expect(ids.has("web_page:/admin/ledger:read")).toBe(true);
+    expect(ids.has("menu_item:menu.ledger:read")).toBe(true);
+    for (const e of PERMISSION_CATALOG.filter((x) => x.category === "Ledger")) {
+      expect(e.category).toBe("Ledger");
+    }
+  });
 });
 
 describe("BUILTIN_ROLES", () => {
@@ -220,5 +246,42 @@ describe("BUILTIN_ROLES", () => {
     expect(support.grants(kycWrite)).toBe(false);
     expect(ops.grants(kycRead)).toBe(false);
     expect(ops.grants(kycWrite)).toBe(false);
+  });
+
+  it("grants Transactions read to ops, compliance and finance; none to support (Phase 3)", () => {
+    const txnRead = PERMISSION_CATALOG.find(
+      (e) => permissionId(e) === "api_route:GET /admin/transactions:read",
+    )!;
+    const ops = BUILTIN_ROLES.find((r) => r.name === "ops")!;
+    const compliance = BUILTIN_ROLES.find((r) => r.name === "compliance")!;
+    const finance = BUILTIN_ROLES.find((r) => r.name === "finance")!;
+    const support = BUILTIN_ROLES.find((r) => r.name === "support")!;
+
+    expect(ops.grants(txnRead)).toBe(true);
+    expect(compliance.grants(txnRead)).toBe(true);
+    expect(finance.grants(txnRead)).toBe(true);
+    expect(support.grants(txnRead)).toBe(false);
+  });
+
+  it("grants Ledger read+execute to finance only; not to ops/compliance/support (Phase 3)", () => {
+    const ledgerRead = PERMISSION_CATALOG.find(
+      (e) => permissionId(e) === "api_route:GET /admin/ledger:read",
+    )!;
+    const ledgerVerify = PERMISSION_CATALOG.find(
+      (e) =>
+        permissionId(e) ===
+        "api_route:POST /admin/ledger/verify/:transactionId:execute",
+    )!;
+    const finance = BUILTIN_ROLES.find((r) => r.name === "finance")!;
+    const ops = BUILTIN_ROLES.find((r) => r.name === "ops")!;
+    const compliance = BUILTIN_ROLES.find((r) => r.name === "compliance")!;
+    const support = BUILTIN_ROLES.find((r) => r.name === "support")!;
+
+    expect(finance.grants(ledgerRead)).toBe(true);
+    expect(finance.grants(ledgerVerify)).toBe(true);
+    expect(ops.grants(ledgerRead)).toBe(false);
+    expect(ops.grants(ledgerVerify)).toBe(false);
+    expect(compliance.grants(ledgerRead)).toBe(false);
+    expect(support.grants(ledgerRead)).toBe(false);
   });
 });

@@ -30,7 +30,21 @@ export interface LedgerEntryRecord {
   amount: string;
   direction: string;
   balanceAfter: string;
+  /** Per-(accountType, accountId) monotonic order; deterministic + immutable. */
+  sequence: number;
   postedAt: Date;
+}
+
+/**
+ * Per-transaction double-entry integrity result (READ-ONLY). Per currency, the
+ * signed sum of legs (credit=+amount, debit=-amount) must net to zero.
+ *   - `balanced` is true only when every currency nets to zero AND legCount > 0.
+ *   - `brokenAt` is the first currency that fails to net to zero (else null).
+ */
+export interface LedgerIntegrityResult {
+  balanced: boolean;
+  legCount: number;
+  brokenAt: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -64,4 +78,32 @@ export interface ILedgerRepository {
     accountId: string,
     limit: number,
   ): Promise<LedgerEntryRecord[]>;
+
+  /**
+   * Admin oversight read (READ-ONLY): returns ALL ledger legs posted by one
+   * transaction, ordered by `sequence` ascending (posting order). Used to render
+   * the transaction-detail view. Returns an empty array for an unknown txn.
+   */
+  listByTransaction(transactionId: string): Promise<LedgerEntryRecord[]>;
+
+  /**
+   * Admin oversight read (READ-ONLY): the most recent `limit` ledger entries for
+   * the given (accountType, accountId, currency) triple, newest-first by
+   * `sequence`. Used by the per-account ledger history viewer.
+   */
+  getAccountHistory(
+    accountType: string,
+    accountId: string,
+    currency: string,
+    limit: number,
+  ): Promise<LedgerEntryRecord[]>;
+
+  /**
+   * Admin oversight read (READ-ONLY): re-sums a transaction's existing legs per
+   * currency and reports whether each currency nets to zero. NEVER mutates — it
+   * only reads and arithmetic-checks the append-only ledger (§3.1).
+   */
+  verifyTransactionIntegrity(
+    transactionId: string,
+  ): Promise<LedgerIntegrityResult>;
 }

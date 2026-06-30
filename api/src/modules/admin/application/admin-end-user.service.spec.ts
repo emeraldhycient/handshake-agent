@@ -97,6 +97,7 @@ function makeLedgerEntry(over?: Partial<LedgerEntryRecord>): LedgerEntryRecord {
     amount: '10.00',
     direction: 'credit',
     balanceAfter: '10.00',
+    sequence: 1,
     postedAt: new Date('2026-06-28T00:00:00.000Z'),
     ...over,
   };

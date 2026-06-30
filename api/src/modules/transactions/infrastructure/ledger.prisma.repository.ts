@@ -17,11 +17,72 @@ import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   ILedgerRepository,
   LedgerEntryRecord,
+  LedgerIntegrityResult,
 } from '../application/ports/ledger.repository.port';
 
 /** A Prisma Decimal exposes a canonical `toString()`. */
 function decimalToString(value: { toString(): string }): string {
   return value.toString();
+}
+
+/** Ledger amounts are Decimal(38,18); 18 fractional digits is the column scale. */
+const LEDGER_SCALE = 18;
+
+/**
+ * Parses a signed decimal string into a scaled BigInt (×10^18) for exact integer
+ * arithmetic — floats cannot represent 18-digit ledger amounts without drift.
+ * Accepts an optional leading '-', an integer part, and an optional fraction.
+ */
+function toScaledBigInt(value: string): bigint {
+  const negative = value.startsWith('-');
+  const unsigned = negative ? value.slice(1) : value;
+  const [intPart, fracPart = ''] = unsigned.split('.');
+  const fracPadded = (fracPart + '0'.repeat(LEDGER_SCALE)).slice(
+    0,
+    LEDGER_SCALE,
+  );
+  const magnitude = BigInt((intPart || '0') + fracPadded);
+  return negative ? -magnitude : magnitude;
+}
+
+const LEDGER_FIELDS = {
+  id: true,
+  transactionId: true,
+  accountType: true,
+  accountId: true,
+  currency: true,
+  amount: true,
+  direction: true,
+  balanceAfter: true,
+  sequence: true,
+  postedAt: true,
+} as const;
+
+/** Maps a raw ledger row (with Prisma Decimal columns) to the app record. */
+function toLedgerRecord(row: {
+  id: string;
+  transactionId: string;
+  accountType: string;
+  accountId: string;
+  currency: string;
+  amount: { toString(): string };
+  direction: string;
+  balanceAfter: { toString(): string };
+  sequence: number;
+  postedAt: Date;
+}): LedgerEntryRecord {
+  return {
+    id: row.id,
+    transactionId: row.transactionId,
+    accountType: row.accountType,
+    accountId: row.accountId,
+    currency: row.currency,
+    amount: decimalToString(row.amount),
+    direction: row.direction,
+    balanceAfter: decimalToString(row.balanceAfter),
+    sequence: row.sequence,
+    postedAt: row.postedAt,
+  };
 }
 
 @Injectable()
@@ -80,29 +141,89 @@ export class LedgerPrismaRepository implements ILedgerRepository {
       },
       orderBy: [{ sequence: 'desc' }, { postedAt: 'desc' }],
       take: limit,
-      select: {
-        id: true,
-        transactionId: true,
-        accountType: true,
-        accountId: true,
-        currency: true,
-        amount: true,
-        direction: true,
-        balanceAfter: true,
-        postedAt: true,
-      },
+      select: LEDGER_FIELDS,
     });
 
-    return rows.map((row) => ({
-      id: row.id,
-      transactionId: row.transactionId,
-      accountType: row.accountType,
-      accountId: row.accountId,
-      currency: row.currency,
-      amount: decimalToString(row.amount),
-      direction: row.direction,
-      balanceAfter: decimalToString(row.balanceAfter),
-      postedAt: row.postedAt,
-    }));
+    return rows.map(toLedgerRecord);
+  }
+
+  /**
+   * Admin oversight (READ-ONLY): all legs of one transaction in posting order
+   * (sequence ascending). Empty array for an unknown transaction.
+   */
+  async listByTransaction(transactionId: string): Promise<LedgerEntryRecord[]> {
+    const rows = await this.prisma.ledgerEntry.findMany({
+      where: { transactionId },
+      orderBy: [{ sequence: 'asc' }],
+      select: LEDGER_FIELDS,
+    });
+    return rows.map(toLedgerRecord);
+  }
+
+  /**
+   * Admin oversight (READ-ONLY): recent `limit` entries for the (accountType,
+   * accountId, currency) triple, newest-first by sequence.
+   */
+  async getAccountHistory(
+    accountType: string,
+    accountId: string,
+    currency: string,
+    limit: number,
+  ): Promise<LedgerEntryRecord[]> {
+    const rows = await this.prisma.ledgerEntry.findMany({
+      where: {
+        accountType: accountType as LedgerAccountType,
+        accountId,
+        currency,
+      },
+      orderBy: [{ sequence: 'desc' }, { postedAt: 'desc' }],
+      take: limit,
+      select: LEDGER_FIELDS,
+    });
+    return rows.map(toLedgerRecord);
+  }
+
+  /**
+   * Admin oversight (READ-ONLY): re-sums a transaction's legs per currency using
+   * exact scaled-integer arithmetic. `amount` is already signed in the schema
+   * (credit positive, debit negative), so the per-currency sum must net to zero.
+   * `brokenAt` is the first currency (in posting order) that fails; `balanced`
+   * requires every currency to net to zero AND at least one leg. NEVER mutates.
+   */
+  async verifyTransactionIntegrity(
+    transactionId: string,
+  ): Promise<LedgerIntegrityResult> {
+    const rows = await this.prisma.ledgerEntry.findMany({
+      where: { transactionId },
+      orderBy: [{ sequence: 'asc' }],
+      select: { currency: true, amount: true },
+    });
+
+    if (rows.length === 0) {
+      return { balanced: false, legCount: 0, brokenAt: null };
+    }
+
+    // Accumulate the scaled-integer sum per currency, preserving first-seen order.
+    const sums = new Map<string, bigint>();
+    const order: string[] = [];
+    for (const row of rows) {
+      const currency = row.currency;
+      if (!sums.has(currency)) {
+        order.push(currency);
+        sums.set(currency, 0n);
+      }
+      sums.set(
+        currency,
+        sums.get(currency)! + toScaledBigInt(decimalToString(row.amount)),
+      );
+    }
+
+    const brokenAt = order.find((c) => sums.get(c) !== 0n) ?? null;
+
+    return {
+      balanced: brokenAt === null,
+      legCount: rows.length,
+      brokenAt,
+    };
   }
 }

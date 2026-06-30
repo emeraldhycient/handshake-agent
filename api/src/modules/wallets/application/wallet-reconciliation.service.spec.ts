@@ -77,6 +77,11 @@ function makeLedgerRepo(ledgerAmount: string): ILedgerRepository {
   return {
     getAccountBalance: jest.fn().mockResolvedValue(ledgerAmount),
     listLedgerEntries: jest.fn().mockResolvedValue([]),
+    listByTransaction: jest.fn().mockResolvedValue([]),
+    getAccountHistory: jest.fn().mockResolvedValue([]),
+    verifyTransactionIntegrity: jest
+      .fn()
+      .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
   };
 }
 
@@ -321,6 +326,11 @@ describe('WalletReconciliationService.reconcileUser', () => {
           Promise.resolve(currency === 'USDT' ? '200' : '500'),
         ),
       listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
 
     const settlementRepo = makeDepositSettlementRepo(true);

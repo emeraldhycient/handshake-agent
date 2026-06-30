@@ -61,6 +61,11 @@ function makeService(overrides?: {
         Promise.resolve(balanceByAsset[currency] ?? '0'),
     ),
     listLedgerEntries: jest.fn().mockResolvedValue([]),
+    listByTransaction: jest.fn().mockResolvedValue([]),
+    getAccountHistory: jest.fn().mockResolvedValue([]),
+    verifyTransactionIntegrity: jest
+      .fn()
+      .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
   };
 
   const rateProvider = {

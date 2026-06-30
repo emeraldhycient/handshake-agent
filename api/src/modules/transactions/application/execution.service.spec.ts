@@ -157,8 +157,13 @@ const STUB_TXN: TransactionRecord = {
   fxRateSnapshot: '1600',
   metadata: { asset: 'USDT', fiatAmount: '10000', fiatCurrency: 'NGN' },
   processorTxRef: null,
+  onChainTxHash: null,
+  failureReason: null,
   pinVerifiedAt: FIXED_NOW,
   createdAt: FIXED_NOW,
+  executedAt: null,
+  completedAt: null,
+  failedAt: null,
 };
 
 const STUB_COLLECTION = {
@@ -204,6 +209,8 @@ function makeTransactionRepo(
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
     listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
     findByUserId: jest.fn().mockResolvedValue([]),
+    listAll: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listByStatus: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
   };
 }
 
@@ -504,6 +511,11 @@ function buildService(
     {
       getAccountBalance: jest.fn().mockResolvedValue('100'),
       listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     },
     // identityService: optional, buy path does not notify
     undefined,
@@ -1161,6 +1173,8 @@ function makeTransactionRepoForSettle(
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
     listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
     findByUserId: jest.fn().mockResolvedValue([]),
+    listAll: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listByStatus: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
   };
 }
 
@@ -1459,8 +1473,13 @@ const STUB_SELL_TXN: TransactionRecord = {
     providerRef: PROVIDER_REF,
   },
   processorTxRef: null,
+  onChainTxHash: null,
+  failureReason: null,
   pinVerifiedAt: FIXED_NOW,
   createdAt: FIXED_NOW,
+  executedAt: null,
+  completedAt: null,
+  failedAt: null,
 };
 
 const STUB_BENEFICIARY = {
@@ -1515,10 +1534,18 @@ function makeBeneficiaryService(
 function makeLedgerRepo(balance: string = '100'): {
   getAccountBalance: jest.Mock;
   listLedgerEntries: jest.Mock;
+  listByTransaction: jest.Mock;
+  getAccountHistory: jest.Mock;
+  verifyTransactionIntegrity: jest.Mock;
 } {
   return {
     getAccountBalance: jest.fn().mockResolvedValue(balance),
     listLedgerEntries: jest.fn().mockResolvedValue([]),
+    listByTransaction: jest.fn().mockResolvedValue([]),
+    getAccountHistory: jest.fn().mockResolvedValue([]),
+    verifyTransactionIntegrity: jest
+      .fn()
+      .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
   };
 }
 
@@ -2014,6 +2041,11 @@ describe('ExecutionService.executeSell', () => {
         return Promise.resolve('100');
       }),
       listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     const directiveService = {
       consume: jest.fn().mockImplementation(() => {
@@ -2110,6 +2142,8 @@ function makeTransactionRepoForSellSettle(
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
     listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
     findByUserId: jest.fn().mockResolvedValue([]),
+    listAll: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listByStatus: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
   };
 }
 
@@ -2466,8 +2500,13 @@ const STUB_SEND_TXN: TransactionRecord = {
     providerRef: SEND_PROVIDER_REF,
   },
   processorTxRef: null,
+  onChainTxHash: null,
+  failureReason: null,
   pinVerifiedAt: FIXED_NOW,
   createdAt: FIXED_NOW,
+  executedAt: null,
+  completedAt: null,
+  failedAt: null,
 };
 
 const STUB_CRYPTO_BENEFICIARY: BeneficiaryRecord = {
@@ -2532,6 +2571,8 @@ function makeTransactionRepoForSend(
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
     listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
     findByUserId: jest.fn().mockResolvedValue([]),
+    listAll: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listByStatus: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
   };
 }
 
@@ -3305,6 +3346,11 @@ describe('ExecutionService.executeSend', () => {
         return Promise.resolve('100');
       }),
       listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     const beneficiaryService = {
       getById: jest.fn().mockImplementation(() => {
@@ -3523,6 +3569,8 @@ function makeTransactionRepoForSendSettle(
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
     listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
     findByUserId: jest.fn().mockResolvedValue([]),
+    listAll: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listByStatus: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
   };
 }
 
@@ -3811,8 +3859,13 @@ const STUB_SWAP_TXN: TransactionRecord = {
     providerSwapId: SWAP_PROVIDER_REF,
   },
   processorTxRef: null,
+  onChainTxHash: null,
+  failureReason: null,
   pinVerifiedAt: FIXED_NOW,
   createdAt: FIXED_NOW,
+  executedAt: null,
+  completedAt: null,
+  failedAt: null,
 };
 
 const STUB_SWAP_EXECUTE_OUTPUT = {
@@ -3879,7 +3932,13 @@ function buildSwapService(
     kycGate?: unknown;
     directiveService?: unknown;
     pinService?: unknown;
-    ledgerRepo?: { getAccountBalance: jest.Mock; listLedgerEntries: jest.Mock };
+    ledgerRepo?: {
+      getAccountBalance: jest.Mock;
+      listLedgerEntries: jest.Mock;
+      listByTransaction?: jest.Mock;
+      getAccountHistory?: jest.Mock;
+      verifyTransactionIntegrity?: jest.Mock;
+    };
     swapProvider?: { getQuote: jest.Mock; execute: jest.Mock };
   } = {},
 ): ExecutionService {
@@ -3909,9 +3968,14 @@ function buildSwapService(
     stubClock,
     makeAssetRegistry(),
     { getById: jest.fn().mockResolvedValue(null) } as never,
-    overrides.ledgerRepo ?? {
+    (overrides.ledgerRepo as never) ?? {
       getAccountBalance: jest.fn().mockResolvedValue('100'),
       listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     },
     undefined, // identityService
     undefined, // whatsAppSender

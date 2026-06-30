@@ -19,6 +19,7 @@ import {
 import type { Prisma } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
+  AdminTxnListFilter,
   CreateSettlingWithProposalData,
   CreateTransactionData,
   ITransactionRepository,
@@ -26,6 +27,7 @@ import type {
   TransactionStatus,
   VelocityIncrementData,
 } from '../application/ports/transaction.repository.port';
+import { TransactionStatus as PrismaTransactionStatus } from '../../../../generated/prisma/client';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -61,8 +63,13 @@ const TRANSACTION_SELECT = {
   fxRateSnapshot: true,
   metadata: true,
   processorTxRef: true,
+  onChainTxHash: true,
+  failureReason: true,
   pinVerifiedAt: true,
   createdAt: true,
+  executedAt: true,
+  completedAt: true,
+  failedAt: true,
 } as const;
 
 /**
@@ -83,8 +90,13 @@ function toRecord(row: {
   // Prisma JsonValue — cast to Record<string, unknown> in the app layer.
   metadata: unknown;
   processorTxRef: string | null;
+  onChainTxHash: string | null;
+  failureReason: string | null;
   pinVerifiedAt: Date | null;
   createdAt: Date;
+  executedAt: Date | null;
+  completedAt: Date | null;
+  failedAt: Date | null;
 }): TransactionRecord {
   return {
     id: row.id,
@@ -102,8 +114,13 @@ function toRecord(row: {
         : null,
     metadata: row.metadata as Record<string, unknown>,
     processorTxRef: row.processorTxRef,
+    onChainTxHash: row.onChainTxHash,
+    failureReason: row.failureReason,
     pinVerifiedAt: row.pinVerifiedAt,
     createdAt: row.createdAt,
+    executedAt: row.executedAt,
+    completedAt: row.completedAt,
+    failedAt: row.failedAt,
   };
 }
 
@@ -448,5 +465,77 @@ export class TransactionPrismaRepository implements ITransactionRepository {
     ]);
 
     return { rows: rows.map(toRecord), total };
+  }
+
+  /**
+   * Admin oversight list (READ-ONLY, cross-user). Newest-first by (createdAt
+   * desc, id desc); keyset-paginated with `cursor` = the last-seen transaction
+   * id. Fetches `limit + 1` rows to derive `nextCursor` without a count query.
+   */
+  async listAll(
+    filter: AdminTxnListFilter,
+    page: { cursor?: string; limit: number },
+  ): Promise<{ items: TransactionRecord[]; nextCursor: string | null }> {
+    const where: Prisma.TransactionWhereInput = {
+      ...(filter.status !== undefined
+        ? { status: filter.status as PrismaTransactionStatus }
+        : {}),
+      ...(filter.type !== undefined
+        ? { type: filter.type as TransactionType }
+        : {}),
+      ...(filter.userId !== undefined ? { userId: filter.userId } : {}),
+      ...(filter.from !== undefined || filter.to !== undefined
+        ? {
+            createdAt: {
+              ...(filter.from !== undefined ? { gte: filter.from } : {}),
+              ...(filter.to !== undefined ? { lte: filter.to } : {}),
+            },
+          }
+        : {}),
+    };
+
+    // Resolve the cursor row's createdAt so the keyset compares on (createdAt,
+    // id). A non-UUID or unknown cursor yields no anchor → return the first page.
+    const cursorAnchor =
+      page.cursor !== undefined && isValidUuid(page.cursor)
+        ? await this.prisma.transaction.findUnique({
+            where: { id: page.cursor },
+            select: { createdAt: true, id: true },
+          })
+        : null;
+
+    const keysetWhere: Prisma.TransactionWhereInput =
+      cursorAnchor !== null
+        ? {
+            OR: [
+              { createdAt: { lt: cursorAnchor.createdAt } },
+              {
+                createdAt: cursorAnchor.createdAt,
+                id: { lt: cursorAnchor.id },
+              },
+            ],
+          }
+        : {};
+
+    const rows = await this.prisma.transaction.findMany({
+      where: { AND: [where, keysetWhere] },
+      select: TRANSACTION_SELECT,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: page.limit + 1,
+    });
+
+    // A full +1 page means there is at least one more row → emit a cursor.
+    const hasMore = rows.length > page.limit;
+    const items = hasMore ? rows.slice(0, page.limit) : rows;
+    const nextCursor = hasMore ? items[items.length - 1].id : null;
+
+    return { items: items.map(toRecord), nextCursor };
+  }
+
+  async listByStatus(
+    status: string,
+    page: { cursor?: string; limit: number },
+  ): Promise<{ items: TransactionRecord[]; nextCursor: string | null }> {
+    return this.listAll({ status }, page);
   }
 }

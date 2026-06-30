@@ -231,6 +231,10 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       {
         getAccountBalance: () => Promise.resolve('0'),
         listLedgerEntries: () => Promise.resolve([]),
+        listByTransaction: () => Promise.resolve([]),
+        getAccountHistory: () => Promise.resolve([]),
+        verifyTransactionIntegrity: () =>
+          Promise.resolve({ balanced: true, legCount: 0, brokenAt: null }),
       },
       // complianceService and configService are required deps but not invoked on the buy path.
       {

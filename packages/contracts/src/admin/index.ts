@@ -7,5 +7,7 @@ export * from "./rbac.dto";
 export * from "./user.dto";
 export * from "./user-mgmt.dto";
 export * from "./kyc-review.dto";
+export * from "./admin-txn.dto";
+export * from "./admin-ledger.dto";
 export * from "./audit.dto";
 export * from "./session.dto";

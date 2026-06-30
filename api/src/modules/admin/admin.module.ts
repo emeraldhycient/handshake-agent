@@ -33,6 +33,8 @@ import { AdminSessionsController } from './presentation/admin-sessions.controlle
 import { AdminSettingsController } from './presentation/admin-settings.controller';
 import { AdminEndUsersController } from './presentation/admin-end-users.controller';
 import { AdminKycReviewController } from './presentation/admin-kyc-review.controller';
+import { AdminTransactionsController } from './presentation/admin-transactions.controller';
+import { AdminLedgerController } from './presentation/admin-ledger.controller';
 import { AdminSessionGuard } from './presentation/admin-session.guard';
 import { PermissionGuard } from './presentation/permission.guard';
 import { AdminStepUpGuard } from './presentation/admin-step-up.guard';
@@ -49,6 +51,8 @@ import { AdminBootstrapService } from './application/admin-bootstrap.service';
 import { AdminSettingsService } from './application/admin-settings.service';
 import { AdminEndUserService } from './application/admin-end-user.service';
 import { AdminKycReviewService } from './application/admin-kyc-review.service';
+import { AdminTxnOversightService } from './application/admin-txn-oversight.service';
+import { AdminLedgerService } from './application/admin-ledger.service';
 import { ADMIN_USER_REPOSITORY } from './application/ports/admin-user.repository.port';
 import { ADMIN_SESSION_REPOSITORY } from './application/ports/admin-session.repository.port';
 import { ROLE_REPOSITORY } from './application/ports/role.repository.port';
@@ -142,6 +146,8 @@ import type { Env } from '../../core/config/env.schema';
     AdminSettingsController,
     AdminEndUsersController,
     AdminKycReviewController,
+    AdminTransactionsController,
+    AdminLedgerController,
   ],
   providers: [
     AdminTokenGuard,
@@ -182,6 +188,11 @@ import type { Env } from '../../core/config/env.schema';
     // Phase 2, Task 5 (ADM-02 / ADM-03): platform end-user management + KYC review.
     AdminEndUserService,
     AdminKycReviewService,
+    // Phase 3, sub-area A (READ-ONLY): transactions + ledger oversight.
+    // TRANSACTION_REPOSITORY comes from the imported TransactionsModule;
+    // LEDGER_REPOSITORY is bound locally below.
+    AdminTxnOversightService,
+    AdminLedgerService,
     AdminSessionGuard,
     PermissionGuard,
     AdminStepUpGuard,

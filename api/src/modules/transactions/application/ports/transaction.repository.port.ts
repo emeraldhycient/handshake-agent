@@ -63,8 +63,18 @@ export interface TransactionRecord {
   fxRateSnapshot: string | null;
   metadata: Record<string, unknown>;
   processorTxRef: string | null;
+  /** On-chain tx hash for SEND (immutable once set); null otherwise. */
+  onChainTxHash: string | null;
+  /** Reason recorded when the transaction failed; null otherwise. */
+  failureReason: string | null;
   pinVerifiedAt: Date | null;
   createdAt: Date;
+  /** Set when execution began (engine flipped to settling); null otherwise. */
+  executedAt: Date | null;
+  /** Set on terminal success; null otherwise. */
+  completedAt: Date | null;
+  /** Set on terminal failure; null otherwise. */
+  failedAt: Date | null;
 }
 
 /**
@@ -178,4 +188,38 @@ export interface ITransactionRepository {
     userId: string,
     opts: { limit: number; cursor?: string },
   ): Promise<TransactionRecord[]>;
+
+  /**
+   * Admin oversight read (READ-ONLY): lists ALL transactions across users,
+   * newest-first, with optional filters. Keyset-paginated on (createdAt desc,
+   * id desc) — `cursor` is the last-seen transaction id; `nextCursor` is the id
+   * of the final row in the page (null when fewer than `limit` rows remain).
+   *
+   * Used by AdminTxnOversightService — never mutates and is NOT scoped to a
+   * single user (the admin surface intentionally spans the whole engine).
+   */
+  listAll(
+    filter: AdminTxnListFilter,
+    page: { cursor?: string; limit: number },
+  ): Promise<{ items: TransactionRecord[]; nextCursor: string | null }>;
+
+  /**
+   * Convenience admin read (READ-ONLY): `listAll` pre-filtered to one status.
+   */
+  listByStatus(
+    status: string,
+    page: { cursor?: string; limit: number },
+  ): Promise<{ items: TransactionRecord[]; nextCursor: string | null }>;
+}
+
+/**
+ * Filter for the admin oversight list (all fields optional). `from`/`to` bound
+ * the createdAt window; `status`/`type`/`userId` narrow by column.
+ */
+export interface AdminTxnListFilter {
+  status?: string;
+  type?: string;
+  userId?: string;
+  from?: Date;
+  to?: Date;
 }

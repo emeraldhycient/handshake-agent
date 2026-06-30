@@ -213,6 +213,11 @@ function makeLedgerRepo(balance = '10.0'): jest.Mocked<ILedgerRepository> {
   return {
     getAccountBalance: jest.fn().mockResolvedValue(balance),
     listLedgerEntries: jest.fn().mockResolvedValue([]),
+    listByTransaction: jest.fn().mockResolvedValue([]),
+    getAccountHistory: jest.fn().mockResolvedValue([]),
+    verifyTransactionIntegrity: jest
+      .fn()
+      .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
   };
 }
 
@@ -704,6 +709,11 @@ describe('ProposalService.createSellProposal', () => {
         return Promise.resolve('100.0');
       }),
       listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     const kycGateOrdered = {
       assertCanTransact: jest.fn().mockImplementation(() => {
@@ -1261,6 +1271,11 @@ describe('ProposalService.createSendProposal', () => {
         return Promise.resolve('100.0');
       }),
       listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     const kycGateOrdered = {
       assertCanTransact: jest.fn().mockImplementation(() => {
