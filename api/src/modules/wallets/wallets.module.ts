@@ -121,6 +121,10 @@ export function selectSwapProvider(
   ],
   exports: [
     WalletService,
+    // Read-only balance/valuation service — exported so AdminModule can inject it
+    // for the ADM-02 end-user detail aggregate (Phase 2, Task 5) without re-binding
+    // its deep dependency graph (WalletService, RATE_PROVIDER, ledger/wallet repos).
+    WalletBalanceService,
     WALLET_PROVIDER,
     SWAP_PROVIDER,
     WALLET_REPOSITORY,

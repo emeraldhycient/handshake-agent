@@ -7,6 +7,11 @@ import { ExpressAdapter } from '@bull-board/express';
 
 import { WalletsModule } from '../wallets/wallets.module';
 import { IdentityModule } from '../identity/identity.module';
+import { TransactionsModule } from '../transactions/transactions.module';
+import { BeneficiariesModule } from '../beneficiaries/beneficiaries.module';
+import { AuthModule } from '../../core/auth/auth.module';
+import { PIN_REPOSITORY } from '../../core/auth/ports/pin.repository.port';
+import { PinPrismaRepository } from '../../core/auth/infrastructure/pin.prisma.repository';
 import { AdminTokenGuard } from './guards/admin-token.guard';
 import { AdminWalletsController } from './presentation/admin-wallets.controller';
 import { WalletBackfillService } from '../wallets/application/wallet-backfill.service';
@@ -26,6 +31,8 @@ import { AdminRolesController } from './presentation/admin-roles.controller';
 import { AdminAuditController } from './presentation/admin-audit.controller';
 import { AdminSessionsController } from './presentation/admin-sessions.controller';
 import { AdminSettingsController } from './presentation/admin-settings.controller';
+import { AdminEndUsersController } from './presentation/admin-end-users.controller';
+import { AdminKycReviewController } from './presentation/admin-kyc-review.controller';
 import { AdminSessionGuard } from './presentation/admin-session.guard';
 import { PermissionGuard } from './presentation/permission.guard';
 import { AdminStepUpGuard } from './presentation/admin-step-up.guard';
@@ -40,6 +47,8 @@ import { AdminInvitationService } from './application/admin-invitation.service';
 import { AdminUserService } from './application/admin-user.service';
 import { AdminBootstrapService } from './application/admin-bootstrap.service';
 import { AdminSettingsService } from './application/admin-settings.service';
+import { AdminEndUserService } from './application/admin-end-user.service';
+import { AdminKycReviewService } from './application/admin-kyc-review.service';
 import { ADMIN_USER_REPOSITORY } from './application/ports/admin-user.repository.port';
 import { ADMIN_SESSION_REPOSITORY } from './application/ports/admin-session.repository.port';
 import { ROLE_REPOSITORY } from './application/ports/role.repository.port';
@@ -93,6 +102,13 @@ import type { Env } from '../../core/config/env.schema';
   imports: [
     WalletsModule,
     IdentityModule,
+    // Phase 2, Task 5 (ADM-02): the end-user detail aggregate injects
+    // TRANSACTION_READ_REPOSITORY (recent transactions) and BeneficiaryService
+    // (linked beneficiaries); AuthModule provides PinService, and PIN_REPOSITORY
+    // is re-bound locally below (AuthModule does not export the token).
+    TransactionsModule,
+    BeneficiariesModule,
+    AuthModule,
     // AdminTokenService injects JwtService for admin session-token sign/verify.
     JwtModule.register({}),
     // Register the wallet-backfill queue in AdminModule so @InjectQueue resolves
@@ -124,6 +140,8 @@ import type { Env } from '../../core/config/env.schema';
     AdminAuditController,
     AdminSessionsController,
     AdminSettingsController,
+    AdminEndUsersController,
+    AdminKycReviewController,
   ],
   providers: [
     AdminTokenGuard,
@@ -161,6 +179,9 @@ import type { Env } from '../../core/config/env.schema';
     AdminUserService,
     AdminBootstrapService,
     AdminSettingsService,
+    // Phase 2, Task 5 (ADM-02 / ADM-03): platform end-user management + KYC review.
+    AdminEndUserService,
+    AdminKycReviewService,
     AdminSessionGuard,
     PermissionGuard,
     AdminStepUpGuard,
@@ -180,6 +201,15 @@ import type { Env } from '../../core/config/env.schema';
     {
       provide: LEDGER_REPOSITORY,
       useClass: LedgerPrismaRepository,
+    },
+    // PIN_REPOSITORY: re-bound locally so AdminEndUserService can force-reset a
+    // user's PIN (ADM-02). AuthModule (imported above) provides PinService but
+    // does not export the underlying PIN_REPOSITORY token — mirrors the local
+    // LEDGER_REPOSITORY / DEPOSIT_SETTLEMENT_REPOSITORY bindings. PrismaService
+    // is global, so the repository has no unmet dependency.
+    {
+      provide: PIN_REPOSITORY,
+      useClass: PinPrismaRepository,
     },
   ],
 })
