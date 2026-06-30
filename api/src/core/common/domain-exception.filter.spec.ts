@@ -46,6 +46,11 @@ import {
   AdminBootstrapForbiddenError,
   AdminNotFoundError,
 } from '../../modules/admin/domain/admin-errors';
+import {
+  SettingNotEditableError,
+  SettingValidationError,
+  MultiCurrencyInvariantError,
+} from '../../modules/admin/domain/settings-errors';
 
 interface ErrorBody {
   statusCode: number;
@@ -150,6 +155,9 @@ describe('DomainExceptionFilter', () => {
     [new BuiltinRoleImmutableError(), 409],
     [new AdminInvitationInvalidError(), 410],
     [new AdminBootstrapForbiddenError(), 403],
+    [new SettingNotEditableError('auth.pin.maxAttempts'), 409],
+    [new SettingValidationError('bad value'), 422],
+    [new MultiCurrencyInvariantError('NGN has no limits'), 422],
   ])('maps admin %s → %i with its code echoed', (err, expected) => {
     const { statusCode, body } = run(filter, err);
     expect(statusCode).toBe(expected);

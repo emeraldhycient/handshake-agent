@@ -25,6 +25,7 @@ import { AdminUsersController } from './presentation/admin-users.controller';
 import { AdminRolesController } from './presentation/admin-roles.controller';
 import { AdminAuditController } from './presentation/admin-audit.controller';
 import { AdminSessionsController } from './presentation/admin-sessions.controller';
+import { AdminSettingsController } from './presentation/admin-settings.controller';
 import { AdminSessionGuard } from './presentation/admin-session.guard';
 import { PermissionGuard } from './presentation/permission.guard';
 import { AdminStepUpGuard } from './presentation/admin-step-up.guard';
@@ -38,6 +39,7 @@ import { RoleService } from './application/role.service';
 import { AdminInvitationService } from './application/admin-invitation.service';
 import { AdminUserService } from './application/admin-user.service';
 import { AdminBootstrapService } from './application/admin-bootstrap.service';
+import { AdminSettingsService } from './application/admin-settings.service';
 import { ADMIN_USER_REPOSITORY } from './application/ports/admin-user.repository.port';
 import { ADMIN_SESSION_REPOSITORY } from './application/ports/admin-session.repository.port';
 import { ROLE_REPOSITORY } from './application/ports/role.repository.port';
@@ -121,6 +123,7 @@ import type { Env } from '../../core/config/env.schema';
     AdminRolesController,
     AdminAuditController,
     AdminSessionsController,
+    AdminSettingsController,
   ],
   providers: [
     AdminTokenGuard,
@@ -157,6 +160,7 @@ import type { Env } from '../../core/config/env.schema';
     AdminInvitationService,
     AdminUserService,
     AdminBootstrapService,
+    AdminSettingsService,
     AdminSessionGuard,
     PermissionGuard,
     AdminStepUpGuard,

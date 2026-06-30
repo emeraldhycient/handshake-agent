@@ -207,6 +207,21 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.GONE,
     message: 'This invitation is invalid or has expired.',
   },
+
+  // ── Admin config settings (layered-config console) → 409 / 422 ──────────────
+  ADMIN_SETTING_NOT_EDITABLE: {
+    status: HttpStatus.CONFLICT,
+    message: 'This setting cannot be edited.',
+  },
+  ADMIN_SETTING_INVALID: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'The proposed value is invalid for this setting.',
+  },
+  ADMIN_MULTI_CURRENCY_INVARIANT: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message:
+      'This change would leave an enabled currency without limits or pricing.',
+  },
 };
 
 const STATUS_TEXT: Readonly<Record<number, string>> = {
