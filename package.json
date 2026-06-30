@@ -14,7 +14,7 @@
     "test": "turbo run test",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,cjs,mjs,json,md,yaml,yml,css}\" --cache",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,cjs,mjs,json,md,yaml,yml,css}\"",
-    "depcruise": "depcruise --config .dependency-cruiser.cjs api web packages",
+    "depcruise": "depcruise --config .dependency-cruiser.cjs api web web-admin packages",
     "prepare": "husky"
   },
   "devDependencies": {

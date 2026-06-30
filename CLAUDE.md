@@ -18,7 +18,7 @@ This is a **separate product** from the `handshake` escrow app in the sibling di
 
 ## 2. Repository layout (monorepo)
 
-`pnpm` workspaces + Turborepo. Two apps at the root (no `apps/` nesting), shared libraries in `packages/`.
+`pnpm` workspaces + Turborepo. Three apps at the root (no `apps/` nesting), shared libraries in `packages/`.
 
 ```
 handshake-agent/
@@ -33,11 +33,12 @@ handshake-agent/
 ├── docs/                    # BRD, PRD, Investor-Memo, adr/
 ├── api/                     # NestJS 11 backend (was handshake-agent-be)
 ├── web/                     # Next.js 16 frontend (was handshake-agent-fe)
+├── web-admin/               # Next.js 16 admin console (separate auth/store; reuses contracts)
 └── packages/
     └── contracts/           # shared Zod schemas + inferred types (FE ⇄ BE ⇄ agent)
 ```
 
-Workspace package names: `@handshake-agent/api`, `@handshake-agent/web`, `@handshake-agent/contracts`. Filter by name (`pnpm --filter @handshake-agent/api …`) or by path (`pnpm --filter ./api …`).
+Workspace package names: `@handshake-agent/api`, `@handshake-agent/web`, `@handshake-agent/web-admin`, `@handshake-agent/contracts`. Filter by name (`pnpm --filter @handshake-agent/api …`) or by path (`pnpm --filter ./api …`).
 
 > New to this layout? [`docs/monorepo.md`](docs/monorepo.md) explains the workspace model: per-package installs, the `workspace:*` shared-package linking, and per-consumer wiring — with a worked example.
 
