@@ -101,6 +101,15 @@ const sendRow = {
   metadata: { asset: 'USDT', cryptoAmount: '10' },
   createdAt: new Date('2026-06-12T09:00:00.000Z'),
 };
+const depositRow = {
+  id: 't3',
+  userId: 'u1',
+  type: 'deposit',
+  status: 'completed',
+  // Deposits store the amount under `amount`, NOT `cryptoAmount`.
+  metadata: { asset: 'USDT', amount: '50' },
+  createdAt: new Date('2026-06-11T08:00:00.000Z'),
+};
 
 describe('TransactionHistoryService.query', () => {
   it('maps rows: direction, formatted amounts, receiptNumber for completed', async () => {
@@ -123,6 +132,17 @@ describe('TransactionHistoryService.query', () => {
     expect(res.totalCount).toBe(2);
     expect(res.truncated).toBe(false);
     expect(res.downloadUrl).toContain('token=tok');
+  });
+
+  it('maps a deposit amount from metadata.amount (deposits use `amount`, not `cryptoAmount`)', async () => {
+    const { svc } = makeService([depositRow], 1);
+    const res = await svc.query('u1', { period: 'this_month' });
+    expect(res.items[0].type).toBe('deposit');
+    expect(res.items[0].direction).toBe('in');
+    // Before the fix this was undefined (mapper only read cryptoAmount).
+    expect(res.items[0].cryptoAmount).toBeDefined();
+    expect(res.items[0].cryptoAmount).toContain('50');
+    expect(res.items[0].cryptoAmount).toContain('USDT');
   });
 
   it('falls back to raw amount for an unregistered/disabled asset (no throw)', async () => {

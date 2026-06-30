@@ -120,8 +120,15 @@ export class TransactionHistoryService {
   ): Promise<TransactionHistoryItem> {
     const meta = row.metadata;
     const asset = typeof meta.asset === 'string' ? meta.asset : undefined;
+    // Deposits (and other inflows) store the amount under `amount`; buy/sell/
+    // send/swap use `cryptoAmount`. Read both so deposit rows show their amount
+    // instead of a blank — verified: deposit metadata is { asset, amount, ... }.
     const cryptoRaw =
-      typeof meta.cryptoAmount === 'string' ? meta.cryptoAmount : undefined;
+      typeof meta.cryptoAmount === 'string'
+        ? meta.cryptoAmount
+        : typeof meta.amount === 'string'
+          ? meta.amount
+          : undefined;
     const fiatRaw =
       typeof meta.fiatAmount === 'string' ? meta.fiatAmount : undefined;
     const fiatCurrency =

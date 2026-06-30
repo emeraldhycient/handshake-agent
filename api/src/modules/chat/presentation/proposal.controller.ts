@@ -402,12 +402,14 @@ export class TransactionStatusController {
         typeof meta[k] === 'string' ? meta[k] : undefined;
       const counterparty =
         str('destination') ?? str('counterparty') ?? str('senderAddress');
+      // Deposits store the amount under `amount`; trades use `cryptoAmount`.
+      const cryptoAmt = str('cryptoAmount') ?? str('amount');
       return {
         id: t.id,
         type: t.type,
         status: t.status,
         ...(str('asset') ? { asset: str('asset') } : {}),
-        ...(str('cryptoAmount') ? { cryptoAmount: str('cryptoAmount') } : {}),
+        ...(cryptoAmt ? { cryptoAmount: cryptoAmt } : {}),
         ...(str('fiatAmount') ? { fiatAmount: str('fiatAmount') } : {}),
         ...(str('fiatCurrency') ? { fiatCurrency: str('fiatCurrency') } : {}),
         ...(counterparty ? { counterparty } : {}),
@@ -487,7 +489,9 @@ export class TransactionStatusController {
       ...(network !== undefined ? { network } : {}),
       ...(typeof meta.cryptoAmount === 'string'
         ? { cryptoAmount: meta.cryptoAmount }
-        : {}),
+        : typeof meta.amount === 'string'
+          ? { cryptoAmount: meta.amount }
+          : {}),
       ...(typeof meta.fiatAmount === 'string'
         ? { fiatAmount: meta.fiatAmount }
         : {}),
