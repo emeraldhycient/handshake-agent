@@ -37,6 +37,7 @@ import type {
   QuoteView,
   ReceiptView,
   ChatAction,
+  TransactionRow,
 } from "@/lib/schemas"
 import {
   PublicConfigResponseSchema,
@@ -93,6 +94,16 @@ export async function getWalletAssets(): Promise<WalletAsset[]> {
 export async function getActivity(): Promise<ActivityGroup[]> {
   await delay(250)
   return z.array(ActivityGroupSchema).parse(activityFixture)
+}
+
+export async function getTransactionHistoryPage(): Promise<{
+  rows: TransactionRow[]
+  hasMore: boolean
+  nextCursor: string | null
+}> {
+  // The mock fixture is a single page; there is never a next page to load.
+  await delay(150)
+  return { rows: [], hasMore: false, nextCursor: null }
 }
 
 export async function getDepositAddress(): Promise<DepositView> {

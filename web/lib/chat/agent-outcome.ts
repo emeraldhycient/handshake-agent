@@ -20,6 +20,7 @@ import type {
 import type { ChatAction, ChatMessage } from "@/lib/schemas"
 import { formatNGN } from "@/lib/format"
 import { ASSET_NAMES, ASSET_TINTS } from "@/lib/constants"
+import { mapHistoryItemToRow } from "@/lib/api/mappers/history-row"
 
 export interface MappedOutcome {
   /** Assistant messages to append for this turn. */
@@ -232,17 +233,16 @@ export function mapOutcomeToMessages(
       role: "assistant",
       kind: "transactions",
       windowLabel: outcome.window.label,
-      rows: outcome.items.map((it) => ({
-        id: it.id,
-        type: it.type,
-        status: it.status,
-        direction: it.direction,
-        amount: `${it.direction === "in" ? "+" : "-"}${it.cryptoAmount ?? it.fiatAmount ?? ""}`,
-        sub: it.createdAt.slice(0, 10),
-      })),
+      rows: outcome.items.map(mapHistoryItemToRow),
       totalCount: outcome.totalCount,
       truncated: outcome.truncated,
       downloadUrl: outcome.downloadUrl,
+      // Frozen absolute window + filter + cursor so "Show more" pages the same window.
+      from: outcome.window.from,
+      to: outcome.window.to,
+      txType: outcome.txType,
+      hasMore: outcome.hasMore,
+      nextCursor: outcome.nextCursor,
     })
   }
 

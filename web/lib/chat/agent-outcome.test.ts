@@ -27,6 +27,46 @@ const buyConfirmation: BuyProposalConfirmation = {
 }
 
 describe("mapOutcomeToMessages", () => {
+  it("maps a transactions outcome carrying the frozen window + pagination", () => {
+    const outcome: AgentTurnOutcome = {
+      kind: "transactions",
+      window: {
+        from: "2026-06-15T00:00:00.000Z",
+        to: "2026-06-29T10:00:00.000Z",
+        label: "Last 2 weeks",
+      },
+      items: [
+        {
+          id: "t1",
+          type: "buy",
+          status: "completed",
+          direction: "in",
+          cryptoAmount: "29.97 USDT",
+          createdAt: "2026-06-20T10:00:00.000Z",
+        },
+      ],
+      totalCount: 12,
+      truncated: true,
+      hasMore: true,
+      nextCursor: "CURSOR1",
+      txType: "all",
+      downloadUrl:
+        "https://api.example.com/transactions/statement/download?token=tok",
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      kind: "transactions",
+      windowLabel: "Last 2 weeks",
+      from: "2026-06-15T00:00:00.000Z",
+      to: "2026-06-29T10:00:00.000Z",
+      txType: "all",
+      hasMore: true,
+      nextCursor: "CURSOR1",
+      rows: [{ id: "t1", amount: "+29.97 USDT", sub: "2026-06-20" }],
+    })
+  })
+
   it("maps a clarification to a single assistant text message", () => {
     const { messages, proposalId } = mapOutcomeToMessages(
       { kind: "clarification", text: "Please clarify?" },

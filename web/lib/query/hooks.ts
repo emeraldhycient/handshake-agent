@@ -6,6 +6,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { gateway } from "@/lib/api/gateway"
+import type { TransactionHistoryPageParams } from "@/lib/api/gateway"
 import { getTransaction, getTransactionDetail } from "@/lib/api/chat"
 import type { ChatAction } from "@/lib/schemas"
 import { qk } from "./keys"
@@ -49,6 +50,19 @@ export function useActivity() {
     queryKey: qk.activity,
     queryFn: () => gateway.getActivity(),
     staleTime: 15_000,
+  })
+}
+
+/**
+ * "Show more" for the chat transactions card. A mutation (not a query) because
+ * it is an imperative, click-driven fetch of the NEXT keyset page of an
+ * already-resolved (frozen) window — the card owns the accumulated rows/cursor
+ * as local UI state and calls this to append the next page.
+ */
+export function useLoadMoreTransactions() {
+  return useMutation({
+    mutationFn: (params: TransactionHistoryPageParams) =>
+      gateway.getTransactionHistoryPage(params),
   })
 }
 

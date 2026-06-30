@@ -223,6 +223,13 @@ export const TransactionsViewSchema = z.object({
   totalCount: z.number(),
   truncated: z.boolean(),
   downloadUrl: z.string(),
+  // Frozen window + filter so "Show more" re-queries the EXACT same window
+  // (a relative range like "today" must not drift between page loads).
+  from: z.string(), // ISO timestamp
+  to: z.string(), // ISO timestamp
+  txType: z.string(),
+  hasMore: z.boolean(),
+  nextCursor: z.string().nullable(),
 })
 export type TransactionsView = z.infer<typeof TransactionsViewSchema>
 
