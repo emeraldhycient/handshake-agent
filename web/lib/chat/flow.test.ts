@@ -381,14 +381,19 @@ describe("flow", () => {
 
   it("startChips + labels", () => {
     expect(startChips()).toEqual(["buy", "balance", "send", "ticket"])
-    expect(chipLabel("buy")).toBe("Buy ₦50,000 of USDT")
+    // Amount-free open prompt — the agent asks for the amount.
+    expect(chipLabel("buy")).toBe("Buy USDT")
   })
 
-  it("chip labels for all 4 start chips", () => {
-    expect(chipLabel("buy")).toBe("Buy ₦50,000 of USDT")
+  it("chip labels for all 4 start chips are amount-free", () => {
+    expect(chipLabel("buy")).toBe("Buy USDT")
     expect(chipLabel("balance")).toBe("Check my balance")
-    expect(chipLabel("send")).toBe("Send 25 USDT")
+    expect(chipLabel("send")).toBe("Send USDT")
     expect(chipLabel("ticket")).toBe("Buy an event ticket")
+    // No chip carries a hardcoded amount.
+    for (const a of ["buy", "sell", "send", "swap"] as const) {
+      expect(chipLabel(a)).not.toMatch(/[₦$]|\d/)
+    }
   })
 
   // ─── Finding #6: swap chip is crypto-to-crypto, not a disguised sell ─────────

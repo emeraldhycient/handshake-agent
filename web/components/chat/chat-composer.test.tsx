@@ -23,9 +23,9 @@ describe("ChatComposer", () => {
 
   it("renders a chip for each action with its label", () => {
     render(<ChatComposer {...defaultProps} />)
-    // chipLabel("buy") === "Buy ₦50,000 of USDT"
+    // chipLabel("buy") === "Buy USDT" (amount-free open prompt)
     expect(
-      screen.getByRole("button", { name: /buy ₦50,000 of usdt/i })
+      screen.getByRole("button", { name: /^buy usdt$/i })
     ).toBeInTheDocument()
     // chipLabel("balance") is something like "Check my balance"
     expect(screen.getByRole("button", { name: /balance/i })).toBeInTheDocument()
@@ -34,9 +34,7 @@ describe("ChatComposer", () => {
   it("clicking a chip calls onChip with the action", async () => {
     const onChip = vi.fn()
     render(<ChatComposer {...defaultProps} onChip={onChip} />)
-    await userEvent.click(
-      screen.getByRole("button", { name: /buy ₦50,000 of usdt/i })
-    )
+    await userEvent.click(screen.getByRole("button", { name: /^buy usdt$/i }))
     expect(onChip).toHaveBeenCalledWith("buy")
   })
 

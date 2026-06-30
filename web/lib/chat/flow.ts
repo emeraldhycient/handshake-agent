@@ -441,11 +441,14 @@ export function buildReceipt(
 
 // ─── Chip helpers ─────────────────────────────────────────────────────────────
 
+// Suggestion chips are AMOUNT-FREE open prompts (consistent with the action
+// buttons' actionPrompt): a chip states the intent, the agent then asks for the
+// amount — it must never assume a figure the user did not choose.
 const CHIP_LABELS: Record<ChatAction, string> = {
-  buy: "Buy ₦50,000 of USDT",
-  sell: "Sell 10 USDT",
+  buy: "Buy USDT",
+  sell: "Sell USDT",
   balance: "Check my balance",
-  send: "Send 25 USDT",
+  send: "Send USDT",
   ticket: "Buy an event ticket",
   receive: "Show my deposit address",
   // Finding #6: swap in this product is crypto-to-crypto only (SwapIntent has
