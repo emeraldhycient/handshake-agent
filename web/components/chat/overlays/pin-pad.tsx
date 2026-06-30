@@ -26,6 +26,8 @@ export function PinPad({
   onBack,
   onFaceId,
   onCancel,
+  error,
+  errorText,
 }: PinPadProps) {
   // Emit-only: the shell wraps this in a focus-trap dialog (see FocusTrap). PinPad must not Esc-dismiss —
   // a PIN gate is dismissed only via Cancel.
@@ -53,6 +55,7 @@ export function PinPad({
             onBack={onBack}
             onFaceId={onFaceId}
             onCancel={onCancel}
+            error={errorText ?? error}
           />
         </div>
       ) : (
@@ -64,6 +67,7 @@ export function PinPad({
           onBack={onBack}
           onFaceId={onFaceId}
           onCancel={onCancel}
+          error={errorText ?? error}
         />
       )}
     </div>
@@ -78,6 +82,7 @@ function PinPadInner({
   onBack,
   onFaceId,
   onCancel,
+  error,
 }: Omit<PinPadProps, "open">) {
   const isDesktop = density === "desktop"
 
@@ -155,6 +160,19 @@ function PinPadInner({
             )
           })}
         </div>
+
+        {/* PIN error message */}
+        {error && (
+          <p
+            role="alert"
+            className={cn(
+              "text-danger mt-3 font-medium",
+              isDesktop ? "text-[12px]" : "text-[13px]"
+            )}
+          >
+            {error}
+          </p>
+        )}
       </div>
 
       {/* Spacer pushes keypad to bottom on mobile */}

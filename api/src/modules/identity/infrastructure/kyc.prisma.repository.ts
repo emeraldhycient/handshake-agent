@@ -22,6 +22,8 @@ import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   CompleteVerificationAtomicInput,
   CompleteVerificationAtomicResult,
+  CompleteVerificationForUserAtomicInput,
+  CompleteVerificationForUserAtomicResult,
   IKycRepository,
 } from '../application/ports/kyc.repository.port';
 
@@ -60,6 +62,7 @@ export class KycPrismaRepository implements IKycRepository {
         data: {
           status: UserStatus.active,
           kycStatus: KycStatus.verified,
+          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           kycTier: KycTier.tier_1,
           pinHash,
         },
@@ -72,6 +75,7 @@ export class KycPrismaRepository implements IKycRepository {
         data: {
           userId: user.id,
           status: KycStatus.verified,
+          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           tier: KycTier.tier_1,
           nin: nin ?? null,
           bvn: bvn ?? null,
@@ -103,5 +107,65 @@ export class KycPrismaRepository implements IKycRepository {
     });
 
     return result;
+  }
+
+  /**
+   * Atomically upgrades an existing web-native User to Tier-1 verified status:
+   *   1. Upserts the KycProfile (web users have no KycProfile yet at this point).
+   *   2. Updates the User row: kycStatus=verified, kycTier=tier_1, status=active, pinHash.
+   *
+   * NOTE: nin/bvn stored plain for the skeleton.
+   * TODO(NFR-1): encrypt nin/bvn at rest before production.
+   */
+  async completeVerificationForUserAtomic(
+    input: CompleteVerificationForUserAtomicInput,
+  ): Promise<CompleteVerificationForUserAtomicResult> {
+    const { userId, nin, bvn, firstName, lastName, dateOfBirth, pinHash, now } =
+      input;
+
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Upsert the KycProfile (web users have no KycProfile yet)
+      // NOTE: nin/bvn stored plain — TODO(NFR-1): encrypt at rest.
+      await tx.kycProfile.upsert({
+        where: { userId },
+        create: {
+          userId,
+          status: KycStatus.verified,
+          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
+          tier: KycTier.tier_1,
+          nin: nin ?? null,
+          bvn: bvn ?? null,
+          firstName,
+          lastName,
+          dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
+          verifiedAt: now,
+        },
+        update: {
+          status: KycStatus.verified,
+          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
+          tier: KycTier.tier_1,
+          nin: nin ?? null,
+          bvn: bvn ?? null,
+          firstName,
+          lastName,
+          dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
+          verifiedAt: now,
+        },
+      });
+
+      // 2. Update the User
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          kycStatus: KycStatus.verified,
+          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
+          kycTier: KycTier.tier_1,
+          status: UserStatus.active,
+          pinHash,
+        },
+      });
+    });
+
+    return { userId };
   }
 }

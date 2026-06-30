@@ -18,6 +18,7 @@ import {
 } from '../../../../generated/prisma/client';
 import type { Prisma } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { encodeCursor, decodeCursor } from '../domain/transaction-cursor';
 import type {
   CreateSettlingWithProposalData,
   CreateTransactionData,
@@ -30,6 +31,25 @@ import type {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * RFC 4122 UUID pattern (versions 1–8, case-insensitive).
+ * Used as a guard before any query against a `@db.Uuid` column: Postgres
+ * rejects non-UUID strings with "invalid input syntax for type uuid", which
+ * would surface as a 500 when e.g. a Blockradar manual-withdraw reference
+ * (not a UUID) reaches findByIdempotencyKey.
+ */
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Returns true when `value` is a syntactically valid UUID.
+ * A false return means querying a `@db.Uuid` column with this value would
+ * throw; callers must return null early rather than forwarding to Prisma.
+ */
+function isValidUuid(value: string): boolean {
+  return UUID_REGEX.test(value);
+}
 
 const TRANSACTION_SELECT = {
   id: true,
@@ -217,7 +237,26 @@ async function writeVelocityIncrements(
 export class TransactionPrismaRepository implements ITransactionRepository {
   constructor(private readonly prisma: PrismaService) {}
 
+  async findById(id: string): Promise<TransactionRecord | null> {
+    // Guard: Transaction.id is @db.Uuid — a non-UUID value would cause Postgres
+    // to throw "invalid input syntax for type uuid". Return null safely instead.
+    if (!isValidUuid(id)) return null;
+
+    const row = await this.prisma.transaction.findUnique({
+      where: { id },
+      select: TRANSACTION_SELECT,
+    });
+
+    return row === null ? null : toRecord(row);
+  }
+
   async findByIdempotencyKey(key: string): Promise<TransactionRecord | null> {
+    // Guard: Transaction.idempotencyKey is @db.Uuid — external references
+    // (e.g. a Blockradar manual-withdraw reference that is not a UUID) must
+    // be short-circuited here to avoid a Postgres "invalid input syntax" error
+    // that would surface as a 500 in the webhook handler.
+    if (!isValidUuid(key)) return null;
+
     const row = await this.prisma.transaction.findUnique({
       where: { idempotencyKey: key },
       select: TRANSACTION_SELECT,
@@ -333,6 +372,22 @@ export class TransactionPrismaRepository implements ITransactionRepository {
     });
   }
 
+  async findByUserId(
+    userId: string,
+    opts: { limit: number; cursor?: string },
+  ): Promise<TransactionRecord[]> {
+    const rows = await this.prisma.transaction.findMany({
+      where: {
+        userId,
+        ...(opts.cursor ? { id: { lt: opts.cursor } } : {}),
+      },
+      select: TRANSACTION_SELECT,
+      orderBy: { id: 'desc' },
+      take: opts.limit,
+    });
+    return rows.map(toRecord);
+  }
+
   async updateStatus(
     id: string,
     status: TransactionStatus,
@@ -365,5 +420,61 @@ export class TransactionPrismaRepository implements ITransactionRepository {
           : {}),
       },
     });
+  }
+
+  async listByUserInRange(input: {
+    userId: string;
+    from: Date;
+    to: Date;
+    types?: string[];
+    limit: number;
+    cursor?: string;
+  }): Promise<{
+    rows: TransactionRecord[];
+    total: number;
+    hasMore: boolean;
+    nextCursor: string | null;
+  }> {
+    // The full-window predicate — drives the total count regardless of cursor.
+    const baseWhere: Prisma.TransactionWhereInput = {
+      userId: input.userId,
+      createdAt: { gte: input.from, lte: input.to },
+      ...(input.types && input.types.length > 0
+        ? { type: { in: input.types as TransactionType[] } }
+        : {}),
+    };
+
+    // Keyset seek on (createdAt desc, id desc): rows strictly "after" the cursor.
+    // A malformed cursor decodes to null and is ignored (first page).
+    const cursor = input.cursor ? decodeCursor(input.cursor) : null;
+    const where: Prisma.TransactionWhereInput = cursor
+      ? {
+          ...baseWhere,
+          OR: [
+            { createdAt: { lt: cursor.createdAt } },
+            { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+          ],
+        }
+      : baseWhere;
+
+    // One round-trip: the page (newest first, fetch limit+1 to detect more) +
+    // the exact total count of the full window (NOT narrowed by the cursor).
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.transaction.findMany({
+        where,
+        select: TRANSACTION_SELECT,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: input.limit + 1,
+      }),
+      this.prisma.transaction.count({ where: baseWhere }),
+    ]);
+
+    const hasMore = rows.length > input.limit;
+    const page = hasMore ? rows.slice(0, input.limit) : rows;
+    const last = page[page.length - 1];
+    const nextCursor =
+      hasMore && last ? encodeCursor(last.createdAt, last.id) : null;
+
+    return { rows: page.map(toRecord), total, hasMore, nextCursor };
   }
 }

@@ -206,6 +206,43 @@ describe('FlutterwaveProvider', () => {
       expect(result.providerRef).toBe('FLW-TOP-REF-001');
     });
 
+    it('sends X-Scenario-Key on createCollection when FLUTTERWAVE_SCENARIO_KEY is set (sandbox)', async () => {
+      const cfg = {
+        get: (k: string) =>
+          (
+            ({
+              FLUTTERWAVE_BASE_URL: BASE_URL,
+              FLUTTERWAVE_SECRET_KEY: SECRET_KEY,
+              FLUTTERWAVE_SCENARIO_KEY: 'scenario:successful',
+            }) as Record<string, unknown>
+          )[k],
+      } as unknown as ConfigService;
+      const p = new FlutterwaveProvider(http, cfg);
+      http.post.mockReturnValue(of(axiosOk(CREATE_COLLECTION_RESPONSE)));
+
+      await p.createCollection(INPUT);
+
+      const [, , config] = http.post.mock.calls[0] as [
+        string,
+        unknown,
+        { headers: Record<string, string> },
+      ];
+      expect(config.headers['X-Scenario-Key']).toBe('scenario:successful');
+    });
+
+    it('omits X-Scenario-Key when not configured (production default)', async () => {
+      http.post.mockReturnValue(of(axiosOk(CREATE_COLLECTION_RESPONSE)));
+
+      await provider.createCollection(INPUT);
+
+      const [, , config] = http.post.mock.calls[0] as [
+        string,
+        unknown,
+        { headers: Record<string, string> },
+      ];
+      expect(config.headers['X-Scenario-Key']).toBeUndefined();
+    });
+
     it('throws a descriptive error including the API message on non-2xx', async () => {
       const axiosErr = Object.assign(new Error('Bad Request'), {
         response: {
@@ -232,6 +269,32 @@ describe('FlutterwaveProvider', () => {
       http.post.mockReturnValue(throwError(() => axiosErr));
 
       await expect(provider.createCollection(INPUT)).rejects.toThrow(/401/);
+    });
+
+    it('attaches httpStatus STRUCTURALLY on a non-2xx (so the engine refunds on a definitive 4xx, not a 5xx/network)', async () => {
+      const axiosErr = Object.assign(new Error('Bad Request'), {
+        response: {
+          status: 400,
+          data: {
+            status: 'error',
+            message: 'merchant is not enabled to make transfers',
+          },
+        },
+        isAxiosError: true,
+      });
+      http.post.mockReturnValue(throwError(() => axiosErr));
+
+      await expect(provider.createCollection(INPUT)).rejects.toMatchObject({
+        httpStatus: 400,
+      });
+    });
+
+    it('does NOT attach httpStatus on a network error (no axios response) — ambiguous, leave settling', async () => {
+      http.post.mockReturnValue(throwError(() => new Error('ECONNRESET')));
+      const netErr = await provider
+        .createCollection(INPUT)
+        .catch((e: unknown) => e);
+      expect((netErr as { httpStatus?: number }).httpStatus).toBeUndefined();
     });
 
     it('re-throws non-Flutterwave errors as-is', async () => {

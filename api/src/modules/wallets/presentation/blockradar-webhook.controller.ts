@@ -154,6 +154,14 @@ export class BlockradarWebhookController {
       return this.handleWithdrawEvent(payload, false);
     }
 
+    if (payload?.event === 'swap.success') {
+      return this.handleSwapEvent(payload, true);
+    }
+
+    if (payload?.event === 'swap.failed') {
+      return this.handleSwapEvent(payload, false);
+    }
+
     this.logger.log(
       { event: payload?.event },
       'Blockradar webhook: unhandled event — acking without processing',
@@ -304,6 +312,66 @@ export class BlockradarWebhookController {
       this.logger.error(
         { err, reference: params.reference },
         'Blockradar webhook: send settlement threw — acking 200 anyway',
+      );
+    }
+  }
+
+  /**
+   * Handles event=swap.success or swap.failed: routes to
+   * ExecutionService.settleSwap using the reference (our idempotencyKey),
+   * the toAmount received, and the on-chain hash (for success). Errors are swallowed.
+   */
+  private async handleSwapEvent(
+    payload: BlockradarWebhookBody,
+    success: boolean,
+  ): Promise<AckResponse> {
+    const data = payload.data;
+    const reference = data?.reference;
+
+    if (typeof reference !== 'string' || reference.length === 0) {
+      this.logger.warn(
+        { data, success },
+        'Blockradar webhook: swap event missing reference — acking without processing',
+      );
+      return { status: 'ok' };
+    }
+
+    const toAmount =
+      success && typeof data?.amount === 'string' ? data.amount : undefined;
+    const hash =
+      success && typeof data?.hash === 'string' ? data.hash : undefined;
+
+    // Ack-then-process: errors must NOT change the 200.
+    await this.settleSwapAndNotify({ reference, success, toAmount, hash });
+
+    return { status: 'ok' };
+  }
+
+  /**
+   * Calls ExecutionService.settleSwap and swallows errors so the 200 ack holds.
+   */
+  private async settleSwapAndNotify(params: {
+    reference: string;
+    success: boolean;
+    toAmount?: string;
+    hash?: string;
+  }): Promise<void> {
+    try {
+      const result = await this.executionService.settleSwap({
+        reference: params.reference,
+        success: params.success,
+        toAmount: params.toAmount,
+        hash: params.hash,
+      });
+
+      this.logger.log(
+        { reference: params.reference, status: result.status },
+        'Blockradar webhook: swap settled',
+      );
+    } catch (err: unknown) {
+      this.logger.error(
+        { err, reference: params.reference },
+        'Blockradar webhook: swap settlement threw — acking 200 anyway',
       );
     }
   }

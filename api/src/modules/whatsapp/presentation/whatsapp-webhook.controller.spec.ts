@@ -2,7 +2,7 @@ import { ForbiddenException, Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 
 import type { Env } from '../../../core/config/env.schema';
-import type { IInboundHandler } from '../application/ports/inbound-handler.port';
+import type { WhatsAppInboundService } from '../application/whatsapp-inbound.service';
 import { WhatsAppWebhookController } from './whatsapp-webhook.controller';
 
 // ---------------------------------------------------------------------------
@@ -22,9 +22,11 @@ function makeConfig(verifyToken: string): ConfigService<Env, true> {
   } as unknown as ConfigService<Env, true>;
 }
 
-/** Build a minimal IInboundHandler mock. */
-function makeHandler(): jest.Mocked<IInboundHandler> {
-  return { handleInbound: jest.fn().mockResolvedValue(undefined) };
+/** Build a minimal WhatsAppInboundService mock. */
+function makeInboundService(): jest.Mocked<WhatsAppInboundService> {
+  return {
+    ingest: jest.fn().mockResolvedValue(undefined),
+  } as unknown as jest.Mocked<WhatsAppInboundService>;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +107,7 @@ describe('WhatsAppWebhookController', () => {
     it('returns the challenge when mode=subscribe and token matches', () => {
       const controller = new WhatsAppWebhookController(
         makeConfig(VERIFY_TOKEN),
-        makeHandler(),
+        makeInboundService(),
       );
 
       const result = controller.verify({
@@ -120,7 +122,7 @@ describe('WhatsAppWebhookController', () => {
     it('throws ForbiddenException when the token does not match', () => {
       const controller = new WhatsAppWebhookController(
         makeConfig(VERIFY_TOKEN),
-        makeHandler(),
+        makeInboundService(),
       );
 
       expect(() =>
@@ -135,7 +137,7 @@ describe('WhatsAppWebhookController', () => {
     it('throws ForbiddenException when mode is not "subscribe"', () => {
       const controller = new WhatsAppWebhookController(
         makeConfig(VERIFY_TOKEN),
-        makeHandler(),
+        makeInboundService(),
       );
 
       expect(() =>
@@ -154,7 +156,7 @@ describe('WhatsAppWebhookController', () => {
 
       const controller = new WhatsAppWebhookController(
         makeConfig(''),
-        makeHandler(),
+        makeInboundService(),
       );
 
       expect(() =>
@@ -171,65 +173,58 @@ describe('WhatsAppWebhookController', () => {
   });
 
   describe('POST /whatsapp/webhook (receive)', () => {
-    it('calls handleInbound once with the mapped DTO and returns a 200 ack body', async () => {
-      const handler = makeHandler();
+    it('calls inboundService.ingest with the parsed payload and returns a 200 ack body', async () => {
+      const inboundService = makeInboundService();
       const controller = new WhatsAppWebhookController(
         makeConfig(VERIFY_TOKEN),
-        handler,
+        inboundService,
       );
 
       const result = await controller.receive(TEXT_PAYLOAD);
 
-      expect(handler.handleInbound).toHaveBeenCalledTimes(1);
-      expect(handler.handleInbound).toHaveBeenCalledWith(
-        expect.objectContaining({
-          externalMessageId: 'wamid.HBgL2347088639675VBIhAkZZA==',
-          fromAddress: '2347088639675',
-          phoneNumberId: '1248377751698132',
-          waName: 'Test User',
-          text: 'buy 5000 naira of usdt',
-          timestamp: '1720000000',
-          channel: 'whatsapp',
-        }),
+      expect(inboundService.ingest).toHaveBeenCalledTimes(1);
+      expect(inboundService.ingest).toHaveBeenCalledWith(
+        expect.objectContaining({ object: 'whatsapp_business_account' }),
       );
       expect(result).toEqual({ status: 'received' });
     });
 
-    it('calls handler zero times and returns 200 for a status-only payload', async () => {
-      const handler = makeHandler();
+    it('calls ingest for a status-only payload (schema passes) and returns 200', async () => {
+      const inboundService = makeInboundService();
       const controller = new WhatsAppWebhookController(
         makeConfig(VERIFY_TOKEN),
-        handler,
+        inboundService,
       );
 
       const result = await controller.receive(STATUS_ONLY_PAYLOAD);
 
-      expect(handler.handleInbound).not.toHaveBeenCalled();
+      // The schema-valid payload is passed to ingest; the service decides to skip it
+      expect(inboundService.ingest).toHaveBeenCalledTimes(1);
       expect(result).toEqual({ status: 'received' });
     });
 
-    it('returns 200 even when the handler throws (error is caught + logged)', async () => {
-      const handler = makeHandler();
-      handler.handleInbound.mockRejectedValue(new Error('handler boom'));
+    it('returns 200 even when ingest throws (error is caught + logged)', async () => {
+      const inboundService = makeInboundService();
+      inboundService.ingest.mockRejectedValue(new Error('ingest boom'));
 
       const controller = new WhatsAppWebhookController(
         makeConfig(VERIFY_TOKEN),
-        handler,
+        inboundService,
       );
 
       const result = await controller.receive(TEXT_PAYLOAD);
       expect(result).toEqual({ status: 'received' });
     });
 
-    it('returns 200 with ack body for a malformed payload (parse failure)', async () => {
+    it('returns 200 with ack body for a malformed payload (parse failure) without calling ingest', async () => {
+      const inboundService = makeInboundService();
       const controller = new WhatsAppWebhookController(
         makeConfig(VERIFY_TOKEN),
-        makeHandler(),
+        inboundService,
       );
 
-      // Not a valid WhatsAppInbound payload
-
       const result = await controller.receive({ totally: 'wrong' } as any);
+      expect(inboundService.ingest).not.toHaveBeenCalled();
       expect(result).toEqual({ status: 'received' });
     });
   });

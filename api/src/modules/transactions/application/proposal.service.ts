@@ -11,16 +11,19 @@ import {
   BuyProposalConfirmationSchema,
   SellProposalConfirmationSchema,
   SendProposalConfirmationSchema,
+  SwapProposalConfirmationSchema,
 } from '@handshake-agent/contracts';
 import type {
   BuyProposalConfirmation,
   SellProposalConfirmation,
   SendProposalConfirmation,
+  SwapProposalConfirmation,
 } from '@handshake-agent/contracts';
 
 import type {
   PricingConfig,
   ComplianceConfig,
+  SwapConfig,
 } from '../../../core/config/configuration';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
@@ -29,7 +32,11 @@ import { QuotesService } from '../../quotes/application/quotes.service';
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { WalletService } from '../../wallets/application/wallet.service';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
-import { InsufficientBalanceError } from '../domain/execution-errors';
+import {
+  BaseRateMisconfiguredError,
+  InsufficientBalanceError,
+  SwapSameAssetError,
+} from '../domain/execution-errors';
 import {
   BeneficiaryNotFoundError,
   BeneficiaryWrongTypeError,
@@ -43,6 +50,10 @@ import type { IQuoteRepository } from './ports/quote.repository.port';
 import { QUOTE_REPOSITORY } from './ports/quote.repository.port';
 import type { ILedgerRepository } from './ports/ledger.repository.port';
 import { LEDGER_REPOSITORY } from './ports/ledger.repository.port';
+import {
+  SWAP_PROVIDER,
+  type ISwapProvider,
+} from '../../wallets/application/ports/swap-provider.port';
 import { toScaled } from '../domain/ledger';
 import { resolveBaseRate } from './resolve-base-rate';
 
@@ -85,6 +96,23 @@ export interface CreateSendProposalOutput {
   /** Send proposals do not persist a Quote row — the fee is stored in Proposal parameters. */
   quoteId: null;
   confirmation: SendProposalConfirmation;
+}
+
+export interface CreateSwapProposalInput {
+  userId: string;
+  conversationId?: string;
+  /** Asset being swapped out of the user's wallet (e.g. 'USDT'). */
+  fromAsset: string;
+  /** Asset to receive into the user's wallet (e.g. 'TRX'). */
+  toAsset: string;
+  /** Human-scaled amount of fromAsset to swap (decimal string, e.g. "100"). */
+  amount: string;
+}
+
+export interface CreateSwapProposalOutput {
+  proposalId: string;
+  quoteId: string;
+  confirmation: SwapProposalConfirmation;
 }
 
 /**
@@ -175,6 +203,8 @@ export class ProposalService {
     private readonly ledgerRepo: ILedgerRepository,
     private readonly complianceService: ComplianceService,
     private readonly configService: ConfigService,
+    @Inject(SWAP_PROVIDER)
+    private readonly swapProvider: ISwapProvider,
   ) {}
 
   async createBuyProposal(
@@ -627,5 +657,216 @@ export class ProposalService {
     });
 
     return { proposalId, quoteId: null, confirmation };
+  }
+
+  /**
+   * Swap-proposal use-case (CLAUDE.md §3.1).
+   *
+   * Flow (all guards BEFORE persisting — §3.1):
+   *   1. fromAsset === toAsset → SwapSameAssetError (engine rule; schema has no .refine()).
+   *   2. Resolve the user's (user, network) wallet for fromAsset (getOrProvisionNetworkWallet).
+   *   3. Balance check: ledger balance ≥ amount (fromAsset).
+   *      → throws InsufficientBalanceError if short.
+   *   4. Resolve asset provider ids via assetRegistry.assetProviderId (Blockradar).
+   *   5. Call SWAP_PROVIDER.getQuote to get the live swap price.
+   *   6. Fold swapSpreadBps into the displayed rate — NEVER surface spread as a line item
+   *      (root CLAUDE.md §3.1). Rate returned to the user = provider rate × (1 - spreadBps/10000).
+   *   7. KYC/velocity gate on the NGN-equivalent value of the fromAmount (§3.3).
+   *   8. Persist Quote(type=swap) + Proposal(type=swap, pending).
+   *   9. Return { proposalId, quoteId, confirmation } parsed through contract schema.
+   *
+   * ORDER: balance + asset resolution + quote + KYC BEFORE persisting (§3.1).
+   */
+  async createSwapProposal(
+    input: CreateSwapProposalInput,
+  ): Promise<CreateSwapProposalOutput> {
+    const { userId, conversationId, fromAsset, toAsset, amount } = input;
+    const now = this.clock.now();
+
+    // 1. fromAsset === toAsset guard (engine rule, CLAUDE.md note on SwapIntentSchema).
+    if (fromAsset === toAsset) {
+      throw new SwapSameAssetError(fromAsset);
+    }
+
+    // 2. Resolve the user's (user, network) wallet for the fromAsset.
+    const network = this.assetRegistry.defaultNetworkFor(fromAsset);
+    const wallet = await this.walletService.getOrProvisionNetworkWallet(
+      userId,
+      network,
+    );
+
+    // 3. Balance check — ledger is authoritative. Must cover fromAmount.
+    const balance = await this.ledgerRepo.getAccountBalance(
+      'user_wallet',
+      wallet.id,
+      fromAsset,
+    );
+
+    if (toScaled(balance) < toScaled(amount)) {
+      throw new InsufficientBalanceError(balance, amount, fromAsset);
+    }
+
+    // 4. Resolve provider asset ids for the swap call.
+    const fromAssetId = this.assetRegistry.assetProviderId(
+      fromAsset,
+      'blockradar',
+    );
+    const toAssetId = this.assetRegistry.assetProviderId(toAsset, 'blockradar');
+
+    // 5. Fetch a live swap quote from the provider.
+    const swapQuote = await this.swapProvider.getQuote({
+      addressId: wallet.providerReference,
+      fromAssetId,
+      toAssetId,
+      amount,
+    });
+
+    // 6. Fold swapSpreadBps INTO the displayed rate.
+    // The displayed rate is LOWER than the provider rate by spreadBps so the platform
+    // captures the margin between the provider execution rate and the displayed rate.
+    // NEVER surface spreadBps as a separate line item (CLAUDE.md §3.1).
+    const swapConfig = this.configService.get<SwapConfig>('swap');
+    const spreadBps = swapConfig?.spreadBps ?? 0;
+    // effective rate = provider rate × (1 - spreadBps / 10000)
+    // Exact integer/BigInt math — multiply by the integer (10000 - spreadBps)
+    // then divide by 10000, instead of float-converting `1 - spreadBps/10000`
+    // to a string (which introduced float drift and could not represent the
+    // misconfiguration boundary precisely — finding #27).
+    const providerRateScaled = toScaled(swapQuote.rate);
+    const SCALE = 10n ** 18n;
+    const SPREAD_DENOM = 10_000n;
+    const spreadMultiplierNum = SPREAD_DENOM - BigInt(spreadBps);
+    // Fail closed if the spread drives the effective rate to <= 0 (spreadBps
+    // >= 100%, i.e. >= 10000). A 0/negative rate would otherwise quote a
+    // 0/negative toAmount — a 0-value swap that bypasses the KYC/velocity gate
+    // and debits the user for nothing (§3.1). Treat it as a pricing
+    // misconfiguration rather than producing a degenerate quote.
+    if (spreadMultiplierNum <= 0n || providerRateScaled <= 0n) {
+      throw new BaseRateMisconfiguredError(
+        fromAsset,
+        this.assetRegistry.defaultFiat(),
+      );
+    }
+    const effectiveRateScaled =
+      (providerRateScaled * spreadMultiplierNum) / SPREAD_DENOM;
+    // Convert back to a decimal string (2dp for rates).
+    const isNegRate = effectiveRateScaled < 0n;
+    const absRate = isNegRate ? -effectiveRateScaled : effectiveRateScaled;
+    const wholeRate = absRate / SCALE;
+    const fracRate = absRate % SCALE;
+    const fracRateStr =
+      fracRate === 0n
+        ? ''
+        : '.' + fracRate.toString().padStart(18, '0').replace(/0+$/, '');
+    const effectiveRate =
+      (isNegRate ? '-' : '') + wholeRate.toString() + fracRateStr;
+
+    // Compute toAmount using the effective (spread-folded) rate.
+    // fromAmount × effectiveRate = toAmount (BigInt-exact).
+    const toAmountScaled = (toScaled(amount) * effectiveRateScaled) / SCALE;
+    const isNegTo = toAmountScaled < 0n;
+    const absTo = isNegTo ? -toAmountScaled : toAmountScaled;
+    const wholeTo = absTo / SCALE;
+    const fracTo = absTo % SCALE;
+    const fracToStr =
+      fracTo === 0n
+        ? ''
+        : '.' + fracTo.toString().padStart(18, '0').replace(/0+$/, '');
+    const effectiveToAmount =
+      (isNegTo ? '-' : '') + wholeTo.toString() + fracToStr;
+
+    // 7. KYC/velocity gate on the NGN-equivalent of fromAmount (§3.3).
+    // Use baseRate for the fromAsset.
+    const pricingConfig = this.configService.get<PricingConfig>('pricing');
+    const baseFiat = this.assetRegistry.defaultFiat();
+    const baseRate = resolveBaseRate(pricingConfig, fromAsset, baseFiat);
+    const LEDGER_SCALE = 10n ** 18n;
+    const scaledFrom = toScaled(amount);
+    const scaledNgn18 =
+      (scaledFrom * toScaled(String(baseRate))) / LEDGER_SCALE;
+    const isNegNgn = scaledNgn18 < 0n;
+    const absNgn = isNegNgn ? -scaledNgn18 : scaledNgn18;
+    const wholeNgn = absNgn / LEDGER_SCALE;
+    const fracNgn = absNgn % LEDGER_SCALE;
+    const fracNgnStr =
+      fracNgn === 0n
+        ? ''
+        : '.' + fracNgn.toString().padStart(18, '0').replace(/0+$/, '');
+    const ngnEquivalentStr =
+      (isNegNgn ? '-' : '') + wholeNgn.toString() + fracNgnStr;
+
+    await this.kycGate.assertCanTransact({
+      userId,
+      fiatAmount: ngnEquivalentStr,
+      fiatCurrency: baseFiat,
+      asset: fromAsset,
+    });
+
+    // 8. Persist Quote + Proposal.
+    const expiresInSec =
+      swapQuote.estimatedArrivalSec > 0
+        ? Math.min(swapQuote.estimatedArrivalSec, 120) // cap quote TTL at 2 min
+        : 60;
+    const expiresAt = new Date(now.getTime() + expiresInSec * 1000);
+
+    // Quote row: uses toAsset as the "cryptoAmount" (amount received) and
+    // fromAsset as the "asset" (what is given up). fiatAmount is the NGN equivalent.
+    const { id: quoteId } = await this.quoteRepo.create({
+      userId,
+      type: 'swap',
+      asset: fromAsset,
+      fiatCurrency: baseFiat,
+      fiatAmount: ngnEquivalentStr,
+      cryptoAmount: amount, // fromAmount (input)
+      fxRate: effectiveRate,
+      baseRate: swapQuote.rate, // raw provider rate for audit
+      spreadBps,
+      processingFeeBps: 0,
+      processingFeeAmount: '0',
+      quotedAt: now,
+      expiresAt,
+    });
+
+    const parameters: Record<string, unknown> = {
+      fromAsset,
+      toAsset,
+      fromAmount: amount,
+      toAmount: effectiveToAmount,
+      rate: effectiveRate,
+      networkFee: swapQuote.networkFee,
+      transactionFee: swapQuote.transactionFee,
+      estimatedArrivalSec: swapQuote.estimatedArrivalSec,
+      walletId: wallet.id,
+      fromAssetId,
+      toAssetId,
+      quoteId,
+    };
+    const parametersChecksum = sha256Hex(parameters);
+
+    const { id: proposalId } = await this.proposalRepo.create({
+      userId,
+      conversationId,
+      type: 'swap',
+      parameters,
+      parametersChecksum,
+      quoteId,
+      expiresAt,
+    });
+
+    // 9. Build itemized confirmation and parse through contract schema.
+    const confirmation = SwapProposalConfirmationSchema.parse({
+      proposalId,
+      fromAsset,
+      toAsset,
+      fromAmount: amount,
+      toAmount: effectiveToAmount,
+      rate: effectiveRate,
+      networkFee: swapQuote.networkFee,
+      transactionFee: swapQuote.transactionFee,
+      estimatedArrivalSec: swapQuote.estimatedArrivalSec,
+      expiresAt: expiresAt.toISOString(),
+    });
+
+    return { proposalId, quoteId, confirmation };
   }
 }

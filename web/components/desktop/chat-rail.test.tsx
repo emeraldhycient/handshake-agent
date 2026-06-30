@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createChatStore } from "@/lib/store/chat-store"
 import { chipLabel } from "@/lib/chat/flow"
 import { ChatRail } from "./chat-rail"
@@ -18,6 +18,16 @@ function makeWrapper() {
 
 // Synchronous scheduler — no real setTimeout
 const immediate = (fn: () => void) => fn()
+
+vi.mock("@/hooks/use-voice-recorder", () => ({
+  useVoiceRecorder: () => ({
+    status: "recording",
+    seconds: 0,
+    start: vi.fn(),
+    stop: vi.fn().mockResolvedValue(new Blob(["x"], { type: "audio/webm" })),
+    cancel: vi.fn(),
+  }),
+}))
 
 describe("ChatRail", () => {
   it("renders the greeting message on the desktop surface", () => {
@@ -89,5 +99,21 @@ describe("ChatRail", () => {
 
     // PinPad should be gone
     expect(screen.queryByText("Enter your PIN")).not.toBeInTheDocument()
+  })
+
+  it('onRecordStop calls sendVoiceToAgent("d", blob) when recording stops', async () => {
+    const user = userEvent.setup()
+    const voiceApi = vi
+      .fn()
+      .mockResolvedValue({ outcome: { kind: "clarification", text: "ok" } })
+    const store = createChatStore({ schedule: immediate, voiceApi })
+    const sendVoiceSpy = vi.spyOn(store.getState(), "sendVoiceToAgent")
+    render(<ChatRail store={store} />, { wrapper: makeWrapper() })
+
+    // useVoiceRecorder is mocked to status:"recording", so Stop button is present
+    await user.click(screen.getByLabelText("Stop recording"))
+    await waitFor(() =>
+      expect(sendVoiceSpy).toHaveBeenCalledWith("d", expect.any(Blob))
+    )
   })
 })

@@ -1,13 +1,23 @@
 "use client"
 
+import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusPill } from "@/components/shared/status-pill"
-import { useActivity } from "@/lib/query/hooks"
+import { TransactionDetailModal } from "@/components/shared/transaction-detail-modal"
+import { useActivityFeed } from "@/lib/query/hooks"
 import type { ActivityTabProps } from "@/types/components"
 
 export function ActivityTab({ className }: ActivityTabProps) {
-  const { data: groups, isLoading, isError } = useActivity()
+  const {
+    groups,
+    isLoading,
+    isError,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useActivityFeed()
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   if (isLoading) {
     return (
@@ -61,7 +71,7 @@ export function ActivityTab({ className }: ActivityTabProps) {
     )
   }
 
-  if (!groups || groups.length === 0) {
+  if (groups.length === 0) {
     return (
       <div
         className={cn(
@@ -97,10 +107,15 @@ export function ActivityTab({ className }: ActivityTabProps) {
             </div>
             <div className="overflow-hidden rounded-[18px] border border-border bg-card">
               {group.items.map((item, i) => (
-                <div
+                <button
                   key={item.id}
+                  type="button"
+                  data-tx-id={item.id}
+                  aria-label={`View details for ${item.title}`}
+                  onClick={() => setSelectedId(item.id)}
                   className={cn(
-                    "flex items-center gap-3 px-[15px] py-[13px]",
+                    "flex w-full cursor-pointer items-center gap-3 px-[15px] py-[13px] text-left",
+                    "transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none",
                     i > 0 && "border-t border-border"
                   )}
                 >
@@ -129,12 +144,33 @@ export function ActivityTab({ className }: ActivityTabProps) {
                       </StatusPill>
                     </div>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </div>
         ))}
+
+        {hasNextPage && (
+          <button
+            type="button"
+            onClick={() => void fetchNextPage()}
+            disabled={isFetchingNextPage}
+            className={cn(
+              "mx-auto rounded-full border border-border px-5 py-2.5 text-[13px] font-semibold text-foreground",
+              "transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none",
+              "disabled:cursor-not-allowed disabled:opacity-60"
+            )}
+          >
+            {isFetchingNextPage ? "Loading…" : "Load more"}
+          </button>
+        )}
       </div>
+
+      {/* ── Transaction detail modal ─────────────────────────────────────────── */}
+      <TransactionDetailModal
+        transactionId={selectedId}
+        onClose={() => setSelectedId(null)}
+      />
     </div>
   )
 }

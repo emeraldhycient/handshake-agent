@@ -73,6 +73,7 @@ function makeFakeWalletProvider(): IWalletProvider {
     getWithdrawalStatus: jest
       .fn()
       .mockResolvedValue({ status: 'pending' as const }),
+    listWalletAssets: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -314,6 +315,7 @@ describe('WN-5: WalletBackfillService (Testcontainers Postgres)', () => {
       getWithdrawalStatus: jest
         .fn()
         .mockResolvedValue({ status: 'pending' as const }),
+      listWalletAssets: jest.fn().mockResolvedValue([]),
     };
     const walletService = new WalletService(
       failingProvider,

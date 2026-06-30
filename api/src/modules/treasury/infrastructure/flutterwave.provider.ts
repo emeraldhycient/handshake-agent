@@ -129,6 +129,8 @@ export class FlutterwaveProvider implements IPaymentProvider {
   private readonly baseUrl: string;
   private readonly authHeader: string;
   private readonly webhookSecret: string;
+  /** Optional sandbox scenario key; sent as X-Scenario-Key on collections when set. */
+  private readonly scenarioKey: string;
 
   constructor(
     private readonly http: HttpService,
@@ -141,6 +143,8 @@ export class FlutterwaveProvider implements IPaymentProvider {
     this.authHeader = `Bearer ${secretKey}`;
     this.webhookSecret =
       this.config.get<string>('FLUTTERWAVE_WEBHOOK_SECRET') ?? '';
+    this.scenarioKey =
+      this.config.get<string>('FLUTTERWAVE_SCENARIO_KEY') ?? '';
   }
 
   // ---------------------------------------------------------------------------
@@ -161,10 +165,18 @@ export class FlutterwaveProvider implements IPaymentProvider {
       is_permanent: false,
     };
 
+    // In sandbox, X-Scenario-Key tells Flutterwave which scenario to simulate
+    // (e.g. "scenario:successful" → simulate the pay-in and fire the webhook).
+    // Only sent when configured; production leaves FLUTTERWAVE_SCENARIO_KEY empty.
+    const headers = this.headers();
+    if (this.scenarioKey) {
+      headers['X-Scenario-Key'] = this.scenarioKey;
+    }
+
     try {
       const response = await firstValueFrom(
         this.http.post<CreateVirtualAccountResponse>(url, body, {
-          headers: this.headers(),
+          headers,
         }),
       );
 
@@ -333,15 +345,26 @@ export class FlutterwaveProvider implements IPaymentProvider {
   /**
    * Translates an Axios rejection into a descriptive Error. Flutterwave v3
    * returns error bodies with a `message` field on non-2xx responses.
+   *
+   * The HTTP status is preserved STRUCTURALLY (as an `httpStatus` property), not
+   * only in the message, so the execution engine can distinguish a DEFINITIVE
+   * client rejection (4xx — collection/payout NOT created) from an ambiguous
+   * 5xx/network failure and refund the reserve safely (no double-spend). Mirrors
+   * BlockradarProvider.wrapError; consumed by ExecutionService.extractHttpStatus.
+   * Network errors (no axios `response`) leave httpStatus undefined → ambiguous.
    */
   private wrapError(operation: string, err: unknown): Error {
     const axiosErr = err as AxiosError<FlutterwaveErrorBody>;
     const body = axiosErr?.response?.data;
+    const httpStatus = axiosErr?.response?.status;
     if (body?.message) {
-      const status = axiosErr.response?.status ?? 'unknown';
-      return new Error(
-        `Flutterwave ${operation} error (HTTP ${status}): ${body.message}`,
+      const wrapped = new Error(
+        `Flutterwave ${operation} error (HTTP ${httpStatus ?? 'unknown'}): ${body.message}`,
       );
+      if (httpStatus !== undefined) {
+        Object.assign(wrapped, { httpStatus });
+      }
+      return wrapped;
     }
     return err instanceof Error ? err : new Error(String(err));
   }

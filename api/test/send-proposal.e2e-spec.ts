@@ -94,6 +94,17 @@ const fakeWalletProvider: IWalletProvider = {
   getWithdrawalStatus: jest
     .fn()
     .mockResolvedValue({ status: 'pending' as const }),
+  listWalletAssets: jest.fn().mockResolvedValue([
+    {
+      assetId: 'e2e-usdt-tron-asset-id',
+      symbol: 'USDT',
+      name: 'Tether USD',
+      network: 'TRON',
+      contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+      decimals: 6,
+      isMainnet: false,
+    },
+  ]),
 };
 
 // Deterministic mock name-enquiry (Fix E: BeneficiaryService requires the port).
@@ -213,6 +224,7 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
       ledgerRepo,
       complianceService,
       config,
+      undefined as never, // swapProvider: not needed on send proposal path
     );
 
     // Seed a KYC-verified user

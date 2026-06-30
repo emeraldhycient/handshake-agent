@@ -211,6 +211,64 @@ describe('KycGateService.assertCanTransact', () => {
     await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
   });
 
+  // ── Positive-amount guard (finding #20) ──────────────────────────────────
+  // The gate must fail closed on a non-positive fiat-equivalent regardless of
+  // which money path called it. BUY/SELL are protected incidentally by the quote
+  // domain, but SEND/SWAP route their fiat-equivalent straight through the gate —
+  // a zero/negative amount must never pass the tier + velocity checks (§3.1/§3.3).
+
+  it('throws TierLimitExceededError for a zero fiat amount (never gate-bypass)', async () => {
+    const svc = makeService(makeUser(), '0', 0);
+    const input = { ...BASE_INPUT, fiatAmount: '0' };
+    await expect(svc.assertCanTransact(input)).rejects.toThrow(
+      TierLimitExceededError,
+    );
+    await expect(svc.assertCanTransact(input)).rejects.toMatchObject({
+      code: 'TIER_LIMIT_EXCEEDED',
+    });
+  });
+
+  it('throws TierLimitExceededError for a "0.00" fiat amount (scaled-zero)', async () => {
+    const svc = makeService(makeUser(), '0', 0);
+    const input = { ...BASE_INPUT, fiatAmount: '0.00' };
+    await expect(svc.assertCanTransact(input)).rejects.toThrow(
+      TierLimitExceededError,
+    );
+  });
+
+  it('throws TierLimitExceededError for a negative fiat amount', async () => {
+    const svc = makeService(makeUser(), '0', 0);
+    const input = { ...BASE_INPUT, fiatAmount: '-100' };
+    await expect(svc.assertCanTransact(input)).rejects.toThrow(
+      TierLimitExceededError,
+    );
+  });
+
+  it('the positive-amount guard fires AFTER the KYC/tier gate (still blocks unverified first)', async () => {
+    // A zero amount from an unverified user surfaces the KYC error, not the
+    // amount error — KYC is the higher-severity gate and runs first.
+    const svc = makeService(
+      makeUser({ kycStatus: 'verified', kycTier: 'unverified' }),
+    );
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, fiatAmount: '0' }),
+    ).rejects.toThrow(KycNotVerifiedError);
+  });
+
+  it('the positive-amount guard does NOT increment velocity (rejects before usage load)', async () => {
+    const velocityRepo = makeVelocityRepo('0', 0);
+    const svc = new KycGateService(
+      makeIdentityRepo(makeUser()),
+      velocityRepo,
+      stubConfig,
+      stubClock,
+    );
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, fiatAmount: '0' }),
+    ).rejects.toThrow(TierLimitExceededError);
+    expect(velocityRepo.getDailyUsage).not.toHaveBeenCalled();
+  });
+
   // ── Daily fiat velocity ───────────────────────────────────────────────────
 
   it('throws VelocityExceededError (fiat) when daily spend + fiatAmount would exceed dailyFiatMax', async () => {

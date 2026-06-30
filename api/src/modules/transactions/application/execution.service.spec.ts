@@ -7,8 +7,8 @@
  *   3. Wrong owner / bad status → ProposalNotExecutableError.
  *   4. Drift exceeded → QuoteDriftError, no Transaction.
  *   5. KYC gate throws → propagates, no Transaction.
- *   6. Directive consume throws (replay) → propagates, PIN NOT checked after.
- *   7. PIN invalid → propagates, no collection/outbox.
+ *   6. Directive consume throws (replay) → propagates after PIN check, no Transaction.
+ *   7. PIN invalid → propagates WITHOUT consuming the directive (I5), no collection/outbox.
  *   8. Idempotent replay → returns existing result, no new side effects.
  *
  * Call ORDER is asserted to guarantee security invariants.
@@ -52,6 +52,8 @@ import {
   SettlementInvalidStatusError,
   InsufficientBalanceError,
   BaseRateMisconfiguredError,
+  ProviderUnavailableError,
+  SwapUnavailableError,
 } from '../domain/execution-errors';
 import { DirectiveReplayError } from '../domain/directive-errors';
 import { PinInvalidError } from '../../../core/auth/domain/pin-errors';
@@ -194,11 +196,14 @@ function makeTransactionRepo(
   created: TransactionRecord = STUB_TXN,
 ): jest.Mocked<ITransactionRepository> {
   return {
+    findById: jest.fn().mockResolvedValue(null),
     findByIdempotencyKey: jest.fn().mockResolvedValue(existing),
     create: jest.fn().mockResolvedValue(created),
     createSettlingWithProposal: jest.fn().mockResolvedValue(created),
     updateStatus: jest.fn().mockResolvedValue(undefined),
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
+    listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+    findByUserId: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -255,6 +260,14 @@ function makeSettlementRepo(
       .fn()
       .mockResolvedValue({ receiptNumber: STUB_RECEIPT_NUMBER }),
     settleSendRefundAtomic: jest.fn().mockResolvedValue(undefined),
+    // Swap methods — unused by buy/sell/send tests; swap tests override via makeSwapSettlementRepo.
+    createSwapSettlingWithReserveAtomic: jest
+      .fn()
+      .mockResolvedValue({ txn: STUB_TXN }),
+    settleSwapFinalizeAtomic: jest
+      .fn()
+      .mockResolvedValue({ receiptNumber: STUB_RECEIPT_NUMBER }),
+    settleSwapRefundAtomic: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -666,6 +679,8 @@ describe('ExecutionService.executeBuy', () => {
       }),
       updateStatus: jest.fn().mockResolvedValue(undefined),
       mergeMetadata: jest.fn().mockResolvedValue(undefined),
+      listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+      findByUserId: jest.fn().mockResolvedValue([]),
     };
 
     const svc = buildService({
@@ -688,9 +703,10 @@ describe('ExecutionService.executeBuy', () => {
     expect(callOrder.indexOf('pin')).toBeLessThan(
       callOrder.indexOf('create_txn'),
     );
-    // Directive comes before PIN.
-    expect(callOrder.indexOf('directive')).toBeLessThan(
-      callOrder.indexOf('pin'),
+    // I5: PIN comes BEFORE the directive is consumed — a wrong PIN must not burn
+    // the single-use directive.
+    expect(callOrder.indexOf('pin')).toBeLessThan(
+      callOrder.indexOf('directive'),
     );
   });
 
@@ -721,6 +737,8 @@ describe('ExecutionService.executeBuy', () => {
       }),
       updateStatus: jest.fn().mockResolvedValue(undefined),
       mergeMetadata: jest.fn().mockResolvedValue(undefined),
+      listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+      findByUserId: jest.fn().mockResolvedValue([]),
     };
 
     const svc = buildService({
@@ -859,7 +877,7 @@ describe('ExecutionService.executeBuy', () => {
 
   // ── Directive consume throws (replay) ─────────────────────────────────────
 
-  it('directive consume throws replay → propagates; PIN NOT called; no Transaction', async () => {
+  it('directive consume throws replay → DirectiveReplayError propagates; no Transaction (replay protection intact after I5 reorder)', async () => {
     const replayError = new DirectiveReplayError();
     const pinService = makePinService();
     const transactionRepo = makeTransactionRepo();
@@ -873,32 +891,92 @@ describe('ExecutionService.executeBuy', () => {
     await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
       DirectiveReplayError,
     );
-    // PIN must NOT be called after directive failure.
-    expect(pinService.verifyPin).not.toHaveBeenCalled();
+    // I5 reorder: PIN is now verified BEFORE the directive consume, so PIN IS
+    // checked here — but a replayed directive is still rejected at consume and
+    // NO transaction is created. Single-use replay protection is fully intact.
+    expect(pinService.verifyPin).toHaveBeenCalledTimes(1);
     expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
   // ── PIN invalid ───────────────────────────────────────────────────────────
 
-  it('PIN invalid → propagates; no collection/outbox created', async () => {
+  it('I5: wrong PIN propagates WITHOUT consuming the one-shot directive (legitimate retry survives); no collection/outbox', async () => {
     const pinError = new PinInvalidError(4);
     const paymentProvider = makePaymentProvider();
     const outboxRepo = makeOutboxRepo();
     const transactionRepo = makeTransactionRepo();
+    const directiveService = makeDirectiveService();
 
     const svc = buildService({
       pinService: makePinService(pinError),
       paymentProvider,
       outboxRepo,
       transactionRepo,
+      directiveService,
     });
 
     await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
       PinInvalidError,
     );
+    // I5: PIN is verified BEFORE the directive is consumed, so a wrong-PIN typo
+    // must NOT burn the single-use directive — the user can retry the SAME
+    // directive instead of being forced to re-authorize from scratch.
+    expect(directiveService.consume).not.toHaveBeenCalled();
     expect(paymentProvider.createCollection).not.toHaveBeenCalled();
     expect(outboxRepo.create).not.toHaveBeenCalled();
     expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+  });
+
+  // ── Payment provider failure (graceful mapping) ───────────────────────────
+
+  it('createCollection failure → ProviderUnavailableError (mapped to a clear error, not a raw 500)', async () => {
+    // The real Flutterwave adapter throws a descriptive Error on a non-2xx /
+    // network failure. The engine must translate ANY such failure into a typed
+    // ProviderUnavailableError so the chat surface returns a clear message
+    // instead of leaking an opaque 500.
+    const providerError = new Error(
+      'Flutterwave createCollection error (HTTP 503): service unavailable',
+    );
+    const paymentProvider = makePaymentProvider(providerError);
+
+    const svc = buildService({ paymentProvider });
+
+    await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+  });
+
+  it('createCollection failure → marks the Transaction failed (no zombie settling buy), no outbox row, re-throws', async () => {
+    // FUNDS-SAFETY (§3.1): the buy reserve posts NO ledger entry (the user pays
+    // NGN later), so a createCollection failure means no funds moved. But the
+    // settling Transaction + consumed proposal/velocity are committed at Step 7.
+    // Leaving it 'settling' with no VA is a zombie buy the user can never pay for
+    // and the reconciler cannot act on (no outbox row). The engine must mark the
+    // Transaction failed so the idempotent-replay path does not return an empty
+    // payment block. No reserve refund is needed (the buy never debited the user).
+    const providerError = new Error(
+      'Flutterwave createCollection error (HTTP 503): service unavailable',
+    );
+    const paymentProvider = makePaymentProvider(providerError);
+    const transactionRepo = makeTransactionRepo();
+    const outboxRepo = makeOutboxRepo();
+
+    const svc = buildService({ paymentProvider, transactionRepo, outboxRepo });
+
+    await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // Transaction marked failed so it is not a zombie 'settling' buy.
+    expect(transactionRepo.updateStatus).toHaveBeenCalledTimes(1);
+    const [failedId, failedStatus, failedFields] =
+      transactionRepo.updateStatus.mock.calls[0];
+    expect(failedId).toBe(TXN_ID);
+    expect(failedStatus).toBe('failed');
+    expect(failedFields?.failedAt).toBeInstanceOf(Date);
+    // No VA was persisted and no outbox row was enqueued.
+    expect(transactionRepo.mergeMetadata).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
   });
 
   // ── Idempotent replay ─────────────────────────────────────────────────────
@@ -1073,11 +1151,14 @@ function makeTransactionRepoForSettle(
   txn: TransactionRecord | null = SETTLING_TXN,
 ): jest.Mocked<ITransactionRepository> {
   return {
+    findById: jest.fn().mockResolvedValue(null),
     findByIdempotencyKey: jest.fn().mockResolvedValue(txn),
     create: jest.fn().mockResolvedValue(SETTLING_TXN),
     createSettlingWithProposal: jest.fn().mockResolvedValue(SETTLING_TXN),
     updateStatus: jest.fn().mockResolvedValue(undefined),
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
+    listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+    findByUserId: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -1371,6 +1452,10 @@ const STUB_SELL_TXN: TransactionRecord = {
     asset: 'USDT',
     cryptoAmount: '16.000000',
     netFiatAmount: '24600',
+    fiatCurrency: 'NGN',
+    // BUG 2 — velocity contribution persisted at reserve, read back on refund.
+    velocityFiatAmount: '24600',
+    velocityFiatCurrency: 'NGN',
     beneficiaryId: BENEFICIARY_ID,
     walletId: 'wallet-id',
     providerRef: PROVIDER_REF,
@@ -1651,9 +1736,9 @@ describe('ExecutionService.executeSell', () => {
     /* eslint-enable @typescript-eslint/no-unsafe-assignment */
   });
 
-  // ── Multi-currency: fiatCurrency threaded into atomic metadata ──────────────
+  // ── BUG 2: velocity contribution persisted to metadata for later reversal ──
 
-  it('includes fiatCurrency from the stored quote in atomic metadata write so settleSellPayout can build finalize ledger entries', async () => {
+  it('persists velocityFiatAmount + velocityFiatCurrency in atomic metadata so a later refund can reverse the daily-spend it consumed', async () => {
     const settlementRepo = makeSettlementRepo(
       null,
       { receiptNumber: STUB_RECEIPT_NUMBER },
@@ -1665,10 +1750,6 @@ describe('ExecutionService.executeSell', () => {
 
     await svc.executeSell(SELL_BASE_INPUT);
 
-    // fiatCurrency must be persisted in the sell metadata (mirroring executeBuy) so
-    // that settleSellPayout can thread it into buildSellFinalizeEntries. Without it,
-    // finalize reads meta.fiatCurrency === undefined and the ledger build crashes on
-    // fiatCurrency.toLowerCase().
     /* eslint-disable @typescript-eslint/no-unsafe-assignment */
     expect(
       settlementRepo.createSellSettlingWithReserveAtomic,
@@ -1676,7 +1757,8 @@ describe('ExecutionService.executeSell', () => {
       expect.objectContaining({
         txnData: expect.objectContaining({
           metadata: expect.objectContaining({
-            fiatCurrency: 'NGN',
+            velocityFiatAmount: expect.any(String),
+            velocityFiatCurrency: 'NGN',
           }),
         }),
       }),
@@ -1848,12 +1930,15 @@ describe('ExecutionService.executeSell', () => {
     expect(
       settlementRepo.createSellSettlingWithReserveAtomic,
     ).not.toHaveBeenCalled();
-    expect(pinService.verifyPin).not.toHaveBeenCalled();
+    // I5 reorder: PIN is verified before the directive consume, so PIN IS checked
+    // here — but the replayed directive is still rejected and no Transaction is
+    // created. Replay protection is intact.
+    expect(pinService.verifyPin).toHaveBeenCalledTimes(1);
   });
 
   // ── PIN invalid ───────────────────────────────────────────────────────────
 
-  it('wrong PIN → PinInvalidError, no collection/outbox', async () => {
+  it('I5: wrong PIN propagates WITHOUT consuming the one-shot directive (legitimate retry survives); no collection/outbox', async () => {
     const pinService = makePinService(new PinInvalidError(4));
     const settlementRepo = makeSettlementRepo(
       null,
@@ -1861,12 +1946,20 @@ describe('ExecutionService.executeSell', () => {
       STUB_SELL_TXN,
     );
     const outboxRepo = makeOutboxRepo();
+    const directiveService = makeDirectiveService(STUB_SELL_GRANT);
 
-    const svc = buildSellService({ pinService, settlementRepo, outboxRepo });
+    const svc = buildSellService({
+      pinService,
+      settlementRepo,
+      outboxRepo,
+      directiveService,
+    });
 
     await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
       PinInvalidError,
     );
+    // I5: PIN before directive consume — a wrong PIN must not burn the directive.
+    expect(directiveService.consume).not.toHaveBeenCalled();
     expect(
       settlementRepo.createSellSettlingWithReserveAtomic,
     ).not.toHaveBeenCalled();
@@ -1942,7 +2035,7 @@ describe('ExecutionService.executeSell', () => {
 
   // ── Gauntlet order: balance → directive → pin → idempotency → atomic create ──
 
-  it('asserts balance-check → directive.consume → pin.verify → idempotency → atomic create, in order', async () => {
+  it('asserts balance-check → pin.verify → directive.consume → idempotency → atomic create, in order (I5: PIN before directive)', async () => {
     const callOrder: string[] = [];
 
     const ledgerRepo = {
@@ -1972,6 +2065,8 @@ describe('ExecutionService.executeSell', () => {
       createSettlingWithProposal: jest.fn().mockResolvedValue(STUB_SELL_TXN),
       updateStatus: jest.fn().mockResolvedValue(undefined),
       mergeMetadata: jest.fn().mockResolvedValue(undefined),
+      listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+      findByUserId: jest.fn().mockResolvedValue([]),
     };
     const settlementRepo = makeSettlementRepo(
       null,
@@ -2001,17 +2096,117 @@ describe('ExecutionService.executeSell', () => {
     await svc.executeSell(SELL_BASE_INPUT);
 
     expect(callOrder.indexOf('balance_check')).toBeLessThan(
-      callOrder.indexOf('directive'),
-    );
-    expect(callOrder.indexOf('directive')).toBeLessThan(
       callOrder.indexOf('pin'),
     );
+    // I5: PIN is verified before the directive is consumed.
     expect(callOrder.indexOf('pin')).toBeLessThan(
+      callOrder.indexOf('directive'),
+    );
+    // Directive is still consumed before the idempotency check.
+    expect(callOrder.indexOf('directive')).toBeLessThan(
       callOrder.indexOf('idempotency'),
     );
     expect(callOrder.indexOf('idempotency')).toBeLessThan(
       callOrder.indexOf('atomic_create'),
     );
+  });
+
+  // ── FUNDS-SAFETY: synchronous createPayout rejection (§3.1) ─────────────────
+  // The USDT reserve (Step 9, user_wallet → clearing) is committed BEFORE the
+  // fiat payout is initiated (Step 10). When createPayout throws synchronously
+  // the engine must compensate ONLY on a DEFINITIVE rejection (HTTP 4xx — the
+  // payout request was rejected and NEVER processed). On an AMBIGUOUS failure
+  // (5xx / timeout / no status) the transfer MIGHT be in flight, so refunding
+  // would risk a double-payout — those are left 'settling' for the reconciler.
+
+  it('createPayout rejected with a definitive 4xx → refunds the reserve, no outbox row, re-throws', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
+    const outboxRepo = makeOutboxRepo();
+    // Mirrors the processor adapter on a 422 "invalid bank account": a definitive
+    // client rejection that was NEVER processed/disbursed.
+    const paymentProvider = makeSellPaymentProvider(
+      Object.assign(
+        new Error('Flutterwave createPayout error (HTTP 422): invalid account'),
+        { httpStatus: 422 },
+      ),
+    );
+
+    const svc = buildSellService({
+      settlementRepo,
+      outboxRepo,
+      paymentProvider,
+    });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // The reserve must be refunded (clearing → user_wallet) and the tx marked failed.
+    expect(settlementRepo.settleSellRefundAtomic).toHaveBeenCalledTimes(1);
+    expect(settlementRepo.settleSellRefundAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transactionId: SELL_TXN_ID,
+        userId: USER_ID,
+        walletId: 'wallet-id',
+        cryptoAmount: '16.000000',
+        asset: 'USDT',
+      }),
+    );
+    // No processor_payout outbox row — the payout never happened.
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('createPayout fails with an ambiguous 5xx → leaves tx settling (NO refund), no outbox row, re-throws', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
+    const outboxRepo = makeOutboxRepo();
+    const paymentProvider = makeSellPaymentProvider(
+      Object.assign(
+        new Error('Flutterwave createPayout error (HTTP 503): upstream down'),
+        { httpStatus: 503 },
+      ),
+    );
+
+    const svc = buildSellService({
+      settlementRepo,
+      outboxRepo,
+      paymentProvider,
+    });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // Ambiguous — the payout may be in flight; refunding risks a double-payout.
+    expect(settlementRepo.settleSellRefundAtomic).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('createPayout fails with a network error (no HTTP status) → leaves tx settling (NO refund), re-throws', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      STUB_SELL_TXN,
+    );
+    const paymentProvider = makeSellPaymentProvider(
+      new Error('socket hang up'),
+    );
+
+    const svc = buildSellService({ settlementRepo, paymentProvider });
+
+    await expect(svc.executeSell(SELL_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // No HTTP status → ambiguous → never refund.
+    expect(settlementRepo.settleSellRefundAtomic).not.toHaveBeenCalled();
   });
 });
 
@@ -2034,11 +2229,14 @@ function makeTransactionRepoForSellSettle(
   txn: TransactionRecord | null,
 ): jest.Mocked<ITransactionRepository> {
   return {
+    findById: jest.fn().mockResolvedValue(null),
     findByIdempotencyKey: jest.fn().mockResolvedValue(txn),
     create: jest.fn(),
     createSettlingWithProposal: jest.fn(),
     updateStatus: jest.fn(),
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
+    listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+    findByUserId: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -2187,6 +2385,19 @@ describe('ExecutionService.settleSellPayout', () => {
     expect(result.status).toBe('failed');
     expect(settlementRepo.settleSellRefundAtomic).toHaveBeenCalledTimes(1);
     expect(settlementRepo.settleSellFinalizeAtomic).not.toHaveBeenCalled();
+
+    // BUG 2 — the refund reverses the velocity this sell consumed at reserve,
+    // using the exact amount/currency persisted in metadata.
+    expect(settlementRepo.settleSellRefundAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest objectContaining matcher is typed `any`
+        velocityReversal: expect.objectContaining({
+          userId: USER_ID,
+          fiatCurrency: 'NGN',
+          fiatAmountStr: '24600',
+        }),
+      }),
+    );
   });
 
   // ── Idempotent: already completed ─────────────────────────────────────────
@@ -2393,6 +2604,9 @@ const STUB_SEND_TXN: TransactionRecord = {
     toAddress: SEND_TO_ADDRESS,
     network: 'TRON',
     providerRef: SEND_PROVIDER_REF,
+    // BUG 2 — velocity contribution persisted at reserve, read back on refund.
+    velocityFiatAmount: '16000',
+    velocityFiatCurrency: 'NGN',
   },
   processorTxRef: null,
   pinVerifiedAt: FIXED_NOW,
@@ -2453,11 +2667,14 @@ function makeTransactionRepoForSend(
   created: TransactionRecord = STUB_SEND_TXN,
 ): jest.Mocked<ITransactionRepository> {
   return {
+    findById: jest.fn().mockResolvedValue(null),
     findByIdempotencyKey: jest.fn().mockResolvedValue(existing),
     create: jest.fn().mockResolvedValue(created),
     createSettlingWithProposal: jest.fn().mockResolvedValue(created),
     updateStatus: jest.fn().mockResolvedValue(undefined),
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
+    listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+    findByUserId: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -2588,6 +2805,102 @@ describe('ExecutionService.executeSend', () => {
         status: 'pending',
       }),
     );
+  });
+
+  // ── FUNDS-SAFETY: synchronous withdraw rejection (§3.1) ─────────────────────
+  // The reserve (Step 10) is committed BEFORE walletService.withdraw (Step 11).
+  // When withdraw throws synchronously, the engine must compensate ONLY when the
+  // rejection is DEFINITIVE (HTTP 4xx — the request was rejected and NEVER
+  // broadcast on-chain). For an AMBIGUOUS failure (5xx / timeout / no status) the
+  // withdrawal MIGHT be in-flight, so refunding would risk a double-spend — those
+  // are left 'settling' for the reconciler (current behaviour).
+
+  it('withdraw rejected with a definitive 4xx → refunds the reserve, marks failed, no outbox row, re-throws', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    const outboxRepo = makeOutboxRepo();
+    const walletService = makeWalletServiceWithWithdraw();
+    // Mirrors BlockradarProvider.wrapError on a 422 "Insufficient TRX balance":
+    // a definitive client rejection that was NEVER broadcast on-chain.
+    walletService.withdraw.mockRejectedValue(
+      Object.assign(
+        new Error(
+          'Blockradar withdraw error (HTTP 422): Insufficient TRX balance',
+        ),
+        { httpStatus: 422 },
+      ),
+    );
+
+    const svc = buildSendService({ settlementRepo, outboxRepo, walletService });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // The reserve must be refunded (clearing → user_wallet) and the tx marked failed.
+    expect(settlementRepo.settleSendRefundAtomic).toHaveBeenCalledTimes(1);
+    expect(settlementRepo.settleSendRefundAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transactionId: SEND_TXN_ID,
+        userId: USER_ID,
+        walletId: 'wallet-id',
+        totalDebit: '11.000000',
+        asset: 'USDT',
+      }),
+    );
+    // No onchain_send outbox row — the withdrawal never happened.
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('withdraw fails with an ambiguous 5xx → leaves tx settling (NO refund), no outbox row, re-throws', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    const outboxRepo = makeOutboxRepo();
+    const walletService = makeWalletServiceWithWithdraw();
+    walletService.withdraw.mockRejectedValue(
+      Object.assign(
+        new Error('Blockradar withdraw error (HTTP 503): upstream unavailable'),
+        { httpStatus: 503 },
+      ),
+    );
+
+    const svc = buildSendService({ settlementRepo, outboxRepo, walletService });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // Ambiguous — the withdrawal may be in-flight; refunding risks a double-spend.
+    expect(settlementRepo.settleSendRefundAtomic).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('withdraw fails with a network error (no HTTP status) → leaves tx settling (NO refund), re-throws', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    const walletService = makeWalletServiceWithWithdraw();
+    walletService.withdraw.mockRejectedValue(new Error('socket hang up'));
+
+    const svc = buildSendService({ settlementRepo, walletService });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // No HTTP status → ambiguous → never refund.
+    expect(settlementRepo.settleSendRefundAtomic).not.toHaveBeenCalled();
   });
 
   // ── Wrong proposal type ────────────────────────────────────────────────────
@@ -2740,7 +3053,7 @@ describe('ExecutionService.executeSend', () => {
 
   // ── PIN invalid ────────────────────────────────────────────────────────────
 
-  it('wrong PIN → PinInvalidError, no Transaction, no withdraw', async () => {
+  it('I5: wrong PIN propagates WITHOUT consuming the one-shot step-up directive (legitimate retry survives); no Transaction, no withdraw', async () => {
     const pinService = makePinService(new PinInvalidError(4));
     const walletService = makeWalletServiceWithWithdraw();
     const settlementRepo = makeSettlementRepo(
@@ -2749,12 +3062,21 @@ describe('ExecutionService.executeSend', () => {
       undefined,
       STUB_SEND_TXN,
     );
+    const directiveService = makeDirectiveService(STUB_SEND_GRANT);
 
-    const svc = buildSendService({ pinService, walletService, settlementRepo });
+    const svc = buildSendService({
+      pinService,
+      walletService,
+      settlementRepo,
+      directiveService,
+    });
 
     await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
       PinInvalidError,
     );
+    // I5: PIN before step-up directive consume — a wrong PIN must not burn the
+    // one-shot step-up grant.
+    expect(directiveService.consume).not.toHaveBeenCalled();
     expect(
       settlementRepo.createSendSettlingWithReserveAtomic,
     ).not.toHaveBeenCalled();
@@ -3117,7 +3439,7 @@ describe('ExecutionService.executeSend', () => {
 
   // ── Gauntlet order ─────────────────────────────────────────────────────────
 
-  it('gauntlet order: balance→cooling-off→sanctions→directive→pin→idempotency→atomic', async () => {
+  it('gauntlet order: balance→cooling-off→sanctions→pin→directive→idempotency→atomic (I5: PIN before directive)', async () => {
     const callOrder: string[] = [];
 
     const ledgerRepo = {
@@ -3159,6 +3481,8 @@ describe('ExecutionService.executeSend', () => {
       createSettlingWithProposal: jest.fn().mockResolvedValue(STUB_SEND_TXN),
       updateStatus: jest.fn().mockResolvedValue(undefined),
       mergeMetadata: jest.fn().mockResolvedValue(undefined),
+      listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+      findByUserId: jest.fn().mockResolvedValue([]),
     };
     const settlementRepo = makeSettlementRepo(
       null,
@@ -3197,12 +3521,14 @@ describe('ExecutionService.executeSend', () => {
       callOrder.indexOf('sanctions'),
     );
     expect(callOrder.indexOf('sanctions')).toBeLessThan(
-      callOrder.indexOf('directive'),
-    );
-    expect(callOrder.indexOf('directive')).toBeLessThan(
       callOrder.indexOf('pin'),
     );
+    // I5: PIN is verified before the step-up directive is consumed.
     expect(callOrder.indexOf('pin')).toBeLessThan(
+      callOrder.indexOf('directive'),
+    );
+    // Directive is still consumed before the idempotency check.
+    expect(callOrder.indexOf('directive')).toBeLessThan(
       callOrder.indexOf('idempotency'),
     );
     expect(callOrder.indexOf('idempotency')).toBeLessThan(
@@ -3331,11 +3657,14 @@ function makeTransactionRepoForSendSettle(
   txn: TransactionRecord | null,
 ): jest.Mocked<ITransactionRepository> {
   return {
+    findById: jest.fn().mockResolvedValue(null),
     findByIdempotencyKey: jest.fn().mockResolvedValue(txn),
     create: jest.fn(),
     createSettlingWithProposal: jest.fn(),
     updateStatus: jest.fn(),
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
+    listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
+    findByUserId: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -3385,6 +3714,18 @@ describe('ExecutionService.settleSendOnChain', () => {
     expect(result.status).toBe('failed');
     expect(settlementRepo.settleSendRefundAtomic).toHaveBeenCalledTimes(1);
     expect(settlementRepo.settleSendFinalizeAtomic).not.toHaveBeenCalled();
+
+    // BUG 2 — the refund reverses the velocity this send consumed at reserve.
+    expect(settlementRepo.settleSendRefundAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest objectContaining matcher is typed `any`
+        velocityReversal: expect.objectContaining({
+          userId: USER_ID,
+          fiatCurrency: 'NGN',
+          fiatAmountStr: '16000',
+        }),
+      }),
+    );
   });
 
   // ── Already completed → idempotent ────────────────────────────────────────
@@ -3544,5 +3885,604 @@ describe('ExecutionService.executeSend — Task 6: fail-closed on missing networ
     const svc = buildSendService({ proposalRepo });
 
     await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toThrow(/network/i);
+  });
+});
+
+// ============================================================================
+// ExecutionService.executeSwap / settleSwap
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// Swap fixtures
+// ---------------------------------------------------------------------------
+
+const SWAP_PROPOSAL_ID = 'swap-prop-1111-0000-7000-8000-000000000001';
+const SWAP_QUOTE_ID = 'swap-quot-2222-0000-7000-8000-000000000002';
+const SWAP_TXN_ID = 'swap-txn-3333-0000-7000-8000-000000000003';
+const SWAP_IDEMPOTENCY_KEY = 'swap-idem-4444-0000-7000-8000-000000000004';
+const SWAP_PROVIDER_REF = 'swap-provref-5555';
+
+const STUB_SWAP_QUOTE_RECORD = {
+  id: SWAP_QUOTE_ID,
+  userId: USER_ID,
+  type: 'swap',
+  asset: 'USDT',
+  fiatCurrency: 'NGN',
+  fiatAmount: '64000',
+  cryptoAmount: '40',
+  fxRate: '1562.5',
+  baseRate: '1600',
+  spreadBps: 100,
+  processingFeeBps: 0,
+  processingFeeAmount: '0',
+  status: 'valid',
+  expiresAt: FUTURE,
+  createdAt: FIXED_NOW,
+};
+
+const STUB_SWAP_PROPOSAL: ProposalRecord = {
+  id: SWAP_PROPOSAL_ID,
+  userId: USER_ID,
+  conversationId: null,
+  type: 'swap',
+  status: 'pending',
+  parameters: {
+    fromAsset: 'USDT',
+    toAsset: 'TRX',
+    fromAmount: '40',
+    toAmount: '62500',
+    rate: '1562.5',
+    networkFee: '1',
+    transactionFee: '0.5',
+    estimatedArrivalSec: 120,
+    walletId: 'wallet-id',
+    fromAssetId: 'br_id_USDT',
+    toAssetId: 'br_id_TRX',
+    quoteId: SWAP_QUOTE_ID,
+  },
+  parametersChecksum: 'a'.repeat(64),
+  quoteId: SWAP_QUOTE_ID,
+  expiresAt: FUTURE,
+  confirmedAt: null,
+  createdAt: FIXED_NOW,
+};
+
+const STUB_SWAP_TXN: TransactionRecord = {
+  id: SWAP_TXN_ID,
+  proposalId: SWAP_PROPOSAL_ID,
+  userId: USER_ID,
+  type: 'swap',
+  status: 'settling',
+  idempotencyKey: SWAP_IDEMPOTENCY_KEY,
+  requestChecksum: 'swap-checksum',
+  fxRateSnapshot: '1562.5',
+  metadata: {
+    fromAsset: 'USDT',
+    toAsset: 'TRX',
+    fromAmount: '40',
+    toAmount: '62500',
+    walletId: 'wallet-id',
+    providerSwapId: SWAP_PROVIDER_REF,
+    // BUG 2 — velocity contribution persisted at reserve, read back on refund.
+    velocityFiatAmount: '64000',
+    velocityFiatCurrency: 'NGN',
+  },
+  processorTxRef: null,
+  pinVerifiedAt: FIXED_NOW,
+  createdAt: FIXED_NOW,
+};
+
+const STUB_SWAP_EXECUTE_OUTPUT = {
+  providerSwapId: SWAP_PROVIDER_REF,
+  status: 'pending' as const,
+};
+
+function makeSwapProviderMock(
+  quoteResult = {
+    toAmount: '62500',
+    rate: '1562.5',
+    minAmount: '62000',
+    slippage: 50,
+    networkFee: '1',
+    transactionFee: '0.5',
+    estimatedArrivalSec: 120,
+  },
+  executeResult = STUB_SWAP_EXECUTE_OUTPUT,
+  throws?: Error,
+) {
+  const mock = {
+    getQuote: jest.fn().mockResolvedValue(quoteResult),
+    execute: jest.fn(),
+  };
+  if (throws) {
+    mock.execute.mockRejectedValue(throws);
+  } else {
+    mock.execute.mockResolvedValue(executeResult);
+  }
+  return mock;
+}
+
+function makeSwapSettlementRepo(): jest.Mocked<ISettlementRepository> {
+  return {
+    ...makeSettlementRepo(),
+    createSwapSettlingWithReserveAtomic: jest
+      .fn()
+      .mockResolvedValue({ txn: STUB_SWAP_TXN }),
+    settleSwapFinalizeAtomic: jest
+      .fn()
+      .mockResolvedValue({ receiptNumber: STUB_RECEIPT_NUMBER }),
+    settleSwapRefundAtomic: jest.fn().mockResolvedValue(undefined),
+  };
+}
+
+const SWAP_STUB_CONFIG = {
+  get: jest.fn((key: string) => {
+    if (key === 'buy') return { maxDriftBps: 50 };
+    if (key === 'sell') return { maxDriftBps: 50 };
+    if (key === 'swap') return { maxDriftBps: 50, spreadBps: 100 };
+    if (key === 'pricing')
+      return { assets: { USDT: { baseRates: { NGN: 1600 } } } };
+    return undefined;
+  }),
+};
+
+function buildSwapService(
+  overrides: {
+    proposalRepo?: jest.Mocked<IProposalRepository>;
+    quoteRepo?: jest.Mocked<IQuoteRepository>;
+    transactionRepo?: jest.Mocked<ITransactionRepository>;
+    outboxRepo?: jest.Mocked<ISettlementOutboxRepository>;
+    settlementRepo?: jest.Mocked<ISettlementRepository>;
+    kycGate?: unknown;
+    directiveService?: unknown;
+    pinService?: unknown;
+    ledgerRepo?: { getAccountBalance: jest.Mock };
+    swapProvider?: { getQuote: jest.Mock; execute: jest.Mock };
+  } = {},
+): ExecutionService {
+  const swapStepUpGrant: DirectiveGrantRecord = {
+    ...STUB_GRANT,
+    directiveRef: 'request_pin', // swap uses request_pin like buy/sell
+  };
+  return new ExecutionService(
+    overrides.proposalRepo ?? makeProposalRepo(STUB_SWAP_PROPOSAL),
+    overrides.quoteRepo ?? {
+      create: jest.fn().mockResolvedValue({ id: SWAP_QUOTE_ID }),
+      findById: jest.fn().mockResolvedValue(STUB_SWAP_QUOTE_RECORD),
+    },
+    overrides.transactionRepo ?? makeTransactionRepo(null, STUB_SWAP_TXN),
+    overrides.outboxRepo ?? makeOutboxRepo(),
+    overrides.settlementRepo ?? makeSwapSettlementRepo(),
+    // quotesService: not used on swap path (no FX quote re-fetch)
+    { quoteBuy: jest.fn(), quoteSell: jest.fn() } as unknown as QuotesService,
+    (overrides.kycGate ?? makeKycGate()) as unknown as KycGateService,
+    (overrides.directiveService ??
+      makeDirectiveService(swapStepUpGrant)) as unknown as DirectiveService,
+    (overrides.pinService ?? makePinService()) as unknown as PinService,
+    makeWalletService() as unknown as WalletService,
+    // paymentProvider: not used on swap path
+    makePaymentProvider() as unknown as IPaymentProvider,
+    SWAP_STUB_CONFIG as never,
+    stubClock,
+    makeAssetRegistry(),
+    { getById: jest.fn().mockResolvedValue(null) } as never,
+    overrides.ledgerRepo ?? {
+      getAccountBalance: jest.fn().mockResolvedValue('100'),
+    },
+    undefined, // identityService
+    undefined, // whatsAppSender
+    undefined, // complianceService (not needed for swap)
+    undefined, // sessionService (not needed for swap)
+    // swapProvider as the last arg
+    overrides.swapProvider ?? makeSwapProviderMock(),
+  );
+}
+
+const SWAP_BASE_INPUT = {
+  userId: USER_ID,
+  proposalId: SWAP_PROPOSAL_ID,
+  directiveId: DIRECTIVE_ID,
+  nonce: NONCE,
+  pin: PIN,
+  idempotencyKey: SWAP_IDEMPOTENCY_KEY,
+};
+
+describe('ExecutionService.executeSwap', () => {
+  it('happy path: reserves fromAsset, calls SWAP_PROVIDER.execute, returns settling+providerSwapId', async () => {
+    const settlementRepo = makeSwapSettlementRepo();
+    const outboxRepo = makeOutboxRepo();
+    const swapProvider = makeSwapProviderMock();
+
+    const svc = buildSwapService({ settlementRepo, outboxRepo, swapProvider });
+    const result = await svc.executeSwap(SWAP_BASE_INPUT);
+
+    expect(result.status).toBe('settling');
+    expect(result.swap.providerSwapId).toBe(SWAP_PROVIDER_REF);
+    // Atomic reserve write
+    expect(
+      settlementRepo.createSwapSettlingWithReserveAtomic,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      settlementRepo.createSwapSettlingWithReserveAtomic,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ fromAsset: 'USDT', fromAmount: '40' }),
+    );
+    // Provider called exactly once
+    expect(swapProvider.execute).toHaveBeenCalledTimes(1);
+    // Outbox enqueued
+    expect(outboxRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ settlementType: 'swap' }),
+    );
+  });
+
+  it('verifies PIN before consuming directive (I5: wrong-PIN must not burn the grant)', async () => {
+    const callOrder: string[] = [];
+    const pinService = {
+      verifyPin: jest.fn(() => {
+        callOrder.push('pin');
+        return Promise.resolve();
+      }),
+    };
+    const directiveService = {
+      consume: jest.fn(() => {
+        callOrder.push('directive');
+        return Promise.resolve(STUB_GRANT);
+      }),
+    };
+
+    const svc = buildSwapService({ pinService, directiveService });
+    await svc.executeSwap(SWAP_BASE_INPUT);
+
+    expect(callOrder.indexOf('pin')).toBeLessThan(
+      callOrder.indexOf('directive'),
+    );
+  });
+
+  it('idempotent replay: returns existing result when transaction found for key', async () => {
+    const existingTxn: TransactionRecord = {
+      ...STUB_SWAP_TXN,
+      metadata: {
+        fromAsset: 'USDT',
+        toAsset: 'TRX',
+        fromAmount: '40',
+        toAmount: '62500',
+        walletId: 'wallet-id',
+        providerSwapId: 'existing-swap-ref',
+      },
+    };
+    const transactionRepo = makeTransactionRepo(existingTxn, STUB_SWAP_TXN);
+    const settlementRepo = makeSwapSettlementRepo();
+
+    const svc = buildSwapService({ transactionRepo, settlementRepo });
+    const result = await svc.executeSwap(SWAP_BASE_INPUT);
+
+    expect(result.status).toBe('settling');
+    expect(result.swap.providerSwapId).toBe('existing-swap-ref');
+    // No new writes
+    expect(
+      settlementRepo.createSwapSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('propagates PIN error without consuming directive', async () => {
+    const pinService = makePinService(new Error('wrong pin'));
+    const directiveService = makeDirectiveService();
+
+    const svc = buildSwapService({ pinService, directiveService });
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toThrow('wrong pin');
+    expect(directiveService.consume).not.toHaveBeenCalled();
+  });
+
+  it('rejects when proposal type is not swap', async () => {
+    const wrongTypeProposal: ProposalRecord = {
+      ...STUB_SWAP_PROPOSAL,
+      type: 'sell',
+    };
+    const proposalRepo = makeProposalRepo(wrongTypeProposal);
+
+    const svc = buildSwapService({ proposalRepo });
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toThrow(
+      ProposalNotExecutableError,
+    );
+  });
+
+  it('deduces drift check — throws QuoteDriftError when provider rate drifted > maxDriftBps', async () => {
+    // Stored rate = 1562.5; fresh rate = 2000 → large drift
+    const swapProvider = makeSwapProviderMock({
+      toAmount: '80000',
+      rate: '2000', // drifted from 1562.5
+      minAmount: '79000',
+      slippage: 50,
+      networkFee: '1',
+      transactionFee: '0.5',
+      estimatedArrivalSec: 120,
+    });
+    const svc = buildSwapService({ swapProvider });
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toThrow(
+      QuoteDriftError,
+    );
+  });
+
+  it('wraps SWAP_PROVIDER.execute failure in ProviderUnavailableError', async () => {
+    const swapProvider = makeSwapProviderMock(
+      undefined,
+      undefined,
+      new Error('provider down'),
+    );
+    const svc = buildSwapService({ swapProvider });
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toThrow(
+      ProviderUnavailableError,
+    );
+  });
+
+  // ── FUNDS-SAFETY: synchronous execute rejection (§3.1) ──────────────────────
+  // Same reserve-then-callProvider shape as executeSend: the reserve (Step 6) is
+  // committed BEFORE SWAP_PROVIDER.execute (Step 7). A definitive 4xx rejection
+  // (request rejected, swap never performed) must refund the reserve; an ambiguous
+  // 5xx/timeout might be in-flight and must be left 'settling' for the reconciler.
+
+  it('execute rejected with a definitive 4xx → refunds the reserve, no outbox row, re-throws', async () => {
+    const settlementRepo = makeSwapSettlementRepo();
+    const outboxRepo = makeOutboxRepo();
+    const swapProvider = makeSwapProviderMock(
+      undefined,
+      undefined,
+      Object.assign(
+        new Error(
+          'Blockradar swap execute error (HTTP 422): insufficient balance',
+        ),
+        { httpStatus: 422 },
+      ),
+    );
+
+    const svc = buildSwapService({ settlementRepo, outboxRepo, swapProvider });
+
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    expect(settlementRepo.settleSwapRefundAtomic).toHaveBeenCalledTimes(1);
+    expect(settlementRepo.settleSwapRefundAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transactionId: SWAP_TXN_ID,
+        userId: USER_ID,
+        walletId: 'wallet-id',
+        fromAmount: '40',
+        fromAsset: 'USDT',
+      }),
+    );
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('execute fails with an ambiguous 5xx → leaves tx settling (NO refund), re-throws', async () => {
+    const settlementRepo = makeSwapSettlementRepo();
+    const outboxRepo = makeOutboxRepo();
+    const swapProvider = makeSwapProviderMock(
+      undefined,
+      undefined,
+      Object.assign(
+        new Error('Blockradar swap execute error (HTTP 502): bad gateway'),
+        { httpStatus: 502 },
+      ),
+    );
+
+    const svc = buildSwapService({ settlementRepo, outboxRepo, swapProvider });
+
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+    expect(settlementRepo.settleSwapRefundAtomic).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  // ── SwapUnavailableError must propagate unchanged (#21/#22) ──────────────────
+  // BlockradarSwapProvider maps HTTP 404 (swap not enrolled) to a typed
+  // SwapUnavailableError so callers can show a graceful "not available" message.
+  // callProvider must NOT clobber it into a retryable ProviderUnavailableError —
+  // the execute path must match the proposal path's graceful semantics.
+
+  it('swapGetQuote throws SwapUnavailableError → propagates unchanged (not wrapped as a retryable 502)', async () => {
+    const swapProvider = makeSwapProviderMock();
+    swapProvider.getQuote.mockRejectedValue(
+      new SwapUnavailableError('Swap is not available on this account'),
+    );
+    const settlementRepo = makeSwapSettlementRepo();
+
+    const svc = buildSwapService({ swapProvider, settlementRepo });
+
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toBeInstanceOf(
+      SwapUnavailableError,
+    );
+    // The quote pre-check runs BEFORE the reserve — no debit, no refund needed.
+    expect(
+      settlementRepo.createSwapSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('swapExecute throws SwapUnavailableError → propagates unchanged (no clobber to ProviderUnavailableError)', async () => {
+    const swapProvider = makeSwapProviderMock();
+    swapProvider.execute.mockRejectedValue(
+      new SwapUnavailableError('Swap not enrolled on this account'),
+    );
+    const settlementRepo = makeSwapSettlementRepo();
+    const outboxRepo = makeOutboxRepo();
+
+    const svc = buildSwapService({ swapProvider, settlementRepo, outboxRepo });
+
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toBeInstanceOf(
+      SwapUnavailableError,
+    );
+    // SwapUnavailableError carries no httpStatus → not a definitive 4xx → no
+    // refund (the reserve was committed; this surfaces as a non-retryable error
+    // and the reconciler will not act on an in-flight that never happened).
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('throws ProposalExpiredError when proposal is expired', async () => {
+    const expiredProposal: ProposalRecord = {
+      ...STUB_SWAP_PROPOSAL,
+      expiresAt: PAST,
+    };
+    const proposalRepo = makeProposalRepo(expiredProposal);
+
+    const svc = buildSwapService({ proposalRepo });
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toThrow(
+      ProposalExpiredError,
+    );
+  });
+});
+
+describe('ExecutionService.settleSwap', () => {
+  it('success path: credits toAsset, marks completed, mints receipt', async () => {
+    const txnWithSettling: TransactionRecord = {
+      ...STUB_SWAP_TXN,
+      status: 'settling',
+    };
+    const transactionRepo = makeTransactionRepo(txnWithSettling, STUB_SWAP_TXN);
+    transactionRepo.findByIdempotencyKey.mockResolvedValue(txnWithSettling);
+    const settlementRepo = makeSwapSettlementRepo();
+
+    const svc = buildSwapService({ transactionRepo, settlementRepo });
+    const result = await svc.settleSwap({
+      reference: SWAP_IDEMPOTENCY_KEY,
+      success: true,
+      toAmount: '62500',
+      hash: 'on-chain-hash-abc',
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.receiptNumber).toBe(STUB_RECEIPT_NUMBER);
+    expect(settlementRepo.settleSwapFinalizeAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toAmount: '62500',
+        toAsset: 'TRX',
+        fromAmount: '40',
+        fromAsset: 'USDT',
+      }),
+    );
+  });
+
+  it('failure path: refunds fromAsset, marks failed', async () => {
+    const txnWithSettling: TransactionRecord = {
+      ...STUB_SWAP_TXN,
+      status: 'settling',
+    };
+    const transactionRepo = makeTransactionRepo(txnWithSettling, STUB_SWAP_TXN);
+    transactionRepo.findByIdempotencyKey.mockResolvedValue(txnWithSettling);
+    const settlementRepo = makeSwapSettlementRepo();
+
+    const svc = buildSwapService({ transactionRepo, settlementRepo });
+    const result = await svc.settleSwap({
+      reference: SWAP_IDEMPOTENCY_KEY,
+      success: false,
+    });
+
+    expect(result.status).toBe('failed');
+    expect(settlementRepo.settleSwapRefundAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({ fromAmount: '40', fromAsset: 'USDT' }),
+    );
+
+    // BUG 2 — the refund reverses the velocity this swap consumed at reserve.
+    expect(settlementRepo.settleSwapRefundAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest objectContaining matcher is typed `any`
+        velocityReversal: expect.objectContaining({
+          userId: USER_ID,
+          fiatCurrency: 'NGN',
+          fiatAmountStr: '64000',
+        }),
+      }),
+    );
+  });
+
+  // ── FUNDS-SAFETY: malformed success payload with missing/zero toAmount (#12) ──
+  // A swap.success webhook that omits or zeroes the converted-amount field must
+  // NEVER credit 0 / strand. The reserve is preserved (no finalize, no refund)
+  // and the row stays 'settling' so a corrected retry can finalize it.
+
+  it('success=true but toAmount is undefined → returns pending, preserves reserve (no finalize, no refund)', async () => {
+    const txnWithSettling: TransactionRecord = {
+      ...STUB_SWAP_TXN,
+      status: 'settling',
+    };
+    const transactionRepo = makeTransactionRepo(txnWithSettling, STUB_SWAP_TXN);
+    transactionRepo.findByIdempotencyKey.mockResolvedValue(txnWithSettling);
+    const settlementRepo = makeSwapSettlementRepo();
+
+    const svc = buildSwapService({ transactionRepo, settlementRepo });
+    const result = await svc.settleSwap({
+      reference: SWAP_IDEMPOTENCY_KEY,
+      success: true,
+      // toAmount intentionally omitted (malformed provider payload)
+    });
+
+    expect(result.status).toBe('pending');
+    // Never credit 0 and never refund — the reserve must be preserved.
+    expect(settlementRepo.settleSwapFinalizeAtomic).not.toHaveBeenCalled();
+    expect(settlementRepo.settleSwapRefundAtomic).not.toHaveBeenCalled();
+  });
+
+  it('success=true but toAmount is "0" → returns pending, preserves reserve (never credits 0)', async () => {
+    const txnWithSettling: TransactionRecord = {
+      ...STUB_SWAP_TXN,
+      status: 'settling',
+    };
+    const transactionRepo = makeTransactionRepo(txnWithSettling, STUB_SWAP_TXN);
+    transactionRepo.findByIdempotencyKey.mockResolvedValue(txnWithSettling);
+    const settlementRepo = makeSwapSettlementRepo();
+
+    const svc = buildSwapService({ transactionRepo, settlementRepo });
+    const result = await svc.settleSwap({
+      reference: SWAP_IDEMPOTENCY_KEY,
+      success: true,
+      toAmount: '0',
+    });
+
+    expect(result.status).toBe('pending');
+    expect(settlementRepo.settleSwapFinalizeAtomic).not.toHaveBeenCalled();
+    expect(settlementRepo.settleSwapRefundAtomic).not.toHaveBeenCalled();
+  });
+
+  it('idempotent path: returns completed without re-settling', async () => {
+    const completedTxn: TransactionRecord = {
+      ...STUB_SWAP_TXN,
+      status: 'completed',
+    };
+    const transactionRepo = makeTransactionRepo(completedTxn, STUB_SWAP_TXN);
+    transactionRepo.findByIdempotencyKey.mockResolvedValue(completedTxn);
+    const settlementRepo = makeSwapSettlementRepo();
+    settlementRepo.findReceiptNumber.mockResolvedValue(STUB_RECEIPT_NUMBER);
+
+    const svc = buildSwapService({ transactionRepo, settlementRepo });
+    const result = await svc.settleSwap({
+      reference: SWAP_IDEMPOTENCY_KEY,
+      success: true,
+      toAmount: '62500',
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.receiptNumber).toBe(STUB_RECEIPT_NUMBER);
+    expect(settlementRepo.settleSwapFinalizeAtomic).not.toHaveBeenCalled();
+  });
+
+  it('throws SettlementInvalidStatusError when txn is not settling or completed', async () => {
+    const failedTxn: TransactionRecord = { ...STUB_SWAP_TXN, status: 'failed' };
+    const transactionRepo = makeTransactionRepo(failedTxn, STUB_SWAP_TXN);
+    transactionRepo.findByIdempotencyKey.mockResolvedValue(failedTxn);
+
+    const svc = buildSwapService({ transactionRepo });
+    await expect(
+      svc.settleSwap({ reference: SWAP_IDEMPOTENCY_KEY, success: true }),
+    ).rejects.toThrow(SettlementInvalidStatusError);
+  });
+
+  it('throws ProposalNotExecutableError when no transaction found for reference', async () => {
+    const transactionRepo = makeTransactionRepo(null, STUB_SWAP_TXN);
+    transactionRepo.findByIdempotencyKey.mockResolvedValue(null);
+
+    const svc = buildSwapService({ transactionRepo });
+    await expect(
+      svc.settleSwap({ reference: 'nonexistent-key', success: true }),
+    ).rejects.toThrow(ProposalNotExecutableError);
   });
 });

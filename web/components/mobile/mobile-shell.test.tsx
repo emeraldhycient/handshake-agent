@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createChatStore } from "@/lib/store/chat-store"
 import { chipLabel } from "@/lib/chat/flow"
 import { MobileShell } from "./mobile-shell"
@@ -18,6 +18,16 @@ function makeWrapper() {
 
 // Synchronous scheduler — no real setTimeout; assistant replies appear instantly
 const immediate = (fn: () => void) => fn()
+
+vi.mock("@/hooks/use-voice-recorder", () => ({
+  useVoiceRecorder: () => ({
+    status: "recording",
+    seconds: 0,
+    start: vi.fn(),
+    stop: vi.fn().mockResolvedValue(new Blob(["x"], { type: "audio/webm" })),
+    cancel: vi.fn(),
+  }),
+}))
 
 describe("MobileShell", () => {
   it("shows the greeting message on the default chat tab", () => {
@@ -122,6 +132,22 @@ describe("MobileShell", () => {
     // Should switch back to chat and show the user message
     await waitFor(() =>
       expect(screen.getByText(chipLabel("buy"))).toBeInTheDocument()
+    )
+  })
+
+  it('onRecordStop calls sendVoiceToAgent("m", blob) when recording stops', async () => {
+    const user = userEvent.setup()
+    const voiceApi = vi
+      .fn()
+      .mockResolvedValue({ outcome: { kind: "clarification", text: "ok" } })
+    const store = createChatStore({ schedule: immediate, voiceApi })
+    const sendVoiceSpy = vi.spyOn(store.getState(), "sendVoiceToAgent")
+    render(<MobileShell store={store} />, { wrapper: makeWrapper() })
+
+    // useVoiceRecorder is mocked to status:"recording", so Stop button is present
+    await user.click(screen.getByLabelText("Stop recording"))
+    await waitFor(() =>
+      expect(sendVoiceSpy).toHaveBeenCalledWith("m", expect.any(Blob))
     )
   })
 })

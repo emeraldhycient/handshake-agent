@@ -46,6 +46,7 @@ import { KycGateService } from '../../identity/application/kyc-gate.service';
 import { IdentityService } from '../../identity/application/identity.service';
 import { QuotesService } from '../../quotes/application/quotes.service';
 import { WalletService } from '../../wallets/application/wallet.service';
+import type { WithdrawOutput } from '../../wallets/application/ports/wallet-provider.port';
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import {
@@ -56,8 +57,14 @@ import type {
   AppConfig,
   BuyConfig,
   SellConfig,
+  SwapConfig,
   PricingConfig,
 } from '../../../core/config/configuration';
+import {
+  SWAP_PROVIDER,
+  type ISwapProvider,
+  type ExecuteSwapOutput,
+} from '../../wallets/application/ports/swap-provider.port';
 import { BeneficiaryCoolingOffError } from '../../beneficiaries/domain/beneficiary-errors';
 import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
 import { ComplianceService } from '../../compliance/application/compliance.service';
@@ -85,6 +92,7 @@ import {
 import {
   SETTLEMENT_REPOSITORY,
   type ISettlementRepository,
+  type VelocityReversal,
 } from './ports/settlement.repository.port';
 import {
   LEDGER_REPOSITORY,
@@ -97,6 +105,8 @@ import {
   QuoteDriftError,
   SettlementInvalidStatusError,
   InsufficientBalanceError,
+  ProviderUnavailableError,
+  SwapUnavailableError,
 } from '../domain/execution-errors';
 import { toScaled } from '../domain/ledger';
 import { resolveBaseRate } from './resolve-base-rate';
@@ -233,6 +243,59 @@ export interface QuerySendWithdrawalStatusOutput {
   onChainTxHash?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Swap types
+// ---------------------------------------------------------------------------
+
+export interface ExecuteSwapServiceInput {
+  userId: string;
+  proposalId: string;
+  directiveId: string;
+  nonce: string;
+  pin: string;
+  idempotencyKey: string;
+}
+
+export interface ExecuteSwapResult {
+  transactionId: string;
+  status: 'settling';
+  swap: {
+    providerSwapId: string;
+  };
+}
+
+export interface SettleSwapInput {
+  /** The idempotency key used at executeSwap (= reference passed to SWAP_PROVIDER.execute). */
+  reference: string;
+  /** true = provider swap confirmed; false = provider swap failed. */
+  success: boolean;
+  /** Actual amount of toAsset received — required when success=true. */
+  toAmount?: string;
+  /** On-chain tx hash from the provider — may be present on success. */
+  hash?: string;
+}
+
+export interface SettleSwapResult {
+  transactionId: string;
+  status: 'completed' | 'failed' | 'pending';
+  receiptNumber?: string;
+  userId?: string;
+}
+
+/**
+ * Output of `querySwapStatus` — used by the reconciler to decide whether to
+ * finalize, refund, or leave a pending `swap` outbox row open after a missed
+ * Blockradar swap webhook.
+ */
+export interface QuerySwapStatusOutput {
+  /** Normalised swap status. */
+  status: 'pending' | 'success' | 'failed';
+  /** Converted toAsset amount — present only on confirmed success. */
+  toAmount?: string;
+  /** On-chain tx hash — present only on confirmed success. */
+  hash?: string;
+}
+
 // The directive ref required to authorize a send execution (step-up auth).
 const REQUIRED_SEND_DIRECTIVE_REF = 'request_step_up';
 
@@ -250,6 +313,7 @@ const REQUIRED_DIRECTIVE_REF = 'request_pin';
 export class ExecutionService {
   private readonly maxBuyDriftBps: number;
   private readonly maxSellDriftBps: number;
+  private readonly maxSwapDriftBps: number;
   private readonly logger = new Logger(ExecutionService.name);
 
   constructor(
@@ -292,11 +356,16 @@ export class ExecutionService {
     // NOT @Optional — NestJS DI will throw at boot if AuthModule is not
     // imported. The runtime guard in executeSend enforces the invariant.
     private readonly sessionService?: SessionService,
+    @Optional()
+    @Inject(SWAP_PROVIDER)
+    private readonly swapProvider?: ISwapProvider,
   ) {
     const buyConfig = this.config.get<BuyConfig>('buy');
     this.maxBuyDriftBps = buyConfig.maxDriftBps;
     const sellConfig = this.config.get<SellConfig>('sell');
     this.maxSellDriftBps = sellConfig.maxDriftBps;
+    const swapConfig = this.config.get<SwapConfig>('swap');
+    this.maxSwapDriftBps = swapConfig?.maxDriftBps ?? 50;
   }
 
   /**
@@ -368,12 +437,21 @@ export class ExecutionService {
       asset: storedQuote.asset,
     });
 
-    // ── Step 4: Consume directive grant (authorizes this exact proposal) ─────
-    // NOTE: The directive is consumed before the idempotency check so idempotent
-    // replay (step 6/7) applies to in-process retry holding a valid directive,
-    // not a fresh re-submit.
-    // Throws DirectiveReplayError, DirectiveExpiredError, DirectiveSignatureError,
-    // DirectiveProposalMismatchError on any failure — let them propagate.
+    // ── Step 4: Verify PIN (BEFORE consuming the one-shot directive) ─────────
+    // I5: the directive is single-use. Consuming it before the PIN check means a
+    // wrong-PIN typo permanently burns the grant and blocks a legitimate retry.
+    // Verifying PIN first fails closed on a bad PIN WITHOUT spending the directive.
+    // PIN has its own lockout, so this does not weaken brute-force resistance, and
+    // every other invariant is preserved: the directive is still single-use
+    // (consumed once, on the success path below), still expires, and is still
+    // bound to this exact proposal.
+    await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 5: Consume directive grant (authorizes this exact proposal) ─────
+    // Still consumed before the idempotency check (step 6/7) so idempotent replay
+    // applies to an in-process retry holding a valid directive, not a fresh
+    // re-submit. Throws DirectiveReplayError, DirectiveExpiredError,
+    // DirectiveSignatureError, DirectiveProposalMismatchError — let them propagate.
     const grant = await this.directiveService.consume({
       directiveId,
       nonce,
@@ -386,11 +464,6 @@ export class ExecutionService {
         `directive ref '${grant.directiveRef}' is not '${REQUIRED_DIRECTIVE_REF}'`,
       );
     }
-
-    // ── Step 5: Verify PIN ───────────────────────────────────────────────────
-    // TODO(SEC): wire session step-up (Session.stepUpCompletedAt) — deferred.
-    // PIN + the consumed signed directive are the authorizers for now.
-    await this.pinService.verifyPin(userId, pin);
 
     // ── Step 6: Idempotency check ────────────────────────────────────────────
     // Check AFTER auth so we don't reveal idempotent results to unauthenticated callers.
@@ -464,18 +537,38 @@ export class ExecutionService {
     // Customer details: sourced from user KYC if available; safe fallbacks used
     // for optional fields (KYC names may be null — noted, not blocking).
     // TODO: when KycProfile is queryable from the engine, use real firstname/lastname.
-    const collection = await this.paymentProvider.createCollection({
-      amount: storedQuote.fiatAmount,
-      currency: storedQuote.fiatCurrency,
-      reference: idempotencyKey,
-      customer: {
-        // Safe fallback: use a synthetic email derived from userId.
-        // Real email will come from User.verifiedEmail in a future iteration.
-        email: `user+${userId}@handshake.internal`,
-        firstname: 'Handshake',
-        lastname: 'User',
-      },
-    });
+    // FUNDS-SAFETY (§3.1): the buy reserve (Step 7) posts NO ledger entry — the
+    // user pays NGN later — so a createCollection failure means NO funds moved
+    // and there is nothing to refund. But the settling Transaction + consumed
+    // proposal/velocity are already committed; leaving it 'settling' with no VA
+    // is a zombie buy the user can never pay for and the reconciler cannot act on
+    // (no outbox row). Mark the Transaction failed on ANY createCollection
+    // failure (4xx OR 5xx — no double-spend risk because nothing was debited) so
+    // the idempotent-replay path does not return an empty payment block.
+    let collection: Awaited<ReturnType<IPaymentProvider['createCollection']>>;
+    try {
+      collection = await this.callProvider('createCollection', () =>
+        this.paymentProvider.createCollection({
+          amount: storedQuote.fiatAmount,
+          currency: storedQuote.fiatCurrency,
+          reference: idempotencyKey,
+          customer: {
+            // Safe fallback: use a synthetic email derived from userId.
+            // Real email will come from User.verifiedEmail in a future iteration.
+            email: `user+${userId}@handshake.internal`,
+            firstname: 'Handshake',
+            lastname: 'User',
+          },
+        }),
+      );
+    } catch (err: unknown) {
+      await this.transactionRepo.updateStatus(txn.id, 'failed', {
+        failedAt: now,
+        failureReason:
+          'virtual-account creation failed at execute (no funds moved)',
+      });
+      throw err;
+    }
 
     // 8c. Persist VA details into Transaction metadata so idempotent replay
     // can return the real VA without calling the provider again (C2).
@@ -741,10 +834,17 @@ export class ExecutionService {
       );
     }
 
-    // ── Step 5: Consume directive grant ──────────────────────────────────────
-    // NOTE: The directive is consumed before the idempotency check so idempotent
-    // replay (step 7/8) applies to in-process retry holding a valid directive,
-    // not a fresh re-submit.
+    // ── Step 5: Verify PIN (BEFORE consuming the one-shot directive) ─────────
+    // I5: verify PIN first so a wrong-PIN typo does not burn the single-use
+    // directive and block a legitimate retry. The directive stays single-use
+    // (consumed once on success), still expires, and is still bound to this
+    // proposal — only the wrong-PIN-spends-the-grant footgun is removed.
+    await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 6: Consume directive grant ──────────────────────────────────────
+    // Still consumed before the idempotency check (step 7/8) so idempotent replay
+    // applies to an in-process retry holding a valid directive, not a fresh
+    // re-submit.
     const grant = await this.directiveService.consume({
       directiveId,
       nonce,
@@ -756,9 +856,6 @@ export class ExecutionService {
         `directive ref '${grant.directiveRef}' is not '${REQUIRED_DIRECTIVE_REF}'`,
       );
     }
-
-    // ── Step 6: Verify PIN ───────────────────────────────────────────────────
-    await this.pinService.verifyPin(userId, pin);
 
     // ── Step 7: Idempotency check ────────────────────────────────────────────
     const existing =
@@ -838,9 +935,16 @@ export class ExecutionService {
             asset: storedQuote.asset,
             cryptoAmount: storedQuote.cryptoAmount,
             netFiatAmount: storedQuote.fiatAmount,
-            // Mirrors executeBuy: persist fiatCurrency so settleSellPayout can thread
-            // it into buildSellFinalizeEntries (read fail-closed, no default at finalize).
+            // Required by settleSellPayout → buildSellFinalizeEntries (reads
+            // meta.fiatCurrency). The older createSettlingWithProposal path and
+            // the buy path both persist it; this atomic path must too, or the
+            // sell finalize crashes on `fiatCurrency.toLowerCase()`.
             fiatCurrency: storedQuote.fiatCurrency,
+            // BUG 2 — persist the EXACT velocity contribution made at reserve so
+            // a later refund (settleSellPayout failure path) can reverse it
+            // byte-for-byte, even if config/rates drift between execute & settle.
+            velocityFiatAmount: storedQuote.fiatAmount,
+            velocityFiatCurrency: storedQuote.fiatCurrency,
             beneficiaryId,
             walletId: wallet.id,
             // providerRef is written atomically here because we pass idempotencyKey
@@ -869,20 +973,57 @@ export class ExecutionService {
       });
 
     // ── Step 10: Initiate fiat payout ────────────────────────────────────────
-    const payout = await this.paymentProvider.createPayout({
-      amount: storedQuote.fiatAmount,
-      currency: storedQuote.fiatCurrency,
-      reference: idempotencyKey,
-      bankAccount: {
-        // These are guaranteed non-null by the guard in step 8 of the gauntlet.
+    // Capture the guard-narrowed (non-null per step 8) bank details into a local
+    // BEFORE the callProvider closure: a closure re-widens `beneficiary.*` back
+    // to `string | null`, so the literal must be built in the narrowed scope.
+    const payoutBankAccount = {
+      accountNumber: beneficiary.accountNumber,
+      bankCode: beneficiary.bankCode,
+      accountName: beneficiary.accountHolderName,
+    };
 
-        accountNumber: beneficiary.accountNumber,
-
-        bankCode: beneficiary.bankCode,
-
-        accountName: beneficiary.accountHolderName,
-      },
-    });
+    // FUNDS-SAFETY (§3.1): the reserve (Step 9, user_wallet → clearing) is already
+    // committed. If createPayout is DEFINITIVELY rejected by the provider (HTTP
+    // 4xx — the request was rejected and the transfer was NEVER processed) we must
+    // refund the reserve and fail the transaction HERE: settleSellPayout is only
+    // ever reached via a webhook for a payout that was created, so for a rejected
+    // request it never fires, and no outbox row was enqueued — the user's USDT
+    // would be stranded in clearing forever. For an AMBIGUOUS failure (5xx /
+    // timeout / no HTTP status) the transfer MIGHT be in flight, so refunding
+    // would risk a double-payout; leave the tx 'settling' for the reconciler.
+    let payout: Awaited<ReturnType<IPaymentProvider['createPayout']>>;
+    try {
+      payout = await this.callProvider('createPayout', () =>
+        this.paymentProvider.createPayout({
+          amount: storedQuote.fiatAmount,
+          currency: storedQuote.fiatCurrency,
+          reference: idempotencyKey,
+          bankAccount: payoutBankAccount,
+        }),
+      );
+    } catch (err: unknown) {
+      if (this.isDefinitiveProviderRejection(err)) {
+        await this.settlementRepo.settleSellRefundAtomic({
+          transactionId: txn.id,
+          userId,
+          walletId: wallet.id,
+          cryptoAmount: storedQuote.cryptoAmount,
+          asset: storedQuote.asset,
+          failureReason:
+            'payout rejected by provider (definitive 4xx) — reserve refunded',
+          now,
+          // BUG 2 — reverse the velocity incremented in the atomic above so a
+          // definitively-rejected sell does not consume the user's daily limit.
+          velocityReversal: {
+            userId,
+            fiatCurrency: storedQuote.fiatCurrency,
+            fiatAmountStr: storedQuote.fiatAmount,
+            now,
+          },
+        });
+      }
+      throw err;
+    }
 
     // Persist providerRef into Transaction metadata for idempotent replay.
     await this.transactionRepo.mergeMetadata(txn.id, {
@@ -1018,6 +1159,8 @@ export class ExecutionService {
       asset: sellAsset,
       failureReason: `payout verifyPayout returned status '${verifyResult.status}'`,
       now,
+      // BUG 2 — reverse the daily-spend velocity this sell consumed at reserve.
+      velocityReversal: this.buildVelocityReversal(txn.userId, meta, now),
     });
 
     // ── Step 6b: Notify (failure) — errors are swallowed, never break settlement.
@@ -1236,10 +1379,18 @@ export class ExecutionService {
       );
     }
 
-    // ── Step 6: Consume directive grant ──────────────────────────────────────
-    // NOTE: The directive is consumed before the idempotency check so idempotent
-    // replay (step 8/9) applies to in-process retry holding a valid directive,
-    // not a fresh re-submit.
+    // ── Step 6: Verify PIN (BEFORE consuming the one-shot step-up directive) ─
+    // I5: verify PIN first so a wrong-PIN typo does not burn the single-use
+    // step-up grant and block a legitimate retry. The directive stays single-use
+    // (consumed once on success), still expires, and is still bound to this
+    // proposal; the device-bound step-up below is only recorded once BOTH PIN and
+    // the directive have passed.
+    await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 7: Consume directive grant ──────────────────────────────────────
+    // Still consumed before the idempotency check (step 8/9) so idempotent replay
+    // applies to an in-process retry holding a valid directive, not a fresh
+    // re-submit.
     const grant = await this.directiveService.consume({
       directiveId,
       nonce,
@@ -1251,9 +1402,6 @@ export class ExecutionService {
         `directive ref '${grant.directiveRef}' is not '${REQUIRED_SEND_DIRECTIVE_REF}'`,
       );
     }
-
-    // ── Step 7: Verify PIN ───────────────────────────────────────────────────
-    await this.pinService.verifyPin(userId, pin);
 
     // ── Step 7b: Record device-bound step-up (Fix G, §3.4) ──────────────────
     // Resolve the acting device: use the explicit deviceId from input when
@@ -1341,6 +1489,12 @@ export class ExecutionService {
             walletId,
             toAddress,
             network,
+            // BUG 2 — persist the EXACT velocity contribution made at reserve so
+            // the refund path (settleSendOnChain failure / execute 4xx) can
+            // reverse it byte-for-byte. Send has no quote; the NGN-equivalent is
+            // computed here from cryptoAmount × baseRate.
+            velocityFiatAmount: String(ngnEquivalent),
+            velocityFiatCurrency: baseFiat,
           },
           pinVerifiedAt: now,
         },
@@ -1385,13 +1539,51 @@ export class ExecutionService {
       network,
     );
     const assetId = this.assetRegistry.assetProviderId(asset, 'blockradar');
-    const withdrawOutput = await this.walletService.withdraw(
-      walletRecord,
-      toAddress,
-      cryptoAmount,
-      assetId,
-      idempotencyKey,
-    );
+
+    // FUNDS-SAFETY (§3.1): the reserve (Step 10, user_wallet → clearing) is already
+    // committed. If the withdraw is DEFINITIVELY rejected by the provider (HTTP
+    // 4xx — the request was rejected and NEVER broadcast on-chain) we must refund
+    // the reserve and fail the transaction HERE: the Phase-2 webhook will never
+    // fire for a request that was never accepted, and the reconciler's
+    // querySendWithdrawalStatus is fail-safe 'pending' so it would never refund —
+    // the user's funds would be stranded in clearing forever. For an AMBIGUOUS
+    // failure (5xx / timeout / no HTTP status) the withdrawal MIGHT be in-flight,
+    // so refunding would risk a double-spend (refund + the on-chain send landing);
+    // we leave the tx 'settling' for the reconciler (current behaviour).
+    let withdrawOutput: WithdrawOutput;
+    try {
+      withdrawOutput = await this.callProvider('withdraw', () =>
+        this.walletService.withdraw(
+          walletRecord,
+          toAddress,
+          cryptoAmount,
+          assetId,
+          idempotencyKey,
+        ),
+      );
+    } catch (err: unknown) {
+      if (this.isDefinitiveProviderRejection(err)) {
+        await this.settlementRepo.settleSendRefundAtomic({
+          transactionId: txn.id,
+          userId,
+          walletId,
+          totalDebit,
+          asset,
+          failureReason:
+            'on-chain withdrawal rejected by provider (definitive 4xx) — reserve refunded',
+          now,
+          // BUG 2 — reverse the velocity incremented in the atomic above so a
+          // definitively-rejected send does not consume the user's daily limit.
+          velocityReversal: {
+            userId,
+            fiatCurrency: baseFiat,
+            fiatAmountStr: String(ngnEquivalent),
+            now,
+          },
+        });
+      }
+      throw err;
+    }
     const providerRef = withdrawOutput.providerReference;
 
     // ── Step 12: Persist providerRef into Transaction metadata ───────────────
@@ -1568,6 +1760,8 @@ export class ExecutionService {
       asset: sendAsset,
       failureReason: 'on-chain withdrawal failed',
       now,
+      // BUG 2 — reverse the daily-spend velocity this send consumed at reserve.
+      velocityReversal: this.buildVelocityReversal(txn.userId, meta, now),
     });
 
     // ── Step 5b: Notify (failure) — errors are swallowed, never break settlement.
@@ -1581,6 +1775,424 @@ export class ExecutionService {
       status: 'failed',
       userId: txn.userId,
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Swap execution
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Executes a swap order after running the full server-side validation gauntlet.
+   *
+   * TWO-PHASE SWAP:
+   *   Phase 1 (this method): reserve fromAsset (user_wallet → swap_clearing) to
+   *   prevent double-spend while the provider swap is in flight. Transaction = 'settling'.
+   *   Phase 2 (settleSwap): on provider confirmation, finalize (credit toAsset +
+   *   debit treasury_reserve/swap_in); on failure, refund (clearing → user_wallet).
+   *
+   * Validation gauntlet (ORDER IS SECURITY-CRITICAL):
+   *   1. Load Proposal(swap, status pending|confirmed, owner, not expired).
+   *   2. Re-quote drift check against stored rate.
+   *   3. Verify PIN (BEFORE consuming directive — I5 invariant).
+   *   4. DirectiveService.consume (ref must be request_pin).
+   *   5. Idempotency check (after auth, before writes).
+   *   6. Atomic write: Transaction(settling) + reserve ledger + Proposal→executing.
+   *   7. SWAP_PROVIDER.execute → providerSwapId.
+   *   8. Enqueue SettlementOutbox(swap).
+   */
+  async executeSwap(
+    input: ExecuteSwapServiceInput,
+  ): Promise<ExecuteSwapResult> {
+    const { userId, proposalId, directiveId, nonce, pin, idempotencyKey } =
+      input;
+    const now = this.clock.now();
+
+    // Fail-CLOSED: SWAP_PROVIDER must be wired.
+    if (this.swapProvider === undefined) {
+      throw new Error(
+        'ExecutionService: SWAP_PROVIDER is not wired — cannot execute swap',
+      );
+    }
+
+    // ── Step 1: Load and validate proposal ──────────────────────────────────
+    const proposal = await this.proposalRepo.findById(proposalId);
+
+    if (proposal === null) {
+      throw new ProposalNotExecutableError('not found');
+    }
+    if (proposal.userId !== userId) {
+      throw new ProposalNotExecutableError('userId mismatch');
+    }
+    if (!EXECUTABLE_STATUSES.has(proposal.status)) {
+      throw new ProposalNotExecutableError(
+        `status '${proposal.status}' is not executable`,
+      );
+    }
+    if (proposal.expiresAt <= now) {
+      throw new ProposalExpiredError();
+    }
+    if (proposal.type !== 'swap') {
+      throw new ProposalNotExecutableError(
+        `proposal type '${proposal.type}' is not 'swap'`,
+      );
+    }
+
+    const params = proposal.parameters as Record<string, string>;
+    const fromAsset = params.fromAsset;
+    const toAsset = params.toAsset;
+    const fromAmount = params.fromAmount;
+    const fromAssetId = params.fromAssetId;
+    const toAssetId = params.toAssetId;
+    const storedRate = Number(params.rate ?? '0');
+    const walletId = params.walletId;
+    const addressId = walletId; // wallet.providerReference — stored as walletId in params
+
+    if (!walletId) {
+      throw new ProposalNotExecutableError(
+        'proposal parameters missing walletId',
+      );
+    }
+
+    // ── Step 2: Re-quote drift check ─────────────────────────────────────────
+    // Re-fetch a fresh quote from the provider to detect slippage.
+    // Use stored fromAssetId / toAssetId (from proposal params).
+    const freshQuote = await this.callProvider('swapGetQuote', () =>
+      this.swapProvider!.getQuote({
+        addressId,
+        fromAssetId,
+        toAssetId,
+        amount: fromAmount,
+      }),
+    );
+
+    const freshRate = Number(freshQuote.rate ?? '0');
+    const driftBps =
+      storedRate > 0
+        ? (Math.abs(freshRate - storedRate) / storedRate) * 10_000
+        : 0;
+
+    if (driftBps > this.maxSwapDriftBps) {
+      throw new QuoteDriftError(driftBps, this.maxSwapDriftBps);
+    }
+
+    // ── Step 3: Verify PIN (BEFORE consuming the one-shot directive) ─────────
+    // I5: verify PIN first so a wrong-PIN typo does not burn the single-use
+    // directive and block a legitimate retry.
+    await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 4: Consume directive grant ──────────────────────────────────────
+    const grant = await this.directiveService.consume({
+      directiveId,
+      nonce,
+      proposalId,
+    });
+
+    if (grant.directiveRef !== REQUIRED_DIRECTIVE_REF) {
+      throw new ProposalNotExecutableError(
+        `directive ref '${grant.directiveRef}' is not '${REQUIRED_DIRECTIVE_REF}'`,
+      );
+    }
+
+    // ── Step 5: Idempotency check ────────────────────────────────────────────
+    const existing =
+      await this.transactionRepo.findByIdempotencyKey(idempotencyKey);
+    if (existing !== null) {
+      const meta = existing.metadata as Record<string, string>;
+      return {
+        transactionId: existing.id,
+        status: 'settling',
+        swap: {
+          providerSwapId: meta.providerSwapId ?? '',
+        },
+      };
+    }
+
+    // ── Step 6: Atomic write ─────────────────────────────────────────────────
+    // create Transaction(swap, settling) + reserve fromAsset (user_wallet→swap_clearing)
+    // + mark Proposal→executing — all in a SINGLE DB $transaction (C1).
+    const pricingConfig = this.config.get<PricingConfig>('pricing');
+    const baseFiat = this.assetRegistry.defaultFiat();
+    const baseRate = resolveBaseRate(pricingConfig, fromAsset, baseFiat);
+    const LEDGER_SCALE = 10n ** 18n;
+    const scaledFromAmount = toScaled(fromAmount);
+    const scaledNgn18 =
+      (scaledFromAmount * toScaled(String(baseRate))) / LEDGER_SCALE;
+    const isNeg = scaledNgn18 < 0n;
+    const abs = isNeg ? -scaledNgn18 : scaledNgn18;
+    const whole = abs / LEDGER_SCALE;
+    const frac = abs % LEDGER_SCALE;
+    const fracStr =
+      frac === 0n
+        ? ''
+        : '.' + frac.toString().padStart(18, '0').replace(/0+$/, '');
+    const ngnEquivalentStr = (isNeg ? '-' : '') + whole.toString() + fracStr;
+
+    const requestChecksum = this.buildRequestChecksum({
+      userId,
+      proposalId,
+      asset: fromAsset,
+      fiatAmount: ngnEquivalentStr,
+      fxRate: params.rate ?? '0',
+    });
+
+    const { txn } =
+      await this.settlementRepo.createSwapSettlingWithReserveAtomic({
+        txnData: {
+          proposalId,
+          userId,
+          type: 'swap',
+          status: 'settling',
+          idempotencyKey,
+          requestChecksum,
+          fxRateSnapshot: params.rate ?? null,
+          metadata: {
+            fromAsset,
+            toAsset,
+            fromAmount,
+            toAmount: params.toAmount ?? '0',
+            walletId,
+            // BUG 2 — persist the EXACT velocity contribution made at reserve so
+            // the refund path (settleSwap failure / execute 4xx) can reverse it.
+            velocityFiatAmount: ngnEquivalentStr,
+            velocityFiatCurrency: baseFiat,
+          },
+          pinVerifiedAt: now,
+        },
+        proposalId,
+        confirmedAt: now,
+        velocityIncrement: {
+          userId,
+          fiatCurrency: baseFiat,
+          fiatAmountStr: ngnEquivalentStr,
+          now,
+        },
+        walletId,
+        fromAmount,
+        fromAsset,
+        now,
+      });
+
+    // ── Step 7: Execute swap via provider ────────────────────────────────────
+    // FUNDS-SAFETY (§3.1): same reserve-then-callProvider shape as executeSend.
+    // The reserve (Step 6, user_wallet → swap_clearing) is already committed. On a
+    // DEFINITIVE rejection (HTTP 4xx — the provider rejected the request and never
+    // performed the swap) refund the reserve and fail HERE. On an AMBIGUOUS failure
+    // (5xx / timeout / no status) the swap MIGHT be in-flight; leave it 'settling'
+    // for the reconciler rather than risk a double-spend.
+    let swapOutput: ExecuteSwapOutput;
+    try {
+      swapOutput = await this.callProvider('swapExecute', () =>
+        this.swapProvider!.execute({
+          addressId,
+          fromAssetId,
+          toAssetId,
+          amount: fromAmount,
+          reference: idempotencyKey,
+        }),
+      );
+    } catch (err: unknown) {
+      if (this.isDefinitiveProviderRejection(err)) {
+        await this.settlementRepo.settleSwapRefundAtomic({
+          transactionId: txn.id,
+          userId,
+          walletId,
+          fromAmount,
+          fromAsset,
+          failureReason:
+            'swap rejected by provider (definitive 4xx) — reserve refunded',
+          now,
+          // BUG 2 — reverse the velocity incremented in the atomic above so a
+          // definitively-rejected swap does not consume the user's daily limit.
+          velocityReversal: {
+            userId,
+            fiatCurrency: baseFiat,
+            fiatAmountStr: ngnEquivalentStr,
+            now,
+          },
+        });
+      }
+      throw err;
+    }
+
+    const providerSwapId = swapOutput.providerSwapId;
+
+    // Persist providerSwapId into Transaction metadata for idempotent replay.
+    await this.transactionRepo.mergeMetadata(txn.id, { providerSwapId });
+
+    // ── Step 8: Enqueue SettlementOutbox ────────────────────────────────────
+    await this.outboxRepo.create({
+      transactionId: txn.id,
+      settlementType: 'swap',
+      payload: {
+        reference: idempotencyKey,
+        fromAsset,
+        toAsset,
+        fromAmount,
+        providerSwapId,
+      },
+      idempotencyKey,
+      status: 'pending',
+      processorRef: providerSwapId,
+    });
+
+    return {
+      transactionId: txn.id,
+      status: 'settling',
+      swap: { providerSwapId },
+    };
+  }
+
+  /**
+   * Phase 2 of a swap: credits toAsset (on success) or refunds fromAsset (on failure).
+   *
+   * Called by the Blockradar swap webhook or a polling job after the provider
+   * confirms or rejects the swap.
+   *
+   * Flow (§3.1 preserved — model proposes, engine disposes):
+   *   1. Load Transaction by idempotencyKey (reference).
+   *   2. Idempotent path: already completed → return existing receipt.
+   *   3. Guard: status must be 'settling'.
+   *   4. Route on success flag:
+   *      - success=true  → settleSwapFinalizeAtomic (credit toAsset).
+   *      - success=false → settleSwapRefundAtomic (refund fromAsset).
+   */
+  async settleSwap(input: SettleSwapInput): Promise<SettleSwapResult> {
+    const { reference, success, toAmount, hash } = input;
+
+    // ── Step 1: Load Transaction by idempotencyKey ───────────────────────────
+    const txn = await this.transactionRepo.findByIdempotencyKey(reference);
+    if (txn === null) {
+      throw new ProposalNotExecutableError(
+        `no transaction found for reference '${reference}'`,
+      );
+    }
+
+    // ── Step 2: Idempotent path ──────────────────────────────────────────────
+    if (txn.status === 'completed') {
+      const receiptNumber = await this.settlementRepo.findReceiptNumber(txn.id);
+      return {
+        transactionId: txn.id,
+        status: 'completed',
+        userId: txn.userId,
+        ...(receiptNumber !== null ? { receiptNumber } : {}),
+      };
+    }
+
+    // ── Step 3: Guard ─────────────────────────────────────────────────────────
+    if (txn.status !== 'settling') {
+      throw new SettlementInvalidStatusError(txn.status);
+    }
+
+    const meta = txn.metadata as Record<string, string>;
+    const walletId = meta.walletId ?? '';
+    const fromAmount = meta.fromAmount ?? '0';
+    const fromAsset = meta.fromAsset ?? '';
+    const toAsset = meta.toAsset ?? '';
+    const now = this.clock.now();
+    const year = now.getFullYear().toString();
+
+    if (success) {
+      // FUNDS-SAFETY (§3.1, #12): a swap.success payload that omits or zeroes the
+      // converted-amount field is MALFORMED. Crediting toAmount '0' would either
+      // throw inside the finalize $transaction (assertPositiveDecimal) — stranding
+      // the reserve in 'settling' — or credit nothing while completing the tx.
+      // Treat it as not-yet-settleable: preserve the reserve (no finalize, no
+      // refund) and return 'pending' so a corrected retry/webhook can finalize.
+      if (toAmount === undefined || toScaled(toAmount) <= 0n) {
+        this.logger.warn(
+          { transactionId: txn.id, reference, toAmount },
+          'settleSwap: success payload missing/zero toAmount — leaving reserve, returning pending',
+        );
+        return {
+          transactionId: txn.id,
+          status: 'pending',
+          userId: txn.userId,
+        };
+      }
+
+      // ── Step 4a: Finalize — credit toAsset ──────────────────────────────────
+      const { receiptNumber } =
+        await this.settlementRepo.settleSwapFinalizeAtomic({
+          transactionId: txn.id,
+          userId: txn.userId,
+          walletId,
+          fromAmount,
+          fromAsset,
+          // Guarded above: toAmount is defined and positive on this path.
+          toAmount,
+          toAsset,
+          onChainTxHash: hash ?? '',
+          now,
+          year,
+        });
+
+      return {
+        transactionId: txn.id,
+        status: 'completed',
+        userId: txn.userId,
+        receiptNumber,
+      };
+    }
+
+    // ── Step 4b: Failure → refund fromAsset ─────────────────────────────────
+    await this.settlementRepo.settleSwapRefundAtomic({
+      transactionId: txn.id,
+      userId: txn.userId,
+      walletId,
+      fromAmount,
+      fromAsset,
+      failureReason: 'swap provider returned failure',
+      now,
+      // BUG 2 — reverse the daily-spend velocity this swap consumed at reserve.
+      velocityReversal: this.buildVelocityReversal(txn.userId, meta, now),
+    });
+
+    return {
+      transactionId: txn.id,
+      status: 'failed',
+      userId: txn.userId,
+    };
+  }
+
+  /**
+   * Queries the terminal status of a swap for the reconciler (#8/#11) — used to
+   * safely handle a MISSED Blockradar swap webhook before deciding to finalize,
+   * refund, or leave a pending `swap` outbox row open.
+   *
+   * Invariant (§3.1): this method is READ-ONLY — it never moves money. The
+   * reconciler routes based on the result and calls `settleSwap` to act.
+   *
+   * The swap provider port exposes no terminal-status query (Blockradar swaps
+   * are webhook-driven only). So this method is FAIL-SAFE 'pending': it can
+   * confirm `success` only when a previously-processed webhook recorded the
+   * converted amount + hash into the outbox payload. Without that confirmation it
+   * returns 'pending' — NEVER 'failed'. This is deliberate: blind-refunding a
+   * swap that actually completed on-chain would credit nothing while the toAsset
+   * is already gone (platform loss), so an unconfirmable swap MUST stay open for
+   * a later webhook/retry rather than be refunded. (CLAUDE.md §3.1.)
+   *
+   * @param payload the SettlementOutbox payload for this swap row (may carry a
+   *   webhook-confirmed `toAmount`/`hash`).
+   */
+  querySwapStatus(
+    payload?: Record<string, unknown> | null,
+  ): QuerySwapStatusOutput {
+    const toAmount = payload?.toAmount;
+    const hash = payload?.hash;
+    if (
+      typeof toAmount === 'string' &&
+      toAmount.length > 0 &&
+      toScaled(toAmount) > 0n
+    ) {
+      return {
+        status: 'success',
+        toAmount,
+        ...(typeof hash === 'string' && hash.length > 0 ? { hash } : {}),
+      };
+    }
+    // No webhook-confirmed converted amount → cannot confirm. Fail-safe pending:
+    // leave the row open for the webhook or a later tick (never blind-refund).
+    return { status: 'pending' };
   }
 
   // ---------------------------------------------------------------------------
@@ -1754,6 +2366,105 @@ export class ExecutionService {
         'notifySellFailed: failed to send WhatsApp notice (swallowed)',
       );
     }
+  }
+
+  /**
+   * Returns true when a provider rejection is DEFINITIVE — the request was
+   * rejected by the provider with an HTTP 4xx status and was therefore NEVER
+   * broadcast on-chain. Only definitive rejections are safe to compensate
+   * (refund a committed reserve): an AMBIGUOUS failure (5xx, network timeout, or
+   * no HTTP status at all) might mean the side-effect IS in-flight, so refunding
+   * would risk a double-spend (refund + the on-chain action both landing). The
+   * caller leaves ambiguous failures for the reconciler. (CLAUDE.md §3.1.)
+   */
+  private isDefinitiveProviderRejection(err: unknown): boolean {
+    const status = this.extractHttpStatus(err);
+    return status !== undefined && status >= 400 && status < 500;
+  }
+
+  /**
+   * Extracts the HTTP status from a provider error. The wallet/swap provider
+   * adapters attach it structurally as `httpStatus` (see
+   * `BlockradarProvider.wrapError`). `callProvider` re-wraps the original error
+   * as the `cause` of a {@link ProviderUnavailableError}, so the status may live
+   * on the error itself or on its `cause`. Returns undefined when no numeric
+   * status is present — which the caller treats as an ambiguous failure.
+   */
+  private extractHttpStatus(err: unknown): number | undefined {
+    const statusOf = (candidate: unknown): number | undefined => {
+      if (
+        typeof candidate === 'object' &&
+        candidate !== null &&
+        'httpStatus' in candidate &&
+        typeof candidate.httpStatus === 'number'
+      ) {
+        return candidate.httpStatus;
+      }
+      return undefined;
+    };
+    return statusOf(err) ?? statusOf((err as { cause?: unknown })?.cause);
+  }
+
+  /**
+   * Runs an external provider side-effect call (Flutterwave / Blockradar) and
+   * translates ANY failure — non-2xx, network error, or any rejection — into a
+   * typed {@link ProviderUnavailableError}. The calling surface (chat /
+   * WhatsApp) maps that to a clear "provider temporarily unavailable" message
+   * so a transient provider failure never leaks an opaque 500. The original
+   * error is logged (provider messages may include sensitive request context,
+   * so only the operation name is logged, not the raw error body — §secrets).
+   */
+  private async callProvider<T>(
+    operation: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      // #21/#22: SwapUnavailableError (Blockradar 404 / no-route) is a typed,
+      // NON-retryable "swap not available on this account" signal — it must NOT
+      // be clobbered into a retryable ProviderUnavailableError (502). Let it
+      // propagate unchanged so the execute path matches the proposal path's
+      // graceful semantics (web-chat surfaces a "swap isn't available" message).
+      if (err instanceof SwapUnavailableError) {
+        this.logger.warn(
+          `provider call '${operation}' returned SwapUnavailableError — propagating unchanged`,
+        );
+        throw err;
+      }
+      this.logger.error(
+        `provider call '${operation}' failed: ${err instanceof Error ? err.message : 'unknown error'}`,
+      );
+      throw new ProviderUnavailableError(operation, err);
+    }
+  }
+
+  /**
+   * Builds the velocity reversal for a refund from a Transaction's metadata
+   * (BUG 2). At reserve we persisted `velocityFiatAmount` + `velocityFiatCurrency`
+   * — the EXACT counter contribution this tx made — so the refund can decrement
+   * the same amount even if config/rates drift between execute and settle.
+   *
+   * Returns undefined for legacy rows that pre-date these metadata fields: a
+   * refund then simply skips the reversal (no-op) rather than guessing an amount
+   * and risking an over- or under-reversal of the user's daily counter.
+   */
+  private buildVelocityReversal(
+    userId: string,
+    meta: Record<string, unknown>,
+    now: Date,
+  ): VelocityReversal | undefined {
+    const fiatAmountStr = meta.velocityFiatAmount;
+    const fiatCurrency = meta.velocityFiatCurrency;
+    if (
+      typeof fiatAmountStr !== 'string' ||
+      fiatAmountStr.length === 0 ||
+      typeof fiatCurrency !== 'string' ||
+      fiatCurrency.length === 0
+    ) {
+      return undefined;
+    }
+    return { userId, fiatCurrency, fiatAmountStr, now };
   }
 
   /**

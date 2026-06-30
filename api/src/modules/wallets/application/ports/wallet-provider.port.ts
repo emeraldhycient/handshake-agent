@@ -5,6 +5,42 @@
  */
 export const WALLET_PROVIDER = Symbol('WALLET_PROVIDER');
 
+/**
+ * A single crypto asset discovered from the provider's wallet-asset listing.
+ * Fields are normalised from the Blockradar GET /wallets/{id}/assets response.
+ * This type is provider-agnostic so the CatalogSyncService only depends on the
+ * port, not the concrete adapter.
+ */
+export interface DiscoveredAsset {
+  /** Provider-assigned UUID for this asset (used as assetId in balance/withdraw calls). */
+  assetId: string;
+  /** Ticker symbol, e.g. "USDT", "TRX". Upper-cased by the adapter. */
+  symbol: string;
+  /** Human-readable name, e.g. "Tether USD". */
+  name: string;
+  /**
+   * Normalised network / blockchain identifier aligned to the catalog key
+   * (e.g. "TRON"). Derived from the response's `blockchain.slug` or `blockchain.name`.
+   */
+  network: string;
+  /**
+   * On-chain contract / token address, when applicable (null for native assets).
+   * TRC-20 USDT has a contract address; TRX does not.
+   */
+  contractAddress: string | null;
+  /**
+   * Number of decimal places for the asset (e.g. 6 for USDT, 6 for TRX).
+   * Taken from the response's `asset.decimals` field.
+   */
+  decimals: number;
+  /**
+   * `true` when the asset/wallet is operating on a mainnet;
+   * `false` on testnet. Derived from the response's `asset.network` field
+   * ("mainnet" → true, anything else → false).
+   */
+  isMainnet: boolean;
+}
+
 export interface ProvisionAddressInput {
   /** Opaque user reference written into the provider's metadata for audit traceability. */
   userRef: string;
@@ -98,6 +134,16 @@ export interface IWalletProvider {
   ): Promise<ProvisionAddressOutput>;
 
   /**
+   * Lists all assets available on the given master wallet.
+   * Used by CatalogSyncService on boot to build the dynamic asset catalog.
+   *
+   * @param masterWalletId - The provider's master wallet UUID (from network config).
+   * @returns Array of discovered assets — may be empty if the wallet has no assets.
+   * @throws Error on non-2xx provider responses (callers must handle gracefully).
+   */
+  listWalletAssets(masterWalletId: string): Promise<DiscoveredAsset[]>;
+
+  /**
    * Returns the current balance for the given provider address id and asset.
    * Amount is already human-scaled (not raw integer units).
    *
@@ -119,7 +165,14 @@ export interface IWalletProvider {
    * delivers the final status via webhook. The deterministic execution engine (§3.1)
    * holds the idempotency key and updates the settlement record on webhook receipt.
    *
-   * @throws Error (with provider message) on non-2xx responses.
+   * @throws Error (with provider message) on non-2xx responses. On a response-bearing
+   *   rejection the thrown error carries the originating HTTP status STRUCTURALLY as a
+   *   numeric `httpStatus` property (NOT only in the message string); on a network error
+   *   with no HTTP response, `httpStatus` is absent (undefined). The execution engine
+   *   reads `httpStatus` to distinguish a DEFINITIVE client rejection (4xx — request
+   *   rejected, never broadcast → safe to refund the reserve) from an AMBIGUOUS failure
+   *   (5xx / network — the withdrawal may be in-flight → leave for the reconciler).
+   *   This is the funds-safety distinction in CLAUDE.md §3.1.
    */
   withdraw(input: WithdrawInput): Promise<WithdrawOutput>;
 

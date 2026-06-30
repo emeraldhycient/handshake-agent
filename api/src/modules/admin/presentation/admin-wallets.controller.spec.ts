@@ -9,6 +9,7 @@
  *   3. Guard: correct token → the guard permits.
  *   4. POST /admin/wallets/backfill-networks: enqueues run + returns { runId } (202).
  *   5. GET /admin/wallets/backfill-runs/:id: returns run status; 404 when not found.
+ *   6. POST /admin/wallets/reconcile: calls reconcileUser + returns results.
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
@@ -26,7 +27,10 @@ import {
   type BackfillRunRecord,
 } from '../../wallets/application/ports/backfill-run.repository.port';
 import { WALLET_BACKFILL_QUEUE_NAME } from '../../wallets/application/wallet-backfill-queue.constants';
+import { WalletReconciliationService } from '../../wallets/application/wallet-reconciliation.service';
+import type { AssetReconciliationResult } from '../../wallets/application/wallet-reconciliation.service';
 import { EnqueueBackfillDto } from './dto/enqueue-backfill.dto';
+import { ReconcileWalletDto } from './dto/reconcile-wallet.dto';
 import type { Env } from '../../../core/config/env.schema';
 
 // ---------------------------------------------------------------------------
@@ -68,13 +72,22 @@ function makeQueueMock(): Partial<Queue> {
   };
 }
 
+function makeReconciliationServiceMock(
+  results: AssetReconciliationResult[] = [],
+): Partial<WalletReconciliationService> {
+  return {
+    reconcileUser: jest.fn().mockResolvedValue(results),
+  };
+}
+
 /**
- * Build a TestingModule with stubs for all BQ-2 dependencies.
+ * Build a TestingModule with stubs for all BQ-2 + reconcile dependencies.
  */
 async function buildModule(
   adminToken: string,
   runRepo: IBackfillRunRepository = makeRunRepo(),
   queue: Partial<Queue> = makeQueueMock(),
+  reconciliationService: Partial<WalletReconciliationService> = makeReconciliationServiceMock(),
 ): Promise<{ controller: AdminWalletsController; module: TestingModule }> {
   const configStub: Partial<ConfigService<Env, true>> = {
     get: jest.fn().mockImplementation((key: string) => {
@@ -89,6 +102,7 @@ async function buildModule(
       { provide: BACKFILL_RUN_REPOSITORY, useValue: runRepo },
       { provide: getQueueToken(WALLET_BACKFILL_QUEUE_NAME), useValue: queue },
       { provide: ConfigService, useValue: configStub },
+      { provide: WalletReconciliationService, useValue: reconciliationService },
     ],
   }).compile();
 
@@ -243,5 +257,66 @@ describe('AdminWalletsController — GET /admin/wallets/backfill-runs/:id (BQ-2)
     await expect(controller.getBackfillRun('nonexistent-id')).rejects.toThrow(
       NotFoundException,
     );
+  });
+});
+
+describe('AdminWalletsController — POST /admin/wallets/reconcile', () => {
+  const CREDITED_RESULT: AssetReconciliationResult = {
+    asset: 'USDT',
+    network: 'TRON',
+    walletId: 'wallet-001',
+    onChain: '2200',
+    ledger: '200',
+    delta: '2000',
+    action: 'credited',
+    deposited: true,
+    receiptNumber: 'HS-2026-000001',
+  };
+
+  it('calls reconcileUser with the userId and returns results', async () => {
+    const reconciliationService = makeReconciliationServiceMock([
+      CREDITED_RESULT,
+    ]);
+    const { controller } = await buildModule(
+      'any-token',
+      undefined,
+      undefined,
+      reconciliationService,
+    );
+
+    const dto: ReconcileWalletDto = {
+      userId: '00000000-0000-7000-0000-000000000001',
+    };
+
+    const result = await controller.reconcileWallet(dto);
+
+    expect(reconciliationService.reconcileUser).toHaveBeenCalledWith(
+      '00000000-0000-7000-0000-000000000001',
+    );
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]).toMatchObject({
+      asset: 'USDT',
+      action: 'credited',
+      delta: '2000',
+      receiptNumber: 'HS-2026-000001',
+    });
+  });
+
+  it('returns an empty results array when no wallets need reconciliation', async () => {
+    const reconciliationService = makeReconciliationServiceMock([]); // in-sync
+    const { controller } = await buildModule(
+      'any-token',
+      undefined,
+      undefined,
+      reconciliationService,
+    );
+
+    const dto: ReconcileWalletDto = {
+      userId: '00000000-0000-7000-0000-000000000002',
+    };
+
+    const result = await controller.reconcileWallet(dto);
+
+    expect(result.results).toHaveLength(0);
   });
 });

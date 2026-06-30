@@ -17,6 +17,7 @@ export function ChatThread({
   density,
   onConfirm,
   onSelectTicket,
+  onResolveBeneficiary,
 }: ChatThreadProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -55,6 +56,7 @@ export function ChatThread({
           density={density}
           onConfirm={onConfirm}
           onSelectTicket={onSelectTicket}
+          onResolveBeneficiary={onResolveBeneficiary}
         />
       ))}
 

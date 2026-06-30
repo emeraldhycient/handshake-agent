@@ -5,24 +5,16 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  Inject,
   Logger,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  WhatsAppInboundSchema,
-  extractTextMessages,
-} from '@handshake-agent/contracts';
+import { WhatsAppInboundSchema } from '@handshake-agent/contracts';
 
 import type { Env } from '../../../core/config/env.schema';
-import { toInboundMessage } from '../application/whatsapp-inbound.mapper';
-import {
-  INBOUND_HANDLER,
-  type IInboundHandler,
-} from '../application/ports/inbound-handler.port';
+import { WhatsAppInboundService } from '../application/whatsapp-inbound.service';
 import { WhatsAppSignatureGuard } from './guards/whatsapp-signature.guard';
 
 /** Ack body returned for every POST (including failures). */
@@ -39,11 +31,9 @@ type VerifyQuery = {
  * Exposes the inbound WhatsApp webhook.
  *
  * GET  /whatsapp/webhook — Meta subscription-verification handshake.
- * POST /whatsapp/webhook — Inbound event receiver; ALWAYS responds 200 (Meta
- *   retries on any non-2xx, so we ack immediately and catch handler errors).
- *
- * The controller depends on `IInboundHandler` via DI; Phase 2 binds the real
- * ConversationService; Phase 1.6 wires the module.
+ * POST /whatsapp/webhook — Inbound event receiver; signature-guarded, parses
+ *   payload, delegates to WhatsAppInboundService.ingest (handles text/audio/
+ *   image/document), always acks 200 immediately (Meta retries on any non-2xx).
  */
 @Controller('whatsapp')
 export class WhatsAppWebhookController {
@@ -51,7 +41,7 @@ export class WhatsAppWebhookController {
 
   constructor(
     private readonly configService: ConfigService<Env, true>,
-    @Inject(INBOUND_HANDLER) private readonly handler: IInboundHandler,
+    private readonly inboundService: WhatsAppInboundService,
   ) {}
 
   /**
@@ -123,17 +113,9 @@ export class WhatsAppWebhookController {
       return { status: 'received' };
     }
 
-    const textMessages = extractTextMessages(parsed.data);
-
-    for (const msg of textMessages) {
-      const dto = toInboundMessage(msg);
-      await this.handler.handleInbound(dto).catch((err: unknown) => {
-        this.logger.error(
-          { err, externalMessageId: dto.externalMessageId },
-          'IInboundHandler.handleInbound threw — acking 200 anyway',
-        );
-      });
-    }
+    await this.inboundService.ingest(parsed.data).catch((err: unknown) => {
+      this.logger.error({ err }, 'ingest threw — acking 200 anyway');
+    });
 
     return { status: 'received' };
   }

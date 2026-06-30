@@ -121,6 +121,17 @@ const fakeWalletProvider: IWalletProvider = {
   getWithdrawalStatus: jest
     .fn()
     .mockResolvedValue({ status: 'pending' as const }),
+  listWalletAssets: jest.fn().mockResolvedValue([
+    {
+      assetId: 'e2e-usdt-tron-asset-id',
+      symbol: 'USDT',
+      name: 'Tether USD',
+      network: 'TRON',
+      contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+      decimals: 6,
+      isMainnet: false,
+    },
+  ]),
 };
 
 const FAKE_ACCOUNT_NUMBER = '0987654321';
@@ -219,6 +230,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
           Promise.resolve({ passed: true, complianceEventId: '' }),
       } as never,
       config,
+      undefined as never, // swapProvider: not needed on buy proposal path
     );
 
     const settlementRepo = new SettlementPrismaRepository(ps, config);
@@ -246,6 +258,8 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       // complianceService: buy path does not run sanctions — pass undefined
       // (executeSend is not called in buy tests; executeBuy has no compliance gate).
       undefined,
+      undefined, // sessionService: not needed on buy path
+      undefined, // swapProvider: not needed on buy path
     );
 
     // Seed a User that is KYC-verified (Tier 1) and has a PIN set.

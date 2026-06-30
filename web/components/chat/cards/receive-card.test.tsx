@@ -4,6 +4,17 @@ import { describe, it, expect, vi } from "vitest"
 import { ReceiveCard } from "./receive-card"
 import type { ReceiveCardProps } from "@/types/components"
 
+// Capture the `value` prop passed to QRCodeSVG so we can assert it matches the address.
+vi.mock("qrcode.react", () => ({
+  QRCodeSVG: ({
+    value,
+    ...rest
+  }: {
+    value: string
+    [key: string]: unknown
+  }) => <svg data-testid="qr" data-qr-value={value} role="img" {...rest} />,
+}))
+
 const baseProps: ReceiveCardProps = {
   kind: "receive",
   asset: "USDT",
@@ -65,5 +76,24 @@ describe("ReceiveCard", () => {
     render(<ReceiveCard {...baseProps} onCopy={onCopy} />)
     await userEvent.click(screen.getByRole("button", { name: /copy/i }))
     expect(onCopy).toHaveBeenCalledOnce()
+  })
+
+  it("QR component encodes the deposit address as its value (mobile)", () => {
+    render(<ReceiveCard {...baseProps} density="mobile" />)
+    const qr = screen.getByTestId("qr")
+    expect(qr).toHaveAttribute("data-qr-value", baseProps.address)
+  })
+
+  it("QR component encodes the deposit address as its value (desktop)", () => {
+    render(<ReceiveCard {...baseProps} density="desktop" />)
+    const qr = screen.getByTestId("qr")
+    expect(qr).toHaveAttribute("data-qr-value", baseProps.address)
+  })
+
+  it("does not render a placeholder QR pattern (real QR replaces fake)", () => {
+    render(<ReceiveCard {...baseProps} density="mobile" />)
+    // qr-module and qr-finder are placeholder-specific test IDs — they must be absent
+    expect(screen.queryByTestId("qr-module")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("qr-finder")).not.toBeInTheDocument()
   })
 })

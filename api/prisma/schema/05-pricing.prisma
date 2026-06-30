@@ -9,7 +9,8 @@ model Quote {
   id                  String         @id @default(uuid(7)) @db.Uuid
   userId              String         @db.Uuid
   type                QuoteType
-  asset               SupportedAsset
+  /// TEXT — validated by AssetRegistry at app layer (dynamic catalog, no migration needed).
+  asset               String
   fiatCurrency        FiatCurrency   @default(NGN)
   fiatAmount          Decimal        @db.Decimal(38, 2)
   /// Byte-stable snapshots (contracts CryptoAmountSchema / fxRate). Display + re-validation only.
@@ -63,7 +64,8 @@ enum QuoteStatus {
 /// Append-only historical market-rate record (treasury analysis, rate-source audit).
 model PriceSnapshot {
   id               String         @id @default(uuid(7)) @db.Uuid
-  asset            SupportedAsset
+  /// TEXT — validated by AssetRegistry at app layer (dynamic catalog).
+  asset            String
   fiatCurrency     FiatCurrency
   baseRate         String
   spreadBps        Int
@@ -81,7 +83,8 @@ model PriceSnapshot {
 /// (asset, currency); daily_snapshot rows are separate periodic aggregates.
 model TreasuryExposure {
   id                String               @id @default(uuid(7)) @db.Uuid
-  asset             SupportedAsset
+  /// TEXT — validated by AssetRegistry at app layer (dynamic catalog).
+  asset             String
   fiatCurrency      FiatCurrency
   /// Crypto held in treasury — byte-stable string snapshot.
   cryptoHeld        String
@@ -123,7 +126,8 @@ enum TreasurySnapshotType {
 model TreasuryAlert {
   id                    String         @id @default(uuid(7)) @db.Uuid
   exposureId            String         @db.Uuid
-  asset                 SupportedAsset
+  /// TEXT — validated by AssetRegistry at app layer (dynamic catalog).
+  asset                 String
   severity              AlertSeverity
   message               String
   netExposure           Decimal        @db.Decimal(38, 2)

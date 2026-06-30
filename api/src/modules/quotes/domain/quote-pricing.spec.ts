@@ -2,6 +2,7 @@ import {
   computeBuyQuote,
   computeSellQuote,
   QuotePricingError,
+  valueAtSellRate,
 } from './quote-pricing';
 
 describe('computeBuyQuote', () => {
@@ -64,6 +65,31 @@ describe('computeBuyQuote', () => {
         fiatAmount: 100000,
         baseRate: 0,
         buySpreadBps: 150,
+        processingFeeBps: 100,
+        cryptoDecimals: 6,
+      }),
+    ).toThrow(QuotePricingError);
+  });
+
+  // ── Fail-closed effective-rate guard (finding #27) ───────────────────────
+  // A misconfigured negative spread can push the effective buy rate to <= 0,
+  // which would produce a 0/negative crypto amount via division. Fail closed.
+  it('rejects a misconfigured spread that drives the effective buy rate <= 0', () => {
+    expect(() =>
+      computeBuyQuote({
+        fiatAmount: 100000,
+        baseRate: 1600,
+        buySpreadBps: -10000, // 1 + (-10000/10000) = 0 → effective rate 0
+        processingFeeBps: 100,
+        cryptoDecimals: 6,
+      }),
+    ).toThrow(QuotePricingError);
+
+    expect(() =>
+      computeBuyQuote({
+        fiatAmount: 100000,
+        baseRate: 1600,
+        buySpreadBps: -20000, // effective rate negative
         processingFeeBps: 100,
         cryptoDecimals: 6,
       }),
@@ -153,6 +179,32 @@ describe('computeSellQuote', () => {
     ).toThrow(QuotePricingError);
   });
 
+  // ── Fail-closed effective-rate guard (finding #27) ───────────────────────
+  // A spread >= 100% (sellSpreadBps >= 10000) drives the effective sell rate to
+  // <= 0. A 0/negative rate would silently produce a 0/negative payout instead
+  // of throwing — fail closed so the misconfiguration surfaces (§3.1).
+  it('rejects a sell spread of exactly 100% (effective rate 0)', () => {
+    expect(() =>
+      computeSellQuote({
+        cryptoAmount: 100,
+        baseRate: 1600,
+        sellSpreadBps: 10000, // 1 - 1.0 = 0 → effective rate 0
+        processingFeeBps: 100,
+      }),
+    ).toThrow(QuotePricingError);
+  });
+
+  it('rejects a sell spread greater than 100% (negative effective rate)', () => {
+    expect(() =>
+      computeSellQuote({
+        cryptoAmount: 100,
+        baseRate: 1600,
+        sellSpreadBps: 12000, // 1 - 1.2 = -0.2 → negative effective rate
+        processingFeeBps: 100,
+      }),
+    ).toThrow(QuotePricingError);
+  });
+
   it('sellSpreadBps=200 yields less NGN than sellSpreadBps=150 (proves independence)', () => {
     // Same baseRate and cryptoAmount, but higher sellSpread → user gets less
     const with150 = computeSellQuote({
@@ -170,6 +222,19 @@ describe('computeSellQuote', () => {
 
     expect(with200.netFiat).toBeLessThan(with150.netFiat);
     expect(with200.effectiveRate).toBeLessThan(with150.effectiveRate);
+  });
+});
+
+describe('valueAtSellRate', () => {
+  it('values crypto at the sell-spread-reduced rate, floored to 2dp', () => {
+    // baseRate 1650, sellSpread 200bps → effective 1617; 29.97 × 1617 = 48461.49
+    expect(valueAtSellRate('29.97', 1650, 200)).toBe('48461.49');
+  });
+  it('returns 0.00 for a zero balance', () => {
+    expect(valueAtSellRate('0', 1650, 200)).toBe('0.00');
+  });
+  it('throws on a non-positive base rate', () => {
+    expect(() => valueAtSellRate('1', 0, 200)).toThrow();
   });
 });
 

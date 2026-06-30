@@ -47,6 +47,21 @@ export class WalletPrismaRepository implements IWalletRepository {
     return this.toRecord(row);
   }
 
+  async findByUser(userId: string): Promise<WalletRecord[]> {
+    const rows = await this.prisma.wallet.findMany({
+      where: { userId },
+      select: {
+        id: true,
+        userId: true,
+        network: true,
+        address: true,
+        providerReference: true,
+        status: true,
+      },
+    });
+    return rows.map((row) => this.toRecord(row));
+  }
+
   async findByAddress(address: string): Promise<WalletRecord | null> {
     const row = await this.prisma.wallet.findUnique({
       where: { address },

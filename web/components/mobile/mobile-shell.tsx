@@ -3,8 +3,11 @@
 import { useState } from "react"
 import { useStore } from "zustand"
 import { defaultChatStore } from "@/lib/store/chat-store"
+import { useAuthStore } from "@/lib/store/auth-store"
+import { useChatHistory } from "@/hooks/use-chat-history"
 import {
-  buildConfirmForQuote,
+  buildConfirmFromQuote,
+  buildConfirmFromSwap,
   buildTicketConfirm,
   chipLabel,
 } from "@/lib/chat/flow"
@@ -18,21 +21,29 @@ import { ConfirmSheet } from "@/components/chat/overlays/confirm-sheet"
 import { PinPad } from "@/components/chat/overlays/pin-pad"
 import { SuccessOverlay } from "@/components/chat/overlays/success-overlay"
 import { FocusTrap } from "@/components/shared/focus-trap"
+import { useVoiceRecorder } from "@/hooks/use-voice-recorder"
 import type { MobileShellProps, MobileTabId } from "@/types/components"
 import type { ChatMessage, TicketOption, ChatAction } from "@/lib/schemas"
 
 export function MobileShell({ store: injectedStore }: MobileShellProps) {
-  const state = useStore(injectedStore ?? defaultChatStore)
+  const store = injectedStore ?? defaultChatStore
+  const state = useStore(store)
+  const authStatus = useAuthStore((s) => s.status)
+  // Rehydrate the thread from server history on mount (authenticated only).
+  useChatHistory("m", store)
   const [tab, setTab] = useState<MobileTabId>("chat")
+  const recorder = useVoiceRecorder()
 
   function handleConfirm(message: ChatMessage) {
+    if (message.kind === "swap") {
+      // Live swap proposal — build confirm from the typed swap fields.
+      state.openConfirm("m", buildConfirmFromSwap(message))
+      return
+    }
     if (message.kind !== "quote") return
-    // message.action is "buy" | "send" | "swap" | "ticket" | "balance" | "receive"
-    // after the kind === "quote" guard, only buy/send/swap are valid quote actions.
-    const payload = buildConfirmForQuote(
-      message.action as "buy" | "send" | "swap"
-    )
-    state.openConfirm("m", payload)
+    // Build the confirm sheet from the live quote so it shows the real
+    // itemized breakdown (buy / sell / send).
+    state.openConfirm("m", buildConfirmFromQuote(message))
   }
 
   function handleSelectTicket(opt: TicketOption) {
@@ -59,14 +70,40 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
             density="mobile"
             onConfirm={handleConfirm}
             onSelectTicket={handleSelectTicket}
+            onResolveBeneficiary={(id) =>
+              void state.resolveBeneficiary("m", id)
+            }
           />
           <ChatComposer
             chips={state.chips.m}
             value={state.input.m}
             onChange={(v) => state.setInput("m", v)}
-            onSubmit={() => state.send("m", state.input.m)}
-            onChip={(a) => state.send("m", chipLabel(a), a)}
+            onSubmit={() => {
+              if (authStatus === "authenticated") {
+                void state.sendToAgent("m", state.input.m)
+              } else {
+                state.send("m", state.input.m)
+              }
+              state.setInput("m", "")
+            }}
+            onChip={(a) => {
+              const label = chipLabel(a)
+              if (authStatus === "authenticated") {
+                void state.sendToAgent("m", label)
+              } else {
+                state.send("m", label, a)
+              }
+            }}
             density="mobile"
+            recording={recorder.status === "recording"}
+            recordSeconds={recorder.seconds}
+            canRecord={recorder.status !== "unsupported"}
+            onRecordStart={() => void recorder.start()}
+            onRecordStop={async () => {
+              const blob = await recorder.stop()
+              if (blob) void state.sendVoiceToAgent("m", blob)
+            }}
+            onRecordCancel={() => recorder.cancel()}
           />
         </>
       )}
@@ -80,7 +117,7 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
         open={showConfirm}
         payload={state.pending}
         density="mobile"
-        onConfirm={state.confirmToPin}
+        onConfirm={() => void state.confirmToPin()}
         onCancel={state.cancel}
       />
 
@@ -92,8 +129,9 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
             density="mobile"
             onDigit={state.pressPin}
             onBack={state.pinBack}
-            onFaceId={state.pinComplete}
+            onFaceId={() => void state.pinComplete()}
             onCancel={state.cancel}
+            errorText={state.pinError ?? undefined}
           />
         </FocusTrap>
       )}

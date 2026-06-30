@@ -1,6 +1,7 @@
 "use client"
 
-import { LockIcon, AlertTriangleIcon } from "lucide-react"
+import { useState } from "react"
+import { LockIcon, AlertTriangleIcon, LoaderCircleIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   Sheet,
@@ -29,13 +30,30 @@ import type { ConfirmSheetProps } from "@/types/components"
  */
 function ConfirmBody({
   payload,
+  error,
   onConfirm,
   onCancel,
 }: {
   payload: NonNullable<ConfirmSheetProps["payload"]>
-  onConfirm: () => void
+  error?: string | null
+  onConfirm: () => void | Promise<void>
   onCancel: () => void
 }) {
+  const [loading, setLoading] = useState(false)
+
+  async function handleConfirm() {
+    if (loading) return
+    setLoading(true)
+    try {
+      await onConfirm()
+    } finally {
+      // Only reset loading if the component is still showing the confirm sheet.
+      // If onConfirm succeeded it transitions to PIN; the sheet will be closed
+      // so this set is a no-op but harmless.
+      setLoading(false)
+    }
+  }
+
   return (
     <div data-testid="confirm-body" className="flex flex-col">
       {/* Title + subtitle — presentational only; AT reads the sr-only shell title */}
@@ -103,21 +121,44 @@ function ConfirmBody({
         </div>
       </div>
 
+      {/* Authorization error banner */}
+      {error && (
+        <div className="border-danger bg-danger-muted mt-3 flex items-start gap-2.5 rounded-[14px] border p-3">
+          <AlertTriangleIcon
+            className="text-danger mt-0.5 h-[18px] w-[18px] shrink-0"
+            aria-hidden="true"
+          />
+          <span className="text-danger-foreground text-[13px] leading-relaxed font-medium">
+            {error}
+          </span>
+        </div>
+      )}
+
       {/* Actions */}
       <div className="mt-4 flex flex-col gap-2">
         <Button
-          onClick={onConfirm}
+          onClick={() => void handleConfirm()}
+          disabled={loading}
           className={cn(
             "w-full gap-2 bg-accent py-4 text-base font-bold text-accent-foreground",
-            "hover:bg-accent-deep"
+            "hover:bg-accent-deep",
+            loading && "cursor-not-allowed opacity-70"
           )}
         >
-          <LockIcon className="h-[15px] w-[15px]" aria-hidden="true" />
-          {payload.cta}
+          {loading ? (
+            <LoaderCircleIcon
+              className="h-[15px] w-[15px] animate-spin"
+              aria-hidden="true"
+            />
+          ) : (
+            <LockIcon className="h-[15px] w-[15px]" aria-hidden="true" />
+          )}
+          {loading ? "Authorizing…" : payload.cta}
         </Button>
         <Button
           variant="ghost"
           onClick={onCancel}
+          disabled={loading}
           className="w-full text-sm font-semibold text-muted-foreground"
         >
           Cancel
@@ -141,6 +182,7 @@ export function ConfirmSheet({
   density,
   onConfirm,
   onCancel,
+  error,
 }: ConfirmSheetProps) {
   // Guard: don't render the shell at all when there is nothing to show.
   if (!open || !payload) return null
@@ -177,6 +219,7 @@ export function ConfirmSheet({
           <div className="px-5 pt-1.5">
             <ConfirmBody
               payload={payload}
+              error={error}
               onConfirm={onConfirm}
               onCancel={onCancel}
             />
@@ -211,6 +254,7 @@ export function ConfirmSheet({
         </DialogDescription>
         <ConfirmBody
           payload={payload}
+          error={error}
           onConfirm={onConfirm}
           onCancel={onCancel}
         />

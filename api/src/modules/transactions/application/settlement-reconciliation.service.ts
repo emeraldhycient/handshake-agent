@@ -46,6 +46,7 @@ const HANDLED_TYPES = new Set([
   'processor_payout',
   'onchain_send',
   'processor_collection',
+  'swap',
 ]);
 
 // Statuses returned by settle methods that indicate the row is fully drained.
@@ -59,6 +60,20 @@ const TERMINAL_STATUSES = new Set(['completed', 'failed']);
 export class SettlementReconciliationService {
   private readonly logger = new Logger(SettlementReconciliationService.name);
   private readonly reconciliationConfig: ReconciliationConfig;
+
+  /**
+   * Re-entrancy guard (BUG 1, candidate b). The @Cron tick fires on a fixed
+   * schedule regardless of whether the previous tick has finished. A slow batch
+   * (provider latency, large backlog) can run longer than the tick interval, so
+   * a new tick would start while the previous one is still draining the SAME
+   * pending rows — driving two concurrent settle calls for one reference. The
+   * settle atomics are now idempotent under their advisory lock (so this is not
+   * the sole defence), but skipping a re-entrant tick avoids the wasted work and
+   * the concurrency entirely. In-process flag is sufficient: a single API
+   * instance owns the cron; if the deployment is scaled the settle idempotency
+   * (in-atomic status re-check) remains the cross-instance guarantee.
+   */
+  private isRunning = false;
 
   constructor(
     @Inject(SETTLEMENT_OUTBOX_REPOSITORY)
@@ -87,57 +102,73 @@ export class SettlementReconciliationService {
    */
   @Cron('*/2 * * * *', { name: 'settlement-reconciliation' })
   async tick(): Promise<void> {
-    const { gracePeriodSec, batchSize } = this.reconciliationConfig;
-
-    const pending = await this.outboxRepo.findPending({
-      olderThanSec: gracePeriodSec,
-      limit: batchSize,
-    });
-
-    if (pending.length === 0) {
-      this.logger.debug(
-        'settlement-reconciliation: no pending rows past grace window',
+    // Re-entrancy guard (BUG 1, candidate b): if the previous tick is still
+    // draining, skip this one rather than concurrently re-process the same
+    // pending rows. The flag is released in `finally` so a thrown batch never
+    // wedges the reconciler permanently.
+    if (this.isRunning) {
+      this.logger.warn(
+        'settlement-reconciliation: previous tick still running — skipping this tick',
       );
       return;
     }
+    this.isRunning = true;
 
-    this.logger.log(
-      `settlement-reconciliation: processing ${pending.length} pending outbox row(s)`,
-    );
+    try {
+      const { gracePeriodSec, batchSize } = this.reconciliationConfig;
 
-    let processed = 0;
-    let skipped = 0;
+      const pending = await this.outboxRepo.findPending({
+        olderThanSec: gracePeriodSec,
+        limit: batchSize,
+      });
 
-    for (const row of pending) {
-      if (!HANDLED_TYPES.has(row.settlementType)) {
-        this.logger.warn(
-          { outboxId: row.id, settlementType: row.settlementType },
-          'settlement-reconciliation: unknown settlementType — skipped',
+      if (pending.length === 0) {
+        this.logger.debug(
+          'settlement-reconciliation: no pending rows past grace window',
         );
-        skipped++;
-        continue;
+        return;
       }
 
-      try {
-        await this.processRow(row);
-        processed++;
-      } catch (err: unknown) {
-        this.logger.error(
-          {
-            outboxId: row.id,
-            settlementType: row.settlementType,
-            transactionId: row.transactionId,
-            err,
-          },
-          'settlement-reconciliation: row failed — continuing batch',
-        );
-        // Do NOT rethrow — one failing row must not abort the rest of the batch.
+      this.logger.log(
+        `settlement-reconciliation: processing ${pending.length} pending outbox row(s)`,
+      );
+
+      let processed = 0;
+      let skipped = 0;
+
+      for (const row of pending) {
+        if (!HANDLED_TYPES.has(row.settlementType)) {
+          this.logger.warn(
+            { outboxId: row.id, settlementType: row.settlementType },
+            'settlement-reconciliation: unknown settlementType — skipped',
+          );
+          skipped++;
+          continue;
+        }
+
+        try {
+          await this.processRow(row);
+          processed++;
+        } catch (err: unknown) {
+          this.logger.error(
+            {
+              outboxId: row.id,
+              settlementType: row.settlementType,
+              transactionId: row.transactionId,
+              err,
+            },
+            'settlement-reconciliation: row failed — continuing batch',
+          );
+          // Do NOT rethrow — one failing row must not abort the rest of the batch.
+        }
       }
+
+      this.logger.log(
+        `settlement-reconciliation: done — processed=${processed} skipped=${skipped} total=${pending.length}`,
+      );
+    } finally {
+      this.isRunning = false;
     }
-
-    this.logger.log(
-      `settlement-reconciliation: done — processed=${processed} skipped=${skipped} total=${pending.length}`,
-    );
   }
 
   // ---------------------------------------------------------------------------
@@ -280,6 +311,66 @@ export class SettlementReconciliationService {
       );
       if (TERMINAL_STATUSES.has(result.status)) {
         terminalStatus = result.status;
+      }
+    } else if (row.settlementType === 'swap') {
+      // Swap phase 2: recover a missed Blockradar swap webhook (#8/#11).
+      //
+      // The swap provider exposes no terminal-status query, so querySwapStatus is
+      // fail-safe 'pending' unless a previously-processed webhook recorded the
+      // converted amount + hash into this outbox payload. We MUST NOT blind-refund
+      // a missed swap webhook: a swap that completed on-chain would credit nothing
+      // while the toAsset is already gone. Mirror the onchain_send decision tree:
+      //   'success' → settleSwap(success=true, toAmount, hash)
+      //   'failed'  → settleSwap(success=false) — refund
+      //   'pending' → leave the row open (markAttempt only, no complete)
+      const swapStatus = this.executionService.querySwapStatus(row.payload);
+
+      this.logger.log(
+        { outboxId: row.id, swapStatus: swapStatus.status },
+        'settlement-reconciliation: swap status',
+      );
+
+      if (swapStatus.status === 'success') {
+        const result = await this.executionService.settleSwap({
+          reference,
+          success: true,
+          toAmount: swapStatus.toAmount,
+          hash: swapStatus.hash,
+        });
+        this.logger.log(
+          {
+            outboxId: row.id,
+            txnId: result.transactionId,
+            status: result.status,
+          },
+          'settlement-reconciliation: settleSwap(success) result',
+        );
+        if (TERMINAL_STATUSES.has(result.status)) {
+          terminalStatus = result.status;
+        }
+      } else if (swapStatus.status === 'failed') {
+        const result = await this.executionService.settleSwap({
+          reference,
+          success: false,
+        });
+        this.logger.log(
+          {
+            outboxId: row.id,
+            txnId: result.transactionId,
+            status: result.status,
+          },
+          'settlement-reconciliation: settleSwap(failed) result',
+        );
+        if (TERMINAL_STATUSES.has(result.status)) {
+          terminalStatus = result.status;
+        }
+      } else {
+        // status === 'pending' — cannot confirm. Leave the row open: markAttempt
+        // was already called above; the webhook or a later tick will finalize.
+        this.logger.log(
+          { outboxId: row.id },
+          'settlement-reconciliation: swap still pending — leaving row open',
+        );
       }
     }
 

@@ -56,7 +56,7 @@ export const walletAssetsFixture: WalletAsset[] = [
     sub: "USDT · TRON",
     amount: "29.97 USDT",
     value: "₦49,150",
-    change: "+0.1%",
+    change: "—",
     tint: ASSET_TINTS.USDT,
   },
   {
@@ -65,7 +65,7 @@ export const walletAssetsFixture: WalletAsset[] = [
     sub: "BTC",
     amount: "0.00010 BTC",
     value: "₦9,800",
-    change: "+2.4%",
+    change: "—",
     tint: ASSET_TINTS.BTC,
   },
   {

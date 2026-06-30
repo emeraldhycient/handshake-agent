@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { AuthModule } from '../../core/auth/auth.module';
+import { WebAuthModule } from '../auth/auth.module';
 import { WalletsModule } from '../wallets/wallets.module';
 import { CLOCK, SystemClock } from '../../core/common/clock';
 import { IDENTITY_REPOSITORY } from './application/ports/identity.repository.port';
@@ -20,6 +21,8 @@ import { HandoffTokenPrismaRepository } from './infrastructure/handoff-token.pri
 import { ActiveUserListerPrismaAdapter } from './infrastructure/active-user-lister.prisma';
 import { MockKycProvider } from './infrastructure/mock-kyc.provider';
 import { KycController } from './presentation/kyc.controller';
+import { ProfileService } from './application/profile.service';
+import { ProfileController } from './presentation/profile.controller';
 
 /**
  * Identity feature module. PrismaModule is global, so PrismaService is already
@@ -47,9 +50,10 @@ import { KycController } from './presentation/kyc.controller';
  * the composition root that imports both and resolves the binding.
  */
 @Module({
-  imports: [AuthModule, WalletsModule],
-  controllers: [KycController],
+  imports: [AuthModule, WebAuthModule, WalletsModule],
+  controllers: [KycController, ProfileController],
   providers: [
+    ProfileService,
     IdentityService,
     KycGateService,
     KycService,

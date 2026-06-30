@@ -517,6 +517,280 @@ describe('BlockradarProvider', () => {
         }),
       ).rejects.toThrow('Network timeout');
     });
+
+    it('preserves the HTTP status STRUCTURALLY on the thrown error (engine refund-vs-leave branching, §3.1)', async () => {
+      // The execution engine branches on definitive (4xx) vs ambiguous (5xx /
+      // none) provider failures to decide whether a reserve refund is safe. The
+      // status must be readable as a structured property — not only embedded in
+      // the message string.
+      const axiosErr = Object.assign(new Error('Unprocessable'), {
+        response: {
+          status: 422,
+          data: { message: 'Insufficient TRX balance', statusCode: 422 },
+        },
+        isAxiosError: true,
+      });
+      http.post.mockReturnValue(throwError(() => axiosErr));
+
+      await expect(
+        provider.withdraw({
+          addressId: ADDRESS_ID,
+          toAddress: TO_ADDRESS,
+          amount: AMOUNT,
+          assetId: USDT_TRON_ASSET_ID,
+          network: 'TRON',
+        }),
+      ).rejects.toMatchObject({ httpStatus: 422 });
+    });
+
+    // The execution engine's refund-vs-leave decision depends on reading the
+    // exact HTTP status structurally. Lock in the full matrix: every Blockradar
+    // 4xx/5xx withdraw rejection must expose `httpStatus`, and a network error
+    // (no HTTP response) must NOT — so the engine treats it as ambiguous and
+    // never refunds an in-flight withdrawal (CLAUDE.md §3.1).
+    it.each([
+      [400, 'Invalid destination address'],
+      [404, 'Asset not found'],
+      [500, 'Internal server error'],
+    ])(
+      'preserves httpStatus=%s structurally on a Blockradar %s rejection',
+      async (status, message) => {
+        const axiosErr = Object.assign(new Error('HTTP error'), {
+          response: { status, data: { message, statusCode: status } },
+          isAxiosError: true,
+        });
+        http.post.mockReturnValue(throwError(() => axiosErr));
+
+        await expect(
+          provider.withdraw({
+            addressId: ADDRESS_ID,
+            toAddress: TO_ADDRESS,
+            amount: AMOUNT,
+            assetId: USDT_TRON_ASSET_ID,
+            network: 'TRON',
+          }),
+        ).rejects.toMatchObject({ httpStatus: status });
+      },
+    );
+
+    it('does NOT attach httpStatus on a network error (no HTTP response → ambiguous, never refund)', async () => {
+      // A bare network failure has no axios `response`, so no status can be
+      // derived. The engine must treat this as ambiguous and leave the reserve.
+      http.post.mockReturnValue(throwError(() => new Error('ECONNRESET')));
+
+      const rejection = provider
+        .withdraw({
+          addressId: ADDRESS_ID,
+          toAddress: TO_ADDRESS,
+          amount: AMOUNT,
+          assetId: USDT_TRON_ASSET_ID,
+          network: 'TRON',
+        })
+        .then(
+          () => {
+            throw new Error('expected withdraw to reject');
+          },
+          (err: unknown) => err,
+        );
+
+      const err = (await rejection) as { httpStatus?: unknown };
+      expect(err).toBeInstanceOf(Error);
+      expect(err.httpStatus).toBeUndefined();
+    });
+  });
+
+  // ── listWalletAssets ─────────────────────────────────────────────────────
+  //
+  // Endpoint: GET /wallets/{masterWalletId}/assets
+  // Header: x-api-key
+  // Response: { data: [{ id, asset: { id, name, symbol, address, decimals,
+  //   network, blockchain: { slug, name } } }] }
+  //
+  // Mapping:
+  //   assetId       ← data[n].id   (wallet-asset id; NOT data[n].asset.id)
+  //   symbol        ← data[n].asset.symbol.toUpperCase()
+  //   name          ← data[n].asset.name
+  //   network       ← data[n].asset.blockchain.slug.toUpperCase()
+  //   contractAddress ← data[n].asset.address || null
+  //   decimals      ← data[n].asset.decimals
+  //   isMainnet     ← data[n].asset.network === 'mainnet'
+
+  describe('listWalletAssets', () => {
+    const MASTER_WALLET = 'master-wallet-uuid';
+
+    const SUCCESS_BODY = {
+      statusCode: 200,
+      message: 'Assets fetched successfully',
+      data: [
+        {
+          id: 'wallet-asset-join-id-1',
+          asset: {
+            id: 'asset-uuid-usdt-tron',
+            name: 'Tether USD',
+            symbol: 'USDT',
+            address: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+            decimals: 6,
+            network: 'testnet',
+            blockchain: {
+              slug: 'tron',
+              name: 'TRON',
+            },
+          },
+        },
+        {
+          id: 'wallet-asset-join-id-2',
+          asset: {
+            id: 'asset-uuid-trx-native',
+            name: 'TRON',
+            symbol: 'TRX',
+            address: '', // native — empty string
+            decimals: 6,
+            network: 'testnet',
+            blockchain: {
+              slug: 'tron',
+              name: 'TRON',
+            },
+          },
+        },
+      ],
+    };
+
+    it('GETs /wallets/{masterWalletId}/assets with x-api-key header', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(http.get).toHaveBeenCalledTimes(1);
+      const [url, config] = http.get.mock.calls[0] as [
+        string,
+        { headers: Record<string, string> },
+      ];
+      expect(url).toBe(`${BASE_URL}/wallets/${MASTER_WALLET}/assets`);
+      expect(config.headers['x-api-key']).toBe(API_KEY);
+    });
+
+    it('maps data[n].id (wallet-asset id) → assetId, NOT data[n].asset.id', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      // The wallet-scoped withdraw/balance endpoints reject asset.id (the global
+      // catalog id) — they require the top-level wallet-asset join id.
+      expect(result[0].assetId).toBe('wallet-asset-join-id-1');
+      expect(result[1].assetId).toBe('wallet-asset-join-id-2');
+    });
+
+    it('maps data[n].asset.symbol.toUpperCase() → symbol', async () => {
+      // Provide a lower-case symbol to verify normalisation.
+      const body = {
+        ...SUCCESS_BODY,
+        data: [
+          {
+            ...SUCCESS_BODY.data[0],
+            asset: { ...SUCCESS_BODY.data[0].asset, symbol: 'usdt' },
+          },
+        ],
+      };
+      http.get.mockReturnValue(of(axiosOk(body)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].symbol).toBe('USDT');
+    });
+
+    it('maps data[n].asset.blockchain.slug.toUpperCase() → network', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      // "tron" slug → "TRON" network
+      expect(result[0].network).toBe('TRON');
+      expect(result[1].network).toBe('TRON');
+    });
+
+    it('maps data[n].asset.address → contractAddress (non-empty string)', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].contractAddress).toBe(
+        'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+      );
+    });
+
+    it('maps empty address string → contractAddress null (native asset)', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      // TRX has address: '' → should be null
+      expect(result[1].contractAddress).toBeNull();
+    });
+
+    it('maps data[n].asset.decimals → decimals', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].decimals).toBe(6);
+    });
+
+    it('maps asset.network === "mainnet" → isMainnet true', async () => {
+      const mainnetBody = {
+        ...SUCCESS_BODY,
+        data: [
+          {
+            ...SUCCESS_BODY.data[0],
+            asset: { ...SUCCESS_BODY.data[0].asset, network: 'mainnet' },
+          },
+        ],
+      };
+      http.get.mockReturnValue(of(axiosOk(mainnetBody)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].isMainnet).toBe(true);
+    });
+
+    it('maps asset.network === "testnet" → isMainnet false', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].isMainnet).toBe(false);
+    });
+
+    it('returns empty array when data is empty', async () => {
+      http.get.mockReturnValue(of(axiosOk({ data: [] })));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result).toEqual([]);
+    });
+
+    it('throws a descriptive error on non-2xx response', async () => {
+      const axiosErr = Object.assign(new Error('Unauthorized'), {
+        response: {
+          status: 401,
+          data: { message: 'Invalid API key' },
+        },
+        isAxiosError: true,
+      });
+      http.get.mockReturnValue(throwError(() => axiosErr));
+
+      await expect(provider.listWalletAssets(MASTER_WALLET)).rejects.toThrow(
+        /Blockradar listWalletAssets error/,
+      );
+    });
+
+    it('does not call AssetRegistry.networkMasterWalletId (caller supplies the id directly)', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      await provider.listWalletAssets(MASTER_WALLET);
+
+      // listWalletAssets takes masterWalletId directly — no registry lookup needed.
+      expect(assetRegistry.networkMasterWalletId).not.toHaveBeenCalled();
+    });
   });
 
   // ── getWithdrawalStatus ───────────────────────────────────────────────────

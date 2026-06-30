@@ -119,3 +119,62 @@ export class ReceiptNotSignableError extends Error {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+/**
+ * Thrown when an external provider side-effect call (Flutterwave collection /
+ * payout, Blockradar withdrawal, etc.) fails — a non-2xx response, a network
+ * error, or any rejection from the adapter. The engine translates the raw
+ * provider error into this typed error so the calling surface (chat / WhatsApp)
+ * can return a clear "provider temporarily unavailable" message instead of
+ * leaking an opaque 500. The original error is preserved as `cause` for logs.
+ * Code: ENGINE_PROVIDER_UNAVAILABLE
+ */
+export class ProviderUnavailableError extends Error {
+  readonly code = 'ENGINE_PROVIDER_UNAVAILABLE' as const;
+
+  constructor(operation: string, cause?: unknown) {
+    super(`Payment/wallet provider call '${operation}' failed`, { cause });
+    this.name = 'ProviderUnavailableError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * Thrown by ProposalService.createSwapProposal when fromAsset === toAsset.
+ * This rule lives in the ENGINE, not the intent schema (the swap intent schema
+ * intentionally omits .refine() to stay compatible with z.discriminatedUnion).
+ * Code: SWAP_SAME_ASSET
+ */
+export class SwapSameAssetError extends Error {
+  readonly code = 'SWAP_SAME_ASSET' as const;
+
+  constructor(asset: string) {
+    super(
+      `Cannot swap ${asset} for ${asset}: fromAsset and toAsset must differ`,
+    );
+    this.name = 'SwapSameAssetError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * Thrown by BlockradarSwapProvider when the provider returns HTTP 404 for the
+ * swap quote or execute endpoint, indicating that the swap feature is not active
+ * for this wallet/account (e.g. testnet limitation, feature disabled on the
+ * Blockradar account, or wallet not yet enrolled for swaps).
+ *
+ * This is structurally different from `ProviderUnavailableError` (transient
+ * network/5xx issue): a 404 means "this capability is not available on this
+ * account right now" and the caller should surface a graceful "Swap isn't
+ * available right now" message — NOT a retryable 502 bad-gateway.
+ * Code: SWAP_PROVIDER_UNAVAILABLE
+ */
+export class SwapUnavailableError extends Error {
+  readonly code = 'SWAP_PROVIDER_UNAVAILABLE' as const;
+
+  constructor(message?: string) {
+    super(message ?? 'Swap is not available on this account at this time');
+    this.name = 'SwapUnavailableError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

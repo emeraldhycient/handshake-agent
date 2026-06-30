@@ -65,6 +65,7 @@ function makeMinimalWalletRepo(
 ): jest.Mocked<IWalletRepository> {
   return {
     findByUserNetwork: findImpl ?? jest.fn().mockResolvedValue(null),
+    findByUser: jest.fn().mockResolvedValue([]),
     findByAddress: jest.fn().mockResolvedValue(null),
     create: jest.fn().mockResolvedValue(null),
   };

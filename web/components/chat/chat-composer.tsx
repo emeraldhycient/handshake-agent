@@ -17,6 +17,12 @@ export function ChatComposer({
   // (both mobile and desktop use the same compact composer layout)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   density: _density,
+  recording,
+  recordSeconds,
+  canRecord,
+  onRecordStart,
+  onRecordStop,
+  onRecordCancel,
 }: ChatComposerProps) {
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter") {
@@ -73,30 +79,63 @@ export function ChatComposer({
             )}
           />
 
-          {/* Mic icon */}
-          <svg
-            width="17"
-            height="17"
-            viewBox="0 0 17 17"
-            fill="none"
-            aria-hidden="true"
-            className="shrink-0"
-          >
-            <rect
-              x="6"
-              y="1.5"
-              width="5"
-              height="9"
-              rx="2.5"
-              className="fill-muted-foreground"
-            />
-            <path
-              d="M3.5 7.5a5 5 0 0010 0M8.5 12.5v2.5"
-              className="stroke-muted-foreground"
-              strokeWidth="1.4"
-              strokeLinecap="round"
-            />
-          </svg>
+          {/* Mic / record control */}
+          {recording ? (
+            <div className="flex items-center gap-2">
+              <span className="text-danger text-xs tabular-nums">
+                {Math.floor(recordSeconds / 60)}:
+                {String(recordSeconds % 60).padStart(2, "0")}
+              </span>
+              <button
+                type="button"
+                aria-label="Cancel recording"
+                onClick={onRecordCancel}
+                className="text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                ✕
+              </button>
+              <button
+                type="button"
+                aria-label="Stop recording"
+                onClick={onRecordStop}
+                className="text-danger focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <span className="bg-danger block h-3 w-3 rounded-[2px]" />
+              </button>
+            </div>
+          ) : (
+            canRecord && (
+              <button
+                type="button"
+                aria-label="Record voice note"
+                onClick={onRecordStart}
+                className="shrink-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <svg
+                  width="17"
+                  height="17"
+                  viewBox="0 0 17 17"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <rect
+                    x="6"
+                    y="1.5"
+                    width="5"
+                    height="9"
+                    rx="2.5"
+                    className="fill-muted-foreground"
+                  />
+                  <path
+                    d="M3.5 7.5a5 5 0 0010 0M8.5 12.5v2.5"
+                    className="stroke-muted-foreground"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </button>
+            )
+          )}
         </div>
 
         {/* Send button */}

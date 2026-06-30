@@ -22,6 +22,7 @@ describe("ChatMessageView", () => {
         density="mobile"
         onConfirm={noop}
         onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     expect(screen.getByText("Hello")).toBeInTheDocument()
@@ -42,6 +43,7 @@ describe("ChatMessageView", () => {
         density="mobile"
         onConfirm={noop}
         onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     expect(screen.getByText("Hi there")).toBeInTheDocument()
@@ -67,6 +69,7 @@ describe("ChatMessageView", () => {
         density="mobile"
         onConfirm={noop}
         onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     expect(screen.getByText("29.97 USDT")).toBeInTheDocument()
@@ -86,6 +89,7 @@ describe("ChatMessageView", () => {
         density="mobile"
         onConfirm={noop}
         onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     expect(screen.getByText("≈ ₦72,340")).toBeInTheDocument()
@@ -108,6 +112,7 @@ describe("ChatMessageView", () => {
         density="mobile"
         onConfirm={noop}
         onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     // ReceiveCard renders "Deposit address" label
@@ -137,6 +142,7 @@ describe("ChatMessageView", () => {
         density="mobile"
         onConfirm={noop}
         onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     expect(screen.getByText("Afrobeats Live")).toBeInTheDocument()
@@ -159,6 +165,7 @@ describe("ChatMessageView", () => {
         density="mobile"
         onConfirm={noop}
         onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     expect(screen.getByText("HS-20240701-7X9K")).toBeInTheDocument()
@@ -184,6 +191,7 @@ describe("ChatMessageView", () => {
         density="mobile"
         onConfirm={onConfirm}
         onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
       />
     )
     await userEvent.click(

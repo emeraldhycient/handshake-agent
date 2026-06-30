@@ -9,9 +9,14 @@ import { IdentityModule } from '../identity/identity.module';
 import { AdminTokenGuard } from './guards/admin-token.guard';
 import { AdminWalletsController } from './presentation/admin-wallets.controller';
 import { WalletBackfillService } from '../wallets/application/wallet-backfill.service';
+import { WalletReconciliationService } from '../wallets/application/wallet-reconciliation.service';
 import { BullBoardBasicAuthMiddleware } from './bull-board.middleware';
 import { ECHO_QUEUE_NAME } from '../../core/jobs/echo-queue.constants';
 import { WALLET_BACKFILL_QUEUE_NAME } from '../wallets/application/wallet-backfill-queue.constants';
+import { DEPOSIT_SETTLEMENT_REPOSITORY } from '../wallets/application/ports/deposit-settlement.repository.port';
+import { DepositSettlementPrismaRepository } from '../wallets/infrastructure/deposit-settlement.prisma.repository';
+import { LEDGER_REPOSITORY } from '../transactions/application/ports/ledger.repository.port';
+import { LedgerPrismaRepository } from '../transactions/infrastructure/ledger.prisma.repository';
 
 /**
  * Admin feature module (WN-5, BQ-1, BQ-2, CLAUDE.md §4 — listed as a planned module).
@@ -76,6 +81,19 @@ import { WALLET_BACKFILL_QUEUE_NAME } from '../wallets/application/wallet-backfi
     // receive USER_LISTER from IdentityModule without creating a cycle.
     // Still needed by the coordinator processor via WorkerModule.
     WalletBackfillService,
+    // WalletReconciliationService: registered here (not in WalletsModule) so it
+    // can be wired alongside the existing DEPOSIT_SETTLEMENT_REPOSITORY and
+    // LEDGER_REPOSITORY bindings without creating a cycle. Both repositories are
+    // bound locally — PrismaService is global so they have no unmet dependencies.
+    WalletReconciliationService,
+    {
+      provide: DEPOSIT_SETTLEMENT_REPOSITORY,
+      useClass: DepositSettlementPrismaRepository,
+    },
+    {
+      provide: LEDGER_REPOSITORY,
+      useClass: LedgerPrismaRepository,
+    },
   ],
 })
 export class AdminModule {}

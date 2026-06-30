@@ -30,6 +30,18 @@
       "import": "./src/dto/index.ts",
       "require": "./src/dto/index.ts",
       "default": "./src/dto/index.ts"
+    },
+    "./beneficiaries": {
+      "types": "./src/beneficiaries/index.ts",
+      "import": "./src/beneficiaries/index.ts",
+      "require": "./src/beneficiaries/index.ts",
+      "default": "./src/beneficiaries/index.ts"
+    },
+    "./media": {
+      "types": "./src/media/index.ts",
+      "import": "./src/media/index.ts",
+      "require": "./src/media/index.ts",
+      "default": "./src/media/index.ts"
     }
   },
   "scripts": {

@@ -44,6 +44,13 @@ export interface IWalletRepository {
   ): Promise<WalletRecord | null>;
 
   /**
+   * Returns all wallets provisioned for the given user (one per network).
+   * Used by the deposit reconciliation service to iterate a user's wallets
+   * across all enabled networks without needing to know which networks are active.
+   */
+  findByUser(userId: string): Promise<WalletRecord[]>;
+
+  /**
    * Returns the wallet for the given on-chain address, or null if none exists.
    * Used by the Blockradar deposit webhook to resolve the recipient wallet.
    */

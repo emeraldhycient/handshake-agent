@@ -11,6 +11,13 @@ export const ASSET_TINTS: Record<string, string> = {
   NGN: "#cfe6d8",
 }
 
+/** Human-readable asset names, keyed by symbol. Falls back to the symbol itself. */
+export const ASSET_NAMES: Record<string, string> = {
+  USDT: "Tether USD",
+  BTC: "Bitcoin",
+  NGN: "Naira",
+}
+
 /** USDT deposit address shown in the receive / deposit flow */
 export const DEPOSIT_ADDRESS = "TQn9Y2khEb7g5mZ8FjpRt1cWnH4dHkLm3vQ"
 

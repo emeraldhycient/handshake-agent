@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { DocumentExtractionResult } from '@handshake-agent/contracts';
 
 import type {
   IInboundHandler,
@@ -21,8 +22,15 @@ import type { DirectiveService } from '../../transactions/application/directive.
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { HandoffTokenService } from '../../identity/application/handoff-token.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import type { BalanceService } from '../../balances/application/balance.service';
+import type { BalanceSnapshot } from '@handshake-agent/contracts';
 import { signFlowToken } from '../../whatsapp/application/flow-token';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
+import type {
+  QueryTransactionsIntent,
+  TransactionHistoryResponse,
+} from '@handshake-agent/contracts';
 
 import {
   CONVERSATION_REPOSITORY,
@@ -57,7 +65,17 @@ export const HANDOFF_TOKEN_SERVICE = Symbol('HANDOFF_TOKEN_SERVICE');
 /** DI token for BeneficiaryService — injected by symbol to avoid coupling at module level (W1). */
 export const BENEFICIARY_SERVICE = Symbol('BENEFICIARY_SERVICE');
 
+/** DI token for TransactionHistoryService — injected by symbol (read-only history). */
+export const TRANSACTION_HISTORY_SERVICE = Symbol(
+  'TRANSACTION_HISTORY_SERVICE',
+);
+/** DI token for BalanceService — injected by symbol (read-only balance snapshot). */
+export const BALANCE_SERVICE = Symbol('BALANCE_SERVICE');
+
 const SAFE_FALLBACK = 'Sorry, something went wrong — please try again.';
+
+/** Max history lines rendered in a WhatsApp text reply (the full set is in the PDF). */
+const MAX_WA_HISTORY_LINES = 20;
 
 // ---------------------------------------------------------------------------
 // Internal resolved-identity shapes
@@ -118,6 +136,10 @@ export class ConversationService implements IInboundHandler {
     private readonly handoffTokenService: HandoffTokenService,
     @Inject(BENEFICIARY_SERVICE)
     private readonly beneficiaryService: BeneficiaryService,
+    @Inject(TRANSACTION_HISTORY_SERVICE)
+    private readonly historyService: TransactionHistoryService,
+    @Inject(BALANCE_SERVICE)
+    private readonly balanceService: BalanceService,
   ) {}
 
   async handleInbound(msg: InboundMessage): Promise<void> {
@@ -156,6 +178,28 @@ export class ConversationService implements IInboundHandler {
         correlationId,
       });
       messageId = message.id;
+
+      // Image/document path: a vision-extracted candidate (never an agent run, never a money move).
+      // Must come BEFORE agentPort.run so the agent never sees extraction messages (§3.1).
+      if (msg.extraction) {
+        const replyText = await this.handleExtractedMedia(
+          msg.extraction,
+          identity,
+          msg,
+        );
+        const reply = await this.replyRepo.create({
+          conversationId: conversation.id,
+          messageId: message.id,
+          text: replyText,
+          correlationId,
+        });
+        await this.sender.sendText(msg.fromAddress, replyText);
+        await this.replyRepo.updateStatus(reply.id, 'sent', {
+          sentAt: new Date(),
+        });
+        await this.messageRepo.updateStatus(message.id, 'processed');
+        return;
+      }
 
       // Step 5: Run the NLU agent — emits a validated structured intent, never moves money.
       const intent = await this.agentPort.run(msg.text);
@@ -300,8 +344,40 @@ export class ConversationService implements IInboundHandler {
         return { replyText, flowSent };
       }
       case 'receive_crypto': {
-        const replyText = await this.handleReceive(identity, msg.fromAddress);
+        // Thread the asset named in the intent (may be undefined when the
+        // model did not specify one — handleReceive falls back to the default).
+        const receiveAsset = (intent as { asset?: string }).asset;
+        const replyText = await this.handleReceive(
+          identity,
+          msg.fromAddress,
+          receiveAsset,
+        );
         return { replyText, flowSent: false };
+      }
+      case 'query_transactions': {
+        const { replyText, flowSent } = await this.handleTransactionHistory(
+          intent as unknown as QueryTransactionsIntent,
+          identity,
+          msg,
+        );
+        return { replyText, flowSent };
+      }
+      case 'check_balance': {
+        const replyText = await this.handleCheckBalance(
+          intent,
+          identity,
+          msg.fromAddress,
+        );
+        return { replyText, flowSent: false };
+      }
+      case 'swap': {
+        const { replyText, flowSent } = await this.handleSwap(
+          intent,
+          identity,
+          conversation,
+          msg,
+        );
+        return { replyText, flowSent };
       }
       case 'none': {
         return {
@@ -310,7 +386,7 @@ export class ConversationService implements IInboundHandler {
         };
       }
       default: {
-        // swap / buy_ticket / check_balance — deferred.
+        // buy_ticket — deferred.
         return {
           replyText: this.notSupportedReply(intent.action),
           flowSent: false,
@@ -425,6 +501,19 @@ export class ConversationService implements IInboundHandler {
       return { replyText: guard.reply, flowSent: false };
     }
 
+    // Currency liveness gate: emit a graceful reply for supported-but-not-live fiats
+    // (e.g. GHS, RWF). Never build a proposal for a non-live currency (§3.1 — no fake quote).
+    const buyFiatCurrency = (intent as { fiatCurrency?: string }).fiatCurrency;
+    if (
+      buyFiatCurrency &&
+      !this.assetRegistry.isCurrencyLive(buyFiatCurrency)
+    ) {
+      return {
+        replyText: `We settle in NGN for now — ${buyFiatCurrency} isn't available yet.`,
+        flowSent: false,
+      };
+    }
+
     // Happy path: create a buy proposal (deterministic engine; model proposes, engine disposes — §3.1).
     const { proposalId, confirmation } =
       await this.proposalService.createBuyProposal({
@@ -478,6 +567,19 @@ export class ConversationService implements IInboundHandler {
     }
 
     const { user } = guard;
+
+    // Currency liveness gate: emit a graceful reply for supported-but-not-live fiats.
+    // Must come BEFORE the beneficiary lookup — never reach that for a non-live currency.
+    const sellFiatCurrency = (intent as { fiatCurrency?: string }).fiatCurrency;
+    if (
+      sellFiatCurrency &&
+      !this.assetRegistry.isCurrencyLive(sellFiatCurrency)
+    ) {
+      return {
+        replyText: `We settle in NGN for now — ${sellFiatCurrency} isn't available yet.`,
+        flowSent: false,
+      };
+    }
 
     // Resolve default bank beneficiary — must exist before creating the proposal.
     const beneficiary = await this.beneficiaryService.getDefault(
@@ -610,6 +712,87 @@ export class ConversationService implements IInboundHandler {
       textFallback: this.buildSendConfirmationText(confirmation),
       flowSentSummary:
         'A secure confirmation form has been sent. Please complete it to proceed with your send.',
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: swap handler
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handles a `swap` intent:
+   *   1. Capability gate: if crypto.swap is disabled → not-supported reply.
+   *   2. Guard: requires active user (KYC + reverification check).
+   *   3. Create swap proposal → send confirmation Flow (request_pin directive).
+   *      - If FLOW_ID unset → text confirmation fallback.
+   *
+   * §3.1: model only proposes; the engine (ExecutionService.executeSwap) disposes.
+   * The swap uses `request_pin` (same as buy/sell) — no on-chain withdrawal initiated
+   * by the user (the provider swaps within its own custody).
+   */
+  private async handleSwap(
+    intent: RoutableIntent,
+    identity: ResolvedIdentity,
+    conversation: ConversationRecord,
+    msg: InboundMessage,
+  ): Promise<{ replyText: string; flowSent: boolean }> {
+    // 1. Capability gate — check before any user resolution (fail cheap).
+    if (!this.assetRegistry.isCapabilityEnabled('crypto.swap')) {
+      return {
+        replyText: this.notSupportedReply('swap'),
+        flowSent: false,
+      };
+    }
+
+    // 2. Guard: requires an active, KYC-verified user.
+    const guard = this.requireActiveUser(identity, msg.fromAddress);
+    if ('needsKyc' in guard) {
+      const replyText = await this.sendKycHandoff(guard.channelAddress);
+      return { replyText, flowSent: false };
+    }
+    if ('needsReverify' in guard) {
+      return { replyText: this.reverifyFallbackReply(), flowSent: false };
+    }
+    if ('reply' in guard) {
+      return { replyText: guard.reply, flowSent: false };
+    }
+
+    const { user } = guard;
+
+    // 3. Create the swap proposal (fromAsset === toAsset guard runs in the engine).
+    const fromAsset = (intent as { fromAsset?: string }).fromAsset ?? '';
+    const toAsset = (intent as { toAsset?: string }).toAsset ?? '';
+    const amount = (intent as { amount?: string }).amount ?? '';
+
+    const { proposalId, confirmation } =
+      await this.proposalService.createSwapProposal({
+        userId: user.id,
+        conversationId: conversation.id,
+        fromAsset,
+        toAsset,
+        amount,
+      });
+
+    return this.sendConfirmationFlow({
+      proposalId,
+      userId: user.id,
+      to: msg.fromAddress,
+      directiveRef: 'request_pin',
+      screen: 'SWAP_CONFIRM',
+      flowData: {
+        proposalId,
+        fromAsset: confirmation.fromAsset,
+        toAsset: confirmation.toAsset,
+        fromAmount: confirmation.fromAmount,
+        toAmount: confirmation.toAmount,
+        rate: confirmation.rate,
+        networkFee: confirmation.networkFee,
+        transactionFee: confirmation.transactionFee,
+        estimatedArrivalSec: confirmation.estimatedArrivalSec,
+      },
+      textFallback: this.buildSwapConfirmationText(confirmation),
+      flowSentSummary:
+        'A secure confirmation form has been sent. Please complete it to proceed with your swap.',
     });
   }
 
@@ -820,6 +1003,7 @@ export class ConversationService implements IInboundHandler {
   private async handleReceive(
     identity: ResolvedIdentity,
     channelAddress: string,
+    requestedAsset?: string,
   ): Promise<string> {
     const guard = this.requireActiveUser(identity, channelAddress);
     if ('needsKyc' in guard) {
@@ -832,26 +1016,163 @@ export class ConversationService implements IInboundHandler {
       return guard.reply;
     }
 
-    // Happy path: read-only — provision the default crypto wallet if needed and
-    // return the address. No proposal, no directive, no execution engine — receiving
+    // Happy path: read-only — provision the crypto wallet if needed and return
+    // the address. No proposal, no directive, no execution engine — receiving
     // is purely informational (§3.1).
-    // Asset and network are derived from the registry — no hardcoded literals (task X3).
-    const defaultAsset = this.assetRegistry.defaultCryptoAsset();
-    const defaultNetwork = this.assetRegistry.defaultNetworkFor(defaultAsset);
-    const assetMeta = this.assetRegistry.asset(defaultAsset);
-    const networkMeta = this.assetRegistry.network(defaultNetwork);
+    // Use the asset named in the intent; fall back to registry default when absent.
+    // On TRON, USDT and TRX share one address — only the label changes.
+    const resolvedAsset =
+      requestedAsset ?? this.assetRegistry.defaultCryptoAsset();
+    const resolvedNetwork = this.assetRegistry.defaultNetworkFor(resolvedAsset);
+    const assetMeta = this.assetRegistry.asset(resolvedAsset);
+    const networkMeta = this.assetRegistry.network(resolvedNetwork);
 
-    // WN-1: wallet is per-(user,network); asset for display comes from the registry
-    // (defaultAsset), not the wallet record itself.
+    // WN-1: wallet is per-(user,network); asset for display comes from the
+    // resolved intent asset, not the wallet record itself.
     const wallet = await this.walletService.getOrProvisionNetworkWallet(
       guard.user.id,
-      defaultNetwork,
+      resolvedNetwork,
     );
 
     return (
       `Your ${assetMeta.displayName} deposit address (${networkMeta.displayName}):\n${wallet.address}\n\n` +
       `Only send ${assetMeta.displayName} on the ${networkMeta.displayName} to this address. Other assets or networks will be lost.`
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: query_transactions handler (read-only history)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handles a `query_transactions` intent: read-only history for a linked user.
+   * Renders the list as text and hands off the PDF via a signed download link
+   * (sendCtaUrl). No KYC/PIN gate — this moves no money (§3.1/§3.3).
+   */
+  private async handleTransactionHistory(
+    intent: QueryTransactionsIntent,
+    identity: ResolvedIdentity,
+    msg: InboundMessage,
+  ): Promise<{ replyText: string; flowSent: boolean }> {
+    const guard = this.requireActiveUser(identity, msg.fromAddress);
+    if ('needsKyc' in guard) {
+      const replyText = await this.sendKycHandoff(guard.channelAddress);
+      return { replyText, flowSent: false };
+    }
+    if ('needsReverify' in guard) {
+      return { replyText: this.reverifyFallbackReply(), flowSent: false };
+    }
+    if ('reply' in guard) {
+      return { replyText: guard.reply, flowSent: false };
+    }
+
+    const result = await this.historyService.query(guard.user.id, {
+      period: intent.period,
+      from: intent.from,
+      to: intent.to,
+      relativeAmount: intent.relativeAmount,
+      relativeUnit: intent.relativeUnit,
+      txType: intent.txType,
+    });
+
+    if (result.totalCount === 0) {
+      return {
+        replyText: `No transactions for ${result.window.label}.`,
+        flowSent: false,
+      };
+    }
+
+    // Send the list, then a CTA URL to the signed PDF. Returning flowSent:true
+    // tells handleInbound NOT to re-send replyText (we've already dispatched).
+    await this.sender.sendText(msg.fromAddress, this.buildHistoryText(result));
+    await this.sender.sendCtaUrl({
+      to: msg.fromAddress,
+      body: `Download your statement (${result.window.label})`,
+      buttonText: 'Download',
+      url: result.downloadUrl,
+    });
+    return {
+      replyText: `Sent your ${result.window.label} statement.`,
+      flowSent: true,
+    };
+  }
+
+  /** Builds a plain-text history list (date · type · ±amount · status). */
+  private buildHistoryText(result: TransactionHistoryResponse): string {
+    const shown = result.items.slice(0, MAX_WA_HISTORY_LINES);
+    const lines = shown.map((it) => {
+      const sign = it.direction === 'in' ? '+' : '-';
+      const amount = it.cryptoAmount ?? it.fiatAmount ?? '';
+      const day = it.createdAt.slice(0, 10);
+      return `${day}  ${it.type.toUpperCase()}  ${sign}${amount}  [${it.status}]`;
+    });
+    const header = `Your transactions (${result.window.label}):`;
+    const more =
+      result.totalCount > shown.length
+        ? `\n…and ${result.totalCount - shown.length} more — download the statement or narrow the date range to see more.`
+        : '';
+    return `${header}\n${lines.join('\n')}${more}`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: check_balance handler (read-only — §3.1)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Handles a `check_balance` intent: requires an active (KYC-verified) user, then
+   * reads the balance snapshot (all assets, or one if `intent.asset` is set) and
+   * renders it as a plain-text list. No proposal, no directive, no engine — reading
+   * a balance never moves money (§3.1).
+   */
+  private async handleCheckBalance(
+    intent: RoutableIntent,
+    identity: ResolvedIdentity,
+    channelAddress: string,
+  ): Promise<string> {
+    const guard = this.requireActiveUser(identity, channelAddress);
+    if ('needsKyc' in guard) {
+      return this.sendKycHandoff(guard.channelAddress);
+    }
+    if ('needsReverify' in guard) {
+      return this.reverifyFallbackReply();
+    }
+    if ('reply' in guard) {
+      return guard.reply;
+    }
+
+    // `asset` is optional on the check_balance intent; absent = all assets.
+    const asset = (intent as { asset?: string }).asset;
+    const snapshot = await this.balanceService.getBalances(
+      guard.user.id,
+      asset,
+    );
+    return this.buildBalanceText(snapshot);
+  }
+
+  /**
+   * Renders a balance snapshot as a WhatsApp text/list reply via registry
+   * formatters (no hardcoded symbols). The mid-market fiat value is shown as an
+   * approximate figure; the FX spread is never surfaced (user rule).
+   */
+  private buildBalanceText(snapshot: BalanceSnapshot): string {
+    if (snapshot.balances.length === 0) {
+      return snapshot.asset
+        ? `You don't hold any ${snapshot.asset} yet.`
+        : "You don't have any assets yet. Send funds to your wallet to get started.";
+    }
+
+    const lines = snapshot.balances.map((b) => {
+      const crypto = this.assetRegistry.formatCrypto(b.asset, b.amount);
+      const fiat = b.fiatValue
+        ? ` (≈ ${this.assetRegistry.formatFiat(snapshot.fiatCurrency, b.fiatValue)})`
+        : '';
+      return `• ${crypto}${fiat}`;
+    });
+
+    const header = snapshot.asset
+      ? `Your ${snapshot.asset} balance:`
+      : 'Here are your balances:';
+    return `${header}\n${lines.join('\n')}`;
   }
 
   /**
@@ -906,6 +1227,140 @@ export class ConversationService implements IInboundHandler {
       `Expires at: ${c.expiresAt}\n` +
       `Reply CONFIRM to proceed.`
     );
+  }
+
+  /**
+   * Builds the itemized swap confirmation text via registry formatters.
+   */
+  private buildSwapConfirmationText(c: {
+    fromAsset: string;
+    toAsset: string;
+    fromAmount: string;
+    toAmount: string;
+    rate: string;
+    networkFee: string;
+    transactionFee: string;
+    estimatedArrivalSec: number;
+    expiresAt: string;
+  }): string {
+    const fromMeta = this.assetRegistry.asset(c.fromAsset);
+    const toMeta = this.assetRegistry.asset(c.toAsset);
+    return (
+      `Here is your swap summary:\n` +
+      `You swap: ${this.assetRegistry.formatCrypto(c.fromAsset, c.fromAmount)} (${fromMeta.displayName})\n` +
+      `You receive: ${this.assetRegistry.formatCrypto(c.toAsset, c.toAmount)} (${toMeta.displayName})\n` +
+      `Rate: 1 ${c.fromAsset} = ${c.rate} ${c.toAsset}\n` +
+      `Network fee: ${this.assetRegistry.formatCrypto(c.fromAsset, c.networkFee)}\n` +
+      `Transaction fee: ${this.assetRegistry.formatCrypto(c.fromAsset, c.transactionFee)}\n` +
+      `Est. arrival: ${c.estimatedArrivalSec}s\n` +
+      `Expires at: ${c.expiresAt}\n` +
+      `Reply CONFIRM to proceed.`
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: extracted-media handler (Task 18)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Routes a vision-extracted candidate (address / bank account / none) to the
+   * appropriate persistence path.
+   *
+   * SACROSANCT (§3.1): this is a candidate the vision model proposes — it never
+   * moves money. `addCryptoAddress` validates the address and applies a
+   * cooling-off; any actual send/sell still requires the full proposal → confirm
+   * → PIN path. The agent is NOT run for extraction messages.
+   */
+  private async handleExtractedMedia(
+    extraction: DocumentExtractionResult,
+    identity: ResolvedIdentity,
+    msg: InboundMessage,
+  ): Promise<string> {
+    // Guard: all paths that persist data require a linked, verified user.
+    const guard = this.requireActiveUser(identity, msg.fromAddress);
+    if ('needsKyc' in guard) {
+      return this.sendKycHandoff(guard.channelAddress);
+    }
+    if ('needsReverify' in guard) {
+      return this.reverifyFallbackReply();
+    }
+    if ('reply' in guard) {
+      return guard.reply;
+    }
+    const { user } = guard;
+
+    if (extraction.kind === 'crypto_address') {
+      // Network is carried by the extraction (vision model named it) or inferred
+      // server-side via the registry pattern match — never hardcoded here.
+      const network =
+        extraction.network ??
+        this.assetRegistry.inferNetworkForAddress(extraction.address);
+      if (!network) {
+        return 'I read an address but it does not look like a valid wallet for a network we support.';
+      }
+      const asset = this.assetRegistry.defaultAssetForNetwork(network);
+      if (!asset) {
+        return 'I read a wallet address but we do not support that network yet.';
+      }
+      try {
+        await this.beneficiaryService.addCryptoAddress({
+          userId: user.id,
+          address: extraction.address,
+          network,
+          asset,
+          label: 'From image',
+        });
+      } catch {
+        return 'I read a wallet address but could not validate it. Please double-check and try again.';
+      }
+      const networkMeta = this.assetRegistry.network(network);
+      const masked = this.maskAddress(extraction.address);
+      return (
+        `Saved this wallet (${networkMeta.displayName}, ${masked}) as a payout address. ` +
+        `Say "send 10 USDT to it" to send.`
+      );
+    }
+
+    if (extraction.kind === 'bank_account') {
+      if (extraction.bankCode) {
+        // We have enough to run name-enquiry — save the beneficiary immediately.
+        try {
+          const saved = await this.beneficiaryService.addBankAccount({
+            userId: user.id,
+            accountNumber: extraction.accountNumber,
+            bankCode: extraction.bankCode,
+            // The BeneficiaryService overwrites this with the bank-resolved name.
+            accountName: extraction.bankName ?? '',
+            label: extraction.bankName ?? 'From image',
+          });
+          const displayName = saved.accountHolderName ?? 'your account';
+          return `Saved ${displayName} (•••${extraction.accountNumber.slice(-4)}) as a payout account.`;
+        } catch {
+          return (
+            'I read bank details but could not verify the account. ' +
+            'Please add it from the payout-account form.'
+          );
+        }
+      }
+      // No bankCode — echo the partial details so the user knows what was read,
+      // but do NOT save (name-enquiry requires a bankCode).
+      const bank = extraction.bankName ? ` at ${extraction.bankName}` : '';
+      return (
+        `I read account •••${extraction.accountNumber.slice(-4)}${bank}. ` +
+        `Add it as a payout account and I'll use it.`
+      );
+    }
+
+    // kind === 'none'
+    return "I couldn't find a wallet address or bank details in that image.";
+  }
+
+  /**
+   * Masks a crypto address for display: first 4 … last 4 characters.
+   * Short addresses (≤ 10 chars) are shown as-is — defensive for unusual cases.
+   */
+  private maskAddress(addr: string): string {
+    return addr.length <= 10 ? addr : `${addr.slice(0, 4)}…${addr.slice(-4)}`;
   }
 
   // ---------------------------------------------------------------------------

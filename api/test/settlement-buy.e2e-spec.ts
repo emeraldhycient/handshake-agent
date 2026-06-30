@@ -110,6 +110,17 @@ const fakeWalletProvider: IWalletProvider = {
   getWithdrawalStatus: jest
     .fn()
     .mockResolvedValue({ status: 'pending' as const }),
+  listWalletAssets: jest.fn().mockResolvedValue([
+    {
+      assetId: 'e2e-usdt-tron-asset-id',
+      symbol: 'USDT',
+      name: 'Tether USD',
+      network: 'TRON',
+      contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+      decimals: 6,
+      isMainnet: false,
+    },
+  ]),
 };
 
 const FAKE_ACCOUNT_NUMBER = '0987654399';
@@ -219,6 +230,7 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
           Promise.resolve({ passed: true, complianceEventId: '' }),
       } as never,
       config,
+      undefined as never, // swapProvider: not needed on buy proposal path
     );
 
     executionService = new ExecutionService(
@@ -242,6 +254,8 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
       undefined, // identityService (optional)
       undefined, // whatsAppSender (optional)
       undefined, // complianceService (buy path has no sanctions gate)
+      undefined, // sessionService: not needed on buy path
+      undefined, // swapProvider: not needed on buy path
     );
 
     // Seed a verified user with a PIN.

@@ -102,6 +102,12 @@ export interface CreateSettlingWithProposalData {
 
 export interface ITransactionRepository {
   /**
+   * Looks up a Transaction by its primary key (id).
+   * Returns null if no transaction exists for that id.
+   */
+  findById(id: string): Promise<TransactionRecord | null>;
+
+  /**
    * Looks up a Transaction by its idempotency key.
    * Returns null if no transaction exists for that key.
    */
@@ -148,4 +154,37 @@ export interface ITransactionRepository {
    * createCollection so idempotent replay can reconstruct the full result (C2).
    */
   mergeMetadata(id: string, extra: Record<string, unknown>): Promise<void>;
+
+  /**
+   * Read-only history query: transactions for a user within [from, to], optionally
+   * filtered by type. Keyset-paginated on `(createdAt desc, id desc)` — pass the
+   * previous page's `nextCursor` to fetch the next page. Returns the page (newest
+   * first, at most `limit`), the exact total count of matching rows in the FULL
+   * window (independent of the cursor), `hasMore`, and the opaque `nextCursor`
+   * (null on the last page). Used by TransactionHistoryService — never mutates.
+   * Scoped to `userId` (the security boundary for read-only own data).
+   */
+  listByUserInRange(input: {
+    userId: string;
+    from: Date;
+    to: Date;
+    types?: string[];
+    limit: number;
+    cursor?: string;
+  }): Promise<{
+    rows: TransactionRecord[];
+    total: number;
+    hasMore: boolean;
+    nextCursor: string | null;
+  }>;
+
+  /**
+   * Lists a user's transactions newest-first for the activity feed.
+   * Keyset-paginated on `id` (uuid7 — time-ordered + unique, so no timestamp-collision row loss);
+   * `cursor` is the last-seen transaction id. Returns up to `limit` records.
+   */
+  findByUserId(
+    userId: string,
+    opts: { limit: number; cursor?: string },
+  ): Promise<TransactionRecord[]>;
 }

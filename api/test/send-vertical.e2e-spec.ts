@@ -61,6 +61,7 @@ import { ComplianceService } from '../src/modules/compliance/application/complia
 import { MockSanctionsScreener } from '../src/modules/compliance/infrastructure/mock-sanctions.screener';
 import { ConfigRateProvider } from '../src/modules/quotes/infrastructure/config-rate.provider';
 import { AssetRegistry } from '../src/core/catalog/asset-registry';
+import { seedRegistryAssets } from './helpers/seed-registry-assets';
 
 // Ports/types
 import type { PrismaService } from '../src/core/prisma/prisma.service';
@@ -124,6 +125,17 @@ const fakeWalletProvider: IWalletProvider = {
   getWithdrawalStatus: jest
     .fn()
     .mockResolvedValue({ status: 'pending' as const }),
+  listWalletAssets: jest.fn().mockResolvedValue([
+    {
+      assetId: 'e2e-usdt-tron-asset-id',
+      symbol: 'USDT',
+      name: 'Tether USD',
+      network: 'TRON',
+      contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+      decimals: 6,
+      isMainnet: false,
+    },
+  ]),
 };
 
 // Deterministic mock name-enquiry (Fix E: BeneficiaryService requires the
@@ -151,6 +163,7 @@ function buildSendExecutionService(
 ): ExecutionService {
   const clock = { now: () => new Date() };
   const assetRegistry = new AssetRegistry(config as never);
+  seedRegistryAssets(assetRegistry);
   const rateProvider = new ConfigRateProvider(config as never);
   const quotesService = new QuotesService(rateProvider, clock, assetRegistry);
   const kycGate = new KycGateService(
@@ -192,6 +205,7 @@ function buildSendExecutionService(
     undefined, // whatsAppSender (optional)
     complianceService,
     sessionService,
+    undefined, // swapProvider: not needed on send path
   );
 }
 
@@ -227,6 +241,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
     const config = new StubConfigService() as never;
     const clock = { now: () => new Date() };
     const assetRegistry = new AssetRegistry(config);
+    seedRegistryAssets(assetRegistry);
 
     // Repos
     const proposalRepo = new ProposalPrismaRepository(ps);
@@ -306,6 +321,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
       ledgerRepo,
       complianceService,
       config,
+      undefined as never, // swapProvider: not needed on send proposal path
     );
 
     // Seed a KYC-verified (Tier 1) user with a PIN + a bound device (Fix G).

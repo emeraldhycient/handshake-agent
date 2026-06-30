@@ -49,8 +49,10 @@ enum WalletStatus {
 model WalletBalance {
   id            String        @id @default(uuid(7)) @db.Uuid
   walletId      String        @db.Uuid
-  /// Which asset this balance snapshot is for (e.g. USDT, BTC).
-  asset         SupportedAsset
+  /// Which asset this balance snapshot is for (e.g. USDT, BTC, TRX).
+  /// TEXT — not an enum so any Blockradar-discovered asset persists without migration.
+  /// Validated by AssetRegistry / contracts SupportedAssetSchema at the app layer.
+  asset         String
   /// Asset-native amount; engine-precision Decimal (38,18) per repo convention.
   amount        Decimal       @db.Decimal(38, 18)
   /// Asset decimal precision at snapshot (e.g. USDT=6, BTC=8) — denormalized for audit.

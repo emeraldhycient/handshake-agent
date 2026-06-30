@@ -15,7 +15,6 @@
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import type { Intent } from '@handshake-agent/contracts';
-import { IntentSchema } from '@handshake-agent/contracts';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 
 // ---------------------------------------------------------------------------
@@ -69,6 +68,7 @@ function makeAssetRegistry(): AssetRegistry {
   return {
     defaultFiat: jest.fn().mockReturnValue('NGN'),
     enabledCryptoAssets: jest.fn().mockReturnValue(['USDT']),
+    enabledFiats: jest.fn().mockReturnValue(['NGN']),
   } as unknown as AssetRegistry;
 }
 
@@ -81,7 +81,10 @@ describe('AnthropicLlmProvider', () => {
     jest.clearAllMocks();
     MockChatAnthropic.mockImplementation(() => mockChatAnthropicInstance);
     mockWithStructuredOutput.mockReturnValue({ invoke: mockInvoke });
-    mockInvoke.mockResolvedValue(cannedIntent);
+    // The structured tool now wraps the intent union in an object
+    // ({ intent }) so the Anthropic tool input_schema has a root object type;
+    // the provider unwraps `.intent`.
+    mockInvoke.mockResolvedValue({ intent: cannedIntent });
   });
 
   describe('when ANTHROPIC_API_KEY is provided', () => {
@@ -124,11 +127,15 @@ describe('AnthropicLlmProvider', () => {
       );
     });
 
-    it('calls withStructuredOutput(IntentSchema, { name: "extract_intent" })', async () => {
+    it('calls withStructuredOutput with the intent-wrapping schema and { name: "extract_intent" }', async () => {
       await provider.extractIntent('buy 5000 naira of usdt');
-      expect(mockWithStructuredOutput).toHaveBeenCalledWith(IntentSchema, {
-        name: 'extract_intent',
-      });
+      // Anthropic tool input_schema must be a root object, so the union is
+      // wrapped: z.object({ intent: IntentSchema }). Assert the wrapper shape
+      // (has an `intent` key) + the tool name.
+      const call = mockWithStructuredOutput.mock.calls[0] as unknown[];
+      const schemaArg = call[0] as { shape?: Record<string, unknown> };
+      expect(schemaArg.shape).toHaveProperty('intent');
+      expect(call[1]).toEqual({ name: 'extract_intent' });
     });
 
     it('invokes the structured model with system + user messages', async () => {
@@ -173,6 +180,97 @@ describe('AnthropicLlmProvider', () => {
       it('does NOT contain the old hardcoded asset basket line', () => {
         const prompt = provider.buildSystemPrompt();
         expect(prompt).not.toContain('Only "USDT" and "BTC"');
+      });
+
+      it('documents the query_transactions action and the no-date-math rule', () => {
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).toContain('query_transactions');
+        expect(prompt).toMatch(/never compute (calendar )?dates/i);
+        expect(prompt).toContain('download');
+      });
+
+      it('documents the relative-duration spec for flexible ranges (sub-day → year)', () => {
+        const prompt = provider.buildSystemPrompt();
+        // The relative-spec field names the model must emit.
+        expect(prompt).toContain('relativeAmount');
+        expect(prompt).toContain('relativeUnit');
+        // The unit vocabulary spans sub-day through year.
+        expect(prompt).toMatch(/minute/);
+        expect(prompt).toMatch(/hour/);
+        expect(prompt).toMatch(/week|month|year/);
+        // At least one worked example so the model maps NL → spec.
+        expect(prompt).toMatch(/last 2 weeks|6 months|24 hours|an hour ago/i);
+      });
+
+      it('instructs the model to set the optional asset on check_balance', () => {
+        const prompt = provider.buildSystemPrompt();
+        // The check_balance bullet must explain the optional asset so that
+        // "my USDT balance" → { action: 'check_balance', asset: 'USDT' } and a
+        // bare "what's my balance" → { action: 'check_balance' }.
+        expect(prompt).toContain('check_balance: user wants to check');
+        expect(prompt).toContain('set "asset"');
+      });
+
+      it('lists the currently live/enabled fiats from the registry', () => {
+        // The prompt must name the enabled fiats so the model knows what can
+        // settle today (NGN only at launch).
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).toContain('NGN');
+        // enabledFiats() was called — confirms dynamic rendering (no hardcoded value).
+        const registry = makeAssetRegistry();
+        // Cast through unknown: ConfigService mock satisfies the shape but the generic
+        // param `true` cannot be inferred from a plain object mock — the cast is safe
+        // here because we are only asserting on `registry.enabledFiats` being called.
+        new AnthropicLlmProvider(
+          makeConfigService(
+            'sk-test',
+          ) as unknown as import('@nestjs/config').ConfigService<
+            import('../../../core/config/env.schema').Env,
+            true
+          >,
+          registry,
+        ).buildSystemPrompt();
+        expect(registry.enabledFiats).toHaveBeenCalled();
+      });
+
+      it('instructs the model to extract any supported fiat (not only enabled ones)', () => {
+        // The model must pass-through whatever fiat the user names — the ENGINE
+        // decides liveness, not the model. The prompt must not tell the model to
+        // reject or refuse non-NGN fiats.
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).not.toMatch(/only (accept|use|support|NGN)/i);
+        expect(prompt).toMatch(/extract.*fiat|fiat.*extract/i);
+      });
+
+      it('lists ALL discovered assets (USDT + TRX) when the registry returns both', () => {
+        // When CatalogSyncService discovers TRX alongside USDT, enabledCryptoAssets()
+        // returns both. The system prompt MUST enumerate all of them so the model
+        // recognises user requests for either asset.
+        const registry = {
+          defaultFiat: jest.fn().mockReturnValue('NGN'),
+          enabledCryptoAssets: jest.fn().mockReturnValue(['USDT', 'TRX']),
+          enabledFiats: jest.fn().mockReturnValue(['NGN']),
+        } as unknown as AssetRegistry;
+
+        const multiAssetProvider = new AnthropicLlmProvider(
+          makeConfigService(
+            'sk-test',
+          ) as unknown as import('@nestjs/config').ConfigService<
+            import('../../../core/config/env.schema').Env,
+            true
+          >,
+          registry,
+        );
+
+        const prompt = multiAssetProvider.buildSystemPrompt();
+
+        // Both assets must appear in the prompt asset list.
+        expect(prompt).toContain('"USDT"');
+        expect(prompt).toContain('"TRX"');
+        // The rule line must reference the full discovered set.
+        expect(prompt).toMatch(/"USDT".*"TRX"|"TRX".*"USDT"/);
+        // enabledCryptoAssets() must be called — confirms dynamic rendering.
+        expect(registry.enabledCryptoAssets).toHaveBeenCalled();
       });
     });
   });

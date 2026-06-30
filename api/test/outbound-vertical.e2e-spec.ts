@@ -53,6 +53,8 @@ import type { INestApplication } from '@nestjs/common';
 // ConfigModule.forRoot(). They export only const symbols and interfaces.
 import { LLM_PROVIDER } from '../src/modules/agent/application/ports/agent.port';
 import { WALLET_PROVIDER } from '../src/modules/wallets/application/ports/wallet-provider.port';
+import { AssetRegistry } from '../src/core/catalog/asset-registry';
+import { seedRegistryAssets } from './helpers/seed-registry-assets';
 import { PAYMENT_PROVIDER } from '../src/modules/treasury/application/ports/payment-provider.port';
 import { WHATSAPP_SENDER } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.port';
@@ -357,6 +359,17 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
       getWithdrawalStatus: jest
         .fn()
         .mockResolvedValue({ status: 'pending' as const }),
+      listWalletAssets: jest.fn().mockResolvedValue([
+        {
+          assetId: 'e2e-usdt-tron-asset-id',
+          symbol: 'USDT',
+          name: 'Tether USD',
+          network: 'TRON',
+          contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+          decimals: 6,
+          isMainnet: false,
+        },
+      ]),
     };
 
     fakePaymentProvider = {
@@ -426,6 +439,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
 
     app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();
+    seedRegistryAssets(app.get(AssetRegistry, { strict: false }));
 
     // 6. Seed: Tier-1 KYC-verified User + PIN + WhatsApp ChannelIdentity
     const user = await prisma.user.create({

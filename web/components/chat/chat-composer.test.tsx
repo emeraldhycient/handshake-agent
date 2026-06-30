@@ -13,6 +13,12 @@ describe("ChatComposer", () => {
     onSubmit: vi.fn(),
     onChip: vi.fn(),
     density: "mobile" as const,
+    recording: false,
+    recordSeconds: 0,
+    canRecord: true,
+    onRecordStart: vi.fn(),
+    onRecordStop: vi.fn(),
+    onRecordCancel: vi.fn(),
   }
 
   it("renders a chip for each action with its label", () => {
@@ -55,5 +61,29 @@ describe("ChatComposer", () => {
     render(<ChatComposer {...defaultProps} onSubmit={onSubmit} />)
     await userEvent.click(screen.getByRole("button", { name: /send/i }))
     expect(onSubmit).toHaveBeenCalledOnce()
+  })
+
+  it("shows a record button when idle and a stop/timer while recording", () => {
+    const base = {
+      chips: [] as ChatAction[],
+      value: "",
+      onChange: () => {},
+      onSubmit: () => {},
+      onChip: () => {},
+      density: "mobile" as const,
+      canRecord: true,
+      recordSeconds: 0,
+      onRecordStart: vi.fn(),
+      onRecordStop: vi.fn(),
+      onRecordCancel: vi.fn(),
+    }
+    const { rerender, getByLabelText, queryByText } = render(
+      <ChatComposer {...base} recording={false} />
+    )
+    getByLabelText("Record voice note")
+    rerender(<ChatComposer {...base} recording recordSeconds={3} />)
+    getByLabelText("Stop recording")
+    expect(queryByText("0:03")).toBeTruthy()
+    getByLabelText("Cancel recording")
   })
 })

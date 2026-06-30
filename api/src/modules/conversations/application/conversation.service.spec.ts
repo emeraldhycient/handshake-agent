@@ -38,6 +38,7 @@ import type {
   CreateBuyProposalOutput,
   CreateSellProposalOutput,
   CreateSendProposalOutput,
+  CreateSwapProposalOutput,
 } from '../../transactions/application/proposal.service';
 import type { DirectiveService } from '../../transactions/application/directive.service';
 import type {
@@ -62,12 +63,14 @@ import {
   PROPOSAL_SERVICE,
   DIRECTIVE_SERVICE,
 } from './conversation.service';
+import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { WalletRecord } from '../../wallets/application/ports/wallet.repository.port';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
 import type { HandoffTokenService } from '../../identity/application/handoff-token.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
+import type { BalanceService } from '../../balances/application/balance.service';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -232,6 +235,14 @@ const stubBuyProposalOutput = (): CreateBuyProposalOutput => ({
 // ---------------------------------------------------------------------------
 
 /**
+ * Builds an InboundMessage with optional field overrides (extraction, text, etc.).
+ * Useful for tests that exercise paths other than the plain-text/agent path.
+ */
+function makeMsg(overrides: Partial<InboundMessage> = {}): InboundMessage {
+  return { ...baseMsg(), ...overrides };
+}
+
+/**
  * Extracts the text body (second argument) from the first sendText call.
  * The cast through `unknown` avoids the unsafe-member-access lint rule on
  * `mock.calls` which is typed `any[][]` in Jest's public typings.
@@ -281,20 +292,44 @@ function makeAgentPort(
   return { run: jest.fn().mockResolvedValue(intent) };
 }
 
+function stubSwapProposalOutput(): CreateSwapProposalOutput {
+  return {
+    proposalId: 'swap-proposal-id-1',
+    quoteId: 'swap-quote-id-1',
+    confirmation: {
+      proposalId: 'swap-proposal-id-1',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      fromAmount: '10',
+      toAmount: '12345.67',
+      rate: '1234.567',
+      networkFee: '0.5',
+      transactionFee: '0.1',
+      estimatedArrivalSec: 30,
+      expiresAt: new Date(Date.now() + 120_000).toISOString(),
+    },
+  };
+}
+
 function makeProposalService(
   output: CreateBuyProposalOutput | Error = stubBuyProposalOutput(),
   sellOutput: CreateSellProposalOutput | Error = stubSellProposalOutput(),
   sendOutput: CreateSendProposalOutput | Error = stubSendProposalOutput(),
+  swapOutput: CreateSwapProposalOutput | Error = stubSwapProposalOutput(),
 ): jest.Mocked<
   Pick<
     ProposalService,
-    'createBuyProposal' | 'createSellProposal' | 'createSendProposal'
+    | 'createBuyProposal'
+    | 'createSellProposal'
+    | 'createSendProposal'
+    | 'createSwapProposal'
   >
 > {
   const svc = {
     createBuyProposal: jest.fn(),
     createSellProposal: jest.fn(),
     createSendProposal: jest.fn(),
+    createSwapProposal: jest.fn(),
   };
   if (output instanceof Error) {
     svc.createBuyProposal.mockRejectedValue(output);
@@ -311,17 +346,29 @@ function makeProposalService(
   } else {
     svc.createSendProposal.mockResolvedValue(sendOutput);
   }
+  if (swapOutput instanceof Error) {
+    svc.createSwapProposal.mockRejectedValue(swapOutput);
+  } else {
+    svc.createSwapProposal.mockResolvedValue(swapOutput);
+  }
   return svc;
 }
 
 function makeBeneficiaryService(
   defaultBeneficiary: BeneficiaryRecord | null = null,
-): jest.Mocked<Pick<BeneficiaryService, 'getDefault' | 'listForUser'>> {
+): jest.Mocked<
+  Pick<
+    BeneficiaryService,
+    'getDefault' | 'listForUser' | 'addCryptoAddress' | 'addBankAccount'
+  >
+> {
   return {
     getDefault: jest.fn().mockResolvedValue(defaultBeneficiary),
     listForUser: jest
       .fn()
       .mockResolvedValue(defaultBeneficiary ? [defaultBeneficiary] : []),
+    addCryptoAddress: jest.fn().mockResolvedValue({ id: 'ben-crypto-new-1' }),
+    addBankAccount: jest.fn().mockResolvedValue({ id: 'ben-bank-new-1' }),
   };
 }
 
@@ -362,6 +409,7 @@ function makeMsgRepo(
     findByExternalId: jest.fn().mockResolvedValue(existing),
     create: jest.fn().mockResolvedValue(created),
     updateStatus: jest.fn().mockResolvedValue(undefined),
+    findWebHistory: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -414,6 +462,28 @@ function makeWalletService(
   return {
     getOrProvisionNetworkWallet: jest.fn().mockResolvedValue(wallet),
   };
+}
+
+function makeBalanceService(
+  snapshot: {
+    fiatCurrency: string;
+    asset?: string;
+    totalFiatValue?: string;
+    balances: Array<{
+      asset: string;
+      network: string;
+      amount: string;
+      fiatValue?: string;
+    }>;
+  } = {
+    fiatCurrency: 'NGN',
+    totalFiatValue: '16800.00',
+    balances: [
+      { asset: 'USDT', network: 'TRON', amount: '10.5', fiatValue: '16800.00' },
+    ],
+  },
+): { getBalances: jest.Mock } {
+  return { getBalances: jest.fn().mockResolvedValue(snapshot) };
 }
 
 function makeHandoffTokenService(
@@ -473,11 +543,14 @@ function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
     ),
     isAssetEnabled: jest.fn(() => true),
     isFiatEnabled: jest.fn(() => true),
+    isCurrencyLive: jest.fn(() => true),
     isNetworkEnabled: jest.fn(() => true),
     isCapabilityEnabled: jest.fn(() => true),
     requireCapability: jest.fn(),
     assetProviderId: jest.fn(),
     validateAddress: jest.fn(() => true),
+    inferNetworkForAddress: jest.fn(() => 'TRON'),
+    defaultAssetForNetwork: jest.fn(() => 'USDT'),
   } as unknown as jest.Mocked<AssetRegistry>;
 }
 
@@ -492,7 +565,10 @@ function buildService(
     proposalService?: jest.Mocked<
       Pick<
         ProposalService,
-        'createBuyProposal' | 'createSellProposal' | 'createSendProposal'
+        | 'createBuyProposal'
+        | 'createSellProposal'
+        | 'createSendProposal'
+        | 'createSwapProposal'
       >
     >;
     sender?: jest.Mocked<IWhatsAppSender>;
@@ -510,8 +586,13 @@ function buildService(
       Pick<HandoffTokenService, 'mintKycToken' | 'consumeKycToken'>
     >;
     beneficiaryService?: jest.Mocked<
-      Pick<BeneficiaryService, 'getDefault' | 'listForUser'>
+      Pick<
+        BeneficiaryService,
+        'getDefault' | 'listForUser' | 'addCryptoAddress' | 'addBankAccount'
+      >
     >;
+    historyService?: jest.Mocked<Pick<TransactionHistoryService, 'query'>>;
+    balanceService?: { getBalances: jest.Mock };
   } = {},
 ) {
   const identityService = overrides.identityService ?? makeIdentityService();
@@ -530,6 +611,8 @@ function buildService(
     overrides.handoffTokenService ?? makeHandoffTokenService();
   const beneficiaryService =
     overrides.beneficiaryService ?? makeBeneficiaryService();
+  const historyService = overrides.historyService ?? makeHistoryService();
+  const balanceService = overrides.balanceService ?? makeBalanceService();
 
   // Build the service directly (not via Nest DI) since all deps are mocks.
   const svc = new ConversationService(
@@ -547,6 +630,8 @@ function buildService(
     assetRegistry,
     handoffTokenService as unknown as HandoffTokenService,
     beneficiaryService as unknown as BeneficiaryService,
+    historyService as unknown as TransactionHistoryService,
+    balanceService as unknown as BalanceService,
   );
 
   return {
@@ -565,6 +650,23 @@ function buildService(
     assetRegistry,
     handoffTokenService,
     beneficiaryService,
+    historyService,
+    balanceService,
+  };
+}
+
+function makeHistoryService(): jest.Mocked<
+  Pick<TransactionHistoryService, 'query'>
+> {
+  return {
+    query: jest.fn().mockResolvedValue({
+      window: { from: 'F', to: 'T', label: 'Today' },
+      items: [],
+      totalCount: 0,
+      truncated: false,
+      downloadUrl:
+        'https://api.example.com/transactions/statement/download?token=tok',
+    }),
   };
 }
 
@@ -907,21 +1009,203 @@ describe('ConversationService.handleInbound', () => {
     expect(sentText).toBe(clarification);
   });
 
-  // ── Unsupported action (swap) ─────────────────────────────────────────────
+  // ── swap, capability disabled → "not supported yet" ──────────────────────
 
-  it('swap intent → sends "not supported yet" reply', async () => {
+  it('swap intent, crypto.swap capability disabled → sends "not supported yet" reply, no proposal', async () => {
     const agentPort = makeAgentPort({
       action: 'swap',
       fromAsset: 'USDT',
-      toAsset: 'BTC',
+      toAsset: 'TRX',
       amount: '10',
     });
-    const { svc, sender } = buildService({ agentPort });
+    const assetRegistry = makeAssetRegistry();
+    // Override isCapabilityEnabled to return false for the swap capability.
+    assetRegistry.isCapabilityEnabled.mockReturnValueOnce(false);
+    const proposalService = makeProposalService();
+    const { svc, sender } = buildService({
+      agentPort,
+      assetRegistry,
+      proposalService,
+    });
 
     await svc.handleInbound(baseMsg());
 
     const sentText = captureFirstSentText(sender);
-    expect(sentText).toContain('not supported yet');
+    expect(sentText).toContain('not supported');
+    expect(proposalService.createSwapProposal).not.toHaveBeenCalled();
+  });
+
+  // ── swap, capability live, verified user → proposal + flow/text confirmation ──
+
+  it('swap intent, capability live, verified user, FLOW_ID empty → text confirmation, createSwapProposal called', async () => {
+    const swapOut = stubSwapProposalOutput();
+    const agentPort = makeAgentPort({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
+    const proposalService = makeProposalService(
+      stubBuyProposalOutput(),
+      stubSellProposalOutput(),
+      stubSendProposalOutput(),
+      swapOut,
+    );
+    const { svc, sender } = buildService({
+      agentPort,
+      proposalService,
+      configService: makeConfigService({
+        flowId: '',
+        signingKey: FIXED_SIGNING_KEY,
+      }),
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(proposalService.createSwapProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-id-1',
+        conversationId: FIXED_CONV_ID,
+        fromAsset: 'USDT',
+        toAsset: 'TRX',
+        amount: '10',
+      }),
+    );
+    // Text fallback: contains swap summary fields
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toContain('swap');
+    expect(sender.sendFlow).not.toHaveBeenCalled();
+  });
+
+  it('swap intent, capability live, verified user, FLOW_ID set → sendFlow with swap data, directive request_pin', async () => {
+    const swapOut = stubSwapProposalOutput();
+    const agentPort = makeAgentPort({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
+    const proposalService = makeProposalService(
+      stubBuyProposalOutput(),
+      stubSellProposalOutput(),
+      stubSendProposalOutput(),
+      swapOut,
+    );
+    const directiveService = makeDirectiveService();
+    const { svc, sender } = buildService({
+      agentPort,
+      proposalService,
+      directiveService,
+      configService: makeConfigService({
+        flowId: FIXED_FLOW_ID,
+        signingKey: FIXED_SIGNING_KEY,
+      }),
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(proposalService.createSwapProposal).toHaveBeenCalled();
+    expect(directiveService.issue).toHaveBeenCalledWith({
+      proposalId: swapOut.proposalId,
+      userId: 'user-id-1',
+      ref: 'request_pin',
+    });
+    expect(sender.sendFlow).toHaveBeenCalledTimes(1);
+    expect(sender.sendText).not.toHaveBeenCalledWith(
+      FIXED_FROM,
+      expect.stringContaining('Reply CONFIRM'),
+    );
+  });
+
+  // ── swap, unlinked contact → KYC handoff, no proposal ────────────────────
+
+  it('swap intent, unlinked contact → KYC handoff, createSwapProposal not called', async () => {
+    const identityService = makeIdentityService({
+      resolveByChannel: jest.fn().mockResolvedValue({
+        kind: 'contact',
+        contact: {
+          id: 'contact-id-1',
+          primaryChannel: 'whatsapp',
+          primaryAddress: FIXED_FROM,
+          status: 'active',
+          linkedUserId: null,
+        },
+      }),
+    });
+    const convRepo = makeConvRepo(null);
+    convRepo.findByContactId.mockResolvedValue(null);
+    convRepo.create.mockResolvedValue({
+      ...baseConv(),
+      userId: null,
+      contactId: 'contact-id-1',
+    });
+    const agentPort = makeAgentPort({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
+    const proposalService = makeProposalService();
+    const { svc } = buildService({
+      identityService,
+      convRepo,
+      agentPort,
+      proposalService,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(proposalService.createSwapProposal).not.toHaveBeenCalled();
+  });
+
+  // ── check_balance (W-balance) ─────────────────────────────────────────────
+
+  it('check_balance (all assets), verified user → text reply listing holdings, no proposal', async () => {
+    const agentPort = makeAgentPort({ action: 'check_balance' });
+    const { svc, sender, balanceService, proposalService } = buildService({
+      agentPort,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(balanceService.getBalances).toHaveBeenCalledWith(
+      'user-id-1',
+      undefined,
+    );
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toContain('USDT');
+    // Read-only: no proposal is ever created for a balance check.
+    expect(proposalService.createBuyProposal).not.toHaveBeenCalled();
+  });
+
+  it('check_balance scoped to USDT → passes the asset to the balance service', async () => {
+    const agentPort = makeAgentPort({ action: 'check_balance', asset: 'USDT' });
+    const { svc, balanceService } = buildService({ agentPort });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(balanceService.getBalances).toHaveBeenCalledWith(
+      'user-id-1',
+      'USDT',
+    );
+  });
+
+  it('check_balance, unlinked contact → KYC handoff, balance service NOT called', async () => {
+    const identityService = makeIdentityService({
+      resolveByChannel: jest.fn().mockResolvedValue({
+        kind: 'contact',
+        contact: { id: 'contact-id-1' },
+      }),
+    });
+    const agentPort = makeAgentPort({ action: 'check_balance' });
+    const { svc, balanceService } = buildService({
+      identityService,
+      agentPort,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(balanceService.getBalances).not.toHaveBeenCalled();
   });
 
   // ── ProposalService throws → failure path ─────────────────────────────────
@@ -1258,6 +1542,71 @@ describe('ConversationService.handleInbound', () => {
     expect(sentText).toContain('TRONnet');
   });
 
+  // ── receive_crypto: asset threaded from intent (bug fix) ──────────────────
+
+  it('receive_crypto with asset=TRX in intent → reply uses TRX displayName ("TRX-coin"), not USDT displayName ("USD-coin")', async () => {
+    // Agent named TRX — the reply must use TRX metadata, not the default USDT.
+    // Use CLEARLY DISTINCT display names so the assertion distinguishes them.
+    const agentPort = makeAgentPort({ action: 'receive_crypto', asset: 'TRX' });
+    const walletService = makeWalletService();
+
+    const assetRegistry = makeAssetRegistry();
+    (assetRegistry.asset as jest.Mock).mockImplementation((symbol: string) => ({
+      symbol,
+      // Distinct sentinel names — 'TRX-coin' vs 'USD-coin' — so we can assert
+      // the right one appears and the wrong one does NOT.
+      displayName: symbol === 'TRX' ? 'TRX-coin' : 'USD-coin',
+      kind: 'crypto',
+      decimals: 6,
+      networks: ['TRON'],
+      providers: {},
+      enabled: true,
+    }));
+    (assetRegistry.defaultNetworkFor as jest.Mock).mockReturnValue('TRON');
+    (assetRegistry.network as jest.Mock).mockImplementation((id: string) => ({
+      id,
+      displayName: 'TRON (TRC-20)',
+      addressPattern: '^T[1-9A-HJ-NP-Za-km-z]{33}$',
+      enabled: true,
+    }));
+
+    const { svc, sender } = buildService({
+      agentPort,
+      walletService,
+      assetRegistry,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    const sentText = captureFirstSentText(sender);
+    // Reply must use the TRX display name, not the USDT default.
+    expect(sentText).toContain('TRX-coin');
+    expect(sentText).not.toContain('USD-coin');
+    // The address is still the same TRON wallet address.
+    expect(sentText).toContain(FIXED_WALLET_ADDRESS);
+  });
+
+  it('receive_crypto with no asset in intent → reply falls back to default asset (USDT)', async () => {
+    // Model did not name an asset — intent has no `asset` field.
+    const agentPort = makeAgentPort({ action: 'receive_crypto' });
+    const walletService = makeWalletService();
+    const assetRegistry = makeAssetRegistry();
+
+    const { svc, sender } = buildService({
+      agentPort,
+      walletService,
+      assetRegistry,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    const sentText = captureFirstSentText(sender);
+    // Default registry stub's asset displayName for USDT is 'USDT' (makeAssetRegistry).
+    expect(sentText).toContain(FIXED_WALLET_ADDRESS);
+    // Should not throw and should produce a reply.
+    expect(sentText.length).toBeGreaterThan(0);
+  });
+
   // Token references (ensure that exported symbols are used consistently)
   it('exports match the correct Symbol tokens', () => {
     expect(AGENT_PORT).toBeDefined();
@@ -1545,5 +1894,276 @@ describe('ConversationService.handleInbound', () => {
     // Text fallback sent
     const sentText = captureFirstSentText(sender);
     expect(sentText).toMatch(/address|wallet|send/i);
+  });
+
+  // ── currency_not_live: buy_crypto with non-live fiat → graceful text, no proposal ──
+
+  it('buy_crypto with non-live fiatCurrency (RWF) → graceful text reply, no proposal, no beneficiary lookup', async () => {
+    const assetRegistry = makeAssetRegistry();
+    (assetRegistry.isCurrencyLive as jest.Mock) = jest
+      .fn()
+      .mockReturnValue(false);
+
+    const { svc, sender, proposalService } = buildService({
+      agentPort: makeAgentPort({
+        action: 'buy_crypto',
+        asset: 'USDT',
+        fiatAmount: '50000',
+        fiatCurrency: 'RWF',
+      }),
+      assetRegistry,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(proposalService.createBuyProposal).not.toHaveBeenCalled();
+    // A graceful message must be sent — it should mention the currency is not available.
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toMatch(/RWF|not available|settle/i);
+    // Must NOT say "only NGN" — that's the old hard-rejection pattern.
+    expect(sentText).not.toMatch(/only NGN/i);
+  });
+
+  it('sell_crypto with non-live fiatCurrency (GHS) → graceful text reply, no proposal', async () => {
+    const assetRegistry = makeAssetRegistry();
+    (assetRegistry.isCurrencyLive as jest.Mock) = jest
+      .fn()
+      .mockReturnValue(false);
+
+    const { svc, sender, proposalService, beneficiaryService } = buildService({
+      agentPort: makeAgentPort({
+        action: 'sell_crypto',
+        asset: 'USDT',
+        cryptoAmount: '5',
+        fiatCurrency: 'GHS',
+      }),
+      assetRegistry,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(proposalService.createSellProposal).not.toHaveBeenCalled();
+    expect(beneficiaryService.getDefault).not.toHaveBeenCalled();
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toMatch(/GHS|not available|settle/i);
+  });
+
+  // ── query_transactions (linked user) → text list + download CTA ────────────
+
+  it('query_transactions (linked user) → sends a text list + a download CTA', async () => {
+    const { svc, sender } = buildService({
+      agentPort: {
+        run: jest.fn().mockResolvedValue({
+          action: 'query_transactions',
+          period: 'today',
+          download: true,
+        }),
+      } as unknown as jest.Mocked<IAgentPort>,
+      historyService: {
+        query: jest.fn().mockResolvedValue({
+          window: { from: 'F', to: 'T', label: 'Today' },
+          items: [
+            {
+              id: 't1',
+              type: 'buy',
+              status: 'completed',
+              direction: 'in',
+              cryptoAmount: '29.97 USDT',
+              createdAt: '2026-06-29T09:00:00.000Z',
+            },
+          ],
+          totalCount: 1,
+          truncated: false,
+          downloadUrl:
+            'https://api.example.com/transactions/statement/download?token=tok',
+        }),
+      } as unknown as jest.Mocked<Pick<TransactionHistoryService, 'query'>>,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(sender.sendText).toHaveBeenCalled();
+    expect(sender.sendCtaUrl).toHaveBeenCalledTimes(1);
+    const ctaArg = (
+      sender.sendCtaUrl as jest.Mock<
+        ReturnType<typeof sender.sendCtaUrl>,
+        [Parameters<typeof sender.sendCtaUrl>[0]]
+      >
+    ).mock.calls[0][0];
+    expect(ctaArg.buttonText).toBe('Download');
+    expect(ctaArg.url).toContain('token=tok');
+  });
+
+  it('query_transactions forwards a relative-duration spec to the history service', async () => {
+    const historyQuery = jest.fn().mockResolvedValue({
+      window: { from: 'F', to: 'T', label: 'Last 6 months' },
+      items: [],
+      totalCount: 0,
+      truncated: false,
+      hasMore: false,
+      nextCursor: null,
+      txType: 'all',
+      downloadUrl:
+        'https://api.example.com/transactions/statement/download?token=tok',
+    });
+    const { svc } = buildService({
+      agentPort: {
+        run: jest.fn().mockResolvedValue({
+          action: 'query_transactions',
+          relativeAmount: 6,
+          relativeUnit: 'month',
+          download: false,
+        }),
+      } as unknown as jest.Mocked<IAgentPort>,
+      historyService: { query: historyQuery } as unknown as jest.Mocked<
+        Pick<TransactionHistoryService, 'query'>
+      >,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(historyQuery).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ relativeAmount: 6, relativeUnit: 'month' }),
+    );
+  });
+
+  // ── Task 18: extracted image/document routing ─────────────────────────────
+
+  it('(T18) saves an extracted crypto address as a beneficiary and confirms', async () => {
+    const assetRegistry = makeAssetRegistry();
+    (assetRegistry.inferNetworkForAddress as jest.Mock).mockReturnValue('TRON');
+    (assetRegistry.defaultAssetForNetwork as jest.Mock).mockReturnValue('USDT');
+    const beneficiaryService = makeBeneficiaryService();
+    (beneficiaryService.addCryptoAddress as jest.Mock).mockResolvedValue({
+      id: 'b1',
+    });
+
+    const { svc, sender, agentPort } = buildService({
+      assetRegistry,
+      beneficiaryService,
+    });
+
+    await svc.handleInbound(
+      makeMsg({
+        extraction: {
+          kind: 'crypto_address',
+          address: 'TXYZAbcdefghij1234567890abcd',
+        },
+      }),
+    );
+
+    expect(beneficiaryService.addCryptoAddress).toHaveBeenCalledWith(
+      expect.objectContaining({ network: 'TRON', asset: 'USDT' }),
+    );
+    expect(sender.sendText).toHaveBeenCalledWith(
+      FIXED_FROM,
+      expect.stringMatching(/payout address/i),
+    );
+    // Agent must NOT run for an extraction message
+    expect(agentPort.run).not.toHaveBeenCalled();
+  });
+
+  it('(T18) replies with a polite failure when the address is not a supported network', async () => {
+    const assetRegistry = makeAssetRegistry();
+    (assetRegistry.inferNetworkForAddress as jest.Mock).mockReturnValue(null);
+    const beneficiaryService = makeBeneficiaryService();
+
+    const { svc, sender } = buildService({ assetRegistry, beneficiaryService });
+
+    await svc.handleInbound(
+      makeMsg({ extraction: { kind: 'crypto_address', address: 'garbage' } }),
+    );
+
+    expect(beneficiaryService.addCryptoAddress).not.toHaveBeenCalled();
+    expect(sender.sendText).toHaveBeenCalledWith(
+      FIXED_FROM,
+      expect.stringMatching(/valid wallet/i),
+    );
+  });
+
+  it('(T18) does not run the agent for an extraction message with kind=none', async () => {
+    const { svc, agentPort, sender } = buildService();
+
+    await svc.handleInbound(makeMsg({ extraction: { kind: 'none' } }));
+
+    expect(agentPort.run).not.toHaveBeenCalled();
+    expect(sender.sendText).toHaveBeenCalledWith(
+      FIXED_FROM,
+      expect.stringMatching(/couldn't find/i),
+    );
+  });
+
+  it('(T18) sends the KYC handoff when an unlinked contact sends an image with an extracted address', async () => {
+    const identityService = makeIdentityService({
+      resolveByChannel: jest.fn().mockResolvedValue({
+        kind: 'contact',
+        contact: {
+          id: 'contact-id-img-1',
+          primaryChannel: 'whatsapp',
+          primaryAddress: FIXED_FROM,
+          status: 'active',
+          linkedUserId: null,
+        },
+      }),
+    });
+
+    const convRepo = makeConvRepo(null);
+    convRepo.findByContactId.mockResolvedValue(null);
+    convRepo.create.mockResolvedValue({
+      ...baseConv(),
+      userId: null,
+      contactId: 'contact-id-img-1',
+    });
+
+    const beneficiaryService = makeBeneficiaryService();
+    const handoffTokenService = makeHandoffTokenService();
+
+    const { svc, sender } = buildService({
+      identityService,
+      convRepo,
+      beneficiaryService,
+      handoffTokenService,
+    });
+
+    await svc.handleInbound(
+      makeMsg({
+        extraction: {
+          kind: 'crypto_address',
+          address: 'TXYZAbcdefghij1234567890abcd',
+        },
+      }),
+    );
+
+    // KYC handoff must be triggered — sendCtaUrl (CTA branch) OR sendText with KYC content (text fallback)
+    const ctaCalled = (sender.sendCtaUrl as jest.Mock).mock.calls.length > 0;
+    const kycText = (sender.sendText as jest.Mock).mock.calls.some(
+      ([, text]: [string, string]) => /verify|identity|link|kyc/i.test(text),
+    );
+    expect(ctaCalled || kycText).toBe(true);
+    // Beneficiary must NOT be saved for an unlinked contact
+    expect(beneficiaryService.addCryptoAddress).not.toHaveBeenCalled();
+  });
+
+  it('(T18) echoes bank details without auto-saving when no bankCode is present', async () => {
+    const beneficiaryService = makeBeneficiaryService();
+
+    const { svc, sender } = buildService({ beneficiaryService });
+
+    await svc.handleInbound(
+      makeMsg({
+        extraction: {
+          kind: 'bank_account',
+          accountNumber: '0123456789',
+          bankName: 'GTBank',
+        },
+      }),
+    );
+
+    expect(beneficiaryService.addBankAccount).not.toHaveBeenCalled();
+    expect(sender.sendText).toHaveBeenCalledWith(
+      FIXED_FROM,
+      expect.stringMatching(/0123456789|account/i),
+    );
   });
 });

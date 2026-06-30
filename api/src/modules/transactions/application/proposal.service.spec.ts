@@ -26,6 +26,7 @@ import {
   BuyProposalConfirmationSchema,
   SellProposalConfirmationSchema,
   SendProposalConfirmationSchema,
+  SwapProposalConfirmationSchema,
 } from '@handshake-agent/contracts';
 
 import type { Clock } from '../../../core/common/clock';
@@ -45,6 +46,7 @@ import { ProposalService } from './proposal.service';
 import {
   InsufficientBalanceError,
   BaseRateMisconfiguredError,
+  SwapSameAssetError,
 } from '../domain/execution-errors';
 import {
   BeneficiaryNotFoundError,
@@ -253,6 +255,8 @@ function makeBuySvc(
     makeLedgerRepo(),
     NOOP_COMPLIANCE_SERVICE,
     NOOP_CONFIG_SERVICE,
+    // swapProvider: not needed on buy path; undefined is fine (@Optional)
+    undefined as never,
   );
 }
 
@@ -286,6 +290,8 @@ function makeSellSvc(opts?: {
     opts?.ledgerRepo ?? makeLedgerRepo(),
     NOOP_COMPLIANCE_SERVICE,
     NOOP_CONFIG_SERVICE,
+    // swapProvider: not needed on sell path; undefined is fine (@Optional)
+    undefined as never,
   );
 }
 
@@ -928,6 +934,8 @@ function makeSendSvc(opts?: {
     (opts?.complianceService ??
       makeComplianceService()) as unknown as ComplianceService,
     (opts?.configService ?? STUB_CONFIG_SERVICE) as never,
+    // swapProvider: not needed on send path; undefined is fine (@Optional)
+    undefined as never,
   );
 }
 
@@ -1409,5 +1417,285 @@ describe('ProposalService.createSendProposal', () => {
       BaseRateMisconfiguredError,
     );
     expect(kycGate.assertCanTransact).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// ProposalService.createSwapProposal
+// ============================================================================
+
+const FIXED_SWAP_PROPOSAL_ID = 'eeeeeeee-0000-7000-8000-000000000007';
+const FIXED_SWAP_QUOTE_ID = 'ffffffff-0000-7000-8000-000000000008';
+const SWAP_WALLET_ID = 'wallet-11111111-0000-7000-8000-000000000009';
+
+const STUB_SWAP_PROVIDER_QUOTE = {
+  toAmount: '62500',
+  rate: '1562.5', // after spread fold
+  minAmount: '62000',
+  slippage: 50,
+  networkFee: '1',
+  transactionFee: '0.5',
+  estimatedArrivalSec: 120,
+};
+
+const STUB_SWAP_WALLET = {
+  id: SWAP_WALLET_ID,
+  userId: 'user-swap-1',
+  network: 'TRON',
+  address: 'TSwapAddressForTests1234567890',
+  providerReference: 'br_swap_ref',
+  status: 'active',
+};
+
+function makeSwapAssetRegistry(): jest.Mocked<
+  Pick<AssetRegistry, 'defaultNetworkFor' | 'defaultFiat' | 'assetProviderId'>
+> {
+  return {
+    defaultNetworkFor: jest.fn().mockReturnValue('TRON'),
+    defaultFiat: jest.fn().mockReturnValue('NGN'),
+    assetProviderId: jest
+      .fn()
+      .mockImplementation((asset: string) => `br_id_${asset}`),
+  };
+}
+
+function makeSwapProvider(quote = STUB_SWAP_PROVIDER_QUOTE): {
+  getQuote: jest.Mock;
+} {
+  return {
+    getQuote: jest.fn().mockResolvedValue(quote),
+  };
+}
+
+/** Stub ConfigService for swap tests: returns swap.spreadBps + pricing baseRate. */
+const STUB_SWAP_CONFIG = {
+  get: jest.fn((key: string) => {
+    if (key === 'swap') return { spreadBps: 100, maxDriftBps: 50 };
+    if (key === 'pricing')
+      return { assets: { USDT: { baseRates: { NGN: 1600 } } } };
+    if (key === 'compliance')
+      return { travelRuleThresholds: { NGN: 1_000_000 } };
+    return undefined;
+  }),
+};
+
+function makeSwapSvc(opts?: {
+  swapProvider?: { getQuote: jest.Mock };
+  kycGate?: Pick<KycGateService, 'assertCanTransact'>;
+  quoteRepo?: IQuoteRepository;
+  proposalRepo?: IProposalRepository;
+  walletService?: Pick<WalletService, 'getOrProvisionNetworkWallet'>;
+  assetRegistry?: Pick<
+    AssetRegistry,
+    'defaultNetworkFor' | 'defaultFiat' | 'assetProviderId'
+  >;
+  ledgerRepo?: ILedgerRepository;
+  configService?: { get: jest.Mock };
+}): ProposalService {
+  return new ProposalService(
+    // quotesService: not called on swap path
+    {
+      quoteBuy: jest.fn(),
+      quoteSell: jest.fn(),
+      quoteSend: jest.fn(),
+    } as unknown as QuotesService,
+    (opts?.kycGate ?? makeKycGate()) as unknown as KycGateService,
+    opts?.quoteRepo ?? makeQuoteRepo(FIXED_SWAP_QUOTE_ID),
+    opts?.proposalRepo ?? makeProposalRepo(FIXED_SWAP_PROPOSAL_ID),
+    stubClock,
+    (opts?.walletService ?? {
+      getOrProvisionNetworkWallet: jest
+        .fn()
+        .mockResolvedValue(STUB_SWAP_WALLET),
+    }) as unknown as WalletService,
+    // beneficiaryService: not called on swap path
+    { getById: jest.fn() } as unknown as BeneficiaryService,
+    (opts?.assetRegistry ??
+      makeSwapAssetRegistry()) as unknown as AssetRegistry,
+    opts?.ledgerRepo ?? makeLedgerRepo('100.0'),
+    NOOP_COMPLIANCE_SERVICE,
+    (opts?.configService ?? STUB_SWAP_CONFIG) as never,
+    // swapProvider is the last positional arg added to ProposalService
+    (opts?.swapProvider ?? makeSwapProvider()) as never,
+  );
+}
+
+const BASE_SWAP_INPUT = {
+  userId: 'user-swap-1',
+  conversationId: 'conv-swap-1',
+  fromAsset: 'USDT' as const,
+  toAsset: 'TRX' as const,
+  amount: '40',
+};
+
+describe('ProposalService.createSwapProposal', () => {
+  it('happy path: returns a SwapProposalConfirmation with proposalId and quoteId', async () => {
+    const svc = makeSwapSvc();
+    const result = await svc.createSwapProposal(BASE_SWAP_INPUT);
+
+    expect(result.proposalId).toBe(FIXED_SWAP_PROPOSAL_ID);
+    expect(result.quoteId).toBe(FIXED_SWAP_QUOTE_ID);
+    expect(() =>
+      SwapProposalConfirmationSchema.parse(result.confirmation),
+    ).not.toThrow();
+    expect(result.confirmation.fromAsset).toBe('USDT');
+    expect(result.confirmation.toAsset).toBe('TRX');
+    expect(result.confirmation.fromAmount).toBe('40');
+  });
+
+  it('rejects fromAsset === toAsset with SwapSameAssetError (engine rule)', async () => {
+    const svc = makeSwapSvc();
+    await expect(
+      svc.createSwapProposal({
+        ...BASE_SWAP_INPUT,
+        fromAsset: 'USDT',
+        toAsset: 'USDT',
+      }),
+    ).rejects.toThrow(SwapSameAssetError);
+  });
+
+  it('SwapSameAssetError carries the stable SWAP_SAME_ASSET code (finding #17)', async () => {
+    // The stable code lets the global DomainExceptionFilter map this to a clean
+    // 422 instead of an opaque 500.
+    const svc = makeSwapSvc();
+    await expect(
+      svc.createSwapProposal({
+        ...BASE_SWAP_INPUT,
+        fromAsset: 'USDT',
+        toAsset: 'USDT',
+      }),
+    ).rejects.toMatchObject({ code: 'SWAP_SAME_ASSET' });
+  });
+
+  it('fails closed when swap.spreadBps drives the effective rate to <= 0 (finding #27)', async () => {
+    // A spread >= 100% (spreadBps >= 10000) would yield a 0/negative effective
+    // rate and a 0/negative toAmount — a 0-value swap that bypasses the gate.
+    // The engine must fail closed on this misconfiguration rather than quote 0.
+    const configService = {
+      get: jest.fn((key: string) => {
+        if (key === 'swap') return { spreadBps: 10000, maxDriftBps: 50 };
+        if (key === 'pricing')
+          return { assets: { USDT: { baseRates: { NGN: 1600 } } } };
+        if (key === 'compliance')
+          return { travelRuleThresholds: { NGN: 1_000_000 } };
+        return undefined;
+      }),
+    };
+    const proposalRepo = makeProposalRepo(FIXED_SWAP_PROPOSAL_ID);
+    const svc = makeSwapSvc({ configService, proposalRepo });
+
+    await expect(svc.createSwapProposal(BASE_SWAP_INPUT)).rejects.toThrow(
+      BaseRateMisconfiguredError,
+    );
+    // Never persists a 0-value swap proposal.
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when swap.spreadBps exceeds 100% (negative effective rate)', async () => {
+    const configService = {
+      get: jest.fn((key: string) => {
+        if (key === 'swap') return { spreadBps: 12000, maxDriftBps: 50 };
+        if (key === 'pricing')
+          return { assets: { USDT: { baseRates: { NGN: 1600 } } } };
+        if (key === 'compliance')
+          return { travelRuleThresholds: { NGN: 1_000_000 } };
+        return undefined;
+      }),
+    };
+    const svc = makeSwapSvc({ configService });
+    await expect(svc.createSwapProposal(BASE_SWAP_INPUT)).rejects.toThrow(
+      BaseRateMisconfiguredError,
+    );
+  });
+
+  it('rejects when ledger balance < fromAmount (InsufficientBalanceError)', async () => {
+    const ledgerRepo = makeLedgerRepo('10.0'); // balance 10, need 40
+    const svc = makeSwapSvc({ ledgerRepo });
+    await expect(svc.createSwapProposal(BASE_SWAP_INPUT)).rejects.toThrow(
+      InsufficientBalanceError,
+    );
+  });
+
+  it('propagates KYC gate error without persisting a Proposal', async () => {
+    class KycError extends Error {
+      constructor() {
+        super('KYC blocked');
+      }
+    }
+    const kycGate = makeKycGate(new KycError());
+    const proposalRepo = makeProposalRepo(FIXED_SWAP_PROPOSAL_ID);
+    const svc = makeSwapSvc({ kycGate, proposalRepo });
+
+    await expect(svc.createSwapProposal(BASE_SWAP_INPUT)).rejects.toThrow(
+      KycError,
+    );
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('persists a Quote row with type=swap', async () => {
+    const quoteRepo = makeQuoteRepo(FIXED_SWAP_QUOTE_ID);
+    const svc = makeSwapSvc({ quoteRepo });
+    await svc.createSwapProposal(BASE_SWAP_INPUT);
+
+    expect(quoteRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'swap', asset: 'USDT' }),
+    );
+  });
+
+  it('persists a Proposal row with type=swap', async () => {
+    const proposalRepo = makeProposalRepo(FIXED_SWAP_PROPOSAL_ID);
+    const svc = makeSwapSvc({ proposalRepo });
+    await svc.createSwapProposal(BASE_SWAP_INPUT);
+
+    expect(proposalRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'swap' }),
+    );
+  });
+
+  it('folds swapSpreadBps into rate and never surfaces spread as a separate line', async () => {
+    // The provider returns rate '1562.5'; after spread fold the displayed rate
+    // should be <= 1562.5 (spread reduces rate). The key invariant: no spreadBps
+    // field in the returned confirmation.
+    const svc = makeSwapSvc();
+    const result = await svc.createSwapProposal(BASE_SWAP_INPUT);
+    // No spread field on confirmation (CLAUDE.md §3.1 — never surface the spread).
+    expect(result.confirmation).not.toHaveProperty('spreadBps');
+    // rate is a non-empty string (provider rate folded).
+    expect(typeof result.confirmation.rate).toBe('string');
+    expect(result.confirmation.rate.length).toBeGreaterThan(0);
+  });
+
+  it('calls KYC gate before persisting the Proposal', async () => {
+    const callOrder: string[] = [];
+    const kycGate = {
+      assertCanTransact: jest.fn(() => {
+        callOrder.push('kyc');
+        return Promise.resolve();
+      }),
+    };
+    const proposalRepo = makeProposalRepo(FIXED_SWAP_PROPOSAL_ID);
+    proposalRepo.create.mockImplementation(() => {
+      callOrder.push('create');
+      return Promise.resolve({ id: FIXED_SWAP_PROPOSAL_ID });
+    });
+
+    const svc = makeSwapSvc({ kycGate, proposalRepo });
+    await svc.createSwapProposal(BASE_SWAP_INPUT);
+
+    expect(callOrder.indexOf('kyc')).toBeLessThan(callOrder.indexOf('create'));
+  });
+
+  it('calls swap provider getQuote to price the swap', async () => {
+    const swapProvider = makeSwapProvider();
+    const svc = makeSwapSvc({ swapProvider });
+    await svc.createSwapProposal(BASE_SWAP_INPUT);
+    expect(swapProvider.getQuote).toHaveBeenCalledTimes(1);
+    expect(swapProvider.getQuote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: '40',
+        fromAssetId: 'br_id_USDT',
+        toAssetId: 'br_id_TRX',
+      }),
+    );
   });
 });

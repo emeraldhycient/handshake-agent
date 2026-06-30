@@ -44,7 +44,11 @@ import { ContactNotFoundError, KycRejectedError } from '../domain/kyc-errors';
 import { HandoffTokenService } from '../application/handoff-token.service';
 import { KycService } from '../application/kyc.service';
 import { WalletService } from '../../wallets/application/wallet.service';
+import { JwtAuthGuard } from '../../auth/presentation/jwt-auth.guard';
+import { CurrentUser } from '../../auth/presentation/current-user.decorator';
+import type { AuthenticatedUser } from '../../auth/presentation/jwt-auth.guard';
 import { KycCompleteDto } from './dto/kyc-complete.dto';
+import { KycSubmitDto } from './dto/kyc-submit.dto';
 
 @Controller('kyc')
 @UseGuards(ThrottlerGuard)
@@ -118,6 +122,53 @@ export class KycController {
       this.logger.warn(
         `WN-3: eager wallet provisioning failed for user ${userId} — ` +
           `lazy provisioning in buy/receive flows will serve as fallback. ` +
+          `Error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    return { userId, status: 'verified' };
+  }
+
+  /**
+   * Complete KYC for a web-native user (JWT session).
+   *
+   * Secured by JwtAuthGuard (Bearer token from WebAuthModule).
+   * The user already exists (created at email signup); this upgrades them to
+   * Tier-1 verified and sets their transaction PIN.
+   *
+   * @throws {UnprocessableEntityException} — KYC provider rejected identity data.
+   */
+  @Post('submit')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  async submit(
+    @Body() dto: KycSubmitDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<KycCompleteResponse> {
+    let userId: string;
+    try {
+      ({ userId } = await this.kycService.completeVerificationForUser({
+        userId: currentUser.userId,
+        nin: dto.nin,
+        bvn: dto.bvn,
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        dateOfBirth: dto.dateOfBirth,
+        pin: dto.pin,
+      }));
+    } catch (err) {
+      if (err instanceof KycRejectedError) {
+        throw new UnprocessableEntityException(err.message);
+      }
+      throw err;
+    }
+
+    // Best-effort eager wallet provisioning (same as /kyc/complete WN-3)
+    try {
+      await this.walletService.provisionAllEnabledNetworks(userId);
+    } catch (err) {
+      this.logger.warn(
+        `WN-3: eager wallet provisioning failed for user ${userId} (submit) — ` +
           `Error: ${err instanceof Error ? err.message : String(err)}`,
       );
     }

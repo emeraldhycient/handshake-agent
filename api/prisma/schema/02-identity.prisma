@@ -17,6 +17,10 @@ model User {
   pinHash             String?
   pinFailureCount     Int        @default(0)
   pinLockedUntil      DateTime?  @db.Timestamptz
+  /// Web account login email (set at signup, lowercased). Distinct from
+  /// verifiedEmail (the KYC out-of-band backup). emailVerifiedAt gates login.
+  email               String?    @unique
+  emailVerifiedAt     DateTime?  @db.Timestamptz
   /// Out-of-band failover identifiers captured at KYC (IDN-02, ADR-0004).
   verifiedEmail       String?    @unique
   verifiedBackupPhone String?    @unique
@@ -45,6 +49,7 @@ model User {
   receipts          Receipt[]
   conversation      Conversation?
   handoffTokens     HandoffToken[]
+  authChallenges    AuthChallenge[]
   notifications     Notification[]
   notificationPrefs NotificationPreference[]
   complianceEvents  ComplianceEvent[]
@@ -206,7 +211,8 @@ model Beneficiary {
   bankCode            String?
   // Crypto-address fields (type = crypto_address)
   cryptoAddress       String?
-  cryptoAsset         SupportedAsset?
+  /// TEXT — validated by AssetRegistry at app layer (dynamic catalog).
+  cryptoAsset         String?
   cryptoNetwork       Network?
   verificationStatus  VerificationStatus @default(pending)
   /// Cooling-off expiry for first crypto send; null once verified or for bank accounts.

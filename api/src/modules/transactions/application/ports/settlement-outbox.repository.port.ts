@@ -14,7 +14,7 @@ export const SETTLEMENT_OUTBOX_REPOSITORY = Symbol(
 
 export interface CreateSettlementOutboxData {
   transactionId: string;
-  /** 'processor_collection' | 'processor_payout' | 'onchain_send' | 'compensation' */
+  /** 'processor_collection' | 'processor_payout' | 'onchain_send' | 'compensation' | 'swap' */
   settlementType: string;
   /** Idempotent settlement request payload — immutable; used for replay detection. */
   payload: Record<string, unknown>;

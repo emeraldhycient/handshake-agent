@@ -195,4 +195,38 @@ describe("ChatMessageSchema", () => {
       }).success
     ).toBe(false)
   })
+
+  it("parses a pay_in message", () => {
+    expect(
+      ChatMessageSchema.safeParse({
+        id: "m12",
+        role: "assistant",
+        kind: "pay_in",
+        transactionId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        accountNumber: "0123456789",
+        bankName: "Test Bank",
+        providerRef: "REF001",
+        amount: "50250",
+        currency: "NGN",
+        status: "pending",
+      }).success
+    ).toBe(true)
+  })
+
+  it("rejects a pay_in message with invalid status", () => {
+    expect(
+      ChatMessageSchema.safeParse({
+        id: "m13",
+        role: "assistant",
+        kind: "pay_in",
+        transactionId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        accountNumber: "0123456789",
+        bankName: "Test Bank",
+        providerRef: "REF001",
+        amount: "50250",
+        currency: "NGN",
+        status: "unknown_status",
+      }).success
+    ).toBe(false)
+  })
 })

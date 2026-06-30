@@ -16,6 +16,15 @@ export interface AssetPricing {
   /** Platform spread for SELL quotes (marks down the rate; user gets less fiat). */
   sellSpreadBps: number;
   cryptoDecimals: number;
+  /**
+   * Whether this asset can be bought/sold for fiat via the buy/sell flows.
+   * Defaults to `true` when absent (all existing assets are fiat-tradeable).
+   * Set to `false` for valuation-only assets (e.g. TRX) that have a baseRate
+   * for wallet display purposes but must NOT be buyable/sellable in fiat.
+   * ConfigRateProvider.getRate() throws when fiatTradeable === false so the
+   * buy/sell proposal flows fail-closed without any per-asset code in the engine.
+   */
+  fiatTradeable?: boolean;
 }
 
 export interface PricingConfig {
@@ -75,9 +84,33 @@ export interface StepUpConfig {
   ttlSeconds: number;
 }
 
+export interface JwtConfig {
+  /** Access-token validity (seconds). Short — refresh rotates. */
+  accessTtlSeconds: number;
+  /** Refresh-token validity (seconds) — also the Session row lifetime. */
+  refreshTtlSeconds: number;
+}
+
+export interface OtpConfig {
+  /** Login OTP validity (seconds). */
+  ttlSeconds: number;
+  /** Number of digits in a login OTP. */
+  length: number;
+  /** Max wrong-OTP attempts before the challenge is invalidated. */
+  maxAttempts: number;
+}
+
+export interface EmailTokenConfig {
+  /** Email-verification link validity (seconds). */
+  ttlSeconds: number;
+}
+
 export interface AuthConfig {
   pin: PinConfig;
   stepUp: StepUpConfig;
+  jwt: JwtConfig;
+  otp: OtpConfig;
+  emailToken: EmailTokenConfig;
 }
 
 /** Directive-grant configuration (task 4.2, ADR-0005/0006). */
@@ -107,6 +140,24 @@ export interface SellConfig {
    * Admin-tunable later (DB-admin AppSetting layer, root §7).
    */
   maxDriftBps: number;
+}
+
+/** Swap-execution configuration (CLAUDE.md §7). */
+export interface SwapConfig {
+  /**
+   * Maximum allowed swap rate drift in basis points between the quote stored at
+   * proposal time and the re-quote at execution time. If drift exceeds this the
+   * engine throws QuoteDriftError and the user must re-propose.
+   * Admin-tunable later (DB-admin AppSetting layer, root §7).
+   */
+  maxDriftBps: number;
+  /**
+   * Platform spread folded INTO the displayed swap rate (bps).
+   * Folded by the proposal builder before returning SwapProposalConfirmation —
+   * NEVER surfaced as a separate line item (root CLAUDE.md §3.1).
+   * Admin-tunable later (DB-admin AppSetting layer, root §7).
+   */
+  spreadBps: number;
 }
 
 /**
@@ -293,6 +344,64 @@ export interface ReconciliationConfig {
   batchSize: number;
 }
 
+/**
+ * Statement / transaction-history configuration (CLAUDE.md §7).
+ * All values are admin-tunable later via the DB-admin AppSetting layer.
+ */
+export interface StatementConfig {
+  /** TTL (seconds) for a signed statement download link. Default 900 (15 min). */
+  linkTtlSeconds: number;
+  /** Max history window in days; longer requests are clamped. Default 400 (~1yr + headroom). */
+  maxWindowDays: number;
+  /** Default page size for the interactive history card / Activity feed. Default 10. */
+  defaultPageSize: number;
+  /** Hard cap on a single page (clamps an over-large client `limit`). Default 100. */
+  maxPageSize: number;
+  /** Safety cap on rows gathered for a full-range PDF statement. Default 5000. */
+  statementMaxRows: number;
+  /** Fixed offset (minutes) for local day boundaries. WAT = UTC+1, no DST → 60. */
+  timezoneOffsetMinutes: number;
+}
+
+/** Voice note upload limits. Admin-tunable later (DB-admin AppSetting layer, §7). */
+export interface VoiceConfig {
+  /**
+   * Maximum allowed voice note upload size in bytes.
+   * Default: 15 MB. Enforced by the voice endpoint (Task 9) before transcription.
+   * Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   */
+  maxUploadBytes: number;
+  /**
+   * Allowed MIME types for voice note uploads.
+   * Enforced by the voice endpoint (Task 9) before transcription.
+   * Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   */
+  allowedMimeTypes: string[];
+}
+
+/** WhatsApp media size limits. Admin-tunable later (DB-admin AppSetting layer, §7). */
+export interface WhatsAppMediaConfig {
+  /**
+   * Maximum allowed WhatsApp media payload size in bytes.
+   * Default: 25 MB (Meta's stated per-message media limit).
+   * Enforced by the WhatsApp media client (Task 14) before download/processing.
+   * Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   */
+  maxMediaBytes: number;
+}
+
+/**
+ * Media configuration (voice note uploads + WhatsApp media).
+ * All values are admin-tunable later via the DB-admin AppSetting layer (§7).
+ */
+export interface MediaConfig {
+  voice: VoiceConfig;
+  whatsapp: WhatsAppMediaConfig;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
@@ -300,40 +409,160 @@ export interface AppConfig {
   directive: DirectiveConfig;
   buy: BuyConfig;
   sell: SellConfig;
+  swap: SwapConfig;
   compliance: ComplianceConfig;
   catalog: CatalogConfig;
   beneficiary: BeneficiaryConfig;
   reconciliation: ReconciliationConfig;
+  statement: StatementConfig;
+  media: MediaConfig;
 }
 
-export default (): AppConfig => ({
+/**
+ * Boot-time cross-validation for multi-currency completeness (audit #25).
+ *
+ * The product's extensibility guarantee is "enabling a fiat = flip the
+ * `enabled` flag, no code change" (root CLAUDE.md §7). That only holds if the
+ * layered config actually carries the matching pricing + limits for the fiat —
+ * otherwise a flag flip produces opaque 500s (ConfigRateProvider /
+ * KycGateService throw raw Errors) instead of working flows.
+ *
+ * This asserts, fail-closed at startup, that EVERY catalog-enabled fiat has:
+ *   1. a `limits[fiat]` block (per-tier transaction caps), and
+ *   2. a `pricing.assets[asset].baseRates[fiat]` entry for every asset that is
+ *      both catalog-enabled AND fiat-tradeable (valuation-only assets such as a
+ *      `fiatTradeable: false` asset are skipped — they can't be bought/sold).
+ *
+ * Throws (failing boot) on the first violation. Disabled fiats are ignored —
+ * their config may legitimately be incomplete until they go live.
+ */
+export function validateConfig(cfg: AppConfig): void {
+  const enabledFiats = Object.values(cfg.catalog.fiats)
+    .filter((fiat) => fiat.enabled)
+    .map((fiat) => fiat.code);
+
+  // Assets that can actually be bought/sold for fiat: catalog-enabled and not
+  // explicitly marked valuation-only (fiatTradeable defaults to true).
+  const tradeableAssets = Object.keys(cfg.pricing.assets).filter((symbol) => {
+    const catalogAsset = cfg.catalog.assets[symbol];
+    const isCatalogEnabled = catalogAsset ? catalogAsset.enabled : false;
+    const isFiatTradeable = cfg.pricing.assets[symbol].fiatTradeable !== false;
+    return isCatalogEnabled && isFiatTradeable;
+  });
+
+  for (const fiat of enabledFiats) {
+    if (!cfg.limits[fiat]) {
+      throw new Error(
+        `Config invariant violated: fiat '${fiat}' is enabled in the catalog ` +
+          `but has no limits block (config.limits.${fiat}). Enabling a fiat ` +
+          `requires adding its limits + pricing baseRates (root CLAUDE.md §7).`,
+      );
+    }
+
+    for (const asset of tradeableAssets) {
+      const baseRate = cfg.pricing.assets[asset].baseRates[fiat];
+      if (baseRate === undefined) {
+        throw new Error(
+          `Config invariant violated: fiat '${fiat}' is enabled but asset ` +
+            `'${asset}' has no pricing baseRate for it ` +
+            `(config.pricing.assets.${asset}.baseRates.${fiat}). Enabling a ` +
+            `fiat requires a baseRate for every enabled fiat-tradeable asset ` +
+            `(root CLAUDE.md §7).`,
+        );
+      }
+    }
+  }
+}
+
+const buildConfig = (): AppConfig => ({
   // ── Asset / fiat / network catalog (task X1, CLAUDE.md §7) ────────────
   // Each entry is a config-layer value; the DB-admin AppSetting layer will be
   // able to override capability flags at runtime (hot-reload) without a deploy.
   // BTC is intentionally NOT registered — Blockradar has no BTC WaaS (ADR-0006).
   catalog: {
     assets: {
+      // USDT is the only static catalog entry at launch.
+      // The Blockradar asset id (providers.blockradar.assetId) is intentionally
+      // NOT hardcoded here — it varies per wallet (testnet vs mainnet) and is
+      // discovered at boot via CatalogSyncService → provider.listWalletAssets().
+      // The sync merges the real runtime assetId into AssetRegistry's
+      // discoveredProviderIds overlay; assetProviderId('USDT', 'blockradar')
+      // returns the discovered value first.
+      //
+      // Static pricing (pricing.assets.USDT) and limits remain keyed by symbol —
+      // those values are independent of the Blockradar asset UUID.
       USDT: {
         symbol: 'USDT',
         displayName: 'USDT',
         kind: 'crypto',
         decimals: 6,
         networks: ['TRON'],
-        // The Blockradar asset id in the catalog is the canonical source of truth
-        // for USDT-on-TRON (task X3 — providers.blockradar.usdtTronAssetId removed).
-        providers: {
-          blockradar: { assetId: 'f56d297c-a3db-4cda-95bd-180b54679070' },
-        },
+        // providers intentionally empty — populated at boot by CatalogSyncService.
+        providers: {},
         enabled: true,
       },
     },
     fiats: {
+      // ── Live at launch ──────────────────────────────────────────────────
       NGN: {
         code: 'NGN',
         displayName: 'Naira',
         symbol: '₦',
         decimals: 2,
         enabled: true,
+      },
+      // ── Supported but NOT yet live (enabled: false) ─────────────────────
+      // Flip `enabled` to true once the Flutterwave collection + disbursement
+      // for that market is live-tested and the compliance review is complete.
+      // No code change required — only a config/DB-admin flag flip (CLAUDE.md §7).
+      GHS: {
+        code: 'GHS',
+        displayName: 'Ghanaian Cedi',
+        symbol: 'GH₵',
+        decimals: 2,
+        enabled: false,
+      },
+      KES: {
+        code: 'KES',
+        displayName: 'Kenyan Shilling',
+        symbol: 'KSh',
+        decimals: 2,
+        enabled: false,
+      },
+      UGX: {
+        code: 'UGX',
+        displayName: 'Ugandan Shilling',
+        symbol: 'USh',
+        decimals: 0,
+        enabled: false,
+      },
+      TZS: {
+        code: 'TZS',
+        displayName: 'Tanzanian Shilling',
+        symbol: 'TSh',
+        decimals: 0,
+        enabled: false,
+      },
+      RWF: {
+        code: 'RWF',
+        displayName: 'Rwandan Franc',
+        symbol: 'FRw',
+        decimals: 0,
+        enabled: false,
+      },
+      ZAR: {
+        code: 'ZAR',
+        displayName: 'South African Rand',
+        symbol: 'R',
+        decimals: 2,
+        enabled: false,
+      },
+      USD: {
+        code: 'USD',
+        displayName: 'US Dollar',
+        symbol: '$',
+        decimals: 2,
+        enabled: false,
       },
     },
     networks: {
@@ -349,6 +578,9 @@ export default (): AppConfig => ({
         // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
         networkFeeCrypto: {
           USDT: '1',
+          // Flat TRX send fee (native TRC transfer; cheap bandwidth/energy).
+          // Admin-tunable like the USDT fee.
+          TRX: '1',
         },
         // Blockradar AML lookup blockchain param for TRON addresses.
         // See BlockradarAmlScreener (compliance/infrastructure).
@@ -368,12 +600,18 @@ export default (): AppConfig => ({
       'crypto.sell': true,
       'crypto.send': true,
       'crypto.receive': true,
-      'crypto.swap': false, // Deferred — no DEX integration at launch.
+      // Enabled: BlockradarSwapProvider (SWAP_MOCK_MODE=true → MockSwapProvider,
+      // SWAP_MOCK_MODE=false → real Blockradar). Requires ≥2 enabled assets in the
+      // catalog (USDT + TRX at launch). Engine gates on KYC + limits + sanctions
+      // before calling the provider (root CLAUDE.md §3.1 / §3.3).
+      'crypto.swap': true,
     },
-    // Validity window for send quotes (30 seconds — same as buy/sell).
+    // Validity window for send quotes (300s / 5 min — same as buy/sell).
+    // A human needs time to read the itemized confirmation and enter a PIN;
+    // 30s was too short to complete the flow. Matches the directive TTL (300s).
     // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
     // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
-    sendQuoteExpiresInSec: 30,
+    sendQuoteExpiresInSec: 300,
   },
   buy: {
     // 50 bps = 0.5% allowed drift. Admin-tunable later (DB-admin AppSetting layer).
@@ -383,20 +621,43 @@ export default (): AppConfig => ({
     // 50 bps = 0.5% allowed drift. Admin-tunable later (DB-admin AppSetting layer).
     maxDriftBps: 50,
   },
+  swap: {
+    // 50 bps = 0.5% allowed drift on the re-quote at execute time.
+    // Admin-tunable later (DB-admin AppSetting layer, root §7).
+    maxDriftBps: 50,
+    // 100 bps = 1% platform spread folded into the displayed rate (never a line item).
+    // Admin-tunable later (DB-admin AppSetting layer, root §7).
+    spreadBps: 100,
+  },
   compliance: {
-    // FATF Travel Rule / CBN circular threshold per fiat code.
+    // FATF Travel Rule threshold per fiat code, in major units.
     // Above this fiat-equivalent value the send proposal sets requiresTravelRule:true.
     // Full TravelRuleData capture happens at execution (Task N3b).
+    // Non-live currencies have thresholds defined here so they are ready when enabled;
+    // they are never reached in practice while the currency has enabled:false in catalog.
     // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
     // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
-    travelRuleThresholds: { NGN: 1_000_000 },
+    travelRuleThresholds: {
+      NGN: 1_000_000, // CBN circular: ₦1,000,000
+      // Non-live: placeholders aligned to FATF Travel Rule equivalents (~USD 1,000).
+      // Update with local regulator thresholds before enabling each currency.
+      GHS: 15_000, // ~GH₵15,000 ≈ USD 1,000 (indicative)
+      KES: 130_000, // ~KSh130,000 ≈ USD 1,000 (indicative)
+      UGX: 3_700_000, // ~USh3,700,000 ≈ USD 1,000 (indicative)
+      TZS: 2_600_000, // ~TSh2,600,000 ≈ USD 1,000 (indicative)
+      RWF: 1_300_000, // ~FRw1,300,000 ≈ USD 1,000 (indicative)
+      ZAR: 18_000, // ~R18,000 ≈ USD 1,000 (indicative)
+      USD: 1_000, // Standard FATF threshold
+    },
     // Empty by default — no addresses flagged. Populate in config to test the
     // blocked path with MockSanctionsScreener (see mock-sanctions.screener.ts).
     sanctionsDenylist: [] as string[],
   },
   pricing: {
     processingFeeBps: 100,
-    expiresInSec: 30,
+    // Buy/sell quote validity (300s / 5 min). A human needs time to read the
+    // confirmation and enter a PIN; 30s was too short to complete the flow.
+    expiresInSec: 300,
     assets: {
       // buySpreadBps=150 matches the old global spreadBps so existing BUY quotes are unchanged.
       // sellSpreadBps is independently tunable — set to 150 as the conservative default.
@@ -411,6 +672,17 @@ export default (): AppConfig => ({
         buySpreadBps: 150,
         sellSpreadBps: 150,
         cryptoDecimals: 8,
+      },
+      // TRX: fiat-tradeable (buy/sell against NGN) in addition to swap + wallet
+      // valuation. Multi-asset from the start — TRX is a first-class tradeable
+      // asset, not swap-only. The spread is the platform margin folded into the
+      // displayed rate (NEVER surfaced as a line item, CLAUDE.md §3.1).
+      TRX: {
+        baseRates: { NGN: 520 },
+        buySpreadBps: 150,
+        sellSpreadBps: 150,
+        cryptoDecimals: 6,
+        fiatTradeable: true,
       },
     },
   },
@@ -455,6 +727,21 @@ export default (): AppConfig => ({
       // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
       ttlSeconds: 900,
     },
+    jwt: {
+      // 1-hour access token; 30-day refresh. Admin-tunable later (DB-admin layer, §7).
+      accessTtlSeconds: 60 * 60,
+      refreshTtlSeconds: 30 * 24 * 60 * 60,
+    },
+    otp: {
+      // 5-minute OTP, 6 digits, 5 attempts. Admin-tunable later (§7).
+      ttlSeconds: 5 * 60,
+      length: 6,
+      maxAttempts: 5,
+    },
+    emailToken: {
+      // 24-hour email-verification link. Admin-tunable later (§7).
+      ttlSeconds: 24 * 60 * 60,
+    },
   },
   beneficiary: {
     // 24-hour cooling-off for new crypto-address beneficiaries (IDN-08).
@@ -474,4 +761,50 @@ export default (): AppConfig => ({
     // Process at most 20 rows per tick to bound settlement-engine load.
     batchSize: 20,
   },
+  statement: {
+    // 15-minute signed-link validity; ~1-year (400-day) max window with headroom so
+    // "last year" isn't trimmed; 10-row default page; 100-row hard page cap; 5000-row
+    // full-statement safety cap; WAT (UTC+1, no DST) day boundaries.
+    // Admin-tunable later (DB-admin layer, §7).
+    linkTtlSeconds: 900,
+    maxWindowDays: 400,
+    defaultPageSize: 10,
+    maxPageSize: 100,
+    statementMaxRows: 5000,
+    timezoneOffsetMinutes: 60,
+  },
+  media: {
+    voice: {
+      // 15 MB — reasonable ceiling for a voice note before transcription.
+      // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+      // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+      maxUploadBytes: 15_000_000,
+      // Accepted voice note MIME types. Task 9 (POST /chat/voice) validates against this list.
+      allowedMimeTypes: [
+        'audio/webm',
+        'audio/mp4',
+        'audio/mpeg',
+        'audio/ogg',
+        'audio/wav',
+      ],
+    },
+    whatsapp: {
+      // 25 MB — Meta's per-message media limit (audio/image/document/video).
+      // Enforced by the WhatsApp media client (Task 14) before download/processing.
+      // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
+      // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+      maxMediaBytes: 25_000_000,
+    },
+  },
 });
+
+/**
+ * Config factory (the @nestjs/config `load` entry). Builds the JSON-defaults
+ * layer and runs the boot-time cross-validation (#25) so a misconfigured
+ * enabled-fiat fails startup rather than producing opaque 500s at runtime.
+ */
+export default (): AppConfig => {
+  const cfg = buildConfig();
+  validateConfig(cfg);
+  return cfg;
+};

@@ -27,6 +27,10 @@ import { TransactionPrismaRepository } from './infrastructure/transaction.prisma
 import { SettlementOutboxPrismaRepository } from './infrastructure/settlement-outbox.prisma.repository';
 import { SettlementPrismaRepository } from './infrastructure/settlement.prisma.repository';
 import { LedgerPrismaRepository } from './infrastructure/ledger.prisma.repository';
+import { TransactionHistoryService } from './application/transaction-history.service';
+import { StatementTokenService } from './application/statement-token.service';
+import { STATEMENT_GENERATOR } from './application/ports/statement-generator.port';
+import { PdfStatementGenerator } from './infrastructure/pdf-statement.generator';
 
 /**
  * Transactions feature module. Wires the buy-proposal, directive, and execution
@@ -74,12 +78,20 @@ import { LedgerPrismaRepository } from './infrastructure/ledger.prisma.repositor
     },
     { provide: LEDGER_REPOSITORY, useClass: LedgerPrismaRepository },
     { provide: CLOCK, useClass: SystemClock },
+    TransactionHistoryService,
+    StatementTokenService,
+    { provide: STATEMENT_GENERATOR, useClass: PdfStatementGenerator },
   ],
   exports: [
     ProposalService,
     DirectiveService,
     ExecutionService,
     PROPOSAL_REPOSITORY,
+    TRANSACTION_REPOSITORY,
+    SETTLEMENT_REPOSITORY,
+    TransactionHistoryService,
+    StatementTokenService,
+    STATEMENT_GENERATOR,
   ],
 })
 export class TransactionsModule {}

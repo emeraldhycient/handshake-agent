@@ -1,0 +1,126 @@
+/**
+ * Chat API client — calls POST /chat/messages to send a user message to the
+ * live agent and receive a structured outcome.
+ *
+ * Parses the request body through the contracts Zod schema before sending,
+ * and parses the response after (UX gate — server is the security gate per §3.3).
+ * The axios instance's request interceptor sets Idempotency-Key automatically
+ * on every non-GET request.
+ */
+import {
+  ChatMessageRequestSchema,
+  WebChatResponseSchema,
+  AuthorizeProposalResponseSchema,
+  ExecuteProposalRequestSchema,
+  ExecuteProposalResponseSchema,
+  TransactionStatusResponseSchema,
+  ChatHistoryResponseSchema,
+  VoiceChatResponseSchema,
+} from "@handshake-agent/contracts"
+import type {
+  ChatMessageRequest,
+  WebChatResponse,
+  AuthorizeProposalResponse,
+  ExecuteProposalRequest,
+  ExecuteProposalResponse,
+  TransactionStatusResponse,
+  ChatHistoryResponse,
+  VoiceChatResponse,
+} from "@handshake-agent/contracts"
+import { api } from "./client"
+
+export async function sendChatMessage(
+  body: ChatMessageRequest
+): Promise<WebChatResponse> {
+  // Parse body through the schema (UX gate — server is the security gate per §3.3)
+  const validated = ChatMessageRequestSchema.parse(body)
+  const { data } = await api.post("/chat/messages", validated)
+  return WebChatResponseSchema.parse(data)
+}
+
+/**
+ * Authorize a proposal — returns a short-lived directiveId + nonce pair.
+ * Called immediately when the user taps "Confirm with PIN".
+ * The nonce is single-use and must never be logged.
+ */
+export async function authorizeProposal(
+  proposalId: string
+): Promise<AuthorizeProposalResponse> {
+  const { data } = await api.post(`/chat/proposals/${proposalId}/authorize`)
+  return AuthorizeProposalResponseSchema.parse(data)
+}
+
+/**
+ * Execute a proposal — submits the PIN + directive credentials.
+ * idempotencyKey is STABLE per proposal (= proposalId) so every retry of the
+ * same proposal carries the same key (I8). The server is authoritative: it
+ * derives the same key from proposalId and never trusts this value, so a
+ * retried confirm is deduped instead of double-executing.
+ *
+ * PIN travels only over TLS; never log the body.
+ */
+export async function executeProposal(
+  proposalId: string,
+  body: ExecuteProposalRequest
+): Promise<ExecuteProposalResponse> {
+  const validated = ExecuteProposalRequestSchema.parse(body)
+  const { data } = await api.post(
+    `/chat/proposals/${proposalId}/execute`,
+    validated
+  )
+  return ExecuteProposalResponseSchema.parse(data)
+}
+
+/**
+ * Poll transaction status — used after execute returns status:"settling"
+ * to drive the TanStack Query refetchInterval until status === "completed".
+ */
+export async function getTransaction(
+  transactionId: string
+): Promise<TransactionStatusResponse> {
+  const { data } = await api.get(`/transactions/${transactionId}`)
+  return TransactionStatusResponseSchema.parse(data)
+}
+
+/**
+ * Fetch the full detail for a single transaction by id.
+ * Used by the TransactionDetailModal — called once on open, not polled.
+ * Re-uses the same endpoint as getTransaction; kept as a named alias so
+ * callers can distinguish polling vs. one-shot detail intent.
+ */
+export async function getTransactionDetail(
+  transactionId: string
+): Promise<TransactionStatusResponse> {
+  const { data } = await api.get(`/transactions/${transactionId}`)
+  return TransactionStatusResponseSchema.parse(data)
+}
+
+/**
+ * Fetch the authenticated user's conversation history (oldest→newest), used to
+ * rehydrate the chat thread on reload. `before` is a messageId cursor for the
+ * previous (older) page. Response is parsed through the contracts schema.
+ */
+export async function fetchChatHistory(params?: {
+  before?: string
+  limit?: number
+}): Promise<ChatHistoryResponse> {
+  const { data } = await api.get("/chat/messages", { params })
+  return ChatHistoryResponseSchema.parse(data)
+}
+
+/**
+ * Uploads a recorded voice note to POST /chat/voice. Lets axios set the
+ * multipart boundary (do not hand-set Content-Type). Response parsed via schema.
+ */
+export async function sendVoiceNote(blob: Blob): Promise<VoiceChatResponse> {
+  const form = new FormData()
+  // Filename extension hints the server mime; the Blob's type is authoritative.
+  const ext = blob.type.includes("mp4")
+    ? "mp4"
+    : blob.type.includes("ogg")
+      ? "ogg"
+      : "webm"
+  form.append("audio", blob, `voice-note.${ext}`)
+  const { data } = await api.post("/chat/voice", form)
+  return VoiceChatResponseSchema.parse(data)
+}

@@ -81,6 +81,9 @@ describe('QuotesService.quoteBuy', () => {
   it('builds an itemized buy quote using the buy spread from the rate provider', async () => {
     const rateProvider: IRateProvider = {
       getRate: jest.fn().mockResolvedValue(RATE),
+      getValuationRate: jest
+        .fn()
+        .mockResolvedValue({ baseRate: RATE.baseRate }),
     };
     const service = new QuotesService(rateProvider, fixedClock);
 
@@ -116,6 +119,9 @@ describe('QuotesService.quoteSell', () => {
     // netFiat = floor(156800 - 1568, 2) = 155232
     const rateProvider: IRateProvider = {
       getRate: jest.fn().mockResolvedValue(RATE),
+      getValuationRate: jest
+        .fn()
+        .mockResolvedValue({ baseRate: RATE.baseRate }),
     };
     const service = new QuotesService(rateProvider, fixedClock);
 
@@ -145,6 +151,9 @@ describe('QuotesService.quoteSell', () => {
   it('sell quote reports the sell spread (200 bps), not the buy spread (150 bps)', async () => {
     const rateProvider: IRateProvider = {
       getRate: jest.fn().mockResolvedValue(RATE),
+      getValuationRate: jest
+        .fn()
+        .mockResolvedValue({ baseRate: RATE.baseRate }),
     };
     const service = new QuotesService(rateProvider, fixedClock);
 
@@ -162,6 +171,9 @@ describe('QuotesService.quoteSell', () => {
   it('output parses against QuoteSellOutputSchema', async () => {
     const rateProvider: IRateProvider = {
       getRate: jest.fn().mockResolvedValue(RATE),
+      getValuationRate: jest
+        .fn()
+        .mockResolvedValue({ baseRate: RATE.baseRate }),
     };
     const service = new QuotesService(rateProvider, fixedClock);
 
@@ -184,6 +196,9 @@ describe('QuotesService.quoteSend', () => {
   // We pass a dummy rateProvider so the DI token is satisfied.
   const rateProvider: IRateProvider = {
     getRate: jest.fn().mockRejectedValue(new Error('should not be called')),
+    getValuationRate: jest
+      .fn()
+      .mockRejectedValue(new Error('should not be called')),
   };
 
   function makeService(): QuotesService {

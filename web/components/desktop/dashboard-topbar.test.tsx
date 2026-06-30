@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { DashboardTopbar } from "./dashboard-topbar"
 import { gateway } from "@/lib/api/gateway"
+import type { MeResponse } from "@handshake-agent/contracts/auth"
+import { defaultAuthStore } from "@/lib/store/auth-store"
 import type { AppNotification, SearchResult } from "@/lib/schemas"
 
 function makeWrapper() {
@@ -19,12 +21,41 @@ function makeWrapper() {
 describe("DashboardTopbar", () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it("renders the greeting", () => {
+  it("renders a time-of-day greeting without a hardcoded name when no user is loaded", () => {
     render(
       <DashboardTopbar onSearchSelect={() => {}} onQuickAction={() => {}} />,
       { wrapper: makeWrapper() }
     )
-    expect(screen.getByText(/good afternoon, amara/i)).toBeInTheDocument()
+    // Matches "Good morning", "Good afternoon", or "Good evening" — no name appended.
+    expect(
+      screen.getByText(/^good (morning|afternoon|evening)$/i)
+    ).toBeInTheDocument()
+  })
+
+  it("renders greeting with first name when the auth store has a user with a name", () => {
+    const meFixture: MeResponse = {
+      userId: "11111111-1111-1111-1111-111111111111",
+      email: "amara@example.com",
+      kycStatus: "verified",
+      kycTier: "tier_1",
+      hasPin: true,
+      firstName: "Amara",
+      lastName: "Okeke",
+    }
+    // Populate the auth store's user directly — this is how the store is set
+    // after login (setSession) and is the source the topbar reads from.
+    defaultAuthStore.getState().setUser(meFixture)
+
+    render(
+      <DashboardTopbar onSearchSelect={() => {}} onQuickAction={() => {}} />,
+      { wrapper: makeWrapper() }
+    )
+    expect(
+      screen.getByText(/^good (morning|afternoon|evening), amara okeke$/i)
+    ).toBeInTheDocument()
+
+    // Clean up store state to avoid polluting other tests.
+    defaultAuthStore.getState().clear()
   })
 
   it("typing in search filters to a matching result", async () => {

@@ -145,6 +145,7 @@ const fakeAssetRegistry: AssetRegistry = {
   ),
   isAssetEnabled: jest.fn(() => true),
   isFiatEnabled: jest.fn(() => true),
+  isCurrencyLive: jest.fn((code: string) => code === 'NGN'),
   isNetworkEnabled: jest.fn(() => true),
   isCapabilityEnabled: jest.fn(() => true),
   requireCapability: jest.fn(),
@@ -212,6 +213,23 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       listForUser: jest.fn().mockResolvedValue([]),
     } as unknown as import('../src/modules/beneficiaries/application/beneficiary.service').BeneficiaryService;
 
+    const fakeHistoryService = {
+      query: jest.fn().mockResolvedValue({
+        window: { from: 'F', to: 'T', label: 'All' },
+        items: [],
+        totalCount: 0,
+        truncated: false,
+        downloadUrl:
+          'https://app.example.com/transactions/statement/download?token=x',
+      }),
+    } as unknown as import('../src/modules/transactions/application/transaction-history.service').TransactionHistoryService;
+    const fakeBalanceService = {
+      getBalances: jest.fn().mockResolvedValue({
+        fiatCurrency: 'NGN',
+        balances: [],
+      }),
+    } as unknown as import('../src/modules/balances/application/balance.service').BalanceService;
+
     svc = new ConversationService(
       identityService,
       fakeAgentPort,
@@ -227,6 +245,8 @@ describe('ConversationService integration (Testcontainers Postgres)', () => {
       fakeAssetRegistry,
       fakeHandoffTokenService,
       fakeBeneficiaryService,
+      fakeHistoryService,
+      fakeBalanceService,
     );
 
     // Seed a Tier-1 verified User + ChannelIdentity

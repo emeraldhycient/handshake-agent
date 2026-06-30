@@ -46,8 +46,12 @@ export interface AddBankAccountInput {
   userId: string;
   accountNumber: string;
   bankCode: string;
-  /** Full account holder name as returned by the bank. */
-  accountName: string;
+  /**
+   * Caller-supplied account holder name. Optional and IGNORED — the resolved
+   * name from the name-enquiry port is what gets persisted (Fix E). Kept for
+   * call sites (e.g. the WhatsApp Flow) that already pass it.
+   */
+  accountName?: string;
   /** User-supplied display label. */
   label: string;
 }

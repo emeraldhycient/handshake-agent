@@ -61,6 +61,7 @@ import { WalletService } from '../src/modules/wallets/application/wallet.service
 import { BeneficiaryService } from '../src/modules/beneficiaries/application/beneficiary.service';
 import { ConfigRateProvider } from '../src/modules/quotes/infrastructure/config-rate.provider';
 import { AssetRegistry } from '../src/core/catalog/asset-registry';
+import { seedRegistryAssets } from './helpers/seed-registry-assets';
 
 // Types
 import type { PrismaService } from '../src/core/prisma/prisma.service';
@@ -169,6 +170,17 @@ function makeFakeWalletProvider(
         ? { onChainTxHash }
         : {}),
     }),
+    listWalletAssets: jest.fn().mockResolvedValue([
+      {
+        assetId: 'e2e-usdt-tron-asset-id',
+        symbol: 'USDT',
+        name: 'Tether USD',
+        network: 'TRON',
+        contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+        decimals: 6,
+        isMainnet: false,
+      },
+    ]),
   };
 }
 
@@ -217,6 +229,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
     const config = new StubConfigService() as never;
     const clock = { now: () => new Date() };
     const assetRegistry = new AssetRegistry(config);
+    seedRegistryAssets(assetRegistry);
 
     // Repos
     const proposalRepo = new ProposalPrismaRepository(ps);
@@ -276,6 +289,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
           Promise.resolve({ passed: true, complianceEventId: '' }),
       } as never,
       config,
+      undefined as never, // swapProvider: not needed on send/sell path in this suite
     );
 
     const fakePaymentProvider = makeFakePaymentProvider('successful');
@@ -307,6 +321,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
         }),
       } as never,
       sessionService, // required for executeSend (Fix G §3.4)
+      undefined, // swapProvider: not needed on send/sell path in this suite
     );
 
     reconciler = new SettlementReconciliationService(

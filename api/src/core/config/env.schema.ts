@@ -64,6 +64,10 @@ export const envSchema = z.object({
     .default('https://api.flutterwave.com/v3'),
   // Dashboard "secret hash" — verifies collection/transfer webhooks (verif-hash equality, v3).
   FLUTTERWAVE_WEBHOOK_SECRET: z.string().optional().default(''),
+  // Optional SANDBOX scenario key (e.g. "scenario:successful"). When set, sent as
+  // the X-Scenario-Key header on collection requests so Flutterwave's sandbox
+  // simulates the pay-in and fires the webhook. MUST be empty in production.
+  FLUTTERWAVE_SCENARIO_KEY: z.string().optional().default(''),
 
   // --- Engine ---
   // HMAC-SHA256 key for DirectiveGrant signing (ADR-0005/0006). Required before the
@@ -74,6 +78,10 @@ export const envSchema = z.object({
   // settlement kernel throws ReceiptNotSignableError before inserting a receipt
   // (fail-closed — no unsigned receipt is ever written).
   RECEIPT_SIGNING_KEY: z.string().optional().default(''),
+  // HMAC-SHA256 key for signing statement download links. Empty is tolerated at
+  // boot but StatementTokenService.sign() throws StatementNotSignableError and the
+  // public download endpoint returns 503 (fail-closed — no unsigned link is issued).
+  STATEMENT_SIGNING_KEY: z.string().optional().default(''),
 
   // --- KYC (task K1) ---
   // When 'true', the MockKycProvider is active (the only adapter at launch).
@@ -86,6 +94,31 @@ export const envSchema = z.object({
   // enabled on the Blockradar plan and a valid BLOCKRADAR_API_KEY).
   SANCTIONS_MOCK_MODE: z.enum(['true', 'false']).default('true'),
 
+  // --- Payment provider (Flutterwave NGN pay-in / pay-out) ---
+  // When 'true' (default), MockPaymentProvider is active — deterministic fake
+  // virtual accounts / payouts, NO live Flutterwave calls (safe for local dev,
+  // tests, and CI without real keys). Set to 'false' to activate the real
+  // FlutterwaveProvider (requires a valid FLUTTERWAVE_SECRET_KEY). Mirrors the
+  // KYC_MOCK_MODE / SANCTIONS_MOCK_MODE pattern (TreasuryModule selects the
+  // adapter via factory).
+  PAYMENTS_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+
+  // --- Bank name-enquiry (BeneficiariesModule) ---
+  // When 'true' (default), MockNameEnquiry is active — deterministic fake
+  // resolved names, NO live Flutterwave calls (safe for local dev / tests and
+  // CI without real keys). Set to 'false' to activate FlutterwaveNameEnquiry
+  // (POST /accounts/resolve; requires a valid FLUTTERWAVE_SECRET_KEY).
+  // Mirrors PAYMENTS_MOCK_MODE / SANCTIONS_MOCK_MODE. BeneficiariesModule
+  // selects the adapter via factory (selectNameEnquiryProvider).
+  NAME_ENQUIRY_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+
+  // --- Wallet provider (Blockradar WaaS; USDT-on-TRON) ---
+  // When 'true' (default), MockWalletProvider is active — deterministic fake
+  // addresses / balances / withdrawals, NO live Blockradar calls. Set to 'false'
+  // to activate the real BlockradarProvider (requires a valid BLOCKRADAR_API_KEY
+  // + master wallet id). WalletsModule selects the adapter via factory.
+  WALLET_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+
   // --- Web App (K3 KYC web handoff) ---
   // Base URL for the web application. Used to build the KYC CTA URL:
   //   `${WEB_APP_BASE_URL}/kyc?t=<token>`
@@ -93,6 +126,13 @@ export const envSchema = z.object({
   // Coerce '' → undefined so an empty placeholder passes boot-time validation
   // (same pattern as ANTHROPIC_API_KEY above).
   WEB_APP_BASE_URL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().url().optional(),
+  ),
+  // Public base URL of THIS api (used to build absolute statement download links
+  // for both web and WhatsApp). Coerce '' → undefined; when unset the token
+  // service falls back to `http://localhost:${PORT}` (dev only).
+  PUBLIC_API_BASE_URL: z.preprocess(
     (v) => (v === '' ? undefined : v),
     z.string().url().optional(),
   ),
@@ -112,6 +152,46 @@ export const envSchema = z.object({
   // Swap seam: when the admin UI + proper admin-session auth is built, replace
   // AdminTokenGuard with a session/role guard — this env var can then be removed.
   ADMIN_API_TOKEN: z.string().optional().default(''),
+
+  // --- Swap provider (Blockradar crypto-to-crypto swaps) ---
+  // When 'true' (default), MockSwapProvider is active — deterministic fake quotes /
+  // execute responses, NO live Blockradar calls (safe for local dev, tests, and CI
+  // without real credentials). Set to 'false' to activate BlockradarSwapProvider
+  // (requires a valid BLOCKRADAR_API_KEY and at least 2 enabled assets in the
+  // catalog). Mirrors WALLET_MOCK_MODE / PAYMENTS_MOCK_MODE.
+  SWAP_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+
+  // --- Media (speech-to-text + document extraction) ---
+  // Mock adapters are the only active ones until real keys are provided (mirror KYC_MOCK_MODE).
+  TRANSCRIPTION_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+  TRANSCRIPTION_API_KEY: z.string().optional().default(''),
+  TRANSCRIPTION_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
+  TRANSCRIPTION_MODEL: z.string().min(1).default('whisper-1'),
+  MEDIA_EXTRACTION_MOCK_MODE: z.enum(['true', 'false']).default('true'),
+  // Vision extraction reuses ANTHROPIC_API_KEY; only the model id is separate.
+  MEDIA_EXTRACTION_MODEL: z.string().min(1).default('claude-opus-4-8'),
+
+  // --- Auth (web sessions) ---
+  // JWT_SECRET is a SECRET — empty disables token issuance (fail-closed in
+  // TokenService), mirroring ADMIN_API_TOKEN. TTLs live in the config JSON layer
+  // (configuration.ts auth.*), not here.
+  JWT_SECRET: z.string().optional().default(''),
+  AUTH_DEV_EXPOSE_OTP: z.enum(['true', 'false']).default('false'),
+
+  // --- Email delivery (Resend) ---
+  // Empty/absent → MockEmailProvider (log-only). Non-empty → ResendEmailProvider
+  // (real delivery). Coerce '' → undefined so an empty placeholder passes boot-time
+  // validation (same pattern as ANTHROPIC_API_KEY).
+  RESEND_API_KEY: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  // Sender address in "Name <addr>" or plain "addr" form. Falls back to a safe
+  // default when unset; provide a verified domain in production.
+  EMAIL_FROM: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(1).optional(),
+  ),
 });
 
 export type Env = z.infer<typeof envSchema>;

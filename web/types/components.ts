@@ -12,7 +12,12 @@ import type {
   DepositView,
   TicketsView,
   TicketOption,
+  TransactionsView,
   ReceiptView,
+  PayInView,
+  SettlingView,
+  SwapView,
+  NeedsBeneficiaryView,
   ChatMessage,
   ChatAction,
   ConfirmPayload,
@@ -122,6 +127,12 @@ export type TicketsCardProps = TicketsView & {
   className?: string
 }
 
+/** Transaction-history list card. */
+export type TransactionsCardProps = TransactionsView & {
+  density: Density
+  className?: string
+}
+
 /** 11.5 */
 export type ReceiptCardProps = ReceiptView & {
   density: Density
@@ -137,6 +148,8 @@ export interface ChatMessageViewProps {
   density: Density
   onConfirm: (m: ChatMessage) => void
   onSelectTicket: (opt: TicketOption) => void
+  /** Resolve a needs_beneficiary card — re-asks the sell/send with the new id. */
+  onResolveBeneficiary: (beneficiaryId: string) => void
 }
 
 /** 12.3 */
@@ -147,6 +160,12 @@ export interface ChatComposerProps {
   onSubmit: () => void
   onChip: (a: ChatAction) => void
   density: Density
+  recording: boolean
+  recordSeconds: number
+  canRecord: boolean
+  onRecordStart: () => void
+  onRecordStop: () => void
+  onRecordCancel: () => void
 }
 
 /** 12.4 */
@@ -156,6 +175,7 @@ export interface ChatThreadProps {
   density: Density
   onConfirm: (m: ChatMessage) => void
   onSelectTicket: (opt: TicketOption) => void
+  onResolveBeneficiary: (beneficiaryId: string) => void
 }
 
 // ─── Phase 13 overlay components ──────────────────────────────────────────────
@@ -165,8 +185,13 @@ export interface ConfirmSheetProps {
   open: boolean
   payload: ConfirmPayload | null
   density: Density
-  onConfirm: () => void
+  /** May be async — triggers authorizeProposal in the authenticated flow. */
+  onConfirm: () => void | Promise<void>
   onCancel: () => void
+  /** Error message shown when authorize fails (wrong state, expired, etc.). */
+  error?: string | null
+  /** True while authorizeProposal is in flight — disables the CTA. */
+  authorizing?: boolean
 }
 
 /** 13.2 */
@@ -179,6 +204,39 @@ export interface PinPadProps {
   onBack: () => void
   onFaceId: () => void
   onCancel: () => void
+  /** Error message shown below the dots after a wrong PIN / expired directive. */
+  error?: string | null
+  /** Alias for `error` — preferred when passed from the store's `pinError` field. */
+  errorText?: string
+}
+
+// ─── Pay-in card (Phase 4) ────────────────────────────────────────────────────
+
+/** 11.6 — Bank transfer card shown while a buy order is settling */
+export type PayInCardProps = PayInView & {
+  density: Density
+  className?: string
+}
+
+/** Outbound-settlement card shown while a sell payout / send withdrawal is in flight */
+export type SettlingCardProps = SettlingView & {
+  density: Density
+  className?: string
+}
+
+/** Swap confirmation card for a live swap proposal from the engine. */
+export type SwapCardProps = SwapView & {
+  density: Density
+  onConfirm: () => void
+  className?: string
+}
+
+/** Inline add/select-beneficiary card shown for a needs_beneficiary outcome */
+export type NeedsBeneficiaryCardProps = NeedsBeneficiaryView & {
+  density: Density
+  /** Called with the chosen/added beneficiary id once the user resolves it. */
+  onResolve: (beneficiaryId: string) => void
+  className?: string
 }
 
 /** 13.3 */
@@ -256,6 +314,28 @@ export interface FocusTrapProps {
 export interface KycFormProps {
   /** Single-use handoff token from the URL query param `t`. */
   token: string
+}
+
+// ─── Auth forms ──────────────────────────────────────────────────────────────
+
+/** Props for SignupForm — no required props; self-contained. */
+export interface SignupFormProps {
+  className?: string
+}
+
+/** Props for VerifyEmailForm — token comes from the URL query param. */
+export interface VerifyEmailFormProps {
+  token: string
+}
+
+/** Props for LoginForm — no required props; self-contained. */
+export interface LoginFormProps {
+  className?: string
+}
+
+/** Props for RequireVerified — wraps children that require verified KYC status. */
+export interface RequireVerifiedProps {
+  children: React.ReactNode
 }
 
 // ─── Phase 15 mobile components ───────────────────────────────────────────────

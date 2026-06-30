@@ -29,11 +29,13 @@ describe("IntentSchema union", () => {
     ).toBe(true)
   })
   it("accepts swap", () => {
+    // SwapIntentSchema uses toAsset (SupportedAssetSchema), not toCurrency —
+    // fiat-to-crypto swaps are out of scope at launch (CLAUDE.md §3.6).
     expect(
       IntentSchema.safeParse({
         action: "swap",
         fromAsset: "USDT",
-        toCurrency: "NGN",
+        toAsset: "BTC",
         amount: "10",
       }).success
     ).toBe(true)

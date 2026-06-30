@@ -44,6 +44,9 @@ function makeWalletRepo(
 ): jest.Mocked<IWalletRepository> {
   return {
     findByUserNetwork: jest.fn().mockResolvedValue(existingWallet),
+    findByUser: jest
+      .fn()
+      .mockResolvedValue(existingWallet ? [existingWallet] : []),
     findByAddress: jest.fn(),
     create: jest.fn(),
   };

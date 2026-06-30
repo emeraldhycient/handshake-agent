@@ -11,6 +11,7 @@
  */
 export class InvalidAddressError extends Error {
   override readonly name = 'InvalidAddressError';
+  readonly code = 'BENEFICIARY_INVALID_ADDRESS' as const;
 
   constructor(network: string, address: string) {
     super(
@@ -26,6 +27,7 @@ export class InvalidAddressError extends Error {
  */
 export class BeneficiaryNotFoundError extends Error {
   override readonly name = 'BeneficiaryNotFoundError';
+  readonly code = 'BENEFICIARY_NOT_FOUND' as const;
 
   constructor(beneficiaryId: string) {
     super(`Beneficiary "${beneficiaryId}" not found.`);
@@ -38,6 +40,7 @@ export class BeneficiaryNotFoundError extends Error {
  */
 export class BeneficiaryWrongTypeError extends Error {
   override readonly name = 'BeneficiaryWrongTypeError';
+  readonly code = 'BENEFICIARY_WRONG_TYPE' as const;
 
   constructor(beneficiaryId: string, expected: string, actual: string) {
     super(
@@ -53,6 +56,7 @@ export class BeneficiaryWrongTypeError extends Error {
  */
 export class BeneficiaryCoolingOffError extends Error {
   override readonly name = 'BeneficiaryCoolingOffError';
+  readonly code = 'BENEFICIARY_COOLING_OFF' as const;
 
   constructor(beneficiaryId: string, lockedUntil: Date) {
     super(
@@ -69,6 +73,7 @@ export class BeneficiaryCoolingOffError extends Error {
  */
 export class NameEnquiryFailedError extends Error {
   override readonly name = 'NameEnquiryFailedError';
+  readonly code = 'BENEFICIARY_NAME_ENQUIRY_FAILED' as const;
 
   constructor(
     bankCode: string,

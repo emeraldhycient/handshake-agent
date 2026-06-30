@@ -4,6 +4,8 @@ import { useState, useMemo } from "react"
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useNotifications, useSearchCatalog } from "@/lib/query/hooks"
+import { useMe } from "@/lib/query/auth"
+import { useAuthStore } from "@/lib/store/auth-store"
 import type { DashboardTopbarProps } from "@/types/components"
 import type { SearchResult } from "@/lib/schemas"
 
@@ -11,6 +13,27 @@ import type { SearchResult } from "@/lib/schemas"
 
 /** Stable keys for the notifications loading skeleton (fixed placeholder rows). */
 const NOTIF_SKELETON_ROWS = ["a", "b", "c"] as const
+
+/** Time-of-day greeting prefix. */
+function greetingPrefix(): string {
+  const h = new Date().getHours()
+  if (h < 12) return "Good morning"
+  if (h < 17) return "Good afternoon"
+  return "Good evening"
+}
+
+/**
+ * Build the greeting string.
+ * - If a name is known: "Good afternoon, Amara"
+ * - Otherwise: "Good afternoon" (no name — never hardcoded placeholder)
+ */
+function buildGreeting(
+  firstName: string | null | undefined,
+  lastName: string | null | undefined
+): string {
+  const name = [firstName, lastName].filter(Boolean).join(" ").trim()
+  return name ? `${greetingPrefix()}, ${name}` : greetingPrefix()
+}
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -31,6 +54,13 @@ export function DashboardTopbar({
   onQuickAction,
   className,
 }: DashboardTopbarProps) {
+  // ── User name (for greeting) ────────────────────────────────────────────────
+  // Prefer the fresh /auth/me query; fall back to the store's in-memory user.
+  const { data: meData } = useMe()
+  const storeUser = useAuthStore((s) => s.user)
+  const user = meData ?? storeUser
+  const greeting = buildGreeting(user?.firstName, user?.lastName)
+
   // ── Search ──────────────────────────────────────────────────────────────────
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
@@ -91,9 +121,7 @@ export function DashboardTopbar({
     >
       {/* ── Greeting ──────────────────────────────────────────────────────── */}
       <div className="flex-1">
-        <h1 className="text-[17px] font-bold text-foreground">
-          Good afternoon, Amara
-        </h1>
+        <h1 className="text-[17px] font-bold text-foreground">{greeting}</h1>
       </div>
 
       {/* ── Search pill ───────────────────────────────────────────────────── */}

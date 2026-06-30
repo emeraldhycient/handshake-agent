@@ -1,9 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { z } from 'zod';
 // ESM-under-CJS: always use `import` for @langchain packages (tsc downlevels to require).
 // Never hand-write require() — see root CLAUDE.md §6.
 import { ChatAnthropic } from '@langchain/anthropic';
 import { IntentSchema, type Intent } from '@handshake-agent/contracts';
+
+// The Anthropic tool API requires a tool's `input_schema` to be a root JSON
+// object (`"type": "object"`). IntentSchema is a discriminated UNION, which
+// serialises to a root-level `anyOf` with no `type` — Anthropic rejects it
+// ("tools.0.custom.input_schema.type: Field required"). Wrapping the union in
+// an object gives the tool a valid root object schema; we unwrap `.intent`.
+const ExtractIntentSchema = z.object({ intent: IntentSchema });
 import type { LlmProvider } from '../core/ports/llm-provider.port';
 import type { Env } from '../../../core/config/env.schema';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
@@ -44,14 +52,16 @@ export class AnthropicLlmProvider implements LlmProvider {
   async extractIntent(userText: string): Promise<Intent> {
     const model = this.getOrCreateModel();
 
-    const structured = model.withStructuredOutput(IntentSchema, {
+    const structured = model.withStructuredOutput(ExtractIntentSchema, {
       name: 'extract_intent',
     });
 
-    return structured.invoke([
+    const result = (await structured.invoke([
       { role: 'system', content: this.buildSystemPrompt() },
       { role: 'user', content: userText },
-    ]) as Promise<Intent>;
+    ])) as { intent: Intent };
+
+    return result.intent;
   }
 
   /**
@@ -66,24 +76,34 @@ export class AnthropicLlmProvider implements LlmProvider {
   buildSystemPrompt(): string {
     const enabledAssets = this.assetRegistry.enabledCryptoAssets();
     const defaultFiat = this.assetRegistry.defaultFiat();
+    const liveFiats = this.assetRegistry.enabledFiats();
     const assetList = enabledAssets.map((s) => `"${s}"`).join(', ');
+    const liveFiatList = liveFiats.map((f) => `"${f}"`).join(', ');
 
-    return `You are a financial intent extractor for a crypto/ticket assistant serving Nigerian users.
+    return `You are a financial intent extractor for a crypto/ticket assistant.
 
 Given a user message, extract their intent and return it as a structured object matching one of the supported actions:
 - buy_crypto: user wants to buy cryptocurrency with fiat
 - send_crypto: user wants to send crypto to someone
 - receive_crypto: user wants to receive crypto / get their wallet address
-- swap: user wants to swap one crypto asset for another
+- swap: user wants to swap one crypto asset for another crypto asset (crypto-to-crypto only, no fiat). Extract fromAsset (the asset to swap out of), toAsset (the asset to receive), and amount (of fromAsset to swap). Both fromAsset and toAsset must be supported crypto assets.
 - buy_ticket: user wants to buy an event ticket
-- check_balance: user wants to check their wallet balance
+- check_balance: user wants to check their wallet balance. If they name a specific asset (e.g. "my USDT balance"), set "asset" to that symbol; if they ask for everything ("what's my balance", "show my assets"), omit "asset".
+- query_transactions: user wants to see their transaction history / past activity, or download a statement
 - none: intent is unclear — return a short clarification question in the "clarification" field
 
 Rules:
 1. Never guess a financial action if the intent is ambiguous — prefer "none" with a clarifying question.
-2. Amounts are strings (e.g. "5000" not 5000). Fiat currency defaults to "${defaultFiat}".
-3. Only ${assetList} are supported assets.
-4. Return exactly one intent matching the schema — no prose, no explanation.`;
+2. Amounts are strings (e.g. "5000" not 5000). Default fiat currency is "${defaultFiat}".
+3. Only ${assetList} are supported crypto assets.
+4. Return exactly one intent matching the schema — no prose, no explanation.
+5. For query_transactions you express the time range one of THREE ways — the SERVER computes the actual dates, you NEVER compute calendar dates yourself:
+   a. "period" — for the common named ranges: today, yesterday, this_week, last_week, this_month, last_month, all (e.g. "today", "last week", "this month").
+   b. "relativeAmount" (a positive integer) + "relativeUnit" (one of minute, hour, day, week, month, year) — for any "last N <unit>" or sub-day phrase that a named period can't express. Examples: "an hour ago" → {relativeAmount:1, relativeUnit:"hour"}; "last 24 hours" → {relativeAmount:24, relativeUnit:"hour"}; "the last 30 minutes" → {relativeAmount:30, relativeUnit:"minute"}; "last 2 weeks" → {relativeAmount:2, relativeUnit:"week"}; "past 6 months" → {relativeAmount:6, relativeUnit:"month"}; "last year" → {relativeAmount:1, relativeUnit:"year"}. Always emit BOTH relativeAmount and relativeUnit together.
+   c. "from"/"to" (ISO YYYY-MM-DD) — ONLY when the user states an explicit calendar range (e.g. "from June 1 to June 15").
+   Pick exactly one of (a)/(b)/(c). Prefer a named period when one fits; otherwise use the relative spec; use from/to only for explicit calendar dates.
+6. Set "txType" (buy/sell/send/receive) when the user names a direction (e.g. "what did I send"). Set "download": true only when the user asks for a file/statement/PDF.
+7. Fiat currency: extract whatever supported fiat currency the user names into the "fiatCurrency" field (do NOT refuse or reject it — the engine decides whether the currency is live). Currently live/settleable fiats are ${liveFiatList}; other supported fiats may be requested but will be handled by the engine.`;
   }
 
   // ---------------------------------------------------------------------------

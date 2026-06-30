@@ -2,7 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   ConversationMessageRecord,
+  ConversationTurnRecord,
   CreateMessageData,
+  FindWebHistoryOptions,
   IMessageRepository,
 } from '../application/ports/message.repository.port';
 
@@ -80,6 +82,37 @@ export class MessagePrismaRepository implements IMessageRepository {
       correlationId: row.correlationId,
       createdAt: row.createdAt,
     };
+  }
+
+  async findWebHistory(
+    conversationId: string,
+    { before, limit }: FindWebHistoryOptions,
+  ): Promise<ConversationTurnRecord[]> {
+    // Newest-first; ids are uuid v7 so id ordering == chronological. Fetch one
+    // extra row so the caller can detect whether an older page exists.
+    const rows = await this.prisma.conversationMessage.findMany({
+      where: {
+        conversationId,
+        channel: 'web',
+        ...(before ? { id: { lt: before } } : {}),
+      },
+      orderBy: { id: 'desc' },
+      take: limit + 1,
+      select: {
+        id: true,
+        text: true,
+        createdAt: true,
+        reply: { select: { text: true, outcome: true } },
+      },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      userText: row.text,
+      createdAt: row.createdAt,
+      reply: row.reply
+        ? { text: row.reply.text, outcome: row.reply.outcome ?? null }
+        : null,
+    }));
   }
 
   async updateStatus(
