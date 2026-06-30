@@ -19,9 +19,12 @@ import {
   AddCryptoAddressRequestSchema,
   type AddBankAccountRequest,
   type AddCryptoAddressRequest,
+  NIGERIAN_BANKS,
+  bankNameForCode,
 } from "@handshake-agent/contracts/beneficiaries"
 import { cn } from "@/lib/utils"
 import { Input } from "@/components/ui/input"
+import { NativeSelect } from "@/components/ui/native-select"
 import { Button } from "@/components/ui/button"
 import {
   useBeneficiaries,
@@ -94,7 +97,7 @@ export function NeedsBeneficiaryCard({
                   <span className="font-medium">{b.label}</span>
                   <span className="text-[12px] text-muted-foreground">
                     {isBank
-                      ? `${b.accountNumber ?? ""} · ${b.bankCode ?? ""}`
+                      ? `${b.accountNumber ?? ""} · ${b.bankCode ? (bankNameForCode(b.bankCode) ?? b.bankCode) : ""}`
                       : truncateMiddle(b.cryptoAddress ?? "")}
                   </span>
                 </button>
@@ -157,12 +160,24 @@ function AddBankForm({ onAdded }: { onAdded: (id: string) => void }) {
           {...register("accountNumber")}
         />
       </Field>
-      <Field label="Bank code" error={errors.bankCode?.message}>
-        <Input
-          placeholder="058"
-          aria-label="Bank code"
+      <Field label="Bank" error={errors.bankCode?.message}>
+        {/* Users don't know bank codes — pick a bank by name, submit its code.
+            Mirrors the WhatsApp Flow bank picker; list is the shared
+            NIGERIAN_BANKS contract. */}
+        <NativeSelect
+          aria-label="Bank"
+          defaultValue=""
           {...register("bankCode")}
-        />
+        >
+          <option value="" disabled>
+            Select your bank
+          </option>
+          {NIGERIAN_BANKS.map((b) => (
+            <option key={b.code} value={b.code}>
+              {b.name}
+            </option>
+          ))}
+        </NativeSelect>
       </Field>
       <Field label="Label" error={errors.label?.message}>
         <Input placeholder="My GTB" aria-label="Label" {...register("label")} />

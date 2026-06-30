@@ -96,7 +96,8 @@ describe("NeedsBeneficiaryCard", () => {
     )
 
     await userEvent.type(screen.getByLabelText("Account number"), "0123456789")
-    await userEvent.type(screen.getByLabelText("Bank code"), "058")
+    // Bank is now a dropdown (users don't know codes) — pick GTBank (code 058).
+    await userEvent.selectOptions(screen.getByLabelText("Bank"), "058")
     await userEvent.type(screen.getByLabelText("Label"), "My GTB")
     await userEvent.click(
       screen.getByRole("button", { name: /add bank account/i })
