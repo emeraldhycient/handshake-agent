@@ -366,7 +366,7 @@ describe('WhatsApp inbound image → beneficiary saved — e2e (AppModule, Testc
 
     const { PinService } = await import('../src/core/auth/pin.service');
     const pinService = moduleRef.get(PinService);
-    await pinService.setPin(userId, '123456');
+    await pinService.setPin(userId, '194837');
 
     await prisma.channelIdentity.create({
       data: {

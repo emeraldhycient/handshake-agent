@@ -10,8 +10,9 @@
  * visible focus, aria-label on the copy button).
  */
 import { useState } from "react"
-import { CheckIcon, CopyIcon } from "lucide-react"
+import { CheckIcon, CopyIcon, ExternalLinkIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { explorerTxUrl } from "@/lib/explorer"
 import {
   Dialog,
   DialogContent,
@@ -35,7 +36,9 @@ export interface TransactionDetailModalProps {
 
 function toneFor(status: string): StatusTone {
   if (status === "completed") return "success"
-  if (status === "failed" || status === "rolled_back") return "neutral"
+  // Terminal failures are the highest-signal state in a money app — danger-red,
+  // never neutral grey (scenario finding: ui-consistency-states).
+  if (status === "failed" || status === "rolled_back") return "danger"
   return "warn"
 }
 
@@ -107,6 +110,26 @@ function CopyButton({ value, label }: { value: string; label: string }) {
   )
 }
 
+// ─── ExplorerLink ─────────────────────────────────────────────────────────────
+
+/** Opens the on-chain transaction on the network's block explorer (new tab). */
+function ExplorerLink({ href }: { href: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label="View on explorer"
+      className={cn(
+        "ml-1 inline-flex h-5 w-5 flex-none items-center justify-center rounded transition-colors",
+        "text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+      )}
+    >
+      <ExternalLinkIcon className="h-3.5 w-3.5" aria-hidden="true" />
+    </a>
+  )
+}
+
 // ─── DetailRow ────────────────────────────────────────────────────────────────
 
 function DetailRow({
@@ -114,11 +137,14 @@ function DetailRow({
   value,
   mono = false,
   copyValue,
+  explorerHref,
 }: {
   label: string
   value: React.ReactNode
   mono?: boolean
   copyValue?: string
+  /** When present, an explorer link is rendered alongside the value. */
+  explorerHref?: string
 }) {
   return (
     <div className="flex items-start justify-between gap-3 py-[10px]">
@@ -130,6 +156,7 @@ function DetailRow({
         )}
       >
         {value}
+        {explorerHref !== undefined && <ExplorerLink href={explorerHref} />}
         {copyValue !== undefined && (
           <CopyButton value={copyValue} label={label} />
         )}
@@ -173,7 +200,7 @@ export function TransactionDetailModal({
         {/* ── Error ── */}
         {isError && !isLoading && (
           <div className="flex flex-col items-center gap-2 px-5 pt-4 pb-5 text-center">
-            <p className="text-danger text-sm font-semibold">
+            <p className="text-sm font-semibold text-danger">
               Could not load transaction
             </p>
             <p className="text-xs text-muted-foreground">
@@ -231,7 +258,8 @@ export function TransactionDetailModal({
                 />
               )}
 
-              {/* On-chain tx hash */}
+              {/* On-chain tx hash — clickable explorer link when the network
+                  has a known explorer; copy is always available. */}
               {data.txHash && (
                 <DetailRow
                   label="Tx hash"
@@ -239,6 +267,9 @@ export function TransactionDetailModal({
                     <span className="font-mono">{shortHash(data.txHash)}</span>
                   }
                   copyValue={data.txHash}
+                  explorerHref={
+                    explorerTxUrl(data.network ?? "", data.txHash) ?? undefined
+                  }
                 />
               )}
 
@@ -256,7 +287,8 @@ export function TransactionDetailModal({
                 />
               )}
 
-              {/* Bank payment details (buy) */}
+              {/* Bank payment details (buy). The provider ref is surfaced once,
+                  canonically, in the references group below. */}
               {data.payment && (
                 <>
                   <DetailRow label="Bank" value={data.payment.bankName} />
@@ -266,22 +298,34 @@ export function TransactionDetailModal({
                     mono
                     copyValue={data.payment.accountNumber}
                   />
-                  <DetailRow
-                    label="Reference"
-                    value={data.payment.providerRef}
-                    mono
-                    copyValue={data.payment.providerRef}
-                  />
                 </>
               )}
 
-              {/* Receipt number */}
+              {/* References — let the user track the transaction internally.
+                  Each is copyable and only shown when present. */}
               {data.receiptNumber && (
                 <DetailRow
-                  label="Receipt"
+                  label="Receipt number"
                   value={data.receiptNumber}
                   mono
                   copyValue={data.receiptNumber}
+                />
+              )}
+              {data.payment?.providerRef && (
+                <DetailRow
+                  label="Provider reference"
+                  value={data.payment.providerRef}
+                  mono
+                  copyValue={data.payment.providerRef}
+                />
+              )}
+              {data.id && (
+                <DetailRow
+                  label="Transaction ID"
+                  value={
+                    <span className="font-mono">{shortHash(data.id)}</span>
+                  }
+                  copyValue={data.id}
                 />
               )}
 

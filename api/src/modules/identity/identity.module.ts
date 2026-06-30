@@ -13,6 +13,7 @@ import { USER_LISTER } from '../wallets/application/ports/user-lister.port';
 import { IdentityService } from './application/identity.service';
 import { KycGateService } from './application/kyc-gate.service';
 import { KycService } from './application/kyc.service';
+import { PinSetupService } from './application/pin-setup.service';
 import { HandoffTokenService } from './application/handoff-token.service';
 import { IdentityPrismaRepository } from './infrastructure/identity.prisma.repository';
 import { VelocityPrismaRepository } from './infrastructure/velocity.prisma.repository';
@@ -57,6 +58,7 @@ import { ProfileController } from './presentation/profile.controller';
     IdentityService,
     KycGateService,
     KycService,
+    PinSetupService,
     HandoffTokenService,
     { provide: IDENTITY_REPOSITORY, useClass: IdentityPrismaRepository },
     { provide: VELOCITY_REPOSITORY, useClass: VelocityPrismaRepository },

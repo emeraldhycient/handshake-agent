@@ -81,7 +81,11 @@ describe("mapOutcomeToMessages", () => {
     })
   })
 
-  it("maps a receive outcome to a receive card with fallbacks", () => {
+  it("maps a receive outcome with no min/eta to EMPTY chip values (never fabricates)", () => {
+    // Finding #9: the backend does not yet populate minAmount/etaText, so the
+    // mapper must NOT invent "—" / "~30 min" (a fabricated, wrong-for-TRON ETA
+    // that disagrees with the wallet-page placeholder). Empty string → the card
+    // hides the chip rather than showing a made-up number.
     const outcome: AgentTurnOutcome = {
       kind: "receive",
       deposit: { asset: "USDT", network: "TRON", address: "TXabc" },
@@ -92,8 +96,26 @@ describe("mapOutcomeToMessages", () => {
       asset: "USDT",
       network: "TRON",
       address: "TXabc",
-      minDeposit: "—",
-      creditedEta: "~30 min",
+      minDeposit: "",
+      creditedEta: "",
+    })
+  })
+
+  it("maps a receive outcome carrying real min/eta through unchanged", () => {
+    const outcome: AgentTurnOutcome = {
+      kind: "receive",
+      deposit: {
+        asset: "USDT",
+        network: "TRON",
+        address: "TXabc",
+        minAmount: "10",
+        etaText: "~2 min",
+      },
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    expect(messages[0]).toMatchObject({
+      minDeposit: "10",
+      creditedEta: "~2 min",
     })
   })
 

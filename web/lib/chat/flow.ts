@@ -448,7 +448,11 @@ const CHIP_LABELS: Record<ChatAction, string> = {
   send: "Send 25 USDT",
   ticket: "Buy an event ticket",
   receive: "Show my deposit address",
-  swap: "Swap 10 USDT to naira",
+  // Finding #6: swap in this product is crypto-to-crypto only (SwapIntent has
+  // fromAsset/toAsset, both SupportedAsset; the engine rejects same-asset and
+  // has no fiat leg). The old "Swap 10 USDT to naira" was semantically a SELL,
+  // not a swap. Express a real crypto→crypto conversion.
+  swap: "Swap USDT to TRX",
 }
 
 export function startChips(): ChatAction[] {
@@ -457,4 +461,30 @@ export function startChips(): ChatAction[] {
 
 export function chipLabel(action: ChatAction): string {
   return CHIP_LABELS[action]
+}
+
+/**
+ * Amount-free open prompts for the LIVE agent path (finding #6).
+ *
+ * The quick-action chips/labels seed the offline MOCK flow with hardcoded
+ * amounts (e.g. "Buy ₦50,000 of USDT"). When an authenticated user taps a hero/
+ * quick action we must NOT present a fabricated amount as a real quote — instead
+ * send an open prompt so the agent asks for the amount/asset against the user's
+ * real balance, rate, and limits. Pages route authenticated quick-actions
+ * through `sendToAgent(surface, actionPrompt(action))`.
+ *
+ * Every prompt is amount-free and currency-symbol-free; swap is crypto→crypto.
+ */
+const ACTION_PROMPTS: Record<ChatAction, string> = {
+  buy: "I'd like to buy USDT",
+  sell: "I'd like to sell USDT",
+  send: "I'd like to send USDT",
+  swap: "I'd like to swap USDT to TRX",
+  balance: "What's my balance?",
+  receive: "Show my deposit address",
+  ticket: "I'd like to buy an event ticket",
+}
+
+export function actionPrompt(action: ChatAction): string {
+  return ACTION_PROMPTS[action]
 }

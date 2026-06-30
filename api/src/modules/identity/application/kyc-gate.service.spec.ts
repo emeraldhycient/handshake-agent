@@ -79,6 +79,9 @@ function makeIdentityRepo(
   kycProfile:
     | import('./ports/identity.repository.port').KycProfileRecord
     | null = null,
+  originator:
+    | import('./ports/identity.repository.port').OriginatorIdentityRecord
+    | null = null,
 ): IIdentityRepository {
   return {
     findActiveChannelIdentity: jest.fn(),
@@ -86,6 +89,7 @@ function makeIdentityRepo(
     loadUser: jest.fn().mockResolvedValue(user),
     loadContact: jest.fn(),
     findKycProfile: jest.fn().mockResolvedValue(kycProfile),
+    findOriginatorIdentity: jest.fn().mockResolvedValue(originator),
     createContactWithChannelIdentity: jest.fn(),
   };
 }
@@ -570,5 +574,78 @@ describe('KycGateService.getOriginatorName', () => {
       stubClock,
     );
     await expect(svc.getOriginatorName(USER_ID)).resolves.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// KycGateService.getOriginatorIdentity — payment-provider customer attribution
+// ---------------------------------------------------------------------------
+
+describe('KycGateService.getOriginatorIdentity', () => {
+  const USER_ID = 'user-id-1';
+  const defaultUser = makeUser();
+
+  function makeService(
+    originator:
+      | import('./ports/identity.repository.port').OriginatorIdentityRecord
+      | null,
+  ): KycGateService {
+    return new KycGateService(
+      makeIdentityRepo(defaultUser, null, originator),
+      { getDailyUsage: jest.fn() },
+      stubConfig,
+      stubClock,
+    );
+  }
+
+  it('returns the real KYC name and prefers the verified backup email', async () => {
+    const svc = makeService({
+      firstName: 'Emeka',
+      lastName: 'Adeyemi',
+      verifiedEmail: 'emeka.kyc@example.com',
+      email: 'emeka.login@example.com',
+    });
+    await expect(svc.getOriginatorIdentity(USER_ID)).resolves.toEqual({
+      firstName: 'Emeka',
+      lastName: 'Adeyemi',
+      email: 'emeka.kyc@example.com',
+    });
+  });
+
+  it('falls back to the login email when no verified backup email exists', async () => {
+    const svc = makeService({
+      firstName: 'Chisom',
+      lastName: 'Okafor',
+      verifiedEmail: null,
+      email: 'chisom.login@example.com',
+    });
+    await expect(svc.getOriginatorIdentity(USER_ID)).resolves.toEqual({
+      firstName: 'Chisom',
+      lastName: 'Okafor',
+      email: 'chisom.login@example.com',
+    });
+  });
+
+  it('resolves email to null when neither email column is set', async () => {
+    const svc = makeService({
+      firstName: 'Ada',
+      lastName: null,
+      verifiedEmail: null,
+      email: null,
+    });
+    await expect(svc.getOriginatorIdentity(USER_ID)).resolves.toEqual({
+      firstName: 'Ada',
+      lastName: null,
+      email: null,
+    });
+  });
+
+  it('returns an all-null projection when the user row does not exist', async () => {
+    const svc = makeService(null);
+    await expect(svc.getOriginatorIdentity(USER_ID)).resolves.toEqual({
+      firstName: null,
+      lastName: null,
+      email: null,
+    });
   });
 });

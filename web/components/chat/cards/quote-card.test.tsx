@@ -79,3 +79,22 @@ describe("QuoteCard", () => {
     expect(onConfirm).toHaveBeenCalledOnce()
   })
 })
+
+describe("QuoteCard — reassurance/expiry footer (finding: desktop drops it)", () => {
+  it("renders the 'No hidden fees' reassurance on desktop, not just mobile", () => {
+    render(<QuoteCard {...baseProps} density="desktop" lockSeconds={58} />)
+    expect(screen.getByText(/no hidden fees/i)).toBeInTheDocument()
+  })
+
+  it("renders the expiry-recovery hint on desktop when the quote is expired", () => {
+    render(<QuoteCard {...baseProps} density="desktop" lockSeconds={0} />)
+    expect(
+      screen.getByText("Request a new quote to continue")
+    ).toBeInTheDocument()
+  })
+
+  it("still renders the reassurance footer on mobile", () => {
+    render(<QuoteCard {...baseProps} density="mobile" lockSeconds={58} />)
+    expect(screen.getByText(/no hidden fees/i)).toBeInTheDocument()
+  })
+})

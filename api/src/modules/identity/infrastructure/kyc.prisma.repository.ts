@@ -7,9 +7,15 @@
  * The single public method, `completeVerificationAtomic`, wraps all writes in
  * a $transaction so the Contact → User upgrade is atomic. If ANY step fails the
  * entire transaction rolls back and no partial state is persisted.
+ *
+ * NFR-1: NIN/BVN are NDPR-regulated Nigerian national IDs. They are encrypted
+ * at rest with AES-256-GCM (see `core/crypto/field-encryption`) before they
+ * touch the DB and decrypted on read. The columns stay TEXT (the ciphertext is
+ * a string) — no schema migration.
  */
 
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 // Generated Prisma types and enums. Only infrastructure imports these.
 import {
@@ -18,6 +24,11 @@ import {
   UserStatus,
   VerificationStatus,
 } from '../../../../generated/prisma/client';
+import {
+  decryptField,
+  encryptField,
+  FieldEncryptionKeyError,
+} from '../../../core/crypto/field-encryption';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   CompleteVerificationAtomicInput,
@@ -29,7 +40,43 @@ import type {
 
 @Injectable()
 export class KycPrismaRepository implements IKycRepository {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
+
+  /**
+   * Encrypts a sensitive identifier (NIN/BVN) for at-rest storage, or returns
+   * `null` when absent. Fail-closed (NFR-1): if a value IS present but no
+   * KYC_ENCRYPTION_KEY is configured, throw rather than persist plaintext —
+   * the boot guard normally blocks startup, this is the in-repo backstop.
+   */
+  private encryptIdentifier(value: string | undefined): string | null {
+    if (value === undefined || value === null) return null;
+    const key = this.config.get<string>('KYC_ENCRYPTION_KEY') ?? '';
+    if (!key) {
+      throw new FieldEncryptionKeyError(
+        'KYC_ENCRYPTION_KEY is not set — refusing to store NIN/BVN in plaintext',
+      );
+    }
+    return encryptField(value, key);
+  }
+
+  /**
+   * Decrypts a stored NIN/BVN ciphertext, or returns `null` when absent.
+   * Throws if the key is missing (a present ciphertext cannot be read without
+   * it) or if the blob fails GCM authentication (tamper).
+   */
+  decryptIdentifier(blob: string | null): string | null {
+    if (blob === null || blob === '') return null;
+    const key = this.config.get<string>('KYC_ENCRYPTION_KEY') ?? '';
+    if (!key) {
+      throw new FieldEncryptionKeyError(
+        'KYC_ENCRYPTION_KEY is not set — cannot decrypt NIN/BVN',
+      );
+    }
+    return decryptField(blob, key);
+  }
 
   /**
    * Atomically:
@@ -38,8 +85,7 @@ export class KycPrismaRepository implements IKycRepository {
    *   3. Links the Contact (linkedUserId = user.id).
    *   4. Updates the ChannelIdentity (userId = user.id, verificationStatus=verified, verifiedAt=now).
    *
-   * NOTE: nin/bvn stored plain for the skeleton.
-   * TODO(NFR-1): encrypt nin/bvn at rest before production.
+   * NIN/BVN are AES-256-GCM-encrypted before they reach the DB (NFR-1).
    */
   async completeVerificationAtomic(
     input: CompleteVerificationAtomicInput,
@@ -56,6 +102,10 @@ export class KycPrismaRepository implements IKycRepository {
       now,
     } = input;
 
+    // Encrypt PII outside the transaction (fail-closed before any write).
+    const ninEnc = this.encryptIdentifier(nin);
+    const bvnEnc = this.encryptIdentifier(bvn);
+
     const result = await this.prisma.$transaction(async (tx) => {
       // 1. Create the User
       const user = await tx.user.create({
@@ -70,15 +120,14 @@ export class KycPrismaRepository implements IKycRepository {
       });
 
       // 2. Create the KycProfile (1:1 with User)
-      // NOTE: nin/bvn stored plain — TODO(NFR-1): encrypt at rest.
       await tx.kycProfile.create({
         data: {
           userId: user.id,
           status: KycStatus.verified,
           // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           tier: KycTier.tier_1,
-          nin: nin ?? null,
-          bvn: bvn ?? null,
+          nin: ninEnc,
+          bvn: bvnEnc,
           firstName,
           lastName,
           dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
@@ -114,8 +163,7 @@ export class KycPrismaRepository implements IKycRepository {
    *   1. Upserts the KycProfile (web users have no KycProfile yet at this point).
    *   2. Updates the User row: kycStatus=verified, kycTier=tier_1, status=active, pinHash.
    *
-   * NOTE: nin/bvn stored plain for the skeleton.
-   * TODO(NFR-1): encrypt nin/bvn at rest before production.
+   * NIN/BVN are AES-256-GCM-encrypted before they reach the DB (NFR-1).
    */
   async completeVerificationForUserAtomic(
     input: CompleteVerificationForUserAtomicInput,
@@ -123,9 +171,12 @@ export class KycPrismaRepository implements IKycRepository {
     const { userId, nin, bvn, firstName, lastName, dateOfBirth, pinHash, now } =
       input;
 
+    // Encrypt PII outside the transaction (fail-closed before any write).
+    const ninEnc = this.encryptIdentifier(nin);
+    const bvnEnc = this.encryptIdentifier(bvn);
+
     await this.prisma.$transaction(async (tx) => {
       // 1. Upsert the KycProfile (web users have no KycProfile yet)
-      // NOTE: nin/bvn stored plain — TODO(NFR-1): encrypt at rest.
       await tx.kycProfile.upsert({
         where: { userId },
         create: {
@@ -133,8 +184,8 @@ export class KycPrismaRepository implements IKycRepository {
           status: KycStatus.verified,
           // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           tier: KycTier.tier_1,
-          nin: nin ?? null,
-          bvn: bvn ?? null,
+          nin: ninEnc,
+          bvn: bvnEnc,
           firstName,
           lastName,
           dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
@@ -144,8 +195,8 @@ export class KycPrismaRepository implements IKycRepository {
           status: KycStatus.verified,
           // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           tier: KycTier.tier_1,
-          nin: nin ?? null,
-          bvn: bvn ?? null,
+          nin: ninEnc,
+          bvn: bvnEnc,
           firstName,
           lastName,
           dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,

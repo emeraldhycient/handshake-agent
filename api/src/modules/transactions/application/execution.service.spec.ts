@@ -24,7 +24,10 @@ import type {
 import type { Clock } from '../../../core/common/clock';
 import type { PinService } from '../../../core/auth/pin.service';
 import type { SessionService } from '../../../core/auth/session.service';
-import type { KycGateService } from '../../identity/application/kyc-gate.service';
+import type {
+  KycGateService,
+  OriginatorIdentity,
+} from '../../identity/application/kyc-gate.service';
 import type { QuotesService } from '../../quotes/application/quotes.service';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
 import type { WalletService } from '../../wallets/application/wallet.service';
@@ -281,7 +284,10 @@ function makeKycGate(
   throws?: Error,
   originatorName: string | null = null,
 ): jest.Mocked<
-  Pick<KycGateService, 'assertCanTransact' | 'getOriginatorName'>
+  Pick<
+    KycGateService,
+    'assertCanTransact' | 'getOriginatorName' | 'getOriginatorIdentity'
+  >
 > {
   const svc = {
     // Fix-C: fiatAmount is now a string (exact NGN decimal).
@@ -297,6 +303,7 @@ function makeKycGate(
       ]
     >(),
     getOriginatorName: jest.fn<Promise<string | null>, [string]>(),
+    getOriginatorIdentity: jest.fn<Promise<OriginatorIdentity>, [string]>(),
   };
   if (throws) {
     svc.assertCanTransact.mockRejectedValue(throws);
@@ -304,6 +311,12 @@ function makeKycGate(
     svc.assertCanTransact.mockResolvedValue(undefined);
   }
   svc.getOriginatorName.mockResolvedValue(originatorName);
+  // Default: no captured name/email → executeBuy substitutes safe placeholders.
+  svc.getOriginatorIdentity.mockResolvedValue({
+    firstName: null,
+    lastName: null,
+    email: null,
+  });
   return svc;
 }
 
@@ -617,6 +630,54 @@ describe('ExecutionService.executeBuy', () => {
         transactionId: TXN_ID,
         settlementType: 'processor_collection',
         status: 'pending',
+      }),
+    );
+  });
+
+  // ── Customer attribution on the collection (real KYC identity) ────────────
+
+  it('threads the real KYC firstName/lastName/email into createCollection.customer', async () => {
+    const kycGate = makeKycGate();
+    kycGate.getOriginatorIdentity.mockResolvedValue({
+      firstName: 'Adaeze',
+      lastName: 'Okonkwo',
+      email: 'adaeze@example.com',
+    });
+    const paymentProvider = makePaymentProvider();
+
+    const svc = buildService({ kycGate, paymentProvider });
+    await svc.executeBuy(BASE_INPUT);
+
+    // Originator identity is resolved for the transacting user.
+    expect(kycGate.getOriginatorIdentity).toHaveBeenCalledWith(USER_ID);
+
+    // The real KYC name + verified email reach the payment provider — not the
+    // "Handshake User" / synthetic-email placeholders.
+    expect(paymentProvider.createCollection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customer: {
+          firstname: 'Adaeze',
+          lastname: 'Okonkwo',
+          email: 'adaeze@example.com',
+        },
+      }),
+    );
+  });
+
+  it('falls back to safe placeholders when the KYC name/email are null', async () => {
+    // makeKycGate defaults getOriginatorIdentity to all-null.
+    const paymentProvider = makePaymentProvider();
+
+    const svc = buildService({ paymentProvider });
+    await svc.executeBuy(BASE_INPUT);
+
+    expect(paymentProvider.createCollection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customer: {
+          firstname: 'Handshake',
+          lastname: 'User',
+          email: `user+${USER_ID}@handshake.internal`,
+        },
       }),
     );
   });
@@ -3931,7 +3992,12 @@ const STUB_SWAP_PROPOSAL: ProposalRecord = {
     toAsset: 'TRX',
     fromAmount: '40',
     toAmount: '62500',
-    rate: '1562.5',
+    // Stored rate is the SPREAD-FOLDED effective rate proposeSwap persists
+    // (provider raw 1562.5 × (1 − 100bps) = 1546.875). executeSwap folds the same
+    // spread into the fresh provider rate before measuring drift, so an unchanged
+    // provider rate yields zero drift (the drift gate measures provider slippage,
+    // not our spread).
+    rate: '1546.875',
     networkFee: '1',
     transactionFee: '0.5',
     estimatedArrivalSec: 120,
@@ -4038,6 +4104,9 @@ function buildSwapService(
     pinService?: unknown;
     ledgerRepo?: { getAccountBalance: jest.Mock };
     swapProvider?: { getQuote: jest.Mock; execute: jest.Mock };
+    walletService?: jest.Mocked<
+      Pick<WalletService, 'getOrProvisionNetworkWallet'>
+    >;
   } = {},
 ): ExecutionService {
   const swapStepUpGrant: DirectiveGrantRecord = {
@@ -4059,7 +4128,8 @@ function buildSwapService(
     (overrides.directiveService ??
       makeDirectiveService(swapStepUpGrant)) as unknown as DirectiveService,
     (overrides.pinService ?? makePinService()) as unknown as PinService,
-    makeWalletService() as unknown as WalletService,
+    (overrides.walletService as unknown as WalletService) ??
+      (makeWalletService() as unknown as WalletService),
     // paymentProvider: not used on swap path
     makePaymentProvider() as unknown as IPaymentProvider,
     SWAP_STUB_CONFIG as never,
@@ -4112,6 +4182,37 @@ describe('ExecutionService.executeSwap', () => {
     // Outbox enqueued
     expect(outboxRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({ settlementType: 'swap' }),
+    );
+  });
+
+  it('passes wallet.providerReference (Blockradar child-address id) as addressId — NOT wallet.id — to getQuote and execute', async () => {
+    // The proposal params store walletId = wallet.id ('wallet-id'), but Blockradar's
+    // swap getQuote/execute require the child-address id (wallet.providerReference).
+    // executeSwap must re-load the wallet and thread providerReference through, mirroring
+    // the send path. Passing wallet.id would make every real swap fail at the provider.
+    const walletService = makeWalletService();
+    const swapProvider = makeSwapProviderMock();
+
+    const svc = buildSwapService({ walletService, swapProvider });
+    await svc.executeSwap(SWAP_BASE_INPUT);
+
+    // Wallet re-loaded by (userId, network) — network derived from fromAsset.
+    expect(walletService.getOrProvisionNetworkWallet).toHaveBeenCalledWith(
+      USER_ID,
+      'TRON',
+    );
+    // Both provider calls receive the providerReference, never the DB wallet.id.
+    expect(swapProvider.getQuote).toHaveBeenCalledWith(
+      expect.objectContaining({ addressId: 'blockradar-ref-001' }),
+    );
+    expect(swapProvider.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ addressId: 'blockradar-ref-001' }),
+    );
+    expect(swapProvider.getQuote).not.toHaveBeenCalledWith(
+      expect.objectContaining({ addressId: 'wallet-id' }),
+    );
+    expect(swapProvider.execute).not.toHaveBeenCalledWith(
+      expect.objectContaining({ addressId: 'wallet-id' }),
     );
   });
 

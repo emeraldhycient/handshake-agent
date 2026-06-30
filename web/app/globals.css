@@ -261,3 +261,20 @@
     opacity: 0.78;
   }
 }
+
+/*
+ * Honor prefers-reduced-motion (CLAUDE.md §13.8). Neutralize the hs-* keyframe
+ * animations — the looping ones (typing blink, success-ring pulse, spark
+ * spin/breathe) and the entrance/scrim ones (message-in, success pop, scrim) —
+ * for users who opt out of motion. Every component applies these via an
+ * animate-hs-* utility, so cancelling those classes here disables the motion
+ * everywhere at once without editing each component. Scoped to the hs-* names so
+ * Radix/shadcn transitions and the essential loading spinner are untouched; the
+ * resting (end) state of each keyframe is the intended static visual, so content
+ * stays fully visible with motion off.
+ */
+@media (prefers-reduced-motion: reduce) {
+  [class*="animate-hs-"] {
+    animation: none !important;
+  }
+}

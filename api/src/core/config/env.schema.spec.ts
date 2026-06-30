@@ -120,7 +120,12 @@ describe('validateEnv', () => {
   });
 
   it('accepts KYC_MOCK_MODE=false', () => {
-    const env = validateEnv({ ...validRaw, KYC_MOCK_MODE: 'false' });
+    // Real KYC mode requires an encryption key (boot guard) — supply it.
+    const env = validateEnv({
+      ...validRaw,
+      KYC_MOCK_MODE: 'false',
+      KYC_ENCRYPTION_KEY: 'a'.repeat(64),
+    });
 
     expect(env.KYC_MOCK_MODE).toBe('false');
   });
@@ -158,7 +163,12 @@ describe('validateEnv', () => {
   });
 
   it('accepts WALLET_MOCK_MODE=false (activates the real Blockradar adapter)', () => {
-    const env = validateEnv({ ...validRaw, WALLET_MOCK_MODE: 'false' });
+    // Real wallet mode requires a receipt-signing key (boot guard) — supply it.
+    const env = validateEnv({
+      ...validRaw,
+      WALLET_MOCK_MODE: 'false',
+      RECEIPT_SIGNING_KEY: 'receipt-key',
+    });
 
     expect(env.WALLET_MOCK_MODE).toBe('false');
   });
@@ -193,5 +203,137 @@ describe('env.schema auth keys', () => {
     expect(() =>
       validateEnv({ ...validRaw, AUTH_DEV_EXPOSE_OTP: 'maybe' }),
     ).toThrow();
+  });
+});
+
+// --- Fail-fast boot guards (cross-field superRefine, CLAUDE.md §7) ---
+
+describe('env.schema boot guards', () => {
+  // 1. AUTH_DEV_EXPOSE_OTP must never echo OTP/verification tokens in prod.
+  it('rejects AUTH_DEV_EXPOSE_OTP=true when NODE_ENV=production', () => {
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        NODE_ENV: 'production',
+        AUTH_DEV_EXPOSE_OTP: 'true',
+      }),
+    ).toThrow(/AUTH_DEV_EXPOSE_OTP/);
+  });
+
+  it('accepts AUTH_DEV_EXPOSE_OTP=true outside production', () => {
+    const env = validateEnv({
+      ...validRaw,
+      NODE_ENV: 'development',
+      AUTH_DEV_EXPOSE_OTP: 'true',
+    });
+    expect(env.AUTH_DEV_EXPOSE_OTP).toBe('true');
+  });
+
+  it('accepts AUTH_DEV_EXPOSE_OTP=false in production', () => {
+    const env = validateEnv({
+      ...validRaw,
+      NODE_ENV: 'production',
+      AUTH_DEV_EXPOSE_OTP: 'false',
+      // satisfy the other prod-only guard so this test isolates the OTP one
+      STATEMENT_SIGNING_KEY: 'stmt-key',
+    });
+    expect(env.AUTH_DEV_EXPOSE_OTP).toBe('false');
+  });
+
+  // 2. RECEIPT_SIGNING_KEY must be present when real deposits settle.
+  it('rejects an empty RECEIPT_SIGNING_KEY when WALLET_MOCK_MODE=false', () => {
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        WALLET_MOCK_MODE: 'false',
+        RECEIPT_SIGNING_KEY: '',
+      }),
+    ).toThrow(/RECEIPT_SIGNING_KEY/);
+  });
+
+  it('rejects a missing RECEIPT_SIGNING_KEY when WALLET_MOCK_MODE=false', () => {
+    expect(() =>
+      validateEnv({ ...validRaw, WALLET_MOCK_MODE: 'false' }),
+    ).toThrow(/RECEIPT_SIGNING_KEY/);
+  });
+
+  it('accepts a present RECEIPT_SIGNING_KEY when WALLET_MOCK_MODE=false', () => {
+    const env = validateEnv({
+      ...validRaw,
+      WALLET_MOCK_MODE: 'false',
+      RECEIPT_SIGNING_KEY: 'receipt-key',
+    });
+    expect(env.RECEIPT_SIGNING_KEY).toBe('receipt-key');
+  });
+
+  it('tolerates an empty RECEIPT_SIGNING_KEY while WALLET_MOCK_MODE=true', () => {
+    const env = validateEnv({ ...validRaw, WALLET_MOCK_MODE: 'true' });
+    expect(env.RECEIPT_SIGNING_KEY).toBe('');
+  });
+
+  // 3. STATEMENT_SIGNING_KEY must be present in production (else statements 503).
+  it('rejects an empty STATEMENT_SIGNING_KEY when NODE_ENV=production', () => {
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        NODE_ENV: 'production',
+        AUTH_DEV_EXPOSE_OTP: 'false',
+        STATEMENT_SIGNING_KEY: '',
+      }),
+    ).toThrow(/STATEMENT_SIGNING_KEY/);
+  });
+
+  it('accepts a present STATEMENT_SIGNING_KEY in production', () => {
+    const env = validateEnv({
+      ...validRaw,
+      NODE_ENV: 'production',
+      AUTH_DEV_EXPOSE_OTP: 'false',
+      STATEMENT_SIGNING_KEY: 'stmt-key',
+    });
+    expect(env.STATEMENT_SIGNING_KEY).toBe('stmt-key');
+  });
+
+  it('tolerates an empty STATEMENT_SIGNING_KEY outside production', () => {
+    const env = validateEnv({ ...validRaw, NODE_ENV: 'development' });
+    expect(env.STATEMENT_SIGNING_KEY).toBe('');
+  });
+});
+
+// --- KYC encryption key (NIN/BVN at-rest encryption) ---
+
+describe('env.schema KYC_ENCRYPTION_KEY', () => {
+  it('defaults KYC_ENCRYPTION_KEY to an empty string when omitted', () => {
+    const env = validateEnv(validRaw);
+    expect(env.KYC_ENCRYPTION_KEY).toBe('');
+  });
+
+  it('rejects an empty KYC_ENCRYPTION_KEY when KYC_MOCK_MODE=false', () => {
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        KYC_MOCK_MODE: 'false',
+        KYC_ENCRYPTION_KEY: '',
+      }),
+    ).toThrow(/KYC_ENCRYPTION_KEY/);
+  });
+
+  it('rejects a missing KYC_ENCRYPTION_KEY when KYC_MOCK_MODE=false', () => {
+    expect(() => validateEnv({ ...validRaw, KYC_MOCK_MODE: 'false' })).toThrow(
+      /KYC_ENCRYPTION_KEY/,
+    );
+  });
+
+  it('accepts a present KYC_ENCRYPTION_KEY when KYC_MOCK_MODE=false', () => {
+    const env = validateEnv({
+      ...validRaw,
+      KYC_MOCK_MODE: 'false',
+      KYC_ENCRYPTION_KEY: 'a'.repeat(64),
+    });
+    expect(env.KYC_ENCRYPTION_KEY).toBe('a'.repeat(64));
+  });
+
+  it('tolerates an empty KYC_ENCRYPTION_KEY while KYC_MOCK_MODE=true', () => {
+    const env = validateEnv({ ...validRaw, KYC_MOCK_MODE: 'true' });
+    expect(env.KYC_ENCRYPTION_KEY).toBe('');
   });
 });

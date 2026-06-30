@@ -49,6 +49,10 @@ import {
   SwapSameAssetError,
 } from '../domain/execution-errors';
 import {
+  AmountTooSmallError,
+  SelfSendError,
+} from '../domain/amount-guard-errors';
+import {
   BeneficiaryNotFoundError,
   BeneficiaryWrongTypeError,
   BeneficiaryCoolingOffError,
@@ -539,6 +543,107 @@ describe('ProposalService.createBuyProposal', () => {
     expect(typeof callArg.fiatAmount).toBe('string');
     expect(callArg.fiatAmount).toBe('10000');
   });
+
+  // ── Amount-floor guard (findings #2, #3, #6) ─────────────────────────────
+  // The guard runs BEFORE quoteBuy and BEFORE the KYC gate, so a non-positive /
+  // dust / below-minimum amount surfaces as a clean AMOUNT_TOO_SMALL (422) — not
+  // an opaque QuotePricingError 500 (#2) nor a confusing tier-limit 403 (#6).
+
+  it('rejects a zero amount with AmountTooSmallError before quoting or gating', async () => {
+    const quotesService = makeQuotesService();
+    const kycGate = makeKycGate();
+    const quoteRepo = makeQuoteRepo();
+    const proposalRepo = makeProposalRepo();
+    const svc = makeBuySvc(
+      quotesService as unknown as QuotesService,
+      kycGate as unknown as KycGateService,
+      quoteRepo,
+      proposalRepo,
+    );
+
+    await expect(
+      svc.createBuyProposal({
+        ...BASE_INPUT,
+        intent: { ...BASE_INPUT.intent, fiatAmount: '0' },
+      }),
+    ).rejects.toMatchObject({ code: 'AMOUNT_TOO_SMALL' });
+
+    // Nothing downstream ran — no quote, no gate, no proposal.
+    expect(quotesService.quoteBuy).not.toHaveBeenCalled();
+    expect(kycGate.assertCanTransact).not.toHaveBeenCalled();
+    expect(quoteRepo.create).not.toHaveBeenCalled();
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a dust amount (0.01) below the default floor with AmountTooSmallError', async () => {
+    const svc = makeBuySvc();
+    await expect(
+      svc.createBuyProposal({
+        ...BASE_INPUT,
+        intent: { ...BASE_INPUT.intent, fiatAmount: '0.01' },
+      }),
+    ).rejects.toMatchObject({ code: 'AMOUNT_TOO_SMALL' });
+  });
+
+  it('rejects an amount below the configured per-fiat minimum', async () => {
+    const quotesService = makeQuotesService();
+    const configService = {
+      get: jest.fn((key: string) =>
+        key === 'pricing' ? { minBuyFiat: { NGN: 500 } } : undefined,
+      ),
+    };
+    const svc = new ProposalService(
+      quotesService as unknown as QuotesService,
+      makeKycGate() as unknown as KycGateService,
+      makeQuoteRepo(),
+      makeProposalRepo(),
+      stubClock,
+      makeWalletService() as unknown as WalletService,
+      makeBeneficiaryService() as unknown as BeneficiaryService,
+      makeAssetRegistry() as unknown as AssetRegistry,
+      makeLedgerRepo(),
+      NOOP_COMPLIANCE_SERVICE,
+      configService as never,
+      undefined as never,
+    );
+
+    await expect(
+      svc.createBuyProposal({
+        ...BASE_INPUT,
+        intent: { ...BASE_INPUT.intent, fiatAmount: '300' },
+      }),
+    ).rejects.toMatchObject({ code: 'AMOUNT_TOO_SMALL' });
+    expect(quotesService.quoteBuy).not.toHaveBeenCalled();
+  });
+
+  it('accepts an amount exactly at the configured minimum (boundary)', async () => {
+    const configService = {
+      get: jest.fn((key: string) =>
+        key === 'pricing' ? { minBuyFiat: { NGN: 500 } } : undefined,
+      ),
+    };
+    const svc = new ProposalService(
+      makeQuotesService() as unknown as QuotesService,
+      makeKycGate() as unknown as KycGateService,
+      makeQuoteRepo(),
+      makeProposalRepo(),
+      stubClock,
+      makeWalletService() as unknown as WalletService,
+      makeBeneficiaryService() as unknown as BeneficiaryService,
+      makeAssetRegistry() as unknown as AssetRegistry,
+      makeLedgerRepo(),
+      NOOP_COMPLIANCE_SERVICE,
+      configService as never,
+      undefined as never,
+    );
+
+    await expect(
+      svc.createBuyProposal({
+        ...BASE_INPUT,
+        intent: { ...BASE_INPUT.intent, fiatAmount: '500' },
+      }),
+    ).resolves.toBeDefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -776,6 +881,64 @@ describe('ProposalService.createSellProposal', () => {
     expect(typeof sellCallArg.fiatAmount).toBe('string');
     // STUB_SELL_QUOTE.netFiatAmount = '7500'
     expect(sellCallArg.fiatAmount).toBe('7500');
+  });
+
+  // ── Amount-floor guard (finding #4) ──────────────────────────────────────
+  // A zero/dust sell must be rejected at the boundary with AMOUNT_TOO_SMALL
+  // BEFORE quoting / balance check / gate — never let dust reach confirmation.
+
+  it('rejects a zero crypto amount with AmountTooSmallError before quoting', async () => {
+    const quotesService = {
+      quoteBuy: jest.fn(),
+      quoteSell: jest.fn().mockResolvedValue(STUB_SELL_QUOTE),
+    };
+    const ledgerRepo = makeLedgerRepo('10.0');
+    const svc = makeSellSvc({ quotesService, ledgerRepo });
+
+    await expect(
+      svc.createSellProposal({
+        ...BASE_SELL_INPUT,
+        intent: { ...BASE_SELL_INPUT.intent, cryptoAmount: '0' },
+      }),
+    ).rejects.toMatchObject({ code: 'AMOUNT_TOO_SMALL' });
+    expect(quotesService.quoteSell).not.toHaveBeenCalled();
+    expect(ledgerRepo.getAccountBalance).not.toHaveBeenCalled();
+  });
+
+  it('rejects a dust crypto amount below the configured per-asset minimum', async () => {
+    const quotesService = {
+      quoteBuy: jest.fn(),
+      quoteSell: jest.fn().mockResolvedValue(STUB_SELL_QUOTE),
+    };
+    const configService = {
+      get: jest.fn((key: string) =>
+        key === 'pricing'
+          ? { minCryptoAmount: { sell: { USDT: 0.5 } } }
+          : undefined,
+      ),
+    };
+    const svc = new ProposalService(
+      quotesService as unknown as QuotesService,
+      makeKycGate() as unknown as KycGateService,
+      makeQuoteRepo(FIXED_SELL_QUOTE_ID),
+      makeProposalRepo(FIXED_SELL_PROPOSAL_ID),
+      stubClock,
+      makeWalletService() as unknown as WalletService,
+      makeBeneficiaryService() as unknown as BeneficiaryService,
+      makeAssetRegistry() as unknown as AssetRegistry,
+      makeLedgerRepo('10.0'),
+      NOOP_COMPLIANCE_SERVICE,
+      configService as never,
+      undefined as never,
+    );
+
+    await expect(
+      svc.createSellProposal({
+        ...BASE_SELL_INPUT,
+        intent: { ...BASE_SELL_INPUT.intent, cryptoAmount: '0.1' },
+      }),
+    ).rejects.toMatchObject({ code: 'AMOUNT_TOO_SMALL' });
+    expect(quotesService.quoteSell).not.toHaveBeenCalled();
   });
 });
 
@@ -1418,6 +1581,115 @@ describe('ProposalService.createSendProposal', () => {
     );
     expect(kycGate.assertCanTransact).not.toHaveBeenCalled();
   });
+
+  // ── Amount-floor + fee-coverage guard (finding #4) ───────────────────────
+
+  it('rejects a zero send amount with AmountTooSmallError before quoting', async () => {
+    const quotesService = makeQuotesServiceWithSend();
+    const ledgerRepo = makeLedgerRepo('100.0');
+    const svc = makeSendSvc({ quotesService, ledgerRepo });
+
+    await expect(
+      svc.createSendProposal({
+        ...BASE_SEND_INPUT,
+        intent: { ...BASE_SEND_INPUT.intent, cryptoAmount: '0' },
+      }),
+    ).rejects.toBeInstanceOf(AmountTooSmallError);
+    expect(quotesService.quoteSend).not.toHaveBeenCalled();
+    expect(ledgerRepo.getAccountBalance).not.toHaveBeenCalled();
+  });
+
+  it('rejects a send whose amount does not exceed the network fee (fee-coverage)', async () => {
+    // networkFeeCrypto from STUB_SEND_QUOTE is '1'. A 0.5 USDT send would pay a
+    // 1 USDT fee for half its value — uneconomic. Reject with AMOUNT_TOO_SMALL.
+    const feeQuote: QuoteSendOutput = {
+      ...STUB_SEND_QUOTE,
+      cryptoAmount: '0.5',
+      networkFeeCrypto: '1',
+      totalDebit: '1.5',
+    };
+    const quotesService = makeQuotesServiceWithSend(feeQuote);
+    const svc = makeSendSvc({
+      quotesService,
+      ledgerRepo: makeLedgerRepo('100.0'),
+    });
+
+    await expect(
+      svc.createSendProposal({
+        ...BASE_SEND_INPUT,
+        intent: { ...BASE_SEND_INPUT.intent, cryptoAmount: '0.5' },
+      }),
+    ).rejects.toMatchObject({ code: 'AMOUNT_TOO_SMALL' });
+  });
+
+  it('accepts a send whose amount exceeds the network fee', async () => {
+    const okQuote: QuoteSendOutput = {
+      ...STUB_SEND_QUOTE,
+      cryptoAmount: '2',
+      networkFeeCrypto: '1',
+      totalDebit: '3',
+    };
+    const quotesService = makeQuotesServiceWithSend(okQuote);
+    const svc = makeSendSvc({
+      quotesService,
+      ledgerRepo: makeLedgerRepo('100.0'),
+    });
+
+    await expect(
+      svc.createSendProposal({
+        ...BASE_SEND_INPUT,
+        intent: { ...BASE_SEND_INPUT.intent, cryptoAmount: '2' },
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  // ── Self-send guard (finding #5) ─────────────────────────────────────────
+
+  it('rejects sending to the user own provisioned wallet address with SelfSendError', async () => {
+    // Beneficiary's crypto address == the user's own wallet address.
+    const ownAddress = STUB_SEND_WALLET_RECORD.address;
+    const selfBeneficiary = {
+      ...STUB_CRYPTO_BENEFICIARY,
+      cryptoAddress: ownAddress,
+    };
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeSendSvc({
+      beneficiaryService: makeBeneficiaryServiceSend(selfBeneficiary),
+      proposalRepo,
+    });
+
+    await expect(
+      svc.createSendProposal(BASE_SEND_INPUT),
+    ).rejects.toBeInstanceOf(SelfSendError);
+    // No proposal persisted — guard precedes persistence (§3.1).
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('self-send comparison is case-insensitive (EVM-style mixed case)', async () => {
+    // Use a wallet whose address differs only by case from the beneficiary's.
+    const wallet = {
+      ...STUB_SEND_WALLET_RECORD,
+      address: STUB_SEND_WALLET_RECORD.address.toUpperCase(),
+    };
+    const selfBeneficiary = {
+      ...STUB_CRYPTO_BENEFICIARY,
+      cryptoAddress: STUB_SEND_WALLET_RECORD.address.toLowerCase(),
+    };
+    const svc = makeSendSvc({
+      walletService: makeWalletServiceSend(wallet),
+      beneficiaryService: makeBeneficiaryServiceSend(selfBeneficiary),
+    });
+
+    await expect(
+      svc.createSendProposal(BASE_SEND_INPUT),
+    ).rejects.toBeInstanceOf(SelfSendError);
+  });
+
+  it('confirmation includes the beneficiaryLabel so the destination is legible (finding #5)', async () => {
+    const svc = makeSendSvc();
+    const result = await svc.createSendProposal(BASE_SEND_INPUT);
+    expect(result.confirmation.beneficiaryLabel).toBe('My TRON Wallet');
+  });
 });
 
 // ============================================================================
@@ -1697,5 +1969,40 @@ describe('ProposalService.createSwapProposal', () => {
         toAssetId: 'br_id_TRX',
       }),
     );
+  });
+
+  // ── Amount-floor guard (finding #4) ──────────────────────────────────────
+
+  it('rejects a zero swap amount with AmountTooSmallError before the provider call', async () => {
+    const swapProvider = makeSwapProvider();
+    const svc = makeSwapSvc({ swapProvider });
+
+    await expect(
+      svc.createSwapProposal({ ...BASE_SWAP_INPUT, amount: '0' }),
+    ).rejects.toMatchObject({ code: 'AMOUNT_TOO_SMALL' });
+    expect(swapProvider.getQuote).not.toHaveBeenCalled();
+  });
+
+  it('rejects a dust swap amount below the configured per-asset minimum', async () => {
+    const swapProvider = makeSwapProvider();
+    const configService = {
+      get: jest.fn((key: string) => {
+        if (key === 'swap') return { spreadBps: 100, maxDriftBps: 50 };
+        if (key === 'pricing')
+          return {
+            assets: { USDT: { baseRates: { NGN: 1600 } } },
+            minCryptoAmount: { swap: { USDT: 1 } },
+          };
+        if (key === 'compliance')
+          return { travelRuleThresholds: { NGN: 1_000_000 } };
+        return undefined;
+      }),
+    };
+    const svc = makeSwapSvc({ swapProvider, configService });
+
+    await expect(
+      svc.createSwapProposal({ ...BASE_SWAP_INPUT, amount: '0.5' }),
+    ).rejects.toMatchObject({ code: 'AMOUNT_TOO_SMALL' });
+    expect(swapProvider.getQuote).not.toHaveBeenCalled();
   });
 });

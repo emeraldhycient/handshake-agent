@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 // Mock the axios instance so no real HTTP happens.
 const get = vi.fn()
 const post = vi.fn()
+const del = vi.fn()
 vi.mock("./client", () => ({
   api: {
     get: (...a: unknown[]) => get(...a),
     post: (...a: unknown[]) => post(...a),
+    delete: (...a: unknown[]) => del(...a),
   },
 }))
 
@@ -14,6 +16,7 @@ import {
   listBeneficiaries,
   addBankAccount,
   addCryptoAddress,
+  deleteBeneficiary,
 } from "./beneficiaries"
 
 const bankBeneficiary = {
@@ -50,6 +53,7 @@ describe("beneficiaries api client", () => {
   beforeEach(() => {
     get.mockReset()
     post.mockReset()
+    del.mockReset()
   })
 
   it("listBeneficiaries calls GET /beneficiaries with the type param and parses", async () => {
@@ -104,5 +108,22 @@ describe("beneficiaries api client", () => {
       label: "Cold wallet",
     })
     expect(result.cryptoAddress).toBe("TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE")
+  })
+
+  it("deleteBeneficiary calls DELETE /beneficiaries/:id and parses the ack", async () => {
+    const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    del.mockResolvedValue({ data: { id, deleted: true } })
+
+    const result = await deleteBeneficiary(id)
+
+    expect(del).toHaveBeenCalledWith(`/beneficiaries/${id}`)
+    expect(result).toEqual({ id, deleted: true })
+  })
+
+  it("deleteBeneficiary rejects a response whose shape does not match (deleted:false)", async () => {
+    const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    del.mockResolvedValue({ data: { id, deleted: false } })
+
+    await expect(deleteBeneficiary(id)).rejects.toThrow()
   })
 })

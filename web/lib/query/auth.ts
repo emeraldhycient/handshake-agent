@@ -14,11 +14,16 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type {
-  LoginRequest,
-  LoginVerifyRequest,
-  SignupRequest,
-  VerifyEmailRequest,
+import {
+  LoginRequestSchema,
+  LoginRequestResponseSchema,
+  SignupResponseSchema,
+  type LoginRequest,
+  type LoginVerifyRequest,
+  type LoginRequestResponse,
+  type SignupResponse,
+  type SignupRequest,
+  type VerifyEmailRequest,
 } from "@handshake-agent/contracts/auth"
 import {
   fetchMe,
@@ -29,6 +34,7 @@ import {
   submitSignup,
   submitVerifyEmail,
 } from "@/lib/api/auth"
+import { api } from "@/lib/api/client"
 import { defaultAuthStore, useAuthStore } from "@/lib/store/auth-store"
 import { qk } from "./keys"
 
@@ -47,6 +53,46 @@ export function useVerifyEmail() {
 export function useLoginRequest() {
   return useMutation({
     mutationFn: (body: LoginRequest) => submitLoginRequest(body),
+  })
+}
+
+/**
+ * Resend the login OTP (POST /auth/login/resend).
+ *
+ * Idempotent + rate-limited server-side; gives the UI a one-click "request a new
+ * code" affordance after a stale/wrong code or an OTP lockout (429 / OTP_LOCKED),
+ * instead of forcing the user to restart the login flow. Reuses the login
+ * request/response shapes (same email body → same `otp_sent` ack).
+ *
+ * Defined here (not in lib/api/auth.ts) but still parses the body before sending
+ * and the response after — the FE gate is UX; the server is the security gate.
+ */
+export function useResendLoginOtp() {
+  return useMutation({
+    mutationFn: async (body: LoginRequest): Promise<LoginRequestResponse> => {
+      const validated = LoginRequestSchema.parse(body)
+      const { data } = await api.post("/auth/login/resend", validated)
+      return LoginRequestResponseSchema.parse(data)
+    },
+  })
+}
+
+/**
+ * Resend the email-verification link (POST /auth/verify-email/resend).
+ *
+ * Idempotent + rate-limited server-side. Powers the "Resend verification email"
+ * affordance on the verify-email page so an expired/lost link does not push the
+ * user to sign up again (which would feel like creating a duplicate account).
+ * The body is just the email (the login request shape); the response is the
+ * signup `pending_verification` ack.
+ */
+export function useResendVerification() {
+  return useMutation({
+    mutationFn: async (body: LoginRequest): Promise<SignupResponse> => {
+      const validated = LoginRequestSchema.parse(body)
+      const { data } = await api.post("/auth/verify-email/resend", validated)
+      return SignupResponseSchema.parse(data)
+    },
   })
 }
 

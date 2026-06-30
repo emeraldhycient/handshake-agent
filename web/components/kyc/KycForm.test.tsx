@@ -45,7 +45,8 @@ const VALID_PAYLOAD = {
   dateOfBirth: "1992-07-14",
   bvn: "12345678901",
   nin: "12345678901",
-  pin: "1234",
+  // A non-trivial PIN — "1234" is a sequence and is rejected by the contract.
+  pin: "1937",
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -195,6 +196,55 @@ describe("KycForm", () => {
 
     await waitFor(() => {
       expect(screen.getByText(/token expired or invalid/i)).toBeInTheDocument()
+    })
+  })
+
+  it("blocks submit when the PIN is weak (1234) — mutation not called", async () => {
+    const user = userEvent.setup()
+    renderForm(VALID_TOKEN)
+
+    await user.type(
+      screen.getByRole("textbox", { name: /first name/i }),
+      VALID_PAYLOAD.firstName
+    )
+    await user.type(
+      screen.getByRole("textbox", { name: /last name/i }),
+      VALID_PAYLOAD.lastName
+    )
+    await user.type(
+      screen.getByRole("textbox", { name: /bvn/i }),
+      VALID_PAYLOAD.bvn
+    )
+    await user.type(screen.getByLabelText(/pin/i), "1234")
+
+    await user.click(screen.getByRole("button", { name: /submit/i }))
+
+    expect(mockSubmit).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(document.getElementById("kyc-pin-error")).toBeInTheDocument()
+    })
+  })
+
+  it("blocks submit when neither NIN nor BVN is provided — error on nin", async () => {
+    const user = userEvent.setup()
+    renderForm(VALID_TOKEN)
+
+    await user.type(
+      screen.getByRole("textbox", { name: /first name/i }),
+      VALID_PAYLOAD.firstName
+    )
+    await user.type(
+      screen.getByRole("textbox", { name: /last name/i }),
+      VALID_PAYLOAD.lastName
+    )
+    // No NIN, no BVN.
+    await user.type(screen.getByLabelText(/pin/i), VALID_PAYLOAD.pin)
+
+    await user.click(screen.getByRole("button", { name: /submit/i }))
+
+    expect(mockSubmit).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(document.getElementById("kyc-nin-error")).toBeInTheDocument()
     })
   })
 })

@@ -99,7 +99,9 @@ export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
         density="desktop"
         onConfirm={handleConfirm}
         onSelectTicket={handleSelectTicket}
-        onResolveBeneficiary={(id) => void state.resolveBeneficiary("d", id)}
+        onResolveBeneficiary={(id, messageId) =>
+          void state.resolveBeneficiary("d", id, messageId)
+        }
       />
 
       {/* ── Composer (chips + input) ───────────────────────────────────────── */}

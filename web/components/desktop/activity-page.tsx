@@ -1,11 +1,17 @@
 "use client"
 
 import { useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { Money } from "@/components/shared/money"
 import { StatusPill } from "@/components/shared/status-pill"
+import {
+  QueryErrorState,
+  QueryEmptyState,
+} from "@/components/shared/query-states"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TransactionDetailModal } from "@/components/shared/transaction-detail-modal"
 import { useActivityFeed } from "@/lib/query/hooks"
+import { qk } from "@/lib/query/keys"
 import type { ActivityItem } from "@/lib/schemas"
 import { cn } from "@/lib/utils"
 
@@ -97,6 +103,11 @@ export function ActivityPage({ className }: { className?: string }) {
   const [activeFilter, setActiveFilter] = useState<ActivityFilter>("all")
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const activity = useActivityFeed()
+  const queryClient = useQueryClient()
+  // The activity feed hook (useInfiniteQuery wrapper) exposes no `refetch`, so
+  // invalidating the key is the retry path.
+  const retry = () =>
+    void queryClient.invalidateQueries({ queryKey: qk.activity })
 
   // ── Loading state ──────────────────────────────────────────────────────────
   if (activity.isLoading) {
@@ -125,14 +136,11 @@ export function ActivityPage({ className }: { className?: string }) {
       <div
         className={cn("flex flex-1 items-center justify-center p-6", className)}
       >
-        <div className="rounded-[14px] border border-danger/20 bg-danger/5 p-5 text-center">
-          <p className="text-sm font-semibold text-danger">
-            Failed to load activity
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Please refresh the page.
-          </p>
-        </div>
+        <QueryErrorState
+          title="Failed to load activity"
+          description="Something went wrong loading your transactions. Check your connection and try again."
+          onRetry={retry}
+        />
       </div>
     )
   }
@@ -153,7 +161,10 @@ export function ActivityPage({ className }: { className?: string }) {
       <div
         className={cn("flex flex-1 items-center justify-center p-6", className)}
       >
-        <p className="text-sm text-muted-foreground">No activity yet.</p>
+        <QueryEmptyState
+          title="No activity yet"
+          description="Your transactions will appear here."
+        />
       </div>
     )
   }

@@ -2,9 +2,10 @@
  * Beneficiary API client — saved payout destinations (sell → bank account,
  * send → crypto address).
  *
- *   listBeneficiaries(type)   → GET  /beneficiaries?type=
- *   addBankAccount(body)      → POST /beneficiaries/bank-account
- *   addCryptoAddress(body)    → POST /beneficiaries/crypto-address
+ *   listBeneficiaries(type)   → GET    /beneficiaries?type=
+ *   addBankAccount(body)      → POST   /beneficiaries/bank-account
+ *   addCryptoAddress(body)    → POST   /beneficiaries/crypto-address
+ *   deleteBeneficiary(id)     → DELETE /beneficiaries/:id
  *
  * Parses request bodies through the contracts Zod schemas before sending and
  * the responses after (UX gate — server is the security gate per §3.3). The
@@ -15,6 +16,7 @@ import {
   BeneficiarySchema,
   AddBankAccountRequestSchema,
   AddCryptoAddressRequestSchema,
+  DeleteBeneficiaryResponseSchema,
 } from "@handshake-agent/contracts/beneficiaries"
 import type {
   Beneficiary,
@@ -22,6 +24,7 @@ import type {
   BeneficiaryType,
   AddBankAccountRequest,
   AddCryptoAddressRequest,
+  DeleteBeneficiaryResponse,
 } from "@handshake-agent/contracts/beneficiaries"
 import { api } from "./client"
 
@@ -46,4 +49,11 @@ export async function addCryptoAddress(
   const validated = AddCryptoAddressRequestSchema.parse(body)
   const { data } = await api.post("/beneficiaries/crypto-address", validated)
   return BeneficiarySchema.parse(data)
+}
+
+export async function deleteBeneficiary(
+  id: string
+): Promise<DeleteBeneficiaryResponse> {
+  const { data } = await api.delete(`/beneficiaries/${id}`)
+  return DeleteBeneficiaryResponseSchema.parse(data)
 }

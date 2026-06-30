@@ -135,7 +135,9 @@ describe("/ root route (adaptive entry)", () => {
 
     // DashboardExperience renders the desktop chat rail greeting
     await waitFor(() => {
-      expect(screen.getByText(/Welcome back, Amara/i)).toBeInTheDocument()
+      expect(
+        screen.getByText(/right here whenever you want to move money/i)
+      ).toBeInTheDocument()
     })
   })
 })

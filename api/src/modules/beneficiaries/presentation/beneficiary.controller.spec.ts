@@ -6,7 +6,10 @@
  * record → DTO mapping (Date → ISO, nulls preserved).
  */
 
-import { UnprocessableEntityException } from '@nestjs/common';
+import {
+  NotFoundException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 
 import { BeneficiaryController } from './beneficiary.controller';
@@ -15,6 +18,7 @@ import { JwtAuthGuard } from '../../auth/presentation/jwt-auth.guard';
 import {
   NameEnquiryFailedError,
   InvalidAddressError,
+  BeneficiaryNotFoundError,
 } from '../domain/beneficiary-errors';
 import type { BeneficiaryRecord } from '../application/ports/beneficiary.repository.port';
 
@@ -75,6 +79,7 @@ const mockService = {
   listForUser: jest.fn(),
   addBankAccount: jest.fn(),
   addCryptoAddress: jest.fn(),
+  delete: jest.fn(),
 };
 
 async function buildModule(): Promise<TestingModule> {
@@ -214,6 +219,33 @@ describe('BeneficiaryController', () => {
           TEST_USER,
         ),
       ).rejects.toThrow(UnprocessableEntityException);
+    });
+  });
+
+  describe('remove (DELETE /:id)', () => {
+    it('soft-deletes the beneficiary for the current user and acks', async () => {
+      mockService.delete.mockResolvedValue({
+        id: bankRecord.id,
+        deleted: true,
+      });
+
+      const result = await controller.remove(bankRecord.id, TEST_USER);
+
+      expect(mockService.delete).toHaveBeenCalledWith(
+        TEST_USER.userId,
+        bankRecord.id,
+      );
+      expect(result).toEqual({ id: bankRecord.id, deleted: true });
+    });
+
+    it('maps BeneficiaryNotFoundError → 404', async () => {
+      mockService.delete.mockRejectedValue(
+        new BeneficiaryNotFoundError('missing-id'),
+      );
+
+      await expect(controller.remove('missing-id', TEST_USER)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });

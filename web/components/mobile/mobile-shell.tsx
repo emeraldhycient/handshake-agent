@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { useStore } from "zustand"
 import { defaultChatStore } from "@/lib/store/chat-store"
 import { useAuthStore } from "@/lib/store/auth-store"
@@ -10,6 +11,7 @@ import {
   buildConfirmFromSwap,
   buildTicketConfirm,
   chipLabel,
+  actionPrompt,
 } from "@/lib/chat/flow"
 import { ChatHeader } from "./chat-header"
 import { MobileTabbar } from "./mobile-tabbar"
@@ -25,14 +27,38 @@ import { useVoiceRecorder } from "@/hooks/use-voice-recorder"
 import type { MobileShellProps, MobileTabId } from "@/types/components"
 import type { ChatMessage, TicketOption, ChatAction } from "@/lib/schemas"
 
+/**
+ * `useRouter` outside an app-router provider throws an invariant. In the real
+ * app MobileShell always renders inside the router tree, but isolated tests
+ * (e.g. AdaptiveExperience) mount it without one. `useRouter` calls `useContext`
+ * before the throw, so wrapping the call keeps hook order stable; on failure we
+ * return null and the session-expired redirect becomes a no-op (the Axios
+ * interceptor still clears the session, so RequireAuth redirects on next render).
+ */
+function useOptionalRouter(): ReturnType<typeof useRouter> | null {
+  try {
+    return useRouter()
+  } catch {
+    return null
+  }
+}
+
 export function MobileShell({ store: injectedStore }: MobileShellProps) {
   const store = injectedStore ?? defaultChatStore
   const state = useStore(store)
   const authStatus = useAuthStore((s) => s.status)
+  const router = useOptionalRouter()
   // Rehydrate the thread from server history on mount (authenticated only).
   useChatHistory("m", store)
   const [tab, setTab] = useState<MobileTabId>("chat")
   const recorder = useVoiceRecorder()
+
+  // Finding #4: inject the dead-session redirect once on mount. The store can't
+  // import next/navigation, so a 401 mid-flow (authorize/execute) routes the user
+  // to re-auth via this handler. Re-runs only if the store or router changes.
+  useEffect(() => {
+    store.getState().setSessionExpiredHandler(() => router?.push("/login"))
+  }, [store, router])
 
   function handleConfirm(message: ChatMessage) {
     if (message.kind === "swap") {
@@ -50,9 +76,19 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
     state.openConfirm("m", buildTicketConfirm(opt.tier, opt.price, opt.total))
   }
 
+  // Finding #1: when authenticated, a quick action must reach the REAL agent
+  // with an amount-free open prompt (so the agent quotes against the user's real
+  // balance/rate/limits) — never the hardcoded "Buy ₦50,000 of USDT" demo label.
+  // This handler previously ALWAYS ran the mock `send`, even when signed in
+  // (the critical bug). `label` is the caller's display label, used only for the
+  // offline demo bubble.
   function handleQuickAction(action: ChatAction, label: string) {
     setTab("chat")
-    state.send("m", label, action)
+    if (authStatus === "authenticated") {
+      void state.sendToAgent("m", actionPrompt(action))
+    } else {
+      state.send("m", label, action)
+    }
   }
 
   const showConfirm = state.confirmOpen && state.overlaySurface === "m"
@@ -70,8 +106,8 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
             density="mobile"
             onConfirm={handleConfirm}
             onSelectTicket={handleSelectTicket}
-            onResolveBeneficiary={(id) =>
-              void state.resolveBeneficiary("m", id)
+            onResolveBeneficiary={(id, messageId) =>
+              void state.resolveBeneficiary("m", id, messageId)
             }
           />
           <ChatComposer

@@ -18,6 +18,8 @@
 
 import {
   BadRequestException,
+  ConflictException,
+  ForbiddenException,
   Logger,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -28,8 +30,13 @@ import {
   HandoffTokenWrongPurposeError,
 } from '../domain/handoff-token-errors';
 import { ContactNotFoundError, KycRejectedError } from '../domain/kyc-errors';
+import {
+  PinAlreadySetError,
+  PinSetupNotVerifiedError,
+} from '../domain/pin-setup-errors';
 import type { HandoffTokenService } from '../application/handoff-token.service';
 import type { KycService } from '../application/kyc.service';
+import type { PinSetupService } from '../application/pin-setup.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import { KycController } from './kyc.controller';
 import type { KycCompleteDto } from './dto/kyc-complete.dto';
@@ -47,7 +54,7 @@ const validDto: KycCompleteDto = {
   firstName: 'Amaka',
   lastName: 'Okafor',
   dateOfBirth: '1992-07-14',
-  pin: '1234',
+  pin: '1357',
 };
 
 // ---------------------------------------------------------------------------
@@ -92,6 +99,18 @@ function makeWalletService(
   return svc;
 }
 
+function makePinSetupService(
+  result: { hasPin: true } | Error = { hasPin: true },
+): jest.Mocked<Pick<PinSetupService, 'setTransactionPin'>> {
+  const svc = { setTransactionPin: jest.fn() };
+  if (result instanceof Error) {
+    svc.setTransactionPin.mockRejectedValue(result);
+  } else {
+    svc.setTransactionPin.mockResolvedValue(result);
+  }
+  return svc;
+}
+
 function buildController(
   handoffTokenService: jest.Mocked<
     Pick<HandoffTokenService, 'consumeKycToken' | 'mintKycToken'>
@@ -102,6 +121,9 @@ function buildController(
   walletService: jest.Mocked<
     Pick<WalletService, 'provisionAllEnabledNetworks'>
   > = makeWalletService(),
+  pinSetupService: jest.Mocked<
+    Pick<PinSetupService, 'setTransactionPin'>
+  > = makePinSetupService(),
 ): KycController {
   // Suppress logger output during tests.
   jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
@@ -109,6 +131,7 @@ function buildController(
     handoffTokenService as unknown as HandoffTokenService,
     kycService as unknown as KycService,
     walletService as unknown as WalletService,
+    pinSetupService as unknown as PinSetupService,
   );
 }
 
@@ -220,6 +243,21 @@ describe('KycController.complete', () => {
     );
   });
 
+  it('KycRejectedError maps to a friendly message — never echoes the raw provider reason', async () => {
+    const controller = buildController(
+      makeHandoffTokenService(),
+      makeKycService(new KycRejectedError('missing required identity fields')),
+    );
+
+    const err = await controller.complete(validDto).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnprocessableEntityException);
+    const message = (err as UnprocessableEntityException).message;
+    // The opaque provider reason must NOT leak to the client.
+    expect(message).not.toContain('missing required identity fields');
+    // The friendly copy guides the user to fix their NIN/BVN.
+    expect(message).toMatch(/NIN|BVN|identity/i);
+  });
+
   it('unknown error re-thrown as-is', async () => {
     const boom = new Error('unexpected boom');
     const controller = buildController(makeHandoffTokenService(boom));
@@ -292,5 +330,63 @@ describe('KycController.complete', () => {
       );
       expect(walletService.provisionAllEnabledNetworks).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('KycController.setPin', () => {
+  const AUTH_USER = { userId: USER_ID } as never;
+
+  it('sets the PIN for a verified PIN-less user and returns { hasPin: true }', async () => {
+    const pinSetup = makePinSetupService();
+    const controller = buildController(
+      makeHandoffTokenService(),
+      makeKycService(),
+      makeWalletService(),
+      pinSetup,
+    );
+
+    const result = await controller.setPin({ pin: '1357' }, AUTH_USER);
+
+    expect(pinSetup.setTransactionPin).toHaveBeenCalledWith(USER_ID, '1357');
+    expect(result).toEqual({ hasPin: true });
+  });
+
+  it('PinSetupNotVerifiedError → ForbiddenException (403)', async () => {
+    const controller = buildController(
+      makeHandoffTokenService(),
+      makeKycService(),
+      makeWalletService(),
+      makePinSetupService(new PinSetupNotVerifiedError()),
+    );
+
+    await expect(controller.setPin({ pin: '1357' }, AUTH_USER)).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('PinAlreadySetError → ConflictException (409)', async () => {
+    const controller = buildController(
+      makeHandoffTokenService(),
+      makeKycService(),
+      makeWalletService(),
+      makePinSetupService(new PinAlreadySetError()),
+    );
+
+    await expect(controller.setPin({ pin: '1357' }, AUTH_USER)).rejects.toThrow(
+      ConflictException,
+    );
+  });
+
+  it('rethrows unknown errors as-is', async () => {
+    const controller = buildController(
+      makeHandoffTokenService(),
+      makeKycService(),
+      makeWalletService(),
+      makePinSetupService(new Error('unexpected boom')),
+    );
+
+    await expect(controller.setPin({ pin: '1357' }, AUTH_USER)).rejects.toThrow(
+      'unexpected boom',
+    );
   });
 });

@@ -5,6 +5,39 @@ import {
   valueAtSellRate,
 } from './quote-pricing';
 
+describe('QuotePricingError', () => {
+  // Finding #2: a non-positive/below-minimum buy was throwing an UNMAPPED
+  // QuotePricingError (no `code`), so the global filter fell through to an opaque
+  // 500. A stable code lets the filter map it to a clean 422 even if the
+  // proposal-boundary guard is bypassed (defense-in-depth).
+  it('carries the stable QUOTE_INVALID_AMOUNT code', () => {
+    const err = new QuotePricingError('fiatAmount must be positive');
+    expect(err.code).toBe('QUOTE_INVALID_AMOUNT');
+  });
+
+  it('is an Error with a name and survives instanceof', () => {
+    const err = new QuotePricingError('boom');
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe('QuotePricingError');
+    expect(err instanceof QuotePricingError).toBe(true);
+  });
+
+  it('errors thrown from computeBuyQuote/computeSellQuote carry the code', () => {
+    try {
+      computeBuyQuote({
+        fiatAmount: 0,
+        baseRate: 1600,
+        buySpreadBps: 150,
+        processingFeeBps: 100,
+        cryptoDecimals: 6,
+      });
+      throw new Error('expected throw');
+    } catch (e) {
+      expect((e as QuotePricingError).code).toBe('QUOTE_INVALID_AMOUNT');
+    }
+  });
+});
+
 describe('computeBuyQuote', () => {
   it('applies the processing fee to fiat and the buySpread to the rate', () => {
     // buySpreadBps=150 → same result as the old spreadBps=150 buy test (no buy regression)

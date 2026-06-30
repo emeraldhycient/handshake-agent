@@ -1,8 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { LockIcon, AlertTriangleIcon, LoaderCircleIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { formatCountdown } from "@/lib/format"
 import {
   Sheet,
   SheetContent,
@@ -41,8 +42,44 @@ function ConfirmBody({
 }) {
   const [loading, setLoading] = useState(false)
 
+  // ── Quote-expiry guard ──────────────────────────────────────────────────────
+  // The proposal's server-issued expiry (when present) drives a live countdown
+  // mirroring QuoteCard, so the user can't enter their PIN against a dead quote.
+  // expiresAt is being added to the ConfirmPayload contract (lib/schemas); read
+  // it defensively until that lands.
+  const expiresAt = (payload as { expiresAt?: string }).expiresAt
+
+  function computeRemaining(): number {
+    if (!expiresAt) return Number.POSITIVE_INFINITY
+    return Math.max(
+      0,
+      Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000)
+    )
+  }
+
+  const [remaining, setRemaining] = useState<number>(computeRemaining)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    if (!expiresAt) return
+    // Initial remaining is computed by the useState initializer; the interval
+    // keeps it ticking. (No synchronous setState in the effect body.)
+    intervalRef.current = setInterval(() => {
+      setRemaining(computeRemaining())
+    }, 1000)
+    return () => {
+      if (intervalRef.current !== null) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expiresAt])
+
+  const isExpired = remaining <= 0
+
   async function handleConfirm() {
-    if (loading) return
+    if (loading || isExpired) return
     setLoading(true)
     try {
       await onConfirm()
@@ -68,9 +105,25 @@ function ConfirmBody({
 
       {/* Hero card */}
       <div className="mt-4 rounded-[18px] border border-border bg-card p-4">
-        <p className="text-xs font-bold tracking-widest text-muted-foreground-subtle uppercase">
-          {payload.heroLabel}
-        </p>
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-bold tracking-widest text-muted-foreground-subtle uppercase">
+            {payload.heroLabel}
+          </p>
+          {/* Live countdown — mirrors QuoteCard so the user sees the same lock
+              window after opening the sheet (scenario finding: buy-amounts). */}
+          {expiresAt && (
+            <span
+              className={cn(
+                "rounded-full px-2 py-[2px] text-[11px] font-semibold",
+                isExpired
+                  ? "bg-muted text-muted-foreground"
+                  : "bg-warn-muted text-warn"
+              )}
+            >
+              {isExpired ? "Expired" : `Locked ${formatCountdown(remaining)}`}
+            </span>
+          )}
+        </div>
         <Money
           as="div"
           value={payload.heroAmount}
@@ -123,12 +176,12 @@ function ConfirmBody({
 
       {/* Authorization error banner */}
       {error && (
-        <div className="border-danger bg-danger-muted mt-3 flex items-start gap-2.5 rounded-[14px] border p-3">
+        <div className="mt-3 flex items-start gap-2.5 rounded-[14px] border border-danger bg-danger-muted p-3">
           <AlertTriangleIcon
-            className="text-danger mt-0.5 h-[18px] w-[18px] shrink-0"
+            className="mt-0.5 h-[18px] w-[18px] shrink-0 text-danger"
             aria-hidden="true"
           />
-          <span className="text-danger-foreground text-[13px] leading-relaxed font-medium">
+          <span className="text-[13px] leading-relaxed font-medium text-danger-foreground">
             {error}
           </span>
         </div>
@@ -136,32 +189,47 @@ function ConfirmBody({
 
       {/* Actions */}
       <div className="mt-4 flex flex-col gap-2">
-        <Button
-          onClick={() => void handleConfirm()}
-          disabled={loading}
-          className={cn(
-            "w-full gap-2 bg-accent py-4 text-base font-bold text-accent-foreground",
-            "hover:bg-accent-deep",
-            loading && "cursor-not-allowed opacity-70"
-          )}
-        >
-          {loading ? (
-            <LoaderCircleIcon
-              className="h-[15px] w-[15px] animate-spin"
-              aria-hidden="true"
-            />
-          ) : (
-            <LockIcon className="h-[15px] w-[15px]" aria-hidden="true" />
-          )}
-          {loading ? "Authorizing…" : payload.cta}
-        </Button>
+        {isExpired ? (
+          // Expired quote — replace the PIN CTA so the user can never reach PIN
+          // entry on a dead quote (server still re-checks as the backstop).
+          <Button
+            onClick={onCancel}
+            disabled
+            aria-disabled
+            className={cn(
+              "w-full cursor-not-allowed gap-2 bg-muted py-4 text-base font-bold text-muted-foreground"
+            )}
+          >
+            Quote expired — request a new one
+          </Button>
+        ) : (
+          <Button
+            onClick={() => void handleConfirm()}
+            disabled={loading}
+            className={cn(
+              "w-full gap-2 bg-accent py-4 text-base font-bold text-accent-foreground",
+              "hover:bg-accent-deep",
+              loading && "cursor-not-allowed opacity-70"
+            )}
+          >
+            {loading ? (
+              <LoaderCircleIcon
+                className="h-[15px] w-[15px] animate-spin"
+                aria-hidden="true"
+              />
+            ) : (
+              <LockIcon className="h-[15px] w-[15px]" aria-hidden="true" />
+            )}
+            {loading ? "Authorizing…" : payload.cta}
+          </Button>
+        )}
         <Button
           variant="ghost"
           onClick={onCancel}
           disabled={loading}
           className="w-full text-sm font-semibold text-muted-foreground"
         >
-          Cancel
+          {isExpired ? "Close" : "Cancel"}
         </Button>
       </div>
     </div>

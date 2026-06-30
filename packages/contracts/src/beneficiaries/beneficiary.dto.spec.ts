@@ -6,6 +6,7 @@ import {
   BeneficiaryListResponseSchema,
   AddBankAccountRequestSchema,
   AddCryptoAddressRequestSchema,
+  DeleteBeneficiaryResponseSchema,
 } from './beneficiary.dto'
 
 // ─── BeneficiaryTypeSchema ──────────────────────────────────────────────────
@@ -188,6 +189,36 @@ describe('AddCryptoAddressRequestSchema', () => {
         network: 'TRON',
         asset: 'USDT',
         label: 'Cold wallet',
+      }),
+    ).toThrow()
+  })
+})
+
+// ─── DeleteBeneficiaryResponseSchema ────────────────────────────────────────
+
+describe('DeleteBeneficiaryResponseSchema', () => {
+  it('accepts a soft-delete acknowledgement with the removed id', () => {
+    const parsed = DeleteBeneficiaryResponseSchema.parse({
+      id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      deleted: true,
+    })
+    expect(parsed).toEqual({
+      id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      deleted: true,
+    })
+  })
+
+  it('rejects a non-uuid id', () => {
+    expect(() =>
+      DeleteBeneficiaryResponseSchema.parse({ id: 'nope', deleted: true }),
+    ).toThrow()
+  })
+
+  it('rejects deleted: false (the endpoint only ever acks a deletion)', () => {
+    expect(() =>
+      DeleteBeneficiaryResponseSchema.parse({
+        id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        deleted: false,
       }),
     ).toThrow()
   })

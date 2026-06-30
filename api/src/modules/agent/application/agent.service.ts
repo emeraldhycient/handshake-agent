@@ -1,7 +1,10 @@
 import { Injectable, Inject } from '@nestjs/common';
 import type { Intent } from '@handshake-agent/contracts';
 import { runAgent } from '../core/agent.graph';
-import type { LlmProvider } from '../core/ports/llm-provider.port';
+import type {
+  ConversationTurn,
+  LlmProvider,
+} from '../core/ports/llm-provider.port';
 import { LLM_PROVIDER, type IAgentPort } from './ports/agent.port';
 
 /**
@@ -24,9 +27,11 @@ import { LLM_PROVIDER, type IAgentPort } from './ports/agent.port';
 export class AgentService implements IAgentPort {
   constructor(@Inject(LLM_PROVIDER) private readonly llm: LlmProvider) {}
 
-  async run(userText: string): Promise<Intent> {
+  async run(userText: string, history?: ConversationTurn[]): Promise<Intent> {
     // Per-call graph compile (see TODO above). The LlmProvider closure is
     // captured inside runAgent — it is never read directly from the graph.
-    return runAgent({ userText, llm: this.llm });
+    // `history` is short-term memory supplied by the calling layer (no DB
+    // checkpointer here — CLAUDE.md §6).
+    return runAgent({ userText, llm: this.llm, history });
   }
 }

@@ -66,6 +66,7 @@ export function BalanceCard({
             <AssetIcon
               sym={asset.sym}
               tint={asset.tint}
+              logoUrl={asset.logoUrl}
               size={isMobile ? "md" : "sm"}
               className={cn(
                 "flex-none rounded-[10px] text-[13px] font-extrabold",

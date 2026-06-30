@@ -90,6 +90,33 @@ describe("ActivityTab", () => {
     )
   })
 
+  // ── Finding #5: shared error state offers a Retry affordance ───────────────
+  it("error branch: offers a Retry button", async () => {
+    vi.spyOn(gatewayModule.gateway, "getActivityPage").mockRejectedValue(
+      new Error("Network error")
+    )
+    render(<ActivityTab />, { wrapper: makeWrapper() })
+    await waitFor(
+      () =>
+        expect(
+          screen.getByRole("button", { name: /retry/i })
+        ).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+  })
+
+  it("empty branch: renders the shared empty state with no activity", async () => {
+    vi.spyOn(gatewayModule.gateway, "getActivityPage").mockResolvedValue({
+      items: [],
+      nextCursor: null,
+    })
+    render(<ActivityTab />, { wrapper: makeWrapper() })
+    await waitFor(
+      () => expect(screen.getByText(/no activity yet/i)).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+  })
+
   it("paginates: 'Load more' fetches and appends the next page", async () => {
     vi.spyOn(gatewayModule.gateway, "getActivityPage")
       .mockResolvedValueOnce({

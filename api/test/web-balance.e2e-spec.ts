@@ -220,7 +220,7 @@ describe('Web chat check_balance — e2e (AppModule, Testcontainers Postgres)', 
         firstName: 'Bola',
         lastName: 'Adeyemi',
         nin: '33445566778',
-        pin: '1234',
+        pin: '1357',
       })
       .expect(200);
     const userId = (ks.body as { userId: string }).userId;

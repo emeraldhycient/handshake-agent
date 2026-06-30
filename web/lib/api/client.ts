@@ -31,6 +31,27 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The exact message the response interceptor attaches when a silent token
+ * refresh fails — i.e. the session is unrecoverable and the user must re-auth.
+ *
+ * A money-flow 401 is ambiguous: it can be a wrong PIN / expired directive
+ * (`PIN_INVALID`, `DIRECTIVE_EXPIRED`, …) OR a dead session (this sentinel).
+ * The chat store branches on this constant so a dead session never masquerades
+ * as a "wrong PIN" prompt (findings #1/#2). Exported (not inlined) so the
+ * producer and the consumer can never drift.
+ */
+export const SESSION_EXPIRED_MESSAGE = "Session expired. Please log in again."
+
+/** True when `err` is the interceptor's unrecoverable-session 401. */
+export function isSessionExpiredError(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    err.status === 401 &&
+    err.message === SESSION_EXPIRED_MESSAGE
+  )
+}
+
 export const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api",
 })
@@ -87,16 +108,16 @@ api.interceptors.response.use(
             accessToken: string
             refreshToken: string
           }>("/auth/refresh", { refreshToken })
-          defaultAuthStore.getState().setTokens(data.accessToken, data.refreshToken)
+          defaultAuthStore
+            .getState()
+            .setTokens(data.accessToken, data.refreshToken)
           ;(config.headers as Record<string, string>)["Authorization"] =
             `Bearer ${data.accessToken}`
           return api(config)
         } catch {
           // Refresh failed — session is unrecoverable; clear and surface error.
           defaultAuthStore.getState().clear()
-          return Promise.reject(
-            new ApiError("Session expired. Please log in again.", 401),
-          )
+          return Promise.reject(new ApiError(SESSION_EXPIRED_MESSAGE, 401))
         }
       }
     }
@@ -105,5 +126,5 @@ api.interceptors.response.use(
     const message =
       error.response?.data?.message ?? error.message ?? "Unknown error"
     return Promise.reject(new ApiError(message, error.response?.status))
-  },
+  }
 )

@@ -64,6 +64,10 @@ function makeConfigService(): { get: <T>(key: string) => T | undefined } {
       if (key === 'WEB_APP_BASE_URL') {
         val = process.env.WEB_APP_BASE_URL ?? undefined;
       }
+      // NIN/BVN field-encryption key (NFR-1) — not in JSON defaults.
+      if (key === 'KYC_ENCRYPTION_KEY') {
+        val = 'a'.repeat(64);
+      }
       return val as T;
     },
   };
@@ -168,7 +172,7 @@ describe('WN-3: eager wallet provisioning on KYC completion (Testcontainers Post
 
     // Identity repos & services
     const handoffRepo = new HandoffTokenPrismaRepository(ps);
-    const kycRepo = new KycPrismaRepository(ps);
+    const kycRepo = new KycPrismaRepository(ps, configSvc);
     const identityRepo = new IdentityPrismaRepository(ps);
 
     handoffTokenService = new HandoffTokenService(handoffRepo, configSvc);
@@ -252,7 +256,7 @@ describe('WN-3: eager wallet provisioning on KYC completion (Testcontainers Post
       firstName: 'Ada',
       lastName: 'Eze',
       dateOfBirth: '1990-01-01',
-      pin: '5678',
+      pin: '1357',
     });
 
     // Emulate what KycController does after completeVerification (WN-3).
@@ -376,7 +380,7 @@ describe('WN-3: eager wallet provisioning on KYC completion (Testcontainers Post
       firstName: 'Funmi',
       lastName: 'Adeyemi',
       dateOfBirth: '1995-06-22',
-      pin: '4321',
+      pin: '1357',
     });
 
     const enabledNetworks = assetRegistry.enabledNetworks();

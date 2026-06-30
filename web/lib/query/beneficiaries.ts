@@ -15,6 +15,7 @@ import {
   listBeneficiaries,
   addBankAccount,
   addCryptoAddress,
+  deleteBeneficiary,
 } from "@/lib/api/beneficiaries"
 import { qk } from "./keys"
 
@@ -47,6 +48,26 @@ export function useAddCryptoAddress() {
   return useMutation({
     mutationFn: (body: AddCryptoAddressRequest) => addCryptoAddress(body),
     onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: qk.beneficiaries("crypto_address"),
+      })
+    },
+  })
+}
+
+/**
+ * Remove a saved beneficiary (soft-delete server-side). Invalidates BOTH list
+ * keys: the hook is type-agnostic (it deletes by id) and a stale/typo'd row must
+ * leave whichever picker is showing it.
+ */
+export function useDeleteBeneficiary() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => deleteBeneficiary(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: qk.beneficiaries("bank_account"),
+      })
       void queryClient.invalidateQueries({
         queryKey: qk.beneficiaries("crypto_address"),
       })

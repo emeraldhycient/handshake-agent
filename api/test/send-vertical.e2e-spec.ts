@@ -334,7 +334,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
     });
     userId = user.id;
 
-    await pinService.setPin(userId, '123456');
+    await pinService.setPin(userId, '194837');
 
     // Create a bound device and pin it to the user (Fix G §3.4).
     const device = await prisma.device.create({
@@ -507,7 +507,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -591,7 +591,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -618,7 +618,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -636,7 +636,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId: proposalId2,
         directiveId: dir2,
         nonce: nonce2,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey, // same key → idempotent path
       });
 
@@ -675,7 +675,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -746,7 +746,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -800,7 +800,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -1018,7 +1018,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId: proposal.id,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -1080,7 +1080,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 

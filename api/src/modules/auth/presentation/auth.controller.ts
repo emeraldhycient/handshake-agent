@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  HttpException,
   HttpStatus,
   NotFoundException,
   Post,
@@ -26,6 +27,7 @@ import {
   InvalidOtpError,
   InvalidRefreshTokenError,
   InvalidVerificationTokenError,
+  OtpLockedError,
   TokenSigningDisabledError,
   UserNotFoundError,
 } from '../domain/auth-errors';
@@ -65,6 +67,30 @@ export class AuthController {
     return this.guard(() => this.auth.loginRequest(dto));
   }
 
+  /**
+   * Resend the login OTP for the same email. Idempotent + rate-limited; returns
+   * the same neutral otp_sent response (no enumeration). Lets the UI offer an
+   * explicit "resend code" action after a wrong/stale code or a lockout.
+   */
+  @Post('login/resend')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Throttle({ auth: { limit: 5, ttl: 60_000 } })
+  async resendLoginOtp(@Body() dto: LoginDto): Promise<LoginRequestResponse> {
+    return this.guard(() => this.auth.resendLoginOtp(dto));
+  }
+
+  /**
+   * Resend the email-verification link. Idempotent + rate-limited; returns the
+   * neutral pending_verification response whether or not the email exists or is
+   * already verified (no enumeration, no duplicate account created).
+   */
+  @Post('verify-email/resend')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Throttle({ auth: { limit: 5, ttl: 60_000 } })
+  async resendVerification(@Body() dto: LoginDto): Promise<SignupResponse> {
+    return this.guard(() => this.auth.resendEmailVerification(dto));
+  }
+
   @Post('login/verify')
   @HttpCode(HttpStatus.OK)
   @Throttle({ auth: { limit: 30, ttl: 60_000 } })
@@ -96,6 +122,13 @@ export class AuthController {
     try {
       return await fn();
     } catch (err) {
+      if (err instanceof OtpLockedError) {
+        // Distinct from a wrong code: the guess budget is spent. 429 + a
+        // request-a-new-code message routes the UI to resend instead of looping
+        // a dead challenge. Safe to distinguish — only reachable for a real
+        // verified user (see OtpLockedError doc / AuthService.loginVerify).
+        throw new HttpException(err.message, HttpStatus.TOO_MANY_REQUESTS);
+      }
       if (
         err instanceof InvalidVerificationTokenError ||
         err instanceof InvalidOtpError ||

@@ -10,7 +10,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { buildBuyConfirm } from "@/lib/chat/flow"
 import { createChatStore } from "./chat-store"
-import { ApiError } from "@/lib/api/client"
+import { greetingDesktop, GREETING_D } from "@/lib/constants"
+import { ApiError, SESSION_EXPIRED_MESSAGE } from "@/lib/api/client"
 import type {
   WebChatResponse,
   ChatMessageRequest,
@@ -237,6 +238,49 @@ describe("chat store", () => {
     expect(thread[0].kind).toBe("text")
     expect(store.getState().chips.m.length).toBeGreaterThan(0)
     expect(store.getState().input.m).toBe("")
+  })
+
+  // ─── desktop greeting personalization ─────────────────────────────────────────
+
+  it("initial desktop greeting is the name-free generic (no hardcoded name)", () => {
+    const greeting = store.getState().threads.d[0]
+    expect(greeting.kind).toBe("text")
+    expect(greeting.kind === "text" && greeting.text).toBe(GREETING_D)
+    expect(greeting.kind === "text" && greeting.text).not.toMatch(/amara/i)
+  })
+
+  it("setDesktopGreeting personalizes the desktop greeting with the first name", () => {
+    store.getState().setDesktopGreeting("Amara")
+    const greeting = store.getState().threads.d[0]
+    expect(greeting.kind === "text" && greeting.text).toBe(
+      greetingDesktop("Amara")
+    )
+    expect(greeting.kind === "text" && greeting.text).toMatch(
+      /welcome back, amara/i
+    )
+    // The greeting id is preserved (still the first message, not appended).
+    expect(store.getState().threads.d).toHaveLength(1)
+  })
+
+  it("setDesktopGreeting with no name keeps the name-free greeting", () => {
+    store.getState().setDesktopGreeting()
+    const greeting = store.getState().threads.d[0]
+    expect(greeting.kind === "text" && greeting.text).toBe(GREETING_D)
+  })
+
+  it("setDesktopGreeting does not touch the mobile thread", () => {
+    store.getState().setDesktopGreeting("Amara")
+    const mGreeting = store.getState().threads.m[0]
+    expect(mGreeting.kind === "text" && mGreeting.text).not.toMatch(/amara/i)
+  })
+
+  it("setDesktopGreeting is a no-op once the conversation has started (never clobbers history)", () => {
+    store.getState().send("d", "Buy ₦50,000 of USDT", "buy")
+    const before = store.getState().threads.d
+    store.getState().setDesktopGreeting("Amara")
+    const after = store.getState().threads.d
+    // Thread is unchanged — the greeting is only personalized on first load.
+    expect(after).toEqual(before)
   })
 
   // ─── deterministic IDs ───────────────────────────────────────────────────────
@@ -589,6 +633,177 @@ describe("buy execute flow (authenticated path)", () => {
     expect(store.getState().pinOpen).toBe(true)
     expect(store.getState().pin).toBe("")
     expect(store.getState().pinError).toBe("Incorrect PIN")
+  })
+
+  it("pinComplete with a real PIN-auth 401 (e.g. PIN_INVALID) re-opens the pin pad", async () => {
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.reject(new ApiError("Authorization failed.", 401))
+    )
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+    })
+    store.getState().openConfirm("m", buildBuyConfirm())
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "9999" })
+    await store.getState().pinComplete()
+
+    // A wrong PIN / expired directive IS retryable → reopen the pad.
+    expect(store.getState().pinOpen).toBe(true)
+    expect(store.getState().pinError).toBe("Authorization failed.")
+  })
+
+  // ─── Finding #1: a dead session mid-execute must NOT re-prompt for a PIN ─────
+
+  it("pinComplete session-expired 401 closes the pad and redirects (never pinError)", async () => {
+    const authorizeApi = makeAuthApi()
+    const onSessionExpired = vi.fn()
+    const executeApi = vi.fn(() =>
+      Promise.reject(new ApiError(SESSION_EXPIRED_MESSAGE, 401))
+    )
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+      onSessionExpired,
+    })
+    store.getState().openConfirm("m", buildBuyConfirm())
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    expect(onSessionExpired).toHaveBeenCalledTimes(1)
+    // The PIN pad is CLOSED (a PIN cannot fix a dead session) and pinError is
+    // not set — it never masquerades as a wrong PIN.
+    expect(store.getState().pinOpen).toBe(false)
+    expect(store.getState().pinError).toBeNull()
+    const last = store.getState().threads.m.at(-1)!
+    if (last.kind === "text")
+      expect(last.text.toLowerCase()).toContain("session")
+  })
+
+  // ─── Finding #5: swap drift / unavailable / insufficient at execute time ────
+  // must NOT be shown as "Incorrect PIN or expired session" — these are not PIN
+  // errors and re-entering the PIN cannot fix them.
+
+  it("pinComplete quote-drift (422) appends a chat message and CLOSES the pad (not pinError)", async () => {
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.reject(
+        new ApiError("The quote changed. Please re-quote and try again.", 422)
+      )
+    )
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+    })
+    store.getState().openConfirm("m", { ...buildBuyConfirm(), action: "swap" })
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    // Pad closed, no PIN error — the real cause surfaces as an assistant message.
+    expect(store.getState().pinOpen).toBe(false)
+    expect(store.getState().pinError).toBeNull()
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") expect(last.text).toContain("quote changed")
+  })
+
+  it("pinComplete swap-unavailable (503) appends a chat message and CLOSES the pad", async () => {
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.reject(
+        new ApiError("Service temporarily unavailable. Please try again.", 503)
+      )
+    )
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+    })
+    store.getState().openConfirm("m", { ...buildBuyConfirm(), action: "swap" })
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    expect(store.getState().pinOpen).toBe(false)
+    expect(store.getState().pinError).toBeNull()
+    const last = store.getState().threads.m.at(-1)!
+    // A 503 is a generic infra failure → generic fallback copy, not pinError.
+    if (last.kind === "text")
+      expect(last.text).toContain("trouble reaching the assistant")
+  })
+
+  it("pinComplete insufficient-balance (422) appends a chat message and CLOSES the pad", async () => {
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.reject(
+        new ApiError("Insufficient balance for this transaction.", 422)
+      )
+    )
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+    })
+    store.getState().openConfirm("m", { ...buildBuyConfirm(), action: "swap" })
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    expect(store.getState().pinOpen).toBe(false)
+    expect(store.getState().pinError).toBeNull()
+    const last = store.getState().threads.m.at(-1)!
+    if (last.kind === "text")
+      expect(last.text).toContain("Insufficient balance")
+  })
+
+  // ─── Finding #4: a swap that returns 'settling' renders a SWAP card ─────────
+
+  it("pinComplete (swap settling) appends a settling card with swap copy + reference", async () => {
+    const transactionId = "wwwwwwww-wwww-wwww-wwww-wwwwwwwwwwww"
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.resolve({
+        transactionId,
+        status: "settling" as const,
+        swap: { providerSwapId: "swap-ref-1" },
+      })
+    )
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+    })
+    store.getState().openConfirm("m", { ...buildBuyConfirm(), action: "swap" })
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    const settling = store
+      .getState()
+      .threads.m.find((m) => m.kind === "settling")
+    expect(settling).toBeDefined()
+    if (settling?.kind === "settling") {
+      expect(settling.txType).toBe("swap")
+      expect(settling.reference).toBe("swap-ref-1")
+      expect(settling.transactionId).toBe(transactionId)
+      // Swap copy, NOT "Broadcasting your transfer on-chain" (the send copy).
+      expect(settling.subtitle.toLowerCase()).toContain("swap")
+      expect(settling.subtitle).not.toContain("Broadcasting your transfer")
+    }
+    expect(store.getState().pinOpen).toBe(false)
+    expect(store.getState()._settlingAction).toBe("swap")
   })
 })
 
@@ -958,6 +1173,65 @@ describe("sendToAgent", () => {
     expect(store.getState().pendingProposalId).toBe(proposalId)
   })
 
+  // ─── Finding #3: resolving a STALE beneficiary card must re-send the intent ──
+  // that card was created for — NOT whatever the user typed most recently.
+
+  it("resolveBeneficiary re-sends the originating intent, not a later unrelated message", async () => {
+    // Turn 1: "sell 10 usdt" → needs_beneficiary (a card bound to THIS text).
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "needs_beneficiary",
+        beneficiaryType: "bank_account",
+      })
+    )
+    await store.getState().sendToAgent("m", "sell 10 usdt")
+    const card = store
+      .getState()
+      .threads.m.find((m) => m.kind === "needs_beneficiary")!
+    expect(card.kind).toBe("needs_beneficiary")
+    const cardId = card.id
+
+    // Turn 2: the user types something else entirely (a balance check), which
+    // overwrites the mutable _lastIntentText.
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "balance",
+        fiatCurrency: "NGN",
+        totalFiatValue: "100.00",
+        balances: [],
+      })
+    )
+    await store.getState().sendToAgent("m", "what's my balance")
+
+    // Now resolve the OLD card. It must re-send "sell 10 usdt", not
+    // "what's my balance".
+    const proposalId = "33333333-3333-3333-3333-333333333333"
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "proposal",
+        txType: "sell",
+        proposalId,
+        confirmation: {
+          proposalId,
+          asset: "USDT",
+          cryptoAmount: "10",
+          fiatCurrency: "NGN",
+          fxRate: "1600",
+          processingFeeAmount: "80",
+          netFiatAmount: "15920",
+          beneficiaryLabel: "My GTB",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        },
+      })
+    )
+    await store.getState().resolveBeneficiary("m", "ben-9", cardId)
+
+    expect(mockApi).toHaveBeenLastCalledWith({
+      text: "sell 10 usdt",
+      beneficiaryId: "ben-9",
+    })
+  })
+
   it("not_supported outcome → 'not supported' text message", async () => {
     mockApi.mockResolvedValue(
       makeResponse({ kind: "not_supported", action: "swap" })
@@ -1079,6 +1353,52 @@ describe("sendToAgent", () => {
       expect(last.text).toBe("RWF isn't live yet")
     }
     expect(store.getState().typing.m).toBe(false)
+  })
+
+  // ─── Finding #2: agent-step session expiry → redirect, not a dead-end bubble ─
+
+  it("session-expired 401 in sendToAgent triggers the redirect handler (not a normal bubble)", async () => {
+    const onSessionExpired = vi.fn()
+    const s = createChatStore({
+      schedule: immediate,
+      chatApi: mockApi,
+      onSessionExpired,
+    })
+    mockApi.mockRejectedValue(new ApiError(SESSION_EXPIRED_MESSAGE, 401))
+    await s.getState().sendToAgent("m", "buy 100 usdt")
+
+    expect(onSessionExpired).toHaveBeenCalledTimes(1)
+    // The user sees a clear session-expired notice, NOT the raw message as a
+    // generic assistant reply or the "trouble reaching the assistant" fallback.
+    const last = s.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("text")
+    if (last.kind === "text") {
+      expect(last.text.toLowerCase()).toContain("session")
+      expect(last.text.toLowerCase()).toContain("log")
+    }
+    expect(s.getState().typing.m).toBe(false)
+  })
+
+  it("setSessionExpiredHandler wires the redirect after construction", async () => {
+    const onSessionExpired = vi.fn()
+    store.getState().setSessionExpiredHandler(onSessionExpired)
+    mockApi.mockRejectedValue(new ApiError(SESSION_EXPIRED_MESSAGE, 401))
+    await store.getState().sendToAgent("m", "buy 100 usdt")
+    expect(onSessionExpired).toHaveBeenCalledTimes(1)
+  })
+
+  it("a NON-session 401 in sendToAgent still surfaces the server message (not a redirect)", async () => {
+    const onSessionExpired = vi.fn()
+    const s = createChatStore({
+      schedule: immediate,
+      chatApi: mockApi,
+      onSessionExpired,
+    })
+    mockApi.mockRejectedValue(new ApiError("Authorization failed.", 401))
+    await s.getState().sendToAgent("m", "buy 100 usdt")
+    expect(onSessionExpired).not.toHaveBeenCalled()
+    const last = s.getState().threads.m.at(-1)!
+    if (last.kind === "text") expect(last.text).toBe("Authorization failed.")
   })
 })
 

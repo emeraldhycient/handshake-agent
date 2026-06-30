@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 import { WalletPage } from "./wallet-page"
@@ -112,5 +112,65 @@ describe("WalletPage", () => {
       "receive",
       "Show my deposit address"
     )
+  })
+
+  // ── Finding #3: multi-asset deposit selector ──────────────────────────────
+  describe("multi-asset deposit panel", () => {
+    it("renders an asset selector (tablist) over the user's depositable holdings", async () => {
+      render(<WalletPage onQuickAction={() => {}} />, { wrapper })
+      const tablist = await screen.findByRole("tablist", {
+        name: /deposit asset/i,
+      })
+      // USDT and BTC are crypto; Naira (fiat) is NOT depositable on-chain.
+      expect(
+        within(tablist).getByRole("tab", { name: /USDT/i })
+      ).toBeInTheDocument()
+      expect(
+        within(tablist).getByRole("tab", { name: /BTC/i })
+      ).toBeInTheDocument()
+      expect(
+        within(tablist).queryByRole("tab", { name: /naira/i })
+      ).not.toBeInTheDocument()
+    })
+
+    it("shows the DepositNetworkWarning naming the network for the selected asset", async () => {
+      render(<WalletPage onQuickAction={() => {}} />, { wrapper })
+      // The shared deposit warning is the role=alert; it names the network.
+      const alert = await screen.findByRole("alert")
+      expect(alert).toHaveTextContent(/TRON/)
+      expect(alert).toHaveTextContent(/lost permanently/i)
+    })
+
+    it("states the address is shared when another asset uses the same network", async () => {
+      // USDT and TRX both deposit to the TRON address — the panel must say so
+      // rather than implying separate addresses. With the mock basket only USDT
+      // maps to TRON, so the shared note appears only when >1 asset matches; we
+      // assert the network is named honestly on the selected USDT tab.
+      render(<WalletPage onQuickAction={() => {}} />, { wrapper })
+      await waitFor(() =>
+        expect(
+          screen.getByText(/TQn9Y2khEb7g5mZ8FjpRt1cWnH4dHkLm3vQ/)
+        ).toBeInTheDocument()
+      )
+      // The network is explicitly named near the address.
+      expect(screen.getByText(/USDT deposit/i)).toHaveTextContent(/TRON/)
+    })
+
+    it("does not show a (wrong) TRON address for an asset on another network", async () => {
+      const user = userEvent.setup()
+      render(<WalletPage onQuickAction={() => {}} />, { wrapper })
+      // Select BTC (mock: no TRON network) — the TRON address must NOT be shown
+      // for it (showing it would risk a permanent loss of funds).
+      const btcTab = await screen.findByRole("tab", { name: /BTC/i })
+      await user.click(btcTab)
+      await waitFor(() =>
+        expect(
+          screen.getByText(/not available|ask in chat|isn't available/i)
+        ).toBeInTheDocument()
+      )
+      expect(
+        screen.queryByText("TQn9Y2khEb7g5mZ8FjpRt1cWnH4dHkLm3vQ")
+      ).not.toBeInTheDocument()
+    })
   })
 })

@@ -30,6 +30,26 @@ import type {
 /** Drives sizing/padding/radii variants across all chat message cards. */
 export type Density = "mobile" | "desktop"
 
+// ─── ActionButton (shared quick-action primitive) ────────────────────────────
+
+/**
+ * The one canonical Buy/Send/Receive/Swap quick-action button (§13.1). Used by
+ * the overview hero, the wallet page header, and the mobile wallet tab so all
+ * three render identically. `layout` switches between the inline pill (desktop)
+ * and the stacked icon-tile (mobile wallet). The `label` is always the
+ * accessible name; `icon` is decorative (callers pass an aria-hidden glyph).
+ */
+export interface ActionButtonProps {
+  label: string
+  /** Decorative glyph/icon node — rendered aria-hidden; the label names the button. */
+  icon?: React.ReactNode
+  variant?: "primary" | "secondary"
+  /** "inline" → icon beside label (default). "stacked" → icon above label (mobile tile). */
+  layout?: "inline" | "stacked"
+  onClick: () => void
+  className?: string
+}
+
 // ─── Money (10.1) ─────────────────────────────────────────────────────────────
 
 export interface MoneyProps {
@@ -60,6 +80,12 @@ export interface AssetIconProps {
   sym: string
   /** Data tint color — applied via inline style (the one approved hex exception) */
   tint: string
+  /**
+   * Optional absolute URL to the asset's logo image. When set, the icon renders
+   * the logo (lazy, alt=sym); on a missing URL or load error it falls back to
+   * the tinted text badge.
+   */
+  logoUrl?: string
   size?: "sm" | "md"
   className?: string
 }
@@ -148,8 +174,13 @@ export interface ChatMessageViewProps {
   density: Density
   onConfirm: (m: ChatMessage) => void
   onSelectTicket: (opt: TicketOption) => void
-  /** Resolve a needs_beneficiary card — re-asks the sell/send with the new id. */
-  onResolveBeneficiary: (beneficiaryId: string) => void
+  /**
+   * Resolve a needs_beneficiary card — re-asks the sell/send with the new id.
+   * `messageId` is the resolving card's id so the store resumes the EXACT intent
+   * that card was bound to (not the mutable last-intent). Optional for legacy
+   * callers that don't forward it.
+   */
+  onResolveBeneficiary: (beneficiaryId: string, messageId?: string) => void
 }
 
 /** 12.3 */
@@ -175,7 +206,8 @@ export interface ChatThreadProps {
   density: Density
   onConfirm: (m: ChatMessage) => void
   onSelectTicket: (opt: TicketOption) => void
-  onResolveBeneficiary: (beneficiaryId: string) => void
+  /** Forwarded to each card; `messageId` binds the resume to that exact card. */
+  onResolveBeneficiary: (beneficiaryId: string, messageId?: string) => void
 }
 
 // ─── Phase 13 overlay components ──────────────────────────────────────────────
@@ -234,8 +266,16 @@ export type SwapCardProps = SwapView & {
 /** Inline add/select-beneficiary card shown for a needs_beneficiary outcome */
 export type NeedsBeneficiaryCardProps = NeedsBeneficiaryView & {
   density: Density
-  /** Called with the chosen/added beneficiary id once the user resolves it. */
-  onResolve: (beneficiaryId: string) => void
+  /**
+   * This card's chat-message id. Forwarded to `onResolve` so the store resumes
+   * the EXACT intent this card was created for (not the mutable last-intent).
+   */
+  messageId?: string
+  /**
+   * Called with the chosen/added beneficiary id once the user resolves it; the
+   * card forwards its own `messageId` as the second arg for per-card binding.
+   */
+  onResolve: (beneficiaryId: string, messageId?: string) => void
   className?: string
 }
 

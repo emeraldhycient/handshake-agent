@@ -4,6 +4,7 @@ import {
   InvalidOtpError,
   InvalidRefreshTokenError,
   InvalidVerificationTokenError,
+  OtpLockedError,
   UserNotFoundError,
 } from '../domain/auth-errors';
 import { AuthService } from './auth.service';
@@ -214,6 +215,75 @@ describe('AuthService.loginRequest', () => {
   });
 });
 
+describe('AuthService.resendLoginOtp', () => {
+  it('re-issues a fresh OTP for a verified user (same neutral otp_sent response)', async () => {
+    const { service, email, challengeRepo, userRepo } = makeDeps();
+    userRepo.findByEmail.mockResolvedValueOnce({
+      id: 'u1',
+      email: 'a@b.com',
+      emailVerifiedAt: new Date(),
+      kycStatus: 'verified',
+      kycTier: 'tier_1',
+      pinHash: 'x',
+    });
+    const res = await service.resendLoginOtp({ email: 'a@b.com' });
+    expect(challengeRepo.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', type: 'otp_email' }),
+    );
+    expect(email.sendLoginOtp).toHaveBeenCalled();
+    expect(res).toEqual({ status: 'otp_sent' });
+  });
+
+  it('is neutral for an unknown user (no send, no enumeration)', async () => {
+    const { service, email } = makeDeps();
+    const res = await service.resendLoginOtp({ email: 'ghost@b.com' });
+    expect(email.sendLoginOtp).not.toHaveBeenCalled();
+    expect(res).toEqual({ status: 'otp_sent' });
+  });
+});
+
+describe('AuthService.resendEmailVerification', () => {
+  it('re-issues a fresh verification token for an unverified existing user', async () => {
+    const { service, email, challengeRepo, userRepo } = makeDeps();
+    userRepo.findByEmail.mockResolvedValueOnce({
+      id: 'u1',
+      email: 'a@b.com',
+      emailVerifiedAt: null, // not yet verified — needs a resend
+      kycStatus: 'not_started',
+      kycTier: 'unverified',
+      pinHash: null as unknown as string,
+    });
+    const res = await service.resendEmailVerification({ email: 'a@b.com' });
+    expect(challengeRepo.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', type: 'email_verification' }),
+    );
+    expect(email.sendEmailVerification).toHaveBeenCalled();
+    expect(res).toEqual({ status: 'pending_verification' });
+  });
+
+  it('does NOT re-send when the email is already verified (idempotent, neutral)', async () => {
+    const { service, email, userRepo } = makeDeps();
+    userRepo.findByEmail.mockResolvedValueOnce({
+      id: 'u1',
+      email: 'a@b.com',
+      emailVerifiedAt: new Date(), // already verified — nothing to resend
+      kycStatus: 'verified',
+      kycTier: 'tier_1',
+      pinHash: 'x',
+    });
+    const res = await service.resendEmailVerification({ email: 'a@b.com' });
+    expect(email.sendEmailVerification).not.toHaveBeenCalled();
+    expect(res).toEqual({ status: 'pending_verification' });
+  });
+
+  it('is neutral for an unknown user (no send, no enumeration)', async () => {
+    const { service, email } = makeDeps();
+    const res = await service.resendEmailVerification({ email: 'ghost@b.com' });
+    expect(email.sendEmailVerification).not.toHaveBeenCalled();
+    expect(res).toEqual({ status: 'pending_verification' });
+  });
+});
+
 describe('AuthService.loginVerify', () => {
   const verified = {
     id: 'u1',
@@ -286,7 +356,7 @@ describe('AuthService.loginVerify', () => {
     expect(challengeRepo.incrementAttempt).toHaveBeenCalledWith('c1');
   });
 
-  it('throws InvalidOtpError when attempts are exhausted', async () => {
+  it('throws OtpLockedError (distinct from a wrong code) when attempts are exhausted', async () => {
     const { service, userRepo, challengeRepo } = makeDeps();
     userRepo.findByEmail.mockResolvedValueOnce(verified);
     challengeRepo.findActiveByUserAndType.mockResolvedValueOnce({
@@ -300,8 +370,46 @@ describe('AuthService.loginVerify', () => {
         otp: '123456',
         deviceFingerprint: 'fp-1',
       }),
-    ).rejects.toBeInstanceOf(InvalidOtpError);
+    ).rejects.toBeInstanceOf(OtpLockedError);
     expect(challengeRepo.incrementAttempt).not.toHaveBeenCalled();
+  });
+
+  it('throws OtpLockedError even when the supplied code happens to match (the budget is exhausted)', async () => {
+    const { service, userRepo, challengeRepo } = makeDeps();
+    userRepo.findByEmail.mockResolvedValueOnce(verified);
+    challengeRepo.findActiveByUserAndType.mockResolvedValueOnce({
+      id: 'c1',
+      challengeHash: 'hash(123456)', // matches the supplied otp
+      attemptCount: 5,
+    });
+    await expect(
+      service.loginVerify({
+        email: 'a@b.com',
+        otp: '123456',
+        deviceFingerprint: 'fp-1',
+      }),
+    ).rejects.toBeInstanceOf(OtpLockedError);
+    // A locked challenge must NOT be consumed or grant a session.
+    expect(challengeRepo.consume).not.toHaveBeenCalled();
+  });
+
+  it('throws InvalidOtpError (NOT OtpLockedError) for an unknown user even past the cap — no enumeration leak', async () => {
+    const { service, userRepo, challengeRepo } = makeDeps();
+    userRepo.findByEmail.mockResolvedValueOnce(null);
+    // Even if a dummy lookup somehow returned an exhausted challenge, an
+    // unknown user must get the generic InvalidOtpError, never the locked one.
+    challengeRepo.findActiveByUserAndType.mockResolvedValueOnce({
+      id: 'dummy',
+      challengeHash: 'hash(x)',
+      attemptCount: 99,
+    });
+    await expect(
+      service.loginVerify({
+        email: 'ghost@b.com',
+        otp: '123456',
+        deviceFingerprint: 'fp',
+      }),
+    ).rejects.toBeInstanceOf(InvalidOtpError);
   });
 
   it('throws InvalidOtpError for an unknown user — and still performs a challenge lookup + constant-time compare (timing oracle defence)', async () => {

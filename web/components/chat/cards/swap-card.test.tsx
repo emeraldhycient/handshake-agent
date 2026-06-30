@@ -114,3 +114,39 @@ describe("SwapCard", () => {
     expect(btn).toBeDisabled()
   })
 })
+
+describe("SwapCard — fee denomination + reconcilable total (finding: swap-receive)", () => {
+  it("renders the network fee in its own fee asset when feeAsset is provided (gas, not fromAsset)", () => {
+    // feeAsset is being added to the SwapView contract (lib/schemas); attach it
+    // via a spread cast until that lands so this card-side test compiles.
+    const withFeeAsset = {
+      ...baseProps,
+      networkFee: "3.2",
+      transactionFee: "0",
+      feeAsset: "TRX",
+    } as SwapCardProps
+    render(<SwapCard {...withFeeAsset} />)
+    expect(screen.getByText("Network fee")).toBeInTheDocument()
+    // gas denominated in the fee asset, NOT the fromAsset
+    expect(screen.getByText("3.2 TRX")).toBeInTheDocument()
+    expect(screen.queryByText("3.2 USDT")).not.toBeInTheDocument()
+  })
+
+  it("falls back to the fromAsset denomination when no feeAsset is provided", () => {
+    render(<SwapCard {...baseProps} networkFee="1" />)
+    expect(screen.getByText("1 USDT")).toBeInTheDocument()
+  })
+
+  it("keeps Total debit at the reserved fromAmount of fromAsset", () => {
+    render(<SwapCard {...baseProps} />)
+    expect(screen.getByText("Total debit")).toBeInTheDocument()
+    expect(screen.getAllByText("100 USDT").length).toBeGreaterThan(0)
+  })
+
+  it("tells the user fees are deducted from the amount received (reconcilable total)", () => {
+    render(<SwapCard {...baseProps} />)
+    expect(
+      screen.getByText(/fees are deducted from the amount you receive/i)
+    ).toBeInTheDocument()
+  })
+})

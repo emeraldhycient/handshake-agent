@@ -314,6 +314,7 @@ export class ExecutionService {
   private readonly maxBuyDriftBps: number;
   private readonly maxSellDriftBps: number;
   private readonly maxSwapDriftBps: number;
+  private readonly swapSpreadBps: number;
   private readonly logger = new Logger(ExecutionService.name);
 
   constructor(
@@ -366,6 +367,7 @@ export class ExecutionService {
     this.maxSellDriftBps = sellConfig.maxDriftBps;
     const swapConfig = this.config.get<SwapConfig>('swap');
     this.maxSwapDriftBps = swapConfig?.maxDriftBps ?? 50;
+    this.swapSpreadBps = swapConfig?.spreadBps ?? 0;
   }
 
   /**
@@ -534,9 +536,12 @@ export class ExecutionService {
     await this.walletService.getOrProvisionNetworkWallet(userId, buyNetwork);
 
     // 8b. Open a Flutterwave NGN virtual-account collection.
-    // Customer details: sourced from user KYC if available; safe fallbacks used
-    // for optional fields (KYC names may be null — noted, not blocking).
-    // TODO: when KycProfile is queryable from the engine, use real firstname/lastname.
+    // Customer attribution: thread the real KYC name + verified email through the
+    // application-layer accessor (§3.2 — no Prisma in the engine) so a real
+    // virtual-account pay-in carries correct attribution for reconciliation /
+    // compliance. Each field falls back to a safe placeholder only when its KYC
+    // value is null (profile not yet captured).
+    const originator = await this.kycGate.getOriginatorIdentity(userId);
     // FUNDS-SAFETY (§3.1): the buy reserve (Step 7) posts NO ledger entry — the
     // user pays NGN later — so a createCollection failure means NO funds moved
     // and there is nothing to refund. But the settling Transaction + consumed
@@ -553,11 +558,11 @@ export class ExecutionService {
           currency: storedQuote.fiatCurrency,
           reference: idempotencyKey,
           customer: {
-            // Safe fallback: use a synthetic email derived from userId.
-            // Real email will come from User.verifiedEmail in a future iteration.
-            email: `user+${userId}@handshake.internal`,
-            firstname: 'Handshake',
-            lastname: 'User',
+            // Safe fallbacks: synthetic userId-derived email + neutral name,
+            // used only when the corresponding KYC field is null.
+            email: originator.email ?? `user+${userId}@handshake.internal`,
+            firstname: originator.firstName ?? 'Handshake',
+            lastname: originator.lastName ?? 'User',
           },
         }),
       );
@@ -1845,13 +1850,26 @@ export class ExecutionService {
     const toAssetId = params.toAssetId;
     const storedRate = Number(params.rate ?? '0');
     const walletId = params.walletId;
-    const addressId = walletId; // wallet.providerReference — stored as walletId in params
 
     if (!walletId) {
       throw new ProposalNotExecutableError(
         'proposal parameters missing walletId',
       );
     }
+
+    // Re-load the (user, network) wallet to get providerReference — the Blockradar
+    // child-address id the swap provider requires as addressId. params.walletId is
+    // the DB wallet.id (system-of-record key), NOT the provider address id; passing
+    // it to the provider would make every real swap fail. Mirror the send path
+    // (settleSendStatus / executeSend re-load the wallet for providerReference).
+    // Network is derived from fromAsset (per-network wallet model, WN-1), the same
+    // derivation proposeSwap used to resolve the wallet at proposal time.
+    const network = this.assetRegistry.defaultNetworkFor(fromAsset);
+    const wallet = await this.walletService.getOrProvisionNetworkWallet(
+      userId,
+      network,
+    );
+    const addressId = wallet.providerReference;
 
     // ── Step 2: Re-quote drift check ─────────────────────────────────────────
     // Re-fetch a fresh quote from the provider to detect slippage.
@@ -1865,7 +1883,14 @@ export class ExecutionService {
       }),
     );
 
-    const freshRate = Number(freshQuote.rate ?? '0');
+    // proposeSwap folds the platform spread INTO the stored rate
+    // (params.rate = provider rate × (1 − spreadBps/10000)). The provider's
+    // getQuote returns the raw (pre-spread) rate, so fold the SAME spread into
+    // the fresh rate before measuring drift — otherwise the comparison is
+    // effective-vs-raw and every swap "drifts" by ~spreadBps and fails the gate.
+    // Drift must measure PROVIDER slippage between quote and execute, not our spread.
+    const freshRate =
+      Number(freshQuote.rate ?? '0') * (1 - this.swapSpreadBps / 10_000);
     const driftBps =
       storedRate > 0
         ? (Math.abs(freshRate - storedRate) / storedRate) * 10_000

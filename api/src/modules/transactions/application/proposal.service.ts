@@ -38,6 +38,16 @@ import {
   SwapSameAssetError,
 } from '../domain/execution-errors';
 import {
+  AmountTooSmallError,
+  SelfSendError,
+} from '../domain/amount-guard-errors';
+import {
+  resolveMinBuyFiat,
+  resolveMinCryptoAmount,
+  type AmountFloorConfig,
+  type CryptoFloorOperation,
+} from '../domain/amount-floors';
+import {
   BeneficiaryNotFoundError,
   BeneficiaryWrongTypeError,
   BeneficiaryCoolingOffError,
@@ -207,11 +217,63 @@ export class ProposalService {
     private readonly swapProvider: ISwapProvider,
   ) {}
 
+  /**
+   * Reads the admin-tunable amount-floor keys off the `pricing` config section.
+   * Narrow read-only view (findings #3/#4) — the canonical typed home for these
+   * keys is `PricingConfig`; this cast crosses that boundary safely until they
+   * are added there (tracked cross-layer).
+   */
+  private amountFloorConfig(): AmountFloorConfig | undefined {
+    return this.configService.get<AmountFloorConfig>('pricing');
+  }
+
+  /**
+   * Guards a FIAT amount (buy) at the proposal boundary — BEFORE pricing/gating.
+   * Rejects non-positive and below-minimum amounts with AmountTooSmallError (422)
+   * so the user gets a clean, correctable message instead of an opaque 500 (#2)
+   * or a confusing tier-limit 403 (#6).
+   */
+  private assertFiatAmountAtLeastMin(
+    amount: string,
+    fiatCurrency: string,
+  ): void {
+    const min = resolveMinBuyFiat(this.amountFloorConfig(), fiatCurrency);
+    if (toScaled(amount) < toScaled(min)) {
+      throw new AmountTooSmallError('buy', amount, min, fiatCurrency);
+    }
+  }
+
+  /**
+   * Guards a CRYPTO amount (sell/send/swap) at the proposal boundary. Rejects
+   * non-positive / below-minimum / dust amounts with AmountTooSmallError (422).
+   * The minimum is per-operation, per-asset and admin-tunable (#4).
+   */
+  private assertCryptoAmountAtLeastMin(
+    operation: CryptoFloorOperation,
+    amount: string,
+    asset: string,
+  ): void {
+    const min = resolveMinCryptoAmount(
+      this.amountFloorConfig(),
+      operation,
+      asset,
+    );
+    if (toScaled(amount) < toScaled(min)) {
+      throw new AmountTooSmallError(operation, amount, min, asset);
+    }
+  }
+
   async createBuyProposal(
     input: CreateBuyProposalInput,
   ): Promise<CreateBuyProposalOutput> {
     const { userId, conversationId, intent } = input;
     const now = this.clock.now();
+
+    // 0. Amount-floor guard (findings #2/#3/#6) — BEFORE pricing and the KYC
+    // gate. A zero/dust/below-minimum buy is ordinary correctable bad input:
+    // reject it as AMOUNT_TOO_SMALL (422) here so it never reaches the quote
+    // domain (opaque 500) or the tier gate (confusing 403).
+    this.assertFiatAmountAtLeastMin(intent.fiatAmount, intent.fiatCurrency);
 
     // 1. Price the buy via the quotes service.
     const quote = await this.quotesService.quoteBuy({
@@ -316,6 +378,15 @@ export class ProposalService {
   ): Promise<CreateSellProposalOutput> {
     const { userId, conversationId, intent, beneficiaryId } = input;
     const now = this.clock.now();
+
+    // 0. Amount-floor guard (finding #4) — BEFORE quoting / balance / gate.
+    // Reject a zero/dust sell with AMOUNT_TOO_SMALL (422) so it never reaches
+    // confirmation.
+    this.assertCryptoAmountAtLeastMin(
+      'sell',
+      intent.cryptoAmount,
+      intent.asset,
+    );
 
     // 1. Resolve the user's (user, network) wallet — network derived from intent asset.
     // Asset for ledger / quote comes from intent.asset (not the wallet record, which
@@ -464,6 +535,14 @@ export class ProposalService {
     const { userId, conversationId, intent, beneficiaryId } = input;
     const now = this.clock.now();
 
+    // 0. Amount-floor guard (finding #4) — BEFORE quoting / balance / gate.
+    // Reject a zero/dust send with AMOUNT_TOO_SMALL (422).
+    this.assertCryptoAmountAtLeastMin(
+      'send',
+      intent.cryptoAmount,
+      intent.asset,
+    );
+
     // 1. Resolve the user's (user, network) wallet — network derived from intent asset.
     // Asset for ledger / quoting comes from intent.asset (not the wallet record — WN-1).
     const network = this.assetRegistry.defaultNetworkFor(intent.asset);
@@ -480,6 +559,19 @@ export class ProposalService {
     });
 
     const { networkFeeCrypto, totalDebit } = sendQuote;
+
+    // 2b. Fee-coverage guard (finding #4) — the send amount must EXCEED the flat
+    // network fee, else the fee dwarfs (or equals) the transfer. Reject as
+    // AMOUNT_TOO_SMALL (422) with the fee as the effective minimum so the user
+    // sees a meaningful floor.
+    if (toScaled(intent.cryptoAmount) <= toScaled(networkFeeCrypto)) {
+      throw new AmountTooSmallError(
+        'send',
+        intent.cryptoAmount,
+        networkFeeCrypto,
+        intent.asset,
+      );
+    }
 
     // 3. Balance check — ledger is authoritative. Must cover totalDebit (amount + fee).
     const balance = await this.ledgerRepo.getAccountBalance(
@@ -570,6 +662,15 @@ export class ProposalService {
         'valid crypto_address',
         `invalid address: ${toAddress}`,
       );
+    }
+
+    // 5b. Self-send guard (finding #5) — sending to the user's OWN provisioned
+    // custodial address is a no-op transfer the masked confirmation can't expose.
+    // Reject with SELF_SEND_BLOCKED (422). Compare case-insensitively so an
+    // EVM-style mixed-case address still matches (TRON base58 is already
+    // case-sensitive, so this only widens — never narrows — the match).
+    if (toAddress.toLowerCase() === wallet.address.toLowerCase()) {
+      throw new SelfSendError();
     }
 
     // 6. First-use cooling-off (IDN-08).
@@ -687,6 +788,10 @@ export class ProposalService {
     if (fromAsset === toAsset) {
       throw new SwapSameAssetError(fromAsset);
     }
+
+    // 1b. Amount-floor guard (finding #4) — reject a zero/dust swap with
+    // AMOUNT_TOO_SMALL (422) BEFORE the balance check and the provider call.
+    this.assertCryptoAmountAtLeastMin('swap', amount, fromAsset);
 
     // 2. Resolve the user's (user, network) wallet for the fromAsset.
     const network = this.assetRegistry.defaultNetworkFor(fromAsset);

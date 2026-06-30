@@ -41,8 +41,11 @@ describe('AgentService', () => {
     const result = await service.run('buy 5000 naira of usdt');
 
     expect(fakeLlmProvider.extractIntent).toHaveBeenCalledTimes(1);
+    // The graph always threads history (defaulting to an empty list when the
+    // caller supplies none), so the provider is called with (text, []).
     expect(fakeLlmProvider.extractIntent).toHaveBeenCalledWith(
       'buy 5000 naira of usdt',
+      [],
     );
     expect(result).toEqual(cannedIntent);
   });
@@ -54,5 +57,19 @@ describe('AgentService', () => {
     await expect(service.run('buy 5000 naira of usdt')).rejects.toThrow(
       'LLM unavailable',
     );
+  });
+
+  it('forwards conversation history to the LlmProvider when supplied', async () => {
+    const history = [
+      { role: 'user' as const, content: 'buy usdt' },
+      {
+        role: 'assistant' as const,
+        content: 'How much USDT would you like to buy?',
+      },
+    ];
+
+    await service.run('50k', history);
+
+    expect(fakeLlmProvider.extractIntent).toHaveBeenCalledWith('50k', history);
   });
 });

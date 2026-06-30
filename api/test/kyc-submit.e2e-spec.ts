@@ -270,7 +270,7 @@ describe('KYC submit — e2e (AppModule, Testcontainers Postgres)', () => {
         firstName: 'Chidi',
         lastName: 'Okeke',
         nin: '11223344556',
-        pin: '5678',
+        pin: '1357',
       })
       .expect(200);
 
@@ -310,7 +310,7 @@ describe('KYC submit — e2e (AppModule, Testcontainers Postgres)', () => {
         firstName: 'Chidi',
         lastName: 'Okeke',
         nin: '11223344556',
-        pin: '5678',
+        pin: '1357',
       })
       .expect(401);
   }, 30_000);

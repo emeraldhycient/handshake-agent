@@ -246,7 +246,7 @@ describe('Web sell + send + beneficiaries — e2e', () => {
 
   async function setupVerifiedUser(
     userEmail: string,
-    pin = '1234',
+    pin = '1357',
   ): Promise<{ accessToken: string; userId: string }> {
     const deviceFingerprint = `e2e-web-ss-fp-${userEmail.slice(0, 16)}`;
 
@@ -397,7 +397,7 @@ describe('Web sell + send + beneficiaries — e2e', () => {
     const body: Record<string, unknown> = {
       directiveId,
       nonce,
-      pin: '1234',
+      pin: '1357',
       idempotencyKey: randomUUID(),
     };
     if (deviceFingerprint) body.deviceFingerprint = deviceFingerprint;

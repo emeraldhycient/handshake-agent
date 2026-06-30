@@ -29,6 +29,7 @@ const makeRegistry = () =>
     defaultNetworkFor: () => 'TRON',
     network: (id: string) => ({ id, displayName: 'TRON (TRC-20)' }),
     fiat: () => ({ symbol: '₦', decimals: 2 }),
+    logoUrl: () => null,
   }) as unknown as AssetRegistry;
 
 // Two enabled assets on distinct networks — exercises the total summation.
@@ -46,6 +47,7 @@ const makeMultiRegistry = () =>
     defaultNetworkFor: () => 'TRON',
     network: (id: string) => ({ id, displayName: id }),
     fiat: () => ({ symbol: '₦', decimals: 2 }),
+    logoUrl: () => null,
   }) as unknown as AssetRegistry;
 
 const wallet = {
@@ -123,6 +125,55 @@ describe('WalletBalanceService', () => {
       fiatValue: '48461.49',
     });
     expect(out.totalFiatValue).toBe('48461.49');
+  });
+
+  it('includes the asset logoUrl from the registry when present, omits it when null', async () => {
+    const walletRepo = makeWalletRepo(wallet);
+    const ledgerRepo: ILedgerRepository = {
+      getAccountBalance: jest.fn().mockResolvedValue('29.97'),
+    };
+    const rates: IRateProvider = {
+      getRate: jest.fn().mockResolvedValue({
+        baseRate: 1650,
+        sellSpreadBps: 200,
+        buySpreadBps: 150,
+        processingFeeBps: 0,
+        expiresInSec: 30,
+        cryptoDecimals: 6,
+      }),
+      getValuationRate: jest.fn().mockResolvedValue({ baseRate: 1650 }),
+    };
+    const wallets = makeWallets();
+    const registry = {
+      ...makeRegistry(),
+      logoUrl: (sym: string) =>
+        sym === 'USDT' ? 'https://cdn.example/usdt.png' : null,
+    } as unknown as AssetRegistry;
+    const svc = new WalletBalanceService(
+      wallets,
+      registry,
+      rates,
+      walletRepo,
+      ledgerRepo,
+    );
+
+    const out = await svc.getBalances('u1');
+    expect(out.assets[0].logoUrl).toBe('https://cdn.example/usdt.png');
+
+    // And when the registry returns null, logoUrl is omitted entirely.
+    const registryNoLogo = {
+      ...makeRegistry(),
+      logoUrl: () => null,
+    } as unknown as AssetRegistry;
+    const svcNoLogo = new WalletBalanceService(
+      wallets,
+      registryNoLogo,
+      rates,
+      walletRepo,
+      ledgerRepo,
+    );
+    const outNoLogo = await svcNoLogo.getBalances('u1');
+    expect(outNoLogo.assets[0].logoUrl).toBeUndefined();
   });
 
   it('returns zero amount when no wallet exists for the user/network yet', async () => {

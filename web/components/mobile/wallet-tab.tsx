@@ -2,6 +2,8 @@
 
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ActionButton } from "@/components/shared/action-button"
+import { AssetIcon } from "@/components/shared/asset-icon"
 import { useBalances, useWalletAssets } from "@/lib/query/hooks"
 import { useCapabilities } from "@/lib/query/capabilities"
 import { chipLabel } from "@/lib/chat/flow"
@@ -97,27 +99,23 @@ export function WalletTab({ onQuickAction }: WalletTabProps) {
         <div className="mt-0.5 text-[34px] font-extrabold tracking-[-0.02em] tabular-nums">
           {balances.total}
         </div>
+        {/* Quick actions — the shared ActionButton primitive (§13.1) in its
+            stacked layout, so the mobile wallet tile matches the desktop hero/
+            wallet-header controls. The accent glyph badge is the icon node. */}
         <div className="mt-[18px] flex gap-[9px]">
           {actions.map(({ action, glyph, label }) => (
-            <button
+            <ActionButton
               key={action}
-              type="button"
-              aria-label={label}
+              label={label}
+              layout="stacked"
+              icon={
+                <span className="flex h-[30px] w-[30px] items-center justify-center rounded-[9px] bg-accent text-[17px] font-bold text-accent-foreground">
+                  {glyph}
+                </span>
+              }
               onClick={() => onQuickAction(action, chipLabel(action))}
-              className={cn(
-                "flex flex-1 cursor-pointer flex-col items-center gap-1.5 rounded-[14px]",
-                "border border-white/15 bg-white/8 py-[11px]",
-                "font-[inherit] text-primary-foreground"
-              )}
-            >
-              <span
-                className="flex h-[30px] w-[30px] items-center justify-center rounded-[9px] bg-accent text-[17px] font-bold text-accent-foreground"
-                aria-hidden="true"
-              >
-                {glyph}
-              </span>
-              <span className="text-[12px] font-semibold">{label}</span>
-            </button>
+              className="flex-1 border-white/15 bg-white/8 text-primary-foreground hover:bg-white/15"
+            />
           ))}
         </div>
       </div>
@@ -134,13 +132,12 @@ export function WalletTab({ onQuickAction }: WalletTabProps) {
                 i > 0 && "border-t border-border"
               )}
             >
-              <div
-                className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-[11px] text-[15px] font-extrabold text-primary-deep"
-                style={{ backgroundColor: asset.tint }}
-                aria-hidden="true"
-              >
-                {asset.sym}
-              </div>
+              <AssetIcon
+                sym={asset.sym}
+                tint={asset.tint}
+                logoUrl={asset.logoUrl}
+                className="flex-none rounded-[11px] text-[15px] font-extrabold text-primary-deep"
+              />
               <div className="min-w-0 flex-1">
                 <div className="text-[14.5px] font-bold text-foreground">
                   {asset.name}
@@ -153,7 +150,18 @@ export function WalletTab({ onQuickAction }: WalletTabProps) {
                 <div className="text-[14.5px] font-bold text-foreground tabular-nums">
                   {asset.value}
                 </div>
-                <div className="text-[12px] text-success">{asset.change}</div>
+                {/* Finding #7: only a real positive change is success-green; an
+                    unpriced "—" (no 24h source) is muted, never green. */}
+                <div
+                  className={cn(
+                    "text-[12px] tabular-nums",
+                    asset.change.startsWith("+")
+                      ? "text-success"
+                      : "text-muted-foreground"
+                  )}
+                >
+                  {asset.change}
+                </div>
               </div>
             </div>
           ))}
