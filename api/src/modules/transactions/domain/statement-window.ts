@@ -5,6 +5,14 @@
  * no Date.now() — the caller passes `now` (from CLOCK) so tests are deterministic.
  */
 
+export type RelativeWindowUnit =
+  | 'minute'
+  | 'hour'
+  | 'day'
+  | 'week'
+  | 'month'
+  | 'year';
+
 export interface QueryWindowSpec {
   period?:
     | 'today'
@@ -16,6 +24,13 @@ export interface QueryWindowSpec {
     | 'all';
   from?: string; // ISO YYYY-MM-DD
   to?: string;
+  /**
+   * Relative duration ("last 2 weeks" → {2,'week'}). Sub-day units use the exact
+   * `now` offset; day+ units keep WAT day-boundary alignment. A lone field is
+   * ignored (both must be present). Precedence: from/to → relative → period.
+   */
+  relativeAmount?: number;
+  relativeUnit?: RelativeWindowUnit;
 }
 
 export interface WindowConfig {
@@ -100,7 +115,32 @@ export function resolveWindow(
     // from > to → fall through to default.
   }
 
-  // ── 2. Period enum ───────────────────────────────────────────────────────
+  // ── 2. Relative duration (server-computed; the model never picks dates) ───
+  // Both fields required; a lone field falls through to the period/default.
+  if (spec.relativeAmount && spec.relativeUnit) {
+    const n = spec.relativeAmount;
+    const u = spec.relativeUnit;
+
+    if (u === 'minute' || u === 'hour') {
+      // Sub-day: exact offset from `now`, no day-boundary alignment.
+      const unitMs = u === 'minute' ? 60_000 : 3_600_000;
+      from = new Date(now.getTime() - n * unitMs);
+    } else if (u === 'day') {
+      from = utcFromLocal(ly, lm, ld - n);
+    } else if (u === 'week') {
+      from = utcFromLocal(ly, lm, ld - n * 7);
+    } else if (u === 'month') {
+      from = utcFromLocal(ly, lm - n, ld);
+    } else {
+      // year
+      from = utcFromLocal(ly - n, lm, ld);
+    }
+    to = now;
+    label = n === 1 ? `Past ${u}` : `Last ${n} ${u}s`;
+    return clamp({ from, to, label }, now, maxMs);
+  }
+
+  // ── 3. Period enum ───────────────────────────────────────────────────────
   switch (spec.period) {
     case 'today':
       from = startOfToday;
