@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { TransactionsCard } from "./transactions-card"
+import * as chatApi from "@/lib/api/chat"
 
 // Control the "Show more" fetch without a network round-trip.
 const { getPageMock } = vi.hoisted(() => ({ getPageMock: vi.fn() }))
@@ -12,7 +13,7 @@ vi.mock("@/lib/api/gateway", () => ({
 
 function wrapper({ children }: { children: React.ReactNode }) {
   const client = new QueryClient({
-    defaultOptions: { mutations: { retry: false } },
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>
 }
@@ -118,5 +119,23 @@ describe("TransactionsCard", () => {
     )
     await user.click(screen.getByRole("button", { name: /show more/i }))
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument())
+  })
+
+  it("clicking a row opens the transaction detail modal", async () => {
+    // Make the detail fetch hang so the modal's loading state is observable.
+    vi.spyOn(chatApi, "getTransactionDetail").mockReturnValue(
+      new Promise(() => {})
+    )
+    const user = userEvent.setup()
+    render(<TransactionsCard {...base} rows={[row("t1", "+29.97 USDT")]} />, {
+      wrapper,
+    })
+
+    await user.click(
+      screen.getByRole("button", { name: /view .*transaction details/i })
+    )
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument())
+    expect(screen.getByText("Transaction Detail")).toBeInTheDocument()
   })
 })
