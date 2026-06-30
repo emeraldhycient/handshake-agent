@@ -517,6 +517,31 @@ describe('BlockradarProvider', () => {
         }),
       ).rejects.toThrow('Network timeout');
     });
+
+    it('preserves the HTTP status STRUCTURALLY on the thrown error (engine refund-vs-leave branching, §3.1)', async () => {
+      // The execution engine branches on definitive (4xx) vs ambiguous (5xx /
+      // none) provider failures to decide whether a reserve refund is safe. The
+      // status must be readable as a structured property — not only embedded in
+      // the message string.
+      const axiosErr = Object.assign(new Error('Unprocessable'), {
+        response: {
+          status: 422,
+          data: { message: 'Insufficient TRX balance', statusCode: 422 },
+        },
+        isAxiosError: true,
+      });
+      http.post.mockReturnValue(throwError(() => axiosErr));
+
+      await expect(
+        provider.withdraw({
+          addressId: ADDRESS_ID,
+          toAddress: TO_ADDRESS,
+          amount: AMOUNT,
+          assetId: USDT_TRON_ASSET_ID,
+          network: 'TRON',
+        }),
+      ).rejects.toMatchObject({ httpStatus: 422 });
+    });
   });
 
   // ── listWalletAssets ─────────────────────────────────────────────────────

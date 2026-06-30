@@ -2625,6 +2625,102 @@ describe('ExecutionService.executeSend', () => {
     );
   });
 
+  // ── FUNDS-SAFETY: synchronous withdraw rejection (§3.1) ─────────────────────
+  // The reserve (Step 10) is committed BEFORE walletService.withdraw (Step 11).
+  // When withdraw throws synchronously, the engine must compensate ONLY when the
+  // rejection is DEFINITIVE (HTTP 4xx — the request was rejected and NEVER
+  // broadcast on-chain). For an AMBIGUOUS failure (5xx / timeout / no status) the
+  // withdrawal MIGHT be in-flight, so refunding would risk a double-spend — those
+  // are left 'settling' for the reconciler (current behaviour).
+
+  it('withdraw rejected with a definitive 4xx → refunds the reserve, marks failed, no outbox row, re-throws', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    const outboxRepo = makeOutboxRepo();
+    const walletService = makeWalletServiceWithWithdraw();
+    // Mirrors BlockradarProvider.wrapError on a 422 "Insufficient TRX balance":
+    // a definitive client rejection that was NEVER broadcast on-chain.
+    walletService.withdraw.mockRejectedValue(
+      Object.assign(
+        new Error(
+          'Blockradar withdraw error (HTTP 422): Insufficient TRX balance',
+        ),
+        { httpStatus: 422 },
+      ),
+    );
+
+    const svc = buildSendService({ settlementRepo, outboxRepo, walletService });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // The reserve must be refunded (clearing → user_wallet) and the tx marked failed.
+    expect(settlementRepo.settleSendRefundAtomic).toHaveBeenCalledTimes(1);
+    expect(settlementRepo.settleSendRefundAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transactionId: SEND_TXN_ID,
+        userId: USER_ID,
+        walletId: 'wallet-id',
+        totalDebit: '11.000000',
+        asset: 'USDT',
+      }),
+    );
+    // No onchain_send outbox row — the withdrawal never happened.
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('withdraw fails with an ambiguous 5xx → leaves tx settling (NO refund), no outbox row, re-throws', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    const outboxRepo = makeOutboxRepo();
+    const walletService = makeWalletServiceWithWithdraw();
+    walletService.withdraw.mockRejectedValue(
+      Object.assign(
+        new Error('Blockradar withdraw error (HTTP 503): upstream unavailable'),
+        { httpStatus: 503 },
+      ),
+    );
+
+    const svc = buildSendService({ settlementRepo, outboxRepo, walletService });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // Ambiguous — the withdrawal may be in-flight; refunding risks a double-spend.
+    expect(settlementRepo.settleSendRefundAtomic).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('withdraw fails with a network error (no HTTP status) → leaves tx settling (NO refund), re-throws', async () => {
+    const settlementRepo = makeSettlementRepo(
+      null,
+      { receiptNumber: STUB_RECEIPT_NUMBER },
+      undefined,
+      STUB_SEND_TXN,
+    );
+    const walletService = makeWalletServiceWithWithdraw();
+    walletService.withdraw.mockRejectedValue(new Error('socket hang up'));
+
+    const svc = buildSendService({ settlementRepo, walletService });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    // No HTTP status → ambiguous → never refund.
+    expect(settlementRepo.settleSendRefundAtomic).not.toHaveBeenCalled();
+  });
+
   // ── Wrong proposal type ────────────────────────────────────────────────────
 
   it('proposal type is sell → ProposalNotExecutableError, no Transaction', async () => {
@@ -3920,6 +4016,66 @@ describe('ExecutionService.executeSwap', () => {
     await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toThrow(
       ProviderUnavailableError,
     );
+  });
+
+  // ── FUNDS-SAFETY: synchronous execute rejection (§3.1) ──────────────────────
+  // Same reserve-then-callProvider shape as executeSend: the reserve (Step 6) is
+  // committed BEFORE SWAP_PROVIDER.execute (Step 7). A definitive 4xx rejection
+  // (request rejected, swap never performed) must refund the reserve; an ambiguous
+  // 5xx/timeout might be in-flight and must be left 'settling' for the reconciler.
+
+  it('execute rejected with a definitive 4xx → refunds the reserve, no outbox row, re-throws', async () => {
+    const settlementRepo = makeSwapSettlementRepo();
+    const outboxRepo = makeOutboxRepo();
+    const swapProvider = makeSwapProviderMock(
+      undefined,
+      undefined,
+      Object.assign(
+        new Error(
+          'Blockradar swap execute error (HTTP 422): insufficient balance',
+        ),
+        { httpStatus: 422 },
+      ),
+    );
+
+    const svc = buildSwapService({ settlementRepo, outboxRepo, swapProvider });
+
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+
+    expect(settlementRepo.settleSwapRefundAtomic).toHaveBeenCalledTimes(1);
+    expect(settlementRepo.settleSwapRefundAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transactionId: SWAP_TXN_ID,
+        userId: USER_ID,
+        walletId: 'wallet-id',
+        fromAmount: '40',
+        fromAsset: 'USDT',
+      }),
+    );
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('execute fails with an ambiguous 5xx → leaves tx settling (NO refund), re-throws', async () => {
+    const settlementRepo = makeSwapSettlementRepo();
+    const outboxRepo = makeOutboxRepo();
+    const swapProvider = makeSwapProviderMock(
+      undefined,
+      undefined,
+      Object.assign(
+        new Error('Blockradar swap execute error (HTTP 502): bad gateway'),
+        { httpStatus: 502 },
+      ),
+    );
+
+    const svc = buildSwapService({ settlementRepo, outboxRepo, swapProvider });
+
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+    expect(settlementRepo.settleSwapRefundAtomic).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
   });
 
   it('throws ProposalExpiredError when proposal is expired', async () => {

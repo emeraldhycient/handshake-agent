@@ -257,16 +257,28 @@ export class BlockradarSwapProvider implements ISwapProvider {
     if (httpStatus === 404) {
       // Blockradar 404 on swap endpoints = wallet not found or swap not active.
       const providerMsg = body?.message ?? 'Wallet not found or not active';
-      return new SwapUnavailableError(
+      const unavailable = new SwapUnavailableError(
         `Swap not available on this account: ${providerMsg}`,
       );
+      // A 404 means the swap was never performed — a DEFINITIVE rejection. Carry
+      // the status structurally so the engine knows a reserve refund is safe (§3.1).
+      Object.assign(unavailable, { httpStatus });
+      return unavailable;
     }
 
     if (body?.message) {
-      return new Error(
+      const wrapped = new Error(
         `Blockradar swap ${operation} error (HTTP ${httpStatus ?? 'unknown'}): ${body.message}`,
       );
+      // Preserve the HTTP status STRUCTURALLY (not only in the message) so the
+      // engine can branch on definitive (4xx) vs ambiguous (5xx) swap failures
+      // when deciding whether to refund the reserve (§3.1 funds-safety).
+      if (httpStatus !== undefined) {
+        Object.assign(wrapped, { httpStatus });
+      }
+      return wrapped;
     }
+    // Network error etc. — no HTTP status → engine treats it as ambiguous.
     return err instanceof Error ? err : new Error(String(err));
   }
 }

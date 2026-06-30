@@ -428,17 +428,29 @@ export class BlockradarProvider implements IWalletProvider {
   /**
    * Translates an Axios rejection into a descriptive Error. Blockradar returns
    * error bodies with a `message` field on non-2xx responses.
+   *
+   * The HTTP status is preserved STRUCTURALLY (as an `httpStatus` property), not
+   * only embedded in the message string, so the execution engine can branch on
+   * a DEFINITIVE client rejection (4xx — request rejected, never broadcast →
+   * safe to refund the reserve) vs an AMBIGUOUS failure (5xx / network error →
+   * the withdrawal may be in-flight → leave 'settling' for the reconciler).
+   * This is the funds-safety distinction in CLAUDE.md §3.1.
    */
   private wrapError(operation: string, err: unknown): Error {
     const axiosErr = err as AxiosError<BlockradarErrorBody>;
+    const httpStatus = axiosErr?.response?.status;
     const body = axiosErr?.response?.data;
     if (body?.message) {
-      const status = axiosErr.response?.status ?? 'unknown';
-      return new Error(
-        `Blockradar ${operation} error (HTTP ${status}): ${body.message}`,
+      const wrapped = new Error(
+        `Blockradar ${operation} error (HTTP ${httpStatus ?? 'unknown'}): ${body.message}`,
       );
+      if (httpStatus !== undefined) {
+        Object.assign(wrapped, { httpStatus });
+      }
+      return wrapped;
     }
-    // Non-Blockradar error (network timeout, etc.) — re-throw as-is.
+    // Non-Blockradar error (network timeout, etc.) — re-throw as-is. No HTTP
+    // status is attached, so the engine treats it as ambiguous (never refunds).
     return err instanceof Error ? err : new Error(String(err));
   }
 }
