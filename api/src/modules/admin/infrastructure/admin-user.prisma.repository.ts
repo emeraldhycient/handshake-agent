@@ -139,7 +139,12 @@ export class AdminUserPrismaRepository implements IAdminUserRepository {
   }
 }
 
-function toRecord(row: AdminUser): AdminUserRecord {
+// The record carries `passwordHash` as an extra field beyond AdminUserRecord:
+// AdminAuthService / AdminStepUpService cast findByEmail / findById results to
+// `AdminUserRecord & { passwordHash }` and verify against it. The API never
+// surfaces it — controllers re-parse list/get rows through the contract schema,
+// which strips this key.
+function toRecord(row: AdminUser): AdminUserRecord & { passwordHash: string } {
   return {
     id: row.id,
     email: row.email,
@@ -150,5 +155,6 @@ function toRecord(row: AdminUser): AdminUserRecord {
     roleId: row.roleId,
     createdAt: row.createdAt,
     lastLoginAt: row.lastLoginAt,
+    passwordHash: row.passwordHash,
   };
 }

@@ -9,11 +9,13 @@
 
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
+import type { IMfaCipher } from '../application/ports/mfa-cipher.port';
+
 const KEY_BYTES = 32;
 const IV_BYTES = 12;
 const KEY_HEX_LENGTH = KEY_BYTES * 2;
 
-export class MfaSecretCipher {
+export class MfaSecretCipher implements IMfaCipher {
   private readonly key: Buffer;
 
   constructor(private readonly keyHex: string) {

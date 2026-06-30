@@ -21,6 +21,8 @@ import type { Queue } from 'bullmq';
 import type { BackfillRunStatusDto } from '@handshake-agent/contracts';
 import { AdminWalletsController } from './admin-wallets.controller';
 import { AdminTokenGuard } from '../guards/admin-token.guard';
+import { AdminSessionGuard } from './admin-session.guard';
+import { PermissionGuard } from './permission.guard';
 import {
   BACKFILL_RUN_REPOSITORY,
   type IBackfillRunRepository,
@@ -96,6 +98,10 @@ async function buildModule(
     }) as ConfigService<Env, true>['get'],
   };
 
+  // The controller is now gated by AdminSessionGuard + PermissionGuard (Task 11).
+  // These tests exercise the handler methods directly, so the guards are stubbed
+  // to allow-through; the guards themselves are unit-tested elsewhere.
+  const allow = { canActivate: () => true };
   const module = await Test.createTestingModule({
     controllers: [AdminWalletsController],
     providers: [
@@ -104,7 +110,12 @@ async function buildModule(
       { provide: ConfigService, useValue: configStub },
       { provide: WalletReconciliationService, useValue: reconciliationService },
     ],
-  }).compile();
+  })
+    .overrideGuard(AdminSessionGuard)
+    .useValue(allow)
+    .overrideGuard(PermissionGuard)
+    .useValue(allow)
+    .compile();
 
   const controller = module.get(AdminWalletsController);
   return { controller, module };

@@ -3,6 +3,9 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   AUDIT_LOG_REPOSITORY,
   type AuditAction,
+  type AuditChainVerifyResult,
+  type AuditListQuery,
+  type AuditListResult,
   type IAuditLogRepository,
 } from './ports/audit-log.repository.port';
 
@@ -49,5 +52,15 @@ export class AuditService {
       before: input.before ?? null,
       after: input.after ?? null,
     });
+  }
+
+  /** Read the audit log (filtered, cursor-paginated). Delegates to the repo. */
+  list(query: AuditListQuery): Promise<AuditListResult> {
+    return this.repo.list(query);
+  }
+
+  /** Verify the hash-chain integrity of the whole log. Delegates to the repo. */
+  verifyChain(): Promise<AuditChainVerifyResult> {
+    return this.repo.verifyChain();
   }
 }

@@ -1,9 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 
-import { MfaSecretCipher } from '../infrastructure/mfa-secret.cipher';
 import {
   ADMIN_USER_REPOSITORY,
   type IAdminUserRepository,
@@ -13,7 +11,7 @@ import {
   PASSWORD_HASHER,
   type IPasswordHasher,
 } from './ports/password-hasher.port';
-import type { Env } from '../../../core/config/env.schema';
+import { MFA_CIPHER, type IMfaCipher } from './ports/mfa-cipher.port';
 
 const RECOVERY_CODE_COUNT = 8;
 const RECOVERY_CODE_BYTES = 5;
@@ -41,14 +39,9 @@ export class AdminMfaService {
     private readonly totp: ITotpProvider,
     @Inject(PASSWORD_HASHER)
     private readonly hasher: IPasswordHasher,
-    private readonly config: ConfigService<Env, true>,
+    @Inject(MFA_CIPHER)
+    private readonly cipher: IMfaCipher,
   ) {}
-
-  private cipher(): MfaSecretCipher {
-    return new MfaSecretCipher(
-      this.config.get('ADMIN_MFA_ENC_KEY', { infer: true }),
-    );
-  }
 
   async enroll(
     adminId: string,
@@ -61,7 +54,7 @@ export class AdminMfaService {
     const hashedCodes = await Promise.all(
       recoveryCodes.map((code) => this.hasher.hash(code)),
     );
-    const encSecret = this.cipher().encrypt(secret);
+    const encSecret = this.cipher.encrypt(secret);
     await this.userRepo.enableMfa(adminId, encSecret, hashedCodes);
     return {
       otpauthUri: this.totp.keyUri(adminEmail, secret),
@@ -76,7 +69,7 @@ export class AdminMfaService {
   ): Promise<boolean> {
     if (totp) {
       if (!user.mfaSecret) return false;
-      const secret = this.cipher().decrypt(user.mfaSecret);
+      const secret = this.cipher.decrypt(user.mfaSecret);
       return this.totp.verify(totp, secret);
     }
     if (recoveryCode) {

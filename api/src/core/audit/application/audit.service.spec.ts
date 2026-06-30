@@ -2,14 +2,21 @@ import { AuditService } from './audit.service';
 import type {
   AppendAuditInput,
   AuditAppendResult,
+  AuditChainVerifyResult,
+  AuditListQuery,
+  AuditListResult,
   IAuditLogRepository,
 } from './ports/audit-log.repository.port';
 
 function makeRepo(): {
   repo: IAuditLogRepository;
   calls: AppendAuditInput[];
+  listCalls: AuditListQuery[];
+  verifyCalls: number;
 } {
   const calls: AppendAuditInput[] = [];
+  const listCalls: AuditListQuery[] = [];
+  let verifyCalls = 0;
   const repo: IAuditLogRepository = {
     append(input): Promise<AuditAppendResult> {
       calls.push(input);
@@ -20,11 +27,23 @@ function makeRepo(): {
         createdAt: new Date(),
       });
     },
-    list: () => Promise.resolve({ items: [], nextCursor: null }),
-    verifyChain: () =>
-      Promise.resolve({ ok: true, checked: 0, brokenAt: null }),
+    list(query): Promise<AuditListResult> {
+      listCalls.push(query);
+      return Promise.resolve({ items: [], nextCursor: null });
+    },
+    verifyChain(): Promise<AuditChainVerifyResult> {
+      verifyCalls += 1;
+      return Promise.resolve({ ok: true, checked: 0, brokenAt: null });
+    },
   };
-  return { repo, calls };
+  return {
+    repo,
+    calls,
+    listCalls,
+    get verifyCalls() {
+      return verifyCalls;
+    },
+  };
 }
 
 describe('AuditService.record', () => {
@@ -74,5 +93,24 @@ describe('AuditService.record', () => {
     });
     expect(calls[0].before).toEqual({ x: 1 });
     expect(calls[0].after).toEqual({ x: 2 });
+  });
+});
+
+describe('AuditService.list', () => {
+  it('delegates the query to the repository', async () => {
+    const { repo, listCalls } = makeRepo();
+    const query: AuditListQuery = { subject: 'Role:r1', limit: 25 };
+    const result = await new AuditService(repo).list(query);
+    expect(listCalls).toEqual([query]);
+    expect(result).toEqual({ items: [], nextCursor: null });
+  });
+});
+
+describe('AuditService.verifyChain', () => {
+  it('delegates to the repository', async () => {
+    const { repo } = makeRepo();
+    const service = new AuditService(repo);
+    const result = await service.verifyChain();
+    expect(result).toEqual({ ok: true, checked: 0, brokenAt: null });
   });
 });

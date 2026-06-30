@@ -1,18 +1,23 @@
 import { AdminMfaService } from './admin-mfa.service';
-import { MfaSecretCipher } from '../infrastructure/mfa-secret.cipher';
 import type { IAdminUserRepository } from './ports/admin-user.repository.port';
 import type { ITotpProvider } from './ports/totp.port';
 import type { IPasswordHasher } from './ports/password-hasher.port';
-import type { Env } from '../../../core/config/env.schema';
+import type { IMfaCipher } from './ports/mfa-cipher.port';
 
-const ENC_KEY = 'a'.repeat(64);
+// Deterministic reversible fake — the real AES-256-GCM cipher is covered by its
+// own infra spec; the application spec must not import infrastructure (§4).
+const fakeCipher: IMfaCipher = {
+  encrypt: (plain) => `enc:${Buffer.from(plain, 'utf8').toString('base64')}`,
+  decrypt: (payload) =>
+    Buffer.from(payload.replace(/^enc:/, ''), 'base64').toString('utf8'),
+};
 
 type Mocked = {
   svc: AdminMfaService;
   userRepo: jest.Mocked<IAdminUserRepository>;
   totp: jest.Mocked<ITotpProvider>;
   hasher: jest.Mocked<IPasswordHasher>;
-  cipher: MfaSecretCipher;
+  cipher: IMfaCipher;
 };
 
 function build(): Mocked {
@@ -42,15 +47,8 @@ function build(): Mocked {
     ),
   } as unknown as jest.Mocked<IPasswordHasher>;
 
-  const cipher = new MfaSecretCipher(ENC_KEY);
-
-  const config = {
-    get: (key: keyof Env) =>
-      key === 'ADMIN_MFA_ENC_KEY' ? ENC_KEY : undefined,
-  };
-
-  const svc = new AdminMfaService(userRepo, totp, hasher, config as never);
-  return { svc, userRepo, totp, hasher, cipher };
+  const svc = new AdminMfaService(userRepo, totp, hasher, fakeCipher);
+  return { svc, userRepo, totp, hasher, cipher: fakeCipher };
 }
 
 describe('AdminMfaService', () => {
@@ -70,8 +68,7 @@ describe('AdminMfaService', () => {
       expect(adminId).toBe('admin-1');
       // Encrypted (not the plaintext secret) and decryptable back to it.
       expect(encSecret).not.toBe('TOTPSECRET');
-      const cipher = new MfaSecretCipher(ENC_KEY);
-      expect(cipher.decrypt(encSecret)).toBe('TOTPSECRET');
+      expect(fakeCipher.decrypt(encSecret)).toBe('TOTPSECRET');
       // Recovery codes are hashed, not plaintext.
       expect(hashedCodes).toHaveLength(8);
       for (let i = 0; i < 8; i += 1) {
@@ -90,7 +87,7 @@ describe('AdminMfaService', () => {
     const user = {
       id: 'admin-1',
       mfaEnabled: true,
-      mfaSecret: new MfaSecretCipher(ENC_KEY).encrypt('TOTPSECRET'),
+      mfaSecret: fakeCipher.encrypt('TOTPSECRET'),
       mfaRecoveryCodes: ['hashed:CODE1', 'hashed:CODE2'],
     };
 
