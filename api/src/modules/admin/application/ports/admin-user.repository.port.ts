@@ -16,6 +16,7 @@ export interface AdminUserRecord {
   mfaSecret: string | null;
   mfaRecoveryCodes: string[];
   roleId: string;
+  roleName: string;
   createdAt: Date;
   lastLoginAt: Date | null;
 }

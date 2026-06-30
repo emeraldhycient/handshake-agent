@@ -28,17 +28,24 @@ export class AdminUserPrismaRepository implements IAdminUserRepository {
         passwordHash: '',
         status: 'pending',
       },
+      include: { role: { select: { name: true } } },
     });
     return toRecord(row);
   }
 
   async findByEmail(email: string): Promise<AdminUserRecord | null> {
-    const row = await this.prisma.adminUser.findUnique({ where: { email } });
+    const row = await this.prisma.adminUser.findUnique({
+      where: { email },
+      include: { role: { select: { name: true } } },
+    });
     return row ? toRecord(row) : null;
   }
 
   async findById(id: string): Promise<AdminUserRecord | null> {
-    const row = await this.prisma.adminUser.findUnique({ where: { id } });
+    const row = await this.prisma.adminUser.findUnique({
+      where: { id },
+      include: { role: { select: { name: true } } },
+    });
     return row ? toRecord(row) : null;
   }
 
@@ -48,6 +55,7 @@ export class AdminUserPrismaRepository implements IAdminUserRepository {
       orderBy: { createdAt: 'desc' },
       take: take + 1,
       ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+      include: { role: { select: { name: true } } },
     });
 
     const hasMore = rows.length > take;
@@ -144,7 +152,9 @@ export class AdminUserPrismaRepository implements IAdminUserRepository {
 // `AdminUserRecord & { passwordHash }` and verify against it. The API never
 // surfaces it — controllers re-parse list/get rows through the contract schema,
 // which strips this key.
-function toRecord(row: AdminUser): AdminUserRecord & { passwordHash: string } {
+function toRecord(
+  row: AdminUser & { role: { name: string } },
+): AdminUserRecord & { passwordHash: string } {
   return {
     id: row.id,
     email: row.email,
@@ -153,6 +163,7 @@ function toRecord(row: AdminUser): AdminUserRecord & { passwordHash: string } {
     mfaSecret: row.mfaSecret,
     mfaRecoveryCodes: row.mfaRecoveryCodes,
     roleId: row.roleId,
+    roleName: row.role.name,
     createdAt: row.createdAt,
     lastLoginAt: row.lastLoginAt,
     passwordHash: row.passwordHash,

@@ -73,6 +73,7 @@ function makeUserRepo(): {
         mfaSecret: null,
         mfaRecoveryCodes: [],
         roleId: input.roleId,
+        roleName: 'super_admin',
         createdAt: new Date(),
         lastLoginAt: null,
       });

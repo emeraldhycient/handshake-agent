@@ -25,6 +25,7 @@ const userBase: AdminUserRecord = {
   mfaSecret: null,
   mfaRecoveryCodes: [],
   roleId: 'role-1',
+  roleName: 'super_admin',
   createdAt: new Date('2026-01-01'),
   lastLoginAt: null,
 };

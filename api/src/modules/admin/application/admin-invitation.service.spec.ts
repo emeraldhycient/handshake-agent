@@ -31,6 +31,7 @@ function makeUser(over?: Partial<AdminUserRecord>): AdminUserRecord {
     mfaSecret: null,
     mfaRecoveryCodes: [],
     roleId: 'role-1',
+    roleName: 'super_admin',
     createdAt: new Date('2026-01-01T00:00:00Z'),
     lastLoginAt: null,
     ...over,

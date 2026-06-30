@@ -39,7 +39,7 @@ function toAdminUser(record: AdminUserRecord): AdminUser {
     email: record.email,
     status: record.status,
     mfaEnabled: record.mfaEnabled,
-    role: { id: record.roleId, name: '' },
+    role: { id: record.roleId, name: record.roleName },
     createdAt: record.createdAt.toISOString(),
     lastLoginAt: record.lastLoginAt?.toISOString() ?? null,
   });
