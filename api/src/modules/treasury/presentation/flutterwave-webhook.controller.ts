@@ -12,6 +12,10 @@
  *        → ExecutionService.settleSellPayout({ reference })
  *        (sell engine handles refund on FAILED internally via verifyPayout)
  *      - transfer.completed + unknown status → log + ack, no processing
+ *      - LEGACY flat formats (no `event` key — e.g. real captured sandbox VA
+ *        pay-ins): top-level camelCase `txRef` + `status='successful'`
+ *        → settleBuyPayment({ reference: txRef }); top-level `reference` +
+ *        `status=SUCCESSFUL|FAILED` → settleSellPayout({ reference }).
  *      - Anything else → 200 (ack; Flutterwave retries on non-2xx).
  *   3. Settlement methods RE-VERIFY via the provider server-side (§3.6;
  *      never trust the webhook body alone). Idempotent: duplicate delivery safe.
@@ -69,6 +73,20 @@ interface FlutterwaveWebhookBody {
     reference?: unknown;
     [key: string]: unknown;
   };
+  /**
+   * Legacy flat collection format (real captured sandbox VA pay-in): the payload
+   * has NO top-level `event`, the tx reference is camelCase `txRef` at the TOP
+   * level, and `status` is top-level (e.g. "successful").
+   */
+  txRef?: unknown;
+  /**
+   * Legacy flat transfer/payout format: NO top-level `event`, the payout
+   * idempotency key is top-level `reference`, `status` is top-level
+   * (e.g. "SUCCESSFUL"/"FAILED").
+   */
+  reference?: unknown;
+  /** Top-level status on a legacy flat payload (collection or transfer). */
+  status?: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +137,21 @@ export class FlutterwaveWebhookController {
 
     if (payload?.event === 'transfer.completed') {
       return this.handleTransferCompleted(payload);
+    }
+
+    // ── Step 3: Legacy flat formats (no top-level `event`) ───────────────────
+    // Some Flutterwave deliveries (notably real captured sandbox virtual-account
+    // pay-ins) arrive WITHOUT an `event` key, with the reference + status hoisted
+    // to the top level. Recognize those only after the v3 routing above.
+    if (payload?.event === undefined) {
+      // Legacy collection: top-level camelCase `txRef` → buy settlement.
+      if (typeof payload?.txRef === 'string') {
+        return this.handleLegacyCollection(payload);
+      }
+      // Legacy transfer/payout: top-level `reference` → sell settlement.
+      if (typeof payload?.reference === 'string') {
+        return this.handleLegacyTransfer(payload);
+      }
     }
 
     this.logger.log(
@@ -189,6 +222,68 @@ export class FlutterwaveWebhookController {
       this.logger.warn(
         { data },
         'Flutterwave webhook: transfer.completed missing reference — acking without processing',
+      );
+      return { status: 'ok' };
+    }
+
+    // Ack-then-process: errors must NOT change the 200.
+    await this.settleSellAndNotify(reference);
+
+    return { status: 'ok' };
+  }
+
+  /**
+   * Handles the LEGACY flat collection format (no `event`): top-level camelCase
+   * `txRef` + top-level `status`. Treats status='successful' as a completed
+   * collection and delegates to settleBuyPayment — mirroring handleChargeCompleted.
+   */
+  private async handleLegacyCollection(
+    payload: FlutterwaveWebhookBody,
+  ): Promise<AckResponse> {
+    if (payload.status !== 'successful') {
+      this.logger.log(
+        { status: payload.status },
+        'Flutterwave webhook: legacy collection not successful — acking without processing',
+      );
+      return { status: 'ok' };
+    }
+
+    const txRef = payload.txRef;
+    if (typeof txRef !== 'string' || txRef.length === 0) {
+      this.logger.warn(
+        'Flutterwave webhook: legacy collection missing txRef — acking without processing',
+      );
+      return { status: 'ok' };
+    }
+
+    // Ack-then-process: errors here must NOT change the 200.
+    await this.settleAndNotify(txRef);
+
+    return { status: 'ok' };
+  }
+
+  /**
+   * Handles the LEGACY flat transfer/payout format (no `event`): top-level
+   * `reference` + top-level `status` (SUCCESSFUL/FAILED). Mirrors
+   * handleTransferCompleted — the sell engine handles refund on FAILED internally.
+   */
+  private async handleLegacyTransfer(
+    payload: FlutterwaveWebhookBody,
+  ): Promise<AckResponse> {
+    const status = payload.status;
+
+    if (status !== 'SUCCESSFUL' && status !== 'FAILED') {
+      this.logger.log(
+        { status },
+        'Flutterwave webhook: legacy transfer with unhandled status — acking without processing',
+      );
+      return { status: 'ok' };
+    }
+
+    const reference = payload.reference;
+    if (typeof reference !== 'string' || reference.length === 0) {
+      this.logger.warn(
+        'Flutterwave webhook: legacy transfer missing reference — acking without processing',
       );
       return { status: 'ok' };
     }
