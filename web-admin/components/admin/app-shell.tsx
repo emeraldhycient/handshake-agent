@@ -6,8 +6,8 @@
  * Nav gating: a nav GROUP renders only when its `menu_item` resourceId is in
  * `adminMe.menus` (UX only; the API still enforces every route). The dashboard
  * link always shows. `menu.access` → the Access group (Admins / Roles /
- * Sessions); `menu.audit` → the Audit group; `menu.config` → the Config group
- * (Settings).
+ * Sessions); `menu.users` → the Users group; `menu.kyc` → the KYC group;
+ * `menu.audit` → the Audit group; `menu.config` → the Config group (Settings).
  *
  * Pure presentation + the menu list derived from useAdminMe(); no data writes.
  */
@@ -47,6 +47,16 @@ const NAV_GROUPS: readonly NavGroup[] = [
       { href: "/roles", label: "Roles & permissions" },
       { href: "/sessions", label: "Sessions" },
     ],
+  },
+  {
+    menu: "menu.users",
+    label: "Users",
+    items: [{ href: "/users", label: "Users" }],
+  },
+  {
+    menu: "menu.kyc",
+    label: "KYC",
+    items: [{ href: "/kyc", label: "KYC review" }],
   },
   {
     menu: "menu.audit",

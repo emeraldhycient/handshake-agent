@@ -3,7 +3,10 @@
  * Each key is a readonly tuple so consumers get stable references and
  * `invalidateQueries` can match precisely by prefix.
  */
-import type { AuditLogQuery } from "@handshake-agent/contracts"
+import type {
+  AdminEndUserSearchQuery,
+  AuditLogQuery,
+} from "@handshake-agent/contracts"
 
 export const qk = {
   me: ["admin", "me"] as const,
@@ -15,4 +18,10 @@ export const qk = {
   sessions: ["admin", "sessions"] as const,
   settings: (category?: string) =>
     ["admin", "settings", category ?? "all"] as const,
+  endUsers: (query: AdminEndUserSearchQuery) =>
+    ["admin", "users", query] as const,
+  endUser: (id: string) => ["admin", "users", id] as const,
+  endUserDevices: (id: string) => ["admin", "users", id, "devices"] as const,
+  kycQueue: ["admin", "kyc", "queue"] as const,
+  kycSubmission: (userId: string) => ["admin", "kyc", userId] as const,
 } as const

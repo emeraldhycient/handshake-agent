@@ -5,8 +5,12 @@
  */
 import type { ReactNode } from "react"
 import type {
+  AdminEndUserDetail,
+  AdminEndUserDevice,
+  AdminEndUserListItem,
   AdminUser,
   EffectiveSetting,
+  KycSubmissionDetail,
   Role,
 } from "@handshake-agent/contracts"
 
@@ -73,4 +77,43 @@ export interface RoleEditorDialogProps {
 export interface SettingFieldProps {
   /** The effective config leaf to render + (when editable) save. */
   setting: EffectiveSetting
+}
+
+// ─── Users page ──────────────────────────────────────────────────────────────────
+
+export interface UserStatusBadgeProps {
+  /** An end-user account status (distinct from the admin-console statuses). */
+  status: AdminEndUserListItem["status"]
+}
+
+export interface KycStatusBadgeProps {
+  status: AdminEndUserListItem["kycStatus"]
+}
+
+export interface UserDetailProps {
+  /** The selected user's id, or null when the drawer is closed. */
+  userId: string | null
+  onOpenChange: (open: boolean) => void
+}
+
+export interface UserDeviceListProps {
+  userId: string
+  devices: AdminEndUserDevice[]
+}
+
+export interface UserActionsProps {
+  /** The loaded aggregate — drives which transitions are offered. */
+  user: AdminEndUserDetail
+}
+
+// ─── KYC review page ─────────────────────────────────────────────────────────────
+
+export interface KycSubmissionProps {
+  /** The selected submission's userId, or null when the drawer is closed. */
+  userId: string | null
+  onOpenChange: (open: boolean) => void
+}
+
+export interface KycReviewActionsProps {
+  submission: KycSubmissionDetail
 }

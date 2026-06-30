@@ -7,17 +7,24 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
+  AdminEndUserSearchQuery,
+  AdminEndUserStatusRequest,
+  AdminEndUserTierRequest,
   AdminInvitationCreateRequest,
   AdminUserStatusRequest,
   AdminUserUpdateRoleRequest,
   AuditLogQuery,
+  KycApproveRequest,
+  KycRejectRequest,
   RoleCreateRequest,
   RoleUpdateRequest,
   UpdateSettingRequest,
 } from "@handshake-agent/contracts"
 
 import * as admin from "@/lib/api/admin"
+import * as kyc from "@/lib/api/kyc"
 import * as settings from "@/lib/api/settings"
+import * as users from "@/lib/api/users"
 import { qk } from "./keys"
 
 // ─── Read hooks ─────────────────────────────────────────────────────────────────
@@ -89,6 +96,54 @@ export function useSettings(category?: string) {
     queryKey: qk.settings(category),
     queryFn: () => settings.listSettings(category),
     staleTime: 30_000,
+  })
+}
+
+/** Search / filter / paginate the platform's end users. Keyed by the query. */
+export function useEndUsers(query: AdminEndUserSearchQuery) {
+  return useQuery({
+    queryKey: qk.endUsers(query),
+    queryFn: () => users.listEndUsers(query),
+    staleTime: 15_000,
+  })
+}
+
+/** One end user's full aggregate (identity + devices + balances + history). */
+export function useEndUserDetail(id: string | null) {
+  return useQuery({
+    queryKey: qk.endUser(id ?? ""),
+    queryFn: () => users.getEndUser(id as string),
+    enabled: id !== null,
+    staleTime: 15_000,
+  })
+}
+
+/** The end user's bound/revoked devices. */
+export function useEndUserDevices(id: string | null) {
+  return useQuery({
+    queryKey: qk.endUserDevices(id ?? ""),
+    queryFn: () => users.listEndUserDevices(id as string),
+    enabled: id !== null,
+    staleTime: 15_000,
+  })
+}
+
+/** The KYC review queue. 15 s stale. */
+export function useKycQueue() {
+  return useQuery({
+    queryKey: qk.kycQueue,
+    queryFn: () => kyc.listKycQueue(),
+    staleTime: 15_000,
+  })
+}
+
+/** One KYC submission's reviewable detail (last-4 PII only). */
+export function useKycSubmission(userId: string | null) {
+  return useQuery({
+    queryKey: qk.kycSubmission(userId ?? ""),
+    queryFn: () => kyc.getKycSubmission(userId as string),
+    enabled: userId !== null,
+    staleTime: 15_000,
   })
 }
 
@@ -192,6 +247,111 @@ export function useUpdateSetting() {
     }) => settings.updateSetting(key, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["admin", "settings"] })
+    },
+  })
+}
+
+// ─── End-user mutations ───────────────────────────────────────────────────────────
+// Each is sensitive (may 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps it in
+// `useStepUpRetry`). On success they invalidate the user's queries so the detail
+// + list re-resolve. `["admin", "users"]` is a prefix match covering the list,
+// detail, and devices keys.
+
+export function useAdjustTier() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string
+      input: AdminEndUserTierRequest
+    }) => users.adjustTier(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
+export function useSetUserStatus() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string
+      input: AdminEndUserStatusRequest
+    }) => users.setEndUserStatus(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
+export function useForcePinReset() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => users.forcePinReset(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
+export function useRevokeDevice() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, deviceId }: { id: string; deviceId: string }) =>
+      users.revokeDevice(id, deviceId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
+export function useSimSwapReverify() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => users.simSwapReverify(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
+// ─── KYC-review mutations ─────────────────────────────────────────────────────────
+// Sensitive (may 403 with ADMIN_STEP_UP_REQUIRED). On success they invalidate the
+// queue and the reviewed submission so both re-resolve.
+
+export function useApproveKyc() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      userId,
+      input,
+    }: {
+      userId: string
+      input: KycApproveRequest
+    }) => kyc.approveKyc(userId, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "kyc"] })
+    },
+  })
+}
+
+export function useRejectKyc() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      userId,
+      input,
+    }: {
+      userId: string
+      input: KycRejectRequest
+    }) => kyc.rejectKyc(userId, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "kyc"] })
     },
   })
 }
