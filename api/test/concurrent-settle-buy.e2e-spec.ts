@@ -411,4 +411,63 @@ describe('Concurrent buy settlement — idempotency + advisory lock (Testcontain
     const seqs = treasuryEntries.map((e) => e.sequence);
     expect(new Set(seqs).size).toBe(seqs.length); // all distinct — no P2002 collision
   });
+
+  // ---------------------------------------------------------------------------
+  // BUG 2 — multi-asset ledger sequence. A wallet that already holds one asset
+  // must accept a credit in a DIFFERENT asset. The ledger allocates `sequence`
+  // PER (accountType, accountId, currency), but the unique constraint was
+  // (accountType, accountId, sequence) — currency-less. So the FIRST time a
+  // wallet account received a 2nd currency, the new per-currency sequence (1)
+  // collided with the existing currency's sequence (1) → deterministic P2002,
+  // blocking every multi-asset user. Constraint now includes `currency`.
+  // ---------------------------------------------------------------------------
+
+  it('credits a 2nd asset into a wallet that already holds another asset (multi-asset sequence) → no P2002', async () => {
+    const userId = await seedUser();
+    const { transactionId, reference, walletId } =
+      await seedSettlingTransaction(userId);
+
+    // The user ALREADY holds TRX on this wallet: a prior TRX ledger entry at
+    // sequence 1. The USDT buy credits the SAME (accountType, accountId); its
+    // per-currency sequence is also 1 — which collided under the old constraint.
+    await prisma.ledgerEntry.create({
+      data: {
+        transactionId,
+        accountType: 'user_wallet',
+        accountId: walletId,
+        currency: 'TRX',
+        amount: '5',
+        direction: 'credit',
+        description: 'seed: prior TRX holding on this wallet',
+        balanceAfter: '5',
+        sequence: 1,
+        postedAt: new Date(),
+      },
+    });
+
+    // Settle the USDT buy — must NOT collide with the TRX seq-1 row.
+    const res = await executionService.settleBuyPayment({ reference });
+    expect(res.status).toBe('completed');
+
+    // The wallet now holds BOTH assets, each at its own per-currency sequence
+    // (both sequence=1, disambiguated by currency in the unique constraint).
+    const trx = await prisma.ledgerEntry.findMany({
+      where: {
+        accountType: 'user_wallet',
+        accountId: walletId,
+        currency: 'TRX',
+      },
+    });
+    const usdt = await prisma.ledgerEntry.findMany({
+      where: {
+        accountType: 'user_wallet',
+        accountId: walletId,
+        currency: 'USDT',
+        transactionId,
+      },
+    });
+    expect(trx).toHaveLength(1);
+    expect(usdt).toHaveLength(1);
+    expect(usdt[0].sequence).toBe(1);
+  });
 });

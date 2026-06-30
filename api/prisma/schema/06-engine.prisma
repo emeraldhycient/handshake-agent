@@ -164,14 +164,18 @@ model LedgerEntry {
   description   String
   /// Running balance for this account after this entry (audit anomaly detection).
   balanceAfter  Decimal           @db.Decimal(38, 18)
-  /// Per-(accountType, accountId) monotonic order; deterministic + immutable.
+  /// Per-(accountType, accountId, currency) monotonic order; deterministic + immutable.
+  /// The sequence is allocated per currency (each asset sub-ledger has its own
+  /// running balance + counter), so the unique constraint MUST include currency —
+  /// otherwise the first time an account receives a 2nd asset, its sequence (1)
+  /// collides with the first asset's sequence (1) and every multi-asset settle fails.
   sequence      Int
   postedAt      DateTime          @db.Timestamptz
   createdAt     DateTime          @default(now()) @db.Timestamptz
 
   transaction Transaction @relation(fields: [transactionId], references: [id])
 
-  @@unique([accountType, accountId, sequence])
+  @@unique([accountType, accountId, currency, sequence])
   @@index([accountType, accountId, postedAt])
   @@index([transactionId])
   @@map("ledger_entries")
