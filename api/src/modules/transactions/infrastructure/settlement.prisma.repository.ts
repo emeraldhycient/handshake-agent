@@ -2157,8 +2157,19 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           throw new ReceiptNotSignableError();
         }
 
-        const receiptSeq = await tx.receipt.count();
-        const receiptNumber = formatReceiptNumber(year, BigInt(receiptSeq + 1));
+        // Derive the next receipt number from the global Postgres sequence —
+        // EXACTLY like buy/sell/send/deposit. nextval() is atomic and unique, so
+        // it can never collide with a number issued by another settlement path.
+        // (The previous `receipt.count()+1` diverged from the sequence and
+        // produced duplicate numbers → P2002 inside this $transaction → the
+        // atomic finalize rolled back and the user's fromAsset reserve was
+        // stranded with no toAsset credit. Audit finding #4.)
+        const seqResultSwap = await tx.$queryRaw<[{ nextval: bigint }]>`
+          SELECT nextval('hs_receipt_seq')`;
+        const receiptNumber = formatReceiptNumber(
+          year,
+          seqResultSwap[0].nextval,
+        );
 
         const { htmlContent, itemized } = buildSwapReceiptContent({
           receiptNumber,
@@ -2172,10 +2183,24 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           issuedAt: now,
         });
 
+        // Content hash + signature MUST match every other receipt path and the
+        // documented Receipt.signatureHash contract (schema/07-receipts.prisma):
+        // contentHash = sha256(html + canonical(itemized)); signature = HMAC over
+        // the structured tuple (receiptNumber, transactionId, contentHash,
+        // userId, issuedAt) — NOT hmac(htmlContent) only. Audit finding #19.
         const contentHash = createHash('sha256')
-          .update(htmlContent, 'utf8')
+          .update(htmlContent + JSON.stringify(itemized), 'utf8')
           .digest('hex');
-        const signatureHash = hmacHex('sha256', signingKey, htmlContent);
+
+        const signaturePayload = [
+          receiptNumber,
+          transactionId,
+          contentHash,
+          userId,
+          now.toISOString(),
+        ].join('|');
+
+        const signatureHash = hmacHex('sha256', signingKey, signaturePayload);
 
         await tx.receipt.create({
           data: {
