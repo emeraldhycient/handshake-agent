@@ -560,6 +560,39 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "View an agent conversation's messages, intents, and replies",
   ),
 
+  // Metrics — read-only date-ranged dashboard aggregations (Phase 5 — FINAL).
+  // Transaction volumes/success, revenue (fees + spread), KYC funnel, active
+  // users, service health. Nothing here moves money (§3.1); revenue is surfaced
+  // only to operators on this surface, never on an end-user surface.
+  r(
+    "api_route",
+    "GET /admin/metrics/dashboard",
+    "read",
+    "Metrics",
+    "Read the composite operational dashboard (all metric blocks)",
+  ),
+  r(
+    "api_route",
+    "GET /admin/metrics/transactions",
+    "read",
+    "Metrics",
+    "Read transaction-volume + success-rate metrics",
+  ),
+  r(
+    "api_route",
+    "GET /admin/metrics/revenue",
+    "read",
+    "Metrics",
+    "Read revenue (fees + spread) metrics by currency",
+  ),
+  r(
+    "api_route",
+    "GET /admin/metrics/kyc-funnel",
+    "read",
+    "Metrics",
+    "Read the KYC funnel (counts by status + tier)",
+  ),
+
   // Web pages (nav/page gating — UX only; the API still enforces api_route perms)
   r(
     "web_page",
@@ -637,6 +670,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Agent",
     "Agent config + conversation logs page",
   ),
+  r(
+    "web_page",
+    "/admin/metrics",
+    "read",
+    "Metrics",
+    "Operational dashboard / metrics page",
+  ),
   // Menu items (nav groups)
   r("menu_item", "menu.access", "read", "Access", "Access & RBAC nav group"),
   r("menu_item", "menu.audit", "read", "Audit", "Audit nav group"),
@@ -676,6 +716,7 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   r("menu_item", "menu.whatsapp", "read", "Comms", "WhatsApp nav group"),
   r("menu_item", "menu.tickets", "read", "Tickets", "Tickets nav group"),
   r("menu_item", "menu.agent", "read", "Agent", "Agent nav group"),
+  r("menu_item", "menu.metrics", "read", "Metrics", "Metrics nav group"),
 ];
 
 // ── Built-in roles ─────────────────────────────────────────────────────────────
@@ -738,6 +779,7 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Comms: ["read", "write"],
       Tickets: ["read"],
       Agent: ["read"],
+      Metrics: ["read"],
     },
   ),
   role(
@@ -750,6 +792,7 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Transactions: ["read"],
       Compliance: ["read", "write", "execute"],
       Beneficiaries: ["read", "write"],
+      Metrics: ["read"],
     },
   ),
   role(
@@ -761,6 +804,7 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Config: ["read", "write"],
       Transactions: ["read", "execute"],
       Ledger: ["read", "execute"],
+      Metrics: ["read"],
     },
   ),
   role("support", "Support: read-only visibility into users and activity.", {
@@ -769,5 +813,6 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
     Beneficiaries: ["read"],
     Comms: ["read"],
     Agent: ["read"],
+    Metrics: ["read"],
   }),
 ];

@@ -50,6 +50,7 @@ import { AdminNotificationsController } from './presentation/admin-notifications
 import { AdminWhatsAppController } from './presentation/admin-whatsapp.controller';
 import { AdminTicketsController } from './presentation/admin-tickets.controller';
 import { AdminAgentController } from './presentation/admin-agent.controller';
+import { AdminMetricsController } from './presentation/admin-metrics.controller';
 import { AdminSessionGuard } from './presentation/admin-session.guard';
 import { PermissionGuard } from './presentation/permission.guard';
 import { AdminStepUpGuard } from './presentation/admin-step-up.guard';
@@ -76,6 +77,9 @@ import { AdminNotificationTemplateService } from './application/admin-notificati
 import { AdminWhatsAppConfigService } from './application/admin-whatsapp-config.service';
 import { AdminTicketService } from './application/admin-ticket.service';
 import { AdminAgentService } from './application/admin-agent.service';
+import { AdminMetricsService } from './application/admin-metrics.service';
+import { METRICS_READ_REPOSITORY } from './application/ports/metrics-read.repository.port';
+import { MetricsReadPrismaRepository } from './infrastructure/metrics-read.prisma.repository';
 import { TICKET_ORDER_READ_REPOSITORY } from './application/ports/ticket-order-read.repository.port';
 import { TicketOrderReadPrismaRepository } from './infrastructure/ticket-order-read.prisma.repository';
 import { ADMIN_USER_REPOSITORY } from './application/ports/admin-user.repository.port';
@@ -194,6 +198,7 @@ import type { Env } from '../../core/config/env.schema';
     AdminWhatsAppController,
     AdminTicketsController,
     AdminAgentController,
+    AdminMetricsController,
   ],
   providers: [
     AdminTokenGuard,
@@ -272,6 +277,10 @@ import type { Env } from '../../core/config/env.schema';
     // Neither service moves money (§3.1); the agent system prompt stays read-only (§6).
     AdminTicketService,
     AdminAgentService,
+    // Phase 5, FINAL (READ-ONLY): operational dashboard / metrics. AdminMetricsService
+    // reaches data via the locally-bound METRICS_READ_REPOSITORY below (PrismaService
+    // is global). All date-ranged aggregations — never moves money (§3.1).
+    AdminMetricsService,
     AdminSessionGuard,
     PermissionGuard,
     AdminStepUpGuard,
@@ -320,6 +329,14 @@ import type { Env } from '../../core/config/env.schema';
     {
       provide: TICKET_ORDER_READ_REPOSITORY,
       useClass: TicketOrderReadPrismaRepository,
+    },
+    // Phase 5, FINAL: METRICS_READ_REPOSITORY is bound locally — the metrics
+    // aggregations have no home module, so the admin layer owns this read
+    // (PrismaService is global). Mirrors the local LEDGER_REPOSITORY /
+    // TREASURY_READ_REPOSITORY / TICKET_ORDER_READ_REPOSITORY binds above.
+    {
+      provide: METRICS_READ_REPOSITORY,
+      useClass: MetricsReadPrismaRepository,
     },
   ],
 })

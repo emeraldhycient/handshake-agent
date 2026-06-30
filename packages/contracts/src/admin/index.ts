@@ -17,5 +17,6 @@ export * from "./notification.dto";
 export * from "./whatsapp.dto";
 export * from "./ticket.dto";
 export * from "./agent.dto";
+export * from "./admin-metrics.dto";
 export * from "./audit.dto";
 export * from "./session.dto";

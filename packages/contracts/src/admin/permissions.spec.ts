@@ -280,6 +280,25 @@ describe("PERMISSION_CATALOG", () => {
     }
   });
 
+  it("registers the Metrics dashboard routes + nav (Phase 5)", () => {
+    const ids = new Set(PERMISSION_CATALOG.map(permissionId));
+    expect(ids.has("api_route:GET /admin/metrics/dashboard:read")).toBe(true);
+    expect(ids.has("api_route:GET /admin/metrics/transactions:read")).toBe(
+      true,
+    );
+    expect(ids.has("api_route:GET /admin/metrics/revenue:read")).toBe(true);
+    expect(ids.has("api_route:GET /admin/metrics/kyc-funnel:read")).toBe(true);
+    expect(ids.has("web_page:/admin/metrics:read")).toBe(true);
+    expect(ids.has("menu_item:menu.metrics:read")).toBe(true);
+    for (const e of PERMISSION_CATALOG.filter(
+      (x) => x.category === "Metrics",
+    )) {
+      expect(e.category).toBe("Metrics");
+      // Metrics surfaces are read-only — no write/execute/delete (§3.1).
+      expect(e.action).toBe("read");
+    }
+  });
+
   it("registers the Beneficiaries oversight routes + nav (Phase 3 sub-area D)", () => {
     const ids = new Set(PERMISSION_CATALOG.map(permissionId));
     expect(ids.has("api_route:GET /admin/beneficiaries:read")).toBe(true);
@@ -566,6 +585,19 @@ describe("BUILTIN_ROLES", () => {
     expect(support.grants(agentConfig)).toBe(true);
     expect(finance.grants(agentConfig)).toBe(false);
     expect(compliance.grants(agentConfig)).toBe(false);
+  });
+
+  it("grants Metrics read to ALL non-super built-in roles (Phase 5)", () => {
+    const dashboard = PERMISSION_CATALOG.find(
+      (e) =>
+        permissionId(e) === "api_route:GET /admin/metrics/dashboard:read",
+    )!;
+    for (const r of BUILTIN_ROLES.filter((x) => x.name !== "super_admin")) {
+      expect(r.grants(dashboard)).toBe(true);
+    }
+    // super_admin holds everything by definition.
+    const superAdmin = BUILTIN_ROLES.find((r) => r.name === "super_admin")!;
+    expect(superAdmin.grants(dashboard)).toBe(true);
   });
 
   it("grants Compliance read+write+execute to compliance, read-only to ops, none to finance/support (Phase 3C)", () => {
