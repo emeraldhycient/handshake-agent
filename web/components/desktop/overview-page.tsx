@@ -160,7 +160,12 @@ export function OverviewPage({
             )}
           >
             <div className="flex flex-[2] items-center gap-3">
-              <AssetIcon sym={a.sym} tint={a.tint} size="sm" />
+              <AssetIcon
+                sym={a.sym}
+                tint={a.tint}
+                logoUrl={a.logoUrl}
+                size="sm"
+              />
               <div>
                 <p className="text-[14.5px] font-bold text-foreground">
                   {a.name}

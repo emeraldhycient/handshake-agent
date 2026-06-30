@@ -52,6 +52,7 @@ import type { ProposalService } from '../../transactions/application/proposal.se
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
+import { StatementTokenService } from '../../transactions/application/statement-token.service';
 import type { BalanceService } from '../../balances/application/balance.service';
 import {
   InsufficientBalanceError,
@@ -122,6 +123,7 @@ export class WebChatService {
     @Inject(REPLY_REPOSITORY)
     private readonly replyRepo: IReplyRepository,
     private readonly assetRegistry: AssetRegistry,
+    private readonly statementTokens: StatementTokenService,
   ) {}
 
   async handleMessage(input: HandleMessageInput): Promise<WebChatResponse> {
@@ -489,7 +491,7 @@ export class WebChatService {
     const messages = [...page].reverse().map((turn) => ({
       messageId: turn.id,
       userText: turn.userText,
-      outcome: this.parseStoredOutcome(turn.reply?.outcome),
+      outcome: this.parseStoredOutcome(turn.reply?.outcome, input.userId),
       createdAt: turn.createdAt.toISOString(),
     }));
 
@@ -500,11 +502,32 @@ export class WebChatService {
    * Defensively re-validate a stored outcome JSON blob against the contract.
    * Returns null for missing/legacy/corrupt rows so the FE renders the user
    * bubble alone rather than failing the whole history load.
+   *
+   * For a `transactions` outcome the persisted statement `downloadUrl` carries a
+   * time-limited signed token (linkTtlSeconds, default 900s). Re-serving it
+   * verbatim on history reload yields a 401 expired link once the card is older
+   * than the TTL, so the link is re-issued here from the stored window + txType,
+   * scoped to the requesting user — always valid when rendered.
    */
-  private parseStoredOutcome(raw: unknown): AgentTurnOutcome | null {
+  private parseStoredOutcome(
+    raw: unknown,
+    userId: string,
+  ): AgentTurnOutcome | null {
     if (raw === null || raw === undefined) return null;
     const parsed = AgentTurnOutcomeSchema.safeParse(raw);
-    return parsed.success ? parsed.data : null;
+    if (!parsed.success) return null;
+    const outcome = parsed.data;
+    if (outcome.kind !== 'transactions') return outcome;
+    const token = this.statementTokens.sign({
+      userId,
+      from: outcome.window.from,
+      to: outcome.window.to,
+      txType: outcome.txType,
+    });
+    return {
+      ...outcome,
+      downloadUrl: this.statementTokens.buildDownloadUrl(token),
+    };
   }
 
   /**

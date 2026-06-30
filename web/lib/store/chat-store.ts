@@ -30,7 +30,7 @@ import {
 } from "@/lib/chat/flow"
 import { parseIntent } from "@/lib/chat/intent"
 import { mapOutcomeToMessages } from "@/lib/chat/agent-outcome"
-import { GREETING_M, GREETING_D } from "@/lib/constants"
+import { GREETING_M, GREETING_D, greetingDesktop } from "@/lib/constants"
 import { formatFiat } from "@/lib/format"
 import { ApiError } from "@/lib/api/client"
 import type {
@@ -266,6 +266,14 @@ interface ChatState {
    */
   sendVoiceToAgent(surface: ChatSurface, blob: Blob): Promise<void>
   setInput(surface: ChatSurface, value: string): void
+  /**
+   * Personalize the desktop chat greeting with the signed-in user's first name
+   * (matching the topbar's profile name). Called once the profile loads. A no-op
+   * once the desktop conversation has started — it only swaps the initial
+   * greeting message in place, never clobbering history. Passing no name leaves
+   * the name-free generic greeting.
+   */
+  setDesktopGreeting(firstName?: string): void
   openConfirm(surface: ChatSurface, payload: ConfirmPayload): void
   cancel(): void
   /**
@@ -608,6 +616,21 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
 
     setInput(surface, value) {
       set((s) => ({ input: { ...s.input, [surface]: value } }))
+    },
+
+    setDesktopGreeting(firstName) {
+      set((s) => {
+        const thread = s.threads.d
+        // Only swap the initial greeting — never once a conversation exists.
+        if (thread.length !== 1) return s
+        const [greeting] = thread
+        return {
+          threads: {
+            ...s.threads,
+            d: [{ ...greeting, text: greetingDesktop(firstName) }],
+          },
+        }
+      })
     },
 
     openConfirm(surface, payload) {

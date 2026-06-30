@@ -19,6 +19,7 @@ export function mapWalletBalances(res: WalletBalancesResponse): BalanceView {
       amount: formatCryptoAmount(a.amount, a.symbol),
       value: a.fiatValue ? formatFiatAmount(a.fiatValue, res.fiatSymbol) : "—",
       tint: tintFor(a.symbol),
+      ...(a.logoUrl ? { logoUrl: a.logoUrl } : {}),
     })),
   }
 }
@@ -32,5 +33,6 @@ export function mapWalletAssets(res: WalletBalancesResponse): WalletAsset[] {
     value: a.fiatValue ? formatFiatAmount(a.fiatValue, res.fiatSymbol) : "—",
     change: "—",
     tint: tintFor(a.symbol),
+    ...(a.logoUrl ? { logoUrl: a.logoUrl } : {}),
   }))
 }

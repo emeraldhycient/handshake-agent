@@ -155,7 +155,9 @@ describe("/dashboard page", () => {
   it("renders the chat rail with the desktop greeting", async () => {
     render(<DashboardPage />, { wrapper })
     await waitFor(() => {
-      expect(screen.getByText(/Welcome back, Amara/i)).toBeInTheDocument()
+      expect(
+        screen.getByText(/right here whenever you want to move money/i)
+      ).toBeInTheDocument()
     })
   })
 })

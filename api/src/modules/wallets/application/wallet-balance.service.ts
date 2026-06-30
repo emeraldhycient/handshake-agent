@@ -104,6 +104,9 @@ export class WalletBalanceService {
             fiatValue = undefined;
           }
         }
+        // Provider-discovered logo (Blockradar Cloudinary URL), when available.
+        // Omit when null so the FE renders the tinted text-badge fallback.
+        const logoUrl = this.registry.logoUrl(symbol);
         return {
           symbol: symbol as SupportedAsset,
           displayName: meta.displayName,
@@ -111,6 +114,7 @@ export class WalletBalanceService {
           amount,
           decimals: meta.decimals,
           ...(fiatValue !== undefined ? { fiatValue } : {}),
+          ...(logoUrl ? { logoUrl } : {}),
         };
       }),
     );

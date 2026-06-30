@@ -23,6 +23,7 @@ import { MESSAGE_REPOSITORY } from '../../conversations/application/ports/messag
 import { INTENT_REPOSITORY } from '../../conversations/application/ports/intent.repository.port';
 import { REPLY_REPOSITORY } from '../../conversations/application/ports/reply.repository.port';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import { StatementTokenService } from '../../transactions/application/statement-token.service';
 import {
   SwapSameAssetError,
   SwapUnavailableError,
@@ -57,6 +58,14 @@ const fakeMessageRepo = {
 };
 const fakeIntentRepo = { create: jest.fn() };
 const fakeReplyRepo = { create: jest.fn(), updateStatus: jest.fn() };
+// Statement token service: deterministic fakes so a re-issued URL is observable.
+const fakeStatementTokens = {
+  sign: jest.fn().mockReturnValue('fresh-token'),
+  buildDownloadUrl: jest.fn(
+    (token: string) =>
+      `https://api.example.com/transactions/statement/download?token=${token}`,
+  ),
+};
 const fakeAssetRegistry = {
   defaultCryptoAsset: jest.fn().mockReturnValue('USDT'),
   defaultNetworkFor: jest.fn().mockReturnValue('tron'),
@@ -156,6 +165,7 @@ describe('WebChatService', () => {
         { provide: INTENT_REPOSITORY, useValue: fakeIntentRepo },
         { provide: REPLY_REPOSITORY, useValue: fakeReplyRepo },
         { provide: AssetRegistry, useValue: fakeAssetRegistry },
+        { provide: StatementTokenService, useValue: fakeStatementTokens },
       ],
     }).compile();
 
@@ -1090,6 +1100,122 @@ describe('WebChatService', () => {
         'reply without outcome',
         'no reply yet',
       ]);
+    });
+
+    // ── transactions outcome: stale signed download URL is re-issued ───────────
+
+    it('re-issues a fresh signed downloadUrl for a stored transactions outcome', async () => {
+      // The signed statement link is time-limited (linkTtlSeconds, default 900s).
+      // Persisting it verbatim and re-serving it on history reload yields a 401
+      // expired link once the card is older than the TTL. On the history-read path
+      // the URL must be regenerated from the stored window + txType so it is always
+      // valid when rendered — never the stale stored value.
+      const storedTxOutcome = {
+        kind: 'transactions',
+        window: {
+          from: '2026-06-01T00:00:00.000Z',
+          to: '2026-06-30T23:59:59.999Z',
+          label: 'This month',
+        },
+        items: [],
+        totalCount: 0,
+        truncated: false,
+        hasMore: false,
+        nextCursor: null,
+        txType: 'buy',
+        downloadUrl:
+          'https://api.example.com/transactions/statement/download?token=STALE.sig',
+      };
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm1',
+          userText: 'my buys this month',
+          createdAt: new Date('2026-06-29T10:00:00.000Z'),
+          reply: { text: 'r', outcome: storedTxOutcome },
+        },
+      ]);
+
+      const result = await service.getHistory({ userId: 'user-1', limit: 30 });
+
+      // The token is re-signed with the SAME window + txType, scoped to this user.
+      expect(fakeStatementTokens.sign).toHaveBeenCalledWith({
+        userId: 'user-1',
+        from: '2026-06-01T00:00:00.000Z',
+        to: '2026-06-30T23:59:59.999Z',
+        txType: 'buy',
+      });
+      const outcome = result.messages[0].outcome as {
+        kind: 'transactions';
+        downloadUrl: string;
+      };
+      // The served URL carries the freshly-signed token, not the stale stored one.
+      expect(outcome.downloadUrl).toBe(
+        'https://api.example.com/transactions/statement/download?token=fresh-token',
+      );
+      expect(outcome.downloadUrl).not.toContain('STALE.sig');
+    });
+
+    it('does not re-sign a download URL for non-transactions outcomes', async () => {
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm1',
+          userText: 'hi',
+          createdAt: new Date('2026-06-29T10:00:00.000Z'),
+          reply: { text: 'r', outcome: { kind: 'needs_kyc' } },
+        },
+      ]);
+      await service.getHistory({ userId: 'user-1', limit: 30 });
+      expect(fakeStatementTokens.sign).not.toHaveBeenCalled();
+    });
+
+    it('preserves all other transactions outcome fields when re-issuing the link', async () => {
+      const storedTxOutcome = {
+        kind: 'transactions',
+        window: {
+          from: '2026-06-01T00:00:00.000Z',
+          to: '2026-06-30T23:59:59.999Z',
+          label: 'This month',
+        },
+        items: [
+          {
+            id: 'tx-1',
+            type: 'buy',
+            status: 'completed',
+            direction: 'in',
+            createdAt: '2026-06-15T09:00:00.000Z',
+          },
+        ],
+        totalCount: 1,
+        truncated: false,
+        hasMore: true,
+        nextCursor: 'cur-1',
+        txType: 'all',
+        downloadUrl:
+          'https://api.example.com/transactions/statement/download?token=STALE.sig',
+      };
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm1',
+          userText: 'my transactions',
+          createdAt: new Date('2026-06-29T10:00:00.000Z'),
+          reply: { text: 'r', outcome: storedTxOutcome },
+        },
+      ]);
+
+      const result = await service.getHistory({ userId: 'user-1', limit: 30 });
+      const outcome = result.messages[0].outcome as {
+        kind: 'transactions';
+        items: unknown[];
+        totalCount: number;
+        hasMore: boolean;
+        nextCursor: string;
+        txType: string;
+      };
+      expect(outcome.items).toHaveLength(1);
+      expect(outcome.totalCount).toBe(1);
+      expect(outcome.hasMore).toBe(true);
+      expect(outcome.nextCursor).toBe('cur-1');
+      expect(outcome.txType).toBe('all');
     });
   });
 });

@@ -314,6 +314,7 @@ export class ExecutionService {
   private readonly maxBuyDriftBps: number;
   private readonly maxSellDriftBps: number;
   private readonly maxSwapDriftBps: number;
+  private readonly swapSpreadBps: number;
   private readonly logger = new Logger(ExecutionService.name);
 
   constructor(
@@ -366,6 +367,7 @@ export class ExecutionService {
     this.maxSellDriftBps = sellConfig.maxDriftBps;
     const swapConfig = this.config.get<SwapConfig>('swap');
     this.maxSwapDriftBps = swapConfig?.maxDriftBps ?? 50;
+    this.swapSpreadBps = swapConfig?.spreadBps ?? 0;
   }
 
   /**
@@ -1845,13 +1847,26 @@ export class ExecutionService {
     const toAssetId = params.toAssetId;
     const storedRate = Number(params.rate ?? '0');
     const walletId = params.walletId;
-    const addressId = walletId; // wallet.providerReference — stored as walletId in params
 
     if (!walletId) {
       throw new ProposalNotExecutableError(
         'proposal parameters missing walletId',
       );
     }
+
+    // Re-load the (user, network) wallet to get providerReference — the Blockradar
+    // child-address id the swap provider requires as addressId. params.walletId is
+    // the DB wallet.id (system-of-record key), NOT the provider address id; passing
+    // it to the provider would make every real swap fail. Mirror the send path
+    // (settleSendStatus / executeSend re-load the wallet for providerReference).
+    // Network is derived from fromAsset (per-network wallet model, WN-1), the same
+    // derivation proposeSwap used to resolve the wallet at proposal time.
+    const network = this.assetRegistry.defaultNetworkFor(fromAsset);
+    const wallet = await this.walletService.getOrProvisionNetworkWallet(
+      userId,
+      network,
+    );
+    const addressId = wallet.providerReference;
 
     // ── Step 2: Re-quote drift check ─────────────────────────────────────────
     // Re-fetch a fresh quote from the provider to detect slippage.
@@ -1865,7 +1880,14 @@ export class ExecutionService {
       }),
     );
 
-    const freshRate = Number(freshQuote.rate ?? '0');
+    // proposeSwap folds the platform spread INTO the stored rate
+    // (params.rate = provider rate × (1 − spreadBps/10000)). The provider's
+    // getQuote returns the raw (pre-spread) rate, so fold the SAME spread into
+    // the fresh rate before measuring drift — otherwise the comparison is
+    // effective-vs-raw and every swap "drifts" by ~spreadBps and fails the gate.
+    // Drift must measure PROVIDER slippage between quote and execute, not our spread.
+    const freshRate =
+      Number(freshQuote.rate ?? '0') * (1 - this.swapSpreadBps / 10_000);
     const driftBps =
       storedRate > 0
         ? (Math.abs(freshRate - storedRate) / storedRate) * 10_000

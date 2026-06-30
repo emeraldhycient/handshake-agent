@@ -735,6 +735,59 @@ describe('BlockradarProvider', () => {
       expect(result[0].decimals).toBe(6);
     });
 
+    it('maps data[n].asset.logoUrl → logoUrl when present', async () => {
+      const logo =
+        'https://res.cloudinary.com/blockradar/image/upload/v1/usdt.png';
+      const body = {
+        ...SUCCESS_BODY,
+        data: [
+          {
+            ...SUCCESS_BODY.data[0],
+            asset: { ...SUCCESS_BODY.data[0].asset, logoUrl: logo },
+          },
+        ],
+      };
+      http.get.mockReturnValue(of(axiosOk(body)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].logoUrl).toBe(logo);
+    });
+
+    it('falls back to data[n].asset.blockchain.logoUrl when asset.logoUrl is absent', async () => {
+      const chainLogo =
+        'https://res.cloudinary.com/blockradar/image/upload/v1/tron.png';
+      const body = {
+        ...SUCCESS_BODY,
+        data: [
+          {
+            ...SUCCESS_BODY.data[0],
+            asset: {
+              ...SUCCESS_BODY.data[0].asset,
+              blockchain: {
+                ...SUCCESS_BODY.data[0].asset.blockchain,
+                logoUrl: chainLogo,
+              },
+            },
+          },
+        ],
+      };
+      http.get.mockReturnValue(of(axiosOk(body)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].logoUrl).toBe(chainLogo);
+    });
+
+    it('maps logoUrl → null when neither asset nor blockchain provides one', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      // SUCCESS_BODY has no logoUrl on either asset or blockchain.
+      expect(result[0].logoUrl).toBeNull();
+    });
+
     it('maps asset.network === "mainnet" → isMainnet true', async () => {
       const mainnetBody = {
         ...SUCCESS_BODY,

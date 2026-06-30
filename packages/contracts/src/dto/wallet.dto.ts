@@ -15,6 +15,10 @@ export const WalletAssetBalanceSchema = z.object({
   // Optional: an asset with no configured FX rate (e.g. a swap-only asset like
   // TRX with no NGN price) is shown with its amount but no fiat valuation.
   fiatValue: FiatAmountSchema.optional(),
+  // Optional: absolute URL to the asset's logo image, sourced from the wallet
+  // provider (Blockradar Cloudinary `logoUrl`). Absent when the provider does
+  // not supply one — the FE then renders a tinted text badge.
+  logoUrl: z.string().url().optional(),
 });
 export type WalletAssetBalance = z.infer<typeof WalletAssetBalanceSchema>;
 

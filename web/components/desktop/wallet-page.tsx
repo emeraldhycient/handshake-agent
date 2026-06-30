@@ -73,8 +73,8 @@ export function WalletPage({
       <div
         className={cn("flex flex-1 items-center justify-center p-6", className)}
       >
-        <div className="border-danger/20 bg-danger/5 rounded-[14px] border p-5 text-center">
-          <p className="text-danger text-sm font-semibold">
+        <div className="rounded-[14px] border border-danger/20 bg-danger/5 p-5 text-center">
+          <p className="text-sm font-semibold text-danger">
             Failed to load wallet
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -138,7 +138,12 @@ export function WalletPage({
             className="rounded-[16px] border border-border bg-card p-4"
           >
             <div className="flex items-center gap-[10px]">
-              <AssetIcon sym={a.sym} tint={a.tint} size="sm" />
+              <AssetIcon
+                sym={a.sym}
+                tint={a.tint}
+                logoUrl={a.logoUrl}
+                size="sm"
+              />
               <div>
                 <p className="text-[13.5px] font-bold text-foreground">
                   {a.name}
@@ -192,7 +197,7 @@ export function WalletPage({
               <Skeleton className="mt-1 h-3 w-48" />
             </>
           ) : deposit.isError || !deposit.data ? (
-            <p className="text-danger text-xs font-semibold">
+            <p className="text-xs font-semibold text-danger">
               Could not load your deposit address.
             </p>
           ) : (

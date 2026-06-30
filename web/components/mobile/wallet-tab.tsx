@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
+import { AssetIcon } from "@/components/shared/asset-icon"
 import { useBalances, useWalletAssets } from "@/lib/query/hooks"
 import { useCapabilities } from "@/lib/query/capabilities"
 import { chipLabel } from "@/lib/chat/flow"
@@ -134,13 +135,12 @@ export function WalletTab({ onQuickAction }: WalletTabProps) {
                 i > 0 && "border-t border-border"
               )}
             >
-              <div
-                className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-[11px] text-[15px] font-extrabold text-primary-deep"
-                style={{ backgroundColor: asset.tint }}
-                aria-hidden="true"
-              >
-                {asset.sym}
-              </div>
+              <AssetIcon
+                sym={asset.sym}
+                tint={asset.tint}
+                logoUrl={asset.logoUrl}
+                className="flex-none rounded-[11px] text-[15px] font-extrabold text-primary-deep"
+              />
               <div className="min-w-0 flex-1">
                 <div className="text-[14.5px] font-bold text-foreground">
                   {asset.name}

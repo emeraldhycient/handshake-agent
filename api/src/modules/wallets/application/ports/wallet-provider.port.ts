@@ -39,6 +39,14 @@ export interface DiscoveredAsset {
    * ("mainnet" → true, anything else → false).
    */
   isMainnet: boolean;
+  /**
+   * Absolute URL to the asset's logo image, when the provider supplies one
+   * (Blockradar returns Cloudinary `logoUrl`s on its asset/blockchain objects).
+   * `null`/absent when no logo is available — the UI falls back to a tinted
+   * text badge. Optional so adapters/fixtures that predate logo support stay
+   * valid; the Blockradar adapter always sets it explicitly (null when absent).
+   */
+  logoUrl?: string | null;
 }
 
 export interface ProvisionAddressInput {

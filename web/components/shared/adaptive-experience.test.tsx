@@ -42,7 +42,9 @@ describe("AdaptiveExperience", () => {
     })
 
     // Desktop greeting must not be present
-    expect(screen.queryByText(/Welcome back, Amara/i)).toBeNull()
+    expect(
+      screen.queryByText(/right here whenever you want to move money/i)
+    ).toBeNull()
   })
 
   it("renders the desktop dashboard on a wide viewport (matchMedia matches:true)", async () => {
@@ -61,7 +63,9 @@ describe("AdaptiveExperience", () => {
 
     // DashboardExperience renders the desktop chat rail greeting
     await waitFor(() => {
-      expect(screen.getByText(/Welcome back, Amara/i)).toBeInTheDocument()
+      expect(
+        screen.getByText(/right here whenever you want to move money/i)
+      ).toBeInTheDocument()
     })
   })
 
@@ -80,7 +84,9 @@ describe("AdaptiveExperience", () => {
     render(<AdaptiveExperience />, { wrapper: makeWrapper() })
 
     await waitFor(() => {
-      expect(screen.getByText(/Welcome back, Amara/i)).toBeInTheDocument()
+      expect(
+        screen.getByText(/right here whenever you want to move money/i)
+      ).toBeInTheDocument()
     })
 
     // Sidebar nav items are desktop-only (not in MobileShell)

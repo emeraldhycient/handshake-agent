@@ -11,8 +11,11 @@
  *   - unknown event (not deposit.success) → 200, no settle.
  *   - address not found in wallet repo → 200, no settle.
  *   - settleDepositAtomic returns deposited:false (idempotent) → 200, no receipt sent.
- *   - settleDepositAtomic throws → 200 (error swallowed + logged).
+ *   - settleDepositAtomic throws (transient/misconfig, e.g. ReceiptNotSignableError)
+ *     → 503 (retryable) so Blockradar redelivers — the deposit is NOT silently lost.
  *   - WhatsApp address not found → 200, settle happened, sendText NOT called.
+ *   - receipt-send (sendText) throws AFTER a successful settle → 200 (best-effort;
+ *     the deposit is already credited, so a notify failure must not force a retry).
  *
  *   withdraw.success / withdraw.failed:
  *   - valid sig + withdraw.success + reference → settleSendOnChain called with success:true + hash.
@@ -35,6 +38,7 @@ import type { IdentityService } from '../../identity/application/identity.servic
 import type { IWhatsAppSender } from '../../whatsapp/application/ports/whatsapp-sender.port';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
 import type { ExecutionService } from '../../transactions/application/execution.service';
+import { ReceiptNotSignableError } from '../../transactions/domain/execution-errors';
 import { BlockradarWebhookController } from './blockradar-webhook.controller';
 import { hmacHex } from '../../../core/crypto/hmac';
 
@@ -94,13 +98,24 @@ function makeWalletRepo(
 }
 
 function makeSettlementRepo(
-  result: 'deposited' | 'duplicate' | 'throw' = 'deposited',
+  result:
+    | 'deposited'
+    | 'duplicate'
+    | 'throw'
+    | 'receipt-not-signable' = 'deposited',
 ): jest.Mocked<Pick<IDepositSettlementRepository, 'settleDepositAtomic'>> {
   if (result === 'throw') {
     return {
       settleDepositAtomic: jest
         .fn()
         .mockRejectedValue(new Error('settle boom')),
+    };
+  }
+  if (result === 'receipt-not-signable') {
+    return {
+      settleDepositAtomic: jest
+        .fn()
+        .mockRejectedValue(new ReceiptNotSignableError()),
     };
   }
   if (result === 'duplicate') {
@@ -209,12 +224,14 @@ function makeExecutionService(
 function makeController(
   overrides: {
     wallet?: WalletRecord | null;
-    settleResult?: 'deposited' | 'duplicate' | 'throw';
+    settleResult?: 'deposited' | 'duplicate' | 'throw' | 'receipt-not-signable';
     settleSendResult?: 'completed' | 'failed' | 'pending' | 'throw';
     waAddress?: string | null;
     apiKey?: string;
     /** Set to false to simulate an unsupported deposited asset (WN-2). */
     assetEnabled?: boolean;
+    /** Set true to make sender.sendText reject (notify failure after settle). */
+    senderThrows?: boolean;
   } = {},
 ) {
   const walletRepo = makeWalletRepo(
@@ -227,6 +244,9 @@ function makeController(
     overrides.waAddress !== undefined ? overrides.waAddress : WA_ADDRESS,
   );
   const sender = makeSender();
+  if (overrides.senderThrows) {
+    sender.sendText.mockRejectedValue(new Error('whatsapp send boom'));
+  }
   const assetRegistry = makeAssetRegistry(overrides.assetEnabled !== false);
   const config = makeConfigService(overrides.apiKey ?? API_KEY);
   const executionService = makeExecutionService(
@@ -396,10 +416,51 @@ describe('BlockradarWebhookController', () => {
       expect(sender.sendText).not.toHaveBeenCalled();
     });
 
-    // ── Settlement throws ─────────────────────────────────────────────────────
+    // ── Settlement throws → retryable 5xx (must NOT ack 200) ──────────────────
 
-    it('settleDepositAtomic throws → returns 200 (error swallowed), sendText NOT called', async () => {
+    it('settleDepositAtomic throws (transient) → 5xx (retryable), sendText NOT called', async () => {
+      // A settlement failure must NOT be acked 200 — that tells Blockradar the
+      // deposit is processed and it never retries, silently losing the credit.
       const { controller, sender } = makeController({ settleResult: 'throw' });
+
+      const body = depositSuccessBody();
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      await expect(
+        controller.handleWebhook(body, rawBody, sig),
+      ).rejects.toMatchObject({ status: 503 });
+
+      // No receipt — settlement never completed.
+      expect(sender.sendText).not.toHaveBeenCalled();
+    });
+
+    it('settleDepositAtomic throws ReceiptNotSignableError (misconfig) → 5xx so Blockradar retries', async () => {
+      // RECEIPT_NOT_SIGNABLE is a fail-closed misconfig: nothing was credited.
+      // Returning 200 would strand the deposit; we must return a retryable 5xx.
+      const { controller, sender } = makeController({
+        settleResult: 'receipt-not-signable',
+      });
+
+      const body = depositSuccessBody();
+      const rawBody = makeRawBody(body);
+      const sig = makeValidSig(rawBody);
+
+      await expect(
+        controller.handleWebhook(body, rawBody, sig),
+      ).rejects.toMatchObject({ status: 503 });
+
+      expect(sender.sendText).not.toHaveBeenCalled();
+    });
+
+    // ── Receipt-send fails AFTER a successful settle → still 200 ───────────────
+
+    it('sendText throws after a successful settle → 200 (best-effort; deposit already credited)', async () => {
+      // The money has moved (deposited:true). A WhatsApp-notify failure must NOT
+      // force a 5xx — a retry would re-fire a webhook for an already-credited tx.
+      const { controller, settlementRepo, sender } = makeController({
+        senderThrows: true,
+      });
 
       const body = depositSuccessBody();
       const rawBody = makeRawBody(body);
@@ -408,7 +469,9 @@ describe('BlockradarWebhookController', () => {
       const result = await controller.handleWebhook(body, rawBody, sig);
 
       expect(result).toEqual({ status: 'ok' });
-      expect(sender.sendText).not.toHaveBeenCalled();
+      expect(settlementRepo.settleDepositAtomic).toHaveBeenCalled();
+      // sendText was attempted (and threw, swallowed by sendReceipt).
+      expect(sender.sendText).toHaveBeenCalled();
     });
 
     // ── WhatsApp address not found ────────────────────────────────────────────

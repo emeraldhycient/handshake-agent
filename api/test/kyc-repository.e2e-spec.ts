@@ -28,7 +28,13 @@ jest.setTimeout(180_000);
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Stub ConfigService for PinService (scrypt key length etc.). */
+/** 32-byte AES key (64 hex chars) used to encrypt NIN/BVN at rest (NFR-1). */
+const KYC_ENCRYPTION_KEY = 'a'.repeat(64);
+
+/**
+ * Stub ConfigService for PinService (scrypt key length etc.) and
+ * KycPrismaRepository (KYC_ENCRYPTION_KEY for NIN/BVN field encryption).
+ */
 function makeConfigService(): ConfigService {
   return {
     get: (key: string) => {
@@ -36,6 +42,7 @@ function makeConfigService(): ConfigService {
         'auth.pin.maxAttempts': 5,
         'auth.pin.lockoutMinutes': 15,
         'auth.pin.scryptKeyLen': 64,
+        KYC_ENCRYPTION_KEY,
       };
       return cfg[key];
     },
@@ -59,7 +66,10 @@ describe('KycPrismaRepository (integration, Testcontainers Postgres)', () => {
     ({ prisma, stop } = await startTestPostgres());
 
     // Boundary cast: PrismaClient → PrismaService (same API surface at runtime).
-    repo = new KycPrismaRepository(prisma as unknown as PrismaService);
+    repo = new KycPrismaRepository(
+      prisma as unknown as PrismaService,
+      makeConfigService(),
+    );
 
     const pinRepo = new PinPrismaRepository(prisma as unknown as PrismaService);
     pinService = new PinService(pinRepo, makeConfigService(), CLOCK);
@@ -152,7 +162,11 @@ describe('KycPrismaRepository (integration, Testcontainers Postgres)', () => {
     expect(profile).not.toBeNull();
     expect(profile!.status).toBe('verified');
     expect(profile!.tier).toBe('tier_1');
-    expect(profile!.nin).toBe('10000000001');
+    // NFR-1: NIN is stored encrypted (ciphertext), never as plaintext, and
+    // decrypts back to the original via the repo's read path.
+    expect(profile!.nin).not.toBe('10000000001');
+    expect(profile!.nin).toMatch(/^v1\./);
+    expect(repo.decryptIdentifier(profile!.nin)).toBe('10000000001');
     expect(profile!.firstName).toBe('Ngozi');
     expect(profile!.lastName).toBe('Adeyemi');
     expect(profile!.verifiedAt).not.toBeNull();

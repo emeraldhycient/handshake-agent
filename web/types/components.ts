@@ -60,6 +60,12 @@ export interface AssetIconProps {
   sym: string
   /** Data tint color — applied via inline style (the one approved hex exception) */
   tint: string
+  /**
+   * Optional absolute URL to the asset's logo image. When set, the icon renders
+   * the logo (lazy, alt=sym); on a missing URL or load error it falls back to
+   * the tinted text badge.
+   */
+  logoUrl?: string
   size?: "sm" | "md"
   className?: string
 }

@@ -18,6 +18,16 @@ const res: WalletBalancesResponse = {
   ],
 }
 
+const resWithLogo: WalletBalancesResponse = {
+  ...res,
+  assets: [
+    {
+      ...res.assets[0],
+      logoUrl: "https://res.cloudinary.com/blockradar/usdt.png",
+    },
+  ],
+}
+
 describe("mapWalletBalances", () => {
   it("produces a BalanceView with an approx total and per-asset rows", () => {
     const v = mapWalletBalances(res)
@@ -31,6 +41,18 @@ describe("mapWalletBalances", () => {
     })
     expect(v.assets[0].tint).toBe("#7fd1a8")
   })
+
+  it("threads logoUrl through when the response provides one", () => {
+    const v = mapWalletBalances(resWithLogo)
+    expect(v.assets[0].logoUrl).toBe(
+      "https://res.cloudinary.com/blockradar/usdt.png"
+    )
+  })
+
+  it("omits logoUrl when the response has none", () => {
+    const v = mapWalletBalances(res)
+    expect(v.assets[0].logoUrl).toBeUndefined()
+  })
 })
 
 describe("mapWalletAssets", () => {
@@ -43,5 +65,17 @@ describe("mapWalletAssets", () => {
       value: "₦49,150",
     })
     expect(typeof rows[0].change).toBe("string")
+  })
+
+  it("threads logoUrl through when the response provides one", () => {
+    const rows = mapWalletAssets(resWithLogo)
+    expect(rows[0].logoUrl).toBe(
+      "https://res.cloudinary.com/blockradar/usdt.png"
+    )
+  })
+
+  it("omits logoUrl when the response has none", () => {
+    const rows = mapWalletAssets(res)
+    expect(rows[0].logoUrl).toBeUndefined()
   })
 })

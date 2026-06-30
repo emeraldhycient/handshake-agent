@@ -101,6 +101,9 @@ export const AssetViewSchema = z.object({
   amount: z.string(),
   value: z.string(),
   tint: z.string(),
+  // Optional logo URL from the wallet provider; AssetIcon falls back to the
+  // tinted text badge when absent or on image load error.
+  logoUrl: z.string().optional(),
 })
 export type AssetView = z.infer<typeof AssetViewSchema>
 

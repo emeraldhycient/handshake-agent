@@ -3931,7 +3931,12 @@ const STUB_SWAP_PROPOSAL: ProposalRecord = {
     toAsset: 'TRX',
     fromAmount: '40',
     toAmount: '62500',
-    rate: '1562.5',
+    // Stored rate is the SPREAD-FOLDED effective rate proposeSwap persists
+    // (provider raw 1562.5 × (1 − 100bps) = 1546.875). executeSwap folds the same
+    // spread into the fresh provider rate before measuring drift, so an unchanged
+    // provider rate yields zero drift (the drift gate measures provider slippage,
+    // not our spread).
+    rate: '1546.875',
     networkFee: '1',
     transactionFee: '0.5',
     estimatedArrivalSec: 120,
@@ -4038,6 +4043,9 @@ function buildSwapService(
     pinService?: unknown;
     ledgerRepo?: { getAccountBalance: jest.Mock };
     swapProvider?: { getQuote: jest.Mock; execute: jest.Mock };
+    walletService?: jest.Mocked<
+      Pick<WalletService, 'getOrProvisionNetworkWallet'>
+    >;
   } = {},
 ): ExecutionService {
   const swapStepUpGrant: DirectiveGrantRecord = {
@@ -4059,7 +4067,8 @@ function buildSwapService(
     (overrides.directiveService ??
       makeDirectiveService(swapStepUpGrant)) as unknown as DirectiveService,
     (overrides.pinService ?? makePinService()) as unknown as PinService,
-    makeWalletService() as unknown as WalletService,
+    (overrides.walletService as unknown as WalletService) ??
+      (makeWalletService() as unknown as WalletService),
     // paymentProvider: not used on swap path
     makePaymentProvider() as unknown as IPaymentProvider,
     SWAP_STUB_CONFIG as never,
@@ -4112,6 +4121,37 @@ describe('ExecutionService.executeSwap', () => {
     // Outbox enqueued
     expect(outboxRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({ settlementType: 'swap' }),
+    );
+  });
+
+  it('passes wallet.providerReference (Blockradar child-address id) as addressId — NOT wallet.id — to getQuote and execute', async () => {
+    // The proposal params store walletId = wallet.id ('wallet-id'), but Blockradar's
+    // swap getQuote/execute require the child-address id (wallet.providerReference).
+    // executeSwap must re-load the wallet and thread providerReference through, mirroring
+    // the send path. Passing wallet.id would make every real swap fail at the provider.
+    const walletService = makeWalletService();
+    const swapProvider = makeSwapProviderMock();
+
+    const svc = buildSwapService({ walletService, swapProvider });
+    await svc.executeSwap(SWAP_BASE_INPUT);
+
+    // Wallet re-loaded by (userId, network) — network derived from fromAsset.
+    expect(walletService.getOrProvisionNetworkWallet).toHaveBeenCalledWith(
+      USER_ID,
+      'TRON',
+    );
+    // Both provider calls receive the providerReference, never the DB wallet.id.
+    expect(swapProvider.getQuote).toHaveBeenCalledWith(
+      expect.objectContaining({ addressId: 'blockradar-ref-001' }),
+    );
+    expect(swapProvider.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ addressId: 'blockradar-ref-001' }),
+    );
+    expect(swapProvider.getQuote).not.toHaveBeenCalledWith(
+      expect.objectContaining({ addressId: 'wallet-id' }),
+    );
+    expect(swapProvider.execute).not.toHaveBeenCalledWith(
+      expect.objectContaining({ addressId: 'wallet-id' }),
     );
   });
 

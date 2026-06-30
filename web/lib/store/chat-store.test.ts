@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { buildBuyConfirm } from "@/lib/chat/flow"
 import { createChatStore } from "./chat-store"
+import { greetingDesktop, GREETING_D } from "@/lib/constants"
 import { ApiError } from "@/lib/api/client"
 import type {
   WebChatResponse,
@@ -237,6 +238,49 @@ describe("chat store", () => {
     expect(thread[0].kind).toBe("text")
     expect(store.getState().chips.m.length).toBeGreaterThan(0)
     expect(store.getState().input.m).toBe("")
+  })
+
+  // ─── desktop greeting personalization ─────────────────────────────────────────
+
+  it("initial desktop greeting is the name-free generic (no hardcoded name)", () => {
+    const greeting = store.getState().threads.d[0]
+    expect(greeting.kind).toBe("text")
+    expect(greeting.kind === "text" && greeting.text).toBe(GREETING_D)
+    expect(greeting.kind === "text" && greeting.text).not.toMatch(/amara/i)
+  })
+
+  it("setDesktopGreeting personalizes the desktop greeting with the first name", () => {
+    store.getState().setDesktopGreeting("Amara")
+    const greeting = store.getState().threads.d[0]
+    expect(greeting.kind === "text" && greeting.text).toBe(
+      greetingDesktop("Amara")
+    )
+    expect(greeting.kind === "text" && greeting.text).toMatch(
+      /welcome back, amara/i
+    )
+    // The greeting id is preserved (still the first message, not appended).
+    expect(store.getState().threads.d).toHaveLength(1)
+  })
+
+  it("setDesktopGreeting with no name keeps the name-free greeting", () => {
+    store.getState().setDesktopGreeting()
+    const greeting = store.getState().threads.d[0]
+    expect(greeting.kind === "text" && greeting.text).toBe(GREETING_D)
+  })
+
+  it("setDesktopGreeting does not touch the mobile thread", () => {
+    store.getState().setDesktopGreeting("Amara")
+    const mGreeting = store.getState().threads.m[0]
+    expect(mGreeting.kind === "text" && mGreeting.text).not.toMatch(/amara/i)
+  })
+
+  it("setDesktopGreeting is a no-op once the conversation has started (never clobbers history)", () => {
+    store.getState().send("d", "Buy ₦50,000 of USDT", "buy")
+    const before = store.getState().threads.d
+    store.getState().setDesktopGreeting("Amara")
+    const after = store.getState().threads.d
+    // Thread is unchanged — the greeting is only personalized on first load.
+    expect(after).toEqual(before)
   })
 
   // ─── deterministic IDs ───────────────────────────────────────────────────────
