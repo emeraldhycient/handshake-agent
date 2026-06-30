@@ -61,8 +61,14 @@ export function mapOutcomeToMessages(
       asset: d.asset,
       network: d.network,
       address: d.address,
-      minDeposit: d.minAmount ?? "—",
-      creditedEta: d.etaText ?? "~30 min",
+      // Finding #9: never fabricate min-deposit / credited-ETA. The backend does
+      // not populate these yet, and the old "—" / "~30 min" fallbacks were both
+      // fake AND inconsistent with the wallet-page placeholders ("1 USDT" /
+      // "~1 min"). Pass real values through; emit "" when absent so the card can
+      // hide the chip instead of showing an invented number. ~30 min is also
+      // simply wrong for TRON (credits after ~1-3 min).
+      minDeposit: d.minAmount ?? "",
+      creditedEta: d.etaText ?? "",
     })
   } else if (outcome.kind === "proposal") {
     const c = outcome.confirmation

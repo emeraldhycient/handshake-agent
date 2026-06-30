@@ -32,10 +32,21 @@ export interface BuyQuoteBreakdown {
   cryptoAmount: string;
 }
 
+/**
+ * Pricing-domain validation error (non-positive amount, non-positive/zeroed-out
+ * rate). Carries a stable `code` so the global DomainExceptionFilter maps it to a
+ * clean 422 instead of falling through to an opaque 500 (finding #2). The
+ * proposal-boundary amount guard normally rejects bad input first, so this is
+ * defense-in-depth for any non-proposal caller (e.g. the /quote endpoint).
+ */
 export class QuotePricingError extends Error {
+  readonly code = 'QUOTE_INVALID_AMOUNT' as const;
+
   constructor(message: string) {
     super(message);
     this.name = 'QuotePricingError';
+    // Restore prototype chain (needed when target < ES2022 transpiles classes).
+    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 

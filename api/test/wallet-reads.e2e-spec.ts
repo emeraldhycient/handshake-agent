@@ -265,7 +265,7 @@ describe('Wallet reads — e2e (GET /wallets/balances + /wallets/deposit-address
         firstName: 'Eze',
         lastName: 'Nweke',
         nin: '12345678901',
-        pin: '1234',
+        pin: '1357',
       })
       .expect(200);
     const { userId } = ks.body as { userId: string; status: string };

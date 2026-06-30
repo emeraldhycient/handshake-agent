@@ -297,7 +297,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
     });
     userId = user.id;
 
-    await pinService.setPin(userId, '123456');
+    await pinService.setPin(userId, '194837');
   });
 
   afterAll(async () => {
@@ -423,7 +423,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -499,7 +499,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -533,7 +533,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -554,7 +554,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         proposalId: proposalId2,
         directiveId: dir2,
         nonce: nonce2,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey, // same key → idempotent path
       });
 
@@ -620,7 +620,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -717,7 +717,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -797,7 +797,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 

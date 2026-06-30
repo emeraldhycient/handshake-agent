@@ -17,11 +17,31 @@ export class InvalidVerificationTokenError extends AuthDomainError {
   }
 }
 
-/** The login OTP is wrong, expired, or exhausted. Generic on purpose. */
+/** The login OTP is wrong or expired. Generic on purpose. */
 export class InvalidOtpError extends AuthDomainError {
   constructor() {
     super('The code is invalid or has expired');
     this.name = 'InvalidOtpError';
+  }
+}
+
+/**
+ * The login OTP challenge has exhausted its guess budget (attemptCount reached
+ * the cap). Distinct from {@link InvalidOtpError} so the controller can tell the
+ * user to request a fresh code rather than retrying a dead one.
+ *
+ * Safe to distinguish without leaking account enumeration: this branch is only
+ * reachable for a real verified user with a real active challenge — an
+ * unknown/unverified email never reaches it (it throws InvalidOtpError first).
+ * The message reveals only that guessing was attempted, never whether the email
+ * is registered.
+ */
+export class OtpLockedError extends AuthDomainError {
+  readonly code = 'OTP_LOCKED' as const;
+
+  constructor() {
+    super('Too many attempts. Please request a new code.');
+    this.name = 'OtpLockedError';
   }
 }
 

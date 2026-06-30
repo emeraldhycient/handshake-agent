@@ -267,7 +267,7 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
       },
     });
     userId = user.id;
-    await pinService.setPin(userId, '123456');
+    await pinService.setPin(userId, '194837');
   });
 
   afterAll(async () => {
@@ -320,7 +320,7 @@ describe('ExecutionService.settleBuyPayment (integration, Testcontainers Postgre
       proposalId,
       directiveId,
       nonce,
-      pin: '123456',
+      pin: '194837',
       idempotencyKey,
     });
 

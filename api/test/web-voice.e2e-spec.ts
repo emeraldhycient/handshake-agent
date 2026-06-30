@@ -265,7 +265,7 @@ describe('Web voice — e2e (AppModule, Testcontainers Postgres)', () => {
         firstName: 'Adaugo',
         lastName: 'Nwosu',
         nin: '33445566778',
-        pin: '5678',
+        pin: '1357',
       })
       .expect(200);
   }, 120_000);

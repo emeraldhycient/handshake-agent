@@ -311,7 +311,7 @@ describe('Swap vertical — propose → execute → settle (Testcontainers Postg
       // funding buy plus the swap below.
       data: { kycStatus: 'verified', kycTier: 'tier_2', status: 'active' },
     });
-    await pinService.setPin(user.id, '123456');
+    await pinService.setPin(user.id, '194837');
     return user.id;
   }
 
@@ -346,7 +346,7 @@ describe('Swap vertical — propose → execute → settle (Testcontainers Postg
       proposalId,
       directiveId,
       nonce,
-      pin: '123456',
+      pin: '194837',
       idempotencyKey: buyKey,
     });
     await executionService.settleBuyPayment({ reference: buyKey });
@@ -403,7 +403,7 @@ describe('Swap vertical — propose → execute → settle (Testcontainers Postg
       proposalId,
       directiveId,
       nonce,
-      pin: '123456',
+      pin: '194837',
       idempotencyKey,
     });
 

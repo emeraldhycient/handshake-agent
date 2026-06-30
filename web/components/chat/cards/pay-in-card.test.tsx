@@ -132,3 +132,28 @@ describe("PayInCard", () => {
     expect(screen.queryByText("₦1,000.00")).not.toBeInTheDocument()
   })
 })
+
+describe("PayInCard — failure tone (finding: FAILED renders danger-red)", () => {
+  it("renders 'Payment failed' on the danger palette, never the calm info blue", () => {
+    render(<PayInCard {...baseProps} status="failed" />)
+    const pill = screen.getByText("Payment failed")
+    expect(pill).toHaveClass("text-danger")
+    expect(pill).toHaveClass("bg-danger-muted")
+    expect(pill).not.toHaveClass("text-info")
+    expect(pill).not.toHaveClass("bg-info-muted")
+  })
+
+  it("keeps 'Awaiting transfer' on the warn palette", () => {
+    render(<PayInCard {...baseProps} status="settling" />)
+    const pill = screen.getByText("Awaiting transfer")
+    expect(pill).toHaveClass("text-warn")
+    expect(pill).not.toHaveClass("text-danger")
+  })
+
+  it("keeps 'Payment received' on the success palette", () => {
+    render(<PayInCard {...baseProps} status="completed" />)
+    const pill = screen.getByText("Payment received")
+    expect(pill).toHaveClass("text-success")
+    expect(pill).not.toHaveClass("text-danger")
+  })
+})

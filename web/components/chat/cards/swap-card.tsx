@@ -36,8 +36,14 @@ export function SwapCard({
   density,
   onConfirm,
   className,
+  ...rest
 }: SwapCardProps) {
   const isMobile = density === "mobile"
+
+  // Network gas is paid in the chain's NATIVE asset (TRX on TRON), not fromAsset.
+  // The fee denomination is being added to the SwapView contract (lib/schemas);
+  // until that lands, read it defensively and fall back to fromAsset.
+  const feeAsset = (rest as { feeAsset?: string }).feeAsset?.trim() || fromAsset
 
   // ── Live countdown ─────────────────────────────────────────────────────────
   function computeRemaining(): number {
@@ -90,8 +96,8 @@ export function SwapCard({
       label: "Rate",
       value: `1 ${fromAsset} = ${rate} ${toAsset}`,
     },
-    { label: "Network fee", value: `${networkFee} ${fromAsset}` },
-    { label: "Transaction fee", value: `${transactionFee} ${fromAsset}` },
+    { label: "Network fee", value: `${networkFee} ${feeAsset}` },
+    { label: "Transaction fee", value: `${transactionFee} ${feeAsset}` },
     { label: "Estimated arrival", value: formatEta(estimatedArrivalSec) },
   ]
 
@@ -201,6 +207,20 @@ export function SwapCard({
         />
       </div>
 
+      {/* Fee reconciliation note — the headline debit is exactly fromAmount of
+          fromAsset (what the engine reserves); fees come out of the received
+          amount, not on top, so the user can reconcile the total. */}
+      <p
+        className={cn(
+          "text-muted-foreground-subtle",
+          isMobile
+            ? "px-4 pb-1 text-[11.5px]"
+            : "px-[15px] pb-[3px] text-[11px]"
+        )}
+      >
+        Fees are deducted from the amount you receive, not from this debit.
+      </p>
+
       {/* CTA */}
       <div className={cn(isMobile ? "px-4 pb-4" : "px-[15px] pb-[15px]")}>
         <button
@@ -221,13 +241,18 @@ export function SwapCard({
         >
           {isExpired ? "Quote expired" : "Review & confirm"}
         </button>
-        {isMobile && (
-          <p className="mt-[9px] text-center text-[11.5px] text-muted-foreground-subtle">
-            {isExpired
-              ? "Request a new swap to continue"
-              : `Rate locked ${formatCountdown(remaining)} · No hidden fees`}
-          </p>
-        )}
+        {/* Reassurance / expiry-recovery hint — shown on BOTH densities for
+            parity with QuoteCard (scenario finding: ui-consistency-states). */}
+        <p
+          className={cn(
+            "text-center text-muted-foreground-subtle",
+            isMobile ? "mt-[9px] text-[11.5px]" : "mt-2 text-[11px]"
+          )}
+        >
+          {isExpired
+            ? "Request a new swap to continue"
+            : `Rate locked ${formatCountdown(remaining)} · No hidden fees`}
+        </p>
       </div>
     </div>
   )

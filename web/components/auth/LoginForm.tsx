@@ -27,8 +27,14 @@ import {
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { useLoginRequest, useLoginVerify } from "@/lib/query/auth"
+import { ApiError } from "@/lib/api/client"
 import { getDeviceFingerprint } from "@/lib/device"
+import { useCountdown } from "@/hooks/use-countdown"
 import type { LoginFormProps } from "@/types/components"
+
+// Seconds the user must wait before re-requesting an OTP. A client-side cooldown
+// that mirrors the server throttle so we don't hammer login/request.
+const RESEND_COOLDOWN_SECONDS = 30
 
 // ─── OTP-only schema for step 2 (deviceFingerprint injected at submit) ───────
 
@@ -47,6 +53,10 @@ export function LoginForm({ className }: LoginFormProps) {
   const [step, setStep] = useState<"request" | "verify">("request")
   const [email, setEmail] = useState("")
   const [devOtp, setDevOtp] = useState<string | undefined>(undefined)
+  // ISO timestamp the resend cooldown ends at; drives the countdown on step 2.
+  const [resendReadyAt, setResendReadyAt] = useState<string | undefined>(
+    undefined
+  )
 
   // ── Step 1 form ──────────────────────────────────────────────────────────────
 
@@ -74,6 +84,19 @@ export function LoginForm({ className }: LoginFormProps) {
 
   const loginVerify = useLoginVerify()
 
+  // Resend cooldown — ticks down from RESEND_COOLDOWN_SECONDS each time a code
+  // is (re)sent. The Resend button is disabled until it reaches 0.
+  const { secondsLeft: resendSecondsLeft, expired: resendReady } =
+    useCountdown(resendReadyAt)
+
+  function startResendCooldown() {
+    // Only ever called from event handlers (submit / resend), never during
+    // render, so reading the clock here is safe.
+    // eslint-disable-next-line react-hooks/purity
+    const readyAt = Date.now() + RESEND_COOLDOWN_SECONDS * 1000
+    setResendReadyAt(new Date(readyAt).toISOString())
+  }
+
   // ── Step 1 submit ─────────────────────────────────────────────────────────────
 
   async function onStep1Submit(values: LoginRequest) {
@@ -84,7 +107,25 @@ export function LoginForm({ className }: LoginFormProps) {
         setDevOtp(result.devOtp)
         setValue("otp", result.devOtp)
       }
+      startResendCooldown()
       setStep("verify")
+    } catch {
+      // Error surfaces via loginRequest.error — rendered below.
+    }
+  }
+
+  // ── Resend the OTP for the current email (step 2) ──────────────────────────────
+
+  async function onResend() {
+    try {
+      const result = await loginRequest.mutateAsync({ email })
+      if (result.devOtp) {
+        setDevOtp(result.devOtp)
+        setValue("otp", result.devOtp)
+      }
+      // A fresh code invalidates any previous wrong-code / locked error.
+      loginVerify.reset()
+      startResendCooldown()
     } catch {
       // Error surfaces via loginRequest.error — rendered below.
     }
@@ -195,11 +236,31 @@ export function LoginForm({ className }: LoginFormProps) {
   // ── Step 2: verify OTP ────────────────────────────────────────────────────────
 
   const loading2 = isSubmittingStep2 || loginVerify.isPending
-  const serverError2 =
-    loginVerify.error instanceof Error
-      ? loginVerify.error.message
-      : loginVerify.error
-        ? String(loginVerify.error)
+  const resending = loginRequest.isPending
+
+  // A lockout (too many attempts / throttle) is a fundamentally different state
+  // from a wrong code: re-entering the OTP can't help — the user must request a
+  // fresh code. The server may signal it via a 429 or a "too many"/"locked"
+  // message; either way we surface distinct, actionable copy.
+  const verifyErr = loginVerify.error
+  const isLockedOut =
+    (verifyErr instanceof ApiError && verifyErr.status === 429) ||
+    (verifyErr instanceof Error && /too many|locked/i.test(verifyErr.message))
+
+  const serverError2 = isLockedOut
+    ? "Too many attempts. Request a new code to continue."
+    : verifyErr instanceof Error
+      ? verifyErr.message
+      : verifyErr
+        ? String(verifyErr)
+        : null
+
+  // Surface a resend failure too, so the resend path is never a silent no-op.
+  const resendError =
+    loginRequest.error instanceof Error
+      ? loginRequest.error.message
+      : loginRequest.error
+        ? String(loginRequest.error)
         : null
 
   return (
@@ -218,9 +279,23 @@ export function LoginForm({ className }: LoginFormProps) {
         <div
           role="alert"
           aria-live="assertive"
-          className="rounded-lg border border-destructive bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          className={
+            isLockedOut
+              ? "rounded-lg border border-warn bg-warn/10 px-4 py-3 text-sm text-warn-foreground"
+              : "rounded-lg border border-destructive bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          }
         >
           {serverError2}
+        </div>
+      )}
+
+      {resendError && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="rounded-lg border border-destructive bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
+          {resendError}
         </div>
       )}
 
@@ -271,11 +346,32 @@ export function LoginForm({ className }: LoginFormProps) {
         {loading2 ? "Verifying…" : "Verify and log in"}
       </Button>
 
+      <div className="flex flex-col items-center gap-1">
+        <button
+          type="button"
+          disabled={!resendReady || resending}
+          aria-busy={resending}
+          className="text-sm font-medium text-primary underline underline-offset-2 disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline"
+          onClick={onResend}
+        >
+          {resending
+            ? "Resending…"
+            : resendReady
+              ? "Resend code"
+              : `Resend code in ${resendSecondsLeft ?? RESEND_COOLDOWN_SECONDS}s`}
+        </button>
+        <p className="text-xs text-muted-foreground">
+          The code expires after a few minutes. Didn&apos;t get it? Check spam,
+          or resend.
+        </p>
+      </div>
+
       <button
         type="button"
         className="text-center text-sm text-muted-foreground underline underline-offset-2"
         onClick={() => {
           setStep("request")
+          setResendReadyAt(undefined)
           loginRequest.reset()
           loginVerify.reset()
         }}

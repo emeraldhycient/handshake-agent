@@ -433,7 +433,7 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
         intent: {
           action: 'send_crypto',
           asset: 'USDT',
-          cryptoAmount: '1.0',
+          cryptoAmount: '5.0',
           network: 'TRON',
         },
         beneficiaryId: coolingBen.id,
@@ -450,7 +450,7 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
         intent: {
           action: 'send_crypto',
           asset: 'USDT',
-          cryptoAmount: '1.0',
+          cryptoAmount: '5.0',
           network: 'TRON',
         },
         beneficiaryId: blockedBeneficiaryId,

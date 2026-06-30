@@ -27,7 +27,9 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
+  ForbiddenException,
   HttpCode,
   HttpStatus,
   Logger,
@@ -37,18 +39,27 @@ import {
 } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
 
-import type { KycCompleteResponse } from '@handshake-agent/contracts';
+import type {
+  KycCompleteResponse,
+  SetPinResponse,
+} from '@handshake-agent/contracts';
 
 import { HandoffTokenDomainError } from '../domain/handoff-token-errors';
 import { ContactNotFoundError, KycRejectedError } from '../domain/kyc-errors';
+import {
+  PinAlreadySetError,
+  PinSetupNotVerifiedError,
+} from '../domain/pin-setup-errors';
 import { HandoffTokenService } from '../application/handoff-token.service';
 import { KycService } from '../application/kyc.service';
+import { PinSetupService } from '../application/pin-setup.service';
 import { WalletService } from '../../wallets/application/wallet.service';
 import { JwtAuthGuard } from '../../auth/presentation/jwt-auth.guard';
 import { CurrentUser } from '../../auth/presentation/current-user.decorator';
 import type { AuthenticatedUser } from '../../auth/presentation/jwt-auth.guard';
 import { KycCompleteDto } from './dto/kyc-complete.dto';
 import { KycSubmitDto } from './dto/kyc-submit.dto';
+import { SetPinDto } from './dto/set-pin.dto';
 
 @Controller('kyc')
 @UseGuards(ThrottlerGuard)
@@ -59,6 +70,7 @@ export class KycController {
     private readonly handoffTokenService: HandoffTokenService,
     private readonly kycService: KycService,
     private readonly walletService: WalletService,
+    private readonly pinSetupService: PinSetupService,
   ) {}
 
   /**
@@ -107,7 +119,8 @@ export class KycController {
         throw new BadRequestException(err.message);
       }
       if (err instanceof KycRejectedError) {
-        throw new UnprocessableEntityException(err.message);
+        // Surface the friendly userMessage — never the raw provider reason.
+        throw new UnprocessableEntityException(err.userMessage);
       }
       throw err;
     }
@@ -158,7 +171,8 @@ export class KycController {
       }));
     } catch (err) {
       if (err instanceof KycRejectedError) {
-        throw new UnprocessableEntityException(err.message);
+        // Surface the friendly userMessage — never the raw provider reason.
+        throw new UnprocessableEntityException(err.userMessage);
       }
       throw err;
     }
@@ -174,5 +188,37 @@ export class KycController {
     }
 
     return { userId, status: 'verified' };
+  }
+
+  /**
+   * Set the transaction PIN for an already-verified user who has no PIN yet
+   * (verified-but-PIN-less recovery). Distinct from /kyc/submit: it carries no
+   * identity fields. JWT-authenticated; the service gates it to verified,
+   * PIN-less users server-side (CLAUDE.md §3.3).
+   *
+   * @throws {ForbiddenException} — user is not verified (must finish KYC first).
+   * @throws {ConflictException} — a PIN already exists (reset requires step-up).
+   */
+  @Post('pin')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  async setPin(
+    @Body() dto: SetPinDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<SetPinResponse> {
+    try {
+      return await this.pinSetupService.setTransactionPin(
+        currentUser.userId,
+        dto.pin,
+      );
+    } catch (err) {
+      if (err instanceof PinSetupNotVerifiedError) {
+        throw new ForbiddenException(err.message);
+      }
+      if (err instanceof PinAlreadySetError) {
+        throw new ConflictException(err.message);
+      }
+      throw err;
+    }
   }
 }

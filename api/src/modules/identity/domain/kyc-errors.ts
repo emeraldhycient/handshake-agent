@@ -33,11 +33,25 @@ export class ContactNotFoundError extends KycDomainError {
 }
 
 /**
- * The KYC provider rejected the submitted identity data. Carries the provider
- * reason for display / logging.
+ * Friendly, client-safe copy for a KYC rejection. The raw provider `reason`
+ * (which may carry internal provider detail) is kept on the error for
+ * server-side logging only and is NEVER sent to the client (CLAUDE.md §3.3).
+ */
+export const KYC_REJECTED_USER_MESSAGE =
+  "We couldn't verify your identity. Please check that your NIN or BVN is " +
+  'correct (11 digits) and that your name matches your records, then try ' +
+  'again.';
+
+/**
+ * The KYC provider rejected the submitted identity data. Carries the raw
+ * provider `reason` for logging and a separate `userMessage` for display —
+ * callers map the friendly `userMessage` to the HTTP response, never `reason`.
  */
 export class KycRejectedError extends KycDomainError {
   readonly code = 'KYC_REJECTED' as const;
+
+  /** Client-safe message — safe to surface verbatim to the user. */
+  readonly userMessage = KYC_REJECTED_USER_MESSAGE;
 
   constructor(readonly reason: string | undefined) {
     super(

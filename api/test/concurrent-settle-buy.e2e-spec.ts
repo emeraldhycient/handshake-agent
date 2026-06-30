@@ -269,7 +269,7 @@ describe('Concurrent buy settlement — idempotency + advisory lock (Testcontain
     const user = await prisma.user.create({
       data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },
     });
-    await pinService.setPin(user.id, '123456');
+    await pinService.setPin(user.id, '194837');
     return user.id;
   }
 
@@ -298,7 +298,7 @@ describe('Concurrent buy settlement — idempotency + advisory lock (Testcontain
       proposalId,
       directiveId,
       nonce,
-      pin: '123456',
+      pin: '194837',
       idempotencyKey,
     });
     const wallet = await prisma.wallet.findFirst({

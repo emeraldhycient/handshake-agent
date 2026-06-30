@@ -179,7 +179,7 @@ describe('KYC complete — service integration (Testcontainers Postgres)', () =>
       firstName: 'Amaka',
       lastName: 'Okafor',
       dateOfBirth: '1992-07-14',
-      pin: '1234',
+      pin: '1357',
     });
 
     expect(result.userId).toBeTruthy();

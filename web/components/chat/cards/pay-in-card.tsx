@@ -46,10 +46,12 @@ export function PayInCard({
   const isCompleted = status === "completed"
   const isFailed = status === "failed"
 
+  // Failure is the highest-signal state in a money app — always danger-red,
+  // never the calm info/neutral palette (scenario finding: ui-consistency-states).
   const statusTone = isCompleted
     ? "success"
     : isFailed
-      ? "info"
+      ? "danger"
       : isPending
         ? "warn"
         : "neutral"

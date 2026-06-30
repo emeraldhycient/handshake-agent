@@ -109,4 +109,28 @@ describe("VerifyEmailForm", () => {
       expect(screen.getByText(/invalid or has expired/i)).toBeInTheDocument()
     })
   })
+
+  it("offers a 'resend verification email' affordance (not just 'sign up again') with reassuring copy", async () => {
+    const user = userEvent.setup()
+    mockSubmit.mockRejectedValueOnce(
+      new Error("Token is invalid or has expired")
+    )
+    renderForm(VALID_TOKEN)
+
+    await user.click(screen.getByRole("button", { name: /verify email/i }))
+
+    // A clear resend affordance, pointing at the (idempotent) request-link path.
+    const resendLink = await screen.findByRole("link", {
+      name: /resend verification email|request a new link/i,
+    })
+    expect(resendLink).toHaveAttribute("href", "/signup")
+
+    // Reassurance that resending does not create a duplicate account.
+    expect(
+      screen.getByText(/won'?t create a duplicate account/i)
+    ).toBeInTheDocument()
+
+    // The misleading "sign up again" wording must be gone.
+    expect(screen.queryByText(/sign up again/i)).not.toBeInTheDocument()
+  })
 })

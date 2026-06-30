@@ -449,7 +449,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
 
     const { PinService } = await import('../src/core/auth/pin.service');
     const pinService = moduleRef.get(PinService);
-    await pinService.setPin(userId, '123456');
+    await pinService.setPin(userId, '194837');
 
     await prisma.channelIdentity.create({
       data: {
@@ -696,7 +696,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
       screen: 'SELL_CONFIRM',
       flow_token: flowToken,
       data: {
-        pin: '123456',
+        pin: '194837',
         nonce: capturedNonce,
       },
     };
@@ -932,7 +932,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
       screen: 'SEND_CONFIRM',
       flow_token: flowToken,
       data: {
-        pin: '123456',
+        pin: '194837',
         nonce: capturedNonce,
       },
     };

@@ -190,7 +190,7 @@ describe('Profile — e2e (GET /profile)', () => {
         firstName: 'Eze',
         lastName: 'Nweke',
         nin: '12345678901',
-        pin: '1234',
+        pin: '1357',
       })
       .expect(200);
     return accessToken;

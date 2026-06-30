@@ -68,15 +68,19 @@ export function VerifyEmailForm({ token }: VerifyEmailFormProps) {
           Verification failed
         </h2>
         <p className="text-sm text-muted-foreground">
-          This link is invalid or has expired. Please sign up again to get a new
-          verification email.
+          This link is invalid or has expired. Verification links are valid for
+          24 hours — request a new one to finish setting up your account.
         </p>
         <Link
           href="/signup"
-          className="text-sm font-medium text-primary underline underline-offset-2"
+          className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-6 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
         >
-          Sign up again
+          Resend verification email
         </Link>
+        <p className="text-xs text-muted-foreground">
+          Don&apos;t worry — this won&apos;t create a duplicate account.
+          We&apos;ll just send a fresh link to your email.
+        </p>
       </div>
     )
   }

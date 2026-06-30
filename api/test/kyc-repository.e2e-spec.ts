@@ -112,7 +112,7 @@ describe('KycPrismaRepository (integration, Testcontainers Postgres)', () => {
   it('completeVerificationAtomic creates User(verified,tier_1), KycProfile(verified), links Contact + CI, PIN round-trips', async () => {
     const phone = '+2348099000001';
     const { contactId, channelIdentityId } = await seedContactAndCI(phone);
-    const rawPin = '4321';
+    const rawPin = '1357';
 
     // Hash the PIN exactly as KycService would
     const pinHash = await pinService.hashPin(rawPin);
@@ -217,8 +217,8 @@ describe('KycPrismaRepository (integration, Testcontainers Postgres)', () => {
     const seed1 = await seedContactAndCI(phone1);
     const seed2 = await seedContactAndCI(phone2);
 
-    const pin1 = await pinService.hashPin('1111');
-    const pin2 = await pinService.hashPin('2222');
+    const pin1 = await pinService.hashPin('1397');
+    const pin2 = await pinService.hashPin('2486');
 
     const now = new Date();
 
@@ -249,11 +249,11 @@ describe('KycPrismaRepository (integration, Testcontainers Postgres)', () => {
     expect(uid1).not.toBe(uid2);
 
     // Each user's PIN only works for themselves
-    await expect(pinService.verifyPin(uid1, '1111')).resolves.toBeUndefined();
-    await expect(pinService.verifyPin(uid2, '2222')).resolves.toBeUndefined();
+    await expect(pinService.verifyPin(uid1, '1397')).resolves.toBeUndefined();
+    await expect(pinService.verifyPin(uid2, '2486')).resolves.toBeUndefined();
 
     // Cross-verify must fail
-    await expect(pinService.verifyPin(uid1, '2222')).rejects.toBeDefined();
-    await expect(pinService.verifyPin(uid2, '1111')).rejects.toBeDefined();
+    await expect(pinService.verifyPin(uid1, '2486')).rejects.toBeDefined();
+    await expect(pinService.verifyPin(uid2, '1397')).rejects.toBeDefined();
   });
 });

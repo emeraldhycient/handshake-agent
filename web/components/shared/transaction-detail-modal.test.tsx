@@ -368,3 +368,41 @@ describe("TransactionDetailModal", () => {
     expect(writeText).toHaveBeenCalledWith(depositDetail.txHash)
   })
 })
+
+describe("TransactionDetailModal — status tone (finding: FAILED is danger-red)", () => {
+  async function renderWithStatus(status: TransactionStatusResponse["status"]) {
+    vi.spyOn(chatApi, "getTransactionDetail").mockResolvedValue({
+      ...depositDetail,
+      status,
+    })
+    render(
+      <TransactionDetailModal
+        transactionId="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        onClose={vi.fn()}
+      />,
+      { wrapper: makeWrapper() }
+    )
+  }
+
+  it("renders the 'Failed' status pill on the danger palette, never neutral", async () => {
+    await renderWithStatus("failed")
+    const pill = await screen.findByText("Failed")
+    expect(pill).toHaveClass("text-danger")
+    expect(pill).toHaveClass("bg-danger-muted")
+    expect(pill).not.toHaveClass("text-muted-foreground")
+  })
+
+  it("renders a 'Rolled back' status pill on the danger palette", async () => {
+    await renderWithStatus("rolled_back")
+    const pill = await screen.findByText("Rolled back")
+    expect(pill).toHaveClass("text-danger")
+    expect(pill).not.toHaveClass("text-muted-foreground")
+  })
+
+  it("keeps a completed status on the success palette", async () => {
+    await renderWithStatus("completed")
+    const pill = await screen.findByText("Completed")
+    expect(pill).toHaveClass("text-success")
+    expect(pill).not.toHaveClass("text-danger")
+  })
+})

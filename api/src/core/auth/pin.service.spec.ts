@@ -15,6 +15,7 @@ import {
   PinInvalidError,
   PinLockedError,
   PinNotSetError,
+  WeakPinError,
 } from './domain/pin-errors';
 import { PinService } from './pin.service';
 
@@ -113,7 +114,7 @@ describe('PinService', () => {
     const { repo } = makeRepo();
     const svc = new PinService(repo, makeConfigService(), makeClock());
 
-    const hash = await svc.hashPin('1234');
+    const hash = await svc.hashPin('1357');
     expect(typeof hash).toBe('string');
     // Formatted as <saltHex>:<hashHex>
     expect(hash).toMatch(/^[0-9a-f]+:[0-9a-f]+$/);
@@ -126,7 +127,7 @@ describe('PinService', () => {
     });
     const svc2 = new PinService(repoWithPin, makeConfigService(), makeClock());
 
-    await expect(svc2.verifyPin(USER_ID, '1234')).resolves.toBeUndefined();
+    await expect(svc2.verifyPin(USER_ID, '1357')).resolves.toBeUndefined();
   });
 
   it('verifyPin throws PinInvalidError when a DIFFERENT pin is supplied', async () => {
@@ -135,7 +136,7 @@ describe('PinService', () => {
       makeConfigService(),
       makeClock(),
     );
-    const hash = await svc.hashPin('1234');
+    const hash = await svc.hashPin('1357');
 
     const { repo: repoWithPin } = makeRepo({
       pinHash: hash,
@@ -144,7 +145,8 @@ describe('PinService', () => {
     });
     const svc2 = new PinService(repoWithPin, makeConfigService(), makeClock());
 
-    await expect(svc2.verifyPin(USER_ID, '9999')).rejects.toBeInstanceOf(
+    // 2468 is a different (also strong) PIN — verify must reject the mismatch.
+    await expect(svc2.verifyPin(USER_ID, '2468')).rejects.toBeInstanceOf(
       PinInvalidError,
     );
   });
@@ -199,7 +201,7 @@ describe('PinService', () => {
       makeConfigService(),
       makeClock(),
     );
-    const hash = await svc.hashPin('correct');
+    const hash = await svc.hashPin('1357');
 
     const { repo, state } = makeRepo({
       pinHash: hash,
@@ -229,7 +231,7 @@ describe('PinService', () => {
       makeConfigService(),
       makeClock(),
     );
-    const hash = await svc.hashPin('correct');
+    const hash = await svc.hashPin('1357');
 
     // pinFailureCount = 4, so this attempt makes it 5 (= maxAttempts)
     const { repo } = makeRepo({
@@ -262,7 +264,7 @@ describe('PinService', () => {
       makeConfigService(),
       makeClock(),
     );
-    const hash = await svc.hashPin('correct');
+    const hash = await svc.hashPin('1357');
 
     const { repo } = makeRepo({
       pinHash: hash,
@@ -271,9 +273,110 @@ describe('PinService', () => {
     });
     const svc2 = new PinService(repo, makeConfigService(), makeClock());
 
-    await expect(svc2.verifyPin(USER_ID, 'correct')).resolves.toBeUndefined();
+    await expect(svc2.verifyPin(USER_ID, '1357')).resolves.toBeUndefined();
     expect(repo.resetFailures).toHaveBeenCalledWith(USER_ID);
     expect(repo.recordFailure).not.toHaveBeenCalled();
+  });
+
+  // ── Server-side PIN strength (CLAUDE.md §3.3) ─────────────────────────────
+  // The server is the security boundary: a weak PIN must be rejected even when
+  // a non-web caller bypasses the shared TransactionPinSchema on the client.
+
+  it('hashPin rejects a 1-digit PIN with WeakPinError', async () => {
+    const svc = new PinService(
+      makeRepo().repo,
+      makeConfigService(),
+      makeClock(),
+    );
+    await expect(svc.hashPin('1')).rejects.toBeInstanceOf(WeakPinError);
+  });
+
+  it('hashPin rejects a non-numeric PIN with WeakPinError', async () => {
+    const svc = new PinService(
+      makeRepo().repo,
+      makeConfigService(),
+      makeClock(),
+    );
+    await expect(svc.hashPin('abcd')).rejects.toBeInstanceOf(WeakPinError);
+  });
+
+  it('hashPin rejects an all-same-digit PIN with WeakPinError', async () => {
+    const svc = new PinService(
+      makeRepo().repo,
+      makeConfigService(),
+      makeClock(),
+    );
+    await expect(svc.hashPin('0000')).rejects.toBeInstanceOf(WeakPinError);
+  });
+
+  it('hashPin rejects a trivial sequence with WeakPinError', async () => {
+    const svc = new PinService(
+      makeRepo().repo,
+      makeConfigService(),
+      makeClock(),
+    );
+    await expect(svc.hashPin('1234')).rejects.toBeInstanceOf(WeakPinError);
+    await expect(svc.hashPin('4321')).rejects.toBeInstanceOf(WeakPinError);
+  });
+
+  it('hashPin accepts a strong 4–6 digit PIN', async () => {
+    const svc = new PinService(
+      makeRepo().repo,
+      makeConfigService(),
+      makeClock(),
+    );
+    await expect(svc.hashPin('1357')).resolves.toMatch(/^[0-9a-f]+:[0-9a-f]+$/);
+    await expect(svc.hashPin('135790')).resolves.toMatch(
+      /^[0-9a-f]+:[0-9a-f]+$/,
+    );
+  });
+
+  it('setPin rejects a weak PIN with WeakPinError and never persists', async () => {
+    const { repo } = makeRepo();
+    const svc = new PinService(repo, makeConfigService(), makeClock());
+    await expect(svc.setPin(USER_ID, '1111')).rejects.toBeInstanceOf(
+      WeakPinError,
+    );
+    expect(repo.setPinHash).not.toHaveBeenCalled();
+    expect(repo.resetFailures).not.toHaveBeenCalled();
+  });
+
+  it('WeakPinError has code PIN_WEAK', async () => {
+    const svc = new PinService(
+      makeRepo().repo,
+      makeConfigService(),
+      makeClock(),
+    );
+    const err = await svc.hashPin('1').catch((e: unknown) => e);
+    expect((err as WeakPinError).code).toBe('PIN_WEAK');
+  });
+
+  // ── hasPin ────────────────────────────────────────────────────────────────
+
+  it('hasPin returns false when no PIN state exists', async () => {
+    const { repo } = makeRepo(null);
+    const svc = new PinService(repo, makeConfigService(), makeClock());
+    await expect(svc.hasPin(USER_ID)).resolves.toBe(false);
+  });
+
+  it('hasPin returns false when pinHash is null', async () => {
+    const { repo } = makeRepo({
+      pinHash: null,
+      pinFailureCount: 0,
+      pinLockedUntil: null,
+    });
+    const svc = new PinService(repo, makeConfigService(), makeClock());
+    await expect(svc.hasPin(USER_ID)).resolves.toBe(false);
+  });
+
+  it('hasPin returns true when a pinHash is present', async () => {
+    const { repo } = makeRepo({
+      pinHash: 'aabb:ccdd',
+      pinFailureCount: 0,
+      pinLockedUntil: null,
+    });
+    const svc = new PinService(repo, makeConfigService(), makeClock());
+    await expect(svc.hasPin(USER_ID)).resolves.toBe(true);
   });
 
   // ── setPin ────────────────────────────────────────────────────────────────
@@ -282,7 +385,7 @@ describe('PinService', () => {
     const { repo } = makeRepo();
     const svc = new PinService(repo, makeConfigService(), makeClock());
 
-    await svc.setPin(USER_ID, '5678');
+    await svc.setPin(USER_ID, '5681');
 
     expect(repo.setPinHash).toHaveBeenCalledTimes(1);
     const [calledUserId, calledHash] = repo.setPinHash.mock.calls[0];
@@ -320,7 +423,7 @@ describe('PinService', () => {
       makeConfigService(),
       makeClock(),
     );
-    const hash = await svc.hashPin('right');
+    const hash = await svc.hashPin('2468');
     const { repo } = makeRepo({
       pinHash: hash,
       pinFailureCount: 0,

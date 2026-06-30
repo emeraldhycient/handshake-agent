@@ -107,16 +107,34 @@ export function useLoadMoreTransactions() {
 }
 
 /**
- * Deposit address for the user's wallet.
- * `staleTime: Infinity` — addresses are stable; no need to re-fetch
- * until the query is explicitly invalidated (e.g. on account change).
+ * How long a fetched deposit address is considered fresh. Addresses are stable
+ * for a session, but NOT permanent — a wallet can be re-provisioned (e.g. a new
+ * child address). Finding #10: the old `staleTime: Infinity` meant a
+ * re-provisioned address could be shown stale forever within a session with no
+ * invalidation path actually wired. A finite staleTime lets it refresh on the
+ * next mount/focus, and `useInvalidateDepositAddress` forces an immediate
+ * refetch on a provisioning/account-change event.
  */
+const DEPOSIT_ADDRESS_STALE_MS = 5 * 60_000
+
+/** Deposit address for the user's wallet. */
 export function useDepositAddress() {
   return useQuery({
     queryKey: qk.deposit,
     queryFn: () => gateway.getDepositAddress(),
-    staleTime: Infinity,
+    staleTime: DEPOSIT_ADDRESS_STALE_MS,
   })
+}
+
+/**
+ * Returns a callback that invalidates the cached deposit address so the next
+ * read refetches. Call after wallet provisioning or an account switch — the one
+ * real invalidation path finding #10 says must exist (the long staleTime alone
+ * is only safe when invalidation is actually wired).
+ */
+export function useInvalidateDepositAddress() {
+  const queryClient = useQueryClient()
+  return () => queryClient.invalidateQueries({ queryKey: qk.deposit })
 }
 
 /** Upcoming event listings. Refreshed every 5 min. */

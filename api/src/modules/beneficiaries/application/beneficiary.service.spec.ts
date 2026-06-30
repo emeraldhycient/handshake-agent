@@ -98,6 +98,8 @@ describe('BeneficiaryService', () => {
       addCryptoAddress: jest.fn(),
       getById: jest.fn(),
       getDefault: jest.fn(),
+      findActiveDuplicate: jest.fn().mockResolvedValue(null),
+      softDelete: jest.fn(),
     };
 
     nameEnquiry = {
@@ -279,6 +281,35 @@ describe('BeneficiaryService', () => {
 
       expect(assetRegistry.validateAddress).not.toHaveBeenCalled();
     });
+
+    // ── dedupe (one typo / re-add must not duplicate) ───────────────────────
+    it('reuses an existing active bank account instead of inserting a duplicate', async () => {
+      const existing = makeRecord({ id: 'existing-bank-id' });
+      repo.findActiveDuplicate.mockResolvedValue(existing);
+      nameEnquiry.resolve.mockResolvedValue({
+        accountName: 'RESOLVED',
+        provider: 'mock',
+        reference: 'ref-dupe',
+      });
+
+      const result = await service.addBankAccount({
+        userId: 'user-id-1',
+        accountNumber: '0123456789',
+        bankCode: '058',
+        accountName: 'John Doe',
+        label: 'GTB Savings',
+      });
+
+      expect(repo.findActiveDuplicate).toHaveBeenCalledWith('user-id-1', {
+        type: 'bank_account',
+        accountNumber: '0123456789',
+        bankCode: '058',
+      });
+      // Reuse the existing row — no insert, no redundant name-enquiry.
+      expect(repo.addBankAccount).not.toHaveBeenCalled();
+      expect(nameEnquiry.resolve).not.toHaveBeenCalled();
+      expect(result).toBe(existing);
+    });
   });
 
   // ── addCryptoAddress ───────────────────────────────────────────────────────
@@ -373,6 +404,44 @@ describe('BeneficiaryService', () => {
       expect(result).toBe(record);
     });
 
+    it('reuses an existing active crypto address (preserves the cooling-off clock)', async () => {
+      const existing = makeCryptoRecord({ id: 'existing-crypto-id' });
+      repo.findActiveDuplicate.mockResolvedValue(existing);
+      assetRegistry.validateAddress.mockReturnValue(true);
+
+      const result = await service.addCryptoAddress({
+        userId: 'user-id-1',
+        address: 'TQn9Y2khDD3VHKZ2GRdmKXD8bNkRuaBP2p',
+        network: 'TRON',
+        asset: 'USDT',
+        label: 'My wallet again',
+      });
+
+      expect(repo.findActiveDuplicate).toHaveBeenCalledWith('user-id-1', {
+        type: 'crypto_address',
+        cryptoAddress: 'TQn9Y2khDD3VHKZ2GRdmKXD8bNkRuaBP2p',
+      });
+      // Reuse the existing row — never re-insert (would reset firstUseLockedUntil).
+      expect(repo.addCryptoAddress).not.toHaveBeenCalled();
+      expect(result).toBe(existing);
+    });
+
+    it('still validates the address before the dedupe lookup (invalid never dedupes)', async () => {
+      assetRegistry.validateAddress.mockReturnValue(false);
+
+      await expect(
+        service.addCryptoAddress({
+          userId: 'user-id-1',
+          address: 'bad-address',
+          network: 'TRON',
+          asset: 'USDT',
+          label: 'Bad wallet',
+        }),
+      ).rejects.toThrow(InvalidAddressError);
+
+      expect(repo.findActiveDuplicate).not.toHaveBeenCalled();
+    });
+
     it('uses a custom cooling-off when configured', async () => {
       // Override the config stub to return 3600 (1 hour).
       configService.get.mockReturnValue(3600);
@@ -461,6 +530,27 @@ describe('BeneficiaryService', () => {
       const result = await service.getById('user-id-1', 'ben-id-missing');
 
       expect(result).toBeNull();
+    });
+  });
+
+  // ── delete (soft-delete) ────────────────────────────────────────────────────
+
+  describe('delete', () => {
+    it('soft-deletes the beneficiary and returns its id', async () => {
+      repo.softDelete.mockResolvedValue(true);
+
+      const result = await service.delete('user-id-1', 'ben-id-1');
+
+      expect(repo.softDelete).toHaveBeenCalledWith('user-id-1', 'ben-id-1');
+      expect(result).toEqual({ id: 'ben-id-1', deleted: true });
+    });
+
+    it('throws BeneficiaryNotFoundError when nothing was deleted', async () => {
+      repo.softDelete.mockResolvedValue(false);
+
+      await expect(
+        service.delete('user-id-1', 'ben-id-missing'),
+      ).rejects.toThrow(BeneficiaryNotFoundError);
     });
   });
 });

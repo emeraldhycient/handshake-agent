@@ -173,6 +173,41 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
       "We couldn't verify that bank account. " +
       'Please check the details and try again.',
   },
+
+  // ── Amount guards (engine) → 422 — clear, non-sensitive validation copy ─────
+  AMOUNT_TOO_SMALL: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'That amount is below the minimum allowed for this transaction.',
+  },
+  SELF_SEND_BLOCKED: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: "That's your own wallet address — no transfer is needed.",
+  },
+
+  // ── Auth / PIN-setup / KYC (backstops; controllers also map these) ─────────
+  PIN_WEAK: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message:
+      'Choose a stronger PIN: 4–6 digits, not all the same and not a simple sequence.',
+  },
+  PIN_SETUP_NOT_VERIFIED: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'Please complete identity verification before setting a PIN.',
+  },
+  PIN_ALREADY_SET: {
+    status: HttpStatus.CONFLICT,
+    message: 'A PIN is already set for this account.',
+  },
+  OTP_LOCKED: {
+    status: HttpStatus.TOO_MANY_REQUESTS,
+    message: 'Too many attempts. Please request a new code.',
+  },
+  KYC_REJECTED: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message:
+      "We couldn't verify your identity with the details provided. " +
+      'Please check them and try again.',
+  },
 };
 
 const STATUS_TEXT: Readonly<Record<number, string>> = {
@@ -181,6 +216,7 @@ const STATUS_TEXT: Readonly<Record<number, string>> = {
   [HttpStatus.NOT_FOUND]: 'Not Found',
   [HttpStatus.CONFLICT]: 'Conflict',
   [HttpStatus.UNPROCESSABLE_ENTITY]: 'Unprocessable Entity',
+  [HttpStatus.TOO_MANY_REQUESTS]: 'Too Many Requests',
   [HttpStatus.SERVICE_UNAVAILABLE]: 'Service Unavailable',
   [HttpStatus.INTERNAL_SERVER_ERROR]: 'Internal Server Error',
 };

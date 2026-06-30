@@ -36,7 +36,9 @@ export interface TransactionDetailModalProps {
 
 function toneFor(status: string): StatusTone {
   if (status === "completed") return "success"
-  if (status === "failed" || status === "rolled_back") return "neutral"
+  // Terminal failures are the highest-signal state in a money app — danger-red,
+  // never neutral grey (scenario finding: ui-consistency-states).
+  if (status === "failed" || status === "rolled_back") return "danger"
   return "warn"
 }
 

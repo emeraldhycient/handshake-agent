@@ -10,7 +10,7 @@
  *  6. Step 2: success navigates to '/'
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { LoginForm } from "./LoginForm"
@@ -37,6 +37,7 @@ vi.mock("next/navigation", () => ({
 }))
 
 import { submitLoginRequest, submitLoginVerify } from "@/lib/api/auth"
+import { ApiError } from "@/lib/api/client"
 
 const mockLoginRequest = vi.mocked(submitLoginRequest)
 const mockLoginVerify = vi.mocked(submitLoginVerify)
@@ -270,6 +271,102 @@ describe("LoginForm", () => {
 
     await waitFor(() => {
       expect(mockPush).toHaveBeenCalledWith("/")
+    })
+  })
+
+  it("step 2: shows a disabled Resend code control during the cooldown", async () => {
+    const user = userEvent.setup()
+    mockLoginRequest.mockResolvedValue({ status: "otp_sent" })
+    renderForm()
+
+    // Advance to step 2.
+    await user.type(
+      screen.getByRole("textbox", { name: /email/i }),
+      VALID_EMAIL
+    )
+    await user.click(screen.getByRole("button", { name: /get otp|send otp/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: /otp|one.time/i })
+      ).toBeInTheDocument()
+    })
+
+    // The resend control exists and is disabled while the cooldown counts down.
+    const resendBtn = screen.getByRole("button", { name: /resend/i })
+    expect(resendBtn).toBeInTheDocument()
+    expect(resendBtn).toBeDisabled()
+  })
+
+  it("step 2: Resend code re-requests an OTP for the same email once the cooldown elapses", async () => {
+    vi.useFakeTimers()
+    try {
+      mockLoginRequest.mockResolvedValue({ status: "otp_sent" })
+      renderForm()
+
+      // Drive step 1 with synchronous fireEvent (userEvent's internal delays
+      // don't compose well with fake timers).
+      fireEvent.change(screen.getByRole("textbox", { name: /email/i }), {
+        target: { value: VALID_EMAIL },
+      })
+      fireEvent.click(screen.getByRole("button", { name: /get otp|send otp/i }))
+
+      // Flush the step-1 mutation promise so step 2 renders.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      screen.getByRole("textbox", { name: /otp|one.time/i })
+
+      // Run out the 30s cooldown, flushing timers and pending microtasks.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31_000)
+      })
+
+      const resendBtn = screen.getByRole("button", { name: /resend code/i })
+      expect(resendBtn).toBeEnabled()
+
+      fireEvent.click(resendBtn)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      // login/request called once for step 1 + once for the resend.
+      expect(mockLoginRequest).toHaveBeenCalledTimes(2)
+      expect(mockLoginRequest).toHaveBeenLastCalledWith({ email: VALID_EMAIL })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("step 2: shows a distinct locked-out message (not a wrong-code message) on a 429", async () => {
+    const user = userEvent.setup()
+    mockLoginRequest.mockResolvedValueOnce({ status: "otp_sent" })
+    const lockedErr = new ApiError("Authentication failed", 429)
+    mockLoginVerify.mockRejectedValueOnce(lockedErr)
+    renderForm()
+
+    await user.type(
+      screen.getByRole("textbox", { name: /email/i }),
+      VALID_EMAIL
+    )
+    await user.click(screen.getByRole("button", { name: /get otp|send otp/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: /otp|one.time/i })
+      ).toBeInTheDocument()
+    })
+
+    await user.type(
+      screen.getByRole("textbox", { name: /otp|one.time/i }),
+      VALID_OTP
+    )
+    await user.click(
+      screen.getByRole("button", { name: /verify|log in|sign in/i })
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText(/too many attempts/i)).toBeInTheDocument()
     })
   })
 })

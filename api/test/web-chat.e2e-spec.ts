@@ -288,7 +288,7 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
         firstName: 'Adaeze',
         lastName: 'Okonkwo',
         nin: '22334455667',
-        pin: '1234',
+        pin: '1357',
       })
       .expect(200);
     const ksBody = ks.body as { userId: string; status: string };
@@ -428,7 +428,7 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
     await request(app.getHttpServer())
       .post('/kyc/submit')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ firstName: 'Test', lastName: 'User', nin, pin: '1234' })
+      .send({ firstName: 'Test', lastName: 'User', nin, pin: '1357' })
       .expect(200);
     return accessToken;
   }
@@ -534,7 +534,7 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
         firstName: 'Hist',
         lastName: 'User',
         nin: '22334455667',
-        pin: '1234',
+        pin: '1357',
       })
       .expect(200);
     const userId = (ks.body as { userId: string }).userId;

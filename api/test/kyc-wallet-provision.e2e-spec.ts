@@ -256,7 +256,7 @@ describe('WN-3: eager wallet provisioning on KYC completion (Testcontainers Post
       firstName: 'Ada',
       lastName: 'Eze',
       dateOfBirth: '1990-01-01',
-      pin: '5678',
+      pin: '1357',
     });
 
     // Emulate what KycController does after completeVerification (WN-3).
@@ -380,7 +380,7 @@ describe('WN-3: eager wallet provisioning on KYC completion (Testcontainers Post
       firstName: 'Funmi',
       lastName: 'Adeyemi',
       dateOfBirth: '1995-06-22',
-      pin: '4321',
+      pin: '1357',
     });
 
     const enabledNetworks = assetRegistry.enabledNetworks();

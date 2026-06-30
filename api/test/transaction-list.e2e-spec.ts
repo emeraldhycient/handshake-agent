@@ -258,7 +258,7 @@ describe('Transaction list — e2e (GET /transactions)', () => {
         firstName: 'Eze',
         lastName: 'Nweke',
         nin: '12345678901',
-        pin: '1234',
+        pin: '1357',
       })
       .expect(200);
     const { userId } = ks.body as { userId: string; status: string };

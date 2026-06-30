@@ -247,7 +247,7 @@ describe('Web buy — e2e (authorize → execute → settle → status)', () => 
 
   async function setupVerifiedUser(
     userEmail: string,
-    pin = '1234',
+    pin = '1357',
   ): Promise<{ accessToken: string; userId: string }> {
     // Each user gets a unique fingerprint derived from the email to avoid
     // the unique constraint on pinnedDeviceId when multiple tests share the DB.
@@ -309,7 +309,7 @@ describe('Web buy — e2e (authorize → execute → settle → status)', () => 
       .send({
         directiveId: 'd',
         nonce: 'n',
-        pin: '1234',
+        pin: '1357',
         idempotencyKey: randomUUID(),
       })
       .expect(401);
@@ -325,7 +325,7 @@ describe('Web buy — e2e (authorize → execute → settle → status)', () => 
 
   it('full buy: signup → chat → authorize → execute → webhook → GET /transactions → completed', async () => {
     const email = `e2e_wb_${Date.now()}@test.com`;
-    const { accessToken, userId } = await setupVerifiedUser(email, '1234');
+    const { accessToken, userId } = await setupVerifiedUser(email, '1357');
 
     // ── Step 1: POST /chat/messages → proposal outcome ──────────────────────
     const chatRes = await request(app.getHttpServer())
@@ -370,7 +370,7 @@ describe('Web buy — e2e (authorize → execute → settle → status)', () => 
     const execRes = await request(app.getHttpServer())
       .post(`/chat/proposals/${proposalId}/execute`)
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ directiveId, nonce, pin: '1234', idempotencyKey })
+      .send({ directiveId, nonce, pin: '1357', idempotencyKey })
       .expect(201);
 
     const execBody = execRes.body as {
@@ -466,7 +466,7 @@ describe('Web buy — e2e (authorize → execute → settle → status)', () => 
 
   it('wrong PIN on execute → 401', async () => {
     const email = `e2e_wb_wrongpin_${Date.now()}@test.com`;
-    const { accessToken } = await setupVerifiedUser(email, '1234');
+    const { accessToken } = await setupVerifiedUser(email, '1357');
 
     // Create a proposal via chat
     const chatRes = await request(app.getHttpServer())

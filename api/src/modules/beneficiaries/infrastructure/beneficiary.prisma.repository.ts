@@ -15,6 +15,7 @@ import type {
   BeneficiaryRecord,
   AddBankAccountInput,
   AddCryptoAddressInput,
+  DuplicateLookup,
 } from '../application/ports/beneficiary.repository.port';
 
 // Prisma 7 generates enums into the client namespace.
@@ -163,6 +164,43 @@ export class BeneficiaryPrismaRepository implements IBeneficiaryRepository {
       select: SELECT,
     });
     return row ? toRecord(row) : null;
+  }
+
+  async findActiveDuplicate(
+    userId: string,
+    lookup: DuplicateLookup,
+  ): Promise<BeneficiaryRecord | null> {
+    const where =
+      lookup.type === 'bank_account'
+        ? {
+            userId,
+            type: 'bank_account' as never,
+            accountNumber: lookup.accountNumber,
+            bankCode: lookup.bankCode,
+            deletedAt: null,
+          }
+        : {
+            userId,
+            type: 'crypto_address' as never,
+            cryptoAddress: lookup.cryptoAddress,
+            deletedAt: null,
+          };
+
+    const row = await this.prisma.beneficiary.findFirst({
+      where,
+      select: SELECT,
+    });
+    return row ? toRecord(row) : null;
+  }
+
+  async softDelete(userId: string, beneficiaryId: string): Promise<boolean> {
+    // updateMany (not update) so a non-matching id / wrong owner / already-deleted
+    // row yields count 0 instead of throwing — ownership is enforced in the WHERE.
+    const result = await this.prisma.beneficiary.updateMany({
+      where: { id: beneficiaryId, userId, deletedAt: null },
+      data: { deletedAt: new Date() },
+    });
+    return result.count > 0;
   }
 }
 

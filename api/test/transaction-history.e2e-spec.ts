@@ -166,7 +166,7 @@ describe('Transaction history — e2e', () => {
     const ks = await request(app.getHttpServer())
       .post('/kyc/submit')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ firstName: 'A', lastName: 'B', nin: '22334455667', pin: '1234' })
+      .send({ firstName: 'A', lastName: 'B', nin: '22334455667', pin: '1357' })
       .expect(200);
     return { accessToken, userId: (ks.body as { userId: string }).userId };
   }

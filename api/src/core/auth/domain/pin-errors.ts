@@ -6,7 +6,11 @@
  * module boundaries.
  */
 
-export type PinErrorCode = 'PIN_NOT_SET' | 'PIN_LOCKED' | 'PIN_INVALID';
+export type PinErrorCode =
+  | 'PIN_NOT_SET'
+  | 'PIN_LOCKED'
+  | 'PIN_INVALID'
+  | 'PIN_WEAK';
 
 /** Base class for all PIN-related errors. */
 export abstract class PinError extends Error {
@@ -47,6 +51,23 @@ export class PinInvalidError extends PinError {
   constructor(remainingAttempts: number) {
     super(
       `Incorrect PIN. ${remainingAttempts} attempt${remainingAttempts === 1 ? '' : 's'} remaining before lockout.`,
+    );
+  }
+}
+
+/**
+ * The PIN being SET is too weak (wrong length/charset, all-same-digit, or a
+ * trivial sequence). This is the server-side enforcement of the same rule the
+ * shared `TransactionPinSchema` enforces on the client — the server gate is the
+ * security boundary (CLAUDE.md §3.3), so a non-web caller that bypasses the form
+ * still cannot register a guessable PIN.
+ */
+export class WeakPinError extends PinError {
+  readonly code = 'PIN_WEAK' as const;
+
+  constructor() {
+    super(
+      'PIN is too weak. Use 4–6 digits that are not all the same and not a simple sequence.',
     );
   }
 }

@@ -339,7 +339,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       },
     });
     userId = user.id;
-    await pinService.setPin(userId, '111111');
+    await pinService.setPin(userId, '194837');
 
     // Create a bound device and pin it to the user so executeSend can
     // resolve the device for step-up recording (fail-closed, Fix G §3.4).
@@ -457,7 +457,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       proposalId,
       directiveId,
       nonce,
-      pin: '111111',
+      pin: '194837',
       idempotencyKey: randomUUID(),
     });
 
@@ -544,7 +544,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       proposalId: sendProposal.proposalId,
       directiveId,
       nonce,
-      pin: '111111',
+      pin: '194837',
       idempotencyKey: randomUUID(),
     });
 
@@ -624,7 +624,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       proposalId: sendProposal.proposalId,
       directiveId,
       nonce,
-      pin: '111111',
+      pin: '194837',
       idempotencyKey: randomUUID(),
     });
 
@@ -698,7 +698,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       proposalId: sendProposal.proposalId,
       directiveId,
       nonce,
-      pin: '111111',
+      pin: '194837',
       idempotencyKey: randomUUID(),
     });
 

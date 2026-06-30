@@ -115,8 +115,22 @@ export class BeneficiaryService {
    *
    * @throws {NameEnquiryFailedError} when the name-enquiry provider cannot
    *         resolve the account. No beneficiary is persisted in that case.
+   *
+   * Dedupe: if an active bank account with the same (accountNumber, bankCode)
+   * already exists, the existing row is returned and no insert (or redundant
+   * name-enquiry) happens — re-adding the same account must not create a junk
+   * duplicate the picker can never distinguish.
    */
   async addBankAccount(input: AddBankAccountInput): Promise<BeneficiaryRecord> {
+    const duplicate = await this.repo.findActiveDuplicate(input.userId, {
+      type: 'bank_account',
+      accountNumber: input.accountNumber,
+      bankCode: input.bankCode,
+    });
+    if (duplicate) {
+      return duplicate;
+    }
+
     // Resolve the account-holder name from the bank (fails-closed on error).
     const enquiryResult = await this.nameEnquiry.resolve({
       bankCode: input.bankCode,
@@ -155,6 +169,17 @@ export class BeneficiaryService {
     );
     if (!valid) {
       throw new InvalidAddressError(input.network, input.address);
+    }
+
+    // Dedupe: re-adding the same address reuses the existing active row rather
+    // than inserting a duplicate — a fresh insert would reset the first-use
+    // cooling-off clock (IDN-08), so a typo-then-fix could silently re-arm it.
+    const duplicate = await this.repo.findActiveDuplicate(input.userId, {
+      type: 'crypto_address',
+      cryptoAddress: input.address,
+    });
+    if (duplicate) {
+      return duplicate;
     }
 
     const coolingOffSeconds = this.getCoolingOffSeconds();
@@ -210,6 +235,27 @@ export class BeneficiaryService {
       throw new BeneficiaryNotFoundError(beneficiaryId);
     }
     return ben;
+  }
+
+  // ── delete (soft-delete) ─────────────────────────────────────────────────────
+
+  /**
+   * Soft-deletes the beneficiary (sets `deletedAt`) so it disappears from the
+   * picker while funds-safety history is preserved. Ownership is enforced in the
+   * repository (the soft-delete is scoped by userId).
+   *
+   * @throws {BeneficiaryNotFoundError} when no active row matched (already
+   *         deleted, or not owned by the user) — the controller maps this to 404.
+   */
+  async delete(
+    userId: string,
+    beneficiaryId: string,
+  ): Promise<{ id: string; deleted: true }> {
+    const deleted = await this.repo.softDelete(userId, beneficiaryId);
+    if (!deleted) {
+      throw new BeneficiaryNotFoundError(beneficiaryId);
+    }
+    return { id: beneficiaryId, deleted: true };
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────

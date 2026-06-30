@@ -199,13 +199,20 @@ export function QuoteCard({
         >
           {isExpired ? "Quote expired" : "Review & confirm"}
         </button>
-        {isMobile && (
-          <p className="mt-[9px] text-center text-[11.5px] text-muted-foreground-subtle">
-            {isExpired
-              ? "Request a new quote to continue"
-              : `Rate locked ${formatCountdown(remaining)} · No hidden fees`}
-          </p>
-        )}
+        {/* Reassurance / expiry-recovery hint — shown on BOTH densities so a
+            desktop user whose quote expired still gets "Request a new quote to
+            continue" and an active quote keeps the "No hidden fees" reassurance
+            (scenario finding: ui-consistency-states). */}
+        <p
+          className={cn(
+            "text-center text-muted-foreground-subtle",
+            isMobile ? "mt-[9px] text-[11.5px]" : "mt-2 text-[11px]"
+          )}
+        >
+          {isExpired
+            ? "Request a new quote to continue"
+            : `Rate locked ${formatCountdown(remaining)} · No hidden fees`}
+        </p>
       </div>
     </div>
   )

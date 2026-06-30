@@ -21,6 +21,7 @@ import {
   InvalidOtpError,
   InvalidRefreshTokenError,
   InvalidVerificationTokenError,
+  OtpLockedError,
   UserNotFoundError,
 } from '../domain/auth-errors';
 import {
@@ -130,6 +131,45 @@ export class AuthService {
     return { status: 'otp_sent' };
   }
 
+  /**
+   * Resends the login OTP. Functionally identical to {@link loginRequest} — the
+   * upsert re-issues a fresh code while the challenge-repo carry-over policy
+   * keeps the guess counter accumulating within the active window (C2 defence).
+   * Exposed as a distinct verb so the FE has an explicit "resend code" action.
+   */
+  async resendLoginOtp(input: LoginRequest): Promise<LoginRequestResponse> {
+    return this.loginRequest(input);
+  }
+
+  /**
+   * Resends the email-verification link to an existing, NOT-yet-verified user.
+   *
+   * Neutral by design (no enumeration): always returns pending_verification and
+   * only actually re-issues + sends when the email belongs to an existing user
+   * who is not yet verified. Already-verified or unknown emails get the same
+   * response with no email sent. Idempotent — re-issuing invalidates the prior
+   * token (a fresh single-use token is minted each time).
+   */
+  async resendEmailVerification(input: LoginRequest): Promise<SignupResponse> {
+    const user = await this.users.findByEmail(input.email);
+    if (user !== null && user.emailVerifiedAt === null) {
+      const token = this.tokens.generateOpaqueToken();
+      const ttl =
+        this.config.get<number>('auth.emailToken.ttlSeconds') ?? 86400;
+      await this.challenges.upsert({
+        userId: user.id,
+        type: 'email_verification',
+        challengeHash: this.tokens.hash(token),
+        expiresAt: new Date(Date.now() + ttl * 1000),
+      });
+      await this.email.sendEmailVerification(user.email, token);
+      if (this.devExpose()) {
+        return { status: 'pending_verification', devToken: token };
+      }
+    }
+    return { status: 'pending_verification' };
+  }
+
   async loginVerify(
     input: LoginVerifyRequest & { userAgent?: string; ip?: string },
   ): Promise<LoginVerifyResponse> {
@@ -159,9 +199,17 @@ export class AuthService {
     // All rejection conditions: unknown/unverified user, no active challenge,
     // exhausted attempts, or wrong code. We gate the incrementAttempt call
     // inside the real-user + real-challenge + wrong-code branch only.
+    //
+    // Order matters for enumeration safety: the unknown/unverified path throws
+    // the GENERIC InvalidOtpError FIRST, so the distinguishable OtpLockedError
+    // below is only ever reachable for a real, verified user with a real active
+    // challenge — telling that user to request a new code leaks nothing.
     if (!isRealUser) throw new InvalidOtpError();
-    if (challenge === null || challenge.attemptCount >= maxAttempts) {
-      throw new InvalidOtpError();
+    if (challenge === null) throw new InvalidOtpError();
+    if (challenge.attemptCount >= maxAttempts) {
+      // Distinct from a wrong code: the guess budget is spent. The FE routes
+      // this to "request a new code" instead of looping a dead challenge.
+      throw new OtpLockedError();
     }
     if (!otpMatches) {
       await this.challenges.incrementAttempt(challenge.id);

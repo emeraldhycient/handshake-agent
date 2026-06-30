@@ -19,22 +19,49 @@ import { useRouter } from "next/navigation"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
-import { KycSubmitRequestSchema } from "@handshake-agent/contracts/dto"
+import {
+  BvnSchema,
+  NinSchema,
+  TransactionPinSchema,
+} from "@handshake-agent/contracts/dto"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { useKycSubmit } from "@/lib/query/kyc"
 
-// ─── Extended schema: KycSubmitRequest fields + confirmPin ────────────────────
+// ─── Form schema — built from the contract's canonical field schemas ──────────
 //
-// `confirmPin` is validated client-side only and stripped before the request.
-// The `.refine` keeps the error on the `confirmPin` field for accessible linking.
+// PIN strength (TransactionPinSchema) and the 11-digit NIN/BVN format
+// (NinSchema/BvnSchema) come straight from @handshake-agent/contracts so the FE
+// (UX) gate and the server (security boundary, §3.3) validate identically — one
+// canonical primitive per concept (§13). `KycSubmitRequestSchema` is a refined
+// schema (ZodEffects) so it can't be `.extend`ed; we compose the same field
+// schemas here and add the client-only `confirmPin`. Empty identifier strings
+// are coerced to `undefined` so a blank field doesn't trip the 11-digit format.
 
-const OnboardingSchema = KycSubmitRequestSchema.extend({
-  confirmPin: z.string().min(1, "Please confirm your PIN"),
-}).refine((data) => data.pin === data.confirmPin, {
-  message: "PINs do not match",
-  path: ["confirmPin"],
-})
+const optionalIdentifier = (schema: z.ZodString) =>
+  z
+    .union([z.literal(""), schema])
+    .optional()
+    .transform((v) => (v === "" ? undefined : v))
+
+const OnboardingSchema = z
+  .object({
+    nin: optionalIdentifier(NinSchema),
+    bvn: optionalIdentifier(BvnSchema),
+    firstName: z.string().min(1, "First name is required"),
+    lastName: z.string().min(1, "Last name is required"),
+    dateOfBirth: z.string().optional(),
+    pin: TransactionPinSchema,
+    confirmPin: z.string().min(1, "Please confirm your PIN"),
+  })
+  .refine((data) => Boolean(data.nin) || Boolean(data.bvn), {
+    message: "Provide your NIN or BVN",
+    path: ["nin"],
+  })
+  .refine((data) => data.pin === data.confirmPin, {
+    message: "PINs do not match",
+    path: ["confirmPin"],
+  })
 
 type OnboardingForm = z.infer<typeof OnboardingSchema>
 
@@ -56,8 +83,10 @@ export function OnboardingKycForm() {
   const loading = isSubmitting || isPending
 
   async function onSubmit(values: OnboardingForm) {
-    // Strip confirmPin before sending — it is client-side only.
-    const { confirmPin: _confirmPin, ...body } = values
+    // Strip confirmPin before sending — it is client-side only. Blank NIN/BVN
+    // are already coerced to `undefined` by the schema transform above.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { confirmPin, ...body } = values
     try {
       await mutateAsync(body)
       router.push("/")
@@ -207,65 +236,81 @@ export function OnboardingKycForm() {
         )}
       </div>
 
-      {/* BVN */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="onb-bvn"
-          className="text-sm font-medium text-foreground"
-        >
-          BVN (Bank Verification Number){" "}
-          <span className="font-normal text-muted-foreground">(optional)</span>
-        </label>
-        <Input
-          id="onb-bvn"
-          type="text"
-          inputMode="numeric"
-          aria-invalid={!!errors.bvn}
-          aria-describedby={errors.bvn ? "onb-bvn-error" : undefined}
-          placeholder="11-digit BVN"
-          disabled={loading}
-          {...register("bvn")}
-        />
-        {errors.bvn && (
-          <p
-            id="onb-bvn-error"
-            role="alert"
-            className="text-xs text-destructive"
-          >
-            {errors.bvn.message}
-          </p>
-        )}
-      </div>
+      {/* Identity — at least one of NIN or BVN is required by the provider. */}
+      <fieldset className="flex flex-col gap-3 border-0 p-0">
+        <legend className="text-sm font-medium text-foreground">
+          NIN or BVN{" "}
+          <span className="font-normal text-muted-foreground">
+            (at least one required)
+          </span>
+        </legend>
+        <p className="text-xs text-muted-foreground">
+          Enter your 11-digit National Identification Number (NIN) or Bank
+          Verification Number (BVN). You only need to provide one.
+        </p>
 
-      {/* NIN */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="onb-nin"
-          className="text-sm font-medium text-foreground"
-        >
-          NIN (National Identification Number){" "}
-          <span className="font-normal text-muted-foreground">(optional)</span>
-        </label>
-        <Input
-          id="onb-nin"
-          type="text"
-          inputMode="numeric"
-          aria-invalid={!!errors.nin}
-          aria-describedby={errors.nin ? "onb-nin-error" : undefined}
-          placeholder="11-digit NIN"
-          disabled={loading}
-          {...register("nin")}
-        />
-        {errors.nin && (
-          <p
-            id="onb-nin-error"
-            role="alert"
-            className="text-xs text-destructive"
+        {/* NIN */}
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="onb-nin"
+            className="text-sm font-medium text-foreground"
           >
-            {errors.nin.message}
-          </p>
-        )}
-      </div>
+            NIN (National Identification Number)
+          </label>
+          <Input
+            id="onb-nin"
+            type="text"
+            inputMode="numeric"
+            pattern="\d{11}"
+            maxLength={11}
+            aria-invalid={!!errors.nin}
+            aria-describedby={errors.nin ? "onb-nin-error" : undefined}
+            placeholder="11-digit NIN"
+            disabled={loading}
+            {...register("nin")}
+          />
+          {errors.nin && (
+            <p
+              id="onb-nin-error"
+              role="alert"
+              className="text-xs text-destructive"
+            >
+              {errors.nin.message}
+            </p>
+          )}
+        </div>
+
+        {/* BVN */}
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="onb-bvn"
+            className="text-sm font-medium text-foreground"
+          >
+            BVN (Bank Verification Number)
+          </label>
+          <Input
+            id="onb-bvn"
+            type="text"
+            inputMode="numeric"
+            pattern="\d{11}"
+            maxLength={11}
+            aria-invalid={!!errors.bvn}
+            aria-describedby={errors.bvn ? "onb-bvn-error" : undefined}
+            placeholder="11-digit BVN"
+            disabled={loading}
+            {...register("bvn")}
+          />
+          {errors.bvn && (
+            <p
+              id="onb-bvn-error"
+              role="alert"
+              className="text-xs text-destructive"
+            >
+              {errors.bvn.message}
+            </p>
+          )}
+        </div>
+      </fieldset>
 
       {/* PIN — type password so it is never visible / logged */}
       <div className="flex flex-col gap-1.5">
@@ -279,22 +324,28 @@ export function OnboardingKycForm() {
           id="onb-pin"
           type="password"
           inputMode="numeric"
+          pattern="\d{4,6}"
           autoComplete="new-password"
           aria-required="true"
           aria-invalid={!!errors.pin}
-          aria-describedby={errors.pin ? "onb-pin-error" : undefined}
+          aria-describedby={errors.pin ? "onb-pin-error" : "onb-pin-hint"}
           placeholder="Set a 4–6 digit PIN"
+          minLength={4}
           maxLength={6}
           disabled={loading}
           {...register("pin")}
         />
-        {errors.pin && (
+        {errors.pin ? (
           <p
             id="onb-pin-error"
             role="alert"
             className="text-xs text-destructive"
           >
             {errors.pin.message ?? "PIN is required"}
+          </p>
+        ) : (
+          <p id="onb-pin-hint" className="text-xs text-muted-foreground">
+            4–6 digits. Avoid repeated digits (1111) or sequences (1234).
           </p>
         )}
       </div>
@@ -311,6 +362,7 @@ export function OnboardingKycForm() {
           id="onb-confirmPin"
           type="password"
           inputMode="numeric"
+          pattern="\d{4,6}"
           autoComplete="new-password"
           aria-required="true"
           aria-invalid={!!errors.confirmPin}
@@ -318,6 +370,7 @@ export function OnboardingKycForm() {
             errors.confirmPin ? "onb-confirmPin-error" : undefined
           }
           placeholder="Re-enter your PIN"
+          minLength={4}
           maxLength={6}
           disabled={loading}
           {...register("confirmPin")}
