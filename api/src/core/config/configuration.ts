@@ -518,6 +518,9 @@ export default (): AppConfig => ({
         // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
         networkFeeCrypto: {
           USDT: '1',
+          // Flat TRX send fee (native TRC transfer; cheap bandwidth/energy).
+          // Admin-tunable like the USDT fee.
+          TRX: '1',
         },
         // Blockradar AML lookup blockchain param for TRON addresses.
         // See BlockradarAmlScreener (compliance/infrastructure).
