@@ -5,7 +5,7 @@
  *   - IBeneficiaryRepository (mock object)
  *   - INameEnquiry (mock object — resolve is an async fn)
  *   - AssetRegistry (mock object — validateAddress is a pure boolean fn)
- *   - ConfigService (stub returning undefined for the optional cooling-off key)
+ *   - EffectiveConfigService (stub returning undefined for the optional cooling-off key)
  *
  * Tests cover:
  *   - addBankAccount calls name-enquiry, persists resolved name + verifiedAt (Fix E)
@@ -18,8 +18,7 @@
  *   - requireById returns the record; throws BeneficiaryNotFoundError when absent
  */
 
-import { ConfigService } from '@nestjs/config';
-
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import {
   InvalidAddressError,
@@ -89,7 +88,7 @@ describe('BeneficiaryService', () => {
   let repo: jest.Mocked<IBeneficiaryRepository>;
   let nameEnquiry: jest.Mocked<INameEnquiry>;
   let assetRegistry: jest.Mocked<AssetRegistry>;
-  let configService: jest.Mocked<ConfigService>;
+  let configService: jest.Mocked<EffectiveConfigService>;
 
   beforeEach(() => {
     repo = {
@@ -110,7 +109,7 @@ describe('BeneficiaryService', () => {
 
     configService = {
       get: jest.fn().mockReturnValue(undefined),
-    } as unknown as jest.Mocked<ConfigService>;
+    } as unknown as jest.Mocked<EffectiveConfigService>;
 
     // Build the service manually (no Nest test bed) — constructor injection.
     service = new BeneficiaryService(
@@ -373,8 +372,9 @@ describe('BeneficiaryService', () => {
       expect(result).toBe(record);
     });
 
-    it('uses a custom cooling-off when configured', async () => {
-      // Override the config stub to return 3600 (1 hour).
+    it('uses a custom cooling-off when configured (DB AppSetting override flows through EffectiveConfigService)', async () => {
+      // Simulate a DB AppSetting override of beneficiary.cryptoCoolingOffSeconds
+      // to 3600 (1 hour); the override is read at call time and must take effect.
       configService.get.mockReturnValue(3600);
 
       assetRegistry.validateAddress.mockReturnValue(true);

@@ -13,6 +13,7 @@
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { sha256Hex } from '../../../core/crypto/hmac';
 import { CLOCK } from '../../../core/common/clock';
 import type { Clock } from '../../../core/common/clock';
@@ -97,10 +98,17 @@ describe('DirectiveService', () => {
           provide: ConfigService,
           useValue: {
             get: (key: string) => {
-              if (key === 'directive.ttlSeconds') return TTL_SECONDS;
               if (key === 'DIRECTIVE_SIGNING_KEY') return TEST_SIGNING_KEY;
               return undefined;
             },
+          },
+        },
+        {
+          // directive.ttlSeconds is now read via EffectiveConfigService (tunable).
+          provide: EffectiveConfigService,
+          useValue: {
+            get: (key: string) =>
+              key === 'directive.ttlSeconds' ? TTL_SECONDS : undefined,
           },
         },
       ],
@@ -224,10 +232,16 @@ describe('DirectiveService', () => {
             provide: ConfigService,
             useValue: {
               get: (key: string) => {
-                if (key === 'directive.ttlSeconds') return TTL_SECONDS;
                 if (key === 'DIRECTIVE_SIGNING_KEY') return '';
                 return undefined;
               },
+            },
+          },
+          {
+            provide: EffectiveConfigService,
+            useValue: {
+              get: (key: string) =>
+                key === 'directive.ttlSeconds' ? TTL_SECONDS : undefined,
             },
           },
         ],

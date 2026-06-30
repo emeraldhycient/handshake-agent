@@ -233,7 +233,12 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
       config,
       clock,
     );
-    directiveService = new DirectiveService(directiveRepo, config, clock);
+    directiveService = new DirectiveService(
+      directiveRepo,
+      config,
+      clock,
+      config,
+    );
     beneficiaryService = new BeneficiaryService(
       beneficiaryRepo,
       fakeNameEnquiry,
@@ -598,7 +603,12 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         new SettlementPrismaRepository(ps, config),
         quotesService,
         kycGate,
-        new DirectiveService(new DirectivePrismaRepository(ps), config, clock),
+        new DirectiveService(
+          new DirectivePrismaRepository(ps),
+          config,
+          clock,
+          config,
+        ),
         pinService,
         walletService,
         fakePaymentProvider,
@@ -696,7 +706,12 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         new SettlementPrismaRepository(ps, config),
         quotesService,
         kycGate,
-        new DirectiveService(new DirectivePrismaRepository(ps), config, clock),
+        new DirectiveService(
+          new DirectivePrismaRepository(ps),
+          config,
+          clock,
+          config,
+        ),
         pinService,
         walletService,
         fakePaymentProvider,
@@ -767,7 +782,12 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         new SettlementPrismaRepository(ps, config),
         quotesService,
         kycGate,
-        new DirectiveService(new DirectivePrismaRepository(ps), config, clock),
+        new DirectiveService(
+          new DirectivePrismaRepository(ps),
+          config,
+          clock,
+          config,
+        ),
         pinService,
         walletService,
         fakePaymentProvider,

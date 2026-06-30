@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { TransactionHistoryService } from './transaction-history.service';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 
@@ -59,7 +60,7 @@ function makeService(rows: unknown[], total: number) {
   };
   const config = {
     get: (k: string) => (k === 'statement' ? STATEMENT_CFG : undefined),
-  } as unknown as ConfigService;
+  } as unknown as EffectiveConfigService;
   const clock = { now: () => new Date('2026-06-29T10:00:00.000Z') };
   const token = {
     sign: jest.fn().mockReturnValue('tok'),

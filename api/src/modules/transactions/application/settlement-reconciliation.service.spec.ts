@@ -14,9 +14,8 @@
  */
 
 import { Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 
-import type { AppConfig } from '../../../core/config/configuration';
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { SettlementReconciliationService } from './settlement-reconciliation.service';
 import type {
   ISettlementOutboxRepository,
@@ -51,7 +50,7 @@ function buildStubConfigService(
     gracePeriodSec?: number;
     batchSize?: number;
   } = {},
-): ConfigService<AppConfig, true> {
+): EffectiveConfigService {
   const cfg = {
     gracePeriodSec: overrides.gracePeriodSec ?? 120,
     batchSize: overrides.batchSize ?? 20,
@@ -59,11 +58,12 @@ function buildStubConfigService(
 
   return {
     get: jest.fn().mockImplementation((key: string) => {
-      // The service reads 'reconciliation' as a sub-config object.
+      // The service reads 'reconciliation' as a sub-config object; a DB
+      // AppSetting override would change the values returned here.
       if (key === 'reconciliation') return cfg;
       return undefined;
     }),
-  } as unknown as ConfigService<AppConfig, true>;
+  } as unknown as EffectiveConfigService;
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +375,22 @@ describe('SettlementReconciliationService', () => {
         olderThanSec: 60,
         limit: 5,
       }),
+    );
+  });
+
+  it('honors a DB AppSetting override of reconciliation.batchSize/gracePeriodSec (EffectiveConfigService flows through)', async () => {
+    // Simulate an admin override of the reconciliation knobs; the overridden
+    // values must reach findPending via get('reconciliation').
+    service = new SettlementReconciliationService(
+      outboxRepo,
+      executionService,
+      buildStubConfigService({ gracePeriodSec: 999, batchSize: 3 }),
+    );
+
+    await service.tick();
+
+    expect(outboxRepo.findPending).toHaveBeenCalledWith(
+      expect.objectContaining({ olderThanSec: 999, limit: 3 }),
     );
   });
 

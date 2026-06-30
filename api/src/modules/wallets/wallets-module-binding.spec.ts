@@ -12,6 +12,7 @@ import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 
 import type { AssetRegistry } from '../../core/catalog/asset-registry';
+import type { EffectiveConfigService } from '../../core/config/application/effective-config.service';
 import { selectWalletProvider, selectSwapProvider } from './wallets.module';
 import { MockWalletProvider } from './infrastructure/mock-wallet.provider';
 import { BlockradarProvider } from './infrastructure/blockradar.provider';
@@ -58,7 +59,11 @@ function resolveWallet(walletMockMode: string) {
 
 function resolveSwap(swapMockMode: string) {
   const config = makeConfigService({ SWAP_MOCK_MODE: swapMockMode });
-  const mock = new MockSwapProvider(config);
+  // The combined stub serves all keys, so it satisfies both ConfigService (env)
+  // and EffectiveConfigService (pricing) positions.
+  const mock = new MockSwapProvider(
+    config as unknown as EffectiveConfigService,
+  );
   const real = new BlockradarSwapProvider(
     makeHttpService(),
     config,

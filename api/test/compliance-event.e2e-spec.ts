@@ -16,20 +16,19 @@
  */
 
 import { PrismaClient } from '../generated/prisma/client';
-import { ConfigService } from '@nestjs/config';
 import type { PrismaService } from '../src/core/prisma/prisma.service';
+import type { EffectiveConfigService } from '../src/core/config/application/effective-config.service';
 import { ComplianceService } from '../src/modules/compliance/application/compliance.service';
 import { MockSanctionsScreener } from '../src/modules/compliance/infrastructure/mock-sanctions.screener';
 import { ComplianceEventPrismaRepository } from '../src/modules/compliance/infrastructure/compliance-event.prisma.repository';
 import { startTestPostgres } from './helpers/pg-testcontainer';
-import type { AppConfig } from '../src/core/config/configuration';
 
 // ---------------------------------------------------------------------------
-// Minimal ConfigService stub for direct (non-Nest-DI) instantiation tests.
+// Minimal EffectiveConfigService stub for direct (non-Nest-DI) instantiation tests.
 // Returns the specified denylist from `compliance.sanctionsDenylist`.
 // ---------------------------------------------------------------------------
 
-function stubConfigService(denylist: string[]): ConfigService<AppConfig, true> {
+function stubConfigService(denylist: string[]): EffectiveConfigService {
   return {
     get: (key: string) => {
       if (key === 'compliance') {
@@ -40,7 +39,7 @@ function stubConfigService(denylist: string[]): ConfigService<AppConfig, true> {
       }
       return undefined;
     },
-  } as unknown as ConfigService<AppConfig, true>;
+  } as unknown as EffectiveConfigService;
 }
 
 jest.setTimeout(180_000);

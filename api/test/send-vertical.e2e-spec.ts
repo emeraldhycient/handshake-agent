@@ -183,6 +183,7 @@ function buildSendExecutionService(
       new DirectivePrismaRepository(ps),
       config as never,
       clock,
+      config as never,
     ),
     pinService,
     walletService,
@@ -270,10 +271,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
           }
         })().get(key);
       },
-    } as unknown as import('@nestjs/config').ConfigService<
-      import('../src/core/config/configuration').AppConfig,
-      true
-    >;
+    } as unknown as import('../src/core/config/application/effective-config.service').EffectiveConfigService;
     const sanctionsScreener = new MockSanctionsScreener(sanctionsConfigStub);
 
     // Services
@@ -294,7 +292,12 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
       config,
       clock,
     );
-    directiveService = new DirectiveService(directiveRepo, config, clock);
+    directiveService = new DirectiveService(
+      directiveRepo,
+      config,
+      clock,
+      config,
+    );
     beneficiaryService = new BeneficiaryService(
       beneficiaryRepo,
       fakeNameEnquiry,

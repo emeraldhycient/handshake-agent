@@ -4,6 +4,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type { StatementConfig } from '../../../core/config/configuration';
 
 /** Thrown when STATEMENT_SIGNING_KEY is unset — no link is ever issued unsigned. */
@@ -38,13 +39,18 @@ interface SignedPayload extends StatementTokenPayload {
 @Injectable()
 export class StatementTokenService {
   constructor(
+    // env-only reads (PUBLIC_API_BASE_URL, PORT, STATEMENT_SIGNING_KEY) stay on
+    // the plain ConfigService — infra/secrets, NOT admin-tunable (root §7).
     private readonly config: ConfigService,
+    // the `statement` section IS admin-tunable — read via EffectiveConfigService.
+    private readonly effectiveConfig: EffectiveConfigService,
     @Inject(CLOCK) private readonly clock: Clock,
   ) {}
 
   sign(payload: StatementTokenPayload): string {
     const key = this.requireKey();
-    const ttl = this.config.get<StatementConfig>('statement')!.linkTtlSeconds;
+    const ttl =
+      this.effectiveConfig.get<StatementConfig>('statement').linkTtlSeconds;
     const exp = Math.floor(this.clock.now().getTime() / 1000) + ttl;
     const body = Buffer.from(
       JSON.stringify({ ...payload, exp } satisfies SignedPayload),

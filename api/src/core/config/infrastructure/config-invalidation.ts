@@ -12,7 +12,12 @@ import { EffectiveConfigService } from '../application/effective-config.service'
 
 export const CONFIG_INVALIDATE_CHANNEL = 'config:invalidate';
 
-function makeClient(url: string): Redis {
+function makeClient(url: string): Redis | null {
+  // Under test, skip the Redis client entirely: cross-instance invalidation is
+  // not exercised, and an open ioredis connection leaks a handle that prevents
+  // Jest workers from exiting. Single-instance correctness comes from the
+  // in-process EffectiveConfigService.refresh() the writer already performs.
+  if (process.env.NODE_ENV === 'test') return null;
   // lazyConnect + a swallowing error handler so a missing/flaky Redis never
   // crashes the app — config still resolves from the in-memory base snapshot.
   const client = new Redis(url, {
@@ -28,13 +33,14 @@ function makeClient(url: string): Redis {
 @Injectable()
 export class ConfigInvalidationPublisher implements OnModuleDestroy {
   private readonly logger = new Logger(ConfigInvalidationPublisher.name);
-  private readonly client: Redis;
+  private readonly client: Redis | null;
 
   constructor(config: ConfigService<Env, true>) {
     this.client = makeClient(config.get('REDIS_URL', { infer: true }));
   }
 
   async publish(): Promise<void> {
+    if (!this.client) return;
     try {
       await this.client.publish(CONFIG_INVALIDATE_CHANNEL, '1');
     } catch (err) {
@@ -48,7 +54,7 @@ export class ConfigInvalidationPublisher implements OnModuleDestroy {
   }
 
   onModuleDestroy(): void {
-    this.client.disconnect();
+    this.client?.disconnect();
   }
 }
 
@@ -58,7 +64,7 @@ export class ConfigInvalidationSubscriber
   implements OnModuleInit, OnModuleDestroy
 {
   private readonly logger = new Logger(ConfigInvalidationSubscriber.name);
-  private readonly client: Redis;
+  private readonly client: Redis | null;
 
   constructor(
     config: ConfigService<Env, true>,
@@ -68,6 +74,7 @@ export class ConfigInvalidationSubscriber
   }
 
   async onModuleInit(): Promise<void> {
+    if (!this.client) return;
     this.client.on('message', (channel) => {
       if (channel !== CONFIG_INVALIDATE_CHANNEL) return;
       void this.effectiveConfig
@@ -90,6 +97,6 @@ export class ConfigInvalidationSubscriber
   }
 
   onModuleDestroy(): void {
-    this.client.disconnect();
+    this.client?.disconnect();
   }
 }

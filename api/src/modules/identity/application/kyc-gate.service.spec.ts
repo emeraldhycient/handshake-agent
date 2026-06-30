@@ -2,10 +2,10 @@
  * Unit tests for KycGateService (task 2.2, §3.3).
  *
  * All external dependencies are mocked:
- *   - IDENTITY_REPOSITORY → mock IIdentityRepository
- *   - VELOCITY_REPOSITORY → mock IVelocityRepository
- *   - ConfigService       → stub returning fixed limit values
- *   - CLOCK               → stub returning a fixed Date
+ *   - IDENTITY_REPOSITORY    → mock IIdentityRepository
+ *   - VELOCITY_REPOSITORY    → mock IVelocityRepository
+ *   - EffectiveConfigService → stub returning fixed (or overridden) limit values
+ *   - CLOCK                  → stub returning a fixed Date
  *
  * Tests follow strict TDD: written first (red), then KycGateService is implemented.
  */
@@ -15,6 +15,7 @@ import type {
   UserRecord,
 } from './ports/identity.repository.port';
 import type { IVelocityRepository } from './ports/velocity.repository.port';
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type { AppConfig } from '../../../core/config/configuration';
 import type { Clock } from '../../../core/common/clock';
 import {
@@ -38,28 +39,36 @@ const TIER_1_LIMITS = {
   dailyTxCountMax: 10,
 };
 
-const stubConfig = {
-  get: (key: string) => {
-    if (key === 'limits') {
-      return {
-        NGN: {
-          tier_1: TIER_1_LIMITS,
-          tier_2: {
-            perTxFiatMax: 500_000,
-            dailyFiatMax: 2_000_000,
-            dailyTxCountMax: 30,
-          },
-          tier_3: {
-            perTxFiatMax: 5_000_000,
-            dailyFiatMax: 20_000_000,
-            dailyTxCountMax: 100,
-          },
-        },
-      } satisfies AppConfig['limits'];
-    }
-    return undefined;
+const DEFAULT_LIMITS: AppConfig['limits'] = {
+  NGN: {
+    tier_1: TIER_1_LIMITS,
+    tier_2: {
+      perTxFiatMax: 500_000,
+      dailyFiatMax: 2_000_000,
+      dailyTxCountMax: 30,
+    },
+    tier_3: {
+      perTxFiatMax: 5_000_000,
+      dailyFiatMax: 20_000_000,
+      dailyTxCountMax: 100,
+    },
   },
-} as unknown as import('@nestjs/config').ConfigService<AppConfig, true>;
+};
+
+/**
+ * Builds an EffectiveConfigService stub returning `limits` from `get('limits')`.
+ * Passing a custom `limits` simulates a DB `AppSetting` override flowing through
+ * the layered config — the consumer reads it at the same call site.
+ */
+function makeConfig(
+  limits: AppConfig['limits'] = DEFAULT_LIMITS,
+): EffectiveConfigService {
+  return {
+    get: (key: string) => (key === 'limits' ? limits : undefined),
+  } as unknown as EffectiveConfigService;
+}
+
+const stubConfig = makeConfig();
 
 const stubClock: Clock = { now: () => FIXED_NOW };
 
@@ -103,11 +112,12 @@ function makeService(
   user: UserRecord | null,
   fiatTotal = '0',
   txCount = 0,
+  config: EffectiveConfigService = stubConfig,
 ): KycGateService {
   return new KycGateService(
     makeIdentityRepo(user),
     makeVelocityRepo(fiatTotal, txCount),
-    stubConfig,
+    config,
     stubClock,
   );
 }
@@ -209,6 +219,25 @@ describe('KycGateService.assertCanTransact', () => {
     const svc = makeService(makeUser(), '0', 0);
     const input = { ...BASE_INPUT, fiatAmount: '50000' }; // exactly at limit
     await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
+  });
+
+  it('honors a DB AppSetting override to perTxFiatMax (EffectiveConfigService flows through the gate)', async () => {
+    // Base allows 10_000 (tier_1 perTxFiatMax=50_000). An admin override lowers
+    // perTxFiatMax to 5_000 — the SAME 10_000 amount must now be rejected,
+    // proving the override flows through the consumer's get('limits') call.
+    const overriddenLimits: AppConfig['limits'] = {
+      NGN: {
+        ...DEFAULT_LIMITS.NGN,
+        tier_1: { ...TIER_1_LIMITS, perTxFiatMax: 5_000 },
+      },
+    };
+    const svc = makeService(makeUser(), '0', 0, makeConfig(overriddenLimits));
+    const input = { ...BASE_INPUT, fiatAmount: '10000' };
+    await expect(svc.assertCanTransact(input)).rejects.toMatchObject({
+      code: 'TIER_LIMIT_EXCEEDED',
+      limitAmount: 5_000,
+      tier: 'tier_1',
+    });
   });
 
   // ── Daily fiat velocity ───────────────────────────────────────────────────

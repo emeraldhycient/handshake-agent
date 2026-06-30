@@ -35,11 +35,11 @@ import {
   Optional,
   InternalServerErrorException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 
 import type { FiatCurrency } from '@handshake-agent/contracts';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { PinService } from '../../../core/auth/pin.service';
 import { SessionService } from '../../../core/auth/session.service';
 import { KycGateService } from '../../identity/application/kyc-gate.service';
@@ -54,7 +54,6 @@ import {
   type IWhatsAppSender,
 } from '../../whatsapp/application/ports/whatsapp-sender.port';
 import type {
-  AppConfig,
   BuyConfig,
   SellConfig,
   SwapConfig,
@@ -318,7 +317,7 @@ export class ExecutionService {
     private readonly walletService: WalletService,
     @Inject(PAYMENT_PROVIDER)
     private readonly paymentProvider: IPaymentProvider,
-    private readonly config: ConfigService<AppConfig, true>,
+    private readonly config: EffectiveConfigService,
     @Inject(CLOCK)
     private readonly clock: Clock,
     private readonly assetRegistry: AssetRegistry,

@@ -9,10 +9,8 @@
  *   - Each call produces a distinct reference.
  */
 
-import { ConfigService } from '@nestjs/config';
-
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { MockSanctionsScreener } from './mock-sanctions.screener';
-import type { AppConfig } from '../../../core/config/configuration';
 
 // ── Known denylist fixture ──────────────────────────────────────────────────
 
@@ -20,12 +18,12 @@ const BLOCKED_ADDRESS = 'TBlocked0000000000000000000000000BAD';
 const CLEAN_ADDRESS = 'TClean0000000000000000000000000CLEAN';
 
 /**
- * Builds a minimal ConfigService stub that returns the given denylist
- * from `config.get('compliance')`.  This mirrors the production wiring
- * in AppModule (ConfigModule is global; ConfigService is always injectable)
- * while keeping the unit tests fast and hermetic.
+ * Builds a minimal EffectiveConfigService stub that returns the given denylist
+ * from `config.get('compliance')`.  This mirrors the production wiring in
+ * AppModule (EffectiveConfigModule is global) while keeping the unit tests fast
+ * and hermetic; a DB AppSetting override would change the denylist returned here.
  */
-function stubConfigService(denylist: string[]): ConfigService<AppConfig, true> {
+function stubConfigService(denylist: string[]): EffectiveConfigService {
   return {
     get: (key: string) => {
       if (key === 'compliance') {
@@ -36,7 +34,7 @@ function stubConfigService(denylist: string[]): ConfigService<AppConfig, true> {
       }
       return undefined;
     },
-  } as unknown as ConfigService<AppConfig, true>;
+  } as unknown as EffectiveConfigService;
 }
 
 function makeScreener(
@@ -127,6 +125,23 @@ describe('MockSanctionsScreener', () => {
 
       expect(r1.passed).toBe(false);
       expect(r2.passed).toBe(false);
+    });
+  });
+
+  describe('AppSetting override', () => {
+    it('blocks an address added to the denylist via a DB override (EffectiveConfigService flows through)', async () => {
+      // An address that is clean against the base denylist must be blocked once
+      // an admin adds it to compliance.sanctionsDenylist via AppSetting.
+      const OVERRIDE_BAD = 'TOverrideBad00000000000000000000BAD3';
+      const screener = makeScreener([OVERRIDE_BAD]);
+
+      const result = await screener.screen({
+        address: OVERRIDE_BAD,
+        network: 'tron',
+      });
+
+      expect(result.passed).toBe(false);
+      expect(result.reason).toBe('sanctioned address');
     });
   });
 

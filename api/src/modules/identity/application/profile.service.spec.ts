@@ -1,3 +1,4 @@
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { ProfileService } from './profile.service';
 
 const limitsConfig = {
@@ -7,9 +8,15 @@ const limitsConfig = {
     tier_3: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
   },
 };
-const config = {
-  get: (k: string) => (k === 'limits' ? limitsConfig : undefined),
-};
+
+/** Builds an EffectiveConfigService stub returning `limits` from get('limits'). */
+function makeConfig(limits: unknown = limitsConfig): EffectiveConfigService {
+  return {
+    get: (k: string) => (k === 'limits' ? limits : undefined),
+  } as unknown as EffectiveConfigService;
+}
+
+const config = makeConfig();
 const registry = { defaultFiat: () => 'NGN' };
 
 describe('ProfileService', () => {
@@ -34,7 +41,7 @@ describe('ProfileService', () => {
     const svc = new ProfileService(
       auth as never,
       identity as never,
-      config as never,
+      config,
       registry as never,
     );
 
@@ -71,7 +78,7 @@ describe('ProfileService', () => {
     const svc = new ProfileService(
       auth as never,
       identity as never,
-      config as never,
+      config,
       registry as never,
     );
 
@@ -103,12 +110,56 @@ describe('ProfileService', () => {
     const svc = new ProfileService(
       auth as never,
       identity as never,
-      config as never,
+      config,
       registry as never,
     );
 
     const out = await svc.getProfile('u1');
     expect(out.fullName).toBe('Amara');
     expect(out.phone).toBeNull();
+  });
+
+  it('reflects a DB AppSetting override of the tier limits (EffectiveConfigService flows through)', async () => {
+    // Simulate an admin override of tier_1 limits; the profile must return the
+    // overridden values, proving get('limits') resolves through the layered config.
+    const overridden = makeConfig({
+      NGN: {
+        tier_1: {
+          perTxFiatMax: 999999,
+          dailyFiatMax: 8888888,
+          dailyTxCountMax: 77,
+        },
+        tier_2: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+        tier_3: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+      },
+    });
+    const auth = {
+      me: jest.fn().mockResolvedValue({
+        userId: 'u1',
+        email: 'a@b.com',
+        kycStatus: 'verified',
+        kycTier: 'tier_1',
+        hasPin: true,
+      }),
+    };
+    const identity = {
+      findKycProfile: jest
+        .fn()
+        .mockResolvedValue({ firstName: 'Amara', lastName: 'Okeke' }),
+      findWhatsAppAddressByUserId: jest.fn().mockResolvedValue(null),
+    };
+    const svc = new ProfileService(
+      auth as never,
+      identity as never,
+      overridden,
+      registry as never,
+    );
+
+    const out = await svc.getProfile('u1');
+    expect(out.limits).toEqual({
+      perTxFiatMax: 999999,
+      dailyFiatMax: 8888888,
+      dailyTxCountMax: 77,
+    });
   });
 });

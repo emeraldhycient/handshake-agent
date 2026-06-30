@@ -1,5 +1,4 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 
 import type {
   TransactionHistoryItem,
@@ -8,6 +7,7 @@ import type {
 
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import { CLOCK, type Clock } from '../../../core/common/clock';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type { StatementConfig } from '../../../core/config/configuration';
 
 import {
@@ -47,7 +47,7 @@ export class TransactionHistoryService {
     private readonly settlementRepo: ISettlementRepository,
     private readonly assets: AssetRegistry,
     @Inject(CLOCK) private readonly clock: Clock,
-    private readonly config: ConfigService,
+    private readonly config: EffectiveConfigService,
     private readonly tokens: StatementTokenService,
   ) {}
 
@@ -56,7 +56,7 @@ export class TransactionHistoryService {
     userId: string,
     spec: QueryTransactionsSpec,
   ): Promise<TransactionHistoryResponse> {
-    const cfg = this.config.get<StatementConfig>('statement')!;
+    const cfg = this.config.get<StatementConfig>('statement');
     const window = resolveWindow(spec, this.clock.now(), {
       maxWindowDays: cfg.maxWindowDays,
       timezoneOffsetMinutes: cfg.timezoneOffsetMinutes,
@@ -100,7 +100,7 @@ export class TransactionHistoryService {
     totalCount: number;
     truncated: boolean;
   }> {
-    const cfg = this.config.get<StatementConfig>('statement')!;
+    const cfg = this.config.get<StatementConfig>('statement');
     const types = TYPE_FILTER_MAP[input.txType] ?? ALL_MONEY_TYPES;
 
     const { rows, total } = await this.txRepo.listByUserInRange({

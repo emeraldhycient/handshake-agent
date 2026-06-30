@@ -42,6 +42,7 @@ import type {
   TransactionRecord,
 } from './ports/transaction.repository.port';
 import type { ISettlementOutboxRepository } from './ports/settlement-outbox.repository.port';
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type { DirectiveService } from './directive.service';
 import type { DirectiveGrantRecord } from './ports/directive.repository.port';
 import { ExecutionService } from './execution.service';
@@ -425,22 +426,30 @@ function makePaymentProvider(
 
 const stubClock: Clock = { now: () => FIXED_NOW };
 
-// Stub ConfigService (returns the buy/sell config values).
-const stubConfig = {
-  get: jest.fn((key: string) => {
-    if (key === 'buy') return { maxDriftBps: 50 };
-    if (key === 'sell') return { maxDriftBps: 50 };
-    // pricing.assets.USDT.baseRates.NGN is required by executeSend's KYC-gate guard.
-    if (key === 'pricing')
-      return {
-        assets: {
-          USDT: { baseRates: { NGN: 1600 } },
-          BTC: { baseRates: { NGN: 85_000_000 } },
-        },
-      };
-    return undefined;
-  }),
-};
+// Stub EffectiveConfigService (returns the buy/sell/swap/pricing config values).
+// A `buyMaxDriftBps` override simulates a DB AppSetting override of buy.maxDriftBps
+// flowing through the engine's constructor read.
+function makeStubConfig(opts: { buyMaxDriftBps?: number } = {}): {
+  get: jest.Mock;
+} {
+  return {
+    get: jest.fn((key: string) => {
+      if (key === 'buy') return { maxDriftBps: opts.buyMaxDriftBps ?? 50 };
+      if (key === 'sell') return { maxDriftBps: 50 };
+      // pricing.assets.USDT.baseRates.NGN is required by executeSend's KYC-gate guard.
+      if (key === 'pricing')
+        return {
+          assets: {
+            USDT: { baseRates: { NGN: 1600 } },
+            BTC: { baseRates: { NGN: 85_000_000 } },
+          },
+        };
+      return undefined;
+    }),
+  };
+}
+
+const stubConfig = makeStubConfig();
 
 // ---------------------------------------------------------------------------
 // Builder
@@ -464,6 +473,7 @@ function buildService(
       Pick<IPaymentProvider, 'createCollection' | 'verify'>
     >;
     assetRegistry?: jest.Mocked<AssetRegistry>;
+    config?: EffectiveConfigService;
   } = {},
 ): ExecutionService {
   return new ExecutionService(
@@ -484,7 +494,8 @@ function buildService(
       (makeWalletService() as unknown as WalletService),
     (overrides.paymentProvider as unknown as IPaymentProvider) ??
       (makePaymentProvider() as unknown as IPaymentProvider),
-    stubConfig as never,
+    (overrides.config as unknown as EffectiveConfigService) ??
+      (stubConfig as unknown as EffectiveConfigService),
     stubClock,
     overrides.assetRegistry ?? makeAssetRegistry(),
     // beneficiaryService stub (sell tests override via buildSellService helper)
@@ -855,6 +866,28 @@ describe('ExecutionService.executeBuy', () => {
     });
     const result = await svc.executeBuy(BASE_INPUT);
     expect(result.status).toBe('settling');
+  });
+
+  it('honors a DB AppSetting override of buy.maxDriftBps (EffectiveConfigService flows through the engine)', async () => {
+    // Stored rate 1600, fresh rate 1601 → drift ≈ 6.25 bps.
+    // Base config (50 bps) would ACCEPT this. An admin override tightening
+    // buy.maxDriftBps to 1 bp must make the SAME drift throw QuoteDriftError,
+    // proving the override flows through the engine's constructor read.
+    const smallDriftQuote: QuoteBuyOutput = { ...FRESH_QUOTE, fxRate: '1601' };
+    const transactionRepo = makeTransactionRepo();
+
+    const svc = buildService({
+      quotesService: makeQuotesService(smallDriftQuote),
+      transactionRepo,
+      config: makeStubConfig({
+        buyMaxDriftBps: 1,
+      }) as unknown as EffectiveConfigService,
+    });
+
+    await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
+      QuoteDriftError,
+    );
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
   // ── KYC gate throws ───────────────────────────────────────────────────────

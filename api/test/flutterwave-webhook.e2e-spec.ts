@@ -217,7 +217,12 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
       clock,
     );
     pinService = new PinService(pinRepo, config, clock);
-    directiveService = new DirectiveService(directiveRepo, config, clock);
+    directiveService = new DirectiveService(
+      directiveRepo,
+      config,
+      clock,
+      config,
+    );
     const assetRegistry = new AssetRegistry(config);
     const walletService = new WalletService(
       fakeWalletProvider,

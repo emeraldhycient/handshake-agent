@@ -1,12 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 
 import type { ProfileResponse } from '@handshake-agent/contracts';
 
-import type {
-  AppConfig,
-  LimitsConfig,
-} from '../../../core/config/configuration';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
+import type { LimitsConfig } from '../../../core/config/configuration';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import { AuthService } from '../../auth/application/auth.service';
 import {
@@ -27,7 +24,7 @@ export class ProfileService {
     private readonly auth: AuthService,
     @Inject(IDENTITY_REPOSITORY)
     private readonly identity: IIdentityRepository,
-    private readonly config: ConfigService<AppConfig, true>,
+    private readonly config: EffectiveConfigService,
     private readonly registry: AssetRegistry,
   ) {}
 

@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import {
   StatementTokenService,
   StatementTokenInvalidError,
@@ -22,9 +23,15 @@ function makeService(opts: {
       timezoneOffsetMinutes: 60,
     },
   };
-  const config = { get: (k: string) => map[k] } as unknown as ConfigService;
+  // One stub serves both env keys (ConfigService) and the `statement` section
+  // (EffectiveConfigService); pass it for both constructor positions.
+  const config = { get: (k: string) => map[k] };
   const clock = { now: () => opts.now };
-  return new StatementTokenService(config, clock);
+  return new StatementTokenService(
+    config as unknown as ConfigService,
+    config as unknown as EffectiveConfigService,
+    clock,
+  );
 }
 
 const payload = {
