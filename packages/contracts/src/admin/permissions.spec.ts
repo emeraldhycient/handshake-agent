@@ -76,6 +76,44 @@ describe("PERMISSION_CATALOG", () => {
       expect(e.category).toBe("Config");
     }
   });
+
+  it("registers the Users management routes + nav (Phase 2)", () => {
+    const ids = new Set(PERMISSION_CATALOG.map(permissionId));
+    expect(ids.has("api_route:GET /admin/users:read")).toBe(true);
+    expect(ids.has("api_route:GET /admin/users/:id:read")).toBe(true);
+    expect(ids.has("api_route:PATCH /admin/users/:id/tier:write")).toBe(true);
+    expect(ids.has("api_route:PATCH /admin/users/:id/status:write")).toBe(true);
+    expect(ids.has("api_route:POST /admin/users/:id/pin-reset:write")).toBe(
+      true,
+    );
+    expect(ids.has("api_route:GET /admin/users/:id/devices:read")).toBe(true);
+    expect(
+      ids.has("api_route:DELETE /admin/users/:id/devices/:deviceId:write"),
+    ).toBe(true);
+    expect(
+      ids.has("api_route:POST /admin/users/:id/sim-swap-reverify:write"),
+    ).toBe(true);
+    expect(ids.has("web_page:/admin/users:read")).toBe(true);
+    expect(ids.has("menu_item:menu.users:read")).toBe(true);
+    for (const e of PERMISSION_CATALOG.filter((x) => x.category === "Users")) {
+      expect(e.category).toBe("Users");
+    }
+  });
+
+  it("registers the KYC review routes + nav (Phase 2)", () => {
+    const ids = new Set(PERMISSION_CATALOG.map(permissionId));
+    expect(ids.has("api_route:GET /admin/kyc/queue:read")).toBe(true);
+    expect(ids.has("api_route:GET /admin/kyc/:userId:read")).toBe(true);
+    expect(ids.has("api_route:POST /admin/kyc/:userId/approve:write")).toBe(
+      true,
+    );
+    expect(ids.has("api_route:POST /admin/kyc/:userId/reject:write")).toBe(true);
+    expect(ids.has("web_page:/admin/kyc:read")).toBe(true);
+    expect(ids.has("menu_item:menu.kyc:read")).toBe(true);
+    for (const e of PERMISSION_CATALOG.filter((x) => x.category === "KYC")) {
+      expect(e.category).toBe("KYC");
+    }
+  });
 });
 
 describe("BUILTIN_ROLES", () => {
@@ -142,5 +180,45 @@ describe("BUILTIN_ROLES", () => {
     for (const r of BUILTIN_ROLES) {
       expect(r.grants(createRole)).toBe(r.name === "super_admin");
     }
+  });
+
+  it("grants Users read+write to compliance and ops, read-only to support (Phase 2)", () => {
+    const usersRead = PERMISSION_CATALOG.find(
+      (e) => permissionId(e) === "api_route:GET /admin/users:read",
+    )!;
+    const usersWrite = PERMISSION_CATALOG.find(
+      (e) => permissionId(e) === "api_route:PATCH /admin/users/:id/status:write",
+    )!;
+    const compliance = BUILTIN_ROLES.find((r) => r.name === "compliance")!;
+    const ops = BUILTIN_ROLES.find((r) => r.name === "ops")!;
+    const support = BUILTIN_ROLES.find((r) => r.name === "support")!;
+    const finance = BUILTIN_ROLES.find((r) => r.name === "finance")!;
+
+    expect(compliance.grants(usersRead)).toBe(true);
+    expect(compliance.grants(usersWrite)).toBe(true);
+    expect(ops.grants(usersRead)).toBe(true);
+    expect(ops.grants(usersWrite)).toBe(true);
+    expect(support.grants(usersRead)).toBe(true);
+    expect(support.grants(usersWrite)).toBe(false);
+    expect(finance.grants(usersRead)).toBe(false);
+  });
+
+  it("grants KYC read+write to compliance, read-only to support, none to ops (Phase 2)", () => {
+    const kycRead = PERMISSION_CATALOG.find(
+      (e) => permissionId(e) === "api_route:GET /admin/kyc/queue:read",
+    )!;
+    const kycWrite = PERMISSION_CATALOG.find(
+      (e) => permissionId(e) === "api_route:POST /admin/kyc/:userId/approve:write",
+    )!;
+    const compliance = BUILTIN_ROLES.find((r) => r.name === "compliance")!;
+    const support = BUILTIN_ROLES.find((r) => r.name === "support")!;
+    const ops = BUILTIN_ROLES.find((r) => r.name === "ops")!;
+
+    expect(compliance.grants(kycRead)).toBe(true);
+    expect(compliance.grants(kycWrite)).toBe(true);
+    expect(support.grants(kycRead)).toBe(true);
+    expect(support.grants(kycWrite)).toBe(false);
+    expect(ops.grants(kycRead)).toBe(false);
+    expect(ops.grants(kycWrite)).toBe(false);
   });
 });

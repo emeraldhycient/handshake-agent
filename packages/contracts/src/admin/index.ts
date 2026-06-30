@@ -5,5 +5,7 @@ export * from "./auth.dto";
 export * from "./invitation.dto";
 export * from "./rbac.dto";
 export * from "./user.dto";
+export * from "./user-mgmt.dto";
+export * from "./kyc-review.dto";
 export * from "./audit.dto";
 export * from "./session.dto";

@@ -202,6 +202,82 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Override a config setting",
   ),
 
+  // Users — end-user management & device/SIM-swap admin (Phase 2)
+  r("api_route", "GET /admin/users", "read", "Users", "List / search end users"),
+  r(
+    "api_route",
+    "GET /admin/users/:id",
+    "read",
+    "Users",
+    "View an end user's detail",
+  ),
+  r(
+    "api_route",
+    "PATCH /admin/users/:id/tier",
+    "write",
+    "Users",
+    "Change an end user's KYC tier",
+  ),
+  r(
+    "api_route",
+    "PATCH /admin/users/:id/status",
+    "write",
+    "Users",
+    "Suspend / reactivate / deactivate an end user",
+  ),
+  r(
+    "api_route",
+    "POST /admin/users/:id/pin-reset",
+    "write",
+    "Users",
+    "Trigger an end user's PIN reset",
+  ),
+  r(
+    "api_route",
+    "GET /admin/users/:id/devices",
+    "read",
+    "Users",
+    "List an end user's devices",
+  ),
+  r(
+    "api_route",
+    "DELETE /admin/users/:id/devices/:deviceId",
+    "write",
+    "Users",
+    "Revoke an end user's device",
+  ),
+  r(
+    "api_route",
+    "POST /admin/users/:id/sim-swap-reverify",
+    "write",
+    "Users",
+    "Force SIM-swap re-verification for an end user",
+  ),
+
+  // KYC — review queue & approve/reject (Phase 2)
+  r("api_route", "GET /admin/kyc/queue", "read", "KYC", "List the KYC review queue"),
+  r(
+    "api_route",
+    "GET /admin/kyc/:userId",
+    "read",
+    "KYC",
+    "View a KYC submission's detail",
+  ),
+  r(
+    "api_route",
+    "POST /admin/kyc/:userId/approve",
+    "write",
+    "KYC",
+    "Approve a KYC submission",
+  ),
+  r(
+    "api_route",
+    "POST /admin/kyc/:userId/reject",
+    "write",
+    "KYC",
+    "Reject a KYC submission",
+  ),
+
   // Web pages (nav/page gating — UX only; the API still enforces api_route perms)
   r(
     "web_page",
@@ -233,11 +309,15 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Config",
     "Config settings management page",
   ),
+  r("web_page", "/admin/users", "read", "Users", "End-user management page"),
+  r("web_page", "/admin/kyc", "read", "KYC", "KYC review queue page"),
   // Menu items (nav groups)
   r("menu_item", "menu.access", "read", "Access", "Access & RBAC nav group"),
   r("menu_item", "menu.audit", "read", "Audit", "Audit nav group"),
   r("menu_item", "menu.treasury", "read", "Treasury", "Treasury nav group"),
   r("menu_item", "menu.config", "read", "Config", "Config nav group"),
+  r("menu_item", "menu.users", "read", "Users", "Users nav group"),
+  r("menu_item", "menu.kyc", "read", "KYC", "KYC nav group"),
 ];
 
 // ── Built-in roles ─────────────────────────────────────────────────────────────
@@ -293,6 +373,7 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Audit: ["read"],
       Treasury: ["read", "execute"],
       Config: ["read"],
+      Users: ["read", "write"],
     },
   ),
   role(
@@ -300,6 +381,8 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
     "Compliance: KYC review, sanctions/AML, audit visibility.",
     {
       Audit: ["read"],
+      Users: ["read", "write"],
+      KYC: ["read", "write"],
     },
   ),
   role(
@@ -311,5 +394,8 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Config: ["read", "write"],
     },
   ),
-  role("support", "Support: read-only visibility into users and activity.", {}),
+  role("support", "Support: read-only visibility into users and activity.", {
+    Users: ["read"],
+    KYC: ["read"],
+  }),
 ];
