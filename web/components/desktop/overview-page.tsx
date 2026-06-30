@@ -1,7 +1,6 @@
 "use client"
 
 import { useQueryClient } from "@tanstack/react-query"
-import { ActionButton } from "@/components/shared/action-button"
 import { AssetIcon } from "@/components/shared/asset-icon"
 import { Money } from "@/components/shared/money"
 import { StatusPill } from "@/components/shared/status-pill"
@@ -133,7 +132,7 @@ export function OverviewPage({
       )}
     >
       {/* ── Balance hero ────────────────────────────────────────────────────── */}
-      <div className="flex items-end gap-8 rounded-[18px] bg-gradient-to-b from-primary to-primary-deep px-[26px] py-6 text-primary-foreground">
+      <div className="flex flex-wrap items-end gap-x-8 gap-y-5 rounded-[18px] bg-gradient-to-b from-primary to-primary-deep px-[26px] py-6 text-primary-foreground">
         <div className="flex-1">
           <p className="text-[13px] font-semibold text-primary-foreground/70">
             Total balance
@@ -144,16 +143,26 @@ export function OverviewPage({
             className="mt-0.5 text-[40px] font-extrabold tracking-tight tabular-nums"
           />
         </div>
-        {/* Action buttons — the shared ActionButton primitive (§13.1) so the
-            hero, the wallet header, and the mobile wallet tile are identical. */}
+        {/* Action buttons. On the dark-green hero the secondary actions use a
+            translucent-on-green treatment (not the light-surface outline used on
+            the wallet header) so they read correctly against the gradient and
+            shrink to fit the row instead of overflowing. Primary stays accent. */}
         <div className="flex gap-[10px]">
           {heroActions.map(({ action, label, primary }) => (
-            <ActionButton
+            <button
               key={action}
-              label={label}
-              variant={primary ? "primary" : "secondary"}
+              type="button"
+              aria-label={label}
               onClick={() => onQuickAction(action, chipLabel(action))}
-            />
+              className={cn(
+                "cursor-pointer rounded-[12px] px-5 py-[11px] text-sm font-bold transition-opacity outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary-foreground/80 focus-visible:ring-offset-2 focus-visible:ring-offset-primary",
+                primary
+                  ? "bg-accent text-accent-foreground"
+                  : "border border-primary-foreground/20 bg-primary-foreground/10 text-primary-foreground"
+              )}
+            >
+              {label}
+            </button>
           ))}
         </div>
       </div>
