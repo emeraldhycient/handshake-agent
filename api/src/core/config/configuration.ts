@@ -546,10 +546,12 @@ export default (): AppConfig => ({
       // before calling the provider (root CLAUDE.md §3.1 / §3.3).
       'crypto.swap': true,
     },
-    // Validity window for send quotes (30 seconds — same as buy/sell).
+    // Validity window for send quotes (300s / 5 min — same as buy/sell).
+    // A human needs time to read the itemized confirmation and enter a PIN;
+    // 30s was too short to complete the flow. Matches the directive TTL (300s).
     // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
     // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
-    sendQuoteExpiresInSec: 30,
+    sendQuoteExpiresInSec: 300,
   },
   buy: {
     // 50 bps = 0.5% allowed drift. Admin-tunable later (DB-admin AppSetting layer).
@@ -593,7 +595,9 @@ export default (): AppConfig => ({
   },
   pricing: {
     processingFeeBps: 100,
-    expiresInSec: 30,
+    // Buy/sell quote validity (300s / 5 min). A human needs time to read the
+    // confirmation and enter a PIN; 30s was too short to complete the flow.
+    expiresInSec: 300,
     assets: {
       // buySpreadBps=150 matches the old global spreadBps so existing BUY quotes are unchanged.
       // sellSpreadBps is independently tunable — set to 150 as the conservative default.
@@ -609,18 +613,16 @@ export default (): AppConfig => ({
         sellSpreadBps: 150,
         cryptoDecimals: 8,
       },
-      // TRX: valuation-only rate for the wallet balance display.
-      // fiatTradeable: false blocks the ConfigRateProvider from returning a
-      // rate for buy/sell flows — those flows call getRate() and will receive
-      // an error, keeping TRX swap-only at runtime. The baseRate is used only
-      // by the wallet balance display path (WalletBalanceService) which catches
-      // valuation errors gracefully and never routes through getRate for a trade.
+      // TRX: fiat-tradeable (buy/sell against NGN) in addition to swap + wallet
+      // valuation. Multi-asset from the start — TRX is a first-class tradeable
+      // asset, not swap-only. The spread is the platform margin folded into the
+      // displayed rate (NEVER surfaced as a line item, CLAUDE.md §3.1).
       TRX: {
         baseRates: { NGN: 520 },
-        buySpreadBps: 0,
-        sellSpreadBps: 0,
+        buySpreadBps: 150,
+        sellSpreadBps: 150,
         cryptoDecimals: 6,
-        fiatTradeable: false,
+        fiatTradeable: true,
       },
     },
   },
