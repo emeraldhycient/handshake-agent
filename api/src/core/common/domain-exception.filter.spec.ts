@@ -28,6 +28,13 @@ import {
 } from '../../modules/compliance/domain/compliance-errors';
 import { PinInvalidError } from '../../core/auth/domain/pin-errors';
 import { AgentUnavailableError } from '../../modules/agent/domain/agent-errors';
+import {
+  BeneficiaryCoolingOffError,
+  BeneficiaryNotFoundError,
+  BeneficiaryWrongTypeError,
+  InvalidAddressError,
+  NameEnquiryFailedError,
+} from '../../modules/beneficiaries/domain/beneficiary-errors';
 
 interface ErrorBody {
   statusCode: number;
@@ -105,6 +112,18 @@ describe('DomainExceptionFilter', () => {
     [new BaseRateMisconfiguredError('USDT', 'NGN'), 503],
     [new SanctionsScreeningUnavailableError('chainalysis'), 503],
     [new PinInvalidError(3), 401],
+    // Beneficiary errors were previously uncoded → opaque 500s. They now map.
+    [
+      new BeneficiaryCoolingOffError('ben-1', new Date('2099-01-01T00:00:00Z')),
+      403,
+    ],
+    [new BeneficiaryNotFoundError('ben-1'), 404],
+    [new InvalidAddressError('TRON', 'not-an-address'), 422],
+    [
+      new BeneficiaryWrongTypeError('ben-1', 'crypto_address', 'bank_account'),
+      422,
+    ],
+    [new NameEnquiryFailedError('058', '0000000000', 'not found'), 422],
   ])('maps %s → %i', (err, expected) => {
     const { statusCode } = run(filter, err);
     expect(statusCode).toBe(expected);
@@ -116,6 +135,16 @@ describe('DomainExceptionFilter', () => {
       new SanctionsBlockedError('addr', 'OFAC hit', 'evt-secret-123', 'ref'),
     );
     expect(JSON.stringify(body)).not.toContain('evt-secret-123');
+  });
+
+  it('does NOT leak the internal beneficiary id for a cooling-off block', () => {
+    const { statusCode, body } = run(
+      filter,
+      new BeneficiaryCoolingOffError('ben-secret-uuid', new Date('2099-01-01')),
+    );
+    expect(statusCode).toBe(403);
+    expect(body.message).toMatch(/cooling-off period/i);
+    expect(JSON.stringify(body)).not.toContain('ben-secret-uuid');
   });
 
   it('passes a NestJS HttpException through with its own status', () => {

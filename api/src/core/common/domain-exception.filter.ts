@@ -134,11 +134,40 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.SERVICE_UNAVAILABLE,
     message: 'Service temporarily unavailable. Please try again.',
   },
+
+  // ── Beneficiaries → 403 (first-use lock) / 404 / 422 ───────────────────────
+  BENEFICIARY_COOLING_OFF: {
+    status: HttpStatus.FORBIDDEN,
+    message:
+      'For your security, newly added recipients have a short cooling-off ' +
+      'period before the first transfer. Please try again later.',
+  },
+  BENEFICIARY_NOT_FOUND: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'Recipient not found.',
+  },
+  BENEFICIARY_INVALID_ADDRESS: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message:
+      "That address isn't valid for the selected network. " +
+      'Please check it and try again.',
+  },
+  BENEFICIARY_WRONG_TYPE: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: "That recipient can't be used for this transaction.",
+  },
+  BENEFICIARY_NAME_ENQUIRY_FAILED: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message:
+      "We couldn't verify that bank account. " +
+      'Please check the details and try again.',
+  },
 };
 
 const STATUS_TEXT: Readonly<Record<number, string>> = {
   [HttpStatus.UNAUTHORIZED]: 'Unauthorized',
   [HttpStatus.FORBIDDEN]: 'Forbidden',
+  [HttpStatus.NOT_FOUND]: 'Not Found',
   [HttpStatus.CONFLICT]: 'Conflict',
   [HttpStatus.UNPROCESSABLE_ENTITY]: 'Unprocessable Entity',
   [HttpStatus.SERVICE_UNAVAILABLE]: 'Service Unavailable',
