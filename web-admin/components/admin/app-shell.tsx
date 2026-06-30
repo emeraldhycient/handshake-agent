@@ -9,8 +9,9 @@
  * Sessions); `menu.users` → the Users group; `menu.kyc` → the KYC group;
  * `menu.transactions` → Transactions; `menu.ledger` → Ledger; `menu.compliance`
  * → Compliance; `menu.treasury` → Treasury; `menu.beneficiaries` →
- * Beneficiaries; `menu.audit` → the Audit group; `menu.config` → the Config
- * group (Settings).
+ * Beneficiaries; `menu.notifications` → Notifications; `menu.whatsapp` →
+ * WhatsApp; `menu.tickets` → Tickets; `menu.agent` → Agent; `menu.audit` → the
+ * Audit group; `menu.config` → the Config group (Settings).
  *
  * Pure presentation + the menu list derived from useAdminMe(); no data writes.
  */
@@ -85,6 +86,26 @@ const NAV_GROUPS: readonly NavGroup[] = [
     menu: "menu.beneficiaries",
     label: "Beneficiaries",
     items: [{ href: "/beneficiaries", label: "Beneficiaries" }],
+  },
+  {
+    menu: "menu.notifications",
+    label: "Notifications",
+    items: [{ href: "/notifications", label: "Templates" }],
+  },
+  {
+    menu: "menu.whatsapp",
+    label: "WhatsApp",
+    items: [{ href: "/whatsapp", label: "Configuration" }],
+  },
+  {
+    menu: "menu.tickets",
+    label: "Tickets",
+    items: [{ href: "/tickets", label: "Orders" }],
+  },
+  {
+    menu: "menu.agent",
+    label: "Agent",
+    items: [{ href: "/agent", label: "Agent" }],
   },
   {
     menu: "menu.audit",

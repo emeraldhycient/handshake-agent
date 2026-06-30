@@ -23,6 +23,8 @@ import type {
   ComplianceReportSubmitRequest,
   KycApproveRequest,
   KycRejectRequest,
+  NotificationTemplatePreviewRequest,
+  NotificationTemplateUpsertRequest,
   RoleCreateRequest,
   RoleUpdateRequest,
   TreasuryAlertAcknowledgeRequest,
@@ -30,16 +32,21 @@ import type {
 } from "@handshake-agent/contracts"
 
 import * as admin from "@/lib/api/admin"
+import * as agent from "@/lib/api/agent"
 import * as beneficiaries from "@/lib/api/beneficiaries"
 import * as compliance from "@/lib/api/compliance"
 import * as kyc from "@/lib/api/kyc"
 import * as ledger from "@/lib/api/ledger"
+import * as notifications from "@/lib/api/notifications"
 import * as settings from "@/lib/api/settings"
+import * as tickets from "@/lib/api/tickets"
 import * as transactions from "@/lib/api/transactions"
 import * as treasury from "@/lib/api/treasury"
 import * as users from "@/lib/api/users"
+import * as whatsapp from "@/lib/api/whatsapp"
 import type { ComplianceEventQuery } from "@/lib/api/compliance"
 import type { LedgerHistoryQuery } from "@/lib/api/ledger"
+import type { TemplateRef } from "@/lib/api/notifications"
 import { qk } from "./keys"
 
 // ─── Read hooks ─────────────────────────────────────────────────────────────────
@@ -651,5 +658,112 @@ export function useOverrideCoolingOff() {
         queryKey: ["admin", "beneficiaries"],
       })
     },
+  })
+}
+
+// ─── Notification-template read hooks (Phase 4) ───────────────────────────────────
+
+/** All admin-editable notification templates. 30 s stale. */
+export function useNotificationTemplates() {
+  return useQuery({
+    queryKey: qk.notificationTemplates,
+    queryFn: () => notifications.listNotificationTemplates(),
+    staleTime: 30_000,
+  })
+}
+
+/** One template by its composite key. Disabled until a `ref` is provided. */
+export function useNotificationTemplate(ref: TemplateRef | null) {
+  return useQuery({
+    queryKey: qk.notificationTemplate(
+      ref ?? { templateKey: "", language: "", channel: "email" }
+    ),
+    queryFn: () => notifications.getNotificationTemplate(ref as TemplateRef),
+    enabled: ref !== null,
+    staleTime: 30_000,
+  })
+}
+
+// ─── WhatsApp / tickets / agent read hooks (Phase 4) ──────────────────────────────
+
+/** Non-secret WhatsApp Cloud-API / Flows wiring + secret-presence flags. */
+export function useWhatsAppConfig() {
+  return useQuery({
+    queryKey: qk.whatsappConfig,
+    queryFn: () => whatsapp.getWhatsAppConfig(),
+    staleTime: 5 * 60_000,
+  })
+}
+
+/** Existing ticket orders (read-only). */
+export function useTicketOrders() {
+  return useQuery({
+    queryKey: qk.ticketOrders,
+    queryFn: () => tickets.listTicketOrders(),
+    staleTime: 15_000,
+  })
+}
+
+/** The embedded agent's resolved config + read-only prompt preview. */
+export function useAgentConfig() {
+  return useQuery({
+    queryKey: qk.agentConfig,
+    queryFn: () => agent.getAgentConfig(),
+    staleTime: 60_000,
+  })
+}
+
+/** The conversation/intent log list. 15 s stale. */
+export function useConversations() {
+  return useQuery({
+    queryKey: qk.conversations,
+    queryFn: () => agent.listConversations(),
+    staleTime: 15_000,
+  })
+}
+
+/** One conversation's messages + replies. Disabled until an `id` is set. */
+export function useConversation(id: string | null) {
+  return useQuery({
+    queryKey: qk.conversation(id ?? ""),
+    queryFn: () => agent.getConversation(id as string),
+    enabled: id !== null,
+    staleTime: 15_000,
+  })
+}
+
+// ─── Notification-template mutations (Phase 4) ────────────────────────────────────
+// Create (POST) and edit (PATCH) are sensitive (may 403 with
+// ADMIN_STEP_UP_REQUIRED — the caller wraps in `useStepUpRetry`). On success they
+// invalidate the templates prefix so the list + detail re-resolve. Preview is a
+// pure render — no persistence, nothing to invalidate.
+
+export function useUpsertTemplate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      ref,
+      input,
+    }: {
+      /** Present → PATCH an existing template; absent → POST (create). */
+      ref: TemplateRef | null
+      input: NotificationTemplateUpsertRequest
+    }) =>
+      ref
+        ? notifications.updateNotificationTemplate(ref, input)
+        : notifications.upsertNotificationTemplate(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: qk.notificationTemplates,
+      })
+    },
+  })
+}
+
+/** Pure deterministic render of supplied content — returns the rendered text. */
+export function usePreviewTemplate() {
+  return useMutation({
+    mutationFn: (input: NotificationTemplatePreviewRequest) =>
+      notifications.previewNotificationTemplate(input),
   })
 }

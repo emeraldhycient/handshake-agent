@@ -14,6 +14,7 @@ import type {
   ComplianceReport,
   EffectiveSetting,
   KycSubmissionDetail,
+  NotificationTemplate,
   Role,
 } from "@handshake-agent/contracts"
 
@@ -161,4 +162,21 @@ export interface ComplianceReportSubmitDialogProps {
 export interface BeneficiaryOverrideProps {
   /** The beneficiary whose first-use cooling-off lock can be cleared. */
   beneficiary: AdminBeneficiary
+}
+
+// ─── Notifications page (Phase 4) ──────────────────────────────────────────────────
+
+export interface TemplateEditorDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** Editing an existing template, or null to create a new one. */
+  template: NotificationTemplate | null
+}
+
+// ─── Agent page (Phase 4) ──────────────────────────────────────────────────────────
+
+export interface ConversationLogDetailProps {
+  /** The selected conversation's id, or null when the drawer is closed. */
+  conversationId: string | null
+  onOpenChange: (open: boolean) => void
 }

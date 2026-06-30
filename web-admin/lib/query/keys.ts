@@ -11,6 +11,7 @@ import type {
 
 import type { ComplianceEventQuery } from "@/lib/api/compliance"
 import type { LedgerHistoryQuery } from "@/lib/api/ledger"
+import type { TemplateRef } from "@/lib/api/notifications"
 
 export const qk = {
   me: ["admin", "me"] as const,
@@ -47,4 +48,19 @@ export const qk = {
   withdrawalPolicies: ["admin", "treasury", "withdrawal-policies"] as const,
   adminBeneficiaries: (userId?: string) =>
     ["admin", "beneficiaries", userId ?? "all"] as const,
+  notificationTemplates: ["admin", "notification-templates"] as const,
+  notificationTemplate: (ref: TemplateRef) =>
+    [
+      "admin",
+      "notification-templates",
+      ref.templateKey,
+      ref.language,
+      ref.channel,
+    ] as const,
+  whatsappConfig: ["admin", "whatsapp", "config"] as const,
+  ticketOrders: ["admin", "tickets", "orders"] as const,
+  agentConfig: ["admin", "agent", "config"] as const,
+  conversations: ["admin", "agent", "conversations"] as const,
+  conversation: (id: string) =>
+    ["admin", "agent", "conversations", id] as const,
 } as const
