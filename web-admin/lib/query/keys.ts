@@ -7,6 +7,7 @@ import type {
   AdminEndUserSearchQuery,
   AdminTxnSearchQuery,
   AuditLogQuery,
+  MetricsRangeQuery,
 } from "@handshake-agent/contracts"
 
 import type { ComplianceEventQuery } from "@/lib/api/compliance"
@@ -63,4 +64,6 @@ export const qk = {
   conversations: ["admin", "agent", "conversations"] as const,
   conversation: (id: string) =>
     ["admin", "agent", "conversations", id] as const,
+  dashboardMetrics: (range: MetricsRangeQuery) =>
+    ["admin", "metrics", "dashboard", range] as const,
 } as const

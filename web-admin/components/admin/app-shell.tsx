@@ -5,7 +5,8 @@
  *
  * Nav gating: a nav GROUP renders only when its `menu_item` resourceId is in
  * `adminMe.menus` (UX only; the API still enforces every route). The dashboard
- * link always shows. `menu.access` → the Access group (Admins / Roles /
+ * link always shows. `menu.metrics` → the Metrics group; `menu.access` → the
+ * Access group (Admins / Roles /
  * Sessions); `menu.users` → the Users group; `menu.kyc` → the KYC group;
  * `menu.transactions` → Transactions; `menu.ledger` → Ledger; `menu.compliance`
  * → Compliance; `menu.treasury` → Treasury; `menu.beneficiaries` →
@@ -42,6 +43,11 @@ const NAV_GROUPS: readonly NavGroup[] = [
     menu: null,
     label: "",
     items: [{ href: "/", label: "Dashboard" }],
+  },
+  {
+    menu: "menu.metrics",
+    label: "Metrics",
+    items: [{ href: "/metrics", label: "Metrics" }],
   },
   {
     menu: "menu.access",

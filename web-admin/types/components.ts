@@ -180,3 +180,24 @@ export interface ConversationLogDetailProps {
   conversationId: string | null
   onOpenChange: (open: boolean) => void
 }
+
+// ─── Metrics dashboard (Phase 5, FINAL) ──────────────────────────────────────────────
+
+export interface MetricsBarProps {
+  /** Accessible label describing what this bar represents. */
+  label: string
+  /** The bar's value; clamped to [0, max] for the rendered width. */
+  value: number
+  /** The scale maximum (the 100%-width reference). Non-positive → an empty track. */
+  max: number
+  /** Optional right-aligned caption (e.g. the formatted value or a percentage). */
+  caption?: string
+}
+
+export interface MetricsDashboardProps {
+  /**
+   * When true the metrics query 403 (no Metrics grant) degrades to a friendly
+   * empty state instead of an error — used on the ungated home page (§3.3 UX).
+   */
+  gracefulOnForbidden?: boolean
+}

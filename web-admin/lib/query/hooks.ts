@@ -23,6 +23,7 @@ import type {
   ComplianceReportSubmitRequest,
   KycApproveRequest,
   KycRejectRequest,
+  MetricsRangeQuery,
   NotificationTemplatePreviewRequest,
   NotificationTemplateUpsertRequest,
   RoleCreateRequest,
@@ -37,6 +38,7 @@ import * as beneficiaries from "@/lib/api/beneficiaries"
 import * as compliance from "@/lib/api/compliance"
 import * as kyc from "@/lib/api/kyc"
 import * as ledger from "@/lib/api/ledger"
+import * as metrics from "@/lib/api/metrics"
 import * as notifications from "@/lib/api/notifications"
 import * as settings from "@/lib/api/settings"
 import * as tickets from "@/lib/api/tickets"
@@ -729,6 +731,23 @@ export function useConversation(id: string | null) {
     queryFn: () => agent.getConversation(id as string),
     enabled: id !== null,
     staleTime: 15_000,
+  })
+}
+
+// ─── Metrics / dashboard read hook (Phase 5, FINAL) ───────────────────────────────
+
+/**
+ * The composite operational dashboard summary for a date range. The range is part
+ * of the key, so changing the preset re-fetches a distinct cache entry. 60 s stale
+ * — aggregations are expensive and need not be real-time. `retry: false` so a 403
+ * (no Metrics grant) surfaces immediately for graceful degradation on the home page.
+ */
+export function useDashboardMetrics(range: MetricsRangeQuery) {
+  return useQuery({
+    queryKey: qk.dashboardMetrics(range),
+    queryFn: () => metrics.getDashboardMetrics(range),
+    staleTime: 60_000,
+    retry: false,
   })
 }
 
