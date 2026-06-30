@@ -13,4 +13,6 @@ export const qk = {
   permissions: ["admin", "permissions"] as const,
   audit: (query: AuditLogQuery) => ["admin", "audit", query] as const,
   sessions: ["admin", "sessions"] as const,
+  settings: (category?: string) =>
+    ["admin", "settings", category ?? "all"] as const,
 } as const

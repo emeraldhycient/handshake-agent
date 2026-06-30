@@ -13,9 +13,11 @@ import type {
   AuditLogQuery,
   RoleCreateRequest,
   RoleUpdateRequest,
+  UpdateSettingRequest,
 } from "@handshake-agent/contracts"
 
 import * as admin from "@/lib/api/admin"
+import * as settings from "@/lib/api/settings"
 import { qk } from "./keys"
 
 // ─── Read hooks ─────────────────────────────────────────────────────────────────
@@ -75,6 +77,18 @@ export function useSessions() {
     queryKey: qk.sessions,
     queryFn: () => admin.listSessions(),
     staleTime: 15_000,
+  })
+}
+
+/**
+ * Effective config settings for one category (or all). Keyed by category so each
+ * tab caches independently. 30 s stale — DB overrides are hot-reloaded server-side.
+ */
+export function useSettings(category?: string) {
+  return useQuery({
+    queryKey: qk.settings(category),
+    queryFn: () => settings.listSettings(category),
+    staleTime: 30_000,
   })
 }
 
@@ -157,5 +171,27 @@ export function useRevokeSession() {
 export function useVerifyAuditChain() {
   return useMutation({
     mutationFn: () => admin.verifyAuditChain(),
+  })
+}
+
+/**
+ * Update one config setting. On success invalidates every settings query (the
+ * prefix match) so all category tabs re-resolve — a catalog flip can change a
+ * sibling's effective state. The PATCH may 403 with ADMIN_STEP_UP_REQUIRED; the
+ * caller wraps the mutation in `useStepUpRetry` to re-auth and retry.
+ */
+export function useUpdateSetting() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      key,
+      input,
+    }: {
+      key: string
+      input: UpdateSettingRequest
+    }) => settings.updateSetting(key, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "settings"] })
+    },
   })
 }

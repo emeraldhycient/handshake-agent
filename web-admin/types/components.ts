@@ -4,7 +4,11 @@
  * (root §13.4). Shapes that cross the FE/BE boundary come from contracts.
  */
 import type { ReactNode } from "react"
-import type { AdminUser, Role } from "@handshake-agent/contracts"
+import type {
+  AdminUser,
+  EffectiveSetting,
+  Role,
+} from "@handshake-agent/contracts"
 
 // ─── Shell + gating ──────────────────────────────────────────────────────────────
 
@@ -62,4 +66,11 @@ export interface RoleEditorDialogProps {
   onOpenChange: (open: boolean) => void
   /** Editing an existing role, or null to create a new one. */
   role: Role | null
+}
+
+// ─── Settings page ───────────────────────────────────────────────────────────────
+
+export interface SettingFieldProps {
+  /** The effective config leaf to render + (when editable) save. */
+  setting: EffectiveSetting
 }
