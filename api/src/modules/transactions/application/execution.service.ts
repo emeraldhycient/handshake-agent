@@ -536,9 +536,12 @@ export class ExecutionService {
     await this.walletService.getOrProvisionNetworkWallet(userId, buyNetwork);
 
     // 8b. Open a Flutterwave NGN virtual-account collection.
-    // Customer details: sourced from user KYC if available; safe fallbacks used
-    // for optional fields (KYC names may be null — noted, not blocking).
-    // TODO: when KycProfile is queryable from the engine, use real firstname/lastname.
+    // Customer attribution: thread the real KYC name + verified email through the
+    // application-layer accessor (§3.2 — no Prisma in the engine) so a real
+    // virtual-account pay-in carries correct attribution for reconciliation /
+    // compliance. Each field falls back to a safe placeholder only when its KYC
+    // value is null (profile not yet captured).
+    const originator = await this.kycGate.getOriginatorIdentity(userId);
     // FUNDS-SAFETY (§3.1): the buy reserve (Step 7) posts NO ledger entry — the
     // user pays NGN later — so a createCollection failure means NO funds moved
     // and there is nothing to refund. But the settling Transaction + consumed
@@ -555,11 +558,11 @@ export class ExecutionService {
           currency: storedQuote.fiatCurrency,
           reference: idempotencyKey,
           customer: {
-            // Safe fallback: use a synthetic email derived from userId.
-            // Real email will come from User.verifiedEmail in a future iteration.
-            email: `user+${userId}@handshake.internal`,
-            firstname: 'Handshake',
-            lastname: 'User',
+            // Safe fallbacks: synthetic userId-derived email + neutral name,
+            // used only when the corresponding KYC field is null.
+            email: originator.email ?? `user+${userId}@handshake.internal`,
+            firstname: originator.firstName ?? 'Handshake',
+            lastname: originator.lastName ?? 'User',
           },
         }),
       );

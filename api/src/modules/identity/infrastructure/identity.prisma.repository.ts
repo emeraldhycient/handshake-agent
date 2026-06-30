@@ -8,6 +8,7 @@ import type {
   ContactRecord,
   IIdentityRepository,
   KycProfileRecord,
+  OriginatorIdentityRecord,
   UserRecord,
 } from '../application/ports/identity.repository.port';
 
@@ -99,6 +100,28 @@ export class IdentityPrismaRepository implements IIdentityRepository {
     if (row === null) return null;
 
     return { firstName: row.firstName, lastName: row.lastName };
+  }
+
+  async findOriginatorIdentity(
+    userId: string,
+  ): Promise<OriginatorIdentityRecord | null> {
+    const row = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        verifiedEmail: true,
+        email: true,
+        kycProfile: { select: { firstName: true, lastName: true } },
+      },
+    });
+
+    if (row === null) return null;
+
+    return {
+      firstName: row.kycProfile?.firstName ?? null,
+      lastName: row.kycProfile?.lastName ?? null,
+      verifiedEmail: row.verifiedEmail,
+      email: row.email,
+    };
   }
 
   async loadContact(contactId: string): Promise<ContactRecord | null> {

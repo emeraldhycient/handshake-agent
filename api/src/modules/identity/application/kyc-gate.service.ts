@@ -69,6 +69,17 @@ function buildDisplayName(
   return parts.length > 0 ? parts.join(' ') : null;
 }
 
+/**
+ * Originator attribution for the payment provider's customer object: the real
+ * KYC name plus a single resolved verified email. Any field may be null when the
+ * user has not yet captured it; callers substitute their own safe fallback.
+ */
+export interface OriginatorIdentity {
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+}
+
 export interface AssertCanTransactInput {
   userId: string;
   /**
@@ -128,6 +139,29 @@ export class KycGateService {
     const profile = await this.identityRepo.findKycProfile(userId);
     if (profile === null) return null;
     return buildDisplayName(profile.firstName, profile.lastName);
+  }
+
+  /**
+   * Returns the originator attribution (real KYC firstName/lastName + a single
+   * resolved verified email) for the payment provider's customer object on a
+   * fiat pay-in, so the virtual-account collection carries correct customer
+   * attribution for reconciliation/compliance.
+   *
+   * Email precedence (business rule): the KYC-captured `verifiedEmail` is the
+   * compliance-canonical address, so it wins; the OTP-verified login `email`
+   * is the fallback. Resolves all fields to null when the user row is absent so
+   * the caller can substitute its own safe placeholders.
+   */
+  async getOriginatorIdentity(userId: string): Promise<OriginatorIdentity> {
+    const record = await this.identityRepo.findOriginatorIdentity(userId);
+    if (record === null) {
+      return { firstName: null, lastName: null, email: null };
+    }
+    return {
+      firstName: record.firstName,
+      lastName: record.lastName,
+      email: record.verifiedEmail ?? record.email,
+    };
   }
 
   /**
