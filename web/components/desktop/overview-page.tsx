@@ -4,7 +4,11 @@ import { AssetIcon } from "@/components/shared/asset-icon"
 import { Money } from "@/components/shared/money"
 import { StatusPill } from "@/components/shared/status-pill"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useBalances, useWalletAssets, useActivity } from "@/lib/query/hooks"
+import {
+  useBalances,
+  useWalletAssets,
+  useActivityFeed,
+} from "@/lib/query/hooks"
 import { useCapabilities } from "@/lib/query/capabilities"
 import { cn } from "@/lib/utils"
 import type { ChatAction } from "@/lib/schemas"
@@ -34,7 +38,7 @@ export function OverviewPage({
 }: PageWithQuickActionProps) {
   const balances = useBalances()
   const assets = useWalletAssets()
-  const activity = useActivity()
+  const activity = useActivityFeed()
   const { canSwap } = useCapabilities()
   // Swap is hidden until the crypto.swap capability is enabled in /config.
   const heroActions = canSwap
@@ -69,8 +73,8 @@ export function OverviewPage({
       <div
         className={cn("flex flex-1 items-center justify-center p-6", className)}
       >
-        <div className="border-danger/20 bg-danger/5 rounded-[14px] border p-5 text-center">
-          <p className="text-danger text-sm font-semibold">
+        <div className="rounded-[14px] border border-danger/20 bg-danger/5 p-5 text-center">
+          <p className="text-sm font-semibold text-danger">
             Failed to load overview
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -83,7 +87,7 @@ export function OverviewPage({
 
   const balanceData = balances.data
   const assetData = assets.data ?? []
-  const activityData = activity.data ?? []
+  const activityData = activity.groups
 
   // ── Empty state ────────────────────────────────────────────────────────────
   if (!balanceData && assetData.length === 0 && activityData.length === 0) {

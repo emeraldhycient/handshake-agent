@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi, afterEach } from "vitest"
 import { ActivityPage } from "./activity-page"
 import * as chatApi from "@/lib/api/chat"
+import * as gatewayModule from "@/lib/api/gateway"
 
 function wrapper({ children }: { children: React.ReactNode }) {
   const client = new QueryClient({
@@ -71,6 +72,48 @@ describe("ActivityPage", () => {
       const pills = screen.getAllByText(/Completed/i)
       expect(pills.length).toBeGreaterThan(0)
     })
+  })
+
+  it("paginates: 'Load more' appends the next page and then disappears", async () => {
+    vi.spyOn(gatewayModule.gateway, "getActivityPage")
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: "pg1",
+            type: "buy",
+            status: "completed",
+            asset: "USDT",
+            cryptoAmount: "1",
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        nextCursor: "CURSOR1",
+      })
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: "pg2",
+            type: "send",
+            status: "completed",
+            asset: "USDT",
+            cryptoAmount: "2",
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        nextCursor: null,
+      })
+    const user = userEvent.setup()
+    render(<ActivityPage />, { wrapper })
+
+    const loadMore = await screen.findByRole("button", { name: /load more/i })
+    await user.click(loadMore)
+
+    await waitFor(() =>
+      expect(screen.getByText(/Sent USDT/i)).toBeInTheDocument()
+    )
+    expect(
+      screen.queryByRole("button", { name: /load more/i })
+    ).not.toBeInTheDocument()
   })
 
   it("clicking a row opens the TransactionDetailModal", async () => {

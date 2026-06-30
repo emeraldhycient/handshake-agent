@@ -5,11 +5,18 @@ import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusPill } from "@/components/shared/status-pill"
 import { TransactionDetailModal } from "@/components/shared/transaction-detail-modal"
-import { useActivity } from "@/lib/query/hooks"
+import { useActivityFeed } from "@/lib/query/hooks"
 import type { ActivityTabProps } from "@/types/components"
 
 export function ActivityTab({ className }: ActivityTabProps) {
-  const { data: groups, isLoading, isError } = useActivity()
+  const {
+    groups,
+    isLoading,
+    isError,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useActivityFeed()
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   if (isLoading) {
@@ -64,7 +71,7 @@ export function ActivityTab({ className }: ActivityTabProps) {
     )
   }
 
-  if (!groups || groups.length === 0) {
+  if (groups.length === 0) {
     return (
       <div
         className={cn(
@@ -142,6 +149,21 @@ export function ActivityTab({ className }: ActivityTabProps) {
             </div>
           </div>
         ))}
+
+        {hasNextPage && (
+          <button
+            type="button"
+            onClick={() => void fetchNextPage()}
+            disabled={isFetchingNextPage}
+            className={cn(
+              "mx-auto rounded-full border border-border px-5 py-2.5 text-[13px] font-semibold text-foreground",
+              "transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none",
+              "disabled:cursor-not-allowed disabled:opacity-60"
+            )}
+          >
+            {isFetchingNextPage ? "Loading…" : "Load more"}
+          </button>
+        )}
       </div>
 
       {/* ── Transaction detail modal ─────────────────────────────────────────── */}

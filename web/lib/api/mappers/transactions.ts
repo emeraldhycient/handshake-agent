@@ -5,8 +5,9 @@ import type {
 import { formatCryptoAmount, formatFiatAmount } from "@/lib/format/money"
 import type { ActivityGroup, ActivityItem, StatusTone } from "@/lib/schemas"
 
-// Mirrors the contracts FiatCurrencySchema / /config fiats; the launch fiat is NGN.
-const FIAT_SYMBOLS: Record<string, string> = { NGN: "₦" }
+/** Fiat code → display symbol, sourced from the `/config` fiats by the caller
+ *  (never hardcoded here — multi-currency aware, root §13). */
+export type FiatSymbols = Record<string, string>
 
 const OUT_TYPES = new Set(["sell", "send"])
 const IN_TYPES = new Set([
@@ -84,28 +85,37 @@ function timeLabel(d: Date): string {
     .replace(" ", "")
 }
 
-function amountFor(it: TransactionListItem, sign: string): string {
+function amountFor(
+  it: TransactionListItem,
+  sign: string,
+  fiatSymbols: FiatSymbols
+): string {
   if (it.cryptoAmount && it.asset)
     return `${sign}${formatCryptoAmount(it.cryptoAmount, it.asset)}`
   if (it.fiatAmount && it.fiatCurrency)
-    return `${sign}${formatFiatAmount(it.fiatAmount, FIAT_SYMBOLS[it.fiatCurrency] ?? "")}`
+    return `${sign}${formatFiatAmount(it.fiatAmount, fiatSymbols[it.fiatCurrency] ?? "")}`
   return ""
 }
 
-function subFor(it: TransactionListItem, d: Date): string {
+function subFor(
+  it: TransactionListItem,
+  d: Date,
+  fiatSymbols: FiatSymbols
+): string {
   const parts = [timeLabel(d)]
   if (it.counterparty)
     parts.push(`to ${it.counterparty.slice(0, 4)}…${it.counterparty.slice(-4)}`)
   else if (it.fiatAmount && it.fiatCurrency)
     parts.push(
-      formatFiatAmount(it.fiatAmount, FIAT_SYMBOLS[it.fiatCurrency] ?? "")
+      formatFiatAmount(it.fiatAmount, fiatSymbols[it.fiatCurrency] ?? "")
     )
   return parts.join(" · ")
 }
 
 export function mapTransactions(
   res: TransactionListResponse,
-  now: Date = new Date()
+  now: Date = new Date(),
+  fiatSymbols: FiatSymbols = {}
 ): ActivityGroup[] {
   const groups: ActivityGroup[] = []
   const byLabel = new Map<string, ActivityItem[]>()
@@ -121,8 +131,8 @@ export function mapTransactions(
       tint: style.tint,
       col: style.col,
       title: (TITLE[it.type] ?? (() => titleCase(it.type)))(it.asset),
-      sub: subFor(it, d),
-      amount: amountFor(it, sign),
+      sub: subFor(it, d, fiatSymbols),
+      amount: amountFor(it, sign, fiatSymbols),
       status: titleCase(it.status),
       statusTone: toneFor(it.status),
     }

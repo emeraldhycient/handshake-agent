@@ -55,6 +55,23 @@ describe("mapTransactions", () => {
     expect(mapTransactions({ items: [] }, now)).toEqual([])
   })
 
+  it("formats fiat amounts with the provided symbol map (no hardcoded NGN)", () => {
+    const r: TransactionListResponse = {
+      items: [
+        {
+          id: "g",
+          type: "buy",
+          status: "completed",
+          fiatAmount: "1000",
+          fiatCurrency: "GHS",
+          createdAt: "2026-06-29T13:00:00.000Z",
+        },
+      ],
+    }
+    const groups = mapTransactions(r, now, { GHS: "GH₵" })
+    expect(groups[0].items[0].amount).toBe("+GH₵1,000")
+  })
+
   describe("status tone (#24 — distinct failure state)", () => {
     function toneOf(status: string): string {
       const r: TransactionListResponse = {
