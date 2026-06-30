@@ -6,7 +6,10 @@ describe('configuration — statement', () => {
     const cfg = configuration();
     expect(cfg.statement).toEqual({
       linkTtlSeconds: 900,
-      maxWindowDays: 365,
+      maxWindowDays: 400,
+      defaultPageSize: 10,
+      maxPageSize: 100,
+      statementMaxRows: 5000,
       rowCap: 100,
       timezoneOffsetMinutes: 60,
     });

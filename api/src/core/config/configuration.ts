@@ -351,9 +351,18 @@ export interface ReconciliationConfig {
 export interface StatementConfig {
   /** TTL (seconds) for a signed statement download link. Default 900 (15 min). */
   linkTtlSeconds: number;
-  /** Max history window in days; longer requests are clamped. Default 365. */
+  /** Max history window in days; longer requests are clamped. Default 400 (~1yr + headroom). */
   maxWindowDays: number;
-  /** Max rows returned to the chat card / statement. Default 100 (truncation surfaced). */
+  /** Default page size for the interactive history card / Activity feed. Default 10. */
+  defaultPageSize: number;
+  /** Hard cap on a single page (clamps an over-large client `limit`). Default 100. */
+  maxPageSize: number;
+  /** Safety cap on rows gathered for a full-range PDF statement. Default 5000. */
+  statementMaxRows: number;
+  /**
+   * @deprecated superseded by `defaultPageSize`/`maxPageSize` — removed once the
+   * history service stops reading it. Kept transiently so the type compiles.
+   */
   rowCap: number;
   /** Fixed offset (minutes) for local day boundaries. WAT = UTC+1, no DST → 60. */
   timezoneOffsetMinutes: number;
@@ -758,10 +767,15 @@ const buildConfig = (): AppConfig => ({
     batchSize: 20,
   },
   statement: {
-    // 15-minute signed-link validity, 1-year max history window, 100-row page cap,
-    // and WAT (UTC+1, no DST) day boundaries. Admin-tunable later (DB-admin layer, §7).
+    // 15-minute signed-link validity; ~1-year (400-day) max window with headroom so
+    // "last year" isn't trimmed; 10-row default page; 100-row hard page cap; 5000-row
+    // full-statement safety cap; WAT (UTC+1, no DST) day boundaries.
+    // Admin-tunable later (DB-admin layer, §7).
     linkTtlSeconds: 900,
-    maxWindowDays: 365,
+    maxWindowDays: 400,
+    defaultPageSize: 10,
+    maxPageSize: 100,
+    statementMaxRows: 5000,
     rowCap: 100,
     timezoneOffsetMinutes: 60,
   },
