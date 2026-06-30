@@ -1,4 +1,9 @@
 import { z } from 'zod'
+import {
+  TransactionPeriodSchema,
+  TransactionTypeFilterSchema,
+  RelativeDurationUnitSchema,
+} from '../intents/query-transactions.intent'
 
 // One transaction row, ready for display. Amounts are already formatted display
 // strings (via the server's AssetRegistry) — the FE never re-formats money.
@@ -27,7 +32,31 @@ export const TransactionHistoryResponseSchema = z.object({
   window: TransactionWindowSchema,
   items: z.array(TransactionHistoryItemSchema),
   totalCount: z.number().int().nonnegative(), // exact count in the window
-  truncated: z.boolean(), // true when totalCount > items.length (row cap hit)
+  truncated: z.boolean(), // true when totalCount > items.length (a single page)
+  // Keyset pagination. `hasMore`/`nextCursor` defaulted so legacy persisted
+  // `transactions` outcomes (pre-pagination) still re-parse instead of dropping
+  // to a null outcome on chat-history rehydration. `txType` echoes the effective
+  // filter so the card can re-query the same filter on "Show more".
+  hasMore: z.boolean().default(false),
+  nextCursor: z.string().nullable().default(null), // opaque keyset cursor
+  txType: z.string().default('all'),
   downloadUrl: z.string(), // absolute, signed-token PDF download URL
 })
 export type TransactionHistoryResponse = z.infer<typeof TransactionHistoryResponseSchema>
+
+// Query params for GET /transactions/history. `relativeAmount`/`limit` arrive as
+// strings from the URL → coerce. `from`/`to` are plain strings: date-only
+// (YYYY-MM-DD) for a first-page relative/explicit query, OR a full ISO timestamp
+// for a frozen-window continuation (the server discriminates). A present `cursor`
+// means "next keyset page of the frozen absolute window".
+export const TransactionHistoryQuerySchema = z.object({
+  period: TransactionPeriodSchema.optional(),
+  relativeAmount: z.coerce.number().int().min(1).max(999).optional(),
+  relativeUnit: RelativeDurationUnitSchema.optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  txType: TransactionTypeFilterSchema.optional(),
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+})
+export type TransactionHistoryQuery = z.infer<typeof TransactionHistoryQuerySchema>
