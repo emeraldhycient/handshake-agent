@@ -10,7 +10,6 @@ describe('configuration — statement', () => {
       defaultPageSize: 10,
       maxPageSize: 100,
       statementMaxRows: 5000,
-      rowCap: 100,
       timezoneOffsetMinutes: 60,
     });
   });

@@ -359,11 +359,6 @@ export interface StatementConfig {
   maxPageSize: number;
   /** Safety cap on rows gathered for a full-range PDF statement. Default 5000. */
   statementMaxRows: number;
-  /**
-   * @deprecated superseded by `defaultPageSize`/`maxPageSize` — removed once the
-   * history service stops reading it. Kept transiently so the type compiles.
-   */
-  rowCap: number;
   /** Fixed offset (minutes) for local day boundaries. WAT = UTC+1, no DST → 60. */
   timezoneOffsetMinutes: number;
 }
@@ -776,7 +771,6 @@ const buildConfig = (): AppConfig => ({
     defaultPageSize: 10,
     maxPageSize: 100,
     statementMaxRows: 5000,
-    rowCap: 100,
     timezoneOffsetMinutes: 60,
   },
   media: {

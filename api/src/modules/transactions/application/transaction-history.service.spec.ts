@@ -4,8 +4,10 @@ import { AssetRegistry } from '../../../core/catalog/asset-registry';
 
 const STATEMENT_CFG = {
   linkTtlSeconds: 900,
-  maxWindowDays: 365,
-  rowCap: 2,
+  maxWindowDays: 400,
+  defaultPageSize: 2,
+  maxPageSize: 100,
+  statementMaxRows: 5000,
   timezoneOffsetMinutes: 60,
 };
 
@@ -50,15 +52,29 @@ function makeRegistry(): AssetRegistry {
   return new AssetRegistry(config);
 }
 
-function makeService(rows: unknown[], total: number) {
+function makeService(
+  rows: unknown[],
+  total: number,
+  extra?: {
+    hasMore?: boolean;
+    nextCursor?: string | null;
+    cfg?: Partial<typeof STATEMENT_CFG>;
+  },
+) {
   const txRepo = {
-    listByUserInRange: jest.fn().mockResolvedValue({ rows, total }),
+    listByUserInRange: jest.fn().mockResolvedValue({
+      rows,
+      total,
+      hasMore: extra?.hasMore ?? total > rows.length,
+      nextCursor: extra?.nextCursor ?? null,
+    }),
   };
   const settlementRepo = {
     findReceiptNumber: jest.fn().mockResolvedValue('HS-2026-000001'),
   };
+  const statementCfg = { ...STATEMENT_CFG, ...extra?.cfg };
   const config = {
-    get: (k: string) => (k === 'statement' ? STATEMENT_CFG : undefined),
+    get: (k: string) => (k === 'statement' ? statementCfg : undefined),
   } as unknown as ConfigService;
   const clock = { now: () => new Date('2026-06-29T10:00:00.000Z') };
   const token = {
@@ -170,7 +186,7 @@ describe('TransactionHistoryService.query', () => {
   });
 
   it('sets truncated when total exceeds the returned page', async () => {
-    const { svc } = makeService([buyRow, sendRow], 5); // rowCap=2, total=5
+    const { svc } = makeService([buyRow, sendRow], 5); // page size 2, total 5
     const res = await svc.query('u1', { period: 'all' });
     expect(res.truncated).toBe(true);
     expect(res.totalCount).toBe(5);
@@ -190,5 +206,160 @@ describe('TransactionHistoryService.query', () => {
     expect(txRepo.listByUserInRange).toHaveBeenCalledWith(
       expect.objectContaining({ types: ['buy', 'sell', 'send', 'deposit'] }),
     );
+  });
+
+  it('requests the default page size and no cursor on the first page', async () => {
+    const { svc, txRepo } = makeService([], 0);
+    await svc.query('u1', {});
+    expect(txRepo.listByUserInRange).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 2, cursor: undefined }),
+    );
+  });
+
+  it('surfaces hasMore + nextCursor + txType from the page', async () => {
+    const { svc } = makeService([buyRow], 3, {
+      hasMore: true,
+      nextCursor: 'NEXT',
+    });
+    const res = await svc.query('u1', { txType: 'send' });
+    expect(res.hasMore).toBe(true);
+    expect(res.nextCursor).toBe('NEXT');
+    expect(res.txType).toBe('send');
+  });
+
+  it('clamps an over-large client limit to maxPageSize', async () => {
+    const { svc, txRepo } = makeService([], 0);
+    await svc.query('u1', { limit: 500 });
+    expect(txRepo.listByUserInRange).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 100 }),
+    );
+  });
+
+  it('honours a client limit within bounds', async () => {
+    const { svc, txRepo } = makeService([], 0);
+    await svc.query('u1', { limit: 5 });
+    expect(txRepo.listByUserInRange).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 5 }),
+    );
+  });
+});
+
+describe('TransactionHistoryService.queryPage (frozen absolute window)', () => {
+  const FROM = new Date('2026-06-01T00:00:00.000Z');
+  const TO = new Date('2026-06-29T10:00:00.000Z');
+
+  it('uses the given from/to verbatim (no resolveWindow) and forwards the cursor', async () => {
+    const { svc, txRepo } = makeService([buyRow], 5, {
+      hasMore: true,
+      nextCursor: 'NEXT2',
+    });
+    const res = await svc.queryPage({
+      userId: 'u1',
+      from: FROM,
+      to: TO,
+      txType: 'all',
+      cursor: 'PREV',
+      limit: 2,
+    });
+    // Passed through unchanged — a relative window would have been re-resolved.
+    expect(txRepo.listByUserInRange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: FROM,
+        to: TO,
+        cursor: 'PREV',
+        limit: 2,
+      }),
+    );
+    expect(res.hasMore).toBe(true);
+    expect(res.nextCursor).toBe('NEXT2');
+    expect(res.items[0].id).toBe('t1');
+  });
+});
+
+describe('TransactionHistoryService.queryAllInRange (full-range PDF)', () => {
+  const FROM = new Date('2026-06-01T00:00:00.000Z');
+  const TO = new Date('2026-06-29T10:00:00.000Z');
+
+  function r(id: string) {
+    return {
+      id,
+      userId: 'u1',
+      type: 'buy',
+      status: 'completed',
+      metadata: {
+        asset: 'USDT',
+        cryptoAmount: '1',
+        fiatAmount: '1',
+        fiatCurrency: 'NGN',
+      },
+      createdAt: new Date('2026-06-10T10:00:00.000Z'),
+    };
+  }
+
+  it('follows the cursor across pages and concatenates every row', async () => {
+    const { svc, txRepo } = makeService([], 5);
+    txRepo.listByUserInRange
+      .mockReset()
+      .mockResolvedValueOnce({
+        rows: [r('a'), r('b')],
+        total: 5,
+        hasMore: true,
+        nextCursor: 'c1',
+      })
+      .mockResolvedValueOnce({
+        rows: [r('c'), r('d')],
+        total: 5,
+        hasMore: true,
+        nextCursor: 'c2',
+      })
+      .mockResolvedValueOnce({
+        rows: [r('e')],
+        total: 5,
+        hasMore: false,
+        nextCursor: null,
+      });
+
+    const res = await svc.queryAllInRange({
+      userId: 'u1',
+      from: FROM,
+      to: TO,
+      txType: 'all',
+    });
+
+    expect(res.items).toHaveLength(5);
+    expect(res.totalCount).toBe(5);
+    expect(res.truncated).toBe(false);
+    expect(txRepo.listByUserInRange).toHaveBeenCalledTimes(3);
+    // Full pages requested (maxPageSize) and the cursor is threaded each call.
+    const calls = txRepo.listByUserInRange.mock.calls as Array<
+      [{ limit?: number; cursor?: string }]
+    >;
+    expect(calls[0][0]).toMatchObject({ limit: 100, cursor: undefined });
+    expect(calls[1][0]).toMatchObject({ cursor: 'c1' });
+    expect(calls[2][0]).toMatchObject({ cursor: 'c2' });
+  });
+
+  it('stops at statementMaxRows and marks the statement truncated', async () => {
+    const { svc, txRepo } = makeService([], 5, {
+      cfg: { statementMaxRows: 2 },
+    });
+    txRepo.listByUserInRange.mockReset().mockResolvedValueOnce({
+      rows: [r('a'), r('b')],
+      total: 5,
+      hasMore: true,
+      nextCursor: 'c1',
+    });
+
+    const res = await svc.queryAllInRange({
+      userId: 'u1',
+      from: FROM,
+      to: TO,
+      txType: 'all',
+    });
+
+    expect(res.items).toHaveLength(2);
+    expect(res.totalCount).toBe(5);
+    expect(res.truncated).toBe(true);
+    expect(txRepo.listByUserInRange).toHaveBeenCalledTimes(1);
   });
 });

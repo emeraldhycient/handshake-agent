@@ -17,8 +17,10 @@ function makeService(opts: {
     PORT: 3001,
     statement: {
       linkTtlSeconds: opts.ttl ?? 900,
-      maxWindowDays: 365,
-      rowCap: 100,
+      maxWindowDays: 400,
+      defaultPageSize: 10,
+      maxPageSize: 100,
+      statementMaxRows: 5000,
       timezoneOffsetMinutes: 60,
     },
   };
