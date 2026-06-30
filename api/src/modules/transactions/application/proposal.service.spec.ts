@@ -212,6 +212,7 @@ function makeAssetRegistry(
 function makeLedgerRepo(balance = '10.0'): jest.Mocked<ILedgerRepository> {
   return {
     getAccountBalance: jest.fn().mockResolvedValue(balance),
+    listLedgerEntries: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -702,6 +703,7 @@ describe('ProposalService.createSellProposal', () => {
         callOrder.push('balance');
         return Promise.resolve('100.0');
       }),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
     };
     const kycGateOrdered = {
       assertCanTransact: jest.fn().mockImplementation(() => {
@@ -1258,6 +1260,7 @@ describe('ProposalService.createSendProposal', () => {
         callOrder.push('balance');
         return Promise.resolve('100.0');
       }),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
     };
     const kycGateOrdered = {
       assertCanTransact: jest.fn().mockImplementation(() => {

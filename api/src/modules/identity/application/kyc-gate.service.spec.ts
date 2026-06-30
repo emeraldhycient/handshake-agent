@@ -96,6 +96,18 @@ function makeIdentityRepo(
     loadContact: jest.fn(),
     findKycProfile: jest.fn().mockResolvedValue(kycProfile),
     createContactWithChannelIdentity: jest.fn(),
+    // Admin reads/writes — unused by KycGateService; stubbed for type completeness.
+    listUsers: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listUsersPendingKycReview: jest
+      .fn()
+      .mockResolvedValue({ items: [], nextCursor: null }),
+    loadUserWithKycAndDevices: jest.fn().mockResolvedValue(null),
+    listDevicesForUser: jest.fn().mockResolvedValue([]),
+    setUserStatus: jest.fn(),
+    setKycTier: jest.fn(),
+    setSimSwapDetectedAt: jest.fn(),
+    revokeDevice: jest.fn(),
+    unpinDevice: jest.fn(),
   };
 }
 

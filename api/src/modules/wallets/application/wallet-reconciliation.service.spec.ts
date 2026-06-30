@@ -76,6 +76,7 @@ function makeWalletProvider(onChainAmount: string): IWalletProvider {
 function makeLedgerRepo(ledgerAmount: string): ILedgerRepository {
   return {
     getAccountBalance: jest.fn().mockResolvedValue(ledgerAmount),
+    listLedgerEntries: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -319,6 +320,7 @@ describe('WalletReconciliationService.reconcileUser', () => {
         .mockImplementation((_type: string, _id: string, currency: string) =>
           Promise.resolve(currency === 'USDT' ? '200' : '500'),
         ),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
     };
 
     const settlementRepo = makeDepositSettlementRepo(true);

@@ -14,7 +14,15 @@ import { Injectable } from '@nestjs/common';
 
 import { LedgerAccountType } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
-import type { ILedgerRepository } from '../application/ports/ledger.repository.port';
+import type {
+  ILedgerRepository,
+  LedgerEntryRecord,
+} from '../application/ports/ledger.repository.port';
+
+/** A Prisma Decimal exposes a canonical `toString()`. */
+function decimalToString(value: { toString(): string }): string {
+  return value.toString();
+}
 
 @Injectable()
 export class LedgerPrismaRepository implements ILedgerRepository {
@@ -51,6 +59,50 @@ export class LedgerPrismaRepository implements ILedgerRepository {
     // balanceAfter is stored as Decimal(38,18) in Postgres; Prisma returns it
     // as a Decimal object with a toString() method that produces a canonical
     // decimal string — safe to return directly to the application layer.
-    return (latest.balanceAfter as { toString(): string }).toString();
+    return decimalToString(latest.balanceAfter);
+  }
+
+  /**
+   * Returns the most recent `limit` ledger entries for the given account,
+   * newest-first by `sequence` (the per-account monotonic counter — the
+   * authoritative ordering), then `postedAt`. Decimal columns are mapped to
+   * canonical decimal strings so no Prisma type leaks past infrastructure.
+   */
+  async listLedgerEntries(
+    accountType: string,
+    accountId: string,
+    limit: number,
+  ): Promise<LedgerEntryRecord[]> {
+    const rows = await this.prisma.ledgerEntry.findMany({
+      where: {
+        accountType: accountType as LedgerAccountType,
+        accountId,
+      },
+      orderBy: [{ sequence: 'desc' }, { postedAt: 'desc' }],
+      take: limit,
+      select: {
+        id: true,
+        transactionId: true,
+        accountType: true,
+        accountId: true,
+        currency: true,
+        amount: true,
+        direction: true,
+        balanceAfter: true,
+        postedAt: true,
+      },
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      transactionId: row.transactionId,
+      accountType: row.accountType,
+      accountId: row.accountId,
+      currency: row.currency,
+      amount: decimalToString(row.amount),
+      direction: row.direction,
+      balanceAfter: decimalToString(row.balanceAfter),
+      postedAt: row.postedAt,
+    }));
   }
 }

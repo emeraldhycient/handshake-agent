@@ -89,6 +89,7 @@ function makeKycRepo(): jest.Mocked<IKycRepository> {
     completeVerificationForUserAtomic: jest
       .fn()
       .mockResolvedValue({ userId: USER_ID }),
+    updateKycProfileDecision: jest.fn().mockResolvedValue(undefined),
   };
 }
 

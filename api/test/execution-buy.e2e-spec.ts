@@ -228,7 +228,10 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       // beneficiaryService and ledgerRepo are not used in buy-proposal tests
       { getById: () => Promise.resolve(null) } as never,
       assetRegistry,
-      { getAccountBalance: () => Promise.resolve('0') },
+      {
+        getAccountBalance: () => Promise.resolve('0'),
+        listLedgerEntries: () => Promise.resolve([]),
+      },
       // complianceService and configService are required deps but not invoked on the buy path.
       {
         screenSendDestination: () =>

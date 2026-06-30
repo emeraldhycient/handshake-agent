@@ -20,6 +20,7 @@ import { TRANSACTION_REPOSITORY } from './application/ports/transaction.reposito
 import { SETTLEMENT_OUTBOX_REPOSITORY } from './application/ports/settlement-outbox.repository.port';
 import { SETTLEMENT_REPOSITORY } from './application/ports/settlement.repository.port';
 import { LEDGER_REPOSITORY } from './application/ports/ledger.repository.port';
+import { TRANSACTION_READ_REPOSITORY } from './application/ports/transaction-read.repository.port';
 import { ProposalPrismaRepository } from './infrastructure/proposal.prisma.repository';
 import { QuotePrismaRepository } from './infrastructure/quote.prisma.repository';
 import { DirectivePrismaRepository } from './infrastructure/directive.prisma.repository';
@@ -27,6 +28,7 @@ import { TransactionPrismaRepository } from './infrastructure/transaction.prisma
 import { SettlementOutboxPrismaRepository } from './infrastructure/settlement-outbox.prisma.repository';
 import { SettlementPrismaRepository } from './infrastructure/settlement.prisma.repository';
 import { LedgerPrismaRepository } from './infrastructure/ledger.prisma.repository';
+import { TransactionReadPrismaRepository } from './infrastructure/transaction-read.prisma.repository';
 import { TransactionHistoryService } from './application/transaction-history.service';
 import { StatementTokenService } from './application/statement-token.service';
 import { STATEMENT_GENERATOR } from './application/ports/statement-generator.port';
@@ -77,6 +79,10 @@ import { PdfStatementGenerator } from './infrastructure/pdf-statement.generator'
       useClass: SettlementPrismaRepository,
     },
     { provide: LEDGER_REPOSITORY, useClass: LedgerPrismaRepository },
+    {
+      provide: TRANSACTION_READ_REPOSITORY,
+      useClass: TransactionReadPrismaRepository,
+    },
     { provide: CLOCK, useClass: SystemClock },
     TransactionHistoryService,
     StatementTokenService,
@@ -88,6 +94,7 @@ import { PdfStatementGenerator } from './infrastructure/pdf-statement.generator'
     ExecutionService,
     PROPOSAL_REPOSITORY,
     TRANSACTION_REPOSITORY,
+    TRANSACTION_READ_REPOSITORY,
     SETTLEMENT_REPOSITORY,
     TransactionHistoryService,
     StatementTokenService,

@@ -60,6 +60,7 @@ function makeService(overrides?: {
       (_type: string, _accountId: string, currency: string) =>
         Promise.resolve(balanceByAsset[currency] ?? '0'),
     ),
+    listLedgerEntries: jest.fn().mockResolvedValue([]),
   };
 
   const rateProvider = {

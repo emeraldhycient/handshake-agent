@@ -501,7 +501,10 @@ function buildService(
     // beneficiaryService stub (sell tests override via buildSellService helper)
     { getById: jest.fn().mockResolvedValue(null) } as never,
     // ledgerRepo stub
-    { getAccountBalance: jest.fn().mockResolvedValue('100') },
+    {
+      getAccountBalance: jest.fn().mockResolvedValue('100'),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
+    },
     // identityService: optional, buy path does not notify
     undefined,
     // whatsAppSender: optional, buy path does not notify
@@ -1511,9 +1514,11 @@ function makeBeneficiaryService(
  */
 function makeLedgerRepo(balance: string = '100'): {
   getAccountBalance: jest.Mock;
+  listLedgerEntries: jest.Mock;
 } {
   return {
     getAccountBalance: jest.fn().mockResolvedValue(balance),
+    listLedgerEntries: jest.fn().mockResolvedValue([]),
   };
 }
 
@@ -2008,6 +2013,7 @@ describe('ExecutionService.executeSell', () => {
         callOrder.push('balance_check');
         return Promise.resolve('100');
       }),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
     };
     const directiveService = {
       consume: jest.fn().mockImplementation(() => {
@@ -3298,6 +3304,7 @@ describe('ExecutionService.executeSend', () => {
         callOrder.push('balance');
         return Promise.resolve('100');
       }),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
     };
     const beneficiaryService = {
       getById: jest.fn().mockImplementation(() => {
@@ -3872,7 +3879,7 @@ function buildSwapService(
     kycGate?: unknown;
     directiveService?: unknown;
     pinService?: unknown;
-    ledgerRepo?: { getAccountBalance: jest.Mock };
+    ledgerRepo?: { getAccountBalance: jest.Mock; listLedgerEntries: jest.Mock };
     swapProvider?: { getQuote: jest.Mock; execute: jest.Mock };
   } = {},
 ): ExecutionService {
@@ -3904,6 +3911,7 @@ function buildSwapService(
     { getById: jest.fn().mockResolvedValue(null) } as never,
     overrides.ledgerRepo ?? {
       getAccountBalance: jest.fn().mockResolvedValue('100'),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
     },
     undefined, // identityService
     undefined, // whatsAppSender
