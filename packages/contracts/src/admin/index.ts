@@ -1,4 +1,5 @@
 export * from "./permissions";
+export * from "./settings";
 export * from "./auth.dto";
 export * from "./invitation.dto";
 export * from "./rbac.dto";
