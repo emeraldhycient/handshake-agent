@@ -18,6 +18,7 @@ import {
 } from '../../../../generated/prisma/client';
 import type { Prisma } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { encodeCursor, decodeCursor } from '../domain/transaction-cursor';
 import type {
   CreateSettlingWithProposalData,
   CreateTransactionData,
@@ -427,8 +428,15 @@ export class TransactionPrismaRepository implements ITransactionRepository {
     to: Date;
     types?: string[];
     limit: number;
-  }): Promise<{ rows: TransactionRecord[]; total: number }> {
-    const where: Prisma.TransactionWhereInput = {
+    cursor?: string;
+  }): Promise<{
+    rows: TransactionRecord[];
+    total: number;
+    hasMore: boolean;
+    nextCursor: string | null;
+  }> {
+    // The full-window predicate — drives the total count regardless of cursor.
+    const baseWhere: Prisma.TransactionWhereInput = {
       userId: input.userId,
       createdAt: { gte: input.from, lte: input.to },
       ...(input.types && input.types.length > 0
@@ -436,17 +444,37 @@ export class TransactionPrismaRepository implements ITransactionRepository {
         : {}),
     };
 
-    // One round-trip: the capped page (newest first) + the exact total count.
+    // Keyset seek on (createdAt desc, id desc): rows strictly "after" the cursor.
+    // A malformed cursor decodes to null and is ignored (first page).
+    const cursor = input.cursor ? decodeCursor(input.cursor) : null;
+    const where: Prisma.TransactionWhereInput = cursor
+      ? {
+          ...baseWhere,
+          OR: [
+            { createdAt: { lt: cursor.createdAt } },
+            { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+          ],
+        }
+      : baseWhere;
+
+    // One round-trip: the page (newest first, fetch limit+1 to detect more) +
+    // the exact total count of the full window (NOT narrowed by the cursor).
     const [rows, total] = await this.prisma.$transaction([
       this.prisma.transaction.findMany({
         where,
         select: TRANSACTION_SELECT,
-        orderBy: { createdAt: 'desc' },
-        take: input.limit,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: input.limit + 1,
       }),
-      this.prisma.transaction.count({ where }),
+      this.prisma.transaction.count({ where: baseWhere }),
     ]);
 
-    return { rows: rows.map(toRecord), total };
+    const hasMore = rows.length > input.limit;
+    const page = hasMore ? rows.slice(0, input.limit) : rows;
+    const last = page[page.length - 1];
+    const nextCursor =
+      hasMore && last ? encodeCursor(last.createdAt, last.id) : null;
+
+    return { rows: page.map(toRecord), total, hasMore, nextCursor };
   }
 }

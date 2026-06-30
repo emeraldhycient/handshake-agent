@@ -114,6 +114,10 @@ model Transaction {
   @@index([userId, status, createdAt])
   @@index([status, createdAt])
   @@index([proposalId])
+  // Keyset pagination for transaction history: seek on (createdAt desc, id desc)
+  // scoped to a user. The (userId, status, createdAt) index leads with status and
+  // lacks id, so it cannot serve this ordered seek.
+  @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
   @@map("transactions")
 }
 
