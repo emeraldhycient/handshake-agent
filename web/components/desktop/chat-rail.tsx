@@ -76,9 +76,10 @@ export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
     >
       {/* ── Agent header ──────────────────────────────────────────────────── */}
       <div className="flex flex-none items-center gap-[11px] border-b border-border px-5 py-[18px]">
-        {/* Agent avatar with online dot */}
+        {/* Agent avatar with online dot — the animated spark mark (honors
+            prefers-reduced-motion: renders static when motion is off). */}
         <div className="relative h-9 w-9 flex-none">
-          <BrandMark size={36} />
+          <BrandMark size={36} variant="spark" />
           {/* Online indicator */}
           <div className="absolute -right-0.5 -bottom-0.5 h-[11px] w-[11px] rounded-full border-2 border-card-muted bg-success-bright" />
         </div>

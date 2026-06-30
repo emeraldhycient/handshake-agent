@@ -51,7 +51,7 @@ describe("DashboardTopbar", () => {
       { wrapper: makeWrapper() }
     )
     expect(
-      screen.getByText(/^good (morning|afternoon|evening), amara okeke$/i)
+      screen.getByText(/^good (morning|afternoon|evening), amara$/i)
     ).toBeInTheDocument()
 
     // Clean up store state to avoid polluting other tests.
