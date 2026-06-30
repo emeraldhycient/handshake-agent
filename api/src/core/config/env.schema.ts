@@ -147,7 +147,23 @@ export const envSchema = z.object({
   //
   // Swap seam: when the admin UI + proper admin-session auth is built, replace
   // AdminTokenGuard with a session/role guard — this env var can then be removed.
+  // (Retained only for the Bull Board dashboard until that too is migrated.)
   ADMIN_API_TOKEN: z.string().optional().default(''),
+
+  // --- Admin platform (RBAC console) — separate principal from end users ---
+  // SECRETS, all fail-closed (empty disables the corresponding capability):
+  //   ADMIN_JWT_SECRET   — signs admin session JWTs. Distinct from JWT_SECRET so an
+  //                        admin token can never be confused with a user token.
+  //   ADMIN_MFA_ENC_KEY  — 64 hex chars (32 bytes) for AES-256-GCM encryption of
+  //                        AdminUser.mfaSecret at rest. Validated at use-site.
+  //   ADMIN_BOOTSTRAP_TOKEN — one-time bootstrap of the first super_admin invitation
+  //                        (only honoured when zero AdminUsers exist).
+  ADMIN_JWT_SECRET: z.string().optional().default(''),
+  ADMIN_MFA_ENC_KEY: z.string().optional().default(''),
+  ADMIN_BOOTSTRAP_TOKEN: z.string().optional().default(''),
+  // TTLs (seconds). Absolute admin session lifetime and step-up freshness window.
+  ADMIN_SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(28800),
+  ADMIN_STEP_UP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
 
   // --- Swap provider (Blockradar crypto-to-crypto swaps) ---
   // When 'true' (default), MockSwapProvider is active — deterministic fake quotes /

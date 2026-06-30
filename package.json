@@ -32,6 +32,7 @@
       "@prisma/client",
       "@prisma/engines",
       "prisma",
+      "argon2",
       "@swc/core",
       "sharp",
       "unrs-resolver",
