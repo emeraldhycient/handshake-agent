@@ -231,6 +231,8 @@ function makeOutboxRepo(): jest.Mocked<ISettlementOutboxRepository> {
     findPending: jest.fn().mockResolvedValue([]),
     markAttempt: jest.fn().mockResolvedValue(undefined),
     complete: jest.fn().mockResolvedValue(undefined),
+    findByTransactionId: jest.fn().mockResolvedValue(null),
+    resetToPending: jest.fn().mockResolvedValue(undefined),
   };
 }
 

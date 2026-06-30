@@ -14,7 +14,8 @@ export type AdminErrorCode =
   | 'ADMIN_INVITATION_INVALID'
   | 'ADMIN_BUILTIN_ROLE_IMMUTABLE'
   | 'ADMIN_BOOTSTRAP_FORBIDDEN'
-  | 'ADMIN_NOT_FOUND';
+  | 'ADMIN_NOT_FOUND'
+  | 'ADMIN_TXN_NOT_TRIAGEABLE';
 
 export abstract class AdminError extends Error {
   abstract readonly code: AdminErrorCode;

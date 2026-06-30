@@ -207,6 +207,12 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.GONE,
     message: 'This invitation is invalid or has expired.',
   },
+  // Transaction triage (Phase 3B): the txn is in a state that cannot be triaged
+  // (not settling, or a type with no reserve to refund) → 409 Conflict.
+  ADMIN_TXN_NOT_TRIAGEABLE: {
+    status: HttpStatus.CONFLICT,
+    message: 'This transaction cannot be triaged in its current state.',
+  },
 
   // ── Admin config settings (layered-config console) → 409 / 422 ──────────────
   ADMIN_SETTING_NOT_EDITABLE: {

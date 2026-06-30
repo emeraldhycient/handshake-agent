@@ -68,4 +68,22 @@ export interface ISettlementOutboxRepository {
    * Marks the outbox row as completed (terminal state — row is drained).
    */
   complete(id: string): Promise<void>;
+
+  /**
+   * Returns the outbox row for a transaction, or null if none exists.
+   * Used by admin triage (Phase 3B) to find the settlement row to re-enqueue.
+   * A transaction has at most one in-flight settlement outbox row at a time.
+   */
+  findByTransactionId(
+    transactionId: string,
+  ): Promise<SettlementOutboxRecord | null>;
+
+  /**
+   * Re-arms a settlement outbox row for the reconciliation worker: sets status
+   * back to 'pending' (and clears the terminal/attempt markers — completedAt,
+   * failureReason, lastAttemptAt) so the existing `findPending` sweep re-drives
+   * settlement on its next pass. Admin retry uses this — it NEVER re-executes
+   * settlement inline (§3.1: the engine, not the admin path, settles).
+   */
+  resetToPending(id: string): Promise<void>;
 }

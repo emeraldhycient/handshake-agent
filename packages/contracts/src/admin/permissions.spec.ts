@@ -128,6 +128,25 @@ describe("PERMISSION_CATALOG", () => {
     }
   });
 
+  it("registers the Transactions triage routes (Phase 3 sub-area B)", () => {
+    const ids = new Set(PERMISSION_CATALOG.map(permissionId));
+    expect(
+      ids.has("api_route:POST /admin/transactions/:id/mark-failed:execute"),
+    ).toBe(true);
+    expect(ids.has("api_route:POST /admin/transactions/:id/retry:execute")).toBe(
+      true,
+    );
+    for (const e of PERMISSION_CATALOG.filter(
+      (x) =>
+        x.resourceType === "api_route" &&
+        (x.resourceId === "POST /admin/transactions/:id/mark-failed" ||
+          x.resourceId === "POST /admin/transactions/:id/retry"),
+    )) {
+      expect(e.category).toBe("Transactions");
+      expect(e.action).toBe("execute");
+    }
+  });
+
   it("registers the Ledger oversight routes + nav (Phase 3)", () => {
     const ids = new Set(PERMISSION_CATALOG.map(permissionId));
     expect(ids.has("api_route:GET /admin/ledger:read")).toBe(true);
@@ -261,6 +280,32 @@ describe("BUILTIN_ROLES", () => {
     expect(compliance.grants(txnRead)).toBe(true);
     expect(finance.grants(txnRead)).toBe(true);
     expect(support.grants(txnRead)).toBe(false);
+  });
+
+  it("grants Transactions EXECUTE (triage) to finance + super_admin only (Phase 3B)", () => {
+    const txnMarkFailed = PERMISSION_CATALOG.find(
+      (e) =>
+        permissionId(e) ===
+        "api_route:POST /admin/transactions/:id/mark-failed:execute",
+    )!;
+    const txnRetry = PERMISSION_CATALOG.find(
+      (e) =>
+        permissionId(e) === "api_route:POST /admin/transactions/:id/retry:execute",
+    )!;
+    const superAdmin = BUILTIN_ROLES.find((r) => r.name === "super_admin")!;
+    const finance = BUILTIN_ROLES.find((r) => r.name === "finance")!;
+    const ops = BUILTIN_ROLES.find((r) => r.name === "ops")!;
+    const compliance = BUILTIN_ROLES.find((r) => r.name === "compliance")!;
+    const support = BUILTIN_ROLES.find((r) => r.name === "support")!;
+
+    for (const perm of [txnMarkFailed, txnRetry]) {
+      expect(superAdmin.grants(perm)).toBe(true);
+      expect(finance.grants(perm)).toBe(true);
+      // ops/compliance hold Transactions:read only — not execute (default-deny).
+      expect(ops.grants(perm)).toBe(false);
+      expect(compliance.grants(perm)).toBe(false);
+      expect(support.grants(perm)).toBe(false);
+    }
   });
 
   it("grants Ledger read+execute to finance only; not to ops/compliance/support (Phase 3)", () => {

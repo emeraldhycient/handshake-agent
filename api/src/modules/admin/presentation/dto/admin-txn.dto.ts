@@ -1,11 +1,19 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
-import { AdminTxnSearchQuerySchema } from '@handshake-agent/contracts';
+import {
+  AdminTxnMarkFailedRequestSchema,
+  AdminTxnSearchQuerySchema,
+} from '@handshake-agent/contracts';
 
 /** Query DTO for GET /admin/transactions (status/type/userId/window + cursor). */
 export class AdminTxnSearchQueryDto extends createZodDto(
   AdminTxnSearchQuerySchema,
+) {}
+
+/** Body DTO for POST /admin/transactions/:id/mark-failed (non-empty reason). */
+export class AdminTxnMarkFailedDto extends createZodDto(
+  AdminTxnMarkFailedRequestSchema,
 ) {}
 
 /**

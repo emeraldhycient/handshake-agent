@@ -96,6 +96,12 @@ import { PdfStatementGenerator } from './infrastructure/pdf-statement.generator'
     TRANSACTION_REPOSITORY,
     TRANSACTION_READ_REPOSITORY,
     SETTLEMENT_REPOSITORY,
+    // Exported for AdminModule's transaction-triage service (Phase 3B): it
+    // re-enqueues the settlement outbox row for the reconciliation worker.
+    SETTLEMENT_OUTBOX_REPOSITORY,
+    // CLOCK is exported so admin-side engine-brokered actions (triage refunds)
+    // stamp timestamps from the same injected clock the engine uses.
+    CLOCK,
     TransactionHistoryService,
     StatementTokenService,
     STATEMENT_GENERATOR,

@@ -113,6 +113,40 @@ export class SettlementOutboxPrismaRepository implements ISettlementOutboxReposi
     });
   }
 
+  /**
+   * Returns the outbox row for a transaction, or null. A transaction has at most
+   * one in-flight settlement row (the `@@unique([transactionId, settlementType])`
+   * constraint allows distinct types, but only one settlement is in flight at a
+   * time per transaction lifecycle); `findFirst` returns the most recent.
+   */
+  async findByTransactionId(
+    transactionId: string,
+  ): Promise<SettlementOutboxRecord | null> {
+    const row = await this.prisma.settlementOutbox.findFirst({
+      where: { transactionId },
+      orderBy: { createdAt: 'desc' },
+      select: OUTBOX_SELECT,
+    });
+    return row ? this.toRecord(row) : null;
+  }
+
+  /**
+   * Re-arms a row for the reconciliation worker: status → 'pending' and clears
+   * the terminal/attempt markers so `findPending` re-drives it. Re-enqueue only —
+   * settlement itself stays with the engine worker (§3.1).
+   */
+  async resetToPending(id: string): Promise<void> {
+    await this.prisma.settlementOutbox.update({
+      where: { id },
+      data: {
+        status: SettlementOutboxStatus.pending,
+        completedAt: null,
+        failureReason: null,
+        lastAttemptAt: null,
+      },
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // Private
   // ---------------------------------------------------------------------------

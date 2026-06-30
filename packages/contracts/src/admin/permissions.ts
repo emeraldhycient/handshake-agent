@@ -293,6 +293,24 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Transactions",
     "View a transaction's detail (legs + timeline)",
   ),
+  // Transactions — engine-brokered, audited, idempotent TRIAGE of stuck txns
+  // (Phase 3, sub-area B). These EXECUTE actions never move money directly: a
+  // mark-failed routes through the engine's atomic refund methods (§3.1); a retry
+  // re-enqueues the settlement outbox for the existing reconciliation worker.
+  r(
+    "api_route",
+    "POST /admin/transactions/:id/mark-failed",
+    "execute",
+    "Transactions",
+    "Mark a stuck transaction failed and refund its reserve (engine-brokered)",
+  ),
+  r(
+    "api_route",
+    "POST /admin/transactions/:id/retry",
+    "execute",
+    "Transactions",
+    "Re-enqueue a stuck transaction's settlement for the reconciliation worker",
+  ),
 
   // Ledger — read-only double-entry history + integrity verification (Phase 3)
   r(
@@ -442,7 +460,7 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Audit: ["read"],
       Treasury: ["read", "execute"],
       Config: ["read", "write"],
-      Transactions: ["read"],
+      Transactions: ["read", "execute"],
       Ledger: ["read", "execute"],
     },
   ),

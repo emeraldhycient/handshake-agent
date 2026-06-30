@@ -34,6 +34,7 @@ import { AdminSettingsController } from './presentation/admin-settings.controlle
 import { AdminEndUsersController } from './presentation/admin-end-users.controller';
 import { AdminKycReviewController } from './presentation/admin-kyc-review.controller';
 import { AdminTransactionsController } from './presentation/admin-transactions.controller';
+import { AdminTxnTriageController } from './presentation/admin-txn-triage.controller';
 import { AdminLedgerController } from './presentation/admin-ledger.controller';
 import { AdminSessionGuard } from './presentation/admin-session.guard';
 import { PermissionGuard } from './presentation/permission.guard';
@@ -52,6 +53,7 @@ import { AdminSettingsService } from './application/admin-settings.service';
 import { AdminEndUserService } from './application/admin-end-user.service';
 import { AdminKycReviewService } from './application/admin-kyc-review.service';
 import { AdminTxnOversightService } from './application/admin-txn-oversight.service';
+import { AdminTxnTriageService } from './application/admin-txn-triage.service';
 import { AdminLedgerService } from './application/admin-ledger.service';
 import { ADMIN_USER_REPOSITORY } from './application/ports/admin-user.repository.port';
 import { ADMIN_SESSION_REPOSITORY } from './application/ports/admin-session.repository.port';
@@ -147,6 +149,7 @@ import type { Env } from '../../core/config/env.schema';
     AdminEndUsersController,
     AdminKycReviewController,
     AdminTransactionsController,
+    AdminTxnTriageController,
     AdminLedgerController,
   ],
   providers: [
@@ -192,6 +195,11 @@ import type { Env } from '../../core/config/env.schema';
     // TRANSACTION_REPOSITORY comes from the imported TransactionsModule;
     // LEDGER_REPOSITORY is bound locally below.
     AdminTxnOversightService,
+    // Phase 3, sub-area B (ENGINE-BROKERED): transaction triage — mark-failed +
+    // refund (via SETTLEMENT_REPOSITORY refund methods) and retry (re-enqueue the
+    // SETTLEMENT_OUTBOX_REPOSITORY row). Both tokens + CLOCK come from the imported
+    // TransactionsModule (exported there); AuditService is global.
+    AdminTxnTriageService,
     AdminLedgerService,
     AdminSessionGuard,
     PermissionGuard,
