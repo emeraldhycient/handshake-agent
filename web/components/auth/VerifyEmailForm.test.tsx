@@ -20,6 +20,8 @@ vi.mock("@/lib/api/auth", () => ({
   submitVerifyEmail: vi.fn(),
 }))
 
+// ApiError is a class with a `.status` field used to branch on 429 (rate limit).
+import { ApiError } from "@/lib/api/client"
 import { submitVerifyEmail } from "@/lib/api/auth"
 
 const mockSubmit = vi.mocked(submitVerifyEmail)
@@ -132,5 +134,27 @@ describe("VerifyEmailForm", () => {
 
     // The misleading "sign up again" wording must be gone.
     expect(screen.queryByText(/sign up again/i)).not.toBeInTheDocument()
+  })
+
+  it("shows a distinct 'too many attempts' message on a 429 (rate-limited)", async () => {
+    const user = userEvent.setup()
+    mockSubmit.mockRejectedValueOnce(new ApiError("Too many requests", 429))
+    renderForm(VALID_TOKEN)
+
+    await user.click(screen.getByRole("button", { name: /verify email/i }))
+
+    // Distinct from the generic invalid/expired copy — tells the user to wait
+    // and request a new link rather than implying the link itself was bad.
+    await waitFor(() => {
+      expect(screen.getByText(/too many attempts/i)).toBeInTheDocument()
+    })
+    expect(
+      screen.getByText(/request a new (link|code|verification)/i)
+    ).toBeInTheDocument()
+
+    // It must NOT show the generic "invalid or has expired" copy for a 429.
+    expect(
+      screen.queryByText(/invalid or has expired/i)
+    ).not.toBeInTheDocument()
   })
 })

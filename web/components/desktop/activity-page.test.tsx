@@ -116,6 +116,29 @@ describe("ActivityPage", () => {
     ).not.toBeInTheDocument()
   })
 
+  // ── Finding #5: shared error / empty states ───────────────────────────────
+  it("renders the shared QueryErrorState with a Retry button on failure", async () => {
+    vi.spyOn(gatewayModule.gateway, "getActivityPage").mockRejectedValue(
+      new Error("Network error")
+    )
+    render(<ActivityPage />, { wrapper })
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument()
+    })
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument()
+  })
+
+  it("renders the shared QueryEmptyState when there is no activity", async () => {
+    vi.spyOn(gatewayModule.gateway, "getActivityPage").mockResolvedValue({
+      items: [],
+      nextCursor: null,
+    })
+    render(<ActivityPage />, { wrapper })
+    await waitFor(() => {
+      expect(screen.getByText(/no activity yet/i)).toBeInTheDocument()
+    })
+  })
+
   it("clicking a row opens the TransactionDetailModal", async () => {
     // Make detail fetch hang so we can observe the modal loading state
     vi.spyOn(chatApi, "getTransactionDetail").mockReturnValue(

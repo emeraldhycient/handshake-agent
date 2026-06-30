@@ -47,6 +47,13 @@ export const ConfirmPayloadSchema = z.object({
   action: ChatActionSchema,
   // meta carries ticket tier/total etc.
   meta: z.record(z.string()).optional(),
+  /**
+   * ISO 8601 expiry timestamp for the underlying proposal. When present, the
+   * confirm sheet/overlay drives its live countdown from this (a swap quote
+   * locks for a short window) — matching the QuoteView/SwapView pattern. Absent
+   * on flows whose quote does not expire (e.g. the mock path).
+   */
+  expiresAt: z.string().optional(),
 })
 export type ConfirmPayload = z.infer<typeof ConfirmPayloadSchema>
 
@@ -169,7 +176,10 @@ export type NeedsBeneficiaryView = z.infer<typeof NeedsBeneficiaryViewSchema>
 // withdrawal is in flight (the sell/send analogue of pay_in, which is inbound).
 export const SettlingViewSchema = z.object({
   kind: z.literal("settling"),
-  txType: z.enum(["sell", "send"]),
+  // "swap" joins sell/send: a swap that settles on-chain renders this same
+  // outbound-settlement card with swap copy (chat-store builds it). Adding it
+  // here removes the temporary `as unknown as ChatMessage` cast in the store.
+  txType: z.enum(["sell", "send", "swap"]),
   transactionId: z.string(),
   title: z.string(),
   subtitle: z.string(),
@@ -200,6 +210,14 @@ export const SwapViewSchema = z.object({
   networkFee: z.string(),
   /** Provider transaction fee in fromAsset (decimal string). */
   transactionFee: z.string(),
+  /**
+   * Asset the network/transaction fees are denominated in. Optional — defaults
+   * to `fromAsset` when absent (the common case), but on some routes the
+   * on-chain fee is charged in the chain's native gas asset (e.g. TRX) rather
+   * than the asset being swapped out, so the card must be able to label it
+   * explicitly instead of mislabeling the fee as fromAsset.
+   */
+  feeAsset: z.string().optional(),
   /** Estimated arrival in seconds. */
   estimatedArrivalSec: z.number().int().nonnegative(),
   /** ISO 8601 expiry timestamp for the proposal — drives the live countdown. */

@@ -5,16 +5,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const listBeneficiaries = vi.fn()
 const addBankAccount = vi.fn()
 const addCryptoAddress = vi.fn()
+const deleteBeneficiary = vi.fn()
 vi.mock("@/lib/api/beneficiaries", () => ({
   listBeneficiaries: (...a: unknown[]) => listBeneficiaries(...a),
   addBankAccount: (...a: unknown[]) => addBankAccount(...a),
   addCryptoAddress: (...a: unknown[]) => addCryptoAddress(...a),
+  deleteBeneficiary: (...a: unknown[]) => deleteBeneficiary(...a),
 }))
 
 import {
   useBeneficiaries,
   useAddBankAccount,
   useAddCryptoAddress,
+  useDeleteBeneficiary,
 } from "./beneficiaries"
 
 function makeWrapper() {
@@ -32,6 +35,7 @@ describe("beneficiaries query hooks", () => {
     listBeneficiaries.mockReset()
     addBankAccount.mockReset()
     addCryptoAddress.mockReset()
+    deleteBeneficiary.mockReset()
   })
 
   it("useBeneficiaries loads the list for the given type", async () => {
@@ -76,6 +80,26 @@ describe("beneficiaries query hooks", () => {
       network: "TRON",
       asset: "USDT",
       label: "x",
+    })
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["beneficiaries", "crypto_address"],
+    })
+  })
+
+  it("useDeleteBeneficiary deletes by id and invalidates BOTH lists", async () => {
+    const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    deleteBeneficiary.mockResolvedValue({ id, deleted: true })
+    const { client, wrapper } = makeWrapper()
+    const spy = vi.spyOn(client, "invalidateQueries")
+    const { result } = renderHook(() => useDeleteBeneficiary(), { wrapper })
+
+    await result.current.mutateAsync(id)
+
+    expect(deleteBeneficiary).toHaveBeenCalledWith(id)
+    // A removed beneficiary must disappear from whichever picker shows it; the
+    // hook does not know the type, so it invalidates both list keys.
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["beneficiaries", "bank_account"],
     })
     expect(spy).toHaveBeenCalledWith({
       queryKey: ["beneficiaries", "crypto_address"],

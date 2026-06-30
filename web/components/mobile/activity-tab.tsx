@@ -1,11 +1,17 @@
 "use client"
 
 import { useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusPill } from "@/components/shared/status-pill"
+import {
+  QueryErrorState,
+  QueryEmptyState,
+} from "@/components/shared/query-states"
 import { TransactionDetailModal } from "@/components/shared/transaction-detail-modal"
 import { useActivityFeed } from "@/lib/query/hooks"
+import { qk } from "@/lib/query/keys"
 import type { ActivityTabProps } from "@/types/components"
 
 export function ActivityTab({ className }: ActivityTabProps) {
@@ -18,6 +24,11 @@ export function ActivityTab({ className }: ActivityTabProps) {
     fetchNextPage,
   } = useActivityFeed()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const queryClient = useQueryClient()
+  // The activity feed hook (useInfiniteQuery wrapper) exposes no `refetch`, so
+  // invalidating the key is the retry path.
+  const retry = () =>
+    void queryClient.invalidateQueries({ queryKey: qk.activity })
 
   if (isLoading) {
     return (
@@ -57,16 +68,15 @@ export function ActivityTab({ className }: ActivityTabProps) {
     return (
       <div
         className={cn(
-          "flex flex-1 flex-col items-center justify-center gap-2 bg-background p-8",
+          "flex flex-1 flex-col items-center justify-center bg-background p-8",
           className
         )}
       >
-        <p className="text-sm font-semibold text-foreground">
-          Could not load activity
-        </p>
-        <p className="text-center text-sm text-muted-foreground">
-          Check your connection and try again.
-        </p>
+        <QueryErrorState
+          title="Could not load activity"
+          description="Check your connection and try again."
+          onRetry={retry}
+        />
       </div>
     )
   }
@@ -75,14 +85,14 @@ export function ActivityTab({ className }: ActivityTabProps) {
     return (
       <div
         className={cn(
-          "flex flex-1 flex-col items-center justify-center gap-2 bg-background p-8",
+          "flex flex-1 flex-col items-center justify-center bg-background p-8",
           className
         )}
       >
-        <p className="text-sm font-semibold text-foreground">No activity yet</p>
-        <p className="text-center text-sm text-muted-foreground">
-          Your transactions will appear here.
-        </p>
+        <QueryEmptyState
+          title="No activity yet"
+          description="Your transactions will appear here."
+        />
       </div>
     )
   }

@@ -459,15 +459,16 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
     expect(JSON.stringify(body)).not.toMatch(/anthropic|sk-secret-leak|529/);
   }, 60_000);
 
-  it('POST /chat/messages → sell with zero balance → 422 (InsufficientBalanceError mapped, NOT 500)', async () => {
+  it('POST /chat/messages → sell with zero balance → in-chat clarification (parity with swap, NOT a 422/500)', async () => {
     const token = await authVerifiedUser({
       email: `sellpoor_${Date.now()}@test.com`,
       phone: '+2348029999011',
       nin: '22334455711',
     });
 
-    // Agent returns a sell intent this turn; the user has zero USDT, so the
-    // proposal builder raises InsufficientBalanceError inside /chat/messages.
+    // Agent returns a sell intent this turn; the user has zero USDT. Sell/send
+    // proposal errors are now first-class chat clarifications (parity with swap) —
+    // the user gets a helpful message in-thread, never an opaque HTTP error.
     fakeLlmProvider.extractIntent.mockResolvedValueOnce({
       action: 'sell_crypto',
       asset: 'USDT',
@@ -482,11 +483,14 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
         text: 'sell 5 USDT',
         beneficiaryId: '11111111-1111-1111-1111-111111111111',
       })
-      .expect(422);
+      .expect(200);
 
-    const body = res.body as { statusCode: number; message: string };
-    expect(body.statusCode).toBe(422);
-    expect(body.message).toBe('Insufficient balance for this transaction.');
+    const body = res.body as {
+      reply: { text: string };
+      outcome: { kind: string };
+    };
+    expect(body.outcome.kind).toBe('clarification');
+    expect(body.reply.text).toMatch(/enough balance/i);
     // The raw domain message reveals exact balances — it must not be exposed.
     expect(JSON.stringify(body)).not.toContain('have 0');
   }, 60_000);

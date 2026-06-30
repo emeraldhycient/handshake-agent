@@ -10,6 +10,7 @@
  */
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
+import { ApiError } from "@/lib/api/client"
 import { useVerifyEmail } from "@/lib/query/auth"
 import type { VerifyEmailFormProps } from "@/types/components"
 
@@ -55,6 +56,11 @@ export function VerifyEmailForm({ token }: VerifyEmailFormProps) {
   // ─── Error state ────────────────────────────────────────────────────────────
 
   if (error) {
+    // A 429 (rate-limit / OTP_LOCKED) is NOT a bad link — telling the user the
+    // link "is invalid or has expired" would be misleading and send them in
+    // circles. Surface a distinct "too many attempts" message instead.
+    const isRateLimited = error instanceof ApiError && error.status === 429
+
     return (
       <div
         role="alert"
@@ -65,11 +71,12 @@ export function VerifyEmailForm({ token }: VerifyEmailFormProps) {
           ✕
         </span>
         <h2 className="text-lg font-semibold text-destructive">
-          Verification failed
+          {isRateLimited ? "Too many attempts" : "Verification failed"}
         </h2>
         <p className="text-sm text-muted-foreground">
-          This link is invalid or has expired. Verification links are valid for
-          24 hours — request a new one to finish setting up your account.
+          {isRateLimited
+            ? "You've tried too many times in a short window. Please wait a moment, then request a new verification link to finish setting up your account."
+            : "This link is invalid or has expired. Verification links are valid for 24 hours — request a new one to finish setting up your account."}
         </p>
         <Link
           href="/signup"

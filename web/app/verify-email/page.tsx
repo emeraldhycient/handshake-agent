@@ -7,6 +7,7 @@
  * If absent → renders invalid-link empty state.
  */
 import type { Metadata } from "next"
+import Link from "next/link"
 import { VerifyEmailForm } from "@/components/auth/VerifyEmailForm"
 
 export const metadata: Metadata = {
@@ -54,7 +55,18 @@ export default async function VerifyEmailPage({
             </h2>
             <p className="text-sm text-muted-foreground">
               This verification link is missing, invalid, or has already been
-              used. Please sign up again to get a new link.
+              used. Verification links are valid for 24 hours — request a fresh
+              one to finish setting up your account.
+            </p>
+            <Link
+              href="/signup"
+              className="mt-1 inline-flex h-10 items-center justify-center rounded-md bg-primary px-6 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              Resend verification email
+            </Link>
+            <p className="text-xs text-muted-foreground">
+              Don&apos;t worry — this won&apos;t create a duplicate account.
+              We&apos;ll just send a fresh link to your email.
             </p>
           </div>
         )}

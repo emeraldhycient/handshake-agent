@@ -1,10 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it, vi, afterEach } from "vitest"
 import { createChatStore } from "@/lib/store/chat-store"
-import { chipLabel } from "@/lib/chat/flow"
+import { defaultAuthStore } from "@/lib/store/auth-store"
+import { chipLabel, actionPrompt } from "@/lib/chat/flow"
 import { MobileShell } from "./mobile-shell"
+
+const mockRouterPush = vi.fn()
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockRouterPush }),
+}))
 
 function makeWrapper() {
   const client = new QueryClient({
@@ -29,7 +35,22 @@ vi.mock("@/hooks/use-voice-recorder", () => ({
   }),
 }))
 
+afterEach(() => {
+  // Reset auth state so an authenticated test doesn't leak into the next.
+  defaultAuthStore.setState({ status: "anonymous" })
+  mockRouterPush.mockReset()
+})
+
 describe("MobileShell", () => {
+  it("wires the session-expired handler to route to /login on mount (finding #4)", () => {
+    const store = createChatStore({ schedule: immediate })
+    const setHandler = vi.spyOn(store.getState(), "setSessionExpiredHandler")
+    render(<MobileShell store={store} />, { wrapper: makeWrapper() })
+    expect(setHandler).toHaveBeenCalledTimes(1)
+    setHandler.mock.calls[0][0]()
+    expect(mockRouterPush).toHaveBeenCalledWith("/login")
+  })
+
   it("shows the greeting message on the default chat tab", () => {
     const store = createChatStore({ schedule: immediate })
     render(<MobileShell store={store} />, { wrapper: makeWrapper() })
@@ -116,7 +137,7 @@ describe("MobileShell", () => {
     })
   })
 
-  it("WalletTab quick action switches to chat and sends the message", async () => {
+  it("WalletTab quick action switches to chat and sends the message (mock/anonymous)", async () => {
     const user = userEvent.setup()
     const store = createChatStore({ schedule: immediate })
     render(<MobileShell store={store} />, { wrapper: makeWrapper() })
@@ -133,6 +154,55 @@ describe("MobileShell", () => {
     await waitFor(() =>
       expect(screen.getByText(chipLabel("buy"))).toBeInTheDocument()
     )
+  })
+
+  // ── Finding #1: prefixed-amount quick actions must hit the REAL agent ──────
+  it("AUTHENTICATED wallet quick action calls sendToAgent with an amount-free prompt (not the mock send)", async () => {
+    const user = userEvent.setup()
+    defaultAuthStore.setState({ status: "authenticated" })
+    const store = createChatStore({ schedule: immediate })
+    const sendToAgent = vi
+      .spyOn(store.getState(), "sendToAgent")
+      .mockResolvedValue(undefined)
+    const send = vi.spyOn(store.getState(), "send")
+
+    render(<MobileShell store={store} />, { wrapper: makeWrapper() })
+    await user.click(screen.getByRole("button", { name: /wallet/i }))
+    const buyBtn = await screen.findByRole(
+      "button",
+      { name: /buy/i },
+      { timeout: 3000 }
+    )
+    await user.click(buyBtn)
+
+    // The real agent path is used — with the amount-free open prompt, NOT
+    // the hardcoded "Buy ₦50,000 of USDT" chip label.
+    expect(sendToAgent).toHaveBeenCalledWith("m", actionPrompt("buy"))
+    expect(send).not.toHaveBeenCalledWith(
+      "m",
+      chipLabel("buy"),
+      expect.anything()
+    )
+  })
+
+  it("ANONYMOUS wallet quick action still uses the mock send (offline demo)", async () => {
+    const user = userEvent.setup()
+    defaultAuthStore.setState({ status: "anonymous" })
+    const store = createChatStore({ schedule: immediate })
+    const sendToAgent = vi.spyOn(store.getState(), "sendToAgent")
+    const send = vi.spyOn(store.getState(), "send")
+
+    render(<MobileShell store={store} />, { wrapper: makeWrapper() })
+    await user.click(screen.getByRole("button", { name: /wallet/i }))
+    const buyBtn = await screen.findByRole(
+      "button",
+      { name: /buy/i },
+      { timeout: 3000 }
+    )
+    await user.click(buyBtn)
+
+    expect(send).toHaveBeenCalled()
+    expect(sendToAgent).not.toHaveBeenCalled()
   })
 
   it('onRecordStop calls sendVoiceToAgent("m", blob) when recording stops', async () => {

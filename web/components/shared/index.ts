@@ -2,6 +2,7 @@
  * Barrel re-export for shared atoms.
  * Phase 11+ cards import from "@/components/shared" instead of deep paths.
  */
+export * from "./action-button"
 export * from "./asset-icon"
 export * from "./avatar-placeholder"
 export * from "./brand-mark"

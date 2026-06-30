@@ -93,6 +93,9 @@ export function ChatMessageView({
               <NeedsBeneficiaryCard
                 {...message}
                 density={density}
+                // Bind the resume to THIS card's id so the store replays the
+                // exact intent that produced it (not the mutable last-intent).
+                messageId={message.id}
                 onResolve={onResolveBeneficiary}
               />
             )

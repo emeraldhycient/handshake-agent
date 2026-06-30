@@ -7,6 +7,7 @@
 
 import { Test } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
+import { z } from 'zod';
 
 import {
   WebChatService,
@@ -27,7 +28,17 @@ import { StatementTokenService } from '../../transactions/application/statement-
 import {
   SwapSameAssetError,
   SwapUnavailableError,
+  InsufficientBalanceError,
 } from '../../transactions/domain/execution-errors';
+import {
+  AmountTooSmallError,
+  SelfSendError,
+} from '../../transactions/domain/amount-guard-errors';
+import {
+  BeneficiaryCoolingOffError,
+  BeneficiaryWrongTypeError,
+} from '../../beneficiaries/domain/beneficiary-errors';
+import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
 
 // ---------------------------------------------------------------------------
 // Fake providers
@@ -183,9 +194,9 @@ describe('WebChatService', () => {
 
   // ── agent / LLM failure → AgentUnavailableError (I1/I2) ─────────────────────
 
-  it('wraps an agent/LLM failure in AgentUnavailableError (never an opaque 500)', async () => {
-    // The agent call is the one external, flaky dependency in this flow. When it
-    // throws (provider down, timeout, invalid Intent), the service must surface a
+  it('wraps a provider outage in AgentUnavailableError (never an opaque 500)', async () => {
+    // A genuine provider outage (network/timeout/auth/5xx) is the one external,
+    // flaky dependency in this flow. When it throws, the service must surface a
     // typed AgentUnavailableError so the global filter maps it to a 5xx with a
     // clean message — not let the raw provider error bubble to an opaque 500.
     fakeAgentPort.run.mockRejectedValue(new Error('anthropic 529 overloaded'));
@@ -193,6 +204,105 @@ describe('WebChatService', () => {
     await expect(
       service.handleMessage({ userId: 'user-1', text: 'buy 5 USDT' }),
     ).rejects.toMatchObject({ code: 'AGENT_UNAVAILABLE' });
+  });
+
+  // ── unparseable intent (ZodError) → clarification, NOT a 503 ─────────────────
+
+  it('an unparseable intent (ZodError) becomes a clarification, not an AgentUnavailableError', async () => {
+    // The model returned output that failed IntentSchema.parse (missing/invalid
+    // action). This is NOT a provider outage — the model is up, it just produced
+    // something we cannot route. Ask the user to rephrase instead of a 503.
+    fakeAgentPort.run.mockRejectedValue(
+      new z.ZodError([
+        {
+          code: 'invalid_type',
+          expected: 'string',
+          received: 'undefined',
+          path: ['action'],
+          message: 'Required',
+        },
+      ]),
+    );
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'asdkjfh qwe',
+    });
+
+    expect(result.outcome.kind).toBe('clarification');
+    expect(
+      (result.outcome as { kind: 'clarification'; text: string }).text,
+    ).toMatch(/rephrase|didn't (quite )?(catch|understand)|try again/i);
+  });
+
+  // ── multi-turn memory: prior turns threaded into the agent ───────────────────
+
+  describe('conversation history (multi-turn memory)', () => {
+    it('loads recent turns and threads them oldest→newest into the agent call', async () => {
+      // Repo returns newest-first (DESC). The service must reverse to chronological
+      // order and emit one user turn + one assistant turn per row.
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm-2',
+          userText: 'how much USDT?',
+          createdAt: new Date('2026-06-30T10:01:00Z'),
+          reply: {
+            text: 'How much USDT would you like to buy?',
+            outcome: { kind: 'clarification', text: 'How much USDT?' },
+          },
+        },
+        {
+          id: 'm-1',
+          userText: 'buy usdt',
+          createdAt: new Date('2026-06-30T10:00:00Z'),
+          reply: {
+            text: 'Sure — which asset?',
+            outcome: { kind: 'clarification', text: 'Which asset?' },
+          },
+        },
+      ]);
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'none',
+        clarification: 'ok',
+      });
+
+      await service.handleMessage({ userId: 'user-1', text: '50k' });
+
+      // History is server-built (authoritative) — never taken from the request body.
+      const historyCall = fakeMessageRepo.findWebHistory.mock.calls[0] as [
+        string,
+        { limit: number },
+      ];
+      expect(historyCall[0]).toBe('conv-1');
+      expect(typeof historyCall[1].limit).toBe('number');
+      // The agent receives the current text + history (oldest first).
+      const [text, history] = fakeAgentPort.run.mock.calls[0] as [
+        string,
+        Array<{ role: string; content: string }>,
+      ];
+      expect(text).toBe('50k');
+      expect(history[0]).toEqual({ role: 'user', content: 'buy usdt' });
+      expect(history[history.length - 1]).toEqual({
+        role: 'assistant',
+        content: 'How much USDT would you like to buy?',
+      });
+    });
+
+    it('threads an empty history when there are no prior turns', async () => {
+      fakeMessageRepo.findWebHistory.mockResolvedValue([]);
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'none',
+        clarification: 'ok',
+      });
+
+      await service.handleMessage({ userId: 'user-1', text: 'hi' });
+
+      const [, history] = fakeAgentPort.run.mock.calls[0] as [
+        string,
+        Array<{ role: string; content: string }>,
+      ];
+      expect(history).toEqual([]);
+    });
   });
 
   // ── none intent → clarification ────────────────────────────────────────────
@@ -743,6 +853,60 @@ describe('WebChatService', () => {
     });
   });
 
+  // ── sell_crypto proposal-error parity → graceful clarification (no 4xx/5xx) ──
+
+  describe('sell_crypto proposal errors → clarification (not an unhandled throw)', () => {
+    const sellIntent = {
+      action: 'sell_crypto' as const,
+      asset: 'USDT',
+      cryptoAmount: '5',
+      fiatCurrency: 'NGN',
+    };
+
+    beforeEach(() => {
+      fakeBeneficiaryService.getDefault.mockResolvedValue({ id: 'bene-1' });
+    });
+
+    it.each([
+      [
+        'InsufficientBalanceError',
+        new InsufficientBalanceError('1', '5', 'USDT'),
+      ],
+      [
+        'AmountTooSmallError',
+        new AmountTooSmallError('sell', '0.1', '1', 'USDT'),
+      ],
+      [
+        'SanctionsBlockedError',
+        new SanctionsBlockedError('addr', 'flagged', 'evt-1', 'ref-1'),
+      ],
+    ])('maps %s to a clarification outcome', async (_label, err: Error) => {
+      fakeProposalService.createSellProposal.mockRejectedValue(err);
+      fakeAgentPort.run.mockResolvedValue(sellIntent);
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'sell 5 USDT',
+      });
+
+      expect(result.outcome.kind).toBe('clarification');
+      expect(
+        (result.outcome as { kind: 'clarification'; text: string }).text,
+      ).toBeTruthy();
+    });
+
+    it('still propagates an unexpected error (mapped to 500 by the filter)', async () => {
+      fakeProposalService.createSellProposal.mockRejectedValue(
+        new Error('unexpected boom'),
+      );
+      fakeAgentPort.run.mockResolvedValue(sellIntent);
+
+      await expect(
+        service.handleMessage({ userId: 'user-1', text: 'sell 5 USDT' }),
+      ).rejects.toThrow('unexpected boom');
+    });
+  });
+
   // ── buy_crypto with non-live currency → currency_not_live (never a proposal) ──
 
   it('buy_crypto with non-live fiatCurrency (RWF) → currency_not_live, no proposal', async () => {
@@ -901,6 +1065,79 @@ describe('WebChatService', () => {
       kind: 'proposal',
       txType: 'send',
       proposalId: sendConf.proposalId,
+    });
+  });
+
+  // ── send_crypto proposal-error parity → graceful clarification ───────────────
+
+  describe('send_crypto proposal errors → clarification (not an unhandled throw)', () => {
+    const sendIntent = {
+      action: 'send_crypto' as const,
+      asset: 'USDT',
+      cryptoAmount: '2',
+      toAddress: 'TYyyyZzzz',
+      network: 'tron',
+    };
+
+    beforeEach(() => {
+      fakeBeneficiaryService.getDefault.mockResolvedValue({
+        id: 'bene-crypto-1',
+      });
+    });
+
+    it.each([
+      [
+        'InsufficientBalanceError',
+        new InsufficientBalanceError('1', '5', 'USDT'),
+      ],
+      [
+        'BeneficiaryCoolingOffError',
+        new BeneficiaryCoolingOffError(
+          'bene-crypto-1',
+          new Date(Date.now() + 1e6),
+        ),
+      ],
+      [
+        'BeneficiaryWrongTypeError',
+        new BeneficiaryWrongTypeError(
+          'bene-crypto-1',
+          'crypto_address',
+          'bank_account',
+        ),
+      ],
+      [
+        'SanctionsBlockedError',
+        new SanctionsBlockedError('addr', undefined, 'evt-1', 'ref-1'),
+      ],
+      [
+        'AmountTooSmallError',
+        new AmountTooSmallError('send', '0.1', '1', 'USDT'),
+      ],
+      ['SelfSendError', new SelfSendError()],
+    ])('maps %s to a clarification outcome', async (_label, err: Error) => {
+      fakeProposalService.createSendProposal.mockRejectedValue(err);
+      fakeAgentPort.run.mockResolvedValue(sendIntent);
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'send 2 USDT',
+      });
+
+      expect(result.outcome.kind).toBe('clarification');
+      expect(
+        (result.outcome as { kind: 'clarification'; text: string }).text,
+      ).toBeTruthy();
+    });
+
+    it('still propagates an unexpected error (mapped to 500 by the filter)', async () => {
+      fakeProposalService.createSendProposal.mockRejectedValue(
+        new Error('unexpected boom'),
+      );
+      fakeAgentPort.run.mockResolvedValue(sendIntent);
+
+      await expect(
+        service.handleMessage({ userId: 'user-1', text: 'send 2 USDT' }),
+      ).rejects.toThrow('unexpected boom');
     });
   });
 

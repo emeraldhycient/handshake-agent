@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { ChatMessageSchema, ChatActionSchema } from "./chat"
+import {
+  ChatMessageSchema,
+  ChatActionSchema,
+  SettlingViewSchema,
+  SwapViewSchema,
+  ConfirmPayloadSchema,
+} from "./chat"
 import { StatusToneSchema } from "./common"
 
 describe("ChatActionSchema", () => {
@@ -228,5 +234,103 @@ describe("ChatMessageSchema", () => {
         status: "unknown_status",
       }).success
     ).toBe(false)
+  })
+})
+
+describe("SettlingViewSchema.txType (swap support)", () => {
+  const base = {
+    kind: "settling" as const,
+    transactionId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    title: "Swap processing",
+    subtitle: "Completing your swap on-chain.",
+    rows: [{ label: "You receive", value: "1.2 TRX" }],
+    reference: "swap-ref-1",
+    status: "pending" as const,
+  }
+
+  it("accepts a settling card with txType 'swap'", () => {
+    expect(
+      SettlingViewSchema.safeParse({ ...base, txType: "swap" }).success
+    ).toBe(true)
+  })
+
+  it("still accepts the existing 'sell' and 'send' txTypes", () => {
+    expect(
+      SettlingViewSchema.safeParse({ ...base, txType: "sell" }).success
+    ).toBe(true)
+    expect(
+      SettlingViewSchema.safeParse({ ...base, txType: "send" }).success
+    ).toBe(true)
+  })
+
+  it("rejects an unknown txType", () => {
+    expect(
+      SettlingViewSchema.safeParse({ ...base, txType: "borrow" }).success
+    ).toBe(false)
+  })
+
+  it("parses a swap settling card through the full ChatMessageSchema union (no cast needed)", () => {
+    expect(
+      ChatMessageSchema.safeParse({
+        id: "m14",
+        role: "assistant",
+        ...base,
+        txType: "swap",
+      }).success
+    ).toBe(true)
+  })
+})
+
+describe("SwapViewSchema.feeAsset", () => {
+  const base = {
+    kind: "swap" as const,
+    fromAsset: "USDT",
+    toAsset: "TRX",
+    fromAmount: "10",
+    toAmount: "84.21",
+    rate: "8.421",
+    networkFee: "1.1",
+    transactionFee: "0.2",
+    estimatedArrivalSec: 60,
+    expiresAt: "2026-06-30T12:00:00.000Z",
+    lockSeconds: 60,
+  }
+
+  it("parses a swap view WITHOUT feeAsset (optional — backwards compatible)", () => {
+    expect(SwapViewSchema.safeParse(base).success).toBe(true)
+  })
+
+  it("parses a swap view WITH an explicit feeAsset", () => {
+    const r = SwapViewSchema.safeParse({ ...base, feeAsset: "TRX" })
+    expect(r.success).toBe(true)
+    if (r.success) expect(r.data.feeAsset).toBe("TRX")
+  })
+})
+
+describe("ConfirmPayloadSchema.expiresAt", () => {
+  const base = {
+    title: "Confirm swap",
+    subtitle: "Review and confirm",
+    heroLabel: "You receive",
+    heroAmount: "84.21 TRX",
+    heroSub: "≈ ₦…",
+    rows: [{ label: "Rate", value: "8.421" }],
+    totalLabel: "Total",
+    totalValue: "10 USDT",
+    cta: "Confirm",
+    action: "swap" as const,
+  }
+
+  it("parses a confirm payload WITHOUT expiresAt (optional)", () => {
+    expect(ConfirmPayloadSchema.safeParse(base).success).toBe(true)
+  })
+
+  it("carries an optional expiresAt so the confirm-sheet countdown can run", () => {
+    const r = ConfirmPayloadSchema.safeParse({
+      ...base,
+      expiresAt: "2026-06-30T12:00:00.000Z",
+    })
+    expect(r.success).toBe(true)
+    if (r.success) expect(r.data.expiresAt).toBe("2026-06-30T12:00:00.000Z")
   })
 })

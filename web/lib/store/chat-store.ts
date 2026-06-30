@@ -981,11 +981,9 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
               // Finding #4: a swap that returns 'settling' must render a SWAP card
               // with swap copy — not fall through to the send branch's
               // "Broadcasting your transfer on-chain." (which mislabels the action
-              // on the in-flight card AND the completion receipt).
-              // CROSS-LAYER: SettlingViewSchema.txType is currently
-              // enum(["sell","send"]) — it needs "swap" added (web/lib/schemas/
-              // chat.ts, owned by another agent). Until then this object is built
-              // and cast to ChatMessage at this single boundary.
+              // on the in-flight card AND the completion receipt). SettlingView's
+              // txType now includes "swap" (web/lib/schemas/chat.ts), so this is a
+              // plain ChatMessage — no cast.
               inFlight = {
                 id: nextId(),
                 role: "assistant",
@@ -997,7 +995,7 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
                 rows: pending.rows,
                 reference: result.swap.providerSwapId,
                 status: "pending",
-              } as unknown as ChatMessage
+              }
             } else {
               // send — result.onChain
               inFlight = {

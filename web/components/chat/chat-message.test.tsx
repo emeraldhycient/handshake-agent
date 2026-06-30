@@ -1,6 +1,42 @@
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
+
+// The needs_beneficiary card mounts the beneficiaries query hooks — mock them so
+// ChatMessageView can render the card without a real QueryClient/network.
+vi.mock("@/lib/query/beneficiaries", () => ({
+  useBeneficiaries: () => ({
+    isPending: false,
+    isError: false,
+    data: {
+      beneficiaries: [
+        {
+          id: "ben-9",
+          type: "bank_account",
+          label: "My GTB",
+          accountNumber: "0123456789",
+          bankCode: "058",
+        },
+      ],
+    },
+  }),
+  useAddBankAccount: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+    isError: false,
+  }),
+  useAddCryptoAddress: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+    isError: false,
+  }),
+  useDeleteBeneficiary: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    isError: false,
+  }),
+}))
+
 import { ChatMessageView } from "./chat-message"
 import type { ChatMessage, TicketOption } from "@/lib/schemas"
 
@@ -198,5 +234,31 @@ describe("ChatMessageView", () => {
       screen.getByRole("button", { name: /review & confirm/i })
     )
     expect(onConfirm).toHaveBeenCalledWith(msg)
+  })
+
+  it("forwards the needs_beneficiary card's message id to onResolveBeneficiary", async () => {
+    const onResolveBeneficiary = vi.fn()
+    const msg: ChatMessage = {
+      id: "needs-card-77",
+      role: "assistant",
+      kind: "needs_beneficiary",
+      beneficiaryType: "bank_account",
+    }
+    render(
+      <ChatMessageView
+        message={msg}
+        density="mobile"
+        onConfirm={noop}
+        onSelectTicket={noopTicket}
+        onResolveBeneficiary={onResolveBeneficiary}
+      />
+    )
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /My GTB0123456789/i })
+    )
+    // The card must bind to ITS OWN message id so the store resumes the exact
+    // intent that produced this card (not the mutable last-intent).
+    expect(onResolveBeneficiary).toHaveBeenCalledWith("ben-9", "needs-card-77")
   })
 })

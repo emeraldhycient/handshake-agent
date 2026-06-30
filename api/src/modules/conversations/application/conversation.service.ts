@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ZodError } from 'zod';
 import type { DocumentExtractionResult } from '@handshake-agent/contracts';
 
 import type {
@@ -15,7 +16,18 @@ import {
 import {
   AGENT_PORT,
   type IAgentPort,
+  type ConversationTurn,
 } from '../../agent/application/ports/agent.port';
+import { InsufficientBalanceError } from '../../transactions/domain/execution-errors';
+import {
+  AmountTooSmallError,
+  SelfSendError,
+} from '../../transactions/domain/amount-guard-errors';
+import {
+  BeneficiaryCoolingOffError,
+  BeneficiaryWrongTypeError,
+} from '../../beneficiaries/domain/beneficiary-errors';
+import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
 import { IdentityService } from '../../identity/application/identity.service';
 import type { ProposalService } from '../../transactions/application/proposal.service';
 import type { DirectiveService } from '../../transactions/application/directive.service';
@@ -74,8 +86,24 @@ export const BALANCE_SERVICE = Symbol('BALANCE_SERVICE');
 
 const SAFE_FALLBACK = 'Sorry, something went wrong — please try again.';
 
+/**
+ * Shown when the model returns output that fails IntentSchema validation (a
+ * ZodError): the model is up but produced something unroutable. This is an
+ * ordinary "rephrase, please" — NOT a provider outage (which still falls through
+ * to SAFE_FALLBACK and marks the message failed).
+ */
+const UNPARSEABLE_INTENT_CLARIFICATION =
+  "Sorry, I didn't quite catch that. Could you rephrase your request?";
+
 /** Max history lines rendered in a WhatsApp text reply (the full set is in the PDF). */
 const MAX_WA_HISTORY_LINES = 20;
+
+/**
+ * Most-recent persisted turns loaded as short-term memory and threaded into the
+ * agent. Small so the prompt stays bounded; the agent holds no DB checkpointer
+ * (CLAUDE.md §6) — history is always built server-side by the calling layer.
+ */
+const HISTORY_TURN_LIMIT = 6;
 
 // ---------------------------------------------------------------------------
 // Internal resolved-identity shapes
@@ -201,24 +229,41 @@ export class ConversationService implements IInboundHandler {
         return;
       }
 
-      // Step 5: Run the NLU agent — emits a validated structured intent, never moves money.
-      const intent = await this.agentPort.run(msg.text);
+      // Step 5: Run the NLU agent — emits a validated structured intent, never
+      // moves money. History (short-term memory) is built server-side from the
+      // message repo and threaded in so a follow-up resolves in context (§3.2).
+      // A ZodError (unparseable intent) is classified inside runAgent and routed
+      // to a clarification reply, NOT the safe-fallback/failed path.
+      const history = await this.loadHistory(conversation.id);
+      const agentResult = await this.runAgent(msg.text, history);
 
-      // Persist the intent for audit trail.
-      await this.intentRepo.create({
-        messageId: message.id,
-        conversationId: conversation.id,
-        action: intent.action,
-        payload: intent,
-      });
+      let replyText: string;
+      let flowSent = false;
 
-      // Step 6: Route on intent action via switch dispatch.
-      const { replyText, flowSent } = await this.routeIntent(
-        intent,
-        identity,
-        conversation,
-        msg,
-      );
+      if ('clarification' in agentResult) {
+        // Unparseable intent → ask the user to rephrase; no intent to persist.
+        replyText = agentResult.clarification;
+      } else {
+        const { intent } = agentResult;
+
+        // Persist the intent for audit trail.
+        await this.intentRepo.create({
+          messageId: message.id,
+          conversationId: conversation.id,
+          action: intent.action,
+          payload: intent,
+        });
+
+        // Step 6: Route on intent action via switch dispatch.
+        const routed = await this.routeIntent(
+          intent,
+          identity,
+          conversation,
+          msg,
+        );
+        replyText = routed.replyText;
+        flowSent = routed.flowSent;
+      }
 
       // Step 7: Persist the reply and dispatch it (unless the Flow was already dispatched).
       const reply = await this.replyRepo.create({
@@ -298,6 +343,111 @@ export class ConversationService implements IInboundHandler {
 
     await this.conversationRepo.touch(conversation.id, new Date());
     return conversation;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: agent run + short-term memory
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Runs the NLU agent, classifying its two failure modes:
+   *   - A ZodError from IntentSchema.parse → the model is UP but produced
+   *     unroutable output. Returns a clarification ("rephrase, please") so the
+   *     caller replies normally and processes the message — NOT the safe-fallback
+   *     / 'failed' path. (§3.1: still only proposes; this is purely interpretive.)
+   *   - Any other failure (provider outage) → rethrown so the handleInbound catch
+   *     marks the message failed and sends the generic safe fallback.
+   */
+  private async runAgent(
+    userText: string,
+    history: ConversationTurn[],
+  ): Promise<
+    | { intent: Awaited<ReturnType<IAgentPort['run']>> }
+    | {
+        clarification: string;
+      }
+  > {
+    try {
+      return { intent: await this.agentPort.run(userText, history) };
+    } catch (err: unknown) {
+      if (err instanceof ZodError) {
+        this.logger.warn(
+          { err: err.message },
+          'Agent returned unparseable intent — asking the user to rephrase',
+        );
+        return { clarification: UNPARSEABLE_INTENT_CLARIFICATION };
+      }
+      // Provider outage — let handleInbound's catch own the failure path.
+      throw err;
+    }
+  }
+
+  /**
+   * Builds short-term conversation memory: the last HISTORY_TURN_LIMIT persisted
+   * turns, oldest→newest, as alternating user + assistant turns. Authoritative
+   * server-side build (§3.2). A repo failure must not break the turn, so it
+   * degrades to no memory rather than throwing.
+   */
+  private async loadHistory(
+    conversationId: string,
+  ): Promise<ConversationTurn[]> {
+    try {
+      // Repo returns newest-first; reverse to chronological order.
+      const rows = await this.messageRepo.findWebHistory(conversationId, {
+        limit: HISTORY_TURN_LIMIT,
+      });
+      const turns: ConversationTurn[] = [];
+      for (const row of [...rows].reverse()) {
+        turns.push({ role: 'user', content: row.userText });
+        if (row.reply?.text) {
+          turns.push({ role: 'assistant', content: row.reply.text });
+        }
+      }
+      return turns;
+    } catch (err: unknown) {
+      this.logger.warn(
+        {
+          conversationId,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        'Failed to load conversation history — proceeding without memory',
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Maps a sell/send proposal-builder rejection to a client-safe clarification
+   * string, or `null` when the error is unexpected and must propagate (handled
+   * by handleInbound's catch → safe fallback + message marked failed).
+   *
+   * Copy mirrors the global DomainExceptionFilter's client-safe messages — the
+   * raw domain message (which may carry balances, addresses, or compliance event
+   * ids) is NEVER surfaced.
+   */
+  private proposalErrorClarification(err: unknown): string | null {
+    if (err instanceof InsufficientBalanceError) {
+      return "You don't have enough balance for this transaction. Try a smaller amount.";
+    }
+    if (err instanceof AmountTooSmallError) {
+      return 'That amount is below the minimum allowed for this transaction.';
+    }
+    if (err instanceof SelfSendError) {
+      return "That's your own wallet address — no transfer is needed. Choose a different recipient.";
+    }
+    if (err instanceof BeneficiaryCoolingOffError) {
+      return (
+        'For your security, newly added recipients have a short cooling-off ' +
+        'period before the first transfer. Please try again later.'
+      );
+    }
+    if (err instanceof BeneficiaryWrongTypeError) {
+      return "That recipient can't be used for this transaction.";
+    }
+    if (err instanceof SanctionsBlockedError) {
+      return 'This transfer can’t be completed. Please use a different recipient.';
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------------------
@@ -599,9 +749,16 @@ export class ConversationService implements IInboundHandler {
       });
     }
 
-    // Happy path: create the sell proposal.
-    const { proposalId, confirmation } =
-      await this.proposalService.createSellProposal({
+    // Happy path: create the sell proposal. Stable-coded proposal rejections
+    // (insufficient balance, dust amount, sanctions) are ordinary correctable
+    // conditions — surface them inline as a clarification rather than letting
+    // them bubble to the safe-fallback/'failed' path (parity with the engine).
+    let proposalId: string;
+    let confirmation: Awaited<
+      ReturnType<ProposalService['createSellProposal']>
+    >['confirmation'];
+    try {
+      const out = await this.proposalService.createSellProposal({
         userId: user.id,
         conversationId: conversation.id,
         intent: intent as Parameters<
@@ -609,6 +766,13 @@ export class ConversationService implements IInboundHandler {
         >[0]['intent'],
         beneficiaryId: beneficiary.id,
       });
+      proposalId = out.proposalId;
+      confirmation = out.confirmation;
+    } catch (sellErr) {
+      const clarification = this.proposalErrorClarification(sellErr);
+      if (clarification === null) throw sellErr;
+      return { replyText: clarification, flowSent: false };
+    }
 
     return this.sendConfirmationFlow({
       proposalId,
@@ -683,9 +847,15 @@ export class ConversationService implements IInboundHandler {
       });
     }
 
-    // Happy path: create the send proposal.
-    const { proposalId, confirmation } =
-      await this.proposalService.createSendProposal({
+    // Happy path: create the send proposal. Same parity as sell: convert the
+    // stable-coded rejections (insufficient balance, cooling-off, wrong type,
+    // sanctions, dust amount, self-send) into a first-class clarification reply.
+    let proposalId: string;
+    let confirmation: Awaited<
+      ReturnType<ProposalService['createSendProposal']>
+    >['confirmation'];
+    try {
+      const out = await this.proposalService.createSendProposal({
         userId: user.id,
         conversationId: conversation.id,
         intent: intent as Parameters<
@@ -693,6 +863,13 @@ export class ConversationService implements IInboundHandler {
         >[0]['intent'],
         beneficiaryId: beneficiary.id,
       });
+      proposalId = out.proposalId;
+      confirmation = out.confirmation;
+    } catch (sendErr) {
+      const clarification = this.proposalErrorClarification(sendErr);
+      if (clarification === null) throw sendErr;
+      return { replyText: clarification, flowSent: false };
+    }
 
     return this.sendConfirmationFlow({
       proposalId,
