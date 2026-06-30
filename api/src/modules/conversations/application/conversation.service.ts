@@ -1070,6 +1070,8 @@ export class ConversationService implements IInboundHandler {
       period: intent.period,
       from: intent.from,
       to: intent.to,
+      relativeAmount: intent.relativeAmount,
+      relativeUnit: intent.relativeUnit,
       txType: intent.txType,
     });
 

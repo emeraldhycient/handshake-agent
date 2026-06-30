@@ -522,6 +522,34 @@ describe('WebChatService', () => {
     );
   });
 
+  it('forwards a relative-duration spec to the history service', async () => {
+    fakeHistoryService.query.mockResolvedValue({
+      window: { from: 'F', to: 'T', label: 'Last 2 weeks' },
+      items: [],
+      totalCount: 0,
+      truncated: false,
+      hasMore: false,
+      nextCursor: null,
+      txType: 'all',
+      downloadUrl:
+        'https://api.example.com/transactions/statement/download?token=tok',
+    });
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'query_transactions',
+      relativeAmount: 2,
+      relativeUnit: 'week',
+      download: false,
+    });
+    await service.handleMessage({
+      userId: 'user-1',
+      text: 'my transactions in the last 2 weeks',
+    });
+    expect(fakeHistoryService.query).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ relativeAmount: 2, relativeUnit: 'week' }),
+    );
+  });
+
   // ── check_balance, verified → balance outcome ──────────────────────────────
 
   it('check_balance intent (all assets), verified → balance outcome', async () => {

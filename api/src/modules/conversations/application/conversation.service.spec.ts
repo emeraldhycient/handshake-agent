@@ -1994,6 +1994,40 @@ describe('ConversationService.handleInbound', () => {
     expect(ctaArg.url).toContain('token=tok');
   });
 
+  it('query_transactions forwards a relative-duration spec to the history service', async () => {
+    const historyQuery = jest.fn().mockResolvedValue({
+      window: { from: 'F', to: 'T', label: 'Last 6 months' },
+      items: [],
+      totalCount: 0,
+      truncated: false,
+      hasMore: false,
+      nextCursor: null,
+      txType: 'all',
+      downloadUrl:
+        'https://api.example.com/transactions/statement/download?token=tok',
+    });
+    const { svc } = buildService({
+      agentPort: {
+        run: jest.fn().mockResolvedValue({
+          action: 'query_transactions',
+          relativeAmount: 6,
+          relativeUnit: 'month',
+          download: false,
+        }),
+      } as unknown as jest.Mocked<IAgentPort>,
+      historyService: { query: historyQuery } as unknown as jest.Mocked<
+        Pick<TransactionHistoryService, 'query'>
+      >,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(historyQuery).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ relativeAmount: 6, relativeUnit: 'month' }),
+    );
+  });
+
   // ── Task 18: extracted image/document routing ─────────────────────────────
 
   it('(T18) saves an extracted crypto address as a beneficiary and confirms', async () => {

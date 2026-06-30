@@ -315,6 +315,8 @@ export class WebChatService {
           period: intent.period,
           from: intent.from,
           to: intent.to,
+          relativeAmount: intent.relativeAmount,
+          relativeUnit: intent.relativeUnit,
           txType: intent.txType,
         });
         outcome = { kind: 'transactions', ...result };
