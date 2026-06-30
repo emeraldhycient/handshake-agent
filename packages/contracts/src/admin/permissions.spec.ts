@@ -223,6 +223,37 @@ describe("PERMISSION_CATALOG", () => {
     }
   });
 
+  it("registers the Comms notification-template + WhatsApp routes + nav (Phase 4 wave 1)", () => {
+    const ids = new Set(PERMISSION_CATALOG.map(permissionId));
+    expect(ids.has("api_route:GET /admin/notification-templates:read")).toBe(
+      true,
+    );
+    expect(
+      ids.has(
+        "api_route:GET /admin/notification-templates/:templateKey/:language/:channel:read",
+      ),
+    ).toBe(true);
+    expect(ids.has("api_route:POST /admin/notification-templates:write")).toBe(
+      true,
+    );
+    expect(
+      ids.has(
+        "api_route:PATCH /admin/notification-templates/:templateKey/:language/:channel:write",
+      ),
+    ).toBe(true);
+    expect(
+      ids.has("api_route:POST /admin/notification-templates/preview:read"),
+    ).toBe(true);
+    expect(ids.has("api_route:GET /admin/whatsapp/config:read")).toBe(true);
+    expect(ids.has("web_page:/admin/notifications:read")).toBe(true);
+    expect(ids.has("web_page:/admin/whatsapp:read")).toBe(true);
+    expect(ids.has("menu_item:menu.notifications:read")).toBe(true);
+    expect(ids.has("menu_item:menu.whatsapp:read")).toBe(true);
+    for (const e of PERMISSION_CATALOG.filter((x) => x.category === "Comms")) {
+      expect(e.category).toBe("Comms");
+    }
+  });
+
   it("registers the Beneficiaries oversight routes + nav (Phase 3 sub-area D)", () => {
     const ids = new Set(PERMISSION_CATALOG.map(permissionId));
     expect(ids.has("api_route:GET /admin/beneficiaries:read")).toBe(true);
@@ -456,6 +487,29 @@ describe("BUILTIN_ROLES", () => {
     expect(support.grants(benRead)).toBe(true);
     expect(support.grants(overrideWrite)).toBe(false);
     expect(finance.grants(benRead)).toBe(false);
+  });
+
+  it("grants Comms read+write to ops, read-only to support, none to finance (Phase 4 wave 1)", () => {
+    const tmplRead = PERMISSION_CATALOG.find(
+      (e) =>
+        permissionId(e) === "api_route:GET /admin/notification-templates:read",
+    )!;
+    const tmplWrite = PERMISSION_CATALOG.find(
+      (e) =>
+        permissionId(e) ===
+        "api_route:POST /admin/notification-templates:write",
+    )!;
+    const ops = BUILTIN_ROLES.find((r) => r.name === "ops")!;
+    const support = BUILTIN_ROLES.find((r) => r.name === "support")!;
+    const finance = BUILTIN_ROLES.find((r) => r.name === "finance")!;
+    const superAdmin = BUILTIN_ROLES.find((r) => r.name === "super_admin")!;
+
+    expect(ops.grants(tmplRead)).toBe(true);
+    expect(ops.grants(tmplWrite)).toBe(true);
+    expect(support.grants(tmplRead)).toBe(true);
+    expect(support.grants(tmplWrite)).toBe(false);
+    expect(finance.grants(tmplRead)).toBe(false);
+    expect(superAdmin.grants(tmplWrite)).toBe(true);
   });
 
   it("grants Compliance read+write+execute to compliance, read-only to ops, none to finance/support (Phase 3C)", () => {

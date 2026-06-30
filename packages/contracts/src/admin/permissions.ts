@@ -478,6 +478,53 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Clear a beneficiary's first-use cooling-off lock",
   ),
 
+  // Comms — notification-template CRUD + preview and read-only WhatsApp config
+  // (Phase 4 wave 1). The create/patch writes are step-up-gated at the controller
+  // and audited as config_change; nothing here moves money (§3.1). The WhatsApp
+  // config view is read-only and returns NON-SECRET values only (§3.5).
+  r(
+    "api_route",
+    "GET /admin/notification-templates",
+    "read",
+    "Comms",
+    "List notification templates",
+  ),
+  r(
+    "api_route",
+    "GET /admin/notification-templates/:templateKey/:language/:channel",
+    "read",
+    "Comms",
+    "View one notification template",
+  ),
+  r(
+    "api_route",
+    "POST /admin/notification-templates",
+    "write",
+    "Comms",
+    "Create a notification template",
+  ),
+  r(
+    "api_route",
+    "PATCH /admin/notification-templates/:templateKey/:language/:channel",
+    "write",
+    "Comms",
+    "Edit a notification template",
+  ),
+  r(
+    "api_route",
+    "POST /admin/notification-templates/preview",
+    "read",
+    "Comms",
+    "Preview a rendered notification template",
+  ),
+  r(
+    "api_route",
+    "GET /admin/whatsapp/config",
+    "read",
+    "Comms",
+    "View the non-secret WhatsApp configuration",
+  ),
+
   // Web pages (nav/page gating — UX only; the API still enforces api_route perms)
   r(
     "web_page",
@@ -533,6 +580,20 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Beneficiaries",
     "Beneficiary oversight page",
   ),
+  r(
+    "web_page",
+    "/admin/notifications",
+    "read",
+    "Comms",
+    "Notification-template management page",
+  ),
+  r(
+    "web_page",
+    "/admin/whatsapp",
+    "read",
+    "Comms",
+    "WhatsApp configuration page",
+  ),
   // Menu items (nav groups)
   r("menu_item", "menu.access", "read", "Access", "Access & RBAC nav group"),
   r("menu_item", "menu.audit", "read", "Audit", "Audit nav group"),
@@ -562,6 +623,14 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Beneficiaries",
     "Beneficiaries nav group",
   ),
+  r(
+    "menu_item",
+    "menu.notifications",
+    "read",
+    "Comms",
+    "Notifications nav group",
+  ),
+  r("menu_item", "menu.whatsapp", "read", "Comms", "WhatsApp nav group"),
 ];
 
 // ── Built-in roles ─────────────────────────────────────────────────────────────
@@ -621,6 +690,7 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Transactions: ["read"],
       Compliance: ["read"],
       Beneficiaries: ["read", "write"],
+      Comms: ["read", "write"],
     },
   ),
   role(
@@ -650,5 +720,6 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
     Users: ["read"],
     KYC: ["read"],
     Beneficiaries: ["read"],
+    Comms: ["read"],
   }),
 ];

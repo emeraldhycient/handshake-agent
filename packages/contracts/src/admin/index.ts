@@ -13,5 +13,7 @@ export * from "./admin-ledger.dto";
 export * from "./compliance.dto";
 export * from "./treasury.dto";
 export * from "./beneficiary.dto";
+export * from "./notification.dto";
+export * from "./whatsapp.dto";
 export * from "./audit.dto";
 export * from "./session.dto";

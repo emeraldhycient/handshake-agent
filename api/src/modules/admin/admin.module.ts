@@ -10,6 +10,7 @@ import { IdentityModule } from '../identity/identity.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { BeneficiariesModule } from '../beneficiaries/beneficiaries.module';
 import { ComplianceModule } from '../compliance/compliance.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { AuthModule } from '../../core/auth/auth.module';
 import { PIN_REPOSITORY } from '../../core/auth/ports/pin.repository.port';
 import { PinPrismaRepository } from '../../core/auth/infrastructure/pin.prisma.repository';
@@ -44,6 +45,8 @@ import { AdminLedgerController } from './presentation/admin-ledger.controller';
 import { AdminComplianceController } from './presentation/admin-compliance.controller';
 import { AdminTreasuryController } from './presentation/admin-treasury.controller';
 import { AdminBeneficiariesController } from './presentation/admin-beneficiaries.controller';
+import { AdminNotificationsController } from './presentation/admin-notifications.controller';
+import { AdminWhatsAppController } from './presentation/admin-whatsapp.controller';
 import { AdminSessionGuard } from './presentation/admin-session.guard';
 import { PermissionGuard } from './presentation/permission.guard';
 import { AdminStepUpGuard } from './presentation/admin-step-up.guard';
@@ -66,6 +69,8 @@ import { AdminLedgerService } from './application/admin-ledger.service';
 import { AdminComplianceService } from './application/admin-compliance.service';
 import { AdminTreasuryService } from './application/admin-treasury.service';
 import { AdminBeneficiaryService } from './application/admin-beneficiary.service';
+import { AdminNotificationTemplateService } from './application/admin-notification-template.service';
+import { AdminWhatsAppConfigService } from './application/admin-whatsapp-config.service';
 import { ADMIN_USER_REPOSITORY } from './application/ports/admin-user.repository.port';
 import { ADMIN_SESSION_REPOSITORY } from './application/ports/admin-session.repository.port';
 import { ROLE_REPOSITORY } from './application/ports/role.repository.port';
@@ -130,6 +135,10 @@ import type { Env } from '../../core/config/env.schema';
     // tokens (events/sanctions/aml-rules/travel-rule/reports) that
     // AdminComplianceService injects. AuditService is global.
     ComplianceModule,
+    // Phase 4, wave 1 (Comms): NotificationsModule exports the
+    // NOTIFICATION_TEMPLATE_REPOSITORY token that AdminNotificationTemplateService
+    // injects for the template console. AuditService + ConfigService are global.
+    NotificationsModule,
     // AdminTokenService injects JwtService for admin session-token sign/verify.
     JwtModule.register({}),
     // Register the wallet-backfill queue in AdminModule so @InjectQueue resolves
@@ -169,6 +178,8 @@ import type { Env } from '../../core/config/env.schema';
     AdminComplianceController,
     AdminTreasuryController,
     AdminBeneficiariesController,
+    AdminNotificationsController,
+    AdminWhatsAppController,
   ],
   providers: [
     AdminTokenGuard,
@@ -234,6 +245,12 @@ import type { Env } from '../../core/config/env.schema';
     //     moves money (§3.1); both audit their write as admin_override.
     AdminTreasuryService,
     AdminBeneficiaryService,
+    // Phase 4, wave 1 (Comms): notification-template CRUD/preview +
+    // read-only WhatsApp config view. The template repo token comes from the
+    // imported NotificationsModule; ConfigService + AuditService are global.
+    // Neither service moves money (§3.1).
+    AdminNotificationTemplateService,
+    AdminWhatsAppConfigService,
     AdminSessionGuard,
     PermissionGuard,
     AdminStepUpGuard,
