@@ -10,6 +10,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { AdminMe } from "@handshake-agent/contracts"
 
@@ -23,6 +24,13 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/lib/api/admin", () => ({
   getMe: vi.fn(),
+}))
+
+// Stub the enroll dialog so the shell's affordance is tested in isolation (the
+// real dialog fires a POST on open).
+vi.mock("@/components/admin/mfa-enroll-dialog", () => ({
+  MfaEnrollDialog: ({ open }: { open: boolean }) =>
+    open ? <div>mfa-enroll-dialog-open</div> : null,
 }))
 
 import { getMe } from "@/lib/api/admin"
@@ -109,5 +117,35 @@ describe("AppShell nav gating", () => {
       screen.queryByRole("link", { name: "Sessions" })
     ).not.toBeInTheDocument()
     expect(screen.queryByText("Access")).not.toBeInTheDocument()
+  })
+})
+
+describe("AppShell MFA enrollment affordance", () => {
+  it("shows a Set up MFA control when not enrolled and opens the enroll dialog", async () => {
+    mockGetMe.mockResolvedValue(adminMe({ mfaEnabled: false }))
+
+    renderShell()
+
+    const button = await screen.findByRole("button", { name: /set up mfa/i })
+    expect(screen.queryByText("mfa-enroll-dialog-open")).not.toBeInTheDocument()
+
+    await userEvent.click(button)
+
+    expect(screen.getByText("mfa-enroll-dialog-open")).toBeInTheDocument()
+  })
+
+  it("hides the Set up MFA control once MFA is enrolled", async () => {
+    mockGetMe.mockResolvedValue(adminMe({ mfaEnabled: true }))
+
+    renderShell()
+
+    // Sign out is always present once me resolves — anchor on it, then assert
+    // the MFA control is absent.
+    expect(
+      await screen.findByRole("button", { name: "Sign out" })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /set up mfa/i })
+    ).not.toBeInTheDocument()
   })
 })

@@ -16,14 +16,16 @@
  *
  * Pure presentation + the menu list derived from useAdminMe(); no data writes.
  */
+import { useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { LogOut } from "lucide-react"
+import { LogOut, ShieldCheck } from "lucide-react"
 
 import { useAdminMe } from "@/lib/query/hooks"
 import { useAdminAuthStore } from "@/lib/store/admin-auth-store"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { MfaEnrollDialog } from "@/components/admin/mfa-enroll-dialog"
 import type { AppShellProps } from "@/types/components"
 
 interface NavItem {
@@ -129,6 +131,7 @@ export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname()
   const me = useAdminMe()
   const clear = useAdminAuthStore((s) => s.clear)
+  const [mfaOpen, setMfaOpen] = useState(false)
 
   const menus = me.data?.menus ?? []
   const visibleGroups = NAV_GROUPS.filter(
@@ -196,6 +199,19 @@ export function AppShell({ children }: AppShellProps) {
               </p>
             </div>
           )}
+          {/* MFA enrollment is the operator's own security setup — surfaced here
+              so it stays reachable from every authenticated page. */}
+          {me.data && !me.data.mfaEnabled && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="mb-2 w-full justify-start"
+              onClick={() => setMfaOpen(true)}
+            >
+              <ShieldCheck aria-hidden="true" />
+              Set up MFA
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -211,6 +227,8 @@ export function AppShell({ children }: AppShellProps) {
 
       {/* ── Page body ────────────────────────────────────────────────────────── */}
       <main className="flex flex-1 flex-col overflow-hidden">{children}</main>
+
+      <MfaEnrollDialog open={mfaOpen} onOpenChange={setMfaOpen} />
     </div>
   )
 }
