@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useSessions, useRevokeSession } from "@/lib/query/hooks"
-import type { AdminSessionView } from "@/lib/schemas"
+import type { AdminSessionView } from "@handshake-agent/contracts"
 
 function sessionState(session: AdminSessionView): {
   label: string

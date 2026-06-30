@@ -10,6 +10,12 @@ import {
 } from '@nestjs/common';
 
 import {
+  type AdminSessionView,
+  AdminSessionListResponseSchema,
+  type AdminSessionListResponse,
+} from '@handshake-agent/contracts';
+
+import {
   ADMIN_SESSION_REPOSITORY,
   type AdminSessionRecord,
   type IAdminSessionRepository,
@@ -18,16 +24,6 @@ import { AdminSessionGuard } from './admin-session.guard';
 import { PermissionGuard } from './permission.guard';
 import { CurrentAdmin, type AdminContext } from './current-admin.decorator';
 import { RequirePermission } from './require-permission.decorator';
-
-/** The client-safe session view — never exposes the stored token hash. */
-interface AdminSessionView {
-  id: string;
-  expiresAt: string;
-  revokedAt: string | null;
-  stepUpCompletedAt: string | null;
-  ipAddress: string | null;
-  userAgent: string | null;
-}
 
 function toView(record: AdminSessionRecord): AdminSessionView {
   return {
@@ -57,9 +53,9 @@ export class AdminSessionsController {
   @RequirePermission('api_route', 'GET /admin/sessions', 'read')
   async list(
     @CurrentAdmin() admin: AdminContext,
-  ): Promise<{ items: AdminSessionView[] }> {
+  ): Promise<AdminSessionListResponse> {
     const records = await this.sessions.listForAdmin(admin.adminId);
-    return { items: records.map(toView) };
+    return AdminSessionListResponseSchema.parse({ items: records.map(toView) });
   }
 
   @Delete('sessions/:id')

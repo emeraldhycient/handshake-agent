@@ -29,6 +29,8 @@ import {
   AuditLogQuerySchema,
   AuditLogListResponseSchema,
   AuditChainVerifyResponseSchema,
+  AdminSessionListResponseSchema,
+  type AdminSessionListResponse,
   type AdminLoginRequest,
   type AdminLoginResponse,
   type AdminMe,
@@ -53,10 +55,6 @@ import {
 } from "@handshake-agent/contracts"
 
 import { api } from "./client"
-import {
-  AdminSessionListResponseSchema,
-  type AdminSessionListResponse,
-} from "@/lib/schemas"
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
