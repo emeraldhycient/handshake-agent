@@ -120,7 +120,7 @@ export function RoleEditorDialog({
         {serverError && (
           <div
             role="alert"
-            className="rounded-lg border border-destructive bg-destructive/10 px-4 py-3 text-sm text-destructive"
+            className="rounded-[12px] border border-sdn bg-sdn/40 px-4 py-3 text-sm text-tdn"
           >
             {serverError}
           </div>
@@ -153,42 +153,49 @@ export function RoleEditorDialog({
 
           {/* ── Permission matrix ──────────────────────────────────────────── */}
           <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-foreground">Permissions</p>
-            <Badge variant="secondary">{selectedCount} selected</Badge>
+            <p className="text-[13px] font-extrabold text-ink">Permissions</p>
+            <Badge variant={selectedCount > 0 ? "info" : "neutral"}>
+              {selectedCount} selected
+            </Badge>
           </div>
 
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3">
             {GROUPED.map((group) => (
               <fieldset
                 key={group.category}
-                className="rounded-md border border-border p-3"
+                className="rounded-[12px] border border-line bg-card2 p-3.5"
               >
-                <legend className="px-1 text-xs font-bold tracking-widest text-muted-foreground uppercase">
+                <legend className="px-1.5 text-[10px] font-bold tracking-[0.06em] text-ink3 uppercase">
                   {group.category}
                 </legend>
-                <ul className="flex flex-col gap-1.5">
+                <ul className="flex flex-col gap-0.5">
                   {group.entries.map((entry) => {
                     const id = permissionId(entry)
                     const inputId = `perm-${id}`
+                    const checked = selected.has(id)
                     return (
-                      <li key={id} className="flex items-start gap-2.5">
-                        <input
-                          id={inputId}
-                          type="checkbox"
-                          className="mt-0.5 size-4 accent-primary"
-                          checked={selected.has(id)}
-                          disabled={readOnly || loading}
-                          onChange={() => toggle(id)}
-                        />
+                      <li key={id}>
                         <label
                           htmlFor={inputId}
-                          className="flex flex-col text-sm leading-tight"
+                          className={`flex cursor-pointer items-start gap-2.5 rounded-[9px] px-2 py-1.5 transition-colors hover:bg-hov has-disabled:cursor-default has-disabled:hover:bg-transparent ${
+                            checked ? "bg-hov/60" : ""
+                          }`}
                         >
-                          <span className="font-medium text-foreground">
-                            {entry.description}
-                          </span>
-                          <span className="font-mono text-[11px] text-muted-foreground">
-                            {entry.resourceId} · {entry.action}
+                          <input
+                            id={inputId}
+                            type="checkbox"
+                            className="mt-0.5 size-4 accent-[--brand-green] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                            checked={checked}
+                            disabled={readOnly || loading}
+                            onChange={() => toggle(id)}
+                          />
+                          <span className="flex flex-col leading-tight">
+                            <span className="text-[12.5px] font-bold text-ink">
+                              {entry.description}
+                            </span>
+                            <span className="mt-0.5 font-mono text-[10.5px] text-ink3">
+                              {entry.resourceId} · {entry.action}
+                            </span>
                           </span>
                         </label>
                       </li>

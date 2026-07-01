@@ -114,7 +114,9 @@ describe("AgentPage", () => {
     expect(
       screen.getByText(/You are the Handshake agent\./i)
     ).toBeInTheDocument()
-    expect(screen.getByText(/system prompt \(read-only\)/i)).toBeInTheDocument()
+    // The system-prompt section is present and marked read-only.
+    expect(screen.getByText(/system prompt/i)).toBeInTheDocument()
+    expect(screen.getByText(/read-only/i)).toBeInTheDocument()
   })
 
   it("renders a conversation's messages with their NLU intents", async () => {

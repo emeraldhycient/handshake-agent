@@ -116,7 +116,9 @@ describe("NotificationsPage", () => {
     expect(await screen.findByText("kyc.approved")).toBeInTheDocument()
 
     // Open the editor for that template.
-    await user.click(screen.getByRole("button", { name: "Edit" }))
+    await user.click(
+      screen.getByRole("button", { name: "Edit template kyc.approved" })
+    )
 
     // The editor is open with the live-preview panel.
     expect(await screen.findByRole("dialog")).toHaveTextContent(

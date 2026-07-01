@@ -2,12 +2,13 @@
  * MetricsDashboard tests.
  *
  *  1. Renders the summary cards from a mock DashboardSummary — asserts the
- *     success-rate % and a revenue currency row.
+ *     success-rate % and the revenue currency/amount.
  *  2. Changing the range preset re-fetches — the api client is called again
  *     with the new (90-day) range window.
- *  3. The service-health table renders one row per service, each with a
+ *  3. The service-health section renders one row per service, each with a
  *     success-rate bar (role="img").
- *  4. When the revenue spread is empty, the "folded into FX" note shows.
+ *  4. When the revenue spread is empty, the revenue tile still renders (with a
+ *     fee-revenue note) rather than erroring.
  *
  * The api layer is mocked — no server.
  */
@@ -104,11 +105,12 @@ describe("MetricsDashboard", () => {
   it("renders summary cards: success rate % and a revenue currency row", async () => {
     renderDashboard()
 
-    // Success rate card (0.925 → 92.5%).
-    expect(await screen.findByText("92.5%")).toBeInTheDocument()
-    // A revenue currency row.
-    expect(screen.getByText("NGN")).toBeInTheDocument()
-    expect(screen.getByText("45000.00")).toBeInTheDocument()
+    // Success rate (0.925 → 92.5%) appears in the KPI grid — as both the hero
+    // delta chip and the dedicated "Success rate" tile value.
+    const rates = await screen.findAllByText("92.5%")
+    expect(rates.length).toBeGreaterThanOrEqual(1)
+    // The primary revenue currency + amount (NGN 45000.00) render together.
+    expect(screen.getByText("NGN 45000.00")).toBeInTheDocument()
     // Total transactions card (120 + 40 = 160).
     expect(screen.getByText("160")).toBeInTheDocument()
   })
@@ -117,13 +119,13 @@ describe("MetricsDashboard", () => {
     const user = userEvent.setup()
     renderDashboard()
 
-    await screen.findByText("92.5%")
+    await screen.findAllByText("92.5%")
     expect(mockDashboard).toHaveBeenCalledTimes(1)
     // Default preset is 30 days → a 30-day-wide window.
     const firstRange = mockDashboard.mock.calls[0][0]
     expect(firstRange).toBeDefined()
 
-    await user.click(screen.getByRole("button", { name: "Last 90 days" }))
+    await user.click(screen.getByRole("button", { name: "90d" }))
 
     await waitFor(() => expect(mockDashboard).toHaveBeenCalledTimes(2))
     const secondRange = mockDashboard.mock.calls[1][0] as {
@@ -138,24 +140,31 @@ describe("MetricsDashboard", () => {
   it("renders a service-health row per service with a success-rate bar", async () => {
     renderDashboard()
 
-    await screen.findByText("92.5%")
-    // One labelled success-rate bar per service (role="img").
+    await screen.findAllByText("92.5%")
+    // One labelled success-rate bar per service (role="img"); the bar's
+    // aria-label carries the service name and its success-rate figure.
     expect(
-      screen.getByRole("img", { name: /buy success rate/i })
+      screen.getByRole("img", { name: /buy: 91\.6%/i })
     ).toBeInTheDocument()
     expect(
-      screen.getByRole("img", { name: /send success rate/i })
+      screen.getByRole("img", { name: /send: 95\.0%/i })
     ).toBeInTheDocument()
     // Per-service success rate captions.
     expect(screen.getByText("91.6%")).toBeInTheDocument()
     expect(screen.getByText("95.0%")).toBeInTheDocument()
   })
 
-  it("shows the 'folded into FX' note when the revenue spread is empty", async () => {
+  it("surfaces that spread is folded into FX (not fabricated) on the revenue tile", async () => {
+    // The fixture has an empty totalSpreadByCurrency; the revenue tile renders
+    // its fee figure AND the honest disclosure that spread is not tracked
+    // separately (revenue = fees only) — surfaced, never fabricated.
     renderDashboard()
 
-    expect(
-      await screen.findByText(/spread folded into fx/i)
-    ).toBeInTheDocument()
+    expect(await screen.findByText("Revenue (fees)")).toBeInTheDocument()
+    expect(screen.getByText("NGN 45000.00")).toBeInTheDocument()
+    // Two fee currencies in the fixture → a "+1 more currencies" note.
+    expect(screen.getByText(/more currencies/i)).toBeInTheDocument()
+    // The spread disclosure must be present.
+    expect(screen.getByText(/spread folded into FX/i)).toBeInTheDocument()
   })
 })

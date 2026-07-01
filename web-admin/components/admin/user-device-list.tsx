@@ -9,6 +9,7 @@
  * non-revoked devices offer a Revoke button.
  */
 import { useState } from "react"
+import { Smartphone } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -49,37 +50,43 @@ export function UserDeviceList({ userId, devices }: UserDeviceListProps) {
   }
 
   if (devices.length === 0) {
-    return <p className="text-xs text-muted-foreground">No devices.</p>
+    return <p className="text-xs text-ink3">No devices.</p>
   }
 
   return (
     <div className="flex flex-col gap-2">
-      <ul className="flex flex-col gap-2">
+      <ul className="flex flex-col">
         {devices.map((device) => (
           <li
             key={device.id}
-            className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2"
+            className="flex items-center gap-3.5 border-b border-line2 py-3.5 last:border-b-0"
           >
-            <div className="flex min-w-0 flex-col gap-0.5">
-              <div className="flex items-center gap-1.5">
-                <span className="font-mono text-xs text-muted-foreground">
+            <span
+              aria-hidden="true"
+              className="flex size-[42px] flex-none items-center justify-center rounded-[11px] bg-card2 text-ink2"
+            >
+              <Smartphone className="size-[19px]" />
+            </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-mono text-[11.5px] text-ink3">
                   {device.id.slice(0, 8)}…
                 </span>
                 <Badge
                   variant={
                     device.trustState === "bound"
-                      ? "default"
+                      ? "success"
                       : device.trustState === "revoked"
-                        ? "destructive"
-                        : "outline"
+                        ? "danger"
+                        : "neutral"
                   }
                 >
                   {device.trustState}
                 </Badge>
-                {device.isPinned && <Badge variant="secondary">pinned</Badge>}
+                {device.isPinned && <Badge variant="info">pinned</Badge>}
               </div>
-              <span className="text-[11px] text-muted-foreground">
-                Last used {formatDate(device.lastUsedAt)}
+              <span className="font-mono text-[11.5px] text-ink3">
+                last seen {formatDate(device.lastUsedAt)}
               </span>
             </div>
             {device.trustState === "bound" && (
@@ -89,7 +96,7 @@ export function UserDeviceList({ userId, devices }: UserDeviceListProps) {
                 disabled={revoke.isPending}
                 onClick={() => onRevoke(device.id)}
               >
-                Revoke
+                Unbind
               </Button>
             )}
           </li>
@@ -97,7 +104,7 @@ export function UserDeviceList({ userId, devices }: UserDeviceListProps) {
       </ul>
 
       {localError && (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="text-xs font-semibold text-tdn">
           {localError}
         </p>
       )}

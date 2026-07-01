@@ -110,10 +110,12 @@ describe("TreasuryPage", () => {
   it("renders aggregated balance rows with totals and wallet counts", async () => {
     renderPage()
 
-    expect(await screen.findByText("USDT")).toBeInTheDocument()
-    expect(screen.getByText("TRX")).toBeInTheDocument()
+    // One card per network/asset group — the label combines asset · network.
+    expect(await screen.findByText(/USDT · tron/i)).toBeInTheDocument()
+    expect(screen.getByText(/TRX · tron/i)).toBeInTheDocument()
+    // Total amount rendered.
     expect(screen.getByText("125000.50")).toBeInTheDocument()
-    // Wallet count rendered.
-    expect(screen.getAllByText("42")).toHaveLength(2)
+    // Wallet count rendered on each of the two group cards.
+    expect(screen.getAllByText(/42 wallets/i)).toHaveLength(2)
   })
 })

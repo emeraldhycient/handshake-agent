@@ -56,62 +56,61 @@ export function ConversationLogDetail({
           {/* ── Loading ──────────────────────────────────────────────────── */}
           {detail.isLoading && (
             <div className="flex flex-col gap-3" aria-busy="true">
-              <Skeleton className="h-24 w-full rounded-md" />
-              <Skeleton className="h-24 w-full rounded-md" />
+              <Skeleton className="h-24 w-full rounded-[16px]" />
+              <Skeleton className="h-24 w-full rounded-[16px]" />
             </div>
           )}
 
           {/* ── Error ────────────────────────────────────────────────────── */}
           {detail.isError && (
-            <div className="rounded-[14px] border border-destructive/20 bg-destructive/5 p-5 text-center">
-              <p className="text-sm font-semibold text-destructive">
+            <div className="rounded-[16px] border border-sdn bg-sdn/40 p-5 text-center">
+              <p className="text-sm font-semibold text-tdn">
                 Failed to load this conversation
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Close and try again.
-              </p>
+              <p className="mt-1 text-xs text-ink3">Close and try again.</p>
             </div>
           )}
 
           {/* ── Empty ────────────────────────────────────────────────────── */}
           {isEmpty && (
-            <p className="text-sm text-muted-foreground">
-              No messages or replies in this conversation.
-            </p>
+            <div className="rounded-[16px] border border-line bg-card p-8 text-center">
+              <p className="text-sm font-bold text-ink">Nothing to show</p>
+              <p className="mt-1 text-[12.5px] text-ink3">
+                No messages or replies in this conversation.
+              </p>
+            </div>
           )}
 
           {/* ── Data ─────────────────────────────────────────────────────── */}
           {detail.isSuccess && conversation && !isEmpty && (
             <>
               <section className="flex flex-col gap-2">
-                <h3 className="text-[11px] font-bold tracking-widest text-muted-foreground uppercase">
+                <h3 className="text-[11px] font-bold tracking-[0.05em] text-ink3 uppercase">
                   Messages
                 </h3>
                 {conversation.messages.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No messages.</p>
+                  <p className="text-[12.5px] text-ink3">No messages.</p>
                 ) : (
                   <ul className="flex flex-col gap-2">
                     {conversation.messages.map((message) => (
                       <li
                         key={message.id}
-                        className="rounded-md border border-border bg-muted/40 p-3"
+                        className="rounded-[14px] border border-line bg-card2 p-3"
                       >
-                        <p className="text-sm text-foreground">
-                          {message.text}
-                        </p>
+                        <p className="text-[13px] text-ink">{message.text}</p>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <Badge variant="secondary">
+                          <Badge variant="neutral">
                             {message.processingStatus}
                           </Badge>
                           {message.intent && (
-                            <Badge variant="outline">
+                            <Badge variant="info">
                               intent: {message.intent.action}
                               {message.intent.confidence !== null
                                 ? ` (${message.intent.confidence})`
                                 : ""}
                             </Badge>
                           )}
-                          <span className="text-[11px] text-muted-foreground tabular-nums">
+                          <span className="font-mono text-[11px] text-ink3 tabular-nums">
                             {formatDate(message.receivedAt)}
                           </span>
                         </div>
@@ -124,22 +123,22 @@ export function ConversationLogDetail({
               <Separator />
 
               <section className="flex flex-col gap-2">
-                <h3 className="text-[11px] font-bold tracking-widest text-muted-foreground uppercase">
+                <h3 className="text-[11px] font-bold tracking-[0.05em] text-ink3 uppercase">
                   Replies
                 </h3>
                 {conversation.replies.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No replies.</p>
+                  <p className="text-[12.5px] text-ink3">No replies.</p>
                 ) : (
                   <ul className="flex flex-col gap-2">
                     {conversation.replies.map((reply) => (
                       <li
                         key={reply.id}
-                        className="rounded-md border border-border bg-card p-3"
+                        className="rounded-[14px] border border-line bg-card p-3"
                       >
-                        <p className="text-sm text-foreground">{reply.text}</p>
+                        <p className="text-[13px] text-ink">{reply.text}</p>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <Badge variant="secondary">{reply.status}</Badge>
-                          <span className="text-[11px] text-muted-foreground tabular-nums">
+                          <Badge variant="neutral">{reply.status}</Badge>
+                          <span className="font-mono text-[11px] text-ink3 tabular-nums">
                             {formatDate(reply.sentAt)}
                           </span>
                         </div>

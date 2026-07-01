@@ -44,7 +44,7 @@ export function BeneficiaryOverride({ beneficiary }: BeneficiaryOverrideProps) {
   if (!beneficiary.coolingOffActive) return null
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="flex shrink-0 flex-col items-end gap-1">
       <Button
         size="sm"
         variant="outline"
@@ -55,7 +55,7 @@ export function BeneficiaryOverride({ beneficiary }: BeneficiaryOverrideProps) {
         Override cooling-off
       </Button>
       {localError && (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="text-[11.5px] font-semibold text-tdn">
           {localError}
         </p>
       )}

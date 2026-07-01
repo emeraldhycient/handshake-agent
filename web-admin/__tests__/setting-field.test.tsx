@@ -91,7 +91,10 @@ function renderField(setting: EffectiveSetting) {
   })
   return render(
     <QueryClientProvider client={client}>
-      <SettingField setting={setting} />
+      <SettingField
+        setting={setting}
+        gridClassName="grid-cols-[1.5fr_1fr_0.7fr_1.5fr_0.9fr]"
+      />
     </QueryClientProvider>
   )
 }

@@ -10,6 +10,11 @@
  * Each section is an independent query with its own four async branches (loading /
  * error / empty / data). Selecting a conversation opens the ConversationLogDetail
  * drawer.
+ *
+ * Presentation follows the operator-console design (§6.17 Agent config): a page
+ * header whose subtitle reads "Tools propose, never execute.", a `1fr 1fr` row of
+ * read-mostly **Model & guardrails** key/val + read-only **System prompt** cards,
+ * then the **Conversation logs** table. Tools propose, never execute (§3.1).
  */
 import { useState } from "react"
 
@@ -34,87 +39,102 @@ function formatDate(iso: string | null): string {
 function LoadingRows() {
   return (
     <div className="flex flex-col gap-2" aria-busy="true">
-      <Skeleton className="h-10 w-full rounded-md" />
-      <Skeleton className="h-10 w-full rounded-md" />
-      <Skeleton className="h-10 w-full rounded-md" />
+      <Skeleton className="h-12 w-full rounded-[16px]" />
+      <Skeleton className="h-12 w-full rounded-[16px]" />
+      <Skeleton className="h-12 w-full rounded-[16px]" />
     </div>
   )
 }
 
-// ─── Config card ──────────────────────────────────────────────────────────────────
+// ─── Config cards ─────────────────────────────────────────────────────────────────
 
-function ConfigCard() {
+function ConfigCards() {
   const config = useAgentConfig()
 
-  return (
-    <section className="flex flex-col gap-3">
-      <h2 className="text-[11px] font-bold tracking-widest text-muted-foreground uppercase">
-        Configuration
-      </h2>
+  // ── Loading ──────────────────────────────────────────────────────────────
+  if (config.isLoading) {
+    return (
+      <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-2" aria-busy="true">
+        <Skeleton className="h-52 w-full rounded-2xl" />
+        <Skeleton className="h-52 w-full rounded-2xl" />
+      </div>
+    )
+  }
 
-      <div
-        role="note"
-        className="rounded-[14px] border border-info/30 bg-info/5 px-4 py-3 text-sm text-info-foreground"
-      >
-        The model id and enablement are edited on the{" "}
-        <a href="/settings" className="font-medium underline">
-          Settings page
-        </a>{" "}
-        (Agent category); the system prompt is not editable.
+  // ── Error ────────────────────────────────────────────────────────────────
+  if (config.isError) {
+    return (
+      <div className="rounded-[16px] border border-sdn bg-sdn/40 p-5 text-center">
+        <p className="text-sm font-semibold text-tdn">
+          Failed to load agent config
+        </p>
+        <p className="mt-1 text-xs text-ink3">Please refresh the page.</p>
+      </div>
+    )
+  }
+
+  // ── Empty ────────────────────────────────────────────────────────────────
+  if (config.isSuccess && !config.data) {
+    return (
+      <div className="rounded-[16px] border border-line bg-card p-12 text-center">
+        <p className="text-sm font-bold text-ink">No agent config found</p>
+        <p className="mt-1 text-[12.5px] text-ink3">
+          The embedded agent has not been configured.
+        </p>
+      </div>
+    )
+  }
+
+  // ── Data ─────────────────────────────────────────────────────────────────
+  if (!config.isSuccess || !config.data) return null
+  const { modelId, enabled, systemPromptPreview } = config.data
+
+  return (
+    <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-2">
+      {/* Model & guardrails — read-mostly key/val */}
+      <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
+        <div className="mb-3 text-[13px] font-extrabold text-ink">
+          Model &amp; guardrails{" "}
+          <span className="font-semibold text-ink3">· read-mostly</span>
+        </div>
+
+        <div className="flex items-center justify-between border-b border-line2 py-[9px]">
+          <span className="text-[12.5px] text-ink2">Model ID</span>
+          <span className="font-mono text-[12px] font-bold text-ink">
+            {modelId}
+          </span>
+        </div>
+        <div className="flex items-center justify-between border-b border-line2 py-[9px] last:border-b-0">
+          <span className="text-[12.5px] text-ink2">Enabled</span>
+          {enabled ? (
+            <Badge variant="success">on</Badge>
+          ) : (
+            <Badge variant="neutral">off</Badge>
+          )}
+        </div>
+
+        <p className="mt-3 text-[11.5px] text-ink3">
+          Model id and enablement are edited on the{" "}
+          <a href="/settings" className="font-semibold text-tif underline">
+            Settings page
+          </a>{" "}
+          (Agent category). Tools <b>propose</b>, never execute.
+        </p>
       </div>
 
-      {config.isLoading && (
-        <div aria-busy="true">
-          <Skeleton className="h-40 w-full rounded-md" />
-        </div>
-      )}
-
-      {config.isError && (
-        <div className="rounded-[14px] border border-destructive/20 bg-destructive/5 p-5 text-center">
-          <p className="text-sm font-semibold text-destructive">
-            Failed to load agent config
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Please refresh the page.
-          </p>
-        </div>
-      )}
-
-      {config.isSuccess && !config.data && (
-        <p className="text-sm text-muted-foreground">No agent config found.</p>
-      )}
-
-      {config.isSuccess && config.data && (
-        <div className="flex flex-col gap-4 rounded-[14px] border border-border bg-card p-5">
-          <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
-            <div className="flex items-center justify-between gap-4 border-b border-border/60 py-1.5">
-              <dt className="text-muted-foreground">Model ID</dt>
-              <dd className="font-mono text-xs text-foreground">
-                {config.data.modelId}
-              </dd>
-            </div>
-            <div className="flex items-center justify-between gap-4 border-b border-border/60 py-1.5">
-              <dt className="text-muted-foreground">Enabled</dt>
-              <dd>
-                {config.data.enabled ? (
-                  <Badge variant="default">on</Badge>
-                ) : (
-                  <Badge variant="outline">off</Badge>
-                )}
-              </dd>
-            </div>
-          </dl>
-          <div className="flex flex-col gap-1.5">
-            <p className="text-[11px] font-bold tracking-widest text-muted-foreground uppercase">
-              System prompt (read-only)
-            </p>
-            <pre className="max-h-64 overflow-auto rounded-md border border-border bg-muted/40 p-3 text-[11px] whitespace-pre-wrap text-muted-foreground">
-              {config.data.systemPromptPreview}
-            </pre>
+      {/* System prompt — read-only preview */}
+      <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="text-[13px] font-extrabold text-ink">
+            System prompt
           </div>
+          <span className="text-[11px] text-ink3">read-only</span>
         </div>
-      )}
-    </section>
+        <pre className="max-h-64 overflow-auto rounded-[12px] border border-line bg-field p-3 font-mono text-[11px] whitespace-pre-wrap text-ink2">
+          {systemPromptPreview}
+        </pre>
+      </div>
+    </div>
   )
 }
 
@@ -125,29 +145,36 @@ function ConversationList({ onOpen }: { onOpen: (id: string) => void }) {
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-[11px] font-bold tracking-widest text-muted-foreground uppercase">
+      <div className="text-[13px] font-extrabold text-ink">
         Conversation logs
-      </h2>
+      </div>
 
+      {/* ── Loading ──────────────────────────────────────────────────────── */}
       {conversations.isLoading && <LoadingRows />}
 
+      {/* ── Error ────────────────────────────────────────────────────────── */}
       {conversations.isError && (
-        <div className="rounded-[14px] border border-destructive/20 bg-destructive/5 p-5 text-center">
-          <p className="text-sm font-semibold text-destructive">
+        <div className="rounded-[16px] border border-sdn bg-sdn/40 p-5 text-center">
+          <p className="text-sm font-semibold text-tdn">
             Failed to load conversations
           </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Please refresh the page.
+          <p className="mt-1 text-xs text-ink3">Please refresh the page.</p>
+        </div>
+      )}
+
+      {/* ── Empty ────────────────────────────────────────────────────────── */}
+      {conversations.isSuccess && conversations.data.items.length === 0 && (
+        <div className="rounded-[16px] border border-line bg-card p-12 text-center">
+          <p className="text-sm font-bold text-ink">No conversations yet</p>
+          <p className="mt-1 text-[12.5px] text-ink3">
+            Agent conversation logs will appear here.
           </p>
         </div>
       )}
 
-      {conversations.isSuccess && conversations.data.items.length === 0 && (
-        <p className="text-sm text-muted-foreground">No conversations yet.</p>
-      )}
-
+      {/* ── Data ─────────────────────────────────────────────────────────── */}
       {conversations.isSuccess && conversations.data.items.length > 0 && (
-        <div className="overflow-hidden rounded-[14px] border border-border bg-card">
+        <div className="overflow-hidden rounded-2xl border border-line bg-card">
           <Table>
             <TableHeader>
               <TableRow>
@@ -165,7 +192,7 @@ function ConversationList({ onOpen }: { onOpen: (id: string) => void }) {
                   role="button"
                   tabIndex={0}
                   aria-label={`Open conversation ${item.id.slice(0, 8)}`}
-                  className="cursor-pointer focus-visible:bg-muted focus-visible:outline-none"
+                  className="cursor-pointer focus-visible:bg-hov focus-visible:outline-none"
                   onClick={() => onOpen(item.id)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
@@ -174,19 +201,15 @@ function ConversationList({ onOpen }: { onOpen: (id: string) => void }) {
                     }
                   }}
                 >
-                  <TableCell className="font-mono text-xs text-muted-foreground">
+                  <TableCell className="font-mono text-[11.5px] text-ink2">
                     {item.id.slice(0, 8)}…
                   </TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">
+                  <TableCell className="font-mono text-[11.5px] text-ink3">
                     {item.userId ? `${item.userId.slice(0, 8)}…` : "—"}
                   </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {item.language}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {item.status}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground tabular-nums">
+                  <TableCell className="text-ink2">{item.language}</TableCell>
+                  <TableCell className="text-ink2">{item.status}</TableCell>
+                  <TableCell className="font-mono text-[11px] text-ink3 tabular-nums">
                     {formatDate(item.lastMessageAt)}
                   </TableCell>
                 </TableRow>
@@ -205,14 +228,19 @@ export function AgentPage() {
   const [conversationId, setConversationId] = useState<string | null>(null)
 
   return (
-    <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-[20px] font-extrabold tracking-tight text-foreground">
-          Agent
+    <div className="mx-auto flex w-full max-w-[1200px] flex-1 flex-col gap-4 overflow-y-auto px-6 py-6 sm:px-8">
+      {/* ── Header ──────────────────────────────────────────────────────── */}
+      <div>
+        <h1 className="text-2xl font-extrabold tracking-tight text-ink">
+          Agent config
         </h1>
+        <p className="mt-1 text-[13.5px] text-ink2">
+          LLM runtime, prompt and conversation oversight. Tools <b>propose</b>,
+          never execute.
+        </p>
       </div>
 
-      <ConfigCard />
+      <ConfigCards />
       <ConversationList onOpen={setConversationId} />
 
       <ConversationLogDetail

@@ -89,6 +89,8 @@
   --color-brand-amber: var(--brand-amber);
   --color-brand-amber-deep: var(--brand-amber-deep);
   --color-btn-dark: var(--btn-dark);
+  /* Muted ink on the dark-green hero tile / sidebar (§1.3 rgba(214,226,219,·)) */
+  --color-on-brand-muted: var(--on-brand-muted);
 
   --shadow-card: var(--card-shadow);
   --shadow-card-lg: var(--card-shadow-lg);
@@ -138,6 +140,8 @@
   --brand-amber-deep: #e8961a;
   --btn-dark: #16261e;
   --ink-on-amber: #231303;
+  /* Muted ink used on the dark-green hero/sidebar surfaces (§1.3) */
+  --on-brand-muted: rgba(214, 226, 219, 0.7);
 
   /* ── shadcn semantic aliases → design tokens (map, do not delete) ── */
   --background: var(--bg);

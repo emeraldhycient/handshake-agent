@@ -86,12 +86,13 @@ export function InviteAdminDialog({
         {/* ── Success: show the one-time token ─────────────────────────────── */}
         {invite.isSuccess ? (
           <div className="flex flex-col gap-3">
-            <p className="text-sm text-foreground">
+            <p className="text-[13px] text-ink2">
               Invitation created for{" "}
-              <span className="font-semibold">{invite.data.email}</span>. Share
-              this one-time token with them — it won&apos;t be shown again:
+              <span className="font-bold text-ink">{invite.data.email}</span>.
+              Share this one-time token with them — it won&apos;t be shown
+              again:
             </p>
-            <code className="rounded-md border border-border bg-muted/40 px-3 py-2 font-mono text-xs break-all">
+            <code className="rounded-[10px] border border-line bg-field px-3 py-2 font-mono text-xs break-all text-ink">
               {invite.data.invitationToken}
             </code>
             <DialogFooter>
@@ -107,7 +108,7 @@ export function InviteAdminDialog({
             {serverError && (
               <div
                 role="alert"
-                className="rounded-lg border border-destructive bg-destructive/10 px-4 py-3 text-sm text-destructive"
+                className="rounded-[10px] border border-sdn bg-sdn px-4 py-3 text-[13px] font-semibold text-tdn"
               >
                 {serverError}
               </div>
@@ -124,7 +125,10 @@ export function InviteAdminDialog({
                 {...register("email")}
               />
               {errors.email && (
-                <p role="alert" className="text-xs text-destructive">
+                <p
+                  role="alert"
+                  className="text-[11.5px] font-semibold text-tdn"
+                >
                   {errors.email.message ?? "Enter a valid email address"}
                 </p>
               )}
@@ -145,7 +149,10 @@ export function InviteAdminDialog({
                 ))}
               </NativeSelect>
               {errors.roleId && (
-                <p role="alert" className="text-xs text-destructive">
+                <p
+                  role="alert"
+                  className="text-[11.5px] font-semibold text-tdn"
+                >
                   {errors.roleId.message ?? "Select a role"}
                 </p>
               )}

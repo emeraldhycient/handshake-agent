@@ -5,7 +5,7 @@
  *
  * Top: an account picker — accountType (select) + accountId + currency — that,
  * once all three are set, drives `useLedgerHistory` and renders the account's
- * posted entries (sequence / dir / amount / balanceAfter / postedAt).
+ * posted entries (seq / account / dir / amount / running / source).
  *
  * Bottom: a "Verify transaction integrity" input (a transaction id) + button that
  * re-sums that transaction's legs server-side (read-only, §3.1) and shows the
@@ -16,14 +16,6 @@
  */
 import { useMemo, useState } from "react"
 
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -31,6 +23,7 @@ import { NativeSelect } from "@/components/ui/native-select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useLedgerHistory, useVerifyLedger } from "@/lib/query/hooks"
 import type { LedgerHistoryQuery } from "@/lib/api/ledger"
+import type { AdminLedgerEntry } from "@handshake-agent/contracts"
 import { ApiError } from "@/lib/api/client"
 
 // The LedgerAccountType engine enum (presentation labels for the picker).
@@ -43,6 +36,11 @@ const ACCOUNT_TYPES = [
   "compensation",
 ] as const
 
+// Ledger table grid — 6 columns matching the design (Seq / Account / Dir /
+// Amount / Running / Source). Shared by the header row and every body row.
+const LEDGER_GRID =
+  "grid grid-cols-[0.7fr_1.8fr_0.8fr_1.1fr_1.1fr_1fr] items-center gap-3 px-[18px]"
+
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString()
 }
@@ -51,6 +49,31 @@ function errorMessage(error: unknown): string | null {
   if (error instanceof ApiError) return error.message
   if (error instanceof Error) return error.message
   return error ? String(error) : null
+}
+
+/** Build + download a CSV of the currently-loaded entries (client-side only). */
+function exportEntries(entries: readonly AdminLedgerEntry[]): void {
+  const header =
+    "sequence,account,direction,amount,currency,balanceAfter,transactionId,postedAt"
+  const rows = entries.map((e) =>
+    [
+      e.sequence,
+      e.accountId,
+      e.direction,
+      e.amount,
+      e.currency,
+      e.balanceAfter,
+      e.transactionId,
+      e.postedAt,
+    ].join(",")
+  )
+  const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv" })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement("a")
+  link.href = url
+  link.download = "ledger-entries.csv"
+  link.click()
+  URL.revokeObjectURL(url)
 }
 
 export function LedgerPage() {
@@ -77,17 +100,44 @@ export function LedgerPage() {
   }
 
   const verifyError = errorMessage(verify.error)
+  const entries = history.data?.entries ?? []
+  const hasEntries = history.isSuccess && entries.length > 0
 
   return (
-    <div className="flex flex-1 flex-col gap-5 overflow-y-auto p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-[20px] font-extrabold tracking-tight text-foreground">
-          Ledger
-        </h1>
+    <div className="mx-auto flex w-full max-w-[1300px] flex-1 flex-col gap-4 overflow-y-auto px-[30px] py-[26px]">
+      {/* ── Header + integrity pill ──────────────────────────────────────── */}
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-[24px] font-extrabold tracking-[-0.02em] text-ink">
+            Ledger
+          </h1>
+          <p className="mt-1 text-[13.5px] text-ink2">
+            Double-entry viewer · per-(account, currency) sequence,
+            advisory-locked.
+          </p>
+        </div>
+        <div className="flex h-[34px] items-center gap-[9px] rounded-full bg-sok px-[13px] text-[11.5px] font-bold text-tok">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="m5 12 5 5L20 7"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          Sequence integrity OK
+        </div>
       </div>
 
-      {/* ── Account picker ───────────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-end gap-3 rounded-[14px] border border-border bg-card p-4">
+      {/* ── Account picker + Export ──────────────────────────────────────── */}
+      <div className="flex flex-wrap items-end gap-3 rounded-[16px] border border-line bg-card p-4">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="ledger-account-type">Account type</Label>
           <NativeSelect
@@ -123,86 +173,114 @@ export function LedgerPage() {
             placeholder="USDT"
           />
         </div>
+        <div className="flex-1" />
+        <Button
+          variant="outline"
+          size="lg"
+          disabled={!hasEntries}
+          onClick={() => exportEntries(entries)}
+        >
+          Export
+        </Button>
       </div>
 
       {/* ── History: prompt / loading / error / empty / data ─────────────── */}
       {query === null && (
-        <p className="text-sm text-muted-foreground">
+        <p className="text-[13px] text-ink2">
           Enter an account type, account id, and currency to load its ledger.
         </p>
       )}
 
       {query !== null && history.isLoading && (
         <div className="flex flex-col gap-2" aria-busy="true">
-          <Skeleton className="h-10 w-full rounded-md" />
-          <Skeleton className="h-10 w-full rounded-md" />
-          <Skeleton className="h-10 w-full rounded-md" />
+          <Skeleton className="h-11 w-full" />
+          <Skeleton className="h-11 w-full" />
+          <Skeleton className="h-11 w-full" />
         </div>
       )}
 
       {query !== null && history.isError && (
-        <div className="rounded-[14px] border border-destructive/20 bg-destructive/5 p-5 text-center">
-          <p className="text-sm font-semibold text-destructive">
+        <div className="rounded-[16px] border border-sdn bg-sdn/40 p-5 text-center">
+          <p className="text-[13px] font-bold text-tdn">
             Failed to load ledger history
           </p>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <p className="mt-1 text-[12px] text-ink3">
             Check the account triple and try again.
           </p>
         </div>
       )}
 
-      {query !== null &&
-        history.isSuccess &&
-        history.data.entries.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            No ledger entries for this account.
+      {query !== null && history.isSuccess && entries.length === 0 && (
+        <div className="rounded-[16px] border border-line bg-card p-8 text-center">
+          <p className="text-[14px] font-bold text-ink">No ledger entries</p>
+          <p className="mt-1 text-[12.5px] text-ink3">
+            This account has no posted entries.
           </p>
-        )}
+        </div>
+      )}
 
-      {query !== null &&
-        history.isSuccess &&
-        history.data.entries.length > 0 && (
-          <div className="overflow-hidden rounded-[14px] border border-border bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Seq</TableHead>
-                  <TableHead>Dir</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="text-right">Balance after</TableHead>
-                  <TableHead>Posted</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {history.data.entries.map((entry) => (
-                  <TableRow key={entry.id}>
-                    <TableCell className="tabular-nums">
-                      {entry.sequence}
-                    </TableCell>
-                    <TableCell className="text-xs">
-                      {entry.direction === "debit" ? "− debit" : "+ credit"}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {entry.amount} {entry.currency}
-                    </TableCell>
-                    <TableCell className="text-right text-muted-foreground tabular-nums">
-                      {entry.balanceAfter}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground tabular-nums">
-                      {formatDate(entry.postedAt)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+      {query !== null && hasEntries && (
+        <div className="overflow-hidden rounded-[16px] border border-line bg-card">
+          {/* Header row */}
+          <div
+            className={`${LEDGER_GRID} border-b border-line bg-card2 py-[11px] text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase`}
+          >
+            <div>Seq</div>
+            <div>Account</div>
+            <div>Dir</div>
+            <div className="text-right">Amount</div>
+            <div className="text-right">Running</div>
+            <div>Source</div>
           </div>
-        )}
+          {/* Body rows */}
+          {entries.map((entry) => (
+            <div
+              key={entry.id}
+              className={`${LEDGER_GRID} border-b border-line2 py-[11px] last:border-0`}
+            >
+              <div className="font-mono text-[11px] text-ink3 tabular-nums">
+                {entry.sequence}
+              </div>
+              <div className="truncate font-mono text-[12px] text-ink2">
+                {entry.accountId}
+              </div>
+              <div>
+                <span
+                  className={`text-[10.5px] font-extrabold ${
+                    entry.direction === "debit" ? "text-tdn" : "text-tok"
+                  }`}
+                >
+                  {entry.direction === "debit" ? "− debit" : "+ credit"}
+                </span>
+              </div>
+              <div className="text-right font-mono text-[12px] font-bold text-ink tabular-nums">
+                {entry.amount} {entry.currency}
+              </div>
+              <div className="text-right font-mono text-[12px] text-ink2 tabular-nums">
+                {entry.balanceAfter}
+              </div>
+              <div
+                className="truncate font-mono text-[11.5px] font-bold text-tif"
+                title={`${entry.transactionId} · posted ${formatDate(entry.postedAt)}`}
+              >
+                {entry.transactionId}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── Integrity verify ─────────────────────────────────────────────── */}
-      <div className="flex flex-col gap-3 rounded-[14px] border border-border bg-card p-4">
-        <h2 className="text-sm font-bold text-foreground">
-          Verify transaction integrity
-        </h2>
+      <div className="flex flex-col gap-3 rounded-[16px] border border-line bg-card p-5">
+        <div>
+          <h2 className="text-[13px] font-extrabold text-ink">
+            Verify transaction integrity
+          </h2>
+          <p className="mt-1 text-[12px] text-ink3">
+            Re-sums a transaction&apos;s legs server-side · read-only, never
+            mutates.
+          </p>
+        </div>
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ledger-verify-id">Transaction id</Label>
@@ -215,7 +293,7 @@ export function LedgerPage() {
             />
           </div>
           <Button
-            size="sm"
+            size="lg"
             disabled={verify.isPending || verifyId.trim().length === 0}
             aria-busy={verify.isPending}
             onClick={onVerify}
@@ -225,7 +303,7 @@ export function LedgerPage() {
         </div>
 
         {verifyError && (
-          <p role="alert" className="text-xs text-destructive">
+          <p role="alert" className="text-[12px] text-tdn">
             {verifyError}
           </p>
         )}
@@ -235,14 +313,14 @@ export function LedgerPage() {
             role="status"
             className={
               verify.data.balanced
-                ? "rounded-md border border-success/30 bg-success/5 px-4 py-3 text-sm text-success-foreground"
-                : "rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+                ? "rounded-[10px] border border-sok bg-sok/50 px-4 py-3 text-[13px] text-tok"
+                : "rounded-[10px] border border-sdn bg-sdn/50 px-4 py-3 text-[13px] text-tdn"
             }
           >
-            <p className="font-semibold">
+            <p className="font-bold">
               {verify.data.balanced ? "Balanced" : "Imbalanced"}
             </p>
-            <p className="mt-1 text-xs">
+            <p className="mt-1 text-[12px]">
               {verify.data.legCount} leg
               {verify.data.legCount === 1 ? "" : "s"}
               {verify.data.brokenAt

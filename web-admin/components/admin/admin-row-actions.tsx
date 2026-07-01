@@ -84,7 +84,7 @@ export function AdminRowActions({ admin, roles }: AdminRowActionsProps) {
           value={admin.role.id}
           disabled={busy}
           onChange={(e) => changeRole(e.target.value)}
-          className="h-8 w-40 text-xs"
+          className="h-8 w-40 rounded-[10px] text-xs"
         >
           {roles.map((role) => (
             <option key={role.id} value={role.id}>
@@ -107,7 +107,7 @@ export function AdminRowActions({ admin, roles }: AdminRowActionsProps) {
       </div>
 
       {localError && (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="text-[11.5px] font-semibold text-tdn">
           {localError}
         </p>
       )}

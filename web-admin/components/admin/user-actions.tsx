@@ -103,7 +103,12 @@ export function UserActions({ user }: UserActionsProps) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="user-tier-adjust">KYC tier</Label>
+        <Label
+          htmlFor="user-tier-adjust"
+          className="text-[11px] font-bold tracking-[0.05em] text-ink3 uppercase"
+        >
+          KYC tier
+        </Label>
         <NativeSelect
           id="user-tier-adjust"
           aria-label="Adjust KYC tier"
@@ -157,7 +162,7 @@ export function UserActions({ user }: UserActionsProps) {
       </div>
 
       {localError && (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="text-xs font-semibold text-tdn">
           {localError}
         </p>
       )}

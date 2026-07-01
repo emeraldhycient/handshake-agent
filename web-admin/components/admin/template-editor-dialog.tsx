@@ -52,8 +52,9 @@ import type { TemplateEditorDialogProps } from "@/types/components"
 
 const CHANNELS = NotificationChannelSchema.options
 
+// Textarea (§5): min-height ~92px, radius 12, bg-field, 1px border-line.
 const textareaClass =
-  "min-h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 py-1.5 text-sm shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
+  "min-h-[92px] w-full min-w-0 resize-y rounded-xl border border-line bg-field px-3.5 py-3 text-sm text-ink transition-[color,box-shadow] outline-none placeholder:text-ink3 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50"
 
 function errorMessage(error: unknown): string | null {
   if (error instanceof ApiError) return error.message
@@ -121,9 +122,7 @@ function VariablesEditor({
         </Button>
       </div>
       {variables.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          No variables documented.
-        </p>
+        <p className="text-xs text-ink3">No variables documented.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {variables.map((variable, index) => (
@@ -131,7 +130,7 @@ function VariablesEditor({
               <div className="flex flex-1 flex-col gap-1">
                 <Label
                   htmlFor={`var-name-${index}`}
-                  className="text-[11px] text-muted-foreground"
+                  className="text-[11px] font-bold tracking-wider text-ink3 uppercase"
                 >
                   Name
                 </Label>
@@ -145,7 +144,7 @@ function VariablesEditor({
               <div className="flex w-28 flex-col gap-1">
                 <Label
                   htmlFor={`var-type-${index}`}
-                  className="text-[11px] text-muted-foreground"
+                  className="text-[11px] font-bold tracking-wider text-ink3 uppercase"
                 >
                   Type
                 </Label>
@@ -159,7 +158,7 @@ function VariablesEditor({
               <div className="flex flex-1 flex-col gap-1">
                 <Label
                   htmlFor={`var-desc-${index}`}
-                  className="text-[11px] text-muted-foreground"
+                  className="text-[11px] font-bold tracking-wider text-ink3 uppercase"
                 >
                   Description
                 </Label>
@@ -221,8 +220,8 @@ function PreviewPanel({
   const serverError = preview.isError ? errorMessage(preview.error) : null
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/30 p-3">
-      <p className="text-[11px] font-bold tracking-widest text-muted-foreground uppercase">
+    <div className="flex flex-col gap-3 rounded-2xl border border-line bg-card2 p-4">
+      <p className="text-[11px] font-bold tracking-wider text-ink3 uppercase">
         Live preview
       </p>
       <div className="flex flex-col gap-1.5">
@@ -250,7 +249,7 @@ function PreviewPanel({
       </Button>
 
       {(localError ?? serverError) && (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="text-xs text-tdn">
           {localError ?? serverError}
         </p>
       )}
@@ -259,17 +258,19 @@ function PreviewPanel({
         <div className="flex flex-col gap-2">
           {preview.data.renderedSubject !== null && (
             <div className="flex flex-col gap-0.5">
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-[11px] font-bold tracking-wider text-ink3 uppercase">
                 Rendered subject
               </p>
-              <p className="text-sm font-medium text-foreground">
+              <p className="text-sm font-semibold text-ink">
                 {preview.data.renderedSubject}
               </p>
             </div>
           )}
           <div className="flex flex-col gap-0.5">
-            <p className="text-[11px] text-muted-foreground">Rendered text</p>
-            <pre className="max-h-40 overflow-auto rounded-md border border-border bg-card p-3 text-xs whitespace-pre-wrap text-foreground">
+            <p className="text-[11px] font-bold tracking-wider text-ink3 uppercase">
+              Rendered text
+            </p>
+            <pre className="max-h-40 overflow-auto rounded-[10px] border border-line bg-card p-3 text-xs whitespace-pre-wrap text-ink">
               {preview.data.renderedText}
             </pre>
           </div>
@@ -460,7 +461,7 @@ function TemplateForm({
           />
 
           {localError && (
-            <p role="alert" className="text-xs text-destructive">
+            <p role="alert" className="text-xs text-tdn">
               {localError}
             </p>
           )}

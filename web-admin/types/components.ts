@@ -81,6 +81,8 @@ export interface RoleEditorDialogProps {
 export interface SettingFieldProps {
   /** The effective config leaf to render + (when editable) save. */
   setting: EffectiveSetting
+  /** The shared `grid-template-columns` utility from the settings table (§6.30). */
+  gridClassName: string
 }
 
 // ─── Users page ──────────────────────────────────────────────────────────────────
