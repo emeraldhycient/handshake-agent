@@ -20,6 +20,16 @@ import { AppShell } from "@/components/admin/app-shell"
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/",
+  // The topbar command-palette + notifications/account menus use the router.
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+  useSearchParams: () => new URLSearchParams(),
 }))
 
 vi.mock("@/lib/api/admin", () => ({

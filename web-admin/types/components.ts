@@ -42,6 +42,56 @@ export interface AppShellProps {
   children: ReactNode
 }
 
+// ─── Topbar controls (command palette / notifications / account) ────────────────
+
+/**
+ * A flattened, navigable destination sourced from the shell's nav groups —
+ * the command palette's search corpus (every reachable screen).
+ */
+export interface NavDestination {
+  href: string
+  label: string
+  group: string
+}
+
+export interface CommandPaletteProps {
+  /** Controlled open state — driven by the search pill + the ⌘K shortcut. */
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** The navigable destinations to search (the shell's flattened nav). */
+  destinations: readonly NavDestination[]
+}
+
+/**
+ * The "view-as" impersonation roles offered by the account menu. Not RBAC —
+ * a UX affordance that scopes the banner + displayed role label (the real
+ * permission-gated nav is left untouched; see app-shell §view-as).
+ */
+export type ViewAsRoleId =
+  | "super_admin"
+  | "operations"
+  | "compliance"
+  | "finance"
+  | "support"
+
+export interface ViewAsRole {
+  id: ViewAsRoleId
+  label: string
+}
+
+export interface AccountMenuProps {
+  /** The signed-in operator's email (from `useAdminMe`). */
+  email: string
+  /** The operator's real role label (from `useAdminMe`), shown when not viewing-as. */
+  realRoleLabel: string
+  /** The currently selected view-as role, or null when unset. */
+  viewAs: ViewAsRole | null
+  /** Select a view-as role (lifted to the shell). */
+  onViewAs: (role: ViewAsRole) => void
+  /** Sign the operator out (the shell's auth-store `clear`). */
+  onSignOut: () => void
+}
+
 export interface LoginFormProps {
   className?: string
 }
