@@ -2,7 +2,10 @@
 
 /**
  * Pagination — the shared table pager (design §5 "Pagination", lines 1083-1094).
- * Pulled up under a table (`-mt-[42px]`) with a `--line2` top border. Left: a
+ * Sits just below the table card with a `--line2` top border. (The design tucks it
+ * up with a −42px margin into the card's body padding; these repro cards have rows
+ * flush to the edge, so a negative margin overlapped the last row — a small positive
+ * margin keeps the pager cleanly below the table on every screen.) Left: a
  * "Showing X–Y of Z" count (tabular). Right: Prev / numbered pages (with the design's
  * ellipsis collapse from `pageNums`, logic.js 336) / Next as 32px radius-9 bordered
  * buttons; the active page uses the dark `--btn-dark` fill, Prev/Next dim at the ends.
@@ -54,7 +57,7 @@ export function Pagination({
   return (
     <nav
       aria-label="Pagination"
-      className="mx-auto -mt-[42px] flex items-center justify-between gap-3 border-t border-line2 px-1 pt-3"
+      className="mx-auto mt-2 flex items-center justify-between gap-3 border-t border-line2 px-1 pt-3"
       style={maxWidth ? { maxWidth } : undefined}
     >
       <span className="text-xs text-ink3 tabular-nums">
