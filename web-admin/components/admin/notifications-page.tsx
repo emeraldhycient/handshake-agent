@@ -13,15 +13,17 @@
  * and the delivery log are the design's own module-level mock content (no fetching,
  * no TanStack Query). Real-data reintegration is a separate later step.
  *
- * FUNDS-SAFETY: composing a broadcast never sends on click. A large audience flips
- * the composer into maker-checker mode (the design's `bBig` warning + "Queue for
- * approval" CTA) and opens the shared `MakerCheckerModal` so the broadcast enters
- * Pending approval before it goes out — matching the design's proposal-only posture
- * (root §3.1).
+ * FUNDS-SAFETY: composing a broadcast never sends on click. Every send opens the
+ * shared confirm modal first — a large audience flips the composer into maker-checker
+ * mode (the design's `bBig` warning + "Queue for approval" CTA) so the broadcast
+ * enters Pending approval before it goes out; a small audience gets a plain confirm.
+ * Only the modal's submit marks it queued/sent — matching the design's proposal-only
+ * posture (root §3.1).
  */
 import { useState } from "react"
 
 import { MakerCheckerModal } from "@/components/admin/flows"
+import { pushToast } from "@/lib/store/toast-store"
 import { NativeSelect } from "@/components/ui/native-select"
 import type {
   BroadcastOption,
@@ -173,15 +175,18 @@ function BroadcastComposer() {
   const [audience, setAudience] = useState(AUDIENCE_OPTIONS[0].value)
   const [templateKey, setTemplateKey] = useState(TEMPLATE_OPTIONS[0].value)
   const [when, setWhen] = useState(SCHEDULE_OPTIONS[0].value)
-  const [makerCheckerOpen, setMakerCheckerOpen] = useState(false)
+  const [customAt, setCustomAt] = useState("")
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const [queued, setQueued] = useState(false)
 
   const isLargeAudience =
     (AUDIENCE_REACH[audience] ?? 0) >= LARGE_AUDIENCE_THRESHOLD
+  const isCustomSchedule = when === "custom"
   const audienceLabel =
     AUDIENCE_OPTIONS.find((o) => o.value === audience)?.label ?? audience
-  const scheduleLabel =
-    SCHEDULE_OPTIONS.find((o) => o.value === when)?.label ?? when
+  const scheduleLabel = isCustomSchedule
+    ? customAt || "Custom…"
+    : (SCHEDULE_OPTIONS.find((o) => o.value === when)?.label ?? when)
 
   function onFieldChange(setter: (value: string) => void) {
     return (event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -190,14 +195,12 @@ function BroadcastComposer() {
     }
   }
 
-  // A broadcast is proposal-only: a large audience opens the shared maker-checker
-  // modal (dual control) rather than sending; a small audience just marks "sent".
+  // A broadcast is proposal-only: it never sends on click. Every send opens the
+  // shared confirm modal first — a large audience carries the maker-checker
+  // (dual-control) framing, a small audience a plain confirm — and only the
+  // modal's submit marks it queued/sent.
   function queueBroadcast() {
-    if (isLargeAudience) {
-      setMakerCheckerOpen(true)
-      return
-    }
-    setQueued(true)
+    setConfirmOpen(true)
   }
 
   const cta = isLargeAudience
@@ -262,6 +265,19 @@ function BroadcastComposer() {
               </option>
             ))}
           </NativeSelect>
+
+          {isCustomSchedule && (
+            <input
+              type="datetime-local"
+              aria-label="Custom send time"
+              value={customAt}
+              onChange={(event) => {
+                setCustomAt(event.target.value)
+                setQueued(false)
+              }}
+              className="mt-[7px] h-10 w-full rounded-[10px] border border-line bg-field px-3 text-[13px] font-semibold text-ink transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            />
+          )}
         </div>
 
         {isLargeAudience && <MakerCheckerWarning />}
@@ -277,17 +293,25 @@ function BroadcastComposer() {
       </div>
 
       <MakerCheckerModal
-        open={makerCheckerOpen}
-        onOpenChange={setMakerCheckerOpen}
-        title="Queue broadcast for approval"
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={
+          isLargeAudience ? "Queue broadcast for approval" : "Confirm broadcast"
+        }
         diff={[
           { field: "Audience", from: "—", to: audienceLabel },
           { field: "Template", from: "—", to: templateKey },
           { field: "Schedule", from: "—", to: scheduleLabel },
         ]}
         onSubmit={() => {
-          setMakerCheckerOpen(false)
+          setConfirmOpen(false)
           setQueued(true)
+          pushToast(
+            isLargeAudience
+              ? "Broadcast queued for approval"
+              : "Broadcast sent",
+            "ok"
+          )
         }}
       />
     </div>

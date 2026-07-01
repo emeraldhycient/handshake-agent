@@ -21,6 +21,7 @@
 import { useState } from "react"
 
 import { MakerCheckerModal } from "@/components/admin/flows"
+import { pushToast } from "@/lib/store/toast-store"
 import { cn } from "@/lib/utils"
 import type {
   CurrencyCatalogRow,
@@ -137,6 +138,12 @@ function CurrencyRow({
 }
 
 export function CurrenciesPage() {
+  // The visible currency rows, seeded from the design's mock. Lifted from a module
+  // const into state so an approved dual-control toggle actually flips the row.
+  const [rows, setRows] = useState<CurrencyCatalogRow[]>(() =>
+    CURRENCY_ROWS.map((r) => ({ ...r }))
+  ) // clone the readonly seed
+
   // Which currency's Live toggle is pending dual-control approval (drives the modal).
   const [pending, setPending] = useState<CurrencyCatalogRow | null>(null)
 
@@ -149,6 +156,19 @@ export function CurrenciesPage() {
         },
       ]
     : []
+
+  // Dual-control approved: invert the pending currency's `live` in state (which
+  // flips the Live pill's label + colour), toast the effective new state, then
+  // close the modal. Nothing moves money (§3.1).
+  const applyToggle = () => {
+    if (!pending) return
+    const nextLive = !pending.live
+    setRows((current) =>
+      current.map((r) => (r.id === pending.id ? { ...r, live: nextLive } : r))
+    )
+    pushToast(`${pending.code} · ${nextLive ? "Live" : "Off"}`, "ok")
+    setPending(null)
+  }
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
@@ -179,7 +199,7 @@ export function CurrenciesPage() {
             <div>Name-enquiry</div>
             <div>Live</div>
           </div>
-          {CURRENCY_ROWS.map((row) => (
+          {rows.map((row) => (
             <CurrencyRow key={row.id} row={row} onToggle={setPending} />
           ))}
         </div>
@@ -197,7 +217,7 @@ export function CurrenciesPage() {
             : "Currency change"
         }
         diff={diff}
-        onSubmit={() => setPending(null)}
+        onSubmit={applyToggle}
       />
     </div>
   )

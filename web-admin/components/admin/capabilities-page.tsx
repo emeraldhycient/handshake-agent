@@ -19,11 +19,14 @@
  * FUNDS-SAFETY: toggling a capability is a KILL-SWITCH. The switch never flips on
  * click — it opens the shared `MakerCheckerModal` (dual-control), so an
  * enable/disable enters Pending approval and requires a second admin before it
- * takes effect, exactly as the design does (root §3.1 model-proposes / §7).
+ * takes effect, exactly as the design does (root §3.1 model-proposes / §7). Once
+ * the modal is approved, the pending capability's `on` flag inverts in local state
+ * so the switch + pill visibly change (the design's reactive mock state).
  */
 import { useMemo, useState } from "react"
 
 import { MakerCheckerModal } from "@/components/admin/flows"
+import { pushToast } from "@/lib/store/toast-store"
 import { cn } from "@/lib/utils"
 import type {
   CapabilityRow,
@@ -36,9 +39,10 @@ import type {
 /**
  * The design's six capability rows. Each is bound to a provider port; `on` drives the
  * pill + toggle. Icons are 24×24 stroke-1.8 paths (the design's per-capability marks);
- * `tone` tints the icon tile through a status-token surface/text pair.
+ * `tone` tints the icon tile through a status-token surface/text pair. This is the
+ * initial seed — the page lifts it into `useState` so approving a toggle flips `on`.
  */
-const CAPABILITY_ROWS: readonly CapabilityRow[] = [
+const CAPABILITY_SEED: readonly CapabilityRow[] = [
   {
     id: "crypto.buy",
     label: "crypto.buy",
@@ -189,6 +193,8 @@ function CapabilityRowCard({ row, onToggle }: CapabilityRowProps) {
 // ─── Page ────────────────────────────────────────────────────────────────────────────
 
 export function CapabilitiesPage() {
+  // The switchboard rows are reactive: approving a toggle inverts a row's `on`.
+  const [rows, setRows] = useState<CapabilityRow[]>(() => [...CAPABILITY_SEED])
   const [pending, setPending] = useState<CapabilityRow | null>(null)
 
   // The from→to change preview for the maker-checker modal (design's diff table).
@@ -202,6 +208,23 @@ export function CapabilitiesPage() {
       },
     ]
   }, [pending])
+
+  // Approve the dual-control change: invert the pending capability's flag in
+  // state (the switch + pill visibly flip), toast, then close the modal.
+  const approveToggle = () => {
+    if (!pending) return
+    const enabling = !pending.on
+    setRows((prev) =>
+      prev.map((row) =>
+        row.id === pending.id ? { ...row, on: enabling } : row
+      )
+    )
+    pushToast(
+      `${pending.label} ${enabling ? "enabled" : "disabled"}`,
+      enabling ? "ok" : "warn"
+    )
+    setPending(null)
+  }
 
   return (
     <div className="mx-auto w-full max-w-[1000px] px-[30px] pt-[26px] pb-[60px]">
@@ -218,7 +241,7 @@ export function CapabilitiesPage() {
 
       {/* ── Kill-switch rows ─────────────────────────────────────────────────── */}
       <div className="flex flex-col gap-3">
-        {CAPABILITY_ROWS.map((row) => (
+        {rows.map((row) => (
           <CapabilityRowCard key={row.id} row={row} onToggle={setPending} />
         ))}
       </div>
@@ -235,7 +258,7 @@ export function CapabilitiesPage() {
             : "Toggle capability"
         }
         diff={diff}
-        onSubmit={() => setPending(null)}
+        onSubmit={approveToggle}
       />
     </div>
   )

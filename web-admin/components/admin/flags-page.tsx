@@ -18,11 +18,15 @@
  *
  * The design's toggle carries an `onToggle` handler. Flipping a product flag is a
  * dual-control config change, so toggling opens the shared MakerCheckerModal (the
- * design's destination). Nothing moves money (§3.1).
+ * design's destination); on approval the row's `on` inverts in state — the knob
+ * slides, the track colour flips, and the `eval →` preview updates. The rows live
+ * in `useState` (seeded from the design mock) so the flip is reactive. Nothing
+ * moves money (§3.1).
  */
 import { useState } from "react"
 
 import { MakerCheckerModal } from "@/components/admin/flows"
+import { pushToast } from "@/lib/store/toast-store"
 import { cn } from "@/lib/utils"
 import type { FeatureFlagRow, MakerCheckerDiffRow } from "@/types/components"
 
@@ -127,6 +131,12 @@ function FlagRow({
 }
 
 export function FlagsPage() {
+  // The visible flag rows, seeded from the design's mock. Lifted from a module
+  // const into state so an approved dual-control toggle actually flips the row.
+  const [rows, setRows] = useState<FeatureFlagRow[]>(() =>
+    FLAG_ROWS.map((r) => ({ ...r }))
+  ) // clone the readonly seed
+
   // Which flag's toggle is pending dual-control approval (drives the modal).
   const [pending, setPending] = useState<FeatureFlagRow | null>(null)
 
@@ -139,6 +149,19 @@ export function FlagsPage() {
         },
       ]
     : []
+
+  // Dual-control approved: invert the pending flag's `on` in state (which slides
+  // the knob, flips the track colour, and updates the `eval →` preview), toast
+  // the effective new state, then close the modal.
+  const applyToggle = () => {
+    if (!pending) return
+    const nextOn = !pending.on
+    setRows((current) =>
+      current.map((r) => (r.key === pending.key ? { ...r, on: nextOn } : r))
+    )
+    pushToast(`${pending.key} · eval → ${nextOn ? "on" : "off"}`, "ok")
+    setPending(null)
+  }
 
   return (
     <div className="mx-auto w-full max-w-[1000px] px-[30px] pt-[26px] pb-[60px]">
@@ -155,7 +178,7 @@ export function FlagsPage() {
 
       {/* ── Flag rows ───────────────────────────────────────────────────────── */}
       <div className="flex flex-col gap-3">
-        {FLAG_ROWS.map((flag) => (
+        {rows.map((flag) => (
           <FlagRow key={flag.key} flag={flag} onToggle={setPending} />
         ))}
       </div>
@@ -172,7 +195,7 @@ export function FlagsPage() {
             : "Feature-flag change"
         }
         diff={diff}
-        onSubmit={() => setPending(null)}
+        onSubmit={applyToggle}
       />
     </div>
   )

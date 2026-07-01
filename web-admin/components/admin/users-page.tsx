@@ -14,21 +14,17 @@
  * selected · the 7-column customer table (checkbox / Customer / KYC / Country /
  * Balance / Risk / Last active) · Pagination (10/page). Row click → `/users/[id]`.
  *
- * Bulk actions surface the shared flow modals (reason → step-up → engine) as the
- * design's audited-action pattern — presentation only; nothing here moves money
- * (root §3.1).
+ * The header "Export CSV" and the bulk-bar Export / Tag / Message actions are
+ * read-shaped confirmations that emit a toast (design `logic.js`) — presentation
+ * only; nothing here moves money (root §3.1).
  */
 import { useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 
 import { cn } from "@/lib/utils"
+import { pushToast } from "@/lib/store/toast-store"
 import { FilterSelect } from "@/components/admin/filter-select"
 import { Pagination } from "@/components/admin/pagination"
-import {
-  ReasonModal,
-  StepUpModal,
-  EngineActionModal,
-} from "@/components/admin/flows"
 import type {
   UserKycStatus,
   UserRiskChip,
@@ -563,13 +559,6 @@ export function UsersPage() {
     router.push(`/users/${id}`)
   }
 
-  // ── Bulk action flow (design's audited-action chain: reason → step-up → engine) ──
-  const [flowStep, setFlowStep] = useState<
-    null | "reason" | "stepup" | "engine"
-  >(null)
-  const flowCount = selected.length || filtered.length
-  const flowNoun = `${flowCount} user${flowCount === 1 ? "" : "s"}`
-
   return (
     <div
       data-screen-label="Users"
@@ -590,7 +579,12 @@ export function UsersPage() {
         <div className="flex gap-[9px]">
           <button
             type="button"
-            onClick={() => setFlowStep("reason")}
+            onClick={() =>
+              pushToast(
+                `Exporting ${selected.length || filtered.length} users to CSV…`,
+                "info"
+              )
+            }
             className="flex h-[38px] items-center gap-[7px] rounded-[11px] border border-line bg-card px-[15px] text-[13px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
           >
             <svg
@@ -708,21 +702,30 @@ export function UsersPage() {
           <div className="h-[18px] w-px bg-white/20" />
           <button
             type="button"
-            onClick={() => setFlowStep("reason")}
+            onClick={() =>
+              pushToast(
+                `Exporting ${selected.length || filtered.length} users to CSV…`,
+                "info"
+              )
+            }
             className="text-[12.5px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
           >
             Export
           </button>
           <button
             type="button"
-            onClick={() => setFlowStep("reason")}
+            onClick={() =>
+              pushToast(`Tag applied to ${selected.length} users`, "ok")
+            }
             className="text-[12.5px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
           >
             Tag
           </button>
           <button
             type="button"
-            onClick={() => setFlowStep("reason")}
+            onClick={() =>
+              pushToast(`Composer opened for ${selected.length} users`, "info")
+            }
             className="text-[12.5px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
           >
             Message
@@ -909,37 +912,6 @@ export function UsersPage() {
         page={page}
         onPageChange={setPage}
         maxWidth={MAX_WIDTH}
-      />
-
-      {/* ── Shared flow modals (audited bulk-action chain: reason → step-up → engine) ── */}
-      <ReasonModal
-        open={flowStep === "reason"}
-        onOpenChange={(o) => setFlowStep(o ? "reason" : null)}
-        title={`Message ${flowNoun}`}
-        onContinue={() => setFlowStep("stepup")}
-      />
-      <StepUpModal
-        open={flowStep === "stepup"}
-        onOpenChange={(o) => setFlowStep(o ? "stepup" : null)}
-        title={`Message ${flowNoun}`}
-        onComplete={() => setFlowStep("engine")}
-      />
-      <EngineActionModal
-        open={flowStep === "engine"}
-        onOpenChange={(o) => setFlowStep(o ? "engine" : null)}
-        title="Broadcast message"
-        effect={[
-          { k: "Audience", v: flowNoun },
-          { k: "Channel", v: "In-app + email" },
-          { k: "Directive", v: "notify.broadcast" },
-        ]}
-        ledger={[]}
-        idempotencyKey="idem_broadcast_users"
-        cta="Send broadcast"
-        onExecute={() => {
-          setFlowStep(null)
-          setSelected([])
-        }}
       />
     </div>
   )

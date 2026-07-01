@@ -163,21 +163,29 @@ function kpiValue(def: KpiDef, mul: number): string {
 // ─── Transaction volume bars (design `volBars`, logic.js 461-464) ────────────────────
 // 14 bars; each day's total is `40 + r*55` where `r = (sin((i+3)*1.7)+1)/2`, split into
 // buy 0.34 / sell 0.22 / send 0.16 / swap 0.16 / ticket 0.12 of the total (as % heights).
+//
+// The chart rescopes with the KPI range switcher: `ChartBars` normalises each bar to the
+// tallest total, so a *uniform* scale would be invisible. Instead the range multiplier
+// shifts the sine phase/frequency so the silhouette visibly changes per range, while the
+// per-segment proportions (0.34/0.22/0.16/0.16/0.12) and the axis labels stay identical.
 
-const VOL_BARS: ChartBar[] = Array.from({ length: 14 }, (_, i) => {
-  const r = (Math.sin((i + 3) * 1.7) + 1) / 2
-  const total = 40 + r * 55
-  return {
-    label: i === 0 ? "Jun 18" : i === 13 ? "Today" : `Day ${i + 1}`,
-    segments: {
-      buy: total * 0.34,
-      sell: total * 0.22,
-      send: total * 0.16,
-      swap: total * 0.16,
-      ticket: total * 0.12,
-    },
-  }
-})
+/** Build the 14-day stacked bars for a KPI range, scaled by its multiplier (`mul`). */
+function volBarsFor(mul: number): ChartBar[] {
+  return Array.from({ length: 14 }, (_, i) => {
+    const r = (Math.sin((i + 3) * 1.7 + mul) + 1) / 2
+    const total = (40 + r * 55) * mul
+    return {
+      label: i === 0 ? "Jun 18" : i === 13 ? "Today" : `Day ${i + 1}`,
+      segments: {
+        buy: total * 0.34,
+        sell: total * 0.22,
+        send: total * 0.16,
+        swap: total * 0.16,
+        ticket: total * 0.12,
+      },
+    }
+  })
+}
 
 // ─── System health rows (design `health`, logic.js 466-472) ──────────────────────────
 
@@ -612,6 +620,10 @@ export function OperatorDashboard() {
     [mul]
   )
 
+  // Rescope the stacked-bar chart to the selected range (design `mul`): the bar
+  // silhouette visibly changes per range while colours/labels stay identical.
+  const volBars = useMemo(() => volBarsFor(mul), [mul])
+
   return (
     <div className="flex flex-1 flex-col overflow-y-auto bg-bg">
       <div className="mx-auto w-full max-w-[1320px] px-[30px] pt-[26px] pb-[60px]">
@@ -705,7 +717,7 @@ export function OperatorDashboard() {
             </div>
             <div className="mt-4">
               <ChartBars
-                bars={VOL_BARS}
+                bars={volBars}
                 ariaLabel="Transaction volume by day, stacked by capability, Jun 18 to today"
                 showLegend={false}
               />

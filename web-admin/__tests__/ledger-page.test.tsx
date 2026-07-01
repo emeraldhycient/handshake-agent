@@ -8,10 +8,16 @@
  * render test asserting the reproduced design content: the heading, the
  * sequence-integrity pill, the table headers, and a known mock ledger row.
  */
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, beforeEach } from "vitest"
 import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 
 import { LedgerPage } from "@/components/admin/ledger-page"
+import { defaultToastStore } from "@/lib/store/toast-store"
+
+beforeEach(() => {
+  defaultToastStore.setState({ toasts: [] })
+})
 
 describe("LedgerPage (design reproduction)", () => {
   it("renders the header + the sequence-integrity pill", () => {
@@ -37,5 +43,17 @@ describe("LedgerPage (design reproduction)", () => {
     expect(
       screen.getAllByRole("link", { name: "tx_80231" }).length
     ).toBeGreaterThanOrEqual(1)
+  })
+
+  it("toasts the CSV export confirmation when Export is clicked", async () => {
+    const user = userEvent.setup()
+    render(<LedgerPage />)
+
+    await user.click(screen.getByRole("button", { name: /Export/i }))
+
+    const { toasts } = defaultToastStore.getState()
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].message).toBe("Exporting ledger to CSV…")
+    expect(toasts[0].kind).toBe("info")
   })
 })

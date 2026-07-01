@@ -17,9 +17,10 @@
  * transaction detail route, exactly as the design does.
  */
 import { useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 
 import { cn } from "@/lib/utils"
+import { pushToast } from "@/lib/store/toast-store"
 import {
   EngineActionModal,
   MakerCheckerModal,
@@ -415,6 +416,24 @@ interface FlowConfig {
   piiLabel?: string
   /** When the flow completes, reveal decrypted PII (the reveal-NIN flow). */
   reveals?: boolean
+  /**
+   * Side-effect to run once the flow's final step is confirmed (mutations, toasts).
+   * Receives the reason text captured by the ReasonModal step, if any.
+   */
+  onComplete?: (reason: string) => void
+}
+
+// Mutable row shapes derived from the design seeds — lifted into component state so
+// add/remove/prepend actions are reactive (visible list changes without data fetching).
+type TimelineEntry = { text: string; meta: string; dot: string }
+type SessionRow = { ua: string; ip: string; when: string; dot: string }
+type BeneficiaryRow = {
+  name: string
+  detail: string
+  ne: string
+  neBg: string
+  neFg: string
+  icon: string
 }
 
 export function UserDetail(_props: UserDetailProps) {
@@ -424,8 +443,20 @@ export function UserDetail(_props: UserDetailProps) {
   void _props
 
   const router = useRouter()
-  const [tab, setTab] = useState<Tab>("profile")
+  const searchParams = useSearchParams()
+  // Deep-link tab: seed from ?tab= when it names a valid tab (KYC-queue links land on KYC).
+  const [tab, setTab] = useState<Tab>(() => {
+    const q = searchParams.get("tab")
+    return TABS.some((t) => t.id === q) ? (q as Tab) : "profile"
+  })
   const [piiRevealed, setPiiRevealed] = useState(false)
+
+  // Reactive design-mock lists (lifted from module consts so mutations show live).
+  const [timeline, setTimeline] = useState<TimelineEntry[]>(() => [...TIMELINE])
+  const [sessions, setSessions] = useState<SessionRow[]>(() => [...SESSIONS])
+  const [beneficiaries, setBeneficiaries] = useState<BeneficiaryRow[]>(() => [
+    ...BENEFICIARIES,
+  ])
 
   // Sequential flow-modal machine: the active step index walks the config's steps.
   const [flow, setFlow] = useState<FlowConfig | null>(null)
@@ -435,11 +466,13 @@ export function UserDetail(_props: UserDetailProps) {
     setFlow(config)
     setFlowStep(0)
   }
-  function advance() {
+  // `reason` is forwarded from the ReasonModal step so onComplete can record it.
+  function advance(reason = "") {
     if (!flow) return
     if (flowStep + 1 >= flow.steps.length) {
       // Completed the last step.
       if (flow.reveals) setPiiRevealed(true)
+      flow.onComplete?.(reason)
       setFlow(null)
       setFlowStep(0)
       return
@@ -510,6 +543,42 @@ export function UserDetail(_props: UserDetailProps) {
       ],
     })
 
+  // Add note — captures the free-text reason as the note and prepends it to the timeline.
+  const addNote = () =>
+    runFlow({
+      title: "Add note",
+      steps: ["reason"],
+      onComplete: (reason) => {
+        setTimeline((rows) => [
+          { text: reason, meta: "just now", dot: "#f5a623" },
+          ...rows,
+        ])
+        pushToast("Note added to timeline", "ok")
+      },
+    })
+
+  // Revoke a single session — confirm, then drop that row from the live sessions list.
+  const revokeSession = (index: number) =>
+    runFlow({
+      title: "Revoke session",
+      steps: ["reason"],
+      onComplete: () => {
+        setSessions((rows) => rows.filter((_, i) => i !== index))
+        pushToast("Session revoked", "ok")
+      },
+    })
+
+  // Remove a single beneficiary — confirm, then drop that row from the live list.
+  const removeBeneficiary = (index: number) =>
+    runFlow({
+      title: "Remove beneficiary",
+      steps: ["reason"],
+      onComplete: () => {
+        setBeneficiaries((rows) => rows.filter((_, i) => i !== index))
+        pushToast("Beneficiary removed", "ok")
+      },
+    })
+
   const revealLabel = piiRevealed ? "Hide" : "Reveal"
   const revealIcon = piiRevealed
     ? "M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.4 5.2A9 9 0 0 1 21 12a17 17 0 0 1-2.2 3M6.2 6.2A17 17 0 0 0 3 12s3.5 7 9 7a9 9 0 0 0 3-.5"
@@ -568,7 +637,10 @@ export function UserDetail(_props: UserDetailProps) {
             </div>
             <button
               type="button"
-              onClick={() => void navigator.clipboard?.writeText(CU.id)}
+              onClick={() => {
+                void navigator.clipboard?.writeText(CU.id)
+                pushToast(`Copied · ${CU.id}`, "copy")
+              }}
               className="mt-1.5 inline-flex cursor-pointer items-center gap-1.5 font-mono text-xs text-ink3 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
             >
               {CU.id}
@@ -597,6 +669,11 @@ export function UserDetail(_props: UserDetailProps) {
                 title={a.label}
                 onClick={() => {
                   if (a.label === "Freeze") freezeUser()
+                  else if (a.label === "Add note") addNote()
+                  else if (a.label === "Resend")
+                    pushToast("Verification link re-sent", "info")
+                  else if (a.label === "View as")
+                    pushToast(`Now viewing as ${CU.name}`, "ok")
                 }}
                 className={cn(
                   "flex h-9 cursor-pointer items-center gap-[7px] rounded-[10px] border px-[13px] text-[12.5px] font-bold focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
@@ -713,12 +790,13 @@ export function UserDetail(_props: UserDetailProps) {
               </div>
               <button
                 type="button"
+                onClick={addNote}
                 className="cursor-pointer text-xs font-bold text-tif focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
               >
                 + Add note
               </button>
             </div>
-            {TIMELINE.map((t, i) => (
+            {timeline.map((t, i) => (
               <div
                 key={i}
                 className="flex gap-[11px] border-b border-line2 py-[9px]"
@@ -1130,7 +1208,7 @@ export function UserDetail(_props: UserDetailProps) {
                 Revoke all
               </button>
             </div>
-            {SESSIONS.map((s, i) => (
+            {sessions.map((s, i) => (
               <div
                 key={i}
                 className="flex items-center gap-[11px] border-b border-line2 py-2.5"
@@ -1147,6 +1225,7 @@ export function UserDetail(_props: UserDetailProps) {
                 </div>
                 <button
                   type="button"
+                  onClick={() => revokeSession(i)}
                   className="cursor-pointer text-[11.5px] font-bold text-ink2 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
                 >
                   Revoke
@@ -1223,7 +1302,10 @@ export function UserDetail(_props: UserDetailProps) {
                 </span>
                 <button
                   type="button"
-                  onClick={() => void navigator.clipboard?.writeText(a.addr)}
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(a.addr)
+                    pushToast(`Copied · ${a.addr}`, "copy")
+                  }}
                   className="flex-1 cursor-pointer overflow-hidden text-left font-mono text-xs text-ellipsis whitespace-nowrap text-ink2 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
                 >
                   {a.addr}
@@ -1240,7 +1322,7 @@ export function UserDetail(_props: UserDetailProps) {
       {/* ===== BENEFICIARIES ===== */}
       {tab === "bene" && (
         <div className="rounded-2xl border border-line bg-card p-[6px_20px]">
-          {BENEFICIARIES.map((b, i) => (
+          {beneficiaries.map((b, i) => (
             <div
               key={i}
               className="flex items-center gap-[13px] border-b border-line2 py-[15px]"
@@ -1276,6 +1358,7 @@ export function UserDetail(_props: UserDetailProps) {
               </span>
               <button
                 type="button"
+                onClick={() => removeBeneficiary(i)}
                 className="cursor-pointer text-[11.5px] font-bold text-ink3 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
               >
                 Remove
@@ -1467,7 +1550,7 @@ export function UserDetail(_props: UserDetailProps) {
         open={current === "reason"}
         onOpenChange={(o) => !o && cancelFlow()}
         title={flow?.title ?? ""}
-        onContinue={() => advance()}
+        onContinue={(reason) => advance(reason)}
       />
       <StepUpModal
         open={current === "stepup"}

@@ -77,17 +77,16 @@ const SCREENING_MATCHES: readonly ScreeningMatch[] = [
 ]
 
 // The design's monitoring toggles (representative content; SPEC §6.5 "toggle rows").
-const MONITOR_ROWS: readonly { label: string; defaultOn: boolean }[] = [
-  {
-    label: "Re-screen all customers daily against updated lists",
-    defaultOn: true,
-  },
-  { label: "Screen every counterparty on outbound transfer", defaultOn: true },
-  {
-    label: "Alert on new PEP (politically exposed person) matches",
-    defaultOn: true,
-  },
-  { label: "Auto-block confirmed OFAC SDN-list hits", defaultOn: false },
+interface MonitorRow {
+  label: string
+  on: boolean
+}
+
+const MONITOR_ROWS: readonly MonitorRow[] = [
+  { label: "Re-screen all customers daily against updated lists", on: true },
+  { label: "Screen every counterparty on outbound transfer", on: true },
+  { label: "Alert on new PEP (politically exposed person) matches", on: true },
+  { label: "Auto-block confirmed OFAC SDN-list hits", on: false },
 ]
 
 // The done-label + token shown once a match has been dispositioned.
@@ -213,21 +212,39 @@ function SanctionsMatchCard({
   )
 }
 
-/** The ongoing-monitoring card (design lines 17–20). */
+/**
+ * The ongoing-monitoring card (design lines 17–20). Each row is a lightweight
+ * soft-toggle — no maker-checker gate — so the Switch is CONTROLLED off `useState`
+ * and genuinely flips + holds when clicked.
+ */
 function OngoingMonitoring() {
+  const [rows, setRows] = useState<MonitorRow[]>(() =>
+    MONITOR_ROWS.map((r) => ({ ...r }))
+  )
+
   return (
     <div className="mt-3.5 rounded-[16px] border border-line bg-card px-5 py-[18px]">
       <div className="mb-3 text-[13px] font-extrabold text-ink">
         Ongoing monitoring
       </div>
       <ul>
-        {MONITOR_ROWS.map((row) => (
+        {rows.map((row) => (
           <li
             key={row.label}
             className="flex items-center justify-between gap-4 border-b border-line2 py-2.5 last:border-b-0"
           >
             <span className="text-[12.5px] text-ink2">{row.label}</span>
-            <Switch defaultChecked={row.defaultOn} aria-label={row.label} />
+            <Switch
+              checked={row.on}
+              onCheckedChange={(next) =>
+                setRows((prev) =>
+                  prev.map((r) =>
+                    r.label === row.label ? { ...r, on: next } : r
+                  )
+                )
+              }
+              aria-label={row.label}
+            />
           </li>
         ))}
       </ul>

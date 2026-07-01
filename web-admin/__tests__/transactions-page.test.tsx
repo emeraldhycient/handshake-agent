@@ -11,15 +11,23 @@
  *
  * The list uses `useRouter().push` on row click, so `next/navigation` is stubbed.
  */
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 
 import { TransactionsPage } from "@/components/admin/transactions-page"
 import { TransactionDetail } from "@/components/admin/transaction-detail"
+import { defaultToastStore } from "@/lib/store/toast-store"
 
+const push = vi.fn()
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push }),
 }))
+
+beforeEach(() => {
+  push.mockClear()
+  defaultToastStore.setState({ toasts: [] })
+})
 
 describe("TransactionsPage (design reproduction)", () => {
   it("renders the header, the ledger table columns and mock rows", () => {
@@ -48,6 +56,37 @@ describe("TransactionsPage (design reproduction)", () => {
       screen.getByRole("button", { name: /Failed today/ })
     ).toBeInTheDocument()
   })
+
+  it("copies the idempotency key + toasts and does NOT navigate the row", async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn()
+    // jsdom's navigator.clipboard is a getter-only prop — define it explicitly.
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    })
+
+    render(<TransactionsPage />)
+
+    // Each page row exposes its idem cell as a role="button" with a Copy
+    // aria-label; take the first row's.
+    const copyCell = screen.getAllByRole("button", {
+      name: /Copy idempotency key idem_/i,
+    })[0]
+    const idem = copyCell.textContent ?? ""
+
+    await user.click(copyCell)
+
+    // Copies to the clipboard and emits the `Copied · …` toast (kind "copy").
+    expect(writeText).toHaveBeenCalledWith(idem)
+    const { toasts } = defaultToastStore.getState()
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].message).toBe(`Copied · ${idem}`)
+    expect(toasts[0].kind).toBe("copy")
+
+    // stopPropagation kept the row from navigating to the detail route.
+    expect(push).not.toHaveBeenCalled()
+  })
 })
 
 describe("TransactionDetail (design reproduction)", () => {
@@ -71,5 +110,26 @@ describe("TransactionDetail (design reproduction)", () => {
     expect(
       screen.getByRole("button", { name: /Mark failed/ })
     ).toBeInTheDocument()
+  })
+
+  it("toasts (no flow) when Resend receipt is clicked", async () => {
+    const user = userEvent.setup()
+    render(<TransactionDetail transactionId="tx_80283" />)
+
+    await user.click(screen.getByRole("button", { name: /Resend receipt/ }))
+
+    const { toasts } = defaultToastStore.getState()
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].kind).toBe("info")
+    expect(toasts[0].message).toMatch(/Receipt re-sent to the customer/)
+  })
+
+  it("deep-links Open ledger to this transaction", () => {
+    render(<TransactionDetail transactionId="tx_80283" />)
+
+    expect(screen.getByRole("link", { name: /Open ledger/ })).toHaveAttribute(
+      "href",
+      "/ledger?tx=tx_80283"
+    )
   })
 })

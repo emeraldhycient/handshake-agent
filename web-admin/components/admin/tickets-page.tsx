@@ -5,8 +5,8 @@
  * `docs/design-ref/screens/Ticketing.html`.
  *
  * Layout: a `1fr 1.4fr` row — **Vendor ports** (mono name + commission + status pill)
- * | **Recent orders** (event/id · user · amount · status). Clickable order rows
- * navigate to the transaction detail route, matching the design's record affordance.
+ * | **Recent orders** (event/id · user · amount · status). Order rows are pure
+ * read-only display (plain mono text, no navigation), matching the design markup.
  *
  * DATA: this is a DESIGN REPRODUCTION — nothing is fetched. Both panels render the
  * design's own representative sample content (module-level consts, matching the
@@ -14,8 +14,6 @@
  * "Amara Okeke"). Real-data reintegration is a separate later step. Read-only — nothing
  * here moves money (§3.1).
  */
-import { useRouter } from "next/navigation"
-
 import { StatusPill } from "@/components/admin/status-pill"
 import { Badge } from "@/components/ui/badge"
 import type {
@@ -114,19 +112,17 @@ function VendorPortsCard() {
   )
 }
 
-/** Right panel — Recent orders (event/id · user · amount · status). */
-function RecentOrdersCard({ onOpen }: { onOpen: (id: string) => void }) {
+/** Right panel — Recent orders (event/id · user · amount · status). Read-only. */
+function RecentOrdersCard() {
   return (
     <div className="overflow-hidden rounded-[16px] border border-line bg-card">
       <div className="border-b border-line px-[18px] py-[14px] text-[13px] font-extrabold text-ink">
         Recent orders
       </div>
       {ORDER_ROWS.map((order) => (
-        <button
-          type="button"
+        <div
           key={order.id}
-          onClick={() => onOpen(order.id)}
-          className="grid w-full grid-cols-[1.6fr_1fr_0.9fr_0.8fr] items-center gap-3 border-b border-line2 px-[18px] py-3 text-left transition-colors last:border-b-0 hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="grid w-full grid-cols-[1.6fr_1fr_0.9fr_0.8fr] items-center gap-3 border-b border-line2 px-[18px] py-3 last:border-b-0"
         >
           <div>
             <div className="text-[12.5px] font-bold text-ink">
@@ -144,7 +140,7 @@ function RecentOrdersCard({ onOpen }: { onOpen: (id: string) => void }) {
               stuck={order.status === "pending_settlement"}
             />
           </div>
-        </button>
+        </div>
       ))}
     </div>
   )
@@ -153,8 +149,6 @@ function RecentOrdersCard({ onOpen }: { onOpen: (id: string) => void }) {
 // ─── Page ───────────────────────────────────────────────────────────────────────────
 
 export function TicketsPage() {
-  const router = useRouter()
-
   return (
     <div className="mx-auto w-full max-w-[1200px] px-[30px] pt-[26px] pb-[60px]">
       <div className="mb-4">
@@ -168,7 +162,7 @@ export function TicketsPage() {
 
       <div className="grid grid-cols-1 items-start gap-[14px] lg:grid-cols-[1fr_1.4fr]">
         <VendorPortsCard />
-        <RecentOrdersCard onOpen={(id) => router.push(`/transactions/${id}`)} />
+        <RecentOrdersCard />
       </div>
     </div>
   )

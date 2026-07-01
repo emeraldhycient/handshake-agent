@@ -21,6 +21,7 @@ import Link from "next/link"
 
 import { FilterSelect } from "@/components/admin/filter-select"
 import { Pagination } from "@/components/admin/pagination"
+import { pushToast } from "@/lib/store/toast-store"
 
 // ── Design data (translated from vLedger(), logic.js 791-817) ────────────────
 
@@ -188,7 +189,7 @@ export function LedgerPage() {
 
   /** Export toast stand-in — mirrors the design's `exportLedger()` (logic.js 790). */
   function exportLedger() {
-    // Design shows a "Exporting ledger to CSV…" toast; reproduction is presentation-only.
+    pushToast("Exporting ledger to CSV…", "info")
   }
 
   return (

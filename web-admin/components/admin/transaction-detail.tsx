@@ -31,6 +31,7 @@ import { useMemo, useState } from "react"
 import Link from "next/link"
 
 import { cn } from "@/lib/utils"
+import { pushToast } from "@/lib/store/toast-store"
 import { StatusPill } from "@/components/admin/status-pill"
 import {
   EngineActionModal,
@@ -361,10 +362,10 @@ const LEDGER_GRID = "grid grid-cols-[1.6fr_0.7fr_1fr_0.7fr] gap-2"
 // The five flow phases a triage action can move through (the design's runFlow).
 type ActivePhase = FlowStep | null
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- route id kept for the later data-wired step
-export function TransactionDetail({
-  transactionId: _transactionId,
-}: TransactionDetailProps) {
+// The route's transactionId is unused in this design reproduction (the screen
+// renders the mock TX); it gets wired to real data in the later integration step.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- see above
+export function TransactionDetail(_props: TransactionDetailProps) {
   const [copied, setCopied] = useState<string | null>(null)
   // The in-flight action + how far through its step list we are.
   const [activeKind, setActiveKind] = useState<FlowKind | null>(null)
@@ -382,8 +383,13 @@ export function TransactionDetail({
   }
 
   function startAction(kind: FlowKind) {
+    if (kind === "receipt") {
+      // Design: no engine flow — just re-send the receipt and confirm via toast.
+      pushToast("Receipt re-sent to the customer", "info")
+      return
+    }
     const next = flowSpecFor(kind)
-    if (!next) return // receipt: no flow (design fires a toast only)
+    if (!next) return
     setActiveKind(kind)
     setPhase(next.steps[0])
   }
@@ -552,7 +558,7 @@ export function TransactionDetail({
                 Double-entry ledger
               </div>
               <Link
-                href="/ledger"
+                href={`/ledger?tx=${TX.id}`}
                 className="text-[11.5px] font-bold text-tif transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
               >
                 Open ledger →

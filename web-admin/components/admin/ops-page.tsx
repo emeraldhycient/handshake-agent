@@ -28,6 +28,7 @@
 import { useState } from "react"
 
 import { cn } from "@/lib/utils"
+import { pushToast } from "@/lib/store/toast-store"
 import {
   EngineActionModal,
   ReasonModal,
@@ -304,6 +305,13 @@ export function OpsPage() {
     setActive(null)
   }
 
+  // Engine confirmed the manual run — surface a "queued" toast (the design's
+  // verify expects this feedback), then dismiss the flow.
+  function executeRun() {
+    if (active) pushToast(`Run started · ${active.job.name}`, "info")
+    closeFlow()
+  }
+
   return (
     <div
       data-screen-label="System / ops"
@@ -352,7 +360,7 @@ export function OpsPage() {
             ledger={[...NO_LEDGER]}
             idempotencyKey={`ops-run-${active.job.id}`}
             cta="Trigger via engine"
-            onExecute={closeFlow}
+            onExecute={executeRun}
           />
         </>
       )}

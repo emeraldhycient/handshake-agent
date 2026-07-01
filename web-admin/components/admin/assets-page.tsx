@@ -26,18 +26,22 @@ import { useState } from "react"
 
 import { cn } from "@/lib/utils"
 import { MakerCheckerModal, ReasonModal } from "@/components/admin/flows"
+import { pushToast } from "@/lib/store/toast-store"
 import type { AssetCatalogRow, DiscoveredAssetRow } from "@/types/components"
 
 // Design §6.23 table grid — Asset / Chain / Decimals / Min-max / Contract / Live.
 const ASSETS_GRID = "grid-cols-[1.4fr_0.8fr_0.7fr_1fr_1.6fr_0.7fr]"
 
-// The design's last-sync caption (matches the seed()'s recent-sync timestamp shape).
-const LAST_SYNC = "2 hours ago · 14 assets, 3 chains"
+// The design's initial last-sync caption (matches the seed()'s recent-sync
+// timestamp shape). Seeds the reactive `lastSync` state — "Sync Blockradar
+// catalog" advances it to "just now".
+const INITIAL_LAST_SYNC = "2 hours ago · 14 assets, 3 chains"
 
 // The design's mock asset rows (green-chip catalog). Values reproduce the markup +
 // the launch dataset (USDT + TRX on TRON, ADR-0006) with representative extras so
-// the table reads exactly as the design renders it.
-const ASSET_ROWS: readonly AssetCatalogRow[] = [
+// the table reads exactly as the design renders it. Seeds the reactive `assets`
+// state — the Live toggle-pill flips a row's `live` flag once maker-checker approves.
+const INITIAL_ASSET_ROWS: readonly AssetCatalogRow[] = [
   {
     sym: "USDT",
     name: "Tether USD",
@@ -271,15 +275,51 @@ function AssetRow({
   )
 }
 
+/** Stable identity for an asset row (ticker + chain uniquely name a listing). */
+function assetKey(asset: AssetCatalogRow) {
+  return `${asset.sym}-${asset.chain}`
+}
+
 export function AssetsPage() {
-  // Which flow modal is open, and the row/asset it targets. Presentation-only —
-  // these reproduce the design's action destinations without a real mutation.
+  // Reactive catalog + last-sync caption (design mock data, lifted into state so
+  // the maker-checker toggle and the Blockradar sync visibly mutate the screen).
+  const [assets, setAssets] =
+    useState<readonly AssetCatalogRow[]>(INITIAL_ASSET_ROWS)
+  const [lastSync, setLastSync] = useState(INITIAL_LAST_SYNC)
+
+  // Which flow modal is open, and the row/asset it targets. The toggle target is
+  // held by key so the modal reads the row's live flag from current state.
   const [reasonFor, setReasonFor] = useState<string | null>(null)
-  const [toggleTarget, setToggleTarget] = useState<AssetCatalogRow | null>(null)
+  const [toggleKey, setToggleKey] = useState<string | null>(null)
+  const toggleTarget =
+    assets.find((asset) => assetKey(asset) === toggleKey) ?? null
 
   function copyContract(asset: AssetCatalogRow) {
     if (asset.contract !== "—")
       void navigator.clipboard?.writeText(asset.contract)
+  }
+
+  // The ReasonModal is shared by the sync action and the discovered-card
+  // "Review & add" action; this title marks the sync path.
+  const SYNC_REASON = "Sync Blockradar catalog"
+
+  /** ReasonModal continue — the sync path advances last-sync + toasts. */
+  function continueReason() {
+    if (reasonFor === SYNC_REASON) {
+      setLastSync("just now")
+      pushToast("Blockradar catalog synced", "info")
+    }
+    setReasonFor(null)
+  }
+
+  /** Flip the targeted asset's live flag once maker-checker approves, then close. */
+  function approveToggle() {
+    setAssets((rows) =>
+      rows.map((asset) =>
+        assetKey(asset) === toggleKey ? { ...asset, live: !asset.live } : asset
+      )
+    )
+    setToggleKey(null)
   }
 
   return (
@@ -297,7 +337,7 @@ export function AssetsPage() {
         </div>
         <button
           type="button"
-          onClick={() => setReasonFor("Sync Blockradar catalog")}
+          onClick={() => setReasonFor(SYNC_REASON)}
           aria-label="Sync Blockradar catalog"
           className="flex h-[38px] items-center gap-2 rounded-[11px] border border-line bg-card px-[15px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
         >
@@ -307,7 +347,7 @@ export function AssetsPage() {
       </div>
 
       {/* Last-sync line */}
-      <div className="mb-3.5 text-[11px] text-ink3">Last sync: {LAST_SYNC}</div>
+      <div className="mb-3.5 text-[11px] text-ink3">Last sync: {lastSync}</div>
 
       {/* ── Newly discovered — review-to-add card ────────────────────────────── */}
       <DiscoveredCard
@@ -330,12 +370,12 @@ export function AssetsPage() {
           <div>Contract</div>
           <div>Live</div>
         </div>
-        {ASSET_ROWS.map((asset) => (
+        {assets.map((asset) => (
           <AssetRow
-            key={`${asset.sym}-${asset.chain}`}
+            key={assetKey(asset)}
             asset={asset}
             onCopy={copyContract}
-            onToggle={setToggleTarget}
+            onToggle={(a) => setToggleKey(assetKey(a))}
           />
         ))}
       </div>
@@ -345,12 +385,12 @@ export function AssetsPage() {
         open={reasonFor !== null}
         onOpenChange={(open) => !open && setReasonFor(null)}
         title={reasonFor ?? ""}
-        onContinue={() => setReasonFor(null)}
+        onContinue={continueReason}
       />
 
       <MakerCheckerModal
         open={toggleTarget !== null}
-        onOpenChange={(open) => !open && setToggleTarget(null)}
+        onOpenChange={(open) => !open && setToggleKey(null)}
         title={
           toggleTarget
             ? `${toggleTarget.live ? "Pause" : "Enable"} ${toggleTarget.sym}`
@@ -367,7 +407,7 @@ export function AssetsPage() {
               ]
             : []
         }
-        onSubmit={() => setToggleTarget(null)}
+        onSubmit={approveToggle}
       />
     </div>
   )

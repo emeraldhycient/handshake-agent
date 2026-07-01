@@ -22,6 +22,7 @@ import { useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { StatusPill } from "@/components/admin/status-pill"
 import { Pagination } from "@/components/admin/pagination"
+import { pushToast } from "@/lib/store/toast-store"
 import type { StatusPillStatus } from "@/types/components"
 
 // ─── Design mock data (translated from docs/design-ref/logic.js seed() + vTxns()) ───
@@ -288,6 +289,16 @@ export function TransactionsPage() {
     setPage(1)
   }
 
+  /**
+   * Copy an idempotency key + toast, stopping the row's navigate (design's
+   * `onCopyIdem`). Shared by the cell's click + Enter/Space keyboard paths.
+   */
+  function copyIdem(e: React.SyntheticEvent, idem: string) {
+    e.stopPropagation()
+    void navigator.clipboard?.writeText(idem)
+    pushToast(`Copied · ${idem}`, "copy")
+  }
+
   return (
     <div className="mx-auto max-w-[1360px] px-[30px] pt-[26px] pb-[60px]">
       {/* Header (Txns.html line 3) */}
@@ -446,10 +457,24 @@ export function TransactionsPage() {
                   stuck={t.status === "pending_settlement"}
                 />
               </div>
-              {/* Idempotency key */}
-              <div className="truncate font-mono text-[11px] text-ink3">
+              {/* Idempotency key — copy-on-click, does NOT navigate the row.
+                  A nested <button> is invalid inside the row button, so this is
+                  a role="button" span with click + Enter/Space keyboard paths. */}
+              <span
+                role="button"
+                tabIndex={0}
+                aria-label={`Copy idempotency key ${t.idem}`}
+                onClick={(e) => copyIdem(e, t.idem)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    copyIdem(e, t.idem)
+                  }
+                }}
+                className="truncate rounded-[6px] font-mono text-[11px] text-ink3 transition-colors hover:text-ink2 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+              >
                 {t.idem}
-              </div>
+              </span>
               {/* Created */}
               <div className="text-[11.5px] text-ink2 tabular-nums">
                 {t.created}
