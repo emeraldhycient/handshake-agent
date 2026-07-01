@@ -1,121 +1,60 @@
 /**
- * TreasuryPage test.
+ * TreasuryPage test (design-reproduction build).
  *
- *  4. The aggregated-balances table renders one row per network/asset group.
- *
- * The api layer is mocked — no server.
+ * The Treasury screen is a pixel-faithful reproduction of
+ * `docs/design-ref/screens/Treasury.html` — it renders the design's own mock
+ * content from module-level constants and does NOT fetch (no TanStack Query /
+ * server). So these tests render the component bare and assert the design's static
+ * structure: the custodial hero, the 4-up balance row, the low-float banner, the
+ * payout approval queue, and the child-address sweeps + threshold.
  */
-import { describe, expect, it, vi, beforeEach } from "vitest"
+import { describe, expect, it } from "vitest"
 import { render, screen } from "@testing-library/react"
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type {
-  AdminMe,
-  TreasuryAlertListResponse,
-  TreasuryBalancesResponse,
-  TreasuryExposureListResponse,
-  WithdrawalPolicyListResponse,
-} from "@handshake-agent/contracts"
 
 import { TreasuryPage } from "@/components/admin/treasury-page"
 
-// ─── Mocks ──────────────────────────────────────────────────────────────────────
-
-vi.mock("@/lib/api/admin", () => ({
-  getMe: vi.fn(),
-}))
-
-vi.mock("@/lib/api/treasury", () => ({
-  listTreasuryBalances: vi.fn(),
-  listTreasuryExposure: vi.fn(),
-  listTreasuryAlerts: vi.fn(),
-  acknowledgeTreasuryAlert: vi.fn(),
-  listWithdrawalPolicies: vi.fn(),
-}))
-
-import { getMe } from "@/lib/api/admin"
-import {
-  listTreasuryBalances,
-  listTreasuryExposure,
-  listTreasuryAlerts,
-  listWithdrawalPolicies,
-} from "@/lib/api/treasury"
-
-const mockGetMe = vi.mocked(getMe)
-const mockBalances = vi.mocked(listTreasuryBalances)
-const mockExposure = vi.mocked(listTreasuryExposure)
-const mockAlerts = vi.mocked(listTreasuryAlerts)
-const mockPolicies = vi.mocked(listWithdrawalPolicies)
-
-// ─── Fixtures ─────────────────────────────────────────────────────────────────
-
-const ME: AdminMe = {
-  id: "00000000-0000-0000-0000-000000000001",
-  email: "admin@example.com",
-  role: { id: "00000000-0000-0000-0000-0000000000aa", name: "finance" },
-  status: "active",
-  mfaEnabled: false,
-  permissions: [],
-  menus: [],
-  pages: [],
-}
-
-const BALANCES: TreasuryBalancesResponse = {
-  balances: [
-    {
-      network: "tron",
-      asset: "USDT",
-      totalAmount: "125000.50",
-      walletCount: 42,
-    },
-    {
-      network: "tron",
-      asset: "TRX",
-      totalAmount: "9000",
-      walletCount: 42,
-    },
-  ],
-}
-
-const EMPTY_EXPOSURE: TreasuryExposureListResponse = { items: [] }
-const EMPTY_ALERTS: TreasuryAlertListResponse = { items: [] }
-const EMPTY_POLICIES: WithdrawalPolicyListResponse = { items: [] }
-
-function renderPage() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+describe("TreasuryPage (design reproduction)", () => {
+  it("renders the header + low-float alert", () => {
+    render(<TreasuryPage />)
+    expect(
+      screen.getByRole("heading", { name: "Treasury" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/NGN float is at 18% of target/i)
+    ).toBeInTheDocument()
   })
-  return render(
-    <QueryClientProvider client={client}>
-      <TreasuryPage />
-    </QueryClientProvider>
-  )
-}
 
-beforeEach(() => {
-  mockGetMe.mockReset()
-  mockBalances.mockReset()
-  mockExposure.mockReset()
-  mockAlerts.mockReset()
-  mockPolicies.mockReset()
-  mockGetMe.mockResolvedValue(ME)
-  mockBalances.mockResolvedValue(BALANCES)
-  mockExposure.mockResolvedValue(EMPTY_EXPOSURE)
-  mockAlerts.mockResolvedValue(EMPTY_ALERTS)
-  mockPolicies.mockResolvedValue(EMPTY_POLICIES)
-})
+  it("renders the 4-up balance cards including the custodial hero", () => {
+    render(<TreasuryPage />)
+    expect(screen.getByText("Custodial · USDT")).toBeInTheDocument()
+    expect(screen.getByText("412,908.44")).toBeInTheDocument()
+    expect(
+      screen.getByText(/12 wallets · Blockradar TRON/i)
+    ).toBeInTheDocument()
+    expect(screen.getByText("NGN fiat float")).toBeInTheDocument()
+    expect(screen.getByText("FX position")).toBeInTheDocument()
+    expect(screen.getByText("Exposure headroom")).toBeInTheDocument()
+  })
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+  it("renders the payout approval queue with a maker-checker tag", () => {
+    render(<TreasuryPage />)
+    expect(
+      screen.getByText("Payout / withdrawal approval queue")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Kelechi Chukwu · GTBank")).toBeInTheDocument()
+    // The large payout carries the amber maker-checker tag.
+    expect(screen.getByText("Maker-checker")).toBeInTheDocument()
+    // One Approve action per pending payout row (3 seeded rows).
+    expect(screen.getAllByRole("button", { name: "Approve" })).toHaveLength(3)
+  })
 
-describe("TreasuryPage", () => {
-  it("renders aggregated balance rows with totals and wallet counts", async () => {
-    renderPage()
-
-    // One card per network/asset group — the label combines asset · network.
-    expect(await screen.findByText(/USDT · tron/i)).toBeInTheDocument()
-    expect(screen.getByText(/TRX · tron/i)).toBeInTheDocument()
-    // Total amount rendered.
-    expect(screen.getByText("125000.50")).toBeInTheDocument()
-    // Wallet count rendered on each of the two group cards.
-    expect(screen.getAllByText(/42 wallets/i)).toHaveLength(2)
+  it("renders the child-address sweeps + 25 TRX threshold", () => {
+    render(<TreasuryPage />)
+    expect(screen.getByText("Child-address sweeps")).toBeInTheDocument()
+    expect(screen.getByText("Swept")).toBeInTheDocument()
+    expect(screen.getByText("Pending")).toBeInTheDocument()
+    expect(screen.getByText("Below threshold")).toBeInTheDocument()
+    expect(screen.getByText("Sweep threshold")).toBeInTheDocument()
+    expect(screen.getByText("25 TRX")).toBeInTheDocument()
   })
 })

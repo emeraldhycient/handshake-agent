@@ -1,161 +1,75 @@
 /**
- * TransactionsPage + TransactionDetail tests.
+ * TransactionsPage + TransactionDetail render tests (design reproduction).
  *
- *  1. The transactions table renders a row per transaction; selecting a status
- *     filter re-queries with that status.
- *  2. A mark-failed action that 403s with ADMIN_STEP_UP_REQUIRED opens the
- *     step-up dialog (the `useStepUpRetry` flow).
+ * Both screens were rebuilt as pixel-faithful reproductions of the design: they
+ * render their own module-level mock content (no `@/lib/api/transactions`, no
+ * `getMe`, no mark-failed mutation, no step-up-on-403). The list still filters its
+ * mock rows by the design's view tabs (client-side) and its rows navigate to the
+ * detail route; the detail screen renders a fixed representative transaction. The old
+ * behavioural tests drove the api + step-up flows, which the reproduction no longer
+ * has, so they are replaced with render tests over the reproduced design content.
  *
- * The api layer is mocked — no server.
+ * The list uses `useRouter().push` on row click, so `next/navigation` is stubbed.
  */
-import { describe, expect, it, vi, beforeEach } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
-import userEvent from "@testing-library/user-event"
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type {
-  AdminMe,
-  AdminTxnDetail,
-  AdminTxnListResponse,
-} from "@handshake-agent/contracts"
+import { describe, expect, it, vi } from "vitest"
+import { render, screen } from "@testing-library/react"
 
 import { TransactionsPage } from "@/components/admin/transactions-page"
-import { ApiError } from "@/lib/api/client"
+import { TransactionDetail } from "@/components/admin/transaction-detail"
 
-// ─── Mocks ──────────────────────────────────────────────────────────────────────
-
-vi.mock("@/lib/api/admin", () => ({
-  getMe: vi.fn(),
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
 }))
 
-vi.mock("@/lib/api/transactions", () => ({
-  listTransactions: vi.fn(),
-  getTransaction: vi.fn(),
-  markTransactionFailed: vi.fn(),
-  retryTransaction: vi.fn(),
-}))
+describe("TransactionsPage (design reproduction)", () => {
+  it("renders the header, the ledger table columns and mock rows", () => {
+    render(<TransactionsPage />)
 
-import { getMe } from "@/lib/api/admin"
-import {
-  listTransactions,
-  getTransaction,
-  markTransactionFailed,
-} from "@/lib/api/transactions"
+    expect(
+      screen.getByRole("heading", { name: "Transactions" })
+    ).toBeInTheDocument()
 
-const mockGetMe = vi.mocked(getMe)
-const mockList = vi.mocked(listTransactions)
-const mockGet = vi.mocked(getTransaction)
-const mockMarkFailed = vi.mocked(markTransactionFailed)
+    // The 7-column ledger table headers.
+    expect(screen.getByText("ID")).toBeInTheDocument()
+    expect(screen.getByText("Idempotency key")).toBeInTheDocument()
 
-// ─── Fixtures ─────────────────────────────────────────────────────────────────
-
-const ME: AdminMe = {
-  id: "00000000-0000-0000-0000-000000000001",
-  email: "admin@example.com",
-  role: { id: "00000000-0000-0000-0000-0000000000aa", name: "ops" },
-  status: "active",
-  mfaEnabled: false,
-  permissions: [],
-  menus: [],
-  pages: [],
-}
-
-const LIST: AdminTxnListResponse = {
-  items: [
-    {
-      id: "11111111-1111-1111-1111-111111111111",
-      userId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-      type: "buy",
-      status: "settling",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    },
-    {
-      id: "22222222-2222-2222-2222-222222222222",
-      userId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-      type: "sell",
-      status: "completed",
-      createdAt: "2026-01-02T00:00:00.000Z",
-    },
-  ],
-  nextCursor: null,
-}
-
-const DETAIL: AdminTxnDetail = {
-  id: "11111111-1111-1111-1111-111111111111",
-  userId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-  type: "buy",
-  status: "settling",
-  idempotencyKey: "idem-123",
-  processorTxRef: null,
-  onChainTxHash: null,
-  failureReason: null,
-  createdAt: "2026-01-01T00:00:00.000Z",
-  executedAt: null,
-  completedAt: null,
-  failedAt: null,
-  ledgerLegs: [],
-  timeline: [{ status: "pending", at: "2026-01-01T00:00:00.000Z" }],
-}
-
-function renderPage() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    // A known mock transaction id from the design's seed dataset (first page).
+    expect(screen.getByText("tx_80231")).toBeInTheDocument()
   })
-  return render(
-    <QueryClientProvider client={client}>
-      <TransactionsPage />
-    </QueryClientProvider>
-  )
-}
 
-beforeEach(() => {
-  mockGetMe.mockReset()
-  mockList.mockReset()
-  mockGet.mockReset()
-  mockMarkFailed.mockReset()
-  mockGetMe.mockResolvedValue(ME)
-  mockList.mockResolvedValue(LIST)
-  mockGet.mockResolvedValue(DETAIL)
+  it("renders the view tabs including Stuck / Pending", () => {
+    render(<TransactionsPage />)
+
+    expect(screen.getByRole("button", { name: /All/ })).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: /Stuck \/ Pending/ })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: /Failed today/ })
+    ).toBeInTheDocument()
+  })
 })
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+describe("TransactionDetail (design reproduction)", () => {
+  it("renders the header, back-link and engine-brokered triage panels", () => {
+    render(<TransactionDetail transactionId="tx_80283" />)
 
-describe("TransactionsPage", () => {
-  it("renders a row per transaction and re-queries on a status filter", async () => {
-    const user = userEvent.setup()
-    renderPage()
+    // Back-link to the list + the copyable mock transaction id.
+    expect(
+      screen.getByRole("link", { name: /All transactions/ })
+    ).toBeInTheDocument()
+    expect(screen.getByText("tx_80283")).toBeInTheDocument()
 
-    expect(await screen.findByText("buy")).toBeInTheDocument()
-    expect(screen.getByText("sell")).toBeInTheDocument()
+    // The itemized-parameters + engine-state panels the design renders.
+    expect(screen.getByText("Itemized parameters")).toBeInTheDocument()
+    expect(screen.getByText("Engine state timeline")).toBeInTheDocument()
 
-    // Select a status filter → the query re-fires with that status.
-    await user.selectOptions(screen.getByLabelText("Status"), "settling")
-
-    await waitFor(() =>
-      expect(mockList).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "settling" })
-      )
-    )
-  })
-
-  it("opens the step-up dialog when mark-failed returns ADMIN_STEP_UP_REQUIRED", async () => {
-    mockMarkFailed.mockRejectedValue(
-      new ApiError("step up", 403, "ADMIN_STEP_UP_REQUIRED")
-    )
-
-    const user = userEvent.setup()
-    renderPage()
-
-    // Open the detail drawer for the settling transaction.
-    await user.click(await screen.findByText("buy"))
-
-    // The triage section appears (settling is triageable). Enter a reason + mark.
-    const reasonInput = await screen.findByLabelText("Mark-failed reason")
-    await user.type(reasonInput, "stuck in settling")
-    await user.click(screen.getByRole("button", { name: "Mark failed" }))
-
-    await waitFor(() => expect(mockMarkFailed).toHaveBeenCalled())
-
-    // The step-up dialog surfaces on the 403.
-    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    // Engine-brokered triage actions (proposal only — never executes here).
+    expect(
+      screen.getByRole("button", { name: /Retry settlement/ })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: /Mark failed/ })
+    ).toBeInTheDocument()
   })
 })

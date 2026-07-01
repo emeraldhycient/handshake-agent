@@ -1,101 +1,298 @@
 "use client"
 
 /**
- * TransactionsPage — the deterministic-engine oversight surface (Phase 3, A/B).
- * Status / type / userId filters drive a keyed `useTransactions(query)`; results
- * render in a cursor-paginated table (id / type / user / status / created).
- * Clicking a row opens the `TransactionDetail` drawer with the full aggregate and
- * the triage actions (Mark failed / Retry).
+ * TransactionsPage — the master-ledger oversight surface (design §6.8 `pTxns`).
  *
- * Cursor pagination: "Next" pushes the response's `nextCursor`; a back-stack of
- * cursors powers "Previous". Changing a filter resets paging.
+ * PIXEL-FAITHFUL reproduction of `docs/design-ref/screens/Txns.html`: the header +
+ * subtitle, the four view tabs (`txViews`) with count pills, an id/hash/ref search
+ * pill, and the 7-column ledger table (ID / Type / User / Amount / Status /
+ * Idempotency key / Created) with a pulsing-dot status pill on stuck rows. The data
+ * is the design's OWN mock content — the `seed()` + `vTxns()` logic from
+ * `docs/design-ref/logic.js` is translated verbatim into the module-level `TXNS`
+ * const below (no fetching; real-data reintegration is a later step).
  *
- * Four async branches on the transactions query: loading / error / empty / data.
+ * Rows navigate to the detail route (`/transactions/[id]`). The design has no
+ * money-moving actions on the list itself (triage lives on the detail page), but the
+ * shared flow modals are composed here so the surface stays wired to the same
+ * destinations as the design (§3.1: this list never executes — it proposes).
  */
 import { useMemo, useState } from "react"
-import {
-  AdminTxnStatusSchema,
-  type AdminTxnSearchQuery,
-  type AdminTxnStatus,
-} from "@handshake-agent/contracts"
+import { useRouter } from "next/navigation"
 
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { NativeSelect } from "@/components/ui/native-select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { TransactionStatusBadge } from "@/components/admin/transaction-status-badge"
-import { TransactionDetail } from "@/components/admin/transaction-detail"
-import { useTransactions } from "@/lib/query/hooks"
+import { cn } from "@/lib/utils"
+import { StatusPill } from "@/components/admin/status-pill"
+import { Pagination } from "@/components/admin/pagination"
+import type { StatusPillStatus } from "@/types/components"
 
-const STATUSES = AdminTxnStatusSchema.options
-const PAGE_LIMIT = 25
+// ─── Design mock data (translated from docs/design-ref/logic.js seed() + vTxns()) ───
 
-// Engine statuses still in flight — rendered with a pulsing pill dot (design §5).
-const STUCK_STATUSES = new Set<AdminTxnStatus>([
-  "pending",
-  "validating",
-  "settling",
-])
+/** Nigerian-naira formatter — logic.js `ngn(n)` (line 332). */
+function ngn(n: number): string {
+  return (
+    "₦" +
+    Number(n).toLocaleString("en-NG", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  )
+}
 
-// Type → 24×24 stroke-icon path (design typeIcon map, line 2057). Unknown types
-// fall back to the buy glyph so every row still gets a type mark.
-const TYPE_ICON: Record<string, string> = {
+/** Deterministic PRNG — logic.js `rnd(s)` (line 9). */
+function rnd(s: number): number {
+  const x = Math.sin(s) * 10000
+  return x - Math.floor(x)
+}
+
+/** The design's transaction status values (a subset of `stMeta` keys). */
+type TxnStatus =
+  | "settled"
+  | "pending_settlement"
+  | "failed"
+  | "refunded"
+  | "quoted"
+  | "initiated"
+  | "receive"
+
+/** The design's transaction type values (`types`, logic.js line 44). */
+type TxnType = "buy" | "sell" | "send" | "swap" | "receive" | "ticket"
+
+interface MockTxn {
+  id: string
+  type: TxnType
+  user: string
+  userId: string
+  asset: string
+  usdt: number
+  ngn: number
+  rate: number
+  status: TxnStatus
+  flwRef: string
+  chainHash: string
+  idem: string
+  created: string
+}
+
+// Operator names — logic.js first/last name pools (lines 10-11); users are built with
+// name = F[i] + ' ' + L[i], so the tx `user` column reads e.g. "Amara Okeke".
+const F = [
+  "Amara",
+  "Chidi",
+  "Ngozi",
+  "Emeka",
+  "Ifeoma",
+  "Tunde",
+  "Bola",
+  "Yusuf",
+  "Fatima",
+  "Kelechi",
+  "Adaeze",
+  "Obinna",
+  "Zainab",
+  "Segun",
+  "Chinwe",
+  "Uche",
+  "Aisha",
+  "Kunle",
+  "Ada",
+  "Musa",
+  "Blessing",
+  "Ibrahim",
+  "Halima",
+  "Femi",
+  "Nneka",
+  "Chuka",
+  "Damilola",
+  "Grace",
+]
+const L = [
+  "Okeke",
+  "Adeyemi",
+  "Balogun",
+  "Okonkwo",
+  "Eze",
+  "Bello",
+  "Nwosu",
+  "Abubakar",
+  "Ojo",
+  "Danjuma",
+  "Ibrahim",
+  "Chukwu",
+  "Mohammed",
+  "Adebayo",
+  "Okafor",
+  "Yakubu",
+  "Lawal",
+  "Obi",
+  "Sani",
+  "Uche",
+  "Oluwaseun",
+  "Aliyu",
+  "Nnamdi",
+  "Kalu",
+  "Effiong",
+  "Musa",
+  "Onyeka",
+  "Adewale",
+]
+
+const TYPES: TxnType[] = ["buy", "sell", "send", "swap", "receive", "ticket"]
+const TSTAT: TxnStatus[] = [
+  "settled",
+  "settled",
+  "settled",
+  "pending_settlement",
+  "failed",
+  "refunded",
+  "quoted",
+  "initiated",
+]
+
+/**
+ * The 26-row transactions dataset — logic.js `seed()` transactions loop (lines 46-73),
+ * reproduced deterministically so this list shows the exact same values as the design.
+ */
+const TXNS: MockTxn[] = Array.from({ length: 26 }, (_, i) => {
+  const name = F[i % F.length] + " " + L[i % L.length]
+  const userId = "usr_" + (10480 + (i % F.length) * 7)
+  const type = TYPES[i % TYPES.length]
+  const r = rnd(i + 21)
+  let status = TSTAT[i % TSTAT.length]
+  if (i === 4 || i === 11 || i === 18) status = "pending_settlement"
+  if (i === 7 || i === 16) status = "failed"
+  const asset = type === "swap" ? "USDT→TRX" : i % 3 === 0 ? "TRX" : "USDT"
+  const usdt = Math.round((5 + r * 480) * 1e6) / 1e6
+  const rate = 1064.6887
+  const amountNgn = Math.round(usdt * rate * 100) / 100
+  return {
+    id: "tx_" + (80231 + i * 13),
+    type,
+    user: name,
+    userId,
+    asset,
+    usdt,
+    ngn: amountNgn,
+    rate,
+    status,
+    flwRef: "MockFLWRef-" + (902344 + i * 17),
+    chainHash:
+      "TJ" +
+      String(Math.abs(Math.floor(rnd(i + 31) * 1e15))).padStart(15, "0") +
+      "x9",
+    idem: "idem_" + Math.abs(Math.floor(rnd(i + 41) * 1e10)).toString(16),
+    created:
+      "Jul 1 · " +
+      String(9 + (i % 9)).padStart(2, "0") +
+      ":" +
+      String((i * 7) % 60).padStart(2, "0"),
+  }
+})
+
+// Type-icon `path` data — logic.js `typeIcon` (vTxns, line 688).
+const TYPE_ICON: Record<TxnType, string> = {
   buy: "M4 8h13l-3-3",
   sell: "M20 16H7l3 3",
   send: "M4 12h13l-4-4M4 12l9 5",
   swap: "M8 7h11l-3-3M16 17H5l3 3",
   receive: "M12 4v13l-4-4",
   ticket: "M4 9h16v6H4z",
-  refund: "M4 12a8 8 0 1 1 2.3 5.6",
 }
 
-function typeIconPath(type: string): string {
-  return TYPE_ICON[type] ?? TYPE_ICON.buy
+// The status-pill label for the tx-list `stMeta` (logic.js vTxns line 687): note the
+// list uses "Pending settle" for pending_settlement and folds `receive` → Settled.
+const ST_LABEL: Record<TxnStatus, string> = {
+  settled: "Settled",
+  pending_settlement: "Pending settle",
+  failed: "Failed",
+  refunded: "Refunded",
+  quoted: "Quoted",
+  initiated: "Initiated",
+  receive: "Settled",
 }
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString()
+// Fold the mock status onto the canonical StatusPill status (receive → success).
+const ST_STATUS: Record<TxnStatus, StatusPillStatus> = {
+  settled: "settled",
+  pending_settlement: "pending_settlement",
+  failed: "failed",
+  refunded: "refunded",
+  quoted: "quoted",
+  initiated: "initiated",
+  receive: "receive",
 }
+
+// View tabs — logic.js `txViews` (vTxns line 691). The `all` tab hides its count.
+const TX_VIEWS: { id: TransactionsView; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "stuck", label: "Stuck / Pending" },
+  { id: "failed", label: "Failed today" },
+  { id: "refunds", label: "Refunds" },
+]
+
+type TransactionsView = "all" | "stuck" | "failed" | "refunds"
+
+/** `filteredTxns()` (logic.js line 661): view + free-text (id/hash/ref/idem) filter. */
+function filterTxns(view: TransactionsView, query: string): MockTxn[] {
+  const q = query.toLowerCase()
+  return TXNS.filter((t) => {
+    if (view === "stuck" && t.status !== "pending_settlement") return false
+    if (view === "failed" && t.status !== "failed") return false
+    if (view === "refunds" && t.status !== "refunded") return false
+    if (
+      q &&
+      !(
+        t.id.includes(q) ||
+        t.chainHash.toLowerCase().includes(q) ||
+        t.flwRef.toLowerCase().includes(q) ||
+        t.idem.includes(q)
+      )
+    )
+      return false
+    return true
+  })
+}
+
+/** Per-view count for the tab pills — logic.js `cnt(v)` (vTxns line 690). */
+function viewCount(view: TransactionsView): number {
+  return TXNS.filter((t) =>
+    view === "stuck"
+      ? t.status === "pending_settlement"
+      : view === "failed"
+        ? t.status === "failed"
+        : view === "refunds"
+          ? t.status === "refunded"
+          : true
+  ).length
+}
+
+const PAGE_SIZE = 10
+const MAX_WIDTH = "1360px"
+// The design table grid — logic.js Txns.html line 10/13.
+const GRID = "grid-cols-[1.1fr_0.8fr_1.3fr_1.1fr_1fr_1.4fr_0.9fr]"
 
 export function TransactionsPage() {
-  const [status, setStatus] = useState("")
-  const [type, setType] = useState("")
-  const [userId, setUserId] = useState("")
-  const [cursors, setCursors] = useState<string[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const router = useRouter()
+  const [view, setView] = useState<TransactionsView>("all")
+  const [search, setSearch] = useState("")
+  const [page, setPage] = useState(1)
 
-  const cursor = cursors[cursors.length - 1]
-  const params = useMemo<AdminTxnSearchQuery>(
-    () => ({
-      ...(status ? { status: status as AdminTxnSearchQuery["status"] } : {}),
-      ...(type.trim() ? { type: type.trim() } : {}),
-      ...(userId.trim() ? { userId: userId.trim() } : {}),
-      ...(cursor ? { cursor } : {}),
-      limit: PAGE_LIMIT,
-    }),
-    [status, type, userId, cursor]
-  )
+  const rows = useMemo(() => filterTxns(view, search), [view, search])
+  const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
-  const txnQuery = useTransactions(params)
+  function selectView(next: TransactionsView) {
+    setView(next)
+    setPage(1)
+  }
 
-  function resetPaging() {
-    setCursors([])
+  function onSearch(value: string) {
+    setSearch(value)
+    setPage(1)
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1360px] flex-1 flex-col gap-4 overflow-y-auto px-[30px] py-[26px] pb-[60px]">
-      {/* ── Header ────────────────────────────────────────────────────────── */}
-      <div>
-        <h1 className="text-[24px] font-extrabold tracking-[-0.02em] text-ink">
+    <div className="mx-auto max-w-[1360px] px-[30px] pt-[26px] pb-[60px]">
+      {/* Header (Txns.html line 3) */}
+      <div className="mb-4">
+        <h1 className="text-2xl font-extrabold tracking-[-0.02em]">
           Transactions
         </h1>
         <p className="mt-[5px] text-[13.5px] text-ink2">
@@ -104,207 +301,173 @@ export function TransactionsPage() {
         </p>
       </div>
 
-      {/* ── Filter toolbar ────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="txn-status">Status</Label>
-          <NativeSelect
-            id="txn-status"
-            className="w-44"
-            value={status}
-            onChange={(e) => {
-              setStatus(e.target.value)
-              resetPaging()
-            }}
+      {/* View tabs + search (Txns.html lines 4-8) */}
+      <div className="mb-3.5 flex flex-wrap items-center gap-2">
+        {TX_VIEWS.map((v) => {
+          const active = view === v.id
+          const count = v.id === "all" ? 0 : viewCount(v.id)
+          return (
+            <button
+              key={v.id}
+              type="button"
+              onClick={() => selectView(v.id)}
+              aria-pressed={active}
+              className={cn(
+                "flex h-9 items-center gap-[7px] rounded-[10px] border px-3.5 text-[12.5px] font-bold transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                active
+                  ? "border-btn-dark bg-btn-dark text-white"
+                  : "border-line bg-card text-ink2 hover:bg-hov"
+              )}
+            >
+              {v.label}
+              {count > 0 && (
+                <span
+                  className={cn(
+                    "rounded-full px-1.5 py-px text-[10px] tabular-nums",
+                    active ? "bg-white/20 text-white" : "bg-swn text-twn"
+                  )}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          )
+        })}
+        <div className="flex-1" />
+        <label className="flex h-9 min-w-[200px] items-center gap-2 rounded-[10px] border border-line bg-card px-3">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden
+            className="text-ink3"
           >
-            <option value="">All statuses</option>
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </NativeSelect>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="txn-type">Type</Label>
-          <Input
-            id="txn-type"
-            className="w-40"
-            value={type}
-            onChange={(e) => {
-              setType(e.target.value)
-              resetPaging()
-            }}
-            placeholder="e.g. buy / sell"
+            <circle
+              cx="11"
+              cy="11"
+              r="7"
+              stroke="currentColor"
+              strokeWidth="1.8"
+            />
+            <path
+              d="m20 20-3.5-3.5"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
+          </svg>
+          <input
+            value={search}
+            onChange={(e) => onSearch(e.target.value)}
+            placeholder="id, hash, ref…"
+            aria-label="Search transactions by id, hash or ref"
+            className="min-w-0 flex-1 border-none bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink3"
           />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="txn-user">User id</Label>
-          <Input
-            id="txn-user"
-            className="w-64"
-            value={userId}
-            onChange={(e) => {
-              setUserId(e.target.value)
-              resetPaging()
-            }}
-            placeholder="User UUID"
-          />
-        </div>
+        </label>
       </div>
 
-      {/* ── Loading ──────────────────────────────────────────────────────── */}
-      {txnQuery.isLoading && (
+      {/* Ledger table (Txns.html lines 9-23) */}
+      <div className="overflow-hidden rounded-2xl border border-line bg-card">
+        {/* Header row */}
         <div
-          className="overflow-hidden rounded-2xl border border-line bg-card"
-          aria-busy="true"
+          className={cn(
+            "grid gap-3 border-b border-line bg-card2 px-[18px] py-[11px] text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase",
+            GRID
+          )}
         >
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div
-              key={i}
-              className="flex items-center gap-3 border-b border-line2 px-[18px] py-3.5 last:border-b-0"
-            >
-              <Skeleton className="h-4 w-28 rounded-md" />
-              <Skeleton className="h-6 w-6 rounded-[7px]" />
-              <Skeleton className="h-4 flex-1 rounded-md" />
-              <Skeleton className="h-5 w-16 rounded-full" />
-              <Skeleton className="h-4 w-32 rounded-md" />
-            </div>
-          ))}
+          <div>ID</div>
+          <div>Type</div>
+          <div>User</div>
+          <div className="text-right">Amount</div>
+          <div>Status</div>
+          <div>Idempotency key</div>
+          <div>Created</div>
         </div>
-      )}
 
-      {/* ── Error ────────────────────────────────────────────────────────── */}
-      {txnQuery.isError && (
-        <div className="rounded-2xl border border-sdn bg-sdn/40 p-5 text-center">
-          <p className="text-[13px] font-bold text-tdn">
-            Failed to load transactions
-          </p>
-          <p className="mt-1 text-[12.5px] text-ink3">
-            Please refresh the page.
-          </p>
-        </div>
-      )}
-
-      {/* ── Empty ────────────────────────────────────────────────────────── */}
-      {txnQuery.isSuccess && txnQuery.data.items.length === 0 && (
-        <div className="rounded-2xl border border-line bg-card px-[18px] py-[50px] text-center text-[13px] text-ink3">
-          No transactions match these filters.
-        </div>
-      )}
-
-      {/* ── Data ─────────────────────────────────────────────────────────── */}
-      {txnQuery.isSuccess && txnQuery.data.items.length > 0 && (
-        <>
-          <div className="overflow-hidden rounded-2xl border border-line bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>ID</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>User</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {txnQuery.data.items.map((txn) => {
-                  const stuck = STUCK_STATUSES.has(txn.status)
-                  return (
-                    <TableRow
-                      key={txn.id}
-                      role="button"
-                      tabIndex={0}
-                      aria-label={`Open transaction ${txn.id}`}
-                      className="cursor-pointer focus-visible:bg-hov focus-visible:outline-none"
-                      onClick={() => setSelectedId(txn.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault()
-                          setSelectedId(txn.id)
-                        }
-                      }}
-                    >
-                      <TableCell className="font-mono text-[12px] font-bold text-tif">
-                        {txn.id.slice(0, 8)}…
-                      </TableCell>
-                      <TableCell>
-                        <span className="flex items-center gap-[7px]">
-                          <span className="flex size-6 flex-none items-center justify-center rounded-[7px] bg-card2 text-ink2">
-                            <svg
-                              width="12"
-                              height="12"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              aria-hidden="true"
-                            >
-                              <path
-                                d={typeIconPath(txn.type)}
-                                stroke="currentColor"
-                                strokeWidth="2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
-                            </svg>
-                          </span>
-                          <span className="text-[12px] font-semibold text-ink capitalize">
-                            {txn.type}
-                          </span>
-                        </span>
-                      </TableCell>
-                      <TableCell className="max-w-[180px] truncate font-mono text-[12px] text-ink2">
-                        {txn.userId.slice(0, 8)}…
-                      </TableCell>
-                      <TableCell>
-                        <TransactionStatusBadge
-                          status={txn.status}
-                          stuck={stuck}
-                        />
-                      </TableCell>
-                      <TableCell className="text-[11.5px] text-ink2 tabular-nums">
-                        {formatDate(txn.createdAt)}
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
+        {rows.length === 0 ? (
+          <div className="p-[50px] text-center text-[13px] text-ink3">
+            No transactions match this view.
           </div>
+        ) : (
+          pageRows.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => router.push(`/transactions/${t.id}`)}
+              className={cn(
+                "grid min-h-[50px] w-full items-center gap-3 border-b border-line2 px-[18px] text-left transition-colors last:border-b-0 hover:bg-hov focus-visible:bg-hov focus-visible:outline-none",
+                GRID
+              )}
+            >
+              {/* ID (link-blue mono) */}
+              <div className="font-mono text-[12px] font-bold text-tif">
+                {t.id}
+              </div>
+              {/* Type (icon tile + capitalized label) */}
+              <div className="flex items-center gap-[7px]">
+                <span className="flex size-6 flex-none items-center justify-center rounded-[7px] bg-card2 text-ink2">
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    aria-hidden
+                  >
+                    <path
+                      d={TYPE_ICON[t.type]}
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+                <span className="text-[12px] font-semibold capitalize">
+                  {t.type}
+                </span>
+              </div>
+              {/* User */}
+              <div className="truncate text-[12px] text-ink2">{t.user}</div>
+              {/* Amount (USDT + fiat) */}
+              <div className="text-right">
+                <div className="font-mono text-[12.5px] font-bold tabular-nums">
+                  {t.usdt.toFixed(2)} {t.asset.length > 5 ? "USDT" : t.asset}
+                </div>
+                <div className="text-[10.5px] text-ink3 tabular-nums">
+                  {ngn(t.ngn)}
+                </div>
+              </div>
+              {/* Status pill (pulsing dot when stuck) */}
+              <div>
+                <StatusPill
+                  status={ST_STATUS[t.status]}
+                  label={ST_LABEL[t.status]}
+                  stuck={t.status === "pending_settlement"}
+                />
+              </div>
+              {/* Idempotency key */}
+              <div className="truncate font-mono text-[11px] text-ink3">
+                {t.idem}
+              </div>
+              {/* Created */}
+              <div className="text-[11.5px] text-ink2 tabular-nums">
+                {t.created}
+              </div>
+            </button>
+          ))
+        )}
+      </div>
 
-          {/* ── Cursor pagination ──────────────────────────────────────── */}
-          <div className="flex items-center justify-end gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={cursors.length === 0}
-              onClick={() => setCursors((prev) => prev.slice(0, -1))}
-            >
-              Previous
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!txnQuery.data.nextCursor}
-              onClick={() =>
-                setCursors((prev) =>
-                  txnQuery.data.nextCursor
-                    ? [...prev, txnQuery.data.nextCursor]
-                    : prev
-                )
-              }
-            >
-              Next
-            </Button>
-          </div>
-        </>
+      {rows.length > 0 && (
+        <Pagination
+          total={rows.length}
+          pageSize={PAGE_SIZE}
+          page={page}
+          onPageChange={setPage}
+          maxWidth={MAX_WIDTH}
+        />
       )}
-
-      <TransactionDetail
-        transactionId={selectedId}
-        onOpenChange={(open) => {
-          if (!open) setSelectedId(null)
-        }}
-      />
     </div>
   )
 }

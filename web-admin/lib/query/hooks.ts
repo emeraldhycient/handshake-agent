@@ -29,18 +29,17 @@ import type {
   RoleCreateRequest,
   RoleUpdateRequest,
   TreasuryAlertAcknowledgeRequest,
-  UpdateSettingRequest,
 } from "@handshake-agent/contracts"
 
 import * as admin from "@/lib/api/admin"
 import * as agent from "@/lib/api/agent"
 import * as beneficiaries from "@/lib/api/beneficiaries"
+import * as config from "@/lib/api/config"
 import * as compliance from "@/lib/api/compliance"
 import * as kyc from "@/lib/api/kyc"
 import * as ledger from "@/lib/api/ledger"
 import * as metrics from "@/lib/api/metrics"
 import * as notifications from "@/lib/api/notifications"
-import * as settings from "@/lib/api/settings"
 import * as tickets from "@/lib/api/tickets"
 import * as transactions from "@/lib/api/transactions"
 import * as treasury from "@/lib/api/treasury"
@@ -112,14 +111,15 @@ export function useSessions() {
 }
 
 /**
- * Effective config settings for one category (or all). Keyed by category so each
- * tab caches independently. 30 s stale — DB overrides are hot-reloaded server-side.
+ * The effective, non-secret catalog (enabled fiats / assets / networks +
+ * capability flags) from `GET /config`. Drives the Currency + Asset catalog
+ * screens. 5 min stale — the catalog changes only via admin config edits.
  */
-export function useSettings(category?: string) {
+export function usePublicConfig() {
   return useQuery({
-    queryKey: qk.settings(category),
-    queryFn: () => settings.listSettings(category),
-    staleTime: 30_000,
+    queryKey: qk.publicConfig,
+    queryFn: () => config.getPublicConfig(),
+    staleTime: 5 * 60_000,
   })
 }
 
@@ -387,28 +387,6 @@ export function useRevokeSession() {
 export function useVerifyAuditChain() {
   return useMutation({
     mutationFn: () => admin.verifyAuditChain(),
-  })
-}
-
-/**
- * Update one config setting. On success invalidates every settings query (the
- * prefix match) so all category tabs re-resolve — a catalog flip can change a
- * sibling's effective state. The PATCH may 403 with ADMIN_STEP_UP_REQUIRED; the
- * caller wraps the mutation in `useStepUpRetry` to re-auth and retry.
- */
-export function useUpdateSetting() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({
-      key,
-      input,
-    }: {
-      key: string
-      input: UpdateSettingRequest
-    }) => settings.updateSetting(key, input),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["admin", "settings"] })
-    },
   })
 }
 

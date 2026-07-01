@@ -1,191 +1,273 @@
 "use client"
 
 /**
- * TreasuryPage — the treasury oversight surface (Phase 3, sub-area D): aggregated
- * custodial balances, exposure-vs-limit snapshots, threshold-breach alerts (with a
- * step-up-gated Acknowledge), and per-wallet withdrawal policies.
+ * TreasuryPage — the treasury oversight surface (design §6.13 Treasury), a
+ * pixel-faithful reproduction of `docs/design-ref/screens/Treasury.html`:
  *
- * Each section is an independent query with its own four async branches (loading /
- * error / empty / data). Nothing here moves money (§3.1) — these are read-only
- * projections plus an audited acknowledgement annotation. Presentation follows the
- * operator-console design system (§6.13 Treasury): optional low-float warning,
- * balance cards with a dark custodial hero, and a 1.5fr/1fr grid (alerts queue |
- * withdrawal policies).
+ *   • an optional low-float amber warning banner,
+ *   • a 4-up balance-card row whose first tile is the dark-green custodial hero
+ *     (custodial USDT, NGN fiat float, FX position, exposure headroom),
+ *   • a 1.5fr / 1fr grid: the payout / withdrawal approval queue (maker-checker
+ *     tag + Approve on large payouts) alongside the child-address sweeps list
+ *     (+ the 25 TRX sweep threshold footer).
+ *
+ * This is the DESIGN-REPRODUCTION build (root §13): the screen renders the design's
+ * own representative mock content from module-level constants — it does NOT fetch or
+ * wire real API data (that is a separate later step). The `logic.js` view method is
+ * truncated, so the sample content matches the exact markup + SPEC §6.13 + the
+ * `seed()` dataset shapes (operator names like "Amara Okeke", TRON child addresses).
+ *
+ * Funds-safety (root §3.1): nothing here moves money. "Approve" opens the shared
+ * flow modals — large payouts route through maker-checker (dual-control) → step-up;
+ * smaller ones through step-up — matching the design's `p.big` maker-checker gate.
  */
 import { useState } from "react"
 
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
-import { StepUpDialog } from "@/components/admin/step-up-dialog"
-import {
-  useAcknowledgeAlert,
-  useAdminMe,
-  useTreasuryAlerts,
-  useTreasuryBalances,
-  useTreasuryExposure,
-  useWithdrawalPolicies,
-} from "@/lib/query/hooks"
-import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
-import { ApiError } from "@/lib/api/client"
+import { MakerCheckerModal, StepUpModal } from "@/components/admin/flows"
 import type {
-  TreasuryAlert,
-  TreasuryAlertSeverity,
-  TreasuryBalance,
-  TreasuryExposureStatus,
-} from "@handshake-agent/contracts"
+  MakerCheckerDiffRow,
+  TreasuryCard,
+  TreasuryPayoutRow,
+  TreasurySweepRow,
+} from "@/types/components"
 
-// The hero balance tile — a dark-green gradient identical in both themes (§5 KPI
-// hero / §6.13 "one dark hero for custodial/USDT").
+// ── Brand constants (the only permitted non-token colour source, §7) ──────────────
+// The custodial hero tile is a dark-green gradient identical in both themes (§5 KPI
+// hero); the delta-dot on the hero is amber.
 const HERO_GRADIENT =
   "linear-gradient(150deg, var(--brand-green) 0%, var(--brand-green-deep) 100%)"
 
-const EXPOSURE_VARIANT: Record<
-  TreasuryExposureStatus,
-  React.ComponentProps<typeof Badge>["variant"]
+// ── Design-faithful sample data (no API — see file header) ────────────────────────
+
+/**
+ * The 4-up balance-card row (design markup line 6, `treasuryCards`). Tile 0 is the
+ * dark-green custodial hero; tiles 1–3 are neutral `--card` tiles. Colours are
+ * expressed as tokens via each tile's `tone`, never raw hex.
+ */
+const TREASURY_CARDS: readonly TreasuryCard[] = [
+  {
+    id: "custodial-usdt",
+    tone: "hero",
+    label: "Custodial · USDT",
+    value: "412,908.44",
+    dot: "ok",
+    note: "12 wallets · Blockradar TRON",
+    live: false,
+  },
+  {
+    id: "ngn-float",
+    tone: "neutral",
+    label: "NGN fiat float",
+    value: "₦42,180,500",
+    dot: "warn",
+    note: "18% of target · low",
+    live: false,
+  },
+  {
+    id: "fx-position",
+    tone: "neutral",
+    label: "FX position",
+    value: "+$8,240",
+    dot: "ok",
+    note: "Net long USDT vs NGN",
+    live: false,
+  },
+  {
+    id: "exposure-headroom",
+    tone: "neutral",
+    label: "Exposure headroom",
+    value: "72%",
+    dot: "ok",
+    note: "Within inventory limit",
+    live: false,
+  },
+]
+
+/**
+ * The payout / withdrawal approval queue (design markup line 11, `payouts`). Large
+ * payouts (`big`) carry the amber Maker-checker tag and route Approve through
+ * dual-control. Names + refs mirror the `seed()` operator/transaction dataset.
+ */
+const PAYOUTS: readonly TreasuryPayoutRow[] = [
+  {
+    id: "pay_7741",
+    to: "Kelechi Chukwu · GTBank",
+    ref: "wd_44219",
+    method: "NGN payout · Flutterwave",
+    amt: "₦4,820,000.00",
+    big: true,
+  },
+  {
+    id: "pay_7742",
+    to: "Amara Okeke · TRON withdrawal",
+    ref: "wd_44220",
+    method: "USDT · Blockradar",
+    amt: "1,250.00 USDT",
+    big: false,
+  },
+  {
+    id: "pay_7743",
+    to: "Ngozi Eze · Access Bank",
+    ref: "wd_44221",
+    method: "NGN payout · Flutterwave",
+    amt: "₦180,000.00",
+    big: false,
+  },
+]
+
+/**
+ * The child-address sweeps list (design markup line 15, `sweeps`). Addresses are
+ * TRON child wallets; the sweep threshold footer is a fixed 25 TRX (matching the
+ * `sweep.threshold.trx` seed setting).
+ */
+const SWEEPS: readonly TreasurySweepRow[] = [
+  {
+    id: "sw_1",
+    addr: "TJm4Yq8s2kPd9wR3vN7xL6bH1cF0gA5eZt",
+    bal: "142.60 TRX",
+    status: "Swept",
+  },
+  {
+    id: "sw_2",
+    addr: "TWk9Pn2rL5xQ8mV4bC7dH3fG1sA6eY0jZu",
+    bal: "38.10 TRX",
+    status: "Pending",
+  },
+  {
+    id: "sw_3",
+    addr: "TRb3Xc7v1kM9nP5wL2dQ8fH4gS6aE0yJ2t",
+    bal: "12.40 TRX",
+    status: "Below threshold",
+  },
+]
+
+// design-faithful: the sweep threshold has no admin endpoint yet — it mirrors the
+// `sweep.threshold.trx` seed setting (25 TRX).
+const SWEEP_THRESHOLD = "25 TRX"
+
+// Low-float alert is a representative flag matching the design's default-on banner
+// (`hint-placeholder-val="{{ true }}"`).
+const LOW_FLOAT = true
+
+// A balance-card health dot's semantic → its token utility. Colour is never the sole
+// signal — each dot is paired with a note that carries the same meaning.
+const DOT_CLASS: Record<TreasuryCard["dot"], string> = {
+  ok: "bg-tok",
+  warn: "bg-twn",
+  danger: "bg-tdn",
+}
+
+// A sweep status → its dot + label token utilities (matching the design's per-row
+// `s.dot` / `s.fg`). Swept reads success, Pending warning, Below-threshold muted.
+const SWEEP_STATUS: Record<
+  TreasurySweepRow["status"],
+  { dot: string; fg: string }
 > = {
-  safe: "success",
-  warning: "warn",
-  critical: "danger",
+  Swept: { dot: "bg-tok", fg: "text-tok" },
+  Pending: { dot: "bg-twn", fg: "text-twn" },
+  "Below threshold": { dot: "bg-ink3", fg: "text-ink3" },
 }
 
-const ALERT_VARIANT: Record<
-  TreasuryAlertSeverity,
-  React.ComponentProps<typeof Badge>["variant"]
-> = {
-  info: "info",
-  warning: "warn",
-  critical: "danger",
-}
-
-/** The hero tile represents the custodial position — USDT on the launch network. */
-function isCustodialHero(balance: TreasuryBalance): boolean {
-  return balance.asset.toUpperCase() === "USDT"
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString()
-}
-
-function errorMessage(error: unknown): string | null {
-  if (error instanceof ApiError) return error.message
-  if (error instanceof Error) return error.message
-  return error ? String(error) : null
-}
-
-function SectionShell({
-  title,
-  note,
-  children,
-}: {
-  title: string
-  note?: string
-  children: React.ReactNode
-}) {
+/** A single balance tile — the hero variant carries the dark-green gradient. */
+function BalanceCard({ card }: { card: TreasuryCard }) {
+  const hero = card.tone === "hero"
   return (
-    <section className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-[13px] font-extrabold text-ink">{title}</h2>
-        {note && (
-          <span className="text-[11px] font-semibold text-ink3">{note}</span>
-        )}
+    <div
+      style={hero ? { background: HERO_GRADIENT } : undefined}
+      className={
+        hero
+          ? "rounded-2xl border border-transparent px-[18px] py-4 text-white"
+          : "rounded-2xl border border-line bg-card px-[18px] py-4 text-ink"
+      }
+    >
+      <div
+        className={
+          hero
+            ? "text-[11.5px] font-semibold text-on-brand-muted"
+            : "text-[11.5px] font-semibold text-ink3"
+        }
+      >
+        {card.label}
       </div>
-      {children}
-    </section>
-  )
-}
-
-function LoadingRows() {
-  return (
-    <div className="flex flex-col gap-2" aria-busy="true">
-      <Skeleton className="h-12 w-full" />
-      <Skeleton className="h-12 w-full" />
-    </div>
-  )
-}
-
-function ErrorPanel({ what }: { what: string }) {
-  return (
-    <div className="rounded-2xl border border-sdn bg-sdn/40 p-4 text-center">
-      <p className="text-[12.5px] font-bold text-tdn">Failed to load {what}</p>
-    </div>
-  )
-}
-
-function EmptyPanel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="rounded-2xl border border-line bg-card px-5 py-8 text-center text-[12.5px] text-ink3">
-      {children}
+      <div className="mt-[5px] font-mono text-[21px] font-extrabold tracking-[-0.01em] tabular-nums">
+        {card.value}
+      </div>
+      <div className="mt-2 flex items-center gap-1.5">
+        <span
+          aria-hidden="true"
+          className={`size-[7px] shrink-0 rounded-full ${
+            hero ? "bg-brand-amber" : DOT_CLASS[card.dot]
+          }`}
+        />
+        <span
+          className={
+            hero ? "text-[11px] text-on-brand-muted" : "text-[11px] text-ink3"
+          }
+        >
+          {card.note}
+        </span>
+      </div>
     </div>
   )
 }
 
 export function TreasuryPage() {
-  const balances = useTreasuryBalances()
-  const exposure = useTreasuryExposure()
-  const alerts = useTreasuryAlerts()
-  const policies = useWithdrawalPolicies()
+  // Local UI state for the flow-modal chain. `flow` tracks which step is open; the
+  // active row drives the modal copy. No server call — approving simply advances
+  // through the shared funds-safety modals then clears the row from the queue.
+  const [flow, setFlow] = useState<null | "maker" | "stepup">(null)
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const [approved, setApproved] = useState<Record<string, boolean>>({})
 
-  const me = useAdminMe()
-  const acknowledge = useAcknowledgeAlert()
-  const stepUp = useStepUpRetry()
-  const [noteByAlert, setNoteByAlert] = useState<Record<string, string>>({})
-  const [localError, setLocalError] = useState<string | null>(null)
+  const active = PAYOUTS.find((p) => p.id === activeId) ?? null
 
-  // Low-float warning is derived from live data — surfaced when any exposure
-  // snapshot has breached (warning/critical) or an unacknowledged critical alert
-  // is open. This mirrors the design's optional amber banner (§6.13) without a
-  // hardcoded flag.
-  const lowFloat =
-    (exposure.isSuccess &&
-      exposure.data.items.some((e) => e.status !== "safe")) ||
-    (alerts.isSuccess &&
-      alerts.data.items.some(
-        (a) => a.severity === "critical" && !a.acknowledgedAt
-      ))
-
-  function onAcknowledge(id: string) {
-    setLocalError(null)
-    const note = noteByAlert[id]?.trim()
-    void (async () => {
-      try {
-        await stepUp.run(() =>
-          acknowledge
-            .mutateAsync({ id, input: note ? { note } : {} })
-            .then(() => undefined)
-        )
-      } catch (error) {
-        setLocalError(errorMessage(error))
-      }
-    })()
+  // Large payouts (design `p.big`) require maker-checker before step-up; smaller
+  // ones go straight to step-up — matching the design's dual-control gate.
+  function onApprove(row: TreasuryPayoutRow) {
+    setActiveId(row.id)
+    setFlow(row.big ? "maker" : "stepup")
   }
 
+  function closeFlow() {
+    setFlow(null)
+    setActiveId(null)
+  }
+
+  function finishApprove() {
+    if (activeId) setApproved((prev) => ({ ...prev, [activeId]: true }))
+    closeFlow()
+  }
+
+  // The maker-checker change-preview diff for the active large payout.
+  const makerDiff: MakerCheckerDiffRow[] = active
+    ? [
+        {
+          field: `Payout ${active.ref}`,
+          from: "Pending approval",
+          to: "Approved · queued for engine",
+        },
+        { field: "Amount", from: "—", to: active.amt },
+      ]
+    : []
+
   return (
-    <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-[26px_30px_60px]">
-      <div>
+    <div className="mx-auto w-full max-w-[1300px] flex-1 overflow-y-auto p-[26px_30px_60px]">
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
+      <div className="mb-4">
         <h1 className="text-2xl font-extrabold tracking-[-0.02em] text-ink">
           Treasury
         </h1>
-        <p className="mt-1 text-[13.5px] text-ink2">
-          Custodial wallet balances, exposure vs limit, threshold alerts and
-          per-wallet withdrawal policies.
+        <p className="mt-[5px] text-[13.5px] text-ink2">
+          Custodial wallet balances, fiat float, FX position and the payout
+          approval queue.
         </p>
       </div>
 
-      {/* ── Low-float warning (optional, derived from live data) ─────────────── */}
-      {lowFloat && (
+      {/* ── Low-float warning (optional) ────────────────────────────────────── */}
+      {LOW_FLOAT && (
         <div
           role="status"
-          className="flex items-center gap-2.5 rounded-xl border border-swn bg-swn px-4 py-3"
+          className="mb-4 flex items-center gap-2.5 rounded-xl border border-[#f0e2c4] bg-swn px-4 py-3"
         >
           <svg
             width="17"
@@ -193,7 +275,7 @@ export function TreasuryPage() {
             viewBox="0 0 24 24"
             fill="none"
             aria-hidden="true"
-            className="shrink-0 text-twn"
+            className="text-twn"
           >
             <path
               d="M12 4l9 16H3zM12 10v4M12 17h.01"
@@ -204,239 +286,130 @@ export function TreasuryPage() {
             />
           </svg>
           <span className="text-[12.5px] font-semibold text-twn">
-            Exposure alert · a treasury position has breached its limit. Review
-            before authorizing large payouts.
+            Low-float alert · NGN float is at 18% of target. Consider a treasury
+            top-up before large payouts.
           </span>
         </div>
       )}
 
-      {/* ── Balance cards (dark custodial hero) ──────────────────────────────── */}
-      <SectionShell title="Aggregated balances">
-        {balances.isLoading && <LoadingRows />}
-        {balances.isError && <ErrorPanel what="balances" />}
-        {balances.isSuccess && balances.data.balances.length === 0 && (
-          <EmptyPanel>No custodial balances.</EmptyPanel>
-        )}
-        {balances.isSuccess && balances.data.balances.length > 0 && (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3.5">
-            {balances.data.balances.map((b) => {
-              const hero = isCustodialHero(b)
-              return (
-                <div
-                  key={`${b.network}-${b.asset}`}
-                  style={hero ? { background: HERO_GRADIENT } : undefined}
-                  className={
-                    hero
-                      ? "rounded-2xl border border-transparent p-4 text-white"
-                      : "rounded-2xl border border-line bg-card p-4 text-ink"
-                  }
-                >
-                  <div
-                    className={
-                      hero
-                        ? "text-[11.5px] font-semibold text-white/70"
-                        : "text-[11.5px] font-semibold text-ink2"
-                    }
-                  >
-                    {b.asset} · {b.network}
-                  </div>
-                  <div className="mt-1.5 font-mono text-[21px] font-extrabold tracking-[-0.01em] tabular-nums">
-                    {b.totalAmount}
-                  </div>
-                  <div
-                    className={
-                      hero
-                        ? "mt-2 text-[11px] text-white/70"
-                        : "mt-2 text-[11px] text-ink3"
-                    }
-                  >
-                    {b.walletCount} wallet{b.walletCount === 1 ? "" : "s"}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </SectionShell>
-
-      {/* ── Exposure vs limit ────────────────────────────────────────────────── */}
-      <SectionShell title="Exposure vs limit">
-        {exposure.isLoading && <LoadingRows />}
-        {exposure.isError && <ErrorPanel what="exposure" />}
-        {exposure.isSuccess && exposure.data.items.length === 0 && (
-          <EmptyPanel>No exposure snapshots.</EmptyPanel>
-        )}
-        {exposure.isSuccess && exposure.data.items.length > 0 && (
-          <div className="overflow-hidden rounded-2xl border border-line bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Asset</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Net exposure</TableHead>
-                  <TableHead className="text-right">Limit (bps)</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {exposure.data.items.map((e) => (
-                  <TableRow key={e.id}>
-                    <TableCell className="font-semibold text-ink">
-                      {e.asset} · {e.fiatCurrency}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={EXPOSURE_VARIANT[e.status]}>
-                        {e.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right font-mono tabular-nums">
-                      {e.netExposure}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-ink2 tabular-nums">
-                      {e.exposureLimitBps}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </SectionShell>
-
-      {/* ── Alerts queue | Withdrawal policies (1.5fr / 1fr) ─────────────────── */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.5fr_1fr]">
-        {/* Exposure alerts — maker-checker-tagged approval queue */}
-        <SectionShell
-          title="Exposure alerts"
-          note="Acknowledgement requires step-up"
-        >
-          {alerts.isLoading && <LoadingRows />}
-          {alerts.isError && <ErrorPanel what="alerts" />}
-          {alerts.isSuccess && alerts.data.items.length === 0 && (
-            <EmptyPanel>No open alerts.</EmptyPanel>
-          )}
-          {alerts.isSuccess && alerts.data.items.length > 0 && (
-            <ul className="flex flex-col gap-2.5">
-              {alerts.data.items.map((alert: TreasuryAlert) => (
-                <li
-                  key={alert.id}
-                  className="rounded-2xl border border-line bg-card p-4"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex min-w-0 flex-col gap-1.5">
-                      <div className="flex items-center gap-2">
-                        <Badge variant={ALERT_VARIANT[alert.severity]}>
-                          {alert.severity}
-                        </Badge>
-                        <span className="text-[13px] font-bold text-ink">
-                          {alert.asset}
-                        </span>
-                        {alert.severity === "critical" && (
-                          <span className="rounded-md bg-swn px-2 py-0.5 text-[9.5px] font-extrabold tracking-[0.04em] text-twn uppercase">
-                            Maker-checker
-                          </span>
-                        )}
-                        {alert.acknowledgedAt && (
-                          <Badge variant="neutral">acknowledged</Badge>
-                        )}
-                      </div>
-                      <p className="text-[12px] text-ink2">{alert.message}</p>
-                      <p className="font-mono text-[11px] text-ink3 tabular-nums">
-                        Net {alert.netExposure} ·{" "}
-                        {formatDate(alert.triggeredAt)}
-                      </p>
-                    </div>
-                    {!alert.acknowledgedAt && (
-                      <div className="flex items-center gap-2">
-                        <Input
-                          aria-label={`Acknowledgement note for ${alert.asset}`}
-                          className="h-9 w-44"
-                          placeholder="Note (optional)"
-                          value={noteByAlert[alert.id] ?? ""}
-                          disabled={acknowledge.isPending}
-                          onChange={(e) =>
-                            setNoteByAlert((prev) => ({
-                              ...prev,
-                              [alert.id]: e.target.value,
-                            }))
-                          }
-                        />
-                        <Button
-                          size="sm"
-                          variant="green"
-                          disabled={acknowledge.isPending}
-                          onClick={() => onAcknowledge(alert.id)}
-                        >
-                          Approve
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-          {localError && (
-            <p role="alert" className="text-[11px] font-semibold text-tdn">
-              {localError}
-            </p>
-          )}
-        </SectionShell>
-
-        {/* Withdrawal policies — per-wallet controls */}
-        <SectionShell title="Withdrawal policies">
-          {policies.isLoading && <LoadingRows />}
-          {policies.isError && <ErrorPanel what="withdrawal policies" />}
-          {policies.isSuccess && policies.data.items.length === 0 && (
-            <EmptyPanel>No active withdrawal policies.</EmptyPanel>
-          )}
-          {policies.isSuccess && policies.data.items.length > 0 && (
-            <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
-              <ul className="flex flex-col">
-                {policies.data.items.map((p) => (
-                  <li
-                    key={p.id}
-                    className="flex items-center gap-3 border-b border-line2 py-3 last:border-0"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={
-                        p.requiresApproval
-                          ? "size-2 shrink-0 rounded-full bg-twn"
-                          : "size-2 shrink-0 rounded-full bg-tok"
-                      }
-                    />
-                    <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ink2">
-                      {p.walletId.slice(0, 12)}…
-                    </span>
-                    <span className="font-mono text-[12px] font-bold tabular-nums">
-                      {p.maxWithdrawalPerTx ?? "—"}
-                    </span>
-                    <span className="text-[10.5px] font-bold text-ink3">
-                      {p.requiresApproval ? "approval" : "auto"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-3.5 flex justify-between border-t border-line2 pt-3">
-                <span className="text-[11.5px] text-ink3">Allow-list mode</span>
-                <span className="font-mono text-[12px] font-bold text-ink2">
-                  {policies.data.items[0]?.allowListMode ?? "—"}
-                </span>
-              </div>
-            </div>
-          )}
-        </SectionShell>
+      {/* ── Balance cards (dark custodial hero) ─────────────────────────────── */}
+      <div className="mb-4 grid grid-cols-2 gap-3.5 lg:grid-cols-4">
+        {TREASURY_CARDS.map((card) => (
+          <BalanceCard key={card.id} card={card} />
+        ))}
       </div>
 
-      <StepUpDialog
-        open={stepUp.open}
-        mfaEnabled={me.data?.mfaEnabled ?? false}
-        onOpenChange={stepUp.setOpen}
-        onSuccess={() => {
-          void stepUp
-            .retry()
-            .catch((error) => setLocalError(errorMessage(error)))
-        }}
+      {/* ── Approval queue | Child-address sweeps (1.5fr / 1fr) ─────────────── */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.5fr_1fr]">
+        {/* Payout / withdrawal approval queue — maker-checker on large amounts */}
+        <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="text-[13px] font-extrabold text-ink">
+              Payout / withdrawal approval queue
+            </div>
+            <span className="text-[11px] font-semibold text-ink3">
+              Large payouts require maker-checker
+            </span>
+          </div>
+
+          {PAYOUTS.map((row) => {
+            const done = approved[row.id]
+            return (
+              <div
+                key={row.id}
+                className="flex items-center gap-3 border-b border-line2 py-3 last:border-0"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] font-bold text-ink">
+                    {row.to}
+                  </div>
+                  <div className="font-mono text-[11px] text-ink3">
+                    {row.ref} · {row.method}
+                  </div>
+                </div>
+                <div className="shrink-0 font-mono text-[13.5px] font-extrabold text-ink tabular-nums">
+                  {row.amt}
+                </div>
+                {row.big && (
+                  <span className="shrink-0 rounded-md bg-swn px-2 py-[3px] text-[9.5px] font-extrabold tracking-[0.02em] text-twn uppercase">
+                    Maker-checker
+                  </span>
+                )}
+                {done ? (
+                  <span className="shrink-0 rounded-[9px] bg-sok px-3.5 py-2 text-[12px] font-bold text-tok">
+                    Approved
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onApprove(row)}
+                    className={`shrink-0 rounded-[9px] px-3.5 py-2 text-[12px] font-bold transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none ${
+                      row.big
+                        ? "bg-btn-dark text-white"
+                        : "bg-brand-green text-white"
+                    }`}
+                  >
+                    Approve
+                  </button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Child-address sweeps — per-wallet balances + sweep threshold */}
+        <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
+          <div className="mb-3.5 text-[13px] font-extrabold text-ink">
+            Child-address sweeps
+          </div>
+
+          {SWEEPS.map((sweep) => {
+            const tone = SWEEP_STATUS[sweep.status]
+            return (
+              <div
+                key={sweep.id}
+                className="flex items-center gap-2.5 border-b border-line2 py-2.5"
+              >
+                <span
+                  aria-hidden="true"
+                  className={`size-2 shrink-0 rounded-full ${tone.dot}`}
+                />
+                <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ink2">
+                  {sweep.addr}
+                </span>
+                <span className="shrink-0 font-mono text-[12px] font-bold text-ink tabular-nums">
+                  {sweep.bal}
+                </span>
+                <span className={`shrink-0 text-[10.5px] font-bold ${tone.fg}`}>
+                  {sweep.status}
+                </span>
+              </div>
+            )
+          })}
+
+          {/* Sweep threshold footer */}
+          <div className="mt-3.5 flex justify-between border-t border-line2 pt-3">
+            <span className="text-[11.5px] text-ink3">Sweep threshold</span>
+            <span className="font-mono text-[12px] font-bold text-ink tabular-nums">
+              {SWEEP_THRESHOLD}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Funds-safety flow modals (design §5) ────────────────────────────── */}
+      <MakerCheckerModal
+        open={flow === "maker"}
+        onOpenChange={(open) => (open ? undefined : closeFlow())}
+        title={active ? `Approve payout ${active.ref}` : "Approve payout"}
+        diff={makerDiff}
+        onSubmit={() => setFlow("stepup")}
+      />
+      <StepUpModal
+        open={flow === "stepup"}
+        onOpenChange={(open) => (open ? undefined : closeFlow())}
+        title={active ? `payout ${active.ref}` : "payout approval"}
+        onComplete={finishApprove}
       />
     </div>
   )

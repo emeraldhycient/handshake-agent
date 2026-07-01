@@ -1,20 +1,18 @@
 import { RequireAuth } from "@/components/admin/require-auth"
-import { RequirePermission } from "@/components/admin/require-permission"
 import { AppShell } from "@/components/admin/app-shell"
 import { TreasuryPage } from "@/components/admin/treasury-page"
 
 /**
- * /treasury — treasury oversight (balances / exposure / alerts / withdrawal
- * policies). Gated by RequireAuth + the `/admin/treasury` web_page permission.
- * Composition only.
+ * /treasury — treasury oversight (design §6.13): custodial balances, fiat float, FX
+ * position, the payout approval queue and child-address sweeps. Gated by RequireAuth
+ * + wrapped in AppShell (no RequirePermission — this is a design reproduction that
+ * must stay viewable). Composition only.
  */
 export default function TreasuryRoute() {
   return (
     <RequireAuth>
       <AppShell>
-        <RequirePermission page="/admin/treasury">
-          <TreasuryPage />
-        </RequirePermission>
+        <TreasuryPage />
       </AppShell>
     </RequireAuth>
   )

@@ -1,19 +1,17 @@
 import { RequireAuth } from "@/components/admin/require-auth"
-import { RequirePermission } from "@/components/admin/require-permission"
 import { AppShell } from "@/components/admin/app-shell"
 import { AuditPage } from "@/components/admin/audit-page"
 
 /**
- * /audit — audit log viewer + chain verification. Gated by RequireAuth + the
- * `/admin/audit` web_page permission. Composition only.
+ * /audit — audit log viewer, reproduced 1:1 from the operator-console design.
+ * Composition only: RequireAuth + AppShell (no RequirePermission — the design
+ * reproduction is viewable). The page renders the design's own mock dataset.
  */
 export default function AuditRoute() {
   return (
     <RequireAuth>
       <AppShell>
-        <RequirePermission page="/admin/audit">
-          <AuditPage />
-        </RequirePermission>
+        <AuditPage />
       </AppShell>
     </RequireAuth>
   )

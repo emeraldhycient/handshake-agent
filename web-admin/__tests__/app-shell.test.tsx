@@ -85,12 +85,12 @@ describe("AppShell nav gating", () => {
 
     renderShell()
 
-    // The menu.access items appear once me resolves.
+    // The menu.access items appear once me resolves (Admins & roles + Approvals
+    // are both gated on menu.access in the rebuilt grouped nav).
     expect(
       await screen.findByRole("link", { name: "Admins & roles" })
     ).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Roles" })).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Sessions" })).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Approvals" })).toBeInTheDocument()
     // Audit log (menu.audit) + Dashboard (always) also show.
     expect(screen.getByRole("link", { name: "Audit log" })).toBeInTheDocument()
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument()
@@ -114,10 +114,7 @@ describe("AppShell nav gating", () => {
       ).not.toBeInTheDocument()
     })
     expect(
-      screen.queryByRole("link", { name: "Roles" })
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("link", { name: "Sessions" })
+      screen.queryByRole("link", { name: "Approvals" })
     ).not.toBeInTheDocument()
   })
 })

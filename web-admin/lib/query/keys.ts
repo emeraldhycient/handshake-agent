@@ -22,8 +22,6 @@ export const qk = {
   permissions: ["admin", "permissions"] as const,
   audit: (query: AuditLogQuery) => ["admin", "audit", query] as const,
   sessions: ["admin", "sessions"] as const,
-  settings: (category?: string) =>
-    ["admin", "settings", category ?? "all"] as const,
   endUsers: (query: AdminEndUserSearchQuery) =>
     ["admin", "users", query] as const,
   endUser: (id: string) => ["admin", "users", id] as const,
@@ -66,4 +64,5 @@ export const qk = {
     ["admin", "agent", "conversations", id] as const,
   dashboardMetrics: (range: MetricsRangeQuery) =>
     ["admin", "metrics", "dashboard", range] as const,
+  publicConfig: ["admin", "config", "public"] as const,
 } as const

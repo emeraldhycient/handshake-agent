@@ -9,16 +9,32 @@
  * While `useAdminMe()` is loading we render nothing (the surrounding RequireAuth
  * shell already shows the chrome); on error we also deny, since we can't confirm
  * the grant.
+ *
+ * Access is granted when ANY of these hold:
+ * - the operator is `super_admin` (holds everything by definition — never blocked
+ *   on new screens the catalog hasn't grown a dedicated `web_page` for yet);
+ * - the page's `web_page` resourceId is in `adminMe.pages`;
+ * - an optional `menu` fallback resourceId is in `adminMe.menus`. Newer config
+ *   screens (pricing / limits / capabilities / …) live under the shared
+ *   `/admin/settings` surface and gate on `menu.config`, so a non-super-admin
+ *   with the Config nav still reaches them without minting a per-screen perm.
  */
 import { useAdminMe } from "@/lib/query/hooks"
 import type { RequirePermissionProps } from "@/types/components"
 
-export function RequirePermission({ page, children }: RequirePermissionProps) {
+export function RequirePermission({
+  page,
+  menu,
+  children,
+}: RequirePermissionProps) {
   const me = useAdminMe()
 
   if (me.isLoading) return null
 
-  const granted = me.data?.pages.includes(page) ?? false
+  const isSuperAdmin = me.data?.role.name === "super_admin"
+  const pageGranted = me.data?.pages.includes(page) ?? false
+  const menuGranted = menu ? (me.data?.menus.includes(menu) ?? false) : false
+  const granted = isSuperAdmin || pageGranted || menuGranted
 
   if (!granted) {
     return (

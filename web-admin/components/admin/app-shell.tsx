@@ -3,18 +3,23 @@
 /**
  * AppShell — the authenticated operator-console chrome (design spec §4):
  * a fixed dark-green sidebar rail + a 60px top bar + an independently
- * scrolling main column.
+ * scrolling main column. Rebuilt 1:1 against `docs/design-ref/chrome.html`.
  *
- * Nav gating (unchanged security model): a nav ITEM renders only when its
- * `menu_item` resourceId is in `adminMe.menus` (UX only; the API still enforces
- * every route). The Dashboard item always shows. A GROUP renders only when it
- * has at least one visible item. Menu map: `menu.metrics` → Metrics;
- * `menu.users` → Users; `menu.kyc` → KYC; `menu.compliance` → Compliance;
- * `menu.transactions` → Transactions; `menu.ledger` → Ledger; `menu.treasury`
- * → Treasury; `menu.beneficiaries` → Beneficiaries; `menu.config` → Settings;
- * `menu.whatsapp` → WhatsApp; `menu.notifications` → Templates; `menu.tickets`
- * → Ticketing; `menu.agent` → Agent; `menu.access` → Admins / Roles / Sessions;
- * `menu.audit` → Audit log.
+ * Nav (§4.1): the design's full grouped nav — Overview / Customers / Compliance
+ * / Money / Configuration / Channels / Commerce / Agent / Platform. A nav ITEM
+ * renders only when its `menu_item` resourceId is in `adminMe.menus` (UX only;
+ * the API still enforces every route). Dashboard + Admin settings are always
+ * shown. A GROUP renders only when it has at least one visible item.
+ *
+ * Menu map (existing `menu.*` resourceIds, reused verbatim):
+ *   Dashboard/Admin-settings → always · Users → menu.users ·
+ *   KYC/Sanctions/AML/Blocked → menu.kyc | menu.compliance ·
+ *   Transactions/Reconciliation → menu.transactions · Ledger → menu.ledger ·
+ *   Treasury → menu.treasury ·
+ *   Settings/Pricing/Limits/Capabilities/Assets/Currencies/Providers/Flags →
+ *     menu.config · Templates/Notifications → menu.notifications ·
+ *   WhatsApp → menu.whatsapp · Ticketing → menu.tickets · Agent → menu.agent ·
+ *   Admins/Approvals → menu.access · Audit/Ops → menu.audit.
  *
  * Chrome behaviours:
  * - Sidebar collapse (232px ⇄ 70px) is local UI state.
@@ -22,6 +27,8 @@
  *   `components/theme-provider.tsx`).
  * - The ⌘K search pill, notification bell, and role switcher are the design's
  *   affordances; the palette is a non-functional visual stub for now.
+ * - The KYC-review nav badge is wired to the live queue count; the other design
+ *   badges (stuck txns / recon breaks / approvals) have no count endpoint yet.
  *
  * Pure presentation + the menu list derived from useAdminMe(); no data writes.
  */
@@ -30,11 +37,16 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
   ArrowLeftRight,
-  BarChart3,
+  Ban,
+  Banknote,
   Bell,
   BookText,
+  Cable,
   ChevronDown,
-  Landmark,
+  CircleCheckBig,
+  Coins,
+  Flag,
+  Gauge,
   LayoutGrid,
   List,
   LogOut,
@@ -43,16 +55,20 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
+  Plug,
+  Scale,
   ScanSearch,
-  ScrollText,
   Search,
   Server,
+  Settings,
   ShieldCheck,
   ShieldUser,
   SlidersHorizontal,
   Sparkles,
   Sun,
+  Tag,
   Ticket,
+  TriangleAlert,
   Users,
   Vault,
 } from "lucide-react"
@@ -70,10 +86,13 @@ interface NavItem {
   label: string
   icon: LucideIcon
   /**
-   * The `menu_item` resourceId that gates this item, or null when it is always
-   * shown (only the Dashboard entry is ungated — home degrades gracefully).
+   * The `menu_item` resourceId(s) that gate this item. `null` → always shown
+   * (Dashboard + Admin settings degrade gracefully). When an array, the item
+   * shows if ANY listed menu is granted.
    */
-  menu: string | null
+  menu: string | string[] | null
+  /** Optional count badge key resolved in the component (design §4.1). */
+  badge?: "kyc" | "stuck" | "recon" | "approvals"
 }
 
 interface NavGroup {
@@ -82,23 +101,14 @@ interface NavGroup {
 }
 
 /**
- * Design nav groups (§4.1) mapped onto the existing web-admin routes + the
- * live `menu.*` RBAC resourceIds. Every current destination stays reachable;
- * per-item gating is byte-identical to the previous shell — the design only
- * reshapes how items are grouped and iconified.
+ * Design nav groups (§4.1) mapped onto the web-admin routes + the live `menu.*`
+ * RBAC resourceIds. Every destination in the design is present; per-item gating
+ * reuses the existing menu resourceIds (no new perms minted).
  */
 const NAV_GROUPS: readonly NavGroup[] = [
   {
     label: "Overview",
-    items: [
-      { href: "/", label: "Dashboard", icon: LayoutGrid, menu: null },
-      {
-        href: "/metrics",
-        label: "Metrics",
-        icon: BarChart3,
-        menu: "menu.metrics",
-      },
-    ],
+    items: [{ href: "/", label: "Dashboard", icon: LayoutGrid, menu: null }],
   },
   {
     label: "Customers",
@@ -113,13 +123,26 @@ const NAV_GROUPS: readonly NavGroup[] = [
         href: "/kyc",
         label: "KYC review",
         icon: ShieldCheck,
-        menu: "menu.kyc",
+        menu: ["menu.kyc", "menu.compliance"],
+        badge: "kyc",
       },
       {
-        href: "/compliance",
-        label: "Sanctions & AML",
+        href: "/sanctions",
+        label: "Sanctions & screening",
         icon: ScanSearch,
-        menu: "menu.compliance",
+        menu: ["menu.kyc", "menu.compliance"],
+      },
+      {
+        href: "/aml",
+        label: "AML / risk",
+        icon: TriangleAlert,
+        menu: ["menu.kyc", "menu.compliance"],
+      },
+      {
+        href: "/blocked",
+        label: "Blocked list",
+        icon: Ban,
+        menu: ["menu.kyc", "menu.compliance"],
       },
     ],
   },
@@ -131,19 +154,21 @@ const NAV_GROUPS: readonly NavGroup[] = [
         label: "Transactions",
         icon: ArrowLeftRight,
         menu: "menu.transactions",
+        badge: "stuck",
       },
       { href: "/ledger", label: "Ledger", icon: BookText, menu: "menu.ledger" },
+      {
+        href: "/reconciliation",
+        label: "Reconciliation",
+        icon: Scale,
+        menu: "menu.transactions",
+        badge: "recon",
+      },
       {
         href: "/treasury",
         label: "Treasury",
         icon: Vault,
         menu: "menu.treasury",
-      },
-      {
-        href: "/beneficiaries",
-        label: "Beneficiaries",
-        icon: Landmark,
-        menu: "menu.beneficiaries",
       },
     ],
   },
@@ -154,6 +179,49 @@ const NAV_GROUPS: readonly NavGroup[] = [
         href: "/settings",
         label: "Settings",
         icon: SlidersHorizontal,
+        menu: "menu.config",
+      },
+      { href: "/pricing", label: "Pricing", icon: Tag, menu: "menu.config" },
+      {
+        href: "/limits",
+        label: "Limits & velocity",
+        icon: Gauge,
+        menu: "menu.config",
+      },
+      {
+        href: "/capabilities",
+        label: "Capabilities",
+        icon: Plug,
+        menu: "menu.config",
+      },
+      {
+        href: "/assets",
+        label: "Asset catalog",
+        icon: Coins,
+        menu: "menu.config",
+      },
+      {
+        href: "/currencies",
+        label: "Currency catalog",
+        icon: Banknote,
+        menu: "menu.config",
+      },
+      {
+        href: "/providers",
+        label: "Providers",
+        icon: Cable,
+        menu: "menu.config",
+      },
+      {
+        href: "/templates",
+        label: "Templates",
+        icon: Mail,
+        menu: "menu.notifications",
+      },
+      {
+        href: "/flags",
+        label: "Feature flags",
+        icon: Flag,
         menu: "menu.config",
       },
     ],
@@ -169,8 +237,8 @@ const NAV_GROUPS: readonly NavGroup[] = [
       },
       {
         href: "/notifications",
-        label: "Templates",
-        icon: Mail,
+        label: "Notifications",
+        icon: Bell,
         menu: "menu.notifications",
       },
     ],
@@ -206,14 +274,20 @@ const NAV_GROUPS: readonly NavGroup[] = [
         icon: ShieldUser,
         menu: "menu.access",
       },
-      { href: "/roles", label: "Roles", icon: ScrollText, menu: "menu.access" },
+      { href: "/audit", label: "Audit log", icon: List, menu: "menu.audit" },
       {
-        href: "/sessions",
-        label: "Sessions",
-        icon: Server,
+        href: "/approvals",
+        label: "Approvals",
+        icon: CircleCheckBig,
         menu: "menu.access",
       },
-      { href: "/audit", label: "Audit log", icon: List, menu: "menu.audit" },
+      { href: "/ops", label: "System / ops", icon: Server, menu: "menu.audit" },
+      {
+        href: "/admin-settings",
+        label: "Admin settings",
+        icon: Settings,
+        menu: null,
+      },
     ],
   },
 ]
@@ -228,6 +302,13 @@ const RAIL_BG =
 /** Striped operator avatar (§4.2 / §1.3). Built from the brand-green token. */
 const STRIPE_AVATAR =
   "repeating-linear-gradient(45deg, color-mix(in srgb, var(--brand-green) 72%, white) 0 5px, var(--brand-green) 5px 10px)"
+
+/** True iff the item's menu gate is satisfied by the granted `menus`. */
+function itemVisible(menu: NavItem["menu"], menus: string[]): boolean {
+  if (menu === null) return true
+  if (Array.isArray(menu)) return menu.some((m) => menus.includes(m))
+  return menus.includes(menu)
+}
 
 function isActive(pathname: string, href: string): boolean {
   return href === "/" ? pathname === "/" : pathname.startsWith(href)
@@ -247,10 +328,18 @@ export function AppShell({ children }: AppShellProps) {
   // A group renders only when at least one of its items is grant-visible.
   const visibleGroups = NAV_GROUPS.map((group) => ({
     label: group.label,
-    items: group.items.filter(
-      (it) => it.menu === null || menus.includes(it.menu)
-    ),
+    items: group.items.filter((it) => itemVisible(it.menu, menus)),
   })).filter((group) => group.items.length > 0)
+
+  // Design nav badges (§4.1) — mock counts matching the design reproduction
+  // (KYC 13 / stuck txns 5 / recon breaks 3 / approvals 4). Live-count wiring
+  // is a data-reintegration step.
+  const DESIGN_BADGES: Record<string, number> = {
+    kyc: 13,
+    stuck: 5,
+    recon: 3,
+    approvals: 4,
+  }
 
   const ThemeIcon = theme === "light" ? Moon : Sun
   const CollapseIcon = collapsed ? PanelLeftOpen : PanelLeftClose
@@ -325,6 +414,9 @@ export function AppShell({ children }: AppShellProps) {
                   {group.items.map((item) => {
                     const active = isActive(pathname, item.href)
                     const Icon = item.icon
+                    const badge = item.badge
+                      ? (DESIGN_BADGES[item.badge] ?? 0)
+                      : 0
                     return (
                       <li key={item.href} className="mb-px">
                         <Link
@@ -346,6 +438,11 @@ export function AppShell({ children }: AppShellProps) {
                           {!collapsed && (
                             <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">
                               {item.label}
+                            </span>
+                          )}
+                          {!collapsed && badge > 0 && (
+                            <span className="flex-none rounded-full bg-[color:var(--brand-amber)] px-[7px] py-px text-center text-[10.5px] font-bold text-[color:var(--brand-green-deep)] tabular-nums">
+                              {badge}
                             </span>
                           )}
                         </Link>

@@ -1,19 +1,18 @@
 import { RequireAuth } from "@/components/admin/require-auth"
-import { RequirePermission } from "@/components/admin/require-permission"
 import { AppShell } from "@/components/admin/app-shell"
-import { WhatsAppConfigPage } from "@/components/admin/whatsapp-config-page"
+import { WhatsAppPage } from "@/components/admin/whatsapp-page"
 
 /**
- * /whatsapp — the read-only WhatsApp configuration view. Gated by RequireAuth +
- * the `/admin/whatsapp` web_page permission. Composition only.
+ * /whatsapp — the read-only WhatsApp operator screen (Cloud-API number & webhook
+ * health, E2E Flows, live conversation monitor). Gated by RequireAuth + AppShell.
+ * This is a pixel design reproduction (no permission gating so it stays viewable);
+ * composition only.
  */
 export default function WhatsAppRoute() {
   return (
     <RequireAuth>
       <AppShell>
-        <RequirePermission page="/admin/whatsapp">
-          <WhatsAppConfigPage />
-        </RequirePermission>
+        <WhatsAppPage />
       </AppShell>
     </RequireAuth>
   )

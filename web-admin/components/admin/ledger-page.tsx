@@ -1,117 +1,205 @@
 "use client"
 
 /**
- * LedgerPage — the double-entry ledger oversight surface (Phase 3, sub-area A).
+ * LedgerPage — the double-entry ledger viewer (design §6.11 Ledger).
  *
- * Top: an account picker — accountType (select) + accountId + currency — that,
- * once all three are set, drives `useLedgerHistory` and renders the account's
- * posted entries (seq / account / dir / amount / running / source).
+ * Reproduces `docs/design-ref/screens/Ledger.html` 1:1: a header with a
+ * "Sequence integrity OK" pill, a two-select filter row (account type · currency)
+ * with an Export action, and the six-column table
+ * (Seq · Account · Dir · Amount · Running · Source). The Source cell links to the
+ * transaction's detail route (`/transactions/[id]`), exactly as the design's
+ * `onSource` navigates to `txDetail`.
  *
- * Bottom: a "Verify transaction integrity" input (a transaction id) + button that
- * re-sums that transaction's legs server-side (read-only, §3.1) and shows the
- * {balanced, legCount, brokenAt} result as a success / danger panel.
- *
- * Four async branches on the history query: loading / error / empty / data. The
- * account-type list is a local presentation tuple (mirrors the engine enum).
+ * This is a design reproduction, not a data-wired screen: the row set, running
+ * balances, sequence numbers, and amount/currency formatting are all translated
+ * verbatim from the design's `vLedger()` + `ngn()` logic (docs/design-ref/logic.js
+ * lines 332, 791-817) and embedded as module-level mock data. Real-data
+ * reintegration is a separate later step.
  */
 import { useMemo, useState } from "react"
+import Link from "next/link"
 
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { NativeSelect } from "@/components/ui/native-select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { useLedgerHistory, useVerifyLedger } from "@/lib/query/hooks"
-import type { LedgerHistoryQuery } from "@/lib/api/ledger"
-import type { AdminLedgerEntry } from "@handshake-agent/contracts"
-import { ApiError } from "@/lib/api/client"
+import { FilterSelect } from "@/components/admin/filter-select"
+import { Pagination } from "@/components/admin/pagination"
 
-// The LedgerAccountType engine enum (presentation labels for the picker).
-const ACCOUNT_TYPES = [
-  "user_wallet",
-  "platform_float",
-  "processor_settlement",
-  "treasury_reserve",
-  "clearing",
-  "compensation",
+// ── Design data (translated from vLedger(), logic.js 791-817) ────────────────
+
+/** One raw ledger leg from the design's `base` array (logic.js 794-805). */
+interface LedgerLeg {
+  acct: string
+  dir: "DEBIT" | "CREDIT"
+  raw: number
+  ccy: "NGN" | "USDT" | "TRX"
+  src: string
+}
+
+/** The design's `base` legs, verbatim. */
+const BASE_LEGS: readonly LedgerLeg[] = [
+  {
+    acct: "user:usr_10480:NGN",
+    dir: "DEBIT",
+    raw: 106469,
+    ccy: "NGN",
+    src: "tx_80231",
+  },
+  {
+    acct: "treasury:USDT",
+    dir: "DEBIT",
+    raw: 100,
+    ccy: "USDT",
+    src: "tx_80231",
+  },
+  {
+    acct: "user:usr_10480:USDT",
+    dir: "CREDIT",
+    raw: 100,
+    ccy: "USDT",
+    src: "tx_80231",
+  },
+  {
+    acct: "revenue:fees:NGN",
+    dir: "CREDIT",
+    raw: 1178,
+    ccy: "NGN",
+    src: "tx_80231",
+  },
+  {
+    acct: "user:usr_10487:NGN",
+    dir: "CREDIT",
+    raw: 53200,
+    ccy: "NGN",
+    src: "tx_80244",
+  },
+  { acct: "float:NGN", dir: "DEBIT", raw: 53200, ccy: "NGN", src: "tx_80244" },
+  {
+    acct: "user:usr_10501:USDT",
+    dir: "DEBIT",
+    raw: 50,
+    ccy: "USDT",
+    src: "tx_80257",
+  },
+  {
+    acct: "treasury:USDT",
+    dir: "CREDIT",
+    raw: 50,
+    ccy: "USDT",
+    src: "tx_80257",
+  },
+  {
+    acct: "revenue:spread:NGN",
+    dir: "CREDIT",
+    raw: 905,
+    ccy: "NGN",
+    src: "tx_80231",
+  },
+  { acct: "float:TRX", dir: "DEBIT", raw: 42.4, ccy: "TRX", src: "sweep_221" },
+]
+
+/** The design's `ngn()` helper (logic.js 332): "₦" + en-NG 2-dp grouping. */
+function ngn(n: number): string {
+  return (
+    "₦" +
+    Number(n).toLocaleString("en-NG", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  )
+}
+
+/** Format an absolute amount per its currency, as the design's inner `fmt`/amt do. */
+function formatAmount(value: number, ccy: LedgerLeg["ccy"]): string {
+  if (ccy === "NGN") return ngn(Math.abs(value))
+  return Math.abs(value).toFixed(ccy === "TRX" ? 4 : 6) + " " + ccy
+}
+
+/** A derived, display-ready ledger row (mirrors vLedger()'s returned row shape). */
+interface LedgerRow {
+  seq: string
+  acct: string
+  dir: LedgerLeg["dir"]
+  dirDanger: boolean
+  amt: string
+  run: string
+  src: string
+  /** The tx-detail route, or null for non-tx sources (e.g. sweeps) — no link then. */
+  href: string | null
+}
+
+/** The design's two filter axes (logic.js 806-816). */
+type AccountFilter = "all" | "user" | "treasury" | "revenue" | "float"
+type CurrencyFilter = "all" | "NGN" | "USDT" | "TRX"
+
+const ACCOUNT_OPTIONS = [
+  { value: "all", label: "All accounts" },
+  { value: "user", label: "User" },
+  { value: "treasury", label: "Treasury" },
+  { value: "revenue", label: "Fees / revenue" },
+  { value: "float", label: "Float" },
 ] as const
 
-// Ledger table grid — 6 columns matching the design (Seq / Account / Dir /
-// Amount / Running / Source). Shared by the header row and every body row.
+const CURRENCY_OPTIONS = [
+  { value: "all", label: "All currencies" },
+  { value: "NGN", label: "NGN" },
+  { value: "USDT", label: "USDT" },
+  { value: "TRX", label: "TRX" },
+] as const
+
+/**
+ * Build the filtered, running-balance-carrying rows, exactly as vLedger() does:
+ * filter by account prefix + currency, then reduce a per-currency running total
+ * (CREDIT adds, DEBIT subtracts), formatting each amount/running per currency.
+ */
+function buildRows(acct: AccountFilter, ccy: CurrencyFilter): LedgerRow[] {
+  const run: Record<string, number> = {}
+  return BASE_LEGS.filter((leg) => {
+    if (acct !== "all" && !leg.acct.startsWith(acct)) return false
+    if (ccy !== "all" && leg.ccy !== ccy) return false
+    return true
+  }).map((leg, i) => {
+    run[leg.ccy] =
+      (run[leg.ccy] ?? 0) + (leg.dir === "CREDIT" ? leg.raw : -leg.raw)
+    return {
+      seq: "44" + (920 + i),
+      acct: leg.acct,
+      dir: leg.dir,
+      dirDanger: leg.dir === "DEBIT",
+      amt: formatAmount(leg.raw, leg.ccy),
+      run: formatAmount(run[leg.ccy], leg.ccy),
+      src: leg.src,
+      href: leg.src.startsWith("tx") ? `/transactions/${leg.src}` : null,
+    }
+  })
+}
+
+/** Six-column grid (Seq · Account · Dir · Amount · Running · Source), shared by
+ *  the header and every body row so the columns stay aligned. */
 const LEDGER_GRID =
-  "grid grid-cols-[0.7fr_1.8fr_0.8fr_1.1fr_1.1fr_1fr] items-center gap-3 px-[18px]"
+  "grid grid-cols-[0.7fr_1.8fr_0.8fr_1.1fr_1.1fr_1fr] gap-3 px-[18px]"
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString()
-}
-
-function errorMessage(error: unknown): string | null {
-  if (error instanceof ApiError) return error.message
-  if (error instanceof Error) return error.message
-  return error ? String(error) : null
-}
-
-/** Build + download a CSV of the currently-loaded entries (client-side only). */
-function exportEntries(entries: readonly AdminLedgerEntry[]): void {
-  const header =
-    "sequence,account,direction,amount,currency,balanceAfter,transactionId,postedAt"
-  const rows = entries.map((e) =>
-    [
-      e.sequence,
-      e.accountId,
-      e.direction,
-      e.amount,
-      e.currency,
-      e.balanceAfter,
-      e.transactionId,
-      e.postedAt,
-    ].join(",")
-  )
-  const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv" })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement("a")
-  link.href = url
-  link.download = "ledger-entries.csv"
-  link.click()
-  URL.revokeObjectURL(url)
-}
+const PAGE_SIZE = 6
 
 export function LedgerPage() {
-  const [accountType, setAccountType] = useState<string>(ACCOUNT_TYPES[0])
-  const [accountId, setAccountId] = useState("")
-  const [currency, setCurrency] = useState("")
-  const [verifyId, setVerifyId] = useState("")
+  const [account, setAccount] = useState<AccountFilter>("all")
+  const [currency, setCurrency] = useState<CurrencyFilter>("all")
+  const [page, setPage] = useState(1)
 
-  const query = useMemo<LedgerHistoryQuery | null>(() => {
-    if (!accountType || !accountId.trim() || !currency.trim()) return null
-    return {
-      accountType,
-      accountId: accountId.trim(),
-      currency: currency.trim(),
-    }
-  }, [accountType, accountId, currency])
+  const rows = useMemo(() => buildRows(account, currency), [account, currency])
+  const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
-  const history = useLedgerHistory(query)
-  const verify = useVerifyLedger()
-
-  function onVerify() {
-    if (verifyId.trim().length === 0) return
-    verify.mutate(verifyId.trim())
+  /** Export toast stand-in — mirrors the design's `exportLedger()` (logic.js 790). */
+  function exportLedger() {
+    // Design shows a "Exporting ledger to CSV…" toast; reproduction is presentation-only.
   }
 
-  const verifyError = errorMessage(verify.error)
-  const entries = history.data?.entries ?? []
-  const hasEntries = history.isSuccess && entries.length > 0
-
   return (
-    <div className="mx-auto flex w-full max-w-[1300px] flex-1 flex-col gap-4 overflow-y-auto px-[30px] py-[26px]">
-      {/* ── Header + integrity pill ──────────────────────────────────────── */}
-      <div className="flex flex-wrap items-end justify-between gap-4">
+    <div className="mx-auto w-full max-w-[1300px] px-[30px] pt-[26px] pb-[60px]">
+      {/* ── Header: title + subtitle · integrity pill ───────────────────────── */}
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-[24px] font-extrabold tracking-[-0.02em] text-ink">
             Ledger
           </h1>
-          <p className="mt-1 text-[13.5px] text-ink2">
+          <p className="mt-[5px] text-[13.5px] text-ink2">
             Double-entry viewer · per-(account, currency) sequence,
             advisory-locked.
           </p>
@@ -136,200 +224,100 @@ export function LedgerPage() {
         </div>
       </div>
 
-      {/* ── Account picker + Export ──────────────────────────────────────── */}
-      <div className="flex flex-wrap items-end gap-3 rounded-[16px] border border-line bg-card p-4">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="ledger-account-type">Account type</Label>
-          <NativeSelect
-            id="ledger-account-type"
-            className="w-52"
-            value={accountType}
-            onChange={(e) => setAccountType(e.target.value)}
-          >
-            {ACCOUNT_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </NativeSelect>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="ledger-account-id">Account id</Label>
-          <Input
-            id="ledger-account-id"
-            className="w-64"
-            value={accountId}
-            onChange={(e) => setAccountId(e.target.value)}
-            placeholder="walletId or named ref"
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="ledger-currency">Currency</Label>
-          <Input
-            id="ledger-currency"
-            className="w-32"
-            value={currency}
-            onChange={(e) => setCurrency(e.target.value)}
-            placeholder="USDT"
-          />
-        </div>
+      {/* ── Filter row: account · currency selects + Export ─────────────────── */}
+      <div className="mb-[14px] flex flex-wrap gap-[10px]">
+        <FilterSelect
+          label="Filter by account"
+          value={account}
+          onChange={(e) => {
+            setAccount(e.target.value as AccountFilter)
+            setPage(1)
+          }}
+          options={ACCOUNT_OPTIONS}
+        />
+        <FilterSelect
+          label="Filter by currency"
+          value={currency}
+          onChange={(e) => {
+            setCurrency(e.target.value as CurrencyFilter)
+            setPage(1)
+          }}
+          options={CURRENCY_OPTIONS}
+        />
         <div className="flex-1" />
-        <Button
-          variant="outline"
-          size="lg"
-          disabled={!hasEntries}
-          onClick={() => exportEntries(entries)}
+        <button
+          type="button"
+          onClick={exportLedger}
+          className="flex h-[38px] items-center gap-[7px] rounded-[11px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
         >
           Export
-        </Button>
+        </button>
       </div>
 
-      {/* ── History: prompt / loading / error / empty / data ─────────────── */}
-      {query === null && (
-        <p className="text-[13px] text-ink2">
-          Enter an account type, account id, and currency to load its ledger.
-        </p>
-      )}
-
-      {query !== null && history.isLoading && (
-        <div className="flex flex-col gap-2" aria-busy="true">
-          <Skeleton className="h-11 w-full" />
-          <Skeleton className="h-11 w-full" />
-          <Skeleton className="h-11 w-full" />
+      {/* ── Table: Seq · Account · Dir · Amount · Running · Source ──────────── */}
+      <div className="overflow-hidden rounded-[16px] border border-line bg-card">
+        {/* Header row */}
+        <div
+          className={`${LEDGER_GRID} border-b border-line bg-card2 py-[11px] text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase`}
+        >
+          <div>Seq</div>
+          <div>Account</div>
+          <div>Dir</div>
+          <div className="text-right">Amount</div>
+          <div className="text-right">Running</div>
+          <div>Source</div>
         </div>
-      )}
-
-      {query !== null && history.isError && (
-        <div className="rounded-[16px] border border-sdn bg-sdn/40 p-5 text-center">
-          <p className="text-[13px] font-bold text-tdn">
-            Failed to load ledger history
-          </p>
-          <p className="mt-1 text-[12px] text-ink3">
-            Check the account triple and try again.
-          </p>
-        </div>
-      )}
-
-      {query !== null && history.isSuccess && entries.length === 0 && (
-        <div className="rounded-[16px] border border-line bg-card p-8 text-center">
-          <p className="text-[14px] font-bold text-ink">No ledger entries</p>
-          <p className="mt-1 text-[12.5px] text-ink3">
-            This account has no posted entries.
-          </p>
-        </div>
-      )}
-
-      {query !== null && hasEntries && (
-        <div className="overflow-hidden rounded-[16px] border border-line bg-card">
-          {/* Header row */}
+        {/* Body rows */}
+        {pageRows.map((row) => (
           <div
-            className={`${LEDGER_GRID} border-b border-line bg-card2 py-[11px] text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase`}
+            key={row.seq}
+            className={`${LEDGER_GRID} items-center border-b border-line2 py-[11px] last:border-b-0`}
           >
-            <div>Seq</div>
-            <div>Account</div>
-            <div>Dir</div>
-            <div className="text-right">Amount</div>
-            <div className="text-right">Running</div>
-            <div>Source</div>
-          </div>
-          {/* Body rows */}
-          {entries.map((entry) => (
-            <div
-              key={entry.id}
-              className={`${LEDGER_GRID} border-b border-line2 py-[11px] last:border-0`}
-            >
-              <div className="font-mono text-[11px] text-ink3 tabular-nums">
-                {entry.sequence}
-              </div>
-              <div className="truncate font-mono text-[12px] text-ink2">
-                {entry.accountId}
-              </div>
-              <div>
-                <span
-                  className={`text-[10.5px] font-extrabold ${
-                    entry.direction === "debit" ? "text-tdn" : "text-tok"
-                  }`}
-                >
-                  {entry.direction === "debit" ? "− debit" : "+ credit"}
-                </span>
-              </div>
-              <div className="text-right font-mono text-[12px] font-bold text-ink tabular-nums">
-                {entry.amount} {entry.currency}
-              </div>
-              <div className="text-right font-mono text-[12px] text-ink2 tabular-nums">
-                {entry.balanceAfter}
-              </div>
-              <div
-                className="truncate font-mono text-[11.5px] font-bold text-tif"
-                title={`${entry.transactionId} · posted ${formatDate(entry.postedAt)}`}
-              >
-                {entry.transactionId}
-              </div>
+            <div className="font-mono text-[11px] text-ink3 tabular-nums">
+              {row.seq}
             </div>
-          ))}
-        </div>
-      )}
-
-      {/* ── Integrity verify ─────────────────────────────────────────────── */}
-      <div className="flex flex-col gap-3 rounded-[16px] border border-line bg-card p-5">
-        <div>
-          <h2 className="text-[13px] font-extrabold text-ink">
-            Verify transaction integrity
-          </h2>
-          <p className="mt-1 text-[12px] text-ink3">
-            Re-sums a transaction&apos;s legs server-side · read-only, never
-            mutates.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ledger-verify-id">Transaction id</Label>
-            <Input
-              id="ledger-verify-id"
-              className="w-72"
-              value={verifyId}
-              onChange={(e) => setVerifyId(e.target.value)}
-              placeholder="Transaction UUID"
-            />
+            <div className="font-mono text-[12px] text-ink2">{row.acct}</div>
+            <div>
+              <span
+                className={`text-[10.5px] font-extrabold ${
+                  row.dirDanger ? "text-tdn" : "text-tok"
+                }`}
+              >
+                {row.dir}
+              </span>
+            </div>
+            <div className="text-right font-mono text-[12px] font-bold tabular-nums">
+              {row.amt}
+            </div>
+            <div className="text-right font-mono text-[12px] text-ink2 tabular-nums">
+              {row.run}
+            </div>
+            <div>
+              {row.href ? (
+                <Link
+                  href={row.href}
+                  className="font-mono text-[11.5px] font-bold text-tif hover:underline"
+                >
+                  {row.src}
+                </Link>
+              ) : (
+                <span className="font-mono text-[11.5px] font-bold text-tif">
+                  {row.src}
+                </span>
+              )}
+            </div>
           </div>
-          <Button
-            size="lg"
-            disabled={verify.isPending || verifyId.trim().length === 0}
-            aria-busy={verify.isPending}
-            onClick={onVerify}
-          >
-            {verify.isPending ? "Verifying…" : "Verify"}
-          </Button>
-        </div>
-
-        {verifyError && (
-          <p role="alert" className="text-[12px] text-tdn">
-            {verifyError}
-          </p>
-        )}
-
-        {verify.isSuccess && (
-          <div
-            role="status"
-            className={
-              verify.data.balanced
-                ? "rounded-[10px] border border-sok bg-sok/50 px-4 py-3 text-[13px] text-tok"
-                : "rounded-[10px] border border-sdn bg-sdn/50 px-4 py-3 text-[13px] text-tdn"
-            }
-          >
-            <p className="font-bold">
-              {verify.data.balanced ? "Balanced" : "Imbalanced"}
-            </p>
-            <p className="mt-1 text-[12px]">
-              {verify.data.legCount} leg
-              {verify.data.legCount === 1 ? "" : "s"}
-              {verify.data.brokenAt
-                ? ` · breaks at ${verify.data.brokenAt}`
-                : " · all currencies net to zero"}
-            </p>
-          </div>
-        )}
+        ))}
       </div>
+
+      {/* ── Pagination (shared, page size 6) ────────────────────────────────── */}
+      <Pagination
+        total={rows.length}
+        pageSize={PAGE_SIZE}
+        page={page}
+        onPageChange={setPage}
+        maxWidth="1300px"
+      />
     </div>
   )
 }

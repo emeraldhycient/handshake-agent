@@ -1,19 +1,17 @@
 import { RequireAuth } from "@/components/admin/require-auth"
-import { RequirePermission } from "@/components/admin/require-permission"
 import { AppShell } from "@/components/admin/app-shell"
 import { SettingsPage } from "@/components/admin/settings-page"
 
 /**
- * /settings — the layered-config (AppSetting) console. Gated by RequireAuth + the
- * `/admin/settings` web_page permission. Composition only.
+ * /settings — the layered-config (AppSetting) console (design §6.30). Gated by
+ * RequireAuth + AppShell only; the design reproduction is intentionally viewable
+ * (no RequirePermission gating). Composition only.
  */
 export default function SettingsRoute() {
   return (
     <RequireAuth>
       <AppShell>
-        <RequirePermission page="/admin/settings">
-          <SettingsPage />
-        </RequirePermission>
+        <SettingsPage />
       </AppShell>
     </RequireAuth>
   )

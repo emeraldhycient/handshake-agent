@@ -1,187 +1,363 @@
 "use client"
 
 /**
- * NotificationsPage — the Comms console's notification-template management surface
- * (Phase 4). A responsive grid of template cards (channel chip + mono
- * templateKey + approval pill; locale/vars line; a content-text preview in a
- * `bg-card2` inset box). A "New template" button and a per-card Edit both open
- * the TemplateEditorDialog (which carries a live-preview panel). Create / edit
- * are step-up-gated inside the dialog.
+ * NotificationsPage — the "Notifications & comms" surface (operator-console design
+ * §6.18), rebuilt 1:1 against `docs/design-ref/screens/Notifications.html`.
  *
- * Presentation follows the operator-console design system §6.19 (Templates).
+ * Layout: a `1fr 1.3fr` row — a **Broadcast composer** (Audience / Template /
+ * Schedule selects, a large-audience maker-checker warning, and the amber send
+ * CTA) beside a read-only **Delivery log** (channel chip + name + audience·time +
+ * status pill, closed by a bounce/complaint footnote).
  *
- * Four async branches: loading / error / empty / data.
+ * DATA: this is a design reproduction — the audience / template / schedule options
+ * and the delivery log are the design's own module-level mock content (no fetching,
+ * no TanStack Query). Real-data reintegration is a separate later step.
+ *
+ * FUNDS-SAFETY: composing a broadcast never sends on click. A large audience flips
+ * the composer into maker-checker mode (the design's `bBig` warning + "Queue for
+ * approval" CTA) and opens the shared `MakerCheckerModal` so the broadcast enters
+ * Pending approval before it goes out — matching the design's proposal-only posture
+ * (root §3.1).
  */
 import { useState } from "react"
 
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
-import { TemplateEditorDialog } from "@/components/admin/template-editor-dialog"
-import { useNotificationTemplates } from "@/lib/query/hooks"
+import { MakerCheckerModal } from "@/components/admin/flows"
+import { NativeSelect } from "@/components/ui/native-select"
 import type {
-  NotificationChannel,
-  NotificationTemplate,
-} from "@handshake-agent/contracts"
+  BroadcastOption,
+  DeliveryChannel,
+  DeliveryLogRow,
+  DeliveryStatus,
+} from "@/types/components"
 
-/** Human label for the channel chip (design shows the channel verbatim). */
-const CHANNEL_LABEL: Record<NotificationChannel, string> = {
-  whatsapp: "WhatsApp",
-  email: "Email",
-  sms: "SMS",
-  in_app: "In-app",
-}
+// ─── Design mock content (docs/design-ref/screens/Notifications.html) ────────────────
+
+/** Audience cohorts — the design's `<option>`s, each carrying its reach count. */
+const AUDIENCE_OPTIONS: readonly BroadcastOption[] = [
+  { value: "lagos", label: "Cohort: Lagos (2,140)" },
+  { value: "tier_1", label: "tier_1 users (8,920)" },
+  { value: "verified", label: "All verified (24,610)" },
+  { value: "all", label: "All users (31,204)" },
+]
+
+/** Template keys — the design's `<option>`s. */
+const TEMPLATE_OPTIONS: readonly BroadcastOption[] = [
+  { value: "kyc_reminder", label: "kyc_reminder" },
+  { value: "tx_confirmation", label: "tx_confirmation" },
+  { value: "promo_ticketing", label: "promo_ticketing" },
+]
+
+/** Schedule options — the design's `<option>`s. */
+const SCHEDULE_OPTIONS: readonly BroadcastOption[] = [
+  { value: "now", label: "Send now" },
+  { value: "9am", label: "Tomorrow 9:00" },
+  { value: "custom", label: "Custom…" },
+]
 
 /**
- * Approval-pill meta. WhatsApp templates require Meta template approval before
- * they can send; other channels are simply active. Absent a persisted approval
- * status on the contract, we derive it from the channel — WhatsApp templates that
- * carry a `whatsappTemplateId` are "Approved", otherwise "Pending review".
+ * The reach of each audience, used to flip the composer into maker-checker mode
+ * (the design's `bBig`). Large cohorts require a second admin's approval.
  */
-function approvalMeta(template: NotificationTemplate): {
-  label: string
-  variant: "success" | "warn"
-} {
-  if (template.channel === "whatsapp") {
-    return template.whatsappTemplateId
-      ? { label: "Approved", variant: "success" }
-      : { label: "Pending review", variant: "warn" }
-  }
-  return { label: "Active", variant: "success" }
+const AUDIENCE_REACH: Record<string, number> = {
+  lagos: 2140,
+  tier_1: 8920,
+  verified: 24610,
+  all: 31204,
 }
 
-function LoadingCards() {
+/** Audiences at/above this reach require maker-checker (the design's `bBig`). */
+const LARGE_AUDIENCE_THRESHOLD = 10000
+
+// design mock: the design's representative delivery-log rows (seed()-shaped names).
+const DELIVERY_ROWS: readonly DeliveryLogRow[] = [
+  {
+    id: "d1",
+    channel: "WhatsApp",
+    name: "kyc_reminder",
+    audience: "tier_1 users",
+    time: "12m ago",
+    status: "Delivered",
+  },
+  {
+    id: "d2",
+    channel: "Email",
+    name: "promo_ticketing",
+    audience: "All verified",
+    time: "1h ago",
+    status: "Sent",
+  },
+  {
+    id: "d3",
+    channel: "WhatsApp",
+    name: "tx_confirmation",
+    audience: "Cohort: Lagos",
+    time: "3h ago",
+    status: "Delivered",
+  },
+  {
+    id: "d4",
+    channel: "SMS",
+    name: "otp_fallback",
+    audience: "All users",
+    time: "5h ago",
+    status: "Sending",
+  },
+  {
+    id: "d5",
+    channel: "Email",
+    name: "kyc_reminder",
+    audience: "tier_1 users",
+    time: "Yesterday",
+    status: "Bounced",
+  },
+]
+
+// ─── Status → token maps (§5 status→token pairs) ─────────────────────────────────────
+
+/** Channel chip → `{{ d.chanBg }}` / `{{ d.chanFg }}` (§5 status-token surface + text). */
+const CHANNEL_CLASS: Record<DeliveryChannel, string> = {
+  WhatsApp: "bg-sok text-tok",
+  Email: "bg-sif text-tif",
+  SMS: "bg-swn text-twn",
+  "In-app": "bg-card2 text-ink2",
+}
+
+/** Delivery status pill → `{{ d.stBg }}` / `{{ d.stFg }}` (§5 status-token surface + text). */
+const STATUS_CLASS: Record<DeliveryStatus, string> = {
+  Delivered: "bg-sok text-tok",
+  Sent: "bg-sok text-tok",
+  Queued: "bg-sif text-tif",
+  Scheduled: "bg-sif text-tif",
+  Sending: "bg-swn text-twn",
+  Bounced: "bg-sdn text-tdn",
+  Failed: "bg-sdn text-tdn",
+}
+
+// ─── Sub-components ─────────────────────────────────────────────────────────────────
+
+/** An uppercase eyebrow label above a composer field (design 11px/700 ink3). */
+function FieldLabel({ children }: { children: string }) {
   return (
-    <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2" aria-busy="true">
-      {[0, 1, 2, 3].map((i) => (
-        <Skeleton key={i} className="h-[128px] w-full rounded-2xl" />
+    <div className="mb-[5px] text-[11px] font-bold text-ink3">{children}</div>
+  )
+}
+
+/** The large-audience maker-checker warning (design's `sc-if bBig`). */
+function MakerCheckerWarning() {
+  return (
+    <div className="flex items-center gap-2 rounded-[9px] bg-swn px-3 py-[9px]">
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        aria-hidden="true"
+        className="shrink-0 text-twn"
+      >
+        <path
+          d="M12 4l9 16H3z"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <span className="text-[11px] font-semibold text-twn">
+        Large audience — requires maker-checker.
+      </span>
+    </div>
+  )
+}
+
+/** The broadcast composer: Audience / Template / Schedule + the `bBig` warning + CTA. */
+function BroadcastComposer() {
+  const [audience, setAudience] = useState(AUDIENCE_OPTIONS[0].value)
+  const [templateKey, setTemplateKey] = useState(TEMPLATE_OPTIONS[0].value)
+  const [when, setWhen] = useState(SCHEDULE_OPTIONS[0].value)
+  const [makerCheckerOpen, setMakerCheckerOpen] = useState(false)
+  const [queued, setQueued] = useState(false)
+
+  const isLargeAudience =
+    (AUDIENCE_REACH[audience] ?? 0) >= LARGE_AUDIENCE_THRESHOLD
+  const audienceLabel =
+    AUDIENCE_OPTIONS.find((o) => o.value === audience)?.label ?? audience
+  const scheduleLabel =
+    SCHEDULE_OPTIONS.find((o) => o.value === when)?.label ?? when
+
+  function onFieldChange(setter: (value: string) => void) {
+    return (event: React.ChangeEvent<HTMLSelectElement>) => {
+      setter(event.target.value)
+      setQueued(false)
+    }
+  }
+
+  // A broadcast is proposal-only: a large audience opens the shared maker-checker
+  // modal (dual control) rather than sending; a small audience just marks "sent".
+  function queueBroadcast() {
+    if (isLargeAudience) {
+      setMakerCheckerOpen(true)
+      return
+    }
+    setQueued(true)
+  }
+
+  const cta = isLargeAudience
+    ? "Queue broadcast for approval"
+    : "Send broadcast"
+  const ctaLabel = queued
+    ? isLargeAudience
+      ? "Queued for approval"
+      : "Broadcast sent"
+    : cta
+
+  return (
+    <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
+      <div className="mb-3.5 text-[13px] font-extrabold text-ink">
+        Broadcast composer
+      </div>
+
+      <div className="flex flex-col gap-[11px]">
+        <div>
+          <FieldLabel>AUDIENCE</FieldLabel>
+          <NativeSelect
+            aria-label="Broadcast audience"
+            className="h-10 rounded-[10px] text-[13px] font-semibold"
+            value={audience}
+            onChange={onFieldChange(setAudience)}
+          >
+            {AUDIENCE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </div>
+
+        <div>
+          <FieldLabel>TEMPLATE</FieldLabel>
+          <NativeSelect
+            aria-label="Broadcast template"
+            className="h-10 rounded-[10px] text-[13px] font-semibold"
+            value={templateKey}
+            onChange={onFieldChange(setTemplateKey)}
+          >
+            {TEMPLATE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </div>
+
+        <div>
+          <FieldLabel>SCHEDULE</FieldLabel>
+          <NativeSelect
+            aria-label="Broadcast schedule"
+            className="h-10 rounded-[10px] text-[13px] font-semibold"
+            value={when}
+            onChange={onFieldChange(setWhen)}
+          >
+            {SCHEDULE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </div>
+
+        {isLargeAudience && <MakerCheckerWarning />}
+
+        <button
+          type="button"
+          onClick={queueBroadcast}
+          aria-label={ctaLabel}
+          className="rounded-[11px] bg-brand-amber px-3 py-3 text-center text-[13.5px] font-extrabold text-[--ink-on-amber] transition-opacity hover:opacity-90 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          {ctaLabel}
+        </button>
+      </div>
+
+      <MakerCheckerModal
+        open={makerCheckerOpen}
+        onOpenChange={setMakerCheckerOpen}
+        title="Queue broadcast for approval"
+        diff={[
+          { field: "Audience", from: "—", to: audienceLabel },
+          { field: "Template", from: "—", to: templateKey },
+          { field: "Schedule", from: "—", to: scheduleLabel },
+        ]}
+        onSubmit={() => {
+          setMakerCheckerOpen(false)
+          setQueued(true)
+        }}
+      />
+    </div>
+  )
+}
+
+/** A single delivery-log row: channel chip + name + audience·time + status pill. */
+function DeliveryRow({ row }: { row: DeliveryLogRow }) {
+  return (
+    <div className="flex items-center gap-[11px] border-b border-line2 px-[18px] py-3 last:border-b-0">
+      <span
+        className={`flex-none rounded-md px-2 py-[2px] text-[10.5px] font-bold ${CHANNEL_CLASS[row.channel]}`}
+      >
+        {row.channel}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[12.5px] font-semibold text-ink">
+          {row.name}
+        </div>
+        <div className="text-[10.5px] text-ink3">
+          {row.audience} · {row.time}
+        </div>
+      </div>
+      <span
+        className={`rounded-full px-[9px] py-[2px] text-[10.5px] font-bold ${STATUS_CLASS[row.status]}`}
+      >
+        {row.status}
+      </span>
+    </div>
+  )
+}
+
+/** The read-only delivery log (header + bounce/complaint footnote + rows). */
+function DeliveryLog() {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-line bg-card">
+      <div className="flex items-center gap-2.5 border-b border-line px-[18px] py-3.5">
+        <div className="flex-1 text-[13px] font-extrabold text-ink">
+          Delivery log
+        </div>
+        <span className="text-[11px] text-ink3">
+          bounce 0.4% · complaint 0.02% (Resend)
+        </span>
+      </div>
+      {DELIVERY_ROWS.map((row) => (
+        <DeliveryRow key={row.id} row={row} />
       ))}
     </div>
   )
 }
 
-function TemplateCard({
-  template,
-  onEdit,
-}: {
-  template: NotificationTemplate
-  onEdit: () => void
-}) {
-  const approval = approvalMeta(template)
-  const preview = template.contentText.trim()
-
-  return (
-    <div className="rounded-2xl border border-line bg-card p-[18px_20px]">
-      <div className="mb-2.5 flex items-center gap-2.5">
-        <span className="shrink-0 rounded-md bg-card2 px-2.5 py-[3px] text-[11px] font-bold text-ink2">
-          {CHANNEL_LABEL[template.channel]}
-        </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[13px] font-bold text-ink">
-          {template.templateKey}
-        </span>
-        <Badge variant={approval.variant}>{approval.label}</Badge>
-      </div>
-
-      <div className="mb-2 text-[11px] text-ink3">
-        locale {template.language} · vars: {template.variables.length}
-      </div>
-
-      <div className="rounded-[10px] bg-card2 px-[13px] py-[11px] text-xs leading-relaxed text-ink2">
-        {preview.length > 0 ? (
-          <span className="line-clamp-3 whitespace-pre-wrap">{preview}</span>
-        ) : (
-          <span className="text-ink3 italic">No content text.</span>
-        )}
-      </div>
-
-      <div className="mt-3 flex justify-end">
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={onEdit}
-          aria-label={`Edit template ${template.templateKey}`}
-        >
-          Edit
-        </Button>
-      </div>
-    </div>
-  )
-}
+// ─── Page ───────────────────────────────────────────────────────────────────────
 
 export function NotificationsPage() {
-  const templates = useNotificationTemplates()
-  const [editing, setEditing] = useState<NotificationTemplate | null>(null)
-  const [dialogOpen, setDialogOpen] = useState(false)
-
-  function openNew() {
-    setEditing(null)
-    setDialogOpen(true)
-  }
-
-  function openEdit(template: NotificationTemplate) {
-    setEditing(template)
-    setDialogOpen(true)
-  }
-
   return (
-    <div className="flex flex-1 flex-col overflow-y-auto">
-      <div className="mx-auto w-full max-w-[1200px] px-[30px] pt-[26px] pb-[60px]">
-        {/* ── Header ──────────────────────────────────────────────────────── */}
-        <div className="mb-4 flex items-end justify-between gap-4">
-          <div>
-            <h1 className="font-heading text-2xl font-extrabold tracking-[-0.02em] text-ink">
-              Templates
-            </h1>
-            <p className="mt-[5px] text-[13.5px] text-ink2">
-              Email (Resend) and WhatsApp approved-template management.
-            </p>
-          </div>
-          <Button size="sm" onClick={openNew}>
-            New template
-          </Button>
-        </div>
+    <div className="mx-auto w-full max-w-[1200px] px-[30px] pt-[26px] pb-[60px]">
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
+      <div className="mb-4">
+        <h1 className="text-[24px] font-extrabold tracking-[-0.02em] text-ink">
+          Notifications &amp; comms
+        </h1>
+        <p className="mt-[5px] text-[13.5px] text-ink2">
+          Delivery log, bounce/complaint rates, and the broadcast composer.
+        </p>
+      </div>
 
-        {/* ── Loading ─────────────────────────────────────────────────────── */}
-        {templates.isLoading && <LoadingCards />}
-
-        {/* ── Error ───────────────────────────────────────────────────────── */}
-        {templates.isError && (
-          <div className="rounded-2xl border border-line bg-sdn/40 p-6 text-center">
-            <p className="text-sm font-bold text-tdn">
-              Failed to load templates
-            </p>
-            <p className="mt-1 text-xs text-ink3">Please refresh the page.</p>
-          </div>
-        )}
-
-        {/* ── Empty ───────────────────────────────────────────────────────── */}
-        {templates.isSuccess && templates.data.items.length === 0 && (
-          <div className="rounded-2xl border border-line bg-card px-6 py-12 text-center">
-            <p className="text-sm font-bold text-ink">No templates yet</p>
-            <p className="mt-1 text-[12.5px] text-ink3">
-              Create one to get started.
-            </p>
-          </div>
-        )}
-
-        {/* ── Data ────────────────────────────────────────────────────────── */}
-        {templates.isSuccess && templates.data.items.length > 0 && (
-          <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
-            {templates.data.items.map((template) => (
-              <TemplateCard
-                key={template.id}
-                template={template}
-                onEdit={() => openEdit(template)}
-              />
-            ))}
-          </div>
-        )}
-
-        <TemplateEditorDialog
-          open={dialogOpen}
-          onOpenChange={setDialogOpen}
-          template={editing}
-        />
+      {/* ── 1fr 1.3fr: composer | delivery log ──────────────────────────────── */}
+      <div className="grid grid-cols-1 items-start gap-3.5 lg:grid-cols-[1fr_1.3fr]">
+        <BroadcastComposer />
+        <DeliveryLog />
       </div>
     </div>
   )

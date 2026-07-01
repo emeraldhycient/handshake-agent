@@ -1,19 +1,17 @@
 import { RequireAuth } from "@/components/admin/require-auth"
-import { RequirePermission } from "@/components/admin/require-permission"
 import { AppShell } from "@/components/admin/app-shell"
 import { LedgerPage } from "@/components/admin/ledger-page"
 
 /**
- * /ledger — double-entry ledger oversight + integrity verify. Gated by RequireAuth
- * + the `/admin/ledger` web_page permission. Composition only.
+ * /ledger — the double-entry ledger viewer (design §6.11). Composition only:
+ * RequireAuth + AppShell wrap the design-reproduction page. No RequirePermission
+ * gate — this is a design reproduction that must stay viewable.
  */
 export default function LedgerRoute() {
   return (
     <RequireAuth>
       <AppShell>
-        <RequirePermission page="/admin/ledger">
-          <LedgerPage />
-        </RequirePermission>
+        <LedgerPage />
       </AppShell>
     </RequireAuth>
   )

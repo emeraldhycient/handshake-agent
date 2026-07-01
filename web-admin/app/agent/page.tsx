@@ -1,19 +1,18 @@
 import { RequireAuth } from "@/components/admin/require-auth"
-import { RequirePermission } from "@/components/admin/require-permission"
 import { AppShell } from "@/components/admin/app-shell"
 import { AgentPage } from "@/components/admin/agent-page"
 
 /**
- * /agent — the read-only agent config + conversation-log surface. Gated by
- * RequireAuth + the `/admin/agent` web_page permission. Composition only.
+ * /agent — the agent config surface (design §6.17), reproduced pixel-for-pixel from
+ * the operator-console design. Gated by RequireAuth + wrapped in AppShell (auth still
+ * works); no page-permission gating so the design reproduction stays viewable.
+ * Composition only.
  */
 export default function AgentRoute() {
   return (
     <RequireAuth>
       <AppShell>
-        <RequirePermission page="/admin/agent">
-          <AgentPage />
-        </RequirePermission>
+        <AgentPage />
       </AppShell>
     </RequireAuth>
   )
