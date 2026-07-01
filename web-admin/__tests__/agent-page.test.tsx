@@ -13,6 +13,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type {
   AgentConfigView,
@@ -22,6 +23,7 @@ import type {
 
 import { AgentPage } from "@/components/admin/agent-page"
 import { ConversationLogDetail } from "@/components/admin/conversation-log-detail"
+import { defaultToastStore } from "@/lib/store/toast-store"
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────────
 
@@ -123,6 +125,22 @@ describe("AgentPage", () => {
     // (it is never edited in place — the read-only posture of §3.1).
     expect(screen.getByText(/system-prompt versions/i)).toBeInTheDocument()
     expect(screen.getByText(/change = maker-checker/i)).toBeInTheDocument()
+  })
+
+  it("toasts the prompt-version action (View diff) when clicked", async () => {
+    // Each version row's action button (View diff / Review / Restore) is bound
+    // to the design's `onAction` toast — a mock confirmation naming the action +
+    // version; real maker-checker wiring is the later integration step.
+    const user = userEvent.setup()
+    defaultToastStore.setState({ toasts: [] })
+    renderPage()
+
+    await user.click(await screen.findByRole("button", { name: "View diff" }))
+
+    const { toasts } = defaultToastStore.getState()
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].message).toMatch(/View diff/)
+    expect(toasts[0].message).toMatch(/v4\.2\.0/)
   })
 
   it("renders a conversation's messages with their NLU intents", async () => {

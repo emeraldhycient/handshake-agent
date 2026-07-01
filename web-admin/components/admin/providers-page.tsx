@@ -26,6 +26,7 @@ import { useCallback, useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { StepUpModal } from "@/components/admin/flows"
+import { pushToast } from "@/lib/store/toast-store"
 import type {
   ProviderCard,
   ProviderCardViewProps,
@@ -257,12 +258,15 @@ function ProviderCardView({
         <span className="min-w-0 truncate text-[11px] text-ink3">
           Bound: {provider.caps}
         </span>
-        {/* design reproduction: no live-probe endpoint — read-shaped, no-op (§3.1). */}
+        {/* design reproduction: read-shaped confirmation, no live probe (§3.1). */}
         <Button
           variant="outline"
           size="sm"
           type="button"
           aria-label={`Test connection to ${provider.name}`}
+          onClick={() =>
+            pushToast(`Testing connection to ${provider.name}…`, "info")
+          }
         >
           Test connection
         </Button>

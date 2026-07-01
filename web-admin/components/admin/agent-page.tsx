@@ -18,6 +18,7 @@
  * kind chip denotes proposal-only capabilities, not execution. Colour is never the
  * sole signal — the tag/chip text carries the state.
  */
+import { pushToast } from "@/lib/store/toast-store"
 import type {
   AgentGuardrailRow,
   AgentPromptVersion,
@@ -140,6 +141,9 @@ function PromptVersionsCard() {
           </div>
           <button
             type="button"
+            onClick={() =>
+              pushToast(`${version.action} · ${version.version}`, "info")
+            }
             className="cursor-pointer rounded-md px-1 text-[11.5px] font-bold text-tif hover:bg-hov focus-visible:outline focus-visible:outline-2 focus-visible:outline-tif"
           >
             {version.action}

@@ -23,6 +23,7 @@
 import { useMemo, useState } from "react"
 
 import { Pagination } from "@/components/admin/pagination"
+import { pushToast } from "@/lib/store/toast-store"
 
 // One row of the design's seed `audit` dataset (logic.js `seed()`, lines 82-89).
 type AuditRow = {
@@ -209,6 +210,7 @@ export function AuditPage() {
           </span>
           <button
             type="button"
+            onClick={() => pushToast("Exporting audit log to CSV…", "info")}
             className="flex h-[34px] cursor-pointer items-center gap-[7px] rounded-[10px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
           >
             <svg

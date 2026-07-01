@@ -79,6 +79,7 @@ import { useAdminAuthStore } from "@/lib/store/admin-auth-store"
 import { useThemeStore } from "@/lib/store/theme-store"
 import { cn } from "@/lib/utils"
 import { MfaEnrollDialog } from "@/components/admin/mfa-enroll-dialog"
+import { Toaster } from "@/components/shared/toaster"
 import type { AppShellProps } from "@/types/components"
 
 interface NavItem {
@@ -601,6 +602,9 @@ export function AppShell({ children }: AppShellProps) {
       </div>
 
       <MfaEnrollDialog open={mfaOpen} onOpenChange={setMfaOpen} />
+
+      {/* Global toast stack — read-shaped action confirmations (§5, design toast). */}
+      <Toaster />
     </div>
   )
 }
