@@ -9,22 +9,25 @@
  * CTA) beside a read-only **Delivery log** (channel chip + name + audience·time +
  * status pill, closed by a bounce/complaint footnote).
  *
- * DATA: this is a design reproduction — the audience / template / schedule options
- * and the delivery log are the design's own module-level mock content (no fetching,
- * no TanStack Query). Real-data reintegration is a separate later step.
+ * DATA (Phase 6a): the TEMPLATE select is wired to the real
+ * `GET /admin/notification-templates` endpoint via `useNotificationTemplates()`
+ * (its keys become the options). The AUDIENCE cohorts + the delivery log remain
+ * the design's module-level mock content — no broadcast-cohort or delivery-log
+ * endpoint exists yet (recorded as shape gaps for a later backend pass).
  *
  * FUNDS-SAFETY: composing a broadcast never sends on click. Every send opens the
  * shared confirm modal first — a large audience flips the composer into maker-checker
  * mode (the design's `bBig` warning + "Queue for approval" CTA) so the broadcast
  * enters Pending approval before it goes out; a small audience gets a plain confirm.
  * Only the modal's submit marks it queued/sent — matching the design's proposal-only
- * posture (root §3.1).
+ * posture (root §3.1). The broadcast send itself stays a mock (Phase 7 — no engine).
  */
 import { useState } from "react"
 
 import { MakerCheckerModal } from "@/components/admin/flows"
 import { pushToast } from "@/lib/store/toast-store"
 import { NativeSelect } from "@/components/ui/native-select"
+import { useNotificationTemplates } from "@/lib/query/hooks"
 import type {
   BroadcastOption,
   DeliveryChannel,
@@ -42,8 +45,12 @@ const AUDIENCE_OPTIONS: readonly BroadcastOption[] = [
   { value: "all", label: "All users (31,204)" },
 ]
 
-/** Template keys — the design's `<option>`s. */
-const TEMPLATE_OPTIONS: readonly BroadcastOption[] = [
+/**
+ * Fallback template `<option>`s — used only while the real
+ * `GET /admin/notification-templates` list is loading or empty, so the composer
+ * always has a valid selection to render (the design's own keys).
+ */
+const FALLBACK_TEMPLATE_OPTIONS: readonly BroadcastOption[] = [
   { value: "kyc_reminder", label: "kyc_reminder" },
   { value: "tx_confirmation", label: "tx_confirmation" },
   { value: "promo_ticketing", label: "promo_ticketing" },
@@ -170,14 +177,46 @@ function MakerCheckerWarning() {
   )
 }
 
+/** Distinct template keys become the composer's TEMPLATE `<option>`s, in list order. */
+function toTemplateOptions(
+  keys: readonly string[]
+): readonly BroadcastOption[] {
+  const seen = new Set<string>()
+  const options: BroadcastOption[] = []
+  for (const key of keys) {
+    if (seen.has(key)) continue
+    seen.add(key)
+    options.push({ value: key, label: key })
+  }
+  return options
+}
+
 /** The broadcast composer: Audience / Template / Schedule + the `bBig` warning + CTA. */
 function BroadcastComposer() {
+  // The TEMPLATE options come from the real notification-templates list; while it
+  // loads (or if it is empty) the composer falls back to the design's own keys so
+  // it always has a valid selection.
+  const templatesQuery = useNotificationTemplates()
+  const templateOptions =
+    templatesQuery.data && templatesQuery.data.items.length > 0
+      ? toTemplateOptions(templatesQuery.data.items.map((t) => t.templateKey))
+      : FALLBACK_TEMPLATE_OPTIONS
+
   const [audience, setAudience] = useState(AUDIENCE_OPTIONS[0].value)
-  const [templateKey, setTemplateKey] = useState(TEMPLATE_OPTIONS[0].value)
+  const [templateKey, setTemplateKey] = useState(
+    FALLBACK_TEMPLATE_OPTIONS[0].value
+  )
   const [when, setWhen] = useState(SCHEDULE_OPTIONS[0].value)
   const [customAt, setCustomAt] = useState("")
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [queued, setQueued] = useState(false)
+
+  // Keep the select controlled against whatever options are live: if the current
+  // key isn't among the resolved options (e.g. real templates just loaded), show
+  // the first available one instead of an out-of-range value.
+  const selectedTemplate = templateOptions.some((o) => o.value === templateKey)
+    ? templateKey
+    : (templateOptions[0]?.value ?? templateKey)
 
   const isLargeAudience =
     (AUDIENCE_REACH[audience] ?? 0) >= LARGE_AUDIENCE_THRESHOLD
@@ -240,10 +279,10 @@ function BroadcastComposer() {
           <NativeSelect
             aria-label="Broadcast template"
             className="h-10 rounded-[10px] text-[13px] font-semibold"
-            value={templateKey}
+            value={selectedTemplate}
             onChange={onFieldChange(setTemplateKey)}
           >
-            {TEMPLATE_OPTIONS.map((option) => (
+            {templateOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
@@ -300,7 +339,7 @@ function BroadcastComposer() {
         }
         diff={[
           { field: "Audience", from: "—", to: audienceLabel },
-          { field: "Template", from: "—", to: templateKey },
+          { field: "Template", from: "—", to: selectedTemplate },
           { field: "Schedule", from: "—", to: scheduleLabel },
         ]}
         onSubmit={() => {

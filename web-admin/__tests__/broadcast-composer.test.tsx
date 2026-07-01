@@ -10,12 +10,32 @@
  * operator can pick a send time; the picked value flows into the confirm modal's
  * change preview.
  */
-import { describe, expect, it, beforeEach } from "vitest"
+import { describe, expect, it, beforeEach, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import { NotificationsPage } from "@/components/admin/notifications-page"
 import { defaultToastStore } from "@/lib/store/toast-store"
+
+// The composer's TEMPLATE select is wired to the real notification-templates list
+// (Phase 6a); mock the client so no server is needed. These tests only exercise
+// the audience/schedule/confirm behaviours, so an empty list (composer falls back
+// to the design's own template keys) is sufficient.
+vi.mock("@/lib/api/notifications", () => ({
+  listNotificationTemplates: vi.fn().mockResolvedValue({ items: [] }),
+}))
+
+function renderPage() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  return render(
+    <QueryClientProvider client={client}>
+      <NotificationsPage />
+    </QueryClientProvider>
+  )
+}
 
 beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
@@ -24,7 +44,7 @@ beforeEach(() => {
 describe("NotificationsPage broadcast composer", () => {
   it("opens a confirm modal for a small audience and only sends on submit", async () => {
     const user = userEvent.setup()
-    render(<NotificationsPage />)
+    renderPage()
 
     // Default seed audience (Lagos · 2,140) is below the maker-checker threshold.
     const cta = screen.getByRole("button", { name: /Send broadcast/i })
@@ -52,7 +72,7 @@ describe("NotificationsPage broadcast composer", () => {
 
   it("reveals a datetime input for the Custom schedule", async () => {
     const user = userEvent.setup()
-    render(<NotificationsPage />)
+    renderPage()
 
     // No custom time picker until "Custom…" is chosen.
     expect(screen.queryByLabelText("Custom send time")).not.toBeInTheDocument()

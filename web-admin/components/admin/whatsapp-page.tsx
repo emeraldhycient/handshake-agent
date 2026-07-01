@@ -4,35 +4,47 @@
  * WhatsAppPage — PIXEL reproduction of `docs/design-ref/screens/Whatsapp.html`
  * (operator-console design system §6.20).
  *
- * This screen is a **pure design reproduction**: it renders the design's own
- * representative sample content (module-level constants — no TanStack Query / no
- * `useWhatsAppConfig`). Real-data reintegration is a separate later step.
+ * The "Number & webhook health" card is now WIRED to real data: the NON-SECRET
+ * Cloud-API / Flows wiring (graph version + phone-number / WABA / app / flow ids)
+ * and the boolean secret-PRESENCE flags come from `useWhatsAppConfig()`
+ * (GET /admin/whatsapp/config). Secret VALUES never cross the boundary (root
+ * CLAUDE.md §3.5) — the presence rows render only "Set" / "Not set", never a
+ * plaintext secret.
+ *
+ * The design's operational-health signals (quality rating, messaging-limit tier,
+ * webhook subscription status, last-webhook age, 7d template rejections), the
+ * Flows registry (per-flow name/desc/live), and the live conversation monitor
+ * have NO read endpoint yet — those remain design-representative module constants
+ * (recorded as shapeGaps for the later backend-enrichment pass).
  *
  * Structure (matching the markup 1:1, `max-width:1200px` · `padding:26px 30px 60px`):
  *   Row 1 (`grid-template-columns:1fr 1fr; gap:14px`):
- *     • "Number & webhook health" — `waHealth` key/val rows (per-row colour) closed
- *       by the "Official Cloud API only · ban-risk: low" success note.
- *     • "Flows (E2E encrypted)" — `waFlows` lock-icon rows + "Live" pills.
+ *     • "Number & webhook health" — real wiring rows + secret-presence, then the
+ *       (mock) operational rows, closed by the "Official Cloud API only" note.
+ *     • "Flows (E2E encrypted)" — `WA_FLOWS` lock-icon rows + "Live" pills (mock).
  *   Row 2 (full-width): "Live conversation monitor" — read-only, redacted chat
- *     bubbles (`waConvo`), inbound left/`card2`, outbound right/`brand-green`.
+ *     bubbles (`WA_CONVO`), inbound left/`card2`, outbound right/`brand-green` (mock).
  *
  * The screen is entirely read-only — it moves no money and takes no sensitive
  * action, so it opens none of the shared flow modals and there is no step-up here
- * (root CLAUDE.md §3.5). Secret VALUES never appear — the health rows carry only
- * presence/status, never a plaintext secret.
+ * (root CLAUDE.md §3.5).
  */
 import { Badge } from "@/components/ui/badge"
+import { Skeleton } from "@/components/ui/skeleton"
+import { useWhatsAppConfig } from "@/lib/query/hooks"
+import type { WhatsAppConfigView } from "@handshake-agent/contracts"
 import type {
   WhatsAppConvoBubble,
   WhatsAppFlowRow,
   WhatsAppHealthRow,
 } from "@/types/components"
 
-// design mock (`waHealth`): the Cloud-API number + webhook wiring, each row tinted by
-// health. Neutral wiring ids render `--ink`; healthy states `--tok`; degraded `--twn`.
-const WA_HEALTH: readonly WhatsAppHealthRow[] = [
-  { label: "Display number", value: "+234 809 •••• 4821", tone: "neutral" },
-  { label: "Phone number ID", value: "109920857462311", tone: "neutral" },
+// Operational-health signals the design shows but the config view does NOT provide
+// (quality rating, messaging limit, webhook status, last-webhook age, template
+// rejections). These have no read endpoint yet — kept as design-representative
+// samples and recorded as shapeGaps. Neutral wiring renders `--ink`; healthy
+// states `--tok`; degraded `--twn`.
+const WA_HEALTH_OPERATIONAL: readonly WhatsAppHealthRow[] = [
   { label: "Quality rating", value: "GREEN · High", tone: "ok" },
   { label: "Messaging limit", value: "Tier 3 · 100K / 24h", tone: "neutral" },
   { label: "Webhook", value: "Subscribed · 200 OK", tone: "ok" },
@@ -41,7 +53,9 @@ const WA_HEALTH: readonly WhatsAppHealthRow[] = [
 ]
 
 // design mock (`waFlows`): the E2E-encrypted in-thread Flows — KYC, itemized confirm
-// and PIN entry (root CLAUDE.md §3.5). Every flow is live.
+// and PIN entry (root CLAUDE.md §3.5). No per-flow registry endpoint exists yet
+// (the config view exposes only flowId + beneficiaryFlowId), so name/desc/live are
+// design-representative samples — recorded as a shapeGap.
 const WA_FLOWS: readonly WhatsAppFlowRow[] = [
   {
     id: "kyc",
@@ -64,6 +78,7 @@ const WA_FLOWS: readonly WhatsAppFlowRow[] = [
 ]
 
 // design mock (`waConvo`): the read-only, redacted live-conversation transcript.
+// No WhatsApp conversation-monitor endpoint exists yet — recorded as a shapeGap.
 const WA_CONVO: readonly WhatsAppConvoBubble[] = [
   { id: "c1", direction: "in", text: "I want to buy 50 USDT" },
   {
@@ -84,6 +99,54 @@ function toneClass(tone: WhatsAppHealthRow["tone"]): string {
   if (tone === "ok") return "text-tok"
   if (tone === "warn") return "text-twn"
   return "text-ink"
+}
+
+/**
+ * Derive the real wiring rows from the config view. The non-secret ids/version
+ * render as neutral mono wiring; the three secret-presence booleans render only
+ * "Set" (`ok`) / "Not set" (`warn`) — never a plaintext secret (§3.5).
+ */
+function wiringRows(config: WhatsAppConfigView): readonly WhatsAppHealthRow[] {
+  const presence = (set: boolean): WhatsAppHealthRow["tone"] =>
+    set ? "ok" : "warn"
+  // An unconfigured env yields blank ids — render a subtle em-dash so the row
+  // reads as "not configured" rather than an empty cell (design-consistent).
+  const id = (value: string): string => (value.trim() === "" ? "—" : value)
+  return [
+    {
+      label: "Graph version",
+      value: id(config.graphVersion),
+      tone: "neutral",
+    },
+    {
+      label: "Phone number ID",
+      value: id(config.phoneNumberId),
+      tone: "neutral",
+    },
+    { label: "WABA ID", value: id(config.wabaId), tone: "neutral" },
+    { label: "App ID", value: id(config.appId), tone: "neutral" },
+    { label: "Flow ID", value: id(config.flowId), tone: "neutral" },
+    {
+      label: "Beneficiary Flow ID",
+      value: id(config.beneficiaryFlowId),
+      tone: "neutral",
+    },
+    {
+      label: "App secret",
+      value: config.hasAppSecret ? "Set" : "Not set",
+      tone: presence(config.hasAppSecret),
+    },
+    {
+      label: "Flow private key",
+      value: config.hasFlowPrivateKey ? "Set" : "Not set",
+      tone: presence(config.hasFlowPrivateKey),
+    },
+    {
+      label: "Verify token",
+      value: config.hasVerifyToken ? "Set" : "Not set",
+      tone: presence(config.hasVerifyToken),
+    },
+  ]
 }
 
 function CheckIcon() {
@@ -133,28 +196,82 @@ function LockIcon() {
   )
 }
 
-/** Number & webhook health — key/val rows + the "Official Cloud API only" note. */
+/** One key/value health row (design markup) — label + tinted mono value. */
+function HealthRow({ row }: { row: WhatsAppHealthRow }) {
+  return (
+    <div className="flex items-center justify-between gap-4 border-b border-line2 py-[9px]">
+      <dt className="text-[12.5px] text-ink2">{row.label}</dt>
+      <dd
+        className={`max-w-[55%] truncate font-mono text-xs font-bold ${toneClass(row.tone)}`}
+      >
+        {row.value}
+      </dd>
+    </div>
+  )
+}
+
+/** Skeleton wiring rows for the loading branch (matches the row rhythm). */
+function HealthRowsSkeleton() {
+  return (
+    <div aria-busy="true">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div
+          key={i}
+          className="flex items-center justify-between gap-4 border-b border-line2 py-[9px]"
+        >
+          <Skeleton className="h-3 w-28" />
+          <Skeleton className="h-3 w-24" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Number & webhook health — real Cloud-API / Flows wiring + secret-presence
+ * (from `useWhatsAppConfig`), then the design's (mock) operational rows, closed
+ * by the "Official Cloud API only" note. Four async branches.
+ */
 function HealthCard() {
+  const { data, isLoading, isError, refetch } = useWhatsAppConfig()
+
   return (
     <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
       <h2 className="mb-3 text-[13px] font-extrabold text-ink">
         Number &amp; webhook health
       </h2>
+
       <dl>
-        {WA_HEALTH.map((row) => (
-          <div
-            key={row.label}
-            className="flex items-center justify-between gap-4 border-b border-line2 py-[9px]"
-          >
-            <dt className="text-[12.5px] text-ink2">{row.label}</dt>
-            <dd
-              className={`max-w-[55%] truncate font-mono text-xs font-bold ${toneClass(row.tone)}`}
+        {isLoading && <HealthRowsSkeleton />}
+
+        {isError && (
+          <div className="my-2 rounded-[9px] border border-sdn bg-sdn/40 px-3 py-[11px] text-center">
+            <p className="text-[12px] font-bold text-tdn">
+              Couldn&apos;t load WhatsApp config
+            </p>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              className="mt-1 cursor-pointer rounded-md px-1 text-[11.5px] font-bold text-tif hover:bg-hov focus-visible:outline focus-visible:outline-2 focus-visible:outline-tif"
             >
-              {row.value}
-            </dd>
+              Retry
+            </button>
           </div>
-        ))}
+        )}
+
+        {data && (
+          <>
+            {wiringRows(data).map((row) => (
+              <HealthRow key={row.label} row={row} />
+            ))}
+            {/* Operational signals the config view does not yet provide (shapeGap). */}
+            {WA_HEALTH_OPERATIONAL.map((row) => (
+              <HealthRow key={row.label} row={row} />
+            ))}
+          </>
+        )}
       </dl>
+
       <div className="mt-3 flex items-center gap-2 rounded-[9px] bg-sok px-3 py-[9px]">
         <CheckIcon />
         <span className="text-[11.5px] font-semibold text-tok">

@@ -4,91 +4,71 @@
  * AmlPage — the AML / risk screen, reproduced pixel-for-pixel from
  * `docs/design-ref/screens/Aml.html` (SPEC §6.6). A `1.2fr 1fr` grid:
  *
- *   - LEFT  · Risk rules — the admin-tunable engine thresholds, one row each with a
- *     name, description, a mono/tnum threshold, and an edit pencil. The card title
- *     carries the "· thresholds are maker-checker" suffix — editing a threshold is a
- *     dual-control change (never moves money; thresholds only annotate the engine's
- *     rule set, root §3.1). The pencil opens the shared MakerCheckerModal.
- *   - RIGHT top · Open cases — the still-open flagged compliance cases, each a
- *     severity dot + title + meta + status pill, with a "Draft SAR/CTR" link that
- *     opens the shared ReasonModal (the draft is recorded in the immutable audit log).
+ *   - LEFT  · Risk rules — the admin-tunable engine thresholds (real AML rules via
+ *     `useAmlRules`), one row each with a name, description, a mono/tnum threshold
+ *     (composed from the rule's typed `parameters`), and an edit pencil. The card
+ *     title carries the "· thresholds are maker-checker" suffix — editing a
+ *     threshold is a dual-control change (never moves money; thresholds only
+ *     annotate the engine's rule set, root §3.1). The pencil opens the shared
+ *     MakerCheckerModal (write path is Phase 7 — left as a no-op flow).
+ *   - RIGHT top · Open cases — the still-open flagged compliance cases (real
+ *     flagged-event queue via `useComplianceEvents`, filtered to open statuses),
+ *     each a severity dot + title + meta + status pill, with a "Draft SAR/CTR"
+ *     link that opens the shared ReasonModal (Phase 7 write).
  *   - RIGHT bottom · Travel Rule records — a read-only summary of qualifying
- *     transfers captured over the $1,000 threshold in the last 24h.
+ *     transfers captured (real count via `useTravelRule`).
  *
- * DESIGN REPRODUCTION (not data-wired): `docs/design-ref/logic.js` does not contain
- * the `vAml()` view method (truncated), so the content below is the design's own
- * representative sample — module-level constants that mirror the markup + SPEC §6.6 +
- * the `seed()` dataset shapes (operator names like "Amara Okeke", case metas, the
- * status→token pairs from `stMeta`). No fetching; real-data reintegration is a
- * separate later step.
+ * READ-WIRED (Phase 6a): the display consts are replaced with the existing read
+ * hooks. Nothing here moves money (§3.1). Each card region has four async
+ * branches — loading skeleton / error (inline, retryable) / empty / data. The
+ * write affordances (edit-threshold, Draft SAR/CTR) keep their design flow-modal
+ * behaviour untouched — those are Phase 7.
  *
  * The `{{ c.dot }}` / `{{ c.stBg }}` / `{{ c.stFg }}` inline styles from the markup map
  * onto the design's semantic status tokens (§5 status→token map): the leading dot's
  * surface + the status pill's `s*`/`t*` pair. Colour is never the sole signal — every
  * pill carries its label.
  */
-import { useState } from "react"
+import { useMemo, useState } from "react"
 
-import { cn } from "@/lib/utils"
+import { Skeleton } from "@/components/ui/skeleton"
 import { ReasonModal, MakerCheckerModal } from "@/components/admin/flows"
+import { cn } from "@/lib/utils"
+import {
+  useAmlRules,
+  useComplianceEvents,
+  useTravelRule,
+} from "@/lib/query/hooks"
+import type {
+  AmlRule,
+  ComplianceEventItem,
+  ComplianceEventStatus,
+} from "@handshake-agent/contracts"
 
-// ── Risk rules (LEFT) — representative sample (SPEC §6.6 + seed() shapes) ────────────
+// ── Risk rules (LEFT) ────────────────────────────────────────────────────────────
 
-interface RiskRule {
-  id: string
-  /** The rule name (design `r.name`). */
-  name: string
-  /** The one-line description (design `r.desc`, --ink3). */
-  desc: string
-  /** The maker-checker threshold (design `r.threshold`, mono/tnum). */
-  threshold: string
+/**
+ * Compose the mono/tnum threshold string the design shows from the rule's typed
+ * `parameters` record (the contract models parameters, not a single free-text
+ * threshold — see shapeGaps). Renders `key value` pairs; an em dash when empty.
+ */
+function thresholdFromParameters(parameters: AmlRule["parameters"]): string {
+  const entries = Object.entries(parameters)
+  if (entries.length === 0) return "—"
+  return entries
+    .map(([key, value]) => `${key.replace(/_/g, " ")} ${String(value)}`)
+    .join(" · ")
 }
 
-const RISK_RULES: readonly RiskRule[] = [
-  {
-    id: "rule_velocity_24h",
-    name: "High velocity — 24h",
-    desc: "Flag when a user exceeds transfers/day",
-    threshold: "≥ 12 / 24h",
-  },
-  {
-    id: "rule_large_single",
-    name: "Large single transfer",
-    desc: "Case opens above per-transfer amount",
-    threshold: "$10,000",
-  },
-  {
-    id: "rule_structuring",
-    name: "Structuring pattern",
-    desc: "Multiple sub-threshold sends within window",
-    threshold: "3 × $900 / 1h",
-  },
-  {
-    id: "rule_new_beneficiary",
-    name: "New beneficiary, high value",
-    desc: "First payout to a beneficiary above amount",
-    threshold: "$5,000",
-  },
-]
-
-// ── Open cases (RIGHT top) — representative sample; the `{{ c.* }}` inline styles map
-// onto the semantic status tokens (§5 status→token map).
-
-type CaseStatus = "flagged" | "under_review" | "escalated"
-
-interface OpenCase {
-  id: string
-  /** The case title (design `c.title`). */
-  title: string
-  /** The case meta line (design `c.meta`, --ink3). */
-  meta: string
-  status: CaseStatus
-}
+// ── Open cases (RIGHT top) — the `{{ c.* }}` inline styles map onto the semantic
+// status tokens (§5 status→token map).
 
 // Status → { dot surface, pill label, pill surface + text }. Flagged reads danger,
-// under-review reads warning, escalated reads info — mirroring the design's `stMeta`.
+// under-review reads warning — mirroring the design's `stMeta`. The contract's
+// ComplianceEventStatus has no `escalated`; the terminal statuses (approved/blocked/
+// dismissed) are not "open" so they never reach this map (filtered out below).
 const CASE_STATUS_META: Record<
-  CaseStatus,
+  ComplianceEventStatus,
   { dot: string; label: string; pillBg: string; pillFg: string }
 > = {
   flagged: {
@@ -103,34 +83,48 @@ const CASE_STATUS_META: Record<
     pillBg: "bg-swn",
     pillFg: "text-twn",
   },
-  escalated: {
+  approved: {
+    dot: "bg-tok",
+    label: "Approved",
+    pillBg: "bg-sok",
+    pillFg: "text-tok",
+  },
+  blocked: {
     dot: "bg-tif",
-    label: "Escalated",
+    label: "Blocked",
     pillBg: "bg-sif",
     pillFg: "text-tif",
   },
+  dismissed: {
+    dot: "bg-ink3",
+    label: "Dismissed",
+    pillBg: "bg-card2",
+    pillFg: "text-ink2",
+  },
 }
 
-const OPEN_CASES: readonly OpenCase[] = [
-  {
-    id: "case_4471",
-    title: "Structuring — Amara Okeke",
-    meta: "3 sends · $2,700 total · 52m",
-    status: "flagged",
-  },
-  {
-    id: "case_4468",
-    title: "High velocity — Chidi Eze",
-    meta: "14 transfers in 24h · 3h ago",
-    status: "under_review",
-  },
-  {
-    id: "case_4462",
-    title: "Large transfer — Ngozi Balogun",
-    meta: "$11,400 send · beneficiary 2d old · 6h ago",
-    status: "escalated",
-  },
+/** The still-open statuses the "Open cases" queue surfaces (design intent). */
+const OPEN_STATUSES: readonly ComplianceEventStatus[] = [
+  "flagged",
+  "under_review",
 ]
+
+/** Compose the human title the design shows (`eventType` humanised + rule/hit). */
+function caseTitle(event: ComplianceEventItem): string {
+  const type = event.eventType.replace(/[._]/g, " ")
+  return event.ruleOrHit ? `${type} — ${event.ruleOrHit}` : type
+}
+
+/** Compose the meta line (severity · user · captured-at) from the DTO fields. */
+function caseMeta(event: ComplianceEventItem): string {
+  const parts = [
+    `${event.severity} severity`,
+    `user ${event.userId.slice(0, 8)}`,
+  ]
+  if (event.transactionId) parts.push(`txn ${event.transactionId.slice(0, 8)}`)
+  parts.push(new Date(event.createdAt).toLocaleDateString())
+  return parts.join(" · ")
+}
 
 // ── Small icons ─────────────────────────────────────────────────────────────────────
 
@@ -165,8 +159,33 @@ function CardShell({ children }: { children: React.ReactNode }) {
   )
 }
 
-/** Risk-rules card (design lines 5–8). */
-function RiskRulesCard({ onEdit }: { onEdit: (rule: RiskRule) => void }) {
+/** An inline, tokened error row with a retry affordance (§ four-branch). */
+function InlineError({
+  label,
+  onRetry,
+}: {
+  label: string
+  onRetry: () => void
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-[10px] border border-sdn bg-sdn/40 px-3 py-2.5">
+      <span className="text-[12px] font-semibold text-tdn">{label}</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="text-[11.5px] font-bold text-tdn underline-offset-2 hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        Retry
+      </button>
+    </div>
+  )
+}
+
+/** Risk-rules card (design lines 5–8) — read-wired to `useAmlRules`. */
+function RiskRulesCard({ onEdit }: { onEdit: (rule: AmlRule) => void }) {
+  const query = useAmlRules()
+  const rules = query.data?.rules ?? []
+
   return (
     <CardShell>
       <div className="mb-3 text-[13px] font-extrabold text-ink">
@@ -175,38 +194,65 @@ function RiskRulesCard({ onEdit }: { onEdit: (rule: RiskRule) => void }) {
           · thresholds are maker-checker
         </span>
       </div>
-      <div>
-        {RISK_RULES.map((rule) => (
-          <div
-            key={rule.id}
-            className="flex items-center gap-3 border-b border-line2 py-[11px] last:border-b-0"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[12.5px] font-bold text-ink">
-                {rule.name}
-              </div>
-              <div className="truncate text-[11px] text-ink3">{rule.desc}</div>
-            </div>
-            <span className="font-mono text-[12.5px] font-bold text-ink tabular-nums">
-              {rule.threshold}
-            </span>
-            <button
-              type="button"
-              onClick={() => onEdit(rule)}
-              aria-label={`Edit rule ${rule.name}`}
-              className="flex size-7 flex-none items-center justify-center rounded-lg border border-line text-ink2 transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+
+      {query.isLoading ? (
+        <div className="flex flex-col gap-2" aria-busy="true">
+          <Skeleton className="h-[44px] rounded-[10px]" />
+          <Skeleton className="h-[44px] rounded-[10px]" />
+          <Skeleton className="h-[44px] rounded-[10px]" />
+        </div>
+      ) : query.isError ? (
+        <InlineError
+          label="Couldn't load risk rules."
+          onRetry={() => query.refetch()}
+        />
+      ) : rules.length === 0 ? (
+        <p className="py-2 text-[12px] text-ink3">No risk rules configured.</p>
+      ) : (
+        <div>
+          {rules.map((rule) => (
+            <div
+              key={rule.id}
+              className="flex items-center gap-3 border-b border-line2 py-[11px] last:border-b-0"
             >
-              <EditPencilIcon />
-            </button>
-          </div>
-        ))}
-      </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[12.5px] font-bold text-ink">
+                  {rule.name}
+                </div>
+                <div className="truncate text-[11px] text-ink3">
+                  {rule.description}
+                </div>
+              </div>
+              <span className="font-mono text-[12.5px] font-bold text-ink tabular-nums">
+                {thresholdFromParameters(rule.parameters)}
+              </span>
+              <button
+                type="button"
+                onClick={() => onEdit(rule)}
+                aria-label={`Edit rule ${rule.name}`}
+                className="flex size-7 flex-none items-center justify-center rounded-lg border border-line text-ink2 transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+              >
+                <EditPencilIcon />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </CardShell>
   )
 }
 
-/** Open-cases card (design lines 10–13). */
+/** Open-cases card (design lines 10–13) — read-wired to `useComplianceEvents`. */
 function OpenCasesCard({ onDraftSar }: { onDraftSar: () => void }) {
+  // The queue shows still-open cases; fetch unfiltered and narrow to open
+  // statuses client-side (the API takes a single status filter — see shapeGaps).
+  const query = useComplianceEvents({})
+  const openCases = useMemo(
+    () =>
+      (query.data?.items ?? []).filter((e) => OPEN_STATUSES.includes(e.status)),
+    [query.data]
+  )
+
   return (
     <CardShell>
       <div className="mb-3 flex items-center justify-between">
@@ -219,53 +265,86 @@ function OpenCasesCard({ onDraftSar }: { onDraftSar: () => void }) {
           Draft SAR/CTR
         </button>
       </div>
-      <div>
-        {OPEN_CASES.map((c) => {
-          const meta = CASE_STATUS_META[c.status]
-          return (
-            <div
-              key={c.id}
-              className="flex items-center gap-[11px] border-b border-line2 py-2.5 last:border-b-0"
-            >
-              <span
-                aria-hidden="true"
-                className={cn("size-2 flex-none rounded-full", meta.dot)}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[12.5px] font-semibold text-ink">
-                  {c.title}
-                </div>
-                <div className="truncate text-[10.5px] text-ink3">{c.meta}</div>
-              </div>
-              <span
-                className={cn(
-                  "rounded-full px-2 py-0.5 text-[10.5px] font-bold",
-                  meta.pillBg,
-                  meta.pillFg
-                )}
+
+      {query.isLoading ? (
+        <div className="flex flex-col gap-2" aria-busy="true">
+          <Skeleton className="h-[40px] rounded-[10px]" />
+          <Skeleton className="h-[40px] rounded-[10px]" />
+        </div>
+      ) : query.isError ? (
+        <InlineError
+          label="Couldn't load open cases."
+          onRetry={() => query.refetch()}
+        />
+      ) : openCases.length === 0 ? (
+        <p className="py-2 text-[12px] text-ink3">No open cases.</p>
+      ) : (
+        <div>
+          {openCases.map((c) => {
+            const meta = CASE_STATUS_META[c.status]
+            return (
+              <div
+                key={c.id}
+                className="flex items-center gap-[11px] border-b border-line2 py-2.5 last:border-b-0"
               >
-                {meta.label}
-              </span>
-            </div>
-          )
-        })}
-      </div>
+                <span
+                  aria-hidden="true"
+                  className={cn("size-2 flex-none rounded-full", meta.dot)}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[12.5px] font-semibold text-ink">
+                    {caseTitle(c)}
+                  </div>
+                  <div className="truncate text-[10.5px] text-ink3">
+                    {caseMeta(c)}
+                  </div>
+                </div>
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[10.5px] font-bold",
+                    meta.pillBg,
+                    meta.pillFg
+                  )}
+                >
+                  {meta.label}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </CardShell>
   )
 }
 
-/** Travel-Rule records card (design lines 14–17). */
+/** Travel-Rule records card (design lines 14–17) — read-wired to `useTravelRule`. */
 function TravelRuleCard() {
+  const query = useTravelRule()
+  const count = query.data?.items.length ?? 0
+
   return (
     <CardShell>
       <div className="mb-2.5 text-[13px] font-extrabold text-ink">
         Travel Rule records
       </div>
-      <p className="text-[12px] leading-normal text-ink2">
-        Originator/beneficiary records attached for{" "}
-        <b className="font-bold">3</b> qualifying transfers over the{" "}
-        <span className="font-mono">$1,000</span> threshold in the last 24h.
-      </p>
+      {query.isLoading ? (
+        <Skeleton className="h-[36px] rounded-[10px]" />
+      ) : query.isError ? (
+        <InlineError
+          label="Couldn't load Travel Rule records."
+          onRetry={() => query.refetch()}
+        />
+      ) : count === 0 ? (
+        <p className="text-[12px] leading-normal text-ink2">
+          No qualifying transfers captured.
+        </p>
+      ) : (
+        <p className="text-[12px] leading-normal text-ink2">
+          Originator/beneficiary records attached for{" "}
+          <b className="font-bold">{count}</b> qualifying{" "}
+          {count === 1 ? "transfer" : "transfers"} over the reporting threshold.
+        </p>
+      )}
     </CardShell>
   )
 }
@@ -274,8 +353,9 @@ function TravelRuleCard() {
 
 // The active flow: editing a risk-rule threshold (maker-checker) or drafting a SAR/CTR
 // (reason). Mirrors how the design's `runFlow` chains each affordance to a flow modal.
+// These are WRITE paths — left as design no-op flows for Phase 7.
 type ActiveFlow =
-  | { kind: "editRule"; rule: RiskRule }
+  | { kind: "editRule"; rule: AmlRule }
   | { kind: "draftSar" }
   | null
 
@@ -303,7 +383,7 @@ export function AmlPage() {
         </div>
       </div>
 
-      {/* ── Flow modals (shared funds-safety flows, SPEC §5) ───────────────── */}
+      {/* ── Flow modals (shared funds-safety flows, SPEC §5) — Phase 7 writes ── */}
 
       {/* Edit threshold → MakerCheckerModal (dual-control; enters Pending approval). */}
       <MakerCheckerModal
@@ -319,8 +399,8 @@ export function AmlPage() {
             ? [
                 {
                   field: flow.rule.name,
-                  from: flow.rule.threshold,
-                  to: flow.rule.threshold,
+                  from: thresholdFromParameters(flow.rule.parameters),
+                  to: thresholdFromParameters(flow.rule.parameters),
                 },
               ]
             : []

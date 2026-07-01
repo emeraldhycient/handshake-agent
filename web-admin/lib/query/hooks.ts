@@ -123,6 +123,31 @@ export function usePublicConfig() {
   })
 }
 
+/**
+ * The effective layered-config settings (GET /admin/settings) — every non-secret
+ * registry key with its effective value + provenance. An optional `category`
+ * narrows the list (e.g. "Pricing", "KYC", "Catalog"). Drives the Settings /
+ * Pricing / Limits / Capabilities / Flags console screens. 60 s stale — config
+ * changes only via admin edits.
+ */
+export function useSettings(category?: string) {
+  return useQuery({
+    queryKey: qk.settings(category),
+    queryFn: () => config.listEffectiveSettings(category),
+    staleTime: 60_000,
+  })
+}
+
+/** One registry key's effective value + provenance. Disabled until a `key` is set. */
+export function useSetting(key: string | null) {
+  return useQuery({
+    queryKey: qk.setting(key ?? ""),
+    queryFn: () => config.getSetting(key as string),
+    enabled: key !== null,
+    staleTime: 60_000,
+  })
+}
+
 /** Search / filter / paginate the platform's end users. Keyed by the query. */
 export function useEndUsers(query: AdminEndUserSearchQuery) {
   return useQuery({

@@ -2,11 +2,19 @@
 
 /**
  * OperatorDashboard — the "Dashboard" screen, reproduced pixel-for-pixel from the
- * imported Operator Console design (`docs/design-ref/screens/Dash.html`, spec §6.1)
- * with the design's OWN mock content embedded (translated from `vDash()` + `seed()`
- * in `docs/design-ref/logic.js`). This is a DESIGN reproduction: it renders the exact
- * values the design shows, with no data fetching — real-data reintegration is a
- * separate later step.
+ * imported Operator Console design (`docs/design-ref/screens/Dash.html`, spec §6.1).
+ *
+ * The KPI tiles + the 24h/7d/30d range switcher are wired to the real composite
+ * operational-metrics endpoint via `useDashboardMetrics` (§8 — the shape crosses the
+ * FE/BE boundary via `@handshake-agent/contracts`). Read-only projections — nothing
+ * here moves money (§3.1). Four async branches: loading skeletons / error / empty
+ * (no metrics access) / data.
+ *
+ * The volume chart, System-health card, Live-activity feed, and Approvals-awaiting-me
+ * inbox still render the design's mock content: those widgets have no backing metrics
+ * (per the FE/BE gap matrix — GMV, per-day-per-capability stacked series, provider
+ * latency/webhook-queue/recon-drift, the activity aggregator, and the maker-checker
+ * approvals subsystem are all unbuilt) and are deferred to Phase 6b backend enrichment.
  *
  * Layout (verbatim from the design markup):
  * - Header: "Operations overview" title + subtitle, and a segmented KPI-range
@@ -14,15 +22,10 @@
  * - KPI TILES: a `repeat(4,1fr)` grid of 8 tiles (4×2); tile 0 is the dark-green
  *   "hero" (brand gradient, white ink, amber delta chip). The rest are `--card`
  *   tiles with muted delta pills (warn/amber for the attention KPIs).
- * - `1.7fr 1fr` row: the stacked-bar **Transaction volume** chart (14 bars, buy/sell/
- *   send/swap/ticket, Jun 18 → Today) and a **System health** card (provider list with
- *   halo dots + latency, plus webhook-queue / recon-drift stat boxes).
+ * - `1.7fr 1fr` row: the stacked-bar **Transaction volume** chart and a **System
+ *   health** card (both mock — Phase 6b).
  * - `1fr 1fr` row: a **Live activity** feed and a column of **Approvals awaiting me**
- *   + **Alerts** cards.
- *
- * Wiring: the range switcher swaps the KPI values (design `mul` multiplier). Approval
- * rows and the "Open inbox →" link navigate to /approvals; alert rows navigate to
- * their destination route; nothing here moves money (§3.1).
+ *   + **Alerts** cards (both mock — Phase 6b).
  */
 import { useMemo, useState } from "react"
 import Link from "next/link"
@@ -32,7 +35,11 @@ import { cn } from "@/lib/utils"
 import { KpiCard } from "@/components/admin/kpi-card"
 import { ChartBars } from "@/components/admin/chart-bars"
 import { MakerCheckerModal } from "@/components/admin/flows"
-import type { ChartBar } from "@/types/components"
+import { Skeleton } from "@/components/ui/skeleton"
+import { useDashboardMetrics } from "@/lib/query/hooks"
+import { ApiError } from "@/lib/api/client"
+import type { DashboardSummary } from "@handshake-agent/contracts"
+import type { ChartBar, KpiDeltaTone } from "@/types/components"
 
 // ─── Brand constants (design logic.js line 2 — NOT theme-swapped) ────────────────────
 
@@ -45,35 +52,26 @@ const VOL_COLORS = {
 } as const
 
 // ─── KPI range switcher (design `kpiRanges`, logic.js 487) ───────────────────────────
+// The switcher drives the real metrics window: each preset resolves to an inclusive
+// `{ from, to }` ISO-date window that `useDashboardMetrics` fetches. "24h" is sub-day
+// so it maps to today only (a 1-day window — the backend takes date bounds).
 
 type RangeId = "24h" | "7d" | "30d"
 
 const KPI_RANGES: readonly RangeId[] = ["24h", "7d", "30d"]
 
-/** The design's per-range multiplier applied to the base KPI figures (vDash line 437). */
-const RANGE_MUL: Record<RangeId, number> = { "24h": 1, "7d": 6.4, "30d": 26 }
+/** How many days back each preset spans (inclusive of today). "24h" → today only. */
+const RANGE_DAYS: Record<RangeId, number> = { "24h": 1, "7d": 7, "30d": 30 }
 
-// ─── KPI definitions (design `kpiDefs`, logic.js 439-448) ────────────────────────────
-// The design derives KPI counts from its seeded dataset. `seed()` yields 3 users with
-// kyc === 'pending' (i < 3) — so KYC pending = 3; 3 pending_settlement + 2 failed tx
-// (i === 4/11/18 & 7/16) — so failed/stuck = 5; and `hasCase` users — 3 open cases.
-
-// Design seed counts across the 28-user / txn mock set (vDash in the source):
-// KYC pending = users with kyc pending|needs_info (13); failed/stuck = txns
-// pending_settlement|failed (9); open cases = users with a compliance case (3).
-const KYC_PENDING = 13
-const FAILED_STUCK = 9
-const OPEN_CASES = 3
-
-/** `ngn()` — design money formatter (logic.js 332): `₦` + `en-NG` 2-dp grouping. */
-function ngn(n: number): string {
-  return (
-    "₦" +
-    Number(n).toLocaleString("en-NG", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
-  )
+/** Build an inclusive `{ from, to }` ISO-date window ending today, N days back. */
+function rangeForDays(days: number): { from: string; to: string } {
+  const to = new Date()
+  const from = new Date(to)
+  from.setDate(from.getDate() - (days - 1))
+  return {
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10),
+  }
 }
 
 /** `f()` — design integer formatter (vDash line 438): `en-NG` grouping, no decimals. */
@@ -81,99 +79,110 @@ function fmtInt(n: number): string {
   return Number(n).toLocaleString("en-NG")
 }
 
-interface KpiDef {
+/** KYC statuses that count toward the "KYC pending" attention tile (gap matrix). */
+const PENDING_KYC_STATUSES = new Set(["pending", "needs_info"])
+
+interface Kpi {
   label: string
-  /** Base (24h) value; scaled by the range multiplier for money/count KPIs. */
-  base: number
-  /** How to render the scaled value. */
-  kind: "ngn" | "int" | "static"
-  /** Static (non-scaled) value string — used for the seeded-count KPIs. */
-  staticValue?: string
+  value: string
   delta: string
-  note: string
-  warn?: boolean
+  deltaNote: string
+  hero?: boolean
+  tone?: KpiDeltaTone
 }
 
-const KPI_DEFS: readonly KpiDef[] = [
-  {
-    label: "Transaction volume",
-    base: 23774629,
-    kind: "ngn",
-    delta: "+12.4%",
-    note: "vs prior",
-  },
-  { label: "GMV", base: 41209800, kind: "ngn", delta: "+8.1%", note: "gross" },
-  {
-    label: "Revenue (fees + FX)",
-    base: 486300,
-    kind: "ngn",
-    delta: "+5.7%",
-    note: "margin",
-  },
-  {
-    label: "Transactions",
-    base: 1284,
-    kind: "int",
-    delta: "+3.2%",
-    note: "count",
-  },
-  {
-    label: "New signups",
-    base: 96,
-    kind: "int",
-    delta: "+18%",
-    note: "new users",
-  },
-  {
-    label: "KYC pending",
-    base: 0,
-    kind: "static",
-    staticValue: fmtInt(KYC_PENDING),
-    delta: "SLA 4h",
-    note: "in queue",
-    warn: true,
-  },
-  {
-    label: "Failed / stuck tx",
-    base: 0,
-    kind: "static",
-    staticValue: fmtInt(FAILED_STUCK),
-    delta: "attention",
-    note: "needs action",
-    warn: true,
-  },
-  {
-    label: "Open compliance cases",
-    base: 0,
-    kind: "static",
-    staticValue: fmtInt(OPEN_CASES),
-    delta: "2 high",
-    note: "active",
-    warn: true,
-  },
-]
+/**
+ * Derive the eight KPI tiles from the real composite summary. Six are backed by the
+ * metrics contract; two (GMV, Open compliance cases) have no metric to source from —
+ * they render "—" and are recorded as shape gaps for Phase 6b enrichment.
+ */
+function deriveKpis(data: DashboardSummary): readonly Kpi[] {
+  const { txnVolume, revenue, kycFunnel, activeUsers } = data
+  const totalTxns = txnVolume.byType.reduce((sum, t) => sum + t.count, 0)
+  const failedTxns = txnVolume.byType.reduce((sum, t) => sum + t.failed, 0)
+  const pendingKyc = kycFunnel.byStatus
+    .filter((s) => PENDING_KYC_STATUSES.has(s.status))
+    .reduce((sum, s) => sum + s.count, 0)
+  const primaryFee = revenue.totalFeesByCurrency[0]
+  const revenueValue = primaryFee
+    ? `${primaryFee.currency} ${primaryFee.amount}`
+    : "—"
+  const revenueNote =
+    revenue.totalFeesByCurrency.length > 1
+      ? `+${revenue.totalFeesByCurrency.length - 1} more`
+      : "fees"
 
-/** Resolve a KPI def's value for the active range (design `kpiDefs`, vDash 440-447). */
-function kpiValue(def: KpiDef, mul: number): string {
-  if (def.kind === "static") return def.staticValue ?? "—"
-  if (def.kind === "ngn") return ngn(def.base * mul)
-  return fmtInt(Math.round(def.base * mul))
+  return [
+    // Hero: the backend surfaces per-type COUNTS, not a fiat money sum — show the
+    // transaction count as the headline volume (fiat-notional volume is a shape gap).
+    {
+      label: "Transaction volume",
+      value: fmtInt(totalTxns),
+      delta: `${(txnVolume.successRate * 100).toFixed(1)}%`,
+      deltaNote: "success rate",
+      hero: true,
+    },
+    // GMV: no backend aggregation exists (gap matrix) — rendered as "—".
+    { label: "GMV", value: "—", delta: "—", deltaNote: "gross" },
+    // Revenue: fees only; spread is folded into FX and not separately ledgered.
+    {
+      label: "Revenue (fees)",
+      value: revenueValue,
+      delta: `${revenue.txnCount.toLocaleString()}`,
+      deltaNote: revenueNote,
+    },
+    {
+      label: "Transactions",
+      value: fmtInt(totalTxns),
+      delta: `${revenue.txnCount.toLocaleString()}`,
+      deltaNote: "completed",
+    },
+    {
+      label: "New signups",
+      value: fmtInt(activeUsers.newInRange),
+      delta: `${activeUsers.activeInRange.toLocaleString()}`,
+      deltaNote: "active",
+    },
+    {
+      label: "KYC pending",
+      value: fmtInt(pendingKyc),
+      delta: "SLA 4h",
+      deltaNote: "in queue",
+      tone: "warn",
+    },
+    {
+      label: "Failed / stuck tx",
+      value: fmtInt(failedTxns),
+      delta: "attention",
+      deltaNote: "needs action",
+      tone: "warn",
+    },
+    // Open compliance cases: no metric count (gap matrix) — rendered as "—".
+    {
+      label: "Open compliance cases",
+      value: "—",
+      delta: "—",
+      deltaNote: "active",
+      tone: "warn",
+    },
+  ]
 }
 
-// ─── Transaction volume bars (design `volBars`, logic.js 461-464) ────────────────────
+// ─── Transaction volume bars (design `volBars`, logic.js 461-464) — MOCK (Phase 6b) ──
 // 14 bars; each day's total is `40 + r*55` where `r = (sin((i+3)*1.7)+1)/2`, split into
 // buy 0.34 / sell 0.22 / send 0.16 / swap 0.16 / ticket 0.12 of the total (as % heights).
 //
-// The chart rescopes with the KPI range switcher: `ChartBars` normalises each bar to the
-// tallest total, so a *uniform* scale would be invisible. Instead the range multiplier
-// shifts the sine phase/frequency so the silhouette visibly changes per range, while the
-// per-segment proportions (0.34/0.22/0.16/0.16/0.12) and the axis labels stay identical.
+// This stacked-by-capability silhouette has no backing metric: the composite endpoint
+// gives a flat per-day total + per-type totals, NOT a per-day-per-type cross-tab (gap
+// matrix), so the chart stays mock. It still rescopes with the range switcher (the day
+// count shifts the sine phase/frequency so the silhouette visibly changes per range)
+// while the per-segment proportions and axis labels stay identical.
 
-/** Build the 14-day stacked bars for a KPI range, scaled by its multiplier (`mul`). */
-function volBarsFor(mul: number): ChartBar[] {
+/** Build the 14-day stacked mock bars, reseeded by the range's day-count (`days`). */
+function volBarsFor(days: number): ChartBar[] {
   return Array.from({ length: 14 }, (_, i) => {
-    const r = (Math.sin((i + 3) * 1.7 + mul) + 1) / 2
-    const total = (40 + r * 55) * mul
+    const r = (Math.sin((i + 3) * 1.7 + days) + 1) / 2
+    const total = (40 + r * 55) * days
     return {
       label: i === 0 ? "Jun 18" : i === 13 ? "Today" : `Day ${i + 1}`,
       segments: {
@@ -593,12 +602,47 @@ function AlertsCard() {
   )
 }
 
+// ─── KPI grid — the metrics-backed data branch (§8) ──────────────────────────────────
+
+/** The 4×2 KPI tile grid rendered from the real composite summary (data branch). */
+function KpiGrid({ data }: { data: DashboardSummary }) {
+  const kpis = useMemo(() => deriveKpis(data), [data])
+  return (
+    <div className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
+      {kpis.map((k) => (
+        <KpiCard
+          key={k.label}
+          label={k.label}
+          value={k.value}
+          delta={k.delta}
+          deltaNote={k.deltaNote}
+          hero={k.hero}
+          tone={k.tone}
+        />
+      ))}
+    </div>
+  )
+}
+
+/** Loading placeholder for the KPI grid — 8 tile-sized skeletons in the 4×2 grid. */
+function KpiGridSkeleton() {
+  return (
+    <div
+      className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4"
+      aria-busy="true"
+    >
+      {Array.from({ length: 8 }, (_, i) => (
+        <Skeleton key={i} className="h-[104px] rounded-2xl" />
+      ))}
+    </div>
+  )
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────────────
 
 export function OperatorDashboard() {
   const router = useRouter()
   const [range, setRange] = useState<RangeId>("24h")
-  const mul = RANGE_MUL[range]
 
   // Approval flow — an "Approvals awaiting me" row opens the shared maker-checker
   // modal with its from→to diff (design maker-checker flow); submitting routes to
@@ -607,22 +651,16 @@ export function OperatorDashboard() {
     null
   )
 
-  const kpis = useMemo(
-    () =>
-      KPI_DEFS.map((def, i) => ({
-        label: def.label,
-        value: kpiValue(def, mul),
-        delta: def.delta,
-        deltaNote: def.note,
-        hero: i === 0,
-        tone: def.warn ? ("warn" as const) : ("success" as const),
-      })),
-    [mul]
-  )
+  // The KPI tiles + range switcher are wired to the real composite metrics endpoint.
+  const days = RANGE_DAYS[range]
+  const metricsRange = useMemo(() => rangeForDays(days), [days])
+  const query = useDashboardMetrics(metricsRange)
+  const isForbidden =
+    query.error instanceof ApiError && query.error.status === 403
 
-  // Rescope the stacked-bar chart to the selected range (design `mul`): the bar
+  // Rescope the (still-mock) stacked-bar chart to the selected range: the bar
   // silhouette visibly changes per range while colours/labels stay identical.
-  const volBars = useMemo(() => volBarsFor(mul), [mul])
+  const volBars = useMemo(() => volBarsFor(days), [days])
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto bg-bg">
@@ -666,19 +704,34 @@ export function OperatorDashboard() {
         </div>
 
         {/* ── KPI TILES — 4×2 grid, tile 0 = hero (design lines 16-27) ───────────── */}
-        <div className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
-          {kpis.map((k) => (
-            <KpiCard
-              key={k.label}
-              label={k.label}
-              value={k.value}
-              delta={k.delta}
-              deltaNote={k.deltaNote}
-              hero={k.hero}
-              tone={k.tone}
-            />
+        {/* Four async branches: loading skeletons / error / empty (no access) / data. */}
+        {query.isLoading && <KpiGridSkeleton />}
+
+        {query.isError &&
+          (isForbidden ? (
+            <div className="mb-4 rounded-[18px] border border-swn bg-swn/40 p-6 text-center">
+              <p className="text-sm font-bold text-twn">No metrics access</p>
+              <p className="mt-1 text-[12.5px] text-ink2">
+                Your role can&apos;t view the operational dashboard. Ask a super
+                admin to grant the Metrics permission.
+              </p>
+            </div>
+          ) : (
+            <div className="mb-4 rounded-[18px] border border-sdn bg-sdn/40 p-6 text-center">
+              <p className="text-sm font-bold text-tdn">
+                Failed to load metrics
+              </p>
+              <button
+                type="button"
+                onClick={() => query.refetch()}
+                className="mt-2 cursor-pointer rounded-[8px] bg-btn-dark px-3.5 py-1.5 text-[12.5px] font-bold text-white outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                Retry
+              </button>
+            </div>
           ))}
-        </div>
+
+        {query.isSuccess && <KpiGrid data={query.data} />}
 
         {/* ── Volume chart + System health (design lines 29-77) ─────────────────── */}
         <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-[1.7fr_1fr]">

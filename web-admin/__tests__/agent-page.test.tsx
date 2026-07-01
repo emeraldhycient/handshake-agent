@@ -114,17 +114,67 @@ beforeEach(() => {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("AgentPage", () => {
-  it("renders the modelId on the read-only config surface", async () => {
+  it("renders the real modelId + enablement on the read-only config surface", async () => {
     renderPage()
 
-    // The resolved model id renders on the config card.
+    // The resolved model id (from useAgentConfig) renders on the config card.
     expect(await screen.findByText("claude-opus-4-8")).toBeInTheDocument()
+    // The resolved enablement flag renders as its own guardrail row.
+    expect(screen.getByText("Agent enabled")).toBeInTheDocument()
+    expect(screen.getByText("yes")).toBeInTheDocument()
+    // The config client was actually called (real data, not the old mock const).
+    expect(mockConfig).toHaveBeenCalledTimes(1)
     // The config surface is read-only ("read-mostly" guardrails), never editable.
     expect(screen.getByText(/read-mostly/i)).toBeInTheDocument()
     // The system-prompt section is present; changes route through maker-checker
     // (it is never edited in place — the read-only posture of §3.1).
     expect(screen.getByText(/system-prompt versions/i)).toBeInTheDocument()
     expect(screen.getByText(/change = maker-checker/i)).toBeInTheDocument()
+  })
+
+  it("shows a loading placeholder before the config resolves, then the data", async () => {
+    // Hold the config promise open so the loading branch is observable.
+    let resolveConfig: (v: AgentConfigView) => void = () => {}
+    mockConfig.mockReturnValue(
+      new Promise<AgentConfigView>((resolve) => {
+        resolveConfig = resolve
+      })
+    )
+
+    const { container } = renderPage()
+
+    // Loading branch: the card body is a busy skeleton region, no model id yet.
+    expect(container.querySelector('[aria-busy="true"]')).toBeInTheDocument()
+    expect(screen.queryByText("claude-opus-4-8")).not.toBeInTheDocument()
+
+    // Resolve → data branch replaces the skeleton with the real model id.
+    resolveConfig(CONFIG)
+    expect(await screen.findByText("claude-opus-4-8")).toBeInTheDocument()
+    expect(
+      container.querySelector('[aria-busy="true"]')
+    ).not.toBeInTheDocument()
+  })
+
+  it("renders an inline error with a retry affordance when the config fails", async () => {
+    mockConfig.mockRejectedValue(new Error("boom"))
+
+    renderPage()
+
+    // Error branch: a tokened inline error + a Retry affordance (still no model id).
+    expect(
+      await screen.findByText(/couldn't load agent config/i)
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument()
+    expect(screen.queryByText("claude-opus-4-8")).not.toBeInTheDocument()
+  })
+
+  it("surfaces disabled enablement faithfully (never fabricated)", async () => {
+    mockConfig.mockResolvedValue({ ...CONFIG, enabled: false })
+
+    renderPage()
+
+    expect(await screen.findByText("Agent enabled")).toBeInTheDocument()
+    expect(screen.getByText("no")).toBeInTheDocument()
   })
 
   it("toasts the prompt-version action (View diff) when clicked", async () => {

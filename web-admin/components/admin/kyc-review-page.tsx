@@ -2,32 +2,41 @@
 
 /**
  * KycReviewPage — the "KYC review queue" screen, reproduced 1:1 from the Operator
- * Console design (`docs/design-ref/screens/Kyc.html`, spec §6.4).
+ * Console design (`docs/design-ref/screens/Kyc.html`, spec §6.4), now wired to the
+ * real admin backend (`useKycQueue` → GET /admin/kyc/queue).
  *
- * DESIGN REPRODUCTION: this screen renders the design's OWN mock content (translated
- * from `logic.js` `vKyc()` + `seed()`), NOT live API data — real-data reintegration is
- * a separate later step. The queue values below (applicant names/ids/tiers, avatar
- * hues, SLA ages, assignees) are the exact rows the design emits for each status tab.
+ * The queue endpoint returns ONLY users whose `kycStatus` is `pending_review`
+ * (the admin review backlog) — a flat list of `{ userId, email, status,
+ * submittedAt }`. The backend has NO status-filter param, so the design's four
+ * status tabs are not independently queryable: the "Pending" tab is fed by the
+ * queue; "Needs info" / "Approved" / "Rejected" have no backing endpoint and show
+ * the design's empty-bucket copy (recorded as a shape gap for later enrichment).
  *
  * Layout (Kyc.html): a 24px/800 title + 13.5px subtitle → a row of status pill-tabs,
- * each with a count badge (`kycTabs`) → a single card holding the queue table with the
- * design's 2fr·1fr·1fr·1fr·0.8fr grid — Applicant · Requested tier · SLA age · Assignee
- * · Review →. Rows are clickable and navigate to the applicant's user-detail KYC tab
- * (`openUserKyc` → `/users/[id]?tab=kyc`). Empty buckets show the design's copy. The
- * design paginates each bucket at 8 rows (`mkPager('kyc', …, 8)`), via the shared
- * Pagination primitive.
+ * each with a count badge → a single card holding the queue table with the design's
+ * 2fr·1fr·1fr·1fr·0.8fr grid — Applicant · Requested tier · SLA age · Assignee ·
+ * Review →. Rows are clickable and navigate to the applicant's user-detail KYC tab
+ * (`openUserKyc` → `/users/[id]?tab=kyc`). The design paginates each bucket at 8
+ * rows, via the shared Pagination primitive.
+ *
+ * Fields the design shows but the contract does NOT provide (tier, SLA age,
+ * assignee) render as a subtle "—"; the avatar hue + monogram are derived
+ * deterministically from the applicant (presentation only — no data invented).
+ * Four async branches: loading / error / empty / data (§5).
  */
 import { useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 
 import { Pagination } from "@/components/admin/pagination"
+import { Skeleton } from "@/components/ui/skeleton"
 import type { KycQueueRow, KycQueueRowProps } from "@/types/components"
+import { useKycQueue } from "@/lib/query/hooks"
 import { cn } from "@/lib/utils"
+import type { KycQueueItem } from "@handshake-agent/contracts"
 
-// ── Design mock data (logic.js `seed()` line 8-42) ──────────────────────────────
-// The design seeds 28 users deterministically. `ini()` builds the 2-letter monogram;
-// `AVA` is the avatar-hue palette (logic.js line 3). We reproduce the seed so the
-// queue renders the SAME applicants the design shows.
+// ── Avatar hue palette (design `AVA`, logic.js line 3) ──────────────────────────
+// Presentation-only: a stable hue + monogram is derived from each applicant so the
+// avatar column matches the design. This is styling, not fabricated queue data.
 const AVA = [
   "#2a6f55",
   "#c07a2a",
@@ -39,128 +48,32 @@ const AVA = [
   "#a0834a",
 ] as const
 
-const FIRST_NAMES = [
-  "Amara",
-  "Chidi",
-  "Ngozi",
-  "Emeka",
-  "Ifeoma",
-  "Tunde",
-  "Bola",
-  "Yusuf",
-  "Fatima",
-  "Kelechi",
-  "Adaeze",
-  "Obinna",
-  "Zainab",
-  "Segun",
-  "Chinwe",
-  "Uche",
-  "Aisha",
-  "Kunle",
-  "Ada",
-  "Musa",
-  "Blessing",
-  "Ibrahim",
-  "Halima",
-  "Femi",
-  "Nneka",
-  "Chuka",
-  "Damilola",
-  "Grace",
-] as const
-
-const LAST_NAMES = [
-  "Okeke",
-  "Adeyemi",
-  "Balogun",
-  "Okonkwo",
-  "Eze",
-  "Bello",
-  "Nwosu",
-  "Abubakar",
-  "Ojo",
-  "Danjuma",
-  "Ibrahim",
-  "Chukwu",
-  "Mohammed",
-  "Adebayo",
-  "Okafor",
-  "Yakubu",
-  "Lawal",
-  "Obi",
-  "Sani",
-  "Uche",
-  "Oluwaseun",
-  "Aliyu",
-  "Nnamdi",
-  "Kalu",
-  "Effiong",
-  "Musa",
-  "Onyeka",
-  "Adewale",
-] as const
-
-const TIERS = ["tier_1", "tier_2", "tier_3"] as const
-// Per-index KYC status cycle (logic.js line 13); the first three users are forced
-// to `pending` (line 19).
-const KYC_STATUS = [
-  "verified",
-  "verified",
-  "verified",
-  "pending",
-  "needs_info",
-  "rejected",
-  "verified",
-  "pending",
-] as const
-
-/** The design's seeded PRNG (logic.js line 9) — `sin`-based, deterministic. */
-function rnd(seed: number): number {
-  const x = Math.sin(seed) * 10000
-  return x - Math.floor(x)
-}
-
-/** Two-letter monogram from a name (logic.js `ini()`, line 333). */
-function initialsOf(name: string): string {
-  return name
-    .split(" ")
-    .map((word) => word[0])
-    .slice(0, 2)
-    .join("")
-}
-
-interface SeededUser {
-  id: string
-  name: string
-  tier: string
-  kyc: (typeof KYC_STATUS)[number] | "pending"
-  avatar: string
-}
-
-/** The 28 seeded users (logic.js `seed()` loop, line 15-42). */
-const SEEDED_USERS: SeededUser[] = Array.from({ length: 28 }, (_, i) => {
-  const name = `${FIRST_NAMES[i]} ${LAST_NAMES[i]}`
-  return {
-    id: `usr_${10480 + i * 7}`,
-    name,
-    tier: TIERS[Math.floor(rnd(i + 7) * 3)],
-    kyc: i < 3 ? "pending" : KYC_STATUS[i % KYC_STATUS.length],
-    avatar: AVA[i % AVA.length],
+/** Stable non-negative hash of a string → used to pick a deterministic avatar hue. */
+function hashString(value: string): number {
+  let hash = 0
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(i)
+    hash |= 0
   }
-})
-
-// ── Status tabs (logic.js `vKyc()` kycTabs, line 647) ───────────────────────────
-// Each tab maps to a seed `kyc` value; the "approved" bucket is the design's
-// `verified` status. Tab counts come from the seeded set (logic.js `cnt()`).
-type TabId = "pending" | "needs_info" | "approved" | "rejected"
-
-const TAB_STATUS: Record<TabId, SeededUser["kyc"]> = {
-  pending: "pending",
-  needs_info: "needs_info",
-  approved: "verified",
-  rejected: "rejected",
+  return Math.abs(hash)
 }
+
+/** Two-letter monogram from an applicant's email local-part (no name is surfaced). */
+function initialsFromEmail(email: string | null): string {
+  if (!email) return "?"
+  const local = email.split("@")[0] ?? ""
+  const parts = local.split(/[._-]+/).filter(Boolean)
+  const letters =
+    parts.length >= 2
+      ? `${parts[0][0]}${parts[1][0]}`
+      : local.slice(0, 2) || "?"
+  return letters.toUpperCase()
+}
+
+// ── Status tabs (design `kycTabs`, logic.js line 647) ───────────────────────────
+// Only the "pending" tab has a backing endpoint (the queue returns pending_review
+// users); the other three are design tabs with no queryable source yet.
+type TabId = "pending" | "needs_info" | "approved" | "rejected"
 
 const TABS: readonly { id: TabId; label: string }[] = [
   { id: "pending", label: "Pending" },
@@ -169,29 +82,21 @@ const TABS: readonly { id: TabId; label: string }[] = [
   { id: "rejected", label: "Rejected" },
 ]
 
-/**
- * Build the queue rows for a tab (logic.js `vKyc()` avatarRows, line 645): filter the
- * seeded users by the tab's status, then derive the SLA age + assignee from the row
- * index exactly as the design does (`i%3` for SLA, `i%2` for assignee).
- */
-function rowsForTab(tab: TabId): KycQueueRow[] {
-  return SEEDED_USERS.filter((u) => u.kyc === TAB_STATUS[tab]).map((u, i) => ({
-    name: u.name,
-    id: u.id,
-    initials: initialsOf(u.name),
-    avatar: u.avatar,
-    tier: u.tier,
-    sla: i % 3 === 0 ? "2h" : i % 3 === 1 ? "6h" : "1d 4h",
-    slaTone: i % 3 === 2 ? "danger" : "ink",
-    assignee: i % 2 === 0 ? "Ifeoma Bello" : "Unassigned",
-  }))
-}
-
-const COUNTS: Record<TabId, number> = {
-  pending: rowsForTab("pending").length,
-  needs_info: rowsForTab("needs_info").length,
-  approved: rowsForTab("approved").length,
-  rejected: rowsForTab("rejected").length,
+/** Map one backend queue item onto the design's row shape. Fields the contract
+ *  does not carry (tier, SLA, assignee) are left null/em-dash by the row renderer. */
+function toQueueRow(item: KycQueueItem): KycQueueRow {
+  const label = item.email ?? item.userId
+  return {
+    name: label,
+    id: item.userId,
+    initials: initialsFromEmail(item.email),
+    avatar: AVA[hashString(item.userId) % AVA.length],
+    // Not provided by KycQueueItem — rendered as "—" (shape gap).
+    tier: "",
+    sla: "",
+    slaTone: "ink",
+    assignee: "",
+  }
 }
 
 // Design grid: Applicant 2fr · Requested tier 1fr · SLA age 1fr · Assignee 1fr ·
@@ -199,6 +104,8 @@ const COUNTS: Record<TabId, number> = {
 const GRID = "grid grid-cols-[2fr_1fr_1fr_1fr_0.8fr] gap-3"
 // The design paginates each bucket at 8 rows (`mkPager('kyc', …, 8, '1200px')`).
 const PAGE_SIZE = 8
+// A subtle placeholder for a design column the contract does not populate.
+const MISSING = "—"
 
 /** One queue row — the design's clickable applicant line (Kyc.html `kycRows`). */
 function KycQueueRowLine({ row, onOpen }: KycQueueRowProps) {
@@ -238,25 +145,31 @@ function KycQueueRowLine({ row, onOpen }: KycQueueRowProps) {
         </div>
       </div>
 
-      {/* Requested tier */}
+      {/* Requested tier (not provided by the queue contract) */}
       <div>
-        <span className="rounded-full bg-card2 px-[9px] py-[3px] text-[11px] font-bold text-ink2">
-          {row.tier}
-        </span>
+        {row.tier ? (
+          <span className="rounded-full bg-card2 px-[9px] py-[3px] text-[11px] font-bold text-ink2">
+            {row.tier}
+          </span>
+        ) : (
+          <span className="text-[12px] text-ink3">{MISSING}</span>
+        )}
       </div>
 
-      {/* SLA age (colored by urgency — the label carries the age, never colour alone) */}
+      {/* SLA age (not provided by the queue contract) */}
       <div
         className={cn(
           "text-[12.5px] font-bold tabular-nums",
           row.slaTone === "danger" ? "text-tdn" : "text-ink"
         )}
       >
-        {row.sla}
+        {row.sla || <span className="font-normal text-ink3">{MISSING}</span>}
       </div>
 
-      {/* Assignee */}
-      <div className="truncate text-[12px] text-ink2">{row.assignee}</div>
+      {/* Assignee (not provided by the queue contract) */}
+      <div className="truncate text-[12px] text-ink2">
+        {row.assignee || <span className="text-ink3">{MISSING}</span>}
+      </div>
 
       {/* Review → */}
       <div className="text-right text-[11.5px] font-bold text-tif">
@@ -271,11 +184,27 @@ export function KycReviewPage() {
   const [activeTab, setActiveTab] = useState<TabId>("pending")
   const [page, setPage] = useState(1)
 
-  const rows = useMemo(() => rowsForTab(activeTab), [activeTab])
+  const query = useKycQueue()
+
+  // Only the pending tab is backed by the queue endpoint (pending_review users);
+  // the other tabs have no queryable source (shape gap) → empty bucket.
+  const rows = useMemo<KycQueueRow[]>(() => {
+    if (activeTab !== "pending" || !query.data) return []
+    return query.data.items.map(toQueueRow)
+  }, [activeTab, query.data])
+
   const pageRows = useMemo(
     () => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
     [rows, page]
   )
+
+  const pendingCount = query.data?.items.length ?? 0
+  const counts: Record<TabId, number | null> = {
+    pending: query.isSuccess ? pendingCount : null,
+    needs_info: null,
+    approved: null,
+    rejected: null,
+  }
 
   const selectTab = (id: TabId) => {
     setActiveTab(id)
@@ -307,6 +236,7 @@ export function KycReviewPage() {
       >
         {TABS.map((tab) => {
           const isActive = activeTab === tab.id
+          const count = counts[tab.id]
           return (
             <button
               key={tab.id}
@@ -328,7 +258,7 @@ export function KycReviewPage() {
                   isActive ? "bg-white/20 text-white" : "bg-card2 text-ink3"
                 )}
               >
-                {COUNTS[tab.id]}
+                {count ?? MISSING}
               </span>
             </button>
           )
@@ -350,8 +280,50 @@ export function KycReviewPage() {
           <div />
         </div>
 
-        {/* Empty bucket */}
-        {rows.length === 0 ? (
+        {/* Loading — skeleton rows matching the design row height */}
+        {activeTab === "pending" && query.isLoading ? (
+          <div aria-busy="true">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div
+                key={i}
+                className={cn(
+                  GRID,
+                  "items-center border-b border-line2 px-[18px] py-[13px] last:border-b-0"
+                )}
+              >
+                <div className="flex items-center gap-[11px]">
+                  <Skeleton className="size-8 rounded-full" />
+                  <div className="flex flex-col gap-1.5">
+                    <Skeleton className="h-3 w-32" />
+                    <Skeleton className="h-2.5 w-20" />
+                  </div>
+                </div>
+                <Skeleton className="h-4 w-14 rounded-full" />
+                <Skeleton className="h-3 w-10" />
+                <Skeleton className="h-3 w-24" />
+                <div />
+              </div>
+            ))}
+          </div>
+        ) : activeTab === "pending" && query.isError ? (
+          /* Error — tokened inline error with a retry affordance */
+          <div className="p-[40px] text-center">
+            <p className="text-[13px] font-bold text-tdn">
+              Couldn&apos;t load the review queue
+            </p>
+            <p className="mt-1 text-[12.5px] text-ink2">
+              Something went wrong fetching applicants awaiting review.
+            </p>
+            <button
+              type="button"
+              onClick={() => void query.refetch()}
+              className="mt-3 inline-flex h-9 items-center rounded-[10px] border border-line bg-card px-3.5 text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              Retry
+            </button>
+          </div>
+        ) : rows.length === 0 ? (
+          /* Empty bucket (design copy) */
           <div className="p-[50px] text-center text-[13px] text-ink3">
             Nothing in this bucket.
           </div>

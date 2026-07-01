@@ -4,79 +4,61 @@
  * SanctionsPage — the sanctions & screening surface, reproduced pixel-for-pixel from
  * `docs/design-ref/screens/Sanctions.html` (SPEC §6.5). Two sections:
  *
- *   1. Screening match cards — a red-triangle danger mark, the matched name, the
- *      matched list/type, a Score, and per-match disposition (Clear / Escalate /
- *      Block) or a done-label once dispositioned.
+ *   1. Screening match cards — a red-triangle danger mark, the matched counterparty,
+ *      the screening provider/type, a verdict chip, and per-match disposition
+ *      (Clear / Escalate / Block) or a done-label once dispositioned.
  *   2. Ongoing monitoring — a card of soft-toggle rows.
  *
- * DESIGN REPRODUCTION (not data-wired): the content is the design's own representative
- * sample, embedded as module-level constants below (the `logic.js` `vSanctions()` view
- * method is truncated in the design source, so the rows mirror the markup + SPEC §6.5 +
- * the `seed()` dataset shapes — customer names like "Musa Sani", sanctions lists like
- * OFAC SDN). No fetching; real-data reintegration is a separate later step.
+ * DATA WIRING (Phase 6a — reads only): the screening match cards are now driven by
+ * the real `useSanctions()` hook (immutable `SanctionsRecordItem` screening-run
+ * history: counterpartyId · verdict · provider · screeningType · createdAt). The
+ * design's rich fields — a human name, the matched-list name, a name/DOB/address
+ * match-type, and a numeric 0–100 confidence score — are NOT modelled on that DTO,
+ * so they are rendered gracefully from what exists (verdict → severity styling, a
+ * verdict chip in the score slot) and recorded as backend-enrichment gaps. The four
+ * async branches (loading / error / empty / data) each render.
  *
- * Disposition actions open the shared funds-safety flow modals exactly as the design's
- * `runFlow` chains them (SPEC §5 "Flow modals"): Clear → ReasonModal (recorded in the
- * immutable audit log); Escalate → MakerCheckerModal (enters Pending approval, a second
- * admin decides); Block → ReasonModal → StepUpModal (a sensitive, step-up-gated action).
- * On completion the card flips to its done-label, matching the design's per-row state.
+ * The Ongoing-monitoring toggles remain design-local: they are policy flags with no
+ * contract and no endpoint (recorded as a shape gap), so the Switch stays CONTROLLED
+ * off `useState` — a lightweight soft-toggle exactly as the design chains it.
+ *
+ * Disposition actions (Clear / Escalate / Block) are Phase-7 writes and are left
+ * exactly as the design's `runFlow` chains them (SPEC §5 "Flow modals"): Clear →
+ * ReasonModal (recorded in the immutable audit log); Escalate → MakerCheckerModal
+ * (enters Pending approval, a second admin decides); Block → ReasonModal → StepUpModal
+ * (a sensitive, step-up-gated action). On completion the card flips to its done-label.
  */
 import { useState } from "react"
 
 import { cn } from "@/lib/utils"
 import { Switch } from "@/components/ui/switch"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   ReasonModal,
   StepUpModal,
   MakerCheckerModal,
 } from "@/components/admin/flows"
+import { useSanctions } from "@/lib/query/hooks"
+import type { SanctionsRecordItem } from "@handshake-agent/contracts"
 
-// ── The design's screening matches (representative sample; SPEC §6.5 + seed() shapes) ──
+// ── Presentation types ────────────────────────────────────────────────────────────
 
 type MatchDone = "cleared" | "escalated" | "blocked"
 
-interface ScreeningMatch {
-  id: string
-  /** Matched customer / counterparty name (seed() `F[i]+' '+L[i]` shape). */
-  name: string
-  /** The screening list the name matched (design "Matched <b>{list}</b>"). */
-  list: string
-  /** The match type — name vs address (design "· {type}"). */
-  type: string
-  /** Match-confidence score (0–100). Colour follows severity, never the sole signal. */
-  score: number
-  /** Score text token — red for strong, amber for partial, muted for weak. */
-  scoreFg: string
+/** The verdict token + label shown in the design's Score slot (the DTO carries no
+ *  numeric confidence score — see shapeGaps). Colour follows severity, never the sole
+ *  signal (an explicit label sits alongside it). */
+const VERDICT_META: Record<
+  SanctionsRecordItem["verdict"],
+  { label: string; fg: string; danger: boolean }
+> = {
+  hit: { label: "Hit", fg: "text-tdn", danger: true },
+  inconclusive: { label: "Review", fg: "text-twn", danger: true },
+  clear: { label: "Clear", fg: "text-tok", danger: false },
 }
 
-const SCREENING_MATCHES: readonly ScreeningMatch[] = [
-  {
-    id: "scr_9012",
-    name: "Musa Sani",
-    list: "OFAC SDN",
-    type: "Name match",
-    score: 96,
-    scoreFg: "text-tdn",
-  },
-  {
-    id: "scr_9013",
-    name: "Ibrahim Danjuma",
-    list: "EU Consolidated",
-    type: "Name + DOB",
-    score: 88,
-    scoreFg: "text-tdn",
-  },
-  {
-    id: "scr_9014",
-    name: "Blessing Okafor",
-    list: "UN Security Council",
-    type: "Address match",
-    score: 71,
-    scoreFg: "text-twn",
-  },
-]
-
-// The design's monitoring toggles (representative content; SPEC §6.5 "toggle rows").
+// The design's monitoring toggles (policy flags with no contract/endpoint yet — see
+// shapeGaps; kept design-local as controlled soft-toggles).
 interface MonitorRow {
   label: string
   on: boolean
@@ -139,52 +121,60 @@ function GhostAction({
 }
 
 /**
- * One screening match rendered as the design's card (design lines 6–14). Open matches
- * offer Clear / Escalate / Block; dispositioned matches show a done-label.
+ * One screening record rendered as the design's match card (design lines 6–14). Open
+ * matches offer Clear / Escalate / Block; dispositioned matches show a done-label.
+ * The `counterpartyId` fills the design's name slot; `provider` · `screeningType`
+ * fill the matched-list/match-type subtitle; `verdict` fills the Score slot (the DTO
+ * has no confidence score — see shapeGaps).
  */
 function SanctionsMatchCard({
-  match,
+  record,
   done,
   onClear,
   onEscalate,
   onBlock,
 }: {
-  match: ScreeningMatch
+  record: SanctionsRecordItem
   done: MatchDone | null
   onClear: () => void
   onEscalate: () => void
   onBlock: () => void
 }) {
   const open = done === null
+  const verdict = VERDICT_META[record.verdict]
+  const flagged = open && verdict.danger
 
   return (
     <div
       className={cn(
         "rounded-[16px] border bg-card px-5 py-4",
-        open ? "border-sdn" : "border-line"
+        flagged ? "border-sdn" : "border-line"
       )}
     >
       <div className="flex items-center gap-[13px]">
-        <TriangleMark open={open} />
+        <TriangleMark open={flagged} />
 
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-bold text-ink">{match.name}</div>
+          <div className="truncate font-mono text-sm font-bold text-ink">
+            {record.counterpartyId}
+          </div>
           <div className="text-[11.5px] text-ink2">
-            Matched <b className="font-bold">{match.list}</b> · {match.type}
+            Screened via <b className="font-bold">{record.provider}</b> ·{" "}
+            {record.screeningType}
           </div>
         </div>
 
         <div className="mr-1.5 flex-none text-center">
           <div className="text-[10px] font-bold tracking-[0.04em] text-ink3 uppercase">
-            Score
+            Verdict
           </div>
           <div
             className={cn(
-              "font-mono text-base font-extrabold tabular-nums",
-              open ? match.scoreFg : "text-ink3"
+              "text-sm font-extrabold",
+              open ? verdict.fg : "text-ink3"
             )}
           >
-            {match.score}
+            {verdict.label}
           </div>
         </div>
 
@@ -212,10 +202,52 @@ function SanctionsMatchCard({
   )
 }
 
+/** Loading placeholder for the match-card list (matches the card silhouette). */
+function LoadingMatches() {
+  return (
+    <div className="flex flex-col gap-3" aria-busy="true">
+      <Skeleton className="h-[74px] w-full rounded-[16px]" />
+      <Skeleton className="h-[74px] w-full rounded-[16px]" />
+      <Skeleton className="h-[74px] w-full rounded-[16px]" />
+    </div>
+  )
+}
+
+/** Tokened inline error with a retry affordance. */
+function ErrorMatches({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="rounded-[16px] border border-sdn bg-sdn/40 p-5 text-center">
+      <p className="text-sm font-bold text-tdn">
+        Failed to load screening matches
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-2 cursor-pointer rounded-[9px] border border-line bg-card px-[14px] py-2 text-xs font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        Retry
+      </button>
+    </div>
+  )
+}
+
+/** Design-consistent empty state for the match-card list. */
+function EmptyMatches() {
+  return (
+    <div className="rounded-[16px] border border-line bg-card px-5 py-8 text-center">
+      <p className="text-sm font-bold text-ink">No screening matches</p>
+      <p className="mt-1 text-[12.5px] text-ink2">
+        Screening runs with no flagged counterparties will appear here.
+      </p>
+    </div>
+  )
+}
+
 /**
  * The ongoing-monitoring card (design lines 17–20). Each row is a lightweight
  * soft-toggle — no maker-checker gate — so the Switch is CONTROLLED off `useState`
- * and genuinely flips + holds when clicked.
+ * and genuinely flips + holds when clicked. (Policy flags have no contract/endpoint
+ * yet — see shapeGaps; these stay design-local until a compliance-policy surface exists.)
  */
 function OngoingMonitoring() {
   const [rows, setRows] = useState<MonitorRow[]>(() =>
@@ -260,12 +292,15 @@ type ActiveFlow =
   | null
 
 export function SanctionsPage() {
+  const sanctions = useSanctions()
+  const records = sanctions.data?.items ?? []
+
   // Per-match disposition outcome (null = still open). Drives each card's state.
   const [outcomes, setOutcomes] = useState<Record<string, MatchDone>>({})
   const [flow, setFlow] = useState<ActiveFlow>(null)
 
-  function nameOf(matchId: string): string {
-    return SCREENING_MATCHES.find((m) => m.id === matchId)?.name ?? "match"
+  function labelOf(matchId: string): string {
+    return records.find((r) => r.id === matchId)?.counterpartyId ?? "match"
   }
 
   function disposition(matchId: string, done: MatchDone) {
@@ -287,20 +322,29 @@ export function SanctionsPage() {
       </div>
 
       {/* ── Screening match cards (design lines 4–16) ──────────────────────── */}
-      <div className="flex flex-col gap-3">
-        {SCREENING_MATCHES.map((match) => (
-          <SanctionsMatchCard
-            key={match.id}
-            match={match}
-            done={outcomes[match.id] ?? null}
-            onClear={() => setFlow({ kind: "clear", matchId: match.id })}
-            onEscalate={() => setFlow({ kind: "escalate", matchId: match.id })}
-            onBlock={() =>
-              setFlow({ kind: "block", matchId: match.id, step: "reason" })
-            }
-          />
-        ))}
-      </div>
+      {sanctions.isLoading && <LoadingMatches />}
+      {sanctions.isError && (
+        <ErrorMatches onRetry={() => void sanctions.refetch()} />
+      )}
+      {sanctions.isSuccess && records.length === 0 && <EmptyMatches />}
+      {sanctions.isSuccess && records.length > 0 && (
+        <div className="flex flex-col gap-3">
+          {records.map((record) => (
+            <SanctionsMatchCard
+              key={record.id}
+              record={record}
+              done={outcomes[record.id] ?? null}
+              onClear={() => setFlow({ kind: "clear", matchId: record.id })}
+              onEscalate={() =>
+                setFlow({ kind: "escalate", matchId: record.id })
+              }
+              onBlock={() =>
+                setFlow({ kind: "block", matchId: record.id, step: "reason" })
+              }
+            />
+          ))}
+        </div>
+      )}
 
       {/* ── Ongoing monitoring (design lines 17–20) ────────────────────────── */}
       <OngoingMonitoring />
@@ -313,7 +357,7 @@ export function SanctionsPage() {
         onOpenChange={(next) => !next && setFlow(null)}
         title={
           flow?.kind === "clear"
-            ? `Clear screening match — ${nameOf(flow.matchId)}`
+            ? `Clear screening match — ${labelOf(flow.matchId)}`
             : "Clear screening match"
         }
         onContinue={() =>
@@ -327,7 +371,7 @@ export function SanctionsPage() {
         onOpenChange={(next) => !next && setFlow(null)}
         title={
           flow?.kind === "escalate"
-            ? `Escalate screening match — ${nameOf(flow.matchId)}`
+            ? `Escalate screening match — ${labelOf(flow.matchId)}`
             : "Escalate screening match"
         }
         diff={[
@@ -348,7 +392,7 @@ export function SanctionsPage() {
         onOpenChange={(next) => !next && setFlow(null)}
         title={
           flow?.kind === "block"
-            ? `Block — ${nameOf(flow.matchId)}`
+            ? `Block — ${labelOf(flow.matchId)}`
             : "Block match"
         }
         onContinue={() =>
@@ -361,7 +405,7 @@ export function SanctionsPage() {
         onOpenChange={(next) => !next && setFlow(null)}
         title={
           flow?.kind === "block"
-            ? `Block — ${nameOf(flow.matchId)}`
+            ? `Block — ${labelOf(flow.matchId)}`
             : "Block match"
         }
         onComplete={() =>

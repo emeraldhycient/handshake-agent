@@ -714,39 +714,11 @@ export interface DiscoveredAssetRow {
 }
 
 // ─── Templates page (design §6.19) ──────────────────────────────────────────────────
-// The console has no dedicated notification-template listing endpoint wired to this
-// screen, and the design reproduction is markup-first: the Templates screen renders a
-// `1fr 1fr` grid of static preview cards (channel chip + mono name + approval pill,
-// a locale·vars line, and a body preview). These shapes describe the component's local
-// design-faithful sample content, not a contracts DTO. Nothing here moves money (§3.1).
-
-/**
- * The channel a template sends on — selects the channel chip's status-token color
- * pair (WhatsApp=success sok/tok, Email=info sif/tif).
- */
-export type TemplateChannel = "WhatsApp" | "Email"
-
-/**
- * A template's Meta/Resend approval state — selects the trailing approval pill's
- * status-token color pair (Approved=success, Pending=warn, Rejected=danger).
- */
-export type TemplateApproval = "Approved" | "Pending" | "Rejected"
-
-/** One template preview card in the design §6.19 grid. */
-export interface TemplateCardRow {
-  /** Stable key for the React list (the template's mono name). */
-  id: string
-  channel: TemplateChannel
-  /** Mono template key (e.g. "kyc_verified_v2"). */
-  name: string
-  approval: TemplateApproval
-  /** Locale tag (e.g. "en" / "en_NG"). */
-  locale: string
-  /** Number of interpolated variables the body carries. */
-  vars: number
-  /** Body preview text shown in the inset `bg-card2` box. */
-  body: string
-}
+// The Templates screen is WIRED to the real GET /admin/notification-templates
+// endpoint (Phase 6a) and maps the contract's `NotificationTemplate` directly onto
+// each card, so it no longer needs local design-faithful card types here. The
+// design's approval pill has no backing contract field and is omitted (recorded as a
+// shape gap for a later backend-enrichment pass).
 
 // ─── Currency catalog page (design §6.24) ───────────────────────────────────────────
 // Design-reproduction: the table renders the design's OWN mock currency seed

@@ -4,12 +4,18 @@
  * AgentPage — the embedded-agent oversight surface, reproduced pixel-for-pixel from
  * the operator-console design (docs/design-ref/screens/Agent.html · spec §6.17).
  *
- * This is a DESIGN reproduction: it renders the design's own module-level mock
- * content (no data fetching, no TanStack Query) so the screen looks exactly like
- * the source markup. Real-data reintegration is a separate later step.
+ * The "Model & guardrails" card is WIRED to real data via `useAgentConfig()`
+ * (GET /admin/agent/config) — the resolved `modelId` and `enabled` flag come from
+ * the layered config (§7). The system-prompt is read-only (§3.1): the contract
+ * surfaces only a preview string, never an editable value or the API key.
+ *
+ * The other three cards (system-prompt versions, tool registry, cost & usage 24h)
+ * have NO backing admin endpoint — they render design-faithful representative
+ * content until the backend surfaces them (recorded as shape gaps). Their action
+ * buttons remain their design toast (Phase 7/8), never executing anything.
  *
  * Layout is two card rows, matching the design's inline grids:
- *   Row 1 (1fr 1fr): "Model & guardrails · read-mostly" (key/val) |
+ *   Row 1 (1fr 1fr): "Model & guardrails · read-mostly" (key/val, WIRED) |
  *                    "System-prompt versions" (dot + version + tag, maker-checker)
  *   Row 2 (1.4fr 1fr): "Tool registry" (mono name + read/write kind chip) |
  *                      "Cost & usage (24h)" (key/val, mono·tabular)
@@ -18,7 +24,10 @@
  * kind chip denotes proposal-only capabilities, not execution. Colour is never the
  * sole signal — the tag/chip text carries the state.
  */
+import { Skeleton } from "@/components/ui/skeleton"
+import { useAgentConfig } from "@/lib/query/hooks"
 import { pushToast } from "@/lib/store/toast-store"
+import type { AgentConfigView } from "@handshake-agent/contracts"
 import type {
   AgentGuardrailRow,
   AgentPromptVersion,
@@ -26,9 +35,11 @@ import type {
   AgentUsageStat,
 } from "@/types/components"
 
-// design mock: "Model & guardrails" key/val rows (design markup `agentParams`, 5 rows).
-const AGENT_PARAMS: readonly AgentGuardrailRow[] = [
-  { label: "Model", value: "claude-opus-4-8" },
+// Architectural guardrail constants (design markup `agentParams`). These are
+// invariant facts of the agent's construction (§3.1/§6), not fetched data — the
+// contract exposes no endpoint for them — so they stay static below the two rows
+// (Model, Agent enabled) that ARE resolved from the layered config.
+const STATIC_GUARDRAILS: readonly AgentGuardrailRow[] = [
   { label: "Structured output", value: "IntentSchema (enforced)" },
   { label: "Checkpointer", value: "none (extractable)" },
   { label: "PIN + step-up", value: "required to execute" },
@@ -91,25 +102,93 @@ const DOT_TONE: Record<AgentPromptVersion["tone"], string> = {
 
 // ─── Model & guardrails (design markup: `agentParams` key/val rows) ─────────────────
 
-function ModelGuardrailsCard() {
+/** The card shell — its title is stable across every async branch. */
+function ModelGuardrailsShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
       <div className="mb-3 text-[13px] font-extrabold text-ink">
         Model &amp; guardrails{" "}
         <span className="font-semibold text-ink3">· read-mostly</span>
       </div>
-      {AGENT_PARAMS.map((row) => (
-        <div
-          key={row.label}
-          className="flex items-center justify-between border-b border-line2 py-[9px]"
-        >
-          <span className="text-[12.5px] text-ink2">{row.label}</span>
-          <span className="font-mono text-xs font-bold text-ink">
-            {row.value}
-          </span>
-        </div>
-      ))}
+      {children}
     </div>
+  )
+}
+
+/** One key/value guardrail row (design markup). */
+function GuardrailRow({ label, value }: AgentGuardrailRow) {
+  return (
+    <div className="flex items-center justify-between border-b border-line2 py-[9px]">
+      <span className="text-[12.5px] text-ink2">{label}</span>
+      <span className="font-mono text-xs font-bold text-ink">{value}</span>
+    </div>
+  )
+}
+
+/**
+ * Model & guardrails — WIRED to `useAgentConfig()`. The `Model` and `Agent
+ * enabled` rows resolve from the layered config; the architectural guardrails
+ * stay static (no endpoint exposes them). Four async branches per §5.
+ */
+function ModelGuardrailsCard() {
+  const query = useAgentConfig()
+
+  if (query.isLoading) {
+    return (
+      <ModelGuardrailsShell>
+        <div className="flex flex-col gap-2 py-1" aria-busy="true">
+          <Skeleton className="h-[19px] w-full" />
+          <Skeleton className="h-[19px] w-full" />
+          <Skeleton className="h-[19px] w-full" />
+          <Skeleton className="h-[19px] w-full" />
+          <Skeleton className="h-[19px] w-full" />
+        </div>
+      </ModelGuardrailsShell>
+    )
+  }
+
+  if (query.isError) {
+    return (
+      <ModelGuardrailsShell>
+        <div className="rounded-xl border border-sdn bg-sdn/40 px-3.5 py-3 text-center">
+          <p className="text-xs font-bold text-tdn">
+            Couldn&apos;t load agent config
+          </p>
+          <button
+            type="button"
+            onClick={() => query.refetch()}
+            className="mt-1.5 cursor-pointer rounded-md px-1.5 text-[11.5px] font-bold text-tif hover:bg-hov focus-visible:outline focus-visible:outline-2 focus-visible:outline-tif"
+          >
+            Retry
+          </button>
+        </div>
+      </ModelGuardrailsShell>
+    )
+  }
+
+  const config: AgentConfigView | undefined = query.data
+  // Defensive: an empty/absent config still renders the card gracefully.
+  if (!config) {
+    return (
+      <ModelGuardrailsShell>
+        <p className="py-2 text-[12.5px] text-ink3">
+          No agent configuration available.
+        </p>
+      </ModelGuardrailsShell>
+    )
+  }
+
+  return (
+    <ModelGuardrailsShell>
+      <GuardrailRow label="Model" value={config.modelId} />
+      <GuardrailRow
+        label="Agent enabled"
+        value={config.enabled ? "yes" : "no"}
+      />
+      {STATIC_GUARDRAILS.map((row) => (
+        <GuardrailRow key={row.label} label={row.label} value={row.value} />
+      ))}
+    </ModelGuardrailsShell>
   )
 }
 

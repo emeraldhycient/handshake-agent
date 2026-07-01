@@ -65,4 +65,7 @@ export const qk = {
   dashboardMetrics: (range: MetricsRangeQuery) =>
     ["admin", "metrics", "dashboard", range] as const,
   publicConfig: ["admin", "config", "public"] as const,
+  settings: (category?: string) =>
+    ["admin", "settings", category ?? "all"] as const,
+  setting: (key: string) => ["admin", "settings", "key", key] as const,
 } as const

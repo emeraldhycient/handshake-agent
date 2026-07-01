@@ -5,146 +5,96 @@
  * (operator-console design system §6.19, `docs/design-ref/screens/Templates.html`).
  *
  * Reproduces the design 1:1: a `1fr 1fr` grid of template preview cards, each
- * carrying a channel chip (status-token color pair) + mono template name +
- * approval pill, a `locale · vars` line, and a body preview inset in a `bg-card2`
- * box. Email (Resend) + WhatsApp approved-template management.
+ * carrying a channel chip (status-token color pair) + mono template name, a
+ * `locale · vars` line, and a body preview inset in a `bg-card2` box. Email
+ * (Resend) + WhatsApp approved-template management.
  *
- * DATA is design-faithful (markup-first reproduction): `docs/design-ref/logic.js`
- * does NOT carry the `vTemplates()` view method (truncated), so the card content is
- * representative sample data matching the markup + the seed() dataset shapes (real
- * operator-facing template keys/bodies). It is module-level const — no fetching,
- * no query hooks — so the screen renders exactly what the design shows. Re-wiring to
- * the real `GET /admin/notification-templates` endpoint is a separate later step.
+ * DATA (Phase 6a): wired to `GET /admin/notification-templates` via
+ * `useNotificationTemplates()`. Each `NotificationTemplate` maps onto the design
+ * card — `templateKey` → name, `language` → locale, `variables.length` → vars,
+ * `contentText` → body preview, `channel` → the channel chip. Four async branches:
+ * loading skeletons / error (inline retry) / empty / data. Read-only — no card
+ * opens an editor here (create/edit is Phase 7). Nothing here moves money (§3.1).
  *
- * The design markup renders static cards (no click handler / no editor trigger on
- * the screen itself), so this reproduction is read-only — no dialog is opened from
- * a card. Nothing here moves money (§3.1).
+ * SHAPE GAP: the design's approval pill (Approved/Pending/Rejected) has NO backing
+ * field on `NotificationTemplate` (no approval/status), so it is omitted here and
+ * recorded for the later backend-enrichment pass — no data is invented.
  */
+import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
+import { useNotificationTemplates } from "@/lib/query/hooks"
 import type {
-  TemplateApproval,
-  TemplateCardRow,
-  TemplateChannel,
-} from "@/types/components"
+  NotificationChannel,
+  NotificationTemplate,
+} from "@handshake-agent/contracts"
 
 // ─── Token maps (§5 status→token pairs) ─────────────────────────────────────────────
 
-/** Channel chip → status-token surface + text pair (WhatsApp=success, Email=info). */
-const CHANNEL_CLASS: Record<TemplateChannel, string> = {
-  WhatsApp: "bg-sok text-tok",
-  Email: "bg-sif text-tif",
+/**
+ * Channel chip → status-token surface + text pair. The design surfaces WhatsApp
+ * (success) + Email (info); the contract's `NotificationChannel` also carries SMS
+ * (warn) and in-app (neutral), rendered gracefully with the same token vocabulary.
+ */
+const CHANNEL_CLASS: Record<NotificationChannel, string> = {
+  whatsapp: "bg-sok text-tok",
+  email: "bg-sif text-tif",
+  sms: "bg-swn text-twn",
+  in_app: "bg-card2 text-ink2",
 }
 
-/** Approval pill → status-token surface + text pair (Approved/Pending/Rejected). */
-const APPROVAL_CLASS: Record<TemplateApproval, string> = {
-  Approved: "bg-sok text-tok",
-  Pending: "bg-swn text-twn",
-  Rejected: "bg-sdn text-tdn",
+/** Human channel label for the chip (contract enum → design casing). */
+const CHANNEL_LABEL: Record<NotificationChannel, string> = {
+  whatsapp: "WhatsApp",
+  email: "Email",
+  sms: "SMS",
+  in_app: "In-app",
 }
-
-// ─── Design-faithful sample content (no view method in logic.js) ────────────────────
-// design-faithful: `vTemplates()` is truncated from logic.js, so these are
-// representative rows matching the Templates.html markup + the seed() dataset shapes
-// (Email via Resend + WhatsApp approved templates, real operator-facing keys/bodies).
-const TEMPLATE_ROWS: ReadonlyArray<TemplateCardRow> = [
-  {
-    id: "wa_kyc_verified_v2",
-    channel: "WhatsApp",
-    name: "kyc_verified_v2",
-    approval: "Approved",
-    locale: "en",
-    vars: 2,
-    body: "Hi {{1}}, your identity is verified. Your account is now Tier {{2}} — you can buy, sell and send. Reply MENU to get started.",
-  },
-  {
-    id: "email_tx_receipt",
-    channel: "Email",
-    name: "tx_receipt",
-    approval: "Approved",
-    locale: "en",
-    vars: 4,
-    body: "Your {{type}} of {{amount}} settled on {{date}}. Reference {{ref}}. This receipt is signed and available in your activity history.",
-  },
-  {
-    id: "wa_pin_reset_otp",
-    channel: "WhatsApp",
-    name: "pin_reset_otp",
-    approval: "Approved",
-    locale: "en",
-    vars: 1,
-    body: "Your Handshake Agent verification code is {{1}}. It expires in 5 minutes. Never share this code — we will never ask for it.",
-  },
-  {
-    id: "email_kyc_needs_info",
-    channel: "Email",
-    name: "kyc_needs_info",
-    approval: "Pending",
-    locale: "en_NG",
-    vars: 3,
-    body: "Hi {{name}}, we need one more thing to verify your account: {{reason}}. Tap {{link}} to continue — it takes under two minutes.",
-  },
-  {
-    id: "wa_ticket_purchase",
-    channel: "WhatsApp",
-    name: "ticket_purchase_confirm",
-    approval: "Pending",
-    locale: "en",
-    vars: 3,
-    body: "You're going to {{1}}! {{2}} ticket(s) confirmed. Your entry QR is attached and saved in this chat. Ref {{3}}.",
-  },
-  {
-    id: "email_low_balance",
-    channel: "Email",
-    name: "low_balance_nudge",
-    approval: "Approved",
-    locale: "en",
-    vars: 2,
-    body: "Heads up {{name}} — your USDT balance is now {{amount}}. Top up in a tap to keep sending and paying without interruption.",
-  },
-]
 
 // ─── Sub-components ─────────────────────────────────────────────────────────────────
 
 /**
  * One template preview card — matches the Templates.html markup exactly: a header
- * row (channel chip · mono name · approval pill), a `locale · vars` meta line, and a
- * body preview inset in a `bg-card2` box.
+ * row (channel chip · mono name), a `locale · vars` meta line, and a body preview
+ * inset in a `bg-card2` box.
  */
-function TemplateCard({ row }: { row: TemplateCardRow }) {
+function TemplateCard({ template }: { template: NotificationTemplate }) {
   return (
     <div className="rounded-[16px] border border-line bg-card px-5 py-[18px]">
-      {/* ── Header row: channel chip · mono name · approval pill ─────────────── */}
+      {/* ── Header row: channel chip · mono name ────────────────────────────── */}
       <div className="mb-2.5 flex items-center gap-2.5">
         <span
           className={cn(
             "shrink-0 rounded-md px-[9px] py-[3px] text-[11px] font-bold",
-            CHANNEL_CLASS[row.channel]
+            CHANNEL_CLASS[template.channel]
           )}
         >
-          {row.channel}
+          {CHANNEL_LABEL[template.channel]}
         </span>
         <span className="min-w-0 flex-1 truncate font-mono text-[13px] font-bold text-ink">
-          {row.name}
-        </span>
-        <span
-          className={cn(
-            "shrink-0 rounded-full px-[9px] py-[3px] text-[10.5px] font-bold",
-            APPROVAL_CLASS[row.approval]
-          )}
-        >
-          {row.approval}
+          {template.templateKey}
         </span>
       </div>
 
       {/* ── locale · vars line ──────────────────────────────────────────────── */}
       <div className="mb-2 text-[11px] text-ink3">
-        locale {row.locale} · vars: {row.vars}
+        locale {template.language} · vars: {template.variables.length}
       </div>
 
       {/* ── Body preview inset (bg-card2) ───────────────────────────────────── */}
       <div className="rounded-[10px] bg-card2 px-[13px] py-[11px] text-[12px] leading-[1.5] text-ink2">
-        {row.body}
+        {template.contentText}
       </div>
+    </div>
+  )
+}
+
+/** Loading branch — a grid of card-shaped skeletons matching the design layout. */
+function TemplatesLoading() {
+  return (
+    <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2" aria-busy="true">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <Skeleton key={i} className="h-[152px] rounded-[16px]" />
+      ))}
     </div>
   )
 }
@@ -152,6 +102,9 @@ function TemplateCard({ row }: { row: TemplateCardRow }) {
 // ─── Page ───────────────────────────────────────────────────────────────────────
 
 export function TemplatesPage() {
+  const query = useNotificationTemplates()
+  const templates = query.data?.items ?? []
+
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
       <div className="mx-auto w-full max-w-[1200px] px-[30px] pt-[26px] pb-[60px]">
@@ -165,12 +118,44 @@ export function TemplatesPage() {
           </p>
         </div>
 
-        {/* ── 1fr 1fr grid of template preview cards ────────────────────────── */}
-        <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
-          {TEMPLATE_ROWS.map((row) => (
-            <TemplateCard key={row.id} row={row} />
-          ))}
-        </div>
+        {/* ── Loading ──────────────────────────────────────────────────────── */}
+        {query.isLoading && <TemplatesLoading />}
+
+        {/* ── Error (inline retry) ─────────────────────────────────────────── */}
+        {query.isError && (
+          <div className="rounded-[16px] border border-sdn bg-sdn/40 p-6 text-center">
+            <p className="text-sm font-bold text-tdn">
+              Couldn&apos;t load templates
+            </p>
+            <p className="mt-1 text-[12.5px] text-ink2">Please try again.</p>
+            <button
+              type="button"
+              onClick={() => query.refetch()}
+              className="mt-3 rounded-[10px] border border-line bg-card px-3.5 py-1.5 text-[12.5px] font-bold text-ink transition-colors hover:bg-card2 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* ── Empty ────────────────────────────────────────────────────────── */}
+        {query.isSuccess && templates.length === 0 && (
+          <div className="rounded-[16px] border border-line bg-card p-10 text-center">
+            <p className="text-[13.5px] font-bold text-ink">No templates yet</p>
+            <p className="mt-1 text-[12.5px] text-ink2">
+              Email and WhatsApp templates you create will appear here.
+            </p>
+          </div>
+        )}
+
+        {/* ── Data: 1fr 1fr grid of template preview cards ──────────────────── */}
+        {query.isSuccess && templates.length > 0 && (
+          <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
+            {templates.map((template) => (
+              <TemplateCard key={template.id} template={template} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -11,22 +11,28 @@
  * ENABLED/DISABLED status pill, a `desc · port` line, and a trailing 52px soft
  * toggle.
  *
- * DATA: this is a PIXEL reproduction — the rows are the design's own module-level
- * mock content (the seed `caps` array, `docs/design-ref/logic.js` lines 113-120):
- * crypto.buy · crypto.sell · send · swap · ticketing.eventbrite · ticketing.tix.
- * No fetching, no TanStack Query. Real-data reintegration is a separate later step.
+ * WIRED (Phase 6a): the crypto capability rows' ENABLED/DISABLED state is REAL —
+ * resolved from the `catalog.capabilities.crypto.{buy,sell,send,swap}` boolean
+ * registry keys via GET /admin/settings (`useSettings("Catalog")`). The per-row
+ * presentation metadata the design shows — human description, bound provider port,
+ * icon, and tint — is NOT modeled by the config contract, so it stays as static
+ * design-faithful presentation keyed by capability id (see PRESENTATION + shapeGaps).
+ * The two ticketing-vendor rows (eventbrite / tix) have NO per-vendor registry key
+ * (only a single global `ticketing.enabled`), so they are omitted here and recorded
+ * as a shapeGap. Four async branches: loading / error / empty / data.
  *
  * FUNDS-SAFETY: toggling a capability is a KILL-SWITCH. The switch never flips on
- * click — it opens the shared `MakerCheckerModal` (dual-control), so an
- * enable/disable enters Pending approval and requires a second admin before it
- * takes effect, exactly as the design does (root §3.1 model-proposes / §7). Once
- * the modal is approved, the pending capability's `on` flag inverts in local state
- * so the switch + pill visibly change (the design's reactive mock state).
+ * click — it opens the shared `MakerCheckerModal` (dual-control). The toggle SUBMIT
+ * is a Phase-7 write; this phase wires the READ path only.
  */
 import { useMemo, useState } from "react"
 
+import type { EffectiveSetting } from "@handshake-agent/contracts"
+
 import { MakerCheckerModal } from "@/components/admin/flows"
+import { Skeleton } from "@/components/ui/skeleton"
 import { pushToast } from "@/lib/store/toast-store"
+import { useSettings } from "@/lib/query/hooks"
 import { cn } from "@/lib/utils"
 import type {
   CapabilityRow,
@@ -34,74 +40,60 @@ import type {
   CapabilityTone,
 } from "@/types/components"
 
-// ─── Design mock content (docs/design-ref/logic.js `caps`, lines 113-120) ────────────
+// ─── Static presentation metadata (design §6.25) ─────────────────────────────────────
 
 /**
- * The design's six capability rows. Each is bound to a provider port; `on` drives the
- * pill + toggle. Icons are 24×24 stroke-1.8 paths (the design's per-capability marks);
- * `tone` tints the icon tile through a status-token surface/text pair. This is the
- * initial seed — the page lifts it into `useState` so approving a toggle flips `on`.
+ * Per-capability display metadata the config contract does NOT provide — the human
+ * label, description, bound provider port, icon path, and icon-tile tint. Keyed by
+ * the crypto capability leaf so each real boolean setting joins its design row.
+ * `on` is NOT here — it comes from the live setting value.
  */
-const CAPABILITY_SEED: readonly CapabilityRow[] = [
+interface CapabilityPresentation {
+  /** The `catalog.capabilities.crypto.<x>` registry key backing this row. */
+  settingKey: string
+  label: string
+  desc: string
+  provider: string
+  tone: CapabilityTone
+  icon: string
+}
+
+const PRESENTATION: readonly CapabilityPresentation[] = [
   {
-    id: "crypto.buy",
+    settingKey: "catalog.capabilities.crypto.buy",
     label: "crypto.buy",
     desc: "Buy USDT/TRX with NGN",
     provider: "Blockradar",
-    on: true,
     tone: "success",
     // coin / currency mark
     icon: "M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
   },
   {
-    id: "crypto.sell",
+    settingKey: "catalog.capabilities.crypto.sell",
     label: "crypto.sell",
     desc: "Sell crypto to NGN payout",
     provider: "Blockradar + Flutterwave",
-    on: true,
     tone: "info",
     // bank / payout mark
     icon: "M4 10h16M4 10l8-6 8 6M6 10v8M10 10v8M14 10v8M18 10v8M4 20h16",
   },
   {
-    id: "send",
+    settingKey: "catalog.capabilities.crypto.send",
     label: "send",
     desc: "On-chain transfer to beneficiary",
     provider: "Blockradar",
-    on: true,
     tone: "warn",
     // paper-plane mark
     icon: "M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z",
   },
   {
-    id: "swap",
+    settingKey: "catalog.capabilities.crypto.swap",
     label: "swap",
     desc: "USDT ↔ TRX swap",
     provider: "Blockradar",
-    on: true,
     tone: "info",
     // swap arrows mark
     icon: "M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5",
-  },
-  {
-    id: "ticketing.eventbrite",
-    label: "ticketing.eventbrite",
-    desc: "Buy event tickets",
-    provider: "Eventbrite port",
-    on: true,
-    tone: "success",
-    // ticket mark
-    icon: "M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2 2 2 0 0 0 0 4 2 2 0 0 0 0 4 2 2 0 0 1-2 2H6a2 2 0 0 1-2-2 2 2 0 0 0 0-4 2 2 0 0 0 0-4z",
-  },
-  {
-    id: "ticketing.tix",
-    label: "ticketing.tix",
-    desc: "Alternate ticketing vendor",
-    provider: "Tix.Africa port",
-    on: false,
-    tone: "neutral",
-    // ticket mark
-    icon: "M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2 2 2 0 0 0 0 4 2 2 0 0 0 0 4 2 2 0 0 1-2 2H6a2 2 0 0 1-2-2 2 2 0 0 0 0-4 2 2 0 0 0 0-4z",
   },
 ] as const
 
@@ -111,6 +103,31 @@ const TONE_TILE: Record<CapabilityTone, string> = {
   info: "bg-sif text-tif",
   warn: "bg-swn text-twn",
   neutral: "bg-card2 text-ink2",
+}
+
+/**
+ * Join the static presentation with the live capability settings: each design row's
+ * `on` is the boolean effective value of its `catalog.capabilities.crypto.<x>` key
+ * (fail-closed — absent / non-boolean → false, per root §7). Rows whose backing key
+ * is missing from the registry response are dropped.
+ */
+function buildRows(settings: readonly EffectiveSetting[]): CapabilityRow[] {
+  const byKey = new Map(settings.map((s) => [s.key, s]))
+  const rows: CapabilityRow[] = []
+  for (const p of PRESENTATION) {
+    const setting = byKey.get(p.settingKey)
+    if (!setting) continue
+    rows.push({
+      id: p.label,
+      label: p.label,
+      desc: p.desc,
+      provider: p.provider,
+      on: setting.value === true,
+      tone: p.tone,
+      icon: p.icon,
+    })
+  }
+  return rows
 }
 
 // ─── Sub-component ───────────────────────────────────────────────────────────────────
@@ -193,8 +210,10 @@ function CapabilityRowCard({ row, onToggle }: CapabilityRowProps) {
 // ─── Page ────────────────────────────────────────────────────────────────────────────
 
 export function CapabilitiesPage() {
-  // The switchboard rows are reactive: approving a toggle inverts a row's `on`.
-  const [rows, setRows] = useState<CapabilityRow[]>(() => [...CAPABILITY_SEED])
+  const query = useSettings("Catalog")
+  const rows = useMemo(() => buildRows(query.data ?? []), [query.data])
+
+  // Which capability's toggle is pending dual-control approval (drives the modal).
   const [pending, setPending] = useState<CapabilityRow | null>(null)
 
   // The from→to change preview for the maker-checker modal (design's diff table).
@@ -209,16 +228,11 @@ export function CapabilitiesPage() {
     ]
   }, [pending])
 
-  // Approve the dual-control change: invert the pending capability's flag in
-  // state (the switch + pill visibly flip), toast, then close the modal.
+  // Approve the dual-control change (Phase-7 write is a stub): toast the intent and
+  // close the modal. The real flip is applied server-side + re-read in Phase 7.
   const approveToggle = () => {
     if (!pending) return
     const enabling = !pending.on
-    setRows((prev) =>
-      prev.map((row) =>
-        row.id === pending.id ? { ...row, on: enabling } : row
-      )
-    )
     pushToast(
       `${pending.label} ${enabling ? "enabled" : "disabled"}`,
       enabling ? "ok" : "warn"
@@ -239,12 +253,52 @@ export function CapabilitiesPage() {
         </p>
       </div>
 
-      {/* ── Kill-switch rows ─────────────────────────────────────────────────── */}
-      <div className="flex flex-col gap-3">
-        {rows.map((row) => (
-          <CapabilityRowCard key={row.id} row={row} onToggle={setPending} />
-        ))}
-      </div>
+      {/* ── Loading ──────────────────────────────────────────────────────────── */}
+      {query.isLoading && (
+        <div className="flex flex-col gap-3" aria-busy="true">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-[74px] rounded-[16px]" />
+          ))}
+        </div>
+      )}
+
+      {/* ── Error ────────────────────────────────────────────────────────────── */}
+      {query.isError && (
+        <div className="rounded-[16px] border border-sdn bg-sdn/40 p-6 text-center">
+          <p className="text-sm font-bold text-tdn">
+            Failed to load capabilities
+          </p>
+          <p className="mt-1 text-[12.5px] text-ink2">
+            The capability registry could not be read.
+          </p>
+          <button
+            type="button"
+            onClick={() => query.refetch()}
+            className="mt-3 inline-flex items-center rounded-[9px] border border-line bg-card px-3 py-[7px] text-[11.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* ── Empty ────────────────────────────────────────────────────────────── */}
+      {query.isSuccess && rows.length === 0 && (
+        <div className="rounded-[16px] border border-line bg-card p-6 text-center">
+          <p className="text-sm font-bold text-ink">No capabilities</p>
+          <p className="mt-1 text-[12.5px] text-ink3">
+            No capability flags are registered.
+          </p>
+        </div>
+      )}
+
+      {/* ── Kill-switch rows (data) ──────────────────────────────────────────── */}
+      {query.isSuccess && rows.length > 0 && (
+        <div className="flex flex-col gap-3">
+          {rows.map((row) => (
+            <CapabilityRowCard key={row.id} row={row} onToggle={setPending} />
+          ))}
+        </div>
+      )}
 
       {/* ── Maker-checker (kill-switch = dual control) ───────────────────────── */}
       <MakerCheckerModal

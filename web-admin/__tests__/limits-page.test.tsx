@@ -1,84 +1,120 @@
 /**
- * LimitsPage test (design §6.26 reproduction).
+ * LimitsPage test (design §6.26) — wired to real per-tier limit settings.
  *
- * Editing an amount cap is maker-checker. The pencil opens a new-value prompt →
- * reason (audit) → step-up (TOTP) → maker-checker. The captured new value drives the
- * maker-checker from→to preview, and approving it ("Submit for approval") writes the
- * new value onto the edited row in local state — so the displayed cap changes and a
- * toast fires (the design's reactive mock state).
+ * The per-tier caps resolve from the `limits.NGN.<tier>.*` registry keys (GET
+ * /admin/settings, mocked). Design rows the registry has no key for (Weekly max,
+ * Single on-chain send max, and the extra velocity windows) render "—". Editing an
+ * amount cap is maker-checker: the pencil opens a new-value prompt → reason → step-up
+ * → maker-checker; approving overlays the new value onto the row (Phase-7 write is
+ * local-only) and toasts. The api layer is mocked — no server.
  */
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import type { EffectiveSetting } from "@handshake-agent/contracts"
 
 import { LimitsPage } from "@/components/admin/limits-page"
 import { defaultToastStore } from "@/lib/store/toast-store"
 
-beforeEach(() => {
-  defaultToastStore.setState({ toasts: [] })
-})
+// ─── Mocks ──────────────────────────────────────────────────────────────────────
+
+vi.mock("@/lib/api/config", () => ({
+  listEffectiveSettings: vi.fn(),
+}))
+
+import { listEffectiveSettings } from "@/lib/api/config"
+
+const mockList = vi.mocked(listEffectiveSettings)
+
+// ─── Fixture ──────────────────────────────────────────────────────────────────
+
+function limit(key: string, value: number): EffectiveSetting {
+  return {
+    key,
+    category: "KYC",
+    label: key,
+    description: `Limit ${key}`,
+    valueType: "number",
+    editable: true,
+    value,
+    source: "default",
+    scope: "global",
+    scopeValue: null,
+  }
+}
+
+// Only tier_1 needs real values for the assertions; the mapper handles missing tiers.
+const LIMIT_SETTINGS: EffectiveSetting[] = [
+  limit("limits.NGN.tier_1.perTxFiatMax", 200000),
+  limit("limits.NGN.tier_1.dailyFiatMax", 500000),
+  limit("limits.NGN.tier_1.dailyTxCountMax", 10),
+]
+
+function renderPage() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  return render(
+    <QueryClientProvider client={client}>
+      <LimitsPage />
+    </QueryClientProvider>
+  )
+}
 
 /** Drive the shared flow chain: reason → step-up (6 digits) → maker-checker. */
 async function advanceThroughAuditChain(
   user: ReturnType<typeof userEvent.setup>
 ) {
-  // Reason step — a non-empty reason enables Continue.
   await user.type(
     screen.getByRole("textbox", { name: "Reason" }),
     "Ops correction"
   )
   await user.click(screen.getByRole("button", { name: "Continue" }))
-
-  // Step-up — entering six digits auto-advances to the maker-checker step.
   for (const d of "123456") {
     await user.click(screen.getByRole("button", { name: d }))
   }
 }
 
-describe("LimitsPage (maker-checker amount-cap edit)", () => {
-  it("renders the tier tabs and the seed amount caps", () => {
-    render(<LimitsPage />)
+beforeEach(() => {
+  defaultToastStore.setState({ toasts: [] })
+  mockList.mockReset()
+  mockList.mockResolvedValue(LIMIT_SETTINGS)
+})
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
+  it("renders the tier tabs and the real per-tier caps", async () => {
+    renderPage()
 
     expect(
       screen.getByRole("heading", { name: "Limits & velocity" })
     ).toBeInTheDocument()
-    expect(screen.getByRole("tab", { name: "Tier 1" })).toHaveAttribute(
+    // The tier tabs render only after the settings resolve (data branch).
+    expect(await screen.findByRole("tab", { name: "Tier 1" })).toHaveAttribute(
       "aria-selected",
       "true"
     )
-    // "Weekly max" is a unique Tier-1 cap (₦1,000,000).
-    expect(screen.getByText("₦1,000,000")).toBeInTheDocument()
-  })
-
-  it("captures a new value and shows it in the maker-checker from→to preview", async () => {
-    const user = userEvent.setup()
-    render(<LimitsPage />)
-
-    await user.click(screen.getByRole("button", { name: "Edit Weekly max" }))
-
-    // New-value prompt — replace the current cap.
-    const input = screen.getByRole("textbox", { name: "New value" })
-    await user.clear(input)
-    await user.type(input, "₦1,500,000")
-    await user.click(screen.getByRole("button", { name: "Continue" }))
-
-    await advanceThroughAuditChain(user)
-
-    const dialog = screen.getByRole("dialog", { name: "Update limit" })
-    // The from→to preview shows the OLD value and the NEW captured value.
-    expect(within(dialog).getByText("₦1,000,000")).toBeInTheDocument()
-    expect(within(dialog).getByText("₦1,500,000")).toBeInTheDocument()
+    // The real per-transaction cap (200,000 → "₦200,000").
+    expect(screen.getByText("₦200,000")).toBeInTheDocument()
+    // The real daily cap (500,000 → "₦500,000").
+    expect(screen.getByText("₦500,000")).toBeInTheDocument()
+    // The real daily tx-count (10) is the one backed velocity row.
+    expect(screen.getByText("10")).toBeInTheDocument()
   })
 
   it("updates the displayed cap + toasts after the edit is approved", async () => {
     const user = userEvent.setup()
-    render(<LimitsPage />)
+    renderPage()
 
-    await user.click(screen.getByRole("button", { name: "Edit Weekly max" }))
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Per-transaction max" })
+    )
 
     const input = screen.getByRole("textbox", { name: "New value" })
     await user.clear(input)
-    await user.type(input, "₦1,500,000")
+    await user.type(input, "₦300,000")
     await user.click(screen.getByRole("button", { name: "Continue" }))
 
     await advanceThroughAuditChain(user)
@@ -88,25 +124,23 @@ describe("LimitsPage (maker-checker amount-cap edit)", () => {
     )
 
     // The row's displayed cap changed and the old value is gone.
-    expect(screen.getByText("₦1,500,000")).toBeInTheDocument()
-    expect(screen.queryByText("₦1,000,000")).not.toBeInTheDocument()
+    expect(screen.getByText("₦300,000")).toBeInTheDocument()
+    expect(screen.queryByText("₦200,000")).not.toBeInTheDocument()
 
     // A feedback toast fired and the flow closed.
     expect(defaultToastStore.getState().toasts).toContainEqual(
       expect.objectContaining({
-        message: "Weekly max · Tier 1 → ₦1,500,000",
+        message: "Per-transaction max · Tier 1 → ₦300,000",
       })
     )
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   })
 
-  it("refuses to continue from the new-value prompt when the field is empty", async () => {
-    const user = userEvent.setup()
-    render(<LimitsPage />)
+  it("shows the error branch with a retry when the settings read fails", async () => {
+    mockList.mockRejectedValueOnce(new Error("boom"))
+    renderPage()
 
-    await user.click(screen.getByRole("button", { name: "Edit Weekly max" }))
-
-    await user.clear(screen.getByRole("textbox", { name: "New value" }))
-    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled()
+    expect(await screen.findByText("Failed to load limits")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
   })
 })

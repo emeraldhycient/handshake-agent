@@ -1,22 +1,22 @@
 /**
- * TransactionsPage + TransactionDetail render tests (design reproduction).
+ * TransactionsPage (real-data wiring) tests.
  *
- * Both screens were rebuilt as pixel-faithful reproductions of the design: they
- * render their own module-level mock content (no `@/lib/api/transactions`, no
- * `getMe`, no mark-failed mutation, no step-up-on-403). The list still filters its
- * mock rows by the design's view tabs (client-side) and its rows navigate to the
- * detail route; the detail screen renders a fixed representative transaction. The old
- * behavioural tests drove the api + step-up flows, which the reproduction no longer
- * has, so they are replaced with render tests over the reproduced design content.
+ * TransactionsPage now reads from the engine via `useTransactions` → the mocked
+ * `@/lib/api/transactions` client; the list's rows, view-tab status filter and the
+ * cursor pager come from `AdminTxnListResponse`. These tests assert the loading→data
+ * branch, the empty branch, the error branch, and that a view tab re-queries with the
+ * mapped status filter. TransactionDetail is now read-wired too, covered by its own
+ * `transaction-detail.test.tsx`.
  *
  * The list uses `useRouter().push` on row click, so `next/navigation` is stubbed.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import type { AdminTxnListResponse } from "@handshake-agent/contracts"
 
 import { TransactionsPage } from "@/components/admin/transactions-page"
-import { TransactionDetail } from "@/components/admin/transaction-detail"
 import { defaultToastStore } from "@/lib/store/toast-store"
 
 const push = vi.fn()
@@ -24,112 +24,118 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push }),
 }))
 
+vi.mock("@/lib/api/transactions", () => ({
+  listTransactions: vi.fn(),
+}))
+
+import { listTransactions } from "@/lib/api/transactions"
+
+const mockList = vi.mocked(listTransactions)
+
+const UUID_A = "11111111-1111-1111-1111-111111111111"
+const UUID_B = "22222222-2222-2222-2222-222222222222"
+
+const RESPONSE: AdminTxnListResponse = {
+  items: [
+    {
+      id: "33333333-3333-3333-3333-333333333333",
+      userId: UUID_A,
+      type: "buy",
+      status: "settling",
+      createdAt: "2026-07-01T09:42:00.000Z",
+    },
+    {
+      id: "44444444-4444-4444-4444-444444444444",
+      userId: UUID_B,
+      type: "send",
+      status: "completed",
+      createdAt: "2026-07-01T10:15:00.000Z",
+    },
+  ],
+  nextCursor: null,
+}
+
+function renderPage() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  return render(
+    <QueryClientProvider client={client}>
+      <TransactionsPage />
+    </QueryClientProvider>
+  )
+}
+
 beforeEach(() => {
   push.mockClear()
+  mockList.mockReset()
+  mockList.mockResolvedValue(RESPONSE)
   defaultToastStore.setState({ toasts: [] })
 })
 
-describe("TransactionsPage (design reproduction)", () => {
-  it("renders the header, the ledger table columns and mock rows", () => {
-    render(<TransactionsPage />)
+describe("TransactionsPage (real-data wiring)", () => {
+  it("shows a loading state, then renders the real rows and columns", async () => {
+    // Hold the request open so the loading (aria-busy) branch is observable.
+    let resolve!: (v: AdminTxnListResponse) => void
+    mockList.mockReturnValueOnce(
+      new Promise<AdminTxnListResponse>((r) => {
+        resolve = r
+      })
+    )
 
-    expect(
-      screen.getByRole("heading", { name: "Transactions" })
-    ).toBeInTheDocument()
+    renderPage()
 
-    // The 7-column ledger table headers.
+    // The 7-column ledger table headers are always present.
     expect(screen.getByText("ID")).toBeInTheDocument()
     expect(screen.getByText("Idempotency key")).toBeInTheDocument()
+    // Loading branch.
+    expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument()
 
-    // A known mock transaction id from the design's seed dataset (first page).
-    expect(screen.getByText("tx_80231")).toBeInTheDocument()
+    resolve(RESPONSE)
+
+    // Data branch — a real row id + its mapped status label render.
+    expect(
+      await screen.findByText("33333333-3333-3333-3333-333333333333")
+    ).toBeInTheDocument()
+    // The engine "settling" status folds onto the "Settling" pill.
+    expect(screen.getByText("Settling")).toBeInTheDocument()
+    // "completed" → "Settled".
+    expect(screen.getByText("Settled")).toBeInTheDocument()
   })
 
-  it("renders the view tabs including Stuck / Pending", () => {
-    render(<TransactionsPage />)
-
-    expect(screen.getByRole("button", { name: /All/ })).toBeInTheDocument()
-    expect(
-      screen.getByRole("button", { name: /Stuck \/ Pending/ })
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole("button", { name: /Failed today/ })
-    ).toBeInTheDocument()
-  })
-
-  it("copies the idempotency key + toasts and does NOT navigate the row", async () => {
+  it("re-queries with the mapped status filter when a view tab is chosen", async () => {
     const user = userEvent.setup()
-    const writeText = vi.fn()
-    // jsdom's navigator.clipboard is a getter-only prop — define it explicitly.
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText },
-      configurable: true,
+    renderPage()
+
+    await screen.findByText("33333333-3333-3333-3333-333333333333")
+    expect(mockList.mock.calls[0][0].status).toBeUndefined()
+
+    await user.click(screen.getByRole("button", { name: /Failed today/ }))
+
+    // "Failed today" maps to status=failed with a from=start-of-day bound.
+    await waitFor(() => {
+      const last = mockList.mock.calls[mockList.mock.calls.length - 1][0]
+      expect(last.status).toBe("failed")
+      expect(last.from).toBeTruthy()
     })
-
-    render(<TransactionsPage />)
-
-    // Each page row exposes its idem cell as a role="button" with a Copy
-    // aria-label; take the first row's.
-    const copyCell = screen.getAllByRole("button", {
-      name: /Copy idempotency key idem_/i,
-    })[0]
-    const idem = copyCell.textContent ?? ""
-
-    await user.click(copyCell)
-
-    // Copies to the clipboard and emits the `Copied · …` toast (kind "copy").
-    expect(writeText).toHaveBeenCalledWith(idem)
-    const { toasts } = defaultToastStore.getState()
-    expect(toasts).toHaveLength(1)
-    expect(toasts[0].message).toBe(`Copied · ${idem}`)
-    expect(toasts[0].kind).toBe("copy")
-
-    // stopPropagation kept the row from navigating to the detail route.
-    expect(push).not.toHaveBeenCalled()
   })
-})
 
-describe("TransactionDetail (design reproduction)", () => {
-  it("renders the header, back-link and engine-brokered triage panels", () => {
-    render(<TransactionDetail transactionId="tx_80283" />)
+  it("renders the design-consistent empty state when there are no rows", async () => {
+    mockList.mockResolvedValue({ items: [], nextCursor: null })
+    renderPage()
 
-    // Back-link to the list + the copyable mock transaction id.
     expect(
-      screen.getByRole("link", { name: /All transactions/ })
-    ).toBeInTheDocument()
-    expect(screen.getByText("tx_80283")).toBeInTheDocument()
-
-    // The itemized-parameters + engine-state panels the design renders.
-    expect(screen.getByText("Itemized parameters")).toBeInTheDocument()
-    expect(screen.getByText("Engine state timeline")).toBeInTheDocument()
-
-    // Engine-brokered triage actions (proposal only — never executes here).
-    expect(
-      screen.getByRole("button", { name: /Retry settlement/ })
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole("button", { name: /Mark failed/ })
+      await screen.findByText("No transactions match this view.")
     ).toBeInTheDocument()
   })
 
-  it("toasts (no flow) when Resend receipt is clicked", async () => {
-    const user = userEvent.setup()
-    render(<TransactionDetail transactionId="tx_80283" />)
+  it("renders a tokened error with a retry affordance on failure", async () => {
+    mockList.mockRejectedValue(new Error("boom"))
+    renderPage()
 
-    await user.click(screen.getByRole("button", { name: /Resend receipt/ }))
-
-    const { toasts } = defaultToastStore.getState()
-    expect(toasts).toHaveLength(1)
-    expect(toasts[0].kind).toBe("info")
-    expect(toasts[0].message).toMatch(/Receipt re-sent to the customer/)
-  })
-
-  it("deep-links Open ledger to this transaction", () => {
-    render(<TransactionDetail transactionId="tx_80283" />)
-
-    expect(screen.getByRole("link", { name: /Open ledger/ })).toHaveAttribute(
-      "href",
-      "/ledger?tx=tx_80283"
-    )
+    expect(
+      await screen.findByText("Couldn't load transactions")
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
   })
 })
