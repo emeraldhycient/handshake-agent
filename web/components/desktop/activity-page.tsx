@@ -1,11 +1,17 @@
 "use client"
 
 import { useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { Money } from "@/components/shared/money"
 import { StatusPill } from "@/components/shared/status-pill"
+import {
+  QueryErrorState,
+  QueryEmptyState,
+} from "@/components/shared/query-states"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TransactionDetailModal } from "@/components/shared/transaction-detail-modal"
-import { useActivity } from "@/lib/query/hooks"
+import { useActivityFeed } from "@/lib/query/hooks"
+import { qk } from "@/lib/query/keys"
 import type { ActivityItem } from "@/lib/schemas"
 import { cn } from "@/lib/utils"
 
@@ -96,7 +102,12 @@ function matchesFilter(item: ActivityItem, filter: ActivityFilter): boolean {
 export function ActivityPage({ className }: { className?: string }) {
   const [activeFilter, setActiveFilter] = useState<ActivityFilter>("all")
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const activity = useActivity()
+  const activity = useActivityFeed()
+  const queryClient = useQueryClient()
+  // The activity feed hook (useInfiniteQuery wrapper) exposes no `refetch`, so
+  // invalidating the key is the retry path.
+  const retry = () =>
+    void queryClient.invalidateQueries({ queryKey: qk.activity })
 
   // ── Loading state ──────────────────────────────────────────────────────────
   if (activity.isLoading) {
@@ -125,19 +136,16 @@ export function ActivityPage({ className }: { className?: string }) {
       <div
         className={cn("flex flex-1 items-center justify-center p-6", className)}
       >
-        <div className="border-danger/20 bg-danger/5 rounded-[14px] border p-5 text-center">
-          <p className="text-danger text-sm font-semibold">
-            Failed to load activity
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Please refresh the page.
-          </p>
-        </div>
+        <QueryErrorState
+          title="Failed to load activity"
+          description="Something went wrong loading your transactions. Check your connection and try again."
+          onRetry={retry}
+        />
       </div>
     )
   }
 
-  const groups = activity.data ?? []
+  const groups = activity.groups
 
   // Filter groups → keep group if it has any items matching the filter
   const filteredGroups = groups
@@ -153,7 +161,10 @@ export function ActivityPage({ className }: { className?: string }) {
       <div
         className={cn("flex flex-1 items-center justify-center p-6", className)}
       >
-        <p className="text-sm text-muted-foreground">No activity yet.</p>
+        <QueryEmptyState
+          title="No activity yet"
+          description="Your transactions will appear here."
+        />
       </div>
     )
   }
@@ -212,6 +223,22 @@ export function ActivityPage({ className }: { className?: string }) {
           </div>
         </div>
       ))}
+
+      {/* ── Load more ───────────────────────────────────────────────────────── */}
+      {activity.hasNextPage && (
+        <button
+          type="button"
+          onClick={() => void activity.fetchNextPage()}
+          disabled={activity.isFetchingNextPage}
+          className={cn(
+            "mx-auto rounded-full border border-border px-5 py-2 text-[13px] font-semibold text-foreground",
+            "transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none",
+            "disabled:cursor-not-allowed disabled:opacity-60"
+          )}
+        >
+          {activity.isFetchingNextPage ? "Loading…" : "Load more"}
+        </button>
+      )}
 
       {/* ── Transaction detail modal ─────────────────────────────────────────── */}
       <TransactionDetailModal

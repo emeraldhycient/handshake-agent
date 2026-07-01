@@ -351,7 +351,7 @@ describe('WhatsApp voice note — e2e (AppModule, Testcontainers Postgres)', () 
 
     const { PinService } = await import('../src/core/auth/pin.service');
     const pinService = moduleRef.get(PinService);
-    await pinService.setPin(userId, '123456');
+    await pinService.setPin(userId, '194837');
 
     await prisma.channelIdentity.create({
       data: {
@@ -460,7 +460,11 @@ describe('WhatsApp voice note — e2e (AppModule, Testcontainers Postgres)', () 
     // Assert the LLM received the transcript text
     // ───────────────────────────────────────────────────────────────────────
 
-    expect(fakeLlmProvider.extractIntent).toHaveBeenCalledWith(TRANSCRIPT);
+    // extractIntent now receives conversation history as a 2nd arg (multi-turn memory).
+    expect(fakeLlmProvider.extractIntent).toHaveBeenCalledWith(
+      TRANSCRIPT,
+      expect.any(Array),
+    );
 
     // ───────────────────────────────────────────────────────────────────────
     // Assert the sender dispatched a deposit-address reply (receive_crypto path)

@@ -1,11 +1,22 @@
 "use client"
 
+import { useQueryClient } from "@tanstack/react-query"
 import { AssetIcon } from "@/components/shared/asset-icon"
 import { Money } from "@/components/shared/money"
 import { StatusPill } from "@/components/shared/status-pill"
+import {
+  QueryErrorState,
+  QueryEmptyState,
+} from "@/components/shared/query-states"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useBalances, useWalletAssets, useActivity } from "@/lib/query/hooks"
+import {
+  useBalances,
+  useWalletAssets,
+  useActivityFeed,
+} from "@/lib/query/hooks"
+import { qk } from "@/lib/query/keys"
 import { useCapabilities } from "@/lib/query/capabilities"
+import { chipLabel } from "@/lib/chat/flow"
 import { cn } from "@/lib/utils"
 import type { ChatAction } from "@/lib/schemas"
 import type { PageWithQuickActionProps } from "@/types/components"
@@ -34,8 +45,25 @@ export function OverviewPage({
 }: PageWithQuickActionProps) {
   const balances = useBalances()
   const assets = useWalletAssets()
-  const activity = useActivity()
+  const activity = useActivityFeed()
+  const queryClient = useQueryClient()
   const { canSwap } = useCapabilities()
+
+  // Single retry that re-fetches all three sections. The activity feed hook
+  // (a useInfiniteQuery wrapper) exposes no `refetch`, so invalidation is the
+  // uniform path for every list on the page. Match by the key's first segment
+  // so all three of qk.balances / qk.walletAssets / qk.activity refetch.
+  const RETRY_KEYS: string[] = [
+    qk.balances[0],
+    qk.walletAssets[0],
+    qk.activity[0],
+  ]
+  const retryAll = () =>
+    void queryClient.invalidateQueries({
+      predicate: (q) =>
+        Array.isArray(q.queryKey) &&
+        RETRY_KEYS.includes(q.queryKey[0] as string),
+    })
   // Swap is hidden until the crypto.swap capability is enabled in /config.
   const heroActions = canSwap
     ? HERO_ACTIONS
@@ -69,21 +97,18 @@ export function OverviewPage({
       <div
         className={cn("flex flex-1 items-center justify-center p-6", className)}
       >
-        <div className="border-danger/20 bg-danger/5 rounded-[14px] border p-5 text-center">
-          <p className="text-danger text-sm font-semibold">
-            Failed to load overview
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Please refresh the page.
-          </p>
-        </div>
+        <QueryErrorState
+          title="Failed to load overview"
+          description="Something went wrong loading your wallet. Check your connection and try again."
+          onRetry={retryAll}
+        />
       </div>
     )
   }
 
   const balanceData = balances.data
   const assetData = assets.data ?? []
-  const activityData = activity.data ?? []
+  const activityData = activity.groups
 
   // ── Empty state ────────────────────────────────────────────────────────────
   if (!balanceData && assetData.length === 0 && activityData.length === 0) {
@@ -91,7 +116,10 @@ export function OverviewPage({
       <div
         className={cn("flex flex-1 items-center justify-center p-6", className)}
       >
-        <p className="text-sm text-muted-foreground">No data yet.</p>
+        <QueryEmptyState
+          title="Nothing here yet"
+          description="Fund your wallet to see your balance and activity."
+        />
       </div>
     )
   }
@@ -104,7 +132,7 @@ export function OverviewPage({
       )}
     >
       {/* ── Balance hero ────────────────────────────────────────────────────── */}
-      <div className="flex items-end gap-8 rounded-[18px] bg-gradient-to-b from-primary to-primary-deep px-[26px] py-6 text-primary-foreground">
+      <div className="flex flex-wrap items-end gap-x-8 gap-y-5 rounded-[18px] bg-gradient-to-b from-primary to-primary-deep px-[26px] py-6 text-primary-foreground">
         <div className="flex-1">
           <p className="text-[13px] font-semibold text-primary-foreground/70">
             Total balance
@@ -115,16 +143,19 @@ export function OverviewPage({
             className="mt-0.5 text-[40px] font-extrabold tracking-tight tabular-nums"
           />
         </div>
-        {/* Action buttons */}
+        {/* Action buttons. On the dark-green hero the secondary actions use a
+            translucent-on-green treatment (not the light-surface outline used on
+            the wallet header) so they read correctly against the gradient and
+            shrink to fit the row instead of overflowing. Primary stays accent. */}
         <div className="flex gap-[10px]">
           {heroActions.map(({ action, label, primary }) => (
             <button
               key={action}
               type="button"
               aria-label={label}
-              onClick={() => onQuickAction(action, label)}
+              onClick={() => onQuickAction(action, chipLabel(action))}
               className={cn(
-                "cursor-pointer rounded-[12px] px-5 py-[11px] text-sm font-bold transition-opacity hover:opacity-90",
+                "cursor-pointer rounded-[12px] px-5 py-[11px] text-sm font-bold transition-opacity outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary-foreground/80 focus-visible:ring-offset-2 focus-visible:ring-offset-primary",
                 primary
                   ? "bg-accent text-accent-foreground"
                   : "border border-primary-foreground/20 bg-primary-foreground/10 text-primary-foreground"
@@ -137,13 +168,14 @@ export function OverviewPage({
       </div>
 
       {/* ── Assets table ────────────────────────────────────────────────────── */}
+      {/* Finding #7: the Price and 24h columns had no backend source and were
+          permanently "—", reading as real-but-empty data. They're dropped until
+          a price-history endpoint exists; only columns we can fill are shown. */}
       <div className="overflow-hidden rounded-[18px] border border-border bg-card">
         {/* Table header */}
         <div className="flex items-center border-b border-border px-[22px] py-3.5 text-xs font-bold tracking-widest text-muted-foreground uppercase">
           <div className="flex-[2]">Asset</div>
           <div className="flex-[1.4] text-right">Holdings</div>
-          <div className="flex-[1.4] text-right">Price</div>
-          <div className="flex-[1] text-right">24h</div>
           <div className="flex-[1.4] text-right">Value</div>
         </div>
         {/* Table rows */}
@@ -156,7 +188,12 @@ export function OverviewPage({
             )}
           >
             <div className="flex flex-[2] items-center gap-3">
-              <AssetIcon sym={a.sym} tint={a.tint} size="sm" />
+              <AssetIcon
+                sym={a.sym}
+                tint={a.tint}
+                logoUrl={a.logoUrl}
+                size="sm"
+              />
               <div>
                 <p className="text-[14.5px] font-bold text-foreground">
                   {a.name}
@@ -168,19 +205,6 @@ export function OverviewPage({
               value={a.amount.split(" ")[0]}
               className="flex-[1.4] text-right text-sm text-foreground"
             />
-            <div className="flex-[1.4] text-right text-sm text-foreground tabular-nums">
-              —
-            </div>
-            <p
-              className={cn(
-                "flex-[1] text-right text-[13.5px] tabular-nums",
-                a.change.startsWith("+")
-                  ? "text-success"
-                  : "text-muted-foreground"
-              )}
-            >
-              {a.change}
-            </p>
             <Money
               value={a.value}
               className="flex-[1.4] text-right text-[14.5px] font-bold text-foreground"
@@ -195,9 +219,11 @@ export function OverviewPage({
           Recent activity
         </p>
         {activityData.flatMap((g) => g.items).length === 0 && (
-          <p className="flex-1 px-[22px] py-4 text-sm text-muted-foreground">
-            No recent activity.
-          </p>
+          <QueryEmptyState
+            className="flex-1"
+            title="No recent activity"
+            description="Your transactions will show up here."
+          />
         )}
         {activityData.flatMap((g) =>
           g.items.map((item, idx, arr) => (

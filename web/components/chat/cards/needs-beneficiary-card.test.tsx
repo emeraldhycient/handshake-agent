@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const useBeneficiaries = vi.fn()
 const addBankMutate = vi.fn()
 const addCryptoMutate = vi.fn()
+const deleteMutate = vi.fn()
 const useAddBankAccount = vi.fn(() => ({
   mutateAsync: addBankMutate,
   isPending: false,
@@ -16,10 +17,17 @@ const useAddCryptoAddress = vi.fn(() => ({
   isPending: false,
   isError: false,
 }))
+const useDeleteBeneficiary = vi.fn(() => ({
+  mutate: deleteMutate,
+  mutateAsync: deleteMutate,
+  isPending: false,
+  isError: false,
+}))
 vi.mock("@/lib/query/beneficiaries", () => ({
   useBeneficiaries: (...a: unknown[]) => useBeneficiaries(...a),
   useAddBankAccount: () => useAddBankAccount(),
   useAddCryptoAddress: () => useAddCryptoAddress(),
+  useDeleteBeneficiary: () => useDeleteBeneficiary(),
 }))
 
 import { NeedsBeneficiaryCard } from "./needs-beneficiary-card"
@@ -29,6 +37,7 @@ describe("NeedsBeneficiaryCard", () => {
     useBeneficiaries.mockReset()
     addBankMutate.mockReset()
     addCryptoMutate.mockReset()
+    deleteMutate.mockReset()
   })
 
   it("renders existing bank beneficiaries and resolves on select", async () => {
@@ -57,8 +66,13 @@ describe("NeedsBeneficiaryCard", () => {
       />
     )
 
-    await userEvent.click(screen.getByRole("button", { name: /My GTB/i }))
-    expect(onResolve).toHaveBeenCalledWith("ben-1")
+    // The select-row's accessible name includes the account number; the remove
+    // button is "Remove My GTB" — match the row specifically.
+    await userEvent.click(
+      screen.getByRole("button", { name: /My GTB0123456789/i })
+    )
+    // No messageId prop here → the second arg is undefined (legacy callers).
+    expect(onResolve).toHaveBeenCalledWith("ben-1", undefined)
   })
 
   it("shows the empty state when there are no saved destinations", () => {
@@ -78,13 +92,18 @@ describe("NeedsBeneficiaryCard", () => {
     expect(screen.getByText(/No saved addresses yet/i)).toBeInTheDocument()
   })
 
-  it("adds a bank account and resolves with the new id", async () => {
+  it("adds a bank account, confirms the resolved account name, then resolves", async () => {
     useBeneficiaries.mockReturnValue({
       isPending: false,
       isError: false,
       data: { beneficiaries: [] },
     })
-    addBankMutate.mockResolvedValue({ id: "new-ben" })
+    // The POST /bank-account response carries the server-resolved account holder
+    // name (name-enquiry). The card must show it and require explicit confirm.
+    addBankMutate.mockResolvedValue({
+      id: "new-ben",
+      accountHolderName: "ADA LOVELACE",
+    })
     const onResolve = vi.fn()
     render(
       <NeedsBeneficiaryCard
@@ -109,7 +128,84 @@ describe("NeedsBeneficiaryCard", () => {
       bankCode: "058",
       label: "My GTB",
     })
-    await waitFor(() => expect(onResolve).toHaveBeenCalledWith("new-ben"))
+
+    // The resolved name is shown and onResolve must NOT have fired yet — the
+    // user has to confirm the name belongs to them (funds-safety, prevents a
+    // typo paying a stranger).
+    expect(await screen.findByText(/ADA LOVELACE/)).toBeInTheDocument()
+    expect(onResolve).not.toHaveBeenCalled()
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /yes, that'?s correct/i })
+    )
+    await waitFor(() =>
+      expect(onResolve).toHaveBeenCalledWith("new-ben", undefined)
+    )
+  })
+
+  it("lets the user delete a saved beneficiary (DELETE mutation by id)", async () => {
+    useBeneficiaries.mockReturnValue({
+      isPending: false,
+      isError: false,
+      data: {
+        beneficiaries: [
+          {
+            id: "ben-del",
+            type: "bank_account",
+            label: "Stale GTB",
+            accountNumber: "0123456789",
+            bankCode: "058",
+          },
+        ],
+      },
+    })
+    render(
+      <NeedsBeneficiaryCard
+        kind="needs_beneficiary"
+        beneficiaryType="bank_account"
+        density="mobile"
+        onResolve={vi.fn()}
+      />
+    )
+
+    // Each saved row has a remove control labelled for accessibility.
+    await userEvent.click(
+      screen.getByRole("button", { name: /remove Stale GTB/i })
+    )
+    await waitFor(() => expect(deleteMutate).toHaveBeenCalledWith("ben-del"))
+  })
+
+  it("passes the card's messageId to onResolve so the right intent resumes", async () => {
+    useBeneficiaries.mockReturnValue({
+      isPending: false,
+      isError: false,
+      data: {
+        beneficiaries: [
+          {
+            id: "ben-1",
+            type: "bank_account",
+            label: "My GTB",
+            accountNumber: "0123456789",
+            bankCode: "058",
+          },
+        ],
+      },
+    })
+    const onResolve = vi.fn()
+    render(
+      <NeedsBeneficiaryCard
+        kind="needs_beneficiary"
+        beneficiaryType="bank_account"
+        density="mobile"
+        messageId="msg-42"
+        onResolve={onResolve}
+      />
+    )
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /My GTB0123456789/i })
+    )
+    expect(onResolve).toHaveBeenCalledWith("ben-1", "msg-42")
   })
 
   it("shows a loading branch while the list is pending", () => {

@@ -81,6 +81,7 @@ import {
   QuoteDriftError,
   ProviderUnavailableError,
   InsufficientBalanceError,
+  SwapUnavailableError,
 } from '../../transactions/domain/execution-errors';
 import {
   KycNotVerifiedError,
@@ -336,6 +337,16 @@ export class ProposalController {
         throw new ForbiddenException('Transaction not permitted');
       }
 
+      // Swap not available on this account (e.g. provider 404 / not enrolled) is a
+      // PERMANENT, non-retryable condition — surface a graceful 422, not a
+      // retryable 502 that invites the user to keep tapping Confirm. Must be
+      // checked BEFORE ProviderUnavailableError so it is not clobbered into a 502.
+      if (err instanceof SwapUnavailableError) {
+        throw new UnprocessableEntityException(
+          "Swap isn't available right now. Please try again later or contact support.",
+        );
+      }
+
       // External provider (Flutterwave / Blockradar) call failed → 502.
       // A transient provider outage must not surface as an opaque 500; return a
       // clear, retryable message. The engine has already logged the raw cause.
@@ -391,12 +402,14 @@ export class TransactionStatusController {
         typeof meta[k] === 'string' ? meta[k] : undefined;
       const counterparty =
         str('destination') ?? str('counterparty') ?? str('senderAddress');
+      // Deposits store the amount under `amount`; trades use `cryptoAmount`.
+      const cryptoAmt = str('cryptoAmount') ?? str('amount');
       return {
         id: t.id,
         type: t.type,
         status: t.status,
         ...(str('asset') ? { asset: str('asset') } : {}),
-        ...(str('cryptoAmount') ? { cryptoAmount: str('cryptoAmount') } : {}),
+        ...(cryptoAmt ? { cryptoAmount: cryptoAmt } : {}),
         ...(str('fiatAmount') ? { fiatAmount: str('fiatAmount') } : {}),
         ...(str('fiatCurrency') ? { fiatCurrency: str('fiatCurrency') } : {}),
         ...(counterparty ? { counterparty } : {}),
@@ -476,7 +489,9 @@ export class TransactionStatusController {
       ...(network !== undefined ? { network } : {}),
       ...(typeof meta.cryptoAmount === 'string'
         ? { cryptoAmount: meta.cryptoAmount }
-        : {}),
+        : typeof meta.amount === 'string'
+          ? { cryptoAmount: meta.amount }
+          : {}),
       ...(typeof meta.fiatAmount === 'string'
         ? { fiatAmount: meta.fiatAmount }
         : {}),

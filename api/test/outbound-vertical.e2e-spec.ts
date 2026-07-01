@@ -53,6 +53,8 @@ import type { INestApplication } from '@nestjs/common';
 // ConfigModule.forRoot(). They export only const symbols and interfaces.
 import { LLM_PROVIDER } from '../src/modules/agent/application/ports/agent.port';
 import { WALLET_PROVIDER } from '../src/modules/wallets/application/ports/wallet-provider.port';
+import { AssetRegistry } from '../src/core/catalog/asset-registry';
+import { seedRegistryAssets } from './helpers/seed-registry-assets';
 import { PAYMENT_PROVIDER } from '../src/modules/treasury/application/ports/payment-provider.port';
 import { WHATSAPP_SENDER } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.port';
@@ -437,6 +439,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
 
     app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();
+    seedRegistryAssets(app.get(AssetRegistry, { strict: false }));
 
     // 6. Seed: Tier-1 KYC-verified User + PIN + WhatsApp ChannelIdentity
     const user = await prisma.user.create({
@@ -446,7 +449,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
 
     const { PinService } = await import('../src/core/auth/pin.service');
     const pinService = moduleRef.get(PinService);
-    await pinService.setPin(userId, '123456');
+    await pinService.setPin(userId, '194837');
 
     await prisma.channelIdentity.create({
       data: {
@@ -693,7 +696,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
       screen: 'SELL_CONFIRM',
       flow_token: flowToken,
       data: {
-        pin: '123456',
+        pin: '194837',
         nonce: capturedNonce,
       },
     };
@@ -929,7 +932,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
       screen: 'SEND_CONFIRM',
       flow_token: flowToken,
       data: {
-        pin: '123456',
+        pin: '194837',
         nonce: capturedNonce,
       },
     };

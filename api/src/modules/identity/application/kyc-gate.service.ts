@@ -68,6 +68,17 @@ function buildDisplayName(
   return parts.length > 0 ? parts.join(' ') : null;
 }
 
+/**
+ * Originator attribution for the payment provider's customer object: the real
+ * KYC name plus a single resolved verified email. Any field may be null when the
+ * user has not yet captured it; callers substitute their own safe fallback.
+ */
+export interface OriginatorIdentity {
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+}
+
 export interface AssertCanTransactInput {
   userId: string;
   /**
@@ -128,6 +139,29 @@ export class KycGateService {
   }
 
   /**
+   * Returns the originator attribution (real KYC firstName/lastName + a single
+   * resolved verified email) for the payment provider's customer object on a
+   * fiat pay-in, so the virtual-account collection carries correct customer
+   * attribution for reconciliation/compliance.
+   *
+   * Email precedence (business rule): the KYC-captured `verifiedEmail` is the
+   * compliance-canonical address, so it wins; the OTP-verified login `email`
+   * is the fallback. Resolves all fields to null when the user row is absent so
+   * the caller can substitute its own safe placeholders.
+   */
+  async getOriginatorIdentity(userId: string): Promise<OriginatorIdentity> {
+    const record = await this.identityRepo.findOriginatorIdentity(userId);
+    if (record === null) {
+      return { firstName: null, lastName: null, email: null };
+    }
+    return {
+      firstName: record.firstName,
+      lastName: record.lastName,
+      email: record.verifiedEmail ?? record.email,
+    };
+  }
+
+  /**
    * Asserts the user is allowed to transact the given fiat amount.
    * Resolves (void) on success; throws a `GateError` subclass on any failure.
    */
@@ -170,7 +204,25 @@ export class KycGateService {
     const scaledTxAmount = toScaled(fiatAmount);
     const scaledPerTxMax = toScaled(String(tierLimits.perTxFiatMax));
 
-    // 4. Per-transaction amount check (BigInt-exact).
+    // 4a. Positive-amount guard — fail closed on a non-positive fiat-equivalent
+    // (finding #20). BUY/SELL are protected incidentally by the quote domain,
+    // but SEND/SWAP route their fiat-equivalent straight through this gate, so a
+    // zero/negative amount would otherwise pass BOTH the tier and velocity checks
+    // (and increment the velocity counters with a 0 contribution). The money gate
+    // must never pass a non-positive amount regardless of which path called it
+    // (§3.1 / §3.3). Reuse TierLimitExceededError so the global filter maps it to
+    // a clean 403 (a non-positive amount is not a permitted transaction value);
+    // requestedAmount carries the offending value, limitAmount the per-tx cap.
+    if (scaledTxAmount <= 0n) {
+      throw new TierLimitExceededError(
+        Number(fiatAmount),
+        tierLimits.perTxFiatMax,
+        user.kycTier,
+        fiatCurrency,
+      );
+    }
+
+    // 4b. Per-transaction amount check (BigInt-exact).
     if (scaledTxAmount > scaledPerTxMax) {
       // Expose the original values for the error payload; convert back to numbers
       // via Number() only for the error object (not for the comparison itself).

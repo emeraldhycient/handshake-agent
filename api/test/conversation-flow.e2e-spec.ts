@@ -145,6 +145,7 @@ const fakeAssetRegistry: AssetRegistry = {
   ),
   isAssetEnabled: jest.fn(() => true),
   isFiatEnabled: jest.fn(() => true),
+  isCurrencyLive: jest.fn((code: string) => code === 'NGN'),
   isNetworkEnabled: jest.fn(() => true),
   isCapabilityEnabled: jest.fn(() => true),
   requireCapability: jest.fn(),

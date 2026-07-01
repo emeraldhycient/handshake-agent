@@ -8,7 +8,6 @@
 import {
   balanceFixture,
   walletAssetsFixture,
-  activityFixture,
   depositFixture,
   eventsFixture,
   notificationsFixture,
@@ -18,7 +17,6 @@ import * as flow from "@/lib/chat/flow"
 import {
   BalanceViewSchema,
   WalletAssetSchema,
-  ActivityGroupSchema,
   DepositViewSchema,
   EventListItemSchema,
   AppNotificationSchema,
@@ -29,7 +27,6 @@ import {
 import type {
   BalanceView,
   WalletAsset,
-  ActivityGroup,
   DepositView,
   EventListItem,
   AppNotification,
@@ -37,10 +34,12 @@ import type {
   QuoteView,
   ReceiptView,
   ChatAction,
+  TransactionRow,
 } from "@/lib/schemas"
 import {
   PublicConfigResponseSchema,
   type PublicConfigResponse,
+  type TransactionListItem,
 } from "@handshake-agent/contracts"
 import { z } from "zod"
 
@@ -90,9 +89,56 @@ export async function getWalletAssets(): Promise<WalletAsset[]> {
   return z.array(WalletAssetSchema).parse(walletAssetsFixture)
 }
 
-export async function getActivity(): Promise<ActivityGroup[]> {
+export async function getActivityPage(): Promise<{
+  items: TransactionListItem[]
+  nextCursor: string | null
+}> {
+  // Single in-memory page. Timestamps are "now" so the hook's day-grouping
+  // labels them "Today" regardless of when the suite runs. The hook maps these
+  // raw items to display groups using the /config fiat symbols.
   await delay(250)
-  return z.array(ActivityGroupSchema).parse(activityFixture)
+  const now = new Date().toISOString()
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  const items: TransactionListItem[] = [
+    {
+      id: "act-today-1",
+      type: "buy",
+      status: "completed",
+      asset: "USDT",
+      cryptoAmount: "29.97",
+      fiatAmount: "50000",
+      fiatCurrency: "NGN",
+      createdAt: now,
+    },
+    {
+      id: "act-today-2",
+      type: "send",
+      status: "settling",
+      asset: "USDT",
+      cryptoAmount: "26.00",
+      counterparty: "TQn9YgkXgk7r",
+      createdAt: now,
+    },
+    {
+      id: "act-yest-1",
+      type: "deposit",
+      status: "completed",
+      asset: "USDT",
+      cryptoAmount: "12.00",
+      createdAt: yesterday,
+    },
+  ]
+  return { items, nextCursor: null }
+}
+
+export async function getTransactionHistoryPage(): Promise<{
+  rows: TransactionRow[]
+  hasMore: boolean
+  nextCursor: string | null
+}> {
+  // The mock fixture is a single page; there is never a next page to load.
+  await delay(150)
+  return { rows: [], hasMore: false, nextCursor: null }
 }
 
 export async function getDepositAddress(): Promise<DepositView> {

@@ -24,7 +24,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 
-import type { TransactionHistoryResponse } from '@handshake-agent/contracts';
+import {
+  TransactionHistoryQuerySchema,
+  type TransactionHistoryResponse,
+} from '@handshake-agent/contracts';
 
 import {
   JwtAuthGuard,
@@ -45,41 +48,59 @@ import {
 } from '../../transactions/application/ports/statement-generator.port';
 import { buildStatementModel } from '../../transactions/application/statement-model';
 
-const PERIODS = new Set([
-  'today',
-  'yesterday',
-  'this_week',
-  'last_week',
-  'this_month',
-  'last_month',
-  'all',
-]);
-const TX_TYPES = new Set(['buy', 'sell', 'send', 'receive', 'all']);
-
 @Controller('transactions/history')
 @UseGuards(JwtAuthGuard)
 export class TransactionHistoryController {
   constructor(private readonly history: TransactionHistoryService) {}
 
+  /**
+   * First page (named period / relative spec / explicit from-to date range) OR a
+   * keyset continuation. The presence of `cursor` is the discriminator: a cursor
+   * request carries the FROZEN absolute window (full ISO from/to) so a relative
+   * range ("today") cannot drift between page loads — the server skips
+   * resolveWindow for those. Query shape is validated by the shared Zod schema
+   * (no hand-rolled allow-lists); invalid input → 400.
+   */
   @Get()
   async get(
     @CurrentUser() user: AuthenticatedUser,
-    @Query('period') period?: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
-    @Query('txType') txType?: string,
+    @Query() rawQuery: Record<string, string | undefined>,
   ): Promise<TransactionHistoryResponse> {
-    if (period !== undefined && !PERIODS.has(period)) {
-      throw new BadRequestException('invalid period');
+    const parsed = TransactionHistoryQuerySchema.safeParse(rawQuery);
+    if (!parsed.success) {
+      throw new BadRequestException('Invalid transaction-history query');
     }
-    if (txType !== undefined && !TX_TYPES.has(txType)) {
-      throw new BadRequestException('invalid txType');
+    const q = parsed.data;
+
+    if (q.cursor) {
+      // Continuation page: the absolute (already-resolved) window is required so
+      // the keyset seek targets the same window page-1 used.
+      if (!q.from || !q.to) {
+        throw new BadRequestException('A cursor page requires from and to');
+      }
+      const from = new Date(q.from);
+      const to = new Date(q.to);
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+        throw new BadRequestException('Invalid from/to for a cursor page');
+      }
+      return this.history.queryPage({
+        userId: user.userId,
+        from,
+        to,
+        txType: q.txType ?? 'all',
+        cursor: q.cursor,
+        limit: q.limit,
+      });
     }
+
     return this.history.query(user.userId, {
-      period: period as never,
-      from,
-      to,
-      txType: txType as never,
+      period: q.period,
+      from: q.from,
+      to: q.to,
+      relativeAmount: q.relativeAmount,
+      relativeUnit: q.relativeUnit,
+      txType: q.txType,
+      limit: q.limit,
     });
   }
 }
@@ -112,7 +133,9 @@ export class StatementDownloadController {
 
     const from = new Date(payload.from);
     const to = new Date(payload.to);
-    const inner = await this.history.queryResolved({
+    // Full-range statement: gather EVERY row in the window (paged internally up
+    // to the statementMaxRows safety cap), not just the first page.
+    const inner = await this.history.queryAllInRange({
       userId: payload.userId,
       from,
       to,

@@ -56,6 +56,8 @@ function makeRepo(
     loadContact: jest.fn().mockResolvedValue(null),
     // findKycProfile: not used by IdentityService.resolveByChannel; stub returns null.
     findKycProfile: jest.fn().mockResolvedValue(null),
+    // findOriginatorIdentity: not used by IdentityService.resolveByChannel; stub returns null.
+    findOriginatorIdentity: jest.fn().mockResolvedValue(null),
     createContactWithChannelIdentity: jest.fn().mockResolvedValue({
       contact: baseContact(),
       channelIdentity: baseCI({ contactId: 'contact-id-1' }),

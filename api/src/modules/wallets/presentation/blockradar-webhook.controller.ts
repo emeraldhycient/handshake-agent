@@ -13,7 +13,11 @@
  *      + signed Receipt). deposited:false means duplicate txHash — 200, no receipt.
  *   5. deposited:true → resolve WhatsApp address (IdentityService) + sendText receipt
  *      referencing the receiptNumber from the signed Receipt.
- *   6. ALWAYS respond 200 except 401. Downstream errors swallowed + logged.
+ *   6. Respond 200 on a genuinely-processed outcome (credited, idempotent
+ *      duplicate, or a deliberate non-credit ack). A *settlement* failure
+ *      (settleDepositAtomic throws) → 503 so Blockradar retries the webhook
+ *      (idempotent on txHash — never double-credits). Invalid signature → 401.
+ *      Receipt-send errors are best-effort: swallowed + logged, never a 5xx.
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -29,6 +33,7 @@ import {
   Logger,
   Post,
   Req,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
@@ -48,6 +53,7 @@ import {
 import {
   DEPOSIT_SETTLEMENT_REPOSITORY,
   type IDepositSettlementRepository,
+  type SettleDepositAtomicOutput,
 } from '../application/ports/deposit-settlement.repository.port';
 
 // ---------------------------------------------------------------------------
@@ -427,7 +433,18 @@ export class BlockradarWebhookController {
 
   /**
    * Resolves wallet, atomically settles the deposit, and — if deposited — sends
-   * the WhatsApp receipt. All errors are caught and logged so the 200 ack holds.
+   * the WhatsApp receipt.
+   *
+   * Funds-safety (CLAUDE.md §3.1): a *settlement* failure (settleDepositAtomic
+   * throws on misconfig/DB/transient error, e.g. ReceiptNotSignableError) must
+   * NOT be acked 200 — that would tell Blockradar the deposit is processed and
+   * it would never retry, silently losing the credit. We rethrow as a retryable
+   * 503 so Blockradar redelivers the webhook. Deliberate non-credit outcomes
+   * (wallet not found, network mismatch, unsupported asset) and the idempotent
+   * duplicate (`deposited:false`) are genuinely processed → return (200).
+   *
+   * The *receipt-send* step is best-effort and already swallows its own errors
+   * (sendReceipt) — the money has moved, so a notify failure never forces a retry.
    */
   private async settleAndNotify(params: {
     hash: string;
@@ -439,56 +456,58 @@ export class BlockradarWebhookController {
     senderAddress?: string;
     postedAt: Date;
   }): Promise<void> {
-    try {
-      // ── 3. Resolve wallet by address ───────────────────────────────────────
-      const wallet = await this.walletRepo.findByAddress(
-        params.recipientAddress,
+    // ── 3. Resolve wallet by address ─────────────────────────────────────────
+    const wallet = await this.walletRepo.findByAddress(params.recipientAddress);
+
+    if (!wallet) {
+      this.logger.warn(
+        { recipientAddress: params.recipientAddress },
+        'Blockradar webhook: no wallet found for address — ignoring',
       );
+      return;
+    }
 
-      if (!wallet) {
-        this.logger.warn(
-          { recipientAddress: params.recipientAddress },
-          'Blockradar webhook: no wallet found for address — ignoring',
-        );
-        return;
-      }
+    // ── 3a. Network mismatch guard (WN-4) ───────────────────────────────────
+    // The per-network wallet has a `network` field set at creation time.
+    // If the payload's network name doesn't match, ack without credit —
+    // a cross-network attribution error must never be silently credited.
+    if (
+      params.networkName !== undefined &&
+      params.networkName !== wallet.network
+    ) {
+      this.logger.warn(
+        {
+          payloadNetwork: params.networkName,
+          walletNetwork: wallet.network,
+          recipientAddress: params.recipientAddress,
+        },
+        'Blockradar webhook: payload network does not match wallet.network — acking without credit',
+      );
+      return;
+    }
 
-      // ── 3a. Network mismatch guard (WN-4) ─────────────────────────────────
-      // The per-network wallet has a `network` field set at creation time.
-      // If the payload's network name doesn't match, ack without credit —
-      // a cross-network attribution error must never be silently credited.
-      if (
-        params.networkName !== undefined &&
-        params.networkName !== wallet.network
-      ) {
-        this.logger.warn(
-          {
-            payloadNetwork: params.networkName,
-            walletNetwork: wallet.network,
-            recipientAddress: params.recipientAddress,
-          },
-          'Blockradar webhook: payload network does not match wallet.network — acking without credit',
-        );
-        return;
-      }
+    // ── 3b. Asset guard — only credit enabled/known assets (WN-2) ───────────
+    // A per-network address receives ANY token on its chain. If the deposited
+    // asset is not registered/enabled in the catalog, log and ack — do NOT
+    // credit an unknown token to the ledger (no crash, no credit).
+    if (!this.assetRegistry.isAssetEnabled(params.assetSymbol)) {
+      this.logger.warn(
+        {
+          assetSymbol: params.assetSymbol,
+          recipientAddress: params.recipientAddress,
+        },
+        'Blockradar webhook: deposited asset not supported in catalog — ignoring deposit',
+      );
+      return;
+    }
 
-      // ── 3b. Asset guard — only credit enabled/known assets (WN-2) ─────────
-      // A per-network address receives ANY token on its chain. If the deposited
-      // asset is not registered/enabled in the catalog, log and ack — do NOT
-      // credit an unknown token to the ledger (no crash, no credit).
-      if (!this.assetRegistry.isAssetEnabled(params.assetSymbol)) {
-        this.logger.warn(
-          {
-            assetSymbol: params.assetSymbol,
-            recipientAddress: params.recipientAddress,
-          },
-          'Blockradar webhook: deposited asset not supported in catalog — ignoring deposit',
-        );
-        return;
-      }
-
-      // ── 4. Atomic settlement ───────────────────────────────────────────────
-      const result = await this.settlementRepo.settleDepositAtomic({
+    // ── 4. Atomic settlement ─────────────────────────────────────────────────
+    // A throw here is a genuine settlement FAILURE — propagate it so the caller
+    // returns 5xx and Blockradar retries (settleDepositAtomic is idempotent on
+    // txHash, so a redelivery never double-credits).
+    let result: SettleDepositAtomicOutput;
+    try {
+      result = await this.settlementRepo.settleDepositAtomic({
         walletId: wallet.id,
         userId: wallet.userId,
         cryptoAmount: params.amount,
@@ -498,33 +517,38 @@ export class BlockradarWebhookController {
         providerWebhookId: params.webhookId,
         postedAt: params.postedAt,
       });
-
-      if (!result.deposited) {
-        this.logger.log(
-          { txHash: params.hash },
-          'Blockradar webhook: duplicate txHash — already credited, skipping',
-        );
-        return;
-      }
-
-      // ── 5. Send WhatsApp receipt ───────────────────────────────────────────
-      // WN-4: params.networkName may be undefined when the payload omitted it;
-      // fall back to wallet.network for the human-readable receipt copy.
-      await this.sendReceipt({
-        userId: wallet.userId,
-        assetSymbol: params.assetSymbol,
-        networkName: params.networkName ?? wallet.network,
-        amount: params.amount,
-        newBalance: result.newBalance ?? params.amount,
-        txHash: params.hash,
-        receiptNumber: result.receiptNumber,
-      });
     } catch (err: unknown) {
       this.logger.error(
         { err, params },
-        'Blockradar webhook: processing error — acking 200 anyway',
+        'Blockradar webhook: settlement failed — returning 503 so Blockradar retries',
+      );
+      throw new ServiceUnavailableException(
+        'Deposit settlement failed — please retry',
       );
     }
+
+    if (!result.deposited) {
+      this.logger.log(
+        { txHash: params.hash },
+        'Blockradar webhook: duplicate txHash — already credited, skipping',
+      );
+      return;
+    }
+
+    // ── 5. Send WhatsApp receipt ─────────────────────────────────────────────
+    // WN-4: params.networkName may be undefined when the payload omitted it;
+    // fall back to wallet.network for the human-readable receipt copy.
+    // sendReceipt swallows its own errors — the deposit is already settled, so a
+    // notify failure must NOT force a 5xx (avoids a credited deposit re-firing).
+    await this.sendReceipt({
+      userId: wallet.userId,
+      assetSymbol: params.assetSymbol,
+      networkName: params.networkName ?? wallet.network,
+      amount: params.amount,
+      newBalance: result.newBalance ?? params.amount,
+      txHash: params.hash,
+      receiptNumber: result.receiptNumber,
+    });
   }
 
   /**

@@ -10,6 +10,7 @@ import {
   buildReceipt,
   startChips,
   chipLabel,
+  actionPrompt,
   assistantText,
 } from "./flow"
 
@@ -380,13 +381,59 @@ describe("flow", () => {
 
   it("startChips + labels", () => {
     expect(startChips()).toEqual(["buy", "balance", "send", "ticket"])
-    expect(chipLabel("buy")).toBe("Buy ₦50,000 of USDT")
+    // Amount-free open prompt — the agent asks for the amount.
+    expect(chipLabel("buy")).toBe("Buy USDT")
   })
 
-  it("chip labels for all 4 start chips", () => {
-    expect(chipLabel("buy")).toBe("Buy ₦50,000 of USDT")
+  it("chip labels for all 4 start chips are amount-free", () => {
+    expect(chipLabel("buy")).toBe("Buy USDT")
     expect(chipLabel("balance")).toBe("Check my balance")
-    expect(chipLabel("send")).toBe("Send 25 USDT")
+    expect(chipLabel("send")).toBe("Send USDT")
     expect(chipLabel("ticket")).toBe("Buy an event ticket")
+    // No chip carries a hardcoded amount.
+    for (const a of ["buy", "sell", "send", "swap"] as const) {
+      expect(chipLabel(a)).not.toMatch(/[₦$]|\d/)
+    }
+  })
+
+  // ─── Finding #6: swap chip is crypto-to-crypto, not a disguised sell ─────────
+
+  it("swap chip label is a real crypto-to-crypto swap, never 'to naira' (which is a sell)", () => {
+    const label = chipLabel("swap")
+    expect(label.toLowerCase()).not.toContain("naira")
+    expect(label.toLowerCase()).not.toContain("₦")
+    // It expresses a crypto→crypto conversion (USDT → TRX).
+    expect(label).toMatch(/USDT/)
+    expect(label).toMatch(/TRX/)
+  })
+
+  // ─── Finding #6: actionPrompt — amount-free open prompts for the live agent ──
+
+  it("actionPrompt returns an amount-free open prompt per action", () => {
+    expect(actionPrompt("buy")).toBe("I'd like to buy USDT")
+    expect(actionPrompt("sell")).toBe("I'd like to sell USDT")
+    expect(actionPrompt("send")).toBe("I'd like to send USDT")
+    expect(actionPrompt("swap")).toBe("I'd like to swap USDT to TRX")
+    expect(actionPrompt("balance")).toBe("What's my balance?")
+    expect(actionPrompt("receive")).toBe("Show my deposit address")
+    expect(actionPrompt("ticket")).toBe("I'd like to buy an event ticket")
+  })
+
+  it("actionPrompt carries NO hardcoded fiat amount or naira figure", () => {
+    for (const a of [
+      "buy",
+      "sell",
+      "send",
+      "swap",
+      "balance",
+      "receive",
+      "ticket",
+    ] as const) {
+      const p = actionPrompt(a)
+      expect(p).not.toMatch(/₦/)
+      expect(p).not.toMatch(/50,?000/)
+      // No bare standalone digit-run that would be a hardcoded amount.
+      expect(p).not.toMatch(/\b\d{2,}\b/)
+    }
   })
 })

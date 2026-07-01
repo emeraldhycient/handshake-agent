@@ -27,6 +27,18 @@ import {
 
 export interface QueryTransactionsSpec extends QueryWindowSpec {
   txType?: 'buy' | 'sell' | 'send' | 'receive' | 'all';
+  /** Client-requested page size; clamped to [1, maxPageSize], defaults to defaultPageSize. */
+  limit?: number;
+}
+
+/** A frozen, already-resolved window page request (load-more continuation). */
+export interface QueryPageInput {
+  userId: string;
+  from: Date;
+  to: Date;
+  txType: string;
+  cursor?: string;
+  limit?: number;
 }
 
 const TYPE_FILTER_MAP: Record<string, string[]> = {
@@ -51,7 +63,7 @@ export class TransactionHistoryService {
     private readonly tokens: StatementTokenService,
   ) {}
 
-  /** Resolve the window from a spec, then read + map. Used by web + WhatsApp. */
+  /** Resolve the window from a spec, then read the first page. Used by web + WhatsApp. */
   async query(
     userId: string,
     spec: QueryTransactionsSpec,
@@ -62,35 +74,124 @@ export class TransactionHistoryService {
       timezoneOffsetMinutes: cfg.timezoneOffsetMinutes,
     });
     const txType = spec.txType ?? 'all';
-    const inner = await this.queryResolved({
+    return this.buildPage({
       userId,
       from: window.from,
       to: window.to,
+      label: window.label,
       txType,
+      limit: spec.limit,
+    });
+  }
+
+  /**
+   * Next keyset page of an ALREADY-RESOLVED (frozen) window. The chat card calls
+   * this on "Show more" with the page-1 window.from/window.to so a relative range
+   * ("today") cannot drift between page loads (the server never re-resolves it).
+   */
+  async queryPage(input: QueryPageInput): Promise<TransactionHistoryResponse> {
+    const fromDay = input.from.toISOString().slice(0, 10);
+    const toDay = input.to.toISOString().slice(0, 10);
+    return this.buildPage({
+      userId: input.userId,
+      from: input.from,
+      to: input.to,
+      label: `${fromDay} – ${toDay}`,
+      txType: input.txType,
+      cursor: input.cursor,
+      limit: input.limit,
+    });
+  }
+
+  /** Read one keyset page + map it, then wrap it in the full response envelope. */
+  private async buildPage(input: {
+    userId: string;
+    from: Date;
+    to: Date;
+    label: string;
+    txType: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<TransactionHistoryResponse> {
+    const inner = await this.queryResolved({
+      userId: input.userId,
+      from: input.from,
+      to: input.to,
+      txType: input.txType,
+      cursor: input.cursor,
+      limit: this.resolvePageSize(input.limit),
     });
 
     const token = this.tokens.sign({
-      userId,
-      from: window.from.toISOString(),
-      to: window.to.toISOString(),
-      txType,
+      userId: input.userId,
+      from: input.from.toISOString(),
+      to: input.to.toISOString(),
+      txType: input.txType,
     });
 
     return {
       window: {
-        from: window.from.toISOString(),
-        to: window.to.toISOString(),
-        label: window.label,
+        from: input.from.toISOString(),
+        to: input.to.toISOString(),
+        label: input.label,
       },
       items: inner.items,
       totalCount: inner.totalCount,
       truncated: inner.truncated,
+      hasMore: inner.hasMore,
+      nextCursor: inner.nextCursor,
+      txType: input.txType,
       downloadUrl: this.tokens.buildDownloadUrl(token),
     };
   }
 
-  /** Read + map for an already-resolved window (used by the signed download path). */
+  /**
+   * Read + map a single keyset page for an already-resolved window. Returns the
+   * mapped items plus pagination metadata. `limit` defaults to the hard page cap.
+   */
   async queryResolved(input: {
+    userId: string;
+    from: Date;
+    to: Date;
+    txType: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<{
+    items: TransactionHistoryItem[];
+    totalCount: number;
+    truncated: boolean;
+    hasMore: boolean;
+    nextCursor: string | null;
+  }> {
+    const cfg = this.config.get<StatementConfig>('statement')!;
+    const types = TYPE_FILTER_MAP[input.txType] ?? ALL_MONEY_TYPES;
+
+    const { rows, total, hasMore, nextCursor } =
+      await this.txRepo.listByUserInRange({
+        userId: input.userId,
+        from: input.from,
+        to: input.to,
+        types,
+        limit: input.limit ?? cfg.maxPageSize,
+        cursor: input.cursor,
+      });
+
+    const items = await Promise.all(rows.map((r) => this.toItem(r)));
+    return {
+      items,
+      totalCount: total,
+      truncated: total > items.length,
+      hasMore,
+      nextCursor,
+    };
+  }
+
+  /**
+   * Gather EVERY row in a window for the full-range PDF statement, paging the
+   * keyset cursor until exhausted or the `statementMaxRows` safety cap is hit.
+   * `truncated` is true when the cap trimmed the statement.
+   */
+  async queryAllInRange(input: {
     userId: string;
     from: Date;
     to: Date;
@@ -101,18 +202,39 @@ export class TransactionHistoryService {
     truncated: boolean;
   }> {
     const cfg = this.config.get<StatementConfig>('statement');
-    const types = TYPE_FILTER_MAP[input.txType] ?? ALL_MONEY_TYPES;
+    const items: TransactionHistoryItem[] = [];
+    let total = 0;
+    let cursor: string | undefined;
 
-    const { rows, total } = await this.txRepo.listByUserInRange({
-      userId: input.userId,
-      from: input.from,
-      to: input.to,
-      types,
-      limit: cfg.rowCap,
-    });
+    for (;;) {
+      const page = await this.queryResolved({
+        userId: input.userId,
+        from: input.from,
+        to: input.to,
+        txType: input.txType,
+        limit: cfg.maxPageSize,
+        cursor,
+      });
+      total = page.totalCount;
+      items.push(...page.items);
+      if (
+        !page.hasMore ||
+        page.nextCursor === null ||
+        items.length >= cfg.statementMaxRows
+      ) {
+        break;
+      }
+      cursor = page.nextCursor;
+    }
 
-    const items = await Promise.all(rows.map((r) => this.toItem(r)));
-    return { items, totalCount: total, truncated: total > rows.length };
+    return { items, totalCount: total, truncated: items.length < total };
+  }
+
+  /** Clamp a client-requested page size into [1, maxPageSize]; default when absent. */
+  private resolvePageSize(requested?: number): number {
+    const cfg = this.config.get<StatementConfig>('statement')!;
+    const n = requested ?? cfg.defaultPageSize;
+    return Math.min(Math.max(n, 1), cfg.maxPageSize);
   }
 
   private async toItem(
@@ -120,8 +242,15 @@ export class TransactionHistoryService {
   ): Promise<TransactionHistoryItem> {
     const meta = row.metadata;
     const asset = typeof meta.asset === 'string' ? meta.asset : undefined;
+    // Deposits (and other inflows) store the amount under `amount`; buy/sell/
+    // send/swap use `cryptoAmount`. Read both so deposit rows show their amount
+    // instead of a blank — verified: deposit metadata is { asset, amount, ... }.
     const cryptoRaw =
-      typeof meta.cryptoAmount === 'string' ? meta.cryptoAmount : undefined;
+      typeof meta.cryptoAmount === 'string'
+        ? meta.cryptoAmount
+        : typeof meta.amount === 'string'
+          ? meta.amount
+          : undefined;
     const fiatRaw =
       typeof meta.fiatAmount === 'string' ? meta.fiatAmount : undefined;
     const fiatCurrency =

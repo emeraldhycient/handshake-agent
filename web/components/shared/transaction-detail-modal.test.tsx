@@ -201,7 +201,7 @@ describe("TransactionDetailModal", () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByText("Receipt")).toBeInTheDocument()
+      expect(screen.getByText("Receipt number")).toBeInTheDocument()
       expect(screen.getByText("HS-2026-000042")).toBeInTheDocument()
     })
   })
@@ -228,6 +228,121 @@ describe("TransactionDetailModal", () => {
     })
   })
 
+  it("renders the tx hash as an explorer link for a known network", async () => {
+    vi.spyOn(chatApi, "getTransactionDetail").mockResolvedValue(depositDetail)
+
+    render(
+      <TransactionDetailModal
+        transactionId="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        onClose={vi.fn()}
+      />,
+      { wrapper: makeWrapper() }
+    )
+
+    await waitFor(() => expect(screen.getByText("Tx hash")).toBeInTheDocument())
+
+    const link = screen.getByRole("link", { name: /view on explorer/i })
+    expect(link).toHaveAttribute(
+      "href",
+      `https://tronscan.org/#/transaction/${depositDetail.txHash}`
+    )
+    expect(link).toHaveAttribute("target", "_blank")
+    expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"))
+    // Copy still available alongside the link.
+    expect(
+      screen.getByRole("button", { name: /copy tx hash/i })
+    ).toBeInTheDocument()
+  })
+
+  it("renders the tx hash as plain text (no link) for an unknown network", async () => {
+    vi.spyOn(chatApi, "getTransactionDetail").mockResolvedValue({
+      ...depositDetail,
+      network: "ethereum",
+    })
+
+    render(
+      <TransactionDetailModal
+        transactionId="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        onClose={vi.fn()}
+      />,
+      { wrapper: makeWrapper() }
+    )
+
+    await waitFor(() => expect(screen.getByText("Tx hash")).toBeInTheDocument())
+
+    expect(
+      screen.queryByRole("link", { name: /view on explorer/i })
+    ).not.toBeInTheDocument()
+    // Copy is still present.
+    expect(
+      screen.getByRole("button", { name: /copy tx hash/i })
+    ).toBeInTheDocument()
+  })
+
+  it("renders internal reference rows (transaction id, provider ref) when present", async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      writable: true,
+    })
+    vi.spyOn(chatApi, "getTransactionDetail").mockResolvedValue({
+      ...depositDetail,
+      payment: {
+        accountNumber: "0123456789",
+        bankName: "Test Bank",
+        providerRef: "FLW-REF-999",
+        amount: "19800",
+        currency: "NGN",
+      },
+    })
+
+    render(
+      <TransactionDetailModal
+        transactionId="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        onClose={vi.fn()}
+      />,
+      { wrapper: makeWrapper() }
+    )
+
+    await waitFor(() =>
+      expect(screen.getByText("Transaction ID")).toBeInTheDocument()
+    )
+
+    // Internal transaction id row — copy carries the FULL (untruncated) id.
+    const copyIdBtn = screen.getByRole("button", {
+      name: /copy transaction id/i,
+    })
+    await user.click(copyIdBtn)
+    expect(writeText).toHaveBeenCalledWith(depositDetail.id)
+
+    // Provider reference, copyable.
+    expect(screen.getByText("Provider reference")).toBeInTheDocument()
+    expect(screen.getByText("FLW-REF-999")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: /copy provider reference/i })
+    ).toBeInTheDocument()
+  })
+
+  it("omits the provider reference row when no provider ref is present", async () => {
+    // depositDetail has no payment block → no provider ref.
+    vi.spyOn(chatApi, "getTransactionDetail").mockResolvedValue(depositDetail)
+
+    render(
+      <TransactionDetailModal
+        transactionId="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        onClose={vi.fn()}
+      />,
+      { wrapper: makeWrapper() }
+    )
+
+    await waitFor(() =>
+      expect(screen.getByText("Transaction ID")).toBeInTheDocument()
+    )
+
+    expect(screen.queryByText("Provider reference")).not.toBeInTheDocument()
+  })
+
   it("copies the tx hash to clipboard when the copy button is clicked", async () => {
     const user = userEvent.setup()
     vi.spyOn(chatApi, "getTransactionDetail").mockResolvedValue(depositDetail)
@@ -251,5 +366,43 @@ describe("TransactionDetailModal", () => {
     await user.click(copyButton)
 
     expect(writeText).toHaveBeenCalledWith(depositDetail.txHash)
+  })
+})
+
+describe("TransactionDetailModal — status tone (finding: FAILED is danger-red)", () => {
+  async function renderWithStatus(status: TransactionStatusResponse["status"]) {
+    vi.spyOn(chatApi, "getTransactionDetail").mockResolvedValue({
+      ...depositDetail,
+      status,
+    })
+    render(
+      <TransactionDetailModal
+        transactionId="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        onClose={vi.fn()}
+      />,
+      { wrapper: makeWrapper() }
+    )
+  }
+
+  it("renders the 'Failed' status pill on the danger palette, never neutral", async () => {
+    await renderWithStatus("failed")
+    const pill = await screen.findByText("Failed")
+    expect(pill).toHaveClass("text-danger")
+    expect(pill).toHaveClass("bg-danger-muted")
+    expect(pill).not.toHaveClass("text-muted-foreground")
+  })
+
+  it("renders a 'Rolled back' status pill on the danger palette", async () => {
+    await renderWithStatus("rolled_back")
+    const pill = await screen.findByText("Rolled back")
+    expect(pill).toHaveClass("text-danger")
+    expect(pill).not.toHaveClass("text-muted-foreground")
+  })
+
+  it("keeps a completed status on the success palette", async () => {
+    await renderWithStatus("completed")
+    const pill = await screen.findByText("Completed")
+    expect(pill).toHaveClass("text-success")
+    expect(pill).not.toHaveClass("text-danger")
   })
 })

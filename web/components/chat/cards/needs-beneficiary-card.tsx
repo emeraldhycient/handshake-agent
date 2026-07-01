@@ -4,14 +4,21 @@
  * NeedsBeneficiaryCard — inline add/select payout-destination UI.
  *
  * Rendered when a sell (bank account) or send (crypto address) needs a saved
- * beneficiary the user doesn't have yet. The user can pick an existing one or
- * add a new one; on resolve, `onResolve(beneficiaryId)` re-asks the agent so
- * the sell/send proposal can be created.
+ * beneficiary the user doesn't have yet. The user can pick an existing one,
+ * remove a stale one, or add a new one; on resolve, `onResolve(beneficiaryId,
+ * messageId)` re-asks the agent so the sell/send proposal can be created.
+ *
+ * Funds-safety: for a NEW bank account the card shows the server-resolved
+ * account-holder name (name-enquiry) and requires an explicit "Yes, that's
+ * correct" before resolving — a typo'd account paying a stranger is the most
+ * expensive beneficiary mistake, so the confirm is mandatory, not optional.
  *
  * Strict layering: pure UI + lib hooks only (no fetch/axios here).
  *   - List: useBeneficiaries (TanStack Query) — loading/error/empty/data branches.
  *   - Add: react-hook-form + zodResolver(contracts schema) + add mutations.
+ *   - Delete: useDeleteBeneficiary.
  */
+import { useState } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import {
@@ -19,6 +26,7 @@ import {
   AddCryptoAddressRequestSchema,
   type AddBankAccountRequest,
   type AddCryptoAddressRequest,
+  type Beneficiary,
   NIGERIAN_BANKS,
   bankNameForCode,
 } from "@handshake-agent/contracts/beneficiaries"
@@ -30,11 +38,13 @@ import {
   useBeneficiaries,
   useAddBankAccount,
   useAddCryptoAddress,
+  useDeleteBeneficiary,
 } from "@/lib/query/beneficiaries"
 import type { NeedsBeneficiaryCardProps } from "@/types/components"
 
 export function NeedsBeneficiaryCard({
   beneficiaryType,
+  messageId,
   onResolve,
   density,
   className,
@@ -43,6 +53,10 @@ export function NeedsBeneficiaryCard({
   const isBank = beneficiaryType === "bank_account"
 
   const list = useBeneficiaries(beneficiaryType)
+  const del = useDeleteBeneficiary()
+
+  // Bind onResolve to this card's id so the right pending intent resumes.
+  const resolve = (beneficiaryId: string) => onResolve(beneficiaryId, messageId)
 
   return (
     <div
@@ -84,22 +98,36 @@ export function NeedsBeneficiaryCard({
         ) : list.data && list.data.beneficiaries.length > 0 ? (
           <ul className="flex flex-col gap-2">
             {list.data.beneficiaries.map((b) => (
-              <li key={b.id}>
+              <li key={b.id} className="flex items-stretch gap-2">
                 <button
                   type="button"
-                  onClick={() => onResolve(b.id)}
+                  onClick={() => resolve(b.id)}
                   className={cn(
-                    "flex w-full items-center justify-between rounded-[12px] border border-border",
+                    "flex min-w-0 flex-1 items-center justify-between rounded-[12px] border border-border",
                     "bg-background px-3 py-2.5 text-left text-[13.5px] text-foreground",
                     "transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                   )}
                 >
-                  <span className="font-medium">{b.label}</span>
-                  <span className="text-[12px] text-muted-foreground">
+                  <span className="truncate font-medium">{b.label}</span>
+                  <span className="ml-2 shrink-0 text-[12px] text-muted-foreground">
                     {isBank
                       ? `${b.accountNumber ?? ""} · ${b.bankCode ? (bankNameForCode(b.bankCode) ?? b.bankCode) : ""}`
                       : truncateMiddle(b.cryptoAddress ?? "")}
                   </span>
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Remove ${b.label}`}
+                  disabled={del.isPending}
+                  onClick={() => del.mutate(b.id)}
+                  className={cn(
+                    "flex w-10 shrink-0 items-center justify-center rounded-[12px] border border-border",
+                    "bg-background text-muted-foreground transition-colors",
+                    "hover:bg-muted hover:text-danger focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                    "disabled:opacity-50"
+                  )}
+                >
+                  <RemoveIcon />
                 </button>
               </li>
             ))}
@@ -108,6 +136,11 @@ export function NeedsBeneficiaryCard({
           <p className="text-[13px] text-muted-foreground">
             No saved {isBank ? "bank accounts" : "addresses"} yet — add your
             first below.
+          </p>
+        )}
+        {del.isError && (
+          <p className="pt-2 text-[12px] text-warn" role="alert">
+            Couldn&apos;t remove that destination. Please try again.
           </p>
         )}
       </div>
@@ -120,18 +153,18 @@ export function NeedsBeneficiaryCard({
       {/* Add form */}
       <div className={cn(isMobile ? "px-4 py-3.5" : "px-[15px] py-[13px]")}>
         {isBank ? (
-          <AddBankForm onAdded={onResolve} />
+          <AddBankForm onResolve={resolve} />
         ) : (
-          <AddCryptoForm onAdded={onResolve} />
+          <AddCryptoForm onResolve={resolve} />
         )}
       </div>
     </div>
   )
 }
 
-// ─── Bank add form ────────────────────────────────────────────────────────────
+// ─── Bank add form (with account-name confirmation) ───────────────────────────
 
-function AddBankForm({ onAdded }: { onAdded: (id: string) => void }) {
+function AddBankForm({ onResolve }: { onResolve: (id: string) => void }) {
   const {
     register,
     handleSubmit,
@@ -141,13 +174,62 @@ function AddBankForm({ onAdded }: { onAdded: (id: string) => void }) {
   })
   const add = useAddBankAccount()
 
+  // After a successful add the server returns the name-enquiry result; hold it
+  // here so the user can confirm the resolved name before we resume the sell.
+  const [added, setAdded] = useState<Beneficiary | null>(null)
+
   async function onSubmit(values: AddBankAccountRequest) {
     try {
       const created = await add.mutateAsync(values)
-      onAdded(created.id)
+      setAdded(created)
     } catch {
       // Surfaced via add.error below — never silently dropped.
     }
+  }
+
+  // ── Confirm step: show the server-resolved account holder name ──────────────
+  if (added) {
+    return (
+      <div
+        className="flex flex-col gap-2.5"
+        role="group"
+        aria-label="Confirm account name"
+      >
+        <p className="text-[12px] font-medium text-muted-foreground">
+          We found this account — is this you?
+        </p>
+        <div className="rounded-[12px] border border-border bg-background px-3 py-2.5">
+          <p className="text-[14px] font-semibold text-foreground">
+            {added.accountHolderName ?? added.label}
+          </p>
+          <p className="pt-0.5 text-[12px] text-muted-foreground">
+            {added.accountNumber ?? ""}
+            {added.bankCode
+              ? ` · ${bankNameForCode(added.bankCode) ?? added.bankCode}`
+              : ""}
+          </p>
+        </div>
+        <p className="text-[11.5px] text-muted-foreground">
+          Money sent to the wrong account can&apos;t be recovered — confirm the
+          name matches before continuing.
+        </p>
+        <Button
+          type="button"
+          onClick={() => onResolve(added.id)}
+          className="mt-1"
+        >
+          Yes, that&apos;s correct
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setAdded(null)}
+          className="mt-0.5"
+        >
+          No, re-enter details
+        </Button>
+      </div>
+    )
   }
 
   return (
@@ -197,7 +279,7 @@ function AddBankForm({ onAdded }: { onAdded: (id: string) => void }) {
 
 // ─── Crypto add form ────────────────────────────────────────────────────────────
 
-function AddCryptoForm({ onAdded }: { onAdded: (id: string) => void }) {
+function AddCryptoForm({ onResolve }: { onResolve: (id: string) => void }) {
   const {
     register,
     handleSubmit,
@@ -212,7 +294,7 @@ function AddCryptoForm({ onAdded }: { onAdded: (id: string) => void }) {
   async function onSubmit(values: AddCryptoAddressRequest) {
     try {
       const created = await add.mutateAsync(values)
-      onAdded(created.id)
+      onResolve(created.id)
     } catch {
       // Surfaced via add.error below.
     }
@@ -270,6 +352,26 @@ function Field({
         </span>
       )}
     </label>
+  )
+}
+
+function RemoveIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    </svg>
   )
 }
 

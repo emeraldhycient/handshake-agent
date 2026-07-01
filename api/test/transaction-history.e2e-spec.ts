@@ -166,7 +166,7 @@ describe('Transaction history — e2e', () => {
     const ks = await request(app.getHttpServer())
       .post('/kyc/submit')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ firstName: 'A', lastName: 'B', nin: '22334455667', pin: '1234' })
+      .send({ firstName: 'A', lastName: 'B', nin: '22334455667', pin: '1357' })
       .expect(200);
     return { accessToken, userId: (ks.body as { userId: string }).userId };
   }
@@ -291,5 +291,87 @@ describe('Transaction history — e2e', () => {
       .get('/transactions/00000000-0000-0000-0000-000000000000')
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(404); // not found, NOT a history payload
+  }, 120_000);
+
+  interface HistoryBody {
+    window: { from: string; to: string; label: string };
+    items: { id: string }[];
+    totalCount: number;
+    hasMore: boolean;
+    nextCursor: string | null;
+  }
+
+  it('GET /transactions/history keyset-paginates with a stable cursor (no dup/skip)', async () => {
+    const { accessToken, userId } = await onboard(
+      `txpg_${Date.now()}@t.com`,
+      '+2348020000009',
+    );
+    // 5 rows at distinct, recent timestamps so they fall in any "all" window.
+    const base = Date.now();
+    for (let i = 0; i < 5; i++) {
+      await seedTxn(userId, 'buy', new Date(base - i * 60_000));
+    }
+    const auth = `Bearer ${accessToken}`;
+    const seen = new Set<string>();
+
+    const p1 = await request(app.getHttpServer())
+      .get('/transactions/history?period=all&limit=2')
+      .set('Authorization', auth)
+      .expect(200);
+    const b1 = p1.body as HistoryBody;
+    expect(b1.items).toHaveLength(2);
+    expect(b1.totalCount).toBe(5);
+    expect(b1.hasMore).toBe(true);
+    expect(b1.nextCursor).toBeTruthy();
+    b1.items.forEach((it) => seen.add(it.id));
+
+    const win = `from=${encodeURIComponent(b1.window.from)}&to=${encodeURIComponent(b1.window.to)}&txType=all&limit=2`;
+
+    const p2 = await request(app.getHttpServer())
+      .get(
+        `/transactions/history?${win}&cursor=${encodeURIComponent(b1.nextCursor!)}`,
+      )
+      .set('Authorization', auth)
+      .expect(200);
+    const b2 = p2.body as HistoryBody;
+    expect(b2.items).toHaveLength(2);
+    expect(b2.hasMore).toBe(true);
+    expect(b2.totalCount).toBe(5); // full-window count, independent of the cursor
+    b2.items.forEach((it) => {
+      expect(seen.has(it.id)).toBe(false);
+      seen.add(it.id);
+    });
+
+    const p3 = await request(app.getHttpServer())
+      .get(
+        `/transactions/history?${win}&cursor=${encodeURIComponent(b2.nextCursor!)}`,
+      )
+      .set('Authorization', auth)
+      .expect(200);
+    const b3 = p3.body as HistoryBody;
+    expect(b3.items).toHaveLength(1);
+    expect(b3.hasMore).toBe(false);
+    expect(b3.nextCursor).toBeNull();
+    b3.items.forEach((it) => seen.add(it.id));
+
+    // Every row seen exactly once across the three pages.
+    expect(seen.size).toBe(5);
+  }, 120_000);
+
+  it('GET /transactions/history resolves a relative-duration window', async () => {
+    const { accessToken, userId } = await onboard(
+      `txrel_${Date.now()}@t.com`,
+      '+2348020000010',
+    );
+    // A row "now" falls inside any recent relative window.
+    await seedTxn(userId, 'buy', new Date());
+
+    const res = await request(app.getHttpServer())
+      .get('/transactions/history?relativeAmount=2&relativeUnit=week')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+    const body = res.body as HistoryBody;
+    expect(body.window.label).toBe('Last 2 weeks');
+    expect(body.totalCount).toBeGreaterThanOrEqual(1);
   }, 120_000);
 });

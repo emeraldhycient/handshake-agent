@@ -1,12 +1,15 @@
-import configuration from './configuration';
+import configuration, { validateConfig } from './configuration';
+import type { AppConfig } from './configuration';
 
 describe('configuration — statement', () => {
   it('exposes statement defaults', () => {
     const cfg = configuration();
     expect(cfg.statement).toEqual({
       linkTtlSeconds: 900,
-      maxWindowDays: 365,
-      rowCap: 100,
+      maxWindowDays: 400,
+      defaultPageSize: 10,
+      maxPageSize: 100,
+      statementMaxRows: 5000,
       timezoneOffsetMinutes: 60,
     });
   });
@@ -96,5 +99,92 @@ describe('configuration — compliance.travelRuleThresholds (multi-currency)', (
       expect(cfg.compliance.travelRuleThresholds[code]).toBeDefined();
       expect(cfg.compliance.travelRuleThresholds[code]).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('configuration — boot-time enabled-fiat cross-validation (#25)', () => {
+  it('the committed defaults pass validation (only NGN is live, fully configured)', () => {
+    // configuration() runs validateConfig() internally; if it throws, boot fails.
+    expect(() => configuration()).not.toThrow();
+  });
+
+  it('validateConfig is a no-op for the committed defaults', () => {
+    const cfg = configuration();
+    expect(() => validateConfig(cfg)).not.toThrow();
+  });
+
+  it('throws when an enabled fiat has NO limits block', () => {
+    const cfg = configuration();
+    // Enable GHS in the catalog but leave limits/baseRates absent → misconfig.
+    cfg.catalog.fiats['GHS'].enabled = true;
+    expect(() => validateConfig(cfg)).toThrow(/GHS/);
+    expect(() => validateConfig(cfg)).toThrow(/limits/i);
+  });
+
+  it('throws when an enabled fiat has limits but NO pricing baseRate for an enabled tradeable asset', () => {
+    const cfg = configuration();
+    cfg.catalog.fiats['GHS'].enabled = true;
+    // Give GHS a limits block so the limits check passes, but no baseRate.
+    cfg.limits['GHS'] = {
+      tier_1: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+      tier_2: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+      tier_3: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+    };
+    expect(() => validateConfig(cfg)).toThrow(/GHS/);
+    expect(() => validateConfig(cfg)).toThrow(/USDT/);
+    expect(() => validateConfig(cfg)).toThrow(/baseRate|pricing/i);
+  });
+
+  it('passes when an enabled fiat has both limits and baseRates for every enabled tradeable asset', () => {
+    const cfg = configuration();
+    cfg.catalog.fiats['GHS'].enabled = true;
+    cfg.limits['GHS'] = {
+      tier_1: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+      tier_2: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+      tier_3: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+    };
+    for (const [, asset] of Object.entries(cfg.pricing.assets)) {
+      asset.baseRates['GHS'] = 1;
+    }
+    expect(() => validateConfig(cfg)).not.toThrow();
+  });
+
+  it('ignores a NON-fiat-tradeable asset when checking baseRates (e.g. valuation-only assets)', () => {
+    const cfg = configuration();
+    cfg.catalog.fiats['GHS'].enabled = true;
+    cfg.limits['GHS'] = {
+      tier_1: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+      tier_2: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+      tier_3: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+    };
+    // Mark every pricing asset as non-fiat-tradeable → no baseRate required.
+    for (const [, asset] of Object.entries(cfg.pricing.assets)) {
+      asset.fiatTradeable = false;
+    }
+    expect(() => validateConfig(cfg)).not.toThrow();
+  });
+
+  it('does not require config for a fiat that is present but NOT enabled', () => {
+    const cfg = configuration();
+    // GHS stays enabled:false and has no limits/baseRates → must NOT throw.
+    expect(cfg.catalog.fiats['GHS'].enabled).toBe(false);
+    expect(cfg.limits['GHS']).toBeUndefined();
+    expect(() => validateConfig(cfg)).not.toThrow();
+  });
+
+  it('only requires baseRates for ENABLED assets (a disabled enabled-asset is skipped)', () => {
+    const cfg: AppConfig = configuration();
+    cfg.catalog.fiats['GHS'].enabled = true;
+    cfg.limits['GHS'] = {
+      tier_1: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+      tier_2: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+      tier_3: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+    };
+    // Disable the catalog asset that has a pricing entry; its missing GHS baseRate
+    // must then be ignored (the asset can't be traded anyway).
+    for (const sym of Object.keys(cfg.catalog.assets)) {
+      cfg.catalog.assets[sym].enabled = false;
+    }
+    expect(() => validateConfig(cfg)).not.toThrow();
   });
 });

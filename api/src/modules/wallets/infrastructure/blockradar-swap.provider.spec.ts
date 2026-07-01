@@ -576,5 +576,55 @@ describe('BlockradarSwapProvider', () => {
         }),
       ).rejects.toMatchObject({ httpStatus: 404 });
     });
+
+    // Complete the matrix the engine relies on: every non-404 swap-execute 4xx/5xx
+    // rejection must carry `httpStatus` structurally so the engine can branch
+    // definitive (4xx → refund-safe) vs ambiguous (5xx → leave for reconciler).
+    // (A 400 on EXECUTE is a plain Error — only getQuote-400 degrades to
+    // SwapUnavailableError.)
+    it.each([
+      [400, 'Invalid asset pair'],
+      [500, 'Internal server error'],
+    ])(
+      'preserves httpStatus=%s structurally on a Blockradar swap execute %s rejection',
+      async (status, message) => {
+        http.post.mockReturnValue(throwError(() => axiosErr(status, message)));
+
+        await expect(
+          provider.execute({
+            addressId: ADDRESS_ID,
+            fromAssetId: FROM_ASSET_ID,
+            toAssetId: TO_ASSET_ID,
+            amount: '100',
+            reference: 'ref-001',
+          }),
+        ).rejects.toMatchObject({ httpStatus: status });
+      },
+    );
+
+    it('does NOT attach httpStatus on a network error (no HTTP response → ambiguous, never refund)', async () => {
+      // A bare network failure carries no axios `response`; the engine must treat
+      // it as ambiguous and leave the swap reserve for the reconciler (§3.1).
+      http.post.mockReturnValue(throwError(() => new Error('ETIMEDOUT')));
+
+      const err = (await provider
+        .execute({
+          addressId: ADDRESS_ID,
+          fromAssetId: FROM_ASSET_ID,
+          toAssetId: TO_ASSET_ID,
+          amount: '100',
+          reference: 'ref-001',
+        })
+        .then(
+          () => {
+            throw new Error('expected execute to reject');
+          },
+          (e: unknown) => e,
+        )) as { httpStatus?: unknown };
+
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(SwapUnavailableError);
+      expect(err.httpStatus).toBeUndefined();
+    });
   });
 });

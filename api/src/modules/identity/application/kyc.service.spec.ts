@@ -35,7 +35,7 @@ const VALID_INPUT = {
   firstName: 'Amaka',
   lastName: 'Okafor',
   dateOfBirth: '1992-07-14',
-  pin: '1234',
+  pin: '1357',
 };
 
 /** Creates a mock IKycProvider. */
@@ -317,7 +317,7 @@ const VALID_WEB_INPUT = {
   firstName: 'Chidi',
   lastName: 'Okeke',
   dateOfBirth: '1992-07-14',
-  pin: '5678',
+  pin: '5681',
 };
 
 /** Unverified user record (kycStatus != 'verified') returned by loadUser. */

@@ -16,28 +16,56 @@
  */
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
+import { z } from "zod"
 import {
-  KycCompleteRequestSchema,
-  type KycCompleteRequest,
+  BvnSchema,
+  NinSchema,
+  TransactionPinSchema,
 } from "@handshake-agent/contracts/dto"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { useKycComplete } from "@/lib/query/kyc"
 import type { KycFormProps } from "@/types/components"
 
-// ─── Sub-schema: omit token (injected from props, not user-entered) ──────────
+// ─── Form schema — built from the contract's canonical field schemas ──────────
 //
-// We still pass token in the final payload — it just doesn't have its own
-// visible field; the form schema for user-facing fields excludes it.
-// The full KycCompleteRequestSchema is used in submitKycComplete for final parse.
+// PIN strength (TransactionPinSchema) and the 11-digit NIN/BVN format come
+// straight from @handshake-agent/contracts so the FE (UX) gate and the server
+// (security boundary, §3.3) validate identically. `token` is injected from
+// props, not user-entered. Empty identifier strings are coerced to `undefined`
+// so a blank field surfaces the "provide your NIN or BVN" rule rather than a
+// 11-digit format error.
+
+const optionalIdentifier = (schema: z.ZodString) =>
+  z
+    .union([z.literal(""), schema])
+    .optional()
+    .transform((v) => (v === "" ? undefined : v))
+
+const KycFormSchema = z
+  .object({
+    token: z.string().min(1),
+    nin: optionalIdentifier(NinSchema),
+    bvn: optionalIdentifier(BvnSchema),
+    firstName: z.string().min(1, "First name is required"),
+    lastName: z.string().min(1, "Last name is required"),
+    dateOfBirth: z.string().optional(),
+    pin: TransactionPinSchema,
+  })
+  .refine((data) => Boolean(data.nin) || Boolean(data.bvn), {
+    message: "Provide your NIN or BVN",
+    path: ["nin"],
+  })
+
+type KycFormValues = z.infer<typeof KycFormSchema>
 
 export function KycForm({ token }: KycFormProps) {
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm<KycCompleteRequest>({
-    resolver: zodResolver(KycCompleteRequestSchema),
+  } = useForm<KycFormValues>({
+    resolver: zodResolver(KycFormSchema),
     defaultValues: { token },
   })
 
@@ -45,10 +73,11 @@ export function KycForm({ token }: KycFormProps) {
 
   const loading = isSubmitting || isPending
 
-  async function onSubmit(values: KycCompleteRequest) {
+  async function onSubmit(values: KycFormValues) {
     // Wrap mutateAsync in try/catch so the rejection is handled here;
     // the error is captured in mutation.error and displayed in the UI.
     // This prevents an unhandled rejection from bubbling to the window.
+    // Blank NIN/BVN are already coerced to `undefined` by the schema transform.
     try {
       await mutateAsync({ ...values, token })
     } catch {
@@ -201,64 +230,81 @@ export function KycForm({ token }: KycFormProps) {
         )}
       </div>
 
-      {/* BVN */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="kyc-bvn"
-          className="text-sm font-medium text-foreground"
-        >
-          BVN (Bank Verification Number)
-        </label>
-        <Input
-          id="kyc-bvn"
-          type="text"
-          inputMode="numeric"
-          aria-invalid={!!errors.bvn}
-          aria-describedby={errors.bvn ? "kyc-bvn-error" : undefined}
-          placeholder="11-digit BVN"
-          disabled={loading}
-          {...register("bvn")}
-        />
-        {errors.bvn && (
-          <p
-            id="kyc-bvn-error"
-            role="alert"
-            className="text-xs text-destructive"
-          >
-            {errors.bvn.message}
-          </p>
-        )}
-      </div>
+      {/* Identity — at least one of NIN or BVN is required by the provider. */}
+      <fieldset className="flex flex-col gap-3 border-0 p-0">
+        <legend className="text-sm font-medium text-foreground">
+          NIN or BVN{" "}
+          <span className="font-normal text-muted-foreground">
+            (at least one required)
+          </span>
+        </legend>
+        <p className="text-xs text-muted-foreground">
+          Enter your 11-digit National Identification Number (NIN) or Bank
+          Verification Number (BVN). You only need to provide one.
+        </p>
 
-      {/* NIN (optional) */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="kyc-nin"
-          className="text-sm font-medium text-foreground"
-        >
-          NIN (National Identification Number){" "}
-          <span className="font-normal text-muted-foreground">(optional)</span>
-        </label>
-        <Input
-          id="kyc-nin"
-          type="text"
-          inputMode="numeric"
-          aria-invalid={!!errors.nin}
-          aria-describedby={errors.nin ? "kyc-nin-error" : undefined}
-          placeholder="11-digit NIN"
-          disabled={loading}
-          {...register("nin")}
-        />
-        {errors.nin && (
-          <p
-            id="kyc-nin-error"
-            role="alert"
-            className="text-xs text-destructive"
+        {/* NIN */}
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="kyc-nin"
+            className="text-sm font-medium text-foreground"
           >
-            {errors.nin.message}
-          </p>
-        )}
-      </div>
+            NIN (National Identification Number)
+          </label>
+          <Input
+            id="kyc-nin"
+            type="text"
+            inputMode="numeric"
+            pattern="\d{11}"
+            maxLength={11}
+            aria-invalid={!!errors.nin}
+            aria-describedby={errors.nin ? "kyc-nin-error" : undefined}
+            placeholder="11-digit NIN"
+            disabled={loading}
+            {...register("nin")}
+          />
+          {errors.nin && (
+            <p
+              id="kyc-nin-error"
+              role="alert"
+              className="text-xs text-destructive"
+            >
+              {errors.nin.message}
+            </p>
+          )}
+        </div>
+
+        {/* BVN */}
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="kyc-bvn"
+            className="text-sm font-medium text-foreground"
+          >
+            BVN (Bank Verification Number)
+          </label>
+          <Input
+            id="kyc-bvn"
+            type="text"
+            inputMode="numeric"
+            pattern="\d{11}"
+            maxLength={11}
+            aria-invalid={!!errors.bvn}
+            aria-describedby={errors.bvn ? "kyc-bvn-error" : undefined}
+            placeholder="11-digit BVN"
+            disabled={loading}
+            {...register("bvn")}
+          />
+          {errors.bvn && (
+            <p
+              id="kyc-bvn-error"
+              role="alert"
+              className="text-xs text-destructive"
+            >
+              {errors.bvn.message}
+            </p>
+          )}
+        </div>
+      </fieldset>
 
       {/* PIN — type password so it is never visible / logged */}
       <div className="flex flex-col gap-1.5">
@@ -272,22 +318,28 @@ export function KycForm({ token }: KycFormProps) {
           id="kyc-pin"
           type="password"
           inputMode="numeric"
+          pattern="\d{4,6}"
           autoComplete="new-password"
           aria-required="true"
           aria-invalid={!!errors.pin}
-          aria-describedby={errors.pin ? "kyc-pin-error" : undefined}
-          placeholder="Set a 4-digit PIN"
+          aria-describedby={errors.pin ? "kyc-pin-error" : "kyc-pin-hint"}
+          placeholder="Set a 4–6 digit PIN"
+          minLength={4}
           maxLength={6}
           disabled={loading}
           {...register("pin")}
         />
-        {errors.pin && (
+        {errors.pin ? (
           <p
             id="kyc-pin-error"
             role="alert"
             className="text-xs text-destructive"
           >
             {errors.pin.message ?? "PIN is required"}
+          </p>
+        ) : (
+          <p id="kyc-pin-hint" className="text-xs text-muted-foreground">
+            4–6 digits. Avoid repeated digits (1111) or sequences (1234).
           </p>
         )}
       </div>

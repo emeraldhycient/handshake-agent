@@ -102,6 +102,18 @@ export class AssetRegistry {
    */
   private readonly discoveredAssets: Map<string, CatalogAsset> = new Map();
 
+  /**
+   * Overlay of provider-discovered asset logo URLs, keyed by SYMBOL (upper-case).
+   * Populated by CatalogSyncService via `mergeDiscoveredAssets`. Read by
+   * `logoUrl(symbol)` and surfaced on the balances API so the FE can render the
+   * real asset logo (falling back to the tinted text badge when absent).
+   *
+   * Kept as a separate overlay (rather than on the synthetic CatalogAsset) so a
+   * discovered logo also attaches to STATIC catalog assets, which never get a
+   * synthetic entry.
+   */
+  private readonly discoveredLogoUrls: Map<string, string> = new Map();
+
   constructor(private readonly config: ConfigService) {
     const catalog = this.config.get<CatalogConfig>('catalog');
     if (!catalog) {
@@ -153,6 +165,13 @@ export class AssetRegistry {
       const existing = this.discoveredProviderIds.get(sym) ?? {};
       existing['blockradar'] = discovered.assetId;
       this.discoveredProviderIds.set(sym, existing);
+
+      // Capture the discovered logo URL (last sync wins). Only set when present
+      // so a later logo-less sync does not clobber a previously found logo with
+      // undefined — but a re-sync that DOES carry a logo overwrites it.
+      if (discovered.logoUrl) {
+        this.discoveredLogoUrls.set(sym, discovered.logoUrl);
+      }
 
       // If the symbol is not in the static catalog, synthesise a CatalogAsset.
       if (!this.catalog.assets[sym] && !this.discoveredAssets.has(sym)) {
@@ -243,6 +262,16 @@ export class AssetRegistry {
       symbol,
       `no provider binding for "${provider}"`,
     );
+  }
+
+  /**
+   * Returns the provider-discovered logo URL for the asset, or `null` when none
+   * was discovered (or the symbol is unknown). Never throws — the logo is a
+   * best-effort display enhancement; absence simply means the UI renders the
+   * tinted text badge fallback.
+   */
+  logoUrl(symbol: string): string | null {
+    return this.discoveredLogoUrls.get(symbol) ?? null;
   }
 
   /**

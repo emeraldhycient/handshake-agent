@@ -86,6 +86,7 @@ export class MockWalletProvider implements IWalletProvider {
         contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
         decimals: 6,
         isMainnet: false, // testnet wallet in mock/dev mode
+        logoUrl: null, // mock provider has no logo source; UI falls back to text badge
       },
       {
         assetId: 'mock-trx-tron-asset-id-00000000000002',
@@ -95,6 +96,7 @@ export class MockWalletProvider implements IWalletProvider {
         contractAddress: null, // native asset, no contract address
         decimals: 6,
         isMainnet: false,
+        logoUrl: null,
       },
     ]);
   }

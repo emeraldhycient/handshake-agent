@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { DashboardSidebar } from "@/components/desktop/dashboard-sidebar"
 import { DashboardTopbar } from "@/components/desktop/dashboard-topbar"
 import { ChatRail } from "@/components/desktop/chat-rail"
@@ -10,9 +11,26 @@ import { ActivityPage } from "@/components/desktop/activity-page"
 import { TicketsPage } from "@/components/desktop/tickets-page"
 import { SettingsPage } from "@/components/desktop/settings-page"
 import { defaultChatStore } from "@/lib/store/chat-store"
-import { chipLabel } from "@/lib/chat/flow"
+import { useAuthStore } from "@/lib/store/auth-store"
+import { chipLabel, actionPrompt } from "@/lib/chat/flow"
 import type { DashboardPage } from "@/lib/schemas"
 import type { ChatAction, SearchResult } from "@/lib/schemas"
+
+/**
+ * `useRouter` outside an app-router provider throws an invariant. In the real
+ * app this component always renders inside the router tree, but isolated tests
+ * (e.g. AdaptiveExperience) mount it without one. `useRouter` calls `useContext`
+ * before the throw, so wrapping the call keeps hook order stable; on failure we
+ * return null and the session-expired redirect becomes a no-op (the Axios
+ * interceptor still clears the session, so RequireAuth redirects on next render).
+ */
+function useOptionalRouter(): ReturnType<typeof useRouter> | null {
+  try {
+    return useRouter()
+  } catch {
+    return null
+  }
+}
 
 /**
  * Full-width desktop layout — extracted from the /dashboard route so it can
@@ -27,10 +45,30 @@ import type { ChatAction, SearchResult } from "@/lib/schemas"
  */
 export function DashboardExperience() {
   const [dPage, setDPage] = useState<DashboardPage>("overview")
+  const router = useOptionalRouter()
+  const authStatus = useAuthStore((s) => s.status)
+
+  // ── Session-expired wiring (finding #4) ───────────────────────────────────
+  // A dead session detected mid-conversation (e.g. authorize/execute 401) must
+  // route the user to re-auth. The store can't import next/navigation, so we
+  // inject the redirect here once on mount. Re-runs only if `router` changes.
+  useEffect(() => {
+    defaultChatStore
+      .getState()
+      .setSessionExpiredHandler(() => router?.push("/login"))
+  }, [router])
 
   // ── Quick action handler ──────────────────────────────────────────────────
+  // Finding #1: an authenticated quick action hits the REAL agent with an
+  // amount-free open prompt (so it quotes against the user's real balance/rate/
+  // limits) — never the hardcoded "Buy ₦50,000 of USDT" demo label. Anonymous
+  // (offline demo) keeps the mock send seeded with the caller's display label.
   function handleQuickAction(action: ChatAction, label: string) {
-    defaultChatStore.getState().send("d", label, action)
+    if (authStatus === "authenticated") {
+      void defaultChatStore.getState().sendToAgent("d", actionPrompt(action))
+    } else {
+      defaultChatStore.getState().send("d", label, action)
+    }
   }
 
   // ── Search select handler ─────────────────────────────────────────────────
@@ -39,8 +77,16 @@ export function DashboardExperience() {
       setDPage(result.page)
     }
     if (result.action) {
-      const label = result.label ?? chipLabel(result.action)
-      defaultChatStore.getState().send("d", label, result.action)
+      // Same auth gate as a quick action — a real session sends the open prompt,
+      // never the demo label, so the agent re-quotes against live data.
+      if (authStatus === "authenticated") {
+        void defaultChatStore
+          .getState()
+          .sendToAgent("d", actionPrompt(result.action))
+      } else {
+        const label = result.label ?? chipLabel(result.action)
+        defaultChatStore.getState().send("d", label, result.action)
+      }
     }
   }
 

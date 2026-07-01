@@ -151,6 +151,97 @@ describe("ConfirmSheet — mobile density", () => {
   })
 })
 
+describe("ConfirmSheet — quote expiry guard (finding: no countdown/expiry guard)", () => {
+  // expiresAt is being added to the ConfirmPayload contract (lib/schemas); cast
+  // until that lands so this overlay-side test compiles independently.
+  function withExpiry(secondsFromNow: number): ConfirmPayload {
+    return {
+      ...buyPayload,
+      expiresAt: new Date(Date.now() + secondsFromNow * 1000).toISOString(),
+    } as ConfirmPayload & { expiresAt: string }
+  }
+
+  it("renders a live countdown when the payload carries expiresAt", () => {
+    render(
+      <ConfirmSheet
+        open
+        payload={withExpiry(58)}
+        density="mobile"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    )
+    expect(screen.getByText(/0:5\d/)).toBeInTheDocument()
+  })
+
+  it("disables the confirm CTA and shows a re-quote prompt once expired", () => {
+    render(
+      <ConfirmSheet
+        open
+        payload={withExpiry(-1)}
+        density="mobile"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    )
+    expect(
+      screen.getByRole("button", { name: /quote expired — request a new one/i })
+    ).toBeDisabled()
+    // the original PIN CTA must not be reachable on a dead quote
+    expect(
+      screen.queryByRole("button", { name: /^confirm with pin$/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it("does not invoke onConfirm when the CTA is clicked on an expired quote", async () => {
+    const onConfirm = vi.fn()
+    render(
+      <ConfirmSheet
+        open
+        payload={withExpiry(-1)}
+        density="mobile"
+        onConfirm={onConfirm}
+        onCancel={() => {}}
+      />
+    )
+    await userEvent.click(
+      screen.getByRole("button", { name: /quote expired — request a new one/i })
+    )
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+
+  it("keeps the normal PIN CTA enabled while the quote is still live", () => {
+    render(
+      <ConfirmSheet
+        open
+        payload={withExpiry(58)}
+        density="mobile"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    )
+    expect(
+      screen.getByRole("button", { name: /confirm with pin/i })
+    ).toBeEnabled()
+  })
+
+  it("does not render a countdown when payload has no expiresAt (mock flow)", () => {
+    render(
+      <ConfirmSheet
+        open
+        payload={buyPayload}
+        density="mobile"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    )
+    expect(
+      screen.getByRole("button", { name: /confirm with pin/i })
+    ).toBeEnabled()
+    expect(screen.queryByText(/quote expired/i)).not.toBeInTheDocument()
+  })
+})
+
 describe("ConfirmSheet — desktop density", () => {
   it("renders the same body fields (title, heroAmount, rows, cta)", () => {
     render(

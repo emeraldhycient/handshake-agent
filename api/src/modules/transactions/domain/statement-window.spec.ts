@@ -1,6 +1,6 @@
 import { resolveWindow } from './statement-window';
 
-const cfg = { maxWindowDays: 365, timezoneOffsetMinutes: 60 }; // WAT
+const cfg = { maxWindowDays: 400, timezoneOffsetMinutes: 60 }; // WAT
 
 describe('resolveWindow (WAT day boundaries)', () => {
   // 2026-06-29T10:00:00Z = 11:00 WAT on Jun 29
@@ -55,17 +55,123 @@ describe('resolveWindow (WAT day boundaries)', () => {
   it('clamps an over-long window to maxWindowDays', () => {
     const w = resolveWindow({ period: 'all' }, now, cfg);
     const days = (w.to.getTime() - w.from.getTime()) / 86_400_000;
-    expect(Math.round(days)).toBe(365);
-    expect(w.label).toBe('Last 365 days');
+    expect(Math.round(days)).toBe(400);
+    expect(w.label).toBe('Last 400 days');
   });
 
   it('falls back to default (all) when from > to', () => {
     const w = resolveWindow({ from: '2026-06-15', to: '2026-06-01' }, now, cfg);
-    expect(w.label).toBe('Last 365 days');
+    expect(w.label).toBe('Last 400 days');
   });
 
   it('defaults to all when nothing is provided', () => {
     const w = resolveWindow({}, now, cfg);
-    expect(w.label).toBe('Last 365 days');
+    expect(w.label).toBe('Last 400 days');
+  });
+
+  // ── Relative-duration spec (GAP 1) ─────────────────────────────────────────
+  describe('relative duration', () => {
+    it('sub-day hour offset is exact (an hour ago)', () => {
+      const w = resolveWindow(
+        { relativeAmount: 1, relativeUnit: 'hour' },
+        now,
+        cfg,
+      );
+      expect(w.from.toISOString()).toBe('2026-06-29T09:00:00.000Z');
+      expect(w.to.toISOString()).toBe(now.toISOString());
+      expect(w.label).toBe('Past hour');
+    });
+
+    it('last 24 hours = exact 24h offset, not a calendar day', () => {
+      const w = resolveWindow(
+        { relativeAmount: 24, relativeUnit: 'hour' },
+        now,
+        cfg,
+      );
+      expect(w.from.toISOString()).toBe('2026-06-28T10:00:00.000Z');
+      expect(w.label).toBe('Last 24 hours');
+    });
+
+    it('sub-day minute offset is exact', () => {
+      const w = resolveWindow(
+        { relativeAmount: 30, relativeUnit: 'minute' },
+        now,
+        cfg,
+      );
+      expect(w.from.toISOString()).toBe('2026-06-29T09:30:00.000Z');
+      expect(w.label).toBe('Last 30 minutes');
+    });
+
+    it('last 2 weeks = 14 days back, WAT day-aligned', () => {
+      const w = resolveWindow(
+        { relativeAmount: 2, relativeUnit: 'week' },
+        now,
+        cfg,
+      );
+      expect(w.from.toISOString()).toBe('2026-06-14T23:00:00.000Z'); // 00:00 WAT Jun 15
+      expect(w.to.toISOString()).toBe(now.toISOString());
+      expect(w.label).toBe('Last 2 weeks');
+    });
+
+    it('last 6 months = calendar-month subtraction, WAT day-aligned', () => {
+      const w = resolveWindow(
+        { relativeAmount: 6, relativeUnit: 'month' },
+        now,
+        cfg,
+      );
+      expect(w.from.toISOString()).toBe('2025-12-28T23:00:00.000Z'); // 00:00 WAT Dec 29 2025
+      expect(w.label).toBe('Last 6 months');
+    });
+
+    it('last year (1 year) is day-aligned and NOT clamped at 400 days', () => {
+      const w = resolveWindow(
+        { relativeAmount: 1, relativeUnit: 'year' },
+        now,
+        cfg,
+      );
+      expect(w.from.toISOString()).toBe('2025-06-28T23:00:00.000Z'); // 00:00 WAT Jun 29 2025
+      expect(w.label).toBe('Past year');
+      const days = (w.to.getTime() - w.from.getTime()) / 86_400_000;
+      expect(days).toBeGreaterThan(365); // would have been clamped under the old 365 cap
+    });
+
+    it('explicit from/to takes precedence over a relative spec', () => {
+      const w = resolveWindow(
+        {
+          from: '2026-06-01',
+          to: '2026-06-15',
+          relativeAmount: 2,
+          relativeUnit: 'week',
+        },
+        now,
+        cfg,
+      );
+      expect(w.label).toBe('Jun 1 – Jun 15, 2026');
+    });
+
+    it('relative spec takes precedence over a named period', () => {
+      const w = resolveWindow(
+        { period: 'today', relativeAmount: 6, relativeUnit: 'month' },
+        now,
+        cfg,
+      );
+      expect(w.label).toBe('Last 6 months');
+    });
+
+    it('clamps an absurd relative range to maxWindowDays but keeps its label', () => {
+      const w = resolveWindow(
+        { relativeAmount: 5, relativeUnit: 'year' },
+        now,
+        cfg,
+      );
+      const days = (w.to.getTime() - w.from.getTime()) / 86_400_000;
+      expect(Math.round(days)).toBe(400);
+      expect(w.label).toBe('Last 5 years');
+    });
+
+    it('ignores a lone relativeAmount (falls back to default)', () => {
+      const w = resolveWindow({ relativeAmount: 3 }, now, cfg);
+      expect(w.label).toBe('Last 400 days');
+    });
   });
 });

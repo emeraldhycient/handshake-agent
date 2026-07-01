@@ -96,7 +96,11 @@ export interface ISwapProvider {
    * The quote is non-binding: the execution engine re-fetches and compares
    * against the stored quote at execute time (maxDriftBps check).
    *
-   * @throws Error on non-2xx provider responses.
+   * @throws SwapUnavailableError on HTTP 404 (swap not enrolled) or HTTP 400
+   *   (no route/liquidity) — both carry `httpStatus` and mean "swap unavailable",
+   *   not a retryable outage. Any other non-2xx response throws an Error that
+   *   carries the originating HTTP status STRUCTURALLY as a numeric `httpStatus`
+   *   property (see {@link execute} for the funds-safety rationale).
    */
   getQuote(input: GetSwapQuoteInput): Promise<GetSwapQuoteOutput>;
 
@@ -109,7 +113,14 @@ export interface ISwapProvider {
    *
    * `reference` is the caller's idempotency key — Blockradar deduplicates on it.
    *
-   * @throws Error on non-2xx provider responses.
+   * @throws SwapUnavailableError on HTTP 404 (carries `httpStatus: 404`). Any
+   *   other non-2xx response throws an Error that carries the originating HTTP
+   *   status STRUCTURALLY as a numeric `httpStatus` property (NOT only in the
+   *   message string); a network error with no HTTP response leaves `httpStatus`
+   *   absent (undefined). The execution engine reads `httpStatus` to distinguish
+   *   a DEFINITIVE client rejection (4xx — swap never performed → safe to refund
+   *   the reserve) from an AMBIGUOUS failure (5xx / network — the swap may be
+   *   in-flight → leave for the reconciler). CLAUDE.md §3.1.
    */
   execute(input: ExecuteSwapInput): Promise<ExecuteSwapOutput>;
 }

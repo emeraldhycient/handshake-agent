@@ -420,7 +420,7 @@ describe('Buy vertical — capstone acceptance e2e (AppModule, Testcontainers Po
 
     const { PinService } = await import('../src/core/auth/pin.service');
     const pinService = moduleRef.get(PinService);
-    await pinService.setPin(userId, '123456');
+    await pinService.setPin(userId, '194837');
 
     await prisma.channelIdentity.create({
       data: {
@@ -568,7 +568,7 @@ describe('Buy vertical — capstone acceptance e2e (AppModule, Testcontainers Po
       screen: 'PIN',
       flow_token: flowToken,
       data: {
-        pin: '123456',
+        pin: '194837',
         nonce: capturedNonce,
       },
     };

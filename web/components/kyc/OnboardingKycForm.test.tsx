@@ -46,8 +46,31 @@ function renderForm() {
 const VALID_PAYLOAD = {
   firstName: "Amara",
   lastName: "Okafor",
-  pin: "1234",
-  confirmPin: "1234",
+  nin: "12345678901",
+  pin: "1937",
+  confirmPin: "1937",
+}
+
+// Fills firstName, lastName, NIN (one identifier), and both PIN fields with the
+// given (strong) PIN so the form is otherwise valid.
+async function fillValidExcept(
+  user: ReturnType<typeof userEvent.setup>,
+  overrides: Partial<typeof VALID_PAYLOAD> = {}
+) {
+  const v = { ...VALID_PAYLOAD, ...overrides }
+  await user.type(
+    screen.getByRole("textbox", { name: /first name/i }),
+    v.firstName
+  )
+  await user.type(
+    screen.getByRole("textbox", { name: /last name/i }),
+    v.lastName
+  )
+  if (v.nin) {
+    await user.type(screen.getByRole("textbox", { name: /^nin/i }), v.nin)
+  }
+  await user.type(screen.getByLabelText(/^transaction pin/i), v.pin)
+  await user.type(screen.getByLabelText(/confirm pin/i), v.confirmPin)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -91,16 +114,7 @@ describe("OnboardingKycForm", () => {
     const user = userEvent.setup()
     renderForm()
 
-    await user.type(
-      screen.getByRole("textbox", { name: /first name/i }),
-      VALID_PAYLOAD.firstName
-    )
-    await user.type(
-      screen.getByRole("textbox", { name: /last name/i }),
-      VALID_PAYLOAD.lastName
-    )
-    await user.type(screen.getByLabelText(/^transaction pin/i), "1234")
-    await user.type(screen.getByLabelText(/confirm pin/i), "9999")
+    await fillValidExcept(user, { pin: "1937", confirmPin: "8264" })
 
     await user.click(screen.getByRole("button", { name: /submit/i }))
 
@@ -112,6 +126,65 @@ describe("OnboardingKycForm", () => {
     })
   })
 
+  it("blocks submit when the PIN is weak (sequential 1234) — mutation not called", async () => {
+    const user = userEvent.setup()
+    renderForm()
+
+    await fillValidExcept(user, { pin: "1234", confirmPin: "1234" })
+
+    await user.click(screen.getByRole("button", { name: /submit/i }))
+
+    expect(mockSubmit).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(document.getElementById("onb-pin-error")).toBeInTheDocument()
+    })
+  })
+
+  it("blocks submit when the PIN is a single digit — mutation not called", async () => {
+    const user = userEvent.setup()
+    renderForm()
+
+    await fillValidExcept(user, { pin: "1", confirmPin: "1" })
+
+    await user.click(screen.getByRole("button", { name: /submit/i }))
+
+    expect(mockSubmit).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(document.getElementById("onb-pin-error")).toBeInTheDocument()
+    })
+  })
+
+  it("blocks submit when neither NIN nor BVN is provided — error on nin", async () => {
+    const user = userEvent.setup()
+    renderForm()
+
+    // No NIN, no BVN — the at-least-one rule should fail.
+    await fillValidExcept(user, { nin: "" })
+
+    await user.click(screen.getByRole("button", { name: /submit/i }))
+
+    expect(mockSubmit).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(document.getElementById("onb-nin-error")).toBeInTheDocument()
+    })
+    expect(screen.getByText(/provide your nin or bvn/i)).toBeInTheDocument()
+  })
+
+  it("blocks submit when NIN is not 11 digits — format error", async () => {
+    const user = userEvent.setup()
+    renderForm()
+
+    await fillValidExcept(user, { nin: "5" })
+
+    await user.click(screen.getByRole("button", { name: /submit/i }))
+
+    expect(mockSubmit).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(document.getElementById("onb-nin-error")).toBeInTheDocument()
+    })
+    expect(screen.getByText(/11 digits/i)).toBeInTheDocument()
+  })
+
   it("calls submitKycSession with correct body (no confirmPin) and navigates to / on success", async () => {
     const user = userEvent.setup()
     mockSubmit.mockResolvedValueOnce({
@@ -120,22 +193,7 @@ describe("OnboardingKycForm", () => {
     })
     renderForm()
 
-    await user.type(
-      screen.getByRole("textbox", { name: /first name/i }),
-      VALID_PAYLOAD.firstName
-    )
-    await user.type(
-      screen.getByRole("textbox", { name: /last name/i }),
-      VALID_PAYLOAD.lastName
-    )
-    await user.type(
-      screen.getByLabelText(/^transaction pin/i),
-      VALID_PAYLOAD.pin
-    )
-    await user.type(
-      screen.getByLabelText(/confirm pin/i),
-      VALID_PAYLOAD.confirmPin
-    )
+    await fillValidExcept(user)
 
     await user.click(screen.getByRole("button", { name: /submit/i }))
 
@@ -149,6 +207,7 @@ describe("OnboardingKycForm", () => {
     expect(calledWith).toMatchObject({
       firstName: VALID_PAYLOAD.firstName,
       lastName: VALID_PAYLOAD.lastName,
+      nin: VALID_PAYLOAD.nin,
       pin: VALID_PAYLOAD.pin,
     })
 
@@ -166,22 +225,7 @@ describe("OnboardingKycForm", () => {
     mockSubmit.mockRejectedValueOnce(new Error("KYC submission failed"))
     renderForm()
 
-    await user.type(
-      screen.getByRole("textbox", { name: /first name/i }),
-      VALID_PAYLOAD.firstName
-    )
-    await user.type(
-      screen.getByRole("textbox", { name: /last name/i }),
-      VALID_PAYLOAD.lastName
-    )
-    await user.type(
-      screen.getByLabelText(/^transaction pin/i),
-      VALID_PAYLOAD.pin
-    )
-    await user.type(
-      screen.getByLabelText(/confirm pin/i),
-      VALID_PAYLOAD.confirmPin
-    )
+    await fillValidExcept(user)
 
     // Submit — the error is caught inside the component (onSubmit catches mutateAsync)
     // and exposed via mutation.error, so no unhandled rejection in the test.

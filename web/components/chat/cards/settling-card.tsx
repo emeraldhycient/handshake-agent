@@ -29,22 +29,35 @@ export function SettlingCard({
 }: SettlingCardProps) {
   const isMobile = density === "mobile"
 
+  // The SettlingView.txType enum is widened to include "swap" in the contract
+  // (lib/schemas); until that lands the prop type may not list it, so we read it
+  // through a widened local to render swap copy without a stale type blocking it.
+  const flow = txType as "sell" | "send" | "swap"
+
+  // The reference is denominated per-flow: bank payout, on-chain transfer, or
+  // provider swap. A swap-in-flight must read as a swap, not an on-chain "send".
+  const referenceLabel =
+    flow === "sell"
+      ? "Payout reference"
+      : flow === "swap"
+        ? "Swap reference"
+        : "Network reference"
+
   const detailRows: QuoteRow[] = [
     ...rows,
-    {
-      label: txType === "sell" ? "Payout reference" : "Network reference",
-      value: reference,
-    },
+    { label: referenceLabel, value: reference },
   ]
 
   const isCompleted = status === "completed"
   const isFailed = status === "failed"
 
-  const statusTone = isCompleted ? "success" : isFailed ? "info" : "warn"
+  // Failure is the highest-signal state — danger-red, never the calm info palette
+  // (scenario finding: ui-consistency-states).
+  const statusTone = isCompleted ? "success" : isFailed ? "danger" : "warn"
+  const completedLabel =
+    flow === "sell" ? "Paid out" : flow === "swap" ? "Swapped" : "Sent"
   const statusLabel = isCompleted
-    ? txType === "sell"
-      ? "Paid out"
-      : "Sent"
+    ? completedLabel
     : isFailed
       ? "Failed"
       : "Processing"
@@ -72,7 +85,11 @@ export function SettlingCard({
             isMobile ? "text-[12px]" : "text-[11px]"
           )}
         >
-          {txType === "sell" ? "Bank Payout" : "On-Chain Transfer"}
+          {flow === "sell"
+            ? "Bank Payout"
+            : flow === "swap"
+              ? "Swap"
+              : "On-Chain Transfer"}
         </span>
         <StatusPill
           tone={statusTone}
@@ -105,11 +122,15 @@ export function SettlingCard({
         )}
       >
         {isFailed
-          ? "This transfer could not be completed. No funds have left your wallet."
+          ? flow === "swap"
+            ? "This swap could not be completed. No funds have left your wallet."
+            : "This transfer could not be completed. No funds have left your wallet."
           : isCompleted
-            ? txType === "sell"
+            ? flow === "sell"
               ? "The funds have been sent to your bank account."
-              : "Your transfer has been broadcast on-chain."
+              : flow === "swap"
+                ? "Your swap is complete."
+                : "Your transfer has been broadcast on-chain."
             : subtitle}
       </p>
 

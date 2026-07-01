@@ -18,9 +18,13 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
+  NotFoundException,
+  Param,
+  ParseUUIDPipe,
   Post,
   Query,
   UnprocessableEntityException,
@@ -30,6 +34,7 @@ import {
 import type {
   Beneficiary,
   BeneficiaryListResponse,
+  DeleteBeneficiaryResponse,
 } from '@handshake-agent/contracts';
 
 import {
@@ -43,6 +48,7 @@ import type { BeneficiaryRecord } from '../application/ports/beneficiary.reposit
 import {
   NameEnquiryFailedError,
   InvalidAddressError,
+  BeneficiaryNotFoundError,
 } from '../domain/beneficiary-errors';
 import {
   ListBeneficiariesQueryDto,
@@ -134,6 +140,27 @@ export class BeneficiaryController {
     } catch (err) {
       if (err instanceof InvalidAddressError) {
         throw new UnprocessableEntityException(err.message);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Soft-deletes a saved beneficiary so it leaves the picker (a typo'd or stale
+   * row can be removed). Scoped to the current user; a missing/foreign/already-
+   * deleted id maps to 404 (never reveals ownership).
+   */
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<DeleteBeneficiaryResponse> {
+    try {
+      return await this.beneficiaryService.delete(user.userId, id);
+    } catch (err) {
+      if (err instanceof BeneficiaryNotFoundError) {
+        throw new NotFoundException('Beneficiary not found.');
       }
       throw err;
     }

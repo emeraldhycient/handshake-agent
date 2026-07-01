@@ -16,6 +16,8 @@ import {
   QuoteDriftError,
   ProposalNotExecutableError,
   BaseRateMisconfiguredError,
+  SwapSameAssetError,
+  SwapUnavailableError,
 } from '../../modules/transactions/domain/execution-errors';
 import {
   KycNotVerifiedError,
@@ -141,6 +143,9 @@ describe('DomainExceptionFilter', () => {
       422,
     ],
     [new NameEnquiryFailedError('058', '0000000000', 'not found'), 422],
+    // Swap domain errors were previously uncoded → opaque 500s. They now map.
+    [new SwapSameAssetError('USDT'), 422],
+    [new SwapUnavailableError(), 422],
   ])('maps %s → %i', (err, expected) => {
     const { statusCode } = run(filter, err);
     expect(statusCode).toBe(expected);
@@ -182,6 +187,22 @@ describe('DomainExceptionFilter', () => {
     expect(statusCode).toBe(403);
     expect(body.message).toMatch(/cooling-off period/i);
     expect(JSON.stringify(body)).not.toContain('ben-secret-uuid');
+  });
+
+  it('maps SwapSameAssetError → 422 with a clean message (no raw asset detail leaked)', () => {
+    const { statusCode, body } = run(filter, new SwapSameAssetError('USDT'));
+    expect(statusCode).toBe(422);
+    expect(body.code).toBe('SWAP_SAME_ASSET');
+    expect(body.message).toMatch(/two different assets/i);
+    // The raw domain message ("Cannot swap USDT for USDT: …") must NOT leak.
+    expect(JSON.stringify(body)).not.toContain('fromAsset and toAsset');
+  });
+
+  it('maps SwapUnavailableError → 422 (non-retryable graceful, not a 502/503)', () => {
+    const { statusCode, body } = run(filter, new SwapUnavailableError());
+    expect(statusCode).toBe(422);
+    expect(body.code).toBe('SWAP_PROVIDER_UNAVAILABLE');
+    expect(body.message).toMatch(/swap isn't available/i);
   });
 
   it('passes a NestJS HttpException through with its own status', () => {

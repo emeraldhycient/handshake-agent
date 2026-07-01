@@ -628,6 +628,43 @@ describe('AssetRegistry', () => {
       expect(registry.isAssetEnabled('TRX')).toBe(true);
     });
 
+    it('exposes the discovered logoUrl via logoUrl(symbol) for a static asset', () => {
+      registry.mergeDiscoveredAssets([
+        { ...DISCOVERED_USDT, logoUrl: 'https://cdn.example/usdt.png' },
+      ]);
+
+      expect(registry.logoUrl('USDT')).toBe('https://cdn.example/usdt.png');
+    });
+
+    it('exposes the discovered logoUrl for a discovered-only asset', () => {
+      registry.mergeDiscoveredAssets([
+        { ...DISCOVERED_TRX, logoUrl: 'https://cdn.example/trx.png' },
+      ]);
+
+      expect(registry.logoUrl('TRX')).toBe('https://cdn.example/trx.png');
+    });
+
+    it('logoUrl(symbol) returns null when no logo was discovered', () => {
+      registry.mergeDiscoveredAssets([DISCOVERED_USDT]);
+
+      expect(registry.logoUrl('USDT')).toBeNull();
+    });
+
+    it('logoUrl(symbol) returns null for an unknown asset (no throw)', () => {
+      expect(registry.logoUrl('NOPE')).toBeNull();
+    });
+
+    it('last sync wins for logoUrl (re-merge overwrites)', () => {
+      registry.mergeDiscoveredAssets([
+        { ...DISCOVERED_USDT, logoUrl: 'https://cdn.example/old.png' },
+      ]);
+      registry.mergeDiscoveredAssets([
+        { ...DISCOVERED_USDT, logoUrl: 'https://cdn.example/new.png' },
+      ]);
+
+      expect(registry.logoUrl('USDT')).toBe('https://cdn.example/new.png');
+    });
+
     it('defaultAssetForNetwork returns discovered asset when static catalog has no match', () => {
       // Build a registry with no static assets on TRON (to test discovered fallback).
       const emptyAssetsConfig = {

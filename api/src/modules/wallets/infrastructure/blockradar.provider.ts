@@ -119,11 +119,19 @@ interface BlockradarAssetItem {
     decimals: number;
     /** "mainnet" | "testnet" — indicates the asset's network environment. */
     network: string;
+    /**
+     * Absolute URL to the asset's logo image (Cloudinary). Optional — Blockradar
+     * does not document this field on the get-assets response, but its other
+     * responses carry `logoUrl`s, so we capture it when present.
+     */
+    logoUrl?: string;
     blockchain: {
       /** Lowercase slug, e.g. "tron", "bsc". Used to derive the catalog network key. */
       slug: string;
       /** Display name, e.g. "TRON". */
       name: string;
+      /** Absolute URL to the blockchain's logo image (Cloudinary). Optional. */
+      logoUrl?: string;
     };
   };
 }
@@ -352,6 +360,7 @@ export class BlockradarProvider implements IWalletProvider {
    *   contractAddress ← data[n].asset.address || null
    *   decimals      ← data[n].asset.decimals
    *   isMainnet     ← data[n].asset.network === 'mainnet'
+   *   logoUrl       ← data[n].asset.logoUrl ?? data[n].asset.blockchain.logoUrl ?? null
    *
    * @throws Error (with provider message) on non-2xx responses.
    */
@@ -380,6 +389,9 @@ export class BlockradarProvider implements IWalletProvider {
         contractAddress: item.asset.address || null,
         decimals: item.asset.decimals,
         isMainnet: item.asset.network === 'mainnet',
+        // Prefer the per-asset logo; fall back to the blockchain logo; null when
+        // neither is present (UI then renders the tinted text badge).
+        logoUrl: item.asset.logoUrl ?? item.asset.blockchain.logoUrl ?? null,
       }));
     } catch (err: unknown) {
       throw this.wrapError('listWalletAssets', err);

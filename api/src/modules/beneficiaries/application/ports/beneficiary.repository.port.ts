@@ -69,6 +69,16 @@ export interface AddCryptoAddressInput {
   firstUseLockedUntil: Date;
 }
 
+/**
+ * Identifier used to detect a duplicate active beneficiary at add-time.
+ * For bank accounts: (accountNumber, bankCode). For crypto addresses: the
+ * on-chain address. The repository scopes the match by userId + type +
+ * deletedAt IS NULL.
+ */
+export type DuplicateLookup =
+  | { type: 'bank_account'; accountNumber: string; bankCode: string }
+  | { type: 'crypto_address'; cryptoAddress: string };
+
 // ---------------------------------------------------------------------------
 // Repository port
 // ---------------------------------------------------------------------------
@@ -132,4 +142,22 @@ export interface IBeneficiaryRepository {
    * the AuditLog. Never moves money (§3.1).
    */
   clearCoolingOff(beneficiaryId: string): Promise<void>;
+  /**
+   * Returns the active (non-deleted) beneficiary matching the identifier for the
+   * user, or null if none. Used to dedupe at add-time so re-adding the same
+   * account/address reuses the existing row instead of inserting a duplicate
+   * (which would reset the first-use cooling-off clock).
+   */
+  findActiveDuplicate(
+    userId: string,
+    lookup: DuplicateLookup,
+  ): Promise<BeneficiaryRecord | null>;
+
+  /**
+   * Soft-deletes the beneficiary (sets `deletedAt`) for the given userId + id.
+   * Returns true when a row was deleted, false when no active row matched
+   * (already deleted or not owned by the user). Idempotent: deleting an
+   * already-deleted row returns false without error.
+   */
+  softDelete(userId: string, beneficiaryId: string): Promise<boolean>;
 }

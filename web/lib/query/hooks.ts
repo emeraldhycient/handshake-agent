@@ -4,10 +4,18 @@
  * All hooks call `gateway` (mock-or-real switch) and use the `qk` key factory.
  * This file lives in `lib/` and must NOT import from `components/` or `app/`.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMemo } from "react"
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { gateway } from "@/lib/api/gateway"
+import type { TransactionHistoryPageParams } from "@/lib/api/gateway"
+import { mapTransactions } from "@/lib/api/mappers/transactions"
 import { getTransaction, getTransactionDetail } from "@/lib/api/chat"
-import type { ChatAction } from "@/lib/schemas"
+import type { ChatAction, ActivityGroup } from "@/lib/schemas"
 import { qk } from "./keys"
 
 // ─── Read hooks ───────────────────────────────────────────────────────────────
@@ -43,26 +51,90 @@ export function useWalletAssets() {
   })
 }
 
-/** Paginated activity / transaction history. Refreshed every 15 s. */
-export function useActivity() {
-  return useQuery({
+/**
+ * Infinite activity feed: keyset-paginated transactions grouped by day. Fetches
+ * raw pages from the cursor endpoint and maps them to display groups HERE (not in
+ * the gateway) so the fiat symbols come from `/config` — never a hardcoded NGN
+ * (root §13). Call `fetchNextPage()` when `hasNextPage` to append the next page.
+ */
+export function useActivityFeed() {
+  const config = useConfig()
+  const infinite = useInfiniteQuery({
     queryKey: qk.activity,
-    queryFn: () => gateway.getActivity(),
+    queryFn: ({ pageParam }) => gateway.getActivityPage(pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
     staleTime: 15_000,
+  })
+
+  const fiatSymbols = useMemo(() => {
+    const out: Record<string, string> = {}
+    for (const f of config.data?.fiats ?? []) out[f.code] = f.symbol
+    return out
+  }, [config.data])
+
+  const items = useMemo(
+    () => (infinite.data?.pages ?? []).flatMap((p) => p.items),
+    [infinite.data]
+  )
+
+  const groups: ActivityGroup[] = useMemo(
+    () => mapTransactions({ items }, new Date(), fiatSymbols),
+    [items, fiatSymbols]
+  )
+
+  return {
+    groups,
+    isLoading: infinite.isLoading,
+    isError: infinite.isError,
+    hasNextPage: infinite.hasNextPage,
+    isFetchingNextPage: infinite.isFetchingNextPage,
+    fetchNextPage: infinite.fetchNextPage,
+  }
+}
+
+/**
+ * "Show more" for the chat transactions card. A mutation (not a query) because
+ * it is an imperative, click-driven fetch of the NEXT keyset page of an
+ * already-resolved (frozen) window — the card owns the accumulated rows/cursor
+ * as local UI state and calls this to append the next page.
+ */
+export function useLoadMoreTransactions() {
+  return useMutation({
+    mutationFn: (params: TransactionHistoryPageParams) =>
+      gateway.getTransactionHistoryPage(params),
   })
 }
 
 /**
- * Deposit address for the user's wallet.
- * `staleTime: Infinity` — addresses are stable; no need to re-fetch
- * until the query is explicitly invalidated (e.g. on account change).
+ * How long a fetched deposit address is considered fresh. Addresses are stable
+ * for a session, but NOT permanent — a wallet can be re-provisioned (e.g. a new
+ * child address). Finding #10: the old `staleTime: Infinity` meant a
+ * re-provisioned address could be shown stale forever within a session with no
+ * invalidation path actually wired. A finite staleTime lets it refresh on the
+ * next mount/focus, and `useInvalidateDepositAddress` forces an immediate
+ * refetch on a provisioning/account-change event.
  */
+const DEPOSIT_ADDRESS_STALE_MS = 5 * 60_000
+
+/** Deposit address for the user's wallet. */
 export function useDepositAddress() {
   return useQuery({
     queryKey: qk.deposit,
     queryFn: () => gateway.getDepositAddress(),
-    staleTime: Infinity,
+    staleTime: DEPOSIT_ADDRESS_STALE_MS,
   })
+}
+
+/**
+ * Returns a callback that invalidates the cached deposit address so the next
+ * read refetches. Call after wallet provisioning or an account switch — the one
+ * real invalidation path finding #10 says must exist (the long staleTime alone
+ * is only safe when invalidation is actually wired).
+ */
+export function useInvalidateDepositAddress() {
+  const queryClient = useQueryClient()
+  return () => queryClient.invalidateQueries({ queryKey: qk.deposit })
 }
 
 /** Upcoming event listings. Refreshed every 5 min. */

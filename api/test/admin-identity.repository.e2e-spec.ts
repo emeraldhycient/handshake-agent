@@ -47,7 +47,12 @@ beforeAll(async () => {
   identityRepo = new IdentityPrismaRepository(
     prisma as unknown as PrismaService,
   );
-  kycRepo = new KycPrismaRepository(prisma as unknown as PrismaService);
+  kycRepo = new KycPrismaRepository(prisma as unknown as PrismaService, {
+    get: (k: string) =>
+      k === 'KYC_ENCRYPTION_KEY'
+        ? '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+        : undefined,
+  } as never);
 }, 180_000);
 
 afterAll(async () => {

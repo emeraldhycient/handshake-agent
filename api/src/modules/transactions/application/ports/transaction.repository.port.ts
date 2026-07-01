@@ -167,9 +167,12 @@ export interface ITransactionRepository {
 
   /**
    * Read-only history query: transactions for a user within [from, to], optionally
-   * filtered by type. Returns the page (capped at `limit`, newest first) AND the
-   * exact total count of matching rows in the window. Used by TransactionHistoryService
-   * — never mutates. Scoped to `userId` (the security boundary for read-only own data).
+   * filtered by type. Keyset-paginated on `(createdAt desc, id desc)` — pass the
+   * previous page's `nextCursor` to fetch the next page. Returns the page (newest
+   * first, at most `limit`), the exact total count of matching rows in the FULL
+   * window (independent of the cursor), `hasMore`, and the opaque `nextCursor`
+   * (null on the last page). Used by TransactionHistoryService — never mutates.
+   * Scoped to `userId` (the security boundary for read-only own data).
    */
   listByUserInRange(input: {
     userId: string;
@@ -177,7 +180,13 @@ export interface ITransactionRepository {
     to: Date;
     types?: string[];
     limit: number;
-  }): Promise<{ rows: TransactionRecord[]; total: number }>;
+    cursor?: string;
+  }): Promise<{
+    rows: TransactionRecord[];
+    total: number;
+    hasMore: boolean;
+    nextCursor: string | null;
+  }>;
 
   /**
    * Lists a user's transactions newest-first for the activity feed.

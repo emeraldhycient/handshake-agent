@@ -484,4 +484,217 @@ describe('FlutterwaveWebhookController', () => {
       expect(executionService.settleSellPayout).not.toHaveBeenCalled();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Legacy flat collection format (real captured sandbox VA pay-in)
+  //   No top-level `event`; camelCase top-level `txRef` + `status`.
+  // ---------------------------------------------------------------------------
+
+  describe('legacy flat collection webhook (no event field)', () => {
+    /**
+     * Builds a minimal legacy flat VA collection body — mirrors the real
+     * captured sandbox payload: top-level `txRef` + `status`, NO `event`.
+     */
+    function legacyCollectionBody(
+      status: string = 'successful',
+      txRef: string = TX_REF,
+    ) {
+      return {
+        id: 10335848,
+        txRef,
+        flwRef: 'FLW-MOCK-abc123',
+        amount: 5000,
+        charged_amount: 5000,
+        status,
+        currency: 'NGN',
+        customer: { email: 'user@test.com', name: 'Test User' },
+        entity: { account_number: '0034236600' },
+      };
+    }
+
+    it('legacy successful VA pay-in → settleBuyPayment(txRef), receipt sent, returns 200', async () => {
+      const { controller, executionService, identityService, sender } =
+        makeController();
+
+      const req = { headers: { 'verif-hash': VALID_HASH } };
+
+      const result = await controller.handleWebhook(
+        legacyCollectionBody('successful'),
+        req as any,
+      );
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(executionService.settleBuyPayment).toHaveBeenCalledWith({
+        reference: TX_REF,
+      });
+      expect(identityService.findWhatsAppAddress).toHaveBeenCalledWith(USER_ID);
+      expect(sender.sendText).toHaveBeenCalledWith(
+        WA_ADDRESS,
+        expect.stringContaining(RECEIPT_NUMBER),
+      );
+      // No sell path on a collection.
+      expect(executionService.settleSellPayout).not.toHaveBeenCalled();
+    });
+
+    it('legacy non-successful status → returns 200, settleBuyPayment NOT called', async () => {
+      const { controller, executionService } = makeController();
+
+      const req = { headers: { 'verif-hash': VALID_HASH } };
+
+      const result = await controller.handleWebhook(
+        legacyCollectionBody('failed'),
+        req as any,
+      );
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(executionService.settleBuyPayment).not.toHaveBeenCalled();
+    });
+
+    it('legacy successful but empty txRef → returns 200, settleBuyPayment NOT called', async () => {
+      const { controller, executionService } = makeController();
+
+      const req = { headers: { 'verif-hash': VALID_HASH } };
+
+      const result = await controller.handleWebhook(
+        legacyCollectionBody('successful', ''),
+        req as any,
+      );
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(executionService.settleBuyPayment).not.toHaveBeenCalled();
+    });
+
+    it('legacy invalid verif-hash → 401, settleBuyPayment NOT called', async () => {
+      const { controller, executionService } = makeController({
+        verifyResult: false,
+      });
+
+      const req = { headers: { 'verif-hash': 'wrong-hash' } };
+
+      await expect(
+        controller.handleWebhook(
+          legacyCollectionBody('successful'),
+          req as any,
+        ),
+      ).rejects.toMatchObject({ status: 401 });
+
+      expect(executionService.settleBuyPayment).not.toHaveBeenCalled();
+    });
+
+    it('eventless + no txRef and no transfer reference → returns 200, nothing called', async () => {
+      const { controller, executionService } = makeController();
+
+      const req = { headers: { 'verif-hash': VALID_HASH } };
+
+      const result = await controller.handleWebhook(
+        { id: 999, status: 'successful', amount: 100 },
+        req as any,
+      );
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(executionService.settleBuyPayment).not.toHaveBeenCalled();
+      expect(executionService.settleSellPayout).not.toHaveBeenCalled();
+    });
+
+    it('v3 charge.completed still routes to settleBuyPayment (no regression)', async () => {
+      const { controller, executionService } = makeController();
+
+      const req = { headers: { 'verif-hash': VALID_HASH } };
+
+      const result = await controller.handleWebhook(
+        chargeCompletedBody(),
+        req as any,
+      );
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(executionService.settleBuyPayment).toHaveBeenCalledWith({
+        reference: TX_REF,
+      });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Legacy flat transfer/payout format (no event field)
+  //   No top-level `event`; top-level `reference` + uppercase `status`.
+  // ---------------------------------------------------------------------------
+
+  describe('legacy flat transfer webhook (no event field)', () => {
+    /**
+     * Builds a minimal legacy flat payout body — top-level `reference` +
+     * `status` (SUCCESSFUL/FAILED), NO `event`, NO `txRef`.
+     */
+    function legacyTransferBody(
+      status: string = 'SUCCESSFUL',
+      reference: string = SELL_REFERENCE,
+    ) {
+      return {
+        id: 7766554,
+        reference,
+        account_number: '0690000040',
+        bank_name: 'Access Bank',
+        amount: 5000,
+        currency: 'NGN',
+        status,
+        complete_message: 'Successful',
+      };
+    }
+
+    it('legacy SUCCESSFUL transfer → settleSellPayout(reference), receipt sent, returns 200', async () => {
+      const { controller, executionService, identityService, sender } =
+        makeController({ settleSellResult: 'completed' });
+
+      const req = { headers: { 'verif-hash': VALID_HASH } };
+
+      const result = await controller.handleWebhook(
+        legacyTransferBody('SUCCESSFUL'),
+        req as any,
+      );
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(executionService.settleSellPayout).toHaveBeenCalledWith({
+        reference: SELL_REFERENCE,
+      });
+      expect(identityService.findWhatsAppAddress).toHaveBeenCalledWith(USER_ID);
+      expect(sender.sendText).toHaveBeenCalledWith(
+        WA_ADDRESS,
+        expect.stringContaining(RECEIPT_NUMBER),
+      );
+      // A legacy transfer must NOT be misrouted to the buy path.
+      expect(executionService.settleBuyPayment).not.toHaveBeenCalled();
+    });
+
+    it('legacy FAILED transfer → settleSellPayout(reference) (engine refunds internally)', async () => {
+      const { controller, executionService } = makeController({
+        settleSellResult: 'failed',
+      });
+
+      const req = { headers: { 'verif-hash': VALID_HASH } };
+
+      const result = await controller.handleWebhook(
+        legacyTransferBody('FAILED'),
+        req as any,
+      );
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(executionService.settleSellPayout).toHaveBeenCalledWith({
+        reference: SELL_REFERENCE,
+      });
+      expect(executionService.settleBuyPayment).not.toHaveBeenCalled();
+    });
+
+    it('legacy transfer with unhandled status → returns 200, settleSellPayout NOT called', async () => {
+      const { controller, executionService } = makeController();
+
+      const req = { headers: { 'verif-hash': VALID_HASH } };
+
+      const result = await controller.handleWebhook(
+        legacyTransferBody('PENDING'),
+        req as any,
+      );
+
+      expect(result).toEqual({ status: 'ok' });
+      expect(executionService.settleSellPayout).not.toHaveBeenCalled();
+      expect(executionService.settleBuyPayment).not.toHaveBeenCalled();
+    });
+  });
 });

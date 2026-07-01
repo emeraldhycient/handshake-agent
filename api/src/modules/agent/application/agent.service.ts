@@ -1,7 +1,10 @@
 import { Injectable, Inject } from '@nestjs/common';
 import type { Intent } from '@handshake-agent/contracts';
 import { runAgent } from '../core/agent.graph';
-import type { LlmProvider } from '../core/ports/llm-provider.port';
+import type {
+  ConversationTurn,
+  LlmProvider,
+} from '../core/ports/llm-provider.port';
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { AgentUnavailableError } from '../domain/agent-errors';
 import { LLM_PROVIDER, type IAgentPort } from './ports/agent.port';
@@ -32,7 +35,7 @@ export class AgentService implements IAgentPort {
     private readonly effectiveConfig: EffectiveConfigService,
   ) {}
 
-  async run(userText: string): Promise<Intent> {
+  async run(userText: string, history?: ConversationTurn[]): Promise<Intent> {
     // Enablement gate (admin-tunable agent.enabled, §7): fail-closed BEFORE any
     // LLM call when the agent is disabled. Surfaces as 503 (AGENT_UNAVAILABLE).
     if (this.effectiveConfig.get<boolean>('agent.enabled') === false) {
@@ -41,6 +44,8 @@ export class AgentService implements IAgentPort {
 
     // Per-call graph compile (see TODO above). The LlmProvider closure is
     // captured inside runAgent — it is never read directly from the graph.
-    return runAgent({ userText, llm: this.llm });
+    // `history` is short-term memory supplied by the calling layer (no DB
+    // checkpointer here — CLAUDE.md §6).
+    return runAgent({ userText, llm: this.llm, history });
   }
 }

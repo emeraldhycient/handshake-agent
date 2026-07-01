@@ -52,6 +52,10 @@ function makeConfigService(): { get: <T>(key: string) => T | undefined } {
       if (key === 'WEB_APP_BASE_URL') {
         val = process.env.WEB_APP_BASE_URL ?? undefined;
       }
+      // NIN/BVN field-encryption key (NFR-1) — not in JSON defaults.
+      if (key === 'KYC_ENCRYPTION_KEY') {
+        val = 'a'.repeat(64);
+      }
       return val as T;
     },
   };
@@ -77,7 +81,7 @@ describe('KYC complete — service integration (Testcontainers Postgres)', () =>
     const configSvc = makeConfigService() as never;
 
     const handoffRepo = new HandoffTokenPrismaRepository(ps);
-    const kycRepo = new KycPrismaRepository(ps);
+    const kycRepo = new KycPrismaRepository(ps, configSvc);
     const identityRepo = new IdentityPrismaRepository(ps);
 
     handoffTokenService = new HandoffTokenService(handoffRepo, configSvc);
@@ -175,7 +179,7 @@ describe('KYC complete — service integration (Testcontainers Postgres)', () =>
       firstName: 'Amaka',
       lastName: 'Okafor',
       dateOfBirth: '1992-07-14',
-      pin: '1234',
+      pin: '1357',
     });
 
     expect(result.userId).toBeTruthy();

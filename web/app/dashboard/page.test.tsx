@@ -24,6 +24,16 @@ vi.mock("@/lib/api/auth", () => ({
     kycTier: "1",
     hasPin: true,
   }),
+  // Sidebar verified-badge reads the real tier via useProfile → fetchProfile.
+  fetchProfile: vi.fn().mockResolvedValue({
+    email: "user@example.com",
+    fullName: "Ada Tester",
+    phone: null,
+    kycStatus: "verified",
+    kycTier: "tier_1",
+    fiatCurrency: "NGN",
+    limits: null,
+  }),
   submitSignup: vi.fn(),
   submitVerifyEmail: vi.fn(),
   submitLoginRequest: vi.fn(),
@@ -145,7 +155,9 @@ describe("/dashboard page", () => {
   it("renders the chat rail with the desktop greeting", async () => {
     render(<DashboardPage />, { wrapper })
     await waitFor(() => {
-      expect(screen.getByText(/Welcome back, Amara/i)).toBeInTheDocument()
+      expect(
+        screen.getByText(/right here whenever you want to move money/i)
+      ).toBeInTheDocument()
     })
   })
 })

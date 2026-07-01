@@ -4,7 +4,7 @@ import type {
   BuyProposalConfirmation,
   SwapProposalConfirmation,
 } from "@handshake-agent/contracts"
-import { mapOutcomeToMessages } from "./agent-outcome"
+import { mapOutcomeToMessages, LIVE_SETTLEMENT_FIAT } from "./agent-outcome"
 
 /** Deterministic id generator for assertions. */
 function makeIder() {
@@ -27,6 +27,46 @@ const buyConfirmation: BuyProposalConfirmation = {
 }
 
 describe("mapOutcomeToMessages", () => {
+  it("maps a transactions outcome carrying the frozen window + pagination", () => {
+    const outcome: AgentTurnOutcome = {
+      kind: "transactions",
+      window: {
+        from: "2026-06-15T00:00:00.000Z",
+        to: "2026-06-29T10:00:00.000Z",
+        label: "Last 2 weeks",
+      },
+      items: [
+        {
+          id: "t1",
+          type: "buy",
+          status: "completed",
+          direction: "in",
+          cryptoAmount: "29.97 USDT",
+          createdAt: "2026-06-20T10:00:00.000Z",
+        },
+      ],
+      totalCount: 12,
+      truncated: true,
+      hasMore: true,
+      nextCursor: "CURSOR1",
+      txType: "all",
+      downloadUrl:
+        "https://api.example.com/transactions/statement/download?token=tok",
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      kind: "transactions",
+      windowLabel: "Last 2 weeks",
+      from: "2026-06-15T00:00:00.000Z",
+      to: "2026-06-29T10:00:00.000Z",
+      txType: "all",
+      hasMore: true,
+      nextCursor: "CURSOR1",
+      rows: [{ id: "t1", amount: "+29.97 USDT", sub: "2026-06-20" }],
+    })
+  })
+
   it("maps a clarification to a single assistant text message", () => {
     const { messages, proposalId } = mapOutcomeToMessages(
       { kind: "clarification", text: "Please clarify?" },
@@ -41,7 +81,11 @@ describe("mapOutcomeToMessages", () => {
     })
   })
 
-  it("maps a receive outcome to a receive card with fallbacks", () => {
+  it("maps a receive outcome with no min/eta to EMPTY chip values (never fabricates)", () => {
+    // Finding #9: the backend does not yet populate minAmount/etaText, so the
+    // mapper must NOT invent "—" / "~30 min" (a fabricated, wrong-for-TRON ETA
+    // that disagrees with the wallet-page placeholder). Empty string → the card
+    // hides the chip rather than showing a made-up number.
     const outcome: AgentTurnOutcome = {
       kind: "receive",
       deposit: { asset: "USDT", network: "TRON", address: "TXabc" },
@@ -52,8 +96,26 @@ describe("mapOutcomeToMessages", () => {
       asset: "USDT",
       network: "TRON",
       address: "TXabc",
-      minDeposit: "—",
-      creditedEta: "~30 min",
+      minDeposit: "",
+      creditedEta: "",
+    })
+  })
+
+  it("maps a receive outcome carrying real min/eta through unchanged", () => {
+    const outcome: AgentTurnOutcome = {
+      kind: "receive",
+      deposit: {
+        asset: "USDT",
+        network: "TRON",
+        address: "TXabc",
+        minAmount: "10",
+        etaText: "~2 min",
+      },
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    expect(messages[0]).toMatchObject({
+      minDeposit: "10",
+      creditedEta: "~2 min",
     })
   })
 
@@ -215,6 +277,23 @@ describe("mapOutcomeToMessages", () => {
     expect(messages).toHaveLength(1)
     if (messages[0].kind === "text") {
       expect(messages[0].text).toContain("GHS")
+    }
+  })
+
+  it("sources the live settlement currency from LIVE_SETTLEMENT_FIAT, not a hardcoded literal (audit #28)", () => {
+    // The live settlement fiat appears in the copy and comes from a single
+    // named constant — so it cannot drift between the two mentions.
+    expect(LIVE_SETTLEMENT_FIAT).toBe("NGN")
+    const { messages } = mapOutcomeToMessages(
+      { kind: "currency_not_live", currency: "GHS" },
+      makeIder()
+    )
+    if (messages[0].kind === "text") {
+      // Both occurrences of the live fiat in the sentence are the constant.
+      const occurrences = (
+        messages[0].text.match(new RegExp(LIVE_SETTLEMENT_FIAT, "g")) ?? []
+      ).length
+      expect(occurrences).toBe(2)
     }
   })
 })

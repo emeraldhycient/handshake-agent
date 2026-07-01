@@ -35,6 +35,12 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
       isGlobal: true,
       load: [configuration],
       validate: (raw: Record<string, unknown>) => validateEnv(raw),
+      // Under test, do NOT load the dev `.env`: it carries live secrets and
+      // real provider modes (e.g. NAME_ENQUIRY_MOCK_MODE=false for live testing)
+      // that would leak into e2e runs and make non-overridden providers hit real
+      // APIs. Tests set their own env explicitly; everything else falls back to
+      // the mock-by-default schema values (see env.schema). Dev/prod still load .env.
+      ignoreEnvFile: process.env.NODE_ENV === 'test',
     }),
     // ThrottlerModule registered globally so ThrottlerGuard resolves in any module
     // (e.g. KycController in IdentityModule). v6-style: named throttlers, ttl in ms.

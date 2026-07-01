@@ -542,6 +542,61 @@ describe('BlockradarProvider', () => {
         }),
       ).rejects.toMatchObject({ httpStatus: 422 });
     });
+
+    // The execution engine's refund-vs-leave decision depends on reading the
+    // exact HTTP status structurally. Lock in the full matrix: every Blockradar
+    // 4xx/5xx withdraw rejection must expose `httpStatus`, and a network error
+    // (no HTTP response) must NOT — so the engine treats it as ambiguous and
+    // never refunds an in-flight withdrawal (CLAUDE.md §3.1).
+    it.each([
+      [400, 'Invalid destination address'],
+      [404, 'Asset not found'],
+      [500, 'Internal server error'],
+    ])(
+      'preserves httpStatus=%s structurally on a Blockradar %s rejection',
+      async (status, message) => {
+        const axiosErr = Object.assign(new Error('HTTP error'), {
+          response: { status, data: { message, statusCode: status } },
+          isAxiosError: true,
+        });
+        http.post.mockReturnValue(throwError(() => axiosErr));
+
+        await expect(
+          provider.withdraw({
+            addressId: ADDRESS_ID,
+            toAddress: TO_ADDRESS,
+            amount: AMOUNT,
+            assetId: USDT_TRON_ASSET_ID,
+            network: 'TRON',
+          }),
+        ).rejects.toMatchObject({ httpStatus: status });
+      },
+    );
+
+    it('does NOT attach httpStatus on a network error (no HTTP response → ambiguous, never refund)', async () => {
+      // A bare network failure has no axios `response`, so no status can be
+      // derived. The engine must treat this as ambiguous and leave the reserve.
+      http.post.mockReturnValue(throwError(() => new Error('ECONNRESET')));
+
+      const rejection = provider
+        .withdraw({
+          addressId: ADDRESS_ID,
+          toAddress: TO_ADDRESS,
+          amount: AMOUNT,
+          assetId: USDT_TRON_ASSET_ID,
+          network: 'TRON',
+        })
+        .then(
+          () => {
+            throw new Error('expected withdraw to reject');
+          },
+          (err: unknown) => err,
+        );
+
+      const err = (await rejection) as { httpStatus?: unknown };
+      expect(err).toBeInstanceOf(Error);
+      expect(err.httpStatus).toBeUndefined();
+    });
   });
 
   // ── listWalletAssets ─────────────────────────────────────────────────────
@@ -678,6 +733,59 @@ describe('BlockradarProvider', () => {
       const result = await provider.listWalletAssets(MASTER_WALLET);
 
       expect(result[0].decimals).toBe(6);
+    });
+
+    it('maps data[n].asset.logoUrl → logoUrl when present', async () => {
+      const logo =
+        'https://res.cloudinary.com/blockradar/image/upload/v1/usdt.png';
+      const body = {
+        ...SUCCESS_BODY,
+        data: [
+          {
+            ...SUCCESS_BODY.data[0],
+            asset: { ...SUCCESS_BODY.data[0].asset, logoUrl: logo },
+          },
+        ],
+      };
+      http.get.mockReturnValue(of(axiosOk(body)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].logoUrl).toBe(logo);
+    });
+
+    it('falls back to data[n].asset.blockchain.logoUrl when asset.logoUrl is absent', async () => {
+      const chainLogo =
+        'https://res.cloudinary.com/blockradar/image/upload/v1/tron.png';
+      const body = {
+        ...SUCCESS_BODY,
+        data: [
+          {
+            ...SUCCESS_BODY.data[0],
+            asset: {
+              ...SUCCESS_BODY.data[0].asset,
+              blockchain: {
+                ...SUCCESS_BODY.data[0].asset.blockchain,
+                logoUrl: chainLogo,
+              },
+            },
+          },
+        ],
+      };
+      http.get.mockReturnValue(of(axiosOk(body)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      expect(result[0].logoUrl).toBe(chainLogo);
+    });
+
+    it('maps logoUrl → null when neither asset nor blockchain provides one', async () => {
+      http.get.mockReturnValue(of(axiosOk(SUCCESS_BODY)));
+
+      const result = await provider.listWalletAssets(MASTER_WALLET);
+
+      // SUCCESS_BODY has no logoUrl on either asset or blockchain.
+      expect(result[0].logoUrl).toBeNull();
     });
 
     it('maps asset.network === "mainnet" → isMainnet true', async () => {

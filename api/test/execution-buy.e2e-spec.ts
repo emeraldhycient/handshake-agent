@@ -284,8 +284,8 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
     });
     userId = user.id;
 
-    // Set PIN '123456' via real PinService (hashes with scrypt + persists).
-    await pinService.setPin(userId, '123456');
+    // Set PIN '194837' via real PinService (hashes with scrypt + persists).
+    await pinService.setPin(userId, '194837');
   });
 
   afterAll(async () => {
@@ -345,7 +345,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       proposalId,
       directiveId,
       nonce,
-      pin: '123456',
+      pin: '194837',
       idempotencyKey,
     });
 
@@ -403,7 +403,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
     const velocityUser = await prisma.user.create({
       data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },
     });
-    await pinService.setPin(velocityUser.id, '123456');
+    await pinService.setPin(velocityUser.id, '194837');
 
     // Seed a proposal for this user (reuse proposalService with the right userId).
     const quoteResult = await proposalService.createBuyProposal({
@@ -427,7 +427,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       proposalId: quoteResult.proposalId,
       directiveId: dir.directiveId,
       nonce: dir.nonce,
-      pin: '123456',
+      pin: '194837',
       idempotencyKey: randomUUID(),
     });
 
@@ -462,7 +462,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
     const capUser = await prisma.user.create({
       data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },
     });
-    await pinService.setPin(capUser.id, '123456');
+    await pinService.setPin(capUser.id, '194837');
 
     // Tier-1 dailyFiatMax=200_000, perTxFiatMax=50_000.
     // Run 4 buys × 50_000 = 200_000 (at the limit — all pass).
@@ -486,7 +486,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
         proposalId: q.proposalId,
         directiveId: d.directiveId,
         nonce: d.nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey: randomUUID(),
       });
     }
@@ -548,7 +548,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
     const countUser = await prisma.user.create({
       data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },
     });
-    await pinService.setPin(countUser.id, '123456');
+    await pinService.setPin(countUser.id, '194837');
 
     // Seed VelocityCounter directly at count=9 (faster than running 9 real buys).
     const now = new Date();
@@ -594,7 +594,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
         proposalId: q10.proposalId,
         directiveId: d10.directiveId,
         nonce: d10.nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey: randomUUID(),
       }),
     ).resolves.toMatchObject({ status: 'settling' });
@@ -620,7 +620,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
     const resetUser = await prisma.user.create({
       data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },
     });
-    await pinService.setPin(resetUser.id, '123456');
+    await pinService.setPin(resetUser.id, '194837');
 
     // Seed stale (expired) velocity counter rows — windowEnd 48h in the past.
     const pastNow = new Date();
@@ -667,7 +667,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
         proposalId: q.proposalId,
         directiveId: d.directiveId,
         nonce: d.nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey: randomUUID(),
       }),
     ).resolves.toMatchObject({ status: 'settling' });
@@ -696,7 +696,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       proposalId,
       directiveId,
       nonce,
-      pin: '123456',
+      pin: '194837',
       idempotencyKey,
     });
     expect(first.transactionId).toBeTruthy();
@@ -723,7 +723,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
       proposalId: proposalId2,
       directiveId: directiveId2,
       nonce: nonce2,
-      pin: '123456',
+      pin: '194837',
       idempotencyKey, // same key!
     });
 

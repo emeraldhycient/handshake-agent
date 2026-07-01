@@ -27,12 +27,13 @@ import {
   buildReceipt,
   startChips,
   chipLabel,
+  actionPrompt,
 } from "@/lib/chat/flow"
 import { parseIntent } from "@/lib/chat/intent"
 import { mapOutcomeToMessages } from "@/lib/chat/agent-outcome"
-import { GREETING_M, GREETING_D } from "@/lib/constants"
-import { formatNGN } from "@/lib/format"
-import { ApiError } from "@/lib/api/client"
+import { GREETING_M, GREETING_D, greetingDesktop } from "@/lib/constants"
+import { formatFiat } from "@/lib/format"
+import { ApiError, isSessionExpiredError } from "@/lib/api/client"
 import type {
   ChatAction,
   ChatMessage,
@@ -54,8 +55,10 @@ import type {
 } from "@handshake-agent/contracts"
 import { getDeviceFingerprint } from "@/lib/device"
 
-// Re-export chipLabel so components can import it from the store module if needed.
-export { chipLabel }
+// Re-export chip/prompt helpers so surfaces can import them from the store
+// module if needed. actionPrompt gives pages an amount-free open prompt to send
+// to the live agent for authenticated quick-actions (finding #6).
+export { chipLabel, actionPrompt }
 
 /** Milliseconds before the success overlay auto-dismisses. Matches prototype (line 1352). */
 const SUCCESS_DISMISS_MS = 1150
@@ -121,6 +124,23 @@ function buildCompletionReceipt(
     }
   }
 
+  if (action === "swap") {
+    // Finding #4: a completed swap gets a swap receipt (its amounts aren't echoed
+    // on the status payload, so they come from the confirmed proposal). Drives
+    // off the swap card's "You receive" hero rather than the buy copy.
+    return {
+      kind: "receipt" as const,
+      title: "Swap complete",
+      subtitle: "Your swapped balance is ready",
+      amount: pending.heroAmount,
+      rows: [
+        pending.rows[0] ?? { label: "Swapped", value: pending.heroAmount },
+        { label: "Date", value: date },
+      ],
+      txRef,
+    }
+  }
+
   // buy
   return {
     kind: "receipt" as const,
@@ -132,7 +152,13 @@ function buildCompletionReceipt(
     rows: [
       {
         label: "Paid",
-        value: tx.fiatAmount ? formatNGN(tx.fiatAmount) : pending.totalValue,
+        // Drive the symbol from the transaction's fiatCurrency — never hardcode
+        // ₦. Once a non-NGN fiat is live the paid amount must render with that
+        // currency's symbol (audit #29). Default NGN when the status payload
+        // omits it (current launch fiat).
+        value: tx.fiatAmount
+          ? formatFiat(tx.fiatAmount, tx.fiatCurrency ?? "NGN")
+          : pending.totalValue,
       },
       { label: "Date", value: date },
     ],
@@ -144,6 +170,10 @@ function buildCompletionReceipt(
 
 const GENERIC_AGENT_ERROR =
   "I'm having trouble reaching the assistant right now — please try again."
+
+/** Notice shown in-thread when the session has expired (findings #1 / #2). */
+const SESSION_EXPIRED_NOTICE =
+  "Your session expired. Please log in again to continue."
 
 /**
  * Extracts the user-facing error message from a caught value.
@@ -160,6 +190,22 @@ function chatErrorMessage(err: unknown): string {
     return err.message
   }
   return GENERIC_AGENT_ERROR
+}
+
+/**
+ * Is `err` a genuine PIN / directive authorization failure that re-entering the
+ * PIN can fix (PIN_INVALID, PIN_LOCKED, DIRECTIVE_EXPIRED, …)? The backend maps
+ * all of these to 401. A 401 that is the interceptor's dead-session sentinel is
+ * NOT one of these — it is handled separately as session-expiry (finding #1).
+ *
+ * A plain (statusless) Error is treated as a PIN error too, preserving the
+ * existing "wrong PIN → reopen pad" behaviour for the offline/mock path and any
+ * caller that rejects with a bare Error.
+ */
+function isRetryablePinError(err: unknown): boolean {
+  if (isSessionExpiredError(err)) return false
+  if (err instanceof ApiError) return err.status === 401
+  return err instanceof Error
 }
 
 // ─── Scheduler type ───────────────────────────────────────────────────────────
@@ -230,8 +276,14 @@ interface ChatState {
   historyHydrated: Record<ChatSurface, boolean>
 
   // The last money-intent text the user sent — re-sent (with a beneficiaryId)
-  // by resolveBeneficiary after they add a payout destination.
+  // by resolveBeneficiary after they add a payout destination. Used only as the
+  // fallback when a needs_beneficiary card does not pass its own message id.
   _lastIntentText: string | null
+
+  // Finding #3: each needs_beneficiary card is bound to the EXACT intent text
+  // that produced it (keyed by the card's message id), so resolving a stale card
+  // re-sends that intent — not whatever the user typed most recently.
+  _beneficiaryIntents: Record<string, string>
 
   // Actions
   send(surface: ChatSurface, text: string, action?: ChatAction): void
@@ -248,11 +300,23 @@ interface ChatState {
    */
   hydrateHistory(surface: ChatSurface, items: ChatHistoryItem[]): void
   /**
-   * Re-sends the last money request with a newly added/selected beneficiaryId
-   * so the sell/send proposal can be created. Called from the needs_beneficiary
-   * card once the user adds or picks a payout destination.
+   * Re-sends the money request a specific needs_beneficiary card was created
+   * for, with a newly added/selected beneficiaryId so the sell/send proposal can
+   * be created. Called from the needs_beneficiary card once the user adds or
+   * picks a payout destination.
+   *
+   * Finding #3: pass the card's `messageId` so the re-send uses the intent text
+   * THAT card was bound to — not the mutable `_lastIntentText`, which a later
+   * unrelated message would have overwritten. Omitting `messageId` falls back to
+   * `_lastIntentText` (legacy callers).
    */
-  resolveBeneficiary(surface: ChatSurface, beneficiaryId: string): Promise<void>
+  resolveBeneficiary(
+    surface: ChatSurface,
+    beneficiaryId: string,
+    messageId?: string
+  ): Promise<void>
+  /** Wire (or replace) the dead-session redirect after construction (findings #1/#2). */
+  setSessionExpiredHandler(handler: () => void): void
   /**
    * Transcribe a recorded voice note (POST /chat/voice) and route the transcript
    * through the same agent path as text: appends the transcript as the user
@@ -260,6 +324,14 @@ interface ChatState {
    */
   sendVoiceToAgent(surface: ChatSurface, blob: Blob): Promise<void>
   setInput(surface: ChatSurface, value: string): void
+  /**
+   * Personalize the desktop chat greeting with the signed-in user's first name
+   * (matching the topbar's profile name). Called once the profile loads. A no-op
+   * once the desktop conversation has started — it only swaps the initial
+   * greeting message in place, never clobbering history. Passing no name leaves
+   * the name-free generic greeting.
+   */
+  setDesktopGreeting(firstName?: string): void
   openConfirm(surface: ChatSurface, payload: ConfirmPayload): void
   cancel(): void
   /**
@@ -299,6 +371,13 @@ interface CreateChatStoreOptions {
    * module-level mocking. Defaults to `sendVoiceNote` from `@/lib/api/chat`.
    */
   voiceApi?: (blob: Blob) => Promise<VoiceChatResponse>
+  /**
+   * Called when a request fails with the dead-session 401 (findings #1 / #2).
+   * The store cannot import `next/navigation`, so the surface injects a
+   * redirect (e.g. `() => router.push("/login")`). May also be wired after
+   * construction via `setSessionExpiredHandler`.
+   */
+  onSessionExpired?: () => void
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -315,6 +394,12 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
   const schedule: Scheduler = options.schedule ?? ((fn) => setTimeout(fn, 680))
   const chatApiFn = options.chatApi ?? defaultSendChatMessage
   const voiceApiFn = options.voiceApi ?? defaultSendVoiceNote
+
+  // Mutable redirect handler — set at construction and/or via
+  // setSessionExpiredHandler. Default no-op so the store works headless (the
+  // interceptor already clears the session, so RequireAuth redirects on its next
+  // render even when no handler is wired).
+  let onSessionExpired: () => void = options.onSessionExpired ?? (() => {})
 
   // Lazy-import the real API functions so tests can inject mocks without
   // bundling the axios client. These are only called when the injected
@@ -347,505 +432,480 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
   const greetingM = greetingMessage(GREETING_M)
   const greetingD = greetingMessage(GREETING_D)
 
-  return createStore<ChatState>()((set, get) => ({
-    // ── Initial state ──────────────────────────────────────────────────────────
-    threads: {
-      m: [greetingM],
-      d: [greetingD],
-    },
-    chips: {
-      m: startChips(),
-      d: startChips(),
-    },
-    typing: { m: false, d: false },
-    input: { m: "", d: "" },
-
-    pending: null,
-    overlaySurface: "m",
-    confirmOpen: false,
-    pinOpen: false,
-    pin: "",
-    successOpen: false,
-    successText: "",
-    successSurface: "m",
-
-    pinError: null,
-
-    pendingProposalId: null,
-
-    _directiveId: null,
-    _nonce: null,
-    _idempotencyKey: null,
-    _pollingTransactionId: null,
-    _settlingSurface: null,
-    _settlingAction: null,
-    _settlingPending: null,
-    historyHydrated: { m: false, d: false },
-    _lastIntentText: null,
-
-    // ── Actions ────────────────────────────────────────────────────────────────
-
-    hydrateHistory(surface, items) {
-      if (get().historyHydrated[surface]) return
-
-      const built: ChatMessage[] = []
-      let lastProposalId: string | null = null
-      for (const item of items) {
-        built.push({
-          id: nextId(),
-          role: "user",
-          kind: "text",
-          text: item.userText,
-        })
-        if (item.outcome) {
-          const { messages, proposalId } = mapOutcomeToMessages(
-            item.outcome,
-            nextId
-          )
-          built.push(...messages)
-          if (proposalId) lastProposalId = proposalId
-        }
-      }
-
-      set((s) => {
-        // Keep the greeting at index 0; insert reconstructed history after it,
-        // before any messages already added live this session.
-        const [greeting, ...rest] = s.threads[surface]
-        return {
-          threads: {
-            ...s.threads,
-            [surface]: [greeting, ...built, ...rest],
-          },
-          historyHydrated: { ...s.historyHydrated, [surface]: true },
-          ...(lastProposalId ? { pendingProposalId: lastProposalId } : {}),
-        }
-      })
-    },
-
-    async sendToAgent(surface, text, beneficiaryId) {
-      const trimmed = text.trim()
-      if (!trimmed) return
-
-      // Remember the text so resolveBeneficiary can re-send it once the user
-      // adds the payout destination a sell/send needs.
-      set({ _lastIntentText: trimmed })
-
-      const userMsg: ChatMessage = {
+  return createStore<ChatState>()((set, get) => {
+    /**
+     * Shared dead-session handler (findings #1 / #2). Closes every overlay/pin
+     * pad (a PIN can't fix a dead session), surfaces a clear in-thread notice,
+     * clears typing, and fires the injected redirect. NEVER sets pinError — a
+     * session expiry must not masquerade as a wrong PIN.
+     */
+    function handleSessionExpired(surface: ChatSurface) {
+      const notice: ChatMessage = {
         id: nextId(),
-        role: "user",
+        role: "assistant",
         kind: "text",
-        text: trimmed,
+        text: SESSION_EXPIRED_NOTICE,
       }
-
       set((s) => ({
-        threads: { ...s.threads, [surface]: [...s.threads[surface], userMsg] },
-        chips: { ...s.chips, [surface]: [] },
-        typing: { ...s.typing, [surface]: true },
+        threads: {
+          ...s.threads,
+          [surface]: [...s.threads[surface], notice],
+        },
+        typing: { ...s.typing, [surface]: false },
+        chips: { ...s.chips, [surface]: startChips() },
+        confirmOpen: false,
+        pinOpen: false,
+        pin: "",
+        pinError: null,
+        pending: null,
+        _directiveId: null,
+        _nonce: null,
+        _idempotencyKey: null,
       }))
+      onSessionExpired()
+    }
 
-      try {
-        const response = await chatApiFn(
-          beneficiaryId ? { text: trimmed, beneficiaryId } : { text: trimmed }
-        )
-        const { outcome } = response
+    return {
+      // ── Initial state ──────────────────────────────────────────────────────────
+      threads: {
+        m: [greetingM],
+        d: [greetingD],
+      },
+      chips: {
+        m: startChips(),
+        d: startChips(),
+      },
+      typing: { m: false, d: false },
+      input: { m: "", d: "" },
 
-        // Shared mapping — identical to the reload/hydration path so a live reply
-        // and a reloaded reply render the same. Never produces a receipt (§3.1).
-        const { messages, proposalId } = mapOutcomeToMessages(outcome, nextId)
-        const pendingProposalId = proposalId ?? undefined
+      pending: null,
+      overlaySurface: "m",
+      confirmOpen: false,
+      pinOpen: false,
+      pin: "",
+      successOpen: false,
+      successText: "",
+      successSurface: "m",
 
-        set((s) => ({
-          threads: {
-            ...s.threads,
-            [surface]: [...s.threads[surface], ...messages],
-          },
-          typing: { ...s.typing, [surface]: false },
-          chips: { ...s.chips, [surface]: startChips() },
-          ...(pendingProposalId ? { pendingProposalId } : {}),
-        }))
-      } catch (err) {
-        const errMsg: ChatMessage = {
-          id: nextId(),
-          role: "assistant",
-          kind: "text",
-          text: chatErrorMessage(err),
+      pinError: null,
+
+      pendingProposalId: null,
+
+      _directiveId: null,
+      _nonce: null,
+      _idempotencyKey: null,
+      _pollingTransactionId: null,
+      _settlingSurface: null,
+      _settlingAction: null,
+      _settlingPending: null,
+      historyHydrated: { m: false, d: false },
+      _lastIntentText: null,
+      _beneficiaryIntents: {},
+
+      // ── Actions ────────────────────────────────────────────────────────────────
+
+      setSessionExpiredHandler(handler) {
+        onSessionExpired = handler
+      },
+
+      hydrateHistory(surface, items) {
+        if (get().historyHydrated[surface]) return
+
+        const built: ChatMessage[] = []
+        let lastProposalId: string | null = null
+        for (const item of items) {
+          built.push({
+            id: nextId(),
+            role: "user",
+            kind: "text",
+            text: item.userText,
+          })
+          if (item.outcome) {
+            const { messages, proposalId } = mapOutcomeToMessages(
+              item.outcome,
+              nextId
+            )
+            built.push(...messages)
+            if (proposalId) lastProposalId = proposalId
+          }
         }
-        set((s) => ({
-          threads: {
-            ...s.threads,
-            [surface]: [...s.threads[surface], errMsg],
-          },
-          typing: { ...s.typing, [surface]: false },
-          chips: { ...s.chips, [surface]: startChips() },
-        }))
-      }
-    },
 
-    async sendVoiceToAgent(surface, blob) {
-      set((s) => ({
-        chips: { ...s.chips, [surface]: [] },
-        typing: { ...s.typing, [surface]: true },
-      }))
+        set((s) => {
+          // Keep the greeting at index 0; insert reconstructed history after it,
+          // before any messages already added live this session.
+          const [greeting, ...rest] = s.threads[surface]
+          return {
+            threads: {
+              ...s.threads,
+              [surface]: [greeting, ...built, ...rest],
+            },
+            historyHydrated: { ...s.historyHydrated, [surface]: true },
+            ...(lastProposalId ? { pendingProposalId: lastProposalId } : {}),
+          }
+        })
+      },
 
-      try {
-        const response = await voiceApiFn(blob)
+      async sendToAgent(surface, text, beneficiaryId) {
+        const trimmed = text.trim()
+        if (!trimmed) return
+
+        // Remember the text so resolveBeneficiary can re-send it once the user
+        // adds the payout destination a sell/send needs.
+        set({ _lastIntentText: trimmed })
+
         const userMsg: ChatMessage = {
           id: nextId(),
           role: "user",
           kind: "text",
-          text: response.transcript,
+          text: trimmed,
         }
-        const { messages, proposalId } = mapOutcomeToMessages(
-          response.outcome,
-          nextId
-        )
-        const pendingProposalId = proposalId ?? undefined
+
         set((s) => ({
           threads: {
             ...s.threads,
-            [surface]: [...s.threads[surface], userMsg, ...messages],
+            [surface]: [...s.threads[surface], userMsg],
           },
-          typing: { ...s.typing, [surface]: false },
-          chips: { ...s.chips, [surface]: startChips() },
-          ...(pendingProposalId ? { pendingProposalId } : {}),
+          chips: { ...s.chips, [surface]: [] },
+          typing: { ...s.typing, [surface]: true },
         }))
-      } catch (err) {
-        const errMsg: ChatMessage = {
-          id: nextId(),
-          role: "assistant",
-          kind: "text",
-          text: chatErrorMessage(err),
-        }
-        set((s) => ({
-          threads: {
-            ...s.threads,
-            [surface]: [...s.threads[surface], errMsg],
-          },
-          typing: { ...s.typing, [surface]: false },
-          chips: { ...s.chips, [surface]: startChips() },
-        }))
-      }
-    },
 
-    async resolveBeneficiary(surface, beneficiaryId) {
-      const { _lastIntentText } = get()
-      if (!_lastIntentText) return
-      await get().sendToAgent(surface, _lastIntentText, beneficiaryId)
-    },
+        try {
+          const response = await chatApiFn(
+            beneficiaryId ? { text: trimmed, beneficiaryId } : { text: trimmed }
+          )
+          const { outcome } = response
 
-    send(surface, text, explicitAction) {
-      const trimmed = text.trim()
-      if (!trimmed) return
+          // Shared mapping — identical to the reload/hydration path so a live reply
+          // and a reloaded reply render the same. Never produces a receipt (§3.1).
+          const { messages, proposalId } = mapOutcomeToMessages(outcome, nextId)
+          const pendingProposalId = proposalId ?? undefined
 
-      const action: ChatAction | null = explicitAction ?? parseIntent(trimmed)
-
-      // Append the user message immediately.
-      const userMsg: ChatMessage = {
-        id: nextId(),
-        role: "user",
-        kind: "text",
-        text: trimmed,
-      }
-
-      set((s) => ({
-        threads: {
-          ...s.threads,
-          [surface]: [...s.threads[surface], userMsg],
-        },
-        chips: { ...s.chips, [surface]: [] },
-        typing: { ...s.typing, [surface]: true },
-      }))
-
-      if (action) {
-        schedule(() => {
-          const { messages } = buildResponse(action)
-          const assembled: ChatMessage[] = messages.map((m) => ({
-            ...m,
-            id: nextId(),
-            role: "assistant" as const,
-          }))
-
-          // Follow-up chips: clear them while a quote is pending (quote actions);
-          // restore startChips for non-quote actions (balance/receive/ticket).
-          const hasQuote = assembled.some((m) => m.kind === "quote")
-          const followUpChips = hasQuote ? [] : startChips()
+          // Finding #3: bind any needs_beneficiary card to the EXACT intent text
+          // that produced it, keyed by the card's message id, so resolving a stale
+          // card later re-sends that intent and not a more recent unrelated one.
+          const beneficiaryCard = messages.find(
+            (m) => m.kind === "needs_beneficiary"
+          )
 
           set((s) => ({
             threads: {
               ...s.threads,
-              [surface]: [...s.threads[surface], ...assembled],
+              [surface]: [...s.threads[surface], ...messages],
             },
             typing: { ...s.typing, [surface]: false },
-            chips: { ...s.chips, [surface]: followUpChips },
+            chips: { ...s.chips, [surface]: startChips() },
+            ...(pendingProposalId ? { pendingProposalId } : {}),
+            ...(beneficiaryCard
+              ? {
+                  _beneficiaryIntents: {
+                    ...s._beneficiaryIntents,
+                    [beneficiaryCard.id]: trimmed,
+                  },
+                }
+              : {}),
           }))
-        })
-      } else {
-        // Fallback: no recognised intent — generic assistant reply.
-        schedule(() => {
-          const fallbackMsg: ChatMessage = {
+        } catch (err) {
+          // Finding #2: a dead session mid-conversation must move the user to
+          // re-auth, not render a dead-end bubble that silently loses the thread.
+          if (isSessionExpiredError(err)) {
+            handleSessionExpired(surface)
+            return
+          }
+          const errMsg: ChatMessage = {
             id: nextId(),
             role: "assistant",
             kind: "text",
-            text: "I didn't quite catch that. Try asking me to buy crypto, send money, check your balance, or find an event ticket.",
+            text: chatErrorMessage(err),
           }
           set((s) => ({
             threads: {
               ...s.threads,
-              [surface]: [...s.threads[surface], fallbackMsg],
+              [surface]: [...s.threads[surface], errMsg],
             },
             typing: { ...s.typing, [surface]: false },
             chips: { ...s.chips, [surface]: startChips() },
           }))
-        })
-      }
-    },
-
-    setInput(surface, value) {
-      set((s) => ({ input: { ...s.input, [surface]: value } }))
-    },
-
-    openConfirm(surface, payload) {
-      set({
-        pending: payload,
-        overlaySurface: surface,
-        confirmOpen: true,
-        pinError: null,
-        _directiveId: null,
-        _nonce: null,
-        _idempotencyKey: null,
-      })
-    },
-
-    cancel() {
-      set({
-        confirmOpen: false,
-        pinOpen: false,
-        pin: "",
-        pending: null,
-        pinError: null,
-        _directiveId: null,
-        _nonce: null,
-        _idempotencyKey: null,
-      })
-    },
-
-    /**
-     * Transition from confirm sheet to PIN pad.
-     *
-     * Authenticated path: calls authorizeProposal(pendingProposalId) first.
-     * On success, stores directiveId + nonce + fresh idempotencyKey, then
-     * opens the PIN pad. On failure, surface the error on the confirm sheet
-     * and keep it open so the user can retry or cancel.
-     *
-     * Mock/unauthenticated path: pendingProposalId is null → open PIN directly.
-     */
-    async confirmToPin() {
-      const { pendingProposalId } = get()
-
-      // Mock/offline path (no live proposal): skip authorize, open PIN directly.
-      if (!pendingProposalId) {
-        set({ confirmOpen: false, pinOpen: true, pin: "", pinError: null })
-        return
-      }
-
-      try {
-        const authorizeFn = getAuthorizeFn()!
-        const result = await authorizeFn(pendingProposalId)
-        set({
-          confirmOpen: false,
-          pinOpen: true,
-          pin: "",
-          pinError: null,
-          _directiveId: result.directiveId,
-          _nonce: result.nonce,
-          // I8: the execute idempotency key is STABLE per proposal (= proposalId),
-          // not a fresh uuid per attempt. A retry of the same proposal therefore
-          // sends the same key, and the server (which derives the same key from
-          // proposalId, never trusting this value) dedups it — no double-execute.
-          _idempotencyKey: pendingProposalId,
-        })
-      } catch (err) {
-        // Show error on the confirm sheet; do NOT open the PIN pad.
-        const message =
-          err instanceof Error
-            ? err.message
-            : "Authorization failed. Please try again."
-        set({ pinError: message })
-      }
-    },
-
-    pressPin(digit) {
-      const { pin } = get()
-      // Ignore if already 4 digits — this guard is checked against the current
-      // pin length BEFORE appending, so pressing a 5th digit when pin === "1234"
-      // (length 4) is ignored. After pinComplete() runs, pin resets to "" so
-      // subsequent presses start a fresh entry.
-      if (pin.length >= 4) return
-      const next = pin + digit
-      set({ pin: next })
-      if (next.length === 4) {
-        void get().pinComplete()
-      }
-    },
-
-    pinBack() {
-      set((s) => ({ pin: s.pin.slice(0, -1) }))
-    },
-
-    /**
-     * THE ONLY path that appends a receipt-kind message and opens success.
-     * Called automatically when the 4th PIN digit is pressed.
-     *
-     * Authenticated path: calls executeProposal with PIN + directive credentials.
-     * - status:"settling" + payment → appends pay-in card, starts polling.
-     * - status:"completed" → appends full receipt, opens success overlay.
-     * - Wrong PIN / expired / locked → clears PIN, shows error on PIN pad, keeps proposal.
-     *
-     * Mock/offline path (_directiveId is null): appends fixture receipt immediately.
-     */
-    async pinComplete() {
-      const {
-        pending,
-        overlaySurface,
-        pendingProposalId,
-        _directiveId,
-        _nonce,
-        _idempotencyKey,
-        pin,
-      } = get()
-      if (!pending) return
-
-      // ── Mock/offline path ────────────────────────────────────────────────────
-      if (!pendingProposalId || !_directiveId || !_nonce || !_idempotencyKey) {
-        const receipt: ChatMessage = {
-          ...buildReceipt(pending.action, pending.meta),
-          id: nextId(),
-          role: "assistant",
         }
+      },
 
-        const successText = COMPLETION_SUCCESS_LABEL[pending.action] ?? "Done"
+      async sendVoiceToAgent(surface, blob) {
+        set((s) => ({
+          chips: { ...s.chips, [surface]: [] },
+          typing: { ...s.typing, [surface]: true },
+        }))
+
+        try {
+          const response = await voiceApiFn(blob)
+          const userMsg: ChatMessage = {
+            id: nextId(),
+            role: "user",
+            kind: "text",
+            text: response.transcript,
+          }
+          const { messages, proposalId } = mapOutcomeToMessages(
+            response.outcome,
+            nextId
+          )
+          const pendingProposalId = proposalId ?? undefined
+          set((s) => ({
+            threads: {
+              ...s.threads,
+              [surface]: [...s.threads[surface], userMsg, ...messages],
+            },
+            typing: { ...s.typing, [surface]: false },
+            chips: { ...s.chips, [surface]: startChips() },
+            ...(pendingProposalId ? { pendingProposalId } : {}),
+          }))
+        } catch (err) {
+          if (isSessionExpiredError(err)) {
+            handleSessionExpired(surface)
+            return
+          }
+          const errMsg: ChatMessage = {
+            id: nextId(),
+            role: "assistant",
+            kind: "text",
+            text: chatErrorMessage(err),
+          }
+          set((s) => ({
+            threads: {
+              ...s.threads,
+              [surface]: [...s.threads[surface], errMsg],
+            },
+            typing: { ...s.typing, [surface]: false },
+            chips: { ...s.chips, [surface]: startChips() },
+          }))
+        }
+      },
+
+      async resolveBeneficiary(surface, beneficiaryId, messageId) {
+        // Finding #3: prefer the intent bound to THIS card; fall back to the
+        // mutable last-intent only for legacy callers that pass no messageId.
+        const { _beneficiaryIntents, _lastIntentText } = get()
+        const intentText =
+          (messageId ? _beneficiaryIntents[messageId] : undefined) ??
+          _lastIntentText
+        if (!intentText) return
+        await get().sendToAgent(surface, intentText, beneficiaryId)
+      },
+
+      send(surface, text, explicitAction) {
+        const trimmed = text.trim()
+        if (!trimmed) return
+
+        const action: ChatAction | null = explicitAction ?? parseIntent(trimmed)
+
+        // Append the user message immediately.
+        const userMsg: ChatMessage = {
+          id: nextId(),
+          role: "user",
+          kind: "text",
+          text: trimmed,
+        }
 
         set((s) => ({
           threads: {
             ...s.threads,
-            [overlaySurface]: [...s.threads[overlaySurface], receipt],
+            [surface]: [...s.threads[surface], userMsg],
           },
-          chips: { ...s.chips, [overlaySurface]: startChips() },
-          pinOpen: false,
-          pin: "",
-          confirmOpen: false,
-          pending: null,
-          pendingProposalId: null,
+          chips: { ...s.chips, [surface]: [] },
+          typing: { ...s.typing, [surface]: true },
+        }))
+
+        if (action) {
+          schedule(() => {
+            const { messages } = buildResponse(action)
+            const assembled: ChatMessage[] = messages.map((m) => ({
+              ...m,
+              id: nextId(),
+              role: "assistant" as const,
+            }))
+
+            // Follow-up chips: clear them while a quote is pending (quote actions);
+            // restore startChips for non-quote actions (balance/receive/ticket).
+            const hasQuote = assembled.some((m) => m.kind === "quote")
+            const followUpChips = hasQuote ? [] : startChips()
+
+            set((s) => ({
+              threads: {
+                ...s.threads,
+                [surface]: [...s.threads[surface], ...assembled],
+              },
+              typing: { ...s.typing, [surface]: false },
+              chips: { ...s.chips, [surface]: followUpChips },
+            }))
+          })
+        } else {
+          // Fallback: no recognised intent — generic assistant reply.
+          schedule(() => {
+            const fallbackMsg: ChatMessage = {
+              id: nextId(),
+              role: "assistant",
+              kind: "text",
+              text: "I didn't quite catch that. Try asking me to buy crypto, send money, check your balance, or find an event ticket.",
+            }
+            set((s) => ({
+              threads: {
+                ...s.threads,
+                [surface]: [...s.threads[surface], fallbackMsg],
+              },
+              typing: { ...s.typing, [surface]: false },
+              chips: { ...s.chips, [surface]: startChips() },
+            }))
+          })
+        }
+      },
+
+      setInput(surface, value) {
+        set((s) => ({ input: { ...s.input, [surface]: value } }))
+      },
+
+      setDesktopGreeting(firstName) {
+        set((s) => {
+          const thread = s.threads.d
+          // Only swap the initial greeting — never once a conversation exists.
+          if (thread.length !== 1) return s
+          const [greeting] = thread
+          return {
+            threads: {
+              ...s.threads,
+              d: [{ ...greeting, text: greetingDesktop(firstName) }],
+            },
+          }
+        })
+      },
+
+      openConfirm(surface, payload) {
+        set({
+          pending: payload,
+          overlaySurface: surface,
+          confirmOpen: true,
           pinError: null,
           _directiveId: null,
           _nonce: null,
           _idempotencyKey: null,
-          successOpen: true,
-          successText,
-          successSurface: overlaySurface,
-        }))
-
-        setTimeout(() => {
-          set({ successOpen: false })
-        }, SUCCESS_DISMISS_MS)
-        return
-      }
-
-      // ── Authenticated path ───────────────────────────────────────────────────
-      // Close the PIN pad immediately (provides instant feedback)
-      set({ pinOpen: false, pin: "" })
-
-      try {
-        const executeFn = getExecuteFn()!
-        const result = await executeFn(pendingProposalId, {
-          directiveId: _directiveId,
-          nonce: _nonce,
-          pin,
-          deviceFingerprint: getDeviceFingerprint(),
-          idempotencyKey: _idempotencyKey,
         })
+      },
 
-        if (result.status === "settling") {
-          // ── In-flight card (buy → pay-in; sell/send → settling) ──────────────
-          let inFlight: ChatMessage
-          if (result.payment) {
-            const p = result.payment
-            inFlight = {
-              id: nextId(),
-              role: "assistant",
-              kind: "pay_in",
-              transactionId: result.transactionId,
-              accountNumber: p.accountNumber,
-              bankName: p.bankName,
-              providerRef: p.providerRef,
-              amount: p.amount,
-              currency: p.currency,
-              status: "pending",
-            }
-          } else if (result.payout) {
-            inFlight = {
-              id: nextId(),
-              role: "assistant",
-              kind: "settling",
-              txType: "sell",
-              transactionId: result.transactionId,
-              title: "Payout processing",
-              subtitle: "Sending the funds to your bank account.",
-              rows: pending.rows,
-              reference: result.payout.providerRef,
-              status: "pending",
-            }
-          } else {
-            // send — result.onChain
-            inFlight = {
-              id: nextId(),
-              role: "assistant",
-              kind: "settling",
-              txType: "send",
-              transactionId: result.transactionId,
-              title: "Transfer processing",
-              subtitle: "Broadcasting your transfer on-chain.",
-              rows: pending.rows,
-              reference: result.onChain?.providerRef ?? "",
-              status: "pending",
-            }
-          }
+      cancel() {
+        set({
+          confirmOpen: false,
+          pinOpen: false,
+          pin: "",
+          pending: null,
+          pinError: null,
+          _directiveId: null,
+          _nonce: null,
+          _idempotencyKey: null,
+        })
+      },
 
-          // C4: hand polling off to the live PayInCardLive TanStack Query hook —
-          // the single settlement watcher (stops on completed/failed, clears on
-          // unmount). The store NO LONGER runs a setInterval (which leaked: it
-          // polled forever on a failed settlement and swallowed the failure).
-          // Record the tx id + surface so resolveSettlement (the hook's callback)
-          // can append the terminal receipt/failure to the right thread.
-          set((s) => ({
-            threads: {
-              ...s.threads,
-              [overlaySurface]: [...s.threads[overlaySurface], inFlight],
-            },
-            chips: { ...s.chips, [overlaySurface]: startChips() },
-            pending: null,
+      /**
+       * Transition from confirm sheet to PIN pad.
+       *
+       * Authenticated path: calls authorizeProposal(pendingProposalId) first.
+       * On success, stores directiveId + nonce + fresh idempotencyKey, then
+       * opens the PIN pad. On failure, surface the error on the confirm sheet
+       * and keep it open so the user can retry or cancel.
+       *
+       * Mock/unauthenticated path: pendingProposalId is null → open PIN directly.
+       */
+      async confirmToPin() {
+        const { pendingProposalId } = get()
+
+        // Mock/offline path (no live proposal): skip authorize, open PIN directly.
+        if (!pendingProposalId) {
+          set({ confirmOpen: false, pinOpen: true, pin: "", pinError: null })
+          return
+        }
+
+        try {
+          const authorizeFn = getAuthorizeFn()!
+          const result = await authorizeFn(pendingProposalId)
+          set({
             confirmOpen: false,
+            pinOpen: true,
+            pin: "",
             pinError: null,
-            _directiveId: null,
-            _nonce: null,
-            _idempotencyKey: null,
-            _pollingTransactionId: result.transactionId,
-            _settlingSurface: overlaySurface,
-            // C4: record the action + confirmed payload so resolveSettlement (the
-            // live card hook's callback) can build the right buy/sell/send receipt
-            // on completion — no store setInterval is started here.
-            _settlingAction: pending.action,
-            _settlingPending: pending,
-          }))
-        } else {
-          // ── Immediate completion path ────────────────────────────────────────
-          const successText = COMPLETION_SUCCESS_LABEL[pending.action] ?? "Done"
+            _directiveId: result.directiveId,
+            _nonce: result.nonce,
+            // I8: the execute idempotency key is STABLE per proposal (= proposalId),
+            // not a fresh uuid per attempt. A retry of the same proposal therefore
+            // sends the same key, and the server (which derives the same key from
+            // proposalId, never trusting this value) dedups it — no double-execute.
+            _idempotencyKey: pendingProposalId,
+          })
+        } catch (err) {
+          // Finding #1: a dead session at the authorize step must not surface as a
+          // confirm-sheet error the user can retry — take them to re-auth.
+          if (isSessionExpiredError(err)) {
+            handleSessionExpired(get().overlaySurface)
+            return
+          }
+          // Show error on the confirm sheet; do NOT open the PIN pad.
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Authorization failed. Please try again."
+          set({ pinError: message })
+        }
+      },
 
+      pressPin(digit) {
+        const { pin } = get()
+        // Ignore if already 4 digits — this guard is checked against the current
+        // pin length BEFORE appending, so pressing a 5th digit when pin === "1234"
+        // (length 4) is ignored. After pinComplete() runs, pin resets to "" so
+        // subsequent presses start a fresh entry.
+        if (pin.length >= 4) return
+        const next = pin + digit
+        set({ pin: next })
+        if (next.length === 4) {
+          void get().pinComplete()
+        }
+      },
+
+      pinBack() {
+        set((s) => ({ pin: s.pin.slice(0, -1) }))
+      },
+
+      /**
+       * THE ONLY path that appends a receipt-kind message and opens success.
+       * Called automatically when the 4th PIN digit is pressed.
+       *
+       * Authenticated path: calls executeProposal with PIN + directive credentials.
+       * - status:"settling" + payment → appends pay-in card, starts polling.
+       * - status:"completed" → appends full receipt, opens success overlay.
+       * - Wrong PIN / expired / locked → clears PIN, shows error on PIN pad, keeps proposal.
+       *
+       * Mock/offline path (_directiveId is null): appends fixture receipt immediately.
+       */
+      async pinComplete() {
+        const {
+          pending,
+          overlaySurface,
+          pendingProposalId,
+          _directiveId,
+          _nonce,
+          _idempotencyKey,
+          pin,
+        } = get()
+        if (!pending) return
+
+        // ── Mock/offline path ────────────────────────────────────────────────────
+        if (
+          !pendingProposalId ||
+          !_directiveId ||
+          !_nonce ||
+          !_idempotencyKey
+        ) {
           const receipt: ChatMessage = {
             ...buildReceipt(pending.action, pending.meta),
             id: nextId(),
             role: "assistant",
           }
+
+          const successText = COMPLETION_SUCCESS_LABEL[pending.action] ?? "Done"
 
           set((s) => ({
             threads: {
@@ -853,8 +913,10 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
               [overlaySurface]: [...s.threads[overlaySurface], receipt],
             },
             chips: { ...s.chips, [overlaySurface]: startChips() },
-            pending: null,
+            pinOpen: false,
+            pin: "",
             confirmOpen: false,
+            pending: null,
             pendingProposalId: null,
             pinError: null,
             _directiveId: null,
@@ -868,106 +930,282 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           setTimeout(() => {
             set({ successOpen: false })
           }, SUCCESS_DISMISS_MS)
+          return
         }
-      } catch (err) {
-        // Wrong PIN / locked / expired directive — re-open PIN pad so user can retry.
-        // Keep the proposal alive; don't clear pendingProposalId.
-        const message =
-          err instanceof Error
-            ? err.message
-            : "Incorrect PIN or expired session. Please try again."
-        set({
-          pinOpen: true,
-          pin: "",
-          pinError: message,
-        })
-      }
-    },
 
-    resolveSettlement(tx) {
-      const {
-        _pollingTransactionId,
-        _settlingSurface,
-        _settlingAction,
-        _settlingPending,
-      } = get()
+        // ── Authenticated path ───────────────────────────────────────────────────
+        // Close the PIN pad immediately (provides instant feedback)
+        set({ pinOpen: false, pin: "" })
 
-      // Guard: only the currently-tracked settling tx, only on a terminal status.
-      // Clearing the tracking on resolve makes repeated hook fires no-ops.
-      if (
-        _settlingSurface === null ||
-        _settlingAction === null ||
-        _settlingPending === null ||
-        tx.id !== _pollingTransactionId ||
-        (tx.status !== "completed" && tx.status !== "failed")
-      ) {
-        return
-      }
-      const surface = _settlingSurface
+        try {
+          const executeFn = getExecuteFn()!
+          const result = await executeFn(pendingProposalId, {
+            directiveId: _directiveId,
+            nonce: _nonce,
+            pin,
+            deviceFingerprint: getDeviceFingerprint(),
+            idempotencyKey: _idempotencyKey,
+          })
 
-      if (tx.status === "completed") {
-        // Build the buy / sell / send completion receipt from the action +
-        // confirmed payload captured at handoff (sell/send amounts aren't echoed
-        // on the status payload, so they come from `pending`).
-        const completedReceipt: ChatMessage = {
-          ...buildCompletionReceipt(_settlingAction, _settlingPending, tx),
+          if (result.status === "settling") {
+            // ── In-flight card (buy → pay-in; sell/send → settling) ──────────────
+            let inFlight: ChatMessage
+            if (result.payment) {
+              const p = result.payment
+              inFlight = {
+                id: nextId(),
+                role: "assistant",
+                kind: "pay_in",
+                transactionId: result.transactionId,
+                accountNumber: p.accountNumber,
+                bankName: p.bankName,
+                providerRef: p.providerRef,
+                amount: p.amount,
+                currency: p.currency,
+                status: "pending",
+              }
+            } else if (result.payout) {
+              inFlight = {
+                id: nextId(),
+                role: "assistant",
+                kind: "settling",
+                txType: "sell",
+                transactionId: result.transactionId,
+                title: "Payout processing",
+                subtitle: "Sending the funds to your bank account.",
+                rows: pending.rows,
+                reference: result.payout.providerRef,
+                status: "pending",
+              }
+            } else if (result.swap) {
+              // Finding #4: a swap that returns 'settling' must render a SWAP card
+              // with swap copy — not fall through to the send branch's
+              // "Broadcasting your transfer on-chain." (which mislabels the action
+              // on the in-flight card AND the completion receipt). SettlingView's
+              // txType now includes "swap" (web/lib/schemas/chat.ts), so this is a
+              // plain ChatMessage — no cast.
+              inFlight = {
+                id: nextId(),
+                role: "assistant",
+                kind: "settling",
+                txType: "swap",
+                transactionId: result.transactionId,
+                title: "Swap processing",
+                subtitle: "Completing your swap on-chain.",
+                rows: pending.rows,
+                reference: result.swap.providerSwapId,
+                status: "pending",
+              }
+            } else {
+              // send — result.onChain
+              inFlight = {
+                id: nextId(),
+                role: "assistant",
+                kind: "settling",
+                txType: "send",
+                transactionId: result.transactionId,
+                title: "Transfer processing",
+                subtitle: "Broadcasting your transfer on-chain.",
+                rows: pending.rows,
+                reference: result.onChain?.providerRef ?? "",
+                status: "pending",
+              }
+            }
+
+            // C4: hand polling off to the live PayInCardLive TanStack Query hook —
+            // the single settlement watcher (stops on completed/failed, clears on
+            // unmount). The store NO LONGER runs a setInterval (which leaked: it
+            // polled forever on a failed settlement and swallowed the failure).
+            // Record the tx id + surface so resolveSettlement (the hook's callback)
+            // can append the terminal receipt/failure to the right thread.
+            set((s) => ({
+              threads: {
+                ...s.threads,
+                [overlaySurface]: [...s.threads[overlaySurface], inFlight],
+              },
+              chips: { ...s.chips, [overlaySurface]: startChips() },
+              pending: null,
+              confirmOpen: false,
+              pinError: null,
+              _directiveId: null,
+              _nonce: null,
+              _idempotencyKey: null,
+              _pollingTransactionId: result.transactionId,
+              _settlingSurface: overlaySurface,
+              // C4: record the action + confirmed payload so resolveSettlement (the
+              // live card hook's callback) can build the right buy/sell/send receipt
+              // on completion — no store setInterval is started here.
+              _settlingAction: pending.action,
+              _settlingPending: pending,
+            }))
+          } else {
+            // ── Immediate completion path ────────────────────────────────────────
+            const successText =
+              COMPLETION_SUCCESS_LABEL[pending.action] ?? "Done"
+
+            const receipt: ChatMessage = {
+              ...buildReceipt(pending.action, pending.meta),
+              id: nextId(),
+              role: "assistant",
+            }
+
+            set((s) => ({
+              threads: {
+                ...s.threads,
+                [overlaySurface]: [...s.threads[overlaySurface], receipt],
+              },
+              chips: { ...s.chips, [overlaySurface]: startChips() },
+              pending: null,
+              confirmOpen: false,
+              pendingProposalId: null,
+              pinError: null,
+              _directiveId: null,
+              _nonce: null,
+              _idempotencyKey: null,
+              successOpen: true,
+              successText,
+              successSurface: overlaySurface,
+            }))
+
+            setTimeout(() => {
+              set({ successOpen: false })
+            }, SUCCESS_DISMISS_MS)
+          }
+        } catch (err) {
+          // Finding #1: a dead session must NOT re-open the PIN pad — a PIN can't
+          // fix an expired session. Close the overlays and route to re-auth.
+          if (isSessionExpiredError(err)) {
+            handleSessionExpired(overlaySurface)
+            return
+          }
+
+          // A genuine PIN / directive failure (PIN_INVALID, PIN_LOCKED,
+          // DIRECTIVE_EXPIRED → 401, or a bare Error from the mock path) IS fixable
+          // by re-entering the PIN → re-open the pad with the error. Keep the
+          // proposal alive; don't clear pendingProposalId.
+          if (isRetryablePinError(err)) {
+            const message =
+              err instanceof Error
+                ? err.message
+                : "Incorrect PIN or expired session. Please try again."
+            set({
+              pinOpen: true,
+              pin: "",
+              pinError: message,
+            })
+            return
+          }
+
+          // Finding #5: every OTHER execute failure — quote drift (422),
+          // swap-unavailable (503), insufficient balance (422), proposal expired,
+          // conflict — is NOT a PIN problem and re-entering the PIN cannot fix it.
+          // Surface the real cause as an assistant message and CLOSE the pad
+          // instead of falsely prompting "Incorrect PIN or expired session".
+          const errMsg: ChatMessage = {
+            id: nextId(),
+            role: "assistant",
+            kind: "text",
+            text: chatErrorMessage(err),
+          }
+          set((s) => ({
+            threads: {
+              ...s.threads,
+              [overlaySurface]: [...s.threads[overlaySurface], errMsg],
+            },
+            chips: { ...s.chips, [overlaySurface]: startChips() },
+            pinOpen: false,
+            pin: "",
+            confirmOpen: false,
+            pinError: null,
+          }))
+        }
+      },
+
+      resolveSettlement(tx) {
+        const {
+          _pollingTransactionId,
+          _settlingSurface,
+          _settlingAction,
+          _settlingPending,
+        } = get()
+
+        // Guard: only the currently-tracked settling tx, only on a terminal status.
+        // Clearing the tracking on resolve makes repeated hook fires no-ops.
+        if (
+          _settlingSurface === null ||
+          _settlingAction === null ||
+          _settlingPending === null ||
+          tx.id !== _pollingTransactionId ||
+          (tx.status !== "completed" && tx.status !== "failed")
+        ) {
+          return
+        }
+        const surface = _settlingSurface
+
+        if (tx.status === "completed") {
+          // Build the buy / sell / send completion receipt from the action +
+          // confirmed payload captured at handoff (sell/send amounts aren't echoed
+          // on the status payload, so they come from `pending`).
+          const completedReceipt: ChatMessage = {
+            ...buildCompletionReceipt(_settlingAction, _settlingPending, tx),
+            id: nextId(),
+            role: "assistant",
+          }
+
+          set((s) => ({
+            threads: {
+              ...s.threads,
+              [surface]: [...s.threads[surface], completedReceipt],
+            },
+            chips: { ...s.chips, [surface]: startChips() },
+            _pollingTransactionId: null,
+            _settlingSurface: null,
+            _settlingAction: null,
+            _settlingPending: null,
+            successOpen: true,
+            successText: COMPLETION_SUCCESS_LABEL[_settlingAction] ?? "Done",
+            successSurface: surface,
+          }))
+
+          setTimeout(() => {
+            set({ successOpen: false })
+          }, SUCCESS_DISMISS_MS)
+          return
+        }
+
+        // status === "failed": surface it in-thread (never swallow / poll forever).
+        const failureMsg: ChatMessage = {
           id: nextId(),
           role: "assistant",
+          kind: "text",
+          text: "This transaction could not be completed. No funds have left your wallet — please try again.",
         }
 
         set((s) => ({
           threads: {
             ...s.threads,
-            [surface]: [...s.threads[surface], completedReceipt],
+            [surface]: [...s.threads[surface], failureMsg],
           },
           chips: { ...s.chips, [surface]: startChips() },
           _pollingTransactionId: null,
           _settlingSurface: null,
           _settlingAction: null,
           _settlingPending: null,
-          successOpen: true,
-          successText: COMPLETION_SUCCESS_LABEL[_settlingAction] ?? "Done",
-          successSurface: surface,
         }))
+      },
 
-        setTimeout(() => {
-          set({ successOpen: false })
-        }, SUCCESS_DISMISS_MS)
-        return
-      }
-
-      // status === "failed": surface it in-thread (never swallow / poll forever).
-      const failureMsg: ChatMessage = {
-        id: nextId(),
-        role: "assistant",
-        kind: "text",
-        text: "This transaction could not be completed. No funds have left your wallet — please try again.",
-      }
-
-      set((s) => ({
-        threads: {
-          ...s.threads,
-          [surface]: [...s.threads[surface], failureMsg],
-        },
-        chips: { ...s.chips, [surface]: startChips() },
-        _pollingTransactionId: null,
-        _settlingSurface: null,
-        _settlingAction: null,
-        _settlingPending: null,
-      }))
-    },
-
-    reset(surface) {
-      const greeting = greetingMessage(
-        surface === "m" ? GREETING_M : GREETING_D
-      )
-      set((s) => ({
-        threads: { ...s.threads, [surface]: [greeting] },
-        chips: { ...s.chips, [surface]: startChips() },
-        input: { ...s.input, [surface]: "" },
-      }))
-    },
-  }))
+      reset(surface) {
+        const greeting = greetingMessage(
+          surface === "m" ? GREETING_M : GREETING_D
+        )
+        set((s) => ({
+          threads: { ...s.threads, [surface]: [greeting] },
+          chips: { ...s.chips, [surface]: startChips() },
+          input: { ...s.input, [surface]: "" },
+        }))
+      },
+    }
+  })
 }
 
 // ─── React singleton binding ──────────────────────────────────────────────────

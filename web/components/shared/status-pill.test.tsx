@@ -29,6 +29,13 @@ describe("StatusPill", () => {
     expect(el).toHaveClass("text-info")
   })
 
+  it("danger tone applies danger token classes (terminal failure, audit #24)", () => {
+    render(<StatusPill tone="danger">Failed</StatusPill>)
+    const el = screen.getByText("Failed")
+    expect(el).toHaveClass("bg-danger-muted")
+    expect(el).toHaveClass("text-danger")
+  })
+
   it("neutral tone applies muted token classes", () => {
     render(<StatusPill tone="neutral">Inactive</StatusPill>)
     const el = screen.getByText("Inactive")

@@ -20,6 +20,7 @@ import type {
 import type { ChatAction, ChatMessage } from "@/lib/schemas"
 import { formatNGN } from "@/lib/format"
 import { ASSET_NAMES, ASSET_TINTS } from "@/lib/constants"
+import { mapHistoryItemToRow } from "@/lib/api/mappers/history-row"
 
 export interface MappedOutcome {
   /** Assistant messages to append for this turn. */
@@ -27,6 +28,15 @@ export interface MappedOutcome {
   /** Proposal id to stash for the execute phase, or null for non-proposal turns. */
   proposalId: string | null
 }
+
+/**
+ * The live settlement fiat at launch. Sourced from one named constant so the
+ * `currency_not_live` copy never hardcodes the currency in two places (where it
+ * could drift). When a second market goes live this is the single point to
+ * update (audit #28 — mirrors the balance branch's use of `outcome.fiatCurrency`
+ * rather than a hardcoded literal).
+ */
+export const LIVE_SETTLEMENT_FIAT = "NGN"
 
 export function mapOutcomeToMessages(
   outcome: AgentTurnOutcome,
@@ -51,8 +61,14 @@ export function mapOutcomeToMessages(
       asset: d.asset,
       network: d.network,
       address: d.address,
-      minDeposit: d.minAmount ?? "—",
-      creditedEta: d.etaText ?? "~30 min",
+      // Finding #9: never fabricate min-deposit / credited-ETA. The backend does
+      // not populate these yet, and the old "—" / "~30 min" fallbacks were both
+      // fake AND inconsistent with the wallet-page placeholders ("1 USDT" /
+      // "~1 min"). Pass real values through; emit "" when absent so the card can
+      // hide the chip instead of showing an invented number. ~30 min is also
+      // simply wrong for TRON (credits after ~1-3 min).
+      minDeposit: d.minAmount ?? "",
+      creditedEta: d.etaText ?? "",
     })
   } else if (outcome.kind === "proposal") {
     const c = outcome.confirmation
@@ -208,11 +224,14 @@ export function mapOutcomeToMessages(
       text: "That's not supported yet.",
     })
   } else if (outcome.kind === "currency_not_live") {
+    // Source the live settlement currency from the single named constant rather
+    // than hardcoding it twice in user-facing financial copy (audit #28).
+    const live = LIVE_SETTLEMENT_FIAT
     messages.push({
       id: makeId(),
       role: "assistant",
       kind: "text",
-      text: `We settle in NGN for now — ${outcome.currency} isn't live yet. Want to continue in NGN?`,
+      text: `We settle in ${live} for now — ${outcome.currency} isn't live yet. Want to continue in ${live}?`,
     })
   } else if (outcome.kind === "transactions") {
     messages.push({
@@ -220,17 +239,16 @@ export function mapOutcomeToMessages(
       role: "assistant",
       kind: "transactions",
       windowLabel: outcome.window.label,
-      rows: outcome.items.map((it) => ({
-        id: it.id,
-        type: it.type,
-        status: it.status,
-        direction: it.direction,
-        amount: `${it.direction === "in" ? "+" : "-"}${it.cryptoAmount ?? it.fiatAmount ?? ""}`,
-        sub: it.createdAt.slice(0, 10),
-      })),
+      rows: outcome.items.map(mapHistoryItemToRow),
       totalCount: outcome.totalCount,
       truncated: outcome.truncated,
       downloadUrl: outcome.downloadUrl,
+      // Frozen absolute window + filter + cursor so "Show more" pages the same window.
+      from: outcome.window.from,
+      to: outcome.window.to,
+      txType: outcome.txType,
+      hasMore: outcome.hasMore,
+      nextCursor: outcome.nextCursor,
     })
   }
 

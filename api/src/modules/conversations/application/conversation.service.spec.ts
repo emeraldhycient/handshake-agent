@@ -27,6 +27,17 @@
 
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { z } from 'zod';
+import { InsufficientBalanceError } from '../../transactions/domain/execution-errors';
+import {
+  AmountTooSmallError,
+  SelfSendError,
+} from '../../transactions/domain/amount-guard-errors';
+import {
+  BeneficiaryCoolingOffError,
+  BeneficiaryWrongTypeError,
+} from '../../beneficiaries/domain/beneficiary-errors';
+import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
 import type { IAgentPort } from '../../agent/application/ports/agent.port';
 import { AGENT_PORT } from '../../agent/application/ports/agent.port';
 import type { IWhatsAppSender } from '../../whatsapp/application/ports/whatsapp-sender.port';
@@ -1009,6 +1020,102 @@ describe('ConversationService.handleInbound', () => {
     expect(sentText).toBe(clarification);
   });
 
+  // ── unparseable intent (ZodError) → clarification, NOT a safe-fallback ───────
+
+  it('agent returns an unparseable intent (ZodError) → sends a rephrase clarification, message NOT marked failed', async () => {
+    // The model is up but returned output failing IntentSchema.parse. This is an
+    // ordinary "rephrase, please", NOT a provider outage: the user must get a
+    // clarification, the message must process normally (not 'failed'), and the
+    // generic safe-fallback ('something went wrong') must NOT be sent.
+    const agentPort: jest.Mocked<IAgentPort> = {
+      run: jest.fn().mockRejectedValue(
+        new z.ZodError([
+          {
+            code: 'invalid_type',
+            expected: 'string',
+            received: 'undefined',
+            path: ['action'],
+            message: 'Required',
+          },
+        ]),
+      ),
+    };
+    const { svc, sender, msgRepo } = buildService({ agentPort });
+
+    await svc.handleInbound(baseMsg());
+
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).not.toContain('something went wrong');
+    expect(sentText).toMatch(/rephrase|didn't (quite )?(catch|understand)/i);
+    // Message processed normally, never marked failed.
+    expect(msgRepo.updateStatus).not.toHaveBeenCalledWith(
+      FIXED_MSG_ID,
+      'failed',
+      expect.anything(),
+    );
+  });
+
+  // ── provider outage (non-Zod) → safe fallback (still a 5xx-style failure) ────
+
+  it('a genuine provider outage (non-Zod error) still falls through to the safe fallback', async () => {
+    const agentPort: jest.Mocked<IAgentPort> = {
+      run: jest.fn().mockRejectedValue(new Error('anthropic 529 overloaded')),
+    };
+    const loggerErrorSpy = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+
+    const { svc, sender, msgRepo } = buildService({ agentPort });
+
+    await expect(svc.handleInbound(baseMsg())).resolves.toBeUndefined();
+
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toContain('something went wrong');
+    expect(msgRepo.updateStatus).toHaveBeenCalledWith(
+      FIXED_MSG_ID,
+      'failed',
+      'anthropic 529 overloaded',
+    );
+
+    loggerErrorSpy.mockRestore();
+  });
+
+  // ── multi-turn memory: prior turns threaded into the agent ───────────────────
+
+  it('loads recent turns and threads them oldest→newest into the agent call', async () => {
+    const msgRepo = makeMsgRepo();
+    msgRepo.findWebHistory.mockResolvedValue([
+      {
+        id: 'm-2',
+        userText: 'how much?',
+        createdAt: new Date('2026-06-30T10:01:00Z'),
+        reply: { text: 'How much USDT would you like?', outcome: null },
+      },
+      {
+        id: 'm-1',
+        userText: 'buy usdt',
+        createdAt: new Date('2026-06-30T10:00:00Z'),
+        reply: { text: 'Sure — which asset?', outcome: null },
+      },
+    ]);
+    const agentPort = makeAgentPort({ action: 'none', clarification: 'ok' });
+    const { svc } = buildService({ agentPort, msgRepo });
+
+    await svc.handleInbound(baseMsg());
+
+    // Server-built history (never client-supplied) is passed as the 2nd arg.
+    const [text, history] = agentPort.run.mock.calls[0] as [
+      string,
+      Array<{ role: string; content: string }>,
+    ];
+    expect(text).toBe(baseMsg().text);
+    expect(history[0]).toEqual({ role: 'user', content: 'buy usdt' });
+    expect(history[history.length - 1]).toEqual({
+      role: 'assistant',
+      content: 'How much USDT would you like?',
+    });
+  });
+
   // ── swap, capability disabled → "not supported yet" ──────────────────────
 
   it('swap intent, crypto.swap capability disabled → sends "not supported yet" reply, no proposal', async () => {
@@ -1896,6 +2003,155 @@ describe('ConversationService.handleInbound', () => {
     expect(sentText).toMatch(/address|wallet|send/i);
   });
 
+  // ── sell/send proposal-error parity → clarification text, NOT a safe-fallback ──
+
+  describe('sell/send proposal errors → clarification (not a safe-fallback)', () => {
+    it.each([
+      [
+        'InsufficientBalanceError',
+        new InsufficientBalanceError('1', '5', 'USDT'),
+      ],
+      [
+        'AmountTooSmallError',
+        new AmountTooSmallError('sell', '0.1', '1', 'USDT'),
+      ],
+      [
+        'SanctionsBlockedError',
+        new SanctionsBlockedError('addr', 'flagged', 'evt-1', 'ref-1'),
+      ],
+    ])(
+      'sell_crypto createSellProposal throws %s → clarification text, message not failed',
+      async (_label, err: Error) => {
+        const proposalService = makeProposalService(
+          stubBuyProposalOutput(),
+          err, // createSellProposal rejects
+        );
+        const agentPort = makeAgentPort({
+          action: 'sell_crypto',
+          asset: 'USDT',
+          cryptoAmount: '5',
+          fiatCurrency: 'NGN',
+        });
+        const beneficiaryService = makeBeneficiaryService(
+          stubBankBeneficiary(),
+        );
+        const { svc, sender, msgRepo } = buildService({
+          agentPort,
+          proposalService,
+          beneficiaryService,
+        });
+
+        await svc.handleInbound(baseMsg());
+
+        const sentText = captureFirstSentText(sender);
+        expect(sentText).not.toContain('something went wrong');
+        expect(sentText.length).toBeGreaterThan(0);
+        expect(msgRepo.updateStatus).not.toHaveBeenCalledWith(
+          FIXED_MSG_ID,
+          'failed',
+          expect.anything(),
+        );
+      },
+    );
+
+    it.each([
+      [
+        'InsufficientBalanceError',
+        new InsufficientBalanceError('1', '5', 'USDT'),
+      ],
+      [
+        'BeneficiaryCoolingOffError',
+        new BeneficiaryCoolingOffError('ben-1', new Date(Date.now() + 1e6)),
+      ],
+      [
+        'BeneficiaryWrongTypeError',
+        new BeneficiaryWrongTypeError(
+          'ben-1',
+          'crypto_address',
+          'bank_account',
+        ),
+      ],
+      [
+        'SanctionsBlockedError',
+        new SanctionsBlockedError('addr', undefined, 'evt-1', 'ref-1'),
+      ],
+      [
+        'AmountTooSmallError',
+        new AmountTooSmallError('send', '0.1', '1', 'USDT'),
+      ],
+      ['SelfSendError', new SelfSendError()],
+    ])(
+      'send_crypto createSendProposal throws %s → clarification text, message not failed',
+      async (_label, err: Error) => {
+        const proposalService = makeProposalService(
+          stubBuyProposalOutput(),
+          stubSellProposalOutput(),
+          err, // createSendProposal rejects
+        );
+        const agentPort = makeAgentPort({
+          action: 'send_crypto',
+          asset: 'USDT',
+          cryptoAmount: '5.0',
+          network: 'TRON',
+        });
+        const beneficiaryService = makeBeneficiaryService(
+          stubCryptoBeneficiary(),
+        );
+        const { svc, sender, msgRepo } = buildService({
+          agentPort,
+          proposalService,
+          beneficiaryService,
+        });
+
+        await svc.handleInbound(baseMsg());
+
+        const sentText = captureFirstSentText(sender);
+        expect(sentText).not.toContain('something went wrong');
+        expect(sentText.length).toBeGreaterThan(0);
+        expect(msgRepo.updateStatus).not.toHaveBeenCalledWith(
+          FIXED_MSG_ID,
+          'failed',
+          expect.anything(),
+        );
+      },
+    );
+
+    it('an UNEXPECTED createSellProposal error still falls through to the safe fallback', async () => {
+      const proposalService = makeProposalService(
+        stubBuyProposalOutput(),
+        new Error('unexpected boom'),
+      );
+      const agentPort = makeAgentPort({
+        action: 'sell_crypto',
+        asset: 'USDT',
+        cryptoAmount: '5',
+        fiatCurrency: 'NGN',
+      });
+      const beneficiaryService = makeBeneficiaryService(stubBankBeneficiary());
+      const loggerErrorSpy = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+
+      const { svc, sender, msgRepo } = buildService({
+        agentPort,
+        proposalService,
+        beneficiaryService,
+      });
+
+      await expect(svc.handleInbound(baseMsg())).resolves.toBeUndefined();
+
+      const sentText = captureFirstSentText(sender);
+      expect(sentText).toContain('something went wrong');
+      expect(msgRepo.updateStatus).toHaveBeenCalledWith(
+        FIXED_MSG_ID,
+        'failed',
+        'unexpected boom',
+      );
+
+      loggerErrorSpy.mockRestore();
+    });
+  });
+
   // ── currency_not_live: buy_crypto with non-live fiat → graceful text, no proposal ──
 
   it('buy_crypto with non-live fiatCurrency (RWF) → graceful text reply, no proposal, no beneficiary lookup', async () => {
@@ -1992,6 +2248,40 @@ describe('ConversationService.handleInbound', () => {
     ).mock.calls[0][0];
     expect(ctaArg.buttonText).toBe('Download');
     expect(ctaArg.url).toContain('token=tok');
+  });
+
+  it('query_transactions forwards a relative-duration spec to the history service', async () => {
+    const historyQuery = jest.fn().mockResolvedValue({
+      window: { from: 'F', to: 'T', label: 'Last 6 months' },
+      items: [],
+      totalCount: 0,
+      truncated: false,
+      hasMore: false,
+      nextCursor: null,
+      txType: 'all',
+      downloadUrl:
+        'https://api.example.com/transactions/statement/download?token=tok',
+    });
+    const { svc } = buildService({
+      agentPort: {
+        run: jest.fn().mockResolvedValue({
+          action: 'query_transactions',
+          relativeAmount: 6,
+          relativeUnit: 'month',
+          download: false,
+        }),
+      } as unknown as jest.Mocked<IAgentPort>,
+      historyService: { query: historyQuery } as unknown as jest.Mocked<
+        Pick<TransactionHistoryService, 'query'>
+      >,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(historyQuery).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ relativeAmount: 6, relativeUnit: 'month' }),
+    );
   });
 
   // ── Task 18: extracted image/document routing ─────────────────────────────

@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ZodError } from 'zod';
 import { AgentTurnOutcomeSchema } from '@handshake-agent/contracts';
 import type {
   WebChatResponse,
@@ -26,8 +27,14 @@ import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import {
   AGENT_PORT,
   type IAgentPort,
+  type ConversationTurn,
 } from '../../agent/application/ports/agent.port';
 import { AgentUnavailableError } from '../../agent/domain/agent-errors';
+import {
+  BeneficiaryCoolingOffError,
+  BeneficiaryWrongTypeError,
+} from '../../beneficiaries/domain/beneficiary-errors';
+import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
 import {
   IDENTITY_REPOSITORY,
   type IIdentityRepository,
@@ -52,11 +59,17 @@ import type { ProposalService } from '../../transactions/application/proposal.se
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
+import { StatementTokenService } from '../../transactions/application/statement-token.service';
 import type { BalanceService } from '../../balances/application/balance.service';
 import {
   InsufficientBalanceError,
+  SwapSameAssetError,
   SwapUnavailableError,
 } from '../../transactions/domain/execution-errors';
+import {
+  AmountTooSmallError,
+  SelfSendError,
+} from '../../transactions/domain/amount-guard-errors';
 
 // ---------------------------------------------------------------------------
 // DI tokens for proposal / wallet / beneficiary services.
@@ -70,6 +83,26 @@ export const WEB_CHAT_BENEFICIARY_SERVICE = Symbol(
 );
 export const WEB_CHAT_HISTORY_SERVICE = Symbol('WEB_CHAT_HISTORY_SERVICE');
 export const WEB_CHAT_BALANCE_SERVICE = Symbol('WEB_CHAT_BALANCE_SERVICE');
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Number of most-recent persisted turns loaded as short-term memory and threaded
+ * into the agent on each call. Kept small so the prompt stays bounded; history is
+ * a refinement aid (resolving "50k" → the asset the agent just asked about), not
+ * a transcript. The agent itself holds no DB checkpointer (CLAUDE.md §6).
+ */
+const HISTORY_TURN_LIMIT = 6;
+
+/**
+ * Shown when the model returns output that fails IntentSchema validation (a
+ * ZodError) — the model is up but produced something unroutable. This is a
+ * clarification, never a 503 (a true provider outage stays AgentUnavailableError).
+ */
+const UNPARSEABLE_INTENT_CLARIFICATION =
+  "Sorry, I didn't quite catch that. Could you rephrase your request?";
 
 // ---------------------------------------------------------------------------
 // Input type
@@ -121,6 +154,7 @@ export class WebChatService {
     @Inject(REPLY_REPOSITORY)
     private readonly replyRepo: IReplyRepository,
     private readonly assetRegistry: AssetRegistry,
+    private readonly statementTokens: StatementTokenService,
   ) {}
 
   async handleMessage(input: HandleMessageInput): Promise<WebChatResponse> {
@@ -142,7 +176,12 @@ export class WebChatService {
     }
     await this.conversationRepo.touch(conversation.id, new Date());
 
-    // 3. Persist inbound message.
+    // 3. Load short-term memory BEFORE persisting the current turn, so the new
+    //    inbound message is not folded into its own history. Built server-side
+    //    from the message repo — authoritative, never trusting client input (§3.2).
+    const history = await this.loadHistory(conversation.id);
+
+    // 4. Persist inbound message.
     const message = await this.messageRepo.create({
       conversationId: conversation.id,
       externalMessageId: randomUUID(),
@@ -154,10 +193,10 @@ export class WebChatService {
       correlationId,
     });
 
-    // 4. Run agent — receives a validated Intent.
-    const intent = await this.runAgent(text, correlationId);
+    // 5. Run agent — receives a validated Intent (with prior-turn context).
+    const intent = await this.runAgent(text, correlationId, history);
 
-    // 5. Persist intent record.
+    // 6. Persist intent record.
     await this.intentRepo.create({
       messageId: message.id,
       conversationId: conversation.id,
@@ -165,7 +204,7 @@ export class WebChatService {
       payload: { ...intent },
     });
 
-    // 6. Map intent → outcome.
+    // 7. Map intent → outcome.
     // TypeScript narrows `intent` in each case branch via the discriminated
     // union on `action`, so no explicit `as TYPE` assertions are needed.
     let outcome: AgentTurnOutcome;
@@ -260,19 +299,31 @@ export class WebChatService {
           summaryText = 'Please add a bank account first.';
           break;
         }
-        const { proposalId: sp, confirmation: sc } =
-          await this.proposalService.createSellProposal({
-            userId,
-            intent,
-            beneficiaryId: sellBeneficiary.id,
-          });
-        outcome = {
-          kind: 'proposal',
-          txType: 'sell',
-          proposalId: sp,
-          confirmation: sc,
-        };
-        summaryText = 'Your sell proposal is ready. Please review and confirm.';
+        try {
+          const { proposalId: sp, confirmation: sc } =
+            await this.proposalService.createSellProposal({
+              userId,
+              intent,
+              beneficiaryId: sellBeneficiary.id,
+            });
+          outcome = {
+            kind: 'proposal',
+            txType: 'sell',
+            proposalId: sp,
+            confirmation: sc,
+          };
+          summaryText =
+            'Your sell proposal is ready. Please review and confirm.';
+        } catch (sellErr) {
+          // Proposal-builder rejections with a stable code are ordinary
+          // correctable conditions (insufficient balance, dust amount, sanctions
+          // hit). Surface them inline as a clarification — never let them bubble
+          // to a 4xx/5xx that drops the chat thread (parity with the swap branch).
+          const clarification = this.proposalErrorClarification(sellErr);
+          if (clarification === null) throw sellErr;
+          outcome = { kind: 'clarification', text: clarification };
+          summaryText = clarification;
+        }
         break;
       }
 
@@ -293,19 +344,30 @@ export class WebChatService {
           summaryText = 'Please add a crypto address first.';
           break;
         }
-        const { proposalId: snp, confirmation: snc } =
-          await this.proposalService.createSendProposal({
-            userId,
-            intent,
-            beneficiaryId: sendBeneficiary.id,
-          });
-        outcome = {
-          kind: 'proposal',
-          txType: 'send',
-          proposalId: snp,
-          confirmation: snc,
-        };
-        summaryText = 'Your send proposal is ready. Please review and confirm.';
+        try {
+          const { proposalId: snp, confirmation: snc } =
+            await this.proposalService.createSendProposal({
+              userId,
+              intent,
+              beneficiaryId: sendBeneficiary.id,
+            });
+          outcome = {
+            kind: 'proposal',
+            txType: 'send',
+            proposalId: snp,
+            confirmation: snc,
+          };
+          summaryText =
+            'Your send proposal is ready. Please review and confirm.';
+        } catch (sendErr) {
+          // Same parity as sell: convert the stable-coded proposal rejections
+          // (insufficient balance, cooling-off, wrong beneficiary type,
+          // sanctions, dust amount, self-send) into a first-class clarification.
+          const clarification = this.proposalErrorClarification(sendErr);
+          if (clarification === null) throw sendErr;
+          outcome = { kind: 'clarification', text: clarification };
+          summaryText = clarification;
+        }
         break;
       }
 
@@ -314,6 +376,8 @@ export class WebChatService {
           period: intent.period,
           from: intent.from,
           to: intent.to,
+          relativeAmount: intent.relativeAmount,
+          relativeUnit: intent.relativeUnit,
           txType: intent.txType,
         });
         outcome = { kind: 'transactions', ...result };
@@ -379,6 +443,12 @@ export class WebChatService {
             outcome = { kind: 'not_supported', action: 'swap' };
             summaryText =
               "Swap isn't available right now. Please try again later or contact support.";
+          } else if (swapErr instanceof SwapSameAssetError) {
+            // Ordinary user-input mistake (e.g. the model emits "swap USDT for
+            // USDT") — surface inline as a clarification, never an opaque 500.
+            const sameAssetText = 'Choose two different assets to swap.';
+            outcome = { kind: 'clarification', text: sameAssetText };
+            summaryText = sameAssetText;
           } else if (swapErr instanceof InsufficientBalanceError) {
             outcome = {
               kind: 'clarification',
@@ -412,7 +482,7 @@ export class WebChatService {
       }
     }
 
-    // 7. Persist reply — including the rendered outcome so the web thread can be
+    // 8. Persist reply — including the rendered outcome so the web thread can be
     //    reconstructed on reload (GET /chat/messages) without re-running the agent.
     await this.replyRepo.create({
       conversationId: conversation.id,
@@ -422,7 +492,7 @@ export class WebChatService {
       outcome,
     });
 
-    // 8. Return response envelope.
+    // 9. Return response envelope.
     return {
       reply: { text: summaryText },
       outcome,
@@ -432,23 +502,110 @@ export class WebChatService {
   }
 
   /**
-   * Runs the agent for a turn, converting any failure into a typed
-   * AgentUnavailableError. The agent/LLM call is the one flaky external
-   * dependency in this flow (provider error, timeout, or Intent validation
-   * failure); surfacing a typed error lets the global filter map it to a clean
-   * 5xx instead of letting the raw provider error bubble out as an opaque 500
-   * (I1/I2).
+   * Runs the agent for a turn, classifying its two failure modes:
+   *
+   *   - A ZodError from IntentSchema.parse means the model is UP but returned
+   *     output we cannot route (missing/invalid action). That is an ordinary
+   *     "rephrase, please" — surfaced as a `none` Intent so the normal
+   *     clarification branch renders it. NEVER a 503.
+   *   - Any other failure (network/timeout/auth/5xx) is a genuine provider
+   *     outage → typed AgentUnavailableError so the global filter maps it to a
+   *     clean 5xx instead of leaking the raw provider error as an opaque 500
+   *     (I1/I2).
+   *
+   * `history` is short-term memory built server-side and threaded in so a
+   * follow-up ("50k") resolves against the question the agent just asked.
    */
-  private async runAgent(text: string, correlationId: string): Promise<Intent> {
+  private async runAgent(
+    text: string,
+    correlationId: string,
+    history: ConversationTurn[],
+  ): Promise<Intent> {
     try {
-      return await this.agentPort.run(text);
+      return await this.agentPort.run(text, history);
     } catch (err: unknown) {
+      if (err instanceof ZodError) {
+        this.logger.warn(
+          { correlationId },
+          'Agent returned unparseable intent — asking the user to rephrase',
+        );
+        return {
+          action: 'none',
+          clarification: UNPARSEABLE_INTENT_CLARIFICATION,
+        };
+      }
       this.logger.error(
         { correlationId, err },
         'Agent run failed — surfacing as AgentUnavailableError',
       );
       throw new AgentUnavailableError();
     }
+  }
+
+  /**
+   * Builds short-term conversation memory from the message repo: the last
+   * HISTORY_TURN_LIMIT persisted turns, oldest→newest, as alternating user +
+   * assistant turns. Authoritative server-side build (§3.2) — the agent never
+   * loads history itself (no checkpointer, CLAUDE.md §6). A repo failure must not
+   * break the turn, so it degrades to no memory rather than throwing.
+   */
+  private async loadHistory(
+    conversationId: string,
+  ): Promise<ConversationTurn[]> {
+    try {
+      // Repo returns newest-first; reverse to chronological order.
+      const rows = await this.messageRepo.findWebHistory(conversationId, {
+        limit: HISTORY_TURN_LIMIT,
+      });
+      const turns: ConversationTurn[] = [];
+      for (const row of [...rows].reverse()) {
+        turns.push({ role: 'user', content: row.userText });
+        if (row.reply?.text) {
+          turns.push({ role: 'assistant', content: row.reply.text });
+        }
+      }
+      return turns;
+    } catch (err: unknown) {
+      this.logger.warn(
+        { conversationId, err },
+        'Failed to load conversation history — proceeding without memory',
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Maps a sell/send proposal-builder rejection to a client-safe clarification
+   * string, or `null` when the error is unexpected and must propagate (mapped to
+   * a 500 by the global filter).
+   *
+   * The copy mirrors the global DomainExceptionFilter's client-safe messages —
+   * the raw domain message (which may carry balances, addresses, or compliance
+   * event ids) is NEVER surfaced; the original is logged for diagnosis.
+   */
+  private proposalErrorClarification(err: unknown): string | null {
+    if (err instanceof InsufficientBalanceError) {
+      return 'You don’t have enough balance for this transaction. Try a smaller amount.';
+    }
+    if (err instanceof AmountTooSmallError) {
+      return 'That amount is below the minimum allowed for this transaction.';
+    }
+    if (err instanceof SelfSendError) {
+      return 'That’s your own wallet address — no transfer is needed. Choose a different recipient.';
+    }
+    if (err instanceof BeneficiaryCoolingOffError) {
+      return (
+        'For your security, newly added recipients have a short cooling-off ' +
+        'period before the first transfer. Please try again later.'
+      );
+    }
+    if (err instanceof BeneficiaryWrongTypeError) {
+      return 'That recipient can’t be used for this transaction.';
+    }
+    if (err instanceof SanctionsBlockedError) {
+      return 'This transfer can’t be completed. Please use a different recipient.';
+    }
+    return null;
   }
 
   /**
@@ -480,7 +637,7 @@ export class WebChatService {
     const messages = [...page].reverse().map((turn) => ({
       messageId: turn.id,
       userText: turn.userText,
-      outcome: this.parseStoredOutcome(turn.reply?.outcome),
+      outcome: this.parseStoredOutcome(turn.reply?.outcome, input.userId),
       createdAt: turn.createdAt.toISOString(),
     }));
 
@@ -491,11 +648,32 @@ export class WebChatService {
    * Defensively re-validate a stored outcome JSON blob against the contract.
    * Returns null for missing/legacy/corrupt rows so the FE renders the user
    * bubble alone rather than failing the whole history load.
+   *
+   * For a `transactions` outcome the persisted statement `downloadUrl` carries a
+   * time-limited signed token (linkTtlSeconds, default 900s). Re-serving it
+   * verbatim on history reload yields a 401 expired link once the card is older
+   * than the TTL, so the link is re-issued here from the stored window + txType,
+   * scoped to the requesting user — always valid when rendered.
    */
-  private parseStoredOutcome(raw: unknown): AgentTurnOutcome | null {
+  private parseStoredOutcome(
+    raw: unknown,
+    userId: string,
+  ): AgentTurnOutcome | null {
     if (raw === null || raw === undefined) return null;
     const parsed = AgentTurnOutcomeSchema.safeParse(raw);
-    return parsed.success ? parsed.data : null;
+    if (!parsed.success) return null;
+    const outcome = parsed.data;
+    if (outcome.kind !== 'transactions') return outcome;
+    const token = this.statementTokens.sign({
+      userId,
+      from: outcome.window.from,
+      to: outcome.window.to,
+      txType: outcome.txType,
+    });
+    return {
+      ...outcome,
+      downloadUrl: this.statementTokens.buildDownloadUrl(token),
+    };
   }
 
   /**

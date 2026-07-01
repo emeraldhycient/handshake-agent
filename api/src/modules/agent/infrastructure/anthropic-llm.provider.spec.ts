@@ -172,9 +172,144 @@ describe('AnthropicLlmProvider', () => {
       );
     });
 
+    it('threads prior conversation turns between the system and current-user messages', async () => {
+      const history = [
+        { role: 'user' as const, content: 'buy usdt' },
+        {
+          role: 'assistant' as const,
+          content: 'How much USDT would you like to buy?',
+        },
+      ];
+      await provider.extractIntent('50000', history);
+
+      const firstCall = mockInvoke.mock.calls[0] as unknown[][];
+      const [messages] = firstCall as [
+        Array<{ role: string; content: string }>,
+      ];
+
+      // Order matters: system, then each history turn in order, then the new user message last.
+      expect(messages[0]).toEqual(expect.objectContaining({ role: 'system' }));
+      expect(messages[1]).toEqual({ role: 'user', content: 'buy usdt' });
+      expect(messages[2]).toEqual({
+        role: 'assistant',
+        content: 'How much USDT would you like to buy?',
+      });
+      expect(messages[messages.length - 1]).toEqual({
+        role: 'user',
+        content: '50000',
+      });
+    });
+
+    it('works with no history (single-turn) — only system + user', async () => {
+      await provider.extractIntent('buy 5000 naira of usdt');
+      const firstCall = mockInvoke.mock.calls[0] as unknown[][];
+      const [messages] = firstCall as [Array<{ role: string }>];
+      expect(messages).toHaveLength(2);
+      expect(messages[0]).toEqual(expect.objectContaining({ role: 'system' }));
+      expect(messages[1]).toEqual(expect.objectContaining({ role: 'user' }));
+    });
+
     it('returns the intent returned by the model', async () => {
       const result = await provider.extractIntent('buy 5000 naira of usdt');
       expect(result).toEqual(cannedIntent);
+    });
+
+    describe('deterministic amount normalization backstop', () => {
+      it('strips a ₦ symbol and thousands-commas from fiatAmount before returning', async () => {
+        mockInvoke.mockResolvedValueOnce({
+          intent: {
+            action: 'buy_crypto',
+            asset: 'USDT',
+            fiatAmount: '₦50,000',
+            fiatCurrency: 'NGN',
+          },
+        });
+
+        const result = await provider.extractIntent('buy ₦50,000 of usdt');
+
+        // The model emitted a non-schema-valid amount; the backstop normalizes
+        // it to a bare decimal so IntentSchema accepts it — no "assistant
+        // unavailable" for a parseable amount.
+        expect(result).toEqual({
+          action: 'buy_crypto',
+          asset: 'USDT',
+          fiatAmount: '50000',
+          fiatCurrency: 'NGN',
+        });
+      });
+
+      it('strips commas and a $ sign and trims spaces from a sell fiatAmount', async () => {
+        mockInvoke.mockResolvedValueOnce({
+          intent: {
+            action: 'sell_crypto',
+            asset: 'USDT',
+            fiatAmount: ' $1,234.50 ',
+            fiatCurrency: 'NGN',
+          },
+        });
+
+        const result = await provider.extractIntent('sell $1,234.50 of usdt');
+
+        expect((result as { fiatAmount: string }).fiatAmount).toBe('1234.50');
+      });
+
+      it('normalizes a send cryptoAmount with grouping separators', async () => {
+        mockInvoke.mockResolvedValueOnce({
+          intent: {
+            action: 'send_crypto',
+            asset: 'USDT',
+            cryptoAmount: '1,000.25',
+            network: 'TRON',
+          },
+        });
+
+        const result = await provider.extractIntent('send 1,000.25 usdt');
+
+        expect((result as { cryptoAmount: string }).cryptoAmount).toBe(
+          '1000.25',
+        );
+      });
+
+      it('normalizes a swap amount with separators', async () => {
+        mockInvoke.mockResolvedValueOnce({
+          intent: {
+            action: 'swap',
+            fromAsset: 'USDT',
+            toAsset: 'TRX',
+            amount: '2,500',
+          },
+        });
+
+        const result = await provider.extractIntent('swap 2,500 usdt for trx');
+
+        expect((result as { amount: string }).amount).toBe('2500');
+      });
+
+      it('leaves an already-clean amount untouched', async () => {
+        mockInvoke.mockResolvedValueOnce({
+          intent: {
+            action: 'buy_crypto',
+            asset: 'USDT',
+            fiatAmount: '5000',
+            fiatCurrency: 'NGN',
+          },
+        });
+
+        const result = await provider.extractIntent('buy 5000 usdt');
+        expect((result as { fiatAmount: string }).fiatAmount).toBe('5000');
+      });
+
+      it('does not touch intents without an amount field (none/receive)', async () => {
+        mockInvoke.mockResolvedValueOnce({
+          intent: { action: 'none', clarification: 'What would you like?' },
+        });
+
+        const result = await provider.extractIntent('hmm');
+        expect(result).toEqual({
+          action: 'none',
+          clarification: 'What would you like?',
+        });
+      });
     });
 
     it('reuses the cached ChatAnthropic instance across multiple calls', async () => {
@@ -227,6 +362,19 @@ describe('AnthropicLlmProvider', () => {
         expect(prompt).toContain('download');
       });
 
+      it('documents the relative-duration spec for flexible ranges (sub-day → year)', () => {
+        const prompt = provider.buildSystemPrompt();
+        // The relative-spec field names the model must emit.
+        expect(prompt).toContain('relativeAmount');
+        expect(prompt).toContain('relativeUnit');
+        // The unit vocabulary spans sub-day through year.
+        expect(prompt).toMatch(/minute/);
+        expect(prompt).toMatch(/hour/);
+        expect(prompt).toMatch(/week|month|year/);
+        // At least one worked example so the model maps NL → spec.
+        expect(prompt).toMatch(/last 2 weeks|6 months|24 hours|an hour ago/i);
+      });
+
       it('instructs the model to set the optional asset on check_balance', () => {
         const prompt = provider.buildSystemPrompt();
         // The check_balance bullet must explain the optional asset so that
@@ -266,6 +414,52 @@ describe('AnthropicLlmProvider', () => {
         const prompt = provider.buildSystemPrompt();
         expect(prompt).not.toMatch(/only (accept|use|support|NGN)/i);
         expect(prompt).toMatch(/extract.*fiat|fiat.*extract/i);
+      });
+
+      it('instructs the model to normalize currency symbols and thousands separators in amounts', () => {
+        // ₦50,000 / $1,234.50 must become bare decimal strings (finding: amount mis-parse).
+        const prompt = provider.buildSystemPrompt();
+        // Mentions the symbols/separators it must strip and the canonical example.
+        expect(prompt).toMatch(/strip|remove/i);
+        expect(prompt).toContain('₦');
+        expect(prompt).toMatch(/thousands|separator|comma/i);
+        expect(prompt).toContain('50000');
+      });
+
+      it('instructs the model to ask a clarifying question when an action is known but the amount is missing', () => {
+        // "buy USDT" / "send some money" → action:'none' + clarification, never a thrown intent.
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).toMatch(/missing|omit|not specif|without/i);
+        expect(prompt).toMatch(/clarif|how much|ask/i);
+        // It must tell the model to use "none" (not emit a buy/send with no amount).
+        expect(prompt).toMatch(/action.*none|"none"/i);
+      });
+
+      it('instructs the model to surface multiple intents instead of silently dropping one', () => {
+        // "buy 5k usdt and send 20 to John" → none + a clarification naming both.
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).toMatch(/two|multiple|more than one|2\+/i);
+        expect(prompt).toMatch(/none/);
+      });
+
+      it('instructs the model to handle non-English (Pidgin/Hausa/Yoruba/Igbo) and reply in the user language', () => {
+        const prompt = provider.buildSystemPrompt();
+        // Names the supported Nigerian languages so the model engages them.
+        expect(prompt).toMatch(/pidgin/i);
+        expect(prompt).toMatch(/hausa/i);
+        expect(prompt).toMatch(/yoruba/i);
+        expect(prompt).toMatch(/igbo/i);
+        // Reply-in-language rule.
+        expect(prompt).toMatch(/user'?s language|same language|reply in/i);
+      });
+
+      it('instructs a low-confidence non-English amount/action to fall back to a clarifying question', () => {
+        const prompt = provider.buildSystemPrompt();
+        // The funds-safety guard: when unsure about a non-English amount/action, prefer none.
+        expect(prompt).toMatch(
+          /not confident|unsure|uncertain|low confidence/i,
+        );
+        expect(prompt).toMatch(/none|clarif/i);
       });
 
       it('lists ALL discovered assets (USDT + TRX) when the registry returns both', () => {

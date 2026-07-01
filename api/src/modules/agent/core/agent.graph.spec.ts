@@ -1,5 +1,5 @@
 import { runAgent } from './agent.graph';
-import type { LlmProvider } from './ports/llm-provider.port';
+import type { ConversationTurn, LlmProvider } from './ports/llm-provider.port';
 import type { Intent } from '@handshake-agent/contracts';
 
 // ---------------------------------------------------------------------------
@@ -54,5 +54,39 @@ describe('runAgent', () => {
     await expect(
       runAgent({ userText: 'buy stuff', llm: makeFake(invalid) }),
     ).rejects.toThrow();
+  });
+
+  it('threads conversation history into the LlmProvider so a follow-up resolves in context', async () => {
+    // Prior turn: the assistant asked "How much USDT?"; the user now replies "50k".
+    const history: ConversationTurn[] = [
+      { role: 'user', content: 'buy usdt' },
+      { role: 'assistant', content: 'How much USDT would you like to buy?' },
+    ];
+    const resolved: Intent = {
+      action: 'buy_crypto',
+      asset: 'USDT',
+      fiatAmount: '50000',
+      fiatCurrency: 'NGN',
+    };
+    const llm = makeFake(resolved);
+
+    const result = await runAgent({ userText: '50k', llm, history });
+
+    expect(result).toEqual(resolved);
+    // The history must reach the provider verbatim so the model can use it.
+    expect(llm.extractIntent).toHaveBeenCalledWith('50k', history);
+  });
+
+  it('passes an empty history through unchanged when none is supplied', async () => {
+    const intent: Intent = {
+      action: 'none',
+      clarification: 'What would you like to do?',
+    };
+    const llm = makeFake(intent);
+
+    await runAgent({ userText: 'hi', llm });
+
+    // No history supplied → provider is called with undefined/empty history.
+    expect(llm.extractIntent).toHaveBeenCalledWith('hi', []);
   });
 });

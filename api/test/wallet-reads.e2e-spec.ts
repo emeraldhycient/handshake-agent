@@ -33,6 +33,9 @@ import type { INestApplication } from '@nestjs/common';
 // ConfigModule.forRoot(). They export only const symbols and interfaces.
 import { LLM_PROVIDER } from '../src/modules/agent/application/ports/agent.port';
 import { WALLET_PROVIDER } from '../src/modules/wallets/application/ports/wallet-provider.port';
+import { AssetRegistry } from '../src/core/catalog/asset-registry';
+import { seedRegistryAssets } from './helpers/seed-registry-assets';
+import { randomUUID } from 'node:crypto';
 import { PAYMENT_PROVIDER } from '../src/modules/treasury/application/ports/payment-provider.port';
 import { WHATSAPP_SENDER } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.port';
@@ -205,6 +208,7 @@ describe('Wallet reads — e2e (GET /wallets/balances + /wallets/deposit-address
 
     app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();
+    seedRegistryAssets(app.get(AssetRegistry, { strict: false }));
   }, 120_000);
 
   afterAll(async () => {
@@ -261,7 +265,7 @@ describe('Wallet reads — e2e (GET /wallets/balances + /wallets/deposit-address
         firstName: 'Eze',
         lastName: 'Nweke',
         nin: '12345678901',
-        pin: '1234',
+        pin: '1357',
       })
       .expect(200);
     const { userId } = ks.body as { userId: string; status: string };
@@ -275,7 +279,42 @@ describe('Wallet reads — e2e (GET /wallets/balances + /wallets/deposit-address
 
   it('signup → verify → login → kyc → GET /wallets/balances + /wallets/deposit-address', async () => {
     const email = `e2e_wr_${Date.now()}@test.com`;
-    const { accessToken } = await setupVerifiedUser(email);
+    const { accessToken, userId } = await setupVerifiedUser(email);
+
+    // The balance endpoint reads the custodial LEDGER (not the provider's
+    // getBalance — see WalletBalanceService), so seed a USDT credit on this
+    // user's TRON wallet (provisioned by KYC submit above) to assert it surfaces.
+    const wallet = await prisma.wallet.findFirst({
+      where: { userId, network: 'TRON' },
+      select: { id: true },
+    });
+    if (wallet === null) throw new Error('no TRON wallet for user');
+    const seedTxn = await prisma.transaction.create({
+      data: {
+        userId,
+        type: 'buy',
+        status: 'completed',
+        idempotencyKey: randomUUID(),
+        requestChecksum: 'seed',
+        fxRateSnapshot: '1600',
+        metadata: {},
+        pinVerifiedAt: new Date(),
+      },
+    });
+    await prisma.ledgerEntry.create({
+      data: {
+        transactionId: seedTxn.id,
+        accountType: 'user_wallet',
+        accountId: wallet.id,
+        currency: 'USDT',
+        direction: 'credit',
+        amount: '29.97',
+        description: 'seed credit for wallet-reads e2e (ledger-based balance)',
+        balanceAfter: '29.97',
+        sequence: 1,
+        postedAt: new Date(),
+      },
+    });
 
     // GET /wallets/balances with Bearer token
     const balances = await request(app.getHttpServer())

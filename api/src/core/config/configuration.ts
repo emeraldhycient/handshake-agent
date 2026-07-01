@@ -351,10 +351,14 @@ export interface ReconciliationConfig {
 export interface StatementConfig {
   /** TTL (seconds) for a signed statement download link. Default 900 (15 min). */
   linkTtlSeconds: number;
-  /** Max history window in days; longer requests are clamped. Default 365. */
+  /** Max history window in days; longer requests are clamped. Default 400 (~1yr + headroom). */
   maxWindowDays: number;
-  /** Max rows returned to the chat card / statement. Default 100 (truncation surfaced). */
-  rowCap: number;
+  /** Default page size for the interactive history card / Activity feed. Default 10. */
+  defaultPageSize: number;
+  /** Hard cap on a single page (clamps an over-large client `limit`). Default 100. */
+  maxPageSize: number;
+  /** Safety cap on rows gathered for a full-range PDF statement. Default 5000. */
+  statementMaxRows: number;
   /** Fixed offset (minutes) for local day boundaries. WAT = UTC+1, no DST → 60. */
   timezoneOffsetMinutes: number;
 }
@@ -442,7 +446,63 @@ export interface AppConfig {
   agent: AgentConfig;
 }
 
-export default (): AppConfig => ({
+/**
+ * Boot-time cross-validation for multi-currency completeness (audit #25).
+ *
+ * The product's extensibility guarantee is "enabling a fiat = flip the
+ * `enabled` flag, no code change" (root CLAUDE.md §7). That only holds if the
+ * layered config actually carries the matching pricing + limits for the fiat —
+ * otherwise a flag flip produces opaque 500s (ConfigRateProvider /
+ * KycGateService throw raw Errors) instead of working flows.
+ *
+ * This asserts, fail-closed at startup, that EVERY catalog-enabled fiat has:
+ *   1. a `limits[fiat]` block (per-tier transaction caps), and
+ *   2. a `pricing.assets[asset].baseRates[fiat]` entry for every asset that is
+ *      both catalog-enabled AND fiat-tradeable (valuation-only assets such as a
+ *      `fiatTradeable: false` asset are skipped — they can't be bought/sold).
+ *
+ * Throws (failing boot) on the first violation. Disabled fiats are ignored —
+ * their config may legitimately be incomplete until they go live.
+ */
+export function validateConfig(cfg: AppConfig): void {
+  const enabledFiats = Object.values(cfg.catalog.fiats)
+    .filter((fiat) => fiat.enabled)
+    .map((fiat) => fiat.code);
+
+  // Assets that can actually be bought/sold for fiat: catalog-enabled and not
+  // explicitly marked valuation-only (fiatTradeable defaults to true).
+  const tradeableAssets = Object.keys(cfg.pricing.assets).filter((symbol) => {
+    const catalogAsset = cfg.catalog.assets[symbol];
+    const isCatalogEnabled = catalogAsset ? catalogAsset.enabled : false;
+    const isFiatTradeable = cfg.pricing.assets[symbol].fiatTradeable !== false;
+    return isCatalogEnabled && isFiatTradeable;
+  });
+
+  for (const fiat of enabledFiats) {
+    if (!cfg.limits[fiat]) {
+      throw new Error(
+        `Config invariant violated: fiat '${fiat}' is enabled in the catalog ` +
+          `but has no limits block (config.limits.${fiat}). Enabling a fiat ` +
+          `requires adding its limits + pricing baseRates (root CLAUDE.md §7).`,
+      );
+    }
+
+    for (const asset of tradeableAssets) {
+      const baseRate = cfg.pricing.assets[asset].baseRates[fiat];
+      if (baseRate === undefined) {
+        throw new Error(
+          `Config invariant violated: fiat '${fiat}' is enabled but asset ` +
+            `'${asset}' has no pricing baseRate for it ` +
+            `(config.pricing.assets.${asset}.baseRates.${fiat}). Enabling a ` +
+            `fiat requires a baseRate for every enabled fiat-tradeable asset ` +
+            `(root CLAUDE.md §7).`,
+        );
+      }
+    }
+  }
+}
+
+const buildConfig = (): AppConfig => ({
   // ── Asset / fiat / network catalog (task X1, CLAUDE.md §7) ────────────
   // Each entry is a config-layer value; the DB-admin AppSetting layer will be
   // able to override capability flags at runtime (hot-reload) without a deploy.
@@ -730,11 +790,15 @@ export default (): AppConfig => ({
     batchSize: 20,
   },
   statement: {
-    // 15-minute signed-link validity, 1-year max history window, 100-row page cap,
-    // and WAT (UTC+1, no DST) day boundaries. Admin-tunable later (DB-admin layer, §7).
+    // 15-minute signed-link validity; ~1-year (400-day) max window with headroom so
+    // "last year" isn't trimmed; 10-row default page; 100-row hard page cap; 5000-row
+    // full-statement safety cap; WAT (UTC+1, no DST) day boundaries.
+    // Admin-tunable later (DB-admin layer, §7).
     linkTtlSeconds: 900,
-    maxWindowDays: 365,
-    rowCap: 100,
+    maxWindowDays: 400,
+    defaultPageSize: 10,
+    maxPageSize: 100,
+    statementMaxRows: 5000,
     timezoneOffsetMinutes: 60,
   },
   media: {
@@ -777,3 +841,14 @@ export default (): AppConfig => ({
     modelId: process.env['AGENT_MODEL'] ?? 'claude-opus-4-8',
   },
 });
+
+/**
+ * Config factory (the @nestjs/config `load` entry). Builds the JSON-defaults
+ * layer and runs the boot-time cross-validation (#25) so a misconfigured
+ * enabled-fiat fails startup rather than producing opaque 500s at runtime.
+ */
+export default (): AppConfig => {
+  const cfg = buildConfig();
+  validateConfig(cfg);
+  return cfg;
+};

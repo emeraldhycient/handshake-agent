@@ -36,6 +36,8 @@ import type { INestApplication } from '@nestjs/common';
 import { WalletService } from '../src/modules/wallets/application/wallet.service';
 import { LLM_PROVIDER } from '../src/modules/agent/application/ports/agent.port';
 import { WALLET_PROVIDER } from '../src/modules/wallets/application/ports/wallet-provider.port';
+import { AssetRegistry } from '../src/core/catalog/asset-registry';
+import { seedRegistryAssets } from './helpers/seed-registry-assets';
 import { PAYMENT_PROVIDER } from '../src/modules/treasury/application/ports/payment-provider.port';
 import { WHATSAPP_SENDER } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.port';
@@ -231,6 +233,7 @@ describe('Web sell + send + beneficiaries — e2e', () => {
 
     app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();
+    seedRegistryAssets(app.get(AssetRegistry, { strict: false }));
   }, 120_000);
 
   afterAll(async () => {
@@ -243,7 +246,7 @@ describe('Web sell + send + beneficiaries — e2e', () => {
 
   async function setupVerifiedUser(
     userEmail: string,
-    pin = '1234',
+    pin = '1357',
   ): Promise<{ accessToken: string; userId: string }> {
     const deviceFingerprint = `e2e-web-ss-fp-${userEmail.slice(0, 16)}`;
 
@@ -394,7 +397,7 @@ describe('Web sell + send + beneficiaries — e2e', () => {
     const body: Record<string, unknown> = {
       directiveId,
       nonce,
-      pin: '1234',
+      pin: '1357',
       idempotencyKey: randomUUID(),
     };
     if (deviceFingerprint) body.deviceFingerprint = deviceFingerprint;

@@ -21,11 +21,14 @@ import { promisify } from 'node:util';
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import { TransactionPinSchema } from '@handshake-agent/contracts';
+
 import { CLOCK, type Clock } from '../common/clock';
 import {
   PinInvalidError,
   PinLockedError,
   PinNotSetError,
+  WeakPinError,
 } from './domain/pin-errors';
 import {
   PIN_REPOSITORY,
@@ -60,11 +63,30 @@ export class PinService {
   /**
    * Hashes a raw PIN using scrypt with a fresh random salt.
    * Returns a `<saltHex>:<hashHex>` string suitable for storing in `pinHash`.
+   *
+   * Server-side strength gate (CLAUDE.md §3.3): the PIN must satisfy the shared
+   * `TransactionPinSchema` (4–6 digits, not all-same, not a trivial sequence).
+   * This is the security boundary — a weak PIN is rejected here even if a
+   * non-web caller bypasses the client form. The schema is the single canonical
+   * rule shared with the frontend.
    */
   async hashPin(pin: string): Promise<string> {
+    if (!TransactionPinSchema.safeParse(pin).success) {
+      throw new WeakPinError();
+    }
     const salt = randomBytes(SALT_BYTES);
     const hash = (await scryptAsync(pin, salt, this.scryptKeyLen)) as Buffer;
     return `${salt.toString('hex')}:${hash.toString('hex')}`;
+  }
+
+  /**
+   * Reports whether `userId` already has a transaction PIN set. Used to gate
+   * the set-PIN-for-verified-user flow (a PIN may only be set when none exists;
+   * replacing an existing PIN requires step-up, not this path).
+   */
+  async hasPin(userId: string): Promise<boolean> {
+    const state = await this.pinRepo.getPinState(userId);
+    return state !== null && state.pinHash !== null;
   }
 
   /**

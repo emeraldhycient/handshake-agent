@@ -1,16 +1,34 @@
 "use client"
 
 import { useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusPill } from "@/components/shared/status-pill"
+import {
+  QueryErrorState,
+  QueryEmptyState,
+} from "@/components/shared/query-states"
 import { TransactionDetailModal } from "@/components/shared/transaction-detail-modal"
-import { useActivity } from "@/lib/query/hooks"
+import { useActivityFeed } from "@/lib/query/hooks"
+import { qk } from "@/lib/query/keys"
 import type { ActivityTabProps } from "@/types/components"
 
 export function ActivityTab({ className }: ActivityTabProps) {
-  const { data: groups, isLoading, isError } = useActivity()
+  const {
+    groups,
+    isLoading,
+    isError,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useActivityFeed()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const queryClient = useQueryClient()
+  // The activity feed hook (useInfiniteQuery wrapper) exposes no `refetch`, so
+  // invalidating the key is the retry path.
+  const retry = () =>
+    void queryClient.invalidateQueries({ queryKey: qk.activity })
 
   if (isLoading) {
     return (
@@ -50,32 +68,31 @@ export function ActivityTab({ className }: ActivityTabProps) {
     return (
       <div
         className={cn(
-          "flex flex-1 flex-col items-center justify-center gap-2 bg-background p-8",
+          "flex flex-1 flex-col items-center justify-center bg-background p-8",
           className
         )}
       >
-        <p className="text-sm font-semibold text-foreground">
-          Could not load activity
-        </p>
-        <p className="text-center text-sm text-muted-foreground">
-          Check your connection and try again.
-        </p>
+        <QueryErrorState
+          title="Could not load activity"
+          description="Check your connection and try again."
+          onRetry={retry}
+        />
       </div>
     )
   }
 
-  if (!groups || groups.length === 0) {
+  if (groups.length === 0) {
     return (
       <div
         className={cn(
-          "flex flex-1 flex-col items-center justify-center gap-2 bg-background p-8",
+          "flex flex-1 flex-col items-center justify-center bg-background p-8",
           className
         )}
       >
-        <p className="text-sm font-semibold text-foreground">No activity yet</p>
-        <p className="text-center text-sm text-muted-foreground">
-          Your transactions will appear here.
-        </p>
+        <QueryEmptyState
+          title="No activity yet"
+          description="Your transactions will appear here."
+        />
       </div>
     )
   }
@@ -142,6 +159,21 @@ export function ActivityTab({ className }: ActivityTabProps) {
             </div>
           </div>
         ))}
+
+        {hasNextPage && (
+          <button
+            type="button"
+            onClick={() => void fetchNextPage()}
+            disabled={isFetchingNextPage}
+            className={cn(
+              "mx-auto rounded-full border border-border px-5 py-2.5 text-[13px] font-semibold text-foreground",
+              "transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none",
+              "disabled:cursor-not-allowed disabled:opacity-60"
+            )}
+          >
+            {isFetchingNextPage ? "Loading…" : "Load more"}
+          </button>
+        )}
       </div>
 
       {/* ── Transaction detail modal ─────────────────────────────────────────── */}

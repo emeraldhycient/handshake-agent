@@ -119,4 +119,31 @@ describe("WalletTab", () => {
       { timeout: 3000 }
     )
   })
+
+  // ── Finding #7: the placeholder "—" change must not be success-green ───────
+  it("does not render the unpriced '—' change in success-green", async () => {
+    render(<WalletTab onQuickAction={() => {}} />, { wrapper: makeWrapper() })
+    await waitFor(
+      () => expect(screen.getByText("Tether USD")).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+    // The fixture change is "—" (no 24h source). It must NOT use the success
+    // token, which would imply a (fake) positive movement.
+    const dashes = screen.getAllByText("—")
+    expect(dashes.length).toBeGreaterThan(0)
+    for (const el of dashes) {
+      expect(el.className).not.toMatch(/text-success/)
+    }
+  })
+
+  // ── §13.1: the quick-action buttons are the shared ActionButton primitive ──
+  it("renders the Buy action with the label as its accessible name", async () => {
+    render(<WalletTab onQuickAction={() => {}} />, { wrapper: makeWrapper() })
+    const buyBtn = await screen.findByRole(
+      "button",
+      { name: "Buy" },
+      { timeout: 3000 }
+    )
+    expect(buyBtn).toBeInTheDocument()
+  })
 })

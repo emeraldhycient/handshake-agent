@@ -324,7 +324,7 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
       },
     });
     userId = user.id;
-    await pinService.setPin(userId, '123456');
+    await pinService.setPin(userId, '194837');
 
     // Seed a WhatsApp ChannelIdentity for the user.
     waAddress = '2348090000001';
@@ -376,7 +376,7 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
       proposalId: proposalResult.proposalId,
       directiveId,
       nonce,
-      pin: '123456',
+      pin: '194837',
       idempotencyKey,
     });
 

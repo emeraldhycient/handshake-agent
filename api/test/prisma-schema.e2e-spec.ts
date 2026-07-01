@@ -77,7 +77,10 @@ describe('Prisma schema (integration, Testcontainers Postgres)', () => {
     );
     // +1 for backfill_run_status (BQ-2).
     // +1 for auth_challenge_type (web-auth-vertical, Task 3).
-    expect(Number(enums)).toBe(73);
+    // -1: the supported_asset enum was dropped when asset columns moved to TEXT
+    //     for the dynamic (Blockradar-sourced) catalog — assets are no longer a
+    //     fixed enum (migration 20260629200000_asset_columns_text_dynamic_catalog).
+    expect(Number(enums)).toBe(72);
   });
 
   it('generates time-sortable uuid v7 ids on the client (the only sanctioned DB door)', async () => {

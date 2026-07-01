@@ -1,19 +1,18 @@
 import type { DepositAddressResponse } from "@handshake-agent/contracts"
 import type { DepositView } from "@/lib/schemas"
 
-// minDeposit/creditedEta have no backend source yet — kept as labelled placeholders.
-const PLACEHOLDER_MIN = "1"
-const PLACEHOLDER_ETA = "~1 min"
-
 export function mapDepositAddress(res: DepositAddressResponse): DepositView {
   return {
     kind: "receive",
     asset: res.asset,
     network: res.networkLabel,
     address: res.address,
-    minDeposit: res.minDeposit
-      ? `${res.minDeposit} ${res.asset}`
-      : `${PLACEHOLDER_MIN} ${res.asset}`,
-    creditedEta: PLACEHOLDER_ETA,
+    // Finding #9: never fabricate a min-deposit / credited-ETA. The previous
+    // "1 USDT" / "~1 min" placeholders were invented AND contradicted the chat
+    // path's "—" / "~30 min". Surface the real backend value when present;
+    // otherwise emit "" so the deposit card hides the chip rather than showing
+    // a made-up number on the money path.
+    minDeposit: res.minDeposit ? `${res.minDeposit} ${res.asset}` : "",
+    creditedEta: "",
   }
 }

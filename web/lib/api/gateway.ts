@@ -14,14 +14,13 @@
 import { api } from "./client"
 import * as mock from "./mock/index"
 import { mapWalletBalances, mapWalletAssets } from "./mappers/wallet"
-import { mapTransactions } from "./mappers/transactions"
+import { mapHistoryItemToRow } from "./mappers/history-row"
 import { mapNotifications } from "./mappers/notifications"
 import { mapDepositAddress } from "./mappers/deposit"
 import { QuoteViewSchema, ReceiptViewSchema } from "@/lib/schemas"
 import type {
   BalanceView,
   WalletAsset,
-  ActivityGroup,
   DepositView,
   EventListItem,
   AppNotification,
@@ -29,15 +28,40 @@ import type {
   QuoteView,
   ReceiptView,
   ChatAction,
+  TransactionRow,
 } from "@/lib/schemas"
 import {
   PublicConfigResponseSchema,
   type PublicConfigResponse,
+  type TransactionListItem,
   WalletBalancesResponseSchema,
   DepositAddressResponseSchema,
   TransactionListResponseSchema,
+  TransactionHistoryResponseSchema,
   NotificationListResponseSchema,
 } from "@handshake-agent/contracts"
+
+/** A raw page of activity-feed transactions (mapped to groups in the hook, where
+ *  the `/config` fiat symbols are available — keeps NGN out of the gateway). */
+export interface ActivityPage {
+  items: TransactionListItem[]
+  nextCursor: string | null
+}
+
+/** A loaded page of chat transaction-history rows (the "Show more" payload). */
+export interface TransactionHistoryPage {
+  rows: TransactionRow[]
+  hasMore: boolean
+  nextCursor: string | null
+}
+
+/** Params for fetching the next keyset page of a FROZEN history window. */
+export interface TransactionHistoryPageParams {
+  from: string
+  to: string
+  txType: string
+  cursor: string
+}
 
 // ─── Type alias for the gateway contract ─────────────────────────────────────
 
@@ -45,7 +69,10 @@ export interface Gateway {
   getConfig(): Promise<PublicConfigResponse>
   getBalances(): Promise<BalanceView>
   getWalletAssets(): Promise<WalletAsset[]>
-  getActivity(): Promise<ActivityGroup[]>
+  getActivityPage(cursor?: string): Promise<ActivityPage>
+  getTransactionHistoryPage(
+    params: TransactionHistoryPageParams
+  ): Promise<TransactionHistoryPage>
   getDepositAddress(): Promise<DepositView>
   getEvents(): Promise<EventListItem[]>
   getNotifications(): Promise<AppNotification[]>
@@ -66,7 +93,7 @@ export interface Gateway {
 // /config capabilities), so they delegate to the mock.
 //   GET  /config
 //   GET  /wallets/balances        → BalanceView / WalletAsset[]
-//   GET  /transactions            → ActivityGroup[]
+//   GET  /transactions            → ActivityPage (raw; grouped in the hook)
 //   GET  /wallets/deposit-address → DepositView
 //   GET  /notifications           → AppNotification[]
 //   POST /quotes · POST /transactions (chat flow — unchanged)
@@ -87,9 +114,23 @@ const realGateway: Gateway = {
     return mapWalletAssets(WalletBalancesResponseSchema.parse(data))
   },
 
-  async getActivity() {
-    const { data } = await api.get("/transactions")
-    return mapTransactions(TransactionListResponseSchema.parse(data))
+  async getActivityPage(cursor?: string) {
+    const { data } = await api.get("/transactions", {
+      params: cursor ? { cursor } : {},
+    })
+    const res = TransactionListResponseSchema.parse(data)
+    return { items: res.items, nextCursor: res.nextCursor ?? null }
+  },
+
+  async getTransactionHistoryPage(params: TransactionHistoryPageParams) {
+    // `cursor` present → the backend pages the FROZEN absolute window (queryPage).
+    const { data } = await api.get("/transactions/history", { params })
+    const res = TransactionHistoryResponseSchema.parse(data)
+    return {
+      rows: res.items.map(mapHistoryItemToRow),
+      hasMore: res.hasMore,
+      nextCursor: res.nextCursor,
+    }
   },
 
   async getDepositAddress() {

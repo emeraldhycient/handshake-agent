@@ -302,7 +302,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
     });
     userId = user.id;
 
-    await pinService.setPin(userId, '123456');
+    await pinService.setPin(userId, '194837');
   });
 
   afterAll(async () => {
@@ -428,7 +428,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -504,7 +504,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -538,7 +538,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -559,7 +559,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         proposalId: proposalId2,
         directiveId: dir2,
         nonce: nonce2,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey, // same key → idempotent path
       });
 
@@ -630,7 +630,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -732,7 +732,7 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -803,13 +803,21 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         undefined, // swapProvider: not needed on sell path
       );
 
+      // BUG 2 — velocity baseline BEFORE the tx (pre-tx daily spend).
+      const velocityRepo = new VelocityPrismaRepository(ps);
+      const usageBefore = await velocityRepo.getDailyUsage(
+        userId,
+        new Date(),
+        'NGN',
+      );
+
       // Phase 1: execute
       const executeResult = await svc.executeSell({
         userId,
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -818,6 +826,17 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
         where: { transactionId: executeResult.transactionId },
       });
       expect(afterReserve).toHaveLength(2);
+
+      // BUG 2 — reserve INCREMENTED velocity (daily spend + tx count rose).
+      const usageAfterReserve = await velocityRepo.getDailyUsage(
+        userId,
+        new Date(),
+        'NGN',
+      );
+      expect(Number(usageAfterReserve.fiatTotal)).toBeGreaterThan(
+        Number(usageBefore.fiatTotal),
+      );
+      expect(usageAfterReserve.txCount).toBe(usageBefore.txCount + 1);
 
       // Phase 2: settle with payout failure → refund
       const settleResult = await svc.settleSellPayout({
@@ -878,6 +897,17 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
       });
       expect(compensation).not.toBeNull();
       expect(compensation?.status).toBe('pending');
+
+      // BUG 2 — the refund REVERSED velocity: daily spend + tx count are back to
+      // their pre-tx values, so a definitively-failed+refunded sell no longer
+      // consumes the user's daily limit (the live 173k-NGN phantom-spend bug).
+      const usageAfterRefund = await velocityRepo.getDailyUsage(
+        userId,
+        new Date(),
+        'NGN',
+      );
+      expect(usageAfterRefund.fiatTotal).toBe(usageBefore.fiatTotal);
+      expect(usageAfterRefund.txCount).toBe(usageBefore.txCount);
     });
   });
 });

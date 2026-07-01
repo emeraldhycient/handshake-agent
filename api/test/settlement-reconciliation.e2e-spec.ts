@@ -61,6 +61,7 @@ import { WalletService } from '../src/modules/wallets/application/wallet.service
 import { BeneficiaryService } from '../src/modules/beneficiaries/application/beneficiary.service';
 import { ConfigRateProvider } from '../src/modules/quotes/infrastructure/config-rate.provider';
 import { AssetRegistry } from '../src/core/catalog/asset-registry';
+import { seedRegistryAssets } from './helpers/seed-registry-assets';
 
 // Types
 import type { PrismaService } from '../src/core/prisma/prisma.service';
@@ -228,6 +229,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
     const config = new StubConfigService() as never;
     const clock = { now: () => new Date() };
     const assetRegistry = new AssetRegistry(config);
+    seedRegistryAssets(assetRegistry);
 
     // Repos
     const proposalRepo = new ProposalPrismaRepository(ps);
@@ -342,7 +344,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       },
     });
     userId = user.id;
-    await pinService.setPin(userId, '111111');
+    await pinService.setPin(userId, '194837');
 
     // Create a bound device and pin it to the user so executeSend can
     // resolve the device for step-up recording (fail-closed, Fix G §3.4).
@@ -460,7 +462,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       proposalId,
       directiveId,
       nonce,
-      pin: '111111',
+      pin: '194837',
       idempotencyKey: randomUUID(),
     });
 
@@ -547,7 +549,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       proposalId: sendProposal.proposalId,
       directiveId,
       nonce,
-      pin: '111111',
+      pin: '194837',
       idempotencyKey: randomUUID(),
     });
 
@@ -627,7 +629,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       proposalId: sendProposal.proposalId,
       directiveId,
       nonce,
-      pin: '111111',
+      pin: '194837',
       idempotencyKey: randomUUID(),
     });
 
@@ -701,7 +703,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       proposalId: sendProposal.proposalId,
       directiveId,
       nonce,
-      pin: '111111',
+      pin: '194837',
       idempotencyKey: randomUUID(),
     });
 

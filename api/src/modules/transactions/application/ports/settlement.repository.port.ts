@@ -178,6 +178,28 @@ export interface SettleSellRefundInput {
   failureReason: string;
   /** Timestamp to use for postedAt / failedAt (from CLOCK). */
   now: Date;
+  /**
+   * BUG 2 — velocity reversal. The exact daily-spend contribution this tx made
+   * at reserve (fiatAmountStr) so the refund can DECREMENT it inside the same
+   * atomic. A definitively-failed + refunded tx must NOT keep consuming the
+   * user's daily limit. Omit only on a tx that never incremented velocity.
+   */
+  velocityReversal?: VelocityReversal;
+}
+
+/**
+ * Velocity-counter reversal applied inside a refund atomic. Mirrors the
+ * `velocityIncrement` written at reserve so the daily-spend and tx-count
+ * counters are restored to their pre-tx values when a tx fails + refunds.
+ */
+export interface VelocityReversal {
+  userId: string;
+  /** Fiat currency code for the counter's window (e.g. 'NGN'). */
+  fiatCurrency: string;
+  /** The exact fiat amount that was incremented at reserve. */
+  fiatAmountStr: string;
+  /** Clock now — used only to decide whether the active window still applies. */
+  now: Date;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +320,8 @@ export interface SettleSendRefundInput {
   failureReason: string;
   /** Timestamp to use for postedAt / failedAt (from CLOCK). */
   now: Date;
+  /** BUG 2 — velocity reversal (see SettleSellRefundInput.velocityReversal). */
+  velocityReversal?: VelocityReversal;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +405,8 @@ export interface SettleSwapRefundInput {
   fromAsset: string;
   failureReason: string;
   now: Date;
+  /** BUG 2 — velocity reversal (see SettleSellRefundInput.velocityReversal). */
+  velocityReversal?: VelocityReversal;
 }
 
 // ---------------------------------------------------------------------------

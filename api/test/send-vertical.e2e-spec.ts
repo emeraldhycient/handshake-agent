@@ -61,6 +61,7 @@ import { ComplianceService } from '../src/modules/compliance/application/complia
 import { MockSanctionsScreener } from '../src/modules/compliance/infrastructure/mock-sanctions.screener';
 import { ConfigRateProvider } from '../src/modules/quotes/infrastructure/config-rate.provider';
 import { AssetRegistry } from '../src/core/catalog/asset-registry';
+import { seedRegistryAssets } from './helpers/seed-registry-assets';
 
 // Ports/types
 import type { PrismaService } from '../src/core/prisma/prisma.service';
@@ -162,6 +163,7 @@ function buildSendExecutionService(
 ): ExecutionService {
   const clock = { now: () => new Date() };
   const assetRegistry = new AssetRegistry(config as never);
+  seedRegistryAssets(assetRegistry);
   const rateProvider = new ConfigRateProvider(config as never);
   const quotesService = new QuotesService(rateProvider, clock, assetRegistry);
   const kycGate = new KycGateService(
@@ -240,6 +242,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
     const config = new StubConfigService() as never;
     const clock = { now: () => new Date() };
     const assetRegistry = new AssetRegistry(config);
+    seedRegistryAssets(assetRegistry);
 
     // Repos
     const proposalRepo = new ProposalPrismaRepository(ps);
@@ -334,7 +337,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
     });
     userId = user.id;
 
-    await pinService.setPin(userId, '123456');
+    await pinService.setPin(userId, '194837');
 
     // Create a bound device and pin it to the user (Fix G §3.4).
     const device = await prisma.device.create({
@@ -507,7 +510,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -591,7 +594,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -618,7 +621,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -636,7 +639,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId: proposalId2,
         directiveId: dir2,
         nonce: nonce2,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey, // same key → idempotent path
       });
 
@@ -675,7 +678,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -746,7 +749,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -800,7 +803,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -1018,7 +1021,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId: proposal.id,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 
@@ -1080,7 +1083,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
         proposalId,
         directiveId,
         nonce,
-        pin: '123456',
+        pin: '194837',
         idempotencyKey,
       });
 

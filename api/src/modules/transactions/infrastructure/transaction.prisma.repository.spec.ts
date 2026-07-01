@@ -27,6 +27,7 @@
 
 import { TransactionPrismaRepository } from './transaction.prisma.repository';
 import type { PrismaService } from '../../../core/prisma/prisma.service';
+import { encodeCursor, decodeCursor } from '../domain/transaction-cursor';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -157,6 +158,163 @@ describe('TransactionPrismaRepository', () => {
       );
       expect(result).not.toBeNull();
       expect(result?.id).toBe(VALID_UUID);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // listByUserInRange — keyset pagination (GAP 2)
+  // ---------------------------------------------------------------------------
+  describe('listByUserInRange — keyset pagination', () => {
+    const FROM = new Date('2026-06-01T00:00:00.000Z');
+    const TO = new Date('2026-06-30T00:00:00.000Z');
+
+    interface WhereArg {
+      OR?: { createdAt: unknown; id?: unknown }[];
+      type?: { in: string[] };
+    }
+    interface FindManyArgs {
+      where: WhereArg;
+      orderBy: unknown;
+      take: number;
+    }
+
+    function row(id: string, iso: string) {
+      return {
+        id,
+        proposalId: null,
+        userId: 'u1',
+        type: 'BUY',
+        status: 'completed',
+        idempotencyKey: VALID_UUID,
+        requestChecksum: 'sum',
+        fxRateSnapshot: null,
+        metadata: {},
+        processorTxRef: null,
+        pinVerifiedAt: null,
+        createdAt: new Date(iso),
+      };
+    }
+
+    function makePagingRepo(findManyRows: unknown[], total: number) {
+      // Capture the call args into typed locals so assertions stay type-safe
+      // (reading jest's `.mock.calls` would surface `any`).
+      const captured: { findMany?: FindManyArgs; count?: { where: WhereArg } } =
+        {};
+      const findMany = jest.fn((args: FindManyArgs) => {
+        captured.findMany = args;
+        return Promise.resolve(findManyRows);
+      });
+      const count = jest.fn((args: { where: WhereArg }) => {
+        captured.count = args;
+        return Promise.resolve(total);
+      });
+      const prisma = {
+        transaction: { findMany, count },
+        // Array-form $transaction: await both queued promises.
+        $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
+      } as unknown as PrismaService;
+      return { repo: new TransactionPrismaRepository(prisma), captured };
+    }
+
+    it('orders by (createdAt desc, id desc), fetches limit+1, and reports hasMore', async () => {
+      // 3 rows returned for limit 2 → page is the first 2, hasMore true.
+      const rows = [
+        row('id-c', '2026-06-10T00:00:00.000Z'),
+        row('id-b', '2026-06-09T00:00:00.000Z'),
+        row('id-a', '2026-06-08T00:00:00.000Z'),
+      ];
+      const { repo, captured } = makePagingRepo(rows, 5);
+
+      const res = await repo.listByUserInRange({
+        userId: 'u1',
+        from: FROM,
+        to: TO,
+        limit: 2,
+      });
+
+      expect(captured.findMany?.orderBy).toEqual([
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ]);
+      expect(captured.findMany?.take).toBe(3); // limit + 1
+      // No cursor → no OR clause in either query.
+      expect(captured.findMany?.where.OR).toBeUndefined();
+      expect(captured.count?.where.OR).toBeUndefined();
+
+      expect(res.rows).toHaveLength(2);
+      expect(res.total).toBe(5);
+      expect(res.hasMore).toBe(true);
+      // nextCursor points at the LAST row of the trimmed page (id-b).
+      expect(decodeCursor(res.nextCursor!)).toEqual({
+        createdAt: new Date('2026-06-09T00:00:00.000Z'),
+        id: 'id-b',
+      });
+    });
+
+    it('returns hasMore=false and nextCursor=null on the final page', async () => {
+      const rows = [row('id-b', '2026-06-09T00:00:00.000Z')];
+      const { repo } = makePagingRepo(rows, 1);
+
+      const res = await repo.listByUserInRange({
+        userId: 'u1',
+        from: FROM,
+        to: TO,
+        limit: 2,
+      });
+
+      expect(res.rows).toHaveLength(1);
+      expect(res.hasMore).toBe(false);
+      expect(res.nextCursor).toBeNull();
+    });
+
+    it('applies the keyset OR clause for a cursor (and counts the full window)', async () => {
+      const cursorAt = new Date('2026-06-09T00:00:00.000Z');
+      const cursor = encodeCursor(cursorAt, 'id-b');
+      const { repo, captured } = makePagingRepo(
+        [row('id-a', '2026-06-08T00:00:00.000Z')],
+        5,
+      );
+
+      await repo.listByUserInRange({
+        userId: 'u1',
+        from: FROM,
+        to: TO,
+        limit: 2,
+        cursor,
+      });
+
+      expect(captured.findMany?.where.OR).toEqual([
+        { createdAt: { lt: cursorAt } },
+        { createdAt: cursorAt, id: { lt: 'id-b' } },
+      ]);
+      // Count is the full-window total, so it must NOT carry the cursor OR.
+      expect(captured.count?.where.OR).toBeUndefined();
+    });
+
+    it('narrows by type when types are provided', async () => {
+      const { repo, captured } = makePagingRepo([], 0);
+      await repo.listByUserInRange({
+        userId: 'u1',
+        from: FROM,
+        to: TO,
+        types: ['buy', 'deposit'],
+        limit: 10,
+      });
+      expect(captured.findMany?.where.type).toEqual({
+        in: ['buy', 'deposit'],
+      });
+    });
+
+    it('ignores a malformed cursor (no OR clause)', async () => {
+      const { repo, captured } = makePagingRepo([], 0);
+      await repo.listByUserInRange({
+        userId: 'u1',
+        from: FROM,
+        to: TO,
+        limit: 10,
+        cursor: 'not-a-valid-cursor',
+      });
+      expect(captured.findMany?.where.OR).toBeUndefined();
     });
   });
 });

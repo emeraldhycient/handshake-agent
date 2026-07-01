@@ -58,6 +58,22 @@ export type BeneficiaryListResponse = z.infer<
   typeof BeneficiaryListResponseSchema
 >
 
+// ─── Delete beneficiary ─────────────────────────────────────────────────────
+
+/**
+ * Acknowledgement returned by DELETE /beneficiaries/:id. The removal is a
+ * soft-delete (sets `deletedAt`) so funds-safety history is preserved; the row
+ * is excluded from every subsequent list/lookup. `deleted` is a literal `true`
+ * — the endpoint either acks a deletion or throws (404 when not found).
+ */
+export const DeleteBeneficiaryResponseSchema = z.object({
+  id: z.string().uuid(),
+  deleted: z.literal(true),
+})
+export type DeleteBeneficiaryResponse = z.infer<
+  typeof DeleteBeneficiaryResponseSchema
+>
+
 // ─── Add bank account ───────────────────────────────────────────────────────
 
 export const AddBankAccountRequestSchema = z.object({

@@ -59,6 +59,9 @@
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
   --color-info-muted: var(--info-muted);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-danger-muted: var(--danger-muted);
   --color-primary-mid: var(--primary-mid);
   --shadow-card: var(--card-shadow);
   --shadow-card-lg: var(--card-shadow-lg);
@@ -112,6 +115,13 @@
   --info: oklch(0.49 0.13 268); /* #3b5bb5 */
   --info-foreground: oklch(0.32 0.09 268); /* deep info text on info-muted */
   --info-muted: oklch(0.95 0.02 270); /* #eef0fb */
+  /* Terminal-failure tone (failed / refunded / reversed) — distinct from warn
+     (in-flight). Warm red, legible on the cream surface (audit #24). */
+  --danger: oklch(0.55 0.2 27); /* #c23b2e — danger text */
+  --danger-foreground: oklch(
+    0.4 0.16 27
+  ); /* deep danger text on danger-muted */
+  --danger-muted: oklch(0.95 0.04 27); /* soft red pill background */
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.9 0.012 90); /* #ebe5d8 */
   --input: oklch(0.9 0.012 90);
@@ -249,5 +259,22 @@
   50% {
     transform: scale(1.12);
     opacity: 0.78;
+  }
+}
+
+/*
+ * Honor prefers-reduced-motion (CLAUDE.md §13.8). Neutralize the hs-* keyframe
+ * animations — the looping ones (typing blink, success-ring pulse, spark
+ * spin/breathe) and the entrance/scrim ones (message-in, success pop, scrim) —
+ * for users who opt out of motion. Every component applies these via an
+ * animate-hs-* utility, so cancelling those classes here disables the motion
+ * everywhere at once without editing each component. Scoped to the hs-* names so
+ * Radix/shadcn transitions and the essential loading spinner are untouched; the
+ * resting (end) state of each keyframe is the intended static visual, so content
+ * stays fully visible with motion off.
+ */
+@media (prefers-reduced-motion: reduce) {
+  [class*="animate-hs-"] {
+    animation: none !important;
   }
 }

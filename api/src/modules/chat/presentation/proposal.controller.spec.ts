@@ -41,6 +41,7 @@ import {
   QuoteDriftError,
   ProviderUnavailableError,
   InsufficientBalanceError,
+  SwapUnavailableError,
 } from '../../transactions/domain/execution-errors';
 import { KycNotVerifiedError } from '../../identity/domain/gate-errors';
 import { BeneficiaryCoolingOffError } from '../../beneficiaries/domain/beneficiary-errors';
@@ -684,6 +685,23 @@ describe('ProposalController.execute', () => {
     await expect(
       controller.execute('proposal-uuid', validBody as never, TEST_USER),
     ).rejects.toThrow(UnprocessableEntityException);
+  });
+
+  it('swap: maps SwapUnavailableError → 422 (non-retryable, NOT a retryable 502)', async () => {
+    // A swap that the provider cannot execute (e.g. not enrolled / 404) is a
+    // permanent condition. It must surface as a graceful non-retryable error, not
+    // a retryable BadGateway that invites the user to keep tapping Confirm.
+    mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'swap' }));
+    mockExecutionService.executeSwap.mockRejectedValue(
+      new SwapUnavailableError(),
+    );
+
+    await expect(
+      controller.execute('proposal-uuid', validBody as never, TEST_USER),
+    ).rejects.toThrow(UnprocessableEntityException);
+    await expect(
+      controller.execute('proposal-uuid', validBody as never, TEST_USER),
+    ).rejects.not.toThrow(BadGatewayException);
   });
 });
 

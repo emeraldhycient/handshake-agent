@@ -28,7 +28,13 @@ jest.setTimeout(180_000);
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Stub ConfigService for PinService (scrypt key length etc.). */
+/** 32-byte AES key (64 hex chars) used to encrypt NIN/BVN at rest (NFR-1). */
+const KYC_ENCRYPTION_KEY = 'a'.repeat(64);
+
+/**
+ * Stub ConfigService for PinService (scrypt key length etc.) and
+ * KycPrismaRepository (KYC_ENCRYPTION_KEY for NIN/BVN field encryption).
+ */
 function makeConfigService(): ConfigService {
   return {
     get: (key: string) => {
@@ -36,6 +42,7 @@ function makeConfigService(): ConfigService {
         'auth.pin.maxAttempts': 5,
         'auth.pin.lockoutMinutes': 15,
         'auth.pin.scryptKeyLen': 64,
+        KYC_ENCRYPTION_KEY,
       };
       return cfg[key];
     },
@@ -59,7 +66,10 @@ describe('KycPrismaRepository (integration, Testcontainers Postgres)', () => {
     ({ prisma, stop } = await startTestPostgres());
 
     // Boundary cast: PrismaClient → PrismaService (same API surface at runtime).
-    repo = new KycPrismaRepository(prisma as unknown as PrismaService);
+    repo = new KycPrismaRepository(
+      prisma as unknown as PrismaService,
+      makeConfigService(),
+    );
 
     const pinRepo = new PinPrismaRepository(prisma as unknown as PrismaService);
     pinService = new PinService(pinRepo, makeConfigService(), CLOCK);
@@ -102,7 +112,7 @@ describe('KycPrismaRepository (integration, Testcontainers Postgres)', () => {
   it('completeVerificationAtomic creates User(verified,tier_1), KycProfile(verified), links Contact + CI, PIN round-trips', async () => {
     const phone = '+2348099000001';
     const { contactId, channelIdentityId } = await seedContactAndCI(phone);
-    const rawPin = '4321';
+    const rawPin = '1357';
 
     // Hash the PIN exactly as KycService would
     const pinHash = await pinService.hashPin(rawPin);
@@ -152,7 +162,11 @@ describe('KycPrismaRepository (integration, Testcontainers Postgres)', () => {
     expect(profile).not.toBeNull();
     expect(profile!.status).toBe('verified');
     expect(profile!.tier).toBe('tier_1');
-    expect(profile!.nin).toBe('10000000001');
+    // NFR-1: NIN is stored encrypted (ciphertext), never as plaintext, and
+    // decrypts back to the original via the repo's read path.
+    expect(profile!.nin).not.toBe('10000000001');
+    expect(profile!.nin).toMatch(/^v1\./);
+    expect(repo.decryptIdentifier(profile!.nin)).toBe('10000000001');
     expect(profile!.firstName).toBe('Ngozi');
     expect(profile!.lastName).toBe('Adeyemi');
     expect(profile!.verifiedAt).not.toBeNull();
@@ -203,8 +217,8 @@ describe('KycPrismaRepository (integration, Testcontainers Postgres)', () => {
     const seed1 = await seedContactAndCI(phone1);
     const seed2 = await seedContactAndCI(phone2);
 
-    const pin1 = await pinService.hashPin('1111');
-    const pin2 = await pinService.hashPin('2222');
+    const pin1 = await pinService.hashPin('1397');
+    const pin2 = await pinService.hashPin('2486');
 
     const now = new Date();
 
@@ -235,11 +249,11 @@ describe('KycPrismaRepository (integration, Testcontainers Postgres)', () => {
     expect(uid1).not.toBe(uid2);
 
     // Each user's PIN only works for themselves
-    await expect(pinService.verifyPin(uid1, '1111')).resolves.toBeUndefined();
-    await expect(pinService.verifyPin(uid2, '2222')).resolves.toBeUndefined();
+    await expect(pinService.verifyPin(uid1, '1397')).resolves.toBeUndefined();
+    await expect(pinService.verifyPin(uid2, '2486')).resolves.toBeUndefined();
 
     // Cross-verify must fail
-    await expect(pinService.verifyPin(uid1, '2222')).rejects.toBeDefined();
-    await expect(pinService.verifyPin(uid2, '1111')).rejects.toBeDefined();
+    await expect(pinService.verifyPin(uid1, '2486')).rejects.toBeDefined();
+    await expect(pinService.verifyPin(uid2, '1397')).rejects.toBeDefined();
   });
 });

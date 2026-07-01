@@ -39,6 +39,25 @@ export interface KycProfileRecord {
   lastName: string | null;
 }
 
+/**
+ * Originator attribution projection for the payment provider's customer object
+ * (real KYC name + a verified email) used by the execution engine when opening
+ * a fiat pay-in collection — so a virtual-account pay-in carries correct
+ * customer attribution for reconciliation/compliance instead of a placeholder.
+ *
+ * Joins the non-sensitive KycProfile name fields with the User's email columns.
+ * Email resolution (which of the two columns to use) is a business rule the
+ * application layer applies — both candidate columns are returned raw here.
+ */
+export interface OriginatorIdentityRecord {
+  firstName: string | null;
+  lastName: string | null;
+  /** KYC-captured out-of-band backup email (compliance-canonical). */
+  verifiedEmail: string | null;
+  /** Web account login email (OTP-verified at signup). */
+  email: string | null;
+}
+
 /** The subset of Contact fields needed for identity resolution. */
 export interface ContactRecord {
   id: string;
@@ -160,6 +179,18 @@ export interface IIdentityRepository {
    * the engine can fall back to null gracefully (documented in TravelRuleData).
    */
   findKycProfile(userId: string): Promise<KycProfileRecord | null>;
+
+  /**
+   * Returns the originator attribution projection (KYC name + candidate emails)
+   * for the given userId, or null if the User row does not exist.
+   *
+   * Used by the execution engine to populate the payment provider's customer
+   * object on a fiat pay-in. Name fields are null when no KycProfile exists yet;
+   * email fields are null when the user has not captured that email.
+   */
+  findOriginatorIdentity(
+    userId: string,
+  ): Promise<OriginatorIdentityRecord | null>;
 
   /**
    * Creates a Contact + a linked ChannelIdentity in a single transaction.
