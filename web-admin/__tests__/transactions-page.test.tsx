@@ -40,19 +40,32 @@ const RESPONSE: AdminTxnListResponse = {
     {
       id: "33333333-3333-3333-3333-333333333333",
       userId: UUID_A,
+      userEmail: "amara.okeke@example.com",
       type: "buy",
       status: "settling",
+      asset: "USDT",
+      amount: "10.5",
+      fiatAmount: "16500.00",
+      fiatCurrency: "NGN",
+      idempotencyKey: "idem_buy_abc",
       createdAt: "2026-07-01T09:42:00.000Z",
     },
     {
       id: "44444444-4444-4444-4444-444444444444",
       userId: UUID_B,
+      userEmail: null,
       type: "send",
       status: "completed",
+      asset: null,
+      amount: null,
+      fiatAmount: null,
+      fiatCurrency: null,
+      idempotencyKey: "idem_send_def",
       createdAt: "2026-07-01T10:15:00.000Z",
     },
   ],
   nextCursor: null,
+  counts: { all: 7, stuck: 2, failed: 1, refunds: 0 },
 }
 
 function renderPage() {
@@ -120,8 +133,50 @@ describe("TransactionsPage (real-data wiring)", () => {
     })
   })
 
+  it("renders the enriched amount, derived user name and copyable idem key", async () => {
+    renderPage()
+
+    // Amount cell: crypto leg + fiat leg from the enriched contract.
+    expect(await screen.findByText("10.5 USDT")).toBeInTheDocument()
+    expect(screen.getByText("NGN 16500.00")).toBeInTheDocument()
+    // User display name derived from the joined email local-part.
+    expect(screen.getByText("Amara Okeke")).toBeInTheDocument()
+    // Idempotency key rendered (copy affordance) for the buy row.
+    expect(screen.getByText("idem_buy_abc")).toBeInTheDocument()
+  })
+
+  it("renders the four view-tab count pills from the response counts", async () => {
+    renderPage()
+
+    await screen.findByText("10.5 USDT")
+    // The "All" pill shows counts.all=7, "Stuck / Pending"=2, "Failed today"=1.
+    expect(screen.getByText("7")).toBeInTheDocument()
+    expect(screen.getByText("2")).toBeInTheDocument()
+    expect(screen.getByText("1")).toBeInTheDocument()
+  })
+
+  it("wires the search pill to the backend q param (debounced)", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByText("10.5 USDT")
+    await user.type(
+      screen.getByLabelText("Search transactions by id, hash or ref"),
+      "flw-ref"
+    )
+
+    await waitFor(() => {
+      const last = mockList.mock.calls[mockList.mock.calls.length - 1][0]
+      expect(last.q).toBe("flw-ref")
+    })
+  })
+
   it("renders the design-consistent empty state when there are no rows", async () => {
-    mockList.mockResolvedValue({ items: [], nextCursor: null })
+    mockList.mockResolvedValue({
+      items: [],
+      nextCursor: null,
+      counts: { all: 0, stuck: 0, failed: 0, refunds: 0 },
+    })
     renderPage()
 
     expect(

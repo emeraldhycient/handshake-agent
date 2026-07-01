@@ -3,6 +3,8 @@ import { Inject, Injectable } from '@nestjs/common';
 import type {
   AdminLedgerEntry,
   AdminLedgerIntegrityResult,
+  AdminLedgerIntegritySummary,
+  AdminLedgerListResponse,
 } from '@handshake-agent/contracts';
 
 import {
@@ -13,6 +15,17 @@ import {
 
 /** Default page size for account ledger history when the caller omits a limit. */
 const DEFAULT_HISTORY_LIMIT = 50;
+
+/** Default page size for the global cross-account ledger browse. */
+const DEFAULT_GLOBAL_LIMIT = 50;
+
+/** Filters for the global cross-account ledger browse. */
+export interface AdminLedgerListQuery {
+  accountType?: string;
+  currency?: string;
+  cursor?: string;
+  limit?: number;
+}
 
 /**
  * Phase 3 (sub-area A) — READ-ONLY ledger oversight for the admin console.
@@ -53,6 +66,38 @@ export class AdminLedgerService {
       balanced: result.balanced,
       legCount: result.legCount,
       brokenAt: result.brokenAt,
+    };
+  }
+
+  /**
+   * Global cross-account ledger browse (READ-ONLY). Filters by optional
+   * accountType/currency, newest-first keyset page. Projects each row onto the
+   * contract entry shape and passes the repository's `nextCursor` straight
+   * through (null when the last page has been reached).
+   */
+  async listGlobal(
+    query: AdminLedgerListQuery,
+  ): Promise<AdminLedgerListResponse> {
+    const page = await this.ledger.listGlobal(
+      { accountType: query.accountType, currency: query.currency },
+      { cursor: query.cursor, limit: query.limit ?? DEFAULT_GLOBAL_LIMIT },
+    );
+    return {
+      entries: page.items.map((e) => this.toEntry(e)),
+      nextCursor: page.nextCursor,
+    };
+  }
+
+  /**
+   * Global sequence-continuity check (READ-ONLY). Delegates to the repository's
+   * per-sub-ledger walk and surfaces the summary for the header integrity pill.
+   */
+  async verifyGlobalSequenceIntegrity(): Promise<AdminLedgerIntegritySummary> {
+    const result = await this.ledger.verifyGlobalSequenceIntegrity();
+    return {
+      ok: result.ok,
+      accountsChecked: result.accountsChecked,
+      brokenAccount: result.brokenAccount,
     };
   }
 

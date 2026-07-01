@@ -5,8 +5,8 @@ import type {
   RecordAuditInput,
 } from '../../../core/audit/application/audit.service';
 import type {
-  AdminUserListResult,
   IIdentityRepository,
+  KycQueueListResult,
   UserAdminDetailRecord,
 } from '../../identity/application/ports/identity.repository.port';
 import type {
@@ -50,7 +50,7 @@ interface Mocks {
   identity: jest.Mocked<
     Pick<
       IIdentityRepository,
-      'listUsersPendingKycReview' | 'loadUserWithKycAndDevices'
+      'listKycReviewQueue' | 'loadUserWithKycAndDevices'
     >
   >;
   kyc: jest.Mocked<Pick<IKycRepository, 'updateKycProfileDecision'>>;
@@ -67,12 +67,12 @@ function makeMocks(): { service: AdminKycReviewService; m: Mocks } {
   }[] = [];
 
   const identity = {
-    listUsersPendingKycReview: jest.fn(),
+    listKycReviewQueue: jest.fn(),
     loadUserWithKycAndDevices: jest.fn(),
   } as unknown as jest.Mocked<
     Pick<
       IIdentityRepository,
-      'listUsersPendingKycReview' | 'loadUserWithKycAndDevices'
+      'listKycReviewQueue' | 'loadUserWithKycAndDevices'
     >
   >;
 
@@ -109,52 +109,124 @@ function makeMocks(): { service: AdminKycReviewService; m: Mocks } {
 // ── listQueue ────────────────────────────────────────────────────────────────
 
 describe('AdminKycReviewService.listQueue', () => {
-  it('maps pending-review users to queue items (ISO submittedAt) and forwards cursor', async () => {
-    const { service, m } = makeMocks();
-    const result: AdminUserListResult = {
+  const NOW = new Date('2026-06-01T01:00:00.000Z');
+
+  beforeEach(() => {
+    jest.useFakeTimers().setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  function queueResult(
+    over?: Partial<KycQueueListResult['items'][number]>,
+  ): KycQueueListResult {
+    return {
       items: [
         {
           id: USER_ID,
           email: 'user@example.com',
-          status: 'active',
+          firstName: 'Ada',
+          lastName: 'Lovelace',
+          requestedTier: 'tier_1',
           kycStatus: 'pending_review',
-          kycTier: 'unverified',
-          simSwapDetectedAt: null,
+          // 1h before NOW → slaAgeSeconds === 3600.
           createdAt: new Date('2026-06-01T00:00:00.000Z'),
+          ...over,
         },
       ],
       nextCursor: 'cursor-2',
     };
-    m.identity.listUsersPendingKycReview.mockResolvedValue(result);
+  }
+
+  it('enriches queue rows (displayName, requestedTier, slaAgeSeconds) and forwards cursor', async () => {
+    const { service, m } = makeMocks();
+    m.identity.listKycReviewQueue.mockResolvedValue(queueResult());
 
     const out = await service.listQueue({ cursor: 'cursor-1', limit: 10 });
 
-    expect(m.identity.listUsersPendingKycReview).toHaveBeenCalledWith({
-      cursor: 'cursor-1',
-      limit: 10,
-    });
+    expect(m.identity.listKycReviewQueue).toHaveBeenCalledWith(
+      { status: 'pending_review' },
+      { cursor: 'cursor-1', limit: 10 },
+    );
     expect(out.nextCursor).toBe('cursor-2');
     expect(out.items).toEqual([
       {
         userId: USER_ID,
         email: 'user@example.com',
+        displayName: 'Ada Lovelace',
+        requestedTier: 'tier_1',
         status: 'pending_review',
         submittedAt: '2026-06-01T00:00:00.000Z',
+        slaAgeSeconds: 3600,
       },
     ]);
   });
 
-  it('defaults the limit when not supplied', async () => {
+  it('forwards an explicit status filter (drives the Approved/Rejected tabs)', async () => {
     const { service, m } = makeMocks();
-    m.identity.listUsersPendingKycReview.mockResolvedValue({
+    m.identity.listKycReviewQueue.mockResolvedValue({
+      items: [],
+      nextCursor: null,
+    });
+
+    await service.listQueue({ status: 'verified' });
+
+    const [filters] = m.identity.listKycReviewQueue.mock.calls[0];
+    expect(filters).toEqual({ status: 'verified' });
+  });
+
+  it('defaults the status to pending_review and the limit when not supplied', async () => {
+    const { service, m } = makeMocks();
+    m.identity.listKycReviewQueue.mockResolvedValue({
       items: [],
       nextCursor: null,
     });
 
     await service.listQueue({});
 
-    const [page] = m.identity.listUsersPendingKycReview.mock.calls[0];
+    const [filters, page] = m.identity.listKycReviewQueue.mock.calls[0];
+    expect(filters).toEqual({ status: 'pending_review' });
     expect(page.limit).toBeGreaterThan(0);
+  });
+
+  it('null-safes name/tier and returns slaAgeSeconds 0 when submittedAt is absent', async () => {
+    const { service, m } = makeMocks();
+    m.identity.listKycReviewQueue.mockResolvedValue(
+      queueResult({
+        firstName: null,
+        lastName: null,
+        requestedTier: null,
+      }),
+    );
+
+    const out = await service.listQueue({});
+
+    expect(out.items[0].displayName).toBeNull();
+    expect(out.items[0].requestedTier).toBeNull();
+  });
+
+  it('composes the display name from a first name alone (trailing space trimmed)', async () => {
+    const { service, m } = makeMocks();
+    m.identity.listKycReviewQueue.mockResolvedValue(
+      queueResult({ firstName: 'Ada', lastName: null }),
+    );
+
+    const out = await service.listQueue({});
+
+    expect(out.items[0].displayName).toBe('Ada');
+  });
+
+  it('clamps a future submittedAt to a non-negative slaAgeSeconds', async () => {
+    const { service, m } = makeMocks();
+    m.identity.listKycReviewQueue.mockResolvedValue(
+      queueResult({ createdAt: new Date('2026-06-01T02:00:00.000Z') }),
+    );
+
+    const out = await service.listQueue({});
+
+    expect(out.items[0].slaAgeSeconds).toBe(0);
   });
 });
 

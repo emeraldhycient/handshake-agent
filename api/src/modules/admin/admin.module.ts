@@ -51,6 +51,10 @@ import { AdminWhatsAppController } from './presentation/admin-whatsapp.controlle
 import { AdminTicketsController } from './presentation/admin-tickets.controller';
 import { AdminAgentController } from './presentation/admin-agent.controller';
 import { AdminMetricsController } from './presentation/admin-metrics.controller';
+import { AdminMetricsOpsController } from './presentation/admin-metrics-ops.controller';
+import { AdminCatalogController } from './presentation/admin-catalog.controller';
+import { AdminProvidersController } from './presentation/admin-providers.controller';
+import { AdminReconciliationController } from './presentation/admin-reconciliation.controller';
 import { AdminSessionGuard } from './presentation/admin-session.guard';
 import { PermissionGuard } from './presentation/permission.guard';
 import { AdminStepUpGuard } from './presentation/admin-step-up.guard';
@@ -66,7 +70,13 @@ import { AdminUserService } from './application/admin-user.service';
 import { AdminBootstrapService } from './application/admin-bootstrap.service';
 import { AdminSettingsService } from './application/admin-settings.service';
 import { AdminEndUserService } from './application/admin-end-user.service';
+import { AdminUserSecurityService } from './application/admin-user-security.service';
+import { AdminAuditService } from './application/admin-audit.service';
 import { AdminKycReviewService } from './application/admin-kyc-review.service';
+import { USER_SESSION_READ_REPOSITORY } from './application/ports/user-session-read.repository.port';
+import { UserSessionReadPrismaRepository } from './infrastructure/user-session-read.prisma.repository';
+import { VELOCITY_REPOSITORY } from '../identity/application/ports/velocity.repository.port';
+import { VelocityPrismaRepository } from '../identity/infrastructure/velocity.prisma.repository';
 import { AdminTxnOversightService } from './application/admin-txn-oversight.service';
 import { AdminTxnTriageService } from './application/admin-txn-triage.service';
 import { AdminLedgerService } from './application/admin-ledger.service';
@@ -74,14 +84,33 @@ import { AdminComplianceService } from './application/admin-compliance.service';
 import { AdminTreasuryService } from './application/admin-treasury.service';
 import { AdminBeneficiaryService } from './application/admin-beneficiary.service';
 import { AdminNotificationTemplateService } from './application/admin-notification-template.service';
+import { AdminNotificationDeliveryService } from './application/admin-notification-delivery.service';
+import { NOTIFICATION_DELIVERY_READ_REPOSITORY } from './application/ports/notification-delivery-read.repository.port';
+import { NotificationDeliveryReadPrismaRepository } from './infrastructure/notification-delivery-read.prisma.repository';
 import { AdminWhatsAppConfigService } from './application/admin-whatsapp-config.service';
 import { AdminTicketService } from './application/admin-ticket.service';
 import { AdminAgentService } from './application/admin-agent.service';
 import { AdminMetricsService } from './application/admin-metrics.service';
+import { AdminCatalogService } from './application/admin-catalog.service';
+import { AdminProvidersService } from './application/admin-providers.service';
 import { METRICS_READ_REPOSITORY } from './application/ports/metrics-read.repository.port';
 import { MetricsReadPrismaRepository } from './infrastructure/metrics-read.prisma.repository';
+import { AdminMetricsOpsService } from './application/admin-metrics-ops.service';
+import { METRICS_OPS_READ_REPOSITORY } from './application/ports/metrics-ops-read.repository.port';
+import { MetricsOpsReadPrismaRepository } from './infrastructure/metrics-ops-read.prisma.repository';
+import { AdminReconciliationService } from './application/admin-reconciliation.service';
+import { RECONCILIATION_READ_REPOSITORY } from './application/ports/reconciliation-read.repository.port';
+import { ReconciliationReadPrismaRepository } from './infrastructure/reconciliation-read.prisma.repository';
+import { AdminOpsController } from './presentation/admin-ops.controller';
+import { AdminOpsService } from './application/admin-ops.service';
+import { OPS_READ_REPOSITORY } from './application/ports/ops-read.repository.port';
+import { OpsReadPrismaRepository } from './infrastructure/ops-read.prisma.repository';
 import { TICKET_ORDER_READ_REPOSITORY } from './application/ports/ticket-order-read.repository.port';
 import { TicketOrderReadPrismaRepository } from './infrastructure/ticket-order-read.prisma.repository';
+import { ADMIN_TXN_READ_REPOSITORY } from './application/ports/admin-txn-read.repository.port';
+import { AdminTxnReadPrismaRepository } from './infrastructure/admin-txn-read.prisma.repository';
+import { AGENT_USAGE_READ_REPOSITORY } from './application/ports/agent-usage-read.repository.port';
+import { AgentUsageReadPrismaRepository } from './infrastructure/agent-usage-read.prisma.repository';
 import { ADMIN_USER_REPOSITORY } from './application/ports/admin-user.repository.port';
 import { ADMIN_SESSION_REPOSITORY } from './application/ports/admin-session.repository.port';
 import { ROLE_REPOSITORY } from './application/ports/role.repository.port';
@@ -199,6 +228,11 @@ import type { Env } from '../../core/config/env.schema';
     AdminTicketsController,
     AdminAgentController,
     AdminMetricsController,
+    AdminMetricsOpsController,
+    AdminOpsController,
+    AdminCatalogController,
+    AdminProvidersController,
+    AdminReconciliationController,
   ],
   providers: [
     AdminTokenGuard,
@@ -238,6 +272,16 @@ import type { Env } from '../../core/config/env.schema';
     AdminSettingsService,
     // Phase 2, Task 5 (ADM-02 / ADM-03): platform end-user management + KYC review.
     AdminEndUserService,
+    // Phase 6b (ADM-02 READ): user-detail Security (sessions) / Limits (effective
+    // caps + live velocity) / Profile timeline (audit-log by subject). Read-only
+    // (§3.1); USER_SESSION_READ_REPOSITORY + VELOCITY_REPOSITORY are bound locally
+    // below (mirrors the LEDGER_REPOSITORY / PIN_REPOSITORY local binds).
+    AdminUserSecurityService,
+    // Phase 6b (READ enrichment): the audit-log read service wraps the global
+    // AuditService and projects per-actor role (resolved via ADMIN_USER_REPOSITORY,
+    // already bound below) + a first-class `reason` (from details.reason). Read-only
+    // (§3.1); both fields are computed on read, never part of the hashed row.
+    AdminAuditService,
     AdminKycReviewService,
     // Phase 3, sub-area A (READ-ONLY): transactions + ledger oversight.
     // TRANSACTION_REPOSITORY comes from the imported TransactionsModule;
@@ -269,6 +313,11 @@ import type { Env } from '../../core/config/env.schema';
     // imported NotificationsModule; ConfigService + AuditService are global.
     // Neither service moves money (§3.1).
     AdminNotificationTemplateService,
+    // Phase 6b (Comms READ enrichment): the read-only delivery log (recent issued
+    // notifications + aggregate bounce/complaint rates). Reads the locally-bound
+    // NOTIFICATION_DELIVERY_READ_REPOSITORY below (PrismaService is global). Never
+    // moves money (§3.1).
+    AdminNotificationDeliveryService,
     AdminWhatsAppConfigService,
     // Phase 4, wave 2 (READ-ONLY): tickets oversight + agent config/conversation
     // logs. AdminTicketService reads the locally-bound TICKET_ORDER_READ_REPOSITORY
@@ -281,6 +330,29 @@ import type { Env } from '../../core/config/env.schema';
     // reaches data via the locally-bound METRICS_READ_REPOSITORY below (PrismaService
     // is global). All date-ranged aggregations — never moves money (§3.1).
     AdminMetricsService,
+    // Phase 6b (READ-ONLY): operational-health panels (system health, activity feed,
+    // open-compliance count). AdminMetricsOpsService reads the locally-bound
+    // METRICS_OPS_READ_REPOSITORY below. Never moves money (§3.1).
+    AdminMetricsOpsService,
+    // Phase 6b (READ-ONLY): the "System / ops" board (provider status, webhook
+    // queues, background-jobs / cron registry). AdminOpsService reads the
+    // locally-bound OPS_READ_REPOSITORY below. Never moves money (§3.1).
+    AdminOpsService,
+    // Phase 6b (READ-ONLY): the provider-vs-ledger Reconciliation surface. The
+    // break list + cron status bar are projected from unresolved compensations +
+    // stuck settlements via the locally-bound RECONCILIATION_READ_REPOSITORY below.
+    // Never moves money (§3.1); the resolve/accept/escalate/run-now WRITES are Phase 7.
+    AdminReconciliationService,
+    // Phase 6b (READ-ONLY): full asset + fiat catalog view (Config group's Asset /
+    // Currency screens). AdminCatalogService reads the merged catalog via the global
+    // EffectiveConfigService — no repo, no Prisma, never moves money (§3.1/§3.2).
+    AdminCatalogService,
+    // Phase 6b (READ-ONLY): the provider-registry view (design §6.27). AdminProvidersService
+    // derives per-provider status/mock-mode/secret-presence/bound-capabilities + the
+    // mock→live readiness checklist from the layered env (ConfigService) + capability
+    // flags (global EffectiveConfigService) — no repo, no Prisma, no secret values,
+    // never moves money (§3.1/§3.2/§3.4).
+    AdminProvidersService,
     AdminSessionGuard,
     PermissionGuard,
     AdminStepUpGuard,
@@ -337,6 +409,67 @@ import type { Env } from '../../core/config/env.schema';
     {
       provide: METRICS_READ_REPOSITORY,
       useClass: MetricsReadPrismaRepository,
+    },
+    // Phase 6b: METRICS_OPS_READ_REPOSITORY is bound locally — the operational-health
+    // panels (system health, activity feed, open-compliance count) have no home
+    // module, so the admin layer owns this read (PrismaService is global). Mirrors
+    // the METRICS_READ_REPOSITORY bind above. Feeds AdminMetricsOpsService.
+    {
+      provide: METRICS_OPS_READ_REPOSITORY,
+      useClass: MetricsOpsReadPrismaRepository,
+    },
+    // Phase 6b: OPS_READ_REPOSITORY is bound locally — the "System / ops" board
+    // (provider status / webhook queues / cron registry) projects real
+    // SettlementOutbox rows + the declared cron registry. Feeds AdminOpsService.
+    {
+      provide: OPS_READ_REPOSITORY,
+      useClass: OpsReadPrismaRepository,
+    },
+    // Phase 6b: RECONCILIATION_READ_REPOSITORY is bound locally — the provider-vs-
+    // ledger break projection (unresolved compensations + stuck settlements) + the
+    // cron-status timeline have no home module, so the admin layer owns this read
+    // (PrismaService is global). Mirrors the METRICS_OPS_READ_REPOSITORY bind above.
+    // Feeds AdminReconciliationService. Read-only (§3.1).
+    {
+      provide: RECONCILIATION_READ_REPOSITORY,
+      useClass: ReconciliationReadPrismaRepository,
+    },
+    // Phase 6b (Comms): NOTIFICATION_DELIVERY_READ_REPOSITORY is bound locally —
+    // the delivery-log read (recent notifications + bounce/complaint stats) has no
+    // home module, so the admin layer owns it (PrismaService is global). Mirrors
+    // the METRICS_OPS_READ_REPOSITORY bind above. Feeds AdminNotificationDeliveryService.
+    {
+      provide: NOTIFICATION_DELIVERY_READ_REPOSITORY,
+      useClass: NotificationDeliveryReadPrismaRepository,
+    },
+    // Phase 6b: ADMIN_TXN_READ_REPOSITORY is bound locally — the admin-owned
+    // transaction read (free-text q search, view-tab counts, userId→email join)
+    // that the base transactions port does not model. PrismaService is global, so
+    // it has no unmet dependency. Feeds AdminTxnOversightService.
+    {
+      provide: ADMIN_TXN_READ_REPOSITORY,
+      useClass: AdminTxnReadPrismaRepository,
+    },
+    // Phase 6b: AGENT_USAGE_READ_REPOSITORY is bound locally — the admin-owned
+    // rolling-24h usage read (conversation/message/reply counts) that backs the
+    // Agent console's "Cost & usage (24h)" card. No token/cost is read — the schema
+    // stores none (§3.6). PrismaService is global, so it has no unmet dependency.
+    // Feeds AdminAgentService.getInsights().
+    {
+      provide: AGENT_USAGE_READ_REPOSITORY,
+      useClass: AgentUsageReadPrismaRepository,
+    },
+    // Phase 6b: USER_SESSION_READ_REPOSITORY (admin-owned read of the end user's
+    // `sessions` rows) + VELOCITY_REPOSITORY (IdentityModule provides the adapter
+    // but does not export the token) are bound locally here. PrismaService is
+    // global, so neither has an unmet dependency. Both feed AdminUserSecurityService.
+    {
+      provide: USER_SESSION_READ_REPOSITORY,
+      useClass: UserSessionReadPrismaRepository,
+    },
+    {
+      provide: VELOCITY_REPOSITORY,
+      useClass: VelocityPrismaRepository,
     },
   ],
 })

@@ -9,18 +9,17 @@
  *      (Clear / Escalate / Block) or a done-label once dispositioned.
  *   2. Ongoing monitoring — a card of soft-toggle rows.
  *
- * DATA WIRING (Phase 6a — reads only): the screening match cards are now driven by
- * the real `useSanctions()` hook (immutable `SanctionsRecordItem` screening-run
- * history: counterpartyId · verdict · provider · screeningType · createdAt). The
- * design's rich fields — a human name, the matched-list name, a name/DOB/address
- * match-type, and a numeric 0–100 confidence score — are NOT modelled on that DTO,
- * so they are rendered gracefully from what exists (verdict → severity styling, a
- * verdict chip in the score slot) and recorded as backend-enrichment gaps. The four
- * async branches (loading / error / empty / data) each render.
+ * DATA WIRING (Phase 6b — reads only): the screening match cards are driven by the
+ * real `useSanctions()` hook (`SanctionsRecordItem`). The backend now DERIVES the
+ * design's rich fields from the immutable screening columns: `matchedList` (human
+ * list name ⇐ provider), `matchType` (⇐ screeningType), and a numeric 0–100
+ * `matchScore` (verdict-banded) fill the design's matched-list subtitle and Score
+ * slot. The four async branches (loading / error / empty / data) each render.
  *
- * The Ongoing-monitoring toggles remain design-local: they are policy flags with no
- * contract and no endpoint (recorded as a shape gap), so the Switch stays CONTROLLED
- * off `useState` — a lightweight soft-toggle exactly as the design chains it.
+ * The Ongoing-monitoring toggles are seeded from the real `useSanctionsMonitoring()`
+ * hook (the four policy flags resolved from layered AppSetting config). The Switch
+ * stays CONTROLLED off local `useState` seeded from those values — a lightweight
+ * soft-toggle exactly as the design chains it; persisting a toggle is a Phase-7 write.
  *
  * Disposition actions (Clear / Escalate / Block) are Phase-7 writes and are left
  * exactly as the design's `runFlow` chains them (SPEC §5 "Flow modals"): Clear →
@@ -28,7 +27,7 @@
  * (enters Pending approval, a second admin decides); Block → ReasonModal → StepUpModal
  * (a sensitive, step-up-gated action). On completion the card flips to its done-label.
  */
-import { useState } from "react"
+import { useMemo, useState } from "react"
 
 import { cn } from "@/lib/utils"
 import { Switch } from "@/components/ui/switch"
@@ -38,8 +37,11 @@ import {
   StepUpModal,
   MakerCheckerModal,
 } from "@/components/admin/flows"
-import { useSanctions } from "@/lib/query/hooks"
-import type { SanctionsRecordItem } from "@handshake-agent/contracts"
+import { useSanctions, useSanctionsMonitoring } from "@/lib/query/hooks"
+import type {
+  SanctionsMonitoringView,
+  SanctionsRecordItem,
+} from "@handshake-agent/contracts"
 
 // ── Presentation types ────────────────────────────────────────────────────────────
 
@@ -57,19 +59,43 @@ const VERDICT_META: Record<
   clear: { label: "Clear", fg: "text-tok", danger: false },
 }
 
-// The design's monitoring toggles (policy flags with no contract/endpoint yet — see
-// shapeGaps; kept design-local as controlled soft-toggles).
+// The monitoring toggles. Each row's ON/OFF is seeded from the real config view
+// (`SanctionsMonitoringView`); the Switch then stays controlled off local state
+// (persisting a toggle is a Phase-7 write).
 interface MonitorRow {
+  key: keyof SanctionsMonitoringView
   label: string
   on: boolean
 }
 
-const MONITOR_ROWS: readonly MonitorRow[] = [
-  { label: "Re-screen all customers daily against updated lists", on: true },
-  { label: "Screen every counterparty on outbound transfer", on: true },
-  { label: "Alert on new PEP (politically exposed person) matches", on: true },
-  { label: "Auto-block confirmed OFAC SDN-list hits", on: false },
+/** Ordered row labels keyed by the monitoring-view flag they surface. */
+const MONITOR_LABELS: readonly {
+  key: keyof SanctionsMonitoringView
+  label: string
+}[] = [
+  {
+    key: "reScreenDaily",
+    label: "Re-screen all customers daily against updated lists",
+  },
+  {
+    key: "screenOnOutbound",
+    label: "Screen every counterparty on outbound transfer",
+  },
+  {
+    key: "pepAlert",
+    label: "Alert on new PEP (politically exposed person) matches",
+  },
+  { key: "autoBlockOfac", label: "Auto-block confirmed OFAC SDN-list hits" },
 ]
+
+/** Projects the fetched monitoring view onto the ordered display rows. */
+function toMonitorRows(view: SanctionsMonitoringView): MonitorRow[] {
+  return MONITOR_LABELS.map(({ key, label }) => ({
+    key,
+    label,
+    on: view[key],
+  }))
+}
 
 // The done-label + token shown once a match has been dispositioned.
 const DONE_META: Record<MatchDone, { label: string; className: string }> = {
@@ -159,14 +185,17 @@ function SanctionsMatchCard({
             {record.counterpartyId}
           </div>
           <div className="text-[11.5px] text-ink2">
-            Screened via <b className="font-bold">{record.provider}</b> ·{" "}
-            {record.screeningType}
+            <b className="font-bold">{record.matchedList}</b> ·{" "}
+            {record.matchType}
           </div>
         </div>
 
+        {/* Score slot (design line 10): the numeric 0–100 confidence with the
+            verdict label beneath it (colour follows severity, never the sole
+            signal — the verdict word sits alongside). */}
         <div className="mr-1.5 flex-none text-center">
           <div className="text-[10px] font-bold tracking-[0.04em] text-ink3 uppercase">
-            Verdict
+            Score
           </div>
           <div
             className={cn(
@@ -174,6 +203,9 @@ function SanctionsMatchCard({
               open ? verdict.fg : "text-ink3"
             )}
           >
+            {record.matchScore}
+          </div>
+          <div className="text-[10px] font-bold text-ink3">
             {verdict.label}
           </div>
         </div>
@@ -243,44 +275,100 @@ function EmptyMatches() {
   )
 }
 
-/**
- * The ongoing-monitoring card (design lines 17–20). Each row is a lightweight
- * soft-toggle — no maker-checker gate — so the Switch is CONTROLLED off `useState`
- * and genuinely flips + holds when clicked. (Policy flags have no contract/endpoint
- * yet — see shapeGaps; these stay design-local until a compliance-policy surface exists.)
- */
-function OngoingMonitoring() {
-  const [rows, setRows] = useState<MonitorRow[]>(() =>
-    MONITOR_ROWS.map((r) => ({ ...r }))
-  )
-
+/** Card chrome shared by every branch of the ongoing-monitoring section. */
+function MonitoringCard({ children }: { children: React.ReactNode }) {
   return (
     <div className="mt-3.5 rounded-[16px] border border-line bg-card px-5 py-[18px]">
       <div className="mb-3 text-[13px] font-extrabold text-ink">
         Ongoing monitoring
       </div>
+      {children}
+    </div>
+  )
+}
+
+/**
+ * The ongoing-monitoring card (design lines 17–20). Rows are seeded from the real
+ * `useSanctionsMonitoring()` view (four policy flags from layered config), then each
+ * Switch is CONTROLLED off local `useState` so it genuinely flips + holds when
+ * clicked (persisting a toggle is a Phase-7 write). Four async branches render.
+ */
+function OngoingMonitoring() {
+  const monitoring = useSanctionsMonitoring()
+  // Local optimistic soft-toggle overrides (persisting a toggle is a Phase-7 write);
+  // the base value comes straight from the fetched config view — derived, not an effect.
+  const [overrides, setOverrides] = useState<
+    Partial<Record<keyof SanctionsMonitoringView, boolean>>
+  >({})
+  const rows = useMemo<MonitorRow[]>(
+    () =>
+      monitoring.data
+        ? toMonitorRows(monitoring.data).map((r) => ({
+            ...r,
+            on: overrides[r.key] ?? r.on,
+          }))
+        : [],
+    [monitoring.data, overrides]
+  )
+
+  if (monitoring.isLoading) {
+    return (
+      <MonitoringCard>
+        <div className="flex flex-col gap-2.5" aria-busy="true">
+          <Skeleton className="h-6 w-full" />
+          <Skeleton className="h-6 w-full" />
+          <Skeleton className="h-6 w-full" />
+          <Skeleton className="h-6 w-full" />
+        </div>
+      </MonitoringCard>
+    )
+  }
+
+  if (monitoring.isError) {
+    return (
+      <MonitoringCard>
+        <p className="text-[12.5px] font-bold text-tdn">
+          Failed to load monitoring policy
+        </p>
+        <button
+          type="button"
+          onClick={() => void monitoring.refetch()}
+          className="mt-2 cursor-pointer rounded-[9px] border border-line bg-card px-[14px] py-2 text-xs font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          Retry
+        </button>
+      </MonitoringCard>
+    )
+  }
+
+  if (rows.length === 0) {
+    return (
+      <MonitoringCard>
+        <p className="text-[12.5px] text-ink2">No monitoring policy configured.</p>
+      </MonitoringCard>
+    )
+  }
+
+  return (
+    <MonitoringCard>
       <ul>
         {rows.map((row) => (
           <li
-            key={row.label}
+            key={row.key}
             className="flex items-center justify-between gap-4 border-b border-line2 py-2.5 last:border-b-0"
           >
             <span className="text-[12.5px] text-ink2">{row.label}</span>
             <Switch
               checked={row.on}
               onCheckedChange={(next) =>
-                setRows((prev) =>
-                  prev.map((r) =>
-                    r.label === row.label ? { ...r, on: next } : r
-                  )
-                )
+                setOverrides((prev) => ({ ...prev, [row.key]: next }))
               }
               aria-label={row.label}
             />
           </li>
         ))}
       </ul>
-    </div>
+    </MonitoringCard>
   )
 }
 

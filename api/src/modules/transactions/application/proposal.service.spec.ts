@@ -222,6 +222,8 @@ function makeLedgerRepo(balance = '10.0'): jest.Mocked<ILedgerRepository> {
     verifyTransactionIntegrity: jest
       .fn()
       .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+    listGlobal: jest.fn(),
+    verifyGlobalSequenceIntegrity: jest.fn(),
   };
 }
 
@@ -819,6 +821,8 @@ describe('ProposalService.createSellProposal', () => {
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
     const kycGateOrdered = {
       assertCanTransact: jest.fn().mockImplementation(() => {
@@ -1439,6 +1443,8 @@ describe('ProposalService.createSendProposal', () => {
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
     const kycGateOrdered = {
       assertCanTransact: jest.fn().mockImplementation(() => {

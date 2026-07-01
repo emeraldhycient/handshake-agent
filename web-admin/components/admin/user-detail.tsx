@@ -36,10 +36,14 @@ import {
 import {
   useEndUserDetail,
   useEndUserDevices,
+  useEndUserLimits,
+  useEndUserSessions,
+  useEndUserTimeline,
   useKycSubmission,
 } from "@/lib/query/hooks"
 import type {
   AdminEndUserDetail,
+  AdminEndUserLimitsResponse,
   KycSubmissionDetail,
 } from "@handshake-agent/contracts"
 import type {
@@ -140,39 +144,21 @@ const U_ACTIONS: readonly { label: string; icon: string; danger?: boolean }[] =
     },
   ]
 
-// ── Profile timeline (design seed — no backend read; add-note write is Phase 7) ──────
-// The admin-action timeline has no read endpoint yet; the design's seeded rows stay as
-// the live-mock list so the Phase-7 add-note flow still has somewhere to prepend.
+// The Profile admin-action timeline, Security auth-sessions, and Limits/velocity
+// are now backed by real read endpoints (useEndUserTimeline / useEndUserSessions /
+// useEndUserLimits) — the former design-mock consts were removed.
 
-const TIMELINE: readonly { text: string; meta: string; dot: string }[] = [
-  { text: "Signed up", meta: "account created", dot: "#8b948a" },
-  { text: "Completed liveness selfie", meta: "KYC", dot: "#8b948a" },
-]
+// A human action label from the audit-log action key (e.g. "kyc_state_change").
+function actionLabel(action: string): string {
+  return action.replace(/_/g, " ")
+}
 
-// ── Security (design mock — no backend read for PIN/lockouts/2FA yet) ─────────────────
-
-const SECURITY: readonly { k: string; v: string; fg: string }[] = [
-  { k: "PIN status", v: "Set · last set 12d ago", fg: "var(--tok)" },
-  { k: "Failed-PIN lockouts", v: "0", fg: "var(--ink)" },
-  { k: "OTP lockouts", v: "0", fg: "var(--ink)" },
-  { k: "2FA", v: "Enrolled", fg: "var(--tok)" },
-]
-
-// Auth sessions have no backend read (the API models devices, not sessions) — the
-// design's session rows stay as a mock so the revoke-session flow keeps a target.
-const SESSIONS: readonly {
-  ua: string
-  ip: string
-  when: string
-  dot: string
-}[] = [
-  {
-    ua: "iPhone 14 · Lagos",
-    ip: "102.89.34.19",
-    when: "2m ago",
-    dot: "#1f8a5b",
-  },
-]
+// Timeline dot tint by action family — deterministic, no color-only signalling.
+function actionDot(action: string): string {
+  if (action.includes("reject") || action.includes("block")) return "#c0563f"
+  if (action.includes("override") || action.includes("reset")) return "#f5a623"
+  return "#8b948a"
+}
 
 // ── Transactions — icon + status pill maps (rows come from the real aggregate) ────────
 
@@ -238,48 +224,32 @@ const CHAT: readonly {
   },
 ]
 
-// ── Limits & velocity (design mock — no per-user limits/velocity read endpoint) ──────
+// ── Limits & velocity money formatting (rows come from useEndUserLimits) ─────────────
 
-const LIMITS: readonly { k: string; v: string; override: boolean }[] = [
-  { k: "Daily send cap", v: "₦10,000,000", override: false },
-  { k: "Weekly cap", v: "₦50,000,000", override: false },
-  { k: "Per-tx cap", v: "₦5,000,000", override: false },
-  { k: "Tx count / day", v: "50", override: false },
-]
+/** Formats a decimal-string fiat amount with grouping + the currency symbol. */
+function fmtFiat(amount: string | null, currency: string | null): string {
+  if (amount === null) return NOT_PROVIDED
+  const n = Number(amount)
+  if (!Number.isFinite(n)) return amount
+  const symbol = currency === "NGN" ? "₦" : currency ? `${currency} ` : ""
+  return symbol + n.toLocaleString("en-NG", { maximumFractionDigits: 2 })
+}
 
-const VELOCITY: readonly {
-  k: string
-  used: string
-  cap: string
-  pct: string
-  bar: string
-  fg: string
-}[] = [
-  {
-    k: "Daily send used",
-    used: "₦252,551.70",
-    cap: "₦2,000,000",
-    pct: "42%",
-    bar: "#1a4536",
-    fg: "var(--ink2)",
-  },
-  {
-    k: "Tx count (24h)",
-    used: "6",
-    cap: "10",
-    pct: "60%",
-    bar: "#f5a623",
-    fg: "var(--twn)",
-  },
-  {
-    k: "Swap volume (24h)",
-    used: "12 USDT",
-    cap: "1,000 USDT",
-    pct: "8%",
-    bar: "#2a6f55",
-    fg: "var(--ink2)",
-  },
-]
+/** Used/cap → a clamped 0–100% width string for the velocity bar. */
+function usagePct(used: string, cap: string): string {
+  const u = Number(used)
+  const c = Number(cap)
+  if (!Number.isFinite(u) || !Number.isFinite(c) || c <= 0) return "0%"
+  return Math.min(100, Math.max(0, Math.round((u / c) * 100))) + "%"
+}
+
+/** Bar tint by usage band — amber past 75%, red past 90% (never color-only). */
+function usageBar(pct: string): string {
+  const v = parseInt(pct, 10)
+  if (v >= 90) return "#c0563f"
+  if (v >= 75) return "#f5a623"
+  return "#1a4536"
+}
 
 // ─── Small presentational helper: the design card/panel ─────────────────────────────
 
@@ -310,12 +280,6 @@ interface FlowConfig {
    */
   onComplete?: (reason: string) => void
 }
-
-// Mutable row shapes for the still-mocked lists (timeline / sessions have no read
-// endpoint) — lifted into component state so the Phase-7 add/remove/prepend flows are
-// reactive (visible list changes without data fetching).
-type TimelineEntry = { text: string; meta: string; dot: string }
-type SessionRow = { ua: string; ip: string; when: string; dot: string }
 
 // ─── Loading / error shells (four-branch async, matching the design frame) ───────────
 
@@ -393,6 +357,158 @@ function UserDetailError({
   )
 }
 
+// ─── Limits tab: effective caps + live velocity usage (useEndUserLimits) ─────────────
+
+/** The subset of the useEndUserLimits query result the Limits tab reads. */
+interface LimitsQueryLike {
+  isLoading: boolean
+  isError: boolean
+  data: AdminEndUserLimitsResponse | undefined
+}
+
+function LimitsTab({
+  tier,
+  query,
+  onRetry,
+}: {
+  tier: string
+  query: LimitsQueryLike
+  onRetry: () => void
+}) {
+  if (query.isLoading) {
+    return (
+      <div className="grid grid-cols-2 gap-3.5" aria-busy="true">
+        <Skeleton className="h-56 rounded-2xl" />
+        <Skeleton className="h-56 rounded-2xl" />
+      </div>
+    )
+  }
+  if (query.isError || !query.data) {
+    return (
+      <div className="flex items-center justify-between gap-3 rounded-2xl border border-sdn bg-sdn/40 p-5">
+        <span className="text-[12.5px] font-bold text-tdn">
+          Failed to load limits & velocity.
+        </span>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="cursor-pointer rounded-[9px] border border-line bg-card px-[13px] py-2 text-xs font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          Retry
+        </button>
+      </div>
+    )
+  }
+
+  const { effectiveLimits, velocity } = query.data
+  const fiat = effectiveLimits?.fiatCurrency ?? null
+
+  // Effective-cap rows — null when the user is unverified (no tier caps apply).
+  const limitRows = effectiveLimits
+    ? [
+        {
+          k: "Per-transaction cap",
+          v: fmtFiat(effectiveLimits.perTxFiatMax, fiat),
+        },
+        { k: "Daily cap", v: fmtFiat(effectiveLimits.dailyFiatMax, fiat) },
+        {
+          k: "Tx count / day",
+          v: String(effectiveLimits.dailyTxCountMax),
+        },
+      ]
+    : []
+
+  // Velocity rows — fiat used vs daily cap, and tx count vs daily count cap.
+  const fiatPct = effectiveLimits
+    ? usagePct(velocity.dailyFiatUsed, effectiveLimits.dailyFiatMax)
+    : "0%"
+  const countPct = effectiveLimits
+    ? usagePct(
+        String(velocity.dailyTxCount),
+        String(effectiveLimits.dailyTxCountMax)
+      )
+    : "0%"
+
+  return (
+    <div className="grid grid-cols-2 items-start gap-3.5">
+      <Panel>
+        <div className="mb-1 text-[13px] font-extrabold">
+          Effective limits · {tier}
+        </div>
+        <div className="mb-3.5 text-[11.5px] text-ink3">
+          Per-tier caps resolved from the layered config.
+        </div>
+        {limitRows.length === 0 ? (
+          <div className="py-4 text-center text-[12px] text-ink3">
+            No tier caps apply — this user is unverified.
+          </div>
+        ) : (
+          limitRows.map((l) => (
+            <div
+              key={l.k}
+              className="flex justify-between gap-3 border-b border-line2 py-[9px]"
+            >
+              <span className="text-[12.5px] text-ink2">{l.k}</span>
+              <span className="font-mono text-[12.5px] font-bold tabular-nums">
+                {l.v}
+              </span>
+            </div>
+          ))
+        )}
+      </Panel>
+      <Panel>
+        <div className="mb-3.5 text-[13px] font-extrabold">
+          Current velocity usage
+        </div>
+        <VelocityBar
+          label="Daily fiat used"
+          used={fmtFiat(velocity.dailyFiatUsed, fiat)}
+          cap={
+            effectiveLimits ? fmtFiat(effectiveLimits.dailyFiatMax, fiat) : "—"
+          }
+          pct={fiatPct}
+        />
+        <VelocityBar
+          label="Tx count (24h)"
+          used={String(velocity.dailyTxCount)}
+          cap={effectiveLimits ? String(effectiveLimits.dailyTxCountMax) : "—"}
+          pct={countPct}
+        />
+      </Panel>
+    </div>
+  )
+}
+
+/** One labelled velocity bar (used / cap + a clamped progress track). */
+function VelocityBar({
+  label,
+  used,
+  cap,
+  pct,
+}: {
+  label: string
+  used: string
+  cap: string
+  pct: string
+}) {
+  return (
+    <div className="mb-[15px]">
+      <div className="mb-1.5 flex justify-between">
+        <span className="text-xs font-semibold text-ink2">{label}</span>
+        <span className="font-mono text-[11.5px] font-bold text-ink2 tabular-nums">
+          {used} / {cap}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-md bg-card2">
+        <div
+          className="h-full rounded-md"
+          style={{ width: pct, background: usageBar(pct) }}
+        />
+      </div>
+    </div>
+  )
+}
+
 export function UserDetail({ userId }: UserDetailProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -401,6 +517,11 @@ export function UserDetail({ userId }: UserDetailProps) {
   const detailQuery = useEndUserDetail(userId)
   const kycQuery = useKycSubmission(userId)
   const devicesQuery = useEndUserDevices(userId)
+  // Per-tab reads (Phase 6b): sessions (Security), limits+velocity (Limits),
+  // admin-action timeline (Profile). Each has its own async branches below.
+  const sessionsQuery = useEndUserSessions(userId)
+  const limitsQuery = useEndUserLimits(userId)
+  const timelineQuery = useEndUserTimeline(userId)
 
   // Deep-link tab: seed from ?tab= when it names a valid tab (KYC-queue links land on KYC).
   const [tab, setTab] = useState<Tab>(() => {
@@ -408,10 +529,6 @@ export function UserDetail({ userId }: UserDetailProps) {
     return TABS.some((t) => t.id === q) ? (q as Tab) : "profile"
   })
   const [piiRevealed, setPiiRevealed] = useState(false)
-
-  // Still-mocked reactive lists (no backend read yet — see shapeGaps).
-  const [timeline, setTimeline] = useState<TimelineEntry[]>(() => [...TIMELINE])
-  const [sessions, setSessions] = useState<SessionRow[]>(() => [...SESSIONS])
 
   // Sequential flow-modal machine: the active step index walks the config's steps.
   const [flow, setFlow] = useState<FlowConfig | null>(null)
@@ -502,29 +619,21 @@ export function UserDetail({ userId }: UserDetailProps) {
       diff: [{ field: "USDT available", from: "—", to: "+25.00 USDT" }],
     })
 
-  // Add note — captures the free-text reason as the note and prepends it to the timeline.
+  // Add note — the timeline is now a read-only projection of the audit log, so
+  // this stays a Phase-7 write stub (persisting a note re-derives the timeline).
   const addNote = () =>
     runFlow({
       title: "Add note",
       steps: ["reason"],
-      onComplete: (reason) => {
-        setTimeline((rows) => [
-          { text: reason, meta: "just now", dot: "#f5a623" },
-          ...rows,
-        ])
-        pushToast("Note added to timeline", "ok")
-      },
+      onComplete: () => pushToast("Note recorded (pending write)", "ok"),
     })
 
-  // Revoke a single session — confirm, then drop that row from the live sessions list.
-  const revokeSession = (index: number) =>
+  // Revoke a single session — confirm, then toast (real revocation is Phase 7).
+  const revokeSession = () =>
     runFlow({
       title: "Revoke session",
       steps: ["reason"],
-      onComplete: () => {
-        setSessions((rows) => rows.filter((_, i) => i !== index))
-        pushToast("Session revoked", "ok")
-      },
+      onComplete: () => pushToast("Session revoked (pending write)", "ok"),
     })
 
   // Remove a single beneficiary — confirm, then toast (real removal is Phase 7).
@@ -570,6 +679,7 @@ export function UserDetail({ userId }: UserDetailProps) {
   const walletCards = detail.balances.map((b, i) => ({
     label: `${b.asset} · ${b.network}`,
     avail: b.amount,
+    pending: b.pending,
     hero: i === 0,
   }))
 
@@ -761,7 +871,7 @@ export function UserDetail({ userId }: UserDetailProps) {
             </div>
             {[
               { k: "Email", v: detail.email ?? NOT_PROVIDED, mono: false },
-              { k: "Phone", v: NOT_PROVIDED, mono: true },
+              { k: "Phone", v: detail.phone ?? NOT_PROVIDED, mono: true },
               { k: "Country", v: NOT_PROVIDED, mono: false },
               { k: "Locale", v: NOT_PROVIDED, mono: false },
               { k: "Status", v: detail.status, mono: false },
@@ -796,18 +906,47 @@ export function UserDetail({ userId }: UserDetailProps) {
                 + Add note
               </button>
             </div>
-            {timeline.map((t, i) => (
+            {timelineQuery.isLoading && (
+              <div className="space-y-3 py-2" aria-busy="true">
+                <Skeleton className="h-8 rounded-lg" />
+                <Skeleton className="h-8 rounded-lg" />
+              </div>
+            )}
+            {timelineQuery.isError && (
+              <div className="flex items-center justify-between gap-3 py-4">
+                <span className="text-[12px] font-bold text-tdn">
+                  Failed to load the timeline.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void timelineQuery.refetch()}
+                  className="cursor-pointer rounded-[9px] border border-line px-3 py-1.5 text-xs font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {timelineQuery.isSuccess && timelineQuery.data.length === 0 && (
+              <div className="py-6 text-center text-[12px] text-ink3">
+                No recorded admin actions for this user.
+              </div>
+            )}
+            {timelineQuery.data?.map((t) => (
               <div
-                key={i}
+                key={t.id}
                 className="flex gap-[11px] border-b border-line2 py-[9px]"
               >
                 <span
                   className="mt-[5px] size-2 flex-none rounded-full"
-                  style={{ background: t.dot }}
+                  style={{ background: actionDot(t.action) }}
                 />
                 <div className="flex-1">
-                  <div className="text-[12.5px] font-semibold">{t.text}</div>
-                  <div className="text-[11px] text-ink3">{t.meta}</div>
+                  <div className="text-[12.5px] font-semibold capitalize">
+                    {actionLabel(t.action)}
+                  </div>
+                  <div className="text-[11px] text-ink3">
+                    {t.actor} · {t.createdAt}
+                  </div>
                 </div>
               </div>
             ))}
@@ -1192,20 +1331,13 @@ export function UserDetail({ userId }: UserDetailProps) {
             <div className="mb-3 text-[13px] font-extrabold">
               PIN & authentication
             </div>
-            {SECURITY.map((s) => (
-              <div
-                key={s.k}
-                className="flex justify-between gap-3 border-b border-line2 py-[9px]"
-              >
-                <span className="text-[12.5px] text-ink3">{s.k}</span>
-                <span
-                  className="text-[12.5px] font-bold"
-                  style={{ color: s.fg }}
-                >
-                  {s.v}
-                </span>
-              </div>
-            ))}
+            {/* PIN-set time / lockout counts / 2FA state are not projected by any
+                read endpoint yet (see shapeGaps) — the reset directive below is
+                the live action; the status rows stay a documented gap. */}
+            <div className="py-4 text-center text-[12px] text-ink3">
+              PIN status, lockout counters, and 2FA state are not yet surfaced in
+              this view.
+            </div>
             <button
               type="button"
               onClick={resetPin}
@@ -1240,25 +1372,58 @@ export function UserDetail({ userId }: UserDetailProps) {
                 Revoke all
               </button>
             </div>
-            {sessions.map((s, i) => (
+            {sessionsQuery.isLoading && (
+              <div className="space-y-3 py-2" aria-busy="true">
+                <Skeleton className="h-9 rounded-lg" />
+                <Skeleton className="h-9 rounded-lg" />
+              </div>
+            )}
+            {sessionsQuery.isError && (
+              <div className="flex items-center justify-between gap-3 py-4">
+                <span className="text-[12px] font-bold text-tdn">
+                  Failed to load sessions.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void sessionsQuery.refetch()}
+                  className="cursor-pointer rounded-[9px] border border-line px-3 py-1.5 text-xs font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {sessionsQuery.isSuccess && sessionsQuery.data.length === 0 && (
+              <div className="py-6 text-center text-[12px] text-ink3">
+                No active or recent sessions.
+              </div>
+            )}
+            {sessionsQuery.data?.map((s) => (
               <div
-                key={i}
+                key={s.id}
                 className="flex items-center gap-[11px] border-b border-line2 py-2.5"
               >
                 <span
                   className="size-2 flex-none rounded-full"
-                  style={{ background: s.dot }}
+                  style={{ background: s.isActive ? "#1f8a5b" : "#8b948a" }}
                 />
-                <div className="flex-1">
-                  <div className="text-[12.5px] font-semibold">{s.ua}</div>
-                  <div className="font-mono text-[11px] text-ink3">
-                    {s.ip} · {s.when}
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12.5px] font-semibold">
+                    {s.userAgent ?? s.channel}
+                    {!s.isActive && (
+                      <span className="ml-1.5 text-[10.5px] font-bold text-ink3">
+                        · ended
+                      </span>
+                    )}
+                  </div>
+                  <div className="truncate font-mono text-[11px] text-ink3">
+                    {(s.ipAddress ?? "—") + " · " + (s.lastActivityAt ?? s.issuedAt)}
                   </div>
                 </div>
                 <button
                   type="button"
-                  onClick={() => revokeSession(i)}
-                  className="cursor-pointer text-[11.5px] font-bold text-ink2 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                  onClick={revokeSession}
+                  disabled={!s.isActive}
+                  className="cursor-pointer text-[11.5px] font-bold text-ink2 disabled:cursor-default disabled:opacity-40 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
                 >
                   Revoke
                 </button>
@@ -1307,6 +1472,9 @@ export function UserDetail({ userId }: UserDetailProps) {
                     }}
                   >
                     available
+                    {w.pending !== null && (
+                      <span className="ml-1.5">· {w.pending} pending</span>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1343,10 +1511,34 @@ export function UserDetail({ userId }: UserDetailProps) {
                 Manual credit
               </button>
             </div>
-            {/* Deposit addresses are not surfaced by the aggregate — see shapeGaps. */}
-            <div className="py-6 text-center text-[12px] text-ink3">
-              On-chain deposit addresses are not yet available in this view.
-            </div>
+            {/* Real per-network child deposit addresses from the aggregate. */}
+            {detail.depositAddresses.length === 0 ? (
+              <div className="py-6 text-center text-[12px] text-ink3">
+                No provisioned deposit addresses yet.
+              </div>
+            ) : (
+              detail.depositAddresses.map((a) => (
+                <button
+                  key={a.network + a.address}
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(a.address)
+                    pushToast(`Copied · ${a.address}`, "copy")
+                  }}
+                  className="flex w-full items-center gap-3 border-b border-line2 py-3 text-left focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  <span className="rounded-md bg-card2 px-2 py-[3px] text-[10.5px] font-bold text-ink2">
+                    {a.network}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink">
+                    {a.address}
+                  </span>
+                  <span className="text-[10.5px] font-bold text-ink3 capitalize">
+                    {a.status}
+                  </span>
+                </button>
+              ))
+            )}
           </Panel>
         </div>
       )}
@@ -1453,9 +1645,23 @@ export function UserDetail({ userId }: UserDetailProps) {
                       </div>
                     </div>
                   </div>
-                  {/* Amount columns are not in the aggregate — see shapeGaps. */}
-                  <div className="font-mono text-[12.5px] font-bold text-ink3 tabular-nums">
-                    {NOT_PROVIDED}
+                  {/* Amount (crypto leg) + NGN fiat leg projected from metadata. */}
+                  <div className="font-mono text-[12.5px] font-bold tabular-nums">
+                    {t.amount !== null ? (
+                      <>
+                        {t.amount}
+                        {t.asset && (
+                          <span className="ml-1 text-[10.5px] text-ink3">
+                            {t.asset}
+                          </span>
+                        )}
+                        <div className="text-[10.5px] font-semibold text-ink3">
+                          {fmtFiat(t.fiatAmount, t.fiatCurrency)}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-ink3">{NOT_PROVIDED}</span>
+                    )}
                   </div>
                   <div className="text-xs text-ink2 tabular-nums">
                     {t.createdAt}
@@ -1543,56 +1749,11 @@ export function UserDetail({ userId }: UserDetailProps) {
 
       {/* ===== LIMITS ===== */}
       {tab === "limits" && (
-        <div className="grid grid-cols-2 items-start gap-3.5">
-          <Panel>
-            <div className="mb-1 text-[13px] font-extrabold">
-              Effective limits · {detail.kycTier}
-            </div>
-            <div className="mb-3.5 text-[11.5px] text-ink3">
-              Per-tier caps with this user&apos;s overrides applied.
-            </div>
-            {LIMITS.map((l) => (
-              <div
-                key={l.k}
-                className="flex justify-between gap-3 border-b border-line2 py-[9px]"
-              >
-                <span className="text-[12.5px] text-ink2">{l.k}</span>
-                <span className="font-mono text-[12.5px] font-bold tabular-nums">
-                  {l.v}{" "}
-                  {l.override && (
-                    <span className="rounded-[5px] bg-sif px-1.5 py-px text-[9.5px] font-extrabold text-tif">
-                      OVERRIDE
-                    </span>
-                  )}
-                </span>
-              </div>
-            ))}
-          </Panel>
-          <Panel>
-            <div className="mb-3.5 text-[13px] font-extrabold">
-              Current velocity usage
-            </div>
-            {VELOCITY.map((v) => (
-              <div key={v.k} className="mb-[15px]">
-                <div className="mb-1.5 flex justify-between">
-                  <span className="text-xs font-semibold text-ink2">{v.k}</span>
-                  <span
-                    className="font-mono text-[11.5px] font-bold tabular-nums"
-                    style={{ color: v.fg }}
-                  >
-                    {v.used} / {v.cap}
-                  </span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-md bg-card2">
-                  <div
-                    className="h-full rounded-md"
-                    style={{ width: v.pct, background: v.bar }}
-                  />
-                </div>
-              </div>
-            ))}
-          </Panel>
-        </div>
+        <LimitsTab
+          tier={detail.kycTier}
+          query={limitsQuery}
+          onRetry={() => void limitsQuery.refetch()}
+        />
       )}
 
       {/* ===== FLOW MODALS (reason → step-up → engine / maker / pii) ===== */}

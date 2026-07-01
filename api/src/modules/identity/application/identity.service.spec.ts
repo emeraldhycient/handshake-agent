@@ -67,6 +67,9 @@ function makeRepo(
     listUsersPendingKycReview: jest
       .fn()
       .mockResolvedValue({ items: [], nextCursor: null }),
+    listKycReviewQueue: jest
+      .fn()
+      .mockResolvedValue({ items: [], nextCursor: null }),
     loadUserWithKycAndDevices: jest.fn().mockResolvedValue(null),
     listDevicesForUser: jest.fn().mockResolvedValue([]),
     setUserStatus: jest.fn().mockResolvedValue(undefined),

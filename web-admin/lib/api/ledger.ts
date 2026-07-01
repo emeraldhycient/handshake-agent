@@ -15,8 +15,13 @@
 import {
   AdminLedgerHistoryResponseSchema,
   AdminLedgerIntegrityResultSchema,
+  AdminLedgerIntegritySummarySchema,
+  AdminLedgerListResponseSchema,
   type AdminLedgerHistoryResponse,
   type AdminLedgerIntegrityResult,
+  type AdminLedgerIntegritySummary,
+  type AdminLedgerListQuery,
+  type AdminLedgerListResponse,
 } from "@handshake-agent/contracts"
 
 import { api } from "./client"
@@ -35,6 +40,27 @@ export async function listLedgerHistory(
 ): Promise<AdminLedgerHistoryResponse> {
   const res = await api.get("/admin/ledger", { params: query })
   return AdminLedgerHistoryResponseSchema.parse(res.data)
+}
+
+/**
+ * GET /admin/ledger/all — the GLOBAL cross-account browse: legs across ALL
+ * accounts filtered by an optional accountType and/or currency, newest-first,
+ * keyset-paginated (opaque `cursor` in, `nextCursor` out). Read-only (§3.1).
+ */
+export async function listGlobalLedger(
+  query: AdminLedgerListQuery
+): Promise<AdminLedgerListResponse> {
+  const res = await api.get("/admin/ledger/all", { params: query })
+  return AdminLedgerListResponseSchema.parse(res.data)
+}
+
+/**
+ * GET /admin/ledger/integrity — the GLOBAL sequence-integrity summary that feeds
+ * the header pill (gap/reorder detection across every sub-ledger). Read-only.
+ */
+export async function getLedgerIntegrity(): Promise<AdminLedgerIntegritySummary> {
+  const res = await api.get("/admin/ledger/integrity")
+  return AdminLedgerIntegritySummarySchema.parse(res.data)
 }
 
 /** POST /admin/ledger/verify/:transactionId — re-sum a transaction's legs (read-only). */

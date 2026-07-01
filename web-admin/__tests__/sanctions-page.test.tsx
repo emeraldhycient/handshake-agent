@@ -15,7 +15,10 @@ import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { SanctionsRecordListResponse } from "@handshake-agent/contracts"
+import type {
+  SanctionsMonitoringView,
+  SanctionsRecordListResponse,
+} from "@handshake-agent/contracts"
 
 import { SanctionsPage } from "@/components/admin/sanctions-page"
 
@@ -23,11 +26,13 @@ import { SanctionsPage } from "@/components/admin/sanctions-page"
 
 vi.mock("@/lib/api/compliance", () => ({
   listSanctions: vi.fn(),
+  getSanctionsMonitoring: vi.fn(),
 }))
 
-import { listSanctions } from "@/lib/api/compliance"
+import { listSanctions, getSanctionsMonitoring } from "@/lib/api/compliance"
 
 const mockListSanctions = vi.mocked(listSanctions)
+const mockGetMonitoring = vi.mocked(getSanctionsMonitoring)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -37,19 +42,32 @@ const SANCTIONS: SanctionsRecordListResponse = {
       id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
       counterpartyId: "cp_musa_sani",
       verdict: "hit",
-      provider: "OFAC SDN",
-      screeningType: "name",
+      provider: "open_sanctions",
+      screeningType: "transaction_counterparty",
+      matchedList: "OpenSanctions",
+      matchType: "Counterparty match",
+      matchScore: 92,
       createdAt: "2026-06-30T10:00:00.000Z",
     },
     {
       id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
       counterpartyId: "cp_blessing_okafor",
       verdict: "inconclusive",
-      provider: "UN Security Council",
-      screeningType: "address",
+      provider: "trm",
+      screeningType: "identity_verification",
+      matchedList: "TRM Labs",
+      matchType: "Identity match",
+      matchScore: 60,
       createdAt: "2026-06-30T11:00:00.000Z",
     },
   ],
+}
+
+const MONITORING: SanctionsMonitoringView = {
+  reScreenDaily: true,
+  screenOnOutbound: true,
+  pepAlert: true,
+  autoBlockOfac: false,
 }
 
 function renderPage() {
@@ -66,6 +84,8 @@ function renderPage() {
 beforeEach(() => {
   mockListSanctions.mockReset()
   mockListSanctions.mockResolvedValue(SANCTIONS)
+  mockGetMonitoring.mockReset()
+  mockGetMonitoring.mockResolvedValue(MONITORING)
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -81,9 +101,17 @@ describe("SanctionsPage", () => {
     // loading → data: the mocked screening records render as match cards.
     expect(await screen.findByText("cp_musa_sani")).toBeInTheDocument()
     expect(screen.getByText("cp_blessing_okafor")).toBeInTheDocument()
-    // Provider is surfaced in the matched-list/type subtitle.
-    expect(screen.getByText("OFAC SDN")).toBeInTheDocument()
-    // The verdict fills the design's Score slot.
+    // The derived matched-list name fills the subtitle.
+    expect(screen.getByText("OpenSanctions")).toBeInTheDocument()
+    expect(screen.getByText("TRM Labs")).toBeInTheDocument()
+    // The derived match-type label fills the subtitle (rendered in its own text
+    // node after the " · " separator).
+    expect(screen.getByText(/Counterparty match/)).toBeInTheDocument()
+    expect(screen.getByText(/Identity match/)).toBeInTheDocument()
+    // The numeric confidence score fills the design's Score slot.
+    expect(screen.getByText("92")).toBeInTheDocument()
+    expect(screen.getByText("60")).toBeInTheDocument()
+    // The verdict label sits beneath the score.
     expect(screen.getByText("Hit")).toBeInTheDocument()
 
     expect(screen.getByText("Ongoing monitoring")).toBeInTheDocument()
@@ -135,5 +163,41 @@ describe("SanctionsPage", () => {
     await waitFor(() =>
       expect(onToggle).toHaveAttribute("aria-checked", "false")
     )
+  })
+
+  it("seeds each monitoring switch from the fetched config view", async () => {
+    // Flip the config: re-screen OFF, PEP alert OFF, auto-block ON.
+    mockGetMonitoring.mockResolvedValue({
+      reScreenDaily: false,
+      screenOnOutbound: true,
+      pepAlert: false,
+      autoBlockOfac: true,
+    })
+    renderPage()
+
+    const reScreen = await screen.findByRole("switch", {
+      name: "Re-screen all customers daily against updated lists",
+    })
+    expect(reScreen).toHaveAttribute("aria-checked", "false")
+
+    expect(
+      screen.getByRole("switch", {
+        name: "Alert on new PEP (politically exposed person) matches",
+      })
+    ).toHaveAttribute("aria-checked", "false")
+    expect(
+      screen.getByRole("switch", {
+        name: "Auto-block confirmed OFAC SDN-list hits",
+      })
+    ).toHaveAttribute("aria-checked", "true")
+  })
+
+  it("renders a monitoring error branch with a Retry when the policy fetch fails", async () => {
+    mockGetMonitoring.mockRejectedValue(new Error("boom"))
+    renderPage()
+
+    expect(
+      await screen.findByText("Failed to load monitoring policy")
+    ).toBeInTheDocument()
   })
 })

@@ -45,6 +45,7 @@ import {
 } from "@/components/admin/flows"
 import type {
   AdminTxnDetail,
+  AdminTxnEconomics,
   AdminTxnLedgerLeg,
   AdminTxnStatus,
   AdminTxnTimelineEntry,
@@ -67,6 +68,17 @@ const IDEMPOTENCY_KEY = "idem_a8f3c1902e"
 /** Format an ISO timestamp for the timeline / created displays. */
 function formatWhen(iso: string): string {
   return new Date(iso).toLocaleString()
+}
+
+/**
+ * The header title: "{type} · {amount} {asset}" when the economics carry an
+ * amount (design's `{type} · {amount} USDT`), else just the capitalized type.
+ */
+function headerTitle(tx: AdminTxnDetail): string {
+  const { amount, asset } = tx.economics
+  if (amount && asset) return `${tx.type} · ${amount} ${asset}`
+  if (amount) return `${tx.type} · ${amount}`
+  return tx.type
 }
 
 /**
@@ -383,7 +395,7 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
             <div>
               <div className="flex flex-wrap items-center gap-2.5">
                 <h1 className="m-0 text-[21px] font-extrabold tracking-[-0.02em] text-ink capitalize">
-                  {tx.type}
+                  {headerTitle(tx)}
                 </h1>
                 <StatusPill
                   status={STATUS_TO_PILL[tx.status]}
@@ -391,6 +403,11 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
                   stuck={tx.status === "settling"}
                 />
               </div>
+              {tx.userEmail && (
+                <div className="mt-0.5 text-[12px] text-ink3">
+                  {tx.userEmail}
+                </div>
+              )}
               <button
                 type="button"
                 aria-label="Copy transaction id"
@@ -458,12 +475,11 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
                 <PanelTitle note="as confirmed to user">
                   Itemized parameters
                 </PanelTitle>
-                {/* The itemized economics (amount / fiat leg / rate / fee /
-                    spread / internal margin) are not yet on AdminTxnDetail —
-                    recorded as a shape gap; rendered as "—" until the backend
-                    projects them (never fabricated). */}
+                {/* Itemized economics projected from Transaction.metadata (quote/
+                    price-snapshot): amount / fiat leg / rate / fee / spread, plus
+                    the operator-only internal margin. Absent values render "—". */}
                 <dl>
-                  {ITEMIZED_KEYS.map((k) => (
+                  {economicsRows(tx.economics).map((k) => (
                     <div
                       key={k.label}
                       className="flex justify-between gap-3 border-b border-line2 py-[9px]"
@@ -475,7 +491,7 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
                           k.warn ? "text-twn" : "text-ink3"
                         )}
                       >
-                        {DASH}
+                        {k.value}
                       </dd>
                     </div>
                   ))}
@@ -655,18 +671,33 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
 // ─── Data-branch sub-renderers ────────────────────────────────────────────────────
 
 /**
- * The itemized-parameter row labels the design shows. The economics behind them
- * (amount/fiat/rate/fee/spread/margin) are not yet on the contract, so the values
- * render as "—" (shape gap: itemized economics block).
+ * The itemized-parameter rows the design shows, each reading one field off the
+ * real `AdminTxnEconomics` block. A null field renders as "—" (never fabricated).
+ * The internal-margin row is operator-only (warn-toned) — never shown to users.
  */
-const ITEMIZED_KEYS: { label: string; warn?: boolean }[] = [
-  { label: "Amount" },
-  { label: "Fiat leg" },
-  { label: "Rate (spread-folded)" },
-  { label: "Processing fee" },
-  { label: "FX spread" },
-  { label: "Internal margin (operator)", warn: true },
-]
+function economicsRows(
+  e: AdminTxnEconomics
+): { label: string; value: string; warn?: boolean }[] {
+  const amount =
+    e.amount && e.asset ? `${e.amount} ${e.asset}` : e.amount ?? DASH
+  const fiat =
+    e.fiatAmount && e.fiatCurrency
+      ? `${e.fiatCurrency} ${e.fiatAmount}`
+      : e.fiatAmount ?? DASH
+  const spread = e.fxSpreadBps ? `${e.fxSpreadBps} bps` : DASH
+  return [
+    { label: "Amount", value: amount },
+    { label: "Fiat leg", value: fiat },
+    { label: "Rate (spread-folded)", value: e.rate ?? DASH },
+    { label: "Processing fee", value: e.processingFee ?? DASH },
+    { label: "FX spread", value: spread },
+    {
+      label: "Internal margin (operator)",
+      value: e.internalMargin ?? DASH,
+      warn: true,
+    },
+  ]
+}
 
 /** One double-entry ledger leg → the design's Account/Dir/Amount/Seq row. */
 function LedgerRowView({ leg }: { leg: AdminTxnLedgerLeg }) {
@@ -692,9 +723,9 @@ function LedgerRowView({ leg }: { leg: AdminTxnLedgerLeg }) {
       <span className="text-right font-mono text-[11.5px] font-bold tabular-nums">
         {leg.amount}
       </span>
-      {/* Seq: AdminTxnLedgerLeg omits the ledger `sequence` — render "—" (gap). */}
+      {/* Seq: the per-account monotonic posting order. */}
       <span className="text-right font-mono text-[11px] text-ink3 tabular-nums">
-        {DASH}
+        {leg.sequence}
       </span>
     </div>
   )
@@ -756,22 +787,40 @@ interface RefRow {
   href?: string
 }
 
+/** Per-provider display label + (for TRON) an external explorer link builder. */
+const PROVIDER_META: Record<
+  string,
+  { label: string; explorer?: (ref: string) => { link: string; href: string } }
+> = {
+  tron: {
+    label: "TRON",
+    explorer: (ref) => ({
+      link: "Tronscan",
+      href: `https://tronscan.org/#/transaction/${ref}`,
+    }),
+  },
+  flutterwave: { label: "Flutterwave" },
+  blockradar: { label: "Blockradar" },
+  swap: { label: "Swap" },
+}
+
 /**
- * Provider references present on the detail: TRON hash (+Tronscan), Flutterwave
- * ref, idempotency key. Nulls are omitted. The design's separate "Blockradar"
- * row has no dedicated DTO field (shape gap) so it is dropped here.
+ * Provider references from the backend projection (TRON hash + Tronscan link,
+ * Flutterwave payout ref, Blockradar withdrawal id, swap id) plus the always-
+ * present idempotency key. Unknown providers fall back to a title-cased label.
  */
 function providerRefs(tx: AdminTxnDetail): RefRow[] {
-  const refs: RefRow[] = []
-  if (tx.onChainTxHash)
-    refs.push({
-      label: "TRON",
-      value: tx.onChainTxHash,
-      link: "Tronscan",
-      href: `https://tronscan.org/#/transaction/${tx.onChainTxHash}`,
-    })
-  if (tx.processorTxRef)
-    refs.push({ label: "Flutterwave", value: tx.processorTxRef })
+  const refs: RefRow[] = tx.providerReferences.map((r) => {
+    const meta = PROVIDER_META[r.provider]
+    const label =
+      meta?.label ?? r.provider[0].toUpperCase() + r.provider.slice(1)
+    const explorer = meta?.explorer?.(r.reference)
+    return {
+      label,
+      value: r.reference,
+      ...(explorer ? { link: explorer.link, href: explorer.href } : {}),
+    }
+  })
   refs.push({ label: "Idempotency", value: tx.idempotencyKey })
   return refs
 }

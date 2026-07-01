@@ -12,12 +12,15 @@ import {
   NotificationTemplateSchema,
   NotificationTemplateListResponseSchema,
   NotificationTemplatePreviewResponseSchema,
+  DeliveryLogResponseSchema,
   type NotificationTemplate,
   type NotificationTemplateListResponse,
   type NotificationTemplatePreviewResponse,
+  type DeliveryLogResponse,
 } from '@handshake-agent/contracts';
 
 import { AdminNotificationTemplateService } from '../application/admin-notification-template.service';
+import { AdminNotificationDeliveryService } from '../application/admin-notification-delivery.service';
 import { AdminSessionGuard } from './admin-session.guard';
 import { PermissionGuard } from './permission.guard';
 import { AdminStepUpGuard } from './admin-step-up.guard';
@@ -40,7 +43,10 @@ import {
 @Controller('admin')
 @UseGuards(AdminSessionGuard, PermissionGuard)
 export class AdminNotificationsController {
-  constructor(private readonly templates: AdminNotificationTemplateService) {}
+  constructor(
+    private readonly templates: AdminNotificationTemplateService,
+    private readonly delivery: AdminNotificationDeliveryService,
+  ) {}
 
   @Get('notification-templates')
   @RequirePermission('api_route', 'GET /admin/notification-templates', 'read')
@@ -48,6 +54,23 @@ export class AdminNotificationsController {
     return NotificationTemplateListResponseSchema.parse(
       await this.templates.list(),
     );
+  }
+
+  /**
+   * Phase 6b (Comms READ enrichment) — the read-only delivery log: recent issued
+   * notifications (channel / template / event / issue-time / derived status) plus
+   * aggregate bounce/complaint rates. Permissioned (default-deny); no write path,
+   * moves no money (§3.1). Parsed through its contract schema before it leaves the
+   * boundary.
+   */
+  @Get('notifications/delivery-log')
+  @RequirePermission(
+    'api_route',
+    'GET /admin/notifications/delivery-log',
+    'read',
+  )
+  async deliveryLog(): Promise<DeliveryLogResponse> {
+    return DeliveryLogResponseSchema.parse(await this.delivery.deliveryLog());
   }
 
   @Post('notification-templates/preview')

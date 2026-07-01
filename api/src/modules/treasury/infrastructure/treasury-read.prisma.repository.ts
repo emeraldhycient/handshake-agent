@@ -16,6 +16,10 @@
 
 import { Injectable } from '@nestjs/common';
 
+import {
+  SettlementOutboxStatus,
+  SettlementType,
+} from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   ITreasuryReadRepository,
@@ -23,11 +27,40 @@ import type {
   TreasuryAlertRecord,
   TreasuryBalanceRecord,
   TreasuryExposureRecord,
+  TreasuryFiatFloatRecord,
+  TreasuryFxPositionRecord,
+  TreasuryPayoutQueueRecord,
+  TreasurySweepFeed,
+  TreasurySweepRecord,
   WithdrawalPolicyRecord,
 } from '../application/ports/treasury-read.repository.port';
 
 /** Cap on the bounded exposure / alert / policy feeds (newest-first). */
 const FEED_LIMIT = 100;
+
+/**
+ * Configured gas-sweep threshold (native TRX) for child TRON addresses. This is the
+ * `sweep.threshold.trx` seed value; the operational sweep view compares each child's
+ * gas balance to it. Surfaced through the feed so the FE footer needs no config read.
+ */
+const SWEEP_THRESHOLD_TRX = '25';
+const SWEEP_THRESHOLD_ASSET = 'TRX';
+
+/** Settlement types that represent an outbound payout awaiting release. */
+const PAYOUT_SETTLEMENT_TYPES: SettlementType[] = [
+  SettlementType.processor_payout,
+  SettlementType.onchain_send,
+];
+
+/** Outbox statuses that mean "not yet released" (still in the approval queue). */
+const PENDING_OUTBOX_STATUSES: SettlementOutboxStatus[] = [
+  SettlementOutboxStatus.pending,
+  SettlementOutboxStatus.enqueued,
+  SettlementOutboxStatus.in_progress,
+];
+
+/** A large payout that must clear maker-checker (NGN-equivalent notional). */
+const LARGE_PAYOUT_NGN_THRESHOLD = 1_000_000;
 
 @Injectable()
 export class TreasuryReadPrismaRepository implements ITreasuryReadRepository {
@@ -185,4 +218,211 @@ export class TreasuryReadPrismaRepository implements ITreasuryReadRepository {
       enabledAt: row.enabledAt,
     }));
   }
+
+  /**
+   * Child-address gas-sweep view. Each row is a real per-user child receive address
+   * (Wallet.address) with its latest native-gas (TRX) balance snapshot and a derived
+   * sweep lifecycle relative to the configured threshold. The gas balance is the
+   * latest WalletBalance snapshot for the network's native asset; the last-sweep
+   * timestamp is the wallet's `lastSyncedAt` (the sweep runs on the sync cycle).
+   */
+  async listSweeps(): Promise<TreasurySweepFeed> {
+    const wallets = await this.prisma.wallet.findMany({
+      where: { status: 'active' as never },
+      select: {
+        id: true,
+        address: true,
+        network: true,
+        lastSyncedAt: true,
+        balances: {
+          where: { asset: SWEEP_THRESHOLD_ASSET },
+          orderBy: { syncedAt: 'desc' },
+          take: 1,
+          select: { amount: true },
+        },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: FEED_LIMIT,
+    });
+
+    const threshold = Number(SWEEP_THRESHOLD_TRX);
+    const rows: TreasurySweepRecord[] = wallets.map((w) => {
+      const balance = w.balances[0]?.amount.toString() ?? '0';
+      const status = deriveSweepStatus(
+        Number(balance),
+        threshold,
+        w.lastSyncedAt,
+      );
+      return {
+        id: w.id,
+        address: w.address,
+        network: w.network,
+        asset: SWEEP_THRESHOLD_ASSET,
+        balance,
+        status,
+        // Swept rows carry the last sync as the sweep time; otherwise null.
+        lastSweptAt: status === 'swept' ? w.lastSyncedAt : null,
+      };
+    });
+
+    return {
+      rows,
+      sweepThreshold: SWEEP_THRESHOLD_TRX,
+      thresholdAsset: SWEEP_THRESHOLD_ASSET,
+    };
+  }
+
+  /**
+   * Pending outbound settlements awaiting release: processor payouts + on-chain
+   * sends whose outbox status is not yet terminal. READ ONLY — never releases funds
+   * (§3.1). Beneficiary label + method are derived from the settlement type and the
+   * joined transaction metadata; the reference prefers the processor ref.
+   */
+  async listPayoutQueue(): Promise<TreasuryPayoutQueueRecord[]> {
+    const rows = await this.prisma.settlementOutbox.findMany({
+      where: {
+        settlementType: { in: PAYOUT_SETTLEMENT_TYPES },
+        status: { in: PENDING_OUTBOX_STATUSES },
+      },
+      select: {
+        id: true,
+        transactionId: true,
+        settlementType: true,
+        processorRef: true,
+        createdAt: true,
+        transaction: { select: { metadata: true } },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: FEED_LIMIT,
+    });
+
+    return rows.map((row) => {
+      const meta = asRecord(row.transaction?.metadata);
+      const asset = str(meta.asset) ?? defaultAssetFor(row.settlementType);
+      const amount = str(meta.amount) ?? str(meta.fiatAmount) ?? '0';
+      const fiatAmount = str(meta.fiatAmount) ?? null;
+      const ngnNotional = Number(
+        fiatAmount ?? (asset === 'NGN' ? amount : '0'),
+      );
+      return {
+        id: row.id,
+        transactionId: row.transactionId,
+        beneficiaryLabel: beneficiaryLabelFor(meta, row.settlementType),
+        reference: row.processorRef ?? `wd_${row.transactionId.slice(0, 8)}`,
+        method: methodFor(row.settlementType, meta),
+        asset,
+        amount,
+        fiatAmount,
+        requiresApproval: ngnNotional >= LARGE_PAYOUT_NGN_THRESHOLD,
+        submittedAt: row.createdAt,
+      };
+    });
+  }
+
+  /**
+   * Running platform_float ledger balance per fiat currency: the LATEST ledger
+   * entry's `balanceAfter` for each (currency) on the platform_float account,
+   * via DISTINCT ON over the per-currency monotonic sequence. Byte-stable strings.
+   */
+  async listFiatFloat(): Promise<TreasuryFiatFloatRecord[]> {
+    const rows = await this.prisma.$queryRaw<
+      Array<{ currency: string; balance: string }>
+    >`
+      SELECT DISTINCT ON (le.currency)
+        le.currency                 AS currency,
+        le."balanceAfter"::text     AS balance
+      FROM "ledger_entries" le
+      WHERE le."accountType" = 'platform_float'
+      ORDER BY le.currency, le.sequence DESC
+    `;
+
+    return rows.map((row) => ({
+      currency: row.currency,
+      balance: row.balance,
+    }));
+  }
+
+  /**
+   * Signed net FX inventory positions per (asset, fiat) with the underlying exposure
+   * fields, from the latest real-time TreasuryExposure snapshots. The service derives
+   * direction + headroom; here we project the raw exposure numbers as strings.
+   */
+  async listFxPositions(): Promise<TreasuryFxPositionRecord[]> {
+    const rows = await this.prisma.treasuryExposure.findMany({
+      where: { snapshotType: 'real_time' as never },
+      select: {
+        asset: true,
+        fiatCurrency: true,
+        netExposure: true,
+        fiatEquivalent: true,
+        exposureLimitBps: true,
+        status: true,
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+      take: FEED_LIMIT,
+    });
+
+    return rows.map((row) => ({
+      asset: row.asset,
+      fiatCurrency: row.fiatCurrency,
+      // The net inventory position valued in fiat is the exposure's fiat net.
+      netPositionFiat: row.netExposure.toString(),
+      netExposure: row.netExposure.toString(),
+      fiatEquivalent: row.fiatEquivalent.toString(),
+      exposureLimitBps: row.exposureLimitBps,
+      status: row.status,
+    }));
+  }
+}
+
+// ── module-private derivations (infra-only presentation of operational state) ────────
+
+/**
+ * Sweep lifecycle: never synced → below_threshold (nothing gathered yet); balance
+ * under the threshold → below_threshold; at/over threshold → pending (awaiting the
+ * next sweep). A synced wallet whose gas is near-zero is treated as already swept.
+ */
+function deriveSweepStatus(
+  balance: number,
+  threshold: number,
+  lastSyncedAt: Date | null,
+): TreasurySweepRecord['status'] {
+  if (lastSyncedAt !== null && balance < threshold * 0.05) return 'swept';
+  if (balance >= threshold) return 'pending';
+  return 'below_threshold';
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object'
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function str(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function defaultAssetFor(type: SettlementType): string {
+  return type === SettlementType.onchain_send ? 'USDT' : 'NGN';
+}
+
+function methodFor(
+  type: SettlementType,
+  meta: Record<string, unknown>,
+): string {
+  if (type === SettlementType.onchain_send) {
+    return `${str(meta.asset) ?? 'USDT'} · Blockradar`;
+  }
+  return 'NGN payout · Flutterwave';
+}
+
+function beneficiaryLabelFor(
+  meta: Record<string, unknown>,
+  type: SettlementType,
+): string {
+  const name = str(meta.beneficiaryName) ?? str(meta.bankName);
+  if (name !== null) return name;
+  return type === SettlementType.onchain_send
+    ? 'TRON withdrawal'
+    : 'NGN payout';
 }

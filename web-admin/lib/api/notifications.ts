@@ -16,12 +16,14 @@ import {
   NotificationTemplateUpsertRequestSchema,
   NotificationTemplatePreviewRequestSchema,
   NotificationTemplatePreviewResponseSchema,
+  DeliveryLogResponseSchema,
   type NotificationChannel,
   type NotificationTemplate,
   type NotificationTemplateListResponse,
   type NotificationTemplateUpsertRequest,
   type NotificationTemplatePreviewRequest,
   type NotificationTemplatePreviewResponse,
+  type DeliveryLogResponse,
 } from "@handshake-agent/contracts"
 
 import { api } from "./client"
@@ -43,6 +45,16 @@ function refPath({ templateKey, language, channel }: TemplateRef): string {
 export async function listNotificationTemplates(): Promise<NotificationTemplateListResponse> {
   const res = await api.get("/admin/notification-templates")
   return NotificationTemplateListResponseSchema.parse(res.data)
+}
+
+/**
+ * GET /admin/notifications/delivery-log — the read-only delivery log (recent
+ * issued notifications + aggregate bounce/complaint rates). Read-only; parses the
+ * response through the contract schema.
+ */
+export async function getDeliveryLog(): Promise<DeliveryLogResponse> {
+  const res = await api.get("/admin/notifications/delivery-log")
+  return DeliveryLogResponseSchema.parse(res.data)
 }
 
 /** GET /admin/notification-templates/:templateKey/:language/:channel — one template. */

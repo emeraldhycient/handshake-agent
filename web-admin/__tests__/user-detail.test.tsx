@@ -20,6 +20,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type {
   AdminEndUserDetail,
   AdminEndUserDevice,
+  AdminEndUserLimitsResponse,
+  AdminEndUserSession,
+  AdminEndUserTimelineEntry,
   KycSubmissionDetail,
 } from "@handshake-agent/contracts"
 
@@ -38,17 +41,29 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/lib/api/users", () => ({
   getEndUser: vi.fn(),
   listEndUserDevices: vi.fn(),
+  listEndUserSessions: vi.fn(),
+  getEndUserLimits: vi.fn(),
+  listEndUserTimeline: vi.fn(),
 }))
 
 vi.mock("@/lib/api/kyc", () => ({
   getKycSubmission: vi.fn(),
 }))
 
-import { getEndUser, listEndUserDevices } from "@/lib/api/users"
+import {
+  getEndUser,
+  listEndUserDevices,
+  listEndUserSessions,
+  getEndUserLimits,
+  listEndUserTimeline,
+} from "@/lib/api/users"
 import { getKycSubmission } from "@/lib/api/kyc"
 
 const mockGetEndUser = vi.mocked(getEndUser)
 const mockListDevices = vi.mocked(listEndUserDevices)
+const mockListSessions = vi.mocked(listEndUserSessions)
+const mockGetLimits = vi.mocked(getEndUserLimits)
+const mockListTimeline = vi.mocked(listEndUserTimeline)
 const mockGetKyc = vi.mocked(getKycSubmission)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -63,17 +78,25 @@ const DETAIL: AdminEndUserDetail = {
   kycStatus: "pending",
   kycTier: "tier_2",
   simSwapDetectedAt: null,
+  phone: "+2348012345678",
   createdAt: "2024-01-01T00:00:00.000Z",
   devices: [],
   balances: [
-    { asset: "USDT", network: "TRON", amount: "790.500000" },
-    { asset: "TRX", network: "TRON", amount: "12.000000" },
+    { asset: "USDT", network: "TRON", amount: "790.500000", pending: null },
+    { asset: "TRX", network: "TRON", amount: "12.000000", pending: null },
+  ],
+  depositAddresses: [
+    { network: "TRON", address: "TXaddr1234", status: "active" },
   ],
   recentTransactions: [
     {
       id: "22222222-2222-2222-2222-222222222222",
       type: "buy",
       status: "completed",
+      asset: "USDT",
+      amount: "100.00",
+      fiatAmount: "150000.00",
+      fiatCurrency: "NGN",
       createdAt: "2024-02-01T00:00:00.000Z",
     },
   ],
@@ -87,6 +110,48 @@ const DETAIL: AdminEndUserDetail = {
     },
   ],
 }
+
+const SESSIONS: AdminEndUserSession[] = [
+  {
+    id: "55555555-5555-5555-5555-555555555555",
+    channel: "web",
+    deviceId: "44444444-4444-4444-4444-444444444444",
+    userAgent: "Mozilla/5.0 (iPhone)",
+    ipAddress: "102.89.34.19",
+    isActive: true,
+    stepUpCompletedAt: null,
+    issuedAt: "2024-02-10T00:00:00.000Z",
+    expiresAt: "2024-02-11T00:00:00.000Z",
+    lastActivityAt: "2024-02-10T00:05:00.000Z",
+    revokedAt: null,
+  },
+]
+
+const LIMITS: AdminEndUserLimitsResponse = {
+  effectiveLimits: {
+    tier: "tier_2",
+    fiatCurrency: "NGN",
+    perTxFiatMax: "5000000",
+    dailyFiatMax: "50000000",
+    dailyTxCountMax: 50,
+  },
+  velocity: {
+    dailyFiatUsed: "252551.70",
+    dailyTxCount: 6,
+    windowStart: "2024-02-09T00:00:00.000Z",
+    windowEnd: "2024-02-10T00:00:00.000Z",
+  },
+}
+
+const TIMELINE: AdminEndUserTimelineEntry[] = [
+  {
+    id: "66666666-6666-6666-6666-666666666666",
+    action: "kyc_state_change",
+    actor: "admin:99999999-9999-9999-9999-999999999999",
+    actorAdminId: "99999999-9999-9999-9999-999999999999",
+    createdAt: "2024-02-05T00:00:00.000Z",
+  },
+]
 
 const KYC: KycSubmissionDetail = {
   userId: USER_ID,
@@ -128,9 +193,15 @@ beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
   mockGetEndUser.mockReset()
   mockListDevices.mockReset()
+  mockListSessions.mockReset()
+  mockGetLimits.mockReset()
+  mockListTimeline.mockReset()
   mockGetKyc.mockReset()
   mockGetEndUser.mockResolvedValue(DETAIL)
   mockListDevices.mockResolvedValue(DEVICES)
+  mockListSessions.mockResolvedValue(SESSIONS)
+  mockGetLimits.mockResolvedValue(LIMITS)
+  mockListTimeline.mockResolvedValue(TIMELINE)
   mockGetKyc.mockResolvedValue(KYC)
 })
 
@@ -200,5 +271,57 @@ describe("UserDetail (real data)", () => {
     expect(await screen.findByText("bound device")).toBeInTheDocument()
     expect(screen.getByText("Pinned")).toBeInTheDocument()
     expect(mockListDevices).toHaveBeenCalledWith(USER_ID)
+  })
+
+  it("surfaces the routing phone on the Profile tab", async () => {
+    renderDetail()
+    expect(await screen.findByText("+2348012345678")).toBeInTheDocument()
+  })
+
+  it("renders the admin-action timeline from the audit log on the Profile tab", async () => {
+    renderDetail()
+
+    // The audit action key renders as a humanised, capitalised label.
+    expect(await screen.findByText("kyc state change")).toBeInTheDocument()
+    expect(mockListTimeline).toHaveBeenCalledWith(USER_ID)
+  })
+
+  it("renders the real auth sessions on the Security tab", async () => {
+    searchParams = new URLSearchParams("tab=security")
+    renderDetail()
+
+    expect(
+      await screen.findByText("Mozilla/5.0 (iPhone)")
+    ).toBeInTheDocument()
+    expect(screen.getByText(/102\.89\.34\.19/)).toBeInTheDocument()
+    expect(mockListSessions).toHaveBeenCalledWith(USER_ID)
+  })
+
+  it("renders effective limits + velocity usage on the Limits tab", async () => {
+    searchParams = new URLSearchParams("tab=limits")
+    renderDetail()
+
+    // Per-tx cap formatted with the ₦ symbol + grouping from the effective caps.
+    expect(await screen.findByText("₦5,000,000")).toBeInTheDocument()
+    // Velocity used shows the live 24h fiat total.
+    expect(screen.getByText("Daily fiat used")).toBeInTheDocument()
+    expect(mockGetLimits).toHaveBeenCalledWith(USER_ID)
+  })
+
+  it("renders the real deposit addresses + transaction economics", async () => {
+    searchParams = new URLSearchParams("tab=wallets")
+    renderDetail()
+
+    // The child deposit address from the aggregate renders (no longer a stub note).
+    expect(await screen.findByText("TXaddr1234")).toBeInTheDocument()
+  })
+
+  it("renders the transaction amount + NGN fiat leg on the Transactions tab", async () => {
+    searchParams = new URLSearchParams("tab=tx")
+    renderDetail()
+
+    // The crypto amount + the humanised NGN fiat leg (₦150,000) from metadata.
+    expect(await screen.findByText("100.00")).toBeInTheDocument()
+    expect(screen.getByText("₦150,000")).toBeInTheDocument()
   })
 })

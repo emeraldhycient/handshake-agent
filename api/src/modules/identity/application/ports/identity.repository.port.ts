@@ -74,15 +74,59 @@ export interface ContactRecord {
 // they leave the backend (never exposed in full to the admin console).
 // ---------------------------------------------------------------------------
 
+/** A per-asset aggregate of a user's cached wallet balances (list projection). */
+export interface AdminUserBalanceSummaryRecord {
+  asset: string;
+  amount: string;
+}
+
 /** Row shape for the paginated admin user list. */
 export interface AdminUserListRecord {
   id: string;
   email: string | null;
+  /** KYC first/last name (raw, non-sensitive); the service derives displayName. */
+  firstName: string | null;
+  lastName: string | null;
   status: string;
   kycStatus: string;
   kycTier: string;
   simSwapDetectedAt: Date | null;
+  /** A prior sanctions screening produced a `hit` verdict for this user. */
+  sanctionsFlagged: boolean;
+  /** Per-asset aggregate of the user's cached wallet_balances rows. */
+  balances: AdminUserBalanceSummaryRecord[];
+  /** Latest real activity (session / device / transaction), NOT registration. */
+  lastActiveAt: Date | null;
   createdAt: Date;
+}
+
+/**
+ * Row shape for the KYC review queue — the user list joined with the applicant's
+ * KYC profile so the queue can show a display name + the requested (target) tier.
+ * `firstName`/`lastName`/`requestedTier` are null when no KycProfile row exists.
+ * The SUBMITTED-AT source is `createdAt` (the account row); the service derives
+ * the SLA age from it.
+ */
+export interface KycQueueRecord {
+  id: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  /** The KYC profile's target tier (what the applicant is requesting). */
+  requestedTier: string | null;
+  kycStatus: string;
+  createdAt: Date;
+}
+
+/** Paginated result for the KYC review queue. */
+export interface KycQueueListResult {
+  items: KycQueueRecord[];
+  nextCursor: string | null;
+}
+
+/** Filter for the KYC review queue — the kycStatus bucket to list. */
+export interface KycQueueFilters {
+  status: string;
 }
 
 /** A device as projected for the admin user-detail view. */
@@ -128,6 +172,7 @@ export interface UserAdminDetailRecord {
 export interface AdminUserListFilters {
   query?: string;
   status?: string;
+  kycStatus?: string;
   kycTier?: string;
 }
 
@@ -141,6 +186,8 @@ export interface AdminUserListPage {
 export interface AdminUserListResult {
   items: AdminUserListRecord[];
   nextCursor: string | null;
+  /** Total rows matching the filters, independent of the cursor page. */
+  total: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +273,17 @@ export interface IIdentityRepository {
   listUsersPendingKycReview(
     page: AdminUserListPage,
   ): Promise<AdminUserListResult>;
+
+  /**
+   * KYC review queue scoped to the given kycStatus bucket, joined with the KYC
+   * profile so each row carries the applicant name + requested (target) tier.
+   * Same keyset pagination as `listUsers` (createdAt desc, id desc). Feeds the
+   * admin console's Pending / Needs-info / Approved / Rejected status tabs.
+   */
+  listKycReviewQueue(
+    filters: KycQueueFilters,
+    page: AdminUserListPage,
+  ): Promise<KycQueueListResult>;
 
   /**
    * Composite admin user-detail projection: the user plus its KYC profile

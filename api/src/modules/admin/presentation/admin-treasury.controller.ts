@@ -15,11 +15,19 @@ import {
   TreasuryAlertListResponseSchema,
   TreasuryBalancesResponseSchema,
   TreasuryExposureListResponseSchema,
+  TreasuryFiatFloatResponseSchema,
+  TreasuryFxPositionResponseSchema,
+  TreasuryPayoutQueueResponseSchema,
+  TreasurySweepListResponseSchema,
   WithdrawalPolicyListResponseSchema,
   type TreasuryAlert,
   type TreasuryAlertListResponse,
   type TreasuryBalancesResponse,
   type TreasuryExposureListResponse,
+  type TreasuryFiatFloatResponse,
+  type TreasuryFxPositionResponse,
+  type TreasuryPayoutQueueResponse,
+  type TreasurySweepListResponse,
   type WithdrawalPolicyListResponse,
 } from '@handshake-agent/contracts';
 
@@ -107,6 +115,46 @@ export class AdminTreasuryController {
   async listWithdrawalPolicies(): Promise<WithdrawalPolicyListResponse> {
     return WithdrawalPolicyListResponseSchema.parse(
       await this.treasury.listWithdrawalPolicies(),
+    );
+  }
+
+  // ── child-address sweeps (Phase 6b, READ) ──────────────────────────────────────
+
+  @Get('sweeps')
+  @RequirePermission('api_route', 'GET /admin/treasury/sweeps', 'read')
+  async listSweeps(): Promise<TreasurySweepListResponse> {
+    return TreasurySweepListResponseSchema.parse(
+      await this.treasury.listSweeps(),
+    );
+  }
+
+  // ── payout / withdrawal approval queue (Phase 6b, READ-ONLY) ─────────────────────
+
+  @Get('payout-queue')
+  @RequirePermission('api_route', 'GET /admin/treasury/payout-queue', 'read')
+  async listPayoutQueue(): Promise<TreasuryPayoutQueueResponse> {
+    return TreasuryPayoutQueueResponseSchema.parse(
+      await this.treasury.listPayoutQueue(),
+    );
+  }
+
+  // ── NGN fiat float vs configured target (Phase 6b, READ) ─────────────────────────
+
+  @Get('fiat-float')
+  @RequirePermission('api_route', 'GET /admin/treasury/fiat-float', 'read')
+  async listFiatFloat(): Promise<TreasuryFiatFloatResponse> {
+    return TreasuryFiatFloatResponseSchema.parse(
+      await this.treasury.listFiatFloat(),
+    );
+  }
+
+  // ── FX position / exposure headroom (Phase 6b, READ) ─────────────────────────────
+
+  @Get('fx-position')
+  @RequirePermission('api_route', 'GET /admin/treasury/fx-position', 'read')
+  async listFxPositions(): Promise<TreasuryFxPositionResponse> {
+    return TreasuryFxPositionResponseSchema.parse(
+      await this.treasury.listFxPositions(),
     );
   }
 }

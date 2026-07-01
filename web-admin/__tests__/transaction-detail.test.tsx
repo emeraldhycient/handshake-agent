@@ -38,6 +38,7 @@ const USER_ID = "22222222-2222-4222-8222-222222222222"
 const DETAIL: AdminTxnDetail = {
   id: TXN_ID,
   userId: USER_ID,
+  userEmail: "amara.okeke@example.com",
   type: "receive",
   status: "settling",
   idempotencyKey: "idem_15020323",
@@ -48,6 +49,16 @@ const DETAIL: AdminTxnDetail = {
   executedAt: "2026-07-01T13:28:02.000Z",
   completedAt: null,
   failedAt: null,
+  economics: {
+    asset: "USDT",
+    amount: "236.599531",
+    fiatAmount: "251904.85",
+    fiatCurrency: "NGN",
+    rate: "1064.72",
+    processingFee: "1250.00",
+    fxSpreadBps: "150",
+    internalMargin: "3778.57",
+  },
   ledgerLegs: [
     {
       accountType: "user",
@@ -56,6 +67,7 @@ const DETAIL: AdminTxnDetail = {
       amount: "251904.85",
       direction: "debit",
       balanceAfter: "0.00",
+      sequence: 11,
       postedAt: "2026-07-01T13:28:02.000Z",
     },
     {
@@ -65,12 +77,18 @@ const DETAIL: AdminTxnDetail = {
       amount: "236.599531",
       direction: "credit",
       balanceAfter: "236.599531",
+      sequence: 12,
       postedAt: "2026-07-01T13:28:02.000Z",
     },
   ],
   timeline: [
     { status: "pending", at: "2026-07-01T13:28:00.000Z" },
     { status: "settling", at: "2026-07-01T13:28:02.000Z" },
+  ],
+  providerReferences: [
+    { provider: "tron", reference: "TJ173305038490070x9" },
+    { provider: "flutterwave", reference: "MockFLWRef-902412" },
+    { provider: "blockradar", reference: "br_wd_88213" },
   ],
 }
 
@@ -111,13 +129,41 @@ describe("TransactionDetail (read-wired)", () => {
     expect(screen.getByText("CREDIT")).toBeInTheDocument()
     expect(screen.getByText("251904.85")).toBeInTheDocument()
 
-    // Provider references from the detail (TRON hash + Flutterwave + idem).
+    // Provider references from the projection (TRON + Flutterwave + Blockradar + idem).
     expect(screen.getByText("TJ173305038490070x9")).toBeInTheDocument()
     expect(screen.getByText("MockFLWRef-902412")).toBeInTheDocument()
+    expect(screen.getByText("br_wd_88213")).toBeInTheDocument()
+    expect(screen.getByText("Blockradar")).toBeInTheDocument()
     expect(screen.getByText("idem_15020323")).toBeInTheDocument()
 
     // Timeline steps render (two entries).
     expect(screen.getByText("settling")).toBeInTheDocument()
+  })
+
+  it("renders the itemized economics and the ledger Seq column", async () => {
+    renderDetail()
+
+    await screen.findByText(TXN_ID)
+    // Itemized economics projected from metadata.
+    expect(screen.getByText("236.599531 USDT")).toBeInTheDocument()
+    expect(screen.getByText("NGN 251904.85")).toBeInTheDocument()
+    expect(screen.getByText("1064.72")).toBeInTheDocument()
+    expect(screen.getByText("1250.00")).toBeInTheDocument()
+    expect(screen.getByText("150 bps")).toBeInTheDocument()
+    // Operator-only internal margin.
+    expect(screen.getByText("3778.57")).toBeInTheDocument()
+    // Ledger Seq column shows the per-account sequence numbers.
+    expect(screen.getByText("11")).toBeInTheDocument()
+    expect(screen.getByText("12")).toBeInTheDocument()
+  })
+
+  it("uses the amount in the header title (type · amount asset)", async () => {
+    renderDetail()
+
+    await screen.findByText(TXN_ID)
+    expect(
+      screen.getByRole("heading", { name: /receive · 236.599531 USDT/i })
+    ).toBeInTheDocument()
   })
 
   it("deep-links Open ledger to the REAL transaction id", async () => {
@@ -152,11 +198,12 @@ describe("TransactionDetail (read-wired)", () => {
     ).toBeInTheDocument()
   })
 
-  it("omits the Tronscan/Flutterwave rows when those refs are null", async () => {
+  it("omits the Tronscan/Flutterwave rows when the projection has no such refs", async () => {
     mockGet.mockResolvedValue({
       ...DETAIL,
       onChainTxHash: null,
       processorTxRef: null,
+      providerReferences: [],
     })
     renderDetail()
 

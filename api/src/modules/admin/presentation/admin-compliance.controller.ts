@@ -18,6 +18,7 @@ import {
   ComplianceEventListResponseSchema,
   ComplianceReportSchema,
   ComplianceReportListResponseSchema,
+  SanctionsMonitoringViewSchema,
   SanctionsRecordListResponseSchema,
   TravelRuleListResponseSchema,
   type AmlRule,
@@ -26,6 +27,7 @@ import {
   type ComplianceEventListResponse,
   type ComplianceReport,
   type ComplianceReportListResponse,
+  type SanctionsMonitoringView,
   type SanctionsRecordListResponse,
   type TravelRuleListResponse,
 } from '@handshake-agent/contracts';
@@ -116,6 +118,12 @@ export class AdminComplianceController {
     return TravelRuleListResponseSchema.parse(
       await this.compliance.listTravelRule(query),
     );
+  }
+
+  @Get('monitoring')
+  @RequirePermission('api_route', 'GET /admin/compliance/monitoring', 'read')
+  getMonitoring(): SanctionsMonitoringView {
+    return SanctionsMonitoringViewSchema.parse(this.compliance.getMonitoring());
   }
 
   // ── AML rules (CRUD) ────────────────────────────────────────────────────────

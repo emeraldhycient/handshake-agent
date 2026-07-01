@@ -249,6 +249,13 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
         getAccountHistory: () => Promise.resolve([]),
         verifyTransactionIntegrity: () =>
           Promise.resolve({ balanced: true, legCount: 0, brokenAt: null }),
+        listGlobal: () => Promise.resolve({ items: [], nextCursor: null }),
+        verifyGlobalSequenceIntegrity: () =>
+          Promise.resolve({
+            ok: true,
+            accountsChecked: 0,
+            brokenAccount: null,
+          }),
       },
       // complianceService and configService are required deps but not invoked on the buy path.
       {

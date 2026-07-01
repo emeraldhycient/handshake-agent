@@ -10,11 +10,15 @@
  * here moves money (§3.1). Four async branches: loading skeletons / error / empty
  * (no metrics access) / data.
  *
- * The volume chart, System-health card, Live-activity feed, and Approvals-awaiting-me
- * inbox still render the design's mock content: those widgets have no backing metrics
- * (per the FE/BE gap matrix — GMV, per-day-per-capability stacked series, provider
- * latency/webhook-queue/recon-drift, the activity aggregator, and the maker-checker
- * approvals subsystem are all unbuilt) and are deferred to Phase 6b backend enrichment.
+ * The GMV tile and the Transaction-volume chart are wired to the real composite
+ * metrics (GMV = the summed fiat notional of completed money-moving txns; the chart =
+ * `txnVolume.stackedSeries`). The System-health card, Live-activity feed, and the
+ * Open-compliance KPI tile are now wired to the real operational-ops endpoint
+ * (`useMetricsOps` → GET /admin/metrics/ops): per-provider dispatch status +
+ * webhook-queue depth + recon drift, a cross-domain activity feed (settled/failed
+ * txns, KYC + config-change audit events, engine sweeps/refunds), and the open
+ * (flagged + under_review) compliance-case count. The Approvals-awaiting-me inbox
+ * stays mock — the maker-checker approvals subsystem is unbuilt (Phase 7).
  *
  * Layout (verbatim from the design markup):
  * - Header: "Operations overview" title + subtitle, and a segmented KPI-range
@@ -36,9 +40,15 @@ import { KpiCard } from "@/components/admin/kpi-card"
 import { ChartBars } from "@/components/admin/chart-bars"
 import { MakerCheckerModal } from "@/components/admin/flows"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useDashboardMetrics } from "@/lib/query/hooks"
+import { useDashboardMetrics, useMetricsOps } from "@/lib/query/hooks"
 import { ApiError } from "@/lib/api/client"
-import type { DashboardSummary } from "@handshake-agent/contracts"
+import type {
+  ActivityEvent,
+  ActivityKind,
+  DashboardSummary,
+  MetricsOps,
+  ProviderHealth,
+} from "@handshake-agent/contracts"
 import type { ChartBar, KpiDeltaTone } from "@/types/components"
 
 // ─── Brand constants (design logic.js line 2 — NOT theme-swapped) ────────────────────
@@ -92,12 +102,16 @@ interface Kpi {
 }
 
 /**
- * Derive the eight KPI tiles from the real composite summary. Six are backed by the
- * metrics contract; two (GMV, Open compliance cases) have no metric to source from —
- * they render "—" and are recorded as shape gaps for Phase 6b enrichment.
+ * Derive the eight KPI tiles from the real composite summary. Seven are backed by the
+ * composite metrics contract (including GMV); the eighth (Open compliance cases) is
+ * sourced from the ops endpoint's open (flagged + under_review) count, or "—" while
+ * that read is still loading / forbidden.
  */
-function deriveKpis(data: DashboardSummary): readonly Kpi[] {
-  const { txnVolume, revenue, kycFunnel, activeUsers } = data
+function deriveKpis(
+  data: DashboardSummary,
+  openComplianceCases: number | undefined
+): readonly Kpi[] {
+  const { txnVolume, gmv, revenue, kycFunnel, activeUsers } = data
   const totalTxns = txnVolume.byType.reduce((sum, t) => sum + t.count, 0)
   const failedTxns = txnVolume.byType.reduce((sum, t) => sum + t.failed, 0)
   const pendingKyc = kycFunnel.byStatus
@@ -112,6 +126,17 @@ function deriveKpis(data: DashboardSummary): readonly Kpi[] {
       ? `+${revenue.totalFeesByCurrency.length - 1} more`
       : "fees"
 
+  // GMV: the summed fiat notional of completed money-moving txns (primary
+  // currency). "—" only when no completed txn carried a fiat notional in range.
+  const primaryGmv = gmv.totalByCurrency[0]
+  const gmvValue = primaryGmv
+    ? `${primaryGmv.currency} ${primaryGmv.amount}`
+    : "—"
+  const gmvNote =
+    gmv.totalByCurrency.length > 1
+      ? `+${gmv.totalByCurrency.length - 1} more`
+      : "gross"
+
   return [
     // Hero: the backend surfaces per-type COUNTS, not a fiat money sum — show the
     // transaction count as the headline volume (fiat-notional volume is a shape gap).
@@ -122,8 +147,13 @@ function deriveKpis(data: DashboardSummary): readonly Kpi[] {
       deltaNote: "success rate",
       hero: true,
     },
-    // GMV: no backend aggregation exists (gap matrix) — rendered as "—".
-    { label: "GMV", value: "—", delta: "—", deltaNote: "gross" },
+    // GMV: summed fiat notional of completed money-moving txns (Phase 6b enrichment).
+    {
+      label: "GMV",
+      value: gmvValue,
+      delta: `${gmv.txnCount.toLocaleString()}`,
+      deltaNote: gmvNote,
+    },
     // Revenue: fees only; spread is folded into FX and not separately ledgered.
     {
       label: "Revenue (fees)",
@@ -157,50 +187,65 @@ function deriveKpis(data: DashboardSummary): readonly Kpi[] {
       deltaNote: "needs action",
       tone: "warn",
     },
-    // Open compliance cases: no metric count (gap matrix) — rendered as "—".
+    // Open compliance cases: the open (flagged + under_review) count from the ops
+    // endpoint. "—" only while that read is loading or forbidden.
     {
       label: "Open compliance cases",
-      value: "—",
-      delta: "—",
-      deltaNote: "active",
+      value:
+        openComplianceCases === undefined
+          ? "—"
+          : fmtInt(openComplianceCases),
+      delta: openComplianceCases === undefined ? "—" : "open",
+      deltaNote: "flagged + review",
       tone: "warn",
     },
   ]
 }
 
-// ─── Transaction volume bars (design `volBars`, logic.js 461-464) — MOCK (Phase 6b) ──
-// 14 bars; each day's total is `40 + r*55` where `r = (sin((i+3)*1.7)+1)/2`, split into
-// buy 0.34 / sell 0.22 / send 0.16 / swap 0.16 / ticket 0.12 of the total (as % heights).
-//
-// This stacked-by-capability silhouette has no backing metric: the composite endpoint
-// gives a flat per-day total + per-type totals, NOT a per-day-per-type cross-tab (gap
-// matrix), so the chart stays mock. It still rescopes with the range switcher (the day
-// count shifts the sine phase/frequency so the silhouette visibly changes per range)
-// while the per-segment proportions and axis labels stay identical.
+// ─── Transaction volume bars — real per-day-per-capability series (Phase 6b) ─────────
+// The composite endpoint now projects `txnVolume.stackedSeries`: one bucket per UTC
+// day carrying the buy/sell/send/swap/ticket counts. We map each bucket straight onto
+// a ChartBar segment set, so the stacked silhouette reflects real settled volume and
+// rescopes with the range switcher (the returned day-set follows the {from,to} window).
 
-/** Build the 14-day stacked mock bars, reseeded by the range's day-count (`days`). */
-function volBarsFor(days: number): ChartBar[] {
-  return Array.from({ length: 14 }, (_, i) => {
-    const r = (Math.sin((i + 3) * 1.7 + days) + 1) / 2
-    const total = (40 + r * 55) * days
-    return {
-      label: i === 0 ? "Jun 18" : i === 13 ? "Today" : `Day ${i + 1}`,
-      segments: {
-        buy: total * 0.34,
-        sell: total * 0.22,
-        send: total * 0.16,
-        swap: total * 0.16,
-        ticket: total * 0.12,
-      },
-    }
-  })
+/** Short "MMM D" axis label for a YYYY-MM-DD bucket date (UTC, locale-independent). */
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+] as const
+
+function bucketLabel(isoDate: string): string {
+  const [, month, day] = isoDate.split("-")
+  const monthName = MONTHS[Number(month) - 1] ?? month
+  return `${monthName} ${Number(day)}`
 }
 
-// ─── System health rows (design `health`, logic.js 466-472) ──────────────────────────
+/** Map the real per-day stacked series onto the ChartBars segment shape. */
+function volBarsFrom(
+  stackedSeries: DashboardSummary["txnVolume"]["stackedSeries"]
+): ChartBar[] {
+  return stackedSeries.map((bucket) => ({
+    label: bucketLabel(bucket.date),
+    segments: {
+      buy: bucket.buy,
+      sell: bucket.sell,
+      send: bucket.send,
+      swap: bucket.swap,
+      ticket: bucket.ticket,
+    },
+  }))
+}
+
+// ─── System health rows — wired to the real ops endpoint (design `health`) ───────────
+// The design's per-provider row is preserved (dot + halo + right-aligned status
+// colour), but the values come from `MetricsOps.systemHealth`: the provider status
+// drives the dot/tint, and the observed latency (or "—" when unmeasured) fills the
+// right-aligned status slot the design used for a latency figure.
 
 interface HealthRow {
   name: string
   note: string
+  /** Right-aligned status label — observed latency ("120ms") or "—". */
   status: string
   dot: string
   halo: string
@@ -208,54 +253,34 @@ interface HealthRow {
   fg: string
 }
 
-const HEALTH: readonly HealthRow[] = [
-  {
-    name: "Blockradar",
-    note: "Custodial WaaS · TRON",
-    status: "120ms",
-    dot: "#1f8a5b",
-    halo: "rgba(31,138,91,0.18)",
-    fg: "var(--tok)",
-  },
-  {
-    name: "Flutterwave",
-    note: "NGN rails",
-    status: "890ms",
-    dot: "#e0a53a",
-    halo: "rgba(224,165,58,0.2)",
-    fg: "var(--twn)",
-  },
-  {
-    name: "Resend",
-    note: "Email",
-    status: "70ms",
-    dot: "#1f8a5b",
-    halo: "rgba(31,138,91,0.18)",
-    fg: "var(--tok)",
-  },
-  {
-    name: "WhatsApp Cloud",
-    note: "Chat + Flows",
-    status: "210ms",
-    dot: "#1f8a5b",
-    halo: "rgba(31,138,91,0.18)",
-    fg: "var(--tok)",
-  },
-  {
-    name: "Anthropic LLM",
-    note: "claude-opus-4-8",
-    status: "640ms",
-    dot: "#1f8a5b",
-    halo: "rgba(31,138,91,0.18)",
-    fg: "var(--tok)",
-  },
-]
+/** Design status-tint tokens per provider status (ok=success, degraded=warn, down=danger). */
+const STATUS_STYLE: Record<
+  ProviderHealth["status"],
+  { dot: string; halo: string; fg: string }
+> = {
+  ok: { dot: "#1f8a5b", halo: "rgba(31,138,91,0.18)", fg: "var(--tok)" },
+  degraded: { dot: "#e0a53a", halo: "rgba(224,165,58,0.2)", fg: "var(--twn)" },
+  down: { dot: "#d0453b", halo: "rgba(208,69,59,0.2)", fg: "var(--tdn)" },
+}
 
-const WEBHOOK_Q = "3"
-/** `recon.filter(open).length` open breaks (seed rc1-rc3 open) + " open" (vDash 488). */
-const RECON_DRIFT = "3 open"
+/** Map one contract provider-health row onto the design's HealthRow view shape. */
+function healthRowFrom(provider: ProviderHealth): HealthRow {
+  const style = STATUS_STYLE[provider.status]
+  return {
+    name: provider.name,
+    note: provider.note,
+    status:
+      provider.lastLatencyMs === null ? "—" : `${provider.lastLatencyMs}ms`,
+    dot: style.dot,
+    halo: style.halo,
+    fg: style.fg,
+  }
+}
 
-// ─── Live activity feed (design `activity`, logic.js 473-480) ────────────────────────
+// ─── Live activity feed — wired to the real ops endpoint (design `activity`) ─────────
+// The design's row (icon + tint + text/meta/time) is preserved; the data comes from
+// `MetricsOps.activityFeed`. Each event `kind` selects the icon + tint the design
+// used; `title`/`meta` render verbatim; the ISO `at` becomes a relative label.
 
 interface ActivityItem {
   text: string
@@ -267,56 +292,66 @@ interface ActivityItem {
   iconFg: string
 }
 
-const ACTIVITY: readonly ActivityItem[] = [
-  {
-    text: "Buy settled · Amara Okeke",
-    meta: "tx_80231 · 120.00 USDT",
-    time: "2m",
+/** Per-kind icon + tint (mirrors the design's settled/kyc/config/failed/sweep/refund rows). */
+const ACTIVITY_STYLE: Record<
+  ActivityKind,
+  { icon: string; iconBg: string; iconFg: string }
+> = {
+  settled: {
     icon: "M4 8h13l-3-3M20 16H7l3 3",
     iconBg: "var(--sok)",
     iconFg: "var(--tok)",
   },
-  {
-    text: "KYC approved · Emeka Okonkwo",
-    meta: "tier_1 · by Ifeoma Bello",
-    time: "8m",
+  kyc_approved: {
     icon: "M12 3l7 3v5c0 5-3.5 8-7 9",
     iconBg: "var(--sif)",
     iconFg: "var(--tif)",
   },
-  {
-    text: "Config change submitted",
-    meta: "FX spread 85→110 bps",
-    time: "34m",
+  config_change: {
     icon: "M4 7h16M4 12h10M4 17h7",
     iconBg: "var(--swn)",
     iconFg: "var(--twn)",
   },
-  {
-    text: "Send failed · retry queued",
-    meta: "tx_80238 · Blockradar timeout",
-    time: "52m",
+  failed: {
     icon: "M12 4l9 16H3z",
     iconBg: "var(--sdn)",
     iconFg: "var(--tdn)",
   },
-  {
-    text: "Sweep confirmed",
-    meta: "child addr · 42.4 TRX",
-    time: "1h",
+  sweep: {
     icon: "M4 8h13l-3-3M20 16H7l3 3",
     iconBg: "var(--sok)",
     iconFg: "var(--tok)",
   },
-  {
-    text: "Refund executed by engine",
-    meta: "tx_80219 · ₦45,000.00",
-    time: "2h",
+  refund: {
     icon: "M4 8h13l-3-3M20 16H7l3 3",
     iconBg: "var(--sif)",
     iconFg: "var(--tif)",
   },
-]
+}
+
+/** Compact relative-time label ("2m" / "3h" / "5d") from an ISO timestamp. */
+function relativeTime(iso: string, now: number = Date.now()): string {
+  const deltaMs = Math.max(0, now - new Date(iso).getTime())
+  const minutes = Math.floor(deltaMs / 60_000)
+  if (minutes < 1) return "now"
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
+/** Map one contract activity event onto the design's ActivityItem view shape. */
+function activityItemFrom(event: ActivityEvent): ActivityItem {
+  const style = ACTIVITY_STYLE[event.kind]
+  return {
+    text: event.title,
+    meta: event.meta,
+    time: relativeTime(event.at),
+    icon: style.icon,
+    iconBg: style.iconBg,
+    iconFg: style.iconFg,
+  }
+}
 
 // ─── Approvals awaiting me (design `myApprovals`, logic.js 481 — first 3 approvals) ──
 // `st.approvals.slice(0,3)` from the seeded maker-checker inbox (logic.js 75-80), each
@@ -415,7 +450,23 @@ function FeatureCard({
 
 // ─── Cards ───────────────────────────────────────────────────────────────────────────
 
-function SystemHealthCard() {
+/**
+ * System-health card — wired to `MetricsOps.systemHealth`. Four async branches:
+ * loading skeleton / error (no-access or generic, both fall back to "unavailable")
+ * / empty (no providers) / data (per-provider rows + queue/recon footer).
+ */
+function SystemHealthCard({
+  ops,
+  isLoading,
+  isError,
+}: {
+  ops: MetricsOps | undefined
+  isLoading: boolean
+  isError: boolean
+}) {
+  const rows = ops ? ops.systemHealth.providers.map(healthRowFrom) : []
+  const reconDrift = ops?.systemHealth.reconDriftCount ?? 0
+
   return (
     <FeatureCard className="flex flex-col">
       <div className="mb-3.5 flex items-center justify-between">
@@ -428,47 +479,70 @@ function SystemHealthCard() {
           Live
         </div>
       </div>
-      <div className="flex flex-col gap-0.5">
-        {HEALTH.map((h) => (
-          <div
-            key={h.name}
-            className="flex items-center gap-[11px] border-b border-line2 py-[9px] last:border-0"
-          >
-            <span
-              aria-hidden
-              className="size-2 flex-none rounded-full"
-              style={{ background: h.dot, boxShadow: `0 0 0 3px ${h.halo}` }}
-            />
-            <div className="min-w-0 flex-1">
-              <div className="text-[12.5px] font-semibold text-ink">
-                {h.name}
-              </div>
-              <div className="text-[10.5px] text-ink3">{h.note}</div>
-            </div>
-            <span
-              className="text-[11px] font-bold tabular-nums"
-              style={{ color: h.fg }}
+
+      {isLoading ? (
+        <div className="flex flex-col gap-2" aria-busy="true">
+          {Array.from({ length: 5 }, (_, i) => (
+            <Skeleton key={i} className="h-[38px] rounded-[8px]" />
+          ))}
+        </div>
+      ) : isError ? (
+        <div className="py-6 text-center text-[12.5px] text-ink3">
+          Health metrics unavailable.
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="py-6 text-center text-[12.5px] text-ink3">
+          No providers registered.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-0.5">
+          {rows.map((h) => (
+            <div
+              key={h.name}
+              className="flex items-center gap-[11px] border-b border-line2 py-[9px] last:border-0"
             >
-              {h.status}
-            </span>
-          </div>
-        ))}
-      </div>
+              <span
+                aria-hidden
+                className="size-2 flex-none rounded-full"
+                style={{ background: h.dot, boxShadow: `0 0 0 3px ${h.halo}` }}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="text-[12.5px] font-semibold text-ink">
+                  {h.name}
+                </div>
+                <div className="text-[10.5px] text-ink3">{h.note}</div>
+              </div>
+              <span
+                className="text-[11px] font-bold tabular-nums"
+                style={{ color: h.fg }}
+              >
+                {h.status}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="mt-auto flex gap-[9px] pt-3.5">
         <div className="flex-1 rounded-[10px] bg-card2 px-[11px] py-[9px]">
           <div className="text-[10.5px] font-semibold text-ink3">
             Webhook queue
           </div>
           <div className="mt-px text-base font-extrabold text-ink tabular-nums">
-            {WEBHOOK_Q}
+            {ops ? fmtInt(ops.systemHealth.webhookQueueDepth) : "—"}
           </div>
         </div>
         <div className="flex-1 rounded-[10px] bg-card2 px-[11px] py-[9px]">
           <div className="text-[10.5px] font-semibold text-ink3">
             Recon drift
           </div>
-          <div className="mt-px text-base font-extrabold text-twn tabular-nums">
-            {RECON_DRIFT}
+          <div
+            className={cn(
+              "mt-px text-base font-extrabold tabular-nums",
+              reconDrift > 0 ? "text-twn" : "text-ink"
+            )}
+          >
+            {ops ? `${fmtInt(reconDrift)} open` : "—"}
           </div>
         </div>
       </div>
@@ -476,16 +550,45 @@ function SystemHealthCard() {
   )
 }
 
-function LiveActivityCard() {
+/**
+ * Live-activity card — wired to `MetricsOps.activityFeed`. Four async branches:
+ * loading skeleton / error / empty (no recent events) / data (the event rows).
+ */
+function LiveActivityCard({
+  ops,
+  isLoading,
+  isError,
+}: {
+  ops: MetricsOps | undefined
+  isLoading: boolean
+  isError: boolean
+}) {
+  const items = ops ? ops.activityFeed.map(activityItemFrom) : []
+
   return (
     <FeatureCard>
       <div className="mb-3 text-sm font-bold text-ink">Live activity</div>
-      <div className="flex flex-col">
-        {ACTIVITY.map((a, i) => (
-          <div
-            key={i}
-            className="flex items-center gap-3 border-b border-line2 py-[9px] last:border-0"
-          >
+      {isLoading ? (
+        <div className="flex flex-col gap-2" aria-busy="true">
+          {Array.from({ length: 5 }, (_, i) => (
+            <Skeleton key={i} className="h-[42px] rounded-[9px]" />
+          ))}
+        </div>
+      ) : isError ? (
+        <div className="py-6 text-center text-[12.5px] text-ink3">
+          Activity feed unavailable.
+        </div>
+      ) : items.length === 0 ? (
+        <div className="py-6 text-center text-[12.5px] text-ink3">
+          No recent activity.
+        </div>
+      ) : (
+        <div className="flex flex-col">
+          {items.map((a, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-3 border-b border-line2 py-[9px] last:border-0"
+            >
             <span
               aria-hidden
               className="flex size-[30px] flex-none items-center justify-center rounded-[9px]"
@@ -513,8 +616,9 @@ function LiveActivityCard() {
               {a.time}
             </span>
           </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </FeatureCard>
   )
 }
@@ -605,8 +709,17 @@ function AlertsCard() {
 // ─── KPI grid — the metrics-backed data branch (§8) ──────────────────────────────────
 
 /** The 4×2 KPI tile grid rendered from the real composite summary (data branch). */
-function KpiGrid({ data }: { data: DashboardSummary }) {
-  const kpis = useMemo(() => deriveKpis(data), [data])
+function KpiGrid({
+  data,
+  openComplianceCases,
+}: {
+  data: DashboardSummary
+  openComplianceCases: number | undefined
+}) {
+  const kpis = useMemo(
+    () => deriveKpis(data, openComplianceCases),
+    [data, openComplianceCases]
+  )
   return (
     <div className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
       {kpis.map((k) => (
@@ -638,6 +751,82 @@ function KpiGridSkeleton() {
   )
 }
 
+// ─── Transaction-volume chart card — real stacked-by-capability series ────────────────
+
+/** The volume-chart legend swatches (design lines 30-42). */
+function VolumeLegend() {
+  return (
+    <div className="flex flex-wrap gap-[13px]">
+      {(
+        [
+          ["buy", VOL_COLORS.buy],
+          ["sell", VOL_COLORS.sell],
+          ["send", VOL_COLORS.send],
+          ["swap", VOL_COLORS.swap],
+          ["ticket", VOL_COLORS.ticket],
+        ] as const
+      ).map(([label, color]) => (
+        <div key={label} className="flex items-center gap-[5px]">
+          <span
+            aria-hidden
+            className="size-[9px] rounded-[3px]"
+            style={{ background: color }}
+          />
+          <span className="text-[11px] font-semibold text-ink2">{label}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * The Transaction-volume card. Wired to the real `txnVolume.stackedSeries` (Phase
+ * 6b) — four async branches: loading skeleton / error (shared with the KPI panel,
+ * so this only distinguishes loading vs empty vs data) / empty (no txns in range) /
+ * data (the stacked-bar silhouette).
+ */
+function VolumeChartCard({
+  data,
+  isLoading,
+}: {
+  data: DashboardSummary | undefined
+  isLoading: boolean
+}) {
+  const bars = useMemo(
+    () => (data ? volBarsFrom(data.txnVolume.stackedSeries) : []),
+    [data]
+  )
+
+  return (
+    <FeatureCard>
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-bold text-ink">Transaction volume</div>
+          <div className="mt-0.5 text-xs text-ink2 tabular-nums">
+            by day · stacked by capability
+          </div>
+        </div>
+        <VolumeLegend />
+      </div>
+      <div className="mt-4">
+        {isLoading ? (
+          <Skeleton className="h-[180px] rounded-[12px]" />
+        ) : bars.length === 0 ? (
+          <div className="flex h-[180px] items-center justify-center text-[12.5px] text-ink3">
+            No transactions in this range.
+          </div>
+        ) : (
+          <ChartBars
+            bars={bars}
+            ariaLabel="Transaction volume by day, stacked by capability"
+            showLegend={false}
+          />
+        )}
+      </div>
+    </FeatureCard>
+  )
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────────────
 
 export function OperatorDashboard() {
@@ -658,9 +847,10 @@ export function OperatorDashboard() {
   const isForbidden =
     query.error instanceof ApiError && query.error.status === 403
 
-  // Rescope the (still-mock) stacked-bar chart to the selected range: the bar
-  // silhouette visibly changes per range while colours/labels stay identical.
-  const volBars = useMemo(() => volBarsFor(days), [days])
+  // The System-health card, Live-activity feed, and Open-compliance KPI are wired to
+  // the range-independent operational-ops endpoint (a distinct query so a 403 there
+  // degrades those panels without hiding the range-scoped KPIs, and vice-versa).
+  const opsQuery = useMetricsOps()
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto bg-bg">
@@ -731,58 +921,31 @@ export function OperatorDashboard() {
             </div>
           ))}
 
-        {query.isSuccess && <KpiGrid data={query.data} />}
+        {query.isSuccess && (
+          <KpiGrid
+            data={query.data}
+            openComplianceCases={opsQuery.data?.compliance.openCases}
+          />
+        )}
 
         {/* ── Volume chart + System health (design lines 29-77) ─────────────────── */}
         <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-[1.7fr_1fr]">
-          <FeatureCard>
-            <div className="mb-1 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-bold text-ink">
-                  Transaction volume
-                </div>
-                <div className="mt-0.5 text-xs text-ink2 tabular-nums">
-                  by day · stacked by capability
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-[13px]">
-                {(
-                  [
-                    ["buy", VOL_COLORS.buy],
-                    ["sell", VOL_COLORS.sell],
-                    ["send", VOL_COLORS.send],
-                    ["swap", VOL_COLORS.swap],
-                    ["ticket", VOL_COLORS.ticket],
-                  ] as const
-                ).map(([label, color]) => (
-                  <div key={label} className="flex items-center gap-[5px]">
-                    <span
-                      aria-hidden
-                      className="size-[9px] rounded-[3px]"
-                      style={{ background: color }}
-                    />
-                    <span className="text-[11px] font-semibold text-ink2">
-                      {label}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="mt-4">
-              <ChartBars
-                bars={volBars}
-                ariaLabel="Transaction volume by day, stacked by capability, Jun 18 to today"
-                showLegend={false}
-              />
-            </div>
-          </FeatureCard>
+          <VolumeChartCard data={query.data} isLoading={query.isLoading} />
 
-          <SystemHealthCard />
+          <SystemHealthCard
+            ops={opsQuery.data}
+            isLoading={opsQuery.isLoading}
+            isError={opsQuery.isError}
+          />
         </div>
 
         {/* ── Attention row — Live activity | (Approvals + Alerts) (lines 79-120) ── */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <LiveActivityCard />
+          <LiveActivityCard
+            ops={opsQuery.data}
+            isLoading={opsQuery.isLoading}
+            isError={opsQuery.isError}
+          />
           <div className="flex flex-col gap-4">
             <ApprovalsCard onOpen={setActiveApproval} />
             <AlertsCard />

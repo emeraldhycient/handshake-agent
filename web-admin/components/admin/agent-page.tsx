@@ -4,119 +4,102 @@
  * AgentPage — the embedded-agent oversight surface, reproduced pixel-for-pixel from
  * the operator-console design (docs/design-ref/screens/Agent.html · spec §6.17).
  *
- * The "Model & guardrails" card is WIRED to real data via `useAgentConfig()`
- * (GET /admin/agent/config) — the resolved `modelId` and `enabled` flag come from
- * the layered config (§7). The system-prompt is read-only (§3.1): the contract
- * surfaces only a preview string, never an editable value or the API key.
+ * The "Model & guardrails" card is WIRED to two hooks: `useAgentConfig()`
+ * (GET /admin/agent/config) for the resolved `modelId` + `enabled` flag from the
+ * layered config (§7), and `useAgentInsights()` (GET /admin/agent/insights) for the
+ * guardrail rows (structured-output / checkpointer / PIN-step-up / max-tool-calls —
+ * architectural facts + the config-tunable max-tool-calls). The system prompt is
+ * read-only (§3.1): the contract surfaces only a preview string, never an editable
+ * value or the API key.
  *
- * The other three cards (system-prompt versions, tool registry, cost & usage 24h)
- * have NO backing admin endpoint — they render design-faithful representative
- * content until the backend surfaces them (recorded as shape gaps). Their action
- * buttons remain their design toast (Phase 7/8), never executing anything.
+ * The other three cards are ALSO WIRED to `useAgentInsights()`:
+ *   - System-prompt versions → the single live version (there is no version store;
+ *     promote/stage is Phase 7), with the prompt length as a change fingerprint.
+ *   - Tool registry → the typed-tool set derived from the real intent-action union.
+ *   - Cost & usage (24h) → REAL rolling-24h counts (conversations / inbound / outbound).
+ *     The schema stores NO token or dollar-cost data, so the card reports measurable
+ *     counts rather than fabricating tokens/cost (§3.6).
  *
  * Layout is two card rows, matching the design's inline grids:
  *   Row 1 (1fr 1fr): "Model & guardrails · read-mostly" (key/val, WIRED) |
- *                    "System-prompt versions" (dot + version + tag, maker-checker)
- *   Row 2 (1.4fr 1fr): "Tool registry" (mono name + read/write kind chip) |
- *                      "Cost & usage (24h)" (key/val, mono·tabular)
+ *                    "System-prompt versions" (dot + version + tag, WIRED · live-only)
+ *   Row 2 (1.4fr 1fr): "Tool registry" (mono name + read/write kind chip, WIRED) |
+ *                      "Cost & usage (24h)" (key/val, mono·tabular, WIRED)
  *
  * This surface is READ-ONLY (§3.1/§6): tools PROPOSE, never execute — the "write"
  * kind chip denotes proposal-only capabilities, not execution. Colour is never the
  * sole signal — the tag/chip text carries the state.
  */
 import { Skeleton } from "@/components/ui/skeleton"
-import { useAgentConfig } from "@/lib/query/hooks"
-import { pushToast } from "@/lib/store/toast-store"
-import type { AgentConfigView } from "@handshake-agent/contracts"
+import { useAgentConfig, useAgentInsights } from "@/lib/query/hooks"
 import type {
-  AgentGuardrailRow,
-  AgentPromptVersion,
-  AgentToolRow,
-  AgentUsageStat,
-} from "@/types/components"
+  AgentConfigView,
+  AgentInsightsView,
+} from "@handshake-agent/contracts"
 
-// Architectural guardrail constants (design markup `agentParams`). These are
-// invariant facts of the agent's construction (§3.1/§6), not fetched data — the
-// contract exposes no endpoint for them — so they stay static below the two rows
-// (Model, Agent enabled) that ARE resolved from the layered config.
-const STATIC_GUARDRAILS: readonly AgentGuardrailRow[] = [
-  { label: "Structured output", value: "IntentSchema (enforced)" },
-  { label: "Checkpointer", value: "none (extractable)" },
-  { label: "PIN + step-up", value: "required to execute" },
-  { label: "Max tool calls / turn", value: "6" },
-]
+// ─── Shared card shells + async branches ────────────────────────────────────────────
 
-// design mock: "System-prompt versions" rows (design markup `promptVersions`, 3 rows).
-// The dot tone drives the coloured status dot; any change here is maker-checker.
-const PROMPT_VERSIONS: readonly AgentPromptVersion[] = [
-  {
-    version: "v4.2.0",
-    tag: "· live",
-    meta: "Promoted by Amara Okeke · 2 days ago",
-    tone: "success",
-    action: "View diff",
-  },
-  {
-    version: "v4.3.0",
-    tag: "· staged",
-    meta: "Awaiting checker approval · Tunde Adeyemi",
-    tone: "warn",
-    action: "Review",
-  },
-  {
-    version: "v4.1.3",
-    tag: "· archived",
-    meta: "Rolled back 6 days ago",
-    tone: "muted",
-    action: "Restore",
-  },
-]
-
-// design mock: "Tool registry" rows (design markup `toolRows`, 5+ rows). "read" tools
-// return data; "write" tools only PROPOSE a transaction — they never execute (§3.1).
-const TOOL_ROWS: readonly AgentToolRow[] = [
-  { name: "get_quote", kind: "read" },
-  { name: "get_wallet_balance", kind: "read" },
-  { name: "list_beneficiaries", kind: "read" },
-  { name: "query_transactions", kind: "read" },
-  { name: "propose_buy_order", kind: "write" },
-  { name: "propose_sell_order", kind: "write" },
-  { name: "propose_send", kind: "write" },
-  { name: "propose_swap", kind: "write" },
-]
-
-// design mock: "Cost & usage (24h)" key/val rows (design markup `agentUsage`, 4 rows).
-const AGENT_USAGE: readonly AgentUsageStat[] = [
-  { label: "Conversations", value: "1,842" },
-  { label: "Input tokens", value: "1,284,930" },
-  { label: "Output tokens", value: "312,547" },
-  { label: "Est. cost", value: "$48.20" },
-]
-
-// Prompt-version dot tone → its token colour (never the sole signal — tag carries the state).
-const DOT_TONE: Record<AgentPromptVersion["tone"], string> = {
-  success: "bg-tok",
-  warn: "bg-twn",
-  muted: "bg-ink3",
-}
-
-// ─── Model & guardrails (design markup: `agentParams` key/val rows) ─────────────────
-
-/** The card shell — its title is stable across every async branch. */
-function ModelGuardrailsShell({ children }: { children: React.ReactNode }) {
+/** A card shell — its title is stable across every async branch. */
+function CardShell({
+  title,
+  suffix,
+  aside,
+  children,
+}: {
+  title: string
+  suffix?: string
+  aside?: React.ReactNode
+  children: React.ReactNode
+}) {
   return (
     <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
-      <div className="mb-3 text-[13px] font-extrabold text-ink">
-        Model &amp; guardrails{" "}
-        <span className="font-semibold text-ink3">· read-mostly</span>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="text-[13px] font-extrabold text-ink">
+          {title}
+          {suffix ? (
+            <span className="font-semibold text-ink3"> {suffix}</span>
+          ) : null}
+        </div>
+        {aside}
       </div>
       {children}
     </div>
   )
 }
 
+/** Five-row loading skeleton, shared by every card. */
+function CardSkeleton() {
+  return (
+    <div className="flex flex-col gap-2 py-1" aria-busy="true">
+      <Skeleton className="h-[19px] w-full" />
+      <Skeleton className="h-[19px] w-full" />
+      <Skeleton className="h-[19px] w-full" />
+      <Skeleton className="h-[19px] w-full" />
+      <Skeleton className="h-[19px] w-full" />
+    </div>
+  )
+}
+
+/** The shared error branch — a message + a Retry that re-runs the query. */
+function CardError({ label, onRetry }: { label: string; onRetry: () => void }) {
+  return (
+    <div className="rounded-xl border border-sdn bg-sdn/40 px-3.5 py-3 text-center">
+      <p className="text-xs font-bold text-tdn">{label}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-1.5 cursor-pointer rounded-md px-1.5 text-[11.5px] font-bold text-tif hover:bg-hov focus-visible:outline focus-visible:outline-2 focus-visible:outline-tif"
+      >
+        Retry
+      </button>
+    </div>
+  )
+}
+
+// ─── Model & guardrails (design markup: `agentParams` key/val rows) ─────────────────
+
 /** One key/value guardrail row (design markup). */
-function GuardrailRow({ label, value }: AgentGuardrailRow) {
+function GuardrailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between border-b border-line2 py-[9px]">
       <span className="text-[12.5px] text-ink2">{label}</span>
@@ -126,122 +109,148 @@ function GuardrailRow({ label, value }: AgentGuardrailRow) {
 }
 
 /**
- * Model & guardrails — WIRED to `useAgentConfig()`. The `Model` and `Agent
- * enabled` rows resolve from the layered config; the architectural guardrails
- * stay static (no endpoint exposes them). Four async branches per §5.
+ * Model & guardrails — the `Model` + `Agent enabled` rows resolve from
+ * `useAgentConfig()`; the guardrail rows resolve from `useAgentInsights()`. Both
+ * queries share the card's four async branches (§5); the card shows data only when
+ * both have resolved so the operator never sees a half-populated card.
  */
 function ModelGuardrailsCard() {
-  const query = useAgentConfig()
+  const config = useAgentConfig()
+  const insights = useAgentInsights()
 
-  if (query.isLoading) {
-    return (
-      <ModelGuardrailsShell>
-        <div className="flex flex-col gap-2 py-1" aria-busy="true">
-          <Skeleton className="h-[19px] w-full" />
-          <Skeleton className="h-[19px] w-full" />
-          <Skeleton className="h-[19px] w-full" />
-          <Skeleton className="h-[19px] w-full" />
-          <Skeleton className="h-[19px] w-full" />
-        </div>
-      </ModelGuardrailsShell>
+  const shell = (children: React.ReactNode) => (
+    <CardShell title="Model & guardrails" suffix="· read-mostly">
+      {children}
+    </CardShell>
+  )
+
+  if (config.isLoading || insights.isLoading) return shell(<CardSkeleton />)
+
+  if (config.isError || insights.isError) {
+    return shell(
+      <CardError
+        label="Couldn't load agent config"
+        onRetry={() => {
+          void config.refetch()
+          void insights.refetch()
+        }}
+      />
     )
   }
 
-  if (query.isError) {
-    return (
-      <ModelGuardrailsShell>
-        <div className="rounded-xl border border-sdn bg-sdn/40 px-3.5 py-3 text-center">
-          <p className="text-xs font-bold text-tdn">
-            Couldn&apos;t load agent config
-          </p>
-          <button
-            type="button"
-            onClick={() => query.refetch()}
-            className="mt-1.5 cursor-pointer rounded-md px-1.5 text-[11.5px] font-bold text-tif hover:bg-hov focus-visible:outline focus-visible:outline-2 focus-visible:outline-tif"
-          >
-            Retry
-          </button>
-        </div>
-      </ModelGuardrailsShell>
+  const configData: AgentConfigView | undefined = config.data
+  const insightsData: AgentInsightsView | undefined = insights.data
+  if (!configData || !insightsData) {
+    return shell(
+      <p className="py-2 text-[12.5px] text-ink3">
+        No agent configuration available.
+      </p>
     )
   }
 
-  const config: AgentConfigView | undefined = query.data
-  // Defensive: an empty/absent config still renders the card gracefully.
-  if (!config) {
-    return (
-      <ModelGuardrailsShell>
-        <p className="py-2 text-[12.5px] text-ink3">
-          No agent configuration available.
-        </p>
-      </ModelGuardrailsShell>
-    )
-  }
-
-  return (
-    <ModelGuardrailsShell>
-      <GuardrailRow label="Model" value={config.modelId} />
+  return shell(
+    <>
+      <GuardrailRow label="Model" value={configData.modelId} />
       <GuardrailRow
         label="Agent enabled"
-        value={config.enabled ? "yes" : "no"}
+        value={configData.enabled ? "yes" : "no"}
       />
-      {STATIC_GUARDRAILS.map((row) => (
+      {insightsData.guardrails.map((row) => (
         <GuardrailRow key={row.label} label={row.label} value={row.value} />
       ))}
-    </ModelGuardrailsShell>
+    </>
   )
 }
 
-// ─── System-prompt versions (design markup: dot + `v.ver v.tag` + meta + action) ────
+// ─── System-prompt versions (design markup: dot + `v.ver v.tag` + meta) ─────────────
 
+/**
+ * System-prompt versions — WIRED to the single LIVE version. There is no
+ * prompt-version store (the prompt is generated read-only from the live catalog,
+ * §3.1/§6), so exactly one row exists; promote/stage/rollback is Phase 7. The
+ * character count is shown as a lightweight change fingerprint.
+ */
 function PromptVersionsCard() {
-  return (
-    <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="text-[13px] font-extrabold text-ink">
-          System-prompt versions
+  const insights = useAgentInsights()
+
+  const shell = (children: React.ReactNode) => (
+    <CardShell
+      title="System-prompt versions"
+      aside={<span className="text-[11px] text-ink3">read-only</span>}
+    >
+      {children}
+    </CardShell>
+  )
+
+  if (insights.isLoading) return shell(<CardSkeleton />)
+  if (insights.isError) {
+    return shell(
+      <CardError
+        label="Couldn't load prompt version"
+        onRetry={() => void insights.refetch()}
+      />
+    )
+  }
+
+  const version = insights.data?.promptVersion
+  if (!version) {
+    return shell(
+      <p className="py-2 text-[12.5px] text-ink3">No prompt version available.</p>
+    )
+  }
+
+  return shell(
+    <div className="flex items-center gap-[11px] border-b border-line2 py-2.5">
+      <span
+        className="size-2 flex-none rounded-full bg-tok"
+        aria-hidden="true"
+      />
+      <div className="flex-1">
+        <div className="font-mono text-[12.5px] font-bold text-ink">
+          {version.label} <span className="text-ink3">· {version.status}</span>
         </div>
-        <span className="text-[11px] text-ink3">change = maker-checker</span>
+        <div className="text-[10.5px] text-ink3">
+          Generated from the live catalog · {version.promptChars} chars
+        </div>
       </div>
-      {PROMPT_VERSIONS.map((version) => (
-        <div
-          key={version.version}
-          className="flex items-center gap-[11px] border-b border-line2 py-2.5"
-        >
-          <span
-            className={`size-2 flex-none rounded-full ${DOT_TONE[version.tone]}`}
-            aria-hidden="true"
-          />
-          <div className="flex-1">
-            <div className="font-mono text-[12.5px] font-bold text-ink">
-              {version.version} <span className="text-ink3">{version.tag}</span>
-            </div>
-            <div className="text-[10.5px] text-ink3">{version.meta}</div>
-          </div>
-          <button
-            type="button"
-            onClick={() =>
-              pushToast(`${version.action} · ${version.version}`, "info")
-            }
-            className="cursor-pointer rounded-md px-1 text-[11.5px] font-bold text-tif hover:bg-hov focus-visible:outline focus-visible:outline-2 focus-visible:outline-tif"
-          >
-            {version.action}
-          </button>
-        </div>
-      ))}
     </div>
   )
 }
 
 // ─── Tool registry (design markup: mono name + inline-styled read/write kind chip) ──
 
+/**
+ * Tool registry — WIRED to the typed-tool set derived from the real intent-action
+ * union. "read" tools return data; "write" tools only PROPOSE, they never execute
+ * (§3.1). Four async branches (§5).
+ */
 function ToolRegistryCard() {
-  return (
-    <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
-      <div className="mb-3 text-[13px] font-extrabold text-ink">
-        Tool registry
-      </div>
-      {TOOL_ROWS.map((tool) => (
+  const insights = useAgentInsights()
+
+  const shell = (children: React.ReactNode) => (
+    <CardShell title="Tool registry">{children}</CardShell>
+  )
+
+  if (insights.isLoading) return shell(<CardSkeleton />)
+  if (insights.isError) {
+    return shell(
+      <CardError
+        label="Couldn't load tool registry"
+        onRetry={() => void insights.refetch()}
+      />
+    )
+  }
+
+  const tools = insights.data?.tools ?? []
+  if (tools.length === 0) {
+    return shell(
+      <p className="py-2 text-[12.5px] text-ink3">No tools registered.</p>
+    )
+  }
+
+  return shell(
+    <>
+      {tools.map((tool) => (
         <div
           key={tool.name}
           className="flex items-center gap-[11px] border-b border-line2 py-[9px]"
@@ -258,30 +267,72 @@ function ToolRegistryCard() {
           </span>
         </div>
       ))}
-    </div>
+    </>
   )
 }
 
 // ─── Cost & usage (24h) (design markup: key/val, mono·tabular value) ────────────────
 
-function CostUsageCard() {
+/** One usage key/value row. */
+function UsageRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
-      <div className="mb-3 text-[13px] font-extrabold text-ink">
-        Cost &amp; usage (24h)
-      </div>
-      {AGENT_USAGE.map((stat) => (
-        <div
-          key={stat.label}
-          className="flex items-center justify-between border-b border-line2 py-[9px]"
-        >
-          <span className="text-[12.5px] text-ink2">{stat.label}</span>
-          <span className="font-mono text-[12.5px] font-bold text-ink tabular-nums">
-            {stat.value}
-          </span>
-        </div>
-      ))}
+    <div className="flex items-center justify-between border-b border-line2 py-[9px]">
+      <span className="text-[12.5px] text-ink2">{label}</span>
+      <span className="font-mono text-[12.5px] font-bold text-ink tabular-nums">
+        {value}
+      </span>
     </div>
+  )
+}
+
+/**
+ * Cost & usage (24h) — WIRED to REAL rolling-24h counts. The schema stores no token
+ * counts or dollar cost, so the card reports what is actually measurable —
+ * conversations touched, inbound messages, outbound replies — rather than
+ * fabricating tokens/cost (§3.6). Four async branches (§5).
+ */
+function CostUsageCard() {
+  const insights = useAgentInsights()
+
+  const shell = (children: React.ReactNode) => (
+    <CardShell title="Cost & usage (24h)">{children}</CardShell>
+  )
+
+  if (insights.isLoading) return shell(<CardSkeleton />)
+  if (insights.isError) {
+    return shell(
+      <CardError
+        label="Couldn't load usage"
+        onRetry={() => void insights.refetch()}
+      />
+    )
+  }
+
+  const usage = insights.data?.usage24h
+  if (!usage) {
+    return shell(
+      <p className="py-2 text-[12.5px] text-ink3">No usage data available.</p>
+    )
+  }
+
+  const rows = [
+    { label: "Conversations", value: usage.conversations.toLocaleString() },
+    {
+      label: "Inbound messages",
+      value: usage.inboundMessages.toLocaleString(),
+    },
+    {
+      label: "Outbound replies",
+      value: usage.outboundReplies.toLocaleString(),
+    },
+  ]
+
+  return shell(
+    <>
+      {rows.map((row) => (
+        <UsageRow key={row.label} label={row.label} value={row.value} />
+      ))}
+    </>
   )
 }
 

@@ -1027,73 +1027,19 @@ export interface OpsJobRow {
 }
 
 // ─── Providers page (design §6.27) ──────────────────────────────────────────────────
-// Provider adapter cards + a mock→live readiness checklist. No provider-config /
-// provider-registry endpoint exists yet, so every field here is design-faithful
-// representative content shaped exactly like the design markup
-// (docs/design-ref/screens/Providers.html). The screen is read-only apart from the
-// "Reveal · step-up" gesture, which routes through the REAL step-up re-auth before
-// the (still design-faithful sample) key value is shown, and a "Test connection"
-// button that runs no live probe yet. Nothing here moves money (§3.1).
-
-/**
- * A provider adapter's operational status → the canonical status pill token pair
- * (ok=success, degraded=warn, down=danger, mock=info). Colour is never the sole
- * signal — the pill's status word carries the state in text. `ok` / `degraded`
- * mirror the design's seed provider records (docs/design-ref/logic.js line 139).
- */
-export type ProviderStatus = "ok" | "degraded" | "down" | "mock"
-
-/**
- * One provider adapter card (design §6.27). Every field is the design's own seed
- * content (docs/design-ref/logic.js `providers`, line 139) — a design reproduction,
- * not live data — mirroring the platform's real adapters: Blockradar (crypto WaaS),
- * Flutterwave (fiat rails), Resend (email), WhatsApp Cloud API, Anthropic (agent LLM).
- */
-export interface ProviderCard {
-  /** Stable key + a11y label root (e.g. "blockradar"). */
-  id: string
-  /** The 2-letter mark shown in the rounded tile (design `ini()` of the name). */
-  mark: string
-  /** Provider display name. */
-  name: string
-  /** The adapter category line under the name (design `p.kind`). */
-  kind: string
-  status: ProviderStatus
-  /** Round-trip latency suffix shown after the status word (design `p.latency`). */
-  latency: string
-  /** True → the amber MOCK-MODE banner is shown (the adapter is wrapped in a mock). */
-  mock: boolean
-  /** The masked API-key preview (design seed sample — never a real secret). */
-  keyMasked: string
-  /**
-   * The (design-faithful) revealed key value, shown only after a real step-up. The
-   * seed masks the key, so this is a representative full sample, never a live secret.
-   */
-  keyRevealed: string
-  /** The bound capabilities line (design `p.caps`, e.g. "crypto.buy, sell, send, swap"). */
-  caps: string
-}
-
-/**
- * One "Mock → live readiness checklist" row (design §6.27). `done` selects the
- * check vs pending-dash icon + its tinted tile; the label carries the requirement.
- */
-export interface ProviderReadinessItem {
-  id: string
-  label: string
-  /** True → a green check tile; false → a muted pending-dash tile. */
-  done: boolean
-}
+// Provider adapter cards + a mock→live readiness checklist, WIRED to the real
+// provider-registry read endpoint (GET /admin/providers, Phase 6b). The card/
+// readiness data shapes are contract-owned (`ProviderCardView` /
+// `ProviderReadinessItem` from `@handshake-agent/contracts`) — this file keeps only
+// the presentational prop type. The screen is READ-ONLY: the API returns
+// secret-PRESENCE booleans, never key values (§3.4/§3.5), so there is no reveal of
+// any real secret; "Test connection" / key reveal are Phase 7. Nothing moves money
+// (§3.1). Status → pill token pair: ok=success, degraded=warn, down=danger,
+// mock=info — colour is never the sole signal (the status word carries the state).
 
 export interface ProviderCardViewProps {
-  /** The provider adapter this card renders. */
-  provider: ProviderCard
-  /** Open the step-up dialog to reveal this provider's masked key. */
-  onReveal: (id: string) => void
-  /** True while this provider's key is revealed (post step-up). */
-  revealed: boolean
-  /** Re-mask this provider's key. */
-  onRemask: (id: string) => void
+  /** The provider adapter card this row renders (contract-owned shape). */
+  provider: import("@handshake-agent/contracts").ProviderCardView
 }
 
 // ─── Approvals page (design §6 Approvals, `screens/Approvals.html`) ──────────────

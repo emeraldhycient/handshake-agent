@@ -19,10 +19,11 @@
  *     Target (mono) · Before → after (strike-red → green) · Reason · Time.
  *   - Cursor keyset pagination via the DTO's `nextCursor` ("Load more").
  *
- * Shape reconciliation (see the gap matrix): the contract carries a flat `actor`
- * string but no per-actor role, and no dedicated `reason` — the role line and
- * reason cell fall back to a subtle "—" and are recorded as shapeGaps for the
- * later backend-enrichment pass. The design's `ip` column is never displayed.
+ * Phase 6b enrichment: the contract now carries a first-class `actorRole`
+ * (resolved from `actorAdminId` server-side) and `reason` (projected from
+ * `details.reason`), so the Actor role sub-line and the Reason cell read those
+ * fields directly — a subtle "—" when either is `null`. The design's `ip` column
+ * is never displayed.
  */
 import { useEffect, useMemo, useState } from "react"
 
@@ -79,16 +80,6 @@ function displayValue(value: unknown): string {
   return JSON.stringify(value)
 }
 
-/**
- * Pull a human reason from the entry's `details` bag if one is present — the
- * contract has no dedicated `reason` field (recorded as a shapeGap). Falls back
- * to "—" so the design's Reason column renders gracefully.
- */
-function entryReason(details: Record<string, unknown>): string {
-  const reason = details.reason
-  return typeof reason === "string" && reason.length > 0 ? reason : "—"
-}
-
 /** Format the ISO `createdAt` as the design's mono "Mon D · HH:MM:SS" timestamp. */
 function formatTime(iso: string): string {
   const date = new Date(iso)
@@ -111,7 +102,7 @@ function AuditRow({ entry }: { entry: AuditLogEntry }) {
     <div
       className={`grid ${GRID_COLS} items-center gap-3 border-b border-line2 px-[18px] py-3 last:border-b-0`}
     >
-      {/* Actor + role (role not carried by the contract → subtle em dash). */}
+      {/* Actor + resolved role (subtle em dash when the role is null). */}
       <div className="min-w-0">
         <div
           className="truncate text-[12.5px] font-bold text-ink"
@@ -119,7 +110,9 @@ function AuditRow({ entry }: { entry: AuditLogEntry }) {
         >
           {entry.actor}
         </div>
-        <div className="text-[10.5px] text-ink3">—</div>
+        <div className="truncate text-[10.5px] text-ink3">
+          {entry.actorRole ?? "—"}
+        </div>
       </div>
       {/* Action chip */}
       <div>
@@ -145,10 +138,8 @@ function AuditRow({ entry }: { entry: AuditLogEntry }) {
           → {displayValue(entry.after)}
         </span>
       </div>
-      {/* Reason (from `details.reason` when present, else em dash) */}
-      <div className="text-[11.5px] text-ink2">
-        {entryReason(entry.details)}
-      </div>
+      {/* Reason (first-class `reason`, projected server-side; em dash if null) */}
+      <div className="text-[11.5px] text-ink2">{entry.reason ?? "—"}</div>
       {/* Time */}
       <div className="font-mono text-[11px] text-ink3 tabular-nums">
         {formatTime(entry.createdAt)}

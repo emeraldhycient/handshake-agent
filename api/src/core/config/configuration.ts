@@ -219,6 +219,22 @@ export interface ComplianceConfig {
    * layer now exists) so operators can update the list without a deploy (root CLAUDE.md §7).
    */
   sanctionsDenylist: string[];
+
+  /**
+   * Sanctions ongoing-monitoring policy flags, surfaced read-only on the admin
+   * sanctions screen. Admin-tunable via the DB-admin AppSetting layer (root §7);
+   * toggling them from the console is a Phase-7 write.
+   */
+  ongoingMonitoring: {
+    /** Re-screen all customers daily against updated lists. */
+    reScreenDaily: boolean;
+    /** Screen every counterparty on outbound transfer. */
+    screenOnOutbound: boolean;
+    /** Alert on new PEP (politically exposed person) matches. */
+    pepAlert: boolean;
+    /** Auto-block confirmed OFAC SDN-list hits. */
+    autoBlockOfac: boolean;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +442,14 @@ export interface AgentConfig {
   enabled: boolean;
   /** The Anthropic model id used for intent extraction (mirrors env AGENT_MODEL). */
   modelId: string;
+  /**
+   * Upper bound on tool/graph invocations the agent may make per user turn — a
+   * guardrail surfaced read-only in the admin Agent console. The current graph is a
+   * single-node intent-extraction pass (no tool-call loop), so the default is 1;
+   * it is a config value (not hardcoded, §7) so a future multi-node graph can raise
+   * it from the DB-admin layer without a deploy.
+   */
+  maxToolCallsPerTurn: number;
 }
 
 export interface AppConfig {
@@ -680,6 +704,15 @@ const buildConfig = (): AppConfig => ({
     // Empty by default — no addresses flagged. Populate in config to test the
     // blocked path with MockSanctionsScreener (see mock-sanctions.screener.ts).
     sanctionsDenylist: [] as string[],
+    // Ongoing-monitoring policy baseline (surfaced read-only on the admin sanctions
+    // screen). Conservative defaults: continuous screening on, auto-block OFAC off
+    // (a confirmed OFAC hit still routes to a human disposition, never auto-money-move).
+    ongoingMonitoring: {
+      reScreenDaily: true,
+      screenOnOutbound: true,
+      pepAlert: true,
+      autoBlockOfac: false,
+    },
   },
   pricing: {
     processingFeeBps: 100,
@@ -839,6 +872,9 @@ const buildConfig = (): AppConfig => ({
   agent: {
     enabled: true,
     modelId: process.env['AGENT_MODEL'] ?? 'claude-opus-4-8',
+    // Single-node intent-extraction graph today → one pass per turn. Admin-tunable
+    // (§7) so a future tool-call loop can raise it without a code change.
+    maxToolCallsPerTurn: 1,
   },
 });
 

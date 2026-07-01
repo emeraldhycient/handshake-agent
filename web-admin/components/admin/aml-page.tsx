@@ -13,12 +13,17 @@
  *     MakerCheckerModal (write path is Phase 7 — left as a no-op flow).
  *   - RIGHT top · Open cases — the still-open flagged compliance cases (real
  *     flagged-event queue via `useComplianceEvents`, filtered to open statuses),
- *     each a severity dot + title + meta + status pill, with a "Draft SAR/CTR"
- *     link that opens the shared ReasonModal (Phase 7 write).
+ *     each a severity dot + title + meta + status pill. Every row is now a
+ *     button that opens a read-only case-detail dialog (Phase 6b drill-in) —
+ *     `useComplianceEvent(id)` surfaces the raw screening payload + the
+ *     disposition note. A "Draft SAR/CTR" link opens the shared ReasonModal
+ *     (Phase 7 write).
  *   - RIGHT bottom · Travel Rule records — a read-only summary of qualifying
- *     transfers captured (real count via `useTravelRule`).
+ *     transfers captured (real count via `useTravelRule`); and a read-only
+ *     Compliance reports card listing the SAR/STR filings (`useComplianceReports`,
+ *     Phase 6b).
  *
- * READ-WIRED (Phase 6a): the display consts are replaced with the existing read
+ * READ-WIRED (Phase 6a/6b): the display consts are replaced with the existing read
  * hooks. Nothing here moves money (§3.1). Each card region has four async
  * branches — loading skeleton / error (inline, retryable) / empty / data. The
  * write affordances (edit-threshold, Draft SAR/CTR) keep their design flow-modal
@@ -32,17 +37,26 @@
 import { useMemo, useState } from "react"
 
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { ReasonModal, MakerCheckerModal } from "@/components/admin/flows"
 import { cn } from "@/lib/utils"
 import {
   useAmlRules,
+  useComplianceEvent,
   useComplianceEvents,
+  useComplianceReports,
   useTravelRule,
 } from "@/lib/query/hooks"
 import type {
   AmlRule,
   ComplianceEventItem,
   ComplianceEventStatus,
+  ComplianceReport,
 } from "@handshake-agent/contracts"
 
 // ── Risk rules (LEFT) ────────────────────────────────────────────────────────────
@@ -243,7 +257,13 @@ function RiskRulesCard({ onEdit }: { onEdit: (rule: AmlRule) => void }) {
 }
 
 /** Open-cases card (design lines 10–13) — read-wired to `useComplianceEvents`. */
-function OpenCasesCard({ onDraftSar }: { onDraftSar: () => void }) {
+function OpenCasesCard({
+  onDraftSar,
+  onOpenCase,
+}: {
+  onDraftSar: () => void
+  onOpenCase: (id: string) => void
+}) {
   // The queue shows still-open cases; fetch unfiltered and narrow to open
   // statuses client-side (the API takes a single status filter — see shapeGaps).
   const query = useComplianceEvents({})
@@ -283,9 +303,12 @@ function OpenCasesCard({ onDraftSar }: { onDraftSar: () => void }) {
           {openCases.map((c) => {
             const meta = CASE_STATUS_META[c.status]
             return (
-              <div
+              <button
                 key={c.id}
-                className="flex items-center gap-[11px] border-b border-line2 py-2.5 last:border-b-0"
+                type="button"
+                onClick={() => onOpenCase(c.id)}
+                aria-label={`Open case ${caseTitle(c)}`}
+                className="flex w-full items-center gap-[11px] border-b border-line2 py-2.5 text-left transition-colors last:border-b-0 hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
               >
                 <span
                   aria-hidden="true"
@@ -308,7 +331,7 @@ function OpenCasesCard({ onDraftSar }: { onDraftSar: () => void }) {
                 >
                   {meta.label}
                 </span>
-              </div>
+              </button>
             )
           })}
         </div>
@@ -349,6 +372,189 @@ function TravelRuleCard() {
   )
 }
 
+// ── Compliance reports (RIGHT bottom) — SAR/STR filings ──────────────────────────
+
+// Report status → { pill label, pill surface + text } (§5 status→token map). Draft
+// reads warning, submitted reads info, closed reads success, rejected reads danger.
+const REPORT_STATUS_META: Record<
+  ComplianceReport["status"],
+  { label: string; pillBg: string; pillFg: string }
+> = {
+  draft: { label: "Draft", pillBg: "bg-swn", pillFg: "text-twn" },
+  submitted: { label: "Submitted", pillBg: "bg-sif", pillFg: "text-tif" },
+  rejected: { label: "Rejected", pillBg: "bg-sdn", pillFg: "text-tdn" },
+  closed: { label: "Closed", pillBg: "bg-sok", pillFg: "text-tok" },
+}
+
+/**
+ * Compliance-reports card — read-only SAR/STR filing list (Phase 6b, wired to
+ * `useComplianceReports`). Each row shows the report type (SAR/STR), a status
+ * pill, its linked-event count, and the created/submitted timestamp.
+ */
+function ReportsCard() {
+  const query = useComplianceReports()
+  const reports = query.data?.items ?? []
+
+  return (
+    <CardShell>
+      <div className="mb-2.5 text-[13px] font-extrabold text-ink">
+        Compliance reports{" "}
+        <span className="font-semibold text-ink3">· SAR / STR filings</span>
+      </div>
+
+      {query.isLoading ? (
+        <div className="flex flex-col gap-2" aria-busy="true">
+          <Skeleton className="h-[36px] rounded-[10px]" />
+          <Skeleton className="h-[36px] rounded-[10px]" />
+        </div>
+      ) : query.isError ? (
+        <InlineError
+          label="Couldn't load compliance reports."
+          onRetry={() => query.refetch()}
+        />
+      ) : reports.length === 0 ? (
+        <p className="py-1 text-[12px] text-ink3">No reports filed yet.</p>
+      ) : (
+        <div>
+          {reports.map((report) => {
+            const meta = REPORT_STATUS_META[report.status]
+            const when = new Date(
+              report.submittedAt ?? report.createdAt
+            ).toLocaleDateString()
+            return (
+              <div
+                key={report.id}
+                className="flex items-center gap-[11px] border-b border-line2 py-2.5 last:border-b-0"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12.5px] font-bold text-ink uppercase">
+                    {report.reportType}
+                  </div>
+                  <div className="truncate text-[10.5px] text-ink3">
+                    {report.relatedEvents.length}{" "}
+                    {report.relatedEvents.length === 1 ? "case" : "cases"} · {when}
+                    {report.submissionRef ? ` · ${report.submissionRef}` : ""}
+                  </div>
+                </div>
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[10.5px] font-bold",
+                    meta.pillBg,
+                    meta.pillFg
+                  )}
+                >
+                  {meta.label}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </CardShell>
+  )
+}
+
+// ── Compliance-event detail drill-in (Phase 6b) ──────────────────────────────────
+
+/** Format a nullable ISO timestamp for the disposition note, else em dash. */
+function formatDisposedAt(iso: string | null): string {
+  if (iso === null) return "—"
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()
+}
+
+/**
+ * Case-detail dialog — a read-only drill-in on one flagged compliance event
+ * (`useComplianceEvent`). Surfaces the event's classification, the raw screening
+ * `details` payload (pretty-printed JSON), and the disposition note
+ * (`dispositionComment` + `dispositionAt`). Read-only — dispositioning is Phase 7.
+ */
+function CaseDetailDialog({
+  eventId,
+  onOpenChange,
+}: {
+  eventId: string | null
+  onOpenChange: (open: boolean) => void
+}) {
+  const query = useComplianceEvent(eventId)
+  const event = query.data ?? null
+
+  return (
+    <Dialog open={eventId !== null} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[520px] max-w-[94vw] gap-0 p-6">
+        <DialogTitle>Compliance case</DialogTitle>
+        <DialogDescription className="mt-1 mb-4 text-[12.5px] leading-normal text-ink2">
+          Raw screening payload and disposition note. Read-only — dispositioning
+          is a step-up action (Phase 7).
+        </DialogDescription>
+
+        {query.isLoading ? (
+          <div className="flex flex-col gap-2.5" aria-busy="true">
+            <Skeleton className="h-[20px] w-1/2 rounded-[8px]" />
+            <Skeleton className="h-[120px] rounded-[10px]" />
+          </div>
+        ) : query.isError ? (
+          <InlineError
+            label="Couldn't load the case."
+            onRetry={() => query.refetch()}
+          />
+        ) : event === null ? (
+          <p className="py-2 text-[12px] text-ink3">Case not found.</p>
+        ) : (
+          <div className="flex flex-col gap-3.5">
+            {/* Classification */}
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-[12px]">
+              <div>
+                <dt className="text-ink3">Type</dt>
+                <dd className="font-semibold text-ink">{event.eventType}</dd>
+              </div>
+              <div>
+                <dt className="text-ink3">Severity</dt>
+                <dd className="font-semibold text-ink capitalize">
+                  {event.severity}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-ink3">Status</dt>
+                <dd className="font-semibold text-ink">{event.status}</dd>
+              </div>
+              <div>
+                <dt className="text-ink3">Provider</dt>
+                <dd className="font-semibold text-ink">
+                  {event.screeningProvider}
+                </dd>
+              </div>
+            </dl>
+
+            {/* Raw screening payload */}
+            <div>
+              <div className="mb-1.5 text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase">
+                Screening payload
+              </div>
+              <pre className="max-h-[220px] overflow-auto rounded-[10px] border border-line bg-card2 p-3 font-mono text-[11px] leading-relaxed text-ink2">
+                {JSON.stringify(event.details, null, 2)}
+              </pre>
+            </div>
+
+            {/* Disposition note */}
+            <div>
+              <div className="mb-1.5 text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase">
+                Disposition note
+              </div>
+              <p className="text-[12.5px] text-ink2">
+                {event.dispositionComment ?? "Not yet dispositioned."}
+              </p>
+              <p className="mt-1 text-[11px] text-ink3">
+                {formatDisposedAt(event.dispositionAt)}
+              </p>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────────────
 
 // The active flow: editing a risk-rule threshold (maker-checker) or drafting a SAR/CTR
@@ -361,6 +567,8 @@ type ActiveFlow =
 
 export function AmlPage() {
   const [flow, setFlow] = useState<ActiveFlow>(null)
+  // The open case's id whose read-only detail drill-in is showing (Phase 6b).
+  const [caseId, setCaseId] = useState<string | null>(null)
 
   return (
     <div className="mx-auto w-full max-w-[1200px] px-[30px] pt-[26px] pb-[60px]">
@@ -378,10 +586,20 @@ export function AmlPage() {
       <div className="grid grid-cols-1 items-start gap-[14px] lg:grid-cols-[1.2fr_1fr]">
         <RiskRulesCard onEdit={(rule) => setFlow({ kind: "editRule", rule })} />
         <div className="flex flex-col gap-[14px]">
-          <OpenCasesCard onDraftSar={() => setFlow({ kind: "draftSar" })} />
+          <OpenCasesCard
+            onDraftSar={() => setFlow({ kind: "draftSar" })}
+            onOpenCase={setCaseId}
+          />
           <TravelRuleCard />
+          <ReportsCard />
         </div>
       </div>
+
+      {/* ── Case-detail drill-in (Phase 6b read) ───────────────────────────── */}
+      <CaseDetailDialog
+        eventId={caseId}
+        onOpenChange={(next) => !next && setCaseId(null)}
+      />
 
       {/* ── Flow modals (shared funds-safety flows, SPEC §5) — Phase 7 writes ── */}
 

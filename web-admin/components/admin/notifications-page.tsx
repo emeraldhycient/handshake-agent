@@ -11,9 +11,16 @@
  *
  * DATA (Phase 6a): the TEMPLATE select is wired to the real
  * `GET /admin/notification-templates` endpoint via `useNotificationTemplates()`
- * (its keys become the options). The AUDIENCE cohorts + the delivery log remain
- * the design's module-level mock content — no broadcast-cohort or delivery-log
- * endpoint exists yet (recorded as shape gaps for a later backend pass).
+ * (its keys become the options).
+ *
+ * DATA (Phase 6b, Comms READ enrichment): the DELIVERY LOG is now wired to the
+ * real `GET /admin/notifications/delivery-log` endpoint via `useDeliveryLog()` —
+ * each row is an issued `Notification` (primary channel · template key · triggering
+ * event · relative issue-time · derived status) and the footnote's bounce/complaint
+ * rates come from the aggregate dispatch stats (Resend + WhatsApp). Four async
+ * branches (loading / error / empty / data). The AUDIENCE cohorts remain the
+ * design's module-level mock content — no broadcast-cohort/segment endpoint exists
+ * yet (recorded as a shape gap for a later pass).
  *
  * FUNDS-SAFETY: composing a broadcast never sends on click. Every send opens the
  * shared confirm modal first — a large audience flips the composer into maker-checker
@@ -27,11 +34,16 @@ import { useState } from "react"
 import { MakerCheckerModal } from "@/components/admin/flows"
 import { pushToast } from "@/lib/store/toast-store"
 import { NativeSelect } from "@/components/ui/native-select"
-import { useNotificationTemplates } from "@/lib/query/hooks"
+import { Skeleton } from "@/components/ui/skeleton"
+import { useDeliveryLog, useNotificationTemplates } from "@/lib/query/hooks"
+import type {
+  DeliveryLogEntry,
+  DeliveryLogStatus,
+  NotificationChannel,
+} from "@handshake-agent/contracts"
 import type {
   BroadcastOption,
   DeliveryChannel,
-  DeliveryLogRow,
   DeliveryStatus,
 } from "@/types/components"
 
@@ -77,49 +89,50 @@ const AUDIENCE_REACH: Record<string, number> = {
 /** Audiences at/above this reach require maker-checker (the design's `bBig`). */
 const LARGE_AUDIENCE_THRESHOLD = 10000
 
-// design mock: the design's representative delivery-log rows (seed()-shaped names).
-const DELIVERY_ROWS: readonly DeliveryLogRow[] = [
-  {
-    id: "d1",
-    channel: "WhatsApp",
-    name: "kyc_reminder",
-    audience: "tier_1 users",
-    time: "12m ago",
-    status: "Delivered",
-  },
-  {
-    id: "d2",
-    channel: "Email",
-    name: "promo_ticketing",
-    audience: "All verified",
-    time: "1h ago",
-    status: "Sent",
-  },
-  {
-    id: "d3",
-    channel: "WhatsApp",
-    name: "tx_confirmation",
-    audience: "Cohort: Lagos",
-    time: "3h ago",
-    status: "Delivered",
-  },
-  {
-    id: "d4",
-    channel: "SMS",
-    name: "otp_fallback",
-    audience: "All users",
-    time: "5h ago",
-    status: "Sending",
-  },
-  {
-    id: "d5",
-    channel: "Email",
-    name: "kyc_reminder",
-    audience: "tier_1 users",
-    time: "Yesterday",
-    status: "Bounced",
-  },
-]
+// ─── Contract → presentation mapping (delivery log) ──────────────────────────────────
+
+/** The contract's lowercase channel enum → the design's cased chip label + tokens. */
+const CHANNEL_LABEL: Record<NotificationChannel, DeliveryChannel> = {
+  whatsapp: "WhatsApp",
+  email: "Email",
+  sms: "SMS",
+  in_app: "In-app",
+}
+
+/** The contract's lowercase status enum → the design's cased pill label + tokens. */
+const STATUS_LABEL: Record<DeliveryLogStatus, DeliveryStatus> = {
+  delivered: "Delivered",
+  sent: "Sent",
+  sending: "Sending",
+  bounced: "Bounced",
+  failed: "Failed",
+}
+
+/**
+ * Humanize a notification event type into the design's audience/context slot
+ * (`kyc_approved` → "Kyc approved"). The backend surfaces the triggering event,
+ * not a broadcast cohort, so this is the audience column's real backing.
+ */
+function eventLabel(eventType: string): string {
+  const spaced = eventType.replace(/_/g, " ").trim()
+  return spaced.length === 0
+    ? eventType
+    : spaced[0].toUpperCase() + spaced.slice(1)
+}
+
+/** A compact relative "time ago" label from an ISO issue-time (design's `time`). */
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return "—"
+  const diffMs = Date.now() - then
+  const min = Math.floor(diffMs / 60_000)
+  if (min < 1) return "just now"
+  if (min < 60) return `${min}m ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  const day = Math.floor(hr / 24)
+  return day === 1 ? "Yesterday" : `${day}d ago`
+}
 
 // ─── Status → token maps (§5 status→token pairs) ─────────────────────────────────────
 
@@ -357,47 +370,116 @@ function BroadcastComposer() {
   )
 }
 
-/** A single delivery-log row: channel chip + name + audience·time + status pill. */
-function DeliveryRow({ row }: { row: DeliveryLogRow }) {
+/** A single delivery-log row: channel chip + template name + event·time + status pill. */
+function DeliveryRow({ entry }: { entry: DeliveryLogEntry }) {
+  const channel = CHANNEL_LABEL[entry.channel]
+  const status = STATUS_LABEL[entry.status]
+  // A plain-fallback notification (no template) renders its event as the name.
+  const name = entry.templateKey ?? eventLabel(entry.eventType)
   return (
     <div className="flex items-center gap-[11px] border-b border-line2 px-[18px] py-3 last:border-b-0">
       <span
-        className={`flex-none rounded-md px-2 py-[2px] text-[10.5px] font-bold ${CHANNEL_CLASS[row.channel]}`}
+        className={`flex-none rounded-md px-2 py-[2px] text-[10.5px] font-bold ${CHANNEL_CLASS[channel]}`}
       >
-        {row.channel}
+        {channel}
       </span>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[12.5px] font-semibold text-ink">
-          {row.name}
+          {name}
         </div>
         <div className="text-[10.5px] text-ink3">
-          {row.audience} · {row.time}
+          {eventLabel(entry.eventType)} · {relativeTime(entry.createdAt)}
         </div>
       </div>
       <span
-        className={`rounded-full px-[9px] py-[2px] text-[10.5px] font-bold ${STATUS_CLASS[row.status]}`}
+        className={`rounded-full px-[9px] py-[2px] text-[10.5px] font-bold ${STATUS_CLASS[status]}`}
       >
-        {row.status}
+        {status}
       </span>
     </div>
   )
 }
 
-/** The read-only delivery log (header + bounce/complaint footnote + rows). */
+/** Percent label for a rate fraction in [0,1] (0.004 → "0.4%"). */
+function pct(rate: number): string {
+  return `${(rate * 100).toFixed(2).replace(/\.?0+$/, "")}%`
+}
+
+/** Skeleton rows for the delivery-log loading branch (matches the row rhythm). */
+function DeliveryRowsSkeleton() {
+  return (
+    <div aria-busy="true">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div
+          key={i}
+          className="flex items-center gap-[11px] border-b border-line2 px-[18px] py-3 last:border-b-0"
+        >
+          <Skeleton className="h-4 w-16 rounded-md" />
+          <div className="min-w-0 flex-1">
+            <Skeleton className="h-3 w-32" />
+            <Skeleton className="mt-1.5 h-2.5 w-24" />
+          </div>
+          <Skeleton className="h-4 w-16 rounded-full" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * The read-only delivery log — wired to `useDeliveryLog()`. Header carries the
+ * real bounce/complaint footnote (aggregate dispatch stats); four async branches
+ * (loading / error / empty / data).
+ */
 function DeliveryLog() {
+  const { data, isLoading, isError, refetch } = useDeliveryLog()
+
+  const footnote = data
+    ? `bounce ${pct(data.stats.bounceRate)} · complaint ${pct(
+        data.stats.complaintRate
+      )} (Resend + WhatsApp)`
+    : "bounce / complaint (Resend + WhatsApp)"
+
   return (
     <div className="overflow-hidden rounded-2xl border border-line bg-card">
       <div className="flex items-center gap-2.5 border-b border-line px-[18px] py-3.5">
         <div className="flex-1 text-[13px] font-extrabold text-ink">
           Delivery log
         </div>
-        <span className="text-[11px] text-ink3">
-          bounce 0.4% · complaint 0.02% (Resend)
-        </span>
+        <span className="text-[11px] text-ink3">{footnote}</span>
       </div>
-      {DELIVERY_ROWS.map((row) => (
-        <DeliveryRow key={row.id} row={row} />
-      ))}
+
+      {isLoading && <DeliveryRowsSkeleton />}
+
+      {isError && (
+        <div className="m-[18px] rounded-[9px] border border-sdn bg-sdn/40 px-3 py-[11px] text-center">
+          <p className="text-[12px] font-bold text-tdn">
+            Couldn&apos;t load the delivery log
+          </p>
+          <button
+            type="button"
+            onClick={() => refetch()}
+            className="mt-1 cursor-pointer rounded-md px-1 text-[11.5px] font-bold text-tif hover:bg-hov focus-visible:outline focus-visible:outline-2 focus-visible:outline-tif"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {data && data.items.length === 0 && (
+        <div className="px-[18px] py-10 text-center">
+          <p className="text-[13px] font-bold text-ink">No deliveries yet</p>
+          <p className="mt-1 text-[12px] text-ink2">
+            Notifications sent to customers will appear here.
+          </p>
+        </div>
+      )}
+
+      {data &&
+        data.items.length > 0 &&
+        data.items.map((entry) => (
+          <DeliveryRow key={entry.id} entry={entry} />
+        ))}
     </div>
   )
 }

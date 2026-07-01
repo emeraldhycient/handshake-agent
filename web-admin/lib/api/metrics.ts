@@ -10,11 +10,13 @@
 import {
   DashboardSummarySchema,
   KycFunnelMetricsSchema,
+  MetricsOpsSchema,
   MetricsRangeQuerySchema,
   RevenueMetricsSchema,
   TxnVolumeMetricsSchema,
   type DashboardSummary,
   type KycFunnelMetrics,
+  type MetricsOps,
   type MetricsRangeQuery,
   type RevenueMetrics,
   type TxnVolumeMetrics,
@@ -56,4 +58,14 @@ export async function getRevenueMetrics(
 export async function getKycFunnelMetrics(): Promise<KycFunnelMetrics> {
   const res = await api.get("/admin/metrics/kyc-funnel")
   return KycFunnelMetricsSchema.parse(res.data)
+}
+
+/**
+ * GET /admin/metrics/ops — operational-health signals for the dashboard's three
+ * still-mock panels: per-provider system health (+ webhook-queue depth + recon
+ * drift), the live-activity feed, and the open-compliance-cases count.
+ */
+export async function getMetricsOps(): Promise<MetricsOps> {
+  const res = await api.get("/admin/metrics/ops")
+  return MetricsOpsSchema.parse(res.data)
 }

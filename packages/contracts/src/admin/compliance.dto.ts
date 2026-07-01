@@ -67,12 +67,25 @@ export type ComplianceDispositionRequest = z.infer<
 >;
 
 // ── Sanctions records — immutable screening-run history (read-only) ────────────────
+// Enrichment (Phase 6b): the admin match-card design needs a human matched-list
+// name, a human match-type label, and a numeric confidence for the Score slot —
+// none of which exist as first-class columns on the immutable SanctionsRecord.
+// They are DERIVED server-side from the columns that DO exist (matchedList ⇐
+// provider, matchType ⇐ screeningType, matchScore ⇐ verdict band) so the operator
+// sees a labelled card without any schema change or fabricated per-row data.
 export const SanctionsRecordItemSchema = z.object({
   id: z.string().uuid(),
   counterpartyId: z.string(),
   verdict: z.enum(["clear", "hit", "inconclusive"]),
   provider: z.string(),
   screeningType: z.string(),
+  /** Human matched-list name derived from `provider` (e.g. "OpenSanctions"). */
+  matchedList: z.string(),
+  /** Human match-type label derived from `screeningType` (e.g. "Counterparty match"). */
+  matchType: z.string(),
+  /** 0–100 confidence banded from `verdict` (hit → high, inconclusive → mid,
+   *  clear → low). Not a fabricated precise score — a bounded verdict projection. */
+  matchScore: z.number().int().min(0).max(100),
   createdAt: z.string(),
 });
 export type SanctionsRecordItem = z.infer<typeof SanctionsRecordItemSchema>;
@@ -82,6 +95,24 @@ export const SanctionsRecordListResponseSchema = z.object({
 });
 export type SanctionsRecordListResponse = z.infer<
   typeof SanctionsRecordListResponseSchema
+>;
+
+// ── Ongoing-monitoring policy view (read-only) ─────────────────────────────────────
+// The four sanctions ongoing-monitoring policy flags shown on the admin sanctions
+// screen. They live in layered AppSetting config (root §7); this read-only view
+// projects the effective values. Toggling them is a Phase-7 write.
+export const SanctionsMonitoringViewSchema = z.object({
+  /** Re-screen all customers daily against updated lists. */
+  reScreenDaily: z.boolean(),
+  /** Screen every counterparty on outbound transfer. */
+  screenOnOutbound: z.boolean(),
+  /** Alert on new PEP (politically exposed person) matches. */
+  pepAlert: z.boolean(),
+  /** Auto-block confirmed OFAC SDN-list hits. */
+  autoBlockOfac: z.boolean(),
+});
+export type SanctionsMonitoringView = z.infer<
+  typeof SanctionsMonitoringViewSchema
 >;
 
 // ── AML rules — admin-tunable, versioned engine rules (CRUD) ───────────────────────

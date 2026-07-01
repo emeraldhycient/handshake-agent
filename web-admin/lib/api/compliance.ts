@@ -19,6 +19,7 @@ import {
   ComplianceEventDetailSchema,
   ComplianceDispositionRequestSchema,
   SanctionsRecordListResponseSchema,
+  SanctionsMonitoringViewSchema,
   AmlRuleListResponseSchema,
   AmlRuleSchema,
   AmlRuleCreateRequestSchema,
@@ -32,6 +33,7 @@ import {
   type ComplianceEventDetail,
   type ComplianceDispositionRequest,
   type SanctionsRecordListResponse,
+  type SanctionsMonitoringView,
   type AmlRuleListResponse,
   type AmlRule,
   type AmlRuleCreateRequest,
@@ -88,6 +90,12 @@ export async function disposeComplianceEvent(
 export async function listSanctions(): Promise<SanctionsRecordListResponse> {
   const res = await api.get("/admin/compliance/sanctions")
   return SanctionsRecordListResponseSchema.parse(res.data)
+}
+
+/** GET /admin/compliance/monitoring — the ongoing-monitoring policy flags (read-only). */
+export async function getSanctionsMonitoring(): Promise<SanctionsMonitoringView> {
+  const res = await api.get("/admin/compliance/monitoring")
+  return SanctionsMonitoringViewSchema.parse(res.data)
 }
 
 // ─── AML rules ──────────────────────────────────────────────────────────────────

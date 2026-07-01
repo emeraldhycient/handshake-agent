@@ -1,46 +1,123 @@
 /**
- * CurrenciesPage — certification that an approved Live toggle actually flips.
+ * CurrenciesPage render test — WIRED to real data (Phase 6b).
  *
- * The design binds each row's Live pill to `onToggle`, opening the shared
- * MakerCheckerModal (enabling / disabling a currency is a dual-control config
- * change). This asserts the full loop: clicking the pill opens the modal,
- * submitting for approval inverts the row's Live/Off state in place and toasts
- * the effective new state. Nothing moves money (§3.1) — it is a config flag.
+ * The page renders `useAdminCatalog()` (GET /admin/config/catalog) instead of a
+ * module-level currency seed. The api client (`@/lib/api/catalog`) is mocked so
+ * no server is needed.
+ *
+ * Asserted branches:
+ *  - loading → data: real fiat rows derived from the mocked `AdminCatalogView` —
+ *    code, name, symbol, rounding (from decimals), and the Live/Off pill from the
+ *    server `live` flag (including a *disabled* row the enabled-only public
+ *    /config could not surface).
+ *  - the Live pill opens the MakerCheckerModal (dual-control), which on submit
+ *    toasts the queued change (the persisted toggle is a Phase-7 write).
+ *  - empty: an empty `fiats[]` renders the design's "No currencies in the catalog".
+ *  - error: a rejected fetch renders the inline retry affordance.
  */
-import { describe, expect, it, beforeEach } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { describe, expect, it, vi, beforeEach } from "vitest"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import type { AdminCatalogView } from "@handshake-agent/contracts"
 
 import { CurrenciesPage } from "@/components/admin/currencies-page"
 import { defaultToastStore } from "@/lib/store/toast-store"
 
+vi.mock("@/lib/api/catalog", () => ({
+  getAdminCatalog: vi.fn(),
+}))
+
+import { getAdminCatalog } from "@/lib/api/catalog"
+
+const mockGetAdminCatalog = vi.mocked(getAdminCatalog)
+
+// ─── Fixtures ─────────────────────────────────────────────────────────────────
+
+const VIEW: AdminCatalogView = {
+  assets: [],
+  fiats: [
+    {
+      code: "NGN",
+      symbol: "₦",
+      displayName: "Nigerian Naira",
+      decimals: 2,
+      live: true,
+    },
+    {
+      code: "RWF",
+      symbol: "FRw",
+      displayName: "Rwandan Franc",
+      decimals: 0,
+      live: false,
+    },
+  ],
+}
+
+function renderPage() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  return render(
+    <QueryClientProvider client={client}>
+      <CurrenciesPage />
+    </QueryClientProvider>
+  )
+}
+
 beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
+  mockGetAdminCatalog.mockReset()
 })
 
 describe("CurrenciesPage", () => {
-  it("flips a currency's Live pill and toasts after maker-checker approval", async () => {
+  it("renders real fiat rows (code, name, rounding, live status incl. a disabled row)", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    renderPage()
+
+    expect(await screen.findByText("Nigerian Naira")).toBeInTheDocument()
+    // The live NGN row offers to Disable it (currently Live).
+    const ngn = screen.getByRole("button", { name: /Disable NGN/i })
+    expect(ngn).toHaveTextContent(/Live/)
+    // The *disabled* RWF row (0-dp) offers to Enable it (currently Off).
+    const rwf = screen.getByRole("button", { name: /Enable RWF/i })
+    expect(rwf).toHaveTextContent(/Off/)
+    // Rounding is sourced from decimals.
+    expect(screen.getByText("0 dp")).toBeInTheDocument()
+  })
+
+  it("opens the maker-checker modal and toasts the queued change on submit", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
     const user = userEvent.setup()
-    render(<CurrenciesPage />)
+    renderPage()
+    await screen.findByText("Nigerian Naira")
 
-    // RWF starts Off (design seed) — its pill offers to Enable it.
-    const enable = screen.getByRole("button", { name: /Enable RWF/i })
-    expect(enable).toHaveTextContent(/Off/)
-
-    // Clicking opens the dual-control modal; approve the change.
-    await user.click(enable)
+    await user.click(screen.getByRole("button", { name: /Enable RWF/i }))
     await user.click(
       screen.getByRole("button", { name: /Submit for approval/i })
     )
 
-    // The pill has flipped to Live (label + aria offer to Disable now).
-    const disable = screen.getByRole("button", { name: /Disable RWF/i })
-    expect(disable).toHaveTextContent(/Live/)
+    await waitFor(() => {
+      const { toasts } = defaultToastStore.getState()
+      expect(toasts).toHaveLength(1)
+      expect(toasts[0].message).toMatch(/RWF/)
+    })
+  })
 
-    // And a toast confirms the effective new state.
-    const { toasts } = defaultToastStore.getState()
-    expect(toasts).toHaveLength(1)
-    expect(toasts[0].message).toMatch(/RWF/)
-    expect(toasts[0].message).toMatch(/Live/)
+  it("renders the empty state when the catalog has no currencies", async () => {
+    mockGetAdminCatalog.mockResolvedValue({ assets: [], fiats: [] })
+    renderPage()
+    expect(
+      await screen.findByText(/No currencies in the catalog/i)
+    ).toBeInTheDocument()
+  })
+
+  it("renders the error state with a retry affordance when the fetch fails", async () => {
+    mockGetAdminCatalog.mockRejectedValue(new Error("boom"))
+    renderPage()
+    expect(
+      await screen.findByText(/Couldn't load the currency catalog/i)
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /Retry/i })).toBeInTheDocument()
   })
 })

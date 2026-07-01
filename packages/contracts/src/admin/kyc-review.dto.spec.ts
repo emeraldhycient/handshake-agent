@@ -1,5 +1,6 @@
 import {
   KycQueueItemSchema,
+  KycQueueQuerySchema,
   KycQueueResponseSchema,
   KycSubmissionDetailSchema,
   KycApproveRequestSchema,
@@ -11,8 +12,11 @@ const ID = "11111111-1111-1111-1111-111111111111";
 const queueItem = {
   userId: ID,
   email: "user@example.com",
+  displayName: "Ada Lovelace",
+  requestedTier: "tier_1" as const,
   status: "pending_review" as const,
   submittedAt: "2026-06-30T12:00:00.000Z",
+  slaAgeSeconds: 3600,
 };
 
 const submission = {
@@ -30,19 +34,65 @@ const submission = {
 };
 
 describe("KycQueueItemSchema", () => {
-  it("parses a queue item with a null email and submittedAt", () => {
+  it("parses an enriched queue item (displayName, requestedTier, slaAgeSeconds)", () => {
+    const parsed = KycQueueItemSchema.parse(queueItem);
+    expect(parsed.displayName).toBe("Ada Lovelace");
+    expect(parsed.requestedTier).toBe("tier_1");
+    expect(parsed.slaAgeSeconds).toBe(3600);
+  });
+
+  it("parses a queue item with a null email, submittedAt, displayName and requestedTier", () => {
     const parsed = KycQueueItemSchema.parse({
       ...queueItem,
       email: null,
       submittedAt: null,
+      displayName: null,
+      requestedTier: null,
     });
     expect(parsed.submittedAt).toBeNull();
+    expect(parsed.displayName).toBeNull();
+    expect(parsed.requestedTier).toBeNull();
   });
 
   it("rejects a non-uuid userId", () => {
     expect(() =>
       KycQueueItemSchema.parse({ ...queueItem, userId: "nope" }),
     ).toThrow();
+  });
+
+  it("rejects a non-integer slaAgeSeconds", () => {
+    expect(() =>
+      KycQueueItemSchema.parse({ ...queueItem, slaAgeSeconds: 1.5 }),
+    ).toThrow();
+  });
+
+  it("rejects an unknown requestedTier", () => {
+    expect(() =>
+      KycQueueItemSchema.parse({ ...queueItem, requestedTier: "platinum" }),
+    ).toThrow();
+  });
+});
+
+describe("KycQueueQuerySchema", () => {
+  it("parses an empty query (all fields optional)", () => {
+    expect(KycQueueQuerySchema.parse({})).toEqual({});
+  });
+
+  it("parses a status filter and coerces a string limit", () => {
+    const parsed = KycQueueQuerySchema.parse({
+      status: "verified",
+      limit: "25",
+    });
+    expect(parsed.status).toBe("verified");
+    expect(parsed.limit).toBe(25);
+  });
+
+  it("rejects an unknown status", () => {
+    expect(() => KycQueueQuerySchema.parse({ status: "escalated" })).toThrow();
+  });
+
+  it("rejects a limit over the cap", () => {
+    expect(() => KycQueueQuerySchema.parse({ limit: 500 })).toThrow();
   });
 });
 

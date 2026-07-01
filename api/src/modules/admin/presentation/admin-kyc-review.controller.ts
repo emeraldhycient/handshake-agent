@@ -10,9 +10,9 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { createZodDto } from 'nestjs-zod';
-import { z } from 'zod';
 
 import {
+  KycQueueQuerySchema,
   KycQueueResponseSchema,
   KycSubmissionDetailSchema,
   type KycQueueResponse,
@@ -28,16 +28,10 @@ import { RequirePermission } from './require-permission.decorator';
 import { KycApproveDto, KycRejectDto } from './dto/admin-end-user.dto';
 
 /**
- * Query DTO for GET /admin/kyc/queue — cursor-paginated. No shared contract
- * schema exists for this query (server-side pagination, not a cross-boundary
- * body shape), so it is defined inline; `limit` is coerced from its string
- * query-param form and bounded.
+ * Query DTO for GET /admin/kyc/queue — the shared contract query. `status` feeds
+ * the console's status tabs (defaults to pending_review server-side); cursor
+ * paginated with a bounded `limit` coerced from its string query-param form.
  */
-const KycQueueQuerySchema = z.object({
-  cursor: z.string().optional(),
-  limit: z.coerce.number().int().positive().max(100).optional(),
-});
-
 class KycQueueQueryDto extends createZodDto(KycQueueQuerySchema) {}
 
 /**

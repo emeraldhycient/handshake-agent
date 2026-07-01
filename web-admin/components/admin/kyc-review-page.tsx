@@ -3,14 +3,14 @@
 /**
  * KycReviewPage — the "KYC review queue" screen, reproduced 1:1 from the Operator
  * Console design (`docs/design-ref/screens/Kyc.html`, spec §6.4), now wired to the
- * real admin backend (`useKycQueue` → GET /admin/kyc/queue).
+ * real admin backend (`useKycQueue(status)` → GET /admin/kyc/queue?status=…).
  *
- * The queue endpoint returns ONLY users whose `kycStatus` is `pending_review`
- * (the admin review backlog) — a flat list of `{ userId, email, status,
- * submittedAt }`. The backend has NO status-filter param, so the design's four
- * status tabs are not independently queryable: the "Pending" tab is fed by the
- * queue; "Needs info" / "Approved" / "Rejected" have no backing endpoint and show
- * the design's empty-bucket copy (recorded as a shape gap for later enrichment).
+ * The queue endpoint takes a `status` filter, so each design tab maps onto a real
+ * KYC-status bucket: Pending → `pending_review`, Needs info → `pending`,
+ * Approved → `verified`, Rejected → `rejected`. All four buckets are queried so
+ * every tab shows real rows and a real count badge. Each queue item is enriched
+ * with the applicant's KYC display name, the requested (target) tier, and a
+ * server-computed SLA age (seconds since submission).
  *
  * Layout (Kyc.html): a 24px/800 title + 13.5px subtitle → a row of status pill-tabs,
  * each with a count badge → a single card holding the queue table with the design's
@@ -19,10 +19,10 @@
  * (`openUserKyc` → `/users/[id]?tab=kyc`). The design paginates each bucket at 8
  * rows, via the shared Pagination primitive.
  *
- * Fields the design shows but the contract does NOT provide (tier, SLA age,
- * assignee) render as a subtle "—"; the avatar hue + monogram are derived
- * deterministically from the applicant (presentation only — no data invented).
- * Four async branches: loading / error / empty / data (§5).
+ * The one field the contract still does not carry (assignee) renders as a subtle
+ * "—"; the avatar hue + monogram are derived deterministically from the applicant
+ * (presentation only — no data invented). Four async branches: loading / error /
+ * empty / data (§5).
  */
 import { useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
@@ -32,7 +32,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import type { KycQueueRow, KycQueueRowProps } from "@/types/components"
 import { useKycQueue } from "@/lib/query/hooks"
 import { cn } from "@/lib/utils"
-import type { KycQueueItem } from "@handshake-agent/contracts"
+import type { KycQueueItem, KycStatus, KycTier } from "@handshake-agent/contracts"
 
 // ── Avatar hue palette (design `AVA`, logic.js line 3) ──────────────────────────
 // Presentation-only: a stable hue + monogram is derived from each applicant so the
@@ -71,30 +71,57 @@ function initialsFromEmail(email: string | null): string {
 }
 
 // ── Status tabs (design `kycTabs`, logic.js line 647) ───────────────────────────
-// Only the "pending" tab has a backing endpoint (the queue returns pending_review
-// users); the other three are design tabs with no queryable source yet.
+// Each design tab maps onto a real KYC-status bucket, queried independently so the
+// row list and the count badge are both live.
 type TabId = "pending" | "needs_info" | "approved" | "rejected"
 
-const TABS: readonly { id: TabId; label: string }[] = [
-  { id: "pending", label: "Pending" },
-  { id: "needs_info", label: "Needs info" },
-  { id: "approved", label: "Approved" },
-  { id: "rejected", label: "Rejected" },
+const TABS: readonly { id: TabId; label: string; status: KycStatus }[] = [
+  { id: "pending", label: "Pending", status: "pending_review" },
+  { id: "needs_info", label: "Needs info", status: "pending" },
+  { id: "approved", label: "Approved", status: "verified" },
+  { id: "rejected", label: "Rejected", status: "rejected" },
 ]
 
-/** Map one backend queue item onto the design's row shape. Fields the contract
- *  does not carry (tier, SLA, assignee) are left null/em-dash by the row renderer. */
+// The tier chip label the design shows (design `tierLabel`) — "unverified" reads as
+// the tier-0 request, the numbered tiers as "Tier N".
+const TIER_LABELS: Record<KycTier, string> = {
+  unverified: "Unverified",
+  tier_1: "Tier 1",
+  tier_2: "Tier 2",
+  tier_3: "Tier 3",
+}
+
+// The stalest bucket (design `slaFg` → `--tdn`): once a submission passes this age
+// its SLA-age cell is tinted danger.
+const SLA_DANGER_SECONDS = 24 * 60 * 60 // 1 day
+
+/**
+ * Format an SLA age (whole seconds) into the design's compact "2h" / "45m" /
+ * "1d 4h" label. Presentation-only.
+ */
+function formatSla(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  const days = Math.floor(hours / 24)
+  const remHours = hours % 24
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`
+}
+
+/** Map one enriched backend queue item onto the design's row shape. The applicant
+ *  name falls back to email; assignee is still not modeled (rendered "—"). */
 function toQueueRow(item: KycQueueItem): KycQueueRow {
-  const label = item.email ?? item.userId
   return {
-    name: label,
+    name: item.displayName ?? item.email ?? item.userId,
     id: item.userId,
     initials: initialsFromEmail(item.email),
     avatar: AVA[hashString(item.userId) % AVA.length],
+    tier: item.requestedTier ? TIER_LABELS[item.requestedTier] : "",
+    sla: formatSla(item.slaAgeSeconds),
+    slaTone: item.slaAgeSeconds >= SLA_DANGER_SECONDS ? "danger" : "ink",
     // Not provided by KycQueueItem — rendered as "—" (shape gap).
-    tier: "",
-    sla: "",
-    slaTone: "ink",
     assignee: "",
   }
 }
@@ -184,26 +211,40 @@ export function KycReviewPage() {
   const [activeTab, setActiveTab] = useState<TabId>("pending")
   const [page, setPage] = useState(1)
 
-  const query = useKycQueue()
+  // One query per status bucket (fixed order — safe for the Rules of Hooks) so
+  // every tab has real rows and a real count badge.
+  const pendingQuery = useKycQueue("pending_review")
+  const needsInfoQuery = useKycQueue("pending")
+  const approvedQuery = useKycQueue("verified")
+  const rejectedQuery = useKycQueue("rejected")
 
-  // Only the pending tab is backed by the queue endpoint (pending_review users);
-  // the other tabs have no queryable source (shape gap) → empty bucket.
-  const rows = useMemo<KycQueueRow[]>(() => {
-    if (activeTab !== "pending" || !query.data) return []
-    return query.data.items.map(toQueueRow)
-  }, [activeTab, query.data])
+  const queries: Record<TabId, ReturnType<typeof useKycQueue>> = {
+    pending: pendingQuery,
+    needs_info: needsInfoQuery,
+    approved: approvedQuery,
+    rejected: rejectedQuery,
+  }
+  const query = queries[activeTab]
+
+  const rows = useMemo<KycQueueRow[]>(
+    () => query.data?.items.map(toQueueRow) ?? [],
+    [query.data]
+  )
 
   const pageRows = useMemo(
     () => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
     [rows, page]
   )
 
-  const pendingCount = query.data?.items.length ?? 0
+  // A tab's badge shows its bucket's real count once the query resolves; null
+  // (rendered "—") while it is still loading or errored.
   const counts: Record<TabId, number | null> = {
-    pending: query.isSuccess ? pendingCount : null,
-    needs_info: null,
-    approved: null,
-    rejected: null,
+    pending: pendingQuery.isSuccess ? pendingQuery.data.items.length : null,
+    needs_info: needsInfoQuery.isSuccess
+      ? needsInfoQuery.data.items.length
+      : null,
+    approved: approvedQuery.isSuccess ? approvedQuery.data.items.length : null,
+    rejected: rejectedQuery.isSuccess ? rejectedQuery.data.items.length : null,
   }
 
   const selectTab = (id: TabId) => {
@@ -281,7 +322,7 @@ export function KycReviewPage() {
         </div>
 
         {/* Loading — skeleton rows matching the design row height */}
-        {activeTab === "pending" && query.isLoading ? (
+        {query.isLoading ? (
           <div aria-busy="true">
             {Array.from({ length: 5 }).map((_, i) => (
               <div
@@ -305,14 +346,14 @@ export function KycReviewPage() {
               </div>
             ))}
           </div>
-        ) : activeTab === "pending" && query.isError ? (
+        ) : query.isError ? (
           /* Error — tokened inline error with a retry affordance */
           <div className="p-[40px] text-center">
             <p className="text-[13px] font-bold text-tdn">
               Couldn&apos;t load the review queue
             </p>
             <p className="mt-1 text-[12.5px] text-ink2">
-              Something went wrong fetching applicants awaiting review.
+              Something went wrong fetching applicants in this bucket.
             </p>
             <button
               type="button"

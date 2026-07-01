@@ -18,10 +18,16 @@ import {
   AdminEndUserDeviceSchema,
   AdminEndUserTierRequestSchema,
   AdminEndUserStatusRequestSchema,
+  AdminEndUserSessionListResponseSchema,
+  AdminEndUserLimitsResponseSchema,
+  AdminEndUserTimelineResponseSchema,
   type AdminEndUserSearchQuery,
   type AdminEndUserListResponse,
   type AdminEndUserDetail,
   type AdminEndUserDevice,
+  type AdminEndUserSession,
+  type AdminEndUserLimitsResponse,
+  type AdminEndUserTimelineEntry,
   type AdminEndUserTierRequest,
   type AdminEndUserStatusRequest,
 } from "@handshake-agent/contracts"
@@ -52,6 +58,30 @@ export async function listEndUserDevices(
 ): Promise<AdminEndUserDevice[]> {
   const res = await api.get(`/admin/users/${id}/devices`)
   return DeviceListSchema.parse(res.data)
+}
+
+/** GET /admin/users/:id/sessions — the user's active + recent auth sessions (Security tab). */
+export async function listEndUserSessions(
+  id: string
+): Promise<AdminEndUserSession[]> {
+  const res = await api.get(`/admin/users/${id}/sessions`)
+  return AdminEndUserSessionListResponseSchema.parse(res.data).sessions
+}
+
+/** GET /admin/users/:id/limits — effective per-tier caps + live velocity usage (Limits tab). */
+export async function getEndUserLimits(
+  id: string
+): Promise<AdminEndUserLimitsResponse> {
+  const res = await api.get(`/admin/users/${id}/limits`)
+  return AdminEndUserLimitsResponseSchema.parse(res.data)
+}
+
+/** GET /admin/users/:id/timeline — the admin-action timeline from the audit log (Profile tab). */
+export async function listEndUserTimeline(
+  id: string
+): Promise<AdminEndUserTimelineEntry[]> {
+  const res = await api.get(`/admin/users/${id}/timeline`)
+  return AdminEndUserTimelineResponseSchema.parse(res.data).entries
 }
 
 /** Sensitive — may 403 with code ADMIN_STEP_UP_REQUIRED. 204 on success. */

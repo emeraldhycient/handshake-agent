@@ -11,14 +11,13 @@
  *     tag + Approve on large payouts) alongside the child-address sweeps list
  *     (+ the 25 TRX sweep threshold footer).
  *
- * WIRING (Phase 6a): the READ-ONLY display data is now sourced from the existing
- * admin treasury hooks — `useTreasuryBalances` (custodial hero), `useTreasuryExposure`
- * (exposure-headroom tile dot/note), `useTreasuryAlerts` (the warning banner), and
- * `useWithdrawalPolicies` (the child-address sweep rows keyed by wallet id). Fields
- * the backend does not yet expose (NGN fiat float, the signed FX-position figure, the
- * exact headroom %, per-child on-chain balance + sweep status, the sweep threshold,
- * and the whole payout approval queue) are rendered design-faithfully or omitted and
- * recorded as shape-gaps for the later backend-enrichment pass — never invented.
+ * WIRING (Phase 6b): every read on this screen is now live. The four balance tiles
+ * come from `useTreasuryBalances` (custodial hero), `useTreasuryFiatFloat` (NGN float
+ * vs target), `useTreasuryFxPosition` (signed net position + the derived headroom %),
+ * and `useTreasuryExposure` (fallback status). The warning banner is `useTreasuryAlerts`;
+ * the child-address sweep list (address + gas balance + lifecycle + threshold) is
+ * `useTreasurySweeps`; the payout / withdrawal approval queue is `useTreasuryPayoutQueue`
+ * (pending outbound settlements). Money strings are formatted for display only.
  *
  * Funds-safety (root §3.1): nothing here moves money. The Approve action + acknowledge
  * are WRITES left to Phase 7 — "Approve" opens the shared flow modals unchanged.
@@ -33,12 +32,19 @@ import {
   useTreasuryAlerts,
   useTreasuryBalances,
   useTreasuryExposure,
-  useWithdrawalPolicies,
+  useTreasuryFiatFloat,
+  useTreasuryFxPosition,
+  useTreasuryPayoutQueue,
+  useTreasurySweeps,
 } from "@/lib/query/hooks"
 import type {
   TreasuryAlert,
   TreasuryBalance,
   TreasuryExposure,
+  TreasuryFiatFloat,
+  TreasuryFxPosition,
+  TreasuryPayoutQueueItem,
+  TreasurySweep,
 } from "@handshake-agent/contracts"
 import type {
   MakerCheckerDiffRow,
@@ -53,75 +59,105 @@ import type {
 const HERO_GRADIENT =
   "linear-gradient(150deg, var(--brand-green) 0%, var(--brand-green-deep) 100%)"
 
-// ── Design-faithful fallbacks for fields no endpoint yet provides ──────────────────
-// These are design-faithful representative values (SHAPE-GAPs recorded for the
-// backend-enrichment pass), NOT fabricated live data — each is clearly marked as a
-// non-live tile.
+// ── Money formatting (grouped thousands; no shared formatter exists in web-admin) ──
+// Amounts arrive as byte-stable decimal strings — format for display only, never for
+// math. A non-numeric string falls back to itself so nothing is silently dropped.
+const NGN = new Intl.NumberFormat("en-NG", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
 
-/** The NGN fiat-float tile — no float endpoint yet (aggregates crypto only). */
-const NGN_FLOAT_CARD: TreasuryCard = {
-  id: "ngn-float",
-  tone: "neutral",
-  label: "NGN fiat float",
-  value: "—",
-  dot: "warn",
-  note: "No fiat-float endpoint yet",
-  live: false,
+function formatFiat(amount: string): string {
+  const n = Number(amount)
+  return Number.isFinite(n) ? `₦${NGN.format(n)}` : amount
 }
 
-/** The FX-position tile — no signed net-position field on any endpoint. */
-const FX_POSITION_CARD: TreasuryCard = {
-  id: "fx-position",
-  tone: "neutral",
-  label: "FX position",
-  value: "—",
-  dot: "ok",
-  note: "No FX-position endpoint yet",
-  live: false,
+function formatAssetAmount(amount: string, asset: string): string {
+  const n = Number(amount)
+  return Number.isFinite(n) ? `${NGN.format(n)} ${asset}` : `${amount} ${asset}`
+}
+
+/** basis points → a whole-percent label (e.g. 1802 → "18%"). */
+function bpsToPct(bps: number): string {
+  return `${Math.round(bps / 100)}%`
+}
+
+/** Map a contract sweep status → the design's row label. */
+const SWEEP_LABEL: Record<TreasurySweep["status"], TreasurySweepRow["status"]> =
+  {
+    swept: "Swept",
+    pending: "Pending",
+    below_threshold: "Below threshold",
+  }
+
+/**
+ * The NGN fiat-float tile from the real platform_float aggregation: balance +
+ * utilization-vs-target + a low/healthy status dot. Falls back to an em-dash when no
+ * NGN float row exists (empty), never fabricated.
+ */
+function resolveFiatFloatCard(
+  floats: readonly TreasuryFiatFloat[]
+): TreasuryCard {
+  const ngn = floats.find((f) => f.currency === "NGN") ?? floats[0]
+  if (!ngn) {
+    return {
+      id: "ngn-float",
+      tone: "neutral",
+      label: "NGN fiat float",
+      value: "—",
+      dot: "warn",
+      note: "No fiat-float rows",
+      live: true,
+    }
+  }
+  return {
+    id: "ngn-float",
+    tone: "neutral",
+    label: `${ngn.currency} fiat float`,
+    value: formatFiat(ngn.balance),
+    dot: ngn.status === "low" ? "warn" : "ok",
+    note: `${bpsToPct(ngn.utilizationBps)} of target · ${ngn.status}`,
+    live: true,
+  }
 }
 
 /**
- * The payout / withdrawal approval queue (design markup line 11, `payouts`). No
- * approval-queue backend exists yet (SHAPE-GAP), so this stays design-faithful mock;
- * the Approve WRITE is Phase 7. Large payouts (`big`) carry the amber Maker-checker
- * tag and route Approve through dual-control.
+ * The FX-position tile from the real net-position aggregation: the signed net
+ * position valued in fiat + a long/short/flat direction label. Falls back to an
+ * em-dash when no position row exists.
  */
-const PAYOUTS: readonly TreasuryPayoutRow[] = [
-  {
-    id: "pay_7741",
-    to: "Kelechi Chukwu · GTBank",
-    ref: "wd_44219",
-    method: "NGN payout · Flutterwave",
-    amt: "₦4,820,000.00",
-    big: true,
-  },
-  {
-    id: "pay_7742",
-    to: "Amara Okeke · TRON withdrawal",
-    ref: "wd_44220",
-    method: "USDT · Blockradar",
-    amt: "1,250.00 USDT",
-    big: false,
-  },
-  {
-    id: "pay_7743",
-    to: "Ngozi Eze · Access Bank",
-    ref: "wd_44221",
-    method: "NGN payout · Flutterwave",
-    amt: "₦180,000.00",
-    big: false,
-  },
-]
-
-// The child-address sweep balance + status have no endpoint yet (SHAPE-GAP); the row
-// ADDRESS is wired from the withdrawal-policy wallet id. These are the design-faithful
-// per-row placeholders used until a sweep read model exists.
-const SWEEP_PLACEHOLDER_BAL = "—"
-const SWEEP_PLACEHOLDER_STATUS: TreasurySweepRow["status"] = "Pending"
-
-// design-faithful: the sweep threshold has no admin endpoint yet — it mirrors the
-// `sweep.threshold.trx` seed setting (25 TRX). SHAPE-GAP recorded.
-const SWEEP_THRESHOLD = "25 TRX"
+function resolveFxPositionCard(
+  positions: readonly TreasuryFxPosition[]
+): TreasuryCard {
+  const primary =
+    positions.find((p) => p.asset.toUpperCase() === "USDT") ?? positions[0]
+  if (!primary) {
+    return {
+      id: "fx-position",
+      tone: "neutral",
+      label: "FX position",
+      value: "—",
+      dot: "ok",
+      note: "No FX-position rows",
+      live: true,
+    }
+  }
+  const dirNote =
+    primary.direction === "long"
+      ? `Net long ${primary.asset} vs ${primary.fiatCurrency}`
+      : primary.direction === "short"
+        ? `Net short ${primary.asset} vs ${primary.fiatCurrency}`
+        : `Flat ${primary.asset} vs ${primary.fiatCurrency}`
+  return {
+    id: "fx-position",
+    tone: "neutral",
+    label: "FX position",
+    value: formatFiat(primary.netPositionFiat),
+    dot: primary.exposureStatus === "critical" ? "danger" : "ok",
+    note: dirNote,
+    live: true,
+  }
+}
 
 // A balance-card health dot's semantic → its token utility. Colour is never the sole
 // signal — each dot is paired with a note that carries the same meaning.
@@ -190,13 +226,37 @@ function resolveHeroCard(balances: readonly TreasuryBalance[]): TreasuryCard {
 }
 
 /**
- * Resolve the exposure-headroom tile from the exposure snapshots. The endpoint does
- * NOT expose a single "headroom %" scalar (SHAPE-GAP), so the value renders an
- * em-dash; the dot + note are driven by the most-severe row's real status.
+ * Resolve the exposure-headroom tile. The FX-position endpoint now carries a derived
+ * `headroomBps` scalar, so the tile shows the real headroom % of the tightest (lowest
+ * headroom) position; the dot + note are driven by that position's real status. Falls
+ * back to the exposure snapshots' worst status when no FX position row exists.
  */
 function resolveExposureCard(
-  exposure: readonly TreasuryExposure[]
+  exposure: readonly TreasuryExposure[],
+  positions: readonly TreasuryFxPosition[]
 ): TreasuryCard {
+  const tightest = [...positions].sort(
+    (a, b) => a.headroomBps - b.headroomBps
+  )[0]
+
+  if (tightest) {
+    const note =
+      tightest.exposureStatus === "safe"
+        ? "Within inventory limit"
+        : tightest.exposureStatus === "warning"
+          ? "Approaching inventory limit"
+          : "Over inventory limit"
+    return {
+      id: "exposure-headroom",
+      tone: "neutral",
+      label: "Exposure headroom",
+      value: bpsToPct(tightest.headroomBps),
+      dot: EXPOSURE_DOT[tightest.exposureStatus],
+      note,
+      live: true,
+    }
+  }
+
   const severityRank: Record<TreasuryExposure["status"], number> = {
     critical: 2,
     warning: 1,
@@ -228,7 +288,6 @@ function resolveExposureCard(
     id: "exposure-headroom",
     tone: "neutral",
     label: "Exposure headroom",
-    // No headroom-% field on the endpoint (SHAPE-GAP) — surface the real status label.
     value: worst.status,
     dot: EXPOSURE_DOT[worst.status],
     note,
@@ -288,19 +347,35 @@ export function TreasuryPage() {
   const balancesQuery = useTreasuryBalances()
   const exposureQuery = useTreasuryExposure()
   const alertsQuery = useTreasuryAlerts()
-  const policiesQuery = useWithdrawalPolicies()
+  const sweepsQuery = useTreasurySweeps()
+  const payoutQuery = useTreasuryPayoutQueue()
+  const fiatFloatQuery = useTreasuryFiatFloat()
+  const fxQuery = useTreasuryFxPosition()
 
   // ── Balance cards ─────────────────────────────────────────────────────────────
-  // Tile 0 (hero) + tile 3 (exposure) are wired; tiles 1–2 (fiat float, FX) have no
-  // endpoint and render design-faithful non-live placeholders (SHAPE-GAPs).
+  // All four tiles are now wired to real reads: custodial hero (balances), NGN fiat
+  // float (platform_float aggregation), FX position (net-position aggregation), and
+  // exposure headroom (the derived headroom-% scalar off the FX-position endpoint).
   const cards: TreasuryCard[] = useMemo(() => {
-    const hero = resolveHeroCard(balancesQuery.data?.balances ?? [])
-    const exposure = resolveExposureCard(exposureQuery.data?.items ?? [])
-    return [hero, NGN_FLOAT_CARD, FX_POSITION_CARD, exposure]
-  }, [balancesQuery.data, exposureQuery.data])
+    const fx = fxQuery.data?.items ?? []
+    return [
+      resolveHeroCard(balancesQuery.data?.balances ?? []),
+      resolveFiatFloatCard(fiatFloatQuery.data?.items ?? []),
+      resolveFxPositionCard(fx),
+      resolveExposureCard(exposureQuery.data?.items ?? [], fx),
+    ]
+  }, [balancesQuery.data, fiatFloatQuery.data, fxQuery.data, exposureQuery.data])
 
-  const cardsLoading = balancesQuery.isLoading || exposureQuery.isLoading
-  const cardsError = balancesQuery.isError || exposureQuery.isError
+  const cardsLoading =
+    balancesQuery.isLoading ||
+    exposureQuery.isLoading ||
+    fiatFloatQuery.isLoading ||
+    fxQuery.isLoading
+  const cardsError =
+    balancesQuery.isError ||
+    exposureQuery.isError ||
+    fiatFloatQuery.isError ||
+    fxQuery.isError
 
   // ── Warning banner ────────────────────────────────────────────────────────────
   // Surfaced from the real threshold-breach alerts (highest-severity unacknowledged
@@ -320,18 +395,38 @@ export function TreasuryPage() {
     )
   }, [alertsQuery.data])
 
-  // ── Child-address sweeps ──────────────────────────────────────────────────────
-  // Row ADDRESS is wired from each withdrawal policy's wallet id; balance + sweep
-  // status have no endpoint (SHAPE-GAPs) → design-faithful placeholders.
+  // ── Child-address sweeps (real read: address + gas balance + lifecycle) ────────
   const sweeps: TreasurySweepRow[] = useMemo(
     () =>
-      (policiesQuery.data?.items ?? []).map((policy) => ({
-        id: policy.id,
-        addr: policy.walletId,
-        bal: SWEEP_PLACEHOLDER_BAL,
-        status: SWEEP_PLACEHOLDER_STATUS,
+      (sweepsQuery.data?.items ?? []).map((s: TreasurySweep) => ({
+        id: s.id,
+        addr: s.address,
+        bal: formatAssetAmount(s.balance, s.asset),
+        status: SWEEP_LABEL[s.status],
       })),
-    [policiesQuery.data]
+    [sweepsQuery.data]
+  )
+
+  // The sweep threshold now comes from the endpoint (mirrors sweep.threshold.trx).
+  const sweepThreshold = sweepsQuery.data
+    ? `${sweepsQuery.data.sweepThreshold} ${sweepsQuery.data.thresholdAsset}`
+    : "—"
+
+  // ── Payout / withdrawal approval queue (real read; Approve WRITE is Phase 7) ────
+  const payouts: TreasuryPayoutRow[] = useMemo(
+    () =>
+      (payoutQuery.data?.items ?? []).map((p: TreasuryPayoutQueueItem) => ({
+        id: p.id,
+        to: p.beneficiaryLabel,
+        ref: p.reference,
+        method: p.method,
+        amt:
+          p.asset === "NGN"
+            ? formatFiat(p.amount)
+            : formatAssetAmount(p.amount, p.asset),
+        big: p.requiresApproval,
+      })),
+    [payoutQuery.data]
   )
 
   // ── Payout approval flow (WRITE — Phase 7, unchanged) ─────────────────────────
@@ -342,10 +437,10 @@ export function TreasuryPage() {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [approved, setApproved] = useState<Record<string, boolean>>({})
 
-  const active = PAYOUTS.find((p) => p.id === activeId) ?? null
+  const active = payouts.find((p) => p.id === activeId) ?? null
 
-  // Large payouts (design `p.big`) require maker-checker before step-up; smaller
-  // ones go straight to step-up — matching the design's dual-control gate.
+  // Large payouts (`big` = requiresApproval) require maker-checker before step-up;
+  // smaller ones go straight to step-up — matching the design's dual-control gate.
   function onApprove(row: TreasuryPayoutRow) {
     setActiveId(row.id)
     setFlow(row.big ? "maker" : "stepup")
@@ -425,6 +520,8 @@ export function TreasuryPage() {
             onClick={() => {
               void balancesQuery.refetch()
               void exposureQuery.refetch()
+              void fiatFloatQuery.refetch()
+              void fxQuery.refetch()
             }}
             className="mt-2 rounded-[9px] bg-btn-dark px-3.5 py-1.5 text-[12px] font-bold text-white transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
           >
@@ -451,9 +548,8 @@ export function TreasuryPage() {
 
       {/* ── Approval queue | Child-address sweeps (1.5fr / 1fr) ─────────────── */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.5fr_1fr]">
-        {/* Payout / withdrawal approval queue — maker-checker on large amounts.
-            No approval-queue endpoint yet (SHAPE-GAP): design-faithful mock; the
-            Approve WRITE is Phase 7. */}
+        {/* Payout / withdrawal approval queue — real pending payouts (read-only);
+            maker-checker on large amounts. The Approve WRITE is Phase 7. */}
         <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className="text-[13px] font-extrabold text-ink">
@@ -464,72 +560,97 @@ export function TreasuryPage() {
             </span>
           </div>
 
-          {PAYOUTS.map((row) => {
-            const done = approved[row.id]
-            return (
-              <div
-                key={row.id}
-                className="flex items-center gap-3 border-b border-line2 py-3 last:border-0"
+          {payoutQuery.isError ? (
+            <div className="py-4 text-center">
+              <p className="text-[12.5px] font-semibold text-tdn">
+                Failed to load payout queue
+              </p>
+              <button
+                type="button"
+                onClick={() => void payoutQuery.refetch()}
+                className="mt-2 rounded-[9px] bg-btn-dark px-3 py-1.5 text-[11.5px] font-bold text-white transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
               >
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px] font-bold text-ink">
-                    {row.to}
+                Retry
+              </button>
+            </div>
+          ) : payoutQuery.isLoading ? (
+            <div className="flex flex-col gap-2" aria-busy="true">
+              <Skeleton className="h-12 rounded-md" />
+              <Skeleton className="h-12 rounded-md" />
+              <Skeleton className="h-12 rounded-md" />
+            </div>
+          ) : payouts.length === 0 ? (
+            <p className="py-4 text-center text-[12px] text-ink3">
+              No payouts awaiting release.
+            </p>
+          ) : (
+            payouts.map((row) => {
+              const done = approved[row.id]
+              return (
+                <div
+                  key={row.id}
+                  className="flex items-center gap-3 border-b border-line2 py-3 last:border-0"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13px] font-bold text-ink">
+                      {row.to}
+                    </div>
+                    <div className="font-mono text-[11px] text-ink3">
+                      {row.ref} · {row.method}
+                    </div>
                   </div>
-                  <div className="font-mono text-[11px] text-ink3">
-                    {row.ref} · {row.method}
+                  <div className="shrink-0 font-mono text-[13.5px] font-extrabold text-ink tabular-nums">
+                    {row.amt}
                   </div>
+                  {row.big && (
+                    <span className="shrink-0 rounded-md bg-swn px-2 py-[3px] text-[9.5px] font-extrabold tracking-[0.02em] text-twn uppercase">
+                      Maker-checker
+                    </span>
+                  )}
+                  {done ? (
+                    <span className="shrink-0 rounded-[9px] bg-sok px-3.5 py-2 text-[12px] font-bold text-tok">
+                      Approved
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onApprove(row)}
+                      className={`shrink-0 rounded-[9px] px-3.5 py-2 text-[12px] font-bold transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none ${
+                        row.big
+                          ? "bg-btn-dark text-white"
+                          : "bg-brand-green text-white"
+                      }`}
+                    >
+                      Approve
+                    </button>
+                  )}
                 </div>
-                <div className="shrink-0 font-mono text-[13.5px] font-extrabold text-ink tabular-nums">
-                  {row.amt}
-                </div>
-                {row.big && (
-                  <span className="shrink-0 rounded-md bg-swn px-2 py-[3px] text-[9.5px] font-extrabold tracking-[0.02em] text-twn uppercase">
-                    Maker-checker
-                  </span>
-                )}
-                {done ? (
-                  <span className="shrink-0 rounded-[9px] bg-sok px-3.5 py-2 text-[12px] font-bold text-tok">
-                    Approved
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => onApprove(row)}
-                    className={`shrink-0 rounded-[9px] px-3.5 py-2 text-[12px] font-bold transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none ${
-                      row.big
-                        ? "bg-btn-dark text-white"
-                        : "bg-brand-green text-white"
-                    }`}
-                  >
-                    Approve
-                  </button>
-                )}
-              </div>
-            )
-          })}
+              )
+            })
+          )}
         </div>
 
-        {/* Child-address sweeps — wallet ids from real withdrawal policies; per-row
-            balance + sweep status are design-faithful (SHAPE-GAPs). */}
+        {/* Child-address sweeps — real per-child address + gas balance + sweep
+            lifecycle from the sweeps read model. */}
         <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
           <div className="mb-3.5 text-[13px] font-extrabold text-ink">
             Child-address sweeps
           </div>
 
-          {policiesQuery.isError ? (
+          {sweepsQuery.isError ? (
             <div className="py-4 text-center">
               <p className="text-[12.5px] font-semibold text-tdn">
                 Failed to load sweeps
               </p>
               <button
                 type="button"
-                onClick={() => void policiesQuery.refetch()}
+                onClick={() => void sweepsQuery.refetch()}
                 className="mt-2 rounded-[9px] bg-btn-dark px-3 py-1.5 text-[11.5px] font-bold text-white transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
               >
                 Retry
               </button>
             </div>
-          ) : policiesQuery.isLoading ? (
+          ) : sweepsQuery.isLoading ? (
             <div className="flex flex-col gap-2" aria-busy="true">
               <Skeleton className="h-8 rounded-md" />
               <Skeleton className="h-8 rounded-md" />
@@ -537,7 +658,7 @@ export function TreasuryPage() {
             </div>
           ) : sweeps.length === 0 ? (
             <p className="py-4 text-center text-[12px] text-ink3">
-              No child addresses under a withdrawal policy.
+              No child addresses to sweep.
             </p>
           ) : (
             sweeps.map((sweep) => {
@@ -567,12 +688,12 @@ export function TreasuryPage() {
             })
           )}
 
-          {/* Sweep threshold footer (design-faithful — no config read on this
-              screen yet; SHAPE-GAP). */}
+          {/* Sweep threshold footer — from the sweeps endpoint (mirrors the
+              sweep.threshold.trx setting). */}
           <div className="mt-3.5 flex justify-between border-t border-line2 pt-3">
             <span className="text-[11.5px] text-ink3">Sweep threshold</span>
             <span className="font-mono text-[12px] font-bold text-ink tabular-nums">
-              {SWEEP_THRESHOLD}
+              {sweepThreshold}
             </span>
           </div>
         </div>

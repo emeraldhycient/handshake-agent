@@ -89,6 +89,8 @@ describe('WalletBalanceService', () => {
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
     const rates: IRateProvider = {
       getRate: jest.fn().mockResolvedValue({
@@ -141,6 +143,8 @@ describe('WalletBalanceService', () => {
       listByTransaction: jest.fn(),
       getAccountHistory: jest.fn(),
       verifyTransactionIntegrity: jest.fn(),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
     const rates: IRateProvider = {
       getRate: jest.fn().mockResolvedValue({
@@ -196,6 +200,8 @@ describe('WalletBalanceService', () => {
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
     const rates: IRateProvider = {
       getRate: jest.fn().mockResolvedValue({
@@ -236,6 +242,8 @@ describe('WalletBalanceService', () => {
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
     const rates: IRateProvider = {
       getRate: jest
@@ -282,6 +290,8 @@ describe('WalletBalanceService', () => {
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
     const rates: IRateProvider = {
       getRate: jest.fn().mockImplementation((asset: string) =>
@@ -343,6 +353,8 @@ describe('WalletBalanceService', () => {
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
     // Both assets fiat-tradeable in this test — getRate returns for both
     const rates: IRateProvider = {
@@ -397,6 +409,8 @@ describe('WalletBalanceService', () => {
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
     const rates: IRateProvider = {
       getRate: jest.fn(),
@@ -429,6 +443,8 @@ describe('WalletBalanceService', () => {
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
     const rates: IRateProvider = {
       getRate: jest.fn(),
@@ -464,6 +480,8 @@ describe('WalletBalanceService', () => {
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
     const rates: IRateProvider = {
       getRate: jest.fn(),

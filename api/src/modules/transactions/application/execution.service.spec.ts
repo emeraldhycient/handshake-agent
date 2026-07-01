@@ -532,6 +532,8 @@ function buildService(
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     },
     // identityService: optional, buy path does not notify
     undefined,
@@ -1638,6 +1640,8 @@ function makeLedgerRepo(balance: string = '100'): {
   listByTransaction: jest.Mock;
   getAccountHistory: jest.Mock;
   verifyTransactionIntegrity: jest.Mock;
+  listGlobal: jest.Mock;
+  verifyGlobalSequenceIntegrity: jest.Mock;
 } {
   return {
     getAccountBalance: jest.fn().mockResolvedValue(balance),
@@ -1647,6 +1651,8 @@ function makeLedgerRepo(balance: string = '100'): {
     verifyTransactionIntegrity: jest
       .fn()
       .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+    listGlobal: jest.fn(),
+    verifyGlobalSequenceIntegrity: jest.fn(),
   };
 }
 
@@ -2177,6 +2183,8 @@ describe('ExecutionService.executeSell', () => {
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
     const directiveService = {
       consume: jest.fn().mockImplementation(() => {
@@ -3596,6 +3604,8 @@ describe('ExecutionService.executeSend', () => {
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
     const beneficiaryService = {
       getById: jest.fn().mockImplementation(() => {
@@ -4245,6 +4255,8 @@ function buildSwapService(
       verifyTransactionIntegrity: jest
         .fn()
         .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     },
     undefined, // identityService
     undefined, // whatsAppSender

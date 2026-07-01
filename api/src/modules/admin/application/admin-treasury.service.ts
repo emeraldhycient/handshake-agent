@@ -7,17 +7,35 @@ import type {
   TreasuryAlertListResponse,
   TreasuryBalancesResponse,
   TreasuryExposureListResponse,
+  TreasuryFiatFloatResponse,
+  TreasuryFiatFloatStatus,
+  TreasuryFxDirection,
+  TreasuryFxPositionResponse,
+  TreasuryPayoutQueueResponse,
+  TreasurySweepListResponse,
   WithdrawalPolicyListResponse,
 } from '@handshake-agent/contracts';
 
 import { AuditService } from '../../../core/audit/application/audit.service';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import {
   TREASURY_READ_REPOSITORY,
   type ITreasuryReadRepository,
   type TreasuryAlertListFilter,
   type TreasuryAlertRecord,
+  type TreasuryFiatFloatRecord,
+  type TreasuryFxPositionRecord,
 } from '../../treasury/application/ports/treasury-read.repository.port';
 import { AdminNotFoundError } from '../domain/admin-errors';
+
+// Config keys (admin-tunable AppSetting overlay, root §7). Absent → fall back to a
+// documented constant so the endpoint stays live before the keys are seeded.
+const FIAT_FLOAT_TARGETS_KEY = 'treasury.fiatFloatTargets';
+const LOW_FLOAT_THRESHOLD_BPS_KEY = 'treasury.lowFloatThresholdBps';
+/** Default low-float floor when unset: a float under 25% of target is "low". */
+const DEFAULT_LOW_FLOAT_THRESHOLD_BPS = 2500;
+/** Basis-point scale (100% = 10 000 bps). */
+const BPS_SCALE = 10000;
 
 /**
  * Phase 3 (sub-area D) — the admin TREASURY OVERSIGHT service: aggregated
@@ -35,6 +53,7 @@ export class AdminTreasuryService {
     @Inject(TREASURY_READ_REPOSITORY)
     private readonly treasury: ITreasuryReadRepository,
     private readonly audit: AuditService,
+    private readonly config: EffectiveConfigService,
   ) {}
 
   // ── balances ─────────────────────────────────────────────────────────────────
@@ -128,12 +147,110 @@ export class AdminTreasuryService {
     };
   }
 
+  // ── child-address sweeps (Phase 6b, READ) ──────────────────────────────────────
+
+  async listSweeps(): Promise<TreasurySweepListResponse> {
+    const feed = await this.treasury.listSweeps();
+    return {
+      items: feed.rows.map((r) => ({
+        id: r.id,
+        address: r.address,
+        network: r.network,
+        asset: r.asset,
+        balance: r.balance,
+        status: r.status,
+        lastSweptAt: toIso(r.lastSweptAt),
+      })),
+      sweepThreshold: feed.sweepThreshold,
+      thresholdAsset: feed.thresholdAsset,
+    };
+  }
+
+  // ── payout / withdrawal approval queue (Phase 6b, READ-ONLY) ─────────────────────
+
+  async listPayoutQueue(): Promise<TreasuryPayoutQueueResponse> {
+    const rows = await this.treasury.listPayoutQueue();
+    return {
+      items: rows.map((r) => ({
+        id: r.id,
+        transactionId: r.transactionId,
+        beneficiaryLabel: r.beneficiaryLabel,
+        reference: r.reference,
+        method: r.method,
+        asset: r.asset,
+        amount: r.amount,
+        fiatAmount: r.fiatAmount,
+        requiresApproval: r.requiresApproval,
+        submittedAt: r.submittedAt.toISOString(),
+      })),
+    };
+  }
+
+  // ── NGN fiat float vs configured target (Phase 6b, READ) ─────────────────────────
+
+  async listFiatFloat(): Promise<TreasuryFiatFloatResponse> {
+    const rows = await this.treasury.listFiatFloat();
+    const targets = this.fiatFloatTargets();
+    const thresholdBps = this.lowFloatThresholdBps();
+    return { items: rows.map((r) => this.toFloat(r, targets, thresholdBps)) };
+  }
+
+  // ── FX position / exposure headroom (Phase 6b, READ) ─────────────────────────────
+
+  async listFxPositions(): Promise<TreasuryFxPositionResponse> {
+    const rows = await this.treasury.listFxPositions();
+    return { items: rows.map((r) => toFxPosition(r)) };
+  }
+
   // ── private helpers ────────────────────────────────────────────────────────────
 
   /** Locates a single alert by id among the bounded feed (acknowledged or not). */
   private async findAlert(id: string): Promise<TreasuryAlertRecord | null> {
     const all = await this.treasury.listAlerts({});
     return all.find((a) => a.id === id) ?? null;
+  }
+
+  /** Configured per-currency target float (admin-tunable; absent → {}). */
+  private fiatFloatTargets(): Record<string, number> {
+    return (
+      this.config.get<Record<string, number> | undefined>(
+        FIAT_FLOAT_TARGETS_KEY,
+      ) ?? {}
+    );
+  }
+
+  /** Configured low-float floor in bps (admin-tunable; absent → default). */
+  private lowFloatThresholdBps(): number {
+    return (
+      this.config.get<number | undefined>(LOW_FLOAT_THRESHOLD_BPS_KEY) ??
+      DEFAULT_LOW_FLOAT_THRESHOLD_BPS
+    );
+  }
+
+  /**
+   * Derives utilization (balance/target in bps) + a healthy/low status. A missing or
+   * zero target yields 0 utilization and a healthy status (no divide-by-zero, and a
+   * float with no target cannot be "under target").
+   */
+  private toFloat(
+    r: TreasuryFiatFloatRecord,
+    targets: Record<string, number>,
+    thresholdBps: number,
+  ): TreasuryFiatFloatResponse['items'][number] {
+    const target = targets[r.currency] ?? 0;
+    const balance = Number(r.balance);
+    const utilizationBps =
+      target > 0 ? Math.round((balance / target) * BPS_SCALE) : 0;
+    const status: TreasuryFiatFloatStatus =
+      target > 0 && utilizationBps < thresholdBps ? 'low' : 'healthy';
+    return {
+      currency: r.currency,
+      balance: r.balance,
+      targetFloat: String(target),
+      utilizationBps,
+      status,
+      lowFloatThresholdBps: thresholdBps,
+    };
   }
 }
 
@@ -153,4 +270,36 @@ function toAlert(r: TreasuryAlertRecord): TreasuryAlert {
 
 function toIso(value: Date | null): string | null {
   return value !== null ? value.toISOString() : null;
+}
+
+/**
+ * Derives the FX position card: direction from the sign of the net position, and
+ * headroom = (limit − exposure)/limit in bps, clamped to ≥ 0. The exposure ratio is
+ * netExposure / fiatEquivalent (both in fiat) expressed in bps; when the reference
+ * value is zero the ratio is treated as 0 (full headroom).
+ */
+function toFxPosition(
+  r: TreasuryFxPositionRecord,
+): TreasuryFxPositionResponse['items'][number] {
+  const net = Number(r.netPositionFiat);
+  const direction: TreasuryFxDirection =
+    net > 0 ? 'long' : net < 0 ? 'short' : 'flat';
+
+  const reference = Number(r.fiatEquivalent);
+  const exposureBps =
+    reference > 0 ? (Number(r.netExposure) / reference) * BPS_SCALE : 0;
+  const limit = r.exposureLimitBps;
+  const headroomBps =
+    limit > 0
+      ? Math.max(0, Math.round(((limit - exposureBps) / limit) * BPS_SCALE))
+      : 0;
+
+  return {
+    asset: r.asset,
+    fiatCurrency: r.fiatCurrency,
+    netPositionFiat: r.netPositionFiat,
+    direction,
+    headroomBps,
+    exposureStatus: r.status,
+  };
 }

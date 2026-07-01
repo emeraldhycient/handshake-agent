@@ -32,6 +32,8 @@ describe('AdminLedgerService', () => {
       listByTransaction: jest.fn(),
       getAccountHistory: jest.fn(),
       verifyTransactionIntegrity: jest.fn(),
+      listGlobal: jest.fn(),
+      verifyGlobalSequenceIntegrity: jest.fn(),
     };
 
     service = new AdminLedgerService(ledgerRepo);
@@ -113,6 +115,88 @@ describe('AdminLedgerService', () => {
         balanced: true,
         legCount: 2,
         brokenAt: null,
+      });
+    });
+  });
+
+  describe('listGlobal', () => {
+    it('maps a global keyset page onto the response shape', async () => {
+      ledgerRepo.listGlobal.mockResolvedValue({
+        items: [
+          makeEntry(),
+          makeEntry({ id: '22222222-2222-2222-2222-222222222222' }),
+        ],
+        nextCursor: '22222222-2222-2222-2222-222222222222',
+      });
+
+      const res = await service.listGlobal({
+        accountType: 'treasury_reserve',
+        currency: 'USDT',
+        cursor: 'abc',
+        limit: 25,
+      });
+
+      expect(ledgerRepo.listGlobal).toHaveBeenCalledWith(
+        { accountType: 'treasury_reserve', currency: 'USDT' },
+        { cursor: 'abc', limit: 25 },
+      );
+      expect(res.entries).toHaveLength(2);
+      expect(res.entries[0].postedAt).toBe('2026-01-01T00:00:00.000Z');
+      expect(res.nextCursor).toBe('22222222-2222-2222-2222-222222222222');
+    });
+
+    it('applies a default limit and passes undefined filters through', async () => {
+      ledgerRepo.listGlobal.mockResolvedValue({ items: [], nextCursor: null });
+
+      await service.listGlobal({});
+
+      const [filterArg, pageArg] = ledgerRepo.listGlobal.mock.calls[0];
+      expect(filterArg).toEqual({
+        accountType: undefined,
+        currency: undefined,
+      });
+      expect(pageArg.cursor).toBeUndefined();
+      expect(pageArg.limit).toBeGreaterThan(0);
+    });
+
+    it('passes a null nextCursor through on the last page', async () => {
+      ledgerRepo.listGlobal.mockResolvedValue({
+        items: [makeEntry()],
+        nextCursor: null,
+      });
+      const res = await service.listGlobal({ limit: 10 });
+      expect(res.nextCursor).toBeNull();
+    });
+  });
+
+  describe('verifyGlobalSequenceIntegrity', () => {
+    it('surfaces an all-clear summary', async () => {
+      ledgerRepo.verifyGlobalSequenceIntegrity.mockResolvedValue({
+        ok: true,
+        accountsChecked: 7,
+        brokenAccount: null,
+      });
+
+      const res = await service.verifyGlobalSequenceIntegrity();
+      expect(res).toEqual({
+        ok: true,
+        accountsChecked: 7,
+        brokenAccount: null,
+      });
+    });
+
+    it('surfaces a broken summary naming the offending sub-ledger', async () => {
+      ledgerRepo.verifyGlobalSequenceIntegrity.mockResolvedValue({
+        ok: false,
+        accountsChecked: 7,
+        brokenAccount: 'user_wallet:wallet-1:NGN',
+      });
+
+      const res = await service.verifyGlobalSequenceIntegrity();
+      expect(res).toEqual({
+        ok: false,
+        accountsChecked: 7,
+        brokenAccount: 'user_wallet:wallet-1:NGN',
       });
     });
   });

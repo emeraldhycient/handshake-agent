@@ -1,48 +1,48 @@
 "use client"
 
 /**
- * LedgerPage — the double-entry ledger viewer (design §6.11 Ledger), wired to the
- * real read-only ledger-history endpoint via `useLedgerHistory` (GET /admin/ledger).
+ * LedgerPage — the GLOBAL double-entry ledger viewer (design §6.11 Ledger), wired
+ * to the real global cross-account read via `useGlobalLedger` (GET /admin/ledger/all)
+ * plus the sequence-integrity summary via `useLedgerIntegrity` (GET /admin/ledger/integrity).
  *
- * Reproduces `docs/design-ref/screens/Ledger.html` 1:1: a header with a
- * "Sequence integrity OK" pill, a filter row (account type · account id · currency)
- * with an Export action, and the six-column table
+ * Reproduces `docs/design-ref/screens/Ledger.html` 1:1: a header with a live
+ * "Sequence integrity" pill, a filter row (account TYPE prefix · currency) with an
+ * Export action, and the six-column table
  * (Seq · Account · Dir · Amount · Running · Source). The Source cell links to the
  * transaction's detail route (`/transactions/[id]`), exactly as the design's
  * `onSource` navigates to `txDetail`.
  *
- * SHAPE MISMATCH (recorded for backend enrichment): the design browses across ALL
- * accounts by account-TYPE prefix (user/treasury/revenue/float) + currency, but the
- * only ledger read endpoint requires a full (accountType, accountId, currency)
- * triple scoped to ONE account — there is no global cross-account ledger list, no
- * keyset pagination, and no global sequence-integrity endpoint. So the account
- * filter is a real `LedgerAccountType` + an explicit account-id input (the triple
- * the endpoint needs); the query stays idle until the triple is complete, and the
- * header integrity pill remains a static indicator (no global endpoint feeds it).
+ * Phase 6b: unlike the old account-scoped triple, this browses across ALL accounts
+ * by account-TYPE prefix (or "All") + currency (or "All"), newest-first, with real
+ * server-side keyset pagination — a "Load more" button pages beyond the first slice
+ * via the response `nextCursor`. The header pill reflects the real global
+ * gap/reorder check.
  *
  * Read-only (§3.1): nothing here moves money. Four async branches:
- * loading skeletons / error / empty (idle or no-entries) / data. The Export button
- * remains a toast stand-in — its backend and the write path are a later phase.
+ * loading skeletons / error / empty / data. The Export button remains a toast
+ * stand-in — its backend and the write path are a later phase.
  */
 import { useMemo, useState } from "react"
 import Link from "next/link"
 
 import { FilterSelect } from "@/components/admin/filter-select"
-import { Pagination } from "@/components/admin/pagination"
-import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { pushToast } from "@/lib/store/toast-store"
-import { useLedgerHistory } from "@/lib/query/hooks"
-import type { LedgerHistoryQuery } from "@/lib/api/ledger"
-import type { AdminLedgerEntry } from "@handshake-agent/contracts"
+import { useGlobalLedger, useLedgerIntegrity } from "@/lib/query/hooks"
+import type {
+  AdminLedgerEntry,
+  AdminLedgerListQuery,
+} from "@handshake-agent/contracts"
 
 // ── Filter axes ──────────────────────────────────────────────────────────────
 
 /**
- * The real `LedgerAccountType` enum (api `06-engine.prisma`), replacing the
- * design's coarse type-prefix filter — the endpoint keys on these exact values.
+ * The account-TYPE filter (design's coarse prefix filter). "All" (empty value)
+ * omits the `accountType` param → the endpoint browses every account type. The
+ * non-empty values are the real `LedgerAccountType` enum (api `06-engine.prisma`).
  */
 const ACCOUNT_OPTIONS = [
+  { value: "", label: "All account types" },
   { value: "user_wallet", label: "User wallet" },
   { value: "platform_float", label: "Platform float" },
   { value: "processor_settlement", label: "Processor settlement" },
@@ -51,19 +51,16 @@ const ACCOUNT_OPTIONS = [
   { value: "compensation", label: "Compensation" },
 ] as const
 
-/** Currency axis — the design's three launch currencies (endpoint keys on this). */
+/** Currency axis — "All" (empty) omits the filter; else the launch currencies. */
 const CURRENCY_OPTIONS = [
+  { value: "", label: "All currencies" },
   { value: "NGN", label: "NGN" },
   { value: "USDT", label: "USDT" },
   { value: "TRX", label: "TRX" },
 ] as const
 
-type AccountType = (typeof ACCOUNT_OPTIONS)[number]["value"]
-type Currency = (typeof CURRENCY_OPTIONS)[number]["value"]
-
-/** Newest-first, capped page of entries the endpoint returns per account. */
-const PAGE_SIZE = 6
-const HISTORY_LIMIT = 500
+/** Server page size for each "Load more" fetch. */
+const PAGE_SIZE = 25
 
 // ── Formatting (mirrors the design's `ngn()` + per-currency `fmt`) ───────────
 
@@ -78,7 +75,7 @@ function ngn(n: number): string {
   )
 }
 
-/** Format a canonical decimal string per its currency, as the design's amt does. */
+/** Format a canonical decimal string per its OWN currency (each row is global). */
 function formatAmount(value: string, currency: string): string {
   const n = Number(value)
   if (currency === "NGN") return ngn(Math.abs(n))
@@ -104,54 +101,58 @@ interface LedgerRow {
   href: string | null
 }
 
-/** Project entries onto the design's row shape (newest-first, as returned). */
-function toRows(
-  entries: readonly AdminLedgerEntry[],
-  currency: string
-): LedgerRow[] {
+/** Project entries onto the design's row shape (newest-first, as returned). Each
+ *  row formats against its OWN currency (this is a mixed-currency global view). */
+function toRows(entries: readonly AdminLedgerEntry[]): LedgerRow[] {
   return entries.map((e) => ({
     key: e.id,
     seq: String(e.sequence),
     acct: `${e.accountType}:${e.accountId}:${e.currency}`,
     dir: e.direction.toUpperCase(),
     dirDanger: e.direction === "debit",
-    amt: formatAmount(e.amount, currency),
-    run: formatAmount(e.balanceAfter, currency),
+    amt: formatAmount(e.amount, e.currency),
+    run: formatAmount(e.balanceAfter, e.currency),
     src: e.transactionId,
     href: e.transactionId ? `/transactions/${e.transactionId}` : null,
   }))
 }
 
 export function LedgerPage() {
-  const [account, setAccount] = useState<AccountType>("user_wallet")
-  const [accountId, setAccountId] = useState("")
-  const [currency, setCurrency] = useState<Currency>("NGN")
-  const [page, setPage] = useState(1)
+  const [account, setAccount] = useState("")
+  const [currency, setCurrency] = useState("")
 
-  // The endpoint needs the full (accountType, accountId, currency) triple; until
-  // an account id is entered the query stays idle (null → hook disabled).
-  const trimmedId = accountId.trim()
-  const query: LedgerHistoryQuery | null = trimmedId
-    ? {
-        accountType: account,
-        accountId: trimmedId,
-        currency,
-        limit: HISTORY_LIMIT,
-      }
-    : null
+  // Both filters are optional; empty → omit the param (global across that axis).
+  const filters: AdminLedgerListQuery = useMemo(
+    () => ({
+      ...(account ? { accountType: account } : {}),
+      ...(currency ? { currency } : {}),
+      limit: PAGE_SIZE,
+    }),
+    [account, currency]
+  )
 
-  const history = useLedgerHistory(query)
+  const ledger = useGlobalLedger(filters)
+  const integrity = useLedgerIntegrity()
 
   const rows = useMemo(
-    () => toRows(history.data?.entries ?? [], currency),
-    [history.data?.entries, currency]
+    () => toRows(ledger.data?.pages.flatMap((p) => p.entries) ?? []),
+    [ledger.data]
   )
-  const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   /** Export toast stand-in — mirrors the design's `exportLedger()` (logic.js 790). */
   function exportLedger() {
     pushToast("Exporting ledger to CSV…", "info")
   }
+
+  // Header pill: reflects the real integrity summary (ok/broken), degrading to a
+  // neutral "checking" label while the summary loads or if it errors.
+  const integrityOk = integrity.data?.ok === true
+  const integrityBroken = integrity.data?.ok === false
+  const pillLabel = integrityBroken
+    ? `Sequence gap: ${integrity.data?.brokenAccount ?? "unknown"}`
+    : integrityOk
+      ? "Sequence integrity OK"
+      : "Checking integrity…"
 
   return (
     <div className="mx-auto w-full max-w-[1300px] px-[30px] pt-[26px] pb-[60px]">
@@ -166,7 +167,13 @@ export function LedgerPage() {
             advisory-locked.
           </p>
         </div>
-        <div className="flex h-[34px] items-center gap-[9px] rounded-full bg-sok px-[13px] text-[11.5px] font-bold text-tok">
+        <div
+          className={`flex h-[34px] items-center gap-[9px] rounded-full px-[13px] text-[11.5px] font-bold ${
+            integrityBroken
+              ? "bg-sdn text-tdn"
+              : "bg-sok text-tok"
+          }`}
+        >
           <svg
             width="14"
             height="14"
@@ -175,45 +182,29 @@ export function LedgerPage() {
             aria-hidden="true"
           >
             <path
-              d="m5 12 5 5L20 7"
+              d={integrityBroken ? "M12 9v4m0 4h.01" : "m5 12 5 5L20 7"}
               stroke="currentColor"
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
             />
           </svg>
-          Sequence integrity OK
+          {pillLabel}
         </div>
       </div>
 
-      {/* ── Filter row: account type · account id · currency + Export ───────── */}
+      {/* ── Filter row: account type · currency + Export ────────────────────── */}
       <div className="mb-[14px] flex flex-wrap gap-[10px]">
         <FilterSelect
           label="Filter by account type"
           value={account}
-          onChange={(e) => {
-            setAccount(e.target.value as AccountType)
-            setPage(1)
-          }}
+          onChange={(e) => setAccount(e.target.value)}
           options={ACCOUNT_OPTIONS}
-        />
-        <Input
-          value={accountId}
-          onChange={(e) => {
-            setAccountId(e.target.value)
-            setPage(1)
-          }}
-          placeholder="Account id…"
-          aria-label="Account id"
-          className="h-[38px] w-[220px] rounded-[11px] bg-card font-mono text-[12.5px]"
         />
         <FilterSelect
           label="Filter by currency"
           value={currency}
-          onChange={(e) => {
-            setCurrency(e.target.value as Currency)
-            setPage(1)
-          }}
+          onChange={(e) => setCurrency(e.target.value)}
           options={CURRENCY_OPTIONS}
         />
         <div className="flex-1" />
@@ -241,7 +232,7 @@ export function LedgerPage() {
         </div>
 
         {/* Loading */}
-        {history.isLoading && (
+        {ledger.isLoading && (
           <div aria-busy="true">
             {Array.from({ length: 4 }).map((_, i) => (
               <div
@@ -260,14 +251,14 @@ export function LedgerPage() {
         )}
 
         {/* Error */}
-        {history.isError && (
+        {ledger.isError && (
           <div className="flex flex-col items-center gap-2.5 px-[18px] py-[50px] text-center">
             <p className="text-[13px] font-bold text-tdn">
               Couldn&apos;t load ledger entries
             </p>
             <button
               type="button"
-              onClick={() => history.refetch()}
+              onClick={() => ledger.refetch()}
               className="flex h-[34px] items-center rounded-[10px] border border-line bg-card px-3.5 text-[12px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
             >
               Retry
@@ -275,19 +266,17 @@ export function LedgerPage() {
           </div>
         )}
 
-        {/* Empty — idle (no account chosen) or a queried account with no entries */}
-        {!history.isLoading && !history.isError && rows.length === 0 && (
+        {/* Empty */}
+        {!ledger.isLoading && !ledger.isError && rows.length === 0 && (
           <div className="px-[18px] py-[50px] text-center text-[13px] text-ink3">
-            {query === null
-              ? "Enter an account id to view its double-entry ledger."
-              : "No ledger entries for this account and currency."}
+            No ledger entries match these filters.
           </div>
         )}
 
         {/* Data */}
-        {!history.isLoading &&
-          !history.isError &&
-          pageRows.map((row) => (
+        {!ledger.isLoading &&
+          !ledger.isError &&
+          rows.map((row) => (
             <div
               key={row.key}
               className={`${LEDGER_GRID} items-center border-b border-line2 py-[11px] last:border-b-0`}
@@ -329,14 +318,19 @@ export function LedgerPage() {
           ))}
       </div>
 
-      {/* ── Pagination (client-side over the returned page, size 6) ─────────── */}
-      <Pagination
-        total={rows.length}
-        pageSize={PAGE_SIZE}
-        page={page}
-        onPageChange={setPage}
-        maxWidth="1300px"
-      />
+      {/* ── Keyset "Load more" (server-side cursor, newest-first) ────────────── */}
+      {!ledger.isLoading && !ledger.isError && ledger.hasNextPage && (
+        <div className="mt-[14px] flex justify-center">
+          <button
+            type="button"
+            onClick={() => ledger.fetchNextPage()}
+            disabled={ledger.isFetchingNextPage}
+            className="flex h-[38px] items-center rounded-[11px] border border-line bg-card px-[16px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
+          >
+            {ledger.isFetchingNextPage ? "Loading…" : "Load more"}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

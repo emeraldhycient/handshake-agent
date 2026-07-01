@@ -1,15 +1,19 @@
 /**
- * LedgerPage tests — wired to the real ledger-history endpoint via
- * `useLedgerHistory` (GET /admin/ledger). The api client is mocked; no server.
+ * LedgerPage tests — wired to the GLOBAL cross-account ledger read via
+ * `useGlobalLedger` (GET /admin/ledger/all) + the sequence-integrity summary via
+ * `useLedgerIntegrity` (GET /admin/ledger/integrity). Both api clients are mocked;
+ * no server.
  *
- * The endpoint needs a full (accountType, accountId, currency) triple, so the
- * query is idle until an account id is entered — the tests type an id to trigger
- * the fetch, then assert:
- *   1. idle empty state before any account id, then loading → data after entry;
- *   2. the projected columns (Seq / Account / Dir / Amount / Running / Source
- *      link) render from the mocked `AdminLedgerEntry` rows;
- *   3. an errored query surfaces the inline error + Retry affordance;
- *   4. the Export button still fires its toast stand-in (Phase 7 write path).
+ * Unlike the old account-scoped triple, this browses ALL accounts by an optional
+ * account-TYPE + currency filter and loads eagerly (no account-id gate). The tests
+ * assert:
+ *   1. the header integrity pill reflects the real summary (OK vs gap);
+ *   2. the projected columns (Seq / Account / Dir / Amount / Running / Source link)
+ *      render from the mocked `AdminLedgerEntry` rows across accounts;
+ *   3. changing a filter re-queries with the right params (omitting empty filters);
+ *   4. keyset "Load more" fetches the next page via the response `nextCursor`;
+ *   5. an errored query surfaces the inline error + Retry affordance;
+ *   6. the Export button still fires its toast stand-in (Phase 7 write path).
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
@@ -23,14 +27,16 @@ import { defaultToastStore } from "@/lib/store/toast-store"
 // ─── Mocks ──────────────────────────────────────────────────────────────────────
 
 vi.mock("@/lib/api/ledger", () => ({
-  listLedgerHistory: vi.fn(),
+  listGlobalLedger: vi.fn(),
+  getLedgerIntegrity: vi.fn(),
 }))
 
-import { listLedgerHistory } from "@/lib/api/ledger"
+import { listGlobalLedger, getLedgerIntegrity } from "@/lib/api/ledger"
 
-const mockHistory = vi.mocked(listLedgerHistory)
+const mockList = vi.mocked(listGlobalLedger)
+const mockIntegrity = vi.mocked(getLedgerIntegrity)
 
-// ─── Fixture ──────────────────────────────────────────────────────────────────
+// ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 const ENTRIES: AdminLedgerEntry[] = [
   {
@@ -48,13 +54,13 @@ const ENTRIES: AdminLedgerEntry[] = [
   {
     id: "22222222-2222-4222-8222-222222222222",
     transactionId: "tx_80244",
-    accountType: "user_wallet",
-    accountId: "usr_10480",
-    currency: "NGN",
-    amount: "53200.00",
+    accountType: "treasury_reserve",
+    accountId: "usdt_treasury",
+    currency: "USDT",
+    amount: "53.200000",
     direction: "credit",
-    balanceAfter: "159669.00",
-    sequence: 44921,
+    balanceAfter: "159.669000",
+    sequence: 12,
     postedAt: "2026-07-01T09:05:00.000Z",
   },
 ]
@@ -72,63 +78,110 @@ function renderPage() {
 
 beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
-  mockHistory.mockReset()
-  mockHistory.mockResolvedValue({ entries: ENTRIES })
+  mockList.mockReset()
+  mockIntegrity.mockReset()
+  mockList.mockResolvedValue({ entries: ENTRIES, nextCursor: null })
+  mockIntegrity.mockResolvedValue({
+    ok: true,
+    accountsChecked: 12,
+    brokenAccount: null,
+  })
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("LedgerPage", () => {
-  it("renders the header + the sequence-integrity pill", () => {
+  it("renders the header + a live OK integrity pill", async () => {
     renderPage()
 
     expect(screen.getByRole("heading", { name: "Ledger" })).toBeInTheDocument()
-    expect(screen.getByText("Sequence integrity OK")).toBeInTheDocument()
+    expect(
+      await screen.findByText("Sequence integrity OK")
+    ).toBeInTheDocument()
   })
 
-  it("stays idle until an account id is entered, then loads real entries", async () => {
-    const user = userEvent.setup()
+  it("shows a sequence-gap pill when the integrity summary is broken", async () => {
+    mockIntegrity.mockResolvedValue({
+      ok: false,
+      accountsChecked: 12,
+      brokenAccount: "user_wallet:usr_10480:NGN",
+    })
     renderPage()
 
-    // Idle: the query is disabled (no account id) → prompt empty state, no fetch.
-    expect(mockHistory).not.toHaveBeenCalled()
     expect(
-      screen.getByText(/Enter an account id to view its double-entry ledger/i)
+      await screen.findByText(/Sequence gap: user_wallet:usr_10480:NGN/i)
     ).toBeInTheDocument()
+  })
 
-    // Entering an account id completes the triple → the endpoint is called and
-    // the projected rows render.
-    await user.type(screen.getByLabelText("Account id"), "usr_10480")
+  it("loads global entries across accounts on mount (no account-id gate)", async () => {
+    renderPage()
 
-    // Typing grows the id keystroke-by-keystroke; the completed triple is the
-    // one that resolves the visible rows, so assert on the latest call's args.
-    await waitFor(() => expect(mockHistory).toHaveBeenCalled())
-    const lastCall = mockHistory.mock.calls.at(-1)
-    expect(lastCall?.[0]).toMatchObject({
-      accountType: "user_wallet",
-      accountId: "usr_10480",
-      currency: "NGN",
-    })
+    await waitFor(() => expect(mockList).toHaveBeenCalled())
+    // Default filters omit accountType/currency (both "All") — only limit is set.
+    expect(mockList.mock.calls[0][0]).toEqual({ limit: 25 })
 
-    // Account (accountType:accountId:currency) renders for each of the two legs;
-    // the NGN-formatted amount, the direction pill, and the Source → tx-detail
-    // link all project from the mocked entries.
+    // Two legs on DIFFERENT accounts render; each formats against its own currency.
     expect(
-      await screen.findAllByText("user_wallet:usr_10480:NGN")
-    ).toHaveLength(2)
+      await screen.findByText("user_wallet:usr_10480:NGN")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("treasury_reserve:usdt_treasury:USDT")
+    ).toBeInTheDocument()
     expect(screen.getByText("₦106,469.00")).toBeInTheDocument()
+    expect(screen.getByText("53.200000 USDT")).toBeInTheDocument()
     expect(screen.getByText("DEBIT")).toBeInTheDocument()
     expect(screen.getByText("CREDIT")).toBeInTheDocument()
     const source = screen.getByRole("link", { name: "tx_80231" })
     expect(source).toHaveAttribute("href", "/transactions/tx_80231")
   })
 
-  it("shows an inline error with a Retry affordance when the query fails", async () => {
+  it("re-queries with the accountType filter, omitting the empty currency", async () => {
     const user = userEvent.setup()
-    mockHistory.mockRejectedValue(new Error("boom"))
+    renderPage()
+    await waitFor(() => expect(mockList).toHaveBeenCalled())
+
+    await user.selectOptions(
+      screen.getByLabelText("Filter by account type"),
+      "treasury_reserve"
+    )
+
+    await waitFor(() => {
+      const last = mockList.mock.calls.at(-1)
+      expect(last?.[0]).toEqual({ accountType: "treasury_reserve", limit: 25 })
+    })
+  })
+
+  it("fetches the next keyset page when Load more is clicked", async () => {
+    const user = userEvent.setup()
+    // First page has a nextCursor; second page ends the list.
+    mockList
+      .mockResolvedValueOnce({
+        entries: [ENTRIES[0]],
+        nextCursor: ENTRIES[0].id,
+      })
+      .mockResolvedValueOnce({ entries: [ENTRIES[1]], nextCursor: null })
     renderPage()
 
-    await user.type(screen.getByLabelText("Account id"), "usr_10480")
+    expect(
+      await screen.findByText("user_wallet:usr_10480:NGN")
+    ).toBeInTheDocument()
+
+    const loadMore = await screen.findByRole("button", { name: /Load more/i })
+    await user.click(loadMore)
+
+    // The second call carries the cursor returned by the first page.
+    await waitFor(() => {
+      const last = mockList.mock.calls.at(-1)
+      expect(last?.[0]).toMatchObject({ cursor: ENTRIES[0].id })
+    })
+    expect(
+      await screen.findByText("treasury_reserve:usdt_treasury:USDT")
+    ).toBeInTheDocument()
+  })
+
+  it("shows an inline error with a Retry affordance when the query fails", async () => {
+    mockList.mockRejectedValue(new Error("boom"))
+    renderPage()
 
     expect(
       await screen.findByText(/Couldn.t load ledger entries/i)
@@ -136,17 +189,12 @@ describe("LedgerPage", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
   })
 
-  it("renders an empty state when the account has no entries", async () => {
-    const user = userEvent.setup()
-    mockHistory.mockResolvedValue({ entries: [] })
+  it("renders an empty state when no entries match the filters", async () => {
+    mockList.mockResolvedValue({ entries: [], nextCursor: null })
     renderPage()
 
-    await user.type(screen.getByLabelText("Account id"), "usr_99999")
-
     expect(
-      await screen.findByText(
-        /No ledger entries for this account and currency/i
-      )
+      await screen.findByText(/No ledger entries match these filters/i)
     ).toBeInTheDocument()
   })
 

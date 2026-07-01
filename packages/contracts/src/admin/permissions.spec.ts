@@ -174,6 +174,9 @@ describe("PERMISSION_CATALOG", () => {
     expect(ids.has("api_route:GET /admin/compliance/sanctions:read")).toBe(
       true,
     );
+    expect(ids.has("api_route:GET /admin/compliance/monitoring:read")).toBe(
+      true,
+    );
     expect(ids.has("api_route:GET /admin/compliance/aml-rules:read")).toBe(
       true,
     );
@@ -259,7 +262,9 @@ describe("PERMISSION_CATALOG", () => {
     expect(ids.has("api_route:GET /admin/tickets/orders:read")).toBe(true);
     expect(ids.has("web_page:/admin/tickets:read")).toBe(true);
     expect(ids.has("menu_item:menu.tickets:read")).toBe(true);
-    for (const e of PERMISSION_CATALOG.filter((x) => x.category === "Tickets")) {
+    for (const e of PERMISSION_CATALOG.filter(
+      (x) => x.category === "Tickets",
+    )) {
       expect(e.category).toBe("Tickets");
     }
   });
@@ -589,8 +594,7 @@ describe("BUILTIN_ROLES", () => {
 
   it("grants Metrics read to ALL non-super built-in roles (Phase 5)", () => {
     const dashboard = PERMISSION_CATALOG.find(
-      (e) =>
-        permissionId(e) === "api_route:GET /admin/metrics/dashboard:read",
+      (e) => permissionId(e) === "api_route:GET /admin/metrics/dashboard:read",
     )!;
     for (const r of BUILTIN_ROLES.filter((x) => x.name !== "super_admin")) {
       expect(r.grants(dashboard)).toBe(true);

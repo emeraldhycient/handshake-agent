@@ -2,7 +2,7 @@
 
 /**
  * OpsPage — the "System / ops" operator screen (design §6.29), a PIXEL reproduction of
- * `docs/design-ref/screens/Ops.html` (the `pOps` flag block).
+ * `docs/design-ref/screens/Ops.html` (the `pOps` flag block), now wired to REAL data.
  *
  * Layout mirrors the markup 1:1 (`max-width:1300px` · `padding:26px 30px 60px`):
  *   • Header block — "System / ops" 24px/800 + the design's subtitle.
@@ -13,22 +13,31 @@
  *     depth/retries meta + status label) | "Background jobs & cron" (name +
  *     schedule/last meta + status pill + a "Run now" link).
  *
- * DESIGN-ONLY (per the reproduction goal): logic.js does NOT expose this view method,
- * so every tile / queue / job is the design's own representative sample content
- * (module-level consts — no TanStack Query / no fetching), shaped exactly like the
- * markup + SPEC §6.29 + the seed() provider/cron shapes. Real-data reintegration is a
- * separate later step.
+ * DATA (Phase 6b): the board is fetched from `GET /admin/ops` via `useOps()` — the
+ * per-provider status (derived from SettlementOutbox dispatch history), the
+ * webhook-ingest queue depths + retries, and the declared background-jobs / cron
+ * registry with each job's last observable run. The FE composes the display labels
+ * (latency "142ms", "Operational" / "Draining", relative "3m ago") from the raw
+ * contract fields; colour is never the sole signal — the status word carries the state.
  *
  * The screen is read-only oversight — it moves no money (§3.1). The design's "Run now"
  * affordance is wired to the SAME shared flow modals an operational action opens:
  * reason (audit) → step-up (TOTP) → engine-action. Triggering a background job is
  * engine-brokered — never a raw side-effect from this surface — so the flow encodes
- * that invariant in the UI even though there is no live endpoint yet.
+ * that invariant in the UI (the live run endpoint itself is a Phase-7 write).
  */
 import { useState } from "react"
 
+import type {
+  OpsJob,
+  OpsProviderStatus,
+  OpsWebhookQueue as OpsWebhookQueueDto,
+} from "@handshake-agent/contracts"
+
 import { cn } from "@/lib/utils"
 import { pushToast } from "@/lib/store/toast-store"
+import { useOps } from "@/lib/query/hooks"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   EngineActionModal,
   ReasonModal,
@@ -39,15 +48,14 @@ import type {
   EngineLedgerRow,
   OpsHealth,
   OpsJobRow,
-  OpsProviderTile,
-  OpsWebhookQueue,
 } from "@/types/components"
 
 // ─── health → token mapping ─────────────────────────────────────────────────────────
 // The design uses per-row raw colours (`p.dot` / `p.fg` / `w.fg` / `j.stBg` / `j.stFg`).
 // Each maps onto the canonical status token pairs (§5): ok=success/green,
 // warn=degraded/amber, down=failing/red. Colour is never the sole signal — the status
-// word carries the state in text.
+// word carries the state in text. The contract `OpsHealth` enum is identical to the FE
+// `OpsHealth` presentation type, so a health value drives these token maps directly.
 
 /** The dot / status-label text token for a health status. */
 const HEALTH_TEXT: Record<OpsHealth, string> = {
@@ -70,98 +78,64 @@ const HEALTH_PILL: Record<OpsHealth, string> = {
   down: "bg-sdn text-tdn",
 }
 
-// ─── design-faithful sample content (no ops endpoint yet) ───────────────────────────
+// ─── contract → display mappers ───────────────────────────────────────────────────────
 
-// The five providers mirror the design's seed provider board (docs/design-ref/logic.js
-// `providers`, line 139): Blockradar, Flutterwave (degraded), Resend, WhatsApp Cloud
-// API, Anthropic — with representative probe latencies.
-const PROVIDER_TILES: readonly OpsProviderTile[] = [
-  { name: "Blockradar", latency: "120ms", status: "Operational", health: "ok" },
-  {
-    name: "Flutterwave",
-    latency: "890ms",
-    status: "Degraded",
-    health: "warn",
-  },
-  { name: "Resend", latency: "70ms", status: "Operational", health: "ok" },
-  {
-    name: "WhatsApp Cloud",
-    latency: "210ms",
-    status: "Operational",
-    health: "ok",
-  },
-  { name: "Anthropic", latency: "640ms", status: "Operational", health: "ok" },
-]
+/** Provider status word from health (the design's "Operational" / "Degraded" label). */
+const PROVIDER_STATUS_LABEL: Record<OpsHealth, string> = {
+  ok: "Operational",
+  warn: "Degraded",
+  down: "Down",
+}
 
-// Representative webhook-ingest queues, shaped exactly like the markup (mono name +
-// "depth · retries" meta + a health-toned status word).
-const WEBHOOK_QUEUES: readonly OpsWebhookQueue[] = [
-  {
-    name: "blockradar.deposit",
-    depth: 0,
-    retries: 0,
-    status: "Healthy",
-    health: "ok",
-  },
-  {
-    name: "blockradar.withdraw",
-    depth: 3,
-    retries: 1,
-    status: "Draining",
-    health: "warn",
-  },
-  {
-    name: "flutterwave.collection",
-    depth: 0,
-    retries: 0,
-    status: "Healthy",
-    health: "ok",
-  },
-  {
-    name: "whatsapp.inbound",
-    depth: 12,
-    retries: 4,
-    status: "Backed up",
-    health: "down",
-  },
-]
+/** Webhook-queue status word from health (the design's "Healthy" / "Draining" label). */
+const QUEUE_STATUS_LABEL: Record<OpsHealth, string> = {
+  ok: "Healthy",
+  warn: "Draining",
+  down: "Backed up",
+}
 
-// Representative cron / background jobs, mirroring the seed() maintenance cadence
-// (reconciliation, child-address sweep, sanctions refresh, statement-link regen).
-const JOB_ROWS: readonly OpsJobRow[] = [
-  {
-    id: "reconciliation-sweep",
-    name: "Reconciliation sweep",
-    schedule: "*/15 * * * *",
-    last: "3m ago",
-    status: "Healthy",
-    health: "ok",
-  },
-  {
-    id: "child-address-sweep",
-    name: "Child-address sweep",
-    schedule: "0 * * * *",
-    last: "22m ago",
-    status: "Healthy",
-    health: "ok",
-  },
-  {
-    id: "sanctions-refresh",
-    name: "Sanctions list refresh",
-    schedule: "0 3 * * *",
-    last: "9h ago",
-    status: "Healthy",
-    health: "ok",
-  },
-  {
-    id: "statement-link-regen",
-    name: "Statement-link regen",
-    schedule: "0 0 * * *",
-    last: "Failed 1h ago",
-    status: "Failed",
-    health: "down",
-  },
-]
+/** Job status word from the run outcome (the design's status pill). */
+const JOB_STATUS_LABEL: Record<OpsJob["status"], string> = {
+  idle: "Idle",
+  running: "Running",
+  ok: "Healthy",
+  failed: "Failed",
+}
+
+/** A latency figure → the mono "142ms" label, or an em dash when unobserved. */
+function latencyLabel(lastLatencyMs: number | null): string {
+  return lastLatencyMs === null ? "—" : `${lastLatencyMs}ms`
+}
+
+/** An ISO timestamp → a compact relative "3m ago" / "9h ago" label ("never" when null). */
+function relativeLabel(iso: string | null): string {
+  if (iso === null) return "never"
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return "never"
+  const seconds = Math.max(0, Math.round((Date.now() - then) / 1000))
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.round(hours / 24)}d ago`
+}
+
+/** Map a contract job onto the FE row shape the Run-now flow + status pill consume. */
+function toJobRow(job: OpsJob): OpsJobRow {
+  const last =
+    job.status === "failed"
+      ? `Failed ${relativeLabel(job.lastRunAt)}`
+      : relativeLabel(job.lastRunAt)
+  return {
+    id: job.id,
+    name: job.name,
+    schedule: job.schedule,
+    last,
+    status: JOB_STATUS_LABEL[job.status],
+    health: job.health,
+  }
+}
 
 // ─── "Run now" engine-action payload ─────────────────────────────────────────────────
 // Running a job is engine-brokered oversight — no funds move. The itemized effect +
@@ -182,12 +156,12 @@ const NO_LEDGER: readonly EngineLedgerRow[] = []
 // ─── sections ─────────────────────────────────────────────────────────────────────────
 
 /** The 5-up provider status tiles (dot + name + latency + status). */
-function ProviderTiles() {
+function ProviderTiles({ providers }: { providers: OpsProviderStatus[] }) {
   return (
     <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-      {PROVIDER_TILES.map((provider) => (
+      {providers.map((provider) => (
         <div
-          key={provider.name}
+          key={provider.key}
           className="rounded-[14px] border border-line bg-card px-[15px] py-[14px]"
         >
           <div className="mb-[7px] flex items-center gap-[7px]">
@@ -198,7 +172,7 @@ function ProviderTiles() {
             <span className="text-xs font-bold text-ink">{provider.name}</span>
           </div>
           <div className="font-mono text-[11px] text-ink2 tabular-nums">
-            {provider.latency}
+            {latencyLabel(provider.lastLatencyMs)}
           </div>
           <div
             className={cn(
@@ -206,7 +180,7 @@ function ProviderTiles() {
               HEALTH_TEXT[provider.health]
             )}
           >
-            {provider.status}
+            {PROVIDER_STATUS_LABEL[provider.health]}
           </div>
         </div>
       ))}
@@ -214,21 +188,42 @@ function ProviderTiles() {
   )
 }
 
+/** Skeleton grid matching the 5-up provider tiles, for the loading branch. */
+function ProviderTilesSkeleton() {
+  return (
+    <div
+      className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5"
+      aria-busy="true"
+    >
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div
+          key={i}
+          className="rounded-[14px] border border-line bg-card px-[15px] py-[14px]"
+        >
+          <Skeleton className="mb-[7px] h-3.5 w-24" />
+          <Skeleton className="h-[11px] w-12" />
+          <Skeleton className="mt-1 h-2.5 w-16" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** Left panel — Webhook queues (mono name + depth/retries + status). */
-function WebhookQueuesCard() {
+function WebhookQueuesCard({ queues }: { queues: OpsWebhookQueueDto[] }) {
   return (
     <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
       <div className="mb-3 text-[13px] font-extrabold text-ink">
         Webhook queues
       </div>
-      {WEBHOOK_QUEUES.map((queue) => (
+      {queues.map((queue) => (
         <div
-          key={queue.name}
+          key={queue.key}
           className="flex items-center gap-[11px] border-b border-line2 py-2.5 last:border-b-0"
         >
           <div className="flex-1">
             <div className="font-mono text-xs font-semibold text-ink">
-              {queue.name}
+              {queue.key}
             </div>
             <div className="text-[10.5px] text-ink3">
               depth <span className="tabular-nums">{queue.depth}</span> ·
@@ -238,7 +233,7 @@ function WebhookQueuesCard() {
           <span
             className={cn("text-[10.5px] font-bold", HEALTH_TEXT[queue.health])}
           >
-            {queue.status}
+            {QUEUE_STATUS_LABEL[queue.health]}
           </span>
         </div>
       ))}
@@ -250,13 +245,19 @@ function WebhookQueuesCard() {
  * Right panel — Background jobs & cron (name + schedule/last + status pill + Run now).
  * "Run now" opens the shared reason → step-up → engine-action flow for its job.
  */
-function BackgroundJobsCard({ onRun }: { onRun: (job: OpsJobRow) => void }) {
+function BackgroundJobsCard({
+  jobs,
+  onRun,
+}: {
+  jobs: OpsJobRow[]
+  onRun: (job: OpsJobRow) => void
+}) {
   return (
     <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
       <div className="mb-3 text-[13px] font-extrabold text-ink">
         Background jobs &amp; cron
       </div>
-      {JOB_ROWS.map((job) => (
+      {jobs.map((job) => (
         <div
           key={job.id}
           className="flex items-center gap-[11px] border-b border-line2 py-[11px] last:border-b-0"
@@ -289,12 +290,35 @@ function BackgroundJobsCard({ onRun }: { onRun: (job: OpsJobRow) => void }) {
   )
 }
 
+/** Skeleton card matching a queues / jobs panel, for the loading branch. */
+function PanelSkeleton() {
+  return (
+    <div className="rounded-2xl border border-line bg-card px-5 py-[18px]" aria-busy="true">
+      <Skeleton className="mb-3 h-3.5 w-32" />
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div
+          key={i}
+          className="flex items-center gap-[11px] border-b border-line2 py-2.5 last:border-b-0"
+        >
+          <div className="flex-1 space-y-1.5">
+            <Skeleton className="h-3 w-40" />
+            <Skeleton className="h-2.5 w-28" />
+          </div>
+          <Skeleton className="h-4 w-16 rounded-full" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ─── page ─────────────────────────────────────────────────────────────────────────────
 
 /** The stage the active "Run now" flow is currently showing. */
 type RunStage = "reason" | "stepup" | "engine"
 
 export function OpsPage() {
+  const { data, isLoading, isError, isSuccess, refetch } = useOps()
+
   // The job whose "Run now" flow is open + which step of that flow is showing.
   const [active, setActive] = useState<{
     job: OpsJobRow
@@ -312,6 +336,13 @@ export function OpsPage() {
     closeFlow()
   }
 
+  const jobs = (data?.jobs ?? []).map(toJobRow)
+  const isEmpty =
+    isSuccess &&
+    data.providers.length === 0 &&
+    data.webhookQueues.length === 0 &&
+    data.jobs.length === 0
+
   return (
     <div
       data-screen-label="System / ops"
@@ -327,14 +358,56 @@ export function OpsPage() {
         </p>
       </div>
 
-      <ProviderTiles />
+      {/* Loading — skeleton tiles + panels. */}
+      {isLoading && (
+        <>
+          <ProviderTilesSkeleton />
+          <div className="grid grid-cols-1 items-start gap-[14px] lg:grid-cols-[1fr_1.2fr]">
+            <PanelSkeleton />
+            <PanelSkeleton />
+          </div>
+        </>
+      )}
 
-      <div className="grid grid-cols-1 items-start gap-[14px] lg:grid-cols-[1fr_1.2fr]">
-        <WebhookQueuesCard />
-        <BackgroundJobsCard
-          onRun={(job) => setActive({ job, stage: "reason" })}
-        />
-      </div>
+      {/* Error — tokened inline error with a retry affordance. */}
+      {isError && (
+        <div className="rounded-2xl border border-line bg-card p-[40px] text-center">
+          <p className="text-[13px] font-bold text-tdn">
+            Couldn&apos;t load the ops board
+          </p>
+          <p className="mt-1 text-[12px] text-ink3">
+            The provider / queue / job feed is unavailable right now.
+          </p>
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            className="mt-3 inline-flex h-8 items-center rounded-[9px] border border-line bg-card px-3.5 text-[12px] font-bold text-ink2 transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Empty — nothing registered (defensive; the registry is normally non-empty). */}
+      {isEmpty && (
+        <div className="rounded-2xl border border-line bg-card p-[50px] text-center text-[13px] text-ink3">
+          No providers, queues, or jobs registered.
+        </div>
+      )}
+
+      {/* Data. */}
+      {isSuccess && !isEmpty && (
+        <>
+          <ProviderTiles providers={data.providers} />
+          <div className="grid grid-cols-1 items-start gap-[14px] lg:grid-cols-[1fr_1.2fr]">
+            <WebhookQueuesCard queues={data.webhookQueues} />
+            <BackgroundJobsCard
+              jobs={jobs}
+              onRun={(job) => setActive({ job, stage: "reason" })}
+            />
+          </div>
+        </>
+      )}
 
       {/* ── "Run now" flow (shared): reason (audit) → step-up (TOTP) → engine-action.
           A manual job run is engine-brokered oversight — no ledger entries, no money. */}

@@ -14,11 +14,15 @@ import type {
   ComplianceReport,
   ComplianceReportDraftRequest,
   ComplianceReportListResponse,
+  SanctionsMonitoringView,
+  SanctionsRecordItem,
   SanctionsRecordListResponse,
   TravelRuleListResponse,
 } from '@handshake-agent/contracts';
 
 import { AuditService } from '../../../core/audit/application/audit.service';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
+import type { SanctionsRecordRecord } from '../../compliance/application/ports/sanctions-record.repository.port';
 import {
   COMPLIANCE_EVENT_REPOSITORY,
   type IComplianceEventRepository,
@@ -48,6 +52,41 @@ import { AdminNotFoundError } from '../domain/admin-errors';
 const DEFAULT_EVENT_LIMIT = 20;
 /** Default cap for the bounded sanctions/Travel-Rule feeds. */
 const DEFAULT_FEED_LIMIT = 50;
+
+/** Human matched-list names keyed by the stored `provider` value. Anything not
+ *  mapped falls back to the raw provider string (forward-compatible with new lists). */
+const MATCHED_LIST_LABEL: Record<string, string> = {
+  open_sanctions: 'OpenSanctions',
+  trm: 'TRM Labs',
+  mock: 'Mock screener',
+};
+
+/** Human match-type labels keyed by the stored `screeningType`. Unmapped types
+ *  fall back to the raw value (forward-compatible with new screening contexts). */
+const MATCH_TYPE_LABEL: Record<string, string> = {
+  beneficiary_add: 'Beneficiary match',
+  transaction_counterparty: 'Counterparty match',
+  identity_verification: 'Identity match',
+  periodic_recheck: 'Periodic re-check',
+};
+
+/** 0–100 confidence banded from the screening verdict. Not a fabricated precise
+ *  score — a bounded, deterministic projection so the Score slot reflects severity
+ *  (hit → high, inconclusive → mid, clear → low). */
+const VERDICT_SCORE: Record<SanctionsRecordItem['verdict'], number> = {
+  hit: 92,
+  inconclusive: 60,
+  clear: 8,
+};
+
+/** Safe monitoring-policy baseline used when a config flag is absent (mirrors the
+ *  JSON defaults in `configuration.ts`). */
+const MONITORING_DEFAULTS: SanctionsMonitoringView = {
+  reScreenDaily: true,
+  screenOnOutbound: true,
+  pepAlert: true,
+  autoBlockOfac: false,
+};
 
 export interface ListEventsQuery {
   status?: string;
@@ -80,6 +119,7 @@ export class AdminComplianceService {
     @Inject(COMPLIANCE_REPORT_REPOSITORY)
     private readonly reports: IComplianceReportRepository,
     private readonly audit: AuditService,
+    private readonly config: EffectiveConfigService,
   ) {}
 
   // ── flagged events ───────────────────────────────────────────────────────────
@@ -144,15 +184,24 @@ export class AdminComplianceService {
     const rows = await this.sanctions.list({
       limit: page.limit ?? DEFAULT_FEED_LIMIT,
     });
+    return { items: rows.map((r) => toSanctionsItem(r)) };
+  }
+
+  /**
+   * The read-only ongoing-monitoring policy view (four flags from layered config).
+   * Absent flags coerce to the safe baseline; toggling is a Phase-7 write.
+   */
+  getMonitoring(): SanctionsMonitoringView {
+    const raw =
+      this.config.get<Partial<SanctionsMonitoringView>>(
+        'compliance.ongoingMonitoring',
+      ) ?? {};
     return {
-      items: rows.map((r) => ({
-        id: r.id,
-        counterpartyId: r.counterpartyId,
-        verdict: r.verdict,
-        provider: r.provider,
-        screeningType: r.screeningType,
-        createdAt: r.createdAt.toISOString(),
-      })),
+      reScreenDaily: raw.reScreenDaily ?? MONITORING_DEFAULTS.reScreenDaily,
+      screenOnOutbound:
+        raw.screenOnOutbound ?? MONITORING_DEFAULTS.screenOnOutbound,
+      pepAlert: raw.pepAlert ?? MONITORING_DEFAULTS.pepAlert,
+      autoBlockOfac: raw.autoBlockOfac ?? MONITORING_DEFAULTS.autoBlockOfac,
     };
   }
 
@@ -282,6 +331,23 @@ export class AdminComplianceService {
 }
 
 // ── mappers (record → contract shape) ────────────────────────────────────────────
+
+/** Projects a sanctions record onto the enriched match-card item, deriving the
+ *  human matched-list name (⇐ provider), match-type label (⇐ screeningType), and
+ *  a verdict-banded confidence score (⇐ verdict) — see the constant maps above. */
+function toSanctionsItem(r: SanctionsRecordRecord): SanctionsRecordItem {
+  return {
+    id: r.id,
+    counterpartyId: r.counterpartyId,
+    verdict: r.verdict,
+    provider: r.provider,
+    screeningType: r.screeningType,
+    matchedList: MATCHED_LIST_LABEL[r.provider] ?? r.provider,
+    matchType: MATCH_TYPE_LABEL[r.screeningType] ?? r.screeningType,
+    matchScore: VERDICT_SCORE[r.verdict],
+    createdAt: r.createdAt.toISOString(),
+  };
+}
 
 function toEventItem(e: ComplianceEventRecord): ComplianceEventItem {
   return {

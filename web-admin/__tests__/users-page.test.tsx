@@ -7,10 +7,12 @@
  *
  * Asserted branches:
  *  - loading → data: skeletons give way to a real user row derived from the mocked
- *    `AdminEndUserListResponse` (name derived from the email local-part, since the
- *    list contract carries no name field; simSwapFlagged → the SIM-SWAP risk badge).
+ *    `AdminEndUserListResponse` (server-provided displayName; simSwapFlagged /
+ *    sanctionsFlagged → the SIM-SWAP / SANCTIONS risk badges; the balance summary
+ *    and real lastActiveAt render; the header shows the server `total`).
  *  - empty: an empty `items[]` renders the design's "No users match these filters".
  *  - error: a rejected fetch renders the inline retry affordance.
+ *  - KYC-status filter maps to the server-side `kycStatus` param.
  *
  * `next/navigation` is stubbed because a row click calls `useRouter().push`.
  */
@@ -42,23 +44,32 @@ const RESPONSE: AdminEndUserListResponse = {
     {
       id: "11111111-1111-1111-1111-111111111111",
       email: "amara.okeke@example.com",
+      displayName: "Amara Okeke",
       status: "active",
       kycStatus: "pending",
       kycTier: "tier_3",
       simSwapFlagged: false,
+      sanctionsFlagged: true,
+      balances: [{ asset: "USDT", amount: "1200.50" }],
+      lastActiveAt: new Date(Date.now() - 3_600_000).toISOString(),
       createdAt: new Date().toISOString(),
     },
     {
       id: "22222222-2222-2222-2222-222222222222",
       email: "ngozi.balogun@example.com",
+      displayName: "Ngozi Balogun",
       status: "active",
       kycStatus: "verified",
       kycTier: "tier_1",
       simSwapFlagged: true,
+      sanctionsFlagged: false,
+      balances: [],
+      lastActiveAt: null,
       createdAt: new Date().toISOString(),
     },
   ],
   nextCursor: null,
+  total: 128,
 }
 
 function renderPage() {
@@ -93,21 +104,38 @@ describe("UsersPage (wired)", () => {
     await screen.findByText("Amara Okeke")
   })
 
-  it("maps real list items to rows, deriving names and the SIM-swap badge", async () => {
+  it("maps real list items to rows, using displayName and both risk badges", async () => {
     mockListEndUsers.mockResolvedValue(RESPONSE)
     renderPage()
 
-    // Name derived from the email local-part (list contract has no name field).
+    // Server-provided displayName (no longer derived from the email local-part).
     expect(await screen.findByText("Amara Okeke")).toBeInTheDocument()
     expect(screen.getByText("Ngozi Balogun")).toBeInTheDocument()
     expect(screen.getByText("amara.okeke@example.com")).toBeInTheDocument()
 
-    // Ngozi is simSwapFlagged → the SIM-SWAP risk badge; Amara is not.
+    // Ngozi is simSwapFlagged; Amara is sanctionsFlagged — each renders once.
     expect(screen.getAllByText("SIM-SWAP")).toHaveLength(1)
+    expect(screen.getAllByText("SANCTIONS")).toHaveLength(1)
+  })
+
+  it("renders the balance summary, real last-active, and the server total", async () => {
+    mockListEndUsers.mockResolvedValue(RESPONSE)
+    renderPage()
+
+    // Balance summary from the per-asset aggregate (native crypto amount).
+    expect(await screen.findByText("1,200.5 USDT")).toBeInTheDocument()
+    // A real lastActiveAt (~1h ago) renders a relative label, not registration.
+    expect(screen.getByText("1h ago")).toBeInTheDocument()
+    // The header surfaces the server-provided total.
+    expect(screen.getByText("128")).toBeInTheDocument()
   })
 
   it("renders the empty state when the list is empty", async () => {
-    mockListEndUsers.mockResolvedValue({ items: [], nextCursor: null })
+    mockListEndUsers.mockResolvedValue({
+      items: [],
+      nextCursor: null,
+      total: 0,
+    })
     renderPage()
 
     expect(
@@ -134,6 +162,25 @@ describe("UsersPage (wired)", () => {
     await waitFor(() =>
       expect(mockListEndUsers).toHaveBeenCalledWith(
         expect.objectContaining({ kycTier: "tier_2" })
+      )
+    )
+  })
+
+  it("maps the KYC-status filter to the server-side kycStatus param", async () => {
+    const user = userEvent.setup()
+    mockListEndUsers.mockResolvedValue(RESPONSE)
+    renderPage()
+
+    await screen.findByText("Amara Okeke")
+    // "Needs info" bucket → the contract's `pending_review` status.
+    await user.selectOptions(
+      screen.getByLabelText("Filter by KYC status"),
+      "needs_info"
+    )
+
+    await waitFor(() =>
+      expect(mockListEndUsers).toHaveBeenCalledWith(
+        expect.objectContaining({ kycStatus: "pending_review" })
       )
     )
   })

@@ -1,5 +1,6 @@
 import {
   AgentConfigViewSchema,
+  AgentInsightsViewSchema,
   ConversationLogDetailSchema,
   ConversationLogItemSchema,
   ConversationLogListResponseSchema,
@@ -113,6 +114,70 @@ describe("ConversationLogReplySchema", () => {
         sentAt: null,
       }),
     ).toBeTruthy();
+  });
+});
+
+describe("AgentInsightsViewSchema", () => {
+  const view = {
+    guardrails: [
+      { label: "Structured output", value: "IntentSchema (enforced)" },
+      { label: "Max tool calls / turn", value: "1" },
+    ],
+    tools: [
+      { name: "check_balance", kind: "read" },
+      { name: "buy_crypto", kind: "write" },
+    ],
+    promptVersion: { label: "live", status: "live", promptChars: 512 },
+    usage24h: {
+      conversations: 12,
+      inboundMessages: 44,
+      outboundReplies: 41,
+      windowHours: 24,
+    },
+  };
+
+  it("parses a well-formed insights view", () => {
+    expect(AgentInsightsViewSchema.parse(view)).toEqual(view);
+  });
+
+  it("rejects a tool kind outside read/write", () => {
+    expect(() =>
+      AgentInsightsViewSchema.parse({
+        ...view,
+        tools: [{ name: "x", kind: "execute" }],
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a non-'live' prompt status (no version store yet)", () => {
+    expect(() =>
+      AgentInsightsViewSchema.parse({
+        ...view,
+        promptVersion: { label: "staged", status: "staged", promptChars: 1 },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a negative usage count", () => {
+    expect(() =>
+      AgentInsightsViewSchema.parse({
+        ...view,
+        usage24h: { ...view.usage24h, conversations: -1 },
+      }),
+    ).toThrow();
+  });
+
+  it("never models any token or cost field (the schema stores none)", () => {
+    const keys = Object.keys(AgentInsightsViewSchema.shape.usage24h.shape);
+    expect(keys).not.toContain("inputTokens");
+    expect(keys).not.toContain("outputTokens");
+    expect(keys).not.toContain("cost");
+    expect(keys).toEqual([
+      "conversations",
+      "inboundMessages",
+      "outboundReplies",
+      "windowHours",
+    ]);
   });
 });
 

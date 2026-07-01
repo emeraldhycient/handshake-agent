@@ -3,20 +3,23 @@
 /**
  * UsersPage — the end-user directory (design §6, `docs/design-ref/screens/Users.html`).
  *
- * WIRED to real data (Phase 6a): the design's 28-row module mock is replaced by
+ * WIRED to real data: the design's 28-row module mock is replaced by
  * `useEndUsers(query)` (GET /admin/users → `AdminEndUserListResponse`). The layout,
  * tokens, spacing, pills and 7-column grid are preserved 1:1 — only the data source
- * changed. Fields the list contract does NOT provide (name, avatar hue, country, NGN
- * balance, sanctions/velocity risk flags, relative last-active) render gracefully
- * ("—" / omitted) and are recorded as shape gaps for later backend enrichment.
+ * changed. Phase-6b enrichment now backs the customer NAME (`displayName`), the
+ * per-asset BALANCE summary (`balances`), the SANCTIONS risk flag (`sanctionsFlagged`),
+ * and true LAST-ACTIVE (`lastActiveAt` — latest session/device/transaction, not
+ * registration); the header also shows the server `total`. Still-unbacked shape gaps:
+ * the Country column (no country field in the schema) and the VELOCITY risk flag
+ * (no per-user breach state) render "—" / match nothing.
  *
- * Server-side filtering: the search box → `query`, the tier select → `kycTier`. The
- * KYC-status select, the country select and the sanctions/velocity risk chips have no
- * matching query param on `AdminEndUserSearchQuery` (only `query`/`status`/`kycTier`),
- * so KYC-status + country + those two chips are filtered client-side over the fetched
- * page; the simSwap chip maps onto the row's `simSwapFlagged` boolean. Pagination is
- * cursor/keyset (the contract returns `nextCursor`, not an offset/total) — the pager
- * is a cursor-aware Prev/Next walking a cursor stack, not the offset numbered pager.
+ * Server-side filtering: the search box → `query`, the KYC-status select → `kycStatus`
+ * (design bucket → contract status), the tier select → `kycTier`. The country select
+ * and the sanctions/velocity risk chips have no matching query param, so they narrow
+ * client-side over the fetched page (sanctions/simSwap chips map onto the row's real
+ * booleans; velocity + country match nothing — shape gaps). Pagination is cursor/keyset
+ * (the contract returns `nextCursor`) — the pager walks a cursor stack; the header
+ * total comes from the response's filter-wide `total`.
  *
  * Four async branches: loading skeleton / error (inline, retryable) / empty / data.
  * The header "Export CSV" and the bulk-bar Export / Tag / Message actions remain
@@ -70,6 +73,20 @@ const KYC_STATUS_TO_BUCKET: Record<
   verified: "verified",
   rejected: "rejected",
   expired: "rejected",
+}
+
+// The design's KYC-status filter buckets → the contract `KycStatus` sent to the
+// server-side `kycStatus` param. One canonical status per bucket (the pending →
+// `pending` and needs_info → `pending_review` cases are the meaningful splits);
+// `not_started`/`expired` are not directly selectable from the four-bucket UI.
+const KYC_BUCKET_TO_STATUS: Record<
+  UserKycStatus,
+  AdminEndUserListItem["kycStatus"]
+> = {
+  verified: "verified",
+  pending: "pending",
+  needs_info: "pending_review",
+  rejected: "rejected",
 }
 
 // Risk flag → badge label + tokens (design `flagMeta`).
@@ -150,17 +167,6 @@ const AVATAR_HUES = [
   "#a0834a",
 ] as const
 
-/** Display name from the email local-part (the list contract has no name field). */
-function displayName(email: string | null): string {
-  if (!email) return "Unnamed user"
-  const local = email.split("@")[0]
-  return local
-    .split(/[._-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ")
-}
-
 /** 1–2 letter initials from a display name (design `ini()`). */
 function initialsOf(name: string): string {
   const parts = name.split(/\s+/).filter(Boolean)
@@ -176,8 +182,13 @@ function avatarHue(id: string): string {
   return AVATAR_HUES[sum % AVATAR_HUES.length]
 }
 
-/** Relative "last active" label from an ISO timestamp (design `lastActive`). */
-function relativeTime(iso: string): string {
+/**
+ * Relative "last active" label from a nullable ISO timestamp. Now sourced from
+ * the contract's real `lastActiveAt` (latest session / device / transaction),
+ * not the registration time. Null (never active) renders an em dash.
+ */
+function relativeTime(iso: string | null): string {
+  if (!iso) return "—"
   const then = new Date(iso).getTime()
   if (Number.isNaN(then)) return "—"
   const secs = Math.max(0, Math.round((Date.now() - then) / 1000))
@@ -190,6 +201,22 @@ function relativeTime(iso: string): string {
   return `${days}d ago`
 }
 
+/**
+ * Compact balance label from the per-asset aggregate. Shows the primary asset's
+ * amount + symbol (e.g. "100.50 USDT"); "+N" when the user holds more assets.
+ * Native crypto amounts only — the contract carries no fiat total for the list.
+ */
+function balanceLabel(balances: AdminEndUserListItem["balances"]): string {
+  const held = balances.filter((b) => Number(b.amount) > 0)
+  if (held.length === 0) return "—"
+  const [primary, ...rest] = held
+  const amount = Number(primary.amount).toLocaleString(undefined, {
+    maximumFractionDigits: 2,
+  })
+  const base = `${amount} ${primary.asset}`
+  return rest.length > 0 ? `${base} +${rest.length}` : base
+}
+
 /** A presentation row derived from an `AdminEndUserListItem`. */
 interface UsersRow {
   id: string
@@ -200,11 +227,13 @@ interface UsersRow {
   kyc: UserKycStatus
   tier: KycTier
   simSwapFlagged: boolean
+  sanctionsFlagged: boolean
+  balance: string
   lastActive: string
 }
 
 function toRow(item: AdminEndUserListItem): UsersRow {
-  const name = displayName(item.email)
+  const name = item.displayName
   return {
     id: item.id,
     name,
@@ -214,7 +243,9 @@ function toRow(item: AdminEndUserListItem): UsersRow {
     kyc: KYC_STATUS_TO_BUCKET[item.kycStatus],
     tier: item.kycTier,
     simSwapFlagged: item.simSwapFlagged,
-    lastActive: relativeTime(item.createdAt),
+    sanctionsFlagged: item.sanctionsFlagged,
+    balance: balanceLabel(item.balances),
+    lastActive: relativeTime(item.lastActiveAt),
   }
 }
 
@@ -249,30 +280,36 @@ export function UsersPage() {
   const queryArg: AdminEndUserSearchQuery = useMemo(
     () => ({
       ...(debouncedSearch ? { query: debouncedSearch } : {}),
+      // KYC status is now a server-side param (mapped from the design bucket).
+      ...(kyc !== "all"
+        ? { kycStatus: KYC_BUCKET_TO_STATUS[kyc as UserKycStatus] }
+        : {}),
       ...(tier !== "all" ? { kycTier: tier as KycTier } : {}),
       ...(cursor ? { cursor } : {}),
       limit: PAGE_SIZE,
     }),
-    [debouncedSearch, tier, cursor]
+    [debouncedSearch, kyc, tier, cursor]
   )
 
   const { data, isLoading, isError, isSuccess, refetch, isFetching } =
     useEndUsers(queryArg)
 
-  // The fetched page → presentation rows, then the client-only filters the server
-  // can't express (KYC status, country, sanctions/velocity chips) applied on top.
+  // The fetched page → presentation rows. Search / KYC-status / tier now filter
+  // SERVER-side (query / kycStatus / kycTier params). The remaining client-only
+  // narrowing is the risk chips (simSwap + sanctions are on the row) and country
+  // (still not in the contract — a country selection matches nothing, a shape gap).
   const rows = useMemo(() => {
     const mapped = (data?.items ?? []).map(toRow)
     return mapped.filter((u) => {
-      if (kyc !== "all" && u.kyc !== kyc) return false
       // Country is not in the list contract — a country filter can't match any row.
       if (country !== "all") return false
       if (risk === "simSwap" && !u.simSwapFlagged) return false
-      // sanctions/velocity are not modeled on the list item — no row can match.
-      if (risk === "sanctions" || risk === "velocity") return false
+      if (risk === "sanctions" && !u.sanctionsFlagged) return false
+      // Velocity breach is not modeled on the list item — no row can match.
+      if (risk === "velocity") return false
       return true
     })
-  }, [data, kyc, country, risk])
+  }, [data, country, risk])
 
   const canPrev = cursorStack.length > 1
   const canNext = Boolean(data?.nextCursor)
@@ -334,7 +371,17 @@ export function UsersPage() {
           </h1>
           <p className="mt-[5px] mb-0 text-[13.5px] text-ink2">
             <span className="tabular-nums">{rows.length}</span> shown
-            {canNext ? " · more available" : ""}
+            {typeof data?.total === "number" ? (
+              <>
+                {" · "}
+                <span className="tabular-nums">
+                  {data.total.toLocaleString()}
+                </span>{" "}
+                total
+              </>
+            ) : (
+              canNext && " · more available"
+            )}
           </p>
         </div>
         <div className="flex gap-[9px]">
@@ -671,12 +718,17 @@ export function UsersPage() {
                 {/* Country — not in the list contract (shape gap) */}
                 <div className="text-[12px] font-semibold text-ink3">—</div>
 
-                {/* Balance — not in the list contract (shape gap) */}
-                <div className="text-right text-[12.5px] font-bold text-ink3 tabular-nums">
-                  —
+                {/* Balance — per-asset aggregate of cached wallet balances */}
+                <div
+                  className={cn(
+                    "text-right text-[12.5px] font-bold tabular-nums",
+                    u.balance === "—" ? "text-ink3" : "text-ink"
+                  )}
+                >
+                  {u.balance}
                 </div>
 
-                {/* Risk — only simSwap is modeled on the list item */}
+                {/* Risk — simSwap + sanctions are modeled on the list item */}
                 <div className="flex flex-wrap gap-[4px]">
                   {u.simSwapFlagged && (
                     <span
@@ -690,9 +742,21 @@ export function UsersPage() {
                       {FLAG_META.simSwap.label}
                     </span>
                   )}
+                  {u.sanctionsFlagged && (
+                    <span
+                      title={FLAG_META.sanctions.full}
+                      className={cn(
+                        "rounded-[5px] px-[6px] py-[2px] text-[9.5px] font-extrabold tracking-[0.03em]",
+                        FLAG_META.sanctions.bg,
+                        FLAG_META.sanctions.fg
+                      )}
+                    >
+                      {FLAG_META.sanctions.label}
+                    </span>
+                  )}
                 </div>
 
-                {/* Last active — derived from createdAt (no last-active field) */}
+                {/* Last active — real latest session/device/transaction activity */}
                 <div className="text-[11.5px] text-ink2 tabular-nums">
                   {u.lastActive}
                 </div>

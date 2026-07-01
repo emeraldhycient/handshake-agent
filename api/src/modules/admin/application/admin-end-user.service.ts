@@ -54,6 +54,7 @@ export type AdminEndUserKycTier = 'unverified' | 'tier_1' | 'tier_2' | 'tier_3';
 export interface AdminEndUserListQuery {
   query?: string;
   status?: string;
+  kycStatus?: string;
   kycTier?: string;
   cursor?: string;
   limit?: number;
@@ -88,16 +89,24 @@ export class AdminEndUserService {
 
   // ── list ───────────────────────────────────────────────────────────────────
 
-  async list(
-    query: AdminEndUserListQuery,
-  ): Promise<{ items: AdminEndUserListItem[]; nextCursor: string | null }> {
+  async list(query: AdminEndUserListQuery): Promise<{
+    items: AdminEndUserListItem[];
+    nextCursor: string | null;
+    total: number;
+  }> {
     const result = await this.identity.listUsers(
-      { query: query.query, status: query.status, kycTier: query.kycTier },
+      {
+        query: query.query,
+        status: query.status,
+        kycStatus: query.kycStatus,
+        kycTier: query.kycTier,
+      },
       { cursor: query.cursor, limit: query.limit ?? DEFAULT_LIST_LIMIT },
     );
     return {
       items: result.items.map((u) => this.toListItem(u)),
       nextCursor: result.nextCursor,
+      total: result.total,
     };
   }
 
@@ -112,11 +121,18 @@ export class AdminEndUserService {
       recentTransactions,
       bankBeneficiaries,
       cryptoBeneficiaries,
+      userWallets,
+      phone,
     ] = await Promise.all([
       this.walletBalance.getBalances(userId),
       this.transactions.listForUser(userId, RECENT_TRANSACTIONS_LIMIT),
       this.beneficiaries.listForUser(userId, 'bank_account'),
       this.beneficiaries.listForUser(userId, 'crypto_address'),
+      // Provisioned per-network child wallets — surface their deposit addresses.
+      this.wallets.findByUser(userId),
+      // Routing phone from the active WhatsApp channel identity (a routing key
+      // only, never the identity anchor — §3.4). Null when no phone channel.
+      this.identity.findWhatsAppAddressByUserId(userId),
     ]);
 
     // Recent double-entry ledger lines for the user's wallet account.
@@ -129,6 +145,7 @@ export class AdminEndUserService {
       kycStatus: detail.kycStatus as AdminEndUserDetail['kycStatus'],
       kycTier: detail.kycTier as AdminEndUserDetail['kycTier'],
       simSwapDetectedAt: toIso(detail.simSwapDetectedAt),
+      phone,
       createdAt: detail.createdAt.toISOString(),
       devices: detail.devices.map((d) =>
         this.toDevice(d, detail.pinnedDeviceId),
@@ -137,11 +154,23 @@ export class AdminEndUserService {
         asset: a.symbol,
         network: a.network,
         amount: a.amount,
+        // Pending (unconfirmed inbound) balance is not surfaced by the ledger
+        // read yet — null until a pending-deposit projection is added.
+        pending: null,
+      })),
+      depositAddresses: userWallets.map((w) => ({
+        network: w.network,
+        address: w.address,
+        status: w.status,
       })),
       recentTransactions: recentTransactions.map((t) => ({
         id: t.id,
         type: t.type,
         status: t.status,
+        asset: t.asset,
+        amount: t.amount,
+        fiatAmount: t.fiatAmount,
+        fiatCurrency: t.fiatCurrency,
         createdAt: t.createdAt.toISOString(),
       })),
       recentLedger,
@@ -262,10 +291,14 @@ export class AdminEndUserService {
     return {
       id: u.id,
       email: u.email,
+      displayName: deriveDisplayName(u.firstName, u.lastName, u.email),
       status: u.status as AdminEndUserListItem['status'],
       kycStatus: u.kycStatus as AdminEndUserListItem['kycStatus'],
       kycTier: u.kycTier as AdminEndUserListItem['kycTier'],
       simSwapFlagged: u.simSwapDetectedAt !== null,
+      sanctionsFlagged: u.sanctionsFlagged,
+      balances: u.balances.map((b) => ({ asset: b.asset, amount: b.amount })),
+      lastActiveAt: toIso(u.lastActiveAt),
       createdAt: u.createdAt.toISOString(),
     };
   }
@@ -314,4 +347,25 @@ export class AdminEndUserService {
 
 function toIso(value: Date | null): string | null {
   return value ? value.toISOString() : null;
+}
+
+/**
+ * Human display name for the admin list: KYC first/last name, else the email
+ * local-part, else a generic label. Never exposes a raw PII identifier (§3.4).
+ */
+function deriveDisplayName(
+  firstName: string | null,
+  lastName: string | null,
+  email: string | null,
+): string {
+  const kycName = [firstName, lastName]
+    .map((p) => p?.trim())
+    .filter((p): p is string => Boolean(p))
+    .join(' ');
+  if (kycName) return kycName;
+
+  const local = email?.split('@')[0]?.trim();
+  if (local) return local;
+
+  return 'Unnamed user';
 }

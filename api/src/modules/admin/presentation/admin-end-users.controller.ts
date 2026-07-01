@@ -17,12 +17,19 @@ import {
   AdminEndUserDetailSchema,
   AdminEndUserDeviceSchema,
   AdminEndUserListResponseSchema,
+  AdminEndUserLimitsResponseSchema,
+  AdminEndUserSessionListResponseSchema,
+  AdminEndUserTimelineResponseSchema,
   type AdminEndUserDetail,
   type AdminEndUserDevice,
+  type AdminEndUserLimitsResponse,
   type AdminEndUserListResponse,
+  type AdminEndUserSessionListResponse,
+  type AdminEndUserTimelineResponse,
 } from '@handshake-agent/contracts';
 
 import { AdminEndUserService } from '../application/admin-end-user.service';
+import { AdminUserSecurityService } from '../application/admin-user-security.service';
 import { AdminSessionGuard } from './admin-session.guard';
 import { AdminStepUpGuard } from './admin-step-up.guard';
 import { PermissionGuard } from './permission.guard';
@@ -56,7 +63,10 @@ type AdminEndUserDeviceListResponse = {
 @Controller('admin')
 @UseGuards(AdminSessionGuard, PermissionGuard)
 export class AdminEndUsersController {
-  constructor(private readonly users: AdminEndUserService) {}
+  constructor(
+    private readonly users: AdminEndUserService,
+    private readonly security: AdminUserSecurityService,
+  ) {}
 
   @Get('users')
   @RequirePermission('api_route', 'GET /admin/users', 'read')
@@ -71,6 +81,34 @@ export class AdminEndUsersController {
   @RequirePermission('api_route', 'GET /admin/users/:id', 'read')
   async get(@Param('id') id: string): Promise<AdminEndUserDetail> {
     return AdminEndUserDetailSchema.parse(await this.users.getDetail(id));
+  }
+
+  @Get('users/:id/sessions')
+  @RequirePermission('api_route', 'GET /admin/users/:id/sessions', 'read')
+  async listSessions(
+    @Param('id') id: string,
+  ): Promise<AdminEndUserSessionListResponse> {
+    const sessions = await this.security.listSessions(id);
+    return AdminEndUserSessionListResponseSchema.parse({ sessions });
+  }
+
+  @Get('users/:id/limits')
+  @RequirePermission('api_route', 'GET /admin/users/:id/limits', 'read')
+  async getLimits(
+    @Param('id') id: string,
+  ): Promise<AdminEndUserLimitsResponse> {
+    return AdminEndUserLimitsResponseSchema.parse(
+      await this.security.getLimits(id),
+    );
+  }
+
+  @Get('users/:id/timeline')
+  @RequirePermission('api_route', 'GET /admin/users/:id/timeline', 'read')
+  async listTimeline(
+    @Param('id') id: string,
+  ): Promise<AdminEndUserTimelineResponse> {
+    const entries = await this.security.listTimeline(id);
+    return AdminEndUserTimelineResponseSchema.parse({ entries });
   }
 
   @Patch('users/:id/tier')

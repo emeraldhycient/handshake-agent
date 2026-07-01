@@ -40,11 +40,13 @@ const LIST: AuditLogListResponse = {
       actor: "Amara Okeke",
       actorAdminId: "22222222-2222-2222-2222-222222222222",
       actorUserId: null,
+      actorRole: "Compliance officer",
       subject: "AppSetting: reconciliation.cron.enabled",
       action: "config_change",
       details: { reason: "Enable nightly reconciliation" },
       before: false,
       after: true,
+      reason: "Enable nightly reconciliation",
       currentHash: "hash-b",
       prevHash: "hash-a",
       createdAt: "2026-07-01T08:42:10.000Z",
@@ -55,11 +57,13 @@ const LIST: AuditLogListResponse = {
       actor: "Ifeoma Bello",
       actorAdminId: "44444444-4444-4444-4444-444444444444",
       actorUserId: null,
+      actorRole: null,
       subject: "usr_10501",
       action: "kyc_state_change",
       details: {},
       before: "pending",
       after: "verified",
+      reason: null,
       currentHash: "hash-c",
       prevHash: "hash-b",
       createdAt: "2026-07-01T08:20:55.000Z",
@@ -109,10 +113,12 @@ describe("AuditPage", () => {
       .getAllByText("config_change")
       .filter((el) => el.tagName === "SPAN")
     expect(chips.length).toBeGreaterThanOrEqual(1)
-    // The details.reason surfaces in the Reason column.
+    // The first-class server-projected `reason` surfaces in the Reason column.
     expect(
       screen.getByText("Enable nightly reconciliation")
     ).toBeInTheDocument()
+    // The resolved `actorRole` renders as the actor sub-line.
+    expect(screen.getByText("Compliance officer")).toBeInTheDocument()
     // The on-mount verify resolves ok → the "verified" pill.
     expect(await screen.findByText("Hash-chain verified")).toBeInTheDocument()
     expect(mockList).toHaveBeenCalled()

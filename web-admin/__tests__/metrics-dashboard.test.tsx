@@ -42,7 +42,31 @@ const SUMMARY: DashboardSummary = {
       { date: "2026-06-28", count: 12 },
       { date: "2026-06-29", count: 20 },
     ],
+    stackedSeries: [
+      {
+        date: "2026-06-28",
+        buy: 8,
+        sell: 0,
+        send: 4,
+        swap: 0,
+        ticket: 0,
+        total: 12,
+      },
+      {
+        date: "2026-06-29",
+        buy: 12,
+        sell: 0,
+        send: 8,
+        swap: 0,
+        ticket: 0,
+        total: 20,
+      },
+    ],
     successRate: 0.925,
+  },
+  gmv: {
+    totalByCurrency: [{ currency: "NGN", amount: "1250000.00" }],
+    txnCount: 148,
   },
   revenue: {
     totalFeesByCurrency: [

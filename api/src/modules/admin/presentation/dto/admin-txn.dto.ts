@@ -2,6 +2,7 @@ import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 import {
+  AdminLedgerListQuerySchema,
   AdminTxnMarkFailedRequestSchema,
   AdminTxnSearchQuerySchema,
 } from '@handshake-agent/contracts';
@@ -30,4 +31,13 @@ export const AdminLedgerHistoryQuerySchema = z.object({
 
 export class AdminLedgerHistoryQueryDto extends createZodDto(
   AdminLedgerHistoryQuerySchema,
+) {}
+
+/**
+ * Query DTO for GET /admin/ledger/all — the GLOBAL cross-account browse. Both
+ * accountType + currency are optional filters (no specific accountId); `cursor`
+ * is an opaque ledger-entry id for newest-first keyset paging. Shared contract.
+ */
+export class AdminLedgerListQueryDto extends createZodDto(
+  AdminLedgerListQuerySchema,
 ) {}

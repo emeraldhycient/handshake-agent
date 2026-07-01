@@ -10,19 +10,20 @@
  * REAL engine via `useTransactions(query)` (Phase 6a) — the design's own mock
  * `TXNS[]` const is gone. This surface never executes; it only reads (§3.1).
  *
- * Contract → design mapping (`AdminTxnListItem` = {id,userId,type,status,createdAt}):
- * the list item does NOT carry the USDT/NGN amount, asset, idempotency key, the
- * user's display name, or per-view counts — those render gracefully as "—" (the
- * copy-idem affordance drops out when the key is absent) and are recorded as
- * backend-enrichment gaps for a later pass. The view tabs drive the single supported
- * `status` filter (+ a from=start-of-day bound for "Failed today"); the free-text
- * search has no backend `q` param, so it filters the loaded page client-side by id.
- * Pagination is keyset cursor (`nextCursor`) via a cursor stack — the offset-based
- * `Pagination` primitive does not fit, so a design-tokened Prev/Next pager is used.
+ * Contract → design mapping (Phase 6b enrichment): `AdminTxnListItem` now carries
+ * the itemized amount leg (asset + crypto + fiat), the user's login email (the
+ * display name is derived from its local-part — the User model has no name field,
+ * §3.4), and the idempotency key (with a copy-on-click affordance). The response
+ * carries the four view-tab counts, rendered as count pills. The view tabs drive
+ * the single supported `status` filter (+ a from=start-of-day bound for "Failed
+ * today"); the search pill is now wired to the backend free-text `q` param
+ * (matched server-side across id/hash/ref/idem). Pagination is keyset cursor
+ * (`nextCursor`) via a cursor stack — the offset-based `Pagination` primitive does
+ * not fit, so a design-tokened Prev/Next pager is used.
  *
  * Rows navigate to the detail route (`/transactions/[id]`).
  */
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type MouseEvent } from "react"
 import { useRouter } from "next/navigation"
 
 import { cn } from "@/lib/utils"
@@ -33,6 +34,7 @@ import type {
   AdminTxnListItem,
   AdminTxnSearchQuery,
   AdminTxnStatus,
+  AdminTxnViewCounts,
 } from "@handshake-agent/contracts"
 import type { StatusPillStatus } from "@/types/components"
 
@@ -101,18 +103,68 @@ function startOfTodayIso(): string {
   return d.toISOString()
 }
 
-/** Build the engine search query from the active view + cursor (page size 10). */
+/** The count key each view tab reads from the response's `counts` block. */
+const VIEW_COUNT_KEY: Record<TransactionsView, keyof AdminTxnViewCounts> = {
+  all: "all",
+  stuck: "stuck",
+  failed: "failed",
+  refunds: "refunds",
+}
+
+/** Build the engine search query from the active view + q + cursor (page size 10). */
 function buildQuery(
   view: TransactionsView,
+  q: string,
   cursor: string | undefined
 ): AdminTxnSearchQuery {
+  const trimmed = q.trim()
   return {
     status: VIEW_STATUS[view],
     from: view === "failed" ? startOfTodayIso() : undefined,
+    ...(trimmed ? { q: trimmed } : {}),
     cursor,
     limit: PAGE_SIZE,
   }
 }
+
+// ─── User name + amount derivation ────────────────────────────────────────────────
+
+/**
+ * A human display name derived from the user's login email local-part (the User
+ * model has no name field, §3.4) — e.g. "amara.okeke@x.com" → "Amara Okeke".
+ * Falls back to a short userId slice when no email is joined.
+ */
+function displayName(email: string | null, userId: string): string {
+  if (!email) return userId.slice(0, 8)
+  const local = email.split("@")[0] ?? ""
+  const words = local
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((w) => w[0].toUpperCase() + w.slice(1))
+  return words.length > 0 ? words.join(" ") : userId.slice(0, 8)
+}
+
+/**
+ * The amount cell: the crypto leg (amount + asset) with the fiat leg beneath, e.g.
+ * "10.5 USDT" / "₦16,500.00". Missing legs collapse gracefully to an em dash.
+ */
+function amountLines(t: AdminTxnListItem): { crypto: string; fiat: string } {
+  const crypto =
+    t.amount && t.asset
+      ? `${t.amount} ${t.asset}`
+      : t.amount
+        ? t.amount
+        : EM_DASH
+  const fiat =
+    t.fiatAmount && t.fiatCurrency
+      ? `${t.fiatCurrency} ${t.fiatAmount}`
+      : t.fiatAmount
+        ? t.fiatAmount
+        : ""
+  return { crypto, fiat }
+}
+
+const SEARCH_DEBOUNCE_MS = 250
 
 // ─── Formatting ─────────────────────────────────────────────────────────────────────
 
@@ -144,19 +196,25 @@ export function TransactionsPage() {
     undefined,
   ])
 
+  // Debounce the free-text search before it hits the server-side `q` param (§7).
+  const [debouncedSearch, setDebouncedSearch] = useState("")
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [search])
+
   const cursor = cursorStack[cursorStack.length - 1]
-  const query = useMemo(() => buildQuery(view, cursor), [view, cursor])
+  const query = useMemo(
+    () => buildQuery(view, debouncedSearch, cursor),
+    [view, debouncedSearch, cursor]
+  )
   const { data, isLoading, isError, isSuccess, refetch } =
     useTransactions(query)
 
-  // The list has no backend free-text `q`; filter the loaded page by id so the
-  // search pill stays functional (recorded as a shape gap for backend enrichment).
-  const rows = useMemo(() => {
-    const items = data?.items ?? []
-    const q = search.trim().toLowerCase()
-    if (!q) return items
-    return items.filter((t) => t.id.toLowerCase().includes(q))
-  }, [data?.items, search])
+  // The backend now filters by `q` (id/hash/ref/idem) — rows come straight from
+  // the response; no client-side re-filtering.
+  const rows = data?.items ?? []
+  const counts = data?.counts
 
   function selectView(next: TransactionsView) {
     setView(next)
@@ -165,6 +223,7 @@ export function TransactionsPage() {
 
   function onSearch(value: string) {
     setSearch(value)
+    setCursorStack([undefined])
   }
 
   function goNext() {
@@ -196,6 +255,7 @@ export function TransactionsPage() {
       <div className="mb-3.5 flex flex-wrap items-center gap-2">
         {TX_VIEWS.map((v) => {
           const active = view === v.id
+          const count = counts?.[VIEW_COUNT_KEY[v.id]]
           return (
             <button
               key={v.id}
@@ -210,6 +270,18 @@ export function TransactionsPage() {
               )}
             >
               {v.label}
+              {count !== undefined && (
+                <span
+                  className={cn(
+                    "inline-flex min-w-[18px] items-center justify-center rounded-full px-1.5 text-[10.5px] font-extrabold tabular-nums",
+                    active
+                      ? "bg-white/20 text-white"
+                      : "bg-card2 text-ink3"
+                  )}
+                >
+                  {count}
+                </span>
+              )}
             </button>
           )
         })}
@@ -380,12 +452,32 @@ function TxnRow({
   onOpen: () => void
 }) {
   const meta = STATUS_META[txn.status]
+  const [copied, setCopied] = useState(false)
+  const { crypto, fiat } = amountLines(txn)
+  const name = displayName(txn.userEmail, txn.userId)
+
+  function copyIdem(e: MouseEvent) {
+    e.stopPropagation()
+    void navigator.clipboard?.writeText(txn.idempotencyKey)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1600)
+  }
+
+  // The row is a keyboard-navigable div (not a <button>) so the idempotency-key
+  // copy control can be a real nested <button> without invalid interactive nesting.
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
       className={cn(
-        "grid min-h-[50px] w-full items-center gap-3 border-b border-line2 px-[18px] text-left transition-colors last:border-b-0 hover:bg-hov focus-visible:bg-hov focus-visible:outline-none",
+        "grid min-h-[50px] w-full cursor-pointer items-center gap-3 border-b border-line2 px-[18px] text-left transition-colors last:border-b-0 hover:bg-hov focus-visible:bg-hov focus-visible:outline-none",
         GRID
       )}
     >
@@ -414,13 +506,17 @@ function TxnRow({
         </span>
         <span className="text-[12px] font-semibold capitalize">{txn.type}</span>
       </div>
-      {/* User — list item exposes only the id (no display name yet). */}
-      <div className="truncate font-mono text-[11.5px] text-ink3">
-        {txn.userId}
+      {/* User — display name derived from the joined login email (§3.4). */}
+      <div className="min-w-0">
+        <div className="truncate text-[12px] font-semibold text-ink">{name}</div>
+        <div className="truncate font-mono text-[10.5px] text-ink3">
+          {txn.userEmail ?? txn.userId}
+        </div>
       </div>
-      {/* Amount (USDT + fiat) — not on the list item; rendered as a placeholder. */}
-      <div className="text-right text-[12px] text-ink3 tabular-nums">
-        {EM_DASH}
+      {/* Amount (crypto leg + fiat leg beneath) */}
+      <div className="text-right tabular-nums">
+        <div className="text-[12px] font-semibold text-ink">{crypto}</div>
+        {fiat && <div className="text-[10.5px] text-ink3">{fiat}</div>}
       </div>
       {/* Status pill (pulsing dot when in-flight) */}
       <div>
@@ -430,14 +526,31 @@ function TxnRow({
           stuck={meta.stuck}
         />
       </div>
-      {/* Idempotency key — absent on the list item; the copy affordance drops out. */}
-      <span className="truncate font-mono text-[11px] text-ink3">
-        {EM_DASH}
-      </span>
+      {/* Idempotency key — copy-on-click. */}
+      <button
+        type="button"
+        onClick={copyIdem}
+        aria-label="Copy idempotency key"
+        className="flex min-w-0 items-center gap-1.5 truncate text-left font-mono text-[11px] text-ink3 transition-colors hover:text-ink2 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        <span className="truncate">
+          {copied ? "Copied" : txn.idempotencyKey}
+        </span>
+        <svg
+          width="11"
+          height="11"
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden
+          className="flex-none"
+        >
+          <path d="M9 9h10v10H9zM5 15V5h10" stroke="currentColor" strokeWidth="1.8" />
+        </svg>
+      </button>
       {/* Created */}
       <div className="text-[11.5px] text-ink2 tabular-nums">
         {formatCreated(txn.createdAt)}
       </div>
-    </button>
+    </div>
   )
 }

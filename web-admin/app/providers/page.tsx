@@ -3,9 +3,10 @@ import { AppShell } from "@/components/admin/app-shell"
 import { ProvidersPage } from "@/components/admin/providers-page"
 
 /**
- * /providers — provider ports + mock→live readiness (design §6.27). A design
- * reproduction: wrapped in RequireAuth + AppShell (auth still works) but NOT
- * permission-gated, so the reproduced screen is always viewable. Composition only.
+ * /providers — provider registry + mock→live readiness (design §6.27), WIRED to
+ * the real `GET /admin/providers` read endpoint (Phase 6b). Wrapped in RequireAuth
+ * + AppShell; the endpoint itself is permission-gated server-side (§3.3).
+ * Composition only.
  */
 export default function ProvidersRoute() {
   return (

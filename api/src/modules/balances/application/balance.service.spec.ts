@@ -66,6 +66,8 @@ function makeService(overrides?: {
     verifyTransactionIntegrity: jest
       .fn()
       .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+    listGlobal: jest.fn(),
+    verifyGlobalSequenceIntegrity: jest.fn(),
   };
 
   const rateProvider = {

@@ -2,10 +2,12 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 
 import {
   DashboardSummarySchema,
+  GmvMetricsSchema,
   KycFunnelMetricsSchema,
   RevenueMetricsSchema,
   TxnVolumeMetricsSchema,
   type DashboardSummary,
+  type GmvMetrics,
   type KycFunnelMetrics,
   type RevenueMetrics,
   type TxnVolumeMetrics,
@@ -43,6 +45,12 @@ export class AdminMetricsController {
     @Query() query: MetricsRangeQueryDto,
   ): Promise<TxnVolumeMetrics> {
     return TxnVolumeMetricsSchema.parse(await this.metrics.transactions(query));
+  }
+
+  @Get('metrics/gmv')
+  @RequirePermission('api_route', 'GET /admin/metrics/gmv', 'read')
+  async gmv(@Query() query: MetricsRangeQueryDto): Promise<GmvMetrics> {
+    return GmvMetricsSchema.parse(await this.metrics.gmv(query));
   }
 
   @Get('metrics/revenue')

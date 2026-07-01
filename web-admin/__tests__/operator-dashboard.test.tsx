@@ -1,17 +1,19 @@
 /**
  * OperatorDashboard tests.
  *
- * The KPI tiles + the 24h/7d/30d range switcher are wired to the real composite
- * metrics endpoint (`useDashboardMetrics` → `getDashboardMetrics`); the volume chart,
- * system-health, live-activity, and approvals widgets stay mock (Phase 6b). These
- * tests assert:
+ * The KPI tiles + the 24h/7d/30d range switcher are wired to the composite metrics
+ * endpoint (`useDashboardMetrics` → `getDashboardMetrics`); the System-health card,
+ * Live-activity feed, and Open-compliance KPI are wired to the ops endpoint
+ * (`useMetricsOps` → `getMetricsOps`); the volume chart is wired to the composite
+ * stacked series. Only the Approvals inbox stays mock (Phase 7). These tests assert:
  *
  *  1. Data branch — the KPI tiles render from a mocked DashboardSummary (derived
- *     totals: transaction count, revenue currency/amount, new signups, KYC pending,
- *     failed tx), and GMV/open-cases (no backend) render "—".
+ *     totals) and GMV; open-compliance renders from the ops payload.
  *  2. Range switcher — changing the preset re-fetches with a wider window.
  *  3. Error branch — a failed metrics fetch shows the error panel with a Retry.
- *  4. The (still-mock) volume chart rescopes when the range switches.
+ *  4. The volume chart rescopes when the range switches.
+ *  5. Ops panels — system health rows (provider + observed latency + queue/recon)
+ *     and the activity feed render from the mocked MetricsOps.
  *
  * The api layer is mocked — no server.
  */
@@ -19,7 +21,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { DashboardSummary } from "@handshake-agent/contracts"
+import type { DashboardSummary, MetricsOps } from "@handshake-agent/contracts"
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -27,12 +29,14 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/lib/api/metrics", () => ({
   getDashboardMetrics: vi.fn(),
+  getMetricsOps: vi.fn(),
 }))
 
-import { getDashboardMetrics } from "@/lib/api/metrics"
+import { getDashboardMetrics, getMetricsOps } from "@/lib/api/metrics"
 import { OperatorDashboard } from "@/components/admin/operator-dashboard"
 
 const mockDashboard = vi.mocked(getDashboardMetrics)
+const mockOps = vi.mocked(getMetricsOps)
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
 
@@ -46,7 +50,31 @@ const SUMMARY: DashboardSummary = {
       { date: "2026-06-28", count: 12 },
       { date: "2026-06-29", count: 20 },
     ],
+    stackedSeries: [
+      {
+        date: "2026-06-28",
+        buy: 8,
+        sell: 0,
+        send: 4,
+        swap: 0,
+        ticket: 0,
+        total: 12,
+      },
+      {
+        date: "2026-06-29",
+        buy: 12,
+        sell: 0,
+        send: 8,
+        swap: 0,
+        ticket: 0,
+        total: 20,
+      },
+    ],
     successRate: 0.925,
+  },
+  gmv: {
+    totalByCurrency: [{ currency: "NGN", amount: "1250000.00" }],
+    txnCount: 148,
   },
   revenue: {
     totalFeesByCurrency: [{ currency: "NGN", amount: "45000.00" }],
@@ -65,6 +93,46 @@ const SUMMARY: DashboardSummary = {
   serviceHealth: { services: [] },
 }
 
+const OPS: MetricsOps = {
+  systemHealth: {
+    providers: [
+      {
+        key: "blockradar",
+        name: "Blockradar",
+        note: "Custodial WaaS · TRON",
+        status: "ok",
+        lastLatencyMs: 120,
+      },
+      {
+        key: "flutterwave",
+        name: "Flutterwave",
+        note: "NGN rails",
+        status: "degraded",
+        lastLatencyMs: null,
+      },
+    ],
+    webhookQueueDepth: 3,
+    reconDriftCount: 2,
+  },
+  activityFeed: [
+    {
+      id: "tx_1",
+      kind: "settled",
+      title: "Buy settled",
+      meta: "tx_1 · 120.00 USDT",
+      at: new Date(Date.now() - 2 * 60_000).toISOString(),
+    },
+    {
+      id: "audit_1",
+      kind: "config_change",
+      title: "Config change",
+      meta: "crypto.buy.spreadBps",
+      at: new Date(Date.now() - 34 * 60_000).toISOString(),
+    },
+  ],
+  compliance: { openCases: 7 },
+}
+
 function renderDashboard() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -79,9 +147,11 @@ function renderDashboard() {
 beforeEach(() => {
   mockDashboard.mockReset()
   mockDashboard.mockResolvedValue(SUMMARY)
+  mockOps.mockReset()
+  mockOps.mockResolvedValue(OPS)
 })
 
-// ─── Snapshot the mock chart's segment heights (inline `height:` styles). ──────────
+// ─── Snapshot the real chart's segment heights (inline `height:` styles). ──────────
 function chartHeights(): string {
   const chart = screen.getByRole("img", {
     name: /Transaction volume by day/i,
@@ -111,14 +181,16 @@ describe("OperatorDashboard — KPI tiles wired to metrics", () => {
     expect(screen.getByText("12")).toBeInTheDocument()
   })
 
-  it("renders '—' for the KPIs with no backend (GMV, open compliance cases)", async () => {
+  it("renders the GMV tile and the open-compliance count from the ops metric", async () => {
     renderDashboard()
 
     await screen.findByText("NGN 45000.00")
-    // GMV and Open compliance cases have no metric to source → both render "—".
+    // GMV is wired: the primary currency + summed fiat notional render.
     expect(screen.getByText("GMV")).toBeInTheDocument()
+    expect(screen.getByText("NGN 1250000.00")).toBeInTheDocument()
+    // Open compliance cases is now wired to the ops payload (openCases: 7).
     expect(screen.getByText("Open compliance cases")).toBeInTheDocument()
-    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2)
+    expect(await screen.findByText("7")).toBeInTheDocument()
   })
 
   it("re-fetches with a wider window when the range preset changes", async () => {
@@ -147,20 +219,102 @@ describe("OperatorDashboard — KPI tiles wired to metrics", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
   })
 
-  it("rescopes the (mock) volume chart when the range switches", async () => {
-    const user = userEvent.setup()
+  it("renders the volume chart from the real stacked-by-capability series", async () => {
     renderDashboard()
 
     await screen.findByText("NGN 45000.00")
-    const before = chartHeights()
-    expect(before.length).toBeGreaterThan(0)
+    // The chart is now backed by txnVolume.stackedSeries (2 day-buckets in the
+    // fixture) — its bar segments render non-zero inline heights.
+    const heights = chartHeights()
+    expect(heights.length).toBeGreaterThan(0)
+    // The tallest day (2026-06-29, total 20) normalises to a 100% bar column.
+    expect(heights).toContain("100%")
+  })
 
-    await user.click(screen.getByRole("button", { name: "7d" }))
-    const after7d = chartHeights()
-    expect(after7d).not.toEqual(before)
+  it("re-renders the volume chart when the range fetch returns a different series", async () => {
+    const user = userEvent.setup()
+    // First (24h) call → the base fixture; the 30d call → a single, different day.
+    const wideSummary: DashboardSummary = {
+      ...SUMMARY,
+      txnVolume: {
+        ...SUMMARY.txnVolume,
+        stackedSeries: [
+          {
+            date: "2026-06-01",
+            buy: 50,
+            sell: 30,
+            send: 0,
+            swap: 0,
+            ticket: 0,
+            total: 80,
+          },
+        ],
+      },
+    }
+    mockDashboard.mockResolvedValueOnce(SUMMARY).mockResolvedValueOnce(wideSummary)
+
+    renderDashboard()
+    await screen.findByText("NGN 45000.00")
+    const before = chartHeights()
 
     await user.click(screen.getByRole("button", { name: "30d" }))
-    const after30d = chartHeights()
-    expect(after30d).not.toEqual(after7d)
+    await waitFor(() => expect(mockDashboard).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(chartHeights()).not.toEqual(before))
+  })
+
+  it("shows an empty-state note when the range has no transactions", async () => {
+    mockDashboard.mockResolvedValue({
+      ...SUMMARY,
+      txnVolume: { ...SUMMARY.txnVolume, stackedSeries: [] },
+    })
+    renderDashboard()
+
+    expect(
+      await screen.findByText("No transactions in this range.")
+    ).toBeInTheDocument()
+  })
+})
+
+describe("OperatorDashboard — System health + Live activity wired to ops", () => {
+  it("renders provider rows with observed latency (and — when unmeasured)", async () => {
+    renderDashboard()
+
+    // Blockradar row + its observed latency; Flutterwave has null latency → "—".
+    expect(await screen.findByText("Blockradar")).toBeInTheDocument()
+    expect(screen.getByText("120ms")).toBeInTheDocument()
+    expect(screen.getByText("Flutterwave")).toBeInTheDocument()
+    // Webhook-queue depth (3) + recon drift ("2 open") from the ops payload.
+    expect(screen.getByText("3")).toBeInTheDocument()
+    expect(screen.getByText("2 open")).toBeInTheDocument()
+  })
+
+  it("renders the activity feed rows from the ops payload", async () => {
+    renderDashboard()
+
+    expect(await screen.findByText("Buy settled")).toBeInTheDocument()
+    expect(screen.getByText("tx_1 · 120.00 USDT")).toBeInTheDocument()
+    expect(screen.getByText("Config change")).toBeInTheDocument()
+  })
+
+  it("shows an empty-state note when the activity feed is empty", async () => {
+    mockOps.mockResolvedValue({ ...OPS, activityFeed: [] })
+    renderDashboard()
+
+    expect(
+      await screen.findByText("No recent activity.")
+    ).toBeInTheDocument()
+  })
+
+  it("shows an unavailable note when the ops fetch fails (panels degrade independently)", async () => {
+    mockOps.mockRejectedValue(new Error("boom"))
+    renderDashboard()
+
+    // The composite dashboard still renders (independent query); the ops panels
+    // fall back to their unavailable notes.
+    await screen.findByText("NGN 45000.00")
+    expect(
+      await screen.findByText("Health metrics unavailable.")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Activity feed unavailable.")).toBeInTheDocument()
   })
 })

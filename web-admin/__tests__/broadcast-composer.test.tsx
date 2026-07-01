@@ -24,6 +24,12 @@ import { defaultToastStore } from "@/lib/store/toast-store"
 // to the design's own template keys) is sufficient.
 vi.mock("@/lib/api/notifications", () => ({
   listNotificationTemplates: vi.fn().mockResolvedValue({ items: [] }),
+  // The page's delivery-log card (Phase 6b) also fetches; these tests only
+  // exercise the composer, so an empty log + zeroed stats is sufficient.
+  getDeliveryLog: vi.fn().mockResolvedValue({
+    items: [],
+    stats: { bounceRate: 0, complaintRate: 0, sampleSize: 0 },
+  }),
 }))
 
 function renderPage() {

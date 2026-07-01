@@ -84,7 +84,15 @@ interface EndUserDetailBody {
   beneficiaries: unknown[];
 }
 interface KycQueueBody {
-  items: { userId: string; email: string | null; status: string }[];
+  items: {
+    userId: string;
+    email: string | null;
+    displayName: string | null;
+    requestedTier: string | null;
+    status: string;
+    submittedAt: string | null;
+    slaAgeSeconds: number;
+  }[];
   nextCursor: string | null;
 }
 
@@ -324,13 +332,28 @@ describe('Admin end-user management + KYC review — e2e (AppModule, Testcontain
     });
     expect(tierAudit).not.toBeNull();
 
-    // 7. GET /admin/kyc/queue — the pending-review user appears.
+    // 7. GET /admin/kyc/queue — the pending-review user appears, enriched with the
+    //    KYC display name + requested tier and a computed SLA age.
     const queueRes = await request(app.getHttpServer())
       .get('/admin/kyc/queue')
       .set('Authorization', `Bearer ${rootToken}`)
       .expect(200);
     const queue = queueRes.body as KycQueueBody;
-    expect(queue.items.some((q) => q.userId === userId)).toBe(true);
+    const seeded = queue.items.find((q) => q.userId === userId);
+    expect(seeded).toBeDefined();
+    expect(seeded?.displayName).toBe('Ada Lovelace');
+    expect(seeded?.requestedTier).toBe('unverified');
+    expect(seeded?.slaAgeSeconds).toBeGreaterThanOrEqual(0);
+
+    // 7b. The status filter narrows to a different bucket — the pending user is absent
+    //     from the 'verified' bucket (it is still pending_review at this point).
+    const verifiedRes = await request(app.getHttpServer())
+      .get('/admin/kyc/queue')
+      .query({ status: 'verified' })
+      .set('Authorization', `Bearer ${rootToken}`)
+      .expect(200);
+    const verifiedQueue = verifiedRes.body as KycQueueBody;
+    expect(verifiedQueue.items.some((q) => q.userId === userId)).toBe(false);
 
     // 8. POST /admin/kyc/:userId/approve — verifies the submission (204, step-up still fresh).
     await request(app.getHttpServer())

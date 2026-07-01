@@ -48,6 +48,7 @@ const WA_VERIFY_TOKEN = 'e2e-verify-token-admin-txnov';
 const BOOTSTRAP_TOKEN = 'e2e-bootstrap-token-txnov';
 const ROOT_EMAIL = 'root-txnov@e2e.test';
 const ROOT_PASSWORD = 'rootPassword123!';
+const USER_EMAIL = 'amara-txnov@e2e.test';
 
 interface BootstrapBody {
   invitationToken: string;
@@ -55,14 +56,44 @@ interface BootstrapBody {
 interface LoginBody {
   accessToken: string;
 }
+interface TxnListItem {
+  id: string;
+  userId: string;
+  userEmail: string | null;
+  type: string;
+  status: string;
+  asset: string | null;
+  amount: string | null;
+  fiatAmount: string | null;
+  fiatCurrency: string | null;
+  idempotencyKey: string;
+}
 interface TxnListBody {
-  items: { id: string; userId: string; type: string; status: string }[];
+  items: TxnListItem[];
   nextCursor: string | null;
+  counts: { all: number; stuck: number; failed: number; refunds: number };
 }
 interface TxnDetailBody {
   id: string;
-  ledgerLegs: { currency: string; direction: string; amount: string }[];
+  userEmail: string | null;
+  economics: {
+    asset: string | null;
+    amount: string | null;
+    fiatAmount: string | null;
+    fiatCurrency: string | null;
+    rate: string | null;
+    processingFee: string | null;
+    fxSpreadBps: string | null;
+    internalMargin: string | null;
+  };
+  ledgerLegs: {
+    currency: string;
+    direction: string;
+    amount: string;
+    sequence: number;
+  }[];
   timeline: { status: string; at: string }[];
+  providerReferences: { provider: string; reference: string }[];
 }
 interface IntegrityBody {
   transactionId: string;
@@ -197,7 +228,7 @@ describe('Admin transactions + ledger oversight — e2e (AppModule, Testcontaine
     app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();
 
-    userId = (await prisma.user.create({ data: {} })).id;
+    userId = (await prisma.user.create({ data: { email: USER_EMAIL } })).id;
   }, 120_000);
 
   afterAll(async () => {
@@ -212,6 +243,11 @@ describe('Admin transactions + ledger oversight — e2e (AppModule, Testcontaine
     type: string,
     status: string,
     createdAt: Date,
+    extra?: {
+      metadata?: Record<string, unknown>;
+      processorTxRef?: string;
+      onChainTxHash?: string;
+    },
   ): Promise<string> {
     const txn = await prisma.transaction.create({
       data: {
@@ -220,7 +256,13 @@ describe('Admin transactions + ledger oversight — e2e (AppModule, Testcontaine
         status: status as never,
         idempotencyKey: randomUUID(),
         requestChecksum: `chk-${randomUUID()}`,
-        metadata: {},
+        metadata: (extra?.metadata ?? {}) as never,
+        ...(extra?.processorTxRef !== undefined
+          ? { processorTxRef: extra.processorTxRef }
+          : {}),
+        ...(extra?.onChainTxHash !== undefined
+          ? { onChainTxHash: extra.onChainTxHash }
+          : {}),
         createdAt,
         ...(status === 'settling' ? { executedAt: createdAt } : {}),
         ...(status === 'completed'
@@ -304,6 +346,20 @@ describe('Admin transactions + ledger oversight — e2e (AppModule, Testcontaine
       'buy',
       'completed',
       new Date('2026-03-02T00:00:00.000Z'),
+      {
+        metadata: {
+          asset: 'USDT',
+          cryptoAmount: '10.5',
+          fiatAmount: '16500.00',
+          fiatCurrency: 'NGN',
+          fxRate: '1571.43',
+          baseRate: '1548.00',
+          processingFeeAmount: '82.50',
+          spreadBps: '150',
+          providerRef: 'br_wd_e2e_123',
+        },
+        processorTxRef: 'flw-ref-e2e',
+      },
     );
     // Unbalanced NGN: only a single -5 debit leg. Distinct account so its
     // per-account sequence does not collide with the balanced txn's legs.
@@ -340,6 +396,60 @@ describe('Admin transactions + ledger oversight — e2e (AppModule, Testcontaine
       'created',
       'settling',
     ]);
+
+    // 4b. Phase 6b enrichment on the UNBALANCED (buy) txn: the list row now
+    //     carries the joined user email + itemized amount leg + idem key, and
+    //     the response carries the four view-tab counts.
+    const allRes = await request(app.getHttpServer())
+      .get('/admin/transactions')
+      .set('Authorization', `Bearer ${rootToken}`)
+      .expect(200);
+    const all = allRes.body as TxnListBody;
+    expect(all.counts.all).toBeGreaterThanOrEqual(2);
+    expect(all.counts.stuck).toBeGreaterThanOrEqual(1); // the settling txn
+    const buyRow = all.items.find((t) => t.id === unbalancedTxnId)!;
+    expect(buyRow.userEmail).toBe(USER_EMAIL);
+    expect(buyRow.asset).toBe('USDT');
+    expect(buyRow.amount).toBe('10.5');
+    expect(buyRow.fiatAmount).toBe('16500.00');
+    expect(buyRow.fiatCurrency).toBe('NGN');
+    expect(buyRow.idempotencyKey).toBeTruthy();
+
+    // 4c. Free-text q search matches the Flutterwave ref (string column).
+    const qRes = await request(app.getHttpServer())
+      .get('/admin/transactions?q=flw-ref-e2e')
+      .set('Authorization', `Bearer ${rootToken}`)
+      .expect(200);
+    const qBody = qRes.body as TxnListBody;
+    expect(qBody.items.map((t) => t.id)).toContain(unbalancedTxnId);
+    expect(qBody.items.map((t) => t.id)).not.toContain(balancedTxnId);
+
+    // 4d. Detail economics + provider references on the buy txn. internalMargin
+    //     = (fxRate − baseRate) × cryptoAmount = 23.43 × 10.5 = 246.015.
+    const buyDetailRes = await request(app.getHttpServer())
+      .get(`/admin/transactions/${unbalancedTxnId}`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .expect(200);
+    const buyDetail = buyDetailRes.body as TxnDetailBody;
+    expect(buyDetail.userEmail).toBe(USER_EMAIL);
+    expect(buyDetail.economics).toEqual({
+      asset: 'USDT',
+      amount: '10.5',
+      fiatAmount: '16500.00',
+      fiatCurrency: 'NGN',
+      rate: '1571.43',
+      processingFee: '82.50',
+      fxSpreadBps: '150',
+      internalMargin: '246.015',
+    });
+    expect(buyDetail.providerReferences).toEqual([
+      { provider: 'flutterwave', reference: 'flw-ref-e2e' },
+      { provider: 'blockradar', reference: 'br_wd_e2e_123' },
+    ]);
+    // Ledger legs now project the per-account sequence.
+    expect(detail.ledgerLegs.every((l) => typeof l.sequence === 'number')).toBe(
+      true,
+    );
 
     // 5a. POST /admin/ledger/verify/:id → balanced=true for the balanced txn.
     const okRes = await request(app.getHttpServer())

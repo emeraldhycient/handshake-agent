@@ -5,12 +5,18 @@
  * factory. This file lives in `lib/` and must NOT import from `components/` or
  * `app/`. Mutations invalidate the queries they affect.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import type {
   AdminEndUserSearchQuery,
   AdminEndUserStatusRequest,
   AdminEndUserTierRequest,
   AdminInvitationCreateRequest,
+  AdminLedgerListQuery,
   AdminTxnMarkFailedRequest,
   AdminTxnSearchQuery,
   AdminUserStatusRequest,
@@ -23,6 +29,7 @@ import type {
   ComplianceReportSubmitRequest,
   KycApproveRequest,
   KycRejectRequest,
+  KycStatus,
   MetricsRangeQuery,
   NotificationTemplatePreviewRequest,
   NotificationTemplateUpsertRequest,
@@ -34,12 +41,16 @@ import type {
 import * as admin from "@/lib/api/admin"
 import * as agent from "@/lib/api/agent"
 import * as beneficiaries from "@/lib/api/beneficiaries"
+import * as catalog from "@/lib/api/catalog"
 import * as config from "@/lib/api/config"
 import * as compliance from "@/lib/api/compliance"
 import * as kyc from "@/lib/api/kyc"
 import * as ledger from "@/lib/api/ledger"
 import * as metrics from "@/lib/api/metrics"
+import * as ops from "@/lib/api/ops"
 import * as notifications from "@/lib/api/notifications"
+import * as providers from "@/lib/api/providers"
+import * as reconciliation from "@/lib/api/reconciliation"
 import * as tickets from "@/lib/api/tickets"
 import * as transactions from "@/lib/api/transactions"
 import * as treasury from "@/lib/api/treasury"
@@ -124,6 +135,21 @@ export function usePublicConfig() {
 }
 
 /**
+ * The FULL asset + fiat catalog (enabled AND disabled) with each entry's live
+ * status, from `GET /admin/config/catalog`. Drives the Asset + Currency catalog
+ * screens — unlike `usePublicConfig` (enabled-only, secret-stripped), this admin
+ * view shows the paused/off rows too. 5 min stale — the catalog changes only via
+ * admin config edits.
+ */
+export function useAdminCatalog() {
+  return useQuery({
+    queryKey: qk.adminCatalog,
+    queryFn: () => catalog.getAdminCatalog(),
+    staleTime: 5 * 60_000,
+  })
+}
+
+/**
  * The effective layered-config settings (GET /admin/settings) — every non-secret
  * registry key with its effective value + provenance. An optional `category`
  * narrows the list (e.g. "Pricing", "KYC", "Catalog"). Drives the Settings /
@@ -177,11 +203,44 @@ export function useEndUserDevices(id: string | null) {
   })
 }
 
-/** The KYC review queue. 15 s stale. */
-export function useKycQueue() {
+/** The end user's active + recent auth sessions (detail Security tab). */
+export function useEndUserSessions(id: string | null) {
   return useQuery({
-    queryKey: qk.kycQueue,
-    queryFn: () => kyc.listKycQueue(),
+    queryKey: qk.endUserSessions(id ?? ""),
+    queryFn: () => users.listEndUserSessions(id as string),
+    enabled: id !== null,
+    staleTime: 15_000,
+  })
+}
+
+/** The end user's effective limits + live velocity usage (detail Limits tab). */
+export function useEndUserLimits(id: string | null) {
+  return useQuery({
+    queryKey: qk.endUserLimits(id ?? ""),
+    queryFn: () => users.getEndUserLimits(id as string),
+    enabled: id !== null,
+    staleTime: 15_000,
+  })
+}
+
+/** The end user's admin-action timeline from the audit log (detail Profile tab). */
+export function useEndUserTimeline(id: string | null) {
+  return useQuery({
+    queryKey: qk.endUserTimeline(id ?? ""),
+    queryFn: () => users.listEndUserTimeline(id as string),
+    enabled: id !== null,
+    staleTime: 15_000,
+  })
+}
+
+/**
+ * The KYC review queue for a status bucket (defaults to pending_review). The
+ * status is part of the key so each console tab caches its own bucket. 15 s stale.
+ */
+export function useKycQueue(status?: KycStatus) {
+  return useQuery({
+    queryKey: qk.kycQueue(status),
+    queryFn: () => kyc.listKycQueue(status ? { status } : {}),
     staleTime: 15_000,
   })
 }
@@ -229,6 +288,35 @@ export function useLedgerHistory(query: LedgerHistoryQuery | null) {
   })
 }
 
+/**
+ * The GLOBAL cross-account ledger, filtered by an optional accountType/currency,
+ * newest-first. Keyset-paginated ("Load more" via `nextCursor`): each page's
+ * cursor is fed into the next request's `params.cursor`. `filters` excludes the
+ * cursor — it seeds page one and keys the cache.
+ */
+export function useGlobalLedger(filters: AdminLedgerListQuery) {
+  return useInfiniteQuery({
+    queryKey: qk.ledgerGlobal(filters),
+    queryFn: ({ pageParam }) =>
+      ledger.listGlobalLedger({
+        ...filters,
+        ...(pageParam ? { cursor: pageParam } : {}),
+      }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    staleTime: 15_000,
+  })
+}
+
+/** The global ledger sequence-integrity summary (header pill). 30 s stale. */
+export function useLedgerIntegrity() {
+  return useQuery({
+    queryKey: qk.ledgerIntegrity,
+    queryFn: () => ledger.getLedgerIntegrity(),
+    staleTime: 30_000,
+  })
+}
+
 // ─── Compliance read hooks ────────────────────────────────────────────────────────
 
 /** The flagged-event queue. Keyed by the filter. */
@@ -256,6 +344,15 @@ export function useSanctions() {
     queryKey: qk.sanctions,
     queryFn: () => compliance.listSanctions(),
     staleTime: 30_000,
+  })
+}
+
+/** The sanctions ongoing-monitoring policy flags (read-only; from layered config). */
+export function useSanctionsMonitoring() {
+  return useQuery({
+    queryKey: qk.sanctionsMonitoring,
+    queryFn: () => compliance.getSanctionsMonitoring(),
+    staleTime: 60_000,
   })
 }
 
@@ -321,6 +418,62 @@ export function useWithdrawalPolicies() {
     queryKey: qk.withdrawalPolicies,
     queryFn: () => treasury.listWithdrawalPolicies(),
     staleTime: 60_000,
+  })
+}
+
+/** Child-address gas-sweep state (balance + lifecycle) + the sweep threshold. */
+export function useTreasurySweeps() {
+  return useQuery({
+    queryKey: qk.treasurySweeps,
+    queryFn: () => treasury.listTreasurySweeps(),
+    staleTime: 30_000,
+  })
+}
+
+/** Pending payouts / withdrawals awaiting release (read-only). */
+export function useTreasuryPayoutQueue() {
+  return useQuery({
+    queryKey: qk.treasuryPayoutQueue,
+    queryFn: () => treasury.listTreasuryPayoutQueue(),
+    staleTime: 15_000,
+  })
+}
+
+/** NGN fiat float vs the configured target. */
+export function useTreasuryFiatFloat() {
+  return useQuery({
+    queryKey: qk.treasuryFiatFloat,
+    queryFn: () => treasury.listTreasuryFiatFloat(),
+    staleTime: 30_000,
+  })
+}
+
+/** FX net position + exposure headroom. */
+export function useTreasuryFxPosition() {
+  return useQuery({
+    queryKey: qk.treasuryFxPosition,
+    queryFn: () => treasury.listTreasuryFxPosition(),
+    staleTime: 30_000,
+  })
+}
+
+// ─── Reconciliation (Phase 6b — READ-ONLY) ────────────────────────────────────────
+
+/** Provider-vs-ledger break list (over-credit / missing-settlement / mismatch / dup). */
+export function useReconBreaks() {
+  return useQuery({
+    queryKey: qk.reconBreaks,
+    queryFn: () => reconciliation.listReconBreaks(),
+    staleTime: 30_000,
+  })
+}
+
+/** Reconciliation-cron status bar (last/next run, enablement, open-break count). */
+export function useReconStatus() {
+  return useQuery({
+    queryKey: qk.reconStatus,
+    queryFn: () => reconciliation.getReconStatus(),
+    staleTime: 30_000,
   })
 }
 
@@ -677,6 +830,19 @@ export function useNotificationTemplates() {
   })
 }
 
+/**
+ * The read-only delivery log (recent issued notifications + aggregate
+ * bounce/complaint rates) for the Comms console. 15 s stale — delivery state moves
+ * quickly. (Phase 6b Comms READ enrichment.)
+ */
+export function useDeliveryLog() {
+  return useQuery({
+    queryKey: qk.notificationDeliveryLog,
+    queryFn: () => notifications.getDeliveryLog(),
+    staleTime: 15_000,
+  })
+}
+
 /** One template by its composite key. Disabled until a `ref` is provided. */
 export function useNotificationTemplate(ref: TemplateRef | null) {
   return useQuery({
@@ -700,6 +866,18 @@ export function useWhatsAppConfig() {
   })
 }
 
+/**
+ * The provider-registry view: per-provider status/mock-mode/secret-presence/
+ * bound-capabilities + the mock→live readiness checklist. Non-secret; no key values.
+ */
+export function useProviderRegistry() {
+  return useQuery({
+    queryKey: qk.providerRegistry,
+    queryFn: () => providers.getProviderRegistry(),
+    staleTime: 60_000,
+  })
+}
+
 /** Existing ticket orders (read-only). */
 export function useTicketOrders() {
   return useQuery({
@@ -714,6 +892,20 @@ export function useAgentConfig() {
   return useQuery({
     queryKey: qk.agentConfig,
     queryFn: () => agent.getAgentConfig(),
+    staleTime: 60_000,
+  })
+}
+
+/**
+ * The agent's guardrails, tool registry, live prompt version, and REAL 24h usage
+ * counts (no token/cost — the schema stores none). Backs the Agent console's four
+ * cards. 60 s stale — guardrails/tools are effectively static; usage need not be
+ * real-time.
+ */
+export function useAgentInsights() {
+  return useQuery({
+    queryKey: qk.agentInsights,
+    queryFn: () => agent.getAgentInsights(),
     staleTime: 60_000,
   })
 }
@@ -750,6 +942,36 @@ export function useDashboardMetrics(range: MetricsRangeQuery) {
     queryKey: qk.dashboardMetrics(range),
     queryFn: () => metrics.getDashboardMetrics(range),
     staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/**
+ * The operational-health payload (system health, live-activity feed, open-compliance
+ * count) for the dashboard's three formerly-mock panels. 30 s stale — these signals
+ * shift more often than the aggregations. `retry: false` so a 403 (no Metrics grant)
+ * degrades gracefully alongside the composite dashboard.
+ */
+export function useMetricsOps() {
+  return useQuery({
+    queryKey: qk.metricsOps,
+    queryFn: () => metrics.getMetricsOps(),
+    staleTime: 30_000,
+    retry: false,
+  })
+}
+
+/**
+ * The "System / ops" board (provider status, webhook-ingest queues, background-
+ * jobs / cron registry) for the ops screen. 30 s stale — these signals shift
+ * more often than the dashboard aggregations. `retry: false` so a 403 (no
+ * Metrics grant) degrades gracefully.
+ */
+export function useOps() {
+  return useQuery({
+    queryKey: qk.opsBoard,
+    queryFn: () => ops.getOpsBoard(),
+    staleTime: 30_000,
     retry: false,
   })
 }
