@@ -27,12 +27,25 @@ import { SanctionsPage } from "@/components/admin/sanctions-page"
 vi.mock("@/lib/api/compliance", () => ({
   listSanctions: vi.fn(),
   getSanctionsMonitoring: vi.fn(),
+  disposeSanctions: vi.fn(),
 }))
 
-import { listSanctions, getSanctionsMonitoring } from "@/lib/api/compliance"
+// The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn(),
+}))
+
+import {
+  listSanctions,
+  getSanctionsMonitoring,
+  disposeSanctions,
+} from "@/lib/api/compliance"
+import { getMe } from "@/lib/api/admin"
 
 const mockListSanctions = vi.mocked(listSanctions)
 const mockGetMonitoring = vi.mocked(getSanctionsMonitoring)
+const mockDispose = vi.mocked(disposeSanctions)
+const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -47,6 +60,7 @@ const SANCTIONS: SanctionsRecordListResponse = {
       matchedList: "OpenSanctions",
       matchType: "Counterparty match",
       matchScore: 92,
+      disposition: null,
       createdAt: "2026-06-30T10:00:00.000Z",
     },
     {
@@ -58,6 +72,7 @@ const SANCTIONS: SanctionsRecordListResponse = {
       matchedList: "TRM Labs",
       matchType: "Identity match",
       matchScore: 60,
+      disposition: null,
       createdAt: "2026-06-30T11:00:00.000Z",
     },
   ],
@@ -86,6 +101,19 @@ beforeEach(() => {
   mockListSanctions.mockResolvedValue(SANCTIONS)
   mockGetMonitoring.mockReset()
   mockGetMonitoring.mockResolvedValue(MONITORING)
+  mockDispose.mockReset()
+  mockDispose.mockResolvedValue({ ...SANCTIONS.items[0], disposition: "cleared" })
+  mockGetMe.mockReset()
+  mockGetMe.mockResolvedValue({
+    id: "11111111-1111-1111-1111-111111111111",
+    email: "amara@handshake.ng",
+    role: { id: "00000000-0000-0000-0000-000000000001", name: "Super Admin" },
+    status: "active",
+    mfaEnabled: true,
+    permissions: [],
+    menus: [],
+    pages: [],
+  })
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -199,5 +227,106 @@ describe("SanctionsPage", () => {
     expect(
       await screen.findByText("Failed to load monitoring policy")
     ).toBeInTheDocument()
+  })
+})
+
+describe("SanctionsPage (Phase 7 — disposition WRITE)", () => {
+  it("seeds the card from the server disposition (already-disposed shows the done-label, no actions)", async () => {
+    mockListSanctions.mockResolvedValue({
+      items: [{ ...SANCTIONS.items[0], disposition: "blocked" }],
+    })
+    renderPage()
+
+    await screen.findByText("cp_musa_sani")
+    // A disposed match renders its done-label, not the Clear/Escalate/Block actions.
+    expect(screen.getByText("Blocked")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Clear" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Block" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("does not call disposeSanctions until the reason modal's Continue fires (Clear)", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByText("cp_musa_sani")
+    // Open the Clear flow — the ReasonModal appears but nothing is persisted yet.
+    await user.click(screen.getAllByRole("button", { name: "Clear" })[0])
+    await screen.findByRole("textbox", { name: "Reason" })
+    expect(mockDispose).not.toHaveBeenCalled()
+  })
+
+  it("fires disposeSanctions with the cleared disposition through the Clear reason flow", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByText("cp_musa_sani")
+    await user.click(screen.getAllByRole("button", { name: "Clear" })[0])
+    await user.type(
+      await screen.findByRole("textbox", { name: "Reason" }),
+      "No true match"
+    )
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+
+    await waitFor(() => expect(mockDispose).toHaveBeenCalledTimes(1))
+    expect(mockDispose).toHaveBeenCalledWith(
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      { disposition: "cleared" }
+    )
+    // The card flips to its done-label optimistically on success.
+    expect(await screen.findByText("Cleared")).toBeInTheDocument()
+  })
+
+  it("fires disposeSanctions with the blocked disposition through the Block reason → step-up flow", async () => {
+    const user = userEvent.setup()
+    mockDispose.mockResolvedValue({
+      ...SANCTIONS.items[0],
+      disposition: "blocked",
+    })
+    renderPage()
+
+    await screen.findByText("cp_musa_sani")
+    // Block → ReasonModal → StepUpModal → disposeSanctions.
+    await user.click(screen.getAllByRole("button", { name: "Block" })[0])
+    await user.type(
+      await screen.findByRole("textbox", { name: "Reason" }),
+      "OFAC SDN confirmed"
+    )
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    for (const d of ["1", "2", "3", "4", "5", "6"]) {
+      await user.click(await screen.findByRole("button", { name: d }))
+    }
+
+    await waitFor(() => expect(mockDispose).toHaveBeenCalledTimes(1))
+    expect(mockDispose).toHaveBeenCalledWith(
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      { disposition: "blocked" }
+    )
+  })
+
+  it("opens the step-up dialog and retries the POST after re-auth when the server demands step-up", async () => {
+    const user = userEvent.setup()
+    const { ApiError } = await import("@/lib/api/client")
+    mockDispose
+      .mockRejectedValueOnce(
+        new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce({ ...SANCTIONS.items[0], disposition: "cleared" })
+
+    renderPage()
+    await screen.findByText("cp_musa_sani")
+    await user.click(screen.getAllByRole("button", { name: "Clear" })[0])
+    await user.type(
+      await screen.findByRole("textbox", { name: "Reason" }),
+      "No true match"
+    )
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+
+    // The re-auth dialog appears (TOTP mode, since mfaEnabled).
+    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    expect(mockDispose).toHaveBeenCalledTimes(1)
   })
 })

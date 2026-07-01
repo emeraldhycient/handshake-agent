@@ -18,25 +18,39 @@
  * each row is an issued `Notification` (primary channel · template key · triggering
  * event · relative issue-time · derived status) and the footnote's bounce/complaint
  * rates come from the aggregate dispatch stats (Resend + WhatsApp). Four async
- * branches (loading / error / empty / data). The AUDIENCE cohorts remain the
- * design's module-level mock content — no broadcast-cohort/segment endpoint exists
- * yet (recorded as a shape gap for a later pass).
+ * branches (loading / error / empty / data). The AUDIENCE cohorts are the design's
+ * module-level `<option>`s whose values map to the `BroadcastAudience` contract
+ * cohorts; the SERVER resolves each cohort's real membership.
  *
- * FUNDS-SAFETY: composing a broadcast never sends on click. Every send opens the
- * shared confirm modal first — a large audience flips the composer into maker-checker
- * mode (the design's `bBig` warning + "Queue for approval" CTA) so the broadcast
- * enters Pending approval before it goes out; a small audience gets a plain confirm.
- * Only the modal's submit marks it queued/sent — matching the design's proposal-only
- * posture (root §3.1). The broadcast send itself stays a mock (Phase 7 — no engine).
+ * WRITE (Phase 7): the composer's send is LIVE — the confirm-modal submit fires
+ * POST /admin/notifications/broadcast via `useSendBroadcast()` (step-up-wrapped).
+ * The SERVER re-resolves the cohort size and decides the disposition: a small
+ * audience is `dispatched` through the notifications outbox now; a large audience is
+ * `queued_for_approval` as a maker-checker ChangeRequest for a second admin (§3.5).
+ *
+ * FUNDS-SAFETY: a broadcast moves no money (§3.1) but is high-impact. It NEVER sends
+ * on click — every send opens the shared confirm modal first (a large audience
+ * carries the design's `bBig` maker-checker framing), and only the modal's submit
+ * fires the real send. The client's reach estimate is only a UX hint; the server is
+ * authoritative on the size gate.
  */
 import { useState } from "react"
 
-import { MakerCheckerModal } from "@/components/admin/flows"
+import { MakerCheckerModal, StepUpModal } from "@/components/admin/flows"
+import { TemplateEditorDialog } from "@/components/admin/template-editor-dialog"
 import { pushToast } from "@/lib/store/toast-store"
 import { NativeSelect } from "@/components/ui/native-select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useDeliveryLog, useNotificationTemplates } from "@/lib/query/hooks"
+import {
+  useDeliveryLog,
+  useNotificationTemplates,
+  useSendBroadcast,
+} from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
+import { ApiError } from "@/lib/api/client"
 import type {
+  BroadcastSchedule,
+  BroadcastSendRequest,
   DeliveryLogEntry,
   DeliveryLogStatus,
   NotificationChannel,
@@ -204,6 +218,29 @@ function toTemplateOptions(
   return options
 }
 
+/**
+ * Map the composer's schedule select (+ optional custom `datetime-local` value) to
+ * the contract's schedule union. Only a `custom` selection with a parseable time is
+ * a scheduled send; everything else (Send now / an unfilled custom) is immediate —
+ * the server re-validates a scheduled `sendAt` anyway.
+ */
+function buildSchedule(when: string, customAt: string): BroadcastSchedule {
+  if (when === "custom" && customAt) {
+    const at = new Date(customAt)
+    if (!Number.isNaN(at.getTime())) {
+      return { kind: "scheduled", sendAt: at.toISOString() }
+    }
+  }
+  return { kind: "now" }
+}
+
+/** A human message for a failed broadcast send (surfaced as a danger toast). */
+function sendErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "Couldn't send the broadcast. Please try again."
+}
+
 /** The broadcast composer: Audience / Template / Schedule + the `bBig` warning + CTA. */
 function BroadcastComposer() {
   // The TEMPLATE options come from the real notification-templates list; while it
@@ -223,6 +260,18 @@ function BroadcastComposer() {
   const [customAt, setCustomAt] = useState("")
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [queued, setQueued] = useState(false)
+  // The shared template editor — opened from the composer to author a new template
+  // (POST via useUpsertTemplate + step-up). On save it invalidates the templates
+  // list, so the TEMPLATE select above picks up the new key.
+  const [editorOpen, setEditorOpen] = useState(false)
+
+  // The REAL broadcast send (Phase 7). A broadcast moves no money (§3.1) but is
+  // high-impact, so the endpoint is step-up gated — a 403 opens the step-up dialog
+  // and replays the send (useStepUpRetry). The SERVER decides the disposition from
+  // the resolved cohort size (dispatched vs queued-for-approval); the client's reach
+  // estimate is only a UX hint for the confirm-modal framing.
+  const sendBroadcast = useSendBroadcast()
+  const stepUp = useStepUpRetry()
 
   // Keep the select controlled against whatever options are live: if the current
   // key isn't among the resolved options (e.g. real templates just loaded), show
@@ -250,9 +299,65 @@ function BroadcastComposer() {
   // A broadcast is proposal-only: it never sends on click. Every send opens the
   // shared confirm modal first — a large audience carries the maker-checker
   // (dual-control) framing, a small audience a plain confirm — and only the
-  // modal's submit marks it queued/sent.
+  // modal's submit fires the real send.
   function queueBroadcast() {
     setConfirmOpen(true)
+  }
+
+  // Build the contract request from the composer's fields. `datetime-local` has no
+  // timezone, so a custom time is normalized to an ISO instant for the wire.
+  function buildRequest(): BroadcastSendRequest {
+    return {
+      // The AUDIENCE_OPTIONS values are exactly the BroadcastAudience cohorts; the
+      // api client re-parses the body through the contract schema before it fires.
+      audience: audience as BroadcastSendRequest["audience"],
+      templateKey: selectedTemplate,
+      schedule: buildSchedule(when, customAt),
+      reason: `Broadcast to ${audienceLabel}`,
+    }
+  }
+
+  // The confirm-modal submit: fire the REAL send (step-up-wrapped). On success the
+  // SERVER's outcome drives the toast — a large audience returns queued-for-approval
+  // (a maker-checker request for a second admin), a small one dispatched now. The
+  // send is the ONLY thing the modal's submit does — a broadcast never sends without
+  // the confirm modal (root §3.1/§3.5).
+  async function submitBroadcast() {
+    const request = buildRequest()
+    try {
+      const completed = await stepUp.run(() => runSend(request))
+      // If the send completed (or triggered a step-up challenge), close the confirm
+      // modal — the step-up dialog now owns the flow until the operator re-auths.
+      if (completed || stepUp.open) setConfirmOpen(false)
+    } catch (error) {
+      // A non-step-up failure (validation / server error) — surface it, keep the
+      // composer open so the operator can retry. Never silently swallow (root §13.6).
+      setConfirmOpen(false)
+      pushToast(sendErrorMessage(error), "warn")
+    }
+  }
+
+  // Replay the send after a successful step-up re-auth (useStepUpRetry.retry).
+  async function retryAfterStepUp() {
+    stepUp.setOpen(false)
+    try {
+      await stepUp.retry()
+    } catch (error) {
+      pushToast(sendErrorMessage(error), "warn")
+    }
+  }
+
+  // The single send action, shared by the first attempt + the post-step-up replay:
+  // fire the mutation and let the SERVER's outcome drive the confirmation toast.
+  async function runSend(request: BroadcastSendRequest): Promise<void> {
+    const result = await sendBroadcast.mutateAsync(request)
+    setQueued(true)
+    pushToast(
+      result.outcome === "queued_for_approval"
+        ? "Broadcast queued for approval"
+        : "Broadcast sent",
+      "ok"
+    )
   }
 
   const cta = isLargeAudience
@@ -288,7 +393,16 @@ function BroadcastComposer() {
         </div>
 
         <div>
-          <FieldLabel>TEMPLATE</FieldLabel>
+          <div className="mb-[5px] flex items-center justify-between">
+            <FieldLabel>TEMPLATE</FieldLabel>
+            <button
+              type="button"
+              onClick={() => setEditorOpen(true)}
+              className="text-[11px] font-bold text-tif transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              New template
+            </button>
+          </div>
           <NativeSelect
             aria-label="Broadcast template"
             className="h-10 rounded-[10px] text-[13px] font-semibold"
@@ -355,16 +469,23 @@ function BroadcastComposer() {
           { field: "Template", from: "—", to: selectedTemplate },
           { field: "Schedule", from: "—", to: scheduleLabel },
         ]}
-        onSubmit={() => {
-          setConfirmOpen(false)
-          setQueued(true)
-          pushToast(
-            isLargeAudience
-              ? "Broadcast queued for approval"
-              : "Broadcast sent",
-            "ok"
-          )
-        }}
+        onSubmit={() => void submitBroadcast()}
+      />
+
+      {/* Step-up (TOTP) — opened when the send 403s ADMIN_STEP_UP_REQUIRED; on
+          completion the stashed send is replayed (useStepUpRetry). */}
+      <StepUpModal
+        open={stepUp.open}
+        onOpenChange={stepUp.setOpen}
+        title="send broadcast"
+        onComplete={() => void retryAfterStepUp()}
+      />
+
+      {/* Author a new notification template inline (POST via useUpsertTemplate). */}
+      <TemplateEditorDialog
+        open={editorOpen}
+        onOpenChange={setEditorOpen}
+        template={null}
       />
     </div>
   )

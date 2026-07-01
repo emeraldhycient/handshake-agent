@@ -22,17 +22,25 @@
  * as a shapeGap. Four async branches: loading / error / empty / data.
  *
  * FUNDS-SAFETY: toggling a capability is a KILL-SWITCH. The switch never flips on
- * click — it opens the shared `MakerCheckerModal` (dual-control). The toggle SUBMIT
- * is a Phase-7 write; this phase wires the READ path only.
+ * click — it opens the shared `MakerCheckerModal` (dual-control). WIRED (Phase 7 —
+ * WRITE): the maker-checker submit calls the real step-up-guarded PATCH
+ * /admin/settings/:key (`useSetSetting`) to flip the `catalog.capabilities.crypto.<x>`
+ * boolean, which re-validates + hot-reloads + audits `config_change` server-side; the
+ * settings query then invalidates so the row re-resolves. A 403 ADMIN_STEP_UP_REQUIRED
+ * opens the StepUpDialog and the PATCH replays after re-auth (`useStepUpRetry`).
+ * Nothing moves money (§3.1).
  */
 import { useMemo, useState } from "react"
 
 import type { EffectiveSetting } from "@handshake-agent/contracts"
 
 import { MakerCheckerModal } from "@/components/admin/flows"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ApiError } from "@/lib/api/client"
 import { pushToast } from "@/lib/store/toast-store"
-import { useSettings } from "@/lib/query/hooks"
+import { useAdminMe, useSetSetting, useSettings } from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { cn } from "@/lib/utils"
 import type {
   CapabilityRow,
@@ -106,14 +114,26 @@ const TONE_TILE: Record<CapabilityTone, string> = {
 }
 
 /**
+ * A resolved capability row plus the registry key + scope that back it — carried so
+ * the write path targets the same leaf the read resolved.
+ */
+interface ResolvedCapability extends CapabilityRow {
+  settingKey: string
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
+}
+
+/**
  * Join the static presentation with the live capability settings: each design row's
  * `on` is the boolean effective value of its `catalog.capabilities.crypto.<x>` key
  * (fail-closed — absent / non-boolean → false, per root §7). Rows whose backing key
  * is missing from the registry response are dropped.
  */
-function buildRows(settings: readonly EffectiveSetting[]): CapabilityRow[] {
+function buildRows(
+  settings: readonly EffectiveSetting[]
+): ResolvedCapability[] {
   const byKey = new Map(settings.map((s) => [s.key, s]))
-  const rows: CapabilityRow[] = []
+  const rows: ResolvedCapability[] = []
   for (const p of PRESENTATION) {
     const setting = byKey.get(p.settingKey)
     if (!setting) continue
@@ -125,6 +145,9 @@ function buildRows(settings: readonly EffectiveSetting[]): CapabilityRow[] {
       on: setting.value === true,
       tone: p.tone,
       icon: p.icon,
+      settingKey: p.settingKey,
+      scope: setting.scope,
+      scopeValue: setting.scopeValue,
     })
   }
   return rows
@@ -209,12 +232,25 @@ function CapabilityRowCard({ row, onToggle }: CapabilityRowProps) {
 
 // ─── Page ────────────────────────────────────────────────────────────────────────────
 
+/** Normalizes a mutation/step-up failure into a user-facing message. */
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "Something went wrong."
+}
+
 export function CapabilitiesPage() {
   const query = useSettings("Catalog")
   const rows = useMemo(() => buildRows(query.data ?? []), [query.data])
 
-  // Which capability's toggle is pending dual-control approval (drives the modal).
-  const [pending, setPending] = useState<CapabilityRow | null>(null)
+  const me = useAdminMe()
+  const setSetting = useSetSetting()
+  const stepUp = useStepUpRetry()
+
+  // Which capability's toggle is pending dual-control approval (drives the modal +
+  // write). Held by id so the resolved row (with its setting key) is re-derived.
+  const [pendingId, setPendingId] = useState<string | null>(null)
+  const pending = rows.find((r) => r.id === pendingId) ?? null
 
   // The from→to change preview for the maker-checker modal (design's diff table).
   const diff = useMemo(() => {
@@ -228,16 +264,41 @@ export function CapabilitiesPage() {
     ]
   }, [pending])
 
-  // Approve the dual-control change (Phase-7 write is a stub): toast the intent and
-  // close the modal. The real flip is applied server-side + re-read in Phase 7.
+  /**
+   * Approve the kill-switch flip. Persists the new boolean via the real step-up-guarded
+   * PATCH /admin/settings/:key (`useSetSetting`) — the server re-validates the catalog
+   * multi-currency invariant + hot-reloads + audits `config_change`; the settings query
+   * then invalidates so the row re-resolves. A 403 ADMIN_STEP_UP_REQUIRED opens the
+   * StepUpDialog and the PATCH replays after re-auth. Nothing moves money (§3.1).
+   */
   const approveToggle = () => {
     if (!pending) return
-    const enabling = !pending.on
-    pushToast(
-      `${pending.label} ${enabling ? "enabled" : "disabled"}`,
-      enabling ? "ok" : "warn"
-    )
-    setPending(null)
+    const cap = pending
+    const enabling = !cap.on
+    setPendingId(null)
+    void (async () => {
+      try {
+        const ok = await stepUp.run(() =>
+          setSetting
+            .mutateAsync({
+              key: cap.settingKey,
+              input: {
+                value: enabling,
+                scope: cap.scope,
+                scopeValue: cap.scopeValue,
+              },
+            })
+            .then(() => undefined)
+        )
+        if (ok)
+          pushToast(
+            `${cap.label} ${enabling ? "enabled" : "disabled"}`,
+            enabling ? "ok" : "warn"
+          )
+      } catch (error) {
+        pushToast(errorMessage(error), "warn")
+      }
+    })()
   }
 
   return (
@@ -295,7 +356,11 @@ export function CapabilitiesPage() {
       {query.isSuccess && rows.length > 0 && (
         <div className="flex flex-col gap-3">
           {rows.map((row) => (
-            <CapabilityRowCard key={row.id} row={row} onToggle={setPending} />
+            <CapabilityRowCard
+              key={row.id}
+              row={row}
+              onToggle={(r) => setPendingId(r.id)}
+            />
           ))}
         </div>
       )}
@@ -304,7 +369,7 @@ export function CapabilitiesPage() {
       <MakerCheckerModal
         open={pending !== null}
         onOpenChange={(open) => {
-          if (!open) setPending(null)
+          if (!open) setPendingId(null)
         }}
         title={
           pending
@@ -313,6 +378,20 @@ export function CapabilitiesPage() {
         }
         diff={diff}
         onSubmit={approveToggle}
+      />
+
+      {/* Server-side step-up re-auth: a 403 on the capability PATCH opens this; the
+          PATCH replays after re-authentication (settings then invalidate). */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then(() => undefined)
+            .catch((error) => pushToast(errorMessage(error), "warn"))
+        }}
       />
     </div>
   )

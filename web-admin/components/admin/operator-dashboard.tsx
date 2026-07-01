@@ -17,8 +17,10 @@
  * (`useMetricsOps` → GET /admin/metrics/ops): per-provider dispatch status +
  * webhook-queue depth + recon drift, a cross-domain activity feed (settled/failed
  * txns, KYC + config-change audit events, engine sweeps/refunds), and the open
- * (flagged + under_review) compliance-case count. The Approvals-awaiting-me inbox
- * stays mock — the maker-checker approvals subsystem is unbuilt (Phase 7).
+ * (flagged + under_review) compliance-case count. The Approvals-awaiting-me panel is
+ * wired to the real maker-checker inbox (`useApprovalsInbox` → GET
+ * /admin/approvals/inbox) — awaiting-me count badge + a teaser of pending requests,
+ * linking to the full /approvals inbox where they are dispositioned (Phase 7).
  *
  * Layout (verbatim from the design markup):
  * - Header: "Operations overview" title + subtitle, and a segmented KPI-range
@@ -29,7 +31,7 @@
  * - `1.7fr 1fr` row: the stacked-bar **Transaction volume** chart and a **System
  *   health** card (both mock — Phase 6b).
  * - `1fr 1fr` row: a **Live activity** feed and a column of **Approvals awaiting me**
- *   + **Alerts** cards (both mock — Phase 6b).
+ *   (real — Phase 7 inbox) + **Alerts** cards (Alerts still mock — Phase 6b).
  */
 import { useMemo, useState } from "react"
 import Link from "next/link"
@@ -38,13 +40,18 @@ import { useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { KpiCard } from "@/components/admin/kpi-card"
 import { ChartBars } from "@/components/admin/chart-bars"
-import { MakerCheckerModal } from "@/components/admin/flows"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useDashboardMetrics, useMetricsOps } from "@/lib/query/hooks"
+import {
+  useApprovalsInbox,
+  useDashboardMetrics,
+  useMetricsOps,
+} from "@/lib/query/hooks"
 import { ApiError } from "@/lib/api/client"
 import type {
   ActivityEvent,
   ActivityKind,
+  ChangeRequest,
+  ChangeRequestKind,
   DashboardSummary,
   MetricsOps,
   ProviderHealth,
@@ -353,39 +360,24 @@ function activityItemFrom(event: ActivityEvent): ActivityItem {
   }
 }
 
-// ─── Approvals awaiting me (design `myApprovals`, logic.js 481 — first 3 approvals) ──
-// `st.approvals.slice(0,3)` from the seeded maker-checker inbox (logic.js 75-80), each
-// carrying the from→to diff the maker-checker modal renders.
+// ─── Approvals awaiting me — wired to the real maker-checker inbox (Phase 7) ──────────
+// The dashboard panel shows the first few of `awaitingMe` (pending change requests a
+// different admin raised that THIS admin may approve) + the awaiting-me count badge.
+// Dispositions happen on the full /approvals inbox — the panel is a read-only teaser.
 
-interface ApprovalItem {
-  title: string
-  by: string
-  ago: string
-  diff: readonly { field: string; from: string; to: string }[]
+/** Human label per change-request kind (mirrors the Approvals page kind pills). */
+const APPROVAL_KIND_LABEL: Record<ChangeRequestKind, string> = {
+  pricing_change: "Pricing change",
+  capability_flip: "Capability",
+  tier_override: "Tier override",
+  refund: "Refund",
+  manual_credit: "Manual credit",
+  notification_broadcast: "Broadcast",
+  payout_release: "Payout release",
 }
 
-const MY_APPROVALS: readonly ApprovalItem[] = [
-  {
-    title: "USDT/NGN buy spread 85 → 110 bps",
-    by: "Tunde Adeyemi",
-    ago: "34m ago",
-    diff: [
-      { field: "crypto.buy · USDT/NGN spread", from: "85 bps", to: "110 bps" },
-    ],
-  },
-  {
-    title: "Disable swap (global)",
-    by: "Amara Okeke",
-    ago: "1h ago",
-    diff: [{ field: "capability: swap", from: "Enabled", to: "Disabled" }],
-  },
-  {
-    title: "Partial refund — tx_80257 · ₦180,000.00",
-    by: "Kelechi Chukwu",
-    ago: "2h ago",
-    diff: [{ field: "Refund amount", from: "₦0.00", to: "₦180,000.00" }],
-  },
-]
+/** How many awaiting-me requests the dashboard teaser shows. */
+const APPROVALS_PANEL_LIMIT = 3
 
 // ─── Alerts (design `alerts`, logic.js 482-486) ──────────────────────────────────────
 
@@ -623,15 +615,32 @@ function LiveActivityCard({
   )
 }
 
-function ApprovalsCard({
-  onOpen,
-}: {
-  onOpen: (approval: ApprovalItem) => void
-}) {
+/**
+ * Approvals-awaiting-me teaser — wired to `useApprovalsInbox`. The header carries
+ * the awaiting-me count badge; the body lists the first few pending requests a
+ * different admin raised. Four async branches: loading skeleton / error / empty
+ * (inbox zero) / data. Rows link to the full /approvals inbox where they are
+ * dispositioned — the dashboard never approves (that lives on the Approvals page).
+ */
+function ApprovalsCard() {
+  const inbox = useApprovalsInbox()
+  const awaiting = inbox.data?.awaitingMe ?? []
+  const count = inbox.data?.counts.awaitingMe ?? awaiting.length
+  const rows = awaiting.slice(0, APPROVALS_PANEL_LIMIT)
+
   return (
     <FeatureCard>
       <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm font-bold text-ink">Approvals awaiting me</div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-bold text-ink">
+            Approvals awaiting me
+          </span>
+          {inbox.isSuccess && count > 0 && (
+            <span className="rounded-full bg-swn px-2 py-0.5 text-[10.5px] font-bold text-twn tabular-nums">
+              {count}
+            </span>
+          )}
+        </div>
         <Link
           href="/approvals"
           className="text-xs font-bold text-tif outline-none hover:underline focus-visible:underline"
@@ -639,30 +648,46 @@ function ApprovalsCard({
           Open inbox →
         </Link>
       </div>
-      {MY_APPROVALS.map((a, i) => (
-        <button
-          key={i}
-          type="button"
-          onClick={() => onOpen(a)}
-          className="flex w-full items-center gap-[11px] border-b border-line2 py-2.5 text-left last:border-0 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          <span
-            aria-hidden
-            className="size-2 flex-none rounded-full bg-brand-amber"
-          />
-          <div className="min-w-0 flex-1">
-            <div className="text-[12.5px] font-semibold text-ink">
-              {a.title}
+
+      {inbox.isLoading ? (
+        <div className="flex flex-col gap-2" aria-busy="true">
+          {Array.from({ length: 3 }, (_, i) => (
+            <Skeleton key={i} className="h-[38px] rounded-[8px]" />
+          ))}
+        </div>
+      ) : inbox.isError ? (
+        <div className="py-6 text-center text-[12.5px] text-ink3">
+          Approvals inbox unavailable.
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="py-6 text-center text-[12.5px] text-ink3">
+          Nothing awaiting your approval.
+        </div>
+      ) : (
+        rows.map((cr: ChangeRequest) => (
+          <Link
+            key={cr.id}
+            href="/approvals"
+            className="flex w-full items-center gap-[11px] border-b border-line2 py-2.5 text-left last:border-0 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            <span
+              aria-hidden
+              className="size-2 flex-none rounded-full bg-brand-amber"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[12.5px] font-semibold text-ink">
+                {APPROVAL_KIND_LABEL[cr.kind]} · {cr.resource}
+              </div>
+              <div className="text-[10.5px] text-ink3">
+                by {cr.requestedByEmail ?? cr.requestedByAdminId}
+              </div>
             </div>
-            <div className="text-[10.5px] text-ink3">
-              by {a.by} · {a.ago}
-            </div>
-          </div>
-          <span className="flex-none rounded-full bg-swn px-2 py-0.5 text-[10.5px] font-bold text-twn">
-            Pending
-          </span>
-        </button>
-      ))}
+            <span className="flex-none rounded-full bg-swn px-2 py-0.5 text-[10.5px] font-bold text-twn">
+              Pending
+            </span>
+          </Link>
+        ))
+      )}
     </FeatureCard>
   )
 }
@@ -830,15 +855,7 @@ function VolumeChartCard({
 // ─── Page ────────────────────────────────────────────────────────────────────────────
 
 export function OperatorDashboard() {
-  const router = useRouter()
   const [range, setRange] = useState<RangeId>("24h")
-
-  // Approval flow — an "Approvals awaiting me" row opens the shared maker-checker
-  // modal with its from→to diff (design maker-checker flow); submitting routes to
-  // the real /approvals inbox where a second admin dispositions it.
-  const [activeApproval, setActiveApproval] = useState<ApprovalItem | null>(
-    null
-  )
 
   // The KPI tiles + range switcher are wired to the real composite metrics endpoint.
   const days = RANGE_DAYS[range]
@@ -947,25 +964,11 @@ export function OperatorDashboard() {
             isError={opsQuery.isError}
           />
           <div className="flex flex-col gap-4">
-            <ApprovalsCard onOpen={setActiveApproval} />
+            <ApprovalsCard />
             <AlertsCard />
           </div>
         </div>
       </div>
-
-      {/* Maker-checker flow modal for the selected approval (design flow §5). */}
-      <MakerCheckerModal
-        open={activeApproval !== null}
-        onOpenChange={(open) => {
-          if (!open) setActiveApproval(null)
-        }}
-        title={activeApproval?.title ?? ""}
-        diff={activeApproval ? [...activeApproval.diff] : []}
-        onSubmit={() => {
-          setActiveApproval(null)
-          router.push("/approvals")
-        }}
-      />
     </div>
   )
 }

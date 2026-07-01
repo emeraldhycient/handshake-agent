@@ -72,6 +72,18 @@ export interface IReconciliationReadRepository {
   listBreaks(staleAfterSec: number): Promise<ReconBreakRecord[]>;
 
   /**
+   * A single projected break by its opaque id (Phase 7 — the resolve/accept actions
+   * need the break's transactionId + kind to route the engine re-drive, and MUST
+   * derive the transactionId server-side rather than trust a client). Returns null
+   * when the id is unknown. `staleAfterSec` scopes the missing-settlement projection
+   * identically to `listBreaks` so a break is findable iff it is currently open.
+   */
+  findBreak(
+    id: string,
+    staleAfterSec: number,
+  ): Promise<ReconBreakRecord | null>;
+
+  /**
    * The reconciler-cron run timeline: the most recent observed run (latest
    * SettlementOutbox attempt/completion) and the next due run (last + interval).
    * `intervalSec` is the reconciler tick cadence used to project the next run.

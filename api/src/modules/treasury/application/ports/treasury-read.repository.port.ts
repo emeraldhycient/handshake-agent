@@ -186,6 +186,14 @@ export interface ITreasuryReadRepository {
   listPayoutQueue(): Promise<TreasuryPayoutQueueRecord[]>;
 
   /**
+   * A single pending payout-queue item by its opaque id (Phase 7 — the approve
+   * maker-checker needs the item's transactionId + reference to raise the change
+   * request). Returns null when the id is unknown or no longer pending. READ-ONLY —
+   * never releases funds.
+   */
+  findPayoutQueueItem(id: string): Promise<TreasuryPayoutQueueRecord | null>;
+
+  /**
    * Running platform_float ledger balance per fiat currency (Phase 6b). Returns
    * the raw balances; the service applies the configured target + threshold.
    */

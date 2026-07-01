@@ -22,8 +22,11 @@
  * total comes from the response's filter-wide `total`.
  *
  * Four async branches: loading skeleton / error (inline, retryable) / empty / data.
- * The header "Export CSV" and the bulk-bar Export / Tag / Message actions remain
- * read-shaped toasts (Phase 7 wires real writes) — nothing here moves money (root §3.1).
+ * The bulk-bar Tag / Message actions are now REAL step-up-guarded writes (Phase 7,
+ * via `UsersBulkActions` → POST /admin/users/tags · /admin/users/message): a tag is
+ * a pure annotation and a message enqueues onto the notifications outbox — nothing
+ * here moves money (root §3.1). The header "Export CSV" and the bulk-bar Export
+ * remain read-shaped toasts.
  */
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
@@ -31,6 +34,7 @@ import { useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { pushToast } from "@/lib/store/toast-store"
 import { FilterSelect } from "@/components/admin/filter-select"
+import { UsersBulkActions } from "@/components/admin/users-bulk-actions"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useEndUsers } from "@/lib/query/hooks"
 import type {
@@ -514,24 +518,10 @@ export function UsersPage() {
           >
             Export
           </button>
-          <button
-            type="button"
-            onClick={() =>
-              pushToast(`Tag applied to ${selected.length} users`, "ok")
-            }
-            className="text-[12.5px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
-          >
-            Tag
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              pushToast(`Composer opened for ${selected.length} users`, "info")
-            }
-            className="text-[12.5px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
-          >
-            Message
-          </button>
+          <UsersBulkActions
+            selectedIds={selected}
+            onDone={() => setSelected([])}
+          />
           <div className="flex-1" />
           <button
             type="button"

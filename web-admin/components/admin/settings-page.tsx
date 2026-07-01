@@ -22,15 +22,25 @@
  * rows client-side (presentation only).
  *
  * The Edit control is styled per editability, exactly as the design does:
- *  - DB-layer keys get an active Edit pill → opens the shared funds-safety flow
- *    chain reason (immutable audit) → step-up TOTP → maker-checker (dual control).
+ *  - DB-layer keys get an active Edit pill → captures a new value, then opens the
+ *    shared funds-safety flow chain: reason (immutable audit) → step-up TOTP →
+ *    maker-checker review, whose submit applies the REAL config-override PATCH.
  *  - ENV / JSON keys are read-only here (the DB layer is empty) → a muted "Locked"
  *    affordance; you cannot edit a baseline from the console.
- * Wrapped in RequireAuth + AppShell upstream. The edit SUBMIT is a stub (Phase 7);
- * this phase wires the READ path only. Four async branches: loading / error / empty / data.
+ *
+ * WIRED (Phase 7 — WRITE): the maker-checker submit calls `useSetSetting`
+ * (PATCH /admin/settings/:key). That endpoint is step-up-guarded server-side and
+ * re-validates the value against the registry schema + multi-currency invariant,
+ * hot-reloads the effective config, and records an immutable `config_change` audit
+ * entry — it never moves money (§3.1/§3.2). A 403 ADMIN_STEP_UP_REQUIRED opens the
+ * StepUpDialog and the PATCH replays after re-auth (`useStepUpRetry`). On success
+ * the settings queries invalidate so the row re-resolves with the new value + 'db'
+ * provenance. Wrapped in RequireAuth + AppShell upstream. Four async branches:
+ * loading / error / empty / data.
  */
 import { useMemo, useState } from "react"
 
+import { UpdateSettingRequestSchema } from "@handshake-agent/contracts"
 import type { EffectiveSetting } from "@handshake-agent/contracts"
 
 import {
@@ -38,8 +48,24 @@ import {
   ReasonModal,
   StepUpModal,
 } from "@/components/admin/flows"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { NativeSelect } from "@/components/ui/native-select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useSettings } from "@/lib/query/hooks"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
+import { useAdminMe, useSetSetting, useSettings } from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
+import { ApiError } from "@/lib/api/client"
+import { pushToast } from "@/lib/store/toast-store"
 import { cn } from "@/lib/utils"
 
 // Design §6.30 table grid — Key / Effective value / Source / Description / Edit.
@@ -64,6 +90,8 @@ interface SettingRow {
   src: SettingSource
   /** The value's type — shown in the key meta line (`valueType`). */
   type: string
+  /** The registry `valueType` — drives the value-entry control + coercion. */
+  valueType: EffectiveSetting["valueType"]
   /** Registry description. */
   desc: string
   /** A human resolution line for the source chip tooltip. */
@@ -73,6 +101,11 @@ interface SettingRow {
    * on DB-layer rows (you can change the DB override, not the env/JSON baseline).
    */
   editable: boolean
+  /** The raw effective value, used to seed the value-entry control. */
+  rawValue: unknown
+  /** The override scope + its selector (global keys carry a null scopeValue). */
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
 }
 
 // Edit-pencil path used in the active Edit pill (design `s.editIcon` for DB keys).
@@ -104,6 +137,7 @@ function toRow(s: EffectiveSetting): SettingRow {
     val,
     src: isDb ? "DB" : "Baseline",
     type: s.valueType,
+    valueType: s.valueType,
     desc: s.description,
     // The contract exposes only db-override-vs-baseline, so the resolution line is
     // the two layers we can actually distinguish (no ENV-vs-JSON split — shapeGap).
@@ -111,6 +145,9 @@ function toRow(s: EffectiveSetting): SettingRow {
       ? [`DB override: ${val}`, "Baseline (ENV / JSON): overridden"]
       : ["DB override: (none)", `Baseline (ENV / JSON): ${val}`],
     editable: s.editable && isDb,
+    rawValue: s.value,
+    scope: s.scope,
+    scopeValue: s.scopeValue,
   }
 }
 
@@ -245,24 +282,183 @@ function SettingsTableRow({
 }
 
 /**
- * The from→to change a maker-checker request would apply for a DB-layer key. The
- * design's edit only proposes a change (blank target) — the real new value is
- * captured downstream; here we mirror the diff-preview shape.
+ * The from→to change the maker-checker review shows for a DB-layer key: the current
+ * effective value (struck-through) against the operator's proposed new value.
  */
 function settingDiff(
-  row: SettingRow
+  row: SettingRow,
+  nextDisplay: string
 ): { field: string; from: string; to: string }[] {
-  return [{ field: row.key, from: row.val, to: "—" }]
+  return [{ field: row.key, from: row.val, to: nextDisplay }]
 }
+
+/**
+ * Coerce the value-entry field's raw string back to the key's `valueType`, matching
+ * what the server's registry schema expects (number → Number, boolean → the select's
+ * true/false, string[] → comma-split, string → as-is). Returns a validation error
+ * for a non-numeric numeric input rather than silently sending NaN.
+ */
+function coerceValue(
+  valueType: SettingRow["valueType"],
+  raw: string
+): { ok: true; value: unknown } | { ok: false; error: string } {
+  switch (valueType) {
+    case "number": {
+      const n = Number(raw.trim())
+      if (raw.trim() === "" || Number.isNaN(n))
+        return { ok: false, error: "Enter a valid number." }
+      return { ok: true, value: n }
+    }
+    case "boolean":
+      return { ok: true, value: raw === "true" }
+    case "string[]":
+      return {
+        ok: true,
+        value: raw
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0),
+      }
+    case "string":
+      return { ok: true, value: raw }
+  }
+}
+
+/** Seed the value-entry field from the current effective value for editing. */
+function seedInput(row: SettingRow): string {
+  const v = row.rawValue
+  if (Array.isArray(v)) return v.join(", ")
+  if (v === null || v === undefined) return ""
+  return String(v)
+}
+
+/**
+ * Step 0 of the settings edit — capture the new DB-override value with a control
+ * typed to the key's `valueType` (number/text input, a true/false select for
+ * booleans, comma-list for string[]). Continue advances into the funds-safety flow
+ * chain; it refuses to advance on an invalid value.
+ */
+function SettingValueModal({
+  open,
+  row,
+  onOpenChange,
+  onContinue,
+}: {
+  open: boolean
+  row: SettingRow | null
+  onOpenChange: (open: boolean) => void
+  onContinue: (value: unknown, display: string) => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {open && row && (
+        <SettingValueForm row={row} onContinue={onContinue} />
+      )}
+    </Dialog>
+  )
+}
+
+/** The value-entry form body — mounted only while open so it seeds from `row`. */
+function SettingValueForm({
+  row,
+  onContinue,
+}: {
+  row: SettingRow
+  onContinue: (value: unknown, display: string) => void
+}) {
+  const [raw, setRaw] = useState(() => seedInput(row))
+  const [error, setError] = useState<string | null>(null)
+
+  function submit() {
+    const coerced = coerceValue(row.valueType, raw)
+    if (!coerced.ok) {
+      setError(coerced.error)
+      return
+    }
+    // Parse against the request schema's value leaf via the shape it will send.
+    onContinue(coerced.value, formatValue(coerced.value))
+  }
+
+  return (
+    <DialogContent showCloseButton={false} className="w-[440px] max-w-[94vw]">
+      <DialogHeader>
+        <DialogTitle>Edit {row.key}</DialogTitle>
+        <DialogDescription>
+          Set a new DB-override value. It resolves above the ENV / JSON baseline.
+        </DialogDescription>
+      </DialogHeader>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="setting-value">New value</Label>
+        {row.valueType === "boolean" ? (
+          <NativeSelect
+            id="setting-value"
+            aria-label="New value"
+            value={raw}
+            onChange={(e) => {
+              setRaw(e.target.value)
+              setError(null)
+            }}
+          >
+            <option value="true">true</option>
+            <option value="false">false</option>
+          </NativeSelect>
+        ) : (
+          <Input
+            id="setting-value"
+            aria-label="New value"
+            inputMode={row.valueType === "number" ? "decimal" : undefined}
+            value={raw}
+            onChange={(e) => {
+              setRaw(e.target.value)
+              setError(null)
+            }}
+            placeholder={
+              row.valueType === "string[]" ? "comma, separated, values" : ""
+            }
+          />
+        )}
+        <p className="text-[11px] text-ink3">Type: {row.valueType}</p>
+        {error && (
+          <p role="alert" className="text-xs text-tdn">
+            {error}
+          </p>
+        )}
+      </div>
+
+      <DialogFooter>
+        <Button variant="outline" onClick={() => onContinue(undefined, "")}>
+          Cancel
+        </Button>
+        <Button onClick={submit}>Continue</Button>
+      </DialogFooter>
+    </DialogContent>
+  )
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "Something went wrong."
+}
+
+// The settings edit chain: value → reason → step-up → maker-checker → PATCH.
+type FlowStep = "value" | "reason" | "stepup" | "maker" | null
 
 export function SettingsPage() {
   const query = useSettings()
   const rows = useMemo(() => (query.data ?? []).map(toRow), [query.data])
 
+  const me = useAdminMe()
+  const setSetting = useSetSetting()
+  const stepUp = useStepUpRetry()
+
   const [search, setSearch] = useState("")
-  // The key being edited + which flow step is open (reason → step-up → maker-checker).
+  // The key being edited, the captured new value, and which flow step is open.
   const [editing, setEditing] = useState<SettingRow | null>(null)
-  const [step, setStep] = useState<"reason" | "stepup" | "maker" | null>(null)
+  const [step, setStep] = useState<FlowStep>(null)
+  const [nextValue, setNextValue] = useState<unknown>(undefined)
+  const [nextDisplay, setNextDisplay] = useState("")
 
   // Client-side key filter over the real rows (presentation only — never re-queries).
   const search_ = search.trim().toLowerCase()
@@ -280,12 +476,54 @@ export function SettingsPage() {
 
   function startEdit(row: SettingRow) {
     setEditing(row)
-    setStep("reason")
+    setNextValue(undefined)
+    setNextDisplay("")
+    setStep("value")
   }
 
   function closeFlow() {
     setStep(null)
     setEditing(null)
+    setNextValue(undefined)
+    setNextDisplay("")
+  }
+
+  // Value-entry Continue: a supplied value advances into the chain; Cancel closes.
+  function onValueContinue(value: unknown, display: string) {
+    if (value === undefined) {
+      closeFlow()
+      return
+    }
+    setNextValue(value)
+    setNextDisplay(display)
+    setStep("reason")
+  }
+
+  // The maker-checker submit APPLIES the override via the real step-up-guarded PATCH.
+  // A 403 ADMIN_STEP_UP_REQUIRED opens the StepUpDialog; the PATCH replays after
+  // re-auth. The mutation body is parsed through the request schema before it fires.
+  function applyOverride() {
+    if (!editing) return
+    const body = UpdateSettingRequestSchema.parse({
+      value: nextValue,
+      scope: editing.scope,
+      scopeValue: editing.scopeValue,
+    })
+    const key = editing.key
+    void (async () => {
+      try {
+        const ok = await stepUp.run(() =>
+          setSetting.mutateAsync({ key, input: body }).then(() => undefined)
+        )
+        if (ok) {
+          pushToast(`Updated ${key}`, "ok")
+          closeFlow()
+        }
+      } catch (error) {
+        pushToast(errorMessage(error), "warn")
+        closeFlow()
+      }
+    })()
   }
 
   const flowTitle = editing ? `Edit ${editing.key}` : "Edit setting"
@@ -414,7 +652,13 @@ export function SettingsPage() {
           ))}
       </div>
 
-      {/* ── Funds-safety flow chain: reason → step-up → maker-checker ─────────── */}
+      {/* ── Funds-safety flow chain: value → reason → step-up → maker-checker ─── */}
+      <SettingValueModal
+        open={step === "value"}
+        row={editing}
+        onOpenChange={(next) => (next ? undefined : closeFlow())}
+        onContinue={onValueContinue}
+      />
       <ReasonModal
         open={step === "reason"}
         onOpenChange={(next) => (next ? undefined : closeFlow())}
@@ -431,8 +675,30 @@ export function SettingsPage() {
         open={step === "maker"}
         onOpenChange={(next) => (next ? undefined : closeFlow())}
         title={flowTitle}
-        diff={editing ? settingDiff(editing) : []}
-        onSubmit={closeFlow}
+        diff={editing ? settingDiff(editing, nextDisplay) : []}
+        onSubmit={applyOverride}
+      />
+
+      {/* Server-side step-up re-auth: a 403 on the PATCH opens this; the override
+          replays after re-authentication (four-async-branch safety upstream). */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then((ok) => {
+              if (ok && editing) {
+                pushToast(`Updated ${editing.key}`, "ok")
+              }
+              closeFlow()
+            })
+            .catch((error) => {
+              pushToast(errorMessage(error), "warn")
+              closeFlow()
+            })
+        }}
       />
     </div>
   )

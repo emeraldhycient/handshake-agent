@@ -20,16 +20,24 @@ import {
   AdminEndUserLimitsResponseSchema,
   AdminEndUserSessionListResponseSchema,
   AdminEndUserTimelineResponseSchema,
+  ApplyUserTagsResponseSchema,
+  BulkMessageResponseSchema,
+  ChangeRequestSchema,
   type AdminEndUserDetail,
   type AdminEndUserDevice,
   type AdminEndUserLimitsResponse,
   type AdminEndUserListResponse,
   type AdminEndUserSessionListResponse,
   type AdminEndUserTimelineResponse,
+  type ApplyUserTagsResponse,
+  type BulkMessageResponse,
+  type ChangeRequest,
 } from '@handshake-agent/contracts';
 
 import { AdminEndUserService } from '../application/admin-end-user.service';
 import { AdminUserSecurityService } from '../application/admin-user-security.service';
+import { AdminUserBulkService } from '../application/admin-user-bulk.service';
+import { AdminApprovalsService } from '../application/admin-approvals.service';
 import { AdminSessionGuard } from './admin-session.guard';
 import { AdminStepUpGuard } from './admin-step-up.guard';
 import { PermissionGuard } from './permission.guard';
@@ -39,7 +47,9 @@ import {
   AdminEndUserSearchQueryDto,
   AdminEndUserStatusDto,
   AdminEndUserTierDto,
+  CreateManualCreditDto,
 } from './dto/admin-end-user.dto';
+import { ApplyUserTagsDto, BulkMessageDto } from './dto/admin-user-bulk.dto';
 
 /**
  * Response shape for GET /admin/users/:id/devices — a thin list wrapper around
@@ -66,6 +76,8 @@ export class AdminEndUsersController {
   constructor(
     private readonly users: AdminEndUserService,
     private readonly security: AdminUserSecurityService,
+    private readonly bulk: AdminUserBulkService,
+    private readonly approvals: AdminApprovalsService,
   ) {}
 
   @Get('users')
@@ -75,6 +87,43 @@ export class AdminEndUsersController {
   ): Promise<AdminEndUserListResponse> {
     const result = await this.users.list(query);
     return AdminEndUserListResponseSchema.parse(result);
+  }
+
+  /**
+   * Bulk-apply an operator TAG to the selected users. Step-up-guarded, permissioned
+   * (Users:write), idempotent + audited. A tag is a pure annotation — it moves no
+   * money and confers no authorization (§3.1).
+   */
+  @Post('users/tags')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission('api_route', 'POST /admin/users/tags', 'write')
+  async applyTags(
+    @Body() body: ApplyUserTagsDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<ApplyUserTagsResponse> {
+    return ApplyUserTagsResponseSchema.parse(
+      await this.bulk.applyTags(body, admin.adminId),
+    );
+  }
+
+  /**
+   * Bulk-queue a templated broadcast to the selected users. Step-up-guarded,
+   * permissioned (Comms:write), idempotent + audited. Enqueues onto the notifications
+   * outbox (never a direct send); the large-set gate is re-checked SERVER-SIDE (§3.3)
+   * and moves no money (§3.1).
+   */
+  @Post('users/message')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission('api_route', 'POST /admin/users/message', 'write')
+  async queueMessage(
+    @Body() body: BulkMessageDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<BulkMessageResponse> {
+    return BulkMessageResponseSchema.parse(
+      await this.bulk.queueMessage(body, admin.adminId),
+    );
   }
 
   @Get('users/:id')
@@ -144,6 +193,34 @@ export class AdminEndUsersController {
     @CurrentAdmin() admin: AdminContext,
   ): Promise<void> {
     await this.users.forcePinReset(id, admin.adminId);
+  }
+
+  /**
+   * Raise a MANUAL-CREDIT request for this user's wallet — a MAKER action only
+   * (four-eyes, §3.1). This moves NO money: it records a pending `manual_credit`
+   * ChangeRequest a SECOND admin must approve (via POST /admin/approvals/:id/approve,
+   * which is step-up-guarded and routes the engine-brokered credit). The target
+   * user is the path :id — never trusted from the body; asset/amount/reason come
+   * from the validated body. Returns the created ChangeRequest (it enters the inbox).
+   */
+  @Post('users/:id/credit')
+  @HttpCode(HttpStatus.CREATED)
+  @RequirePermission('api_route', 'POST /admin/users/:id/credit', 'write')
+  async requestCredit(
+    @Param('id') id: string,
+    @Body() body: CreateManualCreditDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<ChangeRequest> {
+    const result = await this.approvals.create(
+      {
+        kind: 'manual_credit',
+        resource: `User:${id}`,
+        payload: { userId: id, asset: body.asset, amount: body.amount },
+        reason: body.reason,
+      },
+      admin.adminId,
+    );
+    return ChangeRequestSchema.parse(result);
   }
 
   @Get('users/:id/devices')

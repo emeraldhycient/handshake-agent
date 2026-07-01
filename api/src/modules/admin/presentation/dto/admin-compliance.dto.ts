@@ -7,6 +7,7 @@ import {
   ComplianceDispositionRequestSchema,
   ComplianceReportDraftRequestSchema,
   ComplianceReportSubmitRequestSchema,
+  SanctionsDispositionRequestSchema,
 } from '@handshake-agent/contracts';
 
 /** Query DTO for GET /admin/compliance/events (status/severity/userId + cursor). */
@@ -32,6 +33,11 @@ export class ComplianceFeedQueryDto extends createZodDto(
 /** Body DTO for POST /admin/compliance/events/:id/disposition. */
 export class ComplianceDispositionDto extends createZodDto(
   ComplianceDispositionRequestSchema,
+) {}
+
+/** Body DTO for POST /admin/compliance/sanctions/:id/disposition. */
+export class SanctionsDispositionDto extends createZodDto(
+  SanctionsDispositionRequestSchema,
 ) {}
 
 /** Body DTO for POST /admin/compliance/aml-rules. */

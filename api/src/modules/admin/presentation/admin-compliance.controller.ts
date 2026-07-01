@@ -19,6 +19,7 @@ import {
   ComplianceReportSchema,
   ComplianceReportListResponseSchema,
   SanctionsMonitoringViewSchema,
+  SanctionsRecordItemSchema,
   SanctionsRecordListResponseSchema,
   TravelRuleListResponseSchema,
   type AmlRule,
@@ -28,6 +29,7 @@ import {
   type ComplianceReport,
   type ComplianceReportListResponse,
   type SanctionsMonitoringView,
+  type SanctionsRecordItem,
   type SanctionsRecordListResponse,
   type TravelRuleListResponse,
 } from '@handshake-agent/contracts';
@@ -46,6 +48,7 @@ import {
   ComplianceFeedQueryDto,
   ComplianceReportDraftDto,
   ComplianceReportSubmitDto,
+  SanctionsDispositionDto,
 } from './dto/admin-compliance.dto';
 
 /**
@@ -107,6 +110,24 @@ export class AdminComplianceController {
   ): Promise<SanctionsRecordListResponse> {
     return SanctionsRecordListResponseSchema.parse(
       await this.compliance.listSanctions(query),
+    );
+  }
+
+  @Post('sanctions/:id/disposition')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission(
+    'api_route',
+    'POST /admin/compliance/sanctions/:id/disposition',
+    'write',
+  )
+  async disposeSanctions(
+    @Param('id') id: string,
+    @Body() dto: SanctionsDispositionDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<SanctionsRecordItem> {
+    return SanctionsRecordItemSchema.parse(
+      await this.compliance.disposeSanctions(id, dto, admin.adminId),
     );
   }
 

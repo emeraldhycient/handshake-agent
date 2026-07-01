@@ -7,6 +7,7 @@ import {
   ComplianceDispositionRequestSchema,
   SanctionsRecordItemSchema,
   SanctionsRecordListResponseSchema,
+  SanctionsDispositionRequestSchema,
   SanctionsMonitoringViewSchema,
   AmlRuleSchema,
   AmlRuleListResponseSchema,
@@ -157,6 +158,7 @@ describe("SanctionsRecordItemSchema / ListResponse", () => {
     matchedList: "OpenSanctions",
     matchType: "Counterparty match",
     matchScore: 92,
+    disposition: null,
     createdAt: "2026-01-01T00:00:00.000Z",
   };
 
@@ -167,6 +169,27 @@ describe("SanctionsRecordItemSchema / ListResponse", () => {
         verdict,
       );
     }
+  });
+
+  it("accepts each disposition value and null (open match)", () => {
+    for (const disposition of ["cleared", "escalated", "blocked"]) {
+      expect(
+        SanctionsRecordItemSchema.parse({ ...rec, disposition }).disposition,
+      ).toBe(disposition);
+    }
+    expect(
+      SanctionsRecordItemSchema.parse({ ...rec, disposition: null })
+        .disposition,
+    ).toBeNull();
+  });
+
+  it("rejects an unknown disposition and a missing disposition key", () => {
+    expect(() =>
+      SanctionsRecordItemSchema.parse({ ...rec, disposition: "maybe" }),
+    ).toThrow();
+    const { disposition: _d, ...noDisp } = rec;
+    void _d;
+    expect(() => SanctionsRecordItemSchema.parse(noDisp)).toThrow();
   });
 
   it("rejects an unknown verdict", () => {
@@ -209,6 +232,29 @@ describe("SanctionsRecordItemSchema / ListResponse", () => {
     expect(
       SanctionsRecordListResponseSchema.parse({ items: [rec] }).items,
     ).toHaveLength(1);
+  });
+});
+
+describe("SanctionsDispositionRequestSchema", () => {
+  it("accepts each disposition, with and without a comment", () => {
+    for (const disposition of ["cleared", "escalated", "blocked"]) {
+      expect(
+        SanctionsDispositionRequestSchema.parse({ disposition }).disposition,
+      ).toBe(disposition);
+    }
+    expect(
+      SanctionsDispositionRequestSchema.parse({
+        disposition: "blocked",
+        comment: "OFAC SDN confirmed",
+      }).comment,
+    ).toBe("OFAC SDN confirmed");
+  });
+
+  it("rejects an unknown or missing disposition", () => {
+    expect(() =>
+      SanctionsDispositionRequestSchema.parse({ disposition: "ignore" }),
+    ).toThrow();
+    expect(() => SanctionsDispositionRequestSchema.parse({})).toThrow();
   });
 });
 

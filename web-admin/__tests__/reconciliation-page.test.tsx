@@ -8,6 +8,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type {
   ReconBreakListResponse,
@@ -21,13 +22,27 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/lib/api/reconciliation", () => ({
   listReconBreaks: vi.fn(),
   getReconStatus: vi.fn(),
+  resolveReconBreak: vi.fn(),
+  acceptReconBreak: vi.fn(),
+}))
+
+// useAdminMe (mfaEnabled) drives the StepUpDialog rendered by the page.
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn().mockResolvedValue({ mfaEnabled: true, permissions: [] }),
 }))
 
 import { ReconciliationPage } from "@/components/admin/reconciliation-page"
-import { listReconBreaks, getReconStatus } from "@/lib/api/reconciliation"
+import {
+  listReconBreaks,
+  getReconStatus,
+  resolveReconBreak,
+  acceptReconBreak,
+} from "@/lib/api/reconciliation"
 
 const mockBreaks = vi.mocked(listReconBreaks)
 const mockStatus = vi.mocked(getReconStatus)
+const mockResolve = vi.mocked(resolveReconBreak)
+const mockAccept = vi.mocked(acceptReconBreak)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -82,6 +97,16 @@ function renderPage() {
 beforeEach(() => {
   mockBreaks.mockReset().mockResolvedValue(BREAKS)
   mockStatus.mockReset().mockResolvedValue(STATUS)
+  mockResolve.mockReset().mockResolvedValue({
+    breakId: "comp_1",
+    disposition: "resolved",
+    moved: false,
+  })
+  mockAccept.mockReset().mockResolvedValue({
+    breakId: "comp_1",
+    disposition: "accepted",
+    moved: false,
+  })
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -146,5 +171,53 @@ describe("ReconciliationPage (wired)", () => {
         screen.getByText(/Failed to load reconciliation status/i)
       ).toBeInTheDocument()
     )
+  })
+
+  it("fires the REAL resolve mutation via reason → engine-action (never a debit)", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: /Resolve via engine/i }))[0]
+    )
+    // Reason (audit) leg.
+    await user.type(screen.getByLabelText("Reason"), "Webhook replayed")
+    await user.click(screen.getByRole("button", { name: /Continue/ }))
+    // Engine-action leg → the REAL resolve mutation fires (engine-brokered).
+    await user.click(
+      screen.getByRole("button", { name: /Resolve via engine/i })
+    )
+
+    await waitFor(() => {
+      expect(mockResolve).toHaveBeenCalledTimes(1)
+    })
+    expect(mockResolve).toHaveBeenCalledWith("comp_1", {
+      reason: "Webhook replayed",
+    })
+    // The resolved break's footer reflects the disposition.
+    expect(await screen.findByText("Resolved")).toBeInTheDocument()
+  })
+
+  it("fires the REAL accept mutation via reason → maker-checker (no debit)", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: /^Accept$/ }))[0]
+    )
+    await user.type(screen.getByLabelText("Reason"), "Rounding drift")
+    await user.click(screen.getByRole("button", { name: /Continue/ }))
+    // Maker-checker submit → the REAL accept mutation fires.
+    await user.click(
+      screen.getByRole("button", { name: /Submit for approval/i })
+    )
+
+    await waitFor(() => {
+      expect(mockAccept).toHaveBeenCalledTimes(1)
+    })
+    expect(mockAccept).toHaveBeenCalledWith("comp_1", {
+      reason: "Rounding drift",
+    })
+    expect(mockResolve).not.toHaveBeenCalled()
   })
 })

@@ -11,9 +11,15 @@
  * This file lives in `lib/` and must NOT import from `components/` or `app/`.
  */
 import {
+  ReconAcceptRequestSchema,
+  ReconActionResponseSchema,
   ReconBreakListResponseSchema,
+  ReconResolveRequestSchema,
   ReconStatusSchema,
+  type ReconAcceptRequest,
+  type ReconActionResponse,
   type ReconBreakListResponse,
+  type ReconResolveRequest,
   type ReconStatus,
 } from "@handshake-agent/contracts"
 
@@ -29,4 +35,33 @@ export async function listReconBreaks(): Promise<ReconBreakListResponse> {
 export async function getReconStatus(): Promise<ReconStatus> {
   const res = await api.get("/admin/reconciliation/status")
   return ReconStatusSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/reconciliation/breaks/:id/resolve — resolve a break via the engine
+ * (Phase 7, WRITE). Engine-brokered: re-drives the offending txn's settlement — never
+ * a raw debit (§3.1). Sensitive — may 403 with ADMIN_STEP_UP_REQUIRED. Parses the
+ * body before the request and the response after.
+ */
+export async function resolveReconBreak(
+  id: string,
+  input: ReconResolveRequest
+): Promise<ReconActionResponse> {
+  const body = ReconResolveRequestSchema.parse(input)
+  const res = await api.post(`/admin/reconciliation/breaks/${id}/resolve`, body)
+  return ReconActionResponseSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/reconciliation/breaks/:id/accept — accept a break as-is (Phase 7,
+ * WRITE). Dual-control, no-debit disposition; moves no money (§3.1). Sensitive — may
+ * 403 with ADMIN_STEP_UP_REQUIRED.
+ */
+export async function acceptReconBreak(
+  id: string,
+  input: ReconAcceptRequest
+): Promise<ReconActionResponse> {
+  const body = ReconAcceptRequestSchema.parse(input)
+  const res = await api.post(`/admin/reconciliation/breaks/${id}/accept`, body)
+  return ReconActionResponseSchema.parse(res.data)
 }

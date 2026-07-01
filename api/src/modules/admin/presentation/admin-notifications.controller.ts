@@ -13,14 +13,17 @@ import {
   NotificationTemplateListResponseSchema,
   NotificationTemplatePreviewResponseSchema,
   DeliveryLogResponseSchema,
+  BroadcastSendResponseSchema,
   type NotificationTemplate,
   type NotificationTemplateListResponse,
   type NotificationTemplatePreviewResponse,
   type DeliveryLogResponse,
+  type BroadcastSendResponse,
 } from '@handshake-agent/contracts';
 
 import { AdminNotificationTemplateService } from '../application/admin-notification-template.service';
 import { AdminNotificationDeliveryService } from '../application/admin-notification-delivery.service';
+import { AdminNotificationBroadcastService } from '../application/admin-notification-broadcast.service';
 import { AdminSessionGuard } from './admin-session.guard';
 import { PermissionGuard } from './permission.guard';
 import { AdminStepUpGuard } from './admin-step-up.guard';
@@ -29,6 +32,7 @@ import { RequirePermission } from './require-permission.decorator';
 import {
   NotificationTemplateUpsertDto,
   NotificationTemplatePreviewDto,
+  BroadcastSendDto,
 } from './dto/admin-notification.dto';
 
 /**
@@ -46,6 +50,7 @@ export class AdminNotificationsController {
   constructor(
     private readonly templates: AdminNotificationTemplateService,
     private readonly delivery: AdminNotificationDeliveryService,
+    private readonly broadcast: AdminNotificationBroadcastService,
   ) {}
 
   @Get('notification-templates')
@@ -71,6 +76,31 @@ export class AdminNotificationsController {
   )
   async deliveryLog(): Promise<DeliveryLogResponse> {
     return DeliveryLogResponseSchema.parse(await this.delivery.deliveryLog());
+  }
+
+  /**
+   * Phase 7 (WRITES) — send (or queue-for-approval) a broadcast to an audience
+   * cohort via the notifications outbox. Permissioned (default-deny) AND step-up
+   * gated (a fresh re-auth), since a blast is high-impact. The service resolves the
+   * cohort size SERVER-SIDE and either dispatches directly (small audience) or
+   * captures a maker-checker ChangeRequest for a second admin (large audience,
+   * §3.5). Moves no money (§3.1). Parsed through its contract schema before it
+   * leaves the boundary.
+   */
+  @Post('notifications/broadcast')
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission(
+    'api_route',
+    'POST /admin/notifications/broadcast',
+    'write',
+  )
+  async send(
+    @Body() body: BroadcastSendDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<BroadcastSendResponse> {
+    return BroadcastSendResponseSchema.parse(
+      await this.broadcast.send(body, admin.adminId),
+    );
   }
 
   @Post('notification-templates/preview')

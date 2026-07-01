@@ -17,6 +17,7 @@ import type {
   KycSubmissionDetail,
   NotificationTemplate,
   Role,
+  TreasuryAlert,
 } from "@handshake-agent/contracts"
 
 // ─── Shell + gating ──────────────────────────────────────────────────────────────
@@ -235,6 +236,16 @@ export interface UserActionsProps {
   user: AdminEndUserDetail
 }
 
+/**
+ * The Users-directory bulk-bar actions (tag + message) over the current selection.
+ * `selectedIds` is the explicit set the two operations target; `onDone` is called
+ * after a successful op so the page can clear the selection.
+ */
+export interface UsersBulkActionsProps {
+  selectedIds: readonly string[]
+  onDone: () => void
+}
+
 // ─── KYC review page ─────────────────────────────────────────────────────────────
 
 /**
@@ -341,6 +352,13 @@ export interface ComplianceReportSubmitDialogProps {
 export interface BeneficiaryOverrideProps {
   /** The beneficiary whose first-use cooling-off lock can be cleared. */
   beneficiary: AdminBeneficiary
+}
+
+// ─── Treasury writes (§6.13) ────────────────────────────────────────────────────────
+
+export interface TreasuryAlertAcknowledgeProps {
+  /** The threshold-breach alert to acknowledge (captures an audited note). */
+  alert: TreasuryAlert
 }
 
 // ─── Blocked list page (§6.7) ──────────────────────────────────────────────────────
@@ -1042,6 +1060,12 @@ export interface ProviderCardViewProps {
   provider: import("@handshake-agent/contracts").ProviderCardView
 }
 
+/** Props for the ProviderTestButton (the Phase-7 "Test connection" liveness probe). */
+export interface ProviderTestButtonProps {
+  /** The stable provider key to probe (e.g. "blockradar"). */
+  providerKey: string
+}
+
 // ─── Approvals page (design §6 Approvals, `screens/Approvals.html`) ──────────────
 
 /**
@@ -1171,6 +1195,21 @@ export interface EngineActionModalProps extends FlowModalBaseProps {
   cta?: string
   /** Fired when the operator presses the execute CTA. */
   onExecute: () => void
+}
+
+/**
+ * ManualCreditModal — the input step for a manual wallet credit (Phase 7 WRITE).
+ * Collects the asset (from the user's live wallet assets) + a positive amount, then
+ * hands them to the flow via `onContinue`. It is presentation only: it moves no money
+ * (the engine-brokered credit runs only after reason → step-up → maker-checker →
+ * approval by a SECOND admin, §3.1). The Continue CTA activates only for a valid,
+ * positive amount.
+ */
+export interface ManualCreditModalProps extends FlowModalBaseProps {
+  /** The assets the operator can credit (the user's live wallet assets). */
+  assets: readonly string[]
+  /** Called with the chosen asset + entered amount once both are valid. */
+  onContinue: (asset: string, amount: string) => void
 }
 
 /** One from→to diff row in the maker-checker modal. */

@@ -23,11 +23,19 @@
  *      right → Engine state timeline (vertical stepper) + Provider references
  *              (label + mono value + copy + external link)
  *
- * Funds-safety (§3.1): every action button opens the shared flow modals from the
- * Shared phase in the same sequence the design uses (reason → step-up → engine,
- * with a maker-checker branch on large refunds). The modals only propose; they
- * never move money here — the Retry / Mark-failed / Refund / Resend-receipt
- * WRITES remain Phase 7 (this screen only wires the READ).
+ * Funds-safety (§3.1): every money action button opens the shared flow modals in
+ * the design's sequence and WIRES their submit to the REAL engine-brokered
+ * mutation (Phase 7, WRITES):
+ *   - Retry settlement → `useRetrySettlement` (re-enqueues the settlement outbox;
+ *     moves no money itself) — reason → engine-execute.
+ *   - Mark failed → `useMarkFailed` (the engine's atomic `settle*RefundAtomic`
+ *     reverses the reserve, idempotently) — reason → engine-execute.
+ *   - Refund → `useCreateChange` of kind `refund` — a maker-checker request that
+ *     APPLIES NOTHING until a SECOND admin approves it (four-eyes); on approval the
+ *     engine's atomic refund runs. reason → maker-checker submit.
+ * None of these writes a raw ledger entry (§3.1). Each is sensitive: on a 403 with
+ * ADMIN_STEP_UP_REQUIRED we open the real StepUpDialog and replay via
+ * `useStepUpRetry`. The invalidation (tx + list, inbox) lives in the hooks.
  */
 import { useMemo, useState } from "react"
 import Link from "next/link"
@@ -36,12 +44,20 @@ import { cn } from "@/lib/utils"
 import { pushToast } from "@/lib/store/toast-store"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusPill } from "@/components/admin/status-pill"
-import { useTransactionDetail } from "@/lib/query/hooks"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
+import {
+  useAdminMe,
+  useCreateChange,
+  useMarkFailed,
+  useRetrySettlement,
+  useTransactionDetail,
+} from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
+import { ApiError } from "@/lib/api/client"
 import {
   EngineActionModal,
   MakerCheckerModal,
   ReasonModal,
-  StepUpModal,
 } from "@/components/admin/flows"
 import type {
   AdminTxnDetail,
@@ -49,6 +65,7 @@ import type {
   AdminTxnLedgerLeg,
   AdminTxnStatus,
   AdminTxnTimelineEntry,
+  CreateChangeRequest,
 } from "@handshake-agent/contracts"
 import type {
   EngineLedgerRow,
@@ -61,9 +78,6 @@ import type {
 
 /** Subtle placeholder for a design field the contract does not yet provide. */
 const DASH = "—"
-
-/** A stable idempotency key for the engine modal (design mints one per runFlow). */
-const IDEMPOTENCY_KEY = "idem_a8f3c1902e"
 
 /** Format an ISO timestamp for the timeline / created displays. */
 function formatWhen(iso: string): string {
@@ -178,7 +192,11 @@ const TX_ACTIONS: ActionButton[] = [
 ]
 
 // ── Flow-step context per action (mirrors runFlow ctx, logic.js 668-681) ─────────
-type FlowStep = "reason" | "stepup" | "engine" | "maker"
+// The presentation-only step-up box is dropped in favour of the REAL StepUpDialog
+// (which verifies the code server-side and replays the mutation on 403). So the
+// chains are: retry → engine; mark-failed → reason → engine; refund → reason →
+// maker (the four-eyes change-request). The engine/maker submit fires the write.
+type FlowStep = "reason" | "engine" | "maker"
 interface FlowSpec {
   steps: FlowStep[]
   title: string
@@ -189,11 +207,9 @@ interface FlowSpec {
 }
 
 /**
- * Build the flow spec for a triage action from the REAL transaction detail. The
- * modal chain, titles and steps are the design's (Phase 7 wires the execution);
- * the identifiers now reference this transaction rather than a stale mock. The
- * refund's amount is unknown until the backend exposes economics, so the
- * maker-checker threshold branch is omitted for now (recorded as a shape gap).
+ * Build the flow spec for a triage action from the REAL transaction detail. Each
+ * chain's terminal step is the one wired to the mutation: `engine` for the
+ * engine-brokered retry/mark-failed, `maker` for the four-eyes refund request.
  */
 function flowSpecFor(kind: FlowKind, tx: AdminTxnDetail): FlowSpec | null {
   const engineLedger: EngineLedgerRow[] = tx.ledgerLegs.map((l) => ({
@@ -205,7 +221,7 @@ function flowSpecFor(kind: FlowKind, tx: AdminTxnDetail): FlowSpec | null {
   switch (kind) {
     case "retry":
       return {
-        steps: ["stepup", "engine"],
+        steps: ["engine"],
         title: "Retry settlement",
         cta: "Execute retry via engine",
         effect: [
@@ -213,24 +229,30 @@ function flowSpecFor(kind: FlowKind, tx: AdminTxnDetail): FlowSpec | null {
           { k: "Directive", v: "settlement.retry" },
           { k: "Type", v: tx.type },
         ],
-        ledger: engineLedger,
+        // Retry re-enqueues settlement — it writes no ledger legs itself (§3.1).
+        ledger: [],
       }
     case "refund":
       return {
-        steps: ["reason", "stepup", "engine"],
-        title: "Refund (partial)",
-        cta: "Execute refund via engine",
-        diff: [{ field: `Refund · ${tx.id}`, from: "—", to: "—" }],
+        steps: ["reason", "maker"],
+        title: "Refund",
+        cta: "Submit for approval",
+        diff: [
+          {
+            field: `Refund · ${tx.id}`,
+            from: "Settling",
+            to: "Failed + refunded",
+          },
+        ],
         effect: [
           { k: "Original tx", v: tx.id },
-          { k: "Type", v: "partial" },
           { k: "User", v: tx.userId },
         ],
         ledger: engineLedger,
       }
     case "markFailed":
       return {
-        steps: ["reason", "stepup", "engine"],
+        steps: ["reason", "engine"],
         title: "Mark failed",
         cta: "Mark failed via engine",
         effect: [
@@ -241,7 +263,7 @@ function flowSpecFor(kind: FlowKind, tx: AdminTxnDetail): FlowSpec | null {
       }
     case "recon":
       return {
-        steps: ["stepup"],
+        steps: ["engine"],
         title: "Re-run reconciliation",
         cta: "Execute via engine",
         effect: [],
@@ -281,22 +303,41 @@ function PanelTitle({
 
 const LEDGER_GRID = "grid grid-cols-[1.6fr_0.7fr_1fr_0.7fr] gap-2"
 
-// The five flow phases a triage action can move through (the design's runFlow).
+// The flow phases a triage action can move through (design runFlow, minus the
+// presentation-only step-up — the real StepUpDialog handles re-auth).
 type ActivePhase = FlowStep | null
+
+/** Narrow an unknown error to its operator-facing message. */
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "The action could not be completed."
+}
 
 export function TransactionDetail({ transactionId }: TransactionDetailProps) {
   const query = useTransactionDetail(transactionId)
   const tx = query.data
 
+  const me = useAdminMe()
+  const retry = useRetrySettlement()
+  const markFailed = useMarkFailed()
+  const createChange = useCreateChange()
+  const stepUp = useStepUpRetry()
+
   const [copied, setCopied] = useState<string | null>(null)
   // The in-flight action + how far through its step list we are.
   const [activeKind, setActiveKind] = useState<FlowKind | null>(null)
   const [phase, setPhase] = useState<ActivePhase>(null)
+  // The reason captured in the ReasonModal — threaded into the audited mutation.
+  const [reason, setReason] = useState("")
 
   const spec = useMemo(
     () => (activeKind && tx ? flowSpecFor(activeKind, tx) : null),
     [activeKind, tx]
   )
+
+  const executing =
+    retry.isPending || markFailed.isPending || createChange.isPending
 
   function copy(value: string) {
     void navigator.clipboard?.writeText(value)
@@ -310,9 +351,15 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
       pushToast("Receipt re-sent to the customer", "info")
       return
     }
+    if (kind === "recon") {
+      // No dedicated recon-run endpoint yet — flag the gap rather than fake it.
+      pushToast("Re-run reconciliation is not available yet.", "info")
+      return
+    }
     if (!tx) return
     const next = flowSpecFor(kind, tx)
     if (!next) return
+    setReason("")
     setActiveKind(kind)
     setPhase(next.steps[0])
   }
@@ -320,15 +367,64 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
   function closeFlow() {
     setActiveKind(null)
     setPhase(null)
+    setReason("")
   }
 
-  // Advance to the next step in the active spec, or finish (close) at the end.
-  function advance() {
-    if (!spec || !phase) return
-    const idx = spec.steps.indexOf(phase)
-    const nextStep = spec.steps[idx + 1]
-    if (nextStep) setPhase(nextStep)
-    else closeFlow()
+  // The ReasonModal's Continue: stash the reason, advance to the terminal step.
+  function onReason(entered: string) {
+    setReason(entered)
+    if (spec) setPhase(spec.steps[spec.steps.indexOf("reason") + 1] ?? null)
+  }
+
+  // The engine/maker terminal submit → the REAL mutation for the active action.
+  // Runs through `useStepUpRetry`: on a 403 ADMIN_STEP_UP_REQUIRED it opens the
+  // real StepUpDialog and the retry replays this same action after re-auth.
+  function runMutation(): Promise<void> {
+    if (!tx || !activeKind) return Promise.resolve()
+    switch (activeKind) {
+      case "retry":
+        return retry.mutateAsync(tx.id).then(() => undefined)
+      case "markFailed":
+        return markFailed
+          .mutateAsync({ id: tx.id, input: { reason } })
+          .then(() => undefined)
+      case "refund": {
+        // A refund is a four-eyes CHANGE REQUEST — it applies NOTHING here; a
+        // second admin approves it, then the engine's atomic refund runs (§3.1).
+        const input: CreateChangeRequest = {
+          kind: "refund",
+          resource: `Transaction:${tx.id}`,
+          payload: { transactionId: tx.id, reason },
+          reason,
+        }
+        return createChange.mutateAsync(input).then(() => undefined)
+      }
+      default:
+        return Promise.resolve()
+    }
+  }
+
+  function submitFlow() {
+    const kind = activeKind
+    void (async () => {
+      const completed = await stepUp
+        .run(runMutation)
+        .catch((error) => {
+          pushToast(errorMessage(error), "warn")
+          return false
+        })
+      // `completed` is false when a step-up challenge opened (retry pending) — keep
+      // the flow open so the StepUpDialog's success can replay it.
+      if (completed) {
+        pushToast(
+          kind === "refund"
+            ? "Refund submitted for approval"
+            : "Action executed via the engine",
+          "ok"
+        )
+        closeFlow()
+      }
+    })()
   }
 
   return (
@@ -628,40 +724,59 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
             </div>
           </div>
 
-          {/* ── Flow modals (design runFlow: reason → step-up → engine [→ maker]) ── */}
+          {/* ── Flow modals (design runFlow: reason → engine [→ maker]) ─────────── */}
+          {/* Suppressed while the real StepUpDialog is up so there is one dialog at
+              a time; the step-up success replays the stashed mutation. */}
           {spec && (
             <>
               <ReasonModal
-                open={phase === "reason"}
-                onOpenChange={(o) => !o && closeFlow()}
+                open={phase === "reason" && !stepUp.open}
+                onOpenChange={(o) => !o && !executing && closeFlow()}
                 title={spec.title}
-                onContinue={advance}
-              />
-              <StepUpModal
-                open={phase === "stepup"}
-                onOpenChange={(o) => !o && closeFlow()}
-                title={spec.title}
-                onComplete={advance}
+                onContinue={onReason}
               />
               <EngineActionModal
-                open={phase === "engine"}
-                onOpenChange={(o) => !o && closeFlow()}
+                open={phase === "engine" && !stepUp.open}
+                onOpenChange={(o) => !o && !executing && closeFlow()}
                 title={spec.title}
                 effect={spec.effect}
                 ledger={spec.ledger}
-                idempotencyKey={IDEMPOTENCY_KEY}
+                idempotencyKey={tx.idempotencyKey}
                 cta={spec.cta}
-                onExecute={advance}
+                onExecute={submitFlow}
               />
               <MakerCheckerModal
-                open={phase === "maker"}
-                onOpenChange={(o) => !o && closeFlow()}
+                open={phase === "maker" && !stepUp.open}
+                onOpenChange={(o) => !o && !executing && closeFlow()}
                 title={spec.title}
                 diff={spec.diff ?? []}
-                onSubmit={advance}
+                onSubmit={submitFlow}
               />
             </>
           )}
+
+          {/* Real step-up — opened when a triage mutation 403s ADMIN_STEP_UP_REQUIRED. */}
+          <StepUpDialog
+            open={stepUp.open}
+            mfaEnabled={me.data?.mfaEnabled ?? false}
+            onOpenChange={stepUp.setOpen}
+            onSuccess={() => {
+              const kind = activeKind
+              void stepUp
+                .retry()
+                .then((replayed) => {
+                  if (!replayed) return
+                  pushToast(
+                    kind === "refund"
+                      ? "Refund submitted for approval"
+                      : "Action executed via the engine",
+                    "ok"
+                  )
+                  closeFlow()
+                })
+                .catch((error) => pushToast(errorMessage(error), "warn"))
+            }}
+          />
         </>
       )}
     </div>

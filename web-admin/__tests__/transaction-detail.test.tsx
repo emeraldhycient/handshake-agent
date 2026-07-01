@@ -1,20 +1,23 @@
 /**
- * TransactionDetail tests (READ-wired, Phase 6a).
+ * TransactionDetail tests.
  *
- * The screen now fetches its record via `getTransaction` (GET
- * /admin/transactions/:id) through `useTransactionDetail`. These tests mock the
- * api client and assert:
- *  1. loading → data: the header (type + status pill + copyable id), the real
- *     ledger legs, timeline steps and provider references render from the fetched
- *     `AdminTxnDetail`; the Open-ledger link deep-links the REAL tx id.
- *  2. error branch: a tokened failure card with a Retry affordance.
- *  3. empty ledger/timeline: design-consistent empty states, no crash.
+ * READ (Phase 6a): the screen fetches its record via `getTransaction` (GET
+ * /admin/transactions/:id) through `useTransactionDetail`. WRITE (Phase 7): the
+ * triage actions are wired to the REAL engine-brokered / maker-checker mutations —
+ * Retry → `retryTransaction`, Mark failed → `markTransactionFailed`, Refund →
+ * `createChange` (a `kind: refund` change request; four-eyes, applies nothing here).
  *
- * The api layer is mocked — no server. The flow-modal triage actions are Phase 7
- * (propose-only here) so they are not asserted beyond being present.
+ * These tests mock the api layer (no server) and assert:
+ *  1. loading → data: the header, real ledger legs, timeline, provider refs render;
+ *     Open-ledger deep-links the REAL tx id.
+ *  2. error / empty branches.
+ *  3. WRITES: retry fires the engine retry; mark-failed threads the reason; refund
+ *     raises a `kind: refund` change request against this transaction — never a raw
+ *     ledger write from this surface (§3.1).
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { AdminTxnDetail } from "@handshake-agent/contracts"
 
@@ -24,11 +27,32 @@ import { TransactionDetail } from "@/components/admin/transaction-detail"
 
 vi.mock("@/lib/api/transactions", () => ({
   getTransaction: vi.fn(),
+  retryTransaction: vi.fn(),
+  markTransactionFailed: vi.fn(),
 }))
 
-import { getTransaction } from "@/lib/api/transactions"
+vi.mock("@/lib/api/approvals", () => ({
+  createChange: vi.fn(),
+}))
+
+// `useAdminMe` only drives the StepUpDialog's mfa mode (no step-up in these tests).
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn(),
+}))
+
+import {
+  getTransaction,
+  retryTransaction,
+  markTransactionFailed,
+} from "@/lib/api/transactions"
+import { createChange } from "@/lib/api/approvals"
+import { getMe } from "@/lib/api/admin"
 
 const mockGet = vi.mocked(getTransaction)
+const mockRetry = vi.mocked(retryTransaction)
+const mockMarkFailed = vi.mocked(markTransactionFailed)
+const mockCreateChange = vi.mocked(createChange)
+const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixture ────────────────────────────────────────────────────────────────────
 
@@ -105,7 +129,46 @@ function renderDetail(id = TXN_ID) {
 
 beforeEach(() => {
   mockGet.mockReset()
+  mockRetry.mockReset()
+  mockMarkFailed.mockReset()
+  mockCreateChange.mockReset()
+  mockGetMe.mockReset()
   mockGet.mockResolvedValue(DETAIL)
+  mockGetMe.mockResolvedValue({
+    id: "00000000-0000-0000-0000-000000000001",
+    email: "ops@example.com",
+    role: { id: "00000000-0000-0000-0000-0000000000aa", name: "ops" },
+    status: "active",
+    mfaEnabled: false,
+    permissions: [],
+    menus: [],
+    pages: [],
+  })
+  mockRetry.mockResolvedValue({
+    transactionId: TXN_ID,
+    status: "settling",
+    refunded: false,
+  })
+  mockMarkFailed.mockResolvedValue({
+    transactionId: TXN_ID,
+    status: "failed",
+    refunded: true,
+  })
+  mockCreateChange.mockResolvedValue({
+    id: "33333333-3333-4333-8333-333333333333",
+    kind: "refund",
+    resource: `Transaction:${TXN_ID}`,
+    payload: { transactionId: TXN_ID, reason: "Customer request" },
+    status: "pending",
+    reason: "Customer request",
+    requestedByAdminId: "00000000-0000-0000-0000-000000000001",
+    requestedByEmail: "ops@example.com",
+    decidedByAdminId: null,
+    decidedByEmail: null,
+    decisionReason: null,
+    decidedAt: null,
+    createdAt: "2026-07-01T13:30:00.000Z",
+  })
 })
 
 // ─── Tests ──────────────────────────────────────────────────────────────────────
@@ -214,5 +277,87 @@ describe("TransactionDetail (read-wired)", () => {
     )
     expect(screen.queryByText("TJ173305038490070x9")).not.toBeInTheDocument()
     expect(screen.queryByText("MockFLWRef-902412")).not.toBeInTheDocument()
+  })
+
+  // ── WRITES (Phase 7) — engine-brokered + maker-checker triage ───────────────────
+
+  it("Retry settlement → engine modal → fires the engine-brokered retry for this tx", async () => {
+    const user = userEvent.setup()
+    renderDetail()
+    await screen.findByText(TXN_ID)
+
+    await user.click(screen.getByRole("button", { name: "Retry settlement" }))
+    // The engine-action modal shows this tx's idempotency key (not a mock const).
+    expect(await screen.findAllByText("idem_15020323")).not.toHaveLength(0)
+    await user.click(
+      screen.getByRole("button", { name: "Execute retry via engine" })
+    )
+
+    await waitFor(() => expect(mockRetry).toHaveBeenCalledWith(TXN_ID))
+    // Retry moves no money itself — never a mark-failed/refund from this action.
+    expect(mockMarkFailed).not.toHaveBeenCalled()
+    expect(mockCreateChange).not.toHaveBeenCalled()
+  })
+
+  it("Mark failed → reason → engine → calls the engine mark-failed with the reason", async () => {
+    const user = userEvent.setup()
+    renderDetail()
+    await screen.findByText(TXN_ID)
+
+    await user.click(screen.getByRole("button", { name: "Mark failed" }))
+    // ReasonModal: a required reason gates Continue.
+    await user.type(
+      screen.getByLabelText("Reason"),
+      "Stuck settlement, manual fail"
+    )
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await user.click(
+      screen.getByRole("button", { name: "Mark failed via engine" })
+    )
+
+    await waitFor(() =>
+      expect(mockMarkFailed).toHaveBeenCalledWith(TXN_ID, {
+        reason: "Stuck settlement, manual fail",
+      })
+    )
+    expect(mockCreateChange).not.toHaveBeenCalled()
+  })
+
+  it("Refund → reason → maker-checker → raises a `kind: refund` change request (four-eyes, no direct money move)", async () => {
+    const user = userEvent.setup()
+    renderDetail()
+    await screen.findByText(TXN_ID)
+
+    await user.click(screen.getByRole("button", { name: "Refund" }))
+    await user.type(screen.getByLabelText("Reason"), "Duplicate charge")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    // The maker-checker modal (dual-control) is what a refund submits through.
+    await user.click(
+      screen.getByRole("button", { name: "Submit for approval" })
+    )
+
+    await waitFor(() =>
+      expect(mockCreateChange).toHaveBeenCalledWith({
+        kind: "refund",
+        resource: `Transaction:${TXN_ID}`,
+        payload: { transactionId: TXN_ID, reason: "Duplicate charge" },
+        reason: "Duplicate charge",
+      })
+    )
+    // A refund NEVER executes an engine action from this surface — it only proposes.
+    expect(mockMarkFailed).not.toHaveBeenCalled()
+    expect(mockRetry).not.toHaveBeenCalled()
+  })
+
+  it("Resend receipt is a local confirmation — it fires no mutation", async () => {
+    const user = userEvent.setup()
+    renderDetail()
+    await screen.findByText(TXN_ID)
+
+    await user.click(screen.getByRole("button", { name: "Resend receipt" }))
+
+    expect(mockRetry).not.toHaveBeenCalled()
+    expect(mockMarkFailed).not.toHaveBeenCalled()
+    expect(mockCreateChange).not.toHaveBeenCalled()
   })
 })

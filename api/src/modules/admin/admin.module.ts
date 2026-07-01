@@ -1,5 +1,6 @@
 import { Module, type OnModuleInit } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
+import { HttpModule } from '@nestjs/axios';
 import { JwtModule } from '@nestjs/jwt';
 import { BullBoardModule } from '@bull-board/nestjs';
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
@@ -55,6 +56,7 @@ import { AdminMetricsOpsController } from './presentation/admin-metrics-ops.cont
 import { AdminCatalogController } from './presentation/admin-catalog.controller';
 import { AdminProvidersController } from './presentation/admin-providers.controller';
 import { AdminReconciliationController } from './presentation/admin-reconciliation.controller';
+import { AdminApprovalsController } from './presentation/admin-approvals.controller';
 import { AdminSessionGuard } from './presentation/admin-session.guard';
 import { PermissionGuard } from './presentation/permission.guard';
 import { AdminStepUpGuard } from './presentation/admin-step-up.guard';
@@ -71,6 +73,9 @@ import { AdminBootstrapService } from './application/admin-bootstrap.service';
 import { AdminSettingsService } from './application/admin-settings.service';
 import { AdminEndUserService } from './application/admin-end-user.service';
 import { AdminUserSecurityService } from './application/admin-user-security.service';
+import { AdminUserBulkService } from './application/admin-user-bulk.service';
+import { USER_BULK_REPOSITORY } from './application/ports/user-bulk.repository.port';
+import { UserBulkPrismaRepository } from './infrastructure/user-bulk.prisma.repository';
 import { AdminAuditService } from './application/admin-audit.service';
 import { AdminKycReviewService } from './application/admin-kyc-review.service';
 import { USER_SESSION_READ_REPOSITORY } from './application/ports/user-session-read.repository.port';
@@ -87,6 +92,9 @@ import { AdminNotificationTemplateService } from './application/admin-notificati
 import { AdminNotificationDeliveryService } from './application/admin-notification-delivery.service';
 import { NOTIFICATION_DELIVERY_READ_REPOSITORY } from './application/ports/notification-delivery-read.repository.port';
 import { NotificationDeliveryReadPrismaRepository } from './infrastructure/notification-delivery-read.prisma.repository';
+import { AdminNotificationBroadcastService } from './application/admin-notification-broadcast.service';
+import { BROADCAST_DISPATCH_REPOSITORY } from './application/ports/broadcast-dispatch.repository.port';
+import { BroadcastDispatchPrismaRepository } from './infrastructure/broadcast-dispatch.prisma.repository';
 import { AdminWhatsAppConfigService } from './application/admin-whatsapp-config.service';
 import { AdminTicketService } from './application/admin-ticket.service';
 import { AdminAgentService } from './application/admin-agent.service';
@@ -99,8 +107,21 @@ import { AdminMetricsOpsService } from './application/admin-metrics-ops.service'
 import { METRICS_OPS_READ_REPOSITORY } from './application/ports/metrics-ops-read.repository.port';
 import { MetricsOpsReadPrismaRepository } from './infrastructure/metrics-ops-read.prisma.repository';
 import { AdminReconciliationService } from './application/admin-reconciliation.service';
+import { AdminReconciliationActionService } from './application/admin-reconciliation-action.service';
 import { RECONCILIATION_READ_REPOSITORY } from './application/ports/reconciliation-read.repository.port';
 import { ReconciliationReadPrismaRepository } from './infrastructure/reconciliation-read.prisma.repository';
+// Phase 7 WRITES (Ops / Recon / Treasury / Providers): the engine-brokered ops run,
+// the reconciliation resolve/accept dispositions, the payout maker-checker approval,
+// and the provider liveness probe (port + HttpService adapter).
+import { AdminOpsRunService } from './application/admin-ops-run.service';
+import { AdminTreasuryPayoutService } from './application/admin-treasury-payout.service';
+import { AdminProviderProbeService } from './application/admin-provider-probe.service';
+import { PROVIDER_PROBE } from './application/ports/provider-probe.port';
+import { HttpProviderProbeAdapter } from './infrastructure/http-provider-probe.adapter';
+import { AdminApprovalsService } from './application/admin-approvals.service';
+import { AdminManualCreditService } from './application/admin-manual-credit.service';
+import { CHANGE_REQUEST_REPOSITORY } from './application/ports/change-request.repository.port';
+import { ChangeRequestPrismaRepository } from './infrastructure/change-request.prisma.repository';
 import { AdminOpsController } from './presentation/admin-ops.controller';
 import { AdminOpsService } from './application/admin-ops.service';
 import { OPS_READ_REPOSITORY } from './application/ports/ops-read.repository.port';
@@ -186,6 +207,9 @@ import type { Env } from '../../core/config/env.schema';
     ConversationsModule,
     // AdminTokenService injects JwtService for admin session-token sign/verify.
     JwtModule.register({}),
+    // Phase 7 (Providers "Test connection"): the HttpService used by the liveness
+    // probe adapter for a bounded, credential-free reachability round-trip.
+    HttpModule.register({}),
     // Register the wallet-backfill queue in AdminModule so @InjectQueue resolves
     // for AdminWalletsController. BullModule.forRoot() is already set up by
     // JobsModule (imported at AppModule level); this registerQueue call adds the
@@ -233,6 +257,7 @@ import type { Env } from '../../core/config/env.schema';
     AdminCatalogController,
     AdminProvidersController,
     AdminReconciliationController,
+    AdminApprovalsController,
   ],
   providers: [
     AdminTokenGuard,
@@ -277,6 +302,13 @@ import type { Env } from '../../core/config/env.schema';
     // (§3.1); USER_SESSION_READ_REPOSITORY + VELOCITY_REPOSITORY are bound locally
     // below (mirrors the LEDGER_REPOSITORY / PIN_REPOSITORY local binds).
     AdminUserSecurityService,
+    // Phase 7 (WRITES): the Users-directory BULK service — bulk tag + bulk message
+    // over an EXPLICIT selected id set. Neither moves money (§3.1): tags are pure
+    // annotations; messages enqueue onto the notifications outbox (never a direct
+    // send). USER_BULK_REPOSITORY is bound locally below (PrismaService is global);
+    // AuditService + EffectiveConfigService are global. The large-set gate is
+    // re-checked server-side. Both actions are idempotent + immutably audited.
+    AdminUserBulkService,
     // Phase 6b (READ enrichment): the audit-log read service wraps the global
     // AuditService and projects per-actor role (resolved via ADMIN_USER_REPOSITORY,
     // already bound below) + a first-class `reason` (from details.reason). Read-only
@@ -318,6 +350,12 @@ import type { Env } from '../../core/config/env.schema';
     // NOTIFICATION_DELIVERY_READ_REPOSITORY below (PrismaService is global). Never
     // moves money (§3.1).
     AdminNotificationDeliveryService,
+    // Phase 7 (WRITES): the broadcast-send service. Resolves the cohort size
+    // server-side and either dispatches through the outbox (small audience) or
+    // captures a maker-checker ChangeRequest (large audience, §3.5). Reads the
+    // locally-bound BROADCAST_DISPATCH_REPOSITORY below; defers dual-control to
+    // AdminApprovalsService. Moves no money (§3.1).
+    AdminNotificationBroadcastService,
     AdminWhatsAppConfigService,
     // Phase 4, wave 2 (READ-ONLY): tickets oversight + agent config/conversation
     // logs. AdminTicketService reads the locally-bound TICKET_ORDER_READ_REPOSITORY
@@ -343,6 +381,21 @@ import type { Env } from '../../core/config/env.schema';
     // stuck settlements via the locally-bound RECONCILIATION_READ_REPOSITORY below.
     // Never moves money (§3.1); the resolve/accept/escalate/run-now WRITES are Phase 7.
     AdminReconciliationService,
+    // Phase 7 (WRITES): the reconciliation dispositions. RESOLVE is engine-brokered —
+    // it re-drives the offending txn's settlement via AdminTxnTriageService.retry
+    // (re-enqueue; no money moves, §3.1) — and ACCEPT records a no-debit disposition.
+    // The break's transactionId is derived server-side from the read projection; both
+    // are step-up-gated + immutably audited.
+    AdminReconciliationActionService,
+    // Phase 7 (WRITE): the "Run now" manual-run trigger. Re-drives the reconciler's
+    // tick() (exported by TransactionsModule) — an engine-brokered re-drive that moves
+    // no money (§3.1). Step-up-gated + audited.
+    AdminOpsRunService,
+    // Phase 7 (WRITE — maker-checker): approving a queued payout raises a
+    // `payout_release` change request via AdminApprovalsService (four-eyes) — it
+    // releases NO money here; a second admin's approval re-drives settlement via the
+    // engine's atomic path (§3.1). Reaches the payout via TREASURY_READ_REPOSITORY.
+    AdminTreasuryPayoutService,
     // Phase 6b (READ-ONLY): full asset + fiat catalog view (Config group's Asset /
     // Currency screens). AdminCatalogService reads the merged catalog via the global
     // EffectiveConfigService — no repo, no Prisma, never moves money (§3.1/§3.2).
@@ -353,6 +406,28 @@ import type { Env } from '../../core/config/env.schema';
     // flags (global EffectiveConfigService) — no repo, no Prisma, no secret values,
     // never moves money (§3.1/§3.2/§3.4).
     AdminProvidersService,
+    // Phase 7 (WRITE-adjacent): the provider "Test connection" liveness probe. Runs a
+    // real, credential-free reachability round-trip via the HttpService-backed
+    // PROVIDER_PROBE adapter (bound below) — it exposes NO secret (§3.4/§3.5) and moves
+    // NO money (§3.1). Execute-gated + step-up-gated at the controller.
+    AdminProviderProbeService,
+    { provide: PROVIDER_PROBE, useClass: HttpProviderProbeAdapter },
+    // Phase 7 (WRITES — maker-checker): the APPROVALS change-request engine. A
+    // pending request raised by one admin is applied ONLY on a DIFFERENT admin's
+    // approval, and the apply RE-EXECUTES through the target service's atomic path
+    // (AdminSettingsService for pricing/capability/tier config; AdminTxnTriageService
+    // for engine-brokered refunds) — never a raw ledger write (§3.1). CHANGE_REQUEST_
+    // REPOSITORY is bound locally below (PrismaService is global); AuditService + CLOCK
+    // are global; both target services are already provided in this module.
+    AdminApprovalsService,
+    // Phase 7 (WRITES — engine-brokered): the manual-credit APPLIER. Invoked only
+    // by AdminApprovalsService on an approved `manual_credit` request (four-eyes),
+    // it credits an end user's wallet through the engine's atomic
+    // settleManualCreditAtomic (SETTLEMENT_REPOSITORY, from the imported
+    // TransactionsModule) after a server-side status/sanctions re-check via
+    // IDENTITY_REPOSITORY + WALLET_REPOSITORY — never a raw ledger write (§3.1/§3.3).
+    // AssetRegistry + AuditService + CLOCK are global.
+    AdminManualCreditService,
     AdminSessionGuard,
     PermissionGuard,
     AdminStepUpGuard,
@@ -434,6 +509,15 @@ import type { Env } from '../../core/config/env.schema';
       provide: RECONCILIATION_READ_REPOSITORY,
       useClass: ReconciliationReadPrismaRepository,
     },
+    // Phase 7: CHANGE_REQUEST_REPOSITORY is bound locally — the maker-checker
+    // change-request store has no home module, so the admin layer owns this write
+    // (PrismaService is global). Mirrors the RECONCILIATION_READ_REPOSITORY bind
+    // above. Feeds AdminApprovalsService. Stores the request envelope only — never
+    // applies the change and never touches the ledger (§3.1).
+    {
+      provide: CHANGE_REQUEST_REPOSITORY,
+      useClass: ChangeRequestPrismaRepository,
+    },
     // Phase 6b (Comms): NOTIFICATION_DELIVERY_READ_REPOSITORY is bound locally —
     // the delivery-log read (recent notifications + bounce/complaint stats) has no
     // home module, so the admin layer owns it (PrismaService is global). Mirrors
@@ -441,6 +525,23 @@ import type { Env } from '../../core/config/env.schema';
     {
       provide: NOTIFICATION_DELIVERY_READ_REPOSITORY,
       useClass: NotificationDeliveryReadPrismaRepository,
+    },
+    // Phase 7 (Comms WRITES): BROADCAST_DISPATCH_REPOSITORY is bound locally — it
+    // resolves an audience cohort and enqueues the broadcast into the notifications
+    // outbox (idempotent, no PII leaves the DB). PrismaService is global, so it has
+    // no unmet dependency. Feeds AdminNotificationBroadcastService + the approvals
+    // applier's notification_broadcast re-run. Moves no money (§3.1).
+    {
+      provide: BROADCAST_DISPATCH_REPOSITORY,
+      useClass: BroadcastDispatchPrismaRepository,
+    },
+    // Phase 7 (Users bulk bar): USER_BULK_REPOSITORY is bound locally — the bulk
+    // tag write (UserTag) + the explicit-id message enqueue onto the notifications
+    // outbox. PrismaService is global, so it has no unmet dependency. Feeds
+    // AdminUserBulkService. Moves no money (§3.1).
+    {
+      provide: USER_BULK_REPOSITORY,
+      useClass: UserBulkPrismaRepository,
     },
     // Phase 6b: ADMIN_TXN_READ_REPOSITORY is bound locally — the admin-owned
     // transaction read (free-text q search, view-tab counts, userId→email join)

@@ -18,6 +18,7 @@ import {
   TreasuryFiatFloatResponseSchema,
   TreasuryFxPositionResponseSchema,
   TreasuryPayoutQueueResponseSchema,
+  TreasuryPayoutApproveResponseSchema,
   TreasurySweepListResponseSchema,
   WithdrawalPolicyListResponseSchema,
   type TreasuryAlert,
@@ -27,11 +28,13 @@ import {
   type TreasuryFiatFloatResponse,
   type TreasuryFxPositionResponse,
   type TreasuryPayoutQueueResponse,
+  type TreasuryPayoutApproveResponse,
   type TreasurySweepListResponse,
   type WithdrawalPolicyListResponse,
 } from '@handshake-agent/contracts';
 
 import { AdminTreasuryService } from '../application/admin-treasury.service';
+import { AdminTreasuryPayoutService } from '../application/admin-treasury-payout.service';
 import { AdminSessionGuard } from './admin-session.guard';
 import { PermissionGuard } from './permission.guard';
 import { AdminStepUpGuard } from './admin-step-up.guard';
@@ -41,6 +44,7 @@ import {
   TreasuryAlertAcknowledgeDto,
   TreasuryAlertQueryDto,
 } from './dto/admin-treasury.dto';
+import { TreasuryPayoutApproveDto } from './dto/admin-ops-recon-treasury-action.dto';
 
 /**
  * Phase 3 (sub-area D) — the admin TREASURY OVERSIGHT surface. All reads are
@@ -52,7 +56,10 @@ import {
 @Controller('admin/treasury')
 @UseGuards(AdminSessionGuard, PermissionGuard)
 export class AdminTreasuryController {
-  constructor(private readonly treasury: AdminTreasuryService) {}
+  constructor(
+    private readonly treasury: AdminTreasuryService,
+    private readonly payouts: AdminTreasuryPayoutService,
+  ) {}
 
   // ── balances ─────────────────────────────────────────────────────────────────
 
@@ -135,6 +142,28 @@ export class AdminTreasuryController {
   async listPayoutQueue(): Promise<TreasuryPayoutQueueResponse> {
     return TreasuryPayoutQueueResponseSchema.parse(
       await this.treasury.listPayoutQueue(),
+    );
+  }
+
+  // ── payout approval (Phase 7, WRITE — maker-checker; step-up-gated) ──────────────
+  // Raises a four-eyes `payout_release` change request — it releases NO money here;
+  // a SECOND admin approves, and the apply re-drives settlement via the engine (§3.1).
+
+  @Post('payouts/:id/approve')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission(
+    'api_route',
+    'POST /admin/treasury/payouts/:id/approve',
+    'execute',
+  )
+  async approvePayout(
+    @Param('id') id: string,
+    @Body() dto: TreasuryPayoutApproveDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<TreasuryPayoutApproveResponse> {
+    return TreasuryPayoutApproveResponseSchema.parse(
+      await this.payouts.approve(id, dto.reason, admin.adminId),
     );
   }
 

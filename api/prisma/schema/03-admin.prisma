@@ -153,3 +153,82 @@ model AdminInvitation {
   @@index([expiresAt])
   @@map("admin_invitations")
 }
+
+/// Maker-checker change request (ADM Phase 7). A sensitive platform mutation is
+/// captured as a PENDING request by one admin (the maker) and must be approved by a
+/// DIFFERENT admin (the checker) before it is applied — the requester can never
+/// self-approve (four-eyes). On approval the change is RE-EXECUTED through the
+/// target service's existing atomic, idempotent, audited path (never a raw write,
+/// CLAUDE.md §3.1); on rejection a reason is recorded. `payload` is the kind-specific
+/// parameter bag the applier re-validates server-side — it is stored opaquely and
+/// never trusted as a financial instruction. Full decision trail lives in AuditLog.
+model ChangeRequest {
+  id                 String              @id @default(uuid(7)) @db.Uuid
+  /// pricing_change | capability_flip | tier_override | refund (grows additively).
+  kind               ChangeRequestKind
+  /// Human-readable target descriptor, e.g. "pricing.assets.USDT.baseRates.NGN".
+  resource           String
+  /// Kind-specific parameter bag, re-validated by the applier on approval.
+  payload            Json
+  status             ChangeRequestStatus @default(pending)
+  /// The maker's justification for the change.
+  reason             String
+  requestedByAdminId String              @db.Uuid
+  /// The checker (a different admin) who approved/rejected; null while pending.
+  decidedByAdminId   String?             @db.Uuid
+  /// The checker's decision reason (rejection cause / approval note); null pending.
+  decisionReason     String?
+  decidedAt          DateTime?           @db.Timestamptz
+  createdAt          DateTime            @default(now()) @db.Timestamptz
+  updatedAt          DateTime            @updatedAt @db.Timestamptz
+
+  @@index([status])
+  @@index([requestedByAdminId])
+  @@map("change_requests")
+}
+
+enum ChangeRequestKind {
+  pricing_change
+  capability_flip
+  tier_override
+  refund
+  notification_broadcast
+  // Phase 7 (Treasury payout Approve): a maker-checker release of a queued payout.
+  // On approval the applier re-drives the offending txn's settlement via the engine
+  // (AdminTxnTriageService.retrySettlement) — never a raw ledger write (§3.1).
+  payout_release
+  // Phase 7 (Manual credit): a maker-checker credit of an end user's wallet. On
+  // approval the applier routes through the engine's atomic settleManualCreditAtomic
+  // (AdminManualCreditService) — never a raw ledger write (§3.1).
+  manual_credit
+
+  @@map("change_request_kind")
+}
+
+enum ChangeRequestStatus {
+  pending
+  approved
+  rejected
+
+  @@map("change_request_status")
+}
+
+/// An operator-applied TAG on an end user (Users directory bulk bar, ADM Phase 7).
+/// A pure annotation — it moves NO money and confers NO authorization (§3.1); the
+/// KYC/limit/sanctions gates are unaffected by tags. Tag application is idempotent
+/// on the (userId, tag) unique and immutably audited. The applying admin is kept as
+/// a plain ref (full trail in AuditLog). Distinct from a Role/permission grant.
+model UserTag {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  userId         String   @db.Uuid
+  /// Lower-cased, trimmed operator label (e.g. "vip", "watchlist").
+  tag            String
+  appliedByAdminId String @db.Uuid
+  createdAt      DateTime @default(now()) @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tag])
+  @@index([tag])
+  @@map("user_tags")
+}

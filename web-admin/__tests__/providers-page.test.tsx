@@ -15,7 +15,8 @@
  *  - secrets: no key VALUE is ever rendered — only present/missing.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ProviderRegistryView } from "@handshake-agent/contracts"
 
@@ -23,11 +24,23 @@ import { ProvidersPage } from "@/components/admin/providers-page"
 
 vi.mock("@/lib/api/providers", () => ({
   getProviderRegistry: vi.fn(),
+  // WRITE (Phase 7): the "Test connection" liveness probe.
+  testProviderConnection: vi.fn(),
 }))
 
-import { getProviderRegistry } from "@/lib/api/providers"
+// The per-card ProviderTestButton reads the signed-in admin (mfaEnabled) via
+// useAdminMe → admin.getMe to pick the step-up mode for the StepUpDialog.
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn().mockResolvedValue({ mfaEnabled: true, permissions: [] }),
+}))
+
+import {
+  getProviderRegistry,
+  testProviderConnection,
+} from "@/lib/api/providers"
 
 const mockGetProviderRegistry = vi.mocked(getProviderRegistry)
+const mockTest = vi.mocked(testProviderConnection)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -76,6 +89,7 @@ function renderPage() {
 
 beforeEach(() => {
   mockGetProviderRegistry.mockReset()
+  mockTest.mockReset()
 })
 
 describe("ProvidersPage", () => {
@@ -135,5 +149,29 @@ describe("ProvidersPage", () => {
       await screen.findByText(/Couldn't load the provider registry/i)
     ).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /Retry/i })).toBeInTheDocument()
+  })
+
+  it("fires the REAL testProviderConnection probe + shows the reachability result", async () => {
+    mockGetProviderRegistry.mockResolvedValue(VIEW)
+    mockTest.mockResolvedValue({
+      key: "blockradar",
+      result: "ok",
+      latencyMs: 142,
+      checkedAt: "2026-07-01T00:00:00.000Z",
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    // Each card has a "Test connection" button; probe the first (Blockradar).
+    const buttons = await screen.findAllByRole("button", {
+      name: /Test connection/i,
+    })
+    await user.click(buttons[0])
+
+    await waitFor(() => {
+      expect(mockTest).toHaveBeenCalledWith("blockradar")
+    })
+    // The reachability outcome renders inline with a status word + latency.
+    expect(await screen.findByText(/Reachable · 142ms/)).toBeInTheDocument()
   })
 })

@@ -21,17 +21,25 @@
  * design-faithful presentation — shapeGap. Four async branches: loading/error/empty/data.
  *
  * Flipping a product flag is a dual-control config change, so toggling opens the
- * shared MakerCheckerModal. The toggle SUBMIT is a Phase-7 write; this phase wires
- * the READ path only. Nothing moves money (§3.1).
+ * shared MakerCheckerModal. WIRED (Phase 7 — WRITE): for a REGISTRY-BACKED flag (one
+ * with a `settingKey`), the maker-checker submit calls the real step-up-guarded
+ * PATCH /admin/settings/:key (`useSetSetting`) to flip the boolean, then invalidates
+ * the settings query so the row re-resolves with its new effective value. A 403
+ * ADMIN_STEP_UP_REQUIRED opens the StepUpDialog and the PATCH replays after re-auth
+ * (`useStepUpRetry`). Unbacked flags have no registry key to persist — their toggle
+ * stays an acknowledged design intent (shapeGap). Nothing moves money (§3.1).
  */
 import { useMemo, useState } from "react"
 
 import type { EffectiveSetting } from "@handshake-agent/contracts"
 
 import { MakerCheckerModal } from "@/components/admin/flows"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ApiError } from "@/lib/api/client"
 import { pushToast } from "@/lib/store/toast-store"
-import { useSettings } from "@/lib/query/hooks"
+import { useAdminMe, useSetSetting, useSettings } from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { cn } from "@/lib/utils"
 import type { FeatureFlagRow, MakerCheckerDiffRow } from "@/types/components"
 
@@ -93,16 +101,36 @@ const KNOB_ON = "25px" // 52 − 24 − 3 (right inset matches the 3px left inse
 const KNOB_OFF = "3px"
 
 /**
+ * A resolved flag row plus the registry key (if any) that backs it — carried so the
+ * write path knows whether it can persist a flip via the settings PATCH. The scope
+ * mirrors the backing setting so the override targets the same leaf the read resolved.
+ */
+interface ResolvedFlag extends FeatureFlagRow {
+  settingKey?: string
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
+}
+
+/**
  * Resolve each flag's effective `on`: a registry-backed flag takes the boolean value
  * of its backing setting (fail-closed — absent / non-boolean → false); an unbacked
- * flag keeps its design-faithful default.
+ * flag keeps its design-faithful default. Carries the backing key + scope for the
+ * write path.
  */
-function resolveFlags(settings: readonly EffectiveSetting[]): FeatureFlagRow[] {
+function resolveFlags(settings: readonly EffectiveSetting[]): ResolvedFlag[] {
   const byKey = new Map(settings.map((s) => [s.key, s]))
   return FLAG_DEFS.map((def) => {
     const backing = def.settingKey ? byKey.get(def.settingKey) : undefined
     const on = backing ? backing.value === true : def.on
-    return { key: def.key, desc: def.desc, rollout: def.rollout, on }
+    return {
+      key: def.key,
+      desc: def.desc,
+      rollout: def.rollout,
+      on,
+      settingKey: def.settingKey,
+      scope: backing?.scope ?? "global",
+      scopeValue: backing?.scopeValue ?? null,
+    }
   })
 }
 
@@ -116,8 +144,8 @@ function FlagRow({
   flag,
   onToggle,
 }: {
-  flag: FeatureFlagRow
-  onToggle: (flag: FeatureFlagRow) => void
+  flag: ResolvedFlag
+  onToggle: (flag: ResolvedFlag) => void
 }) {
   return (
     <div className="flex items-center gap-4 rounded-[16px] border border-line bg-card px-5 py-4">
@@ -159,12 +187,23 @@ function FlagRow({
   )
 }
 
+/** Normalizes a mutation/step-up failure into a user-facing message. */
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "Something went wrong."
+}
+
 export function FlagsPage() {
   const query = useSettings()
   const rows = useMemo(() => resolveFlags(query.data ?? []), [query.data])
 
-  // Which flag's toggle is pending dual-control approval (drives the modal).
-  const [pending, setPending] = useState<FeatureFlagRow | null>(null)
+  const me = useAdminMe()
+  const setSetting = useSetSetting()
+  const stepUp = useStepUpRetry()
+
+  // Which flag's toggle is pending dual-control approval (drives the modal + write).
+  const [pending, setPending] = useState<ResolvedFlag | null>(null)
 
   const diff: MakerCheckerDiffRow[] = pending
     ? [
@@ -176,13 +215,41 @@ export function FlagsPage() {
       ]
     : []
 
-  // Dual-control approved (Phase-7 write is a stub): toast the intended new state and
-  // close the modal. The real flip is applied server-side + re-read in Phase 7.
+  /**
+   * Dual-control approved. A REGISTRY-BACKED flag persists the flip via the real
+   * step-up-guarded PATCH /admin/settings/:key (`useSetSetting`), which re-validates
+   * + hot-reloads + audits `config_change` server-side; the settings query then
+   * invalidates so the row re-resolves. A 403 ADMIN_STEP_UP_REQUIRED opens the
+   * StepUpDialog and the PATCH replays after re-auth. An UNBACKED flag has no key to
+   * persist — it stays an acknowledged design intent. Nothing moves money (§3.1).
+   */
   const applyToggle = () => {
     if (!pending) return
-    const nextOn = !pending.on
-    pushToast(`${pending.key} · eval → ${nextOn ? "on" : "off"}`, "ok")
+    const flag = pending
+    const nextOn = !flag.on
     setPending(null)
+
+    if (!flag.settingKey) {
+      pushToast(`${flag.key} · eval → ${nextOn ? "on" : "off"}`, "ok")
+      return
+    }
+
+    const key = flag.settingKey
+    void (async () => {
+      try {
+        const ok = await stepUp.run(() =>
+          setSetting
+            .mutateAsync({
+              key,
+              input: { value: nextOn, scope: flag.scope, scopeValue: flag.scopeValue },
+            })
+            .then(() => undefined)
+        )
+        if (ok) pushToast(`${flag.key} · eval → ${nextOn ? "on" : "off"}`, "ok")
+      } catch (error) {
+        pushToast(errorMessage(error), "warn")
+      }
+    })()
   }
 
   return (
@@ -246,6 +313,20 @@ export function FlagsPage() {
         }
         diff={diff}
         onSubmit={applyToggle}
+      />
+
+      {/* Server-side step-up re-auth: a 403 on the flag PATCH opens this; the PATCH
+          replays after re-authentication (settings then invalidate to re-resolve). */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then(() => undefined)
+            .catch((error) => pushToast(errorMessage(error), "warn"))
+        }}
       />
     </div>
   )

@@ -1,0 +1,11 @@
+-- Phase 7 (Treasury payout Approve, maker-checker): a new change-request kind.
+--   change_request_kind += 'payout_release'  (the four-eyes payout-release approval)
+--
+-- Approving a queued payout raises a pending `payout_release` ChangeRequest; a second
+-- admin's approval re-drives the offending transaction's settlement through the
+-- engine's atomic path (AdminTxnTriageService.retrySettlement) — never a raw ledger
+-- write (root CLAUDE.md §3.1). Additive enum value only; no data migration.
+--
+-- `ADD VALUE IF NOT EXISTS` is idempotent so re-running is safe; it stands alone
+-- (Postgres cannot add an enum value inside a transaction that later uses it).
+ALTER TYPE "change_request_kind" ADD VALUE IF NOT EXISTS 'payout_release';

@@ -1,119 +1,111 @@
 "use client"
 
 /**
- * ApprovalsPage — pixel-faithful reproduction of the operator-console design's
- * maker-checker approval inbox (design §6 Approvals — `docs/design-ref/screens/
- * Approvals.html`, data logic `docs/design-ref/logic.js` `vApprovals()` +
- * `approveItem()` / `rejectItem()` + the `approvals` seed at lines 76-79).
+ * ApprovalsPage — the maker-checker approval inbox (design §6 Approvals). Wired to
+ * the real Phase-7 approvals subsystem: `useApprovalsInbox` reads the two
+ * caller-relative buckets (Awaiting me / My requests) + their counts; Approve and
+ * Reject are the checker's dispositions of a pending change request.
  *
- *   • header ("Approvals" + dual-control subtitle),
- *   • two pill tabs with count badges — "Awaiting me" / "My requests"
- *     (design `aprTabs`),
- *   • an "Inbox zero" empty state when the active bucket is empty (`aprEmpty`),
- *   • a column of request cards (`aprRows`): a kind pill, title + "Requested by …
- *     · ago · resource" meta, a mono request id, a reason box, an itemized from→to
- *     diff, then a footer that is either the "your own request" guard, the Reject /
- *     Approve actions, or a "requires an approver role" locked note.
+ * Funds-safety (root §3.1): this screen never moves money. A disposition routes
+ * through the deterministic engine / config writer server-side — Approve hands the
+ * recorded change to the target service to APPLY, Reject applies nothing — and both
+ * are sensitive (step-up-gated, audited, idempotent). The UI enforces the chain:
+ *   • Approve → StepUpDialog (re-auth) → POST /admin/approvals/:id/approve
+ *   • Reject  → ReasonModal (required, audited reason) → POST .../reject
+ * Both may 403 with ADMIN_STEP_UP_REQUIRED; `useStepUpRetry` re-auths and replays.
+ * On success the inbox is invalidated so the buckets + badges re-resolve.
  *
- * DATA IS THE DESIGN'S OWN MOCK CONTENT (design-faithful, no API): `SAMPLE_REQUESTS`
- * translates the design's `approvals` seed verbatim; the current operator is the
- * design's default `super_admin` role (`ROLE`) so every request reads as
- * "Awaiting me" and the Approve/Reject actions are live — matching what the design
- * renders on first paint. Real API reintegration is a later step.
- *
- * ACTIONS mirror the design's destinations: Approve dismisses the row directly
- * (design `approveItem` — no modal), Reject opens the shared ReasonModal
- * (design `rejectItem` → `runFlow({steps:['reason']})`) and dismisses on continue.
- *
- * Funds-safety (root §3.1): this screen never moves money — Approve / Reject are
- * design-faithful and only dismiss the local queue row.
+ * Four async branches (loading / error / empty / data) on the inbox read. The
+ * dual-control guard ("your own request") is server-authoritative — a request the
+ * caller raised only ever appears under "My requests", never with live actions —
+ * and the UI mirrors it by comparing the maker's admin id to the signed-in admin.
  */
-import { useMemo, useState } from "react"
+import { useState } from "react"
+import type {
+  ChangeRequest,
+  ChangeRequestKind,
+} from "@handshake-agent/contracts"
 
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
+import { Skeleton } from "@/components/ui/skeleton"
 import { ReasonModal } from "@/components/admin/flows"
-import type {
-  ApprovalDiffRow,
-  ApprovalKind,
-  ApprovalRequest,
-} from "@/types/components"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
+import {
+  useAdminMe,
+  useApprovalsInbox,
+  useApproveChange,
+  useRejectChange,
+} from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
+import { ApiError } from "@/lib/api/client"
+import type { ApprovalDiffRow } from "@/types/components"
 
-// The design's default viewer role (`state.role`, logic.js line 147). super_admin
-// holds every capability incl. `approve` (`can('approve')`), so on first paint the
-// four seed requests are all "Awaiting me" with live Approve / Reject actions.
-const ROLE = "super_admin"
-
-// super_admin holds the `approve` capability (design `can()`, logic.js 175-186).
-const CAN_APPROVE = true
-
-// Kind pill → the design's `kindColor` token pair (logic.js line 764) as a Badge
-// variant. Colour is paired with the kind label text, so it is never the sole signal.
-//   Pricing change / Refund / KYC decision → --sif/--tif (info)
-//   Capability / Tier override             → --swn/--twn (warn)  [design's #f6ead6/#a86f16 ≈ warn tokens]
-//   Manual credit                          → --sok/--tok (success)
-const KIND_VARIANT: Record<ApprovalKind, "info" | "warn" | "success"> = {
-  "Pricing change": "info",
-  Capability: "warn",
-  Refund: "info",
-  "Tier override": "warn",
-  "KYC decision": "info",
-  "Manual credit": "success",
+// Kind → the design's kind-pill token pair (info / warn / success) + a human label.
+// Colour is paired with the label text, so it is never the sole signal.
+//   pricing_change / refund → info
+//   capability_flip / tier_override → warn
+const KIND_META: Record<
+  ChangeRequestKind,
+  { label: string; variant: "info" | "warn" | "success" }
+> = {
+  pricing_change: { label: "Pricing change", variant: "info" },
+  capability_flip: { label: "Capability", variant: "warn" },
+  tier_override: { label: "Tier override", variant: "warn" },
+  refund: { label: "Refund", variant: "info" },
+  manual_credit: { label: "Manual credit", variant: "warn" },
+  notification_broadcast: { label: "Broadcast", variant: "warn" },
+  payout_release: { label: "Payout release", variant: "warn" },
 }
 
-// The design's `approvals` seed (logic.js lines 76-79): four representative
-// dual-control requests spanning pricing, capability, refund and tier-override
-// changes, each with its maker, originating role, reason and itemized from→to diff.
-const SAMPLE_REQUESTS: ApprovalRequest[] = [
-  {
-    id: "apr_5001",
-    kind: "Pricing change",
-    title: "USDT/NGN buy spread 85 → 110 bps",
-    by: "Tunde Adeyemi",
-    byRole: "config_admin",
-    ago: "34m ago",
-    resource: "Pricing",
-    reason: "Cover rising FX volatility on TRON corridor",
-    diff: [
-      { field: "crypto.buy · USDT/NGN spread", from: "85 bps", to: "110 bps" },
-    ],
-  },
-  {
-    id: "apr_5002",
-    kind: "Capability",
-    title: "Disable swap (global)",
-    by: "Amara Okeke",
-    byRole: "super_admin",
-    ago: "1h ago",
-    resource: "Capabilities",
-    reason: "Blockradar swap enrollment paused for maintenance",
-    diff: [{ field: "capability: swap", from: "Enabled", to: "Disabled" }],
-  },
-  {
-    id: "apr_5003",
-    kind: "Refund",
-    title: "Partial refund — tx_80257 · ₦180,000.00",
-    by: "Kelechi Chukwu",
-    byRole: "treasury_ops",
-    ago: "2h ago",
-    resource: "Transactions",
-    reason: "Duplicate charge confirmed with Flutterwave",
-    diff: [{ field: "Refund amount", from: "₦0.00", to: "₦180,000.00" }],
-  },
-  {
-    id: "apr_5004",
-    kind: "Tier override",
-    title: "Ngozi Eze — tier_2 → tier_3",
-    by: "Ifeoma Bello",
-    byRole: "compliance_officer",
-    ago: "3h ago",
-    resource: "Users",
-    reason: "Enhanced due diligence complete, corporate KYC verified",
-    diff: [{ field: "KYC tier", from: "tier_2", to: "tier_3" }],
-  },
-]
-
 type AprTab = "awaiting" | "mine"
+
+function errorMessage(error: unknown): string | null {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return error ? String(error) : null
+}
+
+/** Compact relative-time label ("34m ago" / "2h ago" / "3d ago") from an ISO date. */
+function relativeAgo(iso: string, now: number = Date.now()): string {
+  const deltaMs = Math.max(0, now - new Date(iso).getTime())
+  const minutes = Math.floor(deltaMs / 60_000)
+  if (minutes < 1) return "just now"
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.floor(hours / 24)}d ago`
+}
+
+/**
+ * Derive the design's from→to diff rows from a change request's opaque payload.
+ * A `{ from, to }` pair renders as a struck-old → new row; any other value renders
+ * as a "set to" row. This is display-only — the server re-validates the payload on
+ * approval (§3.1); nothing here is trusted as a financial instruction.
+ */
+function diffRows(cr: ChangeRequest): ApprovalDiffRow[] {
+  const entries = Object.entries(cr.payload)
+  if (entries.length === 0) {
+    return [{ field: cr.resource, from: "current", to: "requested change" }]
+  }
+  return entries.map(([field, value]) => {
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      "from" in value &&
+      "to" in value
+    ) {
+      const pair = value as { from: unknown; to: unknown }
+      return { field, from: String(pair.from), to: String(pair.to) }
+    }
+    return { field, from: "—", to: String(value) }
+  })
+}
+
+/** A short title for the request row (kind label + target resource). */
+function requestTitle(cr: ChangeRequest): string {
+  return `${KIND_META[cr.kind].label} · ${cr.resource}`
+}
 
 /** A document / reason glyph for the reason box (design line 16). */
 function ReasonIcon() {
@@ -136,7 +128,7 @@ function ReasonIcon() {
   )
 }
 
-/** The from→to arrow that separates the struck-through old value from the new (design line 17). */
+/** The from→to arrow that separates the struck-through old value from the new. */
 function DiffArrow() {
   return (
     <svg
@@ -176,47 +168,48 @@ function DiffLine({ diff }: { diff: ApprovalDiffRow }) {
   )
 }
 
-/** One request card — kind pill, meta, reason, diff, and the RBAC footer (design lines 10-23). */
+/** One request card — kind pill, meta, reason, diff, and the disposition footer. */
 function RequestCard({
   request,
   mine,
-  canApprove,
+  busy,
   onApprove,
   onReject,
 }: {
-  request: ApprovalRequest
+  request: ChangeRequest
   mine: boolean
-  canApprove: boolean
+  busy: boolean
   onApprove: () => void
   onReject: () => void
 }) {
-  const canAct = canApprove && !mine
-  const locked = !canApprove
+  const meta = KIND_META[request.kind]
+  const by = request.requestedByEmail ?? request.requestedByAdminId
 
   return (
     <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
-      {/* ── Header: kind pill · title + meta · mono id (design lines 11-15) ── */}
+      {/* ── Header: kind pill · title + meta · mono id ── */}
       <div className="mb-3 flex items-start gap-3">
         <Badge
-          variant={KIND_VARIANT[request.kind]}
+          variant={meta.variant}
           className="mt-px shrink-0 px-2.5 py-1 text-[10.5px] font-extrabold tracking-[0.04em] uppercase"
         >
-          {request.kind}
+          {meta.label}
         </Badge>
         <div className="min-w-0 flex-1">
           <div className="text-[14.5px] font-bold text-ink">
-            {request.title}
+            {requestTitle(request)}
           </div>
           <div className="mt-0.5 text-[11.5px] text-ink3">
-            Requested by {request.by} · {request.ago} · {request.resource}
+            Requested by {by} · {relativeAgo(request.createdAt)} ·{" "}
+            {request.resource}
           </div>
         </div>
         <span className="shrink-0 font-mono text-[10.5px] text-ink3">
-          {request.id}
+          {request.id.slice(0, 8)}
         </span>
       </div>
 
-      {/* ── Reason box (card2 inset, design line 16) ──────────────────────── */}
+      {/* ── Reason box ── */}
       <div className="mb-3 flex items-start gap-2 rounded-[11px] bg-card2 px-3 py-2.5">
         <ReasonIcon />
         <span className="text-xs leading-[1.4] text-ink2">
@@ -224,14 +217,14 @@ function RequestCard({
         </span>
       </div>
 
-      {/* ── Itemized from→to diff (design line 17) ────────────────────────── */}
-      {request.diff.map((diff) => (
-        <DiffLine key={diff.field} diff={diff} />
+      {/* ── Itemized from→to diff ── */}
+      {diffRows(request).map((diff, i) => (
+        <DiffLine key={`${diff.field}-${i}`} diff={diff} />
       ))}
 
-      {/* ── Footer: your-own-request guard · actions · locked note (18-22) ── */}
+      {/* ── Footer: your-own-request guard · Reject / Approve actions ── */}
       <div className="flex items-center gap-2.5">
-        {mine && (
+        {mine ? (
           <div className="flex flex-1 items-center gap-1.5 text-[11.5px] font-semibold text-twn">
             <svg
               width="14"
@@ -250,47 +243,26 @@ function RequestCard({
             </svg>
             Your own request — needs a different admin to approve.
           </div>
-        )}
-
-        {canAct && (
+        ) : (
           <>
             <div className="flex-1" />
             <button
               type="button"
               onClick={onReject}
-              className="rounded-[10px] border border-[#f0d0cb] px-4 py-[9px] text-[12.5px] font-bold text-tdn transition-colors hover:bg-sdn focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+              disabled={busy}
+              className="rounded-[10px] border border-[#f0d0cb] px-4 py-[9px] text-[12.5px] font-bold text-tdn transition-colors hover:bg-sdn focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             >
               Reject
             </button>
             <button
               type="button"
               onClick={onApprove}
-              className="rounded-[10px] bg-tok px-[18px] py-[9px] text-[12.5px] font-extrabold text-white transition-colors hover:bg-tok/90 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+              disabled={busy}
+              aria-busy={busy}
+              className="rounded-[10px] bg-tok px-[18px] py-[9px] text-[12.5px] font-extrabold text-white transition-colors hover:bg-tok/90 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             >
               Approve
             </button>
-          </>
-        )}
-
-        {locked && (
-          <>
-            <div className="flex-1" />
-            <div className="flex items-center gap-1.5 text-[11.5px] font-bold text-ink3">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                aria-hidden="true"
-              >
-                <path
-                  d="M6 10V8a6 6 0 0 1 12 0v2M5 10h14v10H5z"
-                  stroke="currentColor"
-                  strokeWidth="1.7"
-                />
-              </svg>
-              Requires an approver role
-            </div>
           </>
         )}
       </div>
@@ -329,39 +301,61 @@ function InboxZero() {
 
 export function ApprovalsPage() {
   const [tab, setTab] = useState<AprTab>("awaiting")
-  // Locally-dismissed requests (design Approve/Reject remove the row from the queue).
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set())
-  // The ReasonModal is the design's reject flow (`rejectItem` → runFlow(['reason'])).
-  const [rejecting, setRejecting] = useState<ApprovalRequest | null>(null)
+  const me = useAdminMe()
+  const inbox = useApprovalsInbox()
+  const approve = useApproveChange()
+  const reject = useRejectChange()
+  const stepUp = useStepUpRetry()
 
-  // A request is "mine" when it was raised by my own role — dual control means it
-  // needs a different admin (design `mine: a.role === st.role`, logic.js line 765).
-  const requests = useMemo(
-    () => SAMPLE_REQUESTS.filter((r) => !dismissed.has(r.id)),
-    [dismissed]
-  )
-  const awaiting = useMemo(
-    () => requests.filter((r) => r.byRole !== ROLE),
-    [requests]
-  )
-  const mine = useMemo(
-    () => requests.filter((r) => r.byRole === ROLE),
-    [requests]
-  )
-  const visible = tab === "mine" ? mine : awaiting
+  // The request whose Reject reason is being captured (opens ReasonModal).
+  const [rejecting, setRejecting] = useState<ChangeRequest | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
 
-  function dismiss(id: string) {
-    setDismissed((prev) => new Set(prev).add(id))
+  const awaiting = inbox.data?.awaitingMe ?? []
+  const mineList = inbox.data?.myRequests ?? []
+  // Prefer the server's authoritative counts; fall back to the loaded list lengths.
+  const awaitingCount = inbox.data?.counts.awaitingMe ?? awaiting.length
+  const myCount = inbox.data?.counts.myRequests ?? mineList.length
+  const visible = tab === "mine" ? mineList : awaiting
+
+  // A request is "mine" when I raised it — dual control means a different admin must
+  // approve. Server-authoritative (own requests never land in `awaitingMe`); the UI
+  // mirrors it so a stray own-request row still shows the guard, not live actions.
+  const myAdminId = me.data?.id
+  const busy = approve.isPending || reject.isPending
+
+  // Run a sensitive disposition through the step-up-then-retry gate. `stepUp.run`
+  // returns false (and opens the re-auth dialog) on a 403 ADMIN_STEP_UP_REQUIRED;
+  // any other error surfaces inline.
+  async function runStepUp(action: () => Promise<void>) {
+    setActionError(null)
+    try {
+      await stepUp.run(action)
+    } catch (error) {
+      setActionError(errorMessage(error))
+    }
   }
 
-  function confirmReject() {
-    if (rejecting) dismiss(rejecting.id)
+  function onApprove(request: ChangeRequest) {
+    void runStepUp(() =>
+      approve.mutateAsync(request.id).then(() => undefined)
+    )
+  }
+
+  function confirmReject(reason: string) {
+    const request = rejecting
     setRejecting(null)
+    if (!request) return
+    void runStepUp(() =>
+      reject
+        .mutateAsync({ id: request.id, input: { reason } })
+        .then(() => undefined)
+    )
   }
 
   return (
     <div className="mx-auto w-full max-w-[940px] px-[30px] pt-[26px] pb-[60px]">
-      {/* ── Header (design line 3) ──────────────────────────────────────── */}
+      {/* ── Header ── */}
       <div className="mb-4">
         <h1 className="text-2xl font-extrabold tracking-[-0.02em] text-ink">
           Approvals
@@ -372,7 +366,16 @@ export function ApprovalsPage() {
         </p>
       </div>
 
-      {/* ── Tabs: Awaiting me · My requests (design lines 4-6) ──────────── */}
+      {actionError && (
+        <p
+          role="alert"
+          className="mb-4 rounded-xl border border-sdn bg-sdn/40 px-4 py-3 text-[12.5px] font-semibold text-tdn"
+        >
+          {actionError}
+        </p>
+      )}
+
+      {/* ── Tabs: Awaiting me · My requests (counts from the inbox read) ── */}
       <div
         className="mb-4 flex gap-[9px]"
         role="tablist"
@@ -380,8 +383,8 @@ export function ApprovalsPage() {
       >
         {(
           [
-            ["awaiting", "Awaiting me", awaiting.length],
-            ["mine", "My requests", mine.length],
+            ["awaiting", "Awaiting me", awaitingCount],
+            ["mine", "My requests", myCount],
           ] as const
         ).map(([id, label, count]) => {
           const active = tab === id
@@ -413,8 +416,26 @@ export function ApprovalsPage() {
         })}
       </div>
 
-      {/* ── Empty (Inbox zero) / Data: request cards (design lines 7-25) ── */}
-      {visible.length === 0 ? (
+      {/* ── Loading / error / empty / data ── */}
+      {inbox.isLoading ? (
+        <div className="flex flex-col gap-3" aria-busy="true">
+          <Skeleton className="h-[168px] rounded-2xl" />
+          <Skeleton className="h-[168px] rounded-2xl" />
+        </div>
+      ) : inbox.isError ? (
+        <div className="rounded-2xl border border-sdn bg-sdn/40 px-5 py-8 text-center">
+          <p className="text-[12.5px] font-semibold text-tdn">
+            Failed to load the approvals inbox
+          </p>
+          <button
+            type="button"
+            onClick={() => void inbox.refetch()}
+            className="mt-2 rounded-[9px] bg-btn-dark px-3.5 py-1.5 text-[12px] font-bold text-white transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            Retry
+          </button>
+        </div>
+      ) : visible.length === 0 ? (
         <InboxZero />
       ) : (
         <div className="flex flex-col gap-3">
@@ -422,23 +443,37 @@ export function ApprovalsPage() {
             <RequestCard
               key={request.id}
               request={request}
-              mine={tab === "mine"}
-              canApprove={CAN_APPROVE}
-              onApprove={() => dismiss(request.id)}
+              mine={
+                tab === "mine" || request.requestedByAdminId === myAdminId
+              }
+              busy={busy}
+              onApprove={() => onApprove(request)}
               onReject={() => setRejecting(request)}
             />
           ))}
         </div>
       )}
 
-      {/* ── Reject flow (design `rejectItem` → reason step) ─────────────── */}
+      {/* ── Reject flow: reason (audit) → POST .../reject ── */}
       <ReasonModal
         open={rejecting !== null}
         onOpenChange={(open) => {
           if (!open) setRejecting(null)
         }}
-        title={rejecting ? `Reject · ${rejecting.title}` : "Reject"}
-        onContinue={confirmReject}
+        title={rejecting ? `Reject · ${requestTitle(rejecting)}` : "Reject"}
+        onContinue={(reason) => confirmReject(reason)}
+      />
+
+      {/* ── Step-up re-auth → replays the stashed approve/reject mutation ── */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .catch((error) => setActionError(errorMessage(error)))
+        }}
       />
     </div>
   )

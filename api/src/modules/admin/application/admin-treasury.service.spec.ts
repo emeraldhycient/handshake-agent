@@ -157,6 +157,7 @@ describe('AdminTreasuryService', () => {
       listWithdrawalPolicies: jest.fn(),
       listSweeps: jest.fn(),
       listPayoutQueue: jest.fn(),
+      findPayoutQueueItem: jest.fn(),
       listFiatFloat: jest.fn(),
       listFxPositions: jest.fn(),
     };

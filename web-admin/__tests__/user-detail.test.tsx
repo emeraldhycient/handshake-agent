@@ -16,6 +16,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type {
   AdminEndUserDetail,
@@ -44,10 +45,24 @@ vi.mock("@/lib/api/users", () => ({
   listEndUserSessions: vi.fn(),
   getEndUserLimits: vi.fn(),
   listEndUserTimeline: vi.fn(),
+  adjustTier: vi.fn(),
+  setEndUserStatus: vi.fn(),
+  forcePinReset: vi.fn(),
+  revokeDevice: vi.fn(),
+  simSwapReverify: vi.fn(),
+  requestManualCredit: vi.fn(),
 }))
 
 vi.mock("@/lib/api/kyc", () => ({
   getKycSubmission: vi.fn(),
+}))
+
+// The signed-in admin (`useAdminMe`) + step-up POST (`useStepUp`) back the flow's
+// step-up modal — the design's TOTP keypad now really establishes the fresh
+// step-up the server's AdminStepUpGuard requires before a sensitive mutation.
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn(),
+  stepUp: vi.fn(),
 }))
 
 import {
@@ -56,8 +71,15 @@ import {
   listEndUserSessions,
   getEndUserLimits,
   listEndUserTimeline,
+  adjustTier,
+  setEndUserStatus,
+  forcePinReset,
+  revokeDevice,
+  simSwapReverify,
+  requestManualCredit,
 } from "@/lib/api/users"
 import { getKycSubmission } from "@/lib/api/kyc"
+import { getMe, stepUp } from "@/lib/api/admin"
 
 const mockGetEndUser = vi.mocked(getEndUser)
 const mockListDevices = vi.mocked(listEndUserDevices)
@@ -65,6 +87,14 @@ const mockListSessions = vi.mocked(listEndUserSessions)
 const mockGetLimits = vi.mocked(getEndUserLimits)
 const mockListTimeline = vi.mocked(listEndUserTimeline)
 const mockGetKyc = vi.mocked(getKycSubmission)
+const mockAdjustTier = vi.mocked(adjustTier)
+const mockSetStatus = vi.mocked(setEndUserStatus)
+const mockForcePinReset = vi.mocked(forcePinReset)
+const mockRevokeDevice = vi.mocked(revokeDevice)
+const mockSimSwapReverify = vi.mocked(simSwapReverify)
+const mockRequestManualCredit = vi.mocked(requestManualCredit)
+const mockGetMe = vi.mocked(getMe)
+const mockStepUp = vi.mocked(stepUp)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -197,13 +227,43 @@ beforeEach(() => {
   mockGetLimits.mockReset()
   mockListTimeline.mockReset()
   mockGetKyc.mockReset()
+  mockAdjustTier.mockReset()
+  mockSetStatus.mockReset()
+  mockForcePinReset.mockReset()
+  mockRevokeDevice.mockReset()
+  mockSimSwapReverify.mockReset()
+  mockRequestManualCredit.mockReset()
+  mockGetMe.mockReset()
+  mockStepUp.mockReset()
   mockGetEndUser.mockResolvedValue(DETAIL)
   mockListDevices.mockResolvedValue(DEVICES)
   mockListSessions.mockResolvedValue(SESSIONS)
   mockGetLimits.mockResolvedValue(LIMITS)
   mockListTimeline.mockResolvedValue(TIMELINE)
   mockGetKyc.mockResolvedValue(KYC)
+  mockAdjustTier.mockResolvedValue(undefined)
+  mockSetStatus.mockResolvedValue(undefined)
+  mockForcePinReset.mockResolvedValue(undefined)
+  mockRevokeDevice.mockResolvedValue(undefined)
+  mockSimSwapReverify.mockResolvedValue(undefined)
+  mockRequestManualCredit.mockResolvedValue({} as never)
+  mockGetMe.mockResolvedValue({ mfaEnabled: true } as never)
+  mockStepUp.mockResolvedValue(undefined)
 })
+
+// Walks the design flow to completion: the ReasonModal (a reason is required to
+// Continue) then the StepUpModal's six-box keypad (each digit fills a box; the sixth
+// completes the step and fires the wired mutation). The server-side AdminStepUpGuard is
+// the real gate — a 403 would open the StepUpDialog; here the mocked mutation resolves.
+async function completeReasonAndStepUp(
+  user: ReturnType<typeof userEvent.setup>,
+  reason: string
+) {
+  await user.type(await screen.findByLabelText("Reason"), reason)
+  await user.click(screen.getByRole("button", { name: "Continue" }))
+  await screen.findByText("Step-up authentication")
+  await user.keyboard("123456")
+}
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -323,5 +383,175 @@ describe("UserDetail (real data)", () => {
     // The crypto amount + the humanised NGN fiat leg (₦150,000) from metadata.
     expect(await screen.findByText("100.00")).toBeInTheDocument()
     expect(screen.getByText("₦150,000")).toBeInTheDocument()
+  })
+})
+
+// ─── Phase 7 (WRITES): wired account actions ─────────────────────────────────────
+// Each header/tab action now drives the reason → step-up (→ maker) flow to a REAL
+// end-user mutation. Funds-safety: the flow's TOTP is POSTed to /admin/auth/step-up
+// (establishing the fresh step-up the server guard requires) BEFORE the mutation; the
+// user's queries re-resolve on success. No UI code moves money (§3.1).
+
+describe("UserDetail account actions (Phase 7 writes)", () => {
+  it("Freeze → reason → step-up fires setEndUserStatus(suspended)", async () => {
+    const user = userEvent.setup()
+    renderDetail()
+    await screen.findByRole("heading", { name: "Ada Lovelace" })
+
+    await user.click(screen.getByRole("button", { name: "Freeze" }))
+
+    // The mutation must NOT fire before the reason + step-up steps complete.
+    expect(mockSetStatus).not.toHaveBeenCalled()
+    await completeReasonAndStepUp(user, "Fraud review")
+
+    await waitFor(() =>
+      expect(mockSetStatus).toHaveBeenCalledWith(USER_ID, {
+        status: "suspended",
+      })
+    )
+  })
+
+  it("Unfreeze fires setEndUserStatus(active) for an already-suspended user", async () => {
+    mockGetEndUser.mockResolvedValue({ ...DETAIL, status: "suspended" })
+    const user = userEvent.setup()
+    renderDetail()
+    await screen.findByRole("heading", { name: "Ada Lovelace" })
+
+    await user.click(screen.getByRole("button", { name: "Unfreeze" }))
+    await completeReasonAndStepUp(user, "Cleared")
+
+    await waitFor(() =>
+      expect(mockSetStatus).toHaveBeenCalledWith(USER_ID, { status: "active" })
+    )
+  })
+
+  it("Reset PIN → reason → step-up fires forcePinReset", async () => {
+    searchParams = new URLSearchParams("tab=security")
+    const user = userEvent.setup()
+    renderDetail()
+
+    await user.click(
+      await screen.findByRole("button", { name: /Reset PIN directive/ })
+    )
+    await completeReasonAndStepUp(user, "User lockout")
+
+    await waitFor(() => expect(mockForcePinReset).toHaveBeenCalledWith(USER_ID))
+  })
+
+  it("Override tier → reason → step-up → maker-checker fires adjustTier (de-escalated tier)", async () => {
+    searchParams = new URLSearchParams("tab=kyc")
+    const user = userEvent.setup()
+    renderDetail()
+
+    await user.click(
+      await screen.findByRole("button", { name: /Override tier/ })
+    )
+    await completeReasonAndStepUp(user, "Downgrade risk")
+
+    // Maker-checker is the final step — the mutation fires only on submit-for-approval.
+    expect(mockAdjustTier).not.toHaveBeenCalled()
+    await user.click(
+      await screen.findByRole("button", { name: "Submit for approval" })
+    )
+    // The DETAIL fixture is tier_2 → override de-escalates to tier_1.
+    await waitFor(() =>
+      expect(mockAdjustTier).toHaveBeenCalledWith(USER_ID, { tier: "tier_1" })
+    )
+  })
+
+  it("Revoke device → reason → step-up fires revokeDevice with the row's device id", async () => {
+    searchParams = new URLSearchParams("tab=devices")
+    const user = userEvent.setup()
+    renderDetail()
+
+    await user.click(await screen.findByRole("button", { name: "Unbind" }))
+    await completeReasonAndStepUp(user, "Lost device")
+
+    await waitFor(() =>
+      expect(mockRevokeDevice).toHaveBeenCalledWith(USER_ID, DEVICES[0].id)
+    )
+  })
+
+  it("SIM-swap re-verify (flagged) → reason → step-up fires simSwapReverify", async () => {
+    mockGetEndUser.mockResolvedValue({
+      ...DETAIL,
+      simSwapDetectedAt: "2024-02-01T00:00:00.000Z",
+    })
+    searchParams = new URLSearchParams("tab=devices")
+    const user = userEvent.setup()
+    renderDetail()
+
+    await user.click(
+      await screen.findByRole("button", { name: /SIM-swap re-verify/ })
+    )
+    await completeReasonAndStepUp(user, "SIM change confirmed")
+
+    await waitFor(() =>
+      expect(mockSimSwapReverify).toHaveBeenCalledWith(USER_ID)
+    )
+  })
+
+  it("does not fire the mutation if the flow is cancelled at the reason step", async () => {
+    const user = userEvent.setup()
+    renderDetail()
+    await screen.findByRole("heading", { name: "Ada Lovelace" })
+
+    await user.click(screen.getByRole("button", { name: "Freeze" }))
+    await user.click(await screen.findByRole("button", { name: "Cancel" }))
+
+    expect(mockSetStatus).not.toHaveBeenCalled()
+  })
+
+  // Manual credit is the maker step of the engine-brokered credit: amount + asset →
+  // reason → step-up → engine preview → maker-checker → POST /admin/users/:id/credit
+  // (which RAISES a request; a SECOND admin's approval settles it via the engine, §3.1).
+  it("Manual credit → collect amount → reason → step-up → engine → maker fires requestManualCredit", async () => {
+    searchParams = new URLSearchParams("tab=wallets")
+    const user = userEvent.setup()
+    renderDetail()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Manual credit" })
+    )
+
+    // The ManualCreditModal input step — the credit does NOT fire on amount entry.
+    await user.type(await screen.findByLabelText("Credit amount"), "25.5")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    expect(mockRequestManualCredit).not.toHaveBeenCalled()
+
+    // reason → step-up.
+    await completeReasonAndStepUp(user, "Goodwill credit")
+
+    // Engine preview then maker-checker — the request fires ONLY on submit-for-approval.
+    await user.click(
+      await screen.findByRole("button", { name: "Execute via engine" })
+    )
+    expect(mockRequestManualCredit).not.toHaveBeenCalled()
+    await user.click(
+      await screen.findByRole("button", { name: "Submit for approval" })
+    )
+
+    await waitFor(() =>
+      expect(mockRequestManualCredit).toHaveBeenCalledWith(USER_ID, {
+        asset: "USDT",
+        amount: "25.5",
+        reason: "Goodwill credit",
+      })
+    )
+  })
+
+  it("Manual credit refuses a non-positive amount at the input step (never raises)", async () => {
+    searchParams = new URLSearchParams("tab=wallets")
+    const user = userEvent.setup()
+    renderDetail()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Manual credit" })
+    )
+    await user.type(await screen.findByLabelText("Credit amount"), "0")
+
+    // The Continue CTA stays disabled for a zero amount — no flow advance, no raise.
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled()
+    expect(mockRequestManualCredit).not.toHaveBeenCalled()
   })
 })

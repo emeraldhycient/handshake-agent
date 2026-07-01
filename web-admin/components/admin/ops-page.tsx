@@ -36,19 +36,24 @@ import type {
 
 import { cn } from "@/lib/utils"
 import { pushToast } from "@/lib/store/toast-store"
-import { useOps } from "@/lib/query/hooks"
+import { useOps, useRunOpsJob, useAdminMe } from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
+import { ApiError } from "@/lib/api/client"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  EngineActionModal,
-  ReasonModal,
-  StepUpModal,
-} from "@/components/admin/flows"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
+import { EngineActionModal, ReasonModal } from "@/components/admin/flows"
 import type {
   EngineEffectRow,
   EngineLedgerRow,
   OpsHealth,
   OpsJobRow,
 } from "@/types/components"
+
+function errorMessage(error: unknown): string | null {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return error ? String(error) : null
+}
 
 // ─── health → token mapping ─────────────────────────────────────────────────────────
 // The design uses per-row raw colours (`p.dot` / `p.fg` / `w.fg` / `j.stBg` / `j.stFg`).
@@ -314,26 +319,54 @@ function PanelSkeleton() {
 // ─── page ─────────────────────────────────────────────────────────────────────────────
 
 /** The stage the active "Run now" flow is currently showing. */
-type RunStage = "reason" | "stepup" | "engine"
+type RunStage = "reason" | "engine"
 
 export function OpsPage() {
   const { data, isLoading, isError, isSuccess, refetch } = useOps()
+  const me = useAdminMe()
+  const runJob = useRunOpsJob()
+  const stepUp = useStepUpRetry()
 
   // The job whose "Run now" flow is open + which step of that flow is showing.
   const [active, setActive] = useState<{
     job: OpsJobRow
     stage: RunStage
   } | null>(null)
+  // The audited reason captured in the ReasonModal, replayed with the mutation.
+  const [reason, setReason] = useState("")
+  const [localError, setLocalError] = useState<string | null>(null)
 
   function closeFlow() {
     setActive(null)
   }
 
-  // Engine confirmed the manual run — surface a "queued" toast (the design's
-  // verify expects this feedback), then dismiss the flow.
+  // The engine-action CTA fires the REAL mutation. It is step-up-gated: on a 403
+  // (ADMIN_STEP_UP_REQUIRED) the StepUpDialog opens and replays on re-auth. A manual
+  // run re-drives an engine worker — it moves no money (§3.1).
   function executeRun() {
-    if (active) pushToast(`Run started · ${active.job.name}`, "info")
+    if (!active) return
+    const job = active.job
+    setLocalError(null)
     closeFlow()
+    void (async () => {
+      try {
+        const completed = await stepUp.run(() =>
+          runJob
+            .mutateAsync({ id: job.id, input: { reason } })
+            .then((res) => {
+              pushToast(
+                res.triggered
+                  ? `Run started · ${job.name}`
+                  : `${job.name} is not manually triggerable`,
+                res.triggered ? "info" : "warn"
+              )
+            })
+        )
+        if (completed) setReason("")
+      } catch (error) {
+        setLocalError(errorMessage(error))
+      }
+    })()
   }
 
   const jobs = (data?.jobs ?? []).map(toJobRow)
@@ -409,21 +442,19 @@ export function OpsPage() {
         </>
       )}
 
-      {/* ── "Run now" flow (shared): reason (audit) → step-up (TOTP) → engine-action.
-          A manual job run is engine-brokered oversight — no ledger entries, no money. */}
+      {/* ── "Run now" flow: reason (audit) → engine-action → the REAL mutation.
+          The mutation is step-up-gated (StepUpDialog opens on a 403 + replays). A
+          manual job run is engine-brokered oversight — no ledger entries, no money. */}
       {active && (
         <>
           <ReasonModal
             open={active.stage === "reason"}
             onOpenChange={(o) => !o && closeFlow()}
             title={`Run ${active.job.name} now`}
-            onContinue={() => setActive({ job: active.job, stage: "stepup" })}
-          />
-          <StepUpModal
-            open={active.stage === "stepup"}
-            onOpenChange={(o) => !o && closeFlow()}
-            title={`run ${active.job.name}`}
-            onComplete={() => setActive({ job: active.job, stage: "engine" })}
+            onContinue={(r, category) => {
+              setReason(category ? `${category}: ${r}` : r)
+              setActive({ job: active.job, stage: "engine" })
+            }}
           />
           <EngineActionModal
             open={active.stage === "engine"}
@@ -436,6 +467,26 @@ export function OpsPage() {
             onExecute={executeRun}
           />
         </>
+      )}
+
+      {/* Real step-up: opened when the run mutation 403s, replays on re-auth. */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then((done) => {
+              if (done) setReason("")
+            })
+            .catch((error) => setLocalError(errorMessage(error)))
+        }}
+      />
+      {localError && (
+        <p role="alert" className="mt-3 text-[12px] font-semibold text-tdn">
+          {localError}
+        </p>
       )}
     </div>
   )

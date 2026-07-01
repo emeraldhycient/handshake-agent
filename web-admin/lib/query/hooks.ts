@@ -15,31 +15,44 @@ import type {
   AdminEndUserSearchQuery,
   AdminEndUserStatusRequest,
   AdminEndUserTierRequest,
+  CreateManualCreditRequest,
   AdminInvitationCreateRequest,
   AdminLedgerListQuery,
+  AdminOpsRunRequest,
   AdminTxnMarkFailedRequest,
   AdminTxnSearchQuery,
   AdminUserStatusRequest,
   AdminUserUpdateRoleRequest,
   AmlRuleCreateRequest,
   AmlRuleUpdateRequest,
+  ApplyUserTagsRequest,
   AuditLogQuery,
+  BroadcastSendRequest,
+  BulkMessageRequest,
   ComplianceDispositionRequest,
   ComplianceReportDraftRequest,
   ComplianceReportSubmitRequest,
+  CreateChangeRequest,
   KycApproveRequest,
   KycRejectRequest,
   KycStatus,
   MetricsRangeQuery,
   NotificationTemplatePreviewRequest,
   NotificationTemplateUpsertRequest,
+  ReconAcceptRequest,
+  ReconResolveRequest,
+  RejectChangeRequest,
   RoleCreateRequest,
   RoleUpdateRequest,
+  SanctionsDispositionRequest,
   TreasuryAlertAcknowledgeRequest,
+  TreasuryPayoutApproveRequest,
+  UpdateSettingRequest,
 } from "@handshake-agent/contracts"
 
 import * as admin from "@/lib/api/admin"
 import * as agent from "@/lib/api/agent"
+import * as approvals from "@/lib/api/approvals"
 import * as beneficiaries from "@/lib/api/beneficiaries"
 import * as catalog from "@/lib/api/catalog"
 import * as config from "@/lib/api/config"
@@ -486,6 +499,22 @@ export function useAdminBeneficiaries(userId?: string) {
   })
 }
 
+// ─── Approvals inbox (Phase 7, maker-checker) ──────────────────────────────────────
+
+/**
+ * The maker-checker approvals inbox — the two caller-relative buckets (awaiting me /
+ * my requests) + their counts. Backs the Approvals page tabs/badges and the
+ * dashboard's "Approvals awaiting me" panel count. 15 s stale — the queue moves as
+ * makers raise and checkers dispose of requests.
+ */
+export function useApprovalsInbox() {
+  return useQuery({
+    queryKey: qk.approvalsInbox,
+    queryFn: () => approvals.getApprovalsInbox(),
+    staleTime: 15_000,
+  })
+}
+
 // ─── Mutation hooks ─────────────────────────────────────────────────────────────
 
 export function useCreateInvitation() {
@@ -568,6 +597,30 @@ export function useVerifyAuditChain() {
   })
 }
 
+// ─── Layered-config (AppSetting) mutation ─────────────────────────────────────────
+// Applying an admin override to a tunable key (root CLAUDE.md §7). Sensitive: the
+// PATCH is step-up-guarded server-side and may 403 with ADMIN_STEP_UP_REQUIRED (the
+// caller wraps it in `useStepUpRetry`). The server re-validates, hot-reloads, and
+// records an immutable `config_change` audit entry; it never moves money (§3.1). On
+// success it invalidates the settings prefix so the list + the single-key cache
+// re-resolve with the new effective value + 'db' provenance.
+
+export function useSetSetting() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      key,
+      input,
+    }: {
+      key: string
+      input: UpdateSettingRequest
+    }) => config.setSetting(key, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "settings"] })
+    },
+  })
+}
+
 // ─── End-user mutations ───────────────────────────────────────────────────────────
 // Each is sensitive (may 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps it in
 // `useStepUpRetry`). On success they invalidate the user's queries so the detail
@@ -616,6 +669,28 @@ export function useForcePinReset() {
   })
 }
 
+// Raise a MANUAL-CREDIT request for a user's wallet — a MAKER action (four-eyes,
+// §3.1). It moves NO money from this surface: it enters a pending change request a
+// SECOND admin approves (which routes the engine-brokered credit). May 403 with
+// ADMIN_STEP_UP_REQUIRED. On success it invalidates the approvals inbox (the new
+// request appears) and the users prefix (the pending credit shows on the detail).
+export function useRequestManualCredit() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string
+      input: CreateManualCreditRequest
+    }) => users.requestManualCredit(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.approvalsInbox })
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
 export function useRevokeDevice() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -637,6 +712,32 @@ export function useSimSwapReverify() {
   })
 }
 
+// ─── Users bulk-bar mutations (Phase 7, WRITES) ─────────────────────────────────────
+// Bulk actions over an EXPLICIT selected id set. Neither moves money (§3.1): a tag is
+// a pure annotation; a message enqueues onto the notifications outbox (never a direct
+// send). Both are sensitive (may 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps in
+// `useStepUpRetry`), idempotent, and immutably audited. On success they invalidate the
+// users prefix so the directory re-resolves.
+
+// Bulk-apply an operator tag to the selection. Idempotent (re-tagging is a no-op).
+export function useApplyUserTags() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: ApplyUserTagsRequest) => users.applyUserTags(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
+// Bulk-queue a templated broadcast to the selection. A large set may 422 with
+// ADMIN_BULK_CONFIRMATION_REQUIRED until the operator confirms (`confirmLargeSet`).
+export function useSendBulkMessage() {
+  return useMutation({
+    mutationFn: (input: BulkMessageRequest) => users.sendBulkMessage(input),
+  })
+}
+
 // ─── KYC-review mutations ─────────────────────────────────────────────────────────
 // Sensitive (may 403 with ADMIN_STEP_UP_REQUIRED). On success they invalidate the
 // queue and the reviewed submission so both re-resolve.
@@ -652,7 +753,10 @@ export function useApproveKyc() {
       input: KycApproveRequest
     }) => kyc.approveKyc(userId, input),
     onSuccess: () => {
+      // The queue/submission and the reviewed user's detail (header KYC pill/tier)
+      // both change on a decision — invalidate both prefixes so each re-resolves.
       void queryClient.invalidateQueries({ queryKey: ["admin", "kyc"] })
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
     },
   })
 }
@@ -669,6 +773,54 @@ export function useRejectKyc() {
     }) => kyc.rejectKyc(userId, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["admin", "kyc"] })
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
+// ─── Approvals (maker-checker) mutations ────────────────────────────────────────────
+// The checker's disposition of a pending change request. Both are sensitive (may 403
+// with ADMIN_STEP_UP_REQUIRED — the caller wraps in `useStepUpRetry`) and audited;
+// approving hands the recorded change to the target service to APPLY, rejecting
+// applies nothing. Neither moves money from this surface (§3.1). On success they
+// invalidate the inbox so both buckets + counts re-resolve.
+
+// The maker raising a pending change request (e.g. a `refund` of a stuck txn).
+// APPLIES NOTHING — it enters the inbox for a SECOND admin to approve (four-eyes),
+// so it never moves money from this surface (§3.1). Sensitive (may 403 with
+// ADMIN_STEP_UP_REQUIRED). On success it invalidates the inbox so both buckets +
+// counts re-resolve, and the transactions prefix so the drilled-in detail can
+// reflect the pending-refund request.
+export function useCreateChange() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: CreateChangeRequest) => approvals.createChange(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.approvalsInbox })
+      void queryClient.invalidateQueries({
+        queryKey: ["admin", "transactions"],
+      })
+    },
+  })
+}
+
+export function useApproveChange() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => approvals.approveChange(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.approvalsInbox })
+    },
+  })
+}
+
+export function useRejectChange() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: RejectChangeRequest }) =>
+      approvals.rejectChange(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.approvalsInbox })
     },
   })
 }
@@ -734,6 +886,27 @@ export function useDisposeEvent() {
     }) => compliance.disposeComplianceEvent(id, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["admin", "compliance"] })
+    },
+  })
+}
+
+// The operator's disposition of a sanctions screening match (Clear / Escalate /
+// Block). Sensitive (may 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps in
+// `useStepUpRetry`); the server writes the disposition annotation (never the
+// immutable verdict, §3.1) and records an immutable `admin_review` audit. On success
+// it invalidates the sanctions list so the disposed match re-resolves.
+export function useDisposeSanctions() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string
+      input: SanctionsDispositionRequest
+    }) => compliance.disposeSanctions(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.sanctions })
     },
   })
 }
@@ -816,6 +989,79 @@ export function useOverrideCoolingOff() {
         queryKey: ["admin", "beneficiaries"],
       })
     },
+  })
+}
+
+// ─── Phase 7 WRITES — Ops / Recon / Treasury / Providers ──────────────────────────
+// All sensitive (may 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps in
+// `useStepUpRetry`). None moves money directly (§3.1): the ops run re-drives an
+// engine worker; a recon resolve re-enqueues settlement via the engine; a payout
+// approve raises a four-eyes change request; a provider test is a liveness probe.
+// On success each invalidates the affected read so the surface re-resolves.
+
+/** POST /admin/ops/jobs/:id/run — trigger a manual job run; refreshes the ops board. */
+export function useRunOpsJob() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: AdminOpsRunRequest }) =>
+      ops.runOpsJob(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.opsBoard })
+    },
+  })
+}
+
+/** POST /admin/reconciliation/breaks/:id/resolve — engine-brokered break resolve. */
+export function useResolveReconBreak() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: ReconResolveRequest }) =>
+      reconciliation.resolveReconBreak(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.reconBreaks })
+      void queryClient.invalidateQueries({ queryKey: qk.reconStatus })
+    },
+  })
+}
+
+/** POST /admin/reconciliation/breaks/:id/accept — dual-control, no-debit accept. */
+export function useAcceptReconBreak() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: ReconAcceptRequest }) =>
+      reconciliation.acceptReconBreak(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.reconBreaks })
+      void queryClient.invalidateQueries({ queryKey: qk.reconStatus })
+    },
+  })
+}
+
+/**
+ * POST /admin/treasury/payouts/:id/approve — raise a maker-checker payout approval.
+ * Invalidates the payout queue AND the approvals inbox (the new request lands there).
+ */
+export function useApproveTreasuryPayout() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string
+      input: TreasuryPayoutApproveRequest
+    }) => treasury.approveTreasuryPayout(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.treasuryPayoutQueue })
+      void queryClient.invalidateQueries({ queryKey: qk.approvalsInbox })
+    },
+  })
+}
+
+/** POST /admin/providers/:key/test — run a provider liveness probe (no invalidation). */
+export function useTestProviderConnection() {
+  return useMutation({
+    mutationFn: (key: string) => providers.testProviderConnection(key),
   })
 }
 
@@ -1009,5 +1255,28 @@ export function usePreviewTemplate() {
   return useMutation({
     mutationFn: (input: NotificationTemplatePreviewRequest) =>
       notifications.previewNotificationTemplate(input),
+  })
+}
+
+/**
+ * Send (or queue-for-approval) a broadcast to an audience cohort (Phase 7). The
+ * SERVER decides the disposition from the resolved cohort size: a small audience is
+ * `dispatched` through the outbox now; a large audience is `queued_for_approval` as
+ * a maker-checker request for a second admin (§3.5). Sensitive + high-impact — may
+ * 403 with ADMIN_STEP_UP_REQUIRED (the caller wraps in `useStepUpRetry`) and moves
+ * no money (§3.1). On success it invalidates the delivery log (new outbox rows) and
+ * the approvals inbox (a large-audience queue) so both re-resolve.
+ */
+export function useSendBroadcast() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: BroadcastSendRequest) =>
+      notifications.sendBroadcast(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: qk.notificationDeliveryLog,
+      })
+      void queryClient.invalidateQueries({ queryKey: qk.approvalsInbox })
+    },
   })
 }

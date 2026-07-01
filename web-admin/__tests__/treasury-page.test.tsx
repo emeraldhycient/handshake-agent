@@ -11,8 +11,10 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type {
+  AdminBeneficiaryListResponse,
   TreasuryAlertListResponse,
   TreasuryBalancesResponse,
   TreasuryExposureListResponse,
@@ -34,6 +36,22 @@ vi.mock("@/lib/api/treasury", () => ({
   listTreasuryPayoutQueue: vi.fn(),
   listTreasuryFiatFloat: vi.fn(),
   listTreasuryFxPosition: vi.fn(),
+  // WRITE: acknowledge a threshold-breach alert (audited note).
+  acknowledgeTreasuryAlert: vi.fn(),
+  // WRITE (Phase 7): raise a maker-checker payout-release approval.
+  approveTreasuryPayout: vi.fn(),
+}))
+
+// The banner's acknowledge + the cooling-off override read the signed-in admin to
+// pick the step-up mode; the override lists + clears beneficiary first-use locks.
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn(),
+  stepUp: vi.fn(),
+}))
+
+vi.mock("@/lib/api/beneficiaries", () => ({
+  listBeneficiaries: vi.fn(),
+  overrideCoolingOff: vi.fn(),
 }))
 
 import {
@@ -44,7 +62,11 @@ import {
   listTreasuryPayoutQueue,
   listTreasuryFiatFloat,
   listTreasuryFxPosition,
+  acknowledgeTreasuryAlert,
+  approveTreasuryPayout,
 } from "@/lib/api/treasury"
+import { getMe } from "@/lib/api/admin"
+import { listBeneficiaries, overrideCoolingOff } from "@/lib/api/beneficiaries"
 
 const mockBalances = vi.mocked(listTreasuryBalances)
 const mockExposure = vi.mocked(listTreasuryExposure)
@@ -53,6 +75,11 @@ const mockSweeps = vi.mocked(listTreasurySweeps)
 const mockPayouts = vi.mocked(listTreasuryPayoutQueue)
 const mockFiatFloat = vi.mocked(listTreasuryFiatFloat)
 const mockFx = vi.mocked(listTreasuryFxPosition)
+const mockAcknowledge = vi.mocked(acknowledgeTreasuryAlert)
+const mockApprovePayout = vi.mocked(approveTreasuryPayout)
+const mockGetMe = vi.mocked(getMe)
+const mockBeneficiaries = vi.mocked(listBeneficiaries)
+const mockOverride = vi.mocked(overrideCoolingOff)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -164,6 +191,47 @@ const FX: TreasuryFxPositionResponse = {
   ],
 }
 
+const ME = {
+  id: "88888888-8888-8888-8888-888888888888",
+  email: "ops@handshake.ng",
+  role: {
+    id: "00000000-0000-0000-0000-000000000001",
+    name: "Super Admin",
+  },
+  status: "active" as const,
+  mfaEnabled: false,
+  permissions: [],
+  menus: [],
+  pages: [],
+}
+
+// One beneficiary is still inside its first-use cooling-off window (override target);
+// one is cleared (must not render an override row).
+const BENEFICIARIES: AdminBeneficiaryListResponse = {
+  items: [
+    {
+      id: "99999999-9999-9999-9999-999999999999",
+      userId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      type: "crypto_address",
+      label: "Chidi · USDT wallet",
+      verificationStatus: "verified",
+      firstUseLockedUntil: "2099-01-01T00:00:00.000Z",
+      coolingOffActive: true,
+      createdAt: "2026-07-01T00:00:00.000Z",
+    },
+    {
+      id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      userId: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      type: "bank_account",
+      label: "Ada · GTBank",
+      verificationStatus: "verified",
+      firstUseLockedUntil: null,
+      coolingOffActive: false,
+      createdAt: "2026-06-01T00:00:00.000Z",
+    },
+  ],
+}
+
 function renderPage() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -183,6 +251,19 @@ beforeEach(() => {
   mockPayouts.mockReset().mockResolvedValue(PAYOUTS)
   mockFiatFloat.mockReset().mockResolvedValue(FIAT_FLOAT)
   mockFx.mockReset().mockResolvedValue(FX)
+  mockAcknowledge.mockReset().mockResolvedValue({
+    ...ALERTS.items[0],
+    acknowledgedAt: "2026-07-01T05:00:00.000Z",
+  })
+  mockGetMe.mockReset().mockResolvedValue(ME)
+  mockBeneficiaries.mockReset().mockResolvedValue(BENEFICIARIES)
+  mockOverride.mockReset().mockResolvedValue(undefined)
+  mockApprovePayout.mockReset().mockResolvedValue({
+    payoutId: "44444444-4444-4444-4444-444444444444",
+    changeRequestId: "88888888-8888-8888-8888-888888888888",
+    status: "pending",
+    released: false,
+  })
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -313,5 +394,94 @@ describe("TreasuryPage (wired)", () => {
     await waitFor(() =>
       expect(screen.getByText(/Failed to load payout queue/i)).toBeInTheDocument()
     )
+  })
+})
+
+// ─── WRITE wiring (Phase 7) ───────────────────────────────────────────────────────
+// Acknowledge (audited note) + cooling-off override call the REAL clients. Nothing
+// here moves money (§3.1) — the ack annotates/clears an alert and the override clears
+// a first-use lock; both are step-up-gated and invalidate their query.
+
+describe("TreasuryPage (write wiring)", () => {
+  it("fires acknowledgeTreasuryAlert with the audited note from the reason modal", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // Open the banner's acknowledge → reason modal, enter a note, continue.
+    await user.click(
+      await screen.findByRole("button", { name: "Acknowledge" })
+    )
+    const reason = await screen.findByLabelText("Reason")
+    await user.type(reason, "Reviewed exposure with treasury")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+
+    await waitFor(() =>
+      expect(mockAcknowledge).toHaveBeenCalledWith(
+        "22222222-2222-2222-2222-222222222222",
+        { note: expect.stringContaining("Reviewed exposure with treasury") }
+      )
+    )
+  })
+
+  it("fires approveTreasuryPayout via reason → maker-checker (raises four-eyes; no release)", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // Open the first payout's Approve → reason modal, enter a reason, continue.
+    const approveButtons = await screen.findAllByRole("button", {
+      name: "Approve",
+    })
+    await user.click(approveButtons[0])
+    await user.type(
+      await screen.findByLabelText("Reason"),
+      "Verified against the source order"
+    )
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    // Maker-checker submit → the REAL approve mutation fires (raises a change request).
+    await user.click(
+      screen.getByRole("button", { name: /Submit for approval/i })
+    )
+
+    await waitFor(() =>
+      expect(mockApprovePayout).toHaveBeenCalledWith(
+        "44444444-4444-4444-4444-444444444444",
+        { reason: expect.stringContaining("Verified against the source order") }
+      )
+    )
+    // The row now reads "Requested" — the release awaits a second admin (§3.1).
+    expect(await screen.findByText("Requested")).toBeInTheDocument()
+  })
+
+  it("surfaces only cooling-off beneficiaries and fires overrideCoolingOff", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // The locked beneficiary renders in the cooling-off panel; the cleared one does not.
+    expect(
+      await screen.findByText("Chidi · USDT wallet")
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Ada · GTBank")).not.toBeInTheDocument()
+
+    await user.click(
+      screen.getByRole("button", { name: "Override cooling-off" })
+    )
+
+    await waitFor(() =>
+      expect(mockOverride).toHaveBeenCalledWith(
+        "99999999-9999-9999-9999-999999999999"
+      )
+    )
+  })
+
+  it("hides the cooling-off panel when no beneficiary is locked", async () => {
+    mockBeneficiaries.mockResolvedValue({
+      items: [BENEFICIARIES.items[1]],
+    })
+    renderPage()
+
+    await screen.findByText("412908.44")
+    expect(
+      screen.queryByText("Beneficiaries in cooling-off")
+    ).not.toBeInTheDocument()
   })
 })

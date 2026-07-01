@@ -15,8 +15,9 @@
  * FUNDS-SAFETY / SECRETS: the API returns secret-PRESENCE booleans only — the key
  * VALUES never cross the boundary (root CLAUDE.md §3.4/§3.5), so this screen shows
  * whether each provider's key is configured, never the key itself. There is no
- * reveal of a real secret and "Test connection" runs no live probe — both are
- * Phase 7. The screen is entirely read-only; nothing moves money (§3.1).
+ * reveal of a real secret. Phase 7 adds the wired "Test connection" liveness probe
+ * (ProviderTestButton) — a real, credential-free reachability check that exposes NO
+ * secret and moves NO money (§3.1). Reads stay read-only; the probe is step-up-gated.
  */
 import type {
   ProviderCardView,
@@ -25,6 +26,7 @@ import type {
 
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ProviderTestButton } from "@/components/admin/provider-test-button"
 import { useProviderRegistry } from "@/lib/query/hooks"
 import type { ProviderCardViewProps } from "@/types/components"
 
@@ -151,6 +153,9 @@ function ProviderCardView({ provider }: ProviderCardViewProps) {
             : "—"}
         </span>
       </div>
+
+      {/* Phase 7: the "Test connection" liveness probe (no secret exposure). */}
+      <ProviderTestButton providerKey={provider.key} />
     </div>
   )
 }

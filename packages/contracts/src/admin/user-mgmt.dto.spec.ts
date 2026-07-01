@@ -18,6 +18,7 @@ import {
   AdminEndUserSessionListResponseSchema,
   AdminEndUserLimitsResponseSchema,
   AdminEndUserTimelineEntrySchema,
+  CreateManualCreditRequestSchema,
   AdminEndUserTimelineResponseSchema,
 } from "./user-mgmt.dto";
 
@@ -509,5 +510,46 @@ describe("AdminEndUserTimelineResponseSchema", () => {
       AdminEndUserTimelineResponseSchema.parse({ entries: [timelineEntry] })
         .entries,
     ).toHaveLength(1);
+  });
+});
+
+describe("CreateManualCreditRequestSchema", () => {
+  const valid = { asset: "USDT", amount: "25.5", reason: "goodwill credit" };
+
+  it("parses a valid manual-credit request", () => {
+    expect(CreateManualCreditRequestSchema.parse(valid)).toEqual(valid);
+  });
+
+  it("rejects a non-supported asset", () => {
+    expect(() =>
+      CreateManualCreditRequestSchema.parse({ ...valid, asset: "DOGE" }),
+    ).toThrow();
+  });
+
+  it("rejects a zero amount (no-op credit)", () => {
+    expect(() =>
+      CreateManualCreditRequestSchema.parse({ ...valid, amount: "0" }),
+    ).toThrow();
+  });
+
+  it("rejects a negative amount (sign-flipped credit)", () => {
+    expect(() =>
+      CreateManualCreditRequestSchema.parse({ ...valid, amount: "-5" }),
+    ).toThrow();
+  });
+
+  it("rejects more than 8 decimal places", () => {
+    expect(() =>
+      CreateManualCreditRequestSchema.parse({
+        ...valid,
+        amount: "1.123456789",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a reason shorter than 3 chars", () => {
+    expect(() =>
+      CreateManualCreditRequestSchema.parse({ ...valid, reason: "hi" }),
+    ).toThrow();
   });
 });

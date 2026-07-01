@@ -25,9 +25,18 @@
  *
  * READ-WIRED (Phase 6a/6b): the display consts are replaced with the existing read
  * hooks. Nothing here moves money (§3.1). Each card region has four async
- * branches — loading skeleton / error (inline, retryable) / empty / data. The
- * write affordances (edit-threshold, Draft SAR/CTR) keep their design flow-modal
- * behaviour untouched — those are Phase 7.
+ * branches — loading skeleton / error (inline, retryable) / empty / data.
+ *
+ * WRITE-WIRED (Phase 7): the write affordances are connected to the REAL,
+ * step-up-gated compliance mutations through the shared functional dialogs (each
+ * carries the reason → step-up → mutate → invalidate chain internally):
+ *   - the edit pencil opens `AmlRuleDialog` (edit) → `useUpdateAmlRule`;
+ *   - "Draft SAR/CTR" opens `ComplianceReportDraftDialog` → `useDraftReport`;
+ *   - opening a case opens `ComplianceEventDetail` (raw payload + disposition form)
+ *     → `useDisposeEvent`;
+ *   - a draft report row's "Submit" opens `ComplianceReportSubmitDialog` →
+ *     `useSubmitReport`.
+ * None of these move money (§3.1) — they annotate / disposition compliance rows.
  *
  * The `{{ c.dot }}` / `{{ c.stBg }}` / `{{ c.stFg }}` inline styles from the markup map
  * onto the design's semantic status tokens (§5 status→token map): the leading dot's
@@ -37,17 +46,13 @@
 import { useMemo, useState } from "react"
 
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { ReasonModal, MakerCheckerModal } from "@/components/admin/flows"
+import { AmlRuleDialog } from "@/components/admin/aml-rule-dialog"
+import { ComplianceEventDetail } from "@/components/admin/compliance-event-detail"
+import { ComplianceReportDraftDialog } from "@/components/admin/compliance-report-draft-dialog"
+import { ComplianceReportSubmitDialog } from "@/components/admin/compliance-report-submit-dialog"
 import { cn } from "@/lib/utils"
 import {
   useAmlRules,
-  useComplianceEvent,
   useComplianceEvents,
   useComplianceReports,
   useTravelRule,
@@ -387,11 +392,16 @@ const REPORT_STATUS_META: Record<
 }
 
 /**
- * Compliance-reports card — read-only SAR/STR filing list (Phase 6b, wired to
- * `useComplianceReports`). Each row shows the report type (SAR/STR), a status
- * pill, its linked-event count, and the created/submitted timestamp.
+ * Compliance-reports card — the SAR/STR filing list (wired to `useComplianceReports`).
+ * Each row shows the report type (SAR/STR), a status pill, its linked-event count, and
+ * the created/submitted timestamp. A `draft` row exposes a "Submit report" affordance
+ * that opens the step-up-gated submit dialog (`onSubmit`).
  */
-function ReportsCard() {
+function ReportsCard({
+  onSubmit,
+}: {
+  onSubmit: (report: ComplianceReport) => void
+}) {
   const query = useComplianceReports()
   const reports = query.data?.items ?? []
 
@@ -445,6 +455,16 @@ function ReportsCard() {
                 >
                   {meta.label}
                 </span>
+                {report.status === "draft" && (
+                  <button
+                    type="button"
+                    onClick={() => onSubmit(report)}
+                    aria-label={`Submit report ${report.reportType.toUpperCase()}`}
+                    className="flex-none rounded-[9px] border border-line px-2.5 py-1 text-[11px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                  >
+                    Submit report
+                  </button>
+                )}
               </div>
             )
           })}
@@ -454,121 +474,31 @@ function ReportsCard() {
   )
 }
 
-// ── Compliance-event detail drill-in (Phase 6b) ──────────────────────────────────
-
-/** Format a nullable ISO timestamp for the disposition note, else em dash. */
-function formatDisposedAt(iso: string | null): string {
-  if (iso === null) return "—"
-  const date = new Date(iso)
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString()
-}
-
-/**
- * Case-detail dialog — a read-only drill-in on one flagged compliance event
- * (`useComplianceEvent`). Surfaces the event's classification, the raw screening
- * `details` payload (pretty-printed JSON), and the disposition note
- * (`dispositionComment` + `dispositionAt`). Read-only — dispositioning is Phase 7.
- */
-function CaseDetailDialog({
-  eventId,
-  onOpenChange,
-}: {
-  eventId: string | null
-  onOpenChange: (open: boolean) => void
-}) {
-  const query = useComplianceEvent(eventId)
-  const event = query.data ?? null
-
-  return (
-    <Dialog open={eventId !== null} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[520px] max-w-[94vw] gap-0 p-6">
-        <DialogTitle>Compliance case</DialogTitle>
-        <DialogDescription className="mt-1 mb-4 text-[12.5px] leading-normal text-ink2">
-          Raw screening payload and disposition note. Read-only — dispositioning
-          is a step-up action (Phase 7).
-        </DialogDescription>
-
-        {query.isLoading ? (
-          <div className="flex flex-col gap-2.5" aria-busy="true">
-            <Skeleton className="h-[20px] w-1/2 rounded-[8px]" />
-            <Skeleton className="h-[120px] rounded-[10px]" />
-          </div>
-        ) : query.isError ? (
-          <InlineError
-            label="Couldn't load the case."
-            onRetry={() => query.refetch()}
-          />
-        ) : event === null ? (
-          <p className="py-2 text-[12px] text-ink3">Case not found.</p>
-        ) : (
-          <div className="flex flex-col gap-3.5">
-            {/* Classification */}
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-[12px]">
-              <div>
-                <dt className="text-ink3">Type</dt>
-                <dd className="font-semibold text-ink">{event.eventType}</dd>
-              </div>
-              <div>
-                <dt className="text-ink3">Severity</dt>
-                <dd className="font-semibold text-ink capitalize">
-                  {event.severity}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-ink3">Status</dt>
-                <dd className="font-semibold text-ink">{event.status}</dd>
-              </div>
-              <div>
-                <dt className="text-ink3">Provider</dt>
-                <dd className="font-semibold text-ink">
-                  {event.screeningProvider}
-                </dd>
-              </div>
-            </dl>
-
-            {/* Raw screening payload */}
-            <div>
-              <div className="mb-1.5 text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase">
-                Screening payload
-              </div>
-              <pre className="max-h-[220px] overflow-auto rounded-[10px] border border-line bg-card2 p-3 font-mono text-[11px] leading-relaxed text-ink2">
-                {JSON.stringify(event.details, null, 2)}
-              </pre>
-            </div>
-
-            {/* Disposition note */}
-            <div>
-              <div className="mb-1.5 text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase">
-                Disposition note
-              </div>
-              <p className="text-[12.5px] text-ink2">
-                {event.dispositionComment ?? "Not yet dispositioned."}
-              </p>
-              <p className="mt-1 text-[11px] text-ink3">
-                {formatDisposedAt(event.dispositionAt)}
-              </p>
-            </div>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 // ── Page ───────────────────────────────────────────────────────────────────────────
 
-// The active flow: editing a risk-rule threshold (maker-checker) or drafting a SAR/CTR
-// (reason). Mirrors how the design's `runFlow` chains each affordance to a flow modal.
-// These are WRITE paths — left as design no-op flows for Phase 7.
-type ActiveFlow =
-  | { kind: "editRule"; rule: AmlRule }
-  | { kind: "draftSar" }
-  | null
-
 export function AmlPage() {
-  const [flow, setFlow] = useState<ActiveFlow>(null)
-  // The open case's id whose read-only detail drill-in is showing (Phase 6b).
+  // The rule being edited (or null to close) + explicit open flag so closing keeps the
+  // last rule visible through the dialog's exit transition.
+  const [editingRule, setEditingRule] = useState<AmlRule | null>(null)
+  const [ruleDialogOpen, setRuleDialogOpen] = useState(false)
+  // The "Draft SAR/CTR" dialog open flag.
+  const [draftOpen, setDraftOpen] = useState(false)
+  // The open case's id whose disposition drawer is showing (null = closed).
   const [caseId, setCaseId] = useState<string | null>(null)
+  // The draft report being submitted (or null to close) + open flag.
+  const [submittingReport, setSubmittingReport] =
+    useState<ComplianceReport | null>(null)
+  const [submitOpen, setSubmitOpen] = useState(false)
+
+  function openEditRule(rule: AmlRule) {
+    setEditingRule(rule)
+    setRuleDialogOpen(true)
+  }
+
+  function openSubmitReport(report: ComplianceReport) {
+    setSubmittingReport(report)
+    setSubmitOpen(true)
+  }
 
   return (
     <div className="mx-auto w-full max-w-[1200px] px-[30px] pt-[26px] pb-[60px]">
@@ -584,54 +514,40 @@ export function AmlPage() {
 
       {/* ── 1.2fr / 1fr grid (design line 4) ───────────────────────────────── */}
       <div className="grid grid-cols-1 items-start gap-[14px] lg:grid-cols-[1.2fr_1fr]">
-        <RiskRulesCard onEdit={(rule) => setFlow({ kind: "editRule", rule })} />
+        <RiskRulesCard onEdit={openEditRule} />
         <div className="flex flex-col gap-[14px]">
           <OpenCasesCard
-            onDraftSar={() => setFlow({ kind: "draftSar" })}
+            onDraftSar={() => setDraftOpen(true)}
             onOpenCase={setCaseId}
           />
           <TravelRuleCard />
-          <ReportsCard />
+          <ReportsCard onSubmit={openSubmitReport} />
         </div>
       </div>
 
-      {/* ── Case-detail drill-in (Phase 6b read) ───────────────────────────── */}
-      <CaseDetailDialog
+      {/* ── Compliance writes (Phase 7, step-up-gated dialogs) ─────────────── */}
+
+      {/* Open case → disposition drawer (raw payload + status + comment → useDisposeEvent). */}
+      <ComplianceEventDetail
         eventId={caseId}
         onOpenChange={(next) => !next && setCaseId(null)}
       />
 
-      {/* ── Flow modals (shared funds-safety flows, SPEC §5) — Phase 7 writes ── */}
-
-      {/* Edit threshold → MakerCheckerModal (dual-control; enters Pending approval). */}
-      <MakerCheckerModal
-        open={flow?.kind === "editRule"}
-        onOpenChange={(next) => !next && setFlow(null)}
-        title={
-          flow?.kind === "editRule"
-            ? `Edit threshold — ${flow.rule.name}`
-            : "Edit risk-rule threshold"
-        }
-        diff={
-          flow?.kind === "editRule"
-            ? [
-                {
-                  field: flow.rule.name,
-                  from: thresholdFromParameters(flow.rule.parameters),
-                  to: thresholdFromParameters(flow.rule.parameters),
-                },
-              ]
-            : []
-        }
-        onSubmit={() => setFlow(null)}
+      {/* Edit threshold → AmlRuleDialog (edit) → useUpdateAmlRule (sensitive; step-up). */}
+      <AmlRuleDialog
+        open={ruleDialogOpen}
+        onOpenChange={setRuleDialogOpen}
+        rule={editingRule}
       />
 
-      {/* Draft SAR/CTR → ReasonModal (recorded in the immutable audit log). */}
-      <ReasonModal
-        open={flow?.kind === "draftSar"}
-        onOpenChange={(next) => !next && setFlow(null)}
-        title="Draft SAR/CTR"
-        onContinue={() => setFlow(null)}
+      {/* Draft SAR/CTR → ComplianceReportDraftDialog → useDraftReport (audited). */}
+      <ComplianceReportDraftDialog open={draftOpen} onOpenChange={setDraftOpen} />
+
+      {/* Submit a draft report → ComplianceReportSubmitDialog → useSubmitReport. */}
+      <ComplianceReportSubmitDialog
+        open={submitOpen}
+        onOpenChange={setSubmitOpen}
+        report={submittingReport}
       />
     </div>
   )

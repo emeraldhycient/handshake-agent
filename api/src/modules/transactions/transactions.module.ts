@@ -102,6 +102,9 @@ import { PdfStatementGenerator } from './infrastructure/pdf-statement.generator'
     // CLOCK is exported so admin-side engine-brokered actions (triage refunds)
     // stamp timestamps from the same injected clock the engine uses.
     CLOCK,
+    // Exported for AdminModule's ops "Run now" (Phase 7): a manual trigger re-drives
+    // the reconciler's tick() — an engine-brokered re-drive that moves no money.
+    SettlementReconciliationService,
     TransactionHistoryService,
     StatementTokenService,
     STATEMENT_GENERATOR,

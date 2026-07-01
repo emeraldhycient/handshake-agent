@@ -17,9 +17,13 @@
  * permission matrix card (roles × capabilities, access-level icon tiles + legend).
  * Every async surface has four branches (loading / error / empty / data).
  *
- * WRITE actions stay untouched (Phase 7): "Reset 2FA" → step-up;
- * "Deactivate/Reactivate" → reason → maker-checker; "+ Invite admin" → the invite
- * dialog. This pass wires only the read display; no funds/DB side effects here.
+ * WRITE actions (Phase 7) are wired through the canonical mutation components so
+ * the reason → step-up → mutation → invalidate chain lives in one place (§13.1):
+ * per-row change-role / suspend-reactivate-offboard is `AdminRowActions`
+ * (useUpdateAdminRole / useSetAdminStatus, step-up-gated); create-role and
+ * edit-role-permissions open `RoleEditorDialog` (useCreateRole / useUpdateRole);
+ * "+ Invite admin" is `InviteAdminDialog` (useCreateInvitation). Each mutation
+ * invalidates its query key so the table + matrix re-resolve.
  */
 import { useMemo, useState } from "react"
 import type {
@@ -31,12 +35,9 @@ import type {
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { InviteAdminDialog } from "@/components/admin/invite-admin-dialog"
+import { AdminRowActions } from "@/components/admin/admin-row-actions"
+import { RoleEditorDialog } from "@/components/admin/role-editor-dialog"
 import { useAdmins, usePermissions, useRoles } from "@/lib/query/hooks"
-import {
-  MakerCheckerModal,
-  ReasonModal,
-  StepUpModal,
-} from "@/components/admin/flows"
 
 // ─── Brand + status constants (mapped to design tokens; §1.3 / stMeta) ─────────
 
@@ -79,8 +80,11 @@ function emailInitials(email: string): string {
   return chars.toUpperCase()
 }
 
-/** Shared grid template for the admin table header + every body row (design 5/6). */
-const ADMIN_GRID = "grid-cols-[1.6fr_1.3fr_0.8fr_0.9fr_1.2fr] gap-3 px-[18px]"
+/** Shared grid template for the admin table header + every body row (design 5/6).
+ * The last column hosts the wired row-actions (role select + status buttons), so
+ * it is given more room than the design's original text-only actions column. */
+const ADMIN_GRID =
+  "grid-cols-[1.4fr_1fr_0.7fr_0.8fr_2.1fr] gap-3 px-[18px]"
 
 // ─── Role permission matrix (design lines 9-14) ────────────────────────────────
 
@@ -125,9 +129,9 @@ interface MatrixRow {
   cells: readonly Access[]
 }
 
-/** The derived matrix: role column labels + a row per permission category. */
+/** The derived matrix: role columns (full objects, for the editor) + category rows. */
 interface MatrixData {
-  cols: readonly string[]
+  cols: readonly Role[]
   rows: readonly MatrixRow[]
 }
 
@@ -189,13 +193,10 @@ function buildMatrix(
     return { label: category, cells }
   })
 
-  return { cols: roles.map((role) => role.name), rows }
+  return { cols: roles, rows }
 }
 
 // ─── Page ──────────────────────────────────────────────────────────────────────
-
-/** The four flow steps a row action can currently be waiting on. */
-type ActiveFlow = "reason" | "maker" | "stepUp" | null
 
 export function AdminsPage() {
   const [inviteOpen, setInviteOpen] = useState(false)
@@ -216,19 +217,21 @@ export function AdminsPage() {
   const matrixLoading = rolesQuery.isLoading || permissionsQuery.isLoading
   const matrixError = rolesQuery.isError || permissionsQuery.isError
 
-  // The row-action flow. "Deactivate/Reactivate" runs reason → maker-checker;
-  // "Reset 2FA" runs step-up directly. Presentation only (Phase 7 wires writes).
-  const [flow, setFlow] = useState<ActiveFlow>(null)
-  const [flowAdmin, setFlowAdmin] = useState<AdminUser | null>(null)
+  // Role editor (create / edit permissions) — `roleEdit` holds the target role, or
+  // null when creating. The wired RoleEditorDialog runs useCreateRole / useUpdateRole
+  // and invalidates the roles query on success.
+  const [roleEditorOpen, setRoleEditorOpen] = useState(false)
+  const [roleEdit, setRoleEdit] = useState<Role | null>(null)
 
-  function closeFlow() {
-    setFlow(null)
-    setFlowAdmin(null)
+  function openCreateRole() {
+    setRoleEdit(null)
+    setRoleEditorOpen(true)
   }
 
-  const flowAdminActive = flowAdmin?.status === "active"
-  const flowActionLabel =
-    flowAdmin && (flowAdminActive ? "Deactivate admin" : "Reactivate admin")
+  function openEditRole(role: Role) {
+    setRoleEdit(role)
+    setRoleEditorOpen(true)
+  }
 
   return (
     <div className="mx-auto w-full max-w-[1300px] px-[30px] pt-[26px] pb-[60px]">
@@ -323,25 +326,23 @@ export function AdminsPage() {
         {/* Data */}
         {adminsQuery.isSuccess &&
           admins.map((admin) => (
-            <AdminRow
-              key={admin.id}
-              admin={admin}
-              onReset2fa={() => {
-                setFlowAdmin(admin)
-                setFlow("stepUp")
-              }}
-              onToggleActive={() => {
-                setFlowAdmin(admin)
-                setFlow("reason")
-              }}
-            />
+            <AdminRow key={admin.id} admin={admin} roles={roles} />
           ))}
       </div>
 
       {/* ── Role permission matrix ─────────────────────────────────────────── */}
       <div className="scr overflow-x-auto rounded-[16px] border border-line bg-card px-[20px] py-[18px]">
-        <div className="mb-[14px] text-[13px] font-extrabold text-ink">
-          Role permission matrix
+        <div className="mb-[14px] flex items-center justify-between gap-3">
+          <div className="text-[13px] font-extrabold text-ink">
+            Role permission matrix
+          </div>
+          <button
+            type="button"
+            onClick={openCreateRole}
+            className="flex h-[32px] items-center gap-[6px] rounded-[10px] border border-line bg-card px-3 text-[12px] font-bold text-ink2 transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            + New role
+          </button>
         </div>
 
         {/* Loading */}
@@ -400,13 +401,20 @@ export function AdminsPage() {
                   }}
                 >
                   <div />
-                  {matrix.cols.map((c) => (
-                    <div
-                      key={c}
-                      className="text-center text-[10px] leading-[1.2] font-bold text-ink3"
+                  {matrix.cols.map((role) => (
+                    <button
+                      key={role.id}
+                      type="button"
+                      onClick={() => openEditRole(role)}
+                      title={
+                        role.isBuiltin
+                          ? `View ${role.name} permissions`
+                          : `Edit ${role.name} permissions`
+                      }
+                      className="text-center text-[10px] leading-[1.2] font-bold text-ink3 transition-colors hover:text-tif focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
                     >
-                      {c}
-                    </div>
+                      {role.name}
+                    </button>
                   ))}
                 </div>
 
@@ -426,11 +434,11 @@ export function AdminsPage() {
                       const meta = ACCESS_META[access]
                       return (
                         <div
-                          key={`${row.label}-${matrix.cols[i]}`}
+                          key={`${row.label}-${matrix.cols[i].id}`}
                           className="flex justify-center"
                         >
                           <span
-                            title={`${matrix.cols[i]} · ${meta.title}`}
+                            title={`${matrix.cols[i].name} · ${meta.title}`}
                             className="flex size-6 items-center justify-center rounded-[7px]"
                             style={{ background: meta.bg, color: meta.fg }}
                           >
@@ -485,42 +493,16 @@ export function AdminsPage() {
           )}
       </div>
 
-      {/* ── Flow modals (Reset 2FA · Deactivate/Reactivate · Invite) ───────── */}
-      <ReasonModal
-        open={flow === "reason"}
-        onOpenChange={(open) => {
-          if (!open) closeFlow()
-        }}
-        title={flowActionLabel ?? "Change admin status"}
-        onContinue={() => setFlow("maker")}
-      />
-      <MakerCheckerModal
-        open={flow === "maker"}
-        onOpenChange={(open) => {
-          if (!open) closeFlow()
-        }}
-        title={flowActionLabel ?? "Change admin status"}
-        diff={
-          flowAdmin
-            ? [
-                {
-                  field: `Admin: ${flowAdmin.email}`,
-                  from: flowAdminActive ? "Active" : "Deactivated",
-                  to: flowAdminActive ? "Deactivated" : "Active",
-                },
-              ]
-            : []
-        }
-        onSubmit={closeFlow}
-      />
-      <StepUpModal
-        open={flow === "stepUp"}
-        onOpenChange={(open) => {
-          if (!open) closeFlow()
-        }}
-        title={flowAdmin ? `Reset 2FA for ${flowAdmin.email}` : "Reset 2FA"}
-        onComplete={closeFlow}
-      />
+      {/* ── Role editor (create / edit permissions) · Invite ───────────────── */}
+      {roleEditorOpen && (
+        <RoleEditorDialog
+          // Remount per target so the editor's internal state re-seeds.
+          key={roleEdit?.id ?? "create"}
+          open={roleEditorOpen}
+          onOpenChange={setRoleEditorOpen}
+          role={roleEdit}
+        />
+      )}
 
       <InviteAdminDialog
         open={inviteOpen}
@@ -531,20 +513,16 @@ export function AdminsPage() {
   )
 }
 
-/** One admin table row (design line 6). */
-function AdminRow({
-  admin,
-  onReset2fa,
-  onToggleActive,
-}: {
-  admin: AdminUser
-  onReset2fa: () => void
-  onToggleActive: () => void
-}) {
+/**
+ * One admin table row (design line 6). The sensitive row actions (change role,
+ * suspend / reactivate / offboard) are the wired `AdminRowActions` — it runs the
+ * useUpdateAdminRole / useSetAdminStatus mutations, step-up-gated, and invalidates
+ * the admins query on success.
+ */
+function AdminRow({ admin, roles }: { admin: AdminUser; roles: Role[] }) {
   // No display name on the DTO — the email local-part stands in as the name.
   const displayName = admin.email.split("@")[0] ?? admin.email
   const isActive = admin.status === "active"
-  const actionLabel = isActive ? "Deactivate" : "Reactivate"
   return (
     <div
       className={cn(
@@ -603,22 +581,9 @@ function AdminRow({
         )}
       </div>
 
-      {/* Row actions */}
-      <div className="flex justify-end gap-3">
-        <button
-          type="button"
-          onClick={onReset2fa}
-          className="text-[11.5px] font-bold text-tif transition-opacity hover:opacity-80 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          Reset 2FA
-        </button>
-        <button
-          type="button"
-          onClick={onToggleActive}
-          className="text-[11.5px] font-bold text-ink3 transition-colors hover:text-ink2 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          {actionLabel}
-        </button>
+      {/* Row actions — change role + suspend/reactivate/offboard (step-up-gated) */}
+      <div className="flex justify-end">
+        <AdminRowActions admin={admin} roles={roles} />
       </div>
     </div>
   )

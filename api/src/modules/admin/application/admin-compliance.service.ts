@@ -14,6 +14,7 @@ import type {
   ComplianceReport,
   ComplianceReportDraftRequest,
   ComplianceReportListResponse,
+  SanctionsDispositionRequest,
   SanctionsMonitoringView,
   SanctionsRecordItem,
   SanctionsRecordListResponse,
@@ -188,6 +189,43 @@ export class AdminComplianceService {
   }
 
   /**
+   * Record an operator DISPOSITION on a screening match (Clear / Escalate / Block).
+   * The immutable screener `verdict` is never mutated — this writes only the
+   * annotation columns through the repository port, then records an audited
+   * `admin_review` with the before/after disposition. It moves no money (§3.1) and
+   * holds no Prisma import (§3.2). The endpoint layer gates Block behind step-up and
+   * routes Escalate through maker-checker; the write itself is deterministic.
+   */
+  async disposeSanctions(
+    id: string,
+    decision: SanctionsDispositionRequest,
+    adminId: string,
+  ): Promise<SanctionsRecordItem> {
+    const before = await this.sanctions.findById(id);
+    if (before === null) throw new AdminNotFoundError('Sanctions record');
+
+    await this.sanctions.disposition(id, {
+      disposition: decision.disposition,
+      adminId,
+      comment: decision.comment,
+      at: new Date(),
+    });
+
+    const after = await this.sanctions.findById(id);
+    if (after === null) throw new AdminNotFoundError('Sanctions record');
+
+    await this.audit.record({
+      correlationId: randomUUID(),
+      actorAdminId: adminId,
+      subject: `SanctionsRecord:${id}`,
+      action: 'admin_review',
+      before: { disposition: before.disposition },
+      after: { disposition: after.disposition },
+    });
+    return toSanctionsItem(after);
+  }
+
+  /**
    * The read-only ongoing-monitoring policy view (four flags from layered config).
    * Absent flags coerce to the safe baseline; toggling is a Phase-7 write.
    */
@@ -345,6 +383,7 @@ function toSanctionsItem(r: SanctionsRecordRecord): SanctionsRecordItem {
     matchedList: MATCHED_LIST_LABEL[r.provider] ?? r.provider,
     matchType: MATCH_TYPE_LABEL[r.screeningType] ?? r.screeningType,
     matchScore: VERDICT_SCORE[r.verdict],
+    disposition: r.disposition,
     createdAt: r.createdAt.toISOString(),
   };
 }

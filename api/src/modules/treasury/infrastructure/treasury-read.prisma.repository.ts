@@ -296,27 +296,33 @@ export class TreasuryReadPrismaRepository implements ITreasuryReadRepository {
       take: FEED_LIMIT,
     });
 
-    return rows.map((row) => {
-      const meta = asRecord(row.transaction?.metadata);
-      const asset = str(meta.asset) ?? defaultAssetFor(row.settlementType);
-      const amount = str(meta.amount) ?? str(meta.fiatAmount) ?? '0';
-      const fiatAmount = str(meta.fiatAmount) ?? null;
-      const ngnNotional = Number(
-        fiatAmount ?? (asset === 'NGN' ? amount : '0'),
-      );
-      return {
-        id: row.id,
-        transactionId: row.transactionId,
-        beneficiaryLabel: beneficiaryLabelFor(meta, row.settlementType),
-        reference: row.processorRef ?? `wd_${row.transactionId.slice(0, 8)}`,
-        method: methodFor(row.settlementType, meta),
-        asset,
-        amount,
-        fiatAmount,
-        requiresApproval: ngnNotional >= LARGE_PAYOUT_NGN_THRESHOLD,
-        submittedAt: row.createdAt,
-      };
+    return rows.map((row) => toPayoutRecord(row));
+  }
+
+  /**
+   * A single pending payout by its outbox id (Phase 7 — the approve maker-checker
+   * needs the item's transactionId + reference). Returns null when the id is unknown
+   * or the row is no longer in a pending state. READ-ONLY — never releases funds.
+   */
+  async findPayoutQueueItem(
+    id: string,
+  ): Promise<TreasuryPayoutQueueRecord | null> {
+    const row = await this.prisma.settlementOutbox.findFirst({
+      where: {
+        id,
+        settlementType: { in: PAYOUT_SETTLEMENT_TYPES },
+        status: { in: PENDING_OUTBOX_STATUSES },
+      },
+      select: {
+        id: true,
+        transactionId: true,
+        settlementType: true,
+        processorRef: true,
+        createdAt: true,
+        transaction: { select: { metadata: true } },
+      },
     });
+    return row === null ? null : toPayoutRecord(row);
   }
 
   /**
@@ -425,4 +431,39 @@ function beneficiaryLabelFor(
   return type === SettlementType.onchain_send
     ? 'TRON withdrawal'
     : 'NGN payout';
+}
+
+/** The selected settlement-outbox row shape shared by list + single-item reads. */
+interface PayoutOutboxRow {
+  id: string;
+  transactionId: string;
+  settlementType: SettlementType;
+  processorRef: string | null;
+  createdAt: Date;
+  transaction: { metadata: unknown } | null;
+}
+
+/**
+ * Projects one selected settlement-outbox row into a payout-queue record. Shared by
+ * `listPayoutQueue` and `findPayoutQueueItem` so the list row and the single-item
+ * lookup can never disagree on the derived fields (§13.2 DRY).
+ */
+function toPayoutRecord(row: PayoutOutboxRow): TreasuryPayoutQueueRecord {
+  const meta = asRecord(row.transaction?.metadata);
+  const asset = str(meta.asset) ?? defaultAssetFor(row.settlementType);
+  const amount = str(meta.amount) ?? str(meta.fiatAmount) ?? '0';
+  const fiatAmount = str(meta.fiatAmount) ?? null;
+  const ngnNotional = Number(fiatAmount ?? (asset === 'NGN' ? amount : '0'));
+  return {
+    id: row.id,
+    transactionId: row.transactionId,
+    beneficiaryLabel: beneficiaryLabelFor(meta, row.settlementType),
+    reference: row.processorRef ?? `wd_${row.transactionId.slice(0, 8)}`,
+    method: methodFor(row.settlementType, meta),
+    asset,
+    amount,
+    fiatAmount,
+    requiresApproval: ngnNotional >= LARGE_PAYOUT_NGN_THRESHOLD,
+    submittedAt: row.createdAt,
+  };
 }

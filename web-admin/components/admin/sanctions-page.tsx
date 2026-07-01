@@ -21,11 +21,17 @@
  * stays CONTROLLED off local `useState` seeded from those values — a lightweight
  * soft-toggle exactly as the design chains it; persisting a toggle is a Phase-7 write.
  *
- * Disposition actions (Clear / Escalate / Block) are Phase-7 writes and are left
- * exactly as the design's `runFlow` chains them (SPEC §5 "Flow modals"): Clear →
- * ReasonModal (recorded in the immutable audit log); Escalate → MakerCheckerModal
- * (enters Pending approval, a second admin decides); Block → ReasonModal → StepUpModal
- * (a sensitive, step-up-gated action). On completion the card flips to its done-label.
+ * Disposition actions (Clear / Escalate / Block) are Phase-7 WRITES wired to the real
+ * POST /admin/compliance/sanctions/:id/disposition (`useDisposeSanctions`), chained
+ * exactly as the design's `runFlow` does (SPEC §5 "Flow modals"): Clear → ReasonModal
+ * (recorded in the immutable audit log); Escalate → MakerCheckerModal (dual-control);
+ * Block → ReasonModal → StepUpModal (a sensitive, step-up-gated action). Each modal's
+ * submit fires the mutation; the server writes the disposition ANNOTATION (never the
+ * immutable screener verdict, §3.1) + an immutable `admin_review` audit, and moves no
+ * money. A 403 ADMIN_STEP_UP_REQUIRED opens the StepUpDialog and the POST replays after
+ * re-auth (`useStepUpRetry`). On success the sanctions query invalidates so the card
+ * re-resolves from the server `disposition`; a local optimistic outcome flips it
+ * immediately. Nothing here moves money (§3.1) and PII stays as the stored last-4/ref.
  */
 import { useMemo, useState } from "react"
 
@@ -37,15 +43,27 @@ import {
   StepUpModal,
   MakerCheckerModal,
 } from "@/components/admin/flows"
-import { useSanctions, useSanctionsMonitoring } from "@/lib/query/hooks"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
+import {
+  useAdminMe,
+  useDisposeSanctions,
+  useSanctions,
+  useSanctionsMonitoring,
+} from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
+import { ApiError } from "@/lib/api/client"
+import { pushToast } from "@/lib/store/toast-store"
 import type {
+  SanctionsDisposition,
   SanctionsMonitoringView,
   SanctionsRecordItem,
 } from "@handshake-agent/contracts"
 
 // ── Presentation types ────────────────────────────────────────────────────────────
 
-type MatchDone = "cleared" | "escalated" | "blocked"
+// The done-label token is the contract's disposition union verbatim (cleared /
+// escalated / blocked), so the server value maps straight onto the card state.
+type MatchDone = SanctionsDisposition
 
 /** The verdict token + label shown in the design's Score slot (the DTO carries no
  *  numeric confidence score — see shapeGaps). Colour follows severity, never the sole
@@ -379,21 +397,68 @@ type ActiveFlow =
   | { kind: "block"; matchId: string; step: "reason" | "stepup" }
   | null
 
+/** Normalizes a mutation/step-up failure into a user-facing message. */
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "Something went wrong."
+}
+
 export function SanctionsPage() {
   const sanctions = useSanctions()
   const records = sanctions.data?.items ?? []
 
-  // Per-match disposition outcome (null = still open). Drives each card's state.
+  const me = useAdminMe()
+  const dispose = useDisposeSanctions()
+  const stepUp = useStepUpRetry()
+
+  // Local optimistic outcomes layered over the server disposition (which is the
+  // source of truth once the sanctions query re-resolves). Clearing on invalidation
+  // is unnecessary — the server value and the optimistic value agree post-success.
   const [outcomes, setOutcomes] = useState<Record<string, MatchDone>>({})
   const [flow, setFlow] = useState<ActiveFlow>(null)
+  // The disposition awaiting a server step-up replay (so the success toast/flip after
+  // re-auth targets the right match).
+  const [pending, setPending] = useState<{
+    matchId: string
+    done: MatchDone
+  } | null>(null)
+
+  /** The card's effective done-state: the server disposition, then any local override. */
+  function doneOf(record: SanctionsRecordItem): MatchDone | null {
+    return outcomes[record.id] ?? record.disposition
+  }
 
   function labelOf(matchId: string): string {
     return records.find((r) => r.id === matchId)?.counterpartyId ?? "match"
   }
 
+  /**
+   * Apply a disposition through the real step-up-guarded POST. On success it flips the
+   * card optimistically (the sanctions query also invalidates) and toasts; a 403
+   * ADMIN_STEP_UP_REQUIRED opens the StepUpDialog and the POST replays after re-auth.
+   */
   function disposition(matchId: string, done: MatchDone) {
-    setOutcomes((prev) => ({ ...prev, [matchId]: done }))
     setFlow(null)
+    setPending({ matchId, done })
+    void (async () => {
+      try {
+        const ok = await stepUp.run(() =>
+          dispose
+            .mutateAsync({ id: matchId, input: { disposition: done } })
+            .then(() => undefined)
+        )
+        if (ok) {
+          setOutcomes((prev) => ({ ...prev, [matchId]: done }))
+          pushToast(`${labelOf(matchId)} · ${DONE_META[done].label}`, "ok")
+          setPending(null)
+        }
+        // ok === false → a step-up challenge opened; the StepUpDialog replays it.
+      } catch (error) {
+        pushToast(errorMessage(error), "warn")
+        setPending(null)
+      }
+    })()
   }
 
   return (
@@ -421,7 +486,7 @@ export function SanctionsPage() {
             <SanctionsMatchCard
               key={record.id}
               record={record}
-              done={outcomes[record.id] ?? null}
+              done={doneOf(record)}
               onClear={() => setFlow({ kind: "clear", matchId: record.id })}
               onEscalate={() =>
                 setFlow({ kind: "escalate", matchId: record.id })
@@ -499,6 +564,35 @@ export function SanctionsPage() {
         onComplete={() =>
           flow?.kind === "block" && disposition(flow.matchId, "blocked")
         }
+      />
+
+      {/* Server-side step-up re-auth: a 403 on the disposition POST opens this; the
+          POST replays after re-authentication, then the card flips + toasts. */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then((ok) => {
+              if (ok && pending) {
+                setOutcomes((prev) => ({
+                  ...prev,
+                  [pending.matchId]: pending.done,
+                }))
+                pushToast(
+                  `${labelOf(pending.matchId)} · ${DONE_META[pending.done].label}`,
+                  "ok"
+                )
+              }
+              setPending(null)
+            })
+            .catch((error) => {
+              pushToast(errorMessage(error), "warn")
+              setPending(null)
+            })
+        }}
       />
     </div>
   )

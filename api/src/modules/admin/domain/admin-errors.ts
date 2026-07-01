@@ -15,7 +15,12 @@ export type AdminErrorCode =
   | 'ADMIN_BUILTIN_ROLE_IMMUTABLE'
   | 'ADMIN_BOOTSTRAP_FORBIDDEN'
   | 'ADMIN_NOT_FOUND'
-  | 'ADMIN_TXN_NOT_TRIAGEABLE';
+  | 'ADMIN_TXN_NOT_TRIAGEABLE'
+  | 'ADMIN_SELF_APPROVAL_FORBIDDEN'
+  | 'ADMIN_CHANGE_REQUEST_NOT_PENDING'
+  | 'ADMIN_CHANGE_REQUEST_NOT_APPLICABLE'
+  | 'ADMIN_BULK_CONFIRMATION_REQUIRED'
+  | 'ADMIN_MANUAL_CREDIT_NOT_ALLOWED';
 
 export abstract class AdminError extends Error {
   abstract readonly code: AdminErrorCode;
@@ -104,5 +109,33 @@ export class AdminNotFoundError extends AdminError {
   readonly code = 'ADMIN_NOT_FOUND' as const;
   constructor(what = 'Resource') {
     super(`${what} not found.`);
+  }
+}
+
+/**
+ * A bulk broadcast targets more recipients than the large-set threshold, but the
+ * operator did not explicitly acknowledge it (`confirmLargeSet` was false). The
+ * server re-checks this server-side (§3.3) — the client's flag alone is never
+ * trusted to bypass the gate; nothing is enqueued until the operator confirms.
+ */
+export class AdminBulkConfirmationRequiredError extends AdminError {
+  readonly code = 'ADMIN_BULK_CONFIRMATION_REQUIRED' as const;
+  constructor(recipientCount: number, threshold: number) {
+    super(
+      `This broadcast targets ${recipientCount} users (over the ${threshold} large-set threshold); explicit confirmation is required.`,
+    );
+  }
+}
+
+/**
+ * A manual credit was requested for a user whose server-side state forbids it —
+ * a deactivated account, a sanctions-flagged user, or no custodial wallet on the
+ * credited asset's network. This is the money-endpoint server-side re-check
+ * (§3.3): the engine credit never runs when it fires. Maps to HTTP 422.
+ */
+export class ManualCreditNotAllowedError extends AdminError {
+  readonly code = 'ADMIN_MANUAL_CREDIT_NOT_ALLOWED' as const;
+  constructor(reason: string) {
+    super(`Manual credit is not allowed: ${reason}`);
   }
 }

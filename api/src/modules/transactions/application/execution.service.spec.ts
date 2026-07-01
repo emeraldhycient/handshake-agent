@@ -281,6 +281,12 @@ function makeSettlementRepo(
       .fn()
       .mockResolvedValue({ receiptNumber: STUB_RECEIPT_NUMBER }),
     settleSwapRefundAtomic: jest.fn().mockResolvedValue(undefined),
+    // Manual credit — admin-only path, never exercised by execution-engine tests.
+    settleManualCreditAtomic: jest.fn().mockResolvedValue({
+      credited: true,
+      newBalance: '0',
+      receiptNumber: STUB_RECEIPT_NUMBER,
+    }),
   };
 }
 

@@ -84,6 +84,7 @@ export const qk = {
     ["admin", "metrics", "dashboard", range] as const,
   metricsOps: ["admin", "metrics", "ops"] as const,
   opsBoard: ["admin", "ops", "board"] as const,
+  approvalsInbox: ["admin", "approvals", "inbox"] as const,
   publicConfig: ["admin", "config", "public"] as const,
   settings: (category?: string) =>
     ["admin", "settings", category ?? "all"] as const,

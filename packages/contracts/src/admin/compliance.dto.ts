@@ -73,6 +73,18 @@ export type ComplianceDispositionRequest = z.infer<
 // They are DERIVED server-side from the columns that DO exist (matchedList ⇐
 // provider, matchType ⇐ screeningType, matchScore ⇐ verdict band) so the operator
 // sees a labelled card without any schema change or fabricated per-row data.
+// The operator's disposition of a screening match. This is an ANNOTATION recorded
+// on top of the immutable screener `verdict` (the finding is evidence and is never
+// mutated); `null` means the match is still open and awaiting disposition. Clear →
+// no risk; escalate → hand to a second reviewer (maker-checker); block → deny the
+// counterparty (a sensitive, step-up-gated action).
+export const SanctionsDispositionSchema = z.enum([
+  "cleared",
+  "escalated",
+  "blocked",
+]);
+export type SanctionsDisposition = z.infer<typeof SanctionsDispositionSchema>;
+
 export const SanctionsRecordItemSchema = z.object({
   id: z.string().uuid(),
   counterpartyId: z.string(),
@@ -86,6 +98,10 @@ export const SanctionsRecordItemSchema = z.object({
   /** 0–100 confidence banded from `verdict` (hit → high, inconclusive → mid,
    *  clear → low). Not a fabricated precise score — a bounded verdict projection. */
   matchScore: z.number().int().min(0).max(100),
+  /** The operator's recorded disposition, or `null` while the match is still open.
+   *  Distinct from `verdict` (the immutable screener finding) — this is the audited
+   *  human decision the admin console applies (§3.1: no LLM/UI moves money). */
+  disposition: SanctionsDispositionSchema.nullable(),
   createdAt: z.string(),
 });
 export type SanctionsRecordItem = z.infer<typeof SanctionsRecordItemSchema>;
@@ -95,6 +111,18 @@ export const SanctionsRecordListResponseSchema = z.object({
 });
 export type SanctionsRecordListResponse = z.infer<
   typeof SanctionsRecordListResponseSchema
+>;
+
+// POST /admin/compliance/sanctions/:id/disposition body — the operator's verdict on
+// a screening match plus an audited reason. `comment` is the immutable-audit note
+// carried from the ReasonModal. Escalate routes through maker-checker; block is
+// additionally step-up-gated server-side. Nothing here moves money (§3.1).
+export const SanctionsDispositionRequestSchema = z.object({
+  disposition: SanctionsDispositionSchema,
+  comment: z.string().optional(),
+});
+export type SanctionsDispositionRequest = z.infer<
+  typeof SanctionsDispositionRequestSchema
 >;
 
 // ── Ongoing-monitoring policy view (read-only) ─────────────────────────────────────

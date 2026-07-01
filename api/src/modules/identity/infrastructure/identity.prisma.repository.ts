@@ -572,6 +572,14 @@ export class IdentityPrismaRepository implements IIdentityRepository {
     };
   }
 
+  async hasSanctionsHit(userId: string): Promise<boolean> {
+    const hit = await this.prisma.sanctionsRecord.findFirst({
+      where: { userId, verdict: ScreeningVerdict.hit },
+      select: { id: true },
+    });
+    return hit !== null;
+  }
+
   async listDevicesForUser(userId: string): Promise<DeviceRecord[]> {
     const rows = await this.prisma.device.findMany({
       where: { userId },

@@ -19,16 +19,29 @@
  * `useTreasurySweeps`; the payout / withdrawal approval queue is `useTreasuryPayoutQueue`
  * (pending outbound settlements). Money strings are formatted for display only.
  *
- * Funds-safety (root §3.1): nothing here moves money. The Approve action + acknowledge
- * are WRITES left to Phase 7 — "Approve" opens the shared flow modals unchanged.
+ * Funds-safety (root §3.1): nothing here moves money. The Phase-7 WRITES are wired
+ * through canonical step-up-gated components: the banner's "Acknowledge" is
+ * `TreasuryAlertAcknowledge` (useAcknowledgeAlert, reason → step-up), and the
+ * beneficiary cooling-off override is the wired `BeneficiaryOverride`
+ * (useOverrideCoolingOff). The payout "Approve" opens the shared maker-checker /
+ * step-up flow. Each mutation invalidates its query so the affected view re-resolves.
  *
  * Four async branches (loading / error / empty / data) wrap every wired view.
  */
 import { useMemo, useState } from "react"
 
 import { Skeleton } from "@/components/ui/skeleton"
-import { MakerCheckerModal, StepUpModal } from "@/components/admin/flows"
+import { MakerCheckerModal, ReasonModal } from "@/components/admin/flows"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
+import { TreasuryAlertAcknowledge } from "@/components/admin/treasury-alert-acknowledge"
+import { BeneficiaryOverride } from "@/components/admin/beneficiary-override"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
+import { ApiError } from "@/lib/api/client"
+import { pushToast } from "@/lib/store/toast-store"
 import {
+  useAdminBeneficiaries,
+  useAdminMe,
+  useApproveTreasuryPayout,
   useTreasuryAlerts,
   useTreasuryBalances,
   useTreasuryExposure,
@@ -70,6 +83,12 @@ const NGN = new Intl.NumberFormat("en-NG", {
 function formatFiat(amount: string): string {
   const n = Number(amount)
   return Number.isFinite(n) ? `₦${NGN.format(n)}` : amount
+}
+
+function errorMessage(error: unknown): string | null {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return error ? String(error) : null
 }
 
 function formatAssetAmount(amount: string, asset: string): string {
@@ -351,6 +370,16 @@ export function TreasuryPage() {
   const payoutQuery = useTreasuryPayoutQueue()
   const fiatFloatQuery = useTreasuryFiatFloat()
   const fxQuery = useTreasuryFxPosition()
+  const beneficiariesQuery = useAdminBeneficiaries()
+
+  // Beneficiaries still inside their first-use cooling-off window — the only ones
+  // the override (useOverrideCoolingOff) applies to. The wired BeneficiaryOverride
+  // renders nothing for cleared beneficiaries, so we pre-filter to keep the panel tight.
+  const coolingOff = useMemo(
+    () =>
+      (beneficiariesQuery.data?.items ?? []).filter((b) => b.coolingOffActive),
+    [beneficiariesQuery.data]
+  )
 
   // ── Balance cards ─────────────────────────────────────────────────────────────
   // All four tiles are now wired to real reads: custodial hero (balances), NGN fiat
@@ -429,21 +458,28 @@ export function TreasuryPage() {
     [payoutQuery.data]
   )
 
-  // ── Payout approval flow (WRITE — Phase 7, unchanged) ─────────────────────────
-  // `flow` tracks which step-modal is open; the active row drives the modal copy.
-  // No server call — approving simply advances through the shared funds-safety modals
-  // then clears the row from the queue.
-  const [flow, setFlow] = useState<null | "maker" | "stepup">(null)
+  // ── Payout approval flow (WRITE — Phase 7, WIRED — maker-checker) ─────────────
+  // Approving raises a four-eyes `payout_release` change request via the real
+  // mutation — it releases NO money here; a SECOND admin confirms, and the apply
+  // re-drives settlement through the engine (§3.1). The flow is reason (audit) →
+  // maker-checker (dual-control preview) → the REAL mutation (step-up-gated).
+  const me = useAdminMe()
+  const approvePayout = useApproveTreasuryPayout()
+  const stepUp = useStepUpRetry()
+  const [flow, setFlow] = useState<null | "reason" | "maker">(null)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [approved, setApproved] = useState<Record<string, boolean>>({})
+  const [reason, setReason] = useState("")
+  const [localError, setLocalError] = useState<string | null>(null)
 
   const active = payouts.find((p) => p.id === activeId) ?? null
 
-  // Large payouts (`big` = requiresApproval) require maker-checker before step-up;
-  // smaller ones go straight to step-up — matching the design's dual-control gate.
+  // Every payout approval is captured behind maker-checker on the server (it raises a
+  // four-eyes change request). The reason modal captures the audited justification.
   function onApprove(row: TreasuryPayoutRow) {
     setActiveId(row.id)
-    setFlow(row.big ? "maker" : "stepup")
+    setLocalError(null)
+    setFlow("reason")
   }
 
   function closeFlow() {
@@ -451,18 +487,38 @@ export function TreasuryPage() {
     setActiveId(null)
   }
 
-  function finishApprove() {
-    if (activeId) setApproved((prev) => ({ ...prev, [activeId]: true }))
+  // The maker-checker CTA fires the REAL approve mutation via step-up-retry. On
+  // success the row shows "Requested" (the release awaits a second admin, §3.1).
+  function submitApprove() {
+    const id = activeId
+    if (id === null) return
     closeFlow()
+    void (async () => {
+      try {
+        const completed = await stepUp.run(() =>
+          approvePayout
+            .mutateAsync({ id, input: { reason } })
+            .then(() => {
+              pushToast("Payout approval requested · awaiting second admin", "info")
+            })
+        )
+        if (completed) {
+          setApproved((prev) => ({ ...prev, [id]: true }))
+          setReason("")
+        }
+      } catch (error) {
+        setLocalError(errorMessage(error))
+      }
+    })()
   }
 
-  // The maker-checker change-preview diff for the active large payout.
+  // The maker-checker change-preview diff for the active payout.
   const makerDiff: MakerCheckerDiffRow[] = active
     ? [
         {
           field: `Payout ${active.ref}`,
           from: "Pending approval",
-          to: "Approved · queued for engine",
+          to: "Requested · four-eyes release",
         },
         { field: "Amount", from: "—", to: active.amt },
       ]
@@ -481,7 +537,7 @@ export function TreasuryPage() {
         </p>
       </div>
 
-      {/* ── Threshold-breach warning (from real alerts) ─────────────────────── */}
+      {/* ── Threshold-breach warning (from real alerts) — with acknowledge ──── */}
       {topAlert && (
         <div
           role="status"
@@ -493,7 +549,7 @@ export function TreasuryPage() {
             viewBox="0 0 24 24"
             fill="none"
             aria-hidden="true"
-            className="text-twn"
+            className="shrink-0 text-twn"
           >
             <path
               d="M12 4l9 16H3zM12 10v4M12 17h.01"
@@ -503,9 +559,10 @@ export function TreasuryPage() {
               strokeLinejoin="round"
             />
           </svg>
-          <span className="text-[12.5px] font-semibold text-twn">
+          <span className="flex-1 text-[12.5px] font-semibold text-twn">
             Exposure alert · {topAlert.message}
           </span>
+          <TreasuryAlertAcknowledge alert={topAlert} />
         </div>
       )}
 
@@ -609,7 +666,7 @@ export function TreasuryPage() {
                   )}
                   {done ? (
                     <span className="shrink-0 rounded-[9px] bg-sok px-3.5 py-2 text-[12px] font-bold text-tok">
-                      Approved
+                      Requested
                     </span>
                   ) : (
                     <button
@@ -699,20 +756,86 @@ export function TreasuryPage() {
         </div>
       </div>
 
-      {/* ── Funds-safety flow modals (design §5) ────────────────────────────── */}
+      {/* ── Beneficiaries in cooling-off (first-use lock override, IDN-08) ──── */}
+      {/* Shown only when at least one payout destination is still locked. The
+          override write is the step-up-gated BeneficiaryOverride (useOverrideCoolingOff);
+          on success the beneficiaries query is invalidated so the row clears. */}
+      {coolingOff.length > 0 && (
+        <div className="mt-4 rounded-2xl border border-line bg-card px-5 py-[18px]">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="text-[13px] font-extrabold text-ink">
+              Beneficiaries in cooling-off
+            </div>
+            <span className="text-[11px] font-semibold text-ink3">
+              First-use lock · override requires step-up
+            </span>
+          </div>
+          {coolingOff.map((beneficiary) => (
+            <div
+              key={beneficiary.id}
+              className="flex items-center gap-3 border-b border-line2 py-3 last:border-0"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] font-bold text-ink">
+                  {beneficiary.label}
+                </div>
+                <div className="truncate font-mono text-[11px] text-ink3">
+                  {beneficiary.type === "bank_account"
+                    ? "Bank account"
+                    : "USDT address"}
+                </div>
+              </div>
+              <span className="shrink-0 rounded-md bg-swn px-2 py-[3px] text-[9.5px] font-extrabold tracking-[0.02em] text-twn uppercase">
+                Cooling-off
+              </span>
+              <BeneficiaryOverride beneficiary={beneficiary} />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Payout approval flow (WIRED): reason (audit) → maker-checker → the REAL
+          approve mutation (step-up-gated). Raising the approval releases NO money —
+          it enters the four-eyes inbox for a second admin to confirm (§3.1). */}
+      <ReasonModal
+        open={flow === "reason"}
+        onOpenChange={(open) => (open ? undefined : closeFlow())}
+        title={active ? `Approve payout ${active.ref}` : "Approve payout"}
+        onContinue={(r, category) => {
+          setReason(category ? `${category}: ${r}` : r)
+          setFlow("maker")
+        }}
+      />
       <MakerCheckerModal
         open={flow === "maker"}
         onOpenChange={(open) => (open ? undefined : closeFlow())}
         title={active ? `Approve payout ${active.ref}` : "Approve payout"}
         diff={makerDiff}
-        onSubmit={() => setFlow("stepup")}
+        onSubmit={submitApprove}
       />
-      <StepUpModal
-        open={flow === "stepup"}
-        onOpenChange={(open) => (open ? undefined : closeFlow())}
-        title={active ? `payout ${active.ref}` : "payout approval"}
-        onComplete={finishApprove}
+
+      {/* Real step-up: opened when the approve mutation 403s; replays on re-auth. */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then((done) => {
+              if (done && activeId) {
+                setApproved((prev) => ({ ...prev, [activeId]: true }))
+                setReason("")
+              }
+            })
+            .catch((error) => setLocalError(errorMessage(error)))
+        }}
       />
+      {localError && (
+        <p role="alert" className="mt-3 text-[12px] font-semibold text-tdn">
+          {localError}
+        </p>
+      )}
     </div>
   )
 }

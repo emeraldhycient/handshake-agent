@@ -12,6 +12,7 @@
 import {
   buildBuyLedgerEntries,
   buildDepositLedgerEntries,
+  buildManualCreditEntries,
   buildSellReserveEntries,
   buildSellFinalizeEntries,
   buildSellRefundEntries,
@@ -24,6 +25,7 @@ import {
   type AccountState,
   type BuildBuyLedgerInput,
   type BuildDepositLedgerInput,
+  type BuildManualCreditLedgerInput,
   type BuildSellReserveInput,
   type BuildSellFinalizeInput,
   type BuildSellRefundInput,
@@ -608,6 +610,111 @@ describe('buildDepositLedgerEntries', () => {
         expect(sumByCurrency(entries, 'USDT')).toBe(0n);
       },
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildManualCreditEntries (admin, engine-brokered — Phase 7)
+// ---------------------------------------------------------------------------
+
+function freshManualCreditInput(
+  overrides?: Partial<BuildManualCreditLedgerInput>,
+): BuildManualCreditLedgerInput {
+  return {
+    walletId: 'wallet-credit-abc',
+    cryptoAmount: '25.5',
+    asset: 'USDT',
+    postedAt: new Date('2026-06-01T12:00:00Z'),
+    accountStates: {},
+    ...overrides,
+  };
+}
+
+describe('buildManualCreditEntries', () => {
+  describe('guards', () => {
+    it('throws LedgerError when cryptoAmount is zero', () => {
+      expect(() =>
+        buildManualCreditEntries(freshManualCreditInput({ cryptoAmount: '0' })),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when cryptoAmount is negative', () => {
+      expect(() =>
+        buildManualCreditEntries(
+          freshManualCreditInput({ cryptoAmount: '-1' }),
+        ),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when cryptoAmount is not a valid decimal', () => {
+      expect(() =>
+        buildManualCreditEntries(
+          freshManualCreditInput({ cryptoAmount: 'abc' }),
+        ),
+      ).toThrow(LedgerError);
+    });
+  });
+
+  describe('happy path — fresh account states', () => {
+    let entries: LedgerEntryDraft[];
+
+    beforeAll(() => {
+      entries = buildManualCreditEntries(freshManualCreditInput());
+    });
+
+    it('returns exactly 2 entries', () => {
+      expect(entries).toHaveLength(2);
+    });
+
+    it('signed amounts sum to zero per-currency (invariant 1)', () => {
+      expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+    });
+
+    it('credits user_wallet / walletId / asset with +cryptoAmount', () => {
+      const userEntry = entries.find(
+        (e) =>
+          e.accountType === LedgerAccountType.user_wallet &&
+          e.accountId === 'wallet-credit-abc' &&
+          e.currency === 'USDT',
+      );
+      expect(userEntry).toBeDefined();
+      expect(userEntry!.amount).toBe('25.5');
+      expect(userEntry!.direction).toBe(LedgerDirection.credit);
+    });
+
+    it('debits treasury_reserve / usdt_treasury / asset with −cryptoAmount', () => {
+      const treasuryEntry = entries.find(
+        (e) =>
+          e.accountType === LedgerAccountType.treasury_reserve &&
+          e.accountId === 'usdt_treasury' &&
+          e.currency === 'USDT',
+      );
+      expect(treasuryEntry).toBeDefined();
+      expect(treasuryEntry!.amount).toBe('-25.5');
+      expect(treasuryEntry!.direction).toBe(LedgerDirection.debit);
+    });
+  });
+
+  it('keys crypto legs by the passed asset (not a hardcoded literal)', () => {
+    const entries = buildManualCreditEntries(
+      freshManualCreditInput({ asset: 'TRX', cryptoAmount: '10' }),
+    );
+    expect(entries.every((e) => e.currency === 'TRX')).toBe(true);
+  });
+
+  it('advances sequence + balanceAfter from prior account state', () => {
+    const accountStates: Record<string, AccountState> = {
+      'user_wallet:wallet-credit-abc:USDT': { sequence: 3, balance: '40.0' },
+      'treasury_reserve:usdt_treasury:USDT': { sequence: 7, balance: '-100.0' },
+    };
+    const entries = buildManualCreditEntries(
+      freshManualCreditInput({ cryptoAmount: '10', accountStates }),
+    );
+    const userEntry = entries.find(
+      (e) => e.accountType === LedgerAccountType.user_wallet,
+    )!;
+    expect(userEntry.sequence).toBe(4);
+    expect(userEntry.balanceAfter).toBe('50');
   });
 });
 

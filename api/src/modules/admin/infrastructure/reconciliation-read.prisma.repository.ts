@@ -85,6 +85,20 @@ export class ReconciliationReadPrismaRepository implements IReconciliationReadRe
     );
   }
 
+  /**
+   * A single OPEN break by its projection id. Reuses the same projection as
+   * `listBreaks` so a break is findable iff it is currently open (identical
+   * open-set semantics) — the resolve/accept actions can never act on a break the
+   * list no longer surfaces. Never mutates anything.
+   */
+  async findBreak(
+    id: string,
+    staleAfterSec: number,
+  ): Promise<ReconBreakRecord | null> {
+    const breaks = await this.listBreaks(staleAfterSec);
+    return breaks.find((b) => b.id === id) ?? null;
+  }
+
   /** Unresolved compensation drifts → duplicate / mismatch / over-credit breaks. */
   private async compensationBreaks(): Promise<ReconBreakRecord[]> {
     const rows = await this.prisma.compensationRecord.findMany({

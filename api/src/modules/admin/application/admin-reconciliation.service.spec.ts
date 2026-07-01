@@ -54,6 +54,7 @@ describe('AdminReconciliationService', () => {
   beforeEach(() => {
     repo = {
       listBreaks: jest.fn().mockResolvedValue(makeBreaks()),
+      findBreak: jest.fn().mockResolvedValue(null),
       cronStatus: jest.fn().mockResolvedValue({
         lastRunAt: new Date('2026-07-01T04:00:00.000Z'),
         nextRunAt: new Date('2026-07-01T04:02:00.000Z'),

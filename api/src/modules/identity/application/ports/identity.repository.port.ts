@@ -293,6 +293,14 @@ export interface IIdentityRepository {
     userId: string,
   ): Promise<UserAdminDetailRecord | null>;
 
+  /**
+   * Returns true if the user has any persisted sanctions screening whose verdict
+   * is a `hit` — the authoritative per-user sanctions flag. Used by money-moving
+   * admin endpoints to re-check sanctions server-side (§3.3) before the engine
+   * runs; mirrors the `sanctionsFlaggedIds` aggregation the admin list computes.
+   */
+  hasSanctionsHit(userId: string): Promise<boolean>;
+
   /** Returns the user's devices as admin-facing DeviceRecords. */
   listDevicesForUser(userId: string): Promise<DeviceRecord[]>;
 

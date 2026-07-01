@@ -21,11 +21,20 @@ import { defaultToastStore } from "@/lib/store/toast-store"
 
 vi.mock("@/lib/api/config", () => ({
   listEffectiveSettings: vi.fn(),
+  setSetting: vi.fn(),
 }))
 
-import { listEffectiveSettings } from "@/lib/api/config"
+// The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn(),
+}))
+
+import { listEffectiveSettings, setSetting } from "@/lib/api/config"
+import { getMe } from "@/lib/api/admin"
 
 const mockList = vi.mocked(listEffectiveSettings)
+const mockSet = vi.mocked(setSetting)
+const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
 
@@ -65,6 +74,19 @@ beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
   mockList.mockReset()
   mockList.mockResolvedValue(SETTINGS)
+  mockSet.mockReset()
+  mockSet.mockResolvedValue(flag("catalog.capabilities.crypto.swap", false))
+  mockGetMe.mockReset()
+  mockGetMe.mockResolvedValue({
+    id: "11111111-1111-1111-1111-111111111111",
+    email: "amara@handshake.ng",
+    role: { id: "00000000-0000-0000-0000-000000000001", name: "Super Admin" },
+    status: "active",
+    mfaEnabled: true,
+    permissions: [],
+    menus: [],
+    pages: [],
+  })
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -80,7 +102,7 @@ describe("FlagsPage (wired to registry flags)", () => {
     expect(toggle).toHaveAttribute("aria-checked", "true")
   })
 
-  it("opens the modal on toggle and toasts the new state on approval", async () => {
+  it("persists a registry-backed flip via setSetting (PATCH) on approval", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -95,16 +117,45 @@ describe("FlagsPage (wired to registry flags)", () => {
     expect(
       within(dialog).getByText(/Disable swap\.enabled/i)
     ).toBeInTheDocument()
+    // Nothing persisted until the maker-checker submit fires.
+    expect(mockSet).not.toHaveBeenCalled()
 
-    // Approving toasts the flag + its intended new effective state.
+    // Approving fires the real config-override PATCH against the BACKING key with the
+    // toggled boolean (swap was ON → persists false), and toasts the new state.
     await user.click(
       within(dialog).getByRole("button", { name: /Submit for approval/i })
     )
 
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("catalog.capabilities.crypto.swap", {
+      value: false,
+      scope: "global",
+      scopeValue: null,
+    })
     const { toasts } = defaultToastStore.getState()
     expect(toasts).toHaveLength(1)
     expect(toasts[0].message).toMatch(/swap\.enabled/)
     expect(toasts[0].message).toMatch(/off/)
+  })
+
+  it("does not call setSetting for an UNBACKED flag (no registry key)", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // voice_notes.web has no settingKey → its flip is an acknowledged intent only.
+    const toggle = await screen.findByRole("switch", {
+      name: /Disable voice_notes\.web/i,
+    })
+    await user.click(toggle)
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /Submit for approval/i,
+      })
+    )
+
+    expect(mockSet).not.toHaveBeenCalled()
+    // A toast still acknowledges the (non-persisted) intent.
+    expect(defaultToastStore.getState().toasts).toHaveLength(1)
   })
 
   it("leaves the row unchanged when the modal is cancelled", async () => {

@@ -21,11 +21,20 @@ import { defaultToastStore } from "@/lib/store/toast-store"
 
 vi.mock("@/lib/api/config", () => ({
   listEffectiveSettings: vi.fn(),
+  setSetting: vi.fn(),
 }))
 
-import { listEffectiveSettings } from "@/lib/api/config"
+// The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn(),
+}))
+
+import { listEffectiveSettings, setSetting } from "@/lib/api/config"
+import { getMe } from "@/lib/api/admin"
 
 const mockList = vi.mocked(listEffectiveSettings)
+const mockSet = vi.mocked(setSetting)
+const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
 
@@ -66,6 +75,19 @@ beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
   mockList.mockReset()
   mockList.mockResolvedValue(CATALOG_SETTINGS)
+  mockSet.mockReset()
+  mockSet.mockResolvedValue(flag("catalog.capabilities.crypto.buy", false))
+  mockGetMe.mockReset()
+  mockGetMe.mockResolvedValue({
+    id: "11111111-1111-1111-1111-111111111111",
+    email: "amara@handshake.ng",
+    role: { id: "00000000-0000-0000-0000-000000000001", name: "Super Admin" },
+    status: "active",
+    mfaEnabled: true,
+    permissions: [],
+    menus: [],
+    pages: [],
+  })
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -102,7 +124,7 @@ describe("CapabilitiesPage (wired dual-control kill-switch)", () => {
     ).toBeInTheDocument()
   })
 
-  it("toasts the intended change after the modal is approved (Phase-7 write is a stub)", async () => {
+  it("persists the flip via setSetting (PATCH) when the maker-checker is approved", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -114,11 +136,54 @@ describe("CapabilitiesPage (wired dual-control kill-switch)", () => {
       within(dialog).getByRole("button", { name: "Submit for approval" })
     )
 
+    // The real config-override PATCH fires with the toggled boolean + the setting's
+    // scope; the buy row was ON, so the flip persists `false`.
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("catalog.capabilities.crypto.buy", {
+      value: false,
+      scope: "global",
+      scopeValue: null,
+    })
     // A feedback toast fired and the modal closed.
     expect(defaultToastStore.getState().toasts).toContainEqual(
       expect.objectContaining({ message: "crypto.buy disabled" })
     )
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  })
+
+  it("does not persist until the maker-checker submit fires", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    const toggle = await screen.findByRole("switch", { name: "crypto.buy" })
+    await user.click(toggle)
+    // The dialog is open but nothing has been persisted yet.
+    expect(
+      screen.getByRole("dialog", { name: /Disable crypto.buy/ })
+    ).toBeInTheDocument()
+    expect(mockSet).not.toHaveBeenCalled()
+  })
+
+  it("opens the step-up dialog and retries the PATCH after re-auth when the server demands step-up", async () => {
+    const user = userEvent.setup()
+    const { ApiError } = await import("@/lib/api/client")
+    mockSet
+      .mockRejectedValueOnce(
+        new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce(flag("catalog.capabilities.crypto.buy", false))
+
+    renderPage()
+    const toggle = await screen.findByRole("switch", { name: "crypto.buy" })
+    await user.click(toggle)
+    await user.click(
+      within(
+        screen.getByRole("dialog", { name: /Disable crypto.buy/ })
+      ).getByRole("button", { name: "Submit for approval" })
+    )
+
+    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    expect(mockSet).toHaveBeenCalledTimes(1)
   })
 
   it("shows an error branch with a retry when the settings read fails", async () => {

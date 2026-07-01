@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { CryptoAmountSchema } from "../common";
+import { CryptoAmountSchema, SupportedAssetSchema } from "../common";
 
 // Admin end-user management DTOs — the platform's END USERS (not admin console
 // accounts; those are AdminUser* in user.dto.ts). The enums mirror the Prisma
@@ -293,4 +293,32 @@ export const AdminEndUserTimelineResponseSchema = z.object({
 });
 export type AdminEndUserTimelineResponse = z.infer<
   typeof AdminEndUserTimelineResponseSchema
+>;
+
+// ── Manual credit request (POST /admin/users/:id/credit) ──────────────────────
+// FUNDS-SAFETY-CRITICAL (Phase 7, WRITES). An operator MAKES a request to credit
+// an end user's custodial wallet (e.g. a support goodwill credit or an off-ledger
+// reconciliation top-up). This endpoint is a MAKER action only: it raises a
+// pending `manual_credit` ChangeRequest that a SECOND admin must approve
+// (four-eyes, §3.1) — it NEVER moves money itself. On approval the engine's
+// atomic `settleManualCreditAtomic` credits the user_wallet (double-entry, one
+// receipt, idempotency-keyed); no raw ledger write ever originates from this UI.
+//
+// The body carries ONLY the parameters the engine re-validates server-side: the
+// crypto `asset` (must be catalog-live), the `amount` (positive canonical decimal
+// string, ≤ 8 d.p.), and the maker's `reason` (audited, shown in the inbox). The
+// target user is the path :id — never trusted from the body. The server re-checks
+// the user's status / KYC / sanctions before the credit is settled (§3.3).
+export const CreateManualCreditRequestSchema = z.object({
+  asset: SupportedAssetSchema,
+  // Positive canonical decimal string — the engine rejects "0" / negatives too,
+  // but the boundary refuses them here so a maker never even raises a no-op or a
+  // sign-flipped credit. `refine` keeps the CryptoAmountSchema shape (≤ 8 d.p.).
+  amount: CryptoAmountSchema.refine((v) => Number(v) > 0, {
+    message: "Amount must be greater than zero",
+  }),
+  reason: z.string().min(3).max(500),
+});
+export type CreateManualCreditRequest = z.infer<
+  typeof CreateManualCreditRequestSchema
 >;

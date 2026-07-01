@@ -5,7 +5,8 @@
  * endpoint (`useDashboardMetrics` → `getDashboardMetrics`); the System-health card,
  * Live-activity feed, and Open-compliance KPI are wired to the ops endpoint
  * (`useMetricsOps` → `getMetricsOps`); the volume chart is wired to the composite
- * stacked series. Only the Approvals inbox stays mock (Phase 7). These tests assert:
+ * stacked series; the Approvals-awaiting-me panel is wired to the real maker-checker
+ * inbox (`useApprovalsInbox` → `getApprovalsInbox`). These tests assert:
  *
  *  1. Data branch — the KPI tiles render from a mocked DashboardSummary (derived
  *     totals) and GMV; open-compliance renders from the ops payload.
@@ -32,11 +33,20 @@ vi.mock("@/lib/api/metrics", () => ({
   getMetricsOps: vi.fn(),
 }))
 
+// The Approvals-awaiting-me panel reads the real inbox; keep the dashboard tests
+// hermetic by defaulting it to an empty inbox (its own wiring is covered by
+// approvals-page.test.tsx).
+vi.mock("@/lib/api/approvals", () => ({
+  getApprovalsInbox: vi.fn(),
+}))
+
 import { getDashboardMetrics, getMetricsOps } from "@/lib/api/metrics"
+import { getApprovalsInbox } from "@/lib/api/approvals"
 import { OperatorDashboard } from "@/components/admin/operator-dashboard"
 
 const mockDashboard = vi.mocked(getDashboardMetrics)
 const mockOps = vi.mocked(getMetricsOps)
+const mockApprovalsInbox = vi.mocked(getApprovalsInbox)
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
 
@@ -149,6 +159,12 @@ beforeEach(() => {
   mockDashboard.mockResolvedValue(SUMMARY)
   mockOps.mockReset()
   mockOps.mockResolvedValue(OPS)
+  mockApprovalsInbox.mockReset()
+  mockApprovalsInbox.mockResolvedValue({
+    awaitingMe: [],
+    myRequests: [],
+    counts: { awaitingMe: 0, myRequests: 0, myPending: 0 },
+  })
 })
 
 // ─── Snapshot the real chart's segment heights (inline `height:` styles). ──────────

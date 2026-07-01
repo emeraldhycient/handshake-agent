@@ -13,27 +13,37 @@
  * branch (loading / error / empty / data) is handled. The `lib/api/reconciliation`
  * client is the only door to the server.
  *
- * DEFERRED to Phase 7 (write path): the three per-break actions (Resolve via engine /
- * Accept / Escalate) still open the shared flow modals and settle to LOCAL state only —
- * there is no break-resolution WRITE endpoint yet. "Run now" likewise re-fetches the
- * live queries rather than triggering a server run.
+ * Phase 7 (write path): RESOLVE and ACCEPT are now WIRED to the real endpoints —
+ * resolve re-drives the offending transaction's settlement through the engine's atomic
+ * path (POST /breaks/:id/resolve, step-up-gated), and accept records a dual-control
+ * no-debit disposition (POST /breaks/:id/accept, step-up-gated). ESCALATE has no
+ * endpoint in this slice, so it stays a local-only outcome. "Run now" still re-fetches
+ * the live queries (the server-run trigger lives on the ops board).
  *
  * Funds-safety invariant preserved in the UI (root §3.1): over-credits are flagged for
  * human action, NEVER auto-debited — resolution is engine-brokered, never a raw ledger
  * debit from this surface.
  */
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import type { ReconBreak, ReconBreakKind } from "@handshake-agent/contracts"
 
 import { cn } from "@/lib/utils"
-import { useReconBreaks, useReconStatus } from "@/lib/query/hooks"
+import {
+  useAcceptReconBreak,
+  useAdminMe,
+  useReconBreaks,
+  useReconStatus,
+  useResolveReconBreak,
+} from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
+import { ApiError } from "@/lib/api/client"
 import { Skeleton } from "@/components/ui/skeleton"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import {
   EngineActionModal,
   MakerCheckerModal,
   ReasonModal,
-  StepUpModal,
 } from "@/components/admin/flows"
 import type {
   EngineEffectRow,
@@ -42,6 +52,12 @@ import type {
   ReconBreakResolution,
   ReconBreakSeverity,
 } from "@/types/components"
+
+function errorMessage(error: unknown): string | null {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return error ? String(error) : null
+}
 
 // Severity → the design's pill (10px/800 uppercase). Mapped onto the canonical status
 // token pairs (§5): high = danger, medium = warn, low = info. Colour is never the sole
@@ -145,8 +161,8 @@ function acceptDiff(b: ReconBreak): MakerCheckerDiffRow[] {
 
 /** The three action flows a break card can open. */
 type FlowStep =
-  | { kind: "resolve"; stage: "reason" | "stepup" | "engine" }
-  | { kind: "accept" }
+  | { kind: "resolve"; stage: "reason" | "engine" }
+  | { kind: "accept"; stage: "reason" | "confirm" }
   | { kind: "escalate" }
 
 /** A break with a locally-applied Phase-7 outcome overlaid on the live row. */
@@ -163,10 +179,14 @@ export function ReconciliationPage() {
   const router = useRouter()
   const breaksQuery = useReconBreaks()
   const statusQuery = useReconStatus()
+  const me = useAdminMe()
+  const resolveBreak = useResolveReconBreak()
+  const acceptBreak = useAcceptReconBreak()
+  const stepUp = useStepUpRetry()
 
-  // Locally-applied Phase-7 outcomes keyed by break id (the resolution WRITE does not
-  // exist yet, so a resolved/accepted/escalated break is reflected in local state only
-  // until the next refetch).
+  // Optimistic outcomes keyed by break id — reflect the disposition in the closed-card
+  // footer immediately; the query invalidation then re-resolves the authoritative list.
+  // Escalate has no server endpoint in this slice, so it stays a local-only outcome.
   const [localOutcomes, setLocalOutcomes] = useState<
     Record<string, ReconBreakResolution>
   >({})
@@ -174,6 +194,14 @@ export function ReconciliationPage() {
   const [active, setActive] = useState<{ id: string; flow: FlowStep } | null>(
     null
   )
+  // The audited reason captured before resolve/accept, replayed with the mutation.
+  const [reason, setReason] = useState("")
+  const [localError, setLocalError] = useState<string | null>(null)
+  // The disposition awaiting a step-up retry — re-marked locally on retry success.
+  const pendingDisposition = useRef<{
+    id: string
+    resolution: "resolved" | "accepted"
+  } | null>(null)
 
   const breaks: BreakView[] = useMemo(
     () =>
@@ -197,10 +225,41 @@ export function ReconciliationPage() {
     setActive(null)
   }
 
-  // Apply a Phase-7 outcome to a break locally (drives the closed-card footer) + close.
-  function settle(id: string, resolution: ReconBreakResolution) {
+  // Apply a local outcome to a break (drives the closed-card footer) + close.
+  function markLocal(id: string, resolution: ReconBreakResolution) {
     setLocalOutcomes((prev) => ({ ...prev, [id]: resolution }))
     closeFlow()
+  }
+
+  // Run a real disposition mutation via step-up-retry. On a 403 the StepUpDialog
+  // opens and replays on re-auth; on success the break is marked locally + the query
+  // invalidation re-resolves the list. RESOLVE is engine-brokered (re-drives
+  // settlement); ACCEPT is a no-debit disposition — neither moves money here (§3.1).
+  function runDisposition(
+    id: string,
+    resolution: "resolved" | "accepted",
+    capturedReason: string
+  ) {
+    setLocalError(null)
+    closeFlow()
+    pendingDisposition.current = { id, resolution }
+    void (async () => {
+      try {
+        const completed = await stepUp.run(() =>
+          (resolution === "resolved"
+            ? resolveBreak.mutateAsync({ id, input: { reason: capturedReason } })
+            : acceptBreak.mutateAsync({ id, input: { reason: capturedReason } })
+          ).then(() => undefined)
+        )
+        if (completed) {
+          setLocalOutcomes((prev) => ({ ...prev, [id]: resolution }))
+          setReason("")
+          pendingDisposition.current = null
+        }
+      } catch (error) {
+        setLocalError(errorMessage(error))
+      }
+    })()
   }
 
   return (
@@ -424,7 +483,10 @@ export function ReconciliationPage() {
                     <button
                       type="button"
                       onClick={() =>
-                        setActive({ id: b.id, flow: { kind: "accept" } })
+                        setActive({
+                          id: b.id,
+                          flow: { kind: "accept", stage: "reason" },
+                        })
                       }
                       className="rounded-[9px] border border-line px-3.5 py-2 text-xs font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
                     >
@@ -474,55 +536,63 @@ export function ReconciliationPage() {
       )}
 
       {/* ── Flow modals (shared) ──────────────────────────────────────────────
-          Escalate → reason (audit) → open a compliance case.
-          Accept   → maker-checker (dual-control state change, no debit).
-          Resolve  → reason → step-up TOTP → engine-action (double-entry + idem).
-          All settle to LOCAL state only — the write endpoints are Phase 7. */}
+          Escalate → reason (audit) → LOCAL escalated outcome (no endpoint in-slice).
+          Accept   → reason → maker-checker → the REAL accept mutation (no debit).
+          Resolve  → reason → engine-action → the REAL resolve mutation (re-drives
+          settlement via the engine — never a raw debit). The accept/resolve mutations
+          are step-up-gated (the StepUpDialog opens on a 403 and replays on re-auth). */}
       {activeBreak && (
         <>
-          {/* Escalate: reason only → escalated outcome */}
+          {/* Escalate: reason only → local escalated outcome (no endpoint in-slice). */}
           <ReasonModal
             open={active?.flow.kind === "escalate"}
             onOpenChange={(o) => !o && closeFlow()}
             title={`Escalate ${activeBreak.transactionId} to case`}
-            onContinue={() => settle(activeBreak.id, "escalated")}
+            onContinue={() => markLocal(activeBreak.id, "escalated")}
           />
 
-          {/* Accept: maker-checker dual-control → accepted outcome */}
+          {/* Accept: reason (audit) → maker-checker confirm → the REAL accept mutation. */}
+          <ReasonModal
+            open={
+              active?.flow.kind === "accept" && active.flow.stage === "reason"
+            }
+            onOpenChange={(o) => !o && closeFlow()}
+            title={`Accept break ${activeBreak.transactionId}`}
+            onContinue={(r, category) => {
+              setReason(category ? `${category}: ${r}` : r)
+              setActive({
+                id: activeBreak.id,
+                flow: { kind: "accept", stage: "confirm" },
+              })
+            }}
+          />
           <MakerCheckerModal
-            open={active?.flow.kind === "accept"}
+            open={
+              active?.flow.kind === "accept" && active.flow.stage === "confirm"
+            }
             onOpenChange={(o) => !o && closeFlow()}
             title={`Accept break ${activeBreak.transactionId}`}
             diff={acceptDiff(activeBreak)}
-            onSubmit={() => settle(activeBreak.id, "accepted")}
+            onSubmit={() =>
+              runDisposition(activeBreak.id, "accepted", reason)
+            }
           />
 
-          {/* Resolve via engine: reason → step-up → engine-action */}
+          {/* Resolve via engine: reason (audit) → engine-action → the REAL resolve
+              mutation (step-up-gated; re-drives settlement — never a raw debit). */}
           <ReasonModal
             open={
               active?.flow.kind === "resolve" && active.flow.stage === "reason"
             }
             onOpenChange={(o) => !o && closeFlow()}
             title={`Resolve ${activeBreak.transactionId} via engine`}
-            onContinue={() =>
-              setActive({
-                id: activeBreak.id,
-                flow: { kind: "resolve", stage: "stepup" },
-              })
-            }
-          />
-          <StepUpModal
-            open={
-              active?.flow.kind === "resolve" && active.flow.stage === "stepup"
-            }
-            onOpenChange={(o) => !o && closeFlow()}
-            title={`resolve ${activeBreak.transactionId}`}
-            onComplete={() =>
+            onContinue={(r, category) => {
+              setReason(category ? `${category}: ${r}` : r)
               setActive({
                 id: activeBreak.id,
                 flow: { kind: "resolve", stage: "engine" },
               })
-            }
+            }}
           />
           <EngineActionModal
             open={
@@ -534,9 +604,37 @@ export function ReconciliationPage() {
             ledger={engineLedger(activeBreak)}
             idempotencyKey={`recon-${activeBreak.id}-resolve`}
             cta="Resolve via engine"
-            onExecute={() => settle(activeBreak.id, "resolved")}
+            onExecute={() => runDisposition(activeBreak.id, "resolved", reason)}
           />
         </>
+      )}
+
+      {/* Real step-up: opened when a disposition mutation 403s; replays on re-auth. */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then((done) => {
+              const pending = pendingDisposition.current
+              if (done && pending) {
+                setLocalOutcomes((prev) => ({
+                  ...prev,
+                  [pending.id]: pending.resolution,
+                }))
+                setReason("")
+                pendingDisposition.current = null
+              }
+            })
+            .catch((error) => setLocalError(errorMessage(error)))
+        }}
+      />
+      {localError && (
+        <p role="alert" className="mt-3 text-[12px] font-semibold text-tdn">
+          {localError}
+        </p>
       )}
     </div>
   )

@@ -1,17 +1,22 @@
 /**
- * AdminsPage tests (real-data wiring — Phase 6a).
+ * AdminsPage tests (real-data wiring — Phase 6a) + WRITE wiring (Phase 7).
  *
- * The screen now reads from `useAdmins()` (the admin table) and derives the role
- * permission matrix live from `useRoles()` × `usePermissions()`. The api layer is
- * mocked (no server). These assert:
+ * The screen reads from `useAdmins()` (the admin table) and derives the role
+ * permission matrix live from `useRoles()` × `usePermissions()`. WRITES are wired
+ * through the canonical step-up-gated components: `AdminRowActions` (change role →
+ * useUpdateAdminRole, suspend/reactivate/offboard → useSetAdminStatus) and
+ * `RoleEditorDialog` (create → useCreateRole, edit perms → useUpdateRole). The api
+ * layer is mocked (no server). These assert:
  *  1. loading → data: the admin rows render from the mocked list (email, role
  *     name, 2FA state, status pill), and the matrix renders a row per permission
  *     category with the role name column headers.
- *  2. empty: an empty admins list shows the "No admins yet" empty state.
- *  3. error: a failed admins fetch shows the inline error + a retry affordance.
+ *  2. empty / error branches.
+ *  3. WRITE wiring: changing a row's role fires updateAdminRole; suspending fires
+ *     setAdminStatus; creating a role fires createRole. Each invalidates its query.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type {
   AdminUserListResponse,
@@ -27,16 +32,38 @@ vi.mock("@/lib/api/admin", () => ({
   listAdmins: vi.fn(),
   listRoles: vi.fn(),
   listPermissions: vi.fn(),
-  // Invited via the dialog's mutation — never called on render, but the module
-  // export must exist for the hook import to resolve.
+  // The signed-in admin's identity — read by AdminRowActions to pick the step-up
+  // mode. Resolved in beforeEach so the row actions mount cleanly.
+  getMe: vi.fn(),
+  // WRITE mutations wired into the row actions + role editor + invite dialog.
+  updateAdminRole: vi.fn(),
+  setAdminStatus: vi.fn(),
+  createRole: vi.fn(),
+  updateRole: vi.fn(),
   createInvitation: vi.fn(),
+  // Referenced by the step-up dialog's hook import; never called in these tests.
+  stepUp: vi.fn(),
 }))
 
-import { listAdmins, listRoles, listPermissions } from "@/lib/api/admin"
+import {
+  listAdmins,
+  listRoles,
+  listPermissions,
+  getMe,
+  updateAdminRole,
+  setAdminStatus,
+  createRole,
+  updateRole,
+} from "@/lib/api/admin"
 
 const mockAdmins = vi.mocked(listAdmins)
 const mockRoles = vi.mocked(listRoles)
 const mockPermissions = vi.mocked(listPermissions)
+const mockGetMe = vi.mocked(getMe)
+const mockUpdateAdminRole = vi.mocked(updateAdminRole)
+const mockSetAdminStatus = vi.mocked(setAdminStatus)
+const mockCreateRole = vi.mocked(createRole)
+const mockUpdateRole = vi.mocked(updateRole)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -123,13 +150,28 @@ function renderPage() {
   )
 }
 
+const ME = {
+  id: "11111111-1111-1111-1111-111111111111",
+  email: "amara@handshake.ng",
+  role: { id: SUPER_ROLE_ID, name: "Super Admin" },
+  status: "active" as const,
+  mfaEnabled: false,
+  permissions: [],
+  menus: [],
+  pages: [],
+}
+
 beforeEach(() => {
-  mockAdmins.mockReset()
-  mockRoles.mockReset()
-  mockPermissions.mockReset()
-  mockAdmins.mockResolvedValue(ADMINS)
-  mockRoles.mockResolvedValue(ROLES)
-  mockPermissions.mockResolvedValue(PERMISSIONS)
+  mockAdmins.mockReset().mockResolvedValue(ADMINS)
+  mockRoles.mockReset().mockResolvedValue(ROLES)
+  mockPermissions.mockReset().mockResolvedValue(PERMISSIONS)
+  mockGetMe.mockReset().mockResolvedValue(ME)
+  // updateAdminRole / setAdminStatus / updateRole resolve void (204); createRole
+  // returns the created Role.
+  mockUpdateAdminRole.mockReset().mockResolvedValue(undefined)
+  mockSetAdminStatus.mockReset().mockResolvedValue(undefined)
+  mockCreateRole.mockReset().mockResolvedValue(ROLES.roles[0])
+  mockUpdateRole.mockReset().mockResolvedValue(undefined)
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -185,6 +227,69 @@ describe("AdminsPage (real-data wiring)", () => {
     // The initial call fired once; the matrix (roles + permissions) resolved fine.
     await waitFor(() =>
       expect(mockAdmins.mock.calls.length).toBeGreaterThanOrEqual(1)
+    )
+  })
+})
+
+// ─── WRITE wiring (Phase 7) ───────────────────────────────────────────────────────
+// These assert the row actions + role editor call the REAL mutation clients with the
+// contract-shaped payload. No LLM output, no funds move — RBAC writes only (§3.1).
+
+describe("AdminsPage (write wiring)", () => {
+  it("fires updateAdminRole with the new role id when a row's role is changed", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // The suspended admin (segun) is on the Support Agent role; change it to Super.
+    const selects = await screen.findAllByLabelText(
+      /Change role for .+@handshake\.ng/
+    )
+    const segunSelect = selects.find(
+      (el) => (el as HTMLSelectElement).value === SUPPORT_ROLE_ID
+    ) as HTMLSelectElement
+    expect(segunSelect).toBeTruthy()
+
+    await user.selectOptions(segunSelect, SUPER_ROLE_ID)
+
+    await waitFor(() =>
+      expect(mockUpdateAdminRole).toHaveBeenCalledWith(
+        "22222222-2222-2222-2222-222222222222",
+        { roleId: SUPER_ROLE_ID }
+      )
+    )
+  })
+
+  it("fires setAdminStatus when a row's status transition is clicked", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // The active admin (amara) offers Suspend + Offboard; click Suspend.
+    const suspend = await screen.findByRole("button", { name: "Suspend" })
+    await user.click(suspend)
+
+    await waitFor(() =>
+      expect(mockSetAdminStatus).toHaveBeenCalledWith(
+        "11111111-1111-1111-1111-111111111111",
+        { status: "suspended" }
+      )
+    )
+  })
+
+  it("fires createRole from the role editor's New role flow", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole("button", { name: /New role/ }))
+
+    // Name the role, then save — the create mutation fires with the typed name.
+    const nameInput = await screen.findByLabelText("Name")
+    await user.type(nameInput, "analyst")
+    await user.click(screen.getByRole("button", { name: "Create role" }))
+
+    await waitFor(() =>
+      expect(mockCreateRole).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "analyst" })
+      )
     )
   })
 })

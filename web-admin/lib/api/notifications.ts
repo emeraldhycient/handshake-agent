@@ -17,6 +17,8 @@ import {
   NotificationTemplatePreviewRequestSchema,
   NotificationTemplatePreviewResponseSchema,
   DeliveryLogResponseSchema,
+  BroadcastSendRequestSchema,
+  BroadcastSendResponseSchema,
   type NotificationChannel,
   type NotificationTemplate,
   type NotificationTemplateListResponse,
@@ -24,6 +26,8 @@ import {
   type NotificationTemplatePreviewRequest,
   type NotificationTemplatePreviewResponse,
   type DeliveryLogResponse,
+  type BroadcastSendRequest,
+  type BroadcastSendResponse,
 } from "@handshake-agent/contracts"
 
 import { api } from "./client"
@@ -101,4 +105,21 @@ export async function previewNotificationTemplate(
   const body = NotificationTemplatePreviewRequestSchema.parse(input)
   const res = await api.post("/admin/notification-templates/preview", body)
   return NotificationTemplatePreviewResponseSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/notifications/broadcast — send (or queue-for-approval) a broadcast to
+ * an audience cohort via the notifications outbox. Sensitive + high-impact: may 403
+ * with ADMIN_STEP_UP_REQUIRED (the caller wraps it in `useStepUpRetry`). The SERVER
+ * decides the disposition from the resolved cohort size — a large audience returns
+ * `queued_for_approval` (a maker-checker request for a second admin), a small one
+ * `dispatched`. Moves no money (§3.1). Parses the body before the request and the
+ * response after.
+ */
+export async function sendBroadcast(
+  input: BroadcastSendRequest
+): Promise<BroadcastSendResponse> {
+  const body = BroadcastSendRequestSchema.parse(input)
+  const res = await api.post("/admin/notifications/broadcast", body)
+  return BroadcastSendResponseSchema.parse(res.data)
 }

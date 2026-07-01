@@ -20,31 +20,48 @@
  * wiring them to real mutations is Phase 7. Read-only (§3.1): nothing here moves
  * money; table rows navigate to the transaction-detail route.
  */
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 
 import { cn } from "@/lib/utils"
 import { pushToast } from "@/lib/store/toast-store"
+import { ApiError } from "@/lib/api/client"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   EngineActionModal,
   MakerCheckerModal,
+  ManualCreditModal,
   PiiRevealModal,
   ReasonModal,
   StepUpModal,
 } from "@/components/admin/flows"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import {
+  useAdjustTier,
+  useAdminMe,
+  useApproveKyc,
   useEndUserDetail,
   useEndUserDevices,
   useEndUserLimits,
   useEndUserSessions,
   useEndUserTimeline,
+  useForcePinReset,
   useKycSubmission,
+  useRejectKyc,
+  useRequestManualCredit,
+  useRevokeDevice,
+  useSetUserStatus,
+  useSimSwapReverify,
 } from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
+import { SupportedAssetSchema } from "@handshake-agent/contracts"
 import type {
   AdminEndUserDetail,
+  AdminEndUserTierRequest,
+  KycApproveRequest,
   AdminEndUserLimitsResponse,
   KycSubmissionDetail,
+  SupportedAsset,
 } from "@handshake-agent/contracts"
 import type {
   EngineEffectRow,
@@ -88,6 +105,35 @@ const KYC_STATUS_META: Record<
   expired: { label: "Expired", bg: "var(--sdn)", fg: "var(--tdn)" },
 }
 
+/**
+ * The tier a KYC approval promotes to. Approval never lands on 'unverified'
+ * (mirrors KycApproveRequest, which only accepts tier_1/2/3): we take the
+ * submission's requested tier when it is a verified tier, else default to tier_1.
+ */
+function approveTargetTier(
+  kyc: KycSubmissionDetail | undefined
+): KycApproveRequest["tier"] {
+  const requested = kyc?.tier
+  return requested && requested !== "unverified" ? requested : "tier_1"
+}
+
+/**
+ * The target tier a manual override moves to. The design has no tier-picker, so an
+ * override is a one-step de-escalation (the risk-mitigation action): tier_3→tier_2,
+ * tier_2→tier_1, and tier_1/unverified wrap up to tier_3 so the override always
+ * produces a real from→to change for the maker-checker diff. The chosen tier is sent
+ * as-is to the engine, which re-validates limits/velocity server-side (§3.3).
+ */
+const TIER_OVERRIDE_TARGET: Record<
+  AdminEndUserDetail["kycTier"],
+  AdminEndUserTierRequest["tier"]
+> = {
+  tier_3: "tier_2",
+  tier_2: "tier_1",
+  tier_1: "tier_3",
+  unverified: "tier_3",
+}
+
 /** Beneficiary verification status → the design's name-enquiry pill tokens. */
 function beneVerificationMeta(status: string): {
   label: string
@@ -128,21 +174,32 @@ const TABS: readonly { id: Tab; label: string }[] = [
   { id: "limits", label: "Limits" },
 ]
 
-/** Header action buttons (vUserDetail uActions, line 584). */
-const U_ACTIONS: readonly { label: string; icon: string; danger?: boolean }[] =
-  [
-    {
-      label: "Freeze",
-      icon: "M6 10V8a6 6 0 0 1 12 0v2M5 10h14v10H5z",
-      danger: true,
-    },
-    { label: "Add note", icon: "M12 5v14M5 12h14" },
-    { label: "Resend", icon: "M4 4h16v12H8l-4 4z" },
-    {
-      label: "View as",
-      icon: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z",
-    },
-  ]
+/** Header-action keys — the render dispatches on the key so the freeze label can
+ * toggle (Freeze ↔ Unfreeze) without changing the dispatch target. */
+type UActionKey = "freeze" | "note" | "resend" | "viewas"
+
+/** Header action buttons (vUserDetail uActions, line 584). The freeze label is set
+ * at render time from the user's status; the rest are static. */
+const U_ACTIONS: readonly {
+  key: UActionKey
+  label: string
+  icon: string
+  danger?: boolean
+}[] = [
+  {
+    key: "freeze",
+    label: "Freeze",
+    icon: "M6 10V8a6 6 0 0 1 12 0v2M5 10h14v10H5z",
+    danger: true,
+  },
+  { key: "note", label: "Add note", icon: "M12 5v14M5 12h14" },
+  { key: "resend", label: "Resend", icon: "M4 4h16v12H8l-4 4z" },
+  {
+    key: "viewas",
+    label: "View as",
+    icon: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z",
+  },
+]
 
 // The Profile admin-action timeline, Security auth-sessions, and Limits/velocity
 // are now backed by real read endpoints (useEndUserTimeline / useEndUserSessions /
@@ -263,7 +320,7 @@ function Panel({ children }: { children: React.ReactNode }) {
 
 // ─── Flow-modal orchestration (design runFlow: reason → step-up → engine / maker) ────
 
-type FlowStep = "reason" | "stepup" | "engine" | "maker" | "pii"
+type FlowStep = "credit" | "reason" | "stepup" | "engine" | "maker" | "pii"
 
 interface FlowConfig {
   title: string
@@ -523,6 +580,22 @@ export function UserDetail({ userId }: UserDetailProps) {
   const limitsQuery = useEndUserLimits(userId)
   const timelineQuery = useEndUserTimeline(userId)
 
+  // Sensitive mutations (Phase 7 WRITE) — KYC decisions + account actions (tier /
+  // status / pin-reset / device-revoke / sim-swap). Each is step-up-gated: a 403 with
+  // code ADMIN_STEP_UP_REQUIRED opens the real StepUpDialog (server re-auth), then the
+  // stashed action replays via `stepUp.retry`. The hooks invalidate the KYC queue +
+  // the `["admin","users"]` prefix, so this header and the affected tabs re-resolve.
+  const me = useAdminMe()
+  const approveKyc = useApproveKyc()
+  const rejectKyc = useRejectKyc()
+  const adjustTier = useAdjustTier()
+  const setUserStatus = useSetUserStatus()
+  const forcePinReset = useForcePinReset()
+  const revokeDevice = useRevokeDevice()
+  const simSwapReverify = useSimSwapReverify()
+  const requestManualCredit = useRequestManualCredit()
+  const stepUp = useStepUpRetry()
+
   // Deep-link tab: seed from ?tab= when it names a valid tab (KYC-queue links land on KYC).
   const [tab, setTab] = useState<Tab>(() => {
     const q = searchParams.get("tab")
@@ -533,18 +606,38 @@ export function UserDetail({ userId }: UserDetailProps) {
   // Sequential flow-modal machine: the active step index walks the config's steps.
   const [flow, setFlow] = useState<FlowConfig | null>(null)
   const [flowStep, setFlowStep] = useState(0)
+  // The manual-credit input captured by the ManualCreditModal (the "credit" step).
+  // Mirrored in a ref so the flow's onComplete (a closure fixed at runFlow time)
+  // reads the LATEST captured value, not the stale null from when the flow started.
+  const [creditInput, setCreditInput] = useState<{
+    asset: SupportedAsset
+    amount: string
+  } | null>(null)
+  const creditInputRef = useRef<{
+    asset: SupportedAsset
+    amount: string
+  } | null>(null)
+
+  // The reason captured at the ReasonModal step, retained across the remaining steps
+  // so onComplete (fired at the final step) can record the maker's justification —
+  // the ReasonModal is rarely the last step, so the reason must persist in state.
+  const [flowReason, setFlowReason] = useState("")
 
   function runFlow(config: FlowConfig) {
     setFlow(config)
     setFlowStep(0)
+    setFlowReason("")
   }
-  // `reason` is forwarded from the ReasonModal step so onComplete can record it.
-  function advance(reason = "") {
+  // `reason`, when supplied by the ReasonModal step, is retained; onComplete is
+  // called with the retained reason (or the just-supplied one on a reason-only flow).
+  function advance(reason?: string) {
     if (!flow) return
+    const nextReason = reason !== undefined ? reason : flowReason
+    if (reason !== undefined) setFlowReason(reason)
     if (flowStep + 1 >= flow.steps.length) {
       // Completed the last step.
       if (flow.reveals) setPiiRevealed(true)
-      flow.onComplete?.(reason)
+      flow.onComplete?.(nextReason)
       setFlow(null)
       setFlowStep(0)
       return
@@ -564,8 +657,24 @@ export function UserDetail({ userId }: UserDetailProps) {
 
   // ── Write flows (Phase 7) — still drive the shared modals with design copy. ──────────
   // These read/write no real data yet; wiring them to real mutations is a later step.
-  const freezeUser = () =>
-    runFlow({ title: "Freeze account", steps: ["reason", "stepup"] })
+  // Freeze / Unfreeze — reason → step-up, then PATCH /admin/users/:id/status.
+  // Suspends an active account (freeze) or reactivates a suspended one (unfreeze).
+  const isSuspended = detailQuery.data?.status === "suspended"
+  const freezeUser = () => {
+    const target = isSuspended ? "active" : "suspended"
+    runFlow({
+      title: isSuspended ? "Unfreeze account" : "Freeze account",
+      steps: ["reason", "stepup"],
+      onComplete: () =>
+        runStepUpMutation(
+          () =>
+            setUserStatus
+              .mutateAsync({ id: userId, input: { status: target } })
+              .then(() => undefined),
+          isSuspended ? "Account reactivated" : "Account frozen"
+        ),
+    })
+  }
   const revealNin = () => {
     // The API only ever surfaces the last-4 (PII minimization), so "reveal" toggles a
     // logged-access banner — the full NIN/BVN is never fetched. See shapeGaps.
@@ -580,44 +689,162 @@ export function UserDetail({ userId }: UserDetailProps) {
       reveals: true,
     })
   }
+  // Fire a sensitive mutation through the step-up-retry wrapper: run it; a 403
+  // ADMIN_STEP_UP_REQUIRED opens the real StepUpDialog and stashes the action for
+  // replay. Any other failure surfaces a toast (the flow is already audited server-side).
+  // No UI code moves money here (§3.1) — these mutate identity/KYC/device state only.
+  function runStepUpMutation(action: () => Promise<void>, done: string) {
+    void stepUp
+      .run(action)
+      .then((ok) => {
+        if (ok) pushToast(done, "ok")
+      })
+      .catch((error) =>
+        pushToast(
+          error instanceof ApiError ? error.message : "Action failed",
+          "warn"
+        )
+      )
+  }
+
+  // Approve — reason → step-up → maker-checker (tier 2/3 dual control), then POST
+  // /admin/kyc/:id/approve promoting to the submission's requested (verified) tier.
+  const approveTier = approveTargetTier(kycQuery.data)
   const kycApprove = () =>
     runFlow({
       title: "Approve KYC",
       steps: ["reason", "stepup", "maker"],
-      diff: [{ field: "KYC status", from: "pending", to: "verified" }],
+      diff: [
+        { field: "KYC status", from: detailQuery.data?.kycStatus ?? "—", to: "verified" },
+        { field: "KYC tier", from: detailQuery.data?.kycTier ?? "—", to: approveTier },
+      ],
+      onComplete: () =>
+        runStepUpMutation(
+          () =>
+            approveKyc
+              .mutateAsync({ userId, input: { tier: approveTier } })
+              .then(() => undefined),
+          "KYC approved"
+        ),
     })
+  // Request more info — no dedicated endpoint exists (only approve/reject are
+  // modelled server-side), so this records the reason and toasts; wiring a real
+  // needs-info transition is a backend gap (see notes).
   const kycInfo = () =>
-    runFlow({ title: "Request more info", steps: ["reason"] })
-  const kycReject = () => runFlow({ title: "Reject KYC", steps: ["reason"] })
+    runFlow({
+      title: "Request more info",
+      steps: ["reason"],
+      onComplete: () => pushToast("Info requested (no endpoint yet)", "info"),
+    })
+  // Reject — reason (required), then POST /admin/kyc/:id/reject with that reason.
+  const kycReject = () =>
+    runFlow({
+      title: "Reject KYC",
+      steps: ["reason"],
+      onComplete: (reason) =>
+        runStepUpMutation(
+          () =>
+            rejectKyc
+              .mutateAsync({ userId, input: { reason } })
+              .then(() => undefined),
+          "KYC rejected"
+        ),
+    })
+  // Override tier — reason → step-up → maker-checker (dual control), then
+  // PATCH /admin/users/:id/tier. The target is a one-step de-escalation of the
+  // current tier; the engine re-validates the new tier's limits server-side (§3.3).
+  const overrideTargetTier = TIER_OVERRIDE_TARGET[detailQuery.data?.kycTier ?? "unverified"]
   const overrideTier = () =>
     runFlow({
       title: "Override tier · maker-checker",
       steps: ["reason", "stepup", "maker"],
-      diff: [{ field: "KYC tier", from: "tier_3", to: "tier_2" }],
+      diff: [
+        {
+          field: "KYC tier",
+          from: detailQuery.data?.kycTier ?? "—",
+          to: overrideTargetTier,
+        },
+      ],
+      onComplete: () =>
+        runStepUpMutation(
+          () =>
+            adjustTier
+              .mutateAsync({ id: userId, input: { tier: overrideTargetTier } })
+              .then(() => undefined),
+          "Tier override submitted"
+        ),
     })
   const forceReKyc = () =>
     runFlow({ title: "Force re-KYC", steps: ["reason", "stepup"] })
+  // Reset PIN directive — reason → step-up, then POST /admin/users/:id/pin-reset.
   const resetPin = () =>
-    runFlow({ title: "Reset PIN directive", steps: ["reason", "stepup"] })
+    runFlow({
+      title: "Reset PIN directive",
+      steps: ["reason", "stepup"],
+      onComplete: () =>
+        runStepUpMutation(
+          () => forcePinReset.mutateAsync(userId).then(() => undefined),
+          "PIN reset directive issued"
+        ),
+    })
+  // Revoke-all: no END-USER session-revoke endpoint exists yet (only
+  // GET /admin/users/:id/sessions is modelled; the useRevokeSession hook targets an
+  // ADMIN-console session, not an end-user one, so wiring it here would revoke the
+  // wrong session). Stays a confirmed-then-toast stub until the backend route lands.
   const revokeAll = () =>
     runFlow({ title: "Revoke all sessions", steps: ["stepup"] })
-  const unbindDevice = () =>
-    runFlow({ title: "Unbind device", steps: ["reason", "stepup"] })
-  const manualCredit = () =>
+  // Unbind a single device — reason → step-up, then DELETE the device (per-row id).
+  const unbindDevice = (deviceId: string) =>
     runFlow({
-      title: "Manual credit · 25.00 USDT",
-      steps: ["reason", "stepup", "engine", "maker"],
-      effect: [
-        { k: "Credit to", v: userId },
-        { k: "Amount", v: "25.000000 USDT" },
-        { k: "Proposal type", v: "manual_credit" },
-      ],
-      ledger: [
-        { acct: "treasury:USDT", dir: "DR", amt: "25.000000" },
-        { acct: `${userId}:USDT`, dir: "CR", amt: "25.000000" },
-      ],
-      diff: [{ field: "USDT available", from: "—", to: "+25.00 USDT" }],
+      title: "Unbind device",
+      steps: ["reason", "stepup"],
+      onComplete: () =>
+        runStepUpMutation(
+          () =>
+            revokeDevice
+              .mutateAsync({ id: userId, deviceId })
+              .then(() => undefined),
+          "Device unbound"
+        ),
     })
+  // SIM-swap re-verify — reason → step-up, then POST /admin/users/:id/sim-swap-reverify
+  // (§3.4: a SIM/number change forces re-verification + step-up before trust is restored).
+  const simSwapReverifyUser = () =>
+    runFlow({
+      title: "SIM-swap re-verify",
+      steps: ["reason", "stepup"],
+      onComplete: () =>
+        runStepUpMutation(
+          () => simSwapReverify.mutateAsync(userId).then(() => undefined),
+          "SIM-swap re-verification triggered"
+        ),
+    })
+  // Manual credit (Phase 7 WRITE, engine-brokered) — MAKER action: raises a pending
+  // `manual_credit` request a SECOND admin approves (four-eyes, §3.1). The flow first
+  // collects asset + amount (the `credit` step), then reason → step-up → engine
+  // preview → maker-checker; onComplete POSTs /admin/users/:id/credit (moves no money
+  // from this surface — the engine credits only on approval). The engine preview +
+  // change diff are derived from the captured input, not hardcoded.
+  const manualCredit = () => {
+    setCreditInput(null)
+    creditInputRef.current = null
+    runFlow({
+      title: "Manual credit",
+      steps: ["credit", "reason", "stepup", "engine", "maker"],
+      onComplete: (reason) => {
+        const captured = creditInputRef.current
+        if (!captured) return
+        const { asset, amount } = captured
+        runStepUpMutation(
+          () =>
+            requestManualCredit
+              .mutateAsync({ id: userId, input: { asset, amount, reason } })
+              .then(() => undefined),
+          `Manual credit of ${amount} ${asset} submitted for approval`
+        )
+      },
+    })
+  }
 
   // Add note — the timeline is now a read-only projection of the audit log, so
   // this stays a Phase-7 write stub (persisting a note re-derives the timeline).
@@ -628,7 +855,9 @@ export function UserDetail({ userId }: UserDetailProps) {
       onComplete: () => pushToast("Note recorded (pending write)", "ok"),
     })
 
-  // Revoke a single session — confirm, then toast (real revocation is Phase 7).
+  // Revoke a single END-USER session — confirm, then toast. No backend route exists
+  // for this yet (see revokeAll); it needs a BUILD (DELETE /admin/users/:id/sessions/:sid
+  // + contract + service). Left a stub rather than mis-wired to the admin-session hook.
   const revokeSession = () =>
     runFlow({
       title: "Revoke session",
@@ -682,6 +911,51 @@ export function UserDetail({ userId }: UserDetailProps) {
     pending: b.pending,
     hero: i === 0,
   }))
+
+  // Assets an admin can manually credit: the SUPPORTED assets the user already holds,
+  // plus USDT (the launch asset) so a brand-new user can still be credited. Balances
+  // whose asset is not a SupportedAsset are dropped (the request DTO only accepts the
+  // supported set). The server re-validates against the live catalog on approval
+  // (§3.3) — this list is a UX convenience, not the authority.
+  const creditableAssets: SupportedAsset[] = Array.from(
+    new Set<SupportedAsset>([
+      "USDT",
+      ...detail.balances
+        .map((b) => SupportedAssetSchema.safeParse(b.asset))
+        .filter((r) => r.success)
+        .map((r) => r.data),
+    ])
+  )
+
+  // The engine-preview + maker-checker rows for the manual-credit flow, derived from
+  // the captured input (never hardcoded). Empty until the credit step is completed.
+  const creditEffect: EngineEffectRow[] = creditInput
+    ? [
+        { k: "Credit to", v: userId },
+        { k: "Amount", v: `${creditInput.amount} ${creditInput.asset}` },
+        { k: "Proposal type", v: "manual_credit" },
+      ]
+    : []
+  const creditLedger: EngineLedgerRow[] = creditInput
+    ? [
+        { acct: `treasury:${creditInput.asset}`, dir: "DR", amt: creditInput.amount },
+        {
+          acct: `${userId}:${creditInput.asset}`,
+          dir: "CR",
+          amt: creditInput.amount,
+        },
+      ]
+    : []
+  const creditDiff: MakerCheckerDiffRow[] = creditInput
+    ? [
+        {
+          field: `${creditInput.asset} available`,
+          from: "—",
+          to: `+${creditInput.amount} ${creditInput.asset}`,
+        },
+      ]
+    : []
+  const isCreditFlow = flow?.steps[0] === "credit"
 
   return (
     <div
@@ -765,44 +1039,48 @@ export function UserDetail({ userId }: UserDetailProps) {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            {U_ACTIONS.map((a) => (
-              <button
-                key={a.label}
-                type="button"
-                title={a.label}
-                onClick={() => {
-                  if (a.label === "Freeze") freezeUser()
-                  else if (a.label === "Add note") addNote()
-                  else if (a.label === "Resend")
-                    pushToast("Verification link re-sent", "info")
-                  else if (a.label === "View as")
-                    pushToast(`Now viewing as ${name}`, "ok")
-                }}
-                className={cn(
-                  "flex h-9 cursor-pointer items-center gap-[7px] rounded-[10px] border px-[13px] text-[12.5px] font-bold focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-                  a.danger
-                    ? "border-[#f0d0cb] bg-sdn text-tdn hover:bg-sdn/80"
-                    : "border-line bg-card text-ink hover:bg-hov"
-                )}
-              >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  aria-hidden
+            {U_ACTIONS.map((a) => {
+              // Freeze ↔ Unfreeze mirrors the account status; the rest are static.
+              const label = a.key === "freeze" && frozen ? "Unfreeze" : a.label
+              return (
+                <button
+                  key={a.key}
+                  type="button"
+                  title={label}
+                  onClick={() => {
+                    if (a.key === "freeze") freezeUser()
+                    else if (a.key === "note") addNote()
+                    else if (a.key === "resend")
+                      pushToast("Verification link re-sent", "info")
+                    else if (a.key === "viewas")
+                      pushToast(`Now viewing as ${name}`, "ok")
+                  }}
+                  className={cn(
+                    "flex h-9 cursor-pointer items-center gap-[7px] rounded-[10px] border px-[13px] text-[12.5px] font-bold focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                    a.danger
+                      ? "border-[#f0d0cb] bg-sdn text-tdn hover:bg-sdn/80"
+                      : "border-line bg-card text-ink hover:bg-hov"
+                  )}
                 >
-                  <path
-                    d={a.icon}
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                {a.label}
-              </button>
-            ))}
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    aria-hidden
+                  >
+                    <path
+                      d={a.icon}
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  {label}
+                </button>
+              )
+            })}
           </div>
         </div>
       </div>
@@ -1142,7 +1420,7 @@ export function UserDetail({ userId }: UserDetailProps) {
                     strokeLinejoin="round"
                   />
                 </svg>
-                Approve · tier_3 (maker-checker)
+                Approve · {approveTier} (maker-checker)
               </button>
               <div className="flex gap-[9px]">
                 <button
@@ -1286,9 +1564,18 @@ export function UserDetail({ userId }: UserDetailProps) {
                   SIM-SWAP
                 </span>
               )}
+              {simSwapFlagged && (
+                <button
+                  type="button"
+                  onClick={simSwapReverifyUser}
+                  className="cursor-pointer rounded-[9px] border border-[#f0d0cb] bg-sdn px-[13px] py-2 text-xs font-bold text-tdn transition-colors hover:bg-sdn/80 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  SIM-swap re-verify
+                </button>
+              )}
               <button
                 type="button"
-                onClick={unbindDevice}
+                onClick={() => unbindDevice(d.id)}
                 className="cursor-pointer rounded-[9px] border border-line px-[13px] py-2 text-xs font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
               >
                 Unbind
@@ -1756,7 +2043,25 @@ export function UserDetail({ userId }: UserDetailProps) {
         />
       )}
 
-      {/* ===== FLOW MODALS (reason → step-up → engine / maker / pii) ===== */}
+      {/* ===== FLOW MODALS (credit → reason → step-up → engine / maker / pii) ===== */}
+      <ManualCreditModal
+        open={current === "credit"}
+        onOpenChange={(o) => !o && cancelFlow()}
+        title={flow?.title ?? "Manual credit"}
+        assets={creditableAssets}
+        onContinue={(asset, amount) => {
+          // `asset` is one of `creditableAssets` (all SupportedAsset); parse to
+          // narrow the type — falls back to USDT if somehow off-list (never fires).
+          const parsed = SupportedAssetSchema.safeParse(asset)
+          const input = {
+            asset: parsed.success ? parsed.data : ("USDT" as SupportedAsset),
+            amount,
+          }
+          setCreditInput(input)
+          creditInputRef.current = input
+          advance()
+        }}
+      />
       <ReasonModal
         open={current === "reason"}
         onOpenChange={(o) => !o && cancelFlow()}
@@ -1779,8 +2084,8 @@ export function UserDetail({ userId }: UserDetailProps) {
         open={current === "engine"}
         onOpenChange={(o) => !o && cancelFlow()}
         title={flow?.title ?? ""}
-        effect={flow?.effect ?? []}
-        ledger={flow?.ledger ?? []}
+        effect={isCreditFlow ? creditEffect : (flow?.effect ?? [])}
+        ledger={isCreditFlow ? creditLedger : (flow?.ledger ?? [])}
         idempotencyKey="idem_9f31c0a2"
         cta="Execute via engine"
         onExecute={() => advance()}
@@ -1789,8 +2094,30 @@ export function UserDetail({ userId }: UserDetailProps) {
         open={current === "maker"}
         onOpenChange={(o) => !o && cancelFlow()}
         title={flow?.title ?? ""}
-        diff={flow?.diff ?? []}
+        diff={isCreditFlow ? creditDiff : (flow?.diff ?? [])}
         onSubmit={() => advance()}
+      />
+
+      {/* Server-driven step-up: a sensitive mutation that 403s with
+          ADMIN_STEP_UP_REQUIRED opens this re-auth dialog; on success the stashed
+          mutation replays. Shared by every KYC + account action on this screen. */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then((ok) => {
+              if (ok) pushToast("Action recorded", "ok")
+            })
+            .catch((error) =>
+              pushToast(
+                error instanceof ApiError ? error.message : "Action failed",
+                "warn"
+              )
+            )
+        }}
       />
     </div>
   )
