@@ -1,10 +1,10 @@
 /**
- * AppShell nav-gating tests.
+ * AppShell nav-gating tests (design chrome §4.1 — "Platform" group).
  *
- *  1. A super_admin (menus include `menu.access` + `menu.audit`) sees the Access
- *     nav group (Admins / Roles / Sessions).
- *  2. An ops admin (menus = only `menu.audit`) does NOT see the Access group, but
- *     does see the Audit group. The Dashboard link always shows.
+ *  1. A super_admin (menus include `menu.access` + `menu.audit`) sees the
+ *     access-scoped items (Admins & roles / Roles / Sessions) and Audit log.
+ *  2. An ops admin (menus = only `menu.audit`) does NOT see the menu.access
+ *     items, but DOES see Audit log. The Dashboard link always shows.
  *
  * The api layer is mocked — useAdminMe resolves a canned AdminMe; no server.
  */
@@ -72,7 +72,7 @@ beforeEach(() => {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("AppShell nav gating", () => {
-  it("shows the Access group for a super_admin menu set", async () => {
+  it("shows the access-scoped items + Audit for a super_admin menu set", async () => {
     mockGetMe.mockResolvedValue(
       adminMe({
         role: {
@@ -85,38 +85,40 @@ describe("AppShell nav gating", () => {
 
     renderShell()
 
-    // Access group + its items appear once me resolves.
-    expect(await screen.findByText("Access")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Admins" })).toBeInTheDocument()
+    // The menu.access items appear once me resolves.
     expect(
-      screen.getByRole("link", { name: "Roles & permissions" })
+      await screen.findByRole("link", { name: "Admins & roles" })
     ).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Roles" })).toBeInTheDocument()
     expect(screen.getByRole("link", { name: "Sessions" })).toBeInTheDocument()
-    // Dashboard always shows.
+    // Audit log (menu.audit) + Dashboard (always) also show.
+    expect(screen.getByRole("link", { name: "Audit log" })).toBeInTheDocument()
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument()
   })
 
-  it("hides the Access group for an ops set with only menu.audit", async () => {
+  it("hides the menu.access items but shows Audit for an ops set with only menu.audit", async () => {
     mockGetMe.mockResolvedValue(adminMe({ menus: ["menu.audit"] }))
 
     renderShell()
 
-    // Audit group resolves; the Access group never appears.
-    expect(await screen.findByText("Audit")).toBeInTheDocument()
+    // Audit log resolves (menu.audit granted); Dashboard always shows.
+    expect(
+      await screen.findByRole("link", { name: "Audit log" })
+    ).toBeInTheDocument()
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument()
 
+    // The menu.access items never appear.
     await waitFor(() => {
       expect(
-        screen.queryByRole("link", { name: "Admins" })
+        screen.queryByRole("link", { name: "Admins & roles" })
       ).not.toBeInTheDocument()
     })
     expect(
-      screen.queryByRole("link", { name: "Roles & permissions" })
+      screen.queryByRole("link", { name: "Roles" })
     ).not.toBeInTheDocument()
     expect(
       screen.queryByRole("link", { name: "Sessions" })
     ).not.toBeInTheDocument()
-    expect(screen.queryByText("Access")).not.toBeInTheDocument()
   })
 })
 
