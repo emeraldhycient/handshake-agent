@@ -37,6 +37,23 @@ import {
   InvalidAddressError,
   NameEnquiryFailedError,
 } from '../../modules/beneficiaries/domain/beneficiary-errors';
+import {
+  AdminInvalidCredentialsError,
+  AdminMfaRequiredError,
+  AdminInactiveError,
+  AdminStepUpRequiredError,
+  AdminPermissionDeniedError,
+  AdminInvitationInvalidError,
+  BuiltinRoleImmutableError,
+  AdminBootstrapForbiddenError,
+  AdminNotFoundError,
+} from '../../modules/admin/domain/admin-errors';
+import { TxnNotTriageableError } from '../../modules/admin/domain/txn-triage-errors';
+import {
+  SettingNotEditableError,
+  SettingValidationError,
+  MultiCurrencyInvariantError,
+} from '../../modules/admin/domain/settings-errors';
 
 interface ErrorBody {
   statusCode: number;
@@ -132,6 +149,26 @@ describe('DomainExceptionFilter', () => {
   ])('maps %s → %i', (err, expected) => {
     const { statusCode } = run(filter, err);
     expect(statusCode).toBe(expected);
+  });
+
+  it.each([
+    [new AdminInvalidCredentialsError(), 401],
+    [new AdminMfaRequiredError(), 401],
+    [new AdminInactiveError(), 403],
+    [new AdminStepUpRequiredError(), 403],
+    [new AdminPermissionDeniedError(), 403],
+    [new AdminNotFoundError(), 404],
+    [new BuiltinRoleImmutableError(), 409],
+    [new AdminInvitationInvalidError(), 410],
+    [new AdminBootstrapForbiddenError(), 403],
+    [new SettingNotEditableError('auth.pin.maxAttempts'), 409],
+    [new SettingValidationError('bad value'), 422],
+    [new MultiCurrencyInvariantError('NGN has no limits'), 422],
+    [new TxnNotTriageableError(), 409],
+  ])('maps admin %s → %i with its code echoed', (err, expected) => {
+    const { statusCode, body } = run(filter, err);
+    expect(statusCode).toBe(expected);
+    expect(body.code).toBeDefined();
   });
 
   it('does NOT leak the compliance event id for a sanctions block', () => {

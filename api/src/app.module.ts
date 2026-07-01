@@ -9,6 +9,8 @@ import { ZodValidationPipe } from 'nestjs-zod';
 import configuration from './core/config/configuration';
 import { validateEnv } from './core/config/env.schema';
 import { PrismaModule } from './core/prisma/prisma.module';
+import { AuditModule } from './core/audit/audit.module';
+import { EffectiveConfigModule } from './core/config/effective-config.module';
 import { CatalogModule } from './core/catalog/catalog.module';
 import { AgentModule } from './modules/agent/agent.module';
 import { IdentityModule } from './modules/identity/identity.module';
@@ -61,6 +63,8 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
       },
     }),
     PrismaModule,
+    AuditModule,
+    EffectiveConfigModule,
     CatalogModule,
     AgentModule,
     IdentityModule,

@@ -70,7 +70,24 @@ export interface ComplianceEventRecord {
   ruleOrHit: string | null;
   details: Record<string, unknown>;
   status: ComplianceStatusValue;
+  dispositionComment: string | null;
+  dispositionAt: Date | null;
   createdAt: Date;
+}
+
+/** Filter for the admin flagged-event queue (all fields optional). */
+export interface ComplianceEventListFilter {
+  status?: string;
+  severity?: string;
+  userId?: string;
+}
+
+/** Disposition write — the admin's verdict on a flagged event (AUD-09 trail). */
+export interface ComplianceEventDispositionInput {
+  status: ComplianceStatusValue;
+  adminId: string;
+  comment?: string;
+  at: Date;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,4 +101,27 @@ export interface IComplianceEventRepository {
    * on failure; the caller supplies idempotency context in `details`).
    */
   create(input: CreateComplianceEventInput): Promise<ComplianceEventRecord>;
+
+  /**
+   * Admin flagged-event queue: filtered, keyset-paginated (createdAt desc, id
+   * desc) by the optional status/severity/userId filter. `cursor` is the
+   * last-seen event id; returns up to `limit` records + the next cursor.
+   */
+  listByStatus(
+    filter: ComplianceEventListFilter,
+    page: { cursor?: string; limit: number },
+  ): Promise<{ items: ComplianceEventRecord[]; nextCursor: string | null }>;
+
+  /** Read a single event by id (for the detail view); null if absent. */
+  findById(id: string): Promise<ComplianceEventRecord | null>;
+
+  /**
+   * Records an admin disposition: sets status, dispositionAdminId,
+   * dispositionComment, dispositionAt. The full before/after trail lives in
+   * the AuditLog (this only writes the operational state).
+   */
+  updateDisposition(
+    id: string,
+    input: ComplianceEventDispositionInput,
+  ): Promise<void>;
 }

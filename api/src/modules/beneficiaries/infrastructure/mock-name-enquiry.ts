@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type { AppConfig } from '../../../core/config/configuration';
 import { NameEnquiryFailedError } from '../domain/beneficiary-errors';
 import type {
@@ -39,7 +39,7 @@ export class MockNameEnquiry implements INameEnquiry {
   private readonly badAccountNumber: string;
   private readonly resolvedName: string;
 
-  constructor(private readonly config: ConfigService<AppConfig, true>) {
+  constructor(private readonly config: EffectiveConfigService) {
     const beneficiaryConfig =
       this.config.get<AppConfig['beneficiary']>('beneficiary');
     this.badAccountNumber = beneficiaryConfig?.nameEnquiryBadAccount ?? '';

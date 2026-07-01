@@ -25,12 +25,9 @@
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { ConfigService } from '@nestjs/config';
 
-import type {
-  AppConfig,
-  ReconciliationConfig,
-} from '../../../core/config/configuration';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
+import type { ReconciliationConfig } from '../../../core/config/configuration';
 import {
   SETTLEMENT_OUTBOX_REPOSITORY,
   type ISettlementOutboxRepository,
@@ -79,7 +76,7 @@ export class SettlementReconciliationService {
     @Inject(SETTLEMENT_OUTBOX_REPOSITORY)
     private readonly outboxRepo: ISettlementOutboxRepository,
     private readonly executionService: ExecutionService,
-    private readonly config: ConfigService<AppConfig, true>,
+    private readonly config: EffectiveConfigService,
   ) {
     this.reconciliationConfig =
       this.config.get<ReconciliationConfig>('reconciliation');

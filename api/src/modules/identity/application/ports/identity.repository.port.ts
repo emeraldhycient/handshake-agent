@@ -68,6 +68,82 @@ export interface ContactRecord {
 }
 
 // ---------------------------------------------------------------------------
+// Admin user-management + KYC-review record types (Phase 2, Task 2).
+// Read-only projections consumed by the admin module. Sensitive identifiers
+// (nin/bvn) are returned raw here; the SERVICE truncates them to last-4 before
+// they leave the backend (never exposed in full to the admin console).
+// ---------------------------------------------------------------------------
+
+/** Row shape for the paginated admin user list. */
+export interface AdminUserListRecord {
+  id: string;
+  email: string | null;
+  status: string;
+  kycStatus: string;
+  kycTier: string;
+  simSwapDetectedAt: Date | null;
+  createdAt: Date;
+}
+
+/** A device as projected for the admin user-detail view. */
+export interface DeviceRecord {
+  id: string;
+  trustState: string;
+  lastUsedAt: Date | null;
+  boundAt: Date | null;
+}
+
+/**
+ * KYC fields for the admin user-detail view. nin/bvn are RAW as stored — the
+ * service truncates to last-4 before responding.
+ */
+export interface KycDetailRecord {
+  firstName: string | null;
+  lastName: string | null;
+  dateOfBirth: Date | null;
+  nin: string | null;
+  bvn: string | null;
+  idDocumentType: string | null;
+  livenessCheckResult: string;
+  status: string;
+  tier: string;
+  rejectionReason: string | null;
+}
+
+/** Composite admin user-detail projection (user + kyc + devices). */
+export interface UserAdminDetailRecord {
+  id: string;
+  email: string | null;
+  status: string;
+  kycStatus: string;
+  kycTier: string;
+  simSwapDetectedAt: Date | null;
+  createdAt: Date;
+  pinnedDeviceId: string | null;
+  kyc: KycDetailRecord | null;
+  devices: DeviceRecord[];
+}
+
+/** Filters accepted by `listUsers`. */
+export interface AdminUserListFilters {
+  query?: string;
+  status?: string;
+  kycTier?: string;
+}
+
+/** Cursor-pagination input shared by the admin list reads. */
+export interface AdminUserListPage {
+  cursor?: string;
+  limit: number;
+}
+
+/** Paginated result for the admin user lists. */
+export interface AdminUserListResult {
+  items: AdminUserListRecord[];
+  nextCursor: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Repository port
 // ---------------------------------------------------------------------------
 
@@ -128,4 +204,52 @@ export interface IIdentityRepository {
     contact: ContactRecord;
     channelIdentity: ChannelIdentityRecord;
   }>;
+
+  // -------------------------------------------------------------------------
+  // Admin user-management + KYC-review reads/writes (Phase 2, Task 2).
+  // -------------------------------------------------------------------------
+
+  /**
+   * Cursor-paginated admin user list. `query` matches email (contains,
+   * case-insensitive); `status`/`kycTier` are exact matches. Ordered by
+   * createdAt desc, id desc; cursor is the last item's id.
+   */
+  listUsers(
+    filters: AdminUserListFilters,
+    page: AdminUserListPage,
+  ): Promise<AdminUserListResult>;
+
+  /**
+   * Same pagination contract as `listUsers`, scoped to users whose kycStatus
+   * is 'pending_review' (the admin KYC review queue).
+   */
+  listUsersPendingKycReview(
+    page: AdminUserListPage,
+  ): Promise<AdminUserListResult>;
+
+  /**
+   * Composite admin user-detail projection: the user plus its KYC profile
+   * (raw nin/bvn — truncated by the service) and devices. Null if no user.
+   */
+  loadUserWithKycAndDevices(
+    userId: string,
+  ): Promise<UserAdminDetailRecord | null>;
+
+  /** Returns the user's devices as admin-facing DeviceRecords. */
+  listDevicesForUser(userId: string): Promise<DeviceRecord[]>;
+
+  /** Sets User.status. */
+  setUserStatus(userId: string, status: string): Promise<void>;
+
+  /** Sets User.kycTier. */
+  setKycTier(userId: string, tier: string): Promise<void>;
+
+  /** Sets (or clears, when null) User.simSwapDetectedAt. */
+  setSimSwapDetectedAt(userId: string, at: Date | null): Promise<void>;
+
+  /** Sets Device.trustState = 'revoked'. */
+  revokeDevice(deviceId: string): Promise<void>;
+
+  /** Clears User.pinnedDeviceId. */
+  unpinDevice(userId: string): Promise<void>;
 }

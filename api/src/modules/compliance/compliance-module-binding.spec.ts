@@ -70,8 +70,11 @@ function resolveSanctionsScreener(sanctionsMockMode: string) {
   const config = makeConfigService(sanctionsMockMode);
   const http = makeHttpService();
 
+  // The combined stub returns env keys, `compliance`, and `catalog` from a
+  // single `.get`, so it satisfies both the plain ConfigService (env reads) and
+  // the EffectiveConfigService (catalog/compliance reads) positions.
   const mock = new MockSanctionsScreener(config as never);
-  const real = new BlockradarAmlScreener(http, config as never);
+  const real = new BlockradarAmlScreener(http, config, config as never);
 
   const mockMode = config.get<string>('SANCTIONS_MOCK_MODE');
   return mockMode === 'false' ? real : mock;

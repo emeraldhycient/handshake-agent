@@ -36,6 +36,7 @@ import type {
   CompleteVerificationForUserAtomicInput,
   CompleteVerificationForUserAtomicResult,
   IKycRepository,
+  UpdateKycProfileDecisionInput,
 } from '../application/ports/kyc.repository.port';
 
 @Injectable()
@@ -218,5 +219,40 @@ export class KycPrismaRepository implements IKycRepository {
     });
 
     return { userId };
+  }
+
+  /**
+   * Applies an admin KYC-review decision atomically: the KycProfile and the
+   * mirrored User fields (kycStatus/kycTier) move together so the server-side
+   * gate (§3.3) never observes a partial decision. verifiedAt is stamped only
+   * when the decision verifies; rejectionReason is persisted as provided.
+   */
+  async updateKycProfileDecision(
+    userId: string,
+    decision: UpdateKycProfileDecisionInput,
+  ): Promise<void> {
+    const { status, tier, rejectionReason, reviewedByAdminId } = decision;
+    const verified = status === KycStatus.verified;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.kycProfile.update({
+        where: { userId },
+        data: {
+          status: status as KycStatus,
+          tier: tier as KycTier,
+          rejectionReason: rejectionReason ?? null,
+          reviewedByAdminId,
+          verifiedAt: verified ? new Date() : null,
+        },
+      });
+
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          kycStatus: status as KycStatus,
+          kycTier: tier as KycTier,
+        },
+      });
+    });
   }
 }

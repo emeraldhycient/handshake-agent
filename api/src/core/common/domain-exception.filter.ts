@@ -174,6 +174,72 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
       'Please check the details and try again.',
   },
 
+  // ── Admin platform (RBAC console) → 401 / 403 / 404 / 409 / 410 ─────────────
+  // Distinct principal from end users; messages are admin-operator-facing (no
+  // end-user fund detail), and the `code` is echoed so the admin UI can react
+  // (e.g. ADMIN_STEP_UP_REQUIRED → open the re-auth modal).
+  ADMIN_INVALID_CREDENTIALS: {
+    status: HttpStatus.UNAUTHORIZED,
+    message: 'Invalid credentials.',
+  },
+  ADMIN_MFA_REQUIRED: {
+    status: HttpStatus.UNAUTHORIZED,
+    message: 'A multi-factor code is required.',
+  },
+  ADMIN_MFA_INVALID: {
+    status: HttpStatus.UNAUTHORIZED,
+    message: 'The multi-factor code is invalid.',
+  },
+  ADMIN_INACTIVE: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'This admin account is not active.',
+  },
+  ADMIN_STEP_UP_REQUIRED: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'Please re-authenticate to perform this action.',
+  },
+  ADMIN_PERMISSION_DENIED: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'You do not have permission to perform this action.',
+  },
+  ADMIN_BOOTSTRAP_FORBIDDEN: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'Bootstrap is not available.',
+  },
+  ADMIN_NOT_FOUND: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'Not found.',
+  },
+  ADMIN_BUILTIN_ROLE_IMMUTABLE: {
+    status: HttpStatus.CONFLICT,
+    message: 'Built-in roles cannot be modified.',
+  },
+  ADMIN_INVITATION_INVALID: {
+    status: HttpStatus.GONE,
+    message: 'This invitation is invalid or has expired.',
+  },
+  // Transaction triage (Phase 3B): the txn is in a state that cannot be triaged
+  // (not settling, or a type with no reserve to refund) → 409 Conflict.
+  ADMIN_TXN_NOT_TRIAGEABLE: {
+    status: HttpStatus.CONFLICT,
+    message: 'This transaction cannot be triaged in its current state.',
+  },
+
+  // ── Admin config settings (layered-config console) → 409 / 422 ──────────────
+  ADMIN_SETTING_NOT_EDITABLE: {
+    status: HttpStatus.CONFLICT,
+    message: 'This setting cannot be edited.',
+  },
+  ADMIN_SETTING_INVALID: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'The proposed value is invalid for this setting.',
+  },
+  ADMIN_MULTI_CURRENCY_INVARIANT: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message:
+      'This change would leave an enabled currency without limits or pricing.',
+  },
+
   // ── Amount guards (engine) → 422 — clear, non-sensitive validation copy ─────
   AMOUNT_TOO_SMALL: {
     status: HttpStatus.UNPROCESSABLE_ENTITY,
@@ -215,6 +281,7 @@ const STATUS_TEXT: Readonly<Record<number, string>> = {
   [HttpStatus.FORBIDDEN]: 'Forbidden',
   [HttpStatus.NOT_FOUND]: 'Not Found',
   [HttpStatus.CONFLICT]: 'Conflict',
+  [HttpStatus.GONE]: 'Gone',
   [HttpStatus.UNPROCESSABLE_ENTITY]: 'Unprocessable Entity',
   [HttpStatus.TOO_MANY_REQUESTS]: 'Too Many Requests',
   [HttpStatus.SERVICE_UNAVAILABLE]: 'Service Unavailable',

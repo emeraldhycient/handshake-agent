@@ -1,4 +1,4 @@
-import type { ConfigService } from '@nestjs/config';
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type { PricingConfig } from '../../../core/config/configuration';
 import { ConfigRateProvider } from './config-rate.provider';
 
@@ -15,8 +15,8 @@ const PRICING: PricingConfig = {
   },
 };
 
-const configWith = (pricing: PricingConfig): ConfigService =>
-  ({ get: () => pricing }) as unknown as ConfigService;
+const configWith = (pricing: PricingConfig): EffectiveConfigService =>
+  ({ get: () => pricing }) as unknown as EffectiveConfigService;
 
 describe('ConfigRateProvider', () => {
   it('returns a rate quote with per-asset buy/sell spreads assembled from config', async () => {
@@ -62,13 +62,24 @@ describe('ConfigRateProvider', () => {
   it('fails closed when the asset has no rate for the requested fiat', async () => {
     const provider = new ConfigRateProvider(configWith(PRICING));
 
-    // Cast to FiatCurrency to simulate a future fiat not yet in the config;
+    // 'USD' is a known fiat code but has no configured rate here;
     // the runtime path must still reject fail-closed.
-    await expect(
-      provider.getRate(
-        'USDT',
-        'USD' as import('@handshake-agent/contracts').FiatCurrency,
-      ),
-    ).rejects.toThrow(/USD/);
+    await expect(provider.getRate('USDT', 'USD')).rejects.toThrow(/USD/);
+  });
+
+  it('reflects a DB AppSetting override of the base rate (EffectiveConfigService flows through)', async () => {
+    // An admin override of pricing.assets.USDT.baseRates.NGN must surface in the
+    // assembled rate quote, proving get('pricing') resolves the layered config.
+    const overridden: PricingConfig = {
+      ...PRICING,
+      assets: {
+        USDT: { ...PRICING.assets.USDT, baseRates: { NGN: 1750 } },
+      },
+    };
+    const provider = new ConfigRateProvider(configWith(overridden));
+
+    const rate = await provider.getRate('USDT', 'NGN');
+
+    expect(rate.baseRate).toBe(1750);
   });
 });

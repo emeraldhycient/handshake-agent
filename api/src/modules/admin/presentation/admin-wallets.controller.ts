@@ -16,15 +16,12 @@
  *   the same on-chain balance does NOT double-credit. Over-credits are flagged
  *   for manual review only; no auto-debit is ever performed (§3.1 / safety).
  *   NOT enabled as an unattended cron by default — must be triggered explicitly
- *   by an operator with ADMIN_API_TOKEN.
+ *   by an admin holding the matching Treasury permission.
  *
- * Guard: AdminTokenGuard (Bearer <ADMIN_API_TOKEN>). Fail-closed:
- *   - ADMIN_API_TOKEN unset → every request is denied (403). The endpoint ships
- *     disabled and unexploitable by default.
- *
- * Admin UI hookup seam:
- *   When the admin UI + proper admin-session auth is built, swap AdminTokenGuard
- *   for the session/role guard here (and in AdminModule providers).
+ * Guards: AdminSessionGuard + PermissionGuard (Task 11 — admin-session RBAC).
+ *   Each route declares its catalog permission via @RequirePermission; an admin
+ *   whose role lacks the grant is denied (default-deny, §3.3). The legacy
+ *   AdminTokenGuard is retained only for the Bull Board dashboard middleware.
  *
  * Architecture: presentation layer only. No Prisma, no domain logic, no agent.
  */
@@ -49,7 +46,9 @@ import type {
   EnqueueBackfillResponse,
 } from '@handshake-agent/contracts';
 
-import { AdminTokenGuard } from '../guards/admin-token.guard';
+import { AdminSessionGuard } from './admin-session.guard';
+import { PermissionGuard } from './permission.guard';
+import { RequirePermission } from './require-permission.decorator';
 import {
   BACKFILL_RUN_REPOSITORY,
   type IBackfillRunRepository,
@@ -68,7 +67,7 @@ import { ReconcileWalletDto } from './dto/reconcile-wallet.dto';
 const DEFAULT_BATCH_SIZE = 100;
 
 @Controller('admin/wallets')
-@UseGuards(AdminTokenGuard)
+@UseGuards(AdminSessionGuard, PermissionGuard)
 export class AdminWalletsController {
   constructor(
     @Inject(BACKFILL_RUN_REPOSITORY)
@@ -86,6 +85,11 @@ export class AdminWalletsController {
    */
   @Post('backfill-networks')
   @HttpCode(HttpStatus.ACCEPTED)
+  @RequirePermission(
+    'api_route',
+    'POST /admin/wallets/backfill-networks',
+    'execute',
+  )
   async backfillNetworks(
     @Body() dto: EnqueueBackfillDto,
   ): Promise<EnqueueBackfillResponse> {
@@ -117,6 +121,11 @@ export class AdminWalletsController {
    * Returns the current status of a BackfillRun. 404 when not found.
    */
   @Get('backfill-runs/:id')
+  @RequirePermission(
+    'api_route',
+    'GET /admin/wallets/backfill-runs/:id',
+    'read',
+  )
   async getBackfillRun(@Param('id') id: string): Promise<BackfillRunStatusDto> {
     const run = await this.runRepo.findById(id);
     if (!run) {
@@ -159,6 +168,7 @@ export class AdminWalletsController {
    */
   @Post('reconcile')
   @HttpCode(HttpStatus.OK)
+  @RequirePermission('api_route', 'POST /admin/wallets/reconcile', 'execute')
   async reconcileWallet(
     @Body() dto: ReconcileWalletDto,
   ): Promise<{ results: AssetReconciliationResult[] }> {

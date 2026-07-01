@@ -50,6 +50,9 @@ model AdminSession {
   expiresAt   DateTime  @db.Timestamptz
   createdAt   DateTime  @default(now()) @db.Timestamptz
   revokedAt   DateTime? @db.Timestamptz
+  /// Last successful step-up (re-auth) on this session; gates money-affecting /
+  /// limit-changing admin actions within ADMIN_STEP_UP_TTL_SECONDS (ADM-08).
+  stepUpCompletedAt DateTime? @db.Timestamptz
   ipAddress   String?
   userAgent   String?
 

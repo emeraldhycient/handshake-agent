@@ -7,10 +7,12 @@
  *   - No real Blockradar calls are made
  */
 
-import { ConfigService } from '@nestjs/config';
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { MockSwapProvider } from './mock-swap.provider';
 
-function makeConfig(overrides: Record<string, unknown> = {}): ConfigService {
+function makeConfig(
+  overrides: Record<string, unknown> = {},
+): EffectiveConfigService {
   const defaults: Record<string, unknown> = {
     'pricing.assets': {
       USDT: { baseRates: { NGN: 1600 } },
@@ -20,7 +22,7 @@ function makeConfig(overrides: Record<string, unknown> = {}): ConfigService {
   };
   return {
     get: (key: string) => defaults[key],
-  } as unknown as ConfigService;
+  } as unknown as EffectiveConfigService;
 }
 
 describe('MockSwapProvider', () => {
@@ -79,6 +81,30 @@ describe('MockSwapProvider', () => {
       });
       // rate = 1 → toAmount = 50
       expect(parseFloat(result.toAmount)).toBeCloseTo(50, 6);
+    });
+
+    it('reflects a DB AppSetting override of pricing.assets base rates (EffectiveConfigService flows through)', async () => {
+      // Admin halves USDT's NGN base rate; the USDT→BTC cross-rate must change
+      // accordingly, proving get('pricing.assets') resolves the layered config.
+      const providerOverridden = new MockSwapProvider(
+        makeConfig({
+          'pricing.assets': {
+            USDT: { baseRates: { NGN: 800 } },
+            BTC: { baseRates: { NGN: 100_000_000 } },
+          },
+        }),
+      );
+
+      const result = await providerOverridden.getQuote({
+        addressId: 'addr-1',
+        fromAssetId: 'mock-usdt-tron-asset-id-0000000000001',
+        toAssetId: 'mock-btc-asset-id',
+        amount: '100',
+      });
+
+      // rate = 800 / 100_000_000 = 0.000008 → toAmount = 100 * 0.000008 = 0.0008
+      expect(parseFloat(result.rate)).toBeCloseTo(0.000008, 9);
+      expect(parseFloat(result.toAmount)).toBeCloseTo(0.0008, 7);
     });
 
     it('returns fixed deterministic minAmount, slippage, networkFee, transactionFee, estimatedArrivalSec', async () => {

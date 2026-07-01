@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import type { FiatCurrency, SupportedAsset } from '@handshake-agent/contracts';
 
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type { PricingConfig } from '../../../core/config/configuration';
 import type {
   IRateProvider,
@@ -16,7 +16,7 @@ import type {
  */
 @Injectable()
 export class ConfigRateProvider implements IRateProvider {
-  constructor(private readonly config: ConfigService) {}
+  constructor(private readonly config: EffectiveConfigService) {}
 
   getRate(
     asset: SupportedAsset,

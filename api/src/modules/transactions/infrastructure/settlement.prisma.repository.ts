@@ -715,8 +715,13 @@ const TRANSACTION_SELECT_SELL = {
   fxRateSnapshot: true,
   metadata: true,
   processorTxRef: true,
+  onChainTxHash: true,
+  failureReason: true,
   pinVerifiedAt: true,
   createdAt: true,
+  executedAt: true,
+  completedAt: true,
+  failedAt: true,
 } as const;
 
 function toTransactionRecord(row: {
@@ -730,8 +735,13 @@ function toTransactionRecord(row: {
   fxRateSnapshot: unknown;
   metadata: unknown;
   processorTxRef: string | null;
+  onChainTxHash: string | null;
+  failureReason: string | null;
   pinVerifiedAt: Date | null;
   createdAt: Date;
+  executedAt: Date | null;
+  completedAt: Date | null;
+  failedAt: Date | null;
 }): TransactionRecord {
   return {
     id: row.id,
@@ -747,8 +757,13 @@ function toTransactionRecord(row: {
         : null,
     metadata: row.metadata as Record<string, unknown>,
     processorTxRef: row.processorTxRef,
+    onChainTxHash: row.onChainTxHash,
+    failureReason: row.failureReason,
     pinVerifiedAt: row.pinVerifiedAt,
     createdAt: row.createdAt,
+    executedAt: row.executedAt,
+    completedAt: row.completedAt,
+    failedAt: row.failedAt,
   };
 }
 

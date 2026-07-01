@@ -83,6 +83,12 @@ describe('WalletBalanceService', () => {
     const walletRepo = makeWalletRepo(wallet);
     const ledgerRepo: ILedgerRepository = {
       getAccountBalance: jest.fn().mockResolvedValue('29.97'),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     const rates: IRateProvider = {
       getRate: jest.fn().mockResolvedValue({
@@ -131,6 +137,10 @@ describe('WalletBalanceService', () => {
     const walletRepo = makeWalletRepo(wallet);
     const ledgerRepo: ILedgerRepository = {
       getAccountBalance: jest.fn().mockResolvedValue('29.97'),
+      listLedgerEntries: jest.fn(),
+      listByTransaction: jest.fn(),
+      getAccountHistory: jest.fn(),
+      verifyTransactionIntegrity: jest.fn(),
     };
     const rates: IRateProvider = {
       getRate: jest.fn().mockResolvedValue({
@@ -180,6 +190,12 @@ describe('WalletBalanceService', () => {
     const walletRepo = makeWalletRepo(null); // no wallet provisioned
     const ledgerRepo: ILedgerRepository = {
       getAccountBalance: jest.fn(),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     const rates: IRateProvider = {
       getRate: jest.fn().mockResolvedValue({
@@ -214,6 +230,12 @@ describe('WalletBalanceService', () => {
     const walletRepo = makeWalletRepo(wallet);
     const ledgerRepo: ILedgerRepository = {
       getAccountBalance: jest.fn().mockResolvedValue('200'),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     const rates: IRateProvider = {
       getRate: jest
@@ -254,6 +276,12 @@ describe('WalletBalanceService', () => {
         .mockImplementation((_type: string, _id: string, currency: string) =>
           Promise.resolve(currency === 'USDT' ? '10' : '200'),
         ),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     const rates: IRateProvider = {
       getRate: jest.fn().mockImplementation((asset: string) =>
@@ -309,6 +337,12 @@ describe('WalletBalanceService', () => {
         .mockImplementation((_type: string, _id: string, currency: string) =>
           Promise.resolve(currency === 'USDT' ? '29.97' : '0.5'),
         ),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     // Both assets fiat-tradeable in this test — getRate returns for both
     const rates: IRateProvider = {
@@ -357,6 +391,12 @@ describe('WalletBalanceService', () => {
     const walletRepo = makeWalletRepo(wallet);
     const ledgerRepo: ILedgerRepository = {
       getAccountBalance: jest.fn(),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     const rates: IRateProvider = {
       getRate: jest.fn(),
@@ -383,6 +423,12 @@ describe('WalletBalanceService', () => {
     const walletRepo = makeWalletRepo(wallet);
     const ledgerRepo: ILedgerRepository = {
       getAccountBalance: jest.fn(),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     const rates: IRateProvider = {
       getRate: jest.fn(),
@@ -412,6 +458,12 @@ describe('WalletBalanceService', () => {
     } as unknown as IWalletRepository;
     const ledgerRepo: ILedgerRepository = {
       getAccountBalance: jest.fn(),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     const rates: IRateProvider = {
       getRate: jest.fn(),

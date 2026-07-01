@@ -80,6 +80,9 @@ import { ProfileController } from './presentation/profile.controller';
     KycService,
     HandoffTokenService,
     IDENTITY_REPOSITORY,
+    // Phase 2, Task 2: export KYC_REPOSITORY so AdminModule can inject it for
+    // the admin KYC-review decision write path (updateKycProfileDecision).
+    KYC_REPOSITORY,
     KYC_PROVIDER,
     // WN-5: export USER_LISTER so AdminModule can wire it into WalletBackfillService
     USER_LISTER,

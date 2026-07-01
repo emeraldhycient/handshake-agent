@@ -22,6 +22,7 @@ import { validateEnv } from '../../core/config/env.schema';
 import { PrismaModule } from '../../core/prisma/prisma.module';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { CatalogModule } from '../../core/catalog/catalog.module';
+import { EffectiveConfigModule } from '../../core/config/effective-config.module';
 import { ProposalService } from '../transactions/application/proposal.service';
 import { SettlementReconciliationService } from '../transactions/application/settlement-reconciliation.service';
 import {
@@ -83,6 +84,10 @@ describe('WhatsAppModule (compile)', () => {
         // CatalogModule is @Global in the full app — import here so AssetRegistry
         // is available to ConversationsModule's ConversationService.
         CatalogModule,
+        // EffectiveConfigModule is @Global in the full app — import here so
+        // EffectiveConfigService is available to migrated services (ConfigRateProvider,
+        // DirectiveService, etc.) that now read tunable config through it.
+        EffectiveConfigModule,
         // ThrottlerModule is needed by KycController (part of IdentityModule,
         // which WhatsAppModule transitively depends on since K3).
         ThrottlerModule.forRoot([{ ttl: 60_000, limit: 10 }]),

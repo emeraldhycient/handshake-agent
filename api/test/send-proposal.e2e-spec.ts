@@ -179,10 +179,7 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
         // Delegate everything else to the real config
         return new StubConfigService().get(key);
       },
-    } as unknown as import('@nestjs/config').ConfigService<
-      import('../src/core/config/configuration').AppConfig,
-      true
-    >;
+    } as unknown as import('../src/core/config/application/effective-config.service').EffectiveConfigService;
     const sanctionsScreener = new MockSanctionsScreener(sanctionsConfigStub);
 
     // Wire services

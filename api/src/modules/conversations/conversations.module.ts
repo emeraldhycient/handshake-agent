@@ -22,10 +22,12 @@ import { CONVERSATION_REPOSITORY } from './application/ports/conversation.reposi
 import { MESSAGE_REPOSITORY } from './application/ports/message.repository.port';
 import { INTENT_REPOSITORY } from './application/ports/intent.repository.port';
 import { REPLY_REPOSITORY } from './application/ports/reply.repository.port';
+import { CONVERSATION_LOG_READ_REPOSITORY } from './application/ports/conversation-log-read.repository.port';
 import { ConversationPrismaRepository } from './infrastructure/conversation.prisma.repository';
 import { MessagePrismaRepository } from './infrastructure/message.prisma.repository';
 import { IntentPrismaRepository } from './infrastructure/intent.prisma.repository';
 import { ReplyPrismaRepository } from './infrastructure/reply.prisma.repository';
+import { ConversationLogReadPrismaRepository } from './infrastructure/conversation-log-read.prisma.repository';
 import { INBOUND_HANDLER } from '../whatsapp/application/ports/inbound-handler.port';
 import { ProposalService } from '../transactions/application/proposal.service';
 import { DirectiveService } from '../transactions/application/directive.service';
@@ -97,7 +99,13 @@ import { BalanceService } from '../balances/application/balance.service';
     { provide: MESSAGE_REPOSITORY, useClass: MessagePrismaRepository },
     { provide: INTENT_REPOSITORY, useClass: IntentPrismaRepository },
     { provide: REPLY_REPOSITORY, useClass: ReplyPrismaRepository },
+    // Read-only conversation-LOG repo for the admin Agent console (Phase 4 wave 2).
+    // Exported so AdminModule can inject it for the agent conversation-log surfaces.
+    {
+      provide: CONVERSATION_LOG_READ_REPOSITORY,
+      useClass: ConversationLogReadPrismaRepository,
+    },
   ],
-  exports: [INBOUND_HANDLER],
+  exports: [INBOUND_HANDLER, CONVERSATION_LOG_READ_REPOSITORY],
 })
 export class ConversationsModule {}

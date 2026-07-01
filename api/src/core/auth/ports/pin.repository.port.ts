@@ -40,4 +40,11 @@ export interface IPinRepository {
 
   /** Resets `pinFailureCount` to 0 and clears `pinLockedUntil` after a successful verify. */
   resetFailures(userId: string): Promise<void>;
+
+  /**
+   * Clears the PIN entirely: sets `pinHash` to null and resets
+   * `pinFailureCount`/`pinLockedUntil`. Used by an admin force-reset — it never
+   * sets a new PIN; the user must re-establish one via re-verification.
+   */
+  clearPin(userId: string): Promise<void>;
 }

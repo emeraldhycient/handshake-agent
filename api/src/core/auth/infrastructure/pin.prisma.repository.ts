@@ -60,4 +60,15 @@ export class PinPrismaRepository implements IPinRepository {
       },
     });
   }
+
+  async clearPin(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        pinHash: null,
+        pinFailureCount: 0,
+        pinLockedUntil: null,
+      },
+    });
+  }
 }

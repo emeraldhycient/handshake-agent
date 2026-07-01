@@ -266,7 +266,12 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
       config,
       clock,
     );
-    directiveService = new DirectiveService(directiveRepo, config, clock);
+    directiveService = new DirectiveService(
+      directiveRepo,
+      config,
+      clock,
+      config,
+    );
     beneficiaryService = new BeneficiaryService(
       beneficiaryRepo,
       fakeNameEnquiry,

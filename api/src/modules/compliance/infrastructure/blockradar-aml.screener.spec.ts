@@ -4,7 +4,8 @@
  * TDD: written against the spec in .superpowers/sdd/fix-AML-brief.md.
  *
  * HttpService is mocked — no live Blockradar calls in CI.
- * ConfigService is stubbed to return Blockradar env values + the catalog.
+ * ConfigService is stubbed to return Blockradar env values; EffectiveConfigService
+ * is stubbed to return the (admin-tunable) catalog.
  *
  * Verifies:
  *   - isBlacklisted:true → passed:false, correct reason + provider 'blockradar'
@@ -23,6 +24,7 @@ import { ConfigService } from '@nestjs/config';
 import { of, throwError } from 'rxjs';
 import type { AxiosError, AxiosResponse } from 'axios';
 
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { BlockradarAmlScreener } from './blockradar-aml.screener';
 import { SanctionsScreeningUnavailableError } from '../domain/compliance-errors';
 
@@ -38,36 +40,50 @@ const TRON_ADDRESS = 'TXyz000000000000000000000000000000001';
 // Stubs
 // ---------------------------------------------------------------------------
 
-function makeConfig(overrides: Record<string, unknown> = {}): ConfigService {
+/** Env-only stub (ConfigService) — Blockradar flat env keys (infra/secrets). */
+function makeEnvConfig(overrides: Record<string, unknown> = {}): ConfigService {
   const base: Record<string, unknown> = {
     BLOCKRADAR_BASE_URL: BASE_URL,
     BLOCKRADAR_API_KEY: API_KEY,
-    catalog: {
-      networks: {
-        TRON: {
-          id: 'TRON',
-          displayName: 'TRON (TRC-20)',
-          addressPattern: '^T[1-9A-HJ-NP-Za-km-z]{33}$',
-          enabled: true,
-          networkFeeCrypto: { USDT: '1' },
-          amlBlockchain: 'tron',
-        },
-        // Network without amlBlockchain — simulates a misconfigured entry
-        BADNET: {
-          id: 'BADNET',
-          displayName: 'Bad Network',
-          addressPattern: '.*',
-          enabled: true,
-          networkFeeCrypto: {},
-          // amlBlockchain intentionally absent
-        },
-      },
-    },
     ...overrides,
   };
   return {
     get: (key: string) => base[key],
   } as unknown as ConfigService;
+}
+
+/**
+ * Catalog stub (EffectiveConfigService) — the admin-tunable `catalog` section.
+ * Passing `catalog` overrides simulates a DB AppSetting override of the network
+ * → amlBlockchain mapping flowing through to the screener.
+ */
+function makeEffectiveConfig(
+  catalogOverride?: unknown,
+): EffectiveConfigService {
+  const catalog = catalogOverride ?? {
+    networks: {
+      TRON: {
+        id: 'TRON',
+        displayName: 'TRON (TRC-20)',
+        addressPattern: '^T[1-9A-HJ-NP-Za-km-z]{33}$',
+        enabled: true,
+        networkFeeCrypto: { USDT: '1' },
+        amlBlockchain: 'tron',
+      },
+      // Network without amlBlockchain — simulates a misconfigured entry
+      BADNET: {
+        id: 'BADNET',
+        displayName: 'Bad Network',
+        addressPattern: '.*',
+        enabled: true,
+        networkFeeCrypto: {},
+        // amlBlockchain intentionally absent
+      },
+    },
+  };
+  return {
+    get: (key: string) => (key === 'catalog' ? catalog : undefined),
+  } as unknown as EffectiveConfigService;
 }
 
 function axiosOk<T>(data: T): AxiosResponse<T> {
@@ -112,7 +128,11 @@ describe('BlockradarAmlScreener', () => {
     http = {
       get: jest.fn(),
     } as unknown as jest.Mocked<HttpService>;
-    screener = new BlockradarAmlScreener(http, makeConfig() as never);
+    screener = new BlockradarAmlScreener(
+      http,
+      makeEnvConfig(),
+      makeEffectiveConfig(),
+    );
   });
 
   // ── Passed (not blacklisted) ───────────────────────────────────────────────
@@ -264,6 +284,28 @@ describe('BlockradarAmlScreener', () => {
         { params: Record<string, string>; headers: Record<string, string> },
       ];
       expect(config.params.blockchain).toBe('tron');
+    });
+
+    it('honors a DB AppSetting override of the catalog amlBlockchain mapping (EffectiveConfigService flows through)', async () => {
+      // Admin overrides the catalog so TRON maps to a different blockchain id;
+      // the override must reach the AML lookup query param via get('catalog').
+      const overridden = new BlockradarAmlScreener(
+        http,
+        makeEnvConfig(),
+        makeEffectiveConfig({
+          networks: {
+            TRON: { id: 'TRON', amlBlockchain: 'tron-shasta' },
+          },
+        }),
+      );
+
+      await overridden.screen({ address: TRON_ADDRESS, network: 'TRON' });
+
+      const [, config] = http.get.mock.calls[0] as [
+        string,
+        { params: Record<string, string>; headers: Record<string, string> },
+      ];
+      expect(config.params.blockchain).toBe('tron-shasta');
     });
   });
 

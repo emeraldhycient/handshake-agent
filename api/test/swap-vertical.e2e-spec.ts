@@ -241,7 +241,12 @@ describe('Swap vertical — propose → execute → settle (Testcontainers Postg
       clock,
     );
     pinService = new PinService(pinRepo, config, clock);
-    directiveService = new DirectiveService(directiveRepo, config, clock);
+    directiveService = new DirectiveService(
+      directiveRepo,
+      config,
+      clock,
+      config as never,
+    );
     const assetRegistry = new AssetRegistry(config);
     seedRegistryAssets(assetRegistry);
     const walletService = new WalletService(

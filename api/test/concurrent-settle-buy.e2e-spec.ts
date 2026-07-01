@@ -205,7 +205,12 @@ describe('Concurrent buy settlement — idempotency + advisory lock (Testcontain
       clock,
     );
     pinService = new PinService(pinRepo, config, clock);
-    directiveService = new DirectiveService(directiveRepo, config, clock);
+    directiveService = new DirectiveService(
+      directiveRepo,
+      config,
+      clock,
+      config as never,
+    );
     const assetRegistry = new AssetRegistry(config);
     const walletService = new WalletService(
       fakeWalletProvider,
@@ -223,7 +228,7 @@ describe('Concurrent buy settlement — idempotency + advisory lock (Testcontain
       walletService,
       { getById: () => Promise.resolve(null) } as never,
       assetRegistry,
-      { getAccountBalance: () => Promise.resolve('0') },
+      { getAccountBalance: () => Promise.resolve('0') } as never,
       {
         screenSendDestination: () =>
           Promise.resolve({ passed: true, complianceEventId: '' }),

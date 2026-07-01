@@ -20,10 +20,9 @@
  */
 
 import { Injectable, Inject } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
-import type { Env } from '../../../core/config/env.schema';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import {
   BENEFICIARY_REPOSITORY,
   type IBeneficiaryRepository,
@@ -82,7 +81,7 @@ export class BeneficiaryService {
     @Inject(BANK_NAME_ENQUIRY)
     private readonly nameEnquiry: INameEnquiry,
     private readonly assetRegistry: AssetRegistry,
-    private readonly configService: ConfigService<Env, true>,
+    private readonly configService: EffectiveConfigService,
   ) {}
 
   // ── listForUser ────────────────────────────────────────────────────────────
@@ -261,10 +260,10 @@ export class BeneficiaryService {
   // ── Private helpers ────────────────────────────────────────────────────────
 
   private getCoolingOffSeconds(): number {
-    // Config is read at call time (not constructor) so DB-admin overrides apply.
-    // The key is a non-Env nested path; cast to unknown first then narrow at runtime.
+    // Config is read at call time (not constructor) so DB-admin AppSetting
+    // overrides take effect at runtime via EffectiveConfigService (root §7).
     const fromConfig: unknown = this.configService.get(
-      'beneficiary.cryptoCoolingOffSeconds' as keyof Env,
+      'beneficiary.cryptoCoolingOffSeconds',
     );
     if (typeof fromConfig === 'number' && fromConfig > 0) {
       return fromConfig;

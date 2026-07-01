@@ -12,6 +12,9 @@
 /// row ('0' genesis). A daily job re-walks the chain (writes an audit_chain_check).
 model AuditLog {
   id            String      @id @default(uuid(7)) @db.Uuid
+  /// Monotonic chain order (BIGSERIAL). Tie-free total order for the hash chain —
+  /// `append` reads max(seq), `verifyChain` walks seq asc. Not part of the hash.
+  seq           BigInt      @unique @default(autoincrement())
   /// Ties related events across a single request/flow end-to-end.
   correlationId String
   /// "system" | "user:<id>" | "admin:<id>" | external service name.

@@ -71,6 +71,22 @@ module.exports = {
       to: { path: '^web/(src/)?components/' },
     },
     {
+      name: 'web-admin-components-no-app',
+      comment:
+        'web-admin components must not import from app/ (app composes components, never the reverse).',
+      severity: 'error',
+      from: { path: '^web-admin/(src/)?components/' },
+      to: { path: '^web-admin/(src/)?app/' },
+    },
+    {
+      name: 'web-admin-lib-no-components',
+      comment:
+        'web-admin lib must not import from components (lib is lower in the stack and framework-agnostic).',
+      severity: 'error',
+      from: { path: '^web-admin/(src/)?lib/' },
+      to: { path: '^web-admin/(src/)?components/' },
+    },
+    {
       name: 'no-circular',
       comment: 'No circular dependencies anywhere in the monorepo.',
       severity: 'error',

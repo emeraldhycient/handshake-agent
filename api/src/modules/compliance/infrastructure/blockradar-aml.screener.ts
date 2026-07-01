@@ -25,10 +25,8 @@ import { firstValueFrom } from 'rxjs';
 import { randomUUID } from 'crypto';
 import type { AxiosError } from 'axios';
 
-import type {
-  AppConfig,
-  CatalogConfig,
-} from '../../../core/config/configuration';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
+import type { CatalogConfig } from '../../../core/config/configuration';
 import { SanctionsScreeningUnavailableError } from '../domain/compliance-errors';
 import type {
   ISanctionsScreener,
@@ -59,16 +57,19 @@ export class BlockradarAmlScreener implements ISanctionsScreener {
 
   constructor(
     private readonly http: HttpService,
-    private readonly config: ConfigService<AppConfig, true>,
+    // env-only reads (BLOCKRADAR_* flat keys) stay on the plain ConfigService —
+    // they are infra/secrets, NOT admin-tunable (root CLAUDE.md §7).
+    private readonly config: ConfigService,
+    // the `catalog` section IS admin-tunable — read it through EffectiveConfigService
+    // so an AppSetting override (e.g. a new network's amlBlockchain) takes effect.
+    private readonly effectiveConfig: EffectiveConfigService,
   ) {
     // Read env-level Blockradar config (same values BlockradarProvider uses).
-    // BLOCKRADAR_* are flat env keys — not nested under AppConfig — so we cast
-    // through unknown to the bare ConfigService (no strict type param) which
-    // accepts arbitrary string keys without the AppConfig index-signature clash.
-    const cs = this.config as unknown as ConfigService;
+    // BLOCKRADAR_* are flat env keys — not nested under AppConfig.
     this.baseUrl =
-      cs.get<string>('BLOCKRADAR_BASE_URL') ?? 'https://api.blockradar.co/v1';
-    this.apiKey = cs.get<string>('BLOCKRADAR_API_KEY') ?? '';
+      this.config.get<string>('BLOCKRADAR_BASE_URL') ??
+      'https://api.blockradar.co/v1';
+    this.apiKey = this.config.get<string>('BLOCKRADAR_API_KEY') ?? '';
   }
 
   async screen(input: SanctionsScreenInput): Promise<SanctionsScreenResult> {
@@ -124,9 +125,7 @@ export class BlockradarAmlScreener implements ISanctionsScreener {
    * (fail-closed — an unknown network must not silently pass).
    */
   private resolveBlockchain(network: string): string {
-    const catalog = (
-      this.config as unknown as ConfigService
-    ).get<CatalogConfig>('catalog');
+    const catalog = this.effectiveConfig.get<CatalogConfig>('catalog');
     const networkMeta = catalog?.networks?.[network];
     const blockchain = networkMeta?.amlBlockchain;
 

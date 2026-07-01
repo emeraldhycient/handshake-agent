@@ -7,11 +7,13 @@ import { AnthropicLlmProvider } from './infrastructure/anthropic-llm.provider';
  * AgentModule — wires the framework-agnostic agent core into NestJS.
  *
  * Provider bindings:
- *   LLM_PROVIDER  → AnthropicLlmProvider  (reads ANTHROPIC_API_KEY + AGENT_MODEL from env)
+ *   LLM_PROVIDER  → AnthropicLlmProvider  (ANTHROPIC_API_KEY from env; model id +
+ *                                          enablement from the layered config, §7)
  *   AGENT_PORT    → AgentService           (what ConversationService will inject in Phase 2.3)
  *
- * `ConfigModule` is global (registered in AppModule) so AnthropicLlmProvider
- * receives a ConfigService without an explicit import here.
+ * `ConfigModule` and `EffectiveConfigModule` are both global (registered in
+ * AppModule) so AnthropicLlmProvider + AgentService receive ConfigService and
+ * EffectiveConfigService without an explicit import here.
  *
  * Dependency-cruiser invariants respected:
  *   - agent/core and agent/application never import infrastructure.

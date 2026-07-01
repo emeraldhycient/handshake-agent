@@ -5,6 +5,8 @@ import type {
   ConversationTurn,
   LlmProvider,
 } from '../core/ports/llm-provider.port';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
+import { AgentUnavailableError } from '../domain/agent-errors';
 import { LLM_PROVIDER, type IAgentPort } from './ports/agent.port';
 
 /**
@@ -15,9 +17,12 @@ import { LLM_PROVIDER, type IAgentPort } from './ports/agent.port';
  *   - The port tokens/interfaces from this layer
  *   - Nest DI decorators
  *
- * It imports nothing from `infrastructure` (enforced by dependency-cruiser
- * rule `api-agent-pure-layers-no-infra`); the concrete `LlmProvider`
- * implementation is injected via the `LLM_PROVIDER` token at module level.
+ * It imports nothing from any feature module's `infrastructure` (enforced by
+ * dependency-cruiser rule `api-agent-pure-layers-no-infra`); the concrete
+ * `LlmProvider` implementation is injected via the `LLM_PROVIDER` token at module
+ * level. The layered config (`EffectiveConfigService`, in `core/config/application`)
+ * is the only non-port collaborator — it gates enablement (§3.1/§7). The agent
+ * CORE (`agent/core`) stays framework-agnostic; only this thin Nest adapter touches it.
  *
  * TODO(perf): cache the compiled LangGraph graph instance across calls rather
  * than recompiling it on every `run()` invocation — acceptable for the current
@@ -25,9 +30,18 @@ import { LLM_PROVIDER, type IAgentPort } from './ports/agent.port';
  */
 @Injectable()
 export class AgentService implements IAgentPort {
-  constructor(@Inject(LLM_PROVIDER) private readonly llm: LlmProvider) {}
+  constructor(
+    @Inject(LLM_PROVIDER) private readonly llm: LlmProvider,
+    private readonly effectiveConfig: EffectiveConfigService,
+  ) {}
 
   async run(userText: string, history?: ConversationTurn[]): Promise<Intent> {
+    // Enablement gate (admin-tunable agent.enabled, §7): fail-closed BEFORE any
+    // LLM call when the agent is disabled. Surfaces as 503 (AGENT_UNAVAILABLE).
+    if (this.effectiveConfig.get<boolean>('agent.enabled') === false) {
+      throw new AgentUnavailableError();
+    }
+
     // Per-call graph compile (see TODO above). The LlmProvider closure is
     // captured inside runAgent — it is never read directly from the graph.
     // `history` is short-term memory supplied by the calling layer (no DB

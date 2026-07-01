@@ -59,6 +59,21 @@ export interface CompleteVerificationForUserAtomicResult {
 }
 
 // ---------------------------------------------------------------------------
+// Admin KYC-review decision (Phase 2, Task 2)
+// ---------------------------------------------------------------------------
+
+export interface UpdateKycProfileDecisionInput {
+  /** Target KYC status, e.g. 'verified' | 'rejected'. */
+  status: string;
+  /** Target KYC tier, e.g. 'tier_2' | 'unverified'. */
+  tier: string;
+  /** Set on rejection; null/undefined clears it (e.g. on approval). */
+  rejectionReason?: string | null;
+  /** AdminUser id of the reviewer (attribution; full trail in AuditLog). */
+  reviewedByAdminId: string;
+}
+
+// ---------------------------------------------------------------------------
 // Port interface
 // ---------------------------------------------------------------------------
 
@@ -92,4 +107,18 @@ export interface IKycRepository {
   completeVerificationForUserAtomic(
     input: CompleteVerificationForUserAtomicInput,
   ): Promise<CompleteVerificationForUserAtomicResult>;
+
+  /**
+   * Applies an admin KYC-review decision atomically (one $transaction):
+   *   1. Updates the KycProfile (status/tier/rejectionReason/reviewedByAdminId;
+   *      verifiedAt is stamped when the decision is 'verified', else left null).
+   *   2. Mirrors the decision onto the User (kycStatus/kycTier) so the
+   *      server-side gate (§3.3) reflects it without a second read.
+   *
+   * Pre-condition: the KycProfile already exists (created during submission).
+   */
+  updateKycProfileDecision(
+    userId: string,
+    decision: UpdateKycProfileDecisionInput,
+  ): Promise<void>;
 }

@@ -62,6 +62,18 @@ function makeRepo(
       contact: baseContact(),
       channelIdentity: baseCI({ contactId: 'contact-id-1' }),
     }),
+    // Admin reads/writes — unused by IdentityService; stubbed for type completeness.
+    listUsers: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listUsersPendingKycReview: jest
+      .fn()
+      .mockResolvedValue({ items: [], nextCursor: null }),
+    loadUserWithKycAndDevices: jest.fn().mockResolvedValue(null),
+    listDevicesForUser: jest.fn().mockResolvedValue([]),
+    setUserStatus: jest.fn().mockResolvedValue(undefined),
+    setKycTier: jest.fn().mockResolvedValue(undefined),
+    setSimSwapDetectedAt: jest.fn().mockResolvedValue(undefined),
+    revokeDevice: jest.fn().mockResolvedValue(undefined),
+    unpinDevice: jest.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }

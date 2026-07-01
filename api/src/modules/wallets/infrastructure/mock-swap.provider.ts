@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type {
   ISwapProvider,
   GetSwapQuoteInput,
@@ -39,7 +39,7 @@ export class MockSwapProvider implements ISwapProvider {
   /** Fixed slippage bps. */
   private static readonly MOCK_SLIPPAGE_BPS = 50;
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(private readonly config: EffectiveConfigService) {}
 
   /**
    * Returns a deterministic quote derived from the catalog base rates (NGN).

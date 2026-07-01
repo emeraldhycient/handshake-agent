@@ -1,9 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type {
-  AppConfig,
   FiatLimits,
   LimitsConfig,
   TierLimits,
@@ -107,10 +106,8 @@ export interface AssertCanTransactInput {
  *   4. Rolling 24-h fiat total would not exceed daily limit
  *   5. Rolling 24-h tx count + 1 would not exceed daily count limit
  *
- * TODO(config-admin): once the DB-admin AppSetting layer is built, the limits
- * returned by ConfigService should be overridable at runtime without a deploy
- * (root CLAUDE.md §7). The call-site here does not need to change — just add
- * the override layer inside the ConfigService resolution chain.
+ * Tier limits are tunable via EffectiveConfigService / AppSetting (root CLAUDE.md §7):
+ * an admin override flows through the same `get('limits')` call site at runtime.
  */
 @Injectable()
 export class KycGateService {
@@ -119,7 +116,7 @@ export class KycGateService {
     private readonly identityRepo: IIdentityRepository,
     @Inject(VELOCITY_REPOSITORY)
     private readonly velocityRepo: IVelocityRepository,
-    private readonly config: ConfigService<AppConfig, true>,
+    private readonly config: EffectiveConfigService,
     @Inject(CLOCK)
     private readonly clock: Clock,
   ) {}

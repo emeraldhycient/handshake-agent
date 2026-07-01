@@ -66,11 +66,16 @@ function makeEventRepo(
     ruleOrHit: null,
     details: {},
     status: 'flagged',
+    dispositionComment: null,
+    dispositionAt: null,
     createdAt: new Date(),
     ...record,
   };
   return {
     create: jest.fn().mockResolvedValue(base),
+    listByStatus: jest.fn(),
+    findById: jest.fn(),
+    updateDisposition: jest.fn(),
   };
 }
 

@@ -45,6 +45,7 @@ import type {
   TransactionRecord,
 } from './ports/transaction.repository.port';
 import type { ISettlementOutboxRepository } from './ports/settlement-outbox.repository.port';
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type { DirectiveService } from './directive.service';
 import type { DirectiveGrantRecord } from './ports/directive.repository.port';
 import { ExecutionService } from './execution.service';
@@ -160,8 +161,13 @@ const STUB_TXN: TransactionRecord = {
   fxRateSnapshot: '1600',
   metadata: { asset: 'USDT', fiatAmount: '10000', fiatCurrency: 'NGN' },
   processorTxRef: null,
+  onChainTxHash: null,
+  failureReason: null,
   pinVerifiedAt: FIXED_NOW,
   createdAt: FIXED_NOW,
+  executedAt: null,
+  completedAt: null,
+  failedAt: null,
 };
 
 const STUB_COLLECTION = {
@@ -207,6 +213,8 @@ function makeTransactionRepo(
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
     listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
     findByUserId: jest.fn().mockResolvedValue([]),
+    listAll: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listByStatus: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
   };
 }
 
@@ -227,6 +235,8 @@ function makeOutboxRepo(): jest.Mocked<ISettlementOutboxRepository> {
     findPending: jest.fn().mockResolvedValue([]),
     markAttempt: jest.fn().mockResolvedValue(undefined),
     complete: jest.fn().mockResolvedValue(undefined),
+    findByTransactionId: jest.fn().mockResolvedValue(null),
+    resetToPending: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -439,22 +449,30 @@ function makePaymentProvider(
 
 const stubClock: Clock = { now: () => FIXED_NOW };
 
-// Stub ConfigService (returns the buy/sell config values).
-const stubConfig = {
-  get: jest.fn((key: string) => {
-    if (key === 'buy') return { maxDriftBps: 50 };
-    if (key === 'sell') return { maxDriftBps: 50 };
-    // pricing.assets.USDT.baseRates.NGN is required by executeSend's KYC-gate guard.
-    if (key === 'pricing')
-      return {
-        assets: {
-          USDT: { baseRates: { NGN: 1600 } },
-          BTC: { baseRates: { NGN: 85_000_000 } },
-        },
-      };
-    return undefined;
-  }),
-};
+// Stub EffectiveConfigService (returns the buy/sell/swap/pricing config values).
+// A `buyMaxDriftBps` override simulates a DB AppSetting override of buy.maxDriftBps
+// flowing through the engine's constructor read.
+function makeStubConfig(opts: { buyMaxDriftBps?: number } = {}): {
+  get: jest.Mock;
+} {
+  return {
+    get: jest.fn((key: string) => {
+      if (key === 'buy') return { maxDriftBps: opts.buyMaxDriftBps ?? 50 };
+      if (key === 'sell') return { maxDriftBps: 50 };
+      // pricing.assets.USDT.baseRates.NGN is required by executeSend's KYC-gate guard.
+      if (key === 'pricing')
+        return {
+          assets: {
+            USDT: { baseRates: { NGN: 1600 } },
+            BTC: { baseRates: { NGN: 85_000_000 } },
+          },
+        };
+      return undefined;
+    }),
+  };
+}
+
+const stubConfig = makeStubConfig();
 
 // ---------------------------------------------------------------------------
 // Builder
@@ -478,6 +496,7 @@ function buildService(
       Pick<IPaymentProvider, 'createCollection' | 'verify'>
     >;
     assetRegistry?: jest.Mocked<AssetRegistry>;
+    config?: EffectiveConfigService;
   } = {},
 ): ExecutionService {
   return new ExecutionService(
@@ -498,13 +517,22 @@ function buildService(
       (makeWalletService() as unknown as WalletService),
     (overrides.paymentProvider as unknown as IPaymentProvider) ??
       (makePaymentProvider() as unknown as IPaymentProvider),
-    stubConfig as never,
+    (overrides.config as unknown as EffectiveConfigService) ??
+      (stubConfig as unknown as EffectiveConfigService),
     stubClock,
     overrides.assetRegistry ?? makeAssetRegistry(),
     // beneficiaryService stub (sell tests override via buildSellService helper)
     { getById: jest.fn().mockResolvedValue(null) } as never,
     // ledgerRepo stub
-    { getAccountBalance: jest.fn().mockResolvedValue('100') },
+    {
+      getAccountBalance: jest.fn().mockResolvedValue('100'),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
+    },
     // identityService: optional, buy path does not notify
     undefined,
     // whatsAppSender: optional, buy path does not notify
@@ -919,6 +947,28 @@ describe('ExecutionService.executeBuy', () => {
     expect(result.status).toBe('settling');
   });
 
+  it('honors a DB AppSetting override of buy.maxDriftBps (EffectiveConfigService flows through the engine)', async () => {
+    // Stored rate 1600, fresh rate 1601 → drift ≈ 6.25 bps.
+    // Base config (50 bps) would ACCEPT this. An admin override tightening
+    // buy.maxDriftBps to 1 bp must make the SAME drift throw QuoteDriftError,
+    // proving the override flows through the engine's constructor read.
+    const smallDriftQuote: QuoteBuyOutput = { ...FRESH_QUOTE, fxRate: '1601' };
+    const transactionRepo = makeTransactionRepo();
+
+    const svc = buildService({
+      quotesService: makeQuotesService(smallDriftQuote),
+      transactionRepo,
+      config: makeStubConfig({
+        buyMaxDriftBps: 1,
+      }) as unknown as EffectiveConfigService,
+    });
+
+    await expect(svc.executeBuy(BASE_INPUT)).rejects.toBeInstanceOf(
+      QuoteDriftError,
+    );
+    expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+  });
+
   // ── KYC gate throws ───────────────────────────────────────────────────────
 
   it('KYC gate throws → propagates; no Transaction created', async () => {
@@ -1220,6 +1270,8 @@ function makeTransactionRepoForSettle(
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
     listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
     findByUserId: jest.fn().mockResolvedValue([]),
+    listAll: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listByStatus: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
   };
 }
 
@@ -1522,8 +1574,13 @@ const STUB_SELL_TXN: TransactionRecord = {
     providerRef: PROVIDER_REF,
   },
   processorTxRef: null,
+  onChainTxHash: null,
+  failureReason: null,
   pinVerifiedAt: FIXED_NOW,
   createdAt: FIXED_NOW,
+  executedAt: null,
+  completedAt: null,
+  failedAt: null,
 };
 
 const STUB_BENEFICIARY = {
@@ -1577,9 +1634,19 @@ function makeBeneficiaryService(
  */
 function makeLedgerRepo(balance: string = '100'): {
   getAccountBalance: jest.Mock;
+  listLedgerEntries: jest.Mock;
+  listByTransaction: jest.Mock;
+  getAccountHistory: jest.Mock;
+  verifyTransactionIntegrity: jest.Mock;
 } {
   return {
     getAccountBalance: jest.fn().mockResolvedValue(balance),
+    listLedgerEntries: jest.fn().mockResolvedValue([]),
+    listByTransaction: jest.fn().mockResolvedValue([]),
+    getAccountHistory: jest.fn().mockResolvedValue([]),
+    verifyTransactionIntegrity: jest
+      .fn()
+      .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
   };
 }
 
@@ -2104,6 +2171,12 @@ describe('ExecutionService.executeSell', () => {
         callOrder.push('balance_check');
         return Promise.resolve('100');
       }),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     const directiveService = {
       consume: jest.fn().mockImplementation(() => {
@@ -2298,6 +2371,8 @@ function makeTransactionRepoForSellSettle(
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
     listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
     findByUserId: jest.fn().mockResolvedValue([]),
+    listAll: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listByStatus: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
   };
 }
 
@@ -2670,8 +2745,13 @@ const STUB_SEND_TXN: TransactionRecord = {
     velocityFiatCurrency: 'NGN',
   },
   processorTxRef: null,
+  onChainTxHash: null,
+  failureReason: null,
   pinVerifiedAt: FIXED_NOW,
   createdAt: FIXED_NOW,
+  executedAt: null,
+  completedAt: null,
+  failedAt: null,
 };
 
 const STUB_CRYPTO_BENEFICIARY: BeneficiaryRecord = {
@@ -2736,6 +2816,8 @@ function makeTransactionRepoForSend(
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
     listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
     findByUserId: jest.fn().mockResolvedValue([]),
+    listAll: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listByStatus: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
   };
 }
 
@@ -3508,6 +3590,12 @@ describe('ExecutionService.executeSend', () => {
         callOrder.push('balance');
         return Promise.resolve('100');
       }),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     };
     const beneficiaryService = {
       getById: jest.fn().mockImplementation(() => {
@@ -3726,6 +3814,8 @@ function makeTransactionRepoForSendSettle(
     mergeMetadata: jest.fn().mockResolvedValue(undefined),
     listByUserInRange: jest.fn().mockResolvedValue({ rows: [], total: 0 }),
     findByUserId: jest.fn().mockResolvedValue([]),
+    listAll: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listByStatus: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
   };
 }
 
@@ -4034,8 +4124,13 @@ const STUB_SWAP_TXN: TransactionRecord = {
     velocityFiatCurrency: 'NGN',
   },
   processorTxRef: null,
+  onChainTxHash: null,
+  failureReason: null,
   pinVerifiedAt: FIXED_NOW,
   createdAt: FIXED_NOW,
+  executedAt: null,
+  completedAt: null,
+  failedAt: null,
 };
 
 const STUB_SWAP_EXECUTE_OUTPUT = {
@@ -4102,7 +4197,13 @@ function buildSwapService(
     kycGate?: unknown;
     directiveService?: unknown;
     pinService?: unknown;
-    ledgerRepo?: { getAccountBalance: jest.Mock };
+    ledgerRepo?: {
+      getAccountBalance: jest.Mock;
+      listLedgerEntries: jest.Mock;
+      listByTransaction?: jest.Mock;
+      getAccountHistory?: jest.Mock;
+      verifyTransactionIntegrity?: jest.Mock;
+    };
     swapProvider?: { getQuote: jest.Mock; execute: jest.Mock };
     walletService?: jest.Mocked<
       Pick<WalletService, 'getOrProvisionNetworkWallet'>
@@ -4136,8 +4237,14 @@ function buildSwapService(
     stubClock,
     makeAssetRegistry(),
     { getById: jest.fn().mockResolvedValue(null) } as never,
-    overrides.ledgerRepo ?? {
+    (overrides.ledgerRepo as never) ?? {
       getAccountBalance: jest.fn().mockResolvedValue('100'),
+      listLedgerEntries: jest.fn().mockResolvedValue([]),
+      listByTransaction: jest.fn().mockResolvedValue([]),
+      getAccountHistory: jest.fn().mockResolvedValue([]),
+      verifyTransactionIntegrity: jest
+        .fn()
+        .mockResolvedValue({ balanced: true, legCount: 0, brokenAt: null }),
     },
     undefined, // identityService
     undefined, // whatsAppSender

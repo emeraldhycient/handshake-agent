@@ -47,8 +47,8 @@ export interface TierLimits {
  * KYC-tier limit set for a single fiat currency. `unverified` has no entry —
  * any transaction attempt fails the KYC check before limits are consulted.
  *
- * TODO(config-admin): once the DB-admin AppSetting layer is built, these
- * defaults should be overridable at runtime without a deploy (root CLAUDE.md §7).
+ * These defaults are overridable at runtime via AppSetting / EffectiveConfigService
+ * (the DB-admin layer now exists) — no deploy required (root CLAUDE.md §7).
  */
 export interface FiatLimits {
   tier_1: TierLimits;
@@ -79,7 +79,7 @@ export interface StepUpConfig {
    * After this window, assertStepUpFresh will throw StepUpRequiredError.
    * Admin-tunable later (DB-admin AppSetting layer, root §7).
    * Default: 900 seconds (15 minutes).
-   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   * Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
    */
   ttlSeconds: number;
 }
@@ -168,7 +168,7 @@ export interface BeneficiaryConfig {
   /**
    * Default crypto cooling-off window in seconds (IDN-08).
    * Admin-tunable via the DB-admin AppSetting layer.
-   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   * Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
    */
   cryptoCoolingOffSeconds: number;
   /**
@@ -202,7 +202,7 @@ export interface ComplianceConfig {
    *
    * Adding a new fiat = add a key here; no code change required.
    *
-   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   * Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
    */
   travelRuleThresholds: Record<string, number>;
 
@@ -215,8 +215,8 @@ export interface ComplianceConfig {
    * The real sanctions adapter (OpenSanctions, TRM) will NOT read this field —
    * it is an operational knob for the mock only.
    *
-   * TODO(config-admin): replace with the DB-admin AppSetting layer so operators
-   * can update the list without a deploy.
+   * Overridable at runtime via AppSetting / EffectiveConfigService (the DB-admin
+   * layer now exists) so operators can update the list without a deploy (root CLAUDE.md §7).
    */
   sanctionsDenylist: string[];
 }
@@ -269,7 +269,7 @@ export interface CatalogNetwork {
    *
    * TRC-20 USDT: Blockradar absorbs the TRX gas cost and charges a flat USDT
    * fee from the transferred amount. The initial default is '1' USDT per send.
-   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   * Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
    */
   networkFeeCrypto: Record<string, string>;
   /**
@@ -312,7 +312,7 @@ export interface CatalogConfig {
    * Validity window in seconds for send quotes. The quote must be confirmed
    * before this window expires.
    * Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
-   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   * Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
    */
   sendQuoteExpiresInSec: number;
 }
@@ -369,14 +369,14 @@ export interface VoiceConfig {
    * Maximum allowed voice note upload size in bytes.
    * Default: 15 MB. Enforced by the voice endpoint (Task 9) before transcription.
    * Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
-   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   * Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
    */
   maxUploadBytes: number;
   /**
    * Allowed MIME types for voice note uploads.
    * Enforced by the voice endpoint (Task 9) before transcription.
    * Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
-   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   * Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
    */
   allowedMimeTypes: string[];
 }
@@ -388,7 +388,7 @@ export interface WhatsAppMediaConfig {
    * Default: 25 MB (Meta's stated per-message media limit).
    * Enforced by the WhatsApp media client (Task 14) before download/processing.
    * Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
-   * TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+   * Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
    */
   maxMediaBytes: number;
 }
@@ -400,6 +400,32 @@ export interface WhatsAppMediaConfig {
 export interface MediaConfig {
   voice: VoiceConfig;
   whatsapp: WhatsAppMediaConfig;
+}
+
+/**
+ * Ticketing-vertical configuration (Phase 4 wave 2). Admin-tunable via the
+ * DB-admin AppSetting layer (§7). `enabled` is fail-closed (default off) — the
+ * vertical ships disabled until an operator flips the flag (no deploy required).
+ */
+export interface TicketingConfig {
+  /** Service-registry enablement flag for the ticketing vertical (§7). */
+  enabled: boolean;
+  /** Handshake platform commission per ticket order, in basis points. */
+  commissionBps: number;
+}
+
+/**
+ * Embedded-agent configuration (Phase 4 wave 2). Admin-tunable via the DB-admin
+ * AppSetting layer (§7). The system prompt is intentionally NOT a config value —
+ * it is read-only and never editable (§3.1/§6); the ANTHROPIC_API_KEY is a secret
+ * and stays env-only. `modelId` defaults to the AGENT_MODEL env value so the agent
+ * behaves identically with no override.
+ */
+export interface AgentConfig {
+  /** Enablement flag; when false AgentService throws AgentUnavailableError (§3.1). */
+  enabled: boolean;
+  /** The Anthropic model id used for intent extraction (mirrors env AGENT_MODEL). */
+  modelId: string;
 }
 
 export interface AppConfig {
@@ -416,6 +442,8 @@ export interface AppConfig {
   reconciliation: ReconciliationConfig;
   statement: StatementConfig;
   media: MediaConfig;
+  ticketing: TicketingConfig;
+  agent: AgentConfig;
 }
 
 /**
@@ -575,7 +603,7 @@ const buildConfig = (): AppConfig => ({
         // Flat USDT network fee per on-chain send on TRC-20.
         // Blockradar absorbs the TRX gas and charges a flat USDT fee.
         // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
-        // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+        // Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
         networkFeeCrypto: {
           USDT: '1',
           // Flat TRX send fee (native TRC transfer; cheap bandwidth/energy).
@@ -610,7 +638,7 @@ const buildConfig = (): AppConfig => ({
     // A human needs time to read the itemized confirmation and enter a PIN;
     // 30s was too short to complete the flow. Matches the directive TTL (300s).
     // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
-    // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+    // Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
     sendQuoteExpiresInSec: 300,
   },
   buy: {
@@ -636,7 +664,7 @@ const buildConfig = (): AppConfig => ({
     // Non-live currencies have thresholds defined here so they are ready when enabled;
     // they are never reached in practice while the currency has enabled:false in catalog.
     // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
-    // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+    // Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
     travelRuleThresholds: {
       NGN: 1_000_000, // CBN circular: ₦1,000,000
       // Non-live: placeholders aligned to FATF Travel Rule equivalents (~USD 1,000).
@@ -724,7 +752,7 @@ const buildConfig = (): AppConfig => ({
       // 15-minute step-up validity window. Matches the directive TTL so a user
       // completing PIN within the directive window gets a full 15-minute session.
       // Admin-tunable later (DB-admin AppSetting layer, root CLAUDE.md §7).
-      // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+      // Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
       ttlSeconds: 900,
     },
     jwt: {
@@ -746,7 +774,7 @@ const buildConfig = (): AppConfig => ({
   beneficiary: {
     // 24-hour cooling-off for new crypto-address beneficiaries (IDN-08).
     // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
-    // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+    // Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
     cryptoCoolingOffSeconds: 24 * 60 * 60,
     // Empty by default — no account configured as "not found" for the mock.
     // Populate in config/test env to exercise the NameEnquiryFailedError path.
@@ -777,7 +805,7 @@ const buildConfig = (): AppConfig => ({
     voice: {
       // 15 MB — reasonable ceiling for a voice note before transcription.
       // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
-      // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+      // Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
       maxUploadBytes: 15_000_000,
       // Accepted voice note MIME types. Task 9 (POST /chat/voice) validates against this list.
       allowedMimeTypes: [
@@ -792,9 +820,25 @@ const buildConfig = (): AppConfig => ({
       // 25 MB — Meta's per-message media limit (audio/image/document/video).
       // Enforced by the WhatsApp media client (Task 14) before download/processing.
       // Admin-tunable via the DB-admin AppSetting layer (CLAUDE.md §7).
-      // TODO(config-admin): expose via AppSetting once the DB-admin layer is built.
+      // Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
       maxMediaBytes: 25_000_000,
     },
+  },
+  // ── Ticketing vertical (Phase 4 wave 2, CLAUDE.md §7) ──────────────────────
+  // Fail-closed: ships DISABLED until an operator flips the flag (no deploy).
+  // commissionBps is 0 by default; admin-tunable via the DB-admin AppSetting layer.
+  ticketing: {
+    enabled: false,
+    commissionBps: 0,
+  },
+  // ── Embedded agent (Phase 4 wave 2, CLAUDE.md §7) ──────────────────────────
+  // enabled defaults true (current behaviour). modelId mirrors the AGENT_MODEL env
+  // value (same env-derived pattern as catalog.networks.TRON.masterWalletId above)
+  // so the agent behaves IDENTICALLY with no DB override. The system prompt is NOT
+  // a config value (read-only, §3.1/§6); the ANTHROPIC_API_KEY stays env-only.
+  agent: {
+    enabled: true,
+    modelId: process.env['AGENT_MODEL'] ?? 'claude-opus-4-8',
   },
 });
 

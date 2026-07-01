@@ -22,6 +22,7 @@ import { ConfigService } from '@nestjs/config';
 
 import { hmacHex, sha256Hex } from '../../../core/crypto/hmac';
 import { CLOCK, type Clock } from '../../../core/common/clock';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import {
   DIRECTIVE_REPOSITORY,
   type IDirectiveRepository,
@@ -106,11 +107,16 @@ export class DirectiveService {
   constructor(
     @Inject(DIRECTIVE_REPOSITORY)
     private readonly directiveRepo: IDirectiveRepository,
+    // env-only read (DIRECTIVE_SIGNING_KEY) stays on the plain ConfigService —
+    // a secret, NOT admin-tunable (root §7).
     private readonly config: ConfigService,
     @Inject(CLOCK)
     private readonly clock: Clock,
+    // directive.ttlSeconds IS admin-tunable — read via EffectiveConfigService.
+    private readonly effectiveConfig: EffectiveConfigService,
   ) {
-    const ttlSeconds = this.config.get<number>('directive.ttlSeconds') ?? 300;
+    const ttlSeconds =
+      this.effectiveConfig.get<number>('directive.ttlSeconds') ?? 300;
     this.ttlMs = ttlSeconds * 1000;
     this.signingKey = this.config.get<string>('DIRECTIVE_SIGNING_KEY') ?? '';
   }

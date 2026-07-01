@@ -217,7 +217,12 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
       clock,
     );
     pinService = new PinService(pinRepo, config, clock);
-    directiveService = new DirectiveService(directiveRepo, config, clock);
+    directiveService = new DirectiveService(
+      directiveRepo,
+      config,
+      clock,
+      config,
+    );
     const assetRegistry = new AssetRegistry(config);
     const walletService = new WalletService(
       fakeWalletProvider,
@@ -237,7 +242,14 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
       // beneficiaryService and ledgerRepo are not used in buy-proposal tests
       { getById: () => Promise.resolve(null) } as never,
       assetRegistry,
-      { getAccountBalance: () => Promise.resolve('0') },
+      {
+        getAccountBalance: () => Promise.resolve('0'),
+        listLedgerEntries: () => Promise.resolve([]),
+        listByTransaction: () => Promise.resolve([]),
+        getAccountHistory: () => Promise.resolve([]),
+        verifyTransactionIntegrity: () =>
+          Promise.resolve({ balanced: true, legCount: 0, brokenAt: null }),
+      },
       // complianceService and configService are required deps but not invoked on the buy path.
       {
         screenSendDestination: () =>

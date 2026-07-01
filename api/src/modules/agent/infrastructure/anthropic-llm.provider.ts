@@ -18,6 +18,7 @@ import type {
 } from '../core/ports/llm-provider.port';
 import type { Env } from '../../../core/config/env.schema';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 
 // Intent fields that carry a money amount and must be normalized to a bare
 // decimal string before IntentSchema.parse runs. The model is also prompted to
@@ -57,6 +58,7 @@ export class AnthropicLlmProvider implements LlmProvider {
   constructor(
     private readonly config: ConfigService<Env, true>,
     private readonly assetRegistry: AssetRegistry,
+    private readonly effectiveConfig: EffectiveConfigService,
   ) {}
 
   async extractIntent(
@@ -170,7 +172,10 @@ Rules:
       );
     }
 
-    const modelId = this.config.get('AGENT_MODEL', { infer: true });
+    // Model id is an admin-tunable layered-config value (agent.modelId, §7) — its
+    // default mirrors the AGENT_MODEL env value, so behaviour is unchanged without
+    // a DB override. The ANTHROPIC_API_KEY remains a secret, read from env above.
+    const modelId = this.effectiveConfig.get<string>('agent.modelId');
 
     const model = new ChatAnthropic({ apiKey, model: modelId });
     this.model = model;

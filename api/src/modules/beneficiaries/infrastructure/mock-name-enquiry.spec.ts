@@ -13,11 +13,9 @@
  *   - Each call produces a distinct reference.
  */
 
-import { ConfigService } from '@nestjs/config';
-
 import { MockNameEnquiry } from './mock-name-enquiry';
 import { NameEnquiryFailedError } from '../domain/beneficiary-errors';
-import type { AppConfig } from '../../../core/config/configuration';
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -27,13 +25,14 @@ const GOOD_ACCOUNT = '0123456789';
 const BAD_ACCOUNT = '9999999999'; // the configured "not found" account
 
 /**
- * Builds a minimal ConfigService stub that returns beneficiary config from
- * `config.get('beneficiary')`. Mirrors the production wiring in AppModule.
+ * Builds a minimal EffectiveConfigService stub that returns beneficiary config
+ * from `config.get('beneficiary')`. Mirrors the production wiring in AppModule;
+ * an AppSetting override would change the values returned here.
  */
 function stubConfigService(opts: {
   badAccountNumber?: string;
   resolvedName?: string;
-}): ConfigService<AppConfig, true> {
+}): EffectiveConfigService {
   return {
     get: (key: string) => {
       if (key === 'beneficiary') {
@@ -45,7 +44,7 @@ function stubConfigService(opts: {
       }
       return undefined;
     },
-  } as unknown as ConfigService<AppConfig, true>;
+  } as unknown as EffectiveConfigService;
 }
 
 function makeEnquiry(
@@ -97,6 +96,19 @@ describe('MockNameEnquiry', () => {
       });
 
       expect(result.accountName).toBe('ADAEZE OKAFOR');
+    });
+
+    it('honors a DB AppSetting override of beneficiary.nameEnquiryResolvedName (EffectiveConfigService flows through)', async () => {
+      // The resolved name comes from get('beneficiary'); an admin override of
+      // nameEnquiryResolvedName must surface in the adapter's output.
+      const enquiry = makeEnquiry(BAD_ACCOUNT, 'OVERRIDDEN HOLDER NAME');
+
+      const result = await enquiry.resolve({
+        bankCode: '058',
+        accountNumber: GOOD_ACCOUNT,
+      });
+
+      expect(result.accountName).toBe('OVERRIDDEN HOLDER NAME');
     });
 
     it('generates a distinct reference on each call', async () => {

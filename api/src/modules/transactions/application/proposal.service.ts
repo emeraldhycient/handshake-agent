@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import type {
   BuyCryptoIntent,
   SellCryptoIntent,
@@ -27,6 +26,7 @@ import type {
 } from '../../../core/config/configuration';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { KycGateService } from '../../identity/application/kyc-gate.service';
 import { QuotesService } from '../../quotes/application/quotes.service';
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
@@ -212,7 +212,7 @@ export class ProposalService {
     @Inject(LEDGER_REPOSITORY)
     private readonly ledgerRepo: ILedgerRepository,
     private readonly complianceService: ComplianceService,
-    private readonly configService: ConfigService,
+    private readonly configService: EffectiveConfigService,
     @Inject(SWAP_PROVIDER)
     private readonly swapProvider: ISwapProvider,
   ) {}

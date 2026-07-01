@@ -16,6 +16,7 @@ import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import type { Intent } from '@handshake-agent/contracts';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 
 // ---------------------------------------------------------------------------
 // Mock @langchain/anthropic BEFORE importing the module under test.
@@ -50,17 +51,29 @@ const cannedIntent: Intent = {
   fiatCurrency: 'NGN',
 };
 
-function makeConfigService(
-  apiKey: string | undefined,
-  model = 'claude-opus-4-8',
-): ConfigService {
+function makeConfigService(apiKey: string | undefined): ConfigService {
   return {
     get: jest.fn((key: string) => {
       if (key === 'ANTHROPIC_API_KEY') return apiKey;
-      if (key === 'AGENT_MODEL') return model;
       return undefined;
     }),
   } as unknown as ConfigService;
+}
+
+/**
+ * EffectiveConfigService stub: the model id now resolves from the layered config
+ * (`agent.modelId`), not from ConfigService('AGENT_MODEL'). Default mirrors the
+ * env default so behaviour is unchanged with no DB override.
+ */
+function makeEffectiveConfig(
+  model = 'claude-opus-4-8',
+): EffectiveConfigService {
+  return {
+    get: jest.fn((key: string) => {
+      if (key === 'agent.modelId') return model;
+      return undefined;
+    }),
+  } as unknown as EffectiveConfigService;
 }
 
 /** Minimal AssetRegistry stub backed by a catalog with USDT + NGN. */
@@ -101,6 +114,10 @@ describe('AnthropicLlmProvider', () => {
           {
             provide: AssetRegistry,
             useValue: makeAssetRegistry(),
+          },
+          {
+            provide: EffectiveConfigService,
+            useValue: makeEffectiveConfig(),
           },
         ],
       }).compile();
@@ -301,6 +318,27 @@ describe('AnthropicLlmProvider', () => {
       expect(MockChatAnthropic).toHaveBeenCalledTimes(1);
     });
 
+    it('reads the model id from EffectiveConfigService (agent.modelId), not ConfigService', async () => {
+      // The model id is now a layered-config value (admin-tunable, §7). An admin
+      // override of `agent.modelId` must change which model ChatAnthropic builds,
+      // while the ANTHROPIC_API_KEY still comes from env via ConfigService.
+      const overridden = new AnthropicLlmProvider(
+        makeConfigService('sk-ant-test-key') as unknown as ConfigService<
+          import('../../../core/config/env.schema').Env,
+          true
+        >,
+        makeAssetRegistry(),
+        makeEffectiveConfig('claude-sonnet-override'),
+      );
+      await overridden.extractIntent('buy 5000 naira of usdt');
+      expect(MockChatAnthropic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          apiKey: 'sk-ant-test-key',
+          model: 'claude-sonnet-override',
+        }),
+      );
+    });
+
     describe('buildSystemPrompt()', () => {
       it('contains the catalog-enabled crypto asset (USDT)', () => {
         const prompt = provider.buildSystemPrompt();
@@ -364,6 +402,7 @@ describe('AnthropicLlmProvider', () => {
             true
           >,
           registry,
+          makeEffectiveConfig(),
         ).buildSystemPrompt();
         expect(registry.enabledFiats).toHaveBeenCalled();
       });
@@ -441,6 +480,7 @@ describe('AnthropicLlmProvider', () => {
             true
           >,
           registry,
+          makeEffectiveConfig(),
         );
 
         const prompt = multiAssetProvider.buildSystemPrompt();
@@ -470,6 +510,10 @@ describe('AnthropicLlmProvider', () => {
           {
             provide: AssetRegistry,
             useValue: makeAssetRegistry(),
+          },
+          {
+            provide: EffectiveConfigService,
+            useValue: makeEffectiveConfig(),
           },
         ],
       }).compile();
