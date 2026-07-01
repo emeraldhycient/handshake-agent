@@ -63,6 +63,17 @@ export interface CommandPaletteProps {
   destinations: readonly NavDestination[]
 }
 
+/** The four alert-pip badges the sidebar can show on a nav item. */
+export type NavBadgeKey = "kyc" | "stuck" | "recon" | "approvals"
+
+/**
+ * Live counts for the sidebar nav-item alert pips, keyed by badge. Sourced from
+ * the real read endpoints (KYC review-queue depth / stuck-transaction count /
+ * open reconciliation breaks / maker-checker requests awaiting the caller) — the
+ * design's hardcoded counts are gone. A `0` renders no pip.
+ */
+export type NavBadgeCounts = Record<NavBadgeKey, number>
+
 /**
  * The "view-as" impersonation roles offered by the account menu. Not RBAC —
  * a UX affordance that scopes the banner + displayed role label (the real

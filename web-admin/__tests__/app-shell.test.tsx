@@ -36,6 +36,13 @@ vi.mock("@/lib/api/admin", () => ({
   getMe: vi.fn(),
 }))
 
+// The four live nav-badge sources (KYC queue depth / stuck txns / open recon
+// breaks / approvals awaiting me). Mocked so the badge counts are deterministic.
+vi.mock("@/lib/api/kyc", () => ({ listKycQueue: vi.fn() }))
+vi.mock("@/lib/api/transactions", () => ({ listTransactions: vi.fn() }))
+vi.mock("@/lib/api/reconciliation", () => ({ getReconStatus: vi.fn() }))
+vi.mock("@/lib/api/approvals", () => ({ getApprovalsInbox: vi.fn() }))
+
 // Stub the enroll dialog so the shell's affordance is tested in isolation (the
 // real dialog fires a POST on open).
 vi.mock("@/components/admin/mfa-enroll-dialog", () => ({
@@ -44,7 +51,46 @@ vi.mock("@/components/admin/mfa-enroll-dialog", () => ({
 }))
 
 import { getMe } from "@/lib/api/admin"
+import { listKycQueue } from "@/lib/api/kyc"
+import { listTransactions } from "@/lib/api/transactions"
+import { getReconStatus } from "@/lib/api/reconciliation"
+import { getApprovalsInbox } from "@/lib/api/approvals"
 const mockGetMe = vi.mocked(getMe)
+const mockListKycQueue = vi.mocked(listKycQueue)
+const mockListTransactions = vi.mocked(listTransactions)
+const mockGetReconStatus = vi.mocked(getReconStatus)
+const mockGetApprovalsInbox = vi.mocked(getApprovalsInbox)
+
+// A canned KYC queue of `n` review items (only the length feeds the badge).
+function kycQueue(n: number) {
+  return {
+    items: Array.from({ length: n }, (_, i) => ({ userId: `u${i}` })),
+    nextCursor: null,
+  } as unknown as Awaited<ReturnType<typeof listKycQueue>>
+}
+function txnCounts(stuck: number) {
+  return {
+    items: [],
+    nextCursor: null,
+    counts: { all: stuck, stuck, failed: 0, refunds: 0 },
+  } as unknown as Awaited<ReturnType<typeof listTransactions>>
+}
+function reconStatus(openBreakCount: number) {
+  return {
+    enabled: true,
+    lastRunAt: null,
+    nextRunAt: null,
+    intervalSeconds: 3600,
+    openBreakCount,
+  } as unknown as Awaited<ReturnType<typeof getReconStatus>>
+}
+function approvalsInbox(awaitingMe: number) {
+  return {
+    awaitingMe: [],
+    myRequests: [],
+    counts: { awaitingMe, myRequests: 0, myPending: 0 },
+  } as unknown as Awaited<ReturnType<typeof getApprovalsInbox>>
+}
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -77,6 +123,12 @@ function renderShell() {
 
 beforeEach(() => {
   mockGetMe.mockReset()
+  // Default the badge sources to zero so nav-gating/MFA tests stay deterministic
+  // (a zero count renders no pip). Badge-specific tests override these.
+  mockListKycQueue.mockResolvedValue(kycQueue(0))
+  mockListTransactions.mockResolvedValue(txnCounts(0))
+  mockGetReconStatus.mockResolvedValue(reconStatus(0))
+  mockGetApprovalsInbox.mockResolvedValue(approvalsInbox(0))
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -126,6 +178,59 @@ describe("AppShell nav gating", () => {
     expect(
       screen.queryByRole("link", { name: "Approvals" })
     ).not.toBeInTheDocument()
+  })
+})
+
+describe("AppShell live nav badges", () => {
+  // menus that make all four badge-bearing nav items visible.
+  const BADGE_MENUS = ["menu.kyc", "menu.transactions", "menu.access"]
+
+  it("renders the live count from each badge source, not the design mock", async () => {
+    mockGetMe.mockResolvedValue(
+      adminMe({
+        role: {
+          id: "00000000-0000-0000-0000-0000000000ff",
+          name: "super_admin",
+        },
+        menus: BADGE_MENUS,
+      })
+    )
+    // Live counts distinct from the old design mock (kyc 13 / stuck 5 / recon 3
+    // / approvals 4) so a regression to the hardcoded values fails this test.
+    mockListKycQueue.mockResolvedValue(kycQueue(7))
+    mockListTransactions.mockResolvedValue(txnCounts(2))
+    mockGetReconStatus.mockResolvedValue(reconStatus(9))
+    mockGetApprovalsInbox.mockResolvedValue(approvalsInbox(1))
+
+    renderShell()
+
+    // The badge number is concatenated into each nav link's accessible name.
+    expect(
+      await screen.findByRole("link", { name: /KYC review\s*7/ })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("link", { name: /Transactions\s*2/ })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("link", { name: /Reconciliation\s*9/ })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("link", { name: /Approvals\s*1/ })
+    ).toBeInTheDocument()
+
+    // The stale mock KYC value (13) must not survive anywhere in the nav.
+    expect(screen.queryByText("13")).not.toBeInTheDocument()
+  })
+
+  it("shows no pip when a source count is zero", async () => {
+    mockGetMe.mockResolvedValue(adminMe({ menus: BADGE_MENUS }))
+    // all sources default to zero via beforeEach
+
+    renderShell()
+
+    // KYC review link resolves, but its name carries no trailing count.
+    const kyc = await screen.findByRole("link", { name: /KYC review/ })
+    expect(kyc).toHaveAccessibleName("KYC review")
   })
 })
 

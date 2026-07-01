@@ -75,7 +75,7 @@ import {
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
-import { useAdminMe } from "@/lib/query/hooks"
+import { useAdminMe, useNavBadges } from "@/lib/query/hooks"
 import { useAdminAuthStore } from "@/lib/store/admin-auth-store"
 import { useThemeStore } from "@/lib/store/theme-store"
 import { cn } from "@/lib/utils"
@@ -290,6 +290,7 @@ const NAV_GROUPS: readonly NavGroup[] = [
         label: "Approvals",
         icon: CircleCheckBig,
         menu: "menu.access",
+        badge: "approvals",
       },
       { href: "/ops", label: "System / ops", icon: Server, menu: "menu.audit" },
       {
@@ -361,15 +362,9 @@ export function AppShell({ children }: AppShellProps) {
   // The command palette searches the same grant-visible screens the sidebar shows.
   const destinations = flattenNav(visibleGroups)
 
-  // Design nav badges (§4.1) — mock counts matching the design reproduction
-  // (KYC 13 / stuck txns 5 / recon breaks 3 / approvals 4). Live-count wiring
-  // is a data-reintegration step.
-  const DESIGN_BADGES: Record<string, number> = {
-    kyc: 13,
-    stuck: 5,
-    recon: 3,
-    approvals: 4,
-  }
+  // Live nav-badge counts (§4.1) — KYC review-queue depth / stuck txns / open
+  // recon breaks / approvals awaiting me, each from its real read endpoint.
+  const badges = useNavBadges()
 
   const ThemeIcon = theme === "light" ? Moon : Sun
   const CollapseIcon = collapsed ? PanelLeftOpen : PanelLeftClose
@@ -443,9 +438,7 @@ export function AppShell({ children }: AppShellProps) {
                   {group.items.map((item) => {
                     const active = isActive(pathname, item.href)
                     const Icon = item.icon
-                    const badge = item.badge
-                      ? (DESIGN_BADGES[item.badge] ?? 0)
-                      : 0
+                    const badge = item.badge ? (badges[item.badge] ?? 0) : 0
                     return (
                       <li key={item.href} className="mb-px">
                         <Link

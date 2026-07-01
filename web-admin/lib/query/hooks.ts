@@ -72,6 +72,7 @@ import * as whatsapp from "@/lib/api/whatsapp"
 import type { ComplianceEventQuery } from "@/lib/api/compliance"
 import type { LedgerHistoryQuery } from "@/lib/api/ledger"
 import type { TemplateRef } from "@/lib/api/notifications"
+import type { NavBadgeCounts } from "@/types/components"
 import { qk } from "./keys"
 
 // ─── Read hooks ─────────────────────────────────────────────────────────────────
@@ -513,6 +514,34 @@ export function useApprovalsInbox() {
     queryFn: () => approvals.getApprovalsInbox(),
     staleTime: 15_000,
   })
+}
+
+/** The unfiltered transactions query whose response `counts` feed the stuck badge. */
+const NAV_BADGE_TXN_QUERY: AdminTxnSearchQuery = {}
+
+/**
+ * Live counts for the sidebar nav-item alert pips — replaces the design's mock
+ * counts (§4.1). Composes four existing read hooks (no new endpoint): the KYC
+ * review-queue depth, the stuck-transaction count, open reconciliation breaks,
+ * and maker-checker requests awaiting the caller. Each source is independently
+ * cached (15 s); a source that is still loading or errored contributes `0`, so
+ * the pip simply doesn't show rather than flashing a stale number.
+ *
+ * The KYC count is the current review-queue page length — a floor, not a total;
+ * an operator queue deeper than one page under-counts, which is acceptable for an
+ * alert pip and avoids a bespoke count endpoint.
+ */
+export function useNavBadges(): NavBadgeCounts {
+  const kyc = useKycQueue()
+  const txns = useTransactions(NAV_BADGE_TXN_QUERY)
+  const recon = useReconStatus()
+  const approvalsInbox = useApprovalsInbox()
+  return {
+    kyc: kyc.data?.items.length ?? 0,
+    stuck: txns.data?.counts.stuck ?? 0,
+    recon: recon.data?.openBreakCount ?? 0,
+    approvals: approvalsInbox.data?.counts.awaitingMe ?? 0,
+  }
 }
 
 // ─── Mutation hooks ─────────────────────────────────────────────────────────────
