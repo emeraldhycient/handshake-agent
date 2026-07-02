@@ -55,6 +55,7 @@ model User {
   complianceEvents  ComplianceEvent[]
   velocityCounters  VelocityCounter[]
   ticketOrders      TicketOrder[]
+  tags              UserTag[]
 
   @@index([status, createdAt])
   @@index([kycStatus, kycTier])

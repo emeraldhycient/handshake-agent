@@ -17,6 +17,7 @@
 import { useMemo } from "react"
 import {
   ADMIN_PERMISSION_CATEGORIES,
+  permissionId,
   type AdminPermissionRecord,
   type Role,
 } from "@handshake-agent/contracts"
@@ -63,11 +64,13 @@ function levelFor(
   category: string,
   permissions: AdminPermissionRecord[]
 ): PermissionMatrixLevel {
+  // role.permissionIds are CANONICAL ids (`${resourceType}:${resourceId}:${action}`),
+  // NOT the permission row's UUID — resolve the same canonical id per catalog entry.
   const granted = new Set(role.permissionIds)
   let hasRead = false
   for (const perm of permissions) {
     if (perm.category !== category) continue
-    if (!granted.has(perm.id)) continue
+    if (!granted.has(permissionId(perm))) continue
     if (ELEVATED_ACTIONS.has(perm.action)) return "full"
     hasRead = true
   }

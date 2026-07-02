@@ -35,14 +35,38 @@ const mockDashboard = vi.mocked(getDashboardMetrics)
 const SUMMARY: DashboardSummary = {
   txnVolume: {
     byType: [
-      { type: "buy", count: 120, completed: 110, failed: 10 },
-      { type: "send", count: 40, completed: 38, failed: 2 },
+      { type: "buy", count: 120, completed: 110, failed: 10, stuck: 0 },
+      { type: "send", count: 40, completed: 38, failed: 2, stuck: 0 },
     ],
     series: [
       { date: "2026-06-28", count: 12 },
       { date: "2026-06-29", count: 20 },
     ],
+    stackedSeries: [
+      {
+        date: "2026-06-28",
+        buy: 8,
+        sell: 0,
+        send: 4,
+        swap: 0,
+        ticket: 0,
+        total: 12,
+      },
+      {
+        date: "2026-06-29",
+        buy: 12,
+        sell: 0,
+        send: 8,
+        swap: 0,
+        ticket: 0,
+        total: 20,
+      },
+    ],
     successRate: 0.925,
+  },
+  gmv: {
+    totalByCurrency: [{ currency: "NGN", amount: "1250000.00" }],
+    txnCount: 148,
   },
   revenue: {
     totalFeesByCurrency: [

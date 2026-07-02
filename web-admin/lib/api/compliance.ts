@@ -18,7 +18,10 @@ import {
   ComplianceEventListResponseSchema,
   ComplianceEventDetailSchema,
   ComplianceDispositionRequestSchema,
+  SanctionsRecordItemSchema,
   SanctionsRecordListResponseSchema,
+  SanctionsDispositionRequestSchema,
+  SanctionsMonitoringViewSchema,
   AmlRuleListResponseSchema,
   AmlRuleSchema,
   AmlRuleCreateRequestSchema,
@@ -31,7 +34,10 @@ import {
   type ComplianceEventListResponse,
   type ComplianceEventDetail,
   type ComplianceDispositionRequest,
+  type SanctionsRecordItem,
   type SanctionsRecordListResponse,
+  type SanctionsDispositionRequest,
+  type SanctionsMonitoringView,
   type AmlRuleListResponse,
   type AmlRule,
   type AmlRuleCreateRequest,
@@ -84,10 +90,36 @@ export async function disposeComplianceEvent(
 
 // ─── Sanctions ──────────────────────────────────────────────────────────────────
 
-/** GET /admin/compliance/sanctions — immutable screening-run history (read-only). */
+/** GET /admin/compliance/sanctions — the screening-run history (read-only). */
 export async function listSanctions(): Promise<SanctionsRecordListResponse> {
   const res = await api.get("/admin/compliance/sanctions")
   return SanctionsRecordListResponseSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/compliance/sanctions/:id/disposition — record the operator's decision
+ * on a screening match (Clear / Escalate / Block). Sensitive — may 403 with code
+ * ADMIN_STEP_UP_REQUIRED (the caller wraps it in `useStepUpRetry`). The server writes
+ * the disposition annotation (never the immutable screener verdict, §3.1) and records
+ * an immutable `admin_review` audit; it moves no money. Body parsed before the request,
+ * response after. Returns the updated record.
+ */
+export async function disposeSanctions(
+  id: string,
+  input: SanctionsDispositionRequest
+): Promise<SanctionsRecordItem> {
+  const body = SanctionsDispositionRequestSchema.parse(input)
+  const res = await api.post(
+    `/admin/compliance/sanctions/${id}/disposition`,
+    body
+  )
+  return SanctionsRecordItemSchema.parse(res.data)
+}
+
+/** GET /admin/compliance/monitoring — the ongoing-monitoring policy flags (read-only). */
+export async function getSanctionsMonitoring(): Promise<SanctionsMonitoringView> {
+  const res = await api.get("/admin/compliance/monitoring")
+  return SanctionsMonitoringViewSchema.parse(res.data)
 }
 
 // ─── AML rules ──────────────────────────────────────────────────────────────────

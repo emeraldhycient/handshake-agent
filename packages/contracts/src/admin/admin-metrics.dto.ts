@@ -21,8 +21,24 @@ export const MetricsBucketSchema = z.object({
 });
 export type MetricsBucket = z.infer<typeof MetricsBucketSchema>;
 
+// One day of the stacked-by-capability volume chart: an ISO date and the per-
+// capability transaction counts for that UTC day (buy/sell/send/swap/ticket). The
+// operator dashboard renders these as the stacked-bar silhouette; `total` is the
+// convenience sum so the FE need not re-add the five segments.
+export const TxnCapabilityBucketSchema = z.object({
+  date: z.string(),
+  buy: z.number(),
+  sell: z.number(),
+  send: z.number(),
+  swap: z.number(),
+  ticket: z.number(),
+  total: z.number(),
+});
+export type TxnCapabilityBucket = z.infer<typeof TxnCapabilityBucketSchema>;
+
 // Transaction volume: per-type counts (with completed/failed breakdown), a daily
-// series of total transactions, and the overall success rate over the range.
+// series of total transactions, a daily series stacked by capability (for the
+// dashboard chart), and the overall success rate over the range.
 export const TxnVolumeMetricsSchema = z.object({
   byType: z.array(
     z.object({
@@ -30,12 +46,36 @@ export const TxnVolumeMetricsSchema = z.object({
       count: z.number(),
       completed: z.number(),
       failed: z.number(),
+      // Count of stuck (in-flight, non-terminal) transactions of this type —
+      // the sibling of `failed` so the dashboard "Failed / stuck tx" card can
+      // show BOTH (matching the sidebar stuck badge semantics). Non-negative
+      // integer; `failed` is retained unchanged.
+      stuck: z.number().int().nonnegative(),
     }),
   ),
   series: z.array(MetricsBucketSchema),
+  // Per-day counts split across the five capabilities — feeds the stacked-bar
+  // Transaction-volume chart on the operator dashboard.
+  stackedSeries: z.array(TxnCapabilityBucketSchema),
   successRate: z.number(),
 });
 export type TxnVolumeMetrics = z.infer<typeof TxnVolumeMetricsSchema>;
+
+// GMV (gross merchandise value): the summed fiat notional of every COMPLETED,
+// money-moving transaction in the range, grouped by fiat currency. Amounts are
+// canonical decimal STRINGS computed with exact scaled-integer arithmetic — never
+// floats. `txnCount` is the number of completed transactions that contributed a
+// fiat notional. This is a read-only aggregation; nothing here moves money (§3.1).
+export const GmvMetricsSchema = z.object({
+  totalByCurrency: z.array(
+    z.object({
+      currency: z.string(),
+      amount: z.string(),
+    }),
+  ),
+  txnCount: z.number(),
+});
+export type GmvMetrics = z.infer<typeof GmvMetricsSchema>;
 
 // Revenue: platform fee revenue per currency (the `platform_float` fee legs) and
 // spread per currency. Spread is folded into the fx rate and NOT separately
@@ -103,6 +143,7 @@ export type ServiceHealthMetrics = z.infer<typeof ServiceHealthMetricsSchema>;
 // The composite dashboard payload — every metric block for one date range.
 export const DashboardSummarySchema = z.object({
   txnVolume: TxnVolumeMetricsSchema,
+  gmv: GmvMetricsSchema,
   revenue: RevenueMetricsSchema,
   kycFunnel: KycFunnelMetricsSchema,
   activeUsers: ActiveUsersMetricsSchema,

@@ -2,11 +2,25 @@
 
 /**
  * OperatorDashboard — the "Dashboard" screen, reproduced pixel-for-pixel from the
- * imported Operator Console design (`docs/design-ref/screens/Dash.html`, spec §6.1)
- * with the design's OWN mock content embedded (translated from `vDash()` + `seed()`
- * in `docs/design-ref/logic.js`). This is a DESIGN reproduction: it renders the exact
- * values the design shows, with no data fetching — real-data reintegration is a
- * separate later step.
+ * imported Operator Console design (`docs/design-ref/screens/Dash.html`, spec §6.1).
+ *
+ * The KPI tiles + the 24h/7d/30d range switcher are wired to the real composite
+ * operational-metrics endpoint via `useDashboardMetrics` (§8 — the shape crosses the
+ * FE/BE boundary via `@handshake-agent/contracts`). Read-only projections — nothing
+ * here moves money (§3.1). Four async branches: loading skeletons / error / empty
+ * (no metrics access) / data.
+ *
+ * The GMV tile and the Transaction-volume chart are wired to the real composite
+ * metrics (GMV = the summed fiat notional of completed money-moving txns; the chart =
+ * `txnVolume.stackedSeries`). The System-health card, Live-activity feed, and the
+ * Open-compliance KPI tile are now wired to the real operational-ops endpoint
+ * (`useMetricsOps` → GET /admin/metrics/ops): per-provider dispatch status +
+ * webhook-queue depth + recon drift, a cross-domain activity feed (settled/failed
+ * txns, KYC + config-change audit events, engine sweeps/refunds), and the open
+ * (flagged + under_review) compliance-case count. The Approvals-awaiting-me panel is
+ * wired to the real maker-checker inbox (`useApprovalsInbox` → GET
+ * /admin/approvals/inbox) — awaiting-me count badge + a teaser of pending requests,
+ * linking to the full /approvals inbox where they are dispositioned (Phase 7).
  *
  * Layout (verbatim from the design markup):
  * - Header: "Operations overview" title + subtitle, and a segmented KPI-range
@@ -14,15 +28,10 @@
  * - KPI TILES: a `repeat(4,1fr)` grid of 8 tiles (4×2); tile 0 is the dark-green
  *   "hero" (brand gradient, white ink, amber delta chip). The rest are `--card`
  *   tiles with muted delta pills (warn/amber for the attention KPIs).
- * - `1.7fr 1fr` row: the stacked-bar **Transaction volume** chart (14 bars, buy/sell/
- *   send/swap/ticket, Jun 18 → Today) and a **System health** card (provider list with
- *   halo dots + latency, plus webhook-queue / recon-drift stat boxes).
+ * - `1.7fr 1fr` row: the stacked-bar **Transaction volume** chart and a **System
+ *   health** card (both mock — Phase 6b).
  * - `1fr 1fr` row: a **Live activity** feed and a column of **Approvals awaiting me**
- *   + **Alerts** cards.
- *
- * Wiring: the range switcher swaps the KPI values (design `mul` multiplier). Approval
- * rows and the "Open inbox →" link navigate to /approvals; alert rows navigate to
- * their destination route; nothing here moves money (§3.1).
+ *   (real — Phase 7 inbox) + **Alerts** cards (Alerts still mock — Phase 6b).
  */
 import { useMemo, useState } from "react"
 import Link from "next/link"
@@ -31,8 +40,24 @@ import { useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { KpiCard } from "@/components/admin/kpi-card"
 import { ChartBars } from "@/components/admin/chart-bars"
-import { MakerCheckerModal } from "@/components/admin/flows"
-import type { ChartBar } from "@/types/components"
+import { useOperatorAlerts, type AdminAlert } from "@/components/admin/use-operator-alerts"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  useApprovalsInbox,
+  useDashboardMetrics,
+  useMetricsOps,
+} from "@/lib/query/hooks"
+import { ApiError } from "@/lib/api/client"
+import type {
+  ActivityEvent,
+  ActivityKind,
+  ChangeRequest,
+  ChangeRequestKind,
+  DashboardSummary,
+  MetricsOps,
+  ProviderHealth,
+} from "@handshake-agent/contracts"
+import type { ChartBar, KpiDeltaTone } from "@/types/components"
 
 // ─── Brand constants (design logic.js line 2 — NOT theme-swapped) ────────────────────
 
@@ -45,35 +70,26 @@ const VOL_COLORS = {
 } as const
 
 // ─── KPI range switcher (design `kpiRanges`, logic.js 487) ───────────────────────────
+// The switcher drives the real metrics window: each preset resolves to an inclusive
+// `{ from, to }` ISO-date window that `useDashboardMetrics` fetches. "24h" is sub-day
+// so it maps to today only (a 1-day window — the backend takes date bounds).
 
 type RangeId = "24h" | "7d" | "30d"
 
 const KPI_RANGES: readonly RangeId[] = ["24h", "7d", "30d"]
 
-/** The design's per-range multiplier applied to the base KPI figures (vDash line 437). */
-const RANGE_MUL: Record<RangeId, number> = { "24h": 1, "7d": 6.4, "30d": 26 }
+/** How many days back each preset spans (inclusive of today). "24h" → today only. */
+const RANGE_DAYS: Record<RangeId, number> = { "24h": 1, "7d": 7, "30d": 30 }
 
-// ─── KPI definitions (design `kpiDefs`, logic.js 439-448) ────────────────────────────
-// The design derives KPI counts from its seeded dataset. `seed()` yields 3 users with
-// kyc === 'pending' (i < 3) — so KYC pending = 3; 3 pending_settlement + 2 failed tx
-// (i === 4/11/18 & 7/16) — so failed/stuck = 5; and `hasCase` users — 3 open cases.
-
-// Design seed counts across the 28-user / txn mock set (vDash in the source):
-// KYC pending = users with kyc pending|needs_info (13); failed/stuck = txns
-// pending_settlement|failed (9); open cases = users with a compliance case (3).
-const KYC_PENDING = 13
-const FAILED_STUCK = 9
-const OPEN_CASES = 3
-
-/** `ngn()` — design money formatter (logic.js 332): `₦` + `en-NG` 2-dp grouping. */
-function ngn(n: number): string {
-  return (
-    "₦" +
-    Number(n).toLocaleString("en-NG", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
-  )
+/** Build an inclusive `{ from, to }` ISO-date window ending today, N days back. */
+function rangeForDays(days: number): { from: string; to: string } {
+  const to = new Date()
+  const from = new Date(to)
+  from.setDate(from.getDate() - (days - 1))
+  return {
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10),
+  }
 }
 
 /** `f()` — design integer formatter (vDash line 438): `en-NG` grouping, no decimals. */
@@ -81,117 +97,166 @@ function fmtInt(n: number): string {
   return Number(n).toLocaleString("en-NG")
 }
 
-interface KpiDef {
+/** KYC statuses that count toward the "KYC pending" attention tile (gap matrix). */
+const PENDING_KYC_STATUSES = new Set(["pending", "needs_info"])
+
+interface Kpi {
   label: string
-  /** Base (24h) value; scaled by the range multiplier for money/count KPIs. */
-  base: number
-  /** How to render the scaled value. */
-  kind: "ngn" | "int" | "static"
-  /** Static (non-scaled) value string — used for the seeded-count KPIs. */
-  staticValue?: string
+  value: string
   delta: string
-  note: string
-  warn?: boolean
+  deltaNote: string
+  hero?: boolean
+  tone?: KpiDeltaTone
 }
 
-const KPI_DEFS: readonly KpiDef[] = [
-  {
-    label: "Transaction volume",
-    base: 23774629,
-    kind: "ngn",
-    delta: "+12.4%",
-    note: "vs prior",
-  },
-  { label: "GMV", base: 41209800, kind: "ngn", delta: "+8.1%", note: "gross" },
-  {
-    label: "Revenue (fees + FX)",
-    base: 486300,
-    kind: "ngn",
-    delta: "+5.7%",
-    note: "margin",
-  },
-  {
-    label: "Transactions",
-    base: 1284,
-    kind: "int",
-    delta: "+3.2%",
-    note: "count",
-  },
-  {
-    label: "New signups",
-    base: 96,
-    kind: "int",
-    delta: "+18%",
-    note: "new users",
-  },
-  {
-    label: "KYC pending",
-    base: 0,
-    kind: "static",
-    staticValue: fmtInt(KYC_PENDING),
-    delta: "SLA 4h",
-    note: "in queue",
-    warn: true,
-  },
-  {
-    label: "Failed / stuck tx",
-    base: 0,
-    kind: "static",
-    staticValue: fmtInt(FAILED_STUCK),
-    delta: "attention",
-    note: "needs action",
-    warn: true,
-  },
-  {
-    label: "Open compliance cases",
-    base: 0,
-    kind: "static",
-    staticValue: fmtInt(OPEN_CASES),
-    delta: "2 high",
-    note: "active",
-    warn: true,
-  },
-]
+/**
+ * Derive the eight KPI tiles from the real composite summary. Seven are backed by the
+ * composite metrics contract (including GMV); the eighth (Open compliance cases) is
+ * sourced from the ops endpoint's open (flagged + under_review) count, or "—" while
+ * that read is still loading / forbidden.
+ */
+function deriveKpis(
+  data: DashboardSummary,
+  openComplianceCases: number | undefined
+): readonly Kpi[] {
+  const { txnVolume, gmv, revenue, kycFunnel, activeUsers } = data
+  const totalTxns = txnVolume.byType.reduce((sum, t) => sum + t.count, 0)
+  const failedTxns = txnVolume.byType.reduce((sum, t) => sum + t.failed, 0)
+  // Stuck = in-flight (pending/validating/confirmed/settling) per the same
+  // definition as the sidebar stuck badge, so the two agree (Phase 8 drift fix).
+  const stuckTxns = txnVolume.byType.reduce((sum, t) => sum + t.stuck, 0)
+  const pendingKyc = kycFunnel.byStatus
+    .filter((s) => PENDING_KYC_STATUSES.has(s.status))
+    .reduce((sum, s) => sum + s.count, 0)
+  const primaryFee = revenue.totalFeesByCurrency[0]
+  const revenueValue = primaryFee
+    ? `${primaryFee.currency} ${primaryFee.amount}`
+    : "—"
+  const revenueNote =
+    revenue.totalFeesByCurrency.length > 1
+      ? `+${revenue.totalFeesByCurrency.length - 1} more`
+      : "fees"
 
-/** Resolve a KPI def's value for the active range (design `kpiDefs`, vDash 440-447). */
-function kpiValue(def: KpiDef, mul: number): string {
-  if (def.kind === "static") return def.staticValue ?? "—"
-  if (def.kind === "ngn") return ngn(def.base * mul)
-  return fmtInt(Math.round(def.base * mul))
+  // GMV: the summed fiat notional of completed money-moving txns (primary
+  // currency). "—" only when no completed txn carried a fiat notional in range.
+  const primaryGmv = gmv.totalByCurrency[0]
+  const gmvValue = primaryGmv
+    ? `${primaryGmv.currency} ${primaryGmv.amount}`
+    : "—"
+  const gmvNote =
+    gmv.totalByCurrency.length > 1
+      ? `+${gmv.totalByCurrency.length - 1} more`
+      : "gross"
+
+  return [
+    // Hero: the backend surfaces per-type COUNTS, not a fiat money sum — show the
+    // transaction count as the headline volume (fiat-notional volume is a shape gap).
+    {
+      label: "Transaction volume",
+      value: fmtInt(totalTxns),
+      delta: `${(txnVolume.successRate * 100).toFixed(1)}%`,
+      deltaNote: "success rate",
+      hero: true,
+    },
+    // GMV: summed fiat notional of completed money-moving txns (Phase 6b enrichment).
+    {
+      label: "GMV",
+      value: gmvValue,
+      delta: `${gmv.txnCount.toLocaleString()}`,
+      deltaNote: gmvNote,
+    },
+    // Revenue: fees only; spread is folded into FX and not separately ledgered.
+    {
+      label: "Revenue (fees)",
+      value: revenueValue,
+      delta: `${revenue.txnCount.toLocaleString()}`,
+      deltaNote: revenueNote,
+    },
+    {
+      label: "Transactions",
+      value: fmtInt(totalTxns),
+      delta: `${revenue.txnCount.toLocaleString()}`,
+      deltaNote: "completed",
+    },
+    {
+      label: "New signups",
+      value: fmtInt(activeUsers.newInRange),
+      delta: `${activeUsers.activeInRange.toLocaleString()}`,
+      deltaNote: "active",
+    },
+    {
+      label: "KYC pending",
+      value: fmtInt(pendingKyc),
+      delta: "SLA 4h",
+      deltaNote: "in queue",
+      tone: "warn",
+    },
+    {
+      label: "Failed · stuck tx",
+      value: `${fmtInt(failedTxns)} · ${fmtInt(stuckTxns)}`,
+      delta: "attention",
+      deltaNote: "failed · stuck",
+      tone: "warn",
+    },
+    // Open compliance cases: the open (flagged + under_review) count from the ops
+    // endpoint. "—" only while that read is loading or forbidden.
+    {
+      label: "Open compliance cases",
+      value:
+        openComplianceCases === undefined
+          ? "—"
+          : fmtInt(openComplianceCases),
+      delta: openComplianceCases === undefined ? "—" : "open",
+      deltaNote: "flagged + review",
+      tone: "warn",
+    },
+  ]
 }
 
-// ─── Transaction volume bars (design `volBars`, logic.js 461-464) ────────────────────
-// 14 bars; each day's total is `40 + r*55` where `r = (sin((i+3)*1.7)+1)/2`, split into
-// buy 0.34 / sell 0.22 / send 0.16 / swap 0.16 / ticket 0.12 of the total (as % heights).
-//
-// The chart rescopes with the KPI range switcher: `ChartBars` normalises each bar to the
-// tallest total, so a *uniform* scale would be invisible. Instead the range multiplier
-// shifts the sine phase/frequency so the silhouette visibly changes per range, while the
-// per-segment proportions (0.34/0.22/0.16/0.16/0.12) and the axis labels stay identical.
+// ─── Transaction volume bars — real per-day-per-capability series (Phase 6b) ─────────
+// The composite endpoint now projects `txnVolume.stackedSeries`: one bucket per UTC
+// day carrying the buy/sell/send/swap/ticket counts. We map each bucket straight onto
+// a ChartBar segment set, so the stacked silhouette reflects real settled volume and
+// rescopes with the range switcher (the returned day-set follows the {from,to} window).
 
-/** Build the 14-day stacked bars for a KPI range, scaled by its multiplier (`mul`). */
-function volBarsFor(mul: number): ChartBar[] {
-  return Array.from({ length: 14 }, (_, i) => {
-    const r = (Math.sin((i + 3) * 1.7 + mul) + 1) / 2
-    const total = (40 + r * 55) * mul
-    return {
-      label: i === 0 ? "Jun 18" : i === 13 ? "Today" : `Day ${i + 1}`,
-      segments: {
-        buy: total * 0.34,
-        sell: total * 0.22,
-        send: total * 0.16,
-        swap: total * 0.16,
-        ticket: total * 0.12,
-      },
-    }
-  })
+/** Short "MMM D" axis label for a YYYY-MM-DD bucket date (UTC, locale-independent). */
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+] as const
+
+function bucketLabel(isoDate: string): string {
+  const [, month, day] = isoDate.split("-")
+  const monthName = MONTHS[Number(month) - 1] ?? month
+  return `${monthName} ${Number(day)}`
 }
 
-// ─── System health rows (design `health`, logic.js 466-472) ──────────────────────────
+/** Map the real per-day stacked series onto the ChartBars segment shape. */
+function volBarsFrom(
+  stackedSeries: DashboardSummary["txnVolume"]["stackedSeries"]
+): ChartBar[] {
+  return stackedSeries.map((bucket) => ({
+    label: bucketLabel(bucket.date),
+    segments: {
+      buy: bucket.buy,
+      sell: bucket.sell,
+      send: bucket.send,
+      swap: bucket.swap,
+      ticket: bucket.ticket,
+    },
+  }))
+}
+
+// ─── System health rows — wired to the real ops endpoint (design `health`) ───────────
+// The design's per-provider row is preserved (dot + halo + right-aligned status
+// colour), but the values come from `MetricsOps.systemHealth`: the provider status
+// drives the dot/tint, and the observed latency (or "—" when unmeasured) fills the
+// right-aligned status slot the design used for a latency figure.
 
 interface HealthRow {
   name: string
   note: string
+  /** Right-aligned status label — observed latency ("120ms") or "—". */
   status: string
   dot: string
   halo: string
@@ -199,54 +264,34 @@ interface HealthRow {
   fg: string
 }
 
-const HEALTH: readonly HealthRow[] = [
-  {
-    name: "Blockradar",
-    note: "Custodial WaaS · TRON",
-    status: "120ms",
-    dot: "#1f8a5b",
-    halo: "rgba(31,138,91,0.18)",
-    fg: "var(--tok)",
-  },
-  {
-    name: "Flutterwave",
-    note: "NGN rails",
-    status: "890ms",
-    dot: "#e0a53a",
-    halo: "rgba(224,165,58,0.2)",
-    fg: "var(--twn)",
-  },
-  {
-    name: "Resend",
-    note: "Email",
-    status: "70ms",
-    dot: "#1f8a5b",
-    halo: "rgba(31,138,91,0.18)",
-    fg: "var(--tok)",
-  },
-  {
-    name: "WhatsApp Cloud",
-    note: "Chat + Flows",
-    status: "210ms",
-    dot: "#1f8a5b",
-    halo: "rgba(31,138,91,0.18)",
-    fg: "var(--tok)",
-  },
-  {
-    name: "Anthropic LLM",
-    note: "claude-opus-4-8",
-    status: "640ms",
-    dot: "#1f8a5b",
-    halo: "rgba(31,138,91,0.18)",
-    fg: "var(--tok)",
-  },
-]
+/** Design status-tint tokens per provider status (ok=success, degraded=warn, down=danger). */
+const STATUS_STYLE: Record<
+  ProviderHealth["status"],
+  { dot: string; halo: string; fg: string }
+> = {
+  ok: { dot: "#1f8a5b", halo: "rgba(31,138,91,0.18)", fg: "var(--tok)" },
+  degraded: { dot: "#e0a53a", halo: "rgba(224,165,58,0.2)", fg: "var(--twn)" },
+  down: { dot: "#d0453b", halo: "rgba(208,69,59,0.2)", fg: "var(--tdn)" },
+}
 
-const WEBHOOK_Q = "3"
-/** `recon.filter(open).length` open breaks (seed rc1-rc3 open) + " open" (vDash 488). */
-const RECON_DRIFT = "3 open"
+/** Map one contract provider-health row onto the design's HealthRow view shape. */
+function healthRowFrom(provider: ProviderHealth): HealthRow {
+  const style = STATUS_STYLE[provider.status]
+  return {
+    name: provider.name,
+    note: provider.note,
+    status:
+      provider.lastLatencyMs === null ? "—" : `${provider.lastLatencyMs}ms`,
+    dot: style.dot,
+    halo: style.halo,
+    fg: style.fg,
+  }
+}
 
-// ─── Live activity feed (design `activity`, logic.js 473-480) ────────────────────────
+// ─── Live activity feed — wired to the real ops endpoint (design `activity`) ─────────
+// The design's row (icon + tint + text/meta/time) is preserved; the data comes from
+// `MetricsOps.activityFeed`. Each event `kind` selects the icon + tint the design
+// used; `title`/`meta` render verbatim; the ISO `at` becomes a relative label.
 
 interface ActivityItem {
   text: string
@@ -258,129 +303,85 @@ interface ActivityItem {
   iconFg: string
 }
 
-const ACTIVITY: readonly ActivityItem[] = [
-  {
-    text: "Buy settled · Amara Okeke",
-    meta: "tx_80231 · 120.00 USDT",
-    time: "2m",
+/** Per-kind icon + tint (mirrors the design's settled/kyc/config/failed/sweep/refund rows). */
+const ACTIVITY_STYLE: Record<
+  ActivityKind,
+  { icon: string; iconBg: string; iconFg: string }
+> = {
+  settled: {
     icon: "M4 8h13l-3-3M20 16H7l3 3",
     iconBg: "var(--sok)",
     iconFg: "var(--tok)",
   },
-  {
-    text: "KYC approved · Emeka Okonkwo",
-    meta: "tier_1 · by Ifeoma Bello",
-    time: "8m",
+  kyc_approved: {
     icon: "M12 3l7 3v5c0 5-3.5 8-7 9",
     iconBg: "var(--sif)",
     iconFg: "var(--tif)",
   },
-  {
-    text: "Config change submitted",
-    meta: "FX spread 85→110 bps",
-    time: "34m",
+  config_change: {
     icon: "M4 7h16M4 12h10M4 17h7",
     iconBg: "var(--swn)",
     iconFg: "var(--twn)",
   },
-  {
-    text: "Send failed · retry queued",
-    meta: "tx_80238 · Blockradar timeout",
-    time: "52m",
+  failed: {
     icon: "M12 4l9 16H3z",
     iconBg: "var(--sdn)",
     iconFg: "var(--tdn)",
   },
-  {
-    text: "Sweep confirmed",
-    meta: "child addr · 42.4 TRX",
-    time: "1h",
+  sweep: {
     icon: "M4 8h13l-3-3M20 16H7l3 3",
     iconBg: "var(--sok)",
     iconFg: "var(--tok)",
   },
-  {
-    text: "Refund executed by engine",
-    meta: "tx_80219 · ₦45,000.00",
-    time: "2h",
+  refund: {
     icon: "M4 8h13l-3-3M20 16H7l3 3",
     iconBg: "var(--sif)",
     iconFg: "var(--tif)",
   },
-]
-
-// ─── Approvals awaiting me (design `myApprovals`, logic.js 481 — first 3 approvals) ──
-// `st.approvals.slice(0,3)` from the seeded maker-checker inbox (logic.js 75-80), each
-// carrying the from→to diff the maker-checker modal renders.
-
-interface ApprovalItem {
-  title: string
-  by: string
-  ago: string
-  diff: readonly { field: string; from: string; to: string }[]
 }
 
-const MY_APPROVALS: readonly ApprovalItem[] = [
-  {
-    title: "USDT/NGN buy spread 85 → 110 bps",
-    by: "Tunde Adeyemi",
-    ago: "34m ago",
-    diff: [
-      { field: "crypto.buy · USDT/NGN spread", from: "85 bps", to: "110 bps" },
-    ],
-  },
-  {
-    title: "Disable swap (global)",
-    by: "Amara Okeke",
-    ago: "1h ago",
-    diff: [{ field: "capability: swap", from: "Enabled", to: "Disabled" }],
-  },
-  {
-    title: "Partial refund — tx_80257 · ₦180,000.00",
-    by: "Kelechi Chukwu",
-    ago: "2h ago",
-    diff: [{ field: "Refund amount", from: "₦0.00", to: "₦180,000.00" }],
-  },
-]
-
-// ─── Alerts (design `alerts`, logic.js 482-486) ──────────────────────────────────────
-
-interface AlertItem {
-  title: string
-  desc: string
-  bg: string
-  fg: string
-  icon: string
-  /** Destination route (design `onTap`). */
-  route: string
+/** Compact relative-time label ("2m" / "3h" / "5d") from an ISO timestamp. */
+function relativeTime(iso: string, now: number = Date.now()): string {
+  const deltaMs = Math.max(0, now - new Date(iso).getTime())
+  const minutes = Math.floor(deltaMs / 60_000)
+  if (minutes < 1) return "now"
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
 }
 
-const ALERTS: readonly AlertItem[] = [
-  {
-    title: "Sanctions hit — name match",
-    desc: "Bola Balogun matched OFAC SDN at 0.82. Review required.",
-    bg: "var(--sdn)",
-    fg: "var(--tdn)",
-    icon: "M12 4l9 16H3zM12 10v4",
-    route: "/sanctions",
-  },
-  {
-    title: "Over-credit flagged",
-    desc: "tx_80257 — +70.00 USDT above ledger. Not auto-debited.",
-    bg: "var(--swn)",
-    fg: "var(--twn)",
-    icon: "M12 13l4-4M4 18a8 8 0 1 1 16 0",
-    route: "/reconciliation",
-  },
-  {
-    title: "Provider incident",
-    desc: "Flutterwave NGN payouts degraded.",
-    bg: "var(--swn)",
-    fg: "var(--twn)",
-    icon: "M12 4l9 16H3z",
-    route: "/ops",
-  },
-]
+/** Map one contract activity event onto the design's ActivityItem view shape. */
+function activityItemFrom(event: ActivityEvent): ActivityItem {
+  const style = ACTIVITY_STYLE[event.kind]
+  return {
+    text: event.title,
+    meta: event.meta,
+    time: relativeTime(event.at),
+    icon: style.icon,
+    iconBg: style.iconBg,
+    iconFg: style.iconFg,
+  }
+}
+
+// ─── Approvals awaiting me — wired to the real maker-checker inbox (Phase 7) ──────────
+// The dashboard panel shows the first few of `awaitingMe` (pending change requests a
+// different admin raised that THIS admin may approve) + the awaiting-me count badge.
+// Dispositions happen on the full /approvals inbox — the panel is a read-only teaser.
+
+/** Human label per change-request kind (mirrors the Approvals page kind pills). */
+const APPROVAL_KIND_LABEL: Record<ChangeRequestKind, string> = {
+  pricing_change: "Pricing change",
+  capability_flip: "Capability",
+  tier_override: "Tier override",
+  refund: "Refund",
+  manual_credit: "Manual credit",
+  notification_broadcast: "Broadcast",
+  payout_release: "Payout release",
+}
+
+/** How many awaiting-me requests the dashboard teaser shows. */
+const APPROVALS_PANEL_LIMIT = 3
 
 // ─── Shared card + title primitives (design §5) ──────────────────────────────────────
 
@@ -406,7 +407,23 @@ function FeatureCard({
 
 // ─── Cards ───────────────────────────────────────────────────────────────────────────
 
-function SystemHealthCard() {
+/**
+ * System-health card — wired to `MetricsOps.systemHealth`. Four async branches:
+ * loading skeleton / error (no-access or generic, both fall back to "unavailable")
+ * / empty (no providers) / data (per-provider rows + queue/recon footer).
+ */
+function SystemHealthCard({
+  ops,
+  isLoading,
+  isError,
+}: {
+  ops: MetricsOps | undefined
+  isLoading: boolean
+  isError: boolean
+}) {
+  const rows = ops ? ops.systemHealth.providers.map(healthRowFrom) : []
+  const reconDrift = ops?.systemHealth.reconDriftCount ?? 0
+
   return (
     <FeatureCard className="flex flex-col">
       <div className="mb-3.5 flex items-center justify-between">
@@ -419,47 +436,70 @@ function SystemHealthCard() {
           Live
         </div>
       </div>
-      <div className="flex flex-col gap-0.5">
-        {HEALTH.map((h) => (
-          <div
-            key={h.name}
-            className="flex items-center gap-[11px] border-b border-line2 py-[9px] last:border-0"
-          >
-            <span
-              aria-hidden
-              className="size-2 flex-none rounded-full"
-              style={{ background: h.dot, boxShadow: `0 0 0 3px ${h.halo}` }}
-            />
-            <div className="min-w-0 flex-1">
-              <div className="text-[12.5px] font-semibold text-ink">
-                {h.name}
-              </div>
-              <div className="text-[10.5px] text-ink3">{h.note}</div>
-            </div>
-            <span
-              className="text-[11px] font-bold tabular-nums"
-              style={{ color: h.fg }}
+
+      {isLoading ? (
+        <div className="flex flex-col gap-2" aria-busy="true">
+          {Array.from({ length: 5 }, (_, i) => (
+            <Skeleton key={i} className="h-[38px] rounded-[8px]" />
+          ))}
+        </div>
+      ) : isError ? (
+        <div className="py-6 text-center text-[12.5px] text-ink3">
+          Health metrics unavailable.
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="py-6 text-center text-[12.5px] text-ink3">
+          No providers registered.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-0.5">
+          {rows.map((h) => (
+            <div
+              key={h.name}
+              className="flex items-center gap-[11px] border-b border-line2 py-[9px] last:border-0"
             >
-              {h.status}
-            </span>
-          </div>
-        ))}
-      </div>
+              <span
+                aria-hidden
+                className="size-2 flex-none rounded-full"
+                style={{ background: h.dot, boxShadow: `0 0 0 3px ${h.halo}` }}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="text-[12.5px] font-semibold text-ink">
+                  {h.name}
+                </div>
+                <div className="text-[10.5px] text-ink3">{h.note}</div>
+              </div>
+              <span
+                className="text-[11px] font-bold tabular-nums"
+                style={{ color: h.fg }}
+              >
+                {h.status}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="mt-auto flex gap-[9px] pt-3.5">
         <div className="flex-1 rounded-[10px] bg-card2 px-[11px] py-[9px]">
           <div className="text-[10.5px] font-semibold text-ink3">
             Webhook queue
           </div>
           <div className="mt-px text-base font-extrabold text-ink tabular-nums">
-            {WEBHOOK_Q}
+            {ops ? fmtInt(ops.systemHealth.webhookQueueDepth) : "—"}
           </div>
         </div>
         <div className="flex-1 rounded-[10px] bg-card2 px-[11px] py-[9px]">
           <div className="text-[10.5px] font-semibold text-ink3">
             Recon drift
           </div>
-          <div className="mt-px text-base font-extrabold text-twn tabular-nums">
-            {RECON_DRIFT}
+          <div
+            className={cn(
+              "mt-px text-base font-extrabold tabular-nums",
+              reconDrift > 0 ? "text-twn" : "text-ink"
+            )}
+          >
+            {ops ? `${fmtInt(reconDrift)} open` : "—"}
           </div>
         </div>
       </div>
@@ -467,16 +507,45 @@ function SystemHealthCard() {
   )
 }
 
-function LiveActivityCard() {
+/**
+ * Live-activity card — wired to `MetricsOps.activityFeed`. Four async branches:
+ * loading skeleton / error / empty (no recent events) / data (the event rows).
+ */
+function LiveActivityCard({
+  ops,
+  isLoading,
+  isError,
+}: {
+  ops: MetricsOps | undefined
+  isLoading: boolean
+  isError: boolean
+}) {
+  const items = ops ? ops.activityFeed.map(activityItemFrom) : []
+
   return (
     <FeatureCard>
       <div className="mb-3 text-sm font-bold text-ink">Live activity</div>
-      <div className="flex flex-col">
-        {ACTIVITY.map((a, i) => (
-          <div
-            key={i}
-            className="flex items-center gap-3 border-b border-line2 py-[9px] last:border-0"
-          >
+      {isLoading ? (
+        <div className="flex flex-col gap-2" aria-busy="true">
+          {Array.from({ length: 5 }, (_, i) => (
+            <Skeleton key={i} className="h-[42px] rounded-[9px]" />
+          ))}
+        </div>
+      ) : isError ? (
+        <div className="py-6 text-center text-[12.5px] text-ink3">
+          Activity feed unavailable.
+        </div>
+      ) : items.length === 0 ? (
+        <div className="py-6 text-center text-[12.5px] text-ink3">
+          No recent activity.
+        </div>
+      ) : (
+        <div className="flex flex-col">
+          {items.map((a, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-3 border-b border-line2 py-[9px] last:border-0"
+            >
             <span
               aria-hidden
               className="flex size-[30px] flex-none items-center justify-center rounded-[9px]"
@@ -504,21 +573,39 @@ function LiveActivityCard() {
               {a.time}
             </span>
           </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </FeatureCard>
   )
 }
 
-function ApprovalsCard({
-  onOpen,
-}: {
-  onOpen: (approval: ApprovalItem) => void
-}) {
+/**
+ * Approvals-awaiting-me teaser — wired to `useApprovalsInbox`. The header carries
+ * the awaiting-me count badge; the body lists the first few pending requests a
+ * different admin raised. Four async branches: loading skeleton / error / empty
+ * (inbox zero) / data. Rows link to the full /approvals inbox where they are
+ * dispositioned — the dashboard never approves (that lives on the Approvals page).
+ */
+function ApprovalsCard() {
+  const inbox = useApprovalsInbox()
+  const awaiting = inbox.data?.awaitingMe ?? []
+  const count = inbox.data?.counts.awaitingMe ?? awaiting.length
+  const rows = awaiting.slice(0, APPROVALS_PANEL_LIMIT)
+
   return (
     <FeatureCard>
       <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm font-bold text-ink">Approvals awaiting me</div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-bold text-ink">
+            Approvals awaiting me
+          </span>
+          {inbox.isSuccess && count > 0 && (
+            <span className="rounded-full bg-swn px-2 py-0.5 text-[10.5px] font-bold text-twn tabular-nums">
+              {count}
+            </span>
+          )}
+        </div>
         <Link
           href="/approvals"
           className="text-xs font-bold text-tif outline-none hover:underline focus-visible:underline"
@@ -526,69 +613,221 @@ function ApprovalsCard({
           Open inbox →
         </Link>
       </div>
-      {MY_APPROVALS.map((a, i) => (
-        <button
-          key={i}
-          type="button"
-          onClick={() => onOpen(a)}
-          className="flex w-full items-center gap-[11px] border-b border-line2 py-2.5 text-left last:border-0 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          <span
-            aria-hidden
-            className="size-2 flex-none rounded-full bg-brand-amber"
-          />
-          <div className="min-w-0 flex-1">
-            <div className="text-[12.5px] font-semibold text-ink">
-              {a.title}
+
+      {inbox.isLoading ? (
+        <div className="flex flex-col gap-2" aria-busy="true">
+          {Array.from({ length: 3 }, (_, i) => (
+            <Skeleton key={i} className="h-[38px] rounded-[8px]" />
+          ))}
+        </div>
+      ) : inbox.isError ? (
+        <div className="py-6 text-center text-[12.5px] text-ink3">
+          Approvals inbox unavailable.
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="py-6 text-center text-[12.5px] text-ink3">
+          Nothing awaiting your approval.
+        </div>
+      ) : (
+        rows.map((cr: ChangeRequest) => (
+          <Link
+            key={cr.id}
+            href="/approvals"
+            className="flex w-full items-center gap-[11px] border-b border-line2 py-2.5 text-left last:border-0 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            <span
+              aria-hidden
+              className="size-2 flex-none rounded-full bg-brand-amber"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[12.5px] font-semibold text-ink">
+                {APPROVAL_KIND_LABEL[cr.kind]} · {cr.resource}
+              </div>
+              <div className="text-[10.5px] text-ink3">
+                by {cr.requestedByEmail ?? cr.requestedByAdminId}
+              </div>
             </div>
-            <div className="text-[10.5px] text-ink3">
-              by {a.by} · {a.ago}
-            </div>
-          </div>
-          <span className="flex-none rounded-full bg-swn px-2 py-0.5 text-[10.5px] font-bold text-twn">
-            Pending
-          </span>
-        </button>
-      ))}
+            <span className="flex-none rounded-full bg-swn px-2 py-0.5 text-[10.5px] font-bold text-twn">
+              Pending
+            </span>
+          </Link>
+        ))
+      )}
     </FeatureCard>
   )
 }
 
+/** Icon-chip token per alert tone (status semantic, never colour alone). */
+const ALERT_TONE_CHIP: Record<AdminAlert["tone"], string> = {
+  danger: "bg-[color:var(--danger-muted)] text-[color:var(--destructive)]",
+  warn: "bg-[color:var(--warn-muted)] text-[color:var(--warn)]",
+  info: "bg-[color:var(--info-muted)] text-[color:var(--info)]",
+}
+
 function AlertsCard() {
   const router = useRouter()
+  // LIVE alerts derived from the same source hooks as the topbar bell (shared
+  // useOperatorAlerts) — never a hardcoded list. Empty = "All clear".
+  const alerts = useOperatorAlerts()
   return (
     <FeatureCard className="flex-1">
       <div className="mb-3 text-sm font-bold text-ink">Alerts</div>
-      {ALERTS.map((a, i) => (
-        <button
-          key={i}
-          type="button"
-          onClick={() => router.push(a.route)}
-          className="flex w-full items-start gap-[11px] border-b border-line2 py-2.5 text-left last:border-0 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
+      {alerts.length === 0 ? (
+        <div className="py-2.5 text-[12px] text-ink2">
+          All clear — no operational alerts.
+        </div>
+      ) : (
+        alerts.map((a) => {
+          const Icon = a.icon
+          return (
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => router.push(a.href)}
+              className="flex w-full items-start gap-[11px] border-b border-line2 py-2.5 text-left last:border-0 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "mt-px flex size-[26px] flex-none items-center justify-center rounded-lg",
+                  ALERT_TONE_CHIP[a.tone]
+                )}
+              >
+                <Icon className="size-[14px]" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[12.5px] font-semibold text-ink">
+                  {a.title}
+                </div>
+                <div className="text-[11px] leading-[1.4] text-ink2">
+                  {a.description}
+                </div>
+              </div>
+            </button>
+          )
+        })
+      )}
+    </FeatureCard>
+  )
+}
+
+// ─── KPI grid — the metrics-backed data branch (§8) ──────────────────────────────────
+
+/** The 4×2 KPI tile grid rendered from the real composite summary (data branch). */
+function KpiGrid({
+  data,
+  openComplianceCases,
+}: {
+  data: DashboardSummary
+  openComplianceCases: number | undefined
+}) {
+  const kpis = useMemo(
+    () => deriveKpis(data, openComplianceCases),
+    [data, openComplianceCases]
+  )
+  return (
+    <div className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
+      {kpis.map((k) => (
+        <KpiCard
+          key={k.label}
+          label={k.label}
+          value={k.value}
+          delta={k.delta}
+          deltaNote={k.deltaNote}
+          hero={k.hero}
+          tone={k.tone}
+        />
+      ))}
+    </div>
+  )
+}
+
+/** Loading placeholder for the KPI grid — 8 tile-sized skeletons in the 4×2 grid. */
+function KpiGridSkeleton() {
+  return (
+    <div
+      className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4"
+      aria-busy="true"
+    >
+      {Array.from({ length: 8 }, (_, i) => (
+        <Skeleton key={i} className="h-[104px] rounded-2xl" />
+      ))}
+    </div>
+  )
+}
+
+// ─── Transaction-volume chart card — real stacked-by-capability series ────────────────
+
+/** The volume-chart legend swatches (design lines 30-42). */
+function VolumeLegend() {
+  return (
+    <div className="flex flex-wrap gap-[13px]">
+      {(
+        [
+          ["buy", VOL_COLORS.buy],
+          ["sell", VOL_COLORS.sell],
+          ["send", VOL_COLORS.send],
+          ["swap", VOL_COLORS.swap],
+          ["ticket", VOL_COLORS.ticket],
+        ] as const
+      ).map(([label, color]) => (
+        <div key={label} className="flex items-center gap-[5px]">
           <span
             aria-hidden
-            className="mt-px flex size-[26px] flex-none items-center justify-center rounded-lg"
-            style={{ background: a.bg, color: a.fg }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path
-                d={a.icon}
-                stroke="currentColor"
-                strokeWidth="1.9"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-[12.5px] font-semibold text-ink">
-              {a.title}
-            </div>
-            <div className="text-[11px] leading-[1.4] text-ink2">{a.desc}</div>
-          </div>
-        </button>
+            className="size-[9px] rounded-[3px]"
+            style={{ background: color }}
+          />
+          <span className="text-[11px] font-semibold text-ink2">{label}</span>
+        </div>
       ))}
+    </div>
+  )
+}
+
+/**
+ * The Transaction-volume card. Wired to the real `txnVolume.stackedSeries` (Phase
+ * 6b) — four async branches: loading skeleton / error (shared with the KPI panel,
+ * so this only distinguishes loading vs empty vs data) / empty (no txns in range) /
+ * data (the stacked-bar silhouette).
+ */
+function VolumeChartCard({
+  data,
+  isLoading,
+}: {
+  data: DashboardSummary | undefined
+  isLoading: boolean
+}) {
+  const bars = useMemo(
+    () => (data ? volBarsFrom(data.txnVolume.stackedSeries) : []),
+    [data]
+  )
+
+  return (
+    <FeatureCard>
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-bold text-ink">Transaction volume</div>
+          <div className="mt-0.5 text-xs text-ink2 tabular-nums">
+            by day · stacked by capability
+          </div>
+        </div>
+        <VolumeLegend />
+      </div>
+      <div className="mt-4">
+        {isLoading ? (
+          <Skeleton className="h-[180px] rounded-[12px]" />
+        ) : bars.length === 0 ? (
+          <div className="flex h-[180px] items-center justify-center text-[12.5px] text-ink3">
+            No transactions in this range.
+          </div>
+        ) : (
+          <ChartBars
+            bars={bars}
+            ariaLabel="Transaction volume by day, stacked by capability"
+            showLegend={false}
+          />
+        )}
+      </div>
     </FeatureCard>
   )
 }
@@ -596,33 +835,19 @@ function AlertsCard() {
 // ─── Page ────────────────────────────────────────────────────────────────────────────
 
 export function OperatorDashboard() {
-  const router = useRouter()
   const [range, setRange] = useState<RangeId>("24h")
-  const mul = RANGE_MUL[range]
 
-  // Approval flow — an "Approvals awaiting me" row opens the shared maker-checker
-  // modal with its from→to diff (design maker-checker flow); submitting routes to
-  // the real /approvals inbox where a second admin dispositions it.
-  const [activeApproval, setActiveApproval] = useState<ApprovalItem | null>(
-    null
-  )
+  // The KPI tiles + range switcher are wired to the real composite metrics endpoint.
+  const days = RANGE_DAYS[range]
+  const metricsRange = useMemo(() => rangeForDays(days), [days])
+  const query = useDashboardMetrics(metricsRange)
+  const isForbidden =
+    query.error instanceof ApiError && query.error.status === 403
 
-  const kpis = useMemo(
-    () =>
-      KPI_DEFS.map((def, i) => ({
-        label: def.label,
-        value: kpiValue(def, mul),
-        delta: def.delta,
-        deltaNote: def.note,
-        hero: i === 0,
-        tone: def.warn ? ("warn" as const) : ("success" as const),
-      })),
-    [mul]
-  )
-
-  // Rescope the stacked-bar chart to the selected range (design `mul`): the bar
-  // silhouette visibly changes per range while colours/labels stay identical.
-  const volBars = useMemo(() => volBarsFor(mul), [mul])
+  // The System-health card, Live-activity feed, and Open-compliance KPI are wired to
+  // the range-independent operational-ops endpoint (a distinct query so a 403 there
+  // degrades those panels without hiding the range-scoped KPIs, and vice-versa).
+  const opsQuery = useMetricsOps()
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto bg-bg">
@@ -666,90 +891,64 @@ export function OperatorDashboard() {
         </div>
 
         {/* ── KPI TILES — 4×2 grid, tile 0 = hero (design lines 16-27) ───────────── */}
-        <div className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
-          {kpis.map((k) => (
-            <KpiCard
-              key={k.label}
-              label={k.label}
-              value={k.value}
-              delta={k.delta}
-              deltaNote={k.deltaNote}
-              hero={k.hero}
-              tone={k.tone}
-            />
+        {/* Four async branches: loading skeletons / error / empty (no access) / data. */}
+        {query.isLoading && <KpiGridSkeleton />}
+
+        {query.isError &&
+          (isForbidden ? (
+            <div className="mb-4 rounded-[18px] border border-swn bg-swn/40 p-6 text-center">
+              <p className="text-sm font-bold text-twn">No metrics access</p>
+              <p className="mt-1 text-[12.5px] text-ink2">
+                Your role can&apos;t view the operational dashboard. Ask a super
+                admin to grant the Metrics permission.
+              </p>
+            </div>
+          ) : (
+            <div className="mb-4 rounded-[18px] border border-sdn bg-sdn/40 p-6 text-center">
+              <p className="text-sm font-bold text-tdn">
+                Failed to load metrics
+              </p>
+              <button
+                type="button"
+                onClick={() => query.refetch()}
+                className="mt-2 cursor-pointer rounded-[8px] bg-btn-dark px-3.5 py-1.5 text-[12.5px] font-bold text-white outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                Retry
+              </button>
+            </div>
           ))}
-        </div>
+
+        {query.isSuccess && (
+          <KpiGrid
+            data={query.data}
+            openComplianceCases={opsQuery.data?.compliance.openCases}
+          />
+        )}
 
         {/* ── Volume chart + System health (design lines 29-77) ─────────────────── */}
         <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-[1.7fr_1fr]">
-          <FeatureCard>
-            <div className="mb-1 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-bold text-ink">
-                  Transaction volume
-                </div>
-                <div className="mt-0.5 text-xs text-ink2 tabular-nums">
-                  by day · stacked by capability
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-[13px]">
-                {(
-                  [
-                    ["buy", VOL_COLORS.buy],
-                    ["sell", VOL_COLORS.sell],
-                    ["send", VOL_COLORS.send],
-                    ["swap", VOL_COLORS.swap],
-                    ["ticket", VOL_COLORS.ticket],
-                  ] as const
-                ).map(([label, color]) => (
-                  <div key={label} className="flex items-center gap-[5px]">
-                    <span
-                      aria-hidden
-                      className="size-[9px] rounded-[3px]"
-                      style={{ background: color }}
-                    />
-                    <span className="text-[11px] font-semibold text-ink2">
-                      {label}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="mt-4">
-              <ChartBars
-                bars={volBars}
-                ariaLabel="Transaction volume by day, stacked by capability, Jun 18 to today"
-                showLegend={false}
-              />
-            </div>
-          </FeatureCard>
+          <VolumeChartCard data={query.data} isLoading={query.isLoading} />
 
-          <SystemHealthCard />
+          <SystemHealthCard
+            ops={opsQuery.data}
+            isLoading={opsQuery.isLoading}
+            isError={opsQuery.isError}
+          />
         </div>
 
         {/* ── Attention row — Live activity | (Approvals + Alerts) (lines 79-120) ── */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <LiveActivityCard />
+          <LiveActivityCard
+            ops={opsQuery.data}
+            isLoading={opsQuery.isLoading}
+            isError={opsQuery.isError}
+          />
           <div className="flex flex-col gap-4">
-            <ApprovalsCard onOpen={setActiveApproval} />
+            <ApprovalsCard />
             <AlertsCard />
           </div>
         </div>
       </div>
-
-      {/* Maker-checker flow modal for the selected approval (design flow §5). */}
-      <MakerCheckerModal
-        open={activeApproval !== null}
-        onOpenChange={(open) => {
-          if (!open) setActiveApproval(null)
-        }}
-        title={activeApproval?.title ?? ""}
-        diff={activeApproval ? [...activeApproval.diff] : []}
-        onSubmit={() => {
-          setActiveApproval(null)
-          router.push("/approvals")
-        }}
-      />
     </div>
   )
 }

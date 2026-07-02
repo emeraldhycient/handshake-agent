@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 
 import type {
   DashboardSummary,
+  GmvMetrics,
   KycFunnelMetrics,
   MetricsRangeQuery,
   RevenueMetrics,
@@ -41,10 +42,21 @@ export class AdminMetricsService {
     private readonly metrics: IMetricsReadRepository,
   ) {}
 
-  /** Transaction-volume + success-rate metrics for the (defaulted/clamped) range. */
+  /**
+   * Transaction-volume + success-rate metrics for the (defaulted/clamped) range.
+   * Each `byType` row carries completed / failed / stuck breakdowns; `stuck`
+   * counts the in-flight statuses (pending/validating/confirmed/settling) so the
+   * dashboard "Failed / stuck tx" card can show BOTH, matching the sidebar badge.
+   */
   async transactions(query: MetricsRangeQuery): Promise<TxnVolumeMetrics> {
     const { from, to } = this.resolveRange(query);
     return this.metrics.transactionVolume(from, to);
+  }
+
+  /** GMV (summed fiat notional of completed txns, per currency) for the range. */
+  async gmv(query: MetricsRangeQuery): Promise<GmvMetrics> {
+    const { from, to } = this.resolveRange(query);
+    return this.metrics.gmv(from, to);
   }
 
   /** Revenue (fees by currency; spread folded into fx → empty) for the range. */
@@ -65,9 +77,10 @@ export class AdminMetricsService {
   /** The composite dashboard — every metric block for one resolved range. */
   async dashboard(query: MetricsRangeQuery): Promise<DashboardSummary> {
     const { from, to } = this.resolveRange(query);
-    const [txnVolume, revenue, kycFunnel, activeUsers, serviceHealth] =
+    const [txnVolume, gmv, revenue, kycFunnel, activeUsers, serviceHealth] =
       await Promise.all([
         this.metrics.transactionVolume(from, to),
+        this.metrics.gmv(from, to),
         this.metrics.revenue(from, to),
         this.metrics.kycFunnel(),
         this.metrics.activeUsers(from, to),
@@ -76,6 +89,7 @@ export class AdminMetricsService {
 
     return {
       txnVolume,
+      gmv,
       revenue,
       kycFunnel: {
         byStatus: kycFunnel.byStatus.map((r) => ({

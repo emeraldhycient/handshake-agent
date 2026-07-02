@@ -10,9 +10,11 @@
  */
 import {
   AgentConfigViewSchema,
+  AgentInsightsViewSchema,
   ConversationLogListResponseSchema,
   ConversationLogDetailSchema,
   type AgentConfigView,
+  type AgentInsightsView,
   type ConversationLogListResponse,
   type ConversationLogDetail,
 } from "@handshake-agent/contracts"
@@ -23,6 +25,16 @@ import { api } from "./client"
 export async function getAgentConfig(): Promise<AgentConfigView> {
   const res = await api.get("/admin/agent/config")
   return AgentConfigViewSchema.parse(res.data)
+}
+
+/**
+ * GET /admin/agent/insights — the guardrail params, typed-tool registry, live
+ * prompt version, and REAL rolling-24h usage counts (no token/cost — the schema
+ * stores none). Backs the Agent console's four cards.
+ */
+export async function getAgentInsights(): Promise<AgentInsightsView> {
+  const res = await api.get("/admin/agent/insights")
+  return AgentInsightsViewSchema.parse(res.data)
 }
 
 /** GET /admin/agent/conversations — the conversation/intent log list. */

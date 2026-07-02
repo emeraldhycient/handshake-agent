@@ -443,6 +443,72 @@ export function buildDepositLedgerEntries(
 }
 
 // ---------------------------------------------------------------------------
+// Manual credit ledger (admin, engine-brokered — Phase 7)
+// ---------------------------------------------------------------------------
+
+/** Treasury account id that funds an admin manual credit (mirrors buy's crypto source). */
+const MANUAL_CREDIT_TREASURY_ACCOUNT_ID = 'usdt_treasury';
+
+/** Input to the pure manual-credit ledger builder. */
+export interface BuildManualCreditLedgerInput {
+  /** accountId for the user_wallet crypto account. */
+  walletId: string;
+  /** Crypto amount credited to the user (positive decimal string, e.g. "25.5"). */
+  cryptoAmount: string;
+  /**
+   * The crypto asset symbol (e.g. 'USDT', 'USDC'). Used as the `currency`
+   * label on both legs so reads and writes key by (walletId, asset).
+   */
+  asset: string;
+  postedAt: Date;
+  /**
+   * Current per-account state. Missing keys default to
+   * { sequence: 0, balance: '0' }.
+   */
+  accountStates: Record<AccountKey, AccountState>;
+}
+
+/**
+ * Produce the balanced double-entry `LedgerEntryDraft` rows for an admin
+ * MANUAL CREDIT (exactly 2 entries). The credit is sourced from the treasury —
+ * the platform funds a goodwill/reconciliation credit exactly as a buy sources
+ * the delivered crypto from treasury.
+ *
+ * Account mapping (credit positive, debit negative; per-currency sum = 0):
+ *  + user_wallet      / walletId      / asset  +cryptoAmount  (credited to user)
+ *  − treasury_reserve / usdt_treasury / asset  −cryptoAmount  (sourced from treasury)
+ */
+export function buildManualCreditEntries(
+  input: BuildManualCreditLedgerInput,
+): LedgerEntryDraft[] {
+  const { walletId, cryptoAmount, asset, postedAt, accountStates } = input;
+
+  // -- Validation -- fail closed on a zero / negative / malformed amount.
+  assertPositiveDecimal(cryptoAmount, 'cryptoAmount');
+
+  const negCrypto = fromScaled(-toScaled(cryptoAmount));
+
+  const specs: EntrySpec[] = [
+    {
+      accountType: LedgerAccountType.user_wallet,
+      accountId: walletId,
+      currency: asset,
+      amount: cryptoAmount,
+      description: `Manual credit: ${asset} ${cryptoAmount} credited to user wallet by admin`,
+    },
+    {
+      accountType: LedgerAccountType.treasury_reserve,
+      accountId: MANUAL_CREDIT_TREASURY_ACCOUNT_ID,
+      currency: asset,
+      amount: negCrypto,
+      description: `Manual credit: ${asset} ${cryptoAmount} sourced from treasury`,
+    },
+  ];
+
+  return specs.map((spec) => buildEntry(spec, accountStates, postedAt));
+}
+
+// ---------------------------------------------------------------------------
 // Sell ledger — two-phase (reserve at execute, finalize or refund at settle)
 // ---------------------------------------------------------------------------
 

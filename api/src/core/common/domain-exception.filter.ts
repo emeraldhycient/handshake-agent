@@ -224,6 +224,30 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.CONFLICT,
     message: 'This transaction cannot be triaged in its current state.',
   },
+  // Approvals / maker-checker (Phase 7): four-eyes enforcement + decision guards.
+  ADMIN_SELF_APPROVAL_FORBIDDEN: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'You cannot approve or reject your own change request.',
+  },
+  ADMIN_CHANGE_REQUEST_NOT_PENDING: {
+    status: HttpStatus.CONFLICT,
+    message: 'This change request has already been decided.',
+  },
+  ADMIN_CHANGE_REQUEST_NOT_APPLICABLE: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'This change request cannot be applied.',
+  },
+  ADMIN_BULK_CONFIRMATION_REQUIRED: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message:
+      'This broadcast is over the large-set threshold; explicit confirmation is required.',
+  },
+  // Manual credit (Phase 7): the credited user's server-side state forbids it
+  // (deactivated / sanctions-flagged / no wallet on the asset's network) → 422.
+  ADMIN_MANUAL_CREDIT_NOT_ALLOWED: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'A manual credit is not allowed for this user.',
+  },
 
   // ── Admin config settings (layered-config console) → 409 / 422 ──────────────
   ADMIN_SETTING_NOT_EDITABLE: {

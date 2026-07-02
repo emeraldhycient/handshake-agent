@@ -20,6 +20,15 @@ export interface TransactionListRecord {
   id: string;
   type: string;
   status: string;
+  /**
+   * Economics projected from Transaction.metadata ({ asset, amount, fiatAmount,
+   * fiatCurrency, ... }). Null when the row does not carry that leg (older rows,
+   * or deposit/reward types) — the boundary read of the JSON is best-effort.
+   */
+  asset: string | null;
+  amount: string | null;
+  fiatAmount: string | null;
+  fiatCurrency: string | null;
   createdAt: Date;
 }
 

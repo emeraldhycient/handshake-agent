@@ -81,3 +81,74 @@ export const ConversationLogDetailSchema = z.object({
   replies: z.array(ConversationLogReplySchema),
 });
 export type ConversationLogDetail = z.infer<typeof ConversationLogDetailSchema>;
+
+// ── Agent insights view (Phase 6b READ enrichment) ───────────────────────────
+// READ-ONLY oversight for the Agent console's guardrails / tool-registry /
+// prompt-version / 24h-usage cards. Nothing here moves money (§3.1) and no secret
+// is ever surfaced. The values are computed on read from architectural invariants,
+// the layered config, the real intent-action capability set, and live conversation
+// counts — never fabricated. IMPORTANT: the schema stores NO token or dollar-cost
+// data, so usage is real message/reply COUNTS (not tokens/cost) — we report what is
+// actually measurable rather than inventing figures (§3.6).
+
+/** One "Model & guardrails" key/value row — an architectural fact or config value. */
+export const AgentGuardrailSchema = z.object({
+  label: z.string(),
+  value: z.string(),
+});
+export type AgentGuardrail = z.infer<typeof AgentGuardrailSchema>;
+
+/** A tool's access class — `read` returns data, `write` only PROPOSES (§3.1). */
+export const AgentToolKindSchema = z.enum(["read", "write"]);
+export type AgentToolKind = z.infer<typeof AgentToolKindSchema>;
+
+/** One typed-tool registry row derived from the real agent capability surface. */
+export const AgentToolSchema = z.object({
+  name: z.string(),
+  kind: AgentToolKindSchema,
+});
+export type AgentTool = z.infer<typeof AgentToolSchema>;
+
+/**
+ * The live system-prompt version. There is NO prompt-version store (the prompt is
+ * generated read-only from the live catalog, §3.1/§6), so exactly one row exists:
+ * the current live prompt. `promptChars` is its length — a lightweight change
+ * fingerprint an operator can watch — never the prompt body or any secret.
+ */
+export const AgentPromptVersionViewSchema = z.object({
+  /** Semantic label for the live prompt (e.g. "live"). */
+  label: z.string(),
+  /** Lifecycle status — always "live" until a version store exists (Phase 7). */
+  status: z.literal("live"),
+  /** Character length of the current system prompt (a change fingerprint). */
+  promptChars: z.number().int().nonnegative(),
+});
+export type AgentPromptVersionView = z.infer<
+  typeof AgentPromptVersionViewSchema
+>;
+
+/**
+ * Real rolling-24h usage counts from the conversation logs. The schema records no
+ * token counts or per-turn cost, so these are the honest, measurable figures:
+ * conversations touched, inbound messages received, and outbound replies sent in
+ * the window. `windowHours` documents the window (24) for the card label.
+ */
+export const AgentUsage24hSchema = z.object({
+  /** Distinct conversations with activity in the last 24h. */
+  conversations: z.number().int().nonnegative(),
+  /** Inbound user messages received in the last 24h. */
+  inboundMessages: z.number().int().nonnegative(),
+  /** Outbound agent replies sent in the last 24h. */
+  outboundReplies: z.number().int().nonnegative(),
+  /** The rolling window in hours (24) — drives the card's "(24h)" label. */
+  windowHours: z.number().int().positive(),
+});
+export type AgentUsage24h = z.infer<typeof AgentUsage24hSchema>;
+
+export const AgentInsightsViewSchema = z.object({
+  guardrails: z.array(AgentGuardrailSchema),
+  tools: z.array(AgentToolSchema),
+  promptVersion: AgentPromptVersionViewSchema,
+  usage24h: AgentUsage24hSchema,
+});
+export type AgentInsightsView = z.infer<typeof AgentInsightsViewSchema>;

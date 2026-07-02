@@ -21,6 +21,7 @@ import {
 } from '@handshake-agent/contracts';
 
 import { AdminInvitationService } from '../application/admin-invitation.service';
+import { AdminMfaService } from '../application/admin-mfa.service';
 import { AdminUserService } from '../application/admin-user.service';
 import type { AdminUserRecord } from '../application/ports/admin-user.repository.port';
 import { AdminSessionGuard } from './admin-session.guard';
@@ -30,13 +31,18 @@ import { CurrentAdmin, type AdminContext } from './current-admin.decorator';
 import { RequirePermission } from './require-permission.decorator';
 import { AdminUserListQueryDto } from './dto/admin-list-query.dto';
 import { AdminInvitationCreateDto } from './dto/admin-invitation.dto';
-import { AdminUserRoleDto, AdminUserStatusDto } from './dto/admin-user.dto';
+import {
+  AdminMfaResetDto,
+  AdminUserRoleDto,
+  AdminUserStatusDto,
+} from './dto/admin-user.dto';
 
 /** Serialize an admin-user record into the contract shape (Dates → ISO strings). */
 function toAdminUser(record: AdminUserRecord): AdminUser {
   return AdminUserSchema.parse({
     id: record.id,
     email: record.email,
+    displayName: record.displayName,
     status: record.status,
     mfaEnabled: record.mfaEnabled,
     role: { id: record.roleId, name: record.roleName },
@@ -57,6 +63,7 @@ export class AdminUsersController {
   constructor(
     private readonly users: AdminUserService,
     private readonly invitations: AdminInvitationService,
+    private readonly mfa: AdminMfaService,
   ) {}
 
   @Post('invitations')
@@ -119,5 +126,20 @@ export class AdminUsersController {
     @CurrentAdmin() admin: AdminContext,
   ): Promise<void> {
     await this.users.setStatus(id, dto.status, admin.adminId, new Date());
+  }
+
+  // Reset 2FA for ANOTHER admin (sensitive RBAC action): clears the target's
+  // MFA secret + recovery codes + mfaEnabled so they must re-enroll. Requires a
+  // fresh step-up + write permission + an audited reason; reveals no secret.
+  @Post('admins/:id/mfa/reset')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission('api_route', 'POST /admin/admins/:id/mfa/reset', 'write')
+  @UseGuards(AdminStepUpGuard)
+  async resetMfa(
+    @Param('id') id: string,
+    @Body() dto: AdminMfaResetDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<void> {
+    await this.mfa.resetForAdmin(id, admin.adminId, dto.reason, new Date());
   }
 }

@@ -18,6 +18,8 @@ import {
   ComplianceEventListResponseSchema,
   ComplianceReportSchema,
   ComplianceReportListResponseSchema,
+  SanctionsMonitoringViewSchema,
+  SanctionsRecordItemSchema,
   SanctionsRecordListResponseSchema,
   TravelRuleListResponseSchema,
   type AmlRule,
@@ -26,6 +28,8 @@ import {
   type ComplianceEventListResponse,
   type ComplianceReport,
   type ComplianceReportListResponse,
+  type SanctionsMonitoringView,
+  type SanctionsRecordItem,
   type SanctionsRecordListResponse,
   type TravelRuleListResponse,
 } from '@handshake-agent/contracts';
@@ -44,6 +48,7 @@ import {
   ComplianceFeedQueryDto,
   ComplianceReportDraftDto,
   ComplianceReportSubmitDto,
+  SanctionsDispositionDto,
 } from './dto/admin-compliance.dto';
 
 /**
@@ -108,6 +113,24 @@ export class AdminComplianceController {
     );
   }
 
+  @Post('sanctions/:id/disposition')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission(
+    'api_route',
+    'POST /admin/compliance/sanctions/:id/disposition',
+    'write',
+  )
+  async disposeSanctions(
+    @Param('id') id: string,
+    @Body() dto: SanctionsDispositionDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<SanctionsRecordItem> {
+    return SanctionsRecordItemSchema.parse(
+      await this.compliance.disposeSanctions(id, dto, admin.adminId),
+    );
+  }
+
   @Get('travel-rule')
   @RequirePermission('api_route', 'GET /admin/compliance/travel-rule', 'read')
   async listTravelRule(
@@ -116,6 +139,12 @@ export class AdminComplianceController {
     return TravelRuleListResponseSchema.parse(
       await this.compliance.listTravelRule(query),
     );
+  }
+
+  @Get('monitoring')
+  @RequirePermission('api_route', 'GET /admin/compliance/monitoring', 'read')
+  getMonitoring(): SanctionsMonitoringView {
+    return SanctionsMonitoringViewSchema.parse(this.compliance.getMonitoring());
   }
 
   // ── AML rules (CRUD) ────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ import {
   AdminNotFoundError,
 } from '../domain/admin-errors';
 import { AdminMfaService } from './admin-mfa.service';
+import { resolveAdminDisplayName } from './admin-user.service';
 import { AdminTokenService } from './admin-token.service';
 import { AuthorizationService } from './authorization.service';
 import {
@@ -170,6 +171,7 @@ export class AdminAuthService {
     return {
       id: user.id,
       email: user.email,
+      displayName: resolveAdminDisplayName(user.email, user.displayName),
       role: { id: role.id, name: role.name },
       status: user.status,
       mfaEnabled: user.mfaEnabled,

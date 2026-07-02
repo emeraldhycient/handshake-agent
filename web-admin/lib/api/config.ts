@@ -11,8 +11,13 @@
  * This file lives in `lib/` and must NOT import from `components/` or `app/`.
  */
 import {
+  EffectiveSettingListResponseSchema,
+  EffectiveSettingSchema,
   PublicConfigResponseSchema,
+  UpdateSettingRequestSchema,
+  type EffectiveSetting,
   type PublicConfigResponse,
+  type UpdateSettingRequest,
 } from "@handshake-agent/contracts"
 
 import { api } from "./client"
@@ -21,4 +26,49 @@ import { api } from "./client"
 export async function getPublicConfig(): Promise<PublicConfigResponse> {
   const res = await api.get("/config")
   return PublicConfigResponseSchema.parse(res.data)
+}
+
+/**
+ * GET /admin/settings — the effective view of every non-secret registry key
+ * (root CLAUDE.md §7, DB-admin › env › JSON). Each row pairs a SETTING_REGISTRY
+ * entry's metadata (key/category/label/valueType/editable/scope) with its current
+ * effective `value` and provenance (`source`: 'db' override vs 'default'). An
+ * optional `category` narrows the list to one registry category (e.g. "Pricing",
+ * "KYC", "Catalog"). Read-only — edits go through the step-up-guarded PATCH (Phase 7).
+ * The response is parsed through the contract schema (§8/§3.3: defence-in-depth).
+ */
+export async function listEffectiveSettings(
+  category?: string
+): Promise<EffectiveSetting[]> {
+  const res = await api.get("/admin/settings", {
+    params: category ? { category } : undefined,
+  })
+  return EffectiveSettingListResponseSchema.parse(res.data).settings
+}
+
+/** GET /admin/settings/:key — one registry key's effective value + provenance. */
+export async function getSetting(key: string): Promise<EffectiveSetting> {
+  const res = await api.get(`/admin/settings/${encodeURIComponent(key)}`)
+  return EffectiveSettingSchema.parse(res.data)
+}
+
+/**
+ * PATCH /admin/settings/:key — apply an admin override to the DB layer of a
+ * tunable key (root CLAUDE.md §7). Sensitive: the endpoint is step-up-guarded and
+ * may 403 with ADMIN_STEP_UP_REQUIRED (the caller wraps this in `useStepUpRetry`).
+ * The server re-validates the value against the registry schema + multi-currency
+ * invariant, hot-reloads the snapshot, and records an immutable `config_change`
+ * audit entry — this client never moves money (§3.1/§3.2). The body is parsed
+ * through the request schema before the request fires and the response after (§8/§3.3).
+ */
+export async function setSetting(
+  key: string,
+  input: UpdateSettingRequest
+): Promise<EffectiveSetting> {
+  const body = UpdateSettingRequestSchema.parse(input)
+  const res = await api.patch(
+    `/admin/settings/${encodeURIComponent(key)}`,
+    body
+  )
+  return EffectiveSettingSchema.parse(res.data)
 }

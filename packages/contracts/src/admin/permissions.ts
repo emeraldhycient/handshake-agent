@@ -41,6 +41,8 @@ export const ADMIN_PERMISSION_CATEGORIES = [
   "Tickets",
   "Agent",
   "Metrics",
+  "Ops",
+  "Approvals",
 ] as const;
 export type AdminPermissionCategory =
   (typeof ADMIN_PERMISSION_CATEGORIES)[number];
@@ -115,6 +117,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "write",
     "Access",
     "Invite a new admin user",
+  ),
+  r(
+    "api_route",
+    "POST /admin/admins/:id/mfa/reset",
+    "write",
+    "Access",
+    "Reset another admin user's 2FA (they must re-enroll)",
   ),
   // Access — roles & permissions
   r("api_route", "GET /admin/roles", "read", "Access", "List roles"),
@@ -201,6 +210,16 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Config",
     "Override a config setting",
   ),
+  // Config — full asset + fiat catalog view (Phase 6b, READ-ONLY). The public
+  // GET /config is enabled-only + secret-stripped; this admin view adds the
+  // disabled (paused/off) rows and per-entry live status the catalog screens show.
+  r(
+    "api_route",
+    "GET /admin/config/catalog",
+    "read",
+    "Config",
+    "View the full asset + currency catalog (incl. disabled)",
+  ),
 
   // Users — end-user management & device/SIM-swap admin (Phase 2)
   r(
@@ -238,12 +257,44 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Users",
     "Trigger an end user's PIN reset",
   ),
+  // Manual credit is a MAKER action: it raises a pending `manual_credit`
+  // ChangeRequest a SECOND admin must approve (four-eyes, §3.1) — it never moves
+  // money itself. `write` (it only creates a request; the engine credit happens
+  // on approve, which is guarded by the approvals `execute` permission + step-up).
+  r(
+    "api_route",
+    "POST /admin/users/:id/credit",
+    "write",
+    "Users",
+    "Raise a manual-credit request for an end user's wallet (maker-checker)",
+  ),
   r(
     "api_route",
     "GET /admin/users/:id/devices",
     "read",
     "Users",
     "List an end user's devices",
+  ),
+  r(
+    "api_route",
+    "GET /admin/users/:id/sessions",
+    "read",
+    "Users",
+    "List an end user's active auth sessions",
+  ),
+  r(
+    "api_route",
+    "GET /admin/users/:id/limits",
+    "read",
+    "Users",
+    "View an end user's effective limits & velocity usage",
+  ),
+  r(
+    "api_route",
+    "GET /admin/users/:id/timeline",
+    "read",
+    "Users",
+    "View an end user's admin-action timeline",
   ),
   r(
     "api_route",
@@ -258,6 +309,20 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "write",
     "Users",
     "Force SIM-swap re-verification for an end user",
+  ),
+  r(
+    "api_route",
+    "POST /admin/users/tags",
+    "write",
+    "Users",
+    "Bulk-apply an operator tag to selected end users",
+  ),
+  r(
+    "api_route",
+    "POST /admin/users/message",
+    "write",
+    "Comms",
+    "Bulk-queue a templated broadcast to selected end users",
   ),
 
   // KYC — review queue & approve/reject (Phase 2)
@@ -323,6 +388,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Transactions",
     "Re-enqueue a stuck transaction's settlement for the reconciliation worker",
   ),
+  r(
+    "api_route",
+    "POST /admin/transactions/:id/reconcile",
+    "write",
+    "Transactions",
+    "Re-run reconciliation for one transaction (read-only provider-vs-ledger detection; moves no money)",
+  ),
 
   // Ledger — read-only double-entry history + integrity verification (Phase 3)
   r(
@@ -331,6 +403,21 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "read",
     "Ledger",
     "Read an account's ledger history",
+  ),
+  // Global cross-account ledger browse + sequence-integrity summary (Phase 6b)
+  r(
+    "api_route",
+    "GET /admin/ledger/all",
+    "read",
+    "Ledger",
+    "Browse the global cross-account ledger",
+  ),
+  r(
+    "api_route",
+    "GET /admin/ledger/integrity",
+    "read",
+    "Ledger",
+    "Read the global ledger sequence-integrity summary",
   ),
   r(
     "api_route",
@@ -370,6 +457,20 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "read",
     "Compliance",
     "List sanctions screening records",
+  ),
+  r(
+    "api_route",
+    "POST /admin/compliance/sanctions/:id/disposition",
+    "write",
+    "Compliance",
+    "Dispose of a sanctions screening match (clear / escalate / block)",
+  ),
+  r(
+    "api_route",
+    "GET /admin/compliance/monitoring",
+    "read",
+    "Compliance",
+    "Read the sanctions ongoing-monitoring policy flags",
   ),
   r(
     "api_route",
@@ -459,6 +560,126 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Treasury",
     "List active per-wallet withdrawal policies",
   ),
+  // Phase 6b (READ-ONLY): child-address sweeps, the pending payout/withdrawal
+  // approval queue, NGN fiat-float vs target, and FX position / exposure headroom.
+  // All reads — the approve/release WRITE is engine-brokered in Phase 7 (§3.1).
+  r(
+    "api_route",
+    "GET /admin/treasury/sweeps",
+    "read",
+    "Treasury",
+    "List child-address gas-sweep state (balance + lifecycle)",
+  ),
+  r(
+    "api_route",
+    "GET /admin/treasury/payout-queue",
+    "read",
+    "Treasury",
+    "List pending payouts / withdrawals awaiting release",
+  ),
+  r(
+    "api_route",
+    "GET /admin/treasury/fiat-float",
+    "read",
+    "Treasury",
+    "Show NGN fiat float vs the configured target",
+  ),
+  r(
+    "api_route",
+    "GET /admin/treasury/fx-position",
+    "read",
+    "Treasury",
+    "Show FX net position + exposure headroom",
+  ),
+  // Reconciliation — provider-vs-ledger break list + cron status bar (Phase 6b,
+  // READ-ONLY). Breaks are projected from unresolved compensations + stuck
+  // settlements; nothing here moves money (§3.1). Grouped under Treasury (the
+  // reconciliation desk is a treasury-oversight concern). The resolve/accept/
+  // escalate/run-now WRITES are Phase 7.
+  r(
+    "api_route",
+    "GET /admin/reconciliation/breaks",
+    "read",
+    "Treasury",
+    "List provider-vs-ledger reconciliation breaks",
+  ),
+  r(
+    "api_route",
+    "GET /admin/reconciliation/status",
+    "read",
+    "Treasury",
+    "Read the reconciliation-cron status (last/next run, open-break count)",
+  ),
+  // Reconciliation dispositions (Phase 7, WRITES). Resolve is engine-brokered — it
+  // re-drives the offending transaction's settlement through the engine's atomic
+  // outbox re-enqueue (execute); it NEVER auto-debits an over-credit (§3.1). Accept
+  // records a no-debit disposition (write). Both are step-up-gated at the controller.
+  r(
+    "api_route",
+    "POST /admin/reconciliation/breaks/:id/resolve",
+    "execute",
+    "Treasury",
+    "Resolve a reconciliation break via the engine (re-drive settlement; never a raw debit)",
+  ),
+  r(
+    "api_route",
+    "POST /admin/reconciliation/breaks/:id/accept",
+    "write",
+    "Treasury",
+    "Accept a reconciliation break as-is (dual-control, no debit)",
+  ),
+  r(
+    "api_route",
+    "POST /admin/reconciliation/breaks/:id/escalate",
+    "write",
+    "Treasury",
+    "Escalate a reconciliation break into a compliance case (step-up-gated; opens a ComplianceEvent)",
+  ),
+  // Treasury payout / withdrawal approval (Phase 7, WRITE — maker-checker). Raising
+  // an approval APPLIES NOTHING — it enters the four-eyes inbox for a SECOND admin to
+  // confirm; the release is then applied through the engine's atomic path (§3.1).
+  r(
+    "api_route",
+    "POST /admin/treasury/payouts/:id/approve",
+    "execute",
+    "Treasury",
+    "Approve a queued payout via maker-checker (raises a four-eyes change request)",
+  ),
+
+  // Approvals — the maker-checker change-request subsystem (Phase 7, WRITES). A
+  // sensitive mutation is captured as a pending request (create = write), then a
+  // DIFFERENT admin approves (execute — APPLIES the change via the target service
+  // atomically + audited) or rejects (write — records a reason). The requester can
+  // never self-approve (four-eyes). Approve is step-up-gated at the controller; the
+  // applied change routes through the target service's existing atomic path (§3.1).
+  r(
+    "api_route",
+    "GET /admin/approvals/inbox",
+    "read",
+    "Approvals",
+    "List the approvals inbox (awaiting-me / my-requests + counts)",
+  ),
+  r(
+    "api_route",
+    "POST /admin/approvals",
+    "write",
+    "Approvals",
+    "Raise a change request for a second admin to approve",
+  ),
+  r(
+    "api_route",
+    "POST /admin/approvals/:id/approve",
+    "execute",
+    "Approvals",
+    "Approve a change request and apply the change (engine/target-brokered)",
+  ),
+  r(
+    "api_route",
+    "POST /admin/approvals/:id/reject",
+    "write",
+    "Approvals",
+    "Reject a change request with a reason",
+  ),
 
   // Beneficiaries — saved-payout-destination oversight + first-use cooling-off
   // override (Phase 3, sub-area D). The override is step-up-gated at the controller
@@ -524,6 +745,26 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Comms",
     "View the non-secret WhatsApp configuration",
   ),
+  // Phase 6b (Comms READ enrichment): the read-only notification delivery log
+  // (recent issued notifications + aggregate bounce/complaint rates). Read-only,
+  // moves no money (§3.1).
+  r(
+    "api_route",
+    "GET /admin/notifications/delivery-log",
+    "read",
+    "Comms",
+    "View the notification delivery log + bounce/complaint stats",
+  ),
+  // Phase 7 (Comms WRITES): send a broadcast to an audience cohort via the outbox.
+  // Step-up gated; a large audience is deferred to maker-checker (§3.5). Moves no
+  // money (§3.1).
+  r(
+    "api_route",
+    "POST /admin/notifications/broadcast",
+    "write",
+    "Comms",
+    "Send (or queue-for-approval) a broadcast to an audience cohort",
+  ),
 
   // Tickets — read-only ticket-order oversight (Phase 4 wave 2). Enablement +
   // commission are tuned via /admin/settings; this surface only LISTS orders.
@@ -559,6 +800,18 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Agent",
     "View an agent conversation's messages, intents, and replies",
   ),
+  // Phase 6b (READ enrichment): the Agent console insights — guardrail params
+  // (structured-output / checkpointer / PIN-step-up / max-tool-calls, all
+  // architectural facts or from config), the typed-tool registry (read/write),
+  // the live system-prompt version, and real 24h usage counts (no fabricated
+  // tokens/cost — the schema stores none). Read-only (§3.1); no write routes.
+  r(
+    "api_route",
+    "GET /admin/agent/insights",
+    "read",
+    "Agent",
+    "View agent guardrails, the tool registry, the live prompt version, and 24h usage",
+  ),
 
   // Metrics — read-only date-ranged dashboard aggregations (Phase 5 — FINAL).
   // Transaction volumes/success, revenue (fees + spread), KYC funnel, active
@@ -580,6 +833,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   ),
   r(
     "api_route",
+    "GET /admin/metrics/gmv",
+    "read",
+    "Metrics",
+    "Read GMV (gross merchandise value — fiat notional summed by currency)",
+  ),
+  r(
+    "api_route",
     "GET /admin/metrics/revenue",
     "read",
     "Metrics",
@@ -591,6 +851,50 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "read",
     "Metrics",
     "Read the KYC funnel (counts by status + tier)",
+  ),
+  r(
+    "api_route",
+    "GET /admin/metrics/ops",
+    "read",
+    "Metrics",
+    "Read operational-health metrics (system health, activity feed, open compliance cases)",
+  ),
+  r(
+    "api_route",
+    "GET /admin/ops",
+    "read",
+    "Metrics",
+    "Read the System/ops board (provider status, webhook queues, background-jobs/cron registry)",
+  ),
+  // System/ops "Run now" (Phase 7, WRITE — execute). Triggers a manual run of a
+  // declared background job by re-driving an EXISTING deterministic worker (e.g. the
+  // settlement-reconciliation tick); it NEVER settles inline or moves money (§3.1).
+  // Step-up-gated at the controller. Grouped under Ops (operator-run surfaces —
+  // distinct from the strictly-read-only Metrics category).
+  r(
+    "api_route",
+    "POST /admin/ops/jobs/:id/run",
+    "execute",
+    "Ops",
+    "Trigger a manual run of a declared background job (engine-brokered; moves no money)",
+  ),
+  // Providers registry read (Phase 6b) + the "Test connection" liveness probe
+  // (Phase 7, WRITE — execute). The probe is a real, non-mutating round-trip that
+  // reports reachability + latency; it NEVER returns a secret value (§3.4/§3.5) and
+  // NEVER moves money (§3.1). Grouped under Ops.
+  r(
+    "api_route",
+    "GET /admin/providers",
+    "read",
+    "Ops",
+    "Read the provider-registry view (posture-derived status; secret presence only)",
+  ),
+  r(
+    "api_route",
+    "POST /admin/providers/:key/test",
+    "execute",
+    "Ops",
+    "Run a provider liveness probe (no secret exposure; moves no money)",
   ),
 
   // Web pages (nav/page gating — UX only; the API still enforces api_route perms)
@@ -717,6 +1021,7 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   r("menu_item", "menu.tickets", "read", "Tickets", "Tickets nav group"),
   r("menu_item", "menu.agent", "read", "Agent", "Agent nav group"),
   r("menu_item", "menu.metrics", "read", "Metrics", "Metrics nav group"),
+  r("menu_item", "menu.approvals", "read", "Approvals", "Approvals nav group"),
 ];
 
 // ── Built-in roles ─────────────────────────────────────────────────────────────
@@ -780,6 +1085,12 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Tickets: ["read"],
       Agent: ["read"],
       Metrics: ["read"],
+      // Ops owns the operational-run surfaces: provider registry + the execute-gated
+      // "Run now" (job trigger) + provider "Test connection" probe — both
+      // engine-brokered / non-mutating (§3.1), never a money movement.
+      Ops: ["read", "execute"],
+      // Ops raises pricing/capability/tier changes and acts as a checker on them.
+      Approvals: ["read", "write", "execute"],
     },
   ),
   role(
@@ -793,6 +1104,9 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Compliance: ["read", "write", "execute"],
       Beneficiaries: ["read", "write"],
       Metrics: ["read"],
+      // Compliance can raise + reject change requests (four-eyes checker), but is
+      // not granted execute-apply on economic changes (that is ops/finance).
+      Approvals: ["read", "write"],
     },
   ),
   role(
@@ -805,6 +1119,11 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
       Transactions: ["read", "execute"],
       Ledger: ["read", "execute"],
       Metrics: ["read"],
+      // Finance sees the operator-run surfaces (provider registry) but ops owns the
+      // execute-gated run/probe actions.
+      Ops: ["read"],
+      // Finance raises pricing/refund changes and acts as a checker on them.
+      Approvals: ["read", "write", "execute"],
     },
   ),
   role("support", "Support: read-only visibility into users and activity.", {
@@ -814,5 +1133,6 @@ export const BUILTIN_ROLES: readonly BuiltinRoleDef[] = [
     Comms: ["read"],
     Agent: ["read"],
     Metrics: ["read"],
+    Approvals: ["read"],
   }),
 ];

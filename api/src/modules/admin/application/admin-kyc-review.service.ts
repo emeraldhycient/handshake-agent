@@ -10,8 +10,8 @@ import type {
 import { AuditService } from '../../../core/audit/application/audit.service';
 import {
   IDENTITY_REPOSITORY,
-  type AdminUserListRecord,
   type IIdentityRepository,
+  type KycQueueRecord,
 } from '../../identity/application/ports/identity.repository.port';
 import {
   KYC_REPOSITORY,
@@ -22,9 +22,17 @@ import { AdminNotFoundError } from '../domain/admin-errors';
 /** Default page size for the KYC review queue when the caller omits a limit. */
 const DEFAULT_QUEUE_LIMIT = 20;
 
+/**
+ * The default queue bucket — the admin review backlog. When the caller omits a
+ * `status`, the queue lists users awaiting a decision (the Pending tab).
+ */
+const DEFAULT_QUEUE_STATUS = 'pending_review';
+
 export type KycApprovalTier = 'tier_1' | 'tier_2' | 'tier_3';
 
 export interface KycQueuePage {
+  /** The kycStatus bucket to list; defaults to 'pending_review'. */
+  status?: string;
   cursor?: string;
   limit?: number;
 }
@@ -51,10 +59,10 @@ export class AdminKycReviewService {
   async listQueue(
     page: KycQueuePage,
   ): Promise<{ items: KycQueueItem[]; nextCursor: string | null }> {
-    const result = await this.identity.listUsersPendingKycReview({
-      cursor: page.cursor,
-      limit: page.limit ?? DEFAULT_QUEUE_LIMIT,
-    });
+    const result = await this.identity.listKycReviewQueue(
+      { status: page.status ?? DEFAULT_QUEUE_STATUS },
+      { cursor: page.cursor, limit: page.limit ?? DEFAULT_QUEUE_LIMIT },
+    );
     return {
       items: result.items.map((u) => this.toQueueItem(u)),
       nextCursor: result.nextCursor,
@@ -137,16 +145,35 @@ export class AdminKycReviewService {
 
   // ── private mappers ──────────────────────────────────────────────────────────
 
-  private toQueueItem(u: AdminUserListRecord): KycQueueItem {
+  private toQueueItem(u: KycQueueRecord): KycQueueItem {
+    const submittedAt = u.createdAt;
     return {
       userId: u.id,
       email: u.email,
+      displayName: displayName(u.firstName, u.lastName),
+      requestedTier: (u.requestedTier as KycQueueItem['requestedTier']) ?? null,
       status: u.kycStatus as KycQueueItem['status'],
-      submittedAt: u.createdAt.toISOString(),
+      submittedAt: submittedAt.toISOString(),
+      slaAgeSeconds: ageInSeconds(submittedAt),
     };
   }
 }
 
 function last4(value: string | null): string | null {
   return value ? value.slice(-4) : null;
+}
+
+/** Composes a display name from the KYC first/last name; null when neither is set. */
+function displayName(
+  firstName: string | null,
+  lastName: string | null,
+): string | null {
+  const composed = [firstName, lastName].filter(Boolean).join(' ').trim();
+  return composed.length > 0 ? composed : null;
+}
+
+/** Whole seconds between `from` and now, clamped to a non-negative value. */
+function ageInSeconds(from: Date): number {
+  const elapsedMs = Date.now() - from.getTime();
+  return Math.max(0, Math.floor(elapsedMs / 1000));
 }

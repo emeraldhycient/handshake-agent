@@ -410,6 +410,57 @@ export interface SettleSwapRefundInput {
 }
 
 // ---------------------------------------------------------------------------
+// Manual credit (admin, engine-brokered — Phase 7)
+// ---------------------------------------------------------------------------
+
+/**
+ * An admin-approved manual credit of an end user's custodial wallet. This is a
+ * MONEY-PATH write: it is the engine-brokered applier of an approved
+ * `manual_credit` ChangeRequest (four-eyes maker-checker, §3.1). The credit is a
+ * balanced double-entry (user_wallet + a treasury contra), keyed by
+ * `idempotencyKey` so a replayed apply is a no-op (never a double credit).
+ */
+export interface SettleManualCreditAtomicInput {
+  /** The end user receiving the credit. */
+  userId: string;
+  /** Blockradar / WalletPrismaRepository id of the user's crypto wallet. */
+  walletId: string;
+  /** Crypto amount to credit (positive canonical decimal string, e.g. "25.5"). */
+  cryptoAmount: string;
+  /** The crypto asset symbol (e.g. 'USDT'); threaded to the ledger builder. */
+  asset: string;
+  /**
+   * Per-asset decimal places for the WalletBalance snapshot. Resolved from the
+   * AssetRegistry by the application service (which already validated the asset),
+   * so the repository never hardcodes a decimals literal (§7).
+   */
+  assetDecimals: number;
+  /**
+   * Idempotency key derived from the approved ChangeRequest (its id). A prior
+   * settle with the same key short-circuits WITHOUT re-crediting — the guard
+   * against a double-apply race.
+   */
+  idempotencyKey: string;
+  /** The admin id that approved the credit — recorded in the txn metadata trail. */
+  approvedByAdminId: string;
+  /** The maker's reason — recorded in the txn metadata trail. */
+  reason: string;
+  /** Timestamp to use for postedAt / completedAt / issuedAt (from CLOCK). */
+  now: Date;
+  /** Current year string for receiptNumber (e.g. "2026"). Derived from CLOCK. */
+  year: string;
+}
+
+export interface SettleManualCreditAtomicOutput {
+  /** True on a fresh credit; false when the idempotency key already settled. */
+  credited: boolean;
+  /** The user_wallet running balance after the credit (decimal string). */
+  newBalance: string;
+  /** Human-readable sequential receipt number, e.g. "HS-2026-000001". */
+  receiptNumber: string;
+}
+
+// ---------------------------------------------------------------------------
 // Port interface
 // ---------------------------------------------------------------------------
 
@@ -552,4 +603,21 @@ export interface ISettlementRepository {
    *   4. CompensationRecord created (status=pending, reason=settlement_failed).
    */
   settleSwapRefundAtomic(input: SettleSwapRefundInput): Promise<void>;
+
+  /**
+   * Atomically credits an end user's custodial wallet for an admin-approved
+   * MANUAL CREDIT (engine-brokered applier of a `manual_credit` ChangeRequest):
+   *   1. Idempotency check on `idempotencyKey` — return { credited:false } if a
+   *      prior apply already settled (no double credit).
+   *   2. Read the user_wallet + treasury contra account states (inside the tx).
+   *   3. buildManualCreditEntries → insert 2 LedgerEntry rows (user_wallet credit,
+   *      treasury debit — a balanced double-entry, sum = 0).
+   *   4. Create the anchor Transaction (type=reward, status=completed).
+   *   5. Create the WalletBalance snapshot (credit the user's asset balance).
+   *   6. Mint a signed Receipt.
+   * All inside a single `$transaction` (no half-credited state, §3.1).
+   */
+  settleManualCreditAtomic(
+    input: SettleManualCreditAtomicInput,
+  ): Promise<SettleManualCreditAtomicOutput>;
 }

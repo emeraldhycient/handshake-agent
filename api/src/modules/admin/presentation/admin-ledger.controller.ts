@@ -6,21 +6,48 @@ import {
   Param,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 
 import {
   AdminLedgerHistoryResponseSchema,
   AdminLedgerIntegrityResultSchema,
+  AdminLedgerIntegritySummarySchema,
+  AdminLedgerListResponseSchema,
   type AdminLedgerHistoryResponse,
   type AdminLedgerIntegrityResult,
+  type AdminLedgerIntegritySummary,
+  type AdminLedgerListResponse,
 } from '@handshake-agent/contracts';
 
+import { AuditService } from '../../../core/audit/application/audit.service';
 import { AdminLedgerService } from '../application/admin-ledger.service';
 import { AdminSessionGuard } from './admin-session.guard';
 import { PermissionGuard } from './permission.guard';
+import { CurrentAdmin, type AdminContext } from './current-admin.decorator';
 import { RequirePermission } from './require-permission.decorator';
-import { AdminLedgerHistoryQueryDto } from './dto/admin-txn.dto';
+import { sendCsvExport } from './csv-response';
+import {
+  AdminLedgerHistoryQueryDto,
+  AdminLedgerListQueryDto,
+} from './dto/admin-txn.dto';
+import { AdminLedgerExportQueryDto } from './dto/admin-export.dto';
+
+/** CSV header for the ledger export (matches AdminLedgerEntry column order). */
+const LEDGER_EXPORT_HEADER = [
+  'id',
+  'transactionId',
+  'accountType',
+  'accountId',
+  'currency',
+  'amount',
+  'direction',
+  'balanceAfter',
+  'sequence',
+  'postedAt',
+] as const;
 
 /**
  * Phase 3 (sub-area A) — READ-ONLY ledger oversight. All routes are permissioned
@@ -32,7 +59,73 @@ import { AdminLedgerHistoryQueryDto } from './dto/admin-txn.dto';
 @Controller('admin')
 @UseGuards(AdminSessionGuard, PermissionGuard)
 export class AdminLedgerController {
-  constructor(private readonly ledger: AdminLedgerService) {}
+  constructor(
+    private readonly ledger: AdminLedgerService,
+    private readonly audit: AuditService,
+  ) {}
+
+  /**
+   * CSV export of ALL ledger legs matching the current global-browse filters
+   * (not just the visible page). Same `read` permission as the browse. Declared
+   * BEFORE the account-scoped `GET /admin/ledger` so the static `ledger/export`
+   * path is matched first. Records an `admin_export` audit event with rowCount.
+   */
+  @Get('ledger/export')
+  @RequirePermission('api_route', 'GET /admin/ledger/all', 'read')
+  async exportCsv(
+    @Query() query: AdminLedgerExportQueryDto,
+    @CurrentAdmin() admin: AdminContext,
+    @Res() res: Response,
+  ): Promise<void> {
+    const rows = await this.ledger.exportRows(query);
+    await sendCsvExport({
+      res,
+      audit: this.audit,
+      actorAdminId: admin.adminId,
+      subject: 'ledger',
+      header: LEDGER_EXPORT_HEADER,
+      rows: rows.map((r) => [
+        r.id,
+        r.transactionId,
+        r.accountType,
+        r.accountId,
+        r.currency,
+        r.amount,
+        r.direction,
+        r.balanceAfter,
+        r.sequence,
+        r.postedAt,
+      ]),
+      filters: { accountType: query.accountType, currency: query.currency },
+    });
+  }
+
+  /**
+   * GLOBAL cross-account browse (Phase 6b): legs across ALL accounts filtered by
+   * an optional accountType and/or currency, newest-first, keyset-paginated. This
+   * is a distinct static route from the account-scoped `GET /admin/ledger` below.
+   */
+  @Get('ledger/all')
+  @RequirePermission('api_route', 'GET /admin/ledger/all', 'read')
+  async listGlobal(
+    @Query() query: AdminLedgerListQueryDto,
+  ): Promise<AdminLedgerListResponse> {
+    return AdminLedgerListResponseSchema.parse(
+      await this.ledger.listGlobal(query),
+    );
+  }
+
+  /**
+   * GLOBAL sequence-integrity summary (Phase 6b): walks every sub-ledger's
+   * sequence for gaps/reorders. Feeds the header integrity pill. READ-ONLY (§3.1).
+   */
+  @Get('ledger/integrity')
+  @RequirePermission('api_route', 'GET /admin/ledger/integrity', 'read')
+  async integrity(): Promise<AdminLedgerIntegritySummary> {
+    return AdminLedgerIntegritySummarySchema.parse(
+      await this.ledger.verifyGlobalSequenceIntegrity(),
+    );
+  }
 
   @Get('ledger')
   @RequirePermission('api_route', 'GET /admin/ledger', 'read')

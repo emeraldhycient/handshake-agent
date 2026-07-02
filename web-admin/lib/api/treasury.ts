@@ -18,12 +18,24 @@ import {
   TreasuryAlertSchema,
   TreasuryAlertAcknowledgeRequestSchema,
   WithdrawalPolicyListResponseSchema,
+  TreasurySweepListResponseSchema,
+  TreasuryPayoutQueueResponseSchema,
+  TreasuryPayoutApproveRequestSchema,
+  TreasuryPayoutApproveResponseSchema,
+  TreasuryFiatFloatResponseSchema,
+  TreasuryFxPositionResponseSchema,
   type TreasuryBalancesResponse,
   type TreasuryExposureListResponse,
   type TreasuryAlertListResponse,
   type TreasuryAlert,
   type TreasuryAlertAcknowledgeRequest,
   type WithdrawalPolicyListResponse,
+  type TreasurySweepListResponse,
+  type TreasuryPayoutQueueResponse,
+  type TreasuryPayoutApproveRequest,
+  type TreasuryPayoutApproveResponse,
+  type TreasuryFiatFloatResponse,
+  type TreasuryFxPositionResponse,
 } from "@handshake-agent/contracts"
 
 import { api } from "./client"
@@ -60,4 +72,43 @@ export async function acknowledgeTreasuryAlert(
 export async function listWithdrawalPolicies(): Promise<WithdrawalPolicyListResponse> {
   const res = await api.get("/admin/treasury/withdrawal-policies")
   return WithdrawalPolicyListResponseSchema.parse(res.data)
+}
+
+/** GET /admin/treasury/sweeps — child-address gas-sweep state + threshold. */
+export async function listTreasurySweeps(): Promise<TreasurySweepListResponse> {
+  const res = await api.get("/admin/treasury/sweeps")
+  return TreasurySweepListResponseSchema.parse(res.data)
+}
+
+/** GET /admin/treasury/payout-queue — pending payouts / withdrawals (read-only). */
+export async function listTreasuryPayoutQueue(): Promise<TreasuryPayoutQueueResponse> {
+  const res = await api.get("/admin/treasury/payout-queue")
+  return TreasuryPayoutQueueResponseSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/treasury/payouts/:id/approve — raise a maker-checker approval for a
+ * queued payout (Phase 7, WRITE). Releases NO money here — it raises a four-eyes
+ * `payout_release` change request a SECOND admin must confirm (§3.1). Sensitive —
+ * may 403 with ADMIN_STEP_UP_REQUIRED. Parses the body before + response after.
+ */
+export async function approveTreasuryPayout(
+  id: string,
+  input: TreasuryPayoutApproveRequest
+): Promise<TreasuryPayoutApproveResponse> {
+  const body = TreasuryPayoutApproveRequestSchema.parse(input)
+  const res = await api.post(`/admin/treasury/payouts/${id}/approve`, body)
+  return TreasuryPayoutApproveResponseSchema.parse(res.data)
+}
+
+/** GET /admin/treasury/fiat-float — NGN fiat float vs the configured target. */
+export async function listTreasuryFiatFloat(): Promise<TreasuryFiatFloatResponse> {
+  const res = await api.get("/admin/treasury/fiat-float")
+  return TreasuryFiatFloatResponseSchema.parse(res.data)
+}
+
+/** GET /admin/treasury/fx-position — FX net position + exposure headroom. */
+export async function listTreasuryFxPosition(): Promise<TreasuryFxPositionResponse> {
+  const res = await api.get("/admin/treasury/fx-position")
+  return TreasuryFxPositionResponseSchema.parse(res.data)
 }

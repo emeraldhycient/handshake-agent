@@ -18,12 +18,30 @@ import {
   AdminEndUserDeviceSchema,
   AdminEndUserTierRequestSchema,
   AdminEndUserStatusRequestSchema,
+  AdminEndUserSessionListResponseSchema,
+  AdminEndUserLimitsResponseSchema,
+  AdminEndUserTimelineResponseSchema,
+  ApplyUserTagsRequestSchema,
+  ApplyUserTagsResponseSchema,
+  BulkMessageRequestSchema,
+  BulkMessageResponseSchema,
+  CreateManualCreditRequestSchema,
+  ChangeRequestSchema,
   type AdminEndUserSearchQuery,
   type AdminEndUserListResponse,
   type AdminEndUserDetail,
   type AdminEndUserDevice,
+  type AdminEndUserSession,
+  type AdminEndUserLimitsResponse,
+  type AdminEndUserTimelineEntry,
   type AdminEndUserTierRequest,
   type AdminEndUserStatusRequest,
+  type ApplyUserTagsRequest,
+  type ApplyUserTagsResponse,
+  type BulkMessageRequest,
+  type BulkMessageResponse,
+  type CreateManualCreditRequest,
+  type ChangeRequest,
 } from "@handshake-agent/contracts"
 import { z } from "zod"
 
@@ -40,6 +58,28 @@ export async function listEndUsers(
   return AdminEndUserListResponseSchema.parse(res.data)
 }
 
+/**
+ * GET /admin/users/export — a PII-minimised CSV of ALL end users matching the
+ * current filters (last-4 NIN/BVN only, §3.4; cursor/limit ignored server-side).
+ * `includedIds` scopes it to a selection (bulk-bar export). Returns the raw Blob for
+ * `downloadFile`; the server records an `admin_export` audit event with the rowCount.
+ */
+export async function exportEndUsers(
+  query: AdminEndUserSearchQuery,
+  includedIds?: string[],
+  reason?: string
+): Promise<Blob> {
+  const res = await api.get<Blob>("/admin/users/export", {
+    params: {
+      ...query,
+      ...(includedIds && includedIds.length > 0 ? { includedIds } : {}),
+      ...(reason ? { reason } : {}),
+    },
+    responseType: "blob",
+  })
+  return res.data
+}
+
 /** GET /admin/users/:id — the full end-user aggregate (identity + devices + balances + history). */
 export async function getEndUser(id: string): Promise<AdminEndUserDetail> {
   const res = await api.get(`/admin/users/${id}`)
@@ -52,6 +92,30 @@ export async function listEndUserDevices(
 ): Promise<AdminEndUserDevice[]> {
   const res = await api.get(`/admin/users/${id}/devices`)
   return DeviceListSchema.parse(res.data)
+}
+
+/** GET /admin/users/:id/sessions — the user's active + recent auth sessions (Security tab). */
+export async function listEndUserSessions(
+  id: string
+): Promise<AdminEndUserSession[]> {
+  const res = await api.get(`/admin/users/${id}/sessions`)
+  return AdminEndUserSessionListResponseSchema.parse(res.data).sessions
+}
+
+/** GET /admin/users/:id/limits — effective per-tier caps + live velocity usage (Limits tab). */
+export async function getEndUserLimits(
+  id: string
+): Promise<AdminEndUserLimitsResponse> {
+  const res = await api.get(`/admin/users/${id}/limits`)
+  return AdminEndUserLimitsResponseSchema.parse(res.data)
+}
+
+/** GET /admin/users/:id/timeline — the admin-action timeline from the audit log (Profile tab). */
+export async function listEndUserTimeline(
+  id: string
+): Promise<AdminEndUserTimelineEntry[]> {
+  const res = await api.get(`/admin/users/${id}/timeline`)
+  return AdminEndUserTimelineResponseSchema.parse(res.data).entries
 }
 
 /** Sensitive — may 403 with code ADMIN_STEP_UP_REQUIRED. 204 on success. */
@@ -88,4 +152,49 @@ export async function revokeDevice(
 /** Sensitive — may 403 with code ADMIN_STEP_UP_REQUIRED. 204 on success. */
 export async function simSwapReverify(id: string): Promise<void> {
   await api.post(`/admin/users/${id}/sim-swap-reverify`, {})
+}
+
+/**
+ * Raise a MANUAL-CREDIT request for a user's wallet (POST /admin/users/:id/credit).
+ * MAKER action only: it moves NO money — it records a pending `manual_credit`
+ * ChangeRequest a SECOND admin must approve (four-eyes, §3.1). The engine-brokered
+ * credit runs on approval via the approvals inbox. Body parsed before send, the
+ * created ChangeRequest parsed after. Returns the created request (201).
+ */
+export async function requestManualCredit(
+  id: string,
+  input: CreateManualCreditRequest
+): Promise<ChangeRequest> {
+  const body = CreateManualCreditRequestSchema.parse(input)
+  const res = await api.post(`/admin/users/${id}/credit`, body)
+  return ChangeRequestSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/users/tags — bulk-apply an operator TAG to the selected users. A tag
+ * is a pure annotation — it moves no money and confers no authorization (§3.1).
+ * Idempotent (re-tagging is a no-op). Sensitive — may 403 with ADMIN_STEP_UP_REQUIRED.
+ */
+export async function applyUserTags(
+  input: ApplyUserTagsRequest
+): Promise<ApplyUserTagsResponse> {
+  const body = ApplyUserTagsRequestSchema.parse(input)
+  const res = await api.post("/admin/users/tags", body)
+  return ApplyUserTagsResponseSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/users/message — bulk-queue a templated broadcast to the selected
+ * users. The body references an admin-authored template (the model never authors
+ * it) and enqueues onto the notifications outbox — never a direct send (§3.1).
+ * A large selection additionally requires `confirmLargeSet` (re-checked server-side,
+ * §3.3) — a 422 ADMIN_BULK_CONFIRMATION_REQUIRED asks the operator to confirm.
+ * Sensitive — may 403 with ADMIN_STEP_UP_REQUIRED.
+ */
+export async function sendBulkMessage(
+  input: BulkMessageRequest
+): Promise<BulkMessageResponse> {
+  const body = BulkMessageRequestSchema.parse(input)
+  const res = await api.post("/admin/users/message", body)
+  return BulkMessageResponseSchema.parse(res.data)
 }

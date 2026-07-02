@@ -56,6 +56,7 @@ const ME: AdminMe = {
   email: "admin@example.com",
   role: { id: "00000000-0000-0000-0000-0000000000aa", name: "compliance" },
   status: "active",
+  displayName: "Test Admin",
   mfaEnabled: false,
   permissions: [],
   menus: [],

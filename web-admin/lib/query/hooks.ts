@@ -5,41 +5,67 @@
  * factory. This file lives in `lib/` and must NOT import from `components/` or
  * `app/`. Mutations invalidate the queries they affect.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import type {
   AdminEndUserSearchQuery,
   AdminEndUserStatusRequest,
   AdminEndUserTierRequest,
+  CreateManualCreditRequest,
   AdminInvitationCreateRequest,
+  AdminLedgerListQuery,
+  AdminOpsRunRequest,
   AdminTxnMarkFailedRequest,
   AdminTxnSearchQuery,
+  AdminPreferencesUpdateRequest,
+  BackfillNetworksRequest,
   AdminUserStatusRequest,
   AdminUserUpdateRoleRequest,
   AmlRuleCreateRequest,
   AmlRuleUpdateRequest,
+  ApplyUserTagsRequest,
   AuditLogQuery,
+  BroadcastSendRequest,
+  BulkMessageRequest,
   ComplianceDispositionRequest,
   ComplianceReportDraftRequest,
   ComplianceReportSubmitRequest,
+  CreateChangeRequest,
   KycApproveRequest,
   KycRejectRequest,
+  KycStatus,
   MetricsRangeQuery,
   NotificationTemplatePreviewRequest,
   NotificationTemplateUpsertRequest,
+  ReconAcceptRequest,
+  ReconResolveRequest,
+  RejectChangeRequest,
   RoleCreateRequest,
   RoleUpdateRequest,
+  SanctionsDispositionRequest,
   TreasuryAlertAcknowledgeRequest,
+  TreasuryPayoutApproveRequest,
+  UpdateSettingRequest,
 } from "@handshake-agent/contracts"
 
 import * as admin from "@/lib/api/admin"
 import * as agent from "@/lib/api/agent"
+import * as approvals from "@/lib/api/approvals"
 import * as beneficiaries from "@/lib/api/beneficiaries"
+import * as catalog from "@/lib/api/catalog"
 import * as config from "@/lib/api/config"
 import * as compliance from "@/lib/api/compliance"
 import * as kyc from "@/lib/api/kyc"
 import * as ledger from "@/lib/api/ledger"
 import * as metrics from "@/lib/api/metrics"
+import * as ops from "@/lib/api/ops"
 import * as notifications from "@/lib/api/notifications"
+import * as providers from "@/lib/api/providers"
+import * as reconciliation from "@/lib/api/reconciliation"
 import * as tickets from "@/lib/api/tickets"
 import * as transactions from "@/lib/api/transactions"
 import * as treasury from "@/lib/api/treasury"
@@ -48,6 +74,7 @@ import * as whatsapp from "@/lib/api/whatsapp"
 import type { ComplianceEventQuery } from "@/lib/api/compliance"
 import type { LedgerHistoryQuery } from "@/lib/api/ledger"
 import type { TemplateRef } from "@/lib/api/notifications"
+import type { NavBadgeCounts } from "@/types/components"
 import { qk } from "./keys"
 
 // ─── Read hooks ─────────────────────────────────────────────────────────────────
@@ -123,6 +150,46 @@ export function usePublicConfig() {
   })
 }
 
+/**
+ * The FULL asset + fiat catalog (enabled AND disabled) with each entry's live
+ * status, from `GET /admin/config/catalog`. Drives the Asset + Currency catalog
+ * screens — unlike `usePublicConfig` (enabled-only, secret-stripped), this admin
+ * view shows the paused/off rows too. 5 min stale — the catalog changes only via
+ * admin config edits.
+ */
+export function useAdminCatalog() {
+  return useQuery({
+    queryKey: qk.adminCatalog,
+    queryFn: () => catalog.getAdminCatalog(),
+    staleTime: 5 * 60_000,
+  })
+}
+
+/**
+ * The effective layered-config settings (GET /admin/settings) — every non-secret
+ * registry key with its effective value + provenance. An optional `category`
+ * narrows the list (e.g. "Pricing", "KYC", "Catalog"). Drives the Settings /
+ * Pricing / Limits / Capabilities / Flags console screens. 60 s stale — config
+ * changes only via admin edits.
+ */
+export function useSettings(category?: string) {
+  return useQuery({
+    queryKey: qk.settings(category),
+    queryFn: () => config.listEffectiveSettings(category),
+    staleTime: 60_000,
+  })
+}
+
+/** One registry key's effective value + provenance. Disabled until a `key` is set. */
+export function useSetting(key: string | null) {
+  return useQuery({
+    queryKey: qk.setting(key ?? ""),
+    queryFn: () => config.getSetting(key as string),
+    enabled: key !== null,
+    staleTime: 60_000,
+  })
+}
+
 /** Search / filter / paginate the platform's end users. Keyed by the query. */
 export function useEndUsers(query: AdminEndUserSearchQuery) {
   return useQuery({
@@ -152,11 +219,44 @@ export function useEndUserDevices(id: string | null) {
   })
 }
 
-/** The KYC review queue. 15 s stale. */
-export function useKycQueue() {
+/** The end user's active + recent auth sessions (detail Security tab). */
+export function useEndUserSessions(id: string | null) {
   return useQuery({
-    queryKey: qk.kycQueue,
-    queryFn: () => kyc.listKycQueue(),
+    queryKey: qk.endUserSessions(id ?? ""),
+    queryFn: () => users.listEndUserSessions(id as string),
+    enabled: id !== null,
+    staleTime: 15_000,
+  })
+}
+
+/** The end user's effective limits + live velocity usage (detail Limits tab). */
+export function useEndUserLimits(id: string | null) {
+  return useQuery({
+    queryKey: qk.endUserLimits(id ?? ""),
+    queryFn: () => users.getEndUserLimits(id as string),
+    enabled: id !== null,
+    staleTime: 15_000,
+  })
+}
+
+/** The end user's admin-action timeline from the audit log (detail Profile tab). */
+export function useEndUserTimeline(id: string | null) {
+  return useQuery({
+    queryKey: qk.endUserTimeline(id ?? ""),
+    queryFn: () => users.listEndUserTimeline(id as string),
+    enabled: id !== null,
+    staleTime: 15_000,
+  })
+}
+
+/**
+ * The KYC review queue for a status bucket (defaults to pending_review). The
+ * status is part of the key so each console tab caches its own bucket. 15 s stale.
+ */
+export function useKycQueue(status?: KycStatus) {
+  return useQuery({
+    queryKey: qk.kycQueue(status),
+    queryFn: () => kyc.listKycQueue(status ? { status } : {}),
     staleTime: 15_000,
   })
 }
@@ -204,6 +304,35 @@ export function useLedgerHistory(query: LedgerHistoryQuery | null) {
   })
 }
 
+/**
+ * The GLOBAL cross-account ledger, filtered by an optional accountType/currency,
+ * newest-first. Keyset-paginated ("Load more" via `nextCursor`): each page's
+ * cursor is fed into the next request's `params.cursor`. `filters` excludes the
+ * cursor — it seeds page one and keys the cache.
+ */
+export function useGlobalLedger(filters: AdminLedgerListQuery) {
+  return useInfiniteQuery({
+    queryKey: qk.ledgerGlobal(filters),
+    queryFn: ({ pageParam }) =>
+      ledger.listGlobalLedger({
+        ...filters,
+        ...(pageParam ? { cursor: pageParam } : {}),
+      }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    staleTime: 15_000,
+  })
+}
+
+/** The global ledger sequence-integrity summary (header pill). 30 s stale. */
+export function useLedgerIntegrity() {
+  return useQuery({
+    queryKey: qk.ledgerIntegrity,
+    queryFn: () => ledger.getLedgerIntegrity(),
+    staleTime: 30_000,
+  })
+}
+
 // ─── Compliance read hooks ────────────────────────────────────────────────────────
 
 /** The flagged-event queue. Keyed by the filter. */
@@ -231,6 +360,15 @@ export function useSanctions() {
     queryKey: qk.sanctions,
     queryFn: () => compliance.listSanctions(),
     staleTime: 30_000,
+  })
+}
+
+/** The sanctions ongoing-monitoring policy flags (read-only; from layered config). */
+export function useSanctionsMonitoring() {
+  return useQuery({
+    queryKey: qk.sanctionsMonitoring,
+    queryFn: () => compliance.getSanctionsMonitoring(),
+    staleTime: 60_000,
   })
 }
 
@@ -299,6 +437,62 @@ export function useWithdrawalPolicies() {
   })
 }
 
+/** Child-address gas-sweep state (balance + lifecycle) + the sweep threshold. */
+export function useTreasurySweeps() {
+  return useQuery({
+    queryKey: qk.treasurySweeps,
+    queryFn: () => treasury.listTreasurySweeps(),
+    staleTime: 30_000,
+  })
+}
+
+/** Pending payouts / withdrawals awaiting release (read-only). */
+export function useTreasuryPayoutQueue() {
+  return useQuery({
+    queryKey: qk.treasuryPayoutQueue,
+    queryFn: () => treasury.listTreasuryPayoutQueue(),
+    staleTime: 15_000,
+  })
+}
+
+/** NGN fiat float vs the configured target. */
+export function useTreasuryFiatFloat() {
+  return useQuery({
+    queryKey: qk.treasuryFiatFloat,
+    queryFn: () => treasury.listTreasuryFiatFloat(),
+    staleTime: 30_000,
+  })
+}
+
+/** FX net position + exposure headroom. */
+export function useTreasuryFxPosition() {
+  return useQuery({
+    queryKey: qk.treasuryFxPosition,
+    queryFn: () => treasury.listTreasuryFxPosition(),
+    staleTime: 30_000,
+  })
+}
+
+// ─── Reconciliation (Phase 6b — READ-ONLY) ────────────────────────────────────────
+
+/** Provider-vs-ledger break list (over-credit / missing-settlement / mismatch / dup). */
+export function useReconBreaks() {
+  return useQuery({
+    queryKey: qk.reconBreaks,
+    queryFn: () => reconciliation.listReconBreaks(),
+    staleTime: 30_000,
+  })
+}
+
+/** Reconciliation-cron status bar (last/next run, enablement, open-break count). */
+export function useReconStatus() {
+  return useQuery({
+    queryKey: qk.reconStatus,
+    queryFn: () => reconciliation.getReconStatus(),
+    staleTime: 30_000,
+  })
+}
+
 /** End-user beneficiaries (payout destinations), optionally scoped to a user. */
 export function useAdminBeneficiaries(userId?: string) {
   return useQuery({
@@ -306,6 +500,50 @@ export function useAdminBeneficiaries(userId?: string) {
     queryFn: () => beneficiaries.listBeneficiaries(userId),
     staleTime: 15_000,
   })
+}
+
+// ─── Approvals inbox (Phase 7, maker-checker) ──────────────────────────────────────
+
+/**
+ * The maker-checker approvals inbox — the two caller-relative buckets (awaiting me /
+ * my requests) + their counts. Backs the Approvals page tabs/badges and the
+ * dashboard's "Approvals awaiting me" panel count. 15 s stale — the queue moves as
+ * makers raise and checkers dispose of requests.
+ */
+export function useApprovalsInbox() {
+  return useQuery({
+    queryKey: qk.approvalsInbox,
+    queryFn: () => approvals.getApprovalsInbox(),
+    staleTime: 15_000,
+  })
+}
+
+/** The unfiltered transactions query whose response `counts` feed the stuck badge. */
+const NAV_BADGE_TXN_QUERY: AdminTxnSearchQuery = {}
+
+/**
+ * Live counts for the sidebar nav-item alert pips — replaces the design's mock
+ * counts (§4.1). Composes four existing read hooks (no new endpoint): the KYC
+ * review-queue depth, the stuck-transaction count, open reconciliation breaks,
+ * and maker-checker requests awaiting the caller. Each source is independently
+ * cached (15 s); a source that is still loading or errored contributes `0`, so
+ * the pip simply doesn't show rather than flashing a stale number.
+ *
+ * The KYC count is the current review-queue page length — a floor, not a total;
+ * an operator queue deeper than one page under-counts, which is acceptable for an
+ * alert pip and avoids a bespoke count endpoint.
+ */
+export function useNavBadges(): NavBadgeCounts {
+  const kyc = useKycQueue()
+  const txns = useTransactions(NAV_BADGE_TXN_QUERY)
+  const recon = useReconStatus()
+  const approvalsInbox = useApprovalsInbox()
+  return {
+    kyc: kyc.data?.items.length ?? 0,
+    stuck: txns.data?.counts.stuck ?? 0,
+    recon: recon.data?.openBreakCount ?? 0,
+    approvals: approvalsInbox.data?.counts.awaitingMe ?? 0,
+  }
 }
 
 // ─── Mutation hooks ─────────────────────────────────────────────────────────────
@@ -390,6 +628,30 @@ export function useVerifyAuditChain() {
   })
 }
 
+// ─── Layered-config (AppSetting) mutation ─────────────────────────────────────────
+// Applying an admin override to a tunable key (root CLAUDE.md §7). Sensitive: the
+// PATCH is step-up-guarded server-side and may 403 with ADMIN_STEP_UP_REQUIRED (the
+// caller wraps it in `useStepUpRetry`). The server re-validates, hot-reloads, and
+// records an immutable `config_change` audit entry; it never moves money (§3.1). On
+// success it invalidates the settings prefix so the list + the single-key cache
+// re-resolve with the new effective value + 'db' provenance.
+
+export function useSetSetting() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      key,
+      input,
+    }: {
+      key: string
+      input: UpdateSettingRequest
+    }) => config.setSetting(key, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "settings"] })
+    },
+  })
+}
+
 // ─── End-user mutations ───────────────────────────────────────────────────────────
 // Each is sensitive (may 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps it in
 // `useStepUpRetry`). On success they invalidate the user's queries so the detail
@@ -438,6 +700,28 @@ export function useForcePinReset() {
   })
 }
 
+// Raise a MANUAL-CREDIT request for a user's wallet — a MAKER action (four-eyes,
+// §3.1). It moves NO money from this surface: it enters a pending change request a
+// SECOND admin approves (which routes the engine-brokered credit). May 403 with
+// ADMIN_STEP_UP_REQUIRED. On success it invalidates the approvals inbox (the new
+// request appears) and the users prefix (the pending credit shows on the detail).
+export function useRequestManualCredit() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string
+      input: CreateManualCreditRequest
+    }) => users.requestManualCredit(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.approvalsInbox })
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
 export function useRevokeDevice() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -459,6 +743,32 @@ export function useSimSwapReverify() {
   })
 }
 
+// ─── Users bulk-bar mutations (Phase 7, WRITES) ─────────────────────────────────────
+// Bulk actions over an EXPLICIT selected id set. Neither moves money (§3.1): a tag is
+// a pure annotation; a message enqueues onto the notifications outbox (never a direct
+// send). Both are sensitive (may 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps in
+// `useStepUpRetry`), idempotent, and immutably audited. On success they invalidate the
+// users prefix so the directory re-resolves.
+
+// Bulk-apply an operator tag to the selection. Idempotent (re-tagging is a no-op).
+export function useApplyUserTags() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: ApplyUserTagsRequest) => users.applyUserTags(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
+// Bulk-queue a templated broadcast to the selection. A large set may 422 with
+// ADMIN_BULK_CONFIRMATION_REQUIRED until the operator confirms (`confirmLargeSet`).
+export function useSendBulkMessage() {
+  return useMutation({
+    mutationFn: (input: BulkMessageRequest) => users.sendBulkMessage(input),
+  })
+}
+
 // ─── KYC-review mutations ─────────────────────────────────────────────────────────
 // Sensitive (may 403 with ADMIN_STEP_UP_REQUIRED). On success they invalidate the
 // queue and the reviewed submission so both re-resolve.
@@ -474,7 +784,10 @@ export function useApproveKyc() {
       input: KycApproveRequest
     }) => kyc.approveKyc(userId, input),
     onSuccess: () => {
+      // The queue/submission and the reviewed user's detail (header KYC pill/tier)
+      // both change on a decision — invalidate both prefixes so each re-resolves.
       void queryClient.invalidateQueries({ queryKey: ["admin", "kyc"] })
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
     },
   })
 }
@@ -491,6 +804,54 @@ export function useRejectKyc() {
     }) => kyc.rejectKyc(userId, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["admin", "kyc"] })
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
+// ─── Approvals (maker-checker) mutations ────────────────────────────────────────────
+// The checker's disposition of a pending change request. Both are sensitive (may 403
+// with ADMIN_STEP_UP_REQUIRED — the caller wraps in `useStepUpRetry`) and audited;
+// approving hands the recorded change to the target service to APPLY, rejecting
+// applies nothing. Neither moves money from this surface (§3.1). On success they
+// invalidate the inbox so both buckets + counts re-resolve.
+
+// The maker raising a pending change request (e.g. a `refund` of a stuck txn).
+// APPLIES NOTHING — it enters the inbox for a SECOND admin to approve (four-eyes),
+// so it never moves money from this surface (§3.1). Sensitive (may 403 with
+// ADMIN_STEP_UP_REQUIRED). On success it invalidates the inbox so both buckets +
+// counts re-resolve, and the transactions prefix so the drilled-in detail can
+// reflect the pending-refund request.
+export function useCreateChange() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: CreateChangeRequest) => approvals.createChange(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.approvalsInbox })
+      void queryClient.invalidateQueries({
+        queryKey: ["admin", "transactions"],
+      })
+    },
+  })
+}
+
+export function useApproveChange() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => approvals.approveChange(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.approvalsInbox })
+    },
+  })
+}
+
+export function useRejectChange() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: RejectChangeRequest }) =>
+      approvals.rejectChange(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.approvalsInbox })
     },
   })
 }
@@ -556,6 +917,27 @@ export function useDisposeEvent() {
     }) => compliance.disposeComplianceEvent(id, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["admin", "compliance"] })
+    },
+  })
+}
+
+// The operator's disposition of a sanctions screening match (Clear / Escalate /
+// Block). Sensitive (may 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps in
+// `useStepUpRetry`); the server writes the disposition annotation (never the
+// immutable verdict, §3.1) and records an immutable `admin_review` audit. On success
+// it invalidates the sanctions list so the disposed match re-resolves.
+export function useDisposeSanctions() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string
+      input: SanctionsDispositionRequest
+    }) => compliance.disposeSanctions(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.sanctions })
     },
   })
 }
@@ -641,6 +1023,167 @@ export function useOverrideCoolingOff() {
   })
 }
 
+// ─── Phase 7 WRITES — Ops / Recon / Treasury / Providers ──────────────────────────
+// All sensitive (may 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps in
+// `useStepUpRetry`). None moves money directly (§3.1): the ops run re-drives an
+// engine worker; a recon resolve re-enqueues settlement via the engine; a payout
+// approve raises a four-eyes change request; a provider test is a liveness probe.
+// On success each invalidates the affected read so the surface re-resolves.
+
+/** POST /admin/ops/jobs/:id/run — trigger a manual job run; refreshes the ops board. */
+export function useRunOpsJob() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: AdminOpsRunRequest }) =>
+      ops.runOpsJob(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.opsBoard })
+    },
+  })
+}
+
+/** POST /admin/reconciliation/breaks/:id/resolve — engine-brokered break resolve. */
+export function useResolveReconBreak() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: ReconResolveRequest }) =>
+      reconciliation.resolveReconBreak(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.reconBreaks })
+      void queryClient.invalidateQueries({ queryKey: qk.reconStatus })
+    },
+  })
+}
+
+/** POST /admin/reconciliation/breaks/:id/accept — dual-control, no-debit accept. */
+export function useAcceptReconBreak() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: ReconAcceptRequest }) =>
+      reconciliation.acceptReconBreak(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.reconBreaks })
+      void queryClient.invalidateQueries({ queryKey: qk.reconStatus })
+    },
+  })
+}
+
+// ─── Phase 8: preferences · MFA reset · recon escalate/re-run · wallet backfill ──
+
+/** GET /admin/me/preferences — the caller's own notification toggles (60s stale). */
+export function useAdminPreferences() {
+  return useQuery({
+    queryKey: qk.adminPreferences,
+    queryFn: () => admin.getAdminPreferences(),
+    staleTime: 60_000,
+  })
+}
+
+/** PATCH /admin/me/preferences — replace the caller's own toggles; caches the result. */
+export function useUpdateAdminPreferences() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: AdminPreferencesUpdateRequest) =>
+      admin.updateAdminPreferences(input),
+    onSuccess: (data) => {
+      queryClient.setQueryData(qk.adminPreferences, data)
+    },
+  })
+}
+
+/**
+ * POST /admin/admins/:id/mfa/reset — reset ANOTHER admin's 2FA (step-up-gated; the
+ * caller wraps in useStepUpRetry). Refreshes the admins list on success.
+ */
+export function useResetAdminMfa() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      admin.resetAdminMfa(id, reason),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.admins })
+    },
+  })
+}
+
+/**
+ * POST /admin/reconciliation/breaks/:id/escalate — open a compliance case from a
+ * break (step-up-gated). Refreshes the break list + the compliance events.
+ */
+export function useEscalateReconBreak() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      reconciliation.escalateReconBreak(id, reason),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.reconBreaks })
+      void queryClient.invalidateQueries({
+        queryKey: ["admin", "compliance", "events"],
+      })
+    },
+  })
+}
+
+/** POST /admin/transactions/:id/reconcile — read-only re-run recon for one txn. */
+export function useRerunReconciliation() {
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
+      transactions.rerunReconciliation(id, reason),
+  })
+}
+
+/** POST /admin/wallets/backfill-networks — enqueue a wallet-network backfill run. */
+export function useEnqueueBackfill() {
+  return useMutation({
+    mutationFn: (input: BackfillNetworksRequest) => ops.enqueueBackfill(input),
+  })
+}
+
+/**
+ * GET /admin/wallets/backfill-runs/:id — a run's live status. When `poll` is set,
+ * refetch every 3s until the run reaches a terminal state (completed / failed).
+ */
+export function useBackfillRun(id: string | null, opts?: { poll?: boolean }) {
+  return useQuery({
+    queryKey: qk.backfillRun(id ?? ""),
+    queryFn: () => ops.getBackfillRun(id as string),
+    enabled: id !== null,
+    refetchInterval: (query) => {
+      if (opts?.poll !== true) return false
+      const status = query.state.data?.status
+      return status === "completed" || status === "failed" ? false : 3000
+    },
+  })
+}
+
+/**
+ * POST /admin/treasury/payouts/:id/approve — raise a maker-checker payout approval.
+ * Invalidates the payout queue AND the approvals inbox (the new request lands there).
+ */
+export function useApproveTreasuryPayout() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string
+      input: TreasuryPayoutApproveRequest
+    }) => treasury.approveTreasuryPayout(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.treasuryPayoutQueue })
+      void queryClient.invalidateQueries({ queryKey: qk.approvalsInbox })
+    },
+  })
+}
+
+/** POST /admin/providers/:key/test — run a provider liveness probe (no invalidation). */
+export function useTestProviderConnection() {
+  return useMutation({
+    mutationFn: (key: string) => providers.testProviderConnection(key),
+  })
+}
+
 // ─── Notification-template read hooks (Phase 4) ───────────────────────────────────
 
 /** All admin-editable notification templates. 30 s stale. */
@@ -649,6 +1192,19 @@ export function useNotificationTemplates() {
     queryKey: qk.notificationTemplates,
     queryFn: () => notifications.listNotificationTemplates(),
     staleTime: 30_000,
+  })
+}
+
+/**
+ * The read-only delivery log (recent issued notifications + aggregate
+ * bounce/complaint rates) for the Comms console. 15 s stale — delivery state moves
+ * quickly. (Phase 6b Comms READ enrichment.)
+ */
+export function useDeliveryLog() {
+  return useQuery({
+    queryKey: qk.notificationDeliveryLog,
+    queryFn: () => notifications.getDeliveryLog(),
+    staleTime: 15_000,
   })
 }
 
@@ -675,6 +1231,18 @@ export function useWhatsAppConfig() {
   })
 }
 
+/**
+ * The provider-registry view: per-provider status/mock-mode/secret-presence/
+ * bound-capabilities + the mock→live readiness checklist. Non-secret; no key values.
+ */
+export function useProviderRegistry() {
+  return useQuery({
+    queryKey: qk.providerRegistry,
+    queryFn: () => providers.getProviderRegistry(),
+    staleTime: 60_000,
+  })
+}
+
 /** Existing ticket orders (read-only). */
 export function useTicketOrders() {
   return useQuery({
@@ -689,6 +1257,20 @@ export function useAgentConfig() {
   return useQuery({
     queryKey: qk.agentConfig,
     queryFn: () => agent.getAgentConfig(),
+    staleTime: 60_000,
+  })
+}
+
+/**
+ * The agent's guardrails, tool registry, live prompt version, and REAL 24h usage
+ * counts (no token/cost — the schema stores none). Backs the Agent console's four
+ * cards. 60 s stale — guardrails/tools are effectively static; usage need not be
+ * real-time.
+ */
+export function useAgentInsights() {
+  return useQuery({
+    queryKey: qk.agentInsights,
+    queryFn: () => agent.getAgentInsights(),
     staleTime: 60_000,
   })
 }
@@ -729,6 +1311,36 @@ export function useDashboardMetrics(range: MetricsRangeQuery) {
   })
 }
 
+/**
+ * The operational-health payload (system health, live-activity feed, open-compliance
+ * count) for the dashboard's three formerly-mock panels. 30 s stale — these signals
+ * shift more often than the aggregations. `retry: false` so a 403 (no Metrics grant)
+ * degrades gracefully alongside the composite dashboard.
+ */
+export function useMetricsOps() {
+  return useQuery({
+    queryKey: qk.metricsOps,
+    queryFn: () => metrics.getMetricsOps(),
+    staleTime: 30_000,
+    retry: false,
+  })
+}
+
+/**
+ * The "System / ops" board (provider status, webhook-ingest queues, background-
+ * jobs / cron registry) for the ops screen. 30 s stale — these signals shift
+ * more often than the dashboard aggregations. `retry: false` so a 403 (no
+ * Metrics grant) degrades gracefully.
+ */
+export function useOps() {
+  return useQuery({
+    queryKey: qk.opsBoard,
+    queryFn: () => ops.getOpsBoard(),
+    staleTime: 30_000,
+    retry: false,
+  })
+}
+
 // ─── Notification-template mutations (Phase 4) ────────────────────────────────────
 // Create (POST) and edit (PATCH) are sensitive (may 403 with
 // ADMIN_STEP_UP_REQUIRED — the caller wraps in `useStepUpRetry`). On success they
@@ -762,5 +1374,28 @@ export function usePreviewTemplate() {
   return useMutation({
     mutationFn: (input: NotificationTemplatePreviewRequest) =>
       notifications.previewNotificationTemplate(input),
+  })
+}
+
+/**
+ * Send (or queue-for-approval) a broadcast to an audience cohort (Phase 7). The
+ * SERVER decides the disposition from the resolved cohort size: a small audience is
+ * `dispatched` through the outbox now; a large audience is `queued_for_approval` as
+ * a maker-checker request for a second admin (§3.5). Sensitive + high-impact — may
+ * 403 with ADMIN_STEP_UP_REQUIRED (the caller wraps in `useStepUpRetry`) and moves
+ * no money (§3.1). On success it invalidates the delivery log (new outbox rows) and
+ * the approvals inbox (a large-audience queue) so both re-resolve.
+ */
+export function useSendBroadcast() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: BroadcastSendRequest) =>
+      notifications.sendBroadcast(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: qk.notificationDeliveryLog,
+      })
+      void queryClient.invalidateQueries({ queryKey: qk.approvalsInbox })
+    },
   })
 }

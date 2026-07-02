@@ -14,11 +14,18 @@ const auditEntry = {
   actor: "admin@example.com",
   actorAdminId: ID,
   actorUserId: null,
+  actorRole: "Compliance officer",
   subject: "user:abc",
   action: "config_change" as const,
-  details: { field: "fxSpread", from: "0.01", to: "0.02" },
+  details: {
+    field: "fxSpread",
+    from: "0.01",
+    to: "0.02",
+    reason: "quarterly repricing",
+  },
   before: { fxSpread: "0.01" },
   after: { fxSpread: "0.02" },
+  reason: "quarterly repricing",
   currentHash: "hash-current",
   prevHash: "hash-prev",
   createdAt: "2026-06-30T12:00:00.000Z",
@@ -40,6 +47,32 @@ describe("AuditLogEntrySchema", () => {
   it("parses a full audit-log entry", () => {
     const parsed = AuditLogEntrySchema.parse(auditEntry);
     expect(parsed.action).toBe("config_change");
+  });
+
+  it("carries the resolved actor role and projected reason", () => {
+    const parsed = AuditLogEntrySchema.parse(auditEntry);
+    expect(parsed.actorRole).toBe("Compliance officer");
+    expect(parsed.reason).toBe("quarterly repricing");
+  });
+
+  it("parses an entry with a null actorRole and null reason", () => {
+    const parsed = AuditLogEntrySchema.parse({
+      ...auditEntry,
+      actorRole: null,
+      reason: null,
+    });
+    expect(parsed.actorRole).toBeNull();
+    expect(parsed.reason).toBeNull();
+  });
+
+  it("rejects an entry missing the actorRole field", () => {
+    const { actorRole: _omit, ...withoutRole } = auditEntry;
+    expect(() => AuditLogEntrySchema.parse(withoutRole)).toThrow();
+  });
+
+  it("rejects an entry missing the reason field", () => {
+    const { reason: _omit, ...withoutReason } = auditEntry;
+    expect(() => AuditLogEntrySchema.parse(withoutReason)).toThrow();
   });
 
   it("parses an entry with null before/after and null actor ids", () => {

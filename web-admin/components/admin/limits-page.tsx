@@ -1,31 +1,37 @@
 "use client"
 
 /**
- * LimitsPage — DESIGN REPRODUCTION of the "Limits & velocity" screen (design
- * §6.26; markup docs/design-ref/screens/Limits.html). Pixel-faithful to the
- * design's own mock content — NOT wired to the real config API (real-data
- * reintegration is a separate, later step).
+ * LimitsPage — the "Limits & velocity" screen (design §6.26; markup
+ * docs/design-ref/screens/Limits.html).
  *
- * Structure (from the markup): a page header, a row of tier tabs (`tierTabs`),
- * then a `1fr 1fr` grid of two cards — "Amount caps · {tier}" (key/value rows
- * each with an edit pencil) and "Velocity & counts · {tier}" (display-only
- * key/value rows). Switching the tier tab swaps the rows shown in both cards.
+ * Structure (from the markup): a page header, a row of tier tabs, then a `1fr 1fr`
+ * grid of two cards — "Amount caps · {tier}" (key/value rows each with an edit
+ * pencil) and "Velocity & counts · {tier}" (display-only key/value rows). Switching
+ * the tier tab swaps the rows shown in both cards.
  *
- * Actions: per the subtitle ("Changes are maker-checker") each amount-cap edit
- * pencil opens the shared flow modals in the design's order — a new-value prompt
- * (captures the new cap), then Reason (audit) → Step-up (TOTP) → Maker-checker
- * (from→to change preview, "Submit for approval"). The mock data mirrors the seed
- * dataset shapes in docs/design-ref/logic.js (per-tier NGN caps + tx-count/day)
- * and the SPEC §6.26. Approving the maker-checker updates the edited row's value
- * in local state (the reactive mock), so the displayed cap changes.
+ * WIRED (Phase 6a): the per-tier caps are REAL, resolved from the
+ * `limits.NGN.{tier}.perTxFiatMax` / `.dailyFiatMax` / `.dailyTxCountMax` registry
+ * keys via GET /admin/settings (`useSettings("KYC")`). The design ALSO shows rows the
+ * registry has no key for — "Weekly max", "Single on-chain send max", "Sends / 10-min
+ * window", "Cooling-off after tier change", "New-beneficiary hold" — those render a
+ * subtle "—" (no backing key) and are recorded as shapeGaps for later backend
+ * enrichment. Four async branches: loading / error / empty / data.
+ *
+ * Editing an amount cap is maker-checker: the pencil opens a new-value prompt →
+ * reason (audit) → step-up (TOTP) → maker-checker. The edit SUBMIT is a Phase-7
+ * write (it updates local state only for now — the real PATCH + re-read lands later).
  */
-import { useState } from "react"
+import { useMemo, useState } from "react"
 
+import type { EffectiveSetting } from "@handshake-agent/contracts"
+
+import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { ReasonModal } from "@/components/admin/flows/reason-modal"
 import { StepUpModal } from "@/components/admin/flows/step-up-modal"
 import { MakerCheckerModal } from "@/components/admin/flows/maker-checker-modal"
 import { pushToast } from "@/lib/store/toast-store"
+import { useSettings } from "@/lib/query/hooks"
 import {
   Dialog,
   DialogContent,
@@ -42,74 +48,56 @@ import type {
 // The design's edit pencil (logic.js `editIcon`-shaped path); reused per amount row.
 const EDIT_ICON = "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"
 
-/**
- * Per-tier mock content — reproduces the seed dataset shapes in
- * docs/design-ref/logic.js (per-tier NGN amount caps + tx-count/day) and the
- * markup's four-row cards. Values are the design's own representative content,
- * not fetched. This is the initial seed — the page lifts it into `useState` so
- * an approved amount-cap edit updates the edited row's displayed value.
- */
-const TIER_SEED: readonly LimitTier[] = [
-  {
-    id: "tier_1",
-    label: "Tier 1",
-    amountCaps: [
-      { k: "Per-transaction max", v: "₦200,000" },
-      { k: "Daily max · rolling 24h", v: "₦200,000" },
-      { k: "Weekly max", v: "₦1,000,000" },
-      { k: "Single on-chain send max", v: "50 USDT" },
-    ],
-    velocity: [
-      { k: "Transactions / day", v: "10" },
-      { k: "Sends / 10-min window", v: "3" },
-      { k: "Cooling-off after tier change", v: "24h" },
-      { k: "New-beneficiary hold", v: "12h" },
-    ],
-  },
-  {
-    id: "tier_2",
-    label: "Tier 2",
-    amountCaps: [
-      { k: "Per-transaction max", v: "₦1,000,000" },
-      { k: "Daily max · rolling 24h", v: "₦2,000,000" },
-      { k: "Weekly max", v: "₦8,000,000" },
-      { k: "Single on-chain send max", v: "500 USDT" },
-    ],
-    velocity: [
-      { k: "Transactions / day", v: "50" },
-      { k: "Sends / 10-min window", v: "6" },
-      { k: "Cooling-off after tier change", v: "12h" },
-      { k: "New-beneficiary hold", v: "6h" },
-    ],
-  },
-  {
-    id: "tier_3",
-    label: "Tier 3",
-    amountCaps: [
-      { k: "Per-transaction max", v: "₦5,000,000" },
-      { k: "Daily max · rolling 24h", v: "₦10,000,000" },
-      { k: "Weekly max", v: "₦50,000,000" },
-      { k: "Single on-chain send max", v: "5,000 USDT" },
-    ],
-    velocity: [
-      { k: "Transactions / day", v: "200" },
-      { k: "Sends / 10-min window", v: "10" },
-      { k: "Cooling-off after tier change", v: "6h" },
-      { k: "New-beneficiary hold", v: "1h" },
-    ],
-  },
-] as const
+// Placeholder for a design row the registry has no backing key for (shapeGap).
+const NO_KEY = "—"
+
+/** The three NGN KYC tiers the registry enumerates (`limits.NGN.<tier>.*`). */
+const TIER_META: readonly { id: LimitTierId; label: string }[] = [
+  { id: "tier_1", label: "Tier 1" },
+  { id: "tier_2", label: "Tier 2" },
+  { id: "tier_3", label: "Tier 3" },
+]
+
+/** Format an NGN integer cap as the design's mono string, else the no-key dash. */
+function ngn(value: unknown): string {
+  return typeof value === "number" ? `₦${value.toLocaleString()}` : NO_KEY
+}
+
+/** Format a plain count cap (tx/day), else the no-key dash. */
+function count(value: unknown): string {
+  return typeof value === "number" ? value.toLocaleString() : NO_KEY
+}
 
 /**
- * Deep-copy a seed tier into mutable state shape so `setTiers` can replace an
- * amount-cap row's value without mutating the readonly seed.
+ * Build the per-tier cards from the real KYC-category settings. Amount caps map the
+ * three registry keys; the extra design rows (Weekly / Single on-chain send) have no
+ * key and render "—". Velocity maps the one backed count (Transactions / day); the
+ * rest (10-min window / cooling-off / new-beneficiary hold) render "—" (shapeGaps).
  */
-function cloneTier(tier: LimitTier): LimitTier {
-  return {
-    ...tier,
-    amountCaps: tier.amountCaps.map((r) => ({ ...r })),
-    velocity: tier.velocity.map((r) => ({ ...r })),
-  }
+function buildTiers(settings: readonly EffectiveSetting[]): LimitTier[] {
+  const byKey = new Map(settings.map((s) => [s.key, s.value]))
+  return TIER_META.map(({ id, label }) => {
+    const base = `limits.NGN.${id}`
+    const amountCaps: LimitAmountRow[] = [
+      { k: "Per-transaction max", v: ngn(byKey.get(`${base}.perTxFiatMax`)) },
+      {
+        k: "Daily max · rolling 24h",
+        v: ngn(byKey.get(`${base}.dailyFiatMax`)),
+      },
+      { k: "Weekly max", v: NO_KEY },
+      { k: "Single on-chain send max", v: NO_KEY },
+    ]
+    const velocity: LimitVelocityRow[] = [
+      {
+        k: "Transactions / day",
+        v: count(byKey.get(`${base}.dailyTxCountMax`)),
+      },
+      { k: "Sends / 10-min window", v: NO_KEY },
+      { k: "Cooling-off after tier change", v: NO_KEY },
+      { k: "New-beneficiary hold", v: NO_KEY },
+    ]
+    return { id, label, amountCaps, velocity }
+  })
 }
 
 /** One amount-cap key/value row with the design's edit pencil affordance. */
@@ -170,10 +158,26 @@ function VelocityRow({ row }: { row: LimitVelocityRow }) {
 type LimitFlowStep = "value" | "reason" | "stepup" | "maker"
 
 export function LimitsPage() {
-  // The tiers are reactive: approving an edit updates the edited amount row's value.
-  const [tiers, setTiers] = useState<LimitTier[]>(() =>
-    TIER_SEED.map(cloneTier)
+  const query = useSettings("KYC")
+
+  // Base tiers derived from the real settings. Local edits overlay on top so an
+  // approved maker-checker edit updates the displayed cap (Phase-7 write is local-only).
+  const baseTiers = useMemo(() => buildTiers(query.data ?? []), [query.data])
+  // Overlay of applied edits, keyed `tierId::capLabel` → new value string.
+  const [edits, setEdits] = useState<Record<string, string>>({})
+
+  const tiers = useMemo<LimitTier[]>(
+    () =>
+      baseTiers.map((t) => ({
+        ...t,
+        amountCaps: t.amountCaps.map((r) => {
+          const override = edits[`${t.id}::${r.k}`]
+          return override !== undefined ? { ...r, v: override } : r
+        }),
+      })),
+    [baseTiers, edits]
   )
+
   const [tierId, setTierId] = useState<LimitTierId>("tier_1")
   const tier = tiers.find((t) => t.id === tierId) ?? tiers[0]
 
@@ -194,26 +198,18 @@ export function LimitsPage() {
     setNewValue("")
   }
 
-  // Approve the dual-control edit: write the captured value onto the edited row in
+  // Approve the dual-control edit: overlay the captured value on the edited row in
   // the active tier (the displayed cap changes), toast, then close the flow.
   function applyEdit() {
-    if (!editing) return
+    if (!editing || !tier) return
     const next = newValue.trim()
-    setTiers((prev) =>
-      prev.map((t) =>
-        t.id === tierId
-          ? {
-              ...t,
-              amountCaps: t.amountCaps.map((r) =>
-                r.k === editing.k ? { ...r, v: next } : r
-              ),
-            }
-          : t
-      )
-    )
+    setEdits((prev) => ({ ...prev, [`${tier.id}::${editing.k}`]: next }))
     pushToast(`${editing.k} · ${tier.label} → ${next}`, "ok")
     closeFlow()
   }
+
+  const flowTitle =
+    editing && tier ? `Edit ${editing.k} · ${tier.label}` : "Edit limit"
 
   return (
     <div className="mx-auto max-w-[1080px] px-[30px] pt-[26px] pb-[60px]">
@@ -228,58 +224,99 @@ export function LimitsPage() {
         </p>
       </div>
 
-      {/* ── Tier tabs ──────────────────────────────────────────────────────── */}
-      <div role="tablist" aria-label="KYC tier" className="mb-4 flex gap-[9px]">
-        {tiers.map((t) => {
-          const active = t.id === tierId
-          return (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setTierId(t.id)}
-              className={cn(
-                "cursor-pointer rounded-[10px] border px-4 py-[9px] text-[12.5px] font-bold transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-                active
-                  ? "border-btn-dark bg-btn-dark text-white"
-                  : "border-line bg-card text-ink2 hover:bg-hov"
-              )}
-            >
-              {t.label}
-            </button>
-          )
-        })}
-      </div>
+      {/* ── Loading ────────────────────────────────────────────────────────── */}
+      {query.isLoading && (
+        <div aria-busy="true">
+          <div className="mb-4 flex gap-[9px]">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-[38px] w-[84px] rounded-[10px]" />
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-[14px]">
+            <Skeleton className="h-64 rounded-[16px]" />
+            <Skeleton className="h-64 rounded-[16px]" />
+          </div>
+        </div>
+      )}
 
-      {/* ── Cards: Amount caps | Velocity & counts ─────────────────────────── */}
-      <div className="grid grid-cols-2 gap-[14px]">
-        {/* Amount caps · {tier} */}
-        <section className="rounded-[16px] border border-line bg-card px-5 py-[18px]">
-          <h2 className="mb-3 text-[13px] font-extrabold text-ink">
-            Amount caps · {tier.label}
-          </h2>
-          {tier.amountCaps.map((row) => (
-            <AmountRow key={row.k} row={row} onEdit={startEdit} />
-          ))}
-        </section>
+      {/* ── Error ──────────────────────────────────────────────────────────── */}
+      {query.isError && (
+        <div className="rounded-[16px] border border-sdn bg-sdn/40 p-6 text-center">
+          <p className="text-sm font-bold text-tdn">Failed to load limits</p>
+          <p className="mt-1 text-[12.5px] text-ink2">
+            The tier-limit config could not be read.
+          </p>
+          <button
+            type="button"
+            onClick={() => query.refetch()}
+            className="mt-3 inline-flex items-center rounded-[9px] border border-line bg-card px-3 py-[7px] text-[11.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
-        {/* Velocity & counts · {tier} */}
-        <section className="rounded-[16px] border border-line bg-card px-5 py-[18px]">
-          <h2 className="mb-3 text-[13px] font-extrabold text-ink">
-            Velocity &amp; counts · {tier.label}
-          </h2>
-          {tier.velocity.map((row) => (
-            <VelocityRow key={row.k} row={row} />
-          ))}
-        </section>
-      </div>
+      {/* ── Data (tier tabs + cards) ───────────────────────────────────────── */}
+      {query.isSuccess && tier && (
+        <>
+          {/* Tier tabs */}
+          <div
+            role="tablist"
+            aria-label="KYC tier"
+            className="mb-4 flex gap-[9px]"
+          >
+            {tiers.map((t) => {
+              const active = t.id === tierId
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setTierId(t.id)}
+                  className={cn(
+                    "cursor-pointer rounded-[10px] border px-4 py-[9px] text-[12.5px] font-bold transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                    active
+                      ? "border-btn-dark bg-btn-dark text-white"
+                      : "border-line bg-card text-ink2 hover:bg-hov"
+                  )}
+                >
+                  {t.label}
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Cards: Amount caps | Velocity & counts */}
+          <div className="grid grid-cols-2 gap-[14px]">
+            {/* Amount caps · {tier} */}
+            <section className="rounded-[16px] border border-line bg-card px-5 py-[18px]">
+              <h2 className="mb-3 text-[13px] font-extrabold text-ink">
+                Amount caps · {tier.label}
+              </h2>
+              {tier.amountCaps.map((row) => (
+                <AmountRow key={row.k} row={row} onEdit={startEdit} />
+              ))}
+            </section>
+
+            {/* Velocity & counts · {tier} */}
+            <section className="rounded-[16px] border border-line bg-card px-5 py-[18px]">
+              <h2 className="mb-3 text-[13px] font-extrabold text-ink">
+                Velocity &amp; counts · {tier.label}
+              </h2>
+              {tier.velocity.map((row) => (
+                <VelocityRow key={row.k} row={row} />
+              ))}
+            </section>
+          </div>
+        </>
+      )}
 
       {/* ── Edit flow: new value → reason → step-up → maker-checker ────────── */}
       <NewValueModal
         open={flow === "value"}
         onOpenChange={(open) => (open ? setFlow("value") : closeFlow())}
-        title={editing ? `Edit ${editing.k} · ${tier.label}` : "Edit limit"}
+        title={flowTitle}
         currentValue={editing?.v ?? ""}
         value={newValue}
         onValueChange={setNewValue}
@@ -288,13 +325,13 @@ export function LimitsPage() {
       <ReasonModal
         open={flow === "reason"}
         onOpenChange={(open) => (open ? setFlow("reason") : closeFlow())}
-        title={editing ? `Edit ${editing.k} · ${tier.label}` : "Edit limit"}
+        title={flowTitle}
         onContinue={() => setFlow("stepup")}
       />
       <StepUpModal
         open={flow === "stepup"}
         onOpenChange={(open) => (open ? setFlow("stepup") : closeFlow())}
-        title={editing ? `Edit ${editing.k} · ${tier.label}` : "Edit limit"}
+        title={flowTitle}
         onComplete={() => setFlow("maker")}
       />
       <MakerCheckerModal
@@ -302,7 +339,7 @@ export function LimitsPage() {
         onOpenChange={(open) => (open ? setFlow("maker") : closeFlow())}
         title="Update limit"
         diff={
-          editing
+          editing && tier
             ? [
                 {
                   field: `${editing.k} · ${tier.label}`,

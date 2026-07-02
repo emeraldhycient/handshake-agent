@@ -7,6 +7,8 @@ import {
   ComplianceDispositionRequestSchema,
   SanctionsRecordItemSchema,
   SanctionsRecordListResponseSchema,
+  SanctionsDispositionRequestSchema,
+  SanctionsMonitoringViewSchema,
   AmlRuleSchema,
   AmlRuleListResponseSchema,
   AmlRuleCreateRequestSchema,
@@ -125,9 +127,9 @@ describe("ComplianceEventDetailSchema", () => {
 describe("ComplianceDispositionRequestSchema", () => {
   it("accepts every disposable status", () => {
     for (const status of ["approved", "blocked", "dismissed", "under_review"]) {
-      expect(
-        ComplianceDispositionRequestSchema.parse({ status }).status,
-      ).toBe(status);
+      expect(ComplianceDispositionRequestSchema.parse({ status }).status).toBe(
+        status,
+      );
     }
   });
 
@@ -153,16 +155,41 @@ describe("SanctionsRecordItemSchema / ListResponse", () => {
     verdict: "hit" as const,
     provider: "open_sanctions",
     screeningType: "transaction_counterparty",
+    matchedList: "OpenSanctions",
+    matchType: "Counterparty match",
+    matchScore: 92,
+    disposition: null,
     createdAt: "2026-01-01T00:00:00.000Z",
   };
 
   it("accepts a well-formed record and every verdict", () => {
     expect(SanctionsRecordItemSchema.parse(rec)).toEqual(rec);
     for (const verdict of ["clear", "hit", "inconclusive"]) {
-      expect(
-        SanctionsRecordItemSchema.parse({ ...rec, verdict }).verdict,
-      ).toBe(verdict);
+      expect(SanctionsRecordItemSchema.parse({ ...rec, verdict }).verdict).toBe(
+        verdict,
+      );
     }
+  });
+
+  it("accepts each disposition value and null (open match)", () => {
+    for (const disposition of ["cleared", "escalated", "blocked"]) {
+      expect(
+        SanctionsRecordItemSchema.parse({ ...rec, disposition }).disposition,
+      ).toBe(disposition);
+    }
+    expect(
+      SanctionsRecordItemSchema.parse({ ...rec, disposition: null })
+        .disposition,
+    ).toBeNull();
+  });
+
+  it("rejects an unknown disposition and a missing disposition key", () => {
+    expect(() =>
+      SanctionsRecordItemSchema.parse({ ...rec, disposition: "maybe" }),
+    ).toThrow();
+    const { disposition: _d, ...noDisp } = rec;
+    void _d;
+    expect(() => SanctionsRecordItemSchema.parse(noDisp)).toThrow();
   });
 
   it("rejects an unknown verdict", () => {
@@ -171,10 +198,88 @@ describe("SanctionsRecordItemSchema / ListResponse", () => {
     ).toThrow();
   });
 
+  it("requires the enrichment fields (matchedList / matchType / matchScore)", () => {
+    const { matchedList: _l, ...noList } = rec;
+    void _l;
+    expect(() => SanctionsRecordItemSchema.parse(noList)).toThrow();
+    const { matchType: _t, ...noType } = rec;
+    void _t;
+    expect(() => SanctionsRecordItemSchema.parse(noType)).toThrow();
+    const { matchScore: _s, ...noScore } = rec;
+    void _s;
+    expect(() => SanctionsRecordItemSchema.parse(noScore)).toThrow();
+  });
+
+  it("bounds matchScore to an integer 0–100", () => {
+    expect(() =>
+      SanctionsRecordItemSchema.parse({ ...rec, matchScore: 101 }),
+    ).toThrow();
+    expect(() =>
+      SanctionsRecordItemSchema.parse({ ...rec, matchScore: -1 }),
+    ).toThrow();
+    expect(() =>
+      SanctionsRecordItemSchema.parse({ ...rec, matchScore: 50.5 }),
+    ).toThrow();
+    expect(
+      SanctionsRecordItemSchema.parse({ ...rec, matchScore: 0 }).matchScore,
+    ).toBe(0);
+    expect(
+      SanctionsRecordItemSchema.parse({ ...rec, matchScore: 100 }).matchScore,
+    ).toBe(100);
+  });
+
   it("accepts a list response", () => {
     expect(
       SanctionsRecordListResponseSchema.parse({ items: [rec] }).items,
     ).toHaveLength(1);
+  });
+});
+
+describe("SanctionsDispositionRequestSchema", () => {
+  it("accepts each disposition, with and without a comment", () => {
+    for (const disposition of ["cleared", "escalated", "blocked"]) {
+      expect(
+        SanctionsDispositionRequestSchema.parse({ disposition }).disposition,
+      ).toBe(disposition);
+    }
+    expect(
+      SanctionsDispositionRequestSchema.parse({
+        disposition: "blocked",
+        comment: "OFAC SDN confirmed",
+      }).comment,
+    ).toBe("OFAC SDN confirmed");
+  });
+
+  it("rejects an unknown or missing disposition", () => {
+    expect(() =>
+      SanctionsDispositionRequestSchema.parse({ disposition: "ignore" }),
+    ).toThrow();
+    expect(() => SanctionsDispositionRequestSchema.parse({})).toThrow();
+  });
+});
+
+describe("SanctionsMonitoringViewSchema", () => {
+  const view = {
+    reScreenDaily: true,
+    screenOnOutbound: true,
+    pepAlert: true,
+    autoBlockOfac: false,
+  };
+
+  it("accepts a well-formed monitoring view", () => {
+    expect(SanctionsMonitoringViewSchema.parse(view)).toEqual(view);
+  });
+
+  it("rejects a non-boolean flag", () => {
+    expect(() =>
+      SanctionsMonitoringViewSchema.parse({ ...view, pepAlert: "yes" }),
+    ).toThrow();
+  });
+
+  it("rejects a missing flag", () => {
+    const { autoBlockOfac: _a, ...partial } = view;
+    void _a;
+    expect(() => SanctionsMonitoringViewSchema.parse(partial)).toThrow();
   });
 });
 
@@ -210,9 +315,9 @@ describe("AmlRuleSchema + create/update/list", () => {
   });
 
   it("accepts a list response", () => {
-    expect(AmlRuleListResponseSchema.parse({ rules: [rule] }).rules).toHaveLength(
-      1,
-    );
+    expect(
+      AmlRuleListResponseSchema.parse({ rules: [rule] }).rules,
+    ).toHaveLength(1);
   });
 
   it("create request defaults enabled to true", () => {
@@ -310,9 +415,9 @@ describe("ComplianceReportSchema + draft/submit/list", () => {
 
   it("accepts every report status", () => {
     for (const status of ["draft", "submitted", "rejected", "closed"]) {
-      expect(
-        ComplianceReportSchema.parse({ ...report, status }).status,
-      ).toBe(status);
+      expect(ComplianceReportSchema.parse({ ...report, status }).status).toBe(
+        status,
+      );
     }
   });
 

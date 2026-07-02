@@ -70,6 +70,9 @@ enum NotificationEventType {
   pin_reset_initiated
   device_added
   suspicious_activity_alert
+  /// Operator-issued Comms broadcast (admin console, Phase 7). Not a domain event —
+  /// a marketing/comms blast enqueued to the outbox per resolved recipient.
+  broadcast
 
   @@map("notification_event_type")
 }

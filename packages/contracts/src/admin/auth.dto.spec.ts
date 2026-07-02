@@ -14,6 +14,7 @@ const ROLE_ID = "22222222-2222-2222-2222-222222222222";
 const adminMe = {
   id: ID,
   email: "admin@example.com",
+  displayName: "Super Admin",
   role: { id: ROLE_ID, name: "super_admin" },
   status: "active" as const,
   mfaEnabled: true,
@@ -43,6 +44,16 @@ describe("AdminMeSchema", () => {
   it("parses an admin identity payload", () => {
     const parsed = AdminMeSchema.parse(adminMe);
     expect(parsed.role.name).toBe("super_admin");
+  });
+
+  it("carries a non-optional displayName", () => {
+    const parsed = AdminMeSchema.parse(adminMe);
+    expect(parsed.displayName).toBe("Super Admin");
+  });
+
+  it("rejects a missing displayName", () => {
+    const { displayName: _omit, ...withoutName } = adminMe;
+    expect(() => AdminMeSchema.parse(withoutName)).toThrow();
   });
 
   it("rejects an unknown status", () => {

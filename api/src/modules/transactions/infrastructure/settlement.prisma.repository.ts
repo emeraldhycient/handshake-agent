@@ -34,6 +34,7 @@ import {
   ReceiptDeliveryStatus,
   SettlementOutboxStatus,
   TransactionStatus,
+  TransactionType,
   TravelRulePartyType,
   TravelRuleTrigger,
   VelocityCounterType,
@@ -44,6 +45,7 @@ import { hmacHex } from '../../../core/crypto/hmac';
 import { acquireAccountAdvisoryLocks } from '../../../core/crypto/advisory-lock';
 import {
   buildBuyLedgerEntries,
+  buildManualCreditEntries,
   buildSellReserveEntries,
   buildSellFinalizeEntries,
   buildSellRefundEntries,
@@ -80,6 +82,8 @@ import type {
   SettleSendFinalizeInput,
   SettleSendFinalizeOutput,
   SettleSendRefundInput,
+  SettleManualCreditAtomicInput,
+  SettleManualCreditAtomicOutput,
 } from '../application/ports/settlement.repository.port';
 import { ReceiptNotSignableError } from '../domain/execution-errors';
 import type { TransactionRecord } from '../application/ports/transaction.repository.port';
@@ -693,6 +697,48 @@ function buildSwapReceiptContent(input: {
 <p>From: ${input.fromAmount} ${input.fromAsset}</p>
 <p>To: ${input.toAmount} ${input.toAsset}</p>
 <p>On-chain Tx Hash: ${input.onChainTxHash}</p>
+<p>Issued At: ${input.issuedAt.toISOString()}</p>
+</body>
+</html>`;
+
+  return { htmlContent, itemized };
+}
+
+/**
+ * Builds the deterministic HTML content and itemized JSON for an admin MANUAL
+ * CREDIT receipt. Byte-stable for the same inputs (canonical JSON, ISO dates).
+ */
+function buildManualCreditReceiptContent(input: {
+  receiptNumber: string;
+  transactionId: string;
+  userId: string;
+  asset: string;
+  amount: string;
+  reason: string;
+  approvedByAdminId: string;
+  issuedAt: Date;
+}): { htmlContent: string; itemized: Record<string, unknown> } {
+  const itemized = {
+    asset: input.asset,
+    amount: input.amount,
+    type: 'manual_credit',
+    reason: input.reason,
+    approvedByAdminId: input.approvedByAdminId,
+  };
+
+  const htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Receipt ${input.receiptNumber}</title></head>
+<body>
+<h1>Handshake Manual Credit Receipt</h1>
+<p>Receipt Number: ${input.receiptNumber}</p>
+<p>Transaction ID: ${input.transactionId}</p>
+<p>User ID: ${input.userId}</p>
+<p>Asset: ${input.asset}</p>
+<p>Amount Credited: ${input.amount} ${input.asset}</p>
+<p>Reason: ${input.reason}</p>
+<p>Approved By (admin): ${input.approvedByAdminId}</p>
+<p>Type: manual_credit</p>
 <p>Issued At: ${input.issuedAt.toISOString()}</p>
 </body>
 </html>`;
@@ -2478,6 +2524,228 @@ export class SettlementPrismaRepository implements ISettlementRepository {
         } catch {
           // Duplicate unique constraint — compensation already recorded.
         }
+      },
+      { isolationLevel: 'ReadCommitted' },
+    );
+  }
+
+  /**
+   * Atomic settlement of an admin-approved MANUAL CREDIT in a single
+   * `prisma.$transaction`. This is the engine-brokered applier of a
+   * `manual_credit` ChangeRequest (§3.1) — it is the ONLY component that credits
+   * the user wallet, and it does so as a balanced double-entry, never a raw write.
+   *
+   * Idempotent: a prior settle for the same `idempotencyKey` short-circuits and
+   * returns { credited:false } WITHOUT re-crediting (no double credit).
+   *
+   * Steps inside the $transaction:
+   *   0. Advisory locks (user_wallet + treasury) → serialize concurrent credits.
+   *   1. Idempotency check on Transaction.idempotencyKey → return early if present.
+   *   2. Read the user_wallet + treasury account states (inside the tx).
+   *   3. buildManualCreditEntries → 2 balanced LedgerEntry rows.
+   *   4. Create the anchor Transaction (type=reward, status=completed).
+   *   5. Insert the LedgerEntry rows; capture the user_wallet running balance.
+   *   6. Create the WalletBalance snapshot (credit the user's asset balance).
+   *   7. Mint a signed Receipt (fail-closed if no signing key).
+   */
+  async settleManualCreditAtomic(
+    input: SettleManualCreditAtomicInput,
+  ): Promise<SettleManualCreditAtomicOutput> {
+    const {
+      userId,
+      walletId,
+      cryptoAmount,
+      asset,
+      idempotencyKey,
+      approvedByAdminId,
+      reason,
+      assetDecimals,
+      now,
+      year,
+    } = input;
+    const signingKey = this.signingKey;
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        // ── 0. Advisory locks — serialize concurrent credits to same accounts ──
+        await acquireAccountAdvisoryLocks(tx, [
+          { accountType: 'user_wallet', accountId: walletId },
+          {
+            accountType: 'treasury_reserve',
+            accountId: ACCOUNT_IDS.USDT_TREASURY,
+          },
+        ]);
+
+        // ── 1. Idempotency check (under the lock) ─────────────────────────────
+        // A prior apply of the SAME approved ChangeRequest already settled — its
+        // Transaction carries this idempotencyKey. Return its receipt without
+        // re-crediting (the guard against a double-apply race, §3.1).
+        const existing = await tx.transaction.findUnique({
+          where: { idempotencyKey },
+          select: { id: true },
+        });
+        if (existing !== null) {
+          const receipt = await tx.receipt.findUnique({
+            where: { transactionId: existing.id },
+            select: { receiptNumber: true },
+          });
+          const balance = await tx.ledgerEntry.findFirst({
+            where: {
+              accountType: LedgerAccountType.user_wallet,
+              accountId: walletId,
+              currency: asset,
+            },
+            orderBy: { sequence: 'desc' },
+            select: { balanceAfter: true },
+          });
+          return {
+            credited: false,
+            newBalance: balance?.balanceAfter
+              ? (balance.balanceAfter as { toString(): string }).toString()
+              : '0',
+            receiptNumber: receipt?.receiptNumber ?? '',
+          };
+        }
+
+        // ── 2. Read current account states (inside tx for isolation) ──────────
+        const accountStates = await fetchAccountStatesByList(
+          tx as unknown as PrismaService,
+          [
+            {
+              accountType: 'user_wallet',
+              accountId: walletId,
+              currency: asset,
+            },
+            {
+              accountType: 'treasury_reserve',
+              accountId: ACCOUNT_IDS.USDT_TREASURY,
+              currency: asset,
+            },
+          ],
+        );
+
+        // ── 3. Build ledger entries (pure domain function) ────────────────────
+        const drafts: LedgerEntryDraft[] = buildManualCreditEntries({
+          walletId,
+          cryptoAmount,
+          asset,
+          postedAt: now,
+          accountStates,
+        });
+
+        // ── 4. Create the anchor Transaction (type=reward, completed) ─────────
+        // Manual credits do not follow the Proposal → Transaction flow; a minimal
+        // anchor Transaction carries the idempotencyKey + the maker/checker trail.
+        const creditTxn = await tx.transaction.create({
+          data: {
+            userId,
+            type: TransactionType.reward,
+            status: TransactionStatus.completed,
+            idempotencyKey,
+            requestChecksum: idempotencyKey,
+            metadata: {
+              type: 'manual_credit',
+              asset,
+              amount: cryptoAmount,
+              reason,
+              approvedByAdminId,
+            },
+            completedAt: now,
+          },
+          select: { id: true },
+        });
+
+        // ── 5. Insert LedgerEntry rows; capture the user_wallet running balance ─
+        let userWalletBalanceAfter = cryptoAmount;
+        for (const draft of drafts) {
+          await tx.ledgerEntry.create({
+            data: {
+              transactionId: creditTxn.id,
+              accountType: draft.accountType,
+              accountId: draft.accountId,
+              currency: draft.currency,
+              amount: draft.amount as unknown as Prisma.Decimal,
+              direction: draft.direction,
+              description: draft.description,
+              balanceAfter: draft.balanceAfter as unknown as Prisma.Decimal,
+              sequence: draft.sequence,
+              postedAt: draft.postedAt,
+            },
+          });
+          if (
+            (draft.accountType as LedgerAccountType) ===
+              LedgerAccountType.user_wallet &&
+            draft.accountId === walletId
+          ) {
+            userWalletBalanceAfter = draft.balanceAfter;
+          }
+        }
+
+        // ── 6. Create the WalletBalance snapshot (credit the user's asset) ────
+        await tx.walletBalance.create({
+          data: {
+            walletId,
+            asset,
+            amount: cryptoAmount as unknown as Prisma.Decimal,
+            assetDecimals,
+            // manual_audit: an operator-initiated balance snapshot (admin credit),
+            // distinct from provider_sync / deposit_webhook automated sources.
+            source: BalanceSource.manual_audit,
+            syncedAt: now,
+          },
+        });
+
+        // ── 7. Mint the signed Receipt (fail-closed) ──────────────────────────
+        if (!signingKey) {
+          throw new ReceiptNotSignableError();
+        }
+        const seqResult = await tx.$queryRaw<[{ nextval: bigint }]>`
+          SELECT nextval('hs_receipt_seq')`;
+        const receiptNumber = formatReceiptNumber(year, seqResult[0].nextval);
+
+        const { htmlContent, itemized } = buildManualCreditReceiptContent({
+          receiptNumber,
+          transactionId: creditTxn.id,
+          userId,
+          asset,
+          amount: cryptoAmount,
+          reason,
+          approvedByAdminId,
+          issuedAt: now,
+        });
+
+        const contentHash = createHash('sha256')
+          .update(htmlContent + JSON.stringify(itemized), 'utf8')
+          .digest('hex');
+
+        const signaturePayload = [
+          receiptNumber,
+          creditTxn.id,
+          contentHash,
+          userId,
+          now.toISOString(),
+        ].join('|');
+        const signatureHash = hmacHex('sha256', signingKey, signaturePayload);
+
+        await tx.receipt.create({
+          data: {
+            transactionId: creditTxn.id,
+            receiptNumber,
+            userId,
+            itemized: itemized as unknown as Prisma.InputJsonValue,
+            htmlContent,
+            contentHash,
+            signatureHash,
+            deliveryStatus: ReceiptDeliveryStatus.pending,
+            issuedAt: now,
+          },
+        });
+
+        return {
+          credited: true,
+          newBalance: userWalletBalanceAfter,
+          receiptNumber,
+        };
       },
       { isolationLevel: 'ReadCommitted' },
     );

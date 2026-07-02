@@ -1,0 +1,1751 @@
+{
+  "counts": {
+    "just-wire": 55,
+    "mock-only-needs-backend": 78,
+    "backend-only-not-surfaced": 24,
+    "both-missing": 7,
+    "complete": 4
+  },
+  "domains": [
+    {
+      "domain": "Users & KYC",
+      "summary": "The Users & KYC domain has a substantial \"just-wire\" backbone already built (list end users, user detail aggregate, devices, tier/status/pin-reset/device-revoke/sim-swap mutations, KYC queue + submission + approve/reject), fully covered by contracts, lib/api clients (users.ts, kyc.ts) AND TanStack hooks — but all three FE screens still render module-level mock consts and call none of it. So the largest bucket is \"just-wire\" (replace mock with the existing hooks). A second bucket is real functionality the design mock shows that has NO backend at all (\"mock-only-needs-backend\"): manual credit (engine-brokered admin credit), per-user limits/velocity view, add-note/admin-action timeline, active auth-sessions + revoke-all/revoke-single (the backend models devices, not sessions), full-PII reveal (only last-4 is ever exposed — a deliberate invariant, so this is a design/security conflict not a build item), KYC \"request more info\", KYC document images + name-enquiry surfacing, resend-verification, view-as/impersonate, CSV export, and bulk tag/message. A few backend capabilities are built but not surfaced by these screens (\"backend-only-not-surfaced\"): per-user transactions filter (AdminTxnSearchQuery.userId), the conversation/chat log (exists but not scoped to a user), the recentLedger array in the detail aggregate, and the beneficiary cooling-off override. NOTE: admin-users.controller.ts manages admin CONSOLE accounts (/admin/admins), NOT platform end users — end users are admin-end-users.controller.ts (/admin/users); do not confuse them. Recommended phasing: Phase 1 = wire the ~13 existing endpoints into the three screens; Phase 2 = build the read-only gaps (limits/velocity, sessions, timeline, chat-for-user, KYC docs/name-enquiry, request-info); Phase 3 = decide on money-adjacent + PII items (manual credit via the engine, full-PII reveal policy) which touch invariants §3.1/§3.4 and need product/compliance sign-off.",
+      "items": [
+        {
+          "feature": "Users list (directory table: customer, KYC, tier, country, balance, risk, last-active)",
+          "gap": "just-wire",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "listEndUsers (web-admin/lib/api/users.ts) + useEndUsers hook",
+          "beEndpoint": "admin-end-users.controller.ts:list (GET /admin/users)",
+          "beContract": "AdminEndUserListResponse / AdminEndUserListItem",
+          "detail": "users-page.tsx renders a 28-row module const USERS and filters client-side. Endpoint+contract+client+hook all exist. Wire useEndUsers(query) and map AdminEndUserListItem (id,email,status,kycStatus,kycTier,simSwapFlagged,createdAt). Field mismatches to resolve: mock shows NGN balance, country, tier label, last-active, and per-user risk flags (simSwap/sanctions/velocity) — the list item ONLY provides simSwapFlagged, no balance/country/last-active/tier-in-list/sanctions/velocity flags, so those columns either need list-response enrichment (backend) or must be dropped. Server filters are query/status/kycTier only (no country, no risk-chip, no free-text-on-phone)."
+        },
+        {
+          "feature": "Users list search + filters (KYC status, tier, country, risk chips) + pagination",
+          "gap": "just-wire",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "listEndUsers (AdminEndUserSearchQuery: query,status,kycTier,cursor,limit)",
+          "beEndpoint": "admin-end-users.controller.ts:list (GET /admin/users)",
+          "beContract": "AdminEndUserSearchQuery",
+          "detail": "Search + KYC + tier filters map to query/status/kycTier. GAPS: country filter and the three risk chips (simSwap/sanctions/velocity) have no query params (only status/kycTier supported); simSwap is only a boolean on the row, sanctions/velocity are not modeled at all. Pagination differs: FE mock is offset (10/page); backend is keyset cursor (nextCursor) — the FE Pagination primitive needs to move to cursor or the query needs offset support. Country + sanctions/velocity filters are mock-only-needs-backend sub-parts."
+        },
+        {
+          "feature": "Users list — Export CSV (header + bulk bar)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "Mock 'Export CSV' just pushes a toast. No /admin/users/export endpoint exists anywhere. Needs a backend streaming/paginated CSV export (respecting the same filters + PII minimization) plus a client. Money-safe (read-only) but must audit the export."
+        },
+        {
+          "feature": "Users list — bulk actions (Tag, Message) on selected rows",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "Bulk-bar Tag and Message only emit toasts. No user-tagging model or bulk-messaging/notification-to-end-users endpoint exists in the admin module. Tag needs a tags table + endpoints; Message needs a bulk outbound comms path (ties into notifications module). Both are net-new backend."
+        },
+        {
+          "feature": "User detail — Profile tab (contact & locale)",
+          "gap": "just-wire",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "getEndUser (users.ts) + useEndUserDetail hook",
+          "beEndpoint": "admin-end-users.controller.ts:get (GET /admin/users/:id)",
+          "beContract": "AdminEndUserDetail",
+          "detail": "user-detail.tsx renders const CU (Amara Okeke) and ignores the route id (void _props). Wire useEndUserDetail(id). GAP: AdminEndUserDetail provides id,email,status,kycStatus,kycTier,simSwapDetectedAt,createdAt only — the mock's phone, country, locale, marketing-consent, avatar hue, initials are NOT in the contract, so Contact&locale panel is partly unbacked (needs detail enrichment or dropping those rows)."
+        },
+        {
+          "feature": "User detail — Profile Admin-action timeline + Add note",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "Timeline is a local useState list; Add note prepends a row in-memory. No per-user note/timeline model or endpoint exists (audit log exists but is chain-integrity events keyed by subject, not a user-facing notes feed with free-text). Needs an admin-note entity + POST /admin/users/:id/notes + a per-user timeline read (could derive partly from the audit trail filtered by subject User:<id>)."
+        },
+        {
+          "feature": "User detail — KYC tab: identity documents (NIN/BVN last-4, ID front, selfie)",
+          "gap": "just-wire",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "getKycSubmission (kyc.ts) + useKycSubmission hook",
+          "beEndpoint": "admin-kyc-review.controller.ts:getSubmission (GET /admin/kyc/:userId)",
+          "beContract": "KycSubmissionDetail",
+          "detail": "KycSubmissionDetail provides ninLast4,bvnLast4,idDocumentType,livenessResult,firstName,lastName,dateOfBirth,status,tier,rejectionReason — enough to wire the masked NIN/BVN and status. GAPS: ID_FRONT.jpg and SELFIE.jpg image placeholders have NO backing field (no document image URLs in the contract or service) — mock-only-needs-backend sub-part (needs signed-URL surfacing of the KYC document store)."
+        },
+        {
+          "feature": "User detail — KYC tab: full NIN/BVN reveal (Reveal → step-up → decrypted PII banner, auto-remask)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "The design's marquee PII-reveal flow (reveal full NIN/BVN, 'access is logged', auto-remask 20s) has NO endpoint — the backend DELIBERATELY only ever exposes last-4 (AdminKycReviewService.last4 + comments 'the full NIN/BVN never leaves the backend'). This is a direct CONFLICT with invariant-style PII minimization. Building it means a new audited decrypt endpoint (step-up gated, rate-limited, logged) that contradicts the current 'never leaves backend' stance — needs explicit compliance/product decision before any build, not a routine gap."
+        },
+        {
+          "feature": "User detail — KYC tab: name-enquiry match panel",
+          "gap": "mock-only-needs-backend",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "Mock shows a bank name-enquiry 'Match · <name>' result. KycSubmissionDetail has no name-enquiry field (livenessResult exists, but not the bank account-holder name-match result). Needs a field on the submission detail (the name-enquiry data is produced elsewhere in the KYC/beneficiary flow — surface it here)."
+        },
+        {
+          "feature": "User detail — KYC tab: Approve (maker-checker) / Request info / Reject",
+          "gap": "just-wire",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "approveKyc / rejectKyc (kyc.ts) + useApproveKyc/useRejectKyc",
+          "beEndpoint": "admin-kyc-review.controller.ts:approve|reject (POST /admin/kyc/:userId/approve|reject)",
+          "beContract": "KycApproveRequest / KycRejectRequest",
+          "detail": "Approve→ wire useApproveKyc({tier}); Reject→ wire useRejectKyc({reason}) via the ReasonModal text. Both are step-up gated (403 ADMIN_STEP_UP_REQUIRED → useStepUpRetry). GAPS: (1) 'Request info' (needs_info) has NO endpoint — approve/reject only; needs a POST /admin/kyc/:userId/request-info. (2) The 'maker-checker' second-approver flow the design shows is not represented in the approve endpoint (single-call approve) — either drop the maker-checker UI or build a two-phase approval. Wiring approve/reject = just-wire; request-info + maker-checker = mock-only-needs-backend."
+        },
+        {
+          "feature": "User detail — Devices tab (list bound devices, SIM-swap badge, Unbind)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "listEndUserDevices + revokeDevice (users.ts); useEndUserDevices/useRevokeDevice",
+          "beEndpoint": "admin-end-users.controller.ts:listDevices (GET /admin/users/:id/devices) + revokeDevice (DELETE /admin/users/:id/devices/:deviceId)",
+          "beContract": "AdminEndUserDevice",
+          "detail": "Devices are also embedded in the detail aggregate. Wire the list; 'Unbind' → useRevokeDevice (step-up). AdminEndUserDevice has id,trustState,isPinned,lastUsedAt,boundAt — the mock's device name/fingerprint/OS and the per-device 'SIM-SWAP 2d ago' badge are NOT in the contract (only simSwapDetectedAt at the user level). Device name/fp/os = needs contract+detail enrichment; simSwapReverify endpoint exists but the per-device SIM-swap badge is user-level."
+        },
+        {
+          "feature": "User detail — SIM-swap reverify trigger",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "feMock": false,
+          "feApiClient": "simSwapReverify (users.ts) + useSimSwapReverify",
+          "beEndpoint": "admin-end-users.controller.ts:triggerSimSwapReverify (POST /admin/users/:id/sim-swap-reverify)",
+          "beContract": "none (no body)",
+          "detail": "Full backend endpoint + client + hook exist, but NO design screen exposes a 'trigger sim-swap reverify' action — the Devices tab only shows a passive SIM-SWAP badge and an Unbind button. Either add a 'Force re-verify (SIM-swap)' action button in the Devices/Security tab, or treat as intentional (the badge is informational). Recommend surfacing it near the SIM-swap badge."
+        },
+        {
+          "feature": "User detail — Security tab: active sessions (list, Revoke, Revoke all)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "Mock lists end-user auth SESSIONS (UA, IP, when) with Revoke + Revoke-all. The backend models DEVICES (bind/revoke) but has NO end-user auth-session read or revoke in the admin module (loadUserWithKycAndDevices has no session concept). Note: admin.ts listSessions/revokeSession are the ADMIN's OWN console sessions, not the end user's. Needs new endpoints: GET /admin/users/:id/sessions, DELETE .../:sessionId, POST .../sessions/revoke-all."
+        },
+        {
+          "feature": "User detail — Security tab: PIN status / lockouts / 2FA + Reset PIN directive",
+          "gap": "just-wire",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "forcePinReset (users.ts) + useForcePinReset (the RESET action only)",
+          "beEndpoint": "admin-end-users.controller.ts:forcePinReset (POST /admin/users/:id/pin-reset)",
+          "beContract": "none (no body)",
+          "detail": "The Reset-PIN action is a just-wire (forcePinReset endpoint+client+hook exist, step-up gated). BUT the READ side (PIN status 'Set · last set 12d ago', failed-PIN lockouts, OTP lockouts, 2FA enrolled) is entirely mock — no field on AdminEndUserDetail carries PIN-set time, lockout counts, or 2FA state. So the reset button = just-wire; the security-status panel = mock-only-needs-backend (needs detail enrichment)."
+        },
+        {
+          "feature": "User detail — Wallets & balances tab (asset cards + on-chain deposit addresses)",
+          "gap": "just-wire",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "getEndUser (detail aggregate carries balances)",
+          "beEndpoint": "admin-end-users.controller.ts:get (GET /admin/users/:id)",
+          "beContract": "AdminEndUserDetail.balances (AdminEndUserBalance: asset,network,amount)",
+          "detail": "balances[] exists in the detail aggregate — wire the USDT/TRX/total cards from it (NGN total needs FX conversion, which the detail does not provide — pricing/FX join needed). GAP: the 'on-chain deposit addresses' list (child addresses per asset) is NOT in the contract — no address field on the balance or detail. Cards = just-wire; deposit-address list = mock-only-needs-backend (surface child addresses from the wallets module)."
+        },
+        {
+          "feature": "User detail — Wallets tab: Manual credit (reason→step-up→engine→maker-checker)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "The design's most sensitive action: an engine-brokered manual credit showing an effect table + double-entry ledger (treasury:USDT DR / user:USDT CR) + idempotency key + maker-checker. NO manual-credit endpoint exists anywhere (grep for manual.?credit across api/src returns nothing). This MOVES MONEY, so per §3.1 it must be built as a proposal→deterministic-engine execution (idempotency, maker-checker, audit), not a direct write. High-effort, money-path — needs the engine to expose an admin manual-credit proposal path. Product/compliance sign-off required."
+        },
+        {
+          "feature": "User detail — Beneficiaries tab (list + Remove)",
+          "gap": "just-wire",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "getEndUser (detail carries beneficiaries) / listBeneficiaries(userId) (beneficiaries.ts)",
+          "beEndpoint": "admin-end-users.controller.ts:get (detail.beneficiaries) + admin-beneficiaries.controller.ts:list (GET /admin/beneficiaries?userId=)",
+          "beContract": "AdminEndUserBeneficiary (id,type,label,verificationStatus)",
+          "detail": "The user-detail aggregate already includes beneficiaries[], and a per-user-scoped list (listBeneficiaries(userId)) exists via useAdminBeneficiaries(userId). Wire either. GAP: the mock 'Remove' action has NO backend — admin-beneficiaries.controller.ts exposes ONLY cooling-off-override (POST), no DELETE. Removing an end-user beneficiary from admin needs a new endpoint. List = just-wire; Remove = mock-only-needs-backend."
+        },
+        {
+          "feature": "User detail — Transactions tab (recent txns list, click → tx detail)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "getEndUser (detail.recentTransactions) OR listTransactions({userId}) (transactions.ts)",
+          "beEndpoint": "admin-end-users.controller.ts:get (recentTransactions) + admin-transactions.controller.ts:list (GET /admin/transactions?userId=)",
+          "beContract": "AdminEndUserTxn (id,type,status,createdAt) / AdminTxnSearchQuery.userId",
+          "detail": "Two ways to wire: the detail aggregate's recentTransactions[10], or the transactions list filtered by userId (AdminTxnSearchQuery.userId exists). GAP: AdminEndUserTxn lacks the USDT/NGN amount columns the mock shows (id,type,status,createdAt only); AdminTxnListItem may carry amounts — prefer listTransactions({userId}) for the amount columns. Row click → /transactions/:id (that detail route is a separate domain but exists)."
+        },
+        {
+          "feature": "User detail — Chat history tab (read-only transcript with intent→proposal chips)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "listConversations / getConversation (agent.ts) — NOT scoped to a user",
+          "beEndpoint": "admin-agent.controller.ts:listConversations|getConversation (GET /admin/agent/conversations[/:id])",
+          "beContract": "ConversationLogDetail (messages + intents + replies), ConversationLogItem.userId",
+          "detail": "The conversation-log backend EXISTS (messages, per-message intent {action,confidence}, replies) and ConversationLogItem/Detail carry userId — so the data is available. GAP: the list endpoint has NO userId filter param (AdminPaginationQueryDto only), so surfacing a single user's chat needs either a userId query param added to listConversations OR resolving the user's conversation id first. The user-detail Chat tab renders mock. Classify as backend-mostly-present but needs a per-user filter + FE wiring."
+        },
+        {
+          "feature": "User detail — Limits tab (effective per-tier caps + overrides + live velocity usage)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "Mock shows effective limits (daily/weekly/per-tx/tx-count caps) with an OVERRIDE badge and live velocity bars (daily-send used, tx count 24h, swap volume 24h). NO admin endpoint returns per-user effective limits or current velocity usage, and no per-user limit-override write exists. Tier limits live in DB-admin config (§7) but are not surfaced per user with the user's live velocity counters. Needs GET /admin/users/:id/limits (effective caps + velocity) and optionally a per-user override write. Read-only velocity is money-adjacent but non-mutating."
+        },
+        {
+          "feature": "User detail — header: Tier override (maker-checker) + Force re-KYC",
+          "gap": "just-wire",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "adjustTier (users.ts) + useAdjustTier",
+          "beEndpoint": "admin-end-users.controller.ts:adjustTier (PATCH /admin/users/:id/tier)",
+          "beContract": "AdminEndUserTierRequest (tier)",
+          "detail": "'Override tier' → wire useAdjustTier({tier}) (step-up gated). GAPS: (1) the design's maker-checker (second approver) is not in the single-call PATCH — drop the maker-checker UI or build two-phase. (2) 'Force re-KYC' has NO dedicated endpoint (there's sim-swap-reverify and status change, but not a force-re-KYC that resets kycStatus to pending) — mock-only-needs-backend. Tier change = just-wire; force-re-KYC + maker-checker = needs backend."
+        },
+        {
+          "feature": "User detail — header: Freeze / Unfreeze account",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "setEndUserStatus (users.ts) + useSetUserStatus",
+          "beEndpoint": "admin-end-users.controller.ts:setStatus (PATCH /admin/users/:id/status)",
+          "beContract": "AdminEndUserStatusRequest (active|suspended|deactivated)",
+          "detail": "The mock 'Freeze' (reason→step-up) maps to setStatus('suspended'); unfreeze = setStatus('active'). Endpoint+client+hook exist, step-up gated. Straight wire — map the Freeze button + FROZEN badge to status==='suspended'/'deactivated'. The mock's 'frozen' boolean should be derived from status."
+        },
+        {
+          "feature": "User detail — header: Add note / Resend verification / View as",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "Three header actions with no backend: 'Add note' (same missing notes model as the Profile timeline), 'Resend' verification link (no resend endpoint in admin — ties to notifications/identity), and 'View as' (impersonation — no impersonate endpoint; a high-risk feature that likely should NOT exist for a custodial fintech admin without a strict audited read-only session model). Recommend: build Add-note + Resend; explicitly defer/decline View-as pending security review."
+        },
+        {
+          "feature": "KYC review queue page (status tabs pending/needs_info/approved/rejected + queue table)",
+          "gap": "just-wire",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "listKycQueue (kyc.ts) + useKycQueue",
+          "beEndpoint": "admin-kyc-review.controller.ts:listQueue (GET /admin/kyc/queue)",
+          "beContract": "KycQueueResponse / KycQueueItem (userId,email,status,submittedAt)",
+          "detail": "kyc-review-page.tsx re-seeds the 28-user mock and buckets by status client-side. GAP: the backend queue (listUsersPendingKycReview) returns ONLY pending-review users — it is NOT a 4-tab (pending/needs_info/approved/rejected) queryable queue; there is no status filter param on GET /admin/kyc/queue. So the pending tab = just-wire; the needs_info/approved/rejected tabs need a status filter added to the queue endpoint (mock-only-needs-backend sub-part). Also the mock's SLA age and Assignee columns have NO backing fields (KycQueueItem has no SLA/assignee) — needs enrichment. Row click → /users/:id?tab=kyc already aligns with the wired KYC tab."
+        }
+      ]
+    },
+    {
+      "domain": "Transactions & Ledger",
+      "summary": "All three web-admin screens (transactions-page, transaction-detail, ledger-page) are pure design reproductions rendering module-level mock consts — none import a query hook or api client. A real read-only oversight + engine-brokered triage backend already exists (AdminTransactionsController, AdminTxnTriageController, AdminLedgerController) with matching contracts (admin-txn, txn-action, admin-ledger) and lib/api clients (transactions.ts, ledger.ts) plus TanStack hooks (useTransactions, useTransactionDetail, useLedgerHistory, useMarkFailed, useRetrySettlement, useVerifyLedger). So the transactions list, detail, and the two money-path actions (retry, mark-failed) are largely \"just-wire\". BUT three real backend gaps exist: (1) the txn-list contract returns NO amount/asset/idempotency-key/user-name, so the FE list's amount, asset, idempotency-key and user columns + the free-text search over hash/ref/idem + the per-view count pills have no backend to feed them; (2) the Ledger page browses ALL accounts by account-TYPE prefix + currency, but GET /admin/ledger requires a full (accountType, accountId, currency) triple and there is no global cross-account list, no CSV export, and no sequence-integrity endpoint; (3) the detail page's \"Resend receipt\" and per-transaction \"Re-run recon\" action buttons have no admin endpoint (wallet-level reconcile exists but is user-scoped, not per-transaction). Phase plan: P1 wire list/detail/retry/mark-failed + verify; P2 enrich txn-list DTO (amount/asset/idem/user + free-text search + counts) and build global ledger list + export + integrity; P3 build resend-receipt + per-txn recon.",
+      "items": [
+        {
+          "feature": "Transactions list — table rows (id, type, user, status, created)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "listTransactions",
+          "beEndpoint": "admin-transactions.controller.ts:list (GET /admin/transactions)",
+          "beContract": "AdminTxnListResponse / AdminTxnListItem",
+          "detail": "FE transactions-page.tsx renders the module-level TXNS[] const (no hook imported). The endpoint + contract + client (listTransactions) + hook (useTransactions) all exist and return {id,userId,type,status,createdAt} keyset-paginated. Wiring: replace TXNS with useTransactions(query); map status via existing StatusPill. Only the base columns (id/type/status/created) map cleanly — amount/asset/user-name/idem columns are separate gaps below."
+        },
+        {
+          "feature": "Transactions list — Amount (USDT + NGN) and Asset columns",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "listTransactions",
+          "beEndpoint": "admin-transactions.controller.ts:list (GET /admin/transactions)",
+          "beContract": "AdminTxnListItem (missing fields)",
+          "detail": "FE list shows per-row USDT amount, asset (USDT/TRX/USDT→TRX) and NGN fiat leg. AdminTxnListItemSchema has ONLY {id,userId,type,status,createdAt} — no amount/asset/fiat. These live in Transaction.metadata (asset, cryptoAmount, fiatAmount, fxRate); the list repo projection does not surface them. Needs: widen AdminTxnListItemSchema + AdminTxnOversightService.toListItem + transaction repo listAll projection to include amount/asset/fiat from metadata."
+        },
+        {
+          "feature": "Transactions list — Idempotency-key column (copy-on-click)",
+          "gap": "mock-only-needs-backend",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "listTransactions",
+          "beEndpoint": "admin-transactions.controller.ts:list (GET /admin/transactions)",
+          "beContract": "AdminTxnListItem (missing idempotencyKey)",
+          "detail": "FE list renders t.idem per row with a copy affordance. idempotencyKey exists on AdminTxnDetail (detail endpoint) but NOT on AdminTxnListItem. Add idempotencyKey to the list-item schema + service mapper + repo projection (the column already exists on the Transaction row, trivial to project)."
+        },
+        {
+          "feature": "Transactions list — User display name column",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "listTransactions",
+          "beEndpoint": "admin-transactions.controller.ts:list (GET /admin/transactions)",
+          "beContract": "AdminTxnListItem (only userId)",
+          "detail": "FE shows a human name ('Amara Okeke'). The list item exposes only userId (uuid). Backend must either join the user's display name/handle into the list projection or the FE must resolve names via a batch user lookup. Simplest: add a userLabel/displayName to AdminTxnListItem via a repo join (User table). Effort M because it crosses into the identity module."
+        },
+        {
+          "feature": "Transactions list — view tabs (All / Stuck-Pending / Failed today / Refunds) with count pills",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "listTransactions",
+          "beEndpoint": "admin-transactions.controller.ts:list (partial — status filter only)",
+          "beContract": "AdminTxnSearchQuery (status filter) / no counts",
+          "detail": "The status filter can drive each tab (stuck→settling/pending_settlement, failed→failed, refunds→refunded) so the FILTERING is just-wire, BUT: (a) 'Failed today' needs a from=startOfDay bound (supported via from/to) and (b) the per-tab count PILLS have no backend — there is no aggregate-count endpoint. Note also a status-vocabulary mismatch: FE uses pending_settlement/refunded/quoted/initiated/receive; BE AdminTxnStatus enum is pending/validating/confirmed/settling/completed/failed/rolled_back/cancelled — a mapping layer is required. Counts need a small counts endpoint or a metrics query."
+        },
+        {
+          "feature": "Transactions list — free-text search by id / chain-hash / provider-ref / idempotency-key",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "listTransactions",
+          "beEndpoint": "admin-transactions.controller.ts:list (no text search)",
+          "beContract": "AdminTxnSearchQuery (no q field)",
+          "detail": "FE search filters TXNS by id.includes / chainHash / flwRef / idem. AdminTxnSearchQuerySchema supports status/type/userId/from/to/cursor/limit but NO free-text 'q'. Needs a search param + repo WHERE across id, onChainTxHash, processorTxRef, idempotencyKey (and metadata refs). Effort M — repo query + contract + service."
+        },
+        {
+          "feature": "Transaction detail — itemized parameters (amount, fiat leg, rate, fee, spread, internal margin)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "getTransaction",
+          "beEndpoint": "admin-transactions.controller.ts:get (GET /admin/transactions/:id)",
+          "beContract": "AdminTxnDetail (no itemized economics)",
+          "detail": "FE PARAMS shows Amount(USDT), Fiat leg(NGN), spread-folded Rate, Processing fee, FX spread bps, and an operator-only Internal margin. AdminTxnDetail exposes id/userId/type/status/idempotencyKey/processorTxRef/onChainTxHash/failureReason/timestamps/ledgerLegs/timeline — but NO amount/rate/fee/spread/margin fields. These derive from Transaction.metadata + fxRateSnapshot + config spread; backend must project an economics/itemized block (incl. operator-only margin, gated) onto the detail DTO."
+        },
+        {
+          "feature": "Transaction detail — double-entry ledger mini-table (Account/Dir/Amount/Seq)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "getTransaction",
+          "beEndpoint": "admin-transactions.controller.ts:get (GET /admin/transactions/:id)",
+          "beContract": "AdminTxnDetail.ledgerLegs (AdminTxnLedgerLeg[])",
+          "detail": "FE LEDGER const mirrors AdminTxnLedgerLeg exactly (accountType/accountId/currency/amount/direction/balanceAfter/postedAt). The detail endpoint already returns ledgerLegs via ledger.listByTransaction. Wire ledgerLegs into the mini-table; FE's 'seq' display can use array index or add sequence (sequence exists on AdminLedgerEntry but AdminTxnLedgerLeg omits it — add sequence to the leg schema if the Seq column must be real, else S)."
+        },
+        {
+          "feature": "Transaction detail — engine state timeline (stepper)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "getTransaction",
+          "beEndpoint": "admin-transactions.controller.ts:get (GET /admin/transactions/:id)",
+          "beContract": "AdminTxnDetail.timeline (AdminTxnTimelineEntry[])",
+          "detail": "FE TIMELINE is a hardcoded 5-step stepper. AdminTxnDetail.timeline is derived from the txn's non-null timestamps (created/settling/completed/failed) via deriveTimeline. Wire timeline[] into the stepper. Note the BE timeline is coarser (4 lifecycle states, no Quoted/Directive/webhook sub-steps) — acceptable if FE renders what BE provides; richer sub-steps would need a per-txn event log (not present)."
+        },
+        {
+          "feature": "Transaction detail — provider references (TRON hash + Tronscan link, Flutterwave ref, Blockradar, idempotency)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "getTransaction",
+          "beEndpoint": "admin-transactions.controller.ts:get (GET /admin/transactions/:id)",
+          "beContract": "AdminTxnDetail (onChainTxHash, processorTxRef, idempotencyKey)",
+          "detail": "FE REFS shows TRON hash (+Tronscan href), Flutterwave ref, Blockradar id, idempotency. AdminTxnDetail exposes onChainTxHash (→TRON+Tronscan), processorTxRef (→Flutterwave), idempotencyKey. The separate 'Blockradar' ref has no dedicated DTO field (it may live in metadata as blockradar/depositId) — wire the three present fields; the Blockradar row needs a metadata projection or drop it. Mostly just-wire."
+        },
+        {
+          "feature": "Transaction detail — webhook history list",
+          "gap": "both-missing",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "FE WEBHOOKS shows per-txn webhook events (blockradar.deposit.detected, flutterwave.settlement.pending) with delivered/in-flight tone. There is NO admin endpoint, contract, client, or service exposing a per-transaction webhook/event history. Would require a webhook-event store + a GET /admin/transactions/:id/webhooks projection. Flag as intentional-omission candidate for P3 or drop the panel if no event log is persisted."
+        },
+        {
+          "feature": "Transaction detail — Retry settlement action",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "retryTransaction",
+          "beEndpoint": "admin-txn-triage.controller.ts:retry (POST /admin/transactions/:id/retry)",
+          "beContract": "AdminTxnActionResponse",
+          "detail": "FE 'Retry settlement' opens the step-up→engine modal chain but only advances local state (no request). The endpoint (retry re-enqueues the settlement outbox, moves no money), client (retryTransaction), hook (useRetrySettlement, invalidates txns), and step-up 403 handling all exist. Wire the EngineActionModal onExecute to useRetrySettlement wrapped in useStepUpRetry."
+        },
+        {
+          "feature": "Transaction detail — Mark failed action (with refund)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "markTransactionFailed",
+          "beEndpoint": "admin-txn-triage.controller.ts:markFailed (POST /admin/transactions/:id/mark-failed)",
+          "beContract": "AdminTxnMarkFailedRequest / AdminTxnActionResponse",
+          "detail": "FE 'Mark failed' runs reason→step-up→engine locally. Endpoint exists and is engine-brokered (routes through settle{Sell,Send,Swap}RefundAtomic, audited, idempotent, step-up-guarded). Client markTransactionFailed + hook useMarkFailed exist. Wire the ReasonModal reason into AdminTxnMarkFailedRequest and EngineActionModal onExecute → useMarkFailed. Note BE only allows mark-failed on a 'settling' sell/send/swap (rejects others) — FE must surface TxnNotTriageableError as an error branch."
+        },
+        {
+          "feature": "Transaction detail — Refund (partial, maker-checker over threshold) action",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "FE 'Refund' opens reason→step-up→engine and, when the partial-refund amount exceeds ₦100,000, adds a maker-checker approval step. There is NO admin refund endpoint/contract/client — mark-failed does a FULL reserve reversal, not an operator-specified PARTIAL refund, and there is NO maker-checker (two-person-approval) workflow anywhere in the admin backend. Needs a new engine-brokered partial-refund directive + a maker-checker approval domain (request/approve/execute) — the largest single gap. Effort L."
+        },
+        {
+          "feature": "Transaction detail — Re-run reconciliation (per-transaction) action",
+          "gap": "both-missing",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none (wallet-level reconcile is user-scoped, not per-txn)",
+          "beContract": "none",
+          "detail": "FE 'Re-run recon' opens a step-up→engine flow scoped to THIS transaction. There is NO per-transaction recon endpoint. POST /admin/wallets/reconcile exists but takes a userId and reconciles on-chain-vs-ledger deposits for a whole user — a different action, not per-txn settlement recon. Either build a per-txn recon endpoint (re-run settlement reconciliation for one txn) or repoint the FE button at the existing retry (outbox re-enqueue) if semantics match. Effort M."
+        },
+        {
+          "feature": "Transaction detail — Resend receipt action",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "FE 'Resend receipt' is a no-op toast ('Receipt re-sent'). No admin endpoint/contract/client for resending a transaction receipt/statement to the customer. A statement/receipt generator exists in the transactions module (pdf-statement.generator, statement-token.service) but is not exposed as an admin action. Needs a POST /admin/transactions/:id/resend-receipt wired to notifications + statement services."
+        },
+        {
+          "feature": "Ledger page — double-entry table (Seq/Account/Dir/Amount/Running/Source) browsing ALL accounts",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "feMock": true,
+          "feApiClient": "listLedgerHistory (insufficient)",
+          "beEndpoint": "admin-ledger.controller.ts:history (GET /admin/ledger — account-scoped only)",
+          "beContract": "AdminLedgerHistoryResponse / AdminLedgerEntry",
+          "detail": "FE ledger-page.tsx browses ledger legs across ALL accounts, filtered only by account-TYPE prefix (user/treasury/revenue/float) + currency, with a per-currency running balance and Source→txn links. But GET /admin/ledger REQUIRES a full (accountType, accountId, currency) triple (AdminLedgerHistoryQueryDto: all three .min(1)) — it cannot serve a global cross-account browse, and there is no keyset pagination on it. Needs a NEW global ledger-list endpoint (filter by accountType-prefix + currency, cursor-paginated, newest-first) returning AdminLedgerEntry[] (which already carries sequence + running balanceAfter). Effort L (new repo query + contract + client + hook)."
+        },
+        {
+          "feature": "Ledger page — Export (CSV)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "FE Export button fires a toast stand-in ('Exporting ledger to CSV…'). No admin ledger-export endpoint/contract/client exists. Needs a GET /admin/ledger/export (streamed CSV, respecting the same account/currency filters). Effort M."
+        },
+        {
+          "feature": "Ledger page — Sequence integrity indicator (header 'Sequence integrity OK' pill)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "verifyLedger (per-transaction only)",
+          "beEndpoint": "admin-ledger.controller.ts:verify (POST /admin/ledger/verify/:transactionId)",
+          "beContract": "AdminLedgerIntegrityResult (per-txn, not global)",
+          "detail": "FE shows a static global 'Sequence integrity OK' pill. The existing verify endpoint checks ONE transaction's legs net to zero — it is NOT a global per-(account,currency) sequence-continuity check. There is no endpoint that validates the ledger's global sequence integrity (no gaps/reorders across accounts). Either build a global integrity/sequence-continuity endpoint or scope the pill to the currently viewed account. Effort M."
+        },
+        {
+          "feature": "Ledger page — Source → transaction detail navigation",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "none (client-side route)",
+          "beEndpoint": "admin-transactions.controller.ts:get (target route)",
+          "beContract": "AdminLedgerEntry.transactionId",
+          "detail": "FE links each tx-sourced row to /transactions/[id]. AdminLedgerEntry already carries transactionId, so once the ledger list is wired the Source link maps directly. Pure client wiring on top of the ledger-list gap above; non-tx sources (e.g. sweeps) have no txn link — the FE already handles that null case."
+        },
+        {
+          "feature": "Per-transaction ledger integrity verify (backend capability)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "feMock": false,
+          "feApiClient": "verifyLedger",
+          "beEndpoint": "admin-ledger.controller.ts:verify (POST /admin/ledger/verify/:transactionId)",
+          "beContract": "AdminLedgerIntegrityResult",
+          "detail": "A per-transaction integrity check (re-sum legs, per-currency net-to-zero) exists end-to-end: endpoint, contract (AdminLedgerIntegrityResult), client (verifyLedger), hook (useVerifyLedger). No design screen surfaces a per-txn 'verify integrity' button — the txn-detail page has no such action and the ledger page's integrity pill is global-not-per-txn. Surface it as a button on the transaction-detail ledger panel (S), or note as intentional omission if the global integrity pill is deemed sufficient."
+        }
+      ]
+    },
+    {
+      "domain": "Compliance & Audit",
+      "summary": "Across the four Compliance & Audit repro screens (Sanctions, AML/risk, Blocked list, Audit log), the backend is far more complete than the screens admit: a full compliance console (flagged-events queue+disposition, AML-rule CRUD, sanctions screening-run history, Travel-Rule capture, SAR/STR draft/submit) and a hash-chained audit log (list + chain-verify) all exist as real controllers + contracts + web-admin api-clients + TanStack hooks — yet every screen renders module-level mock consts and never calls a hook. So the bulk of the work is JUST-WIRE (swap consts for the existing hooks, reconcile the design's shapes to the real DTOs). Three genuine backend gaps: (1) the Sanctions page's per-match Clear/Escalate/Block disposition and the numeric match \"score\"/name+list card shape are NOT what the read-only SanctionsRecord endpoint returns — that endpoint is immutable history with only verdict clear/hit/inconclusive and no disposition mutation, so the disposition actions must be re-homed onto compliance-event disposition or a new sanctions-disposition endpoint must be built; (2) the Sanctions \"Ongoing monitoring\" toggles have no backend/contract at all; (3) the Audit \"Export CSV\" button has no export endpoint. The Blocked-list screen is a special case: its store is the compliance.sanctionsDenylist AppSetting (a string[]) edited via the existing PATCH /admin/settings/:key route + UpdateSettingRequestSchema contract — the endpoint and contract exist, but web-admin has NO settings api-client or read hook at all (only getPublicConfig), so both read and Add/Remove need a thin client built. Also unsurfaced by any screen: compliance-event detail drill-in, event severity/status filters, SAR/STR report list + submit, AML-rule create (only edit is mocked), and audit filters (actor/action/date) + cursor pagination (design paginates client-side over 6 mock rows).",
+      "items": [
+        {
+          "feature": "Audit log — list/table (Actor+role · Action chip · Target · Before→after · Reason · Time)",
+          "gap": "just-wire",
+          "effort": "M",
+          "detail": "AuditPage renders the verbatim `AUDIT` mock const (6 rows) with client-side search+pagination. A complete BE read exists: GET /admin/audit (AdminAuditController.list) → AuditLogListResponseSchema, with web-admin client `listAudit` and hook `useAudit(query)` already built. Wire: replace the const + local filter with useAudit, map the search box onto the DTO's subject/action filters (server-side) or keep client filter, and switch the client-slice Pagination to the DTO's nextCursor keyset. Shape reconciliation: design's actor is a display name + separate role; contract exposes flat `actor` string + nullable actorAdminId/actorUserId (role not carried → derive/label or extend DTO). before/after are z.unknown() (design assumes strings). Design row carries `ip` but the table never displays it; contract has no ip field — no action unless an IP column is wanted.",
+          "feMock": true,
+          "feApiClient": "listAudit",
+          "beEndpoint": "admin-audit.controller.ts:list",
+          "beContract": "AuditLogListResponseSchema / AuditLogQuerySchema / AuditLogEntrySchema"
+        },
+        {
+          "feature": "Audit log — hash-chain verified indicator",
+          "gap": "just-wire",
+          "effort": "S",
+          "detail": "AuditPage shows a STATIC green 'Hash-chain verified' pill (hardcoded markup, never verified). BE POST /admin/audit/verify (AdminAuditController.verify → AuditChainVerifyResponseSchema {ok, checked, brokenAt}) exists with client `verifyAuditChain` and hook `useVerifyAuditChain`. Wire the pill to the verify result: ok→verified badge, else a broken-at banner. Note there is no permanent 'last-verified' GET — the pill would reflect an on-demand verify (design intent is a passive badge, so consider running verify on mount or adding a lightweight GET).",
+          "feMock": true,
+          "feApiClient": "verifyAuditChain",
+          "beEndpoint": "admin-audit.controller.ts:verify",
+          "beContract": "AuditChainVerifyResponseSchema"
+        },
+        {
+          "feature": "Audit log — Export (CSV)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "The Export button only fires pushToast('Exporting audit log to CSV…'). No export endpoint exists (grep of admin presentation shows no /audit/export, no csv). Needs BE: a streaming GET /admin/audit/export (respecting the same filters, permissioned, likely capped/async for large ranges) + a contract for the request filters + FE client + download wiring. A client-side CSV of only the fetched page would contradict 'export the audit log' (full, filtered), so flag as backend work.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "AML/risk — Risk rules list + edit threshold (maker-checker)",
+          "gap": "just-wire",
+          "effort": "M",
+          "detail": "AmlPage renders the `RISK_RULES` const (name/desc/threshold as a display string) and the edit pencil opens a MakerCheckerModal that no-ops. Full BE CRUD exists: GET /admin/compliance/aml-rules (listAmlRules), PATCH /admin/compliance/aml-rules/:id (updateAmlRule, step-up-gated) → AmlRuleSchema, with clients listAmlRules/updateAmlRule and hooks useAmlRules/useUpdateAmlRule. Wire: replace const with useAmlRules and make the edit modal submit a real AmlRuleUpdateRequest. Shape gap: design shows a single free-text `threshold` string; contract models it as typed `parameters` (record) + ruleType + action — the edit form must build/patch a parameters object, not a string.",
+          "feMock": true,
+          "feApiClient": "updateAmlRule",
+          "beEndpoint": "admin-compliance.controller.ts:updateAmlRule",
+          "beContract": "AmlRuleListResponseSchema / AmlRuleUpdateRequestSchema / AmlRuleSchema"
+        },
+        {
+          "feature": "AML/risk — Create AML rule",
+          "gap": "backend-only-not-surfaced",
+          "effort": "M",
+          "detail": "BE POST /admin/compliance/aml-rules (createAmlRule, step-up) + AmlRuleCreateRequestSchema + client createAmlRule + hook useCreateAmlRule all exist, but the AML design screen offers ONLY per-row edit — no 'Add rule' affordance. A real backend capability with no FE surface; a full rule-management console needs an add-rule form (ruleKey/name/desc/ruleType/action/parameters/enabled). State whether the omission is intentional for launch.",
+          "feMock": false,
+          "feApiClient": "createAmlRule",
+          "beEndpoint": "admin-compliance.controller.ts:createAmlRule",
+          "beContract": "AmlRuleCreateRequestSchema / AmlRuleSchema"
+        },
+        {
+          "feature": "AML/risk — Open cases (flagged compliance-event queue) list",
+          "gap": "just-wire",
+          "effort": "M",
+          "detail": "The 'Open cases' card renders the `OPEN_CASES` const (title/meta/status severity dots). Maps to the real flagged-event queue: GET /admin/compliance/events (listEvents, filterable by status/severity/userId, cursor-paginated) → ComplianceEventListResponseSchema, client listComplianceEvents + hook useComplianceEvents. Wire: replace const with useComplianceEvents({status:'flagged'|'under_review'}). Shape reconciliation: design's title/meta are composed human strings; the DTO gives eventType/severity/ruleOrHit/userId/transactionId/createdAt so the FE must compose the title/meta line. Enum note: design 'escalated' status has no direct contract target (ComplianceEventStatus is flagged/under_review/approved/blocked/dismissed).",
+          "feMock": true,
+          "feApiClient": "listComplianceEvents",
+          "beEndpoint": "admin-compliance.controller.ts:listEvents",
+          "beContract": "ComplianceEventListResponseSchema / ComplianceEventItemSchema"
+        },
+        {
+          "feature": "Compliance — dispose a flagged case/match (approve/block/dismiss/under-review)",
+          "gap": "just-wire",
+          "effort": "M",
+          "detail": "The design's disposition actions (Sanctions Clear/Escalate/Block; AML case handling) have a real backend: POST /admin/compliance/events/:id/disposition (disposeEvent, step-up-gated, audited as admin_review) with ComplianceDispositionRequestSchema {status: approved|blocked|dismissed|under_review, comment} and client disposeComplianceEvent + hook useDisposeComplianceEvent. Wire the ReasonModal/StepUpModal/MakerCheckerModal chains to this mutation, passing the audited comment. Enum reconciliation: FE 'Clear'→approved/dismissed, 'Block'→blocked, 'Escalate' has no direct target (contract lacks 'escalated' — use under_review or extend the enum). This disposition is on ComplianceEvents, NOT on SanctionsRecords (which are immutable — see the Sanctions rows).",
+          "feMock": true,
+          "feApiClient": "disposeComplianceEvent",
+          "beEndpoint": "admin-compliance.controller.ts:dispose",
+          "beContract": "ComplianceDispositionRequestSchema / ComplianceEventDetailSchema"
+        },
+        {
+          "feature": "Compliance-event detail drill-in (raw screening payload + disposition note)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "detail": "BE GET /admin/compliance/events/:id (getEvent → ComplianceEventDetailSchema with details record, dispositionComment, dispositionAt) + client getComplianceEvent + hook useComplianceEvent exist, but no design screen opens a case-detail view — the AML 'Open cases' rows are not clickable in the mock. Needed for a real case workflow (view the raw provider payload before dispositioning). Small FE-only work to add a detail drawer/modal.",
+          "feMock": false,
+          "feApiClient": "getComplianceEvent",
+          "beEndpoint": "admin-compliance.controller.ts:getEvent",
+          "beContract": "ComplianceEventDetailSchema"
+        },
+        {
+          "feature": "AML/risk — Draft SAR/CTR",
+          "gap": "just-wire",
+          "effort": "M",
+          "detail": "The 'Draft SAR/CTR' link opens a ReasonModal that no-ops. BE POST /admin/compliance/reports (draftReport, step-up, audited) + ComplianceReportDraftRequestSchema {reportType: sar|str, relatedEvents[], content record} + client draftComplianceReport + hook useDraftComplianceReport exist. Wire the modal to build a real draft. Shape gap: design collects only a free-text reason; contract wants reportType + relatedEvents (event ids) + structured content — the modal must pick sar/str and link the case(s). Label note: contract uses 'str' where the design says 'CTR' (SAR/STR vs SAR/CTR to reconcile).",
+          "feMock": true,
+          "feApiClient": "draftComplianceReport",
+          "beEndpoint": "admin-compliance.controller.ts:draftReport",
+          "beContract": "ComplianceReportDraftRequestSchema / ComplianceReportSchema"
+        },
+        {
+          "feature": "Compliance reports — list + submit filed SAR/STR",
+          "gap": "backend-only-not-surfaced",
+          "effort": "M",
+          "detail": "BE GET /admin/compliance/reports (listReports) and POST /admin/compliance/reports/:id/submit (submitReport, step-up, execute) + ComplianceReportListResponseSchema + ComplianceReportSubmitRequestSchema {submissionRef} + clients listComplianceReports/submitComplianceReport + hooks useComplianceReports/useSubmitComplianceReport all exist, but NO design screen shows a reports queue or a submit-with-regulator-ref action. The AML mock only drafts. A real compliance console needs a reports list (draft→submitted→rejected/closed lifecycle) + submit UI.",
+          "feMock": false,
+          "feApiClient": "listComplianceReports / submitComplianceReport",
+          "beEndpoint": "admin-compliance.controller.ts:listReports / submitReport",
+          "beContract": "ComplianceReportListResponseSchema / ComplianceReportSubmitRequestSchema"
+        },
+        {
+          "feature": "AML/risk — Travel Rule records summary",
+          "gap": "just-wire",
+          "effort": "S",
+          "detail": "TravelRuleCard hardcodes 'records attached for 3 qualifying transfers over $1,000 in the last 24h'. BE GET /admin/compliance/travel-rule (listTravelRule) → TravelRuleListResponseSchema (items: transactionId, asset, amount, amountFiat, triggeringFactor, capturedAt, reportedAt) + client listTravelRule + hook useTravelRule exist. Wire: replace the static sentence with useTravelRule and count/summarize real items (ideally list them). The $1,000 threshold is itself a config value (compliance.travelRuleThreshold AppSetting), not a constant — read from config, don't hardcode.",
+          "feMock": true,
+          "feApiClient": "listTravelRule",
+          "beEndpoint": "admin-compliance.controller.ts:listTravelRule",
+          "beContract": "TravelRuleListResponseSchema / TravelRuleItemSchema"
+        },
+        {
+          "feature": "Sanctions — screening match cards (name · matched list · match-type · numeric confidence score)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "detail": "SanctionsPage renders `SCREENING_MATCHES` consts with a numeric score (0-100), matched-list name (OFAC SDN/EU/UN), and match-type (Name/DOB/Address). The only sanctions endpoint is GET /admin/compliance/sanctions (listSanctions), returning immutable SanctionsRecord history — SanctionsRecordItemSchema has verdict (clear|hit|inconclusive), counterpartyId, provider, screeningType, createdAt — and NO confidence score, NO matched-list name, NO name/DOB/address match-type. So the design's rich match card cannot be populated from the existing DTO. Either read from ComplianceEvents (event `details` JSON may hold the screening payload) or extend the SanctionsRecord schema+repo to surface score/matchedList/matchType. Needs-backend (DTO/schema enrichment) beyond a simple wire.",
+          "feMock": true,
+          "feApiClient": "listSanctions (shape-insufficient)",
+          "beEndpoint": "admin-compliance.controller.ts:listSanctions",
+          "beContract": "SanctionsRecordListResponseSchema (missing score/matchedList/matchType)"
+        },
+        {
+          "feature": "Sanctions — per-match Clear / Escalate / Block disposition",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "Each SanctionsMatchCard offers Clear (Reason) / Escalate (MakerChecker) / Block (Reason→StepUp), flipping to a done-label locally. There is NO disposition endpoint on SanctionsRecords — the sanctions endpoint is read-only immutable history (no updateDisposition on the sanctions repo). Options: (a) re-home these onto POST /admin/compliance/events/:id/disposition (treat a hit as a ComplianceEvent — the intended path, then it's just-wire IF the match is surfaced as an event), or (b) build a dedicated sanctions-disposition endpoint. Because the current screen is driven off SanctionsRecords which have no disposition mutation, classify as needs-backend/decision. 'Block' also semantically implies appending to the blocked list (see Blocked rows).",
+          "feMock": true,
+          "feApiClient": "none (disposeComplianceEvent only if re-homed to events)",
+          "beEndpoint": "none for sanctions records",
+          "beContract": "none (SanctionsRecord has no disposition DTO)"
+        },
+        {
+          "feature": "Sanctions — Ongoing monitoring toggles (re-screen daily, screen on outbound, PEP alert, auto-block OFAC)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "OngoingMonitoring renders `MONITOR_ROWS` consts as controlled Switches that flip locally only. These are policy flags with NO contract and NO endpoint. They belong in the layered config (AppSetting flags like compliance.rescreenDaily / screenOnOutbound / alertNewPep / autoBlockOfac). Needs: register these keys (contracts settings.ts) + persist, then surface via a settings-update client (which also does not exist — see Blocked rows) or a dedicated compliance-policy endpoint. Backend (define+persist flags) + FE settings-client work.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Blocked list — read the blocked users/addresses/banks table",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "BlockedPage renders `SEED_ENTRIES` consts (type/value/reason/added-by/when). The store of record is the compliance.sanctionsDenylist AppSetting — a string[] (contracts/admin/settings.ts:184 says 'edited via the existing /admin/settings API, no new endpoint'). Reading it means GET /admin/settings (or /admin/settings/:key) — that BE route exists — BUT web-admin has NO settings api-client and NO settings hook at all (only getPublicConfig reads public/effective config). So the read path needs a new client+hook. ALSO the denylist is a bare string[] with no per-entry reason/added-by/timestamp, so the rich table columns cannot be populated from the current setting shape — either accept a thinner table or model blocked entries as first-class rows (new endpoint/table). Needs-backend: at minimum a settings client; at most a richer blocked-entry model.",
+          "feMock": true,
+          "feApiClient": "none (no settings client)",
+          "beEndpoint": "admin-settings.controller.ts:get (string[] only, no per-entry metadata)",
+          "beContract": "EffectiveSettingSchema (value: unknown string[]) — no BlockedEntry DTO"
+        },
+        {
+          "feature": "Blocked list — Add entry / Remove entry (mutate the sanctions denylist)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "AddBlockedDialog appends and Remove (Reason→StepUp) deletes, both against local state only. The mutation route EXISTS: PATCH /admin/settings/:key (admin-settings.controller.ts:update, step-up-gated) with UpdateSettingRequestSchema {value, scope, scopeValue} to overwrite compliance.sanctionsDenylist with the new string[]. But there is NO FE settings-update client or hook in web-admin, so both Add and Remove need a `updateSetting` client + hook built and wired (read-modify-write the string[]: append for Add, filter for Remove; there's no per-entry endpoint so the whole recomputed array is sent). Endpoint+contract are ready (just-wire on BE), but the missing FE client makes the FE-visible feature needs-backend-layer work.",
+          "feMock": true,
+          "feApiClient": "none (needs a new updateSetting client)",
+          "beEndpoint": "admin-settings.controller.ts:update",
+          "beContract": "UpdateSettingRequestSchema"
+        },
+        {
+          "feature": "Audit log — server-side filters (actor / action / date range) + cursor pagination",
+          "gap": "backend-only-not-surfaced",
+          "effort": "M",
+          "detail": "AuditLogQuerySchema supports actorAdminId, subject, action (enum), from/to date range, cursor, limit — all backed by AdminAuditController.list and the useAudit hook. The design exposes only a single free-text search box that filters the 6 mock rows client-side and paginates client-side at size 6. So the DTO's richer filters + keyset pagination are unsurfaced. Wiring the list should also expose action/date filters and switch to nextCursor — otherwise the console can't scan a real (large) audit log. FE-only work atop the existing endpoint.",
+          "feMock": true,
+          "feApiClient": "listAudit",
+          "beEndpoint": "admin-audit.controller.ts:list",
+          "beContract": "AuditLogQuerySchema"
+        }
+      ]
+    },
+    {
+      "domain": "Treasury & Reconciliation",
+      "summary": "The Treasury screen and the Reconciliation screen are polar opposites in build state. Treasury has a substantial real backend already built (AdminTreasuryController: balances/exposure/alerts+acknowledge/withdrawal-policies — full controller+service+read-repo+contract+lib client+TanStack hooks), yet treasury-page.tsx renders 100% module-const mock and calls none of it: the four data views it shows partially map to real endpoints (balances→listTreasuryBalances) but the exact cards shown (NGN fiat float, FX position, exposure headroom %) are NOT what the exposure/balances endpoints return, and the two big interactive blocks — the payout/withdrawal approval queue with maker-checker, and the child-address sweeps list — have NO backend at all. Reconciliation is the bigger gap: there is NO admin reconciliation surface anywhere (no controller, contract, lib client, or query hook). Engine-level reconciliation machinery exists (WalletReconciliationService behind POST /admin/wallets/reconcile for per-user on-demand; SettlementReconciliationService webhook-replay worker; a RECONCILIATION_CRON_ENABLED flag) and the engine-brokered remediation primitives exist (POST /admin/transactions/:id/mark-failed and /retry via AdminTxnTriageController), but there is no provider-vs-ledger BREAK read model, no cron-status endpoint, no \"run now\" trigger endpoint, and no break-resolution/accept/escalate action bound to a break. Net: Treasury = mostly just-wire for balances/exposure/alerts + two mock-only-needs-backend features; Reconciliation = almost entirely mock-only-needs-backend, a full 3-view + 4-action backend must be built (the resolution action can lean on the existing engine triage primitives but needs a break entity to hang off).",
+      "items": [
+        {
+          "feature": "Treasury: aggregated custodial balances (USDT hero card)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "listTreasuryBalances (web-admin/lib/api/treasury.ts) + useTreasuryBalances hook",
+          "beEndpoint": "admin-treasury.controller.ts:getBalances (GET /admin/treasury/balances)",
+          "beContract": "TreasuryBalancesResponse / TreasuryBalance",
+          "detail": "FE TREASURY_CARDS[0] 'Custodial · USDT 412,908.44 · 12 wallets · Blockradar TRON' is a hardcoded const. A real endpoint returns SUM(WalletBalance.amount) grouped by network+asset with walletCount — exactly the hero tile's value + '12 wallets · TRON' note. Client + hook already exist. Just swap the const for useTreasuryBalances and map network/asset/totalAmount/walletCount into the hero card. The 'live' flag is already in the FE type."
+        },
+        {
+          "feature": "Treasury: exposure headroom / FX position cards",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "listTreasuryExposure (exists) — but shape mismatch",
+          "beEndpoint": "admin-treasury.controller.ts:listExposure (GET /admin/treasury/exposure)",
+          "beContract": "TreasuryExposureListResponse / TreasuryExposure",
+          "detail": "FE shows three neutral tiles: 'FX position +$8,240 · Net long USDT vs NGN', 'Exposure headroom 72% · Within inventory limit', and it treats them as simple scalar cards. The real TreasuryExposure DTO returns per-asset rows (cryptoHeld, fiatEquivalent, netExposure, exposureLimitBps, status safe/warning/critical) — it does NOT expose a single 'headroom %' or a signed 'FX position' figure, nor a net-long descriptor. Wiring the headroom card needs a derived headroom = (limit - netExposure)/limit computed either FE-side from the exposure rows or a new summary field; the FX-position card ('+$8,240', 'net long USDT vs NGN') has no backing field and needs a new aggregation (net USDT position valued vs NGN). Classify as needs-backend because the specific numbers the design shows aren't produced by any endpoint."
+        },
+        {
+          "feature": "Treasury: NGN fiat-float card + low-float warning banner",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "FE TREASURY_CARDS[1] '₦42,180,500 · 18% of target · low' and the amber LOW_FLOAT banner ('NGN float is at 18% of target') are consts. There is no fiat-float balance endpoint: the treasury balances endpoint aggregates crypto WalletBalance rows only; fiat float lives in the ledger platform_float account (ledger_account_type has 'platform_float'), not surfaced by any treasury read. Needs a new BE aggregation (platform_float balance per fiat currency) plus a configurable target/threshold (an AppSetting) to compute the '% of target' and drive the low-float alert. No contract/client/hook exists."
+        },
+        {
+          "feature": "Treasury: exposure-threshold alerts + acknowledge",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "feMock": false,
+          "feApiClient": "listTreasuryAlerts + acknowledgeTreasuryAlert (exist); useTreasuryAlerts + useAcknowledgeAlert hooks (exist)",
+          "beEndpoint": "admin-treasury.controller.ts:listAlerts (GET /admin/treasury/alerts) + acknowledgeAlert (POST /admin/treasury/alerts/:id/acknowledge, step-up guarded, audited)",
+          "beContract": "TreasuryAlertListResponse / TreasuryAlert / TreasuryAlertAcknowledgeRequest",
+          "detail": "A complete backend feature — list + step-up-guarded, audited acknowledge — with full contract, lib client, AND query hooks (useTreasuryAlerts, useAcknowledgeAlert) already wired. But treasury-page.tsx surfaces NO alerts list or acknowledge action at all; the only banner is the hardcoded LOW_FLOAT one (a different concept). This is ready-built backend awaiting a small FE panel: render the alerts list and wire acknowledge through the existing useStepUpRetry pattern."
+        },
+        {
+          "feature": "Treasury: payout / withdrawal approval queue (maker-checker + Approve)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "The largest Treasury action block: PAYOUTS const (3 rows: 'Kelechi Chukwu · GTBank ₦4,820,000 maker-checker', TRON/Flutterwave payouts) with an Approve button that opens MakerCheckerModal→StepUpModal for big payouts and StepUp for small. There is NO backend: grep for approve-payout/withdrawal-queue/maker-checker across api/src/modules/admin returns nothing. WithdrawalPolicy DTO exists (per-wallet requiresApproval flag) but that is policy config, not a live approval QUEUE of pending withdrawals, and there is no approve endpoint. Building this needs: a pending-withdrawal read model (transactions in a 'awaiting_approval' state or a dedicated ApprovalQueue), a maker-checker dual-control approve endpoint that hands the approved payout to the deterministic engine (never moves money itself, §3.1), contract DTOs, lib client, and hooks. Fully greenfield backend."
+        },
+        {
+          "feature": "Treasury: child-address sweeps list + sweep threshold",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "FE SWEEPS const (3 TRON child addresses with TRX balances + Swept/Pending/Below-threshold status) plus a fixed '25 TRX' SWEEP_THRESHOLD footer (comment says it mirrors the sweep.threshold.trx seed setting but has no endpoint). Auto-sweep exists internally in the wallets module (04-wallets.prisma comment: 'deposit webhooks with auto-sweep') but there is NO admin read model exposing per-child-address balances or sweep status, and the threshold is not read from config on this screen. Needs a BE endpoint listing child addresses with on-chain/last-sweep status + the configured threshold (from AppSetting), a contract, client, and hook. The threshold value itself is a config read that could be surfaced via the existing /config layer."
+        },
+        {
+          "feature": "Reconciliation: provider-vs-ledger break list (over-credit / missing-settlement / amount-mismatch / duplicate-credit)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "RECON_BREAKS const (4 breaks with kind, severity, tx ref, detail, signed delta, open/closed status, resolution). There is NO admin reconciliation surface anywhere: no admin-reconciliation.controller, no reconciliation contract in packages/contracts/src/admin, no lib/api/reconciliation.ts, no useRecon* hook. Engine-level reconciliation exists (WalletReconciliationService for per-user on-demand credit; SettlementReconciliationService webhook-replay worker) but neither produces a persisted, queryable BREAK entity with severity/kind/delta. Building this is the core Reconciliation work: a ReconciliationBreak read model (detected provider-vs-ledger discrepancies), a list endpoint with kind/severity/delta/status, contract DTOs, lib client, and query hook. Greenfield."
+        },
+        {
+          "feature": "Reconciliation: cron status bar (last/next run, open-breaks count) + 'Run now'",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none (router.refresh() only)",
+          "beContract": "none",
+          "detail": "FE shows CRON_LAST_RUN '04:00' / CRON_NEXT_RUN '04:00 tomorrow' consts + a client-derived openCount, and the 'Run now' button merely calls router.refresh() — no network call. A RECONCILIATION_CRON_ENABLED config flag exists (default OFF, admin-triggered), and POST /admin/wallets/reconcile runs per-USER on-demand reconciliation, but there is no cron-status read endpoint (last/next run, break count) and no global 'run reconciliation now' trigger endpoint. Needs a status endpoint + a trigger endpoint (or reuse/extend the wallets reconcile job to a platform-wide sweep), contract, client, hook. The per-user reconcile endpoint is close infrastructure but not the same surface."
+        },
+        {
+          "feature": "Reconciliation: resolve a break via engine (reason → step-up → double-entry engine action)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "feMock": true,
+          "feApiClient": "none (analogous: markTransactionFailed / retryTransaction exist)",
+          "beEndpoint": "none for a break; closest is admin-txn-triage.controller.ts:markFailed/retry (POST /admin/transactions/:id/mark-failed, /retry)",
+          "beContract": "none for a break; closest AdminTxnActionResponse",
+          "detail": "FE 'Resolve via engine' opens ReasonModal→StepUpModal→EngineActionModal with a fabricated double-entry preview (DR user:wallet:usdt / CR recon:adjustment) and idempotencyKey 'recon-{id}-resolve', then flips the break to resolved locally. The engine-brokered remediation PRIMITIVES exist and are exactly the right pattern (AdminTxnTriageService.markFailedAndRefund routes through the engine's atomic refund methods + CompensationRecord, step-up guarded, idempotent, audited; retrySettlement re-enqueues the outbox). But they act on a TRANSACTION id, not a reconciliation break, and there is no 'reverse excess ledger entry' engine action for an over-credit break. Needs a break-resolution endpoint that maps a break to the correct engine action (reverse duplicate credit, post missing settlement, adjust mismatch), reusing the triage service's engine-brokered, idempotent, audited approach. Greenfield endpoint but can lean heavily on existing engine machinery."
+        },
+        {
+          "feature": "Reconciliation: accept a break (dual-control, no debit)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "FE 'Accept' opens MakerCheckerModal with an acceptDiff (Open → 'Accepted (no debit)') and flips the break to accepted locally. No backend: there is no break entity to transition, and no maker-checker accept endpoint. Needs a break-disposition state machine + a dual-control accept endpoint (audited, no money movement), contract, client, hook. Depends on the break read model (feature above) existing first."
+        },
+        {
+          "feature": "Reconciliation: escalate a break to a compliance case",
+          "gap": "both-missing",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "FE 'Escalate to case' opens ReasonModal then flips the break to 'escalated' locally. Neither side is usably built: no break entity to escalate FROM, and while a compliance module exists (compliance controller/contract/client with events + disposition + reports), there is no 'case' entity that a reconciliation break can be promoted into, and no endpoint linking a recon break to a compliance case. Needs both the break read model AND an escalation endpoint that opens/links a compliance case (or reuses ComplianceEvent creation), with audit. Both-missing because there is no usable target case entity for escalation on the BE and no break entity on either side."
+        },
+        {
+          "feature": "Reconciliation: navigate to offending transaction detail",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "transactions.getTransaction / useTransactionDetail (exist)",
+          "beEndpoint": "admin-transactions.controller.ts (GET /admin/transactions/:id) — transaction detail",
+          "beContract": "AdminTxnDetail (admin-txn.dto.ts)",
+          "detail": "Each break card's mono tx button does router.push(`/transactions/${b.tx}`). The transaction-detail route + endpoint + contract + useTransactionDetail hook all already exist (Phase 3 transactions oversight). Once real breaks carry real transaction ids, this link works with zero new backend — the only reason it's not fully 'complete' is the break rows themselves are mock, so the tx ids are fabricated. Trivial once the break list is wired."
+        }
+      ]
+    },
+    {
+      "domain": "Config (settings / pricing / limits / capabilities / assets / currencies / providers / flags)",
+      "summary": "The Config domain is the strongest \"just-wire\" opportunity in the admin console: a complete, permissioned, step-up-guarded layered-config backend already exists — `AdminSettingsController` (GET /admin/settings, GET /admin/settings/:key, PATCH /admin/settings/:key), the `EffectiveSetting`/`UpdateSettingRequest` contracts, `AdminSettingsService` (validate → persist → hot-reload → cross-instance invalidate → audited config_change), and a 40+-key `SETTING_REGISTRY` covering pricing spreads/fees/base-rates, NGN tier limits, capability flags, travel-rule, ticketing, and agent. Yet the FE has NO settings api-client (`lib/api/settings.ts` absent) and NO settings hooks (no `useSettings`/`useUpdateSetting` in hooks.ts) — all 8 config screens render module-level mock consts. Read paths for the Asset/Currency catalog DO exist end-to-end (`GET /config` public endpoint + `usePublicConfig` hook) but are unused by the mock screens and expose no contract-address/min-max/live-toggle. The registry drives Settings/Pricing/Limits/Capabilities/Flags edits through ONE generic PATCH — so most edit actions are just-wire. The genuine backend gaps are: currency/asset live-toggle + rounding + name-enquiry, Blockradar catalog sync + discovered-assets, per-tier velocity/weekly/on-chain caps, provider registry + key-reveal(step-up) + test-connection + readiness checklist, and per-cohort/percentage rollout for feature flags. Note: the shared MakerCheckerModal (dual-control) the FE wires every config edit through has NO maker-checker/approvals backend anywhere in the admin module — every \"edits enter maker-checker\" claim in these screens is currently unbacked; the real PATCH is single-actor with a step-up guard only.",
+      "items": [
+        {
+          "feature": "Settings — effective-config list (all tunable keys, effective value, DB/ENV/JSON source, description, editable flag)",
+          "gap": "just-wire",
+          "effort": "S",
+          "detail": "FE settings-page.tsx renders 8 hardcoded SETTING_ROWS. Backend fully exists: GET /admin/settings returns EffectiveSetting[] {key,category,label,description,valueType,editable,value,source('db'|'default'),scope,scopeValue} for every non-secret SETTING_REGISTRY entry. Missing only: create web-admin/lib/api/settings.ts (listEffectiveSettings/getSetting) + useSettings/useSetting hooks + qk.settings key, then render real rows. NOTE the FE's DB>ENV>JSON 3-way 'chain' tooltip is richer than the BE 'source' 2-value enum ('db'|'default') — the ENV-vs-JSON distinction is NOT modeled server-side, so the chain resolution shown is not fully backable without a source enum widening.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "admin-settings.controller.ts:list (GET /admin/settings)",
+          "beContract": "EffectiveSetting / EffectiveSettingListResponse (settings.dto.ts)"
+        },
+        {
+          "feature": "Settings — edit a DB-layer key (submit new value through step-up)",
+          "gap": "just-wire",
+          "effort": "M",
+          "detail": "FE Edit pill opens Reason→StepUp→MakerChecker modals but submit is a no-op stub. Backend PATCH /admin/settings/:key exists: AdminStepUpGuard + PermissionGuard('write'), body {value,scope,scopeValue}, validates against per-entry Zod schema (bounds/enum), enforces multi-currency invariant for catalog.* keys, hot-reloads + audits config_change. Missing: updateSetting client fn + useUpdateSetting mutation + wiring the modal's captured value. CAVEAT: the FE promises maker-checker/dual-control ('edits enter Pending approval, then hot-reload'), but the backend applies the change immediately after a single admin's step-up — there is NO maker-checker/approval workflow in the admin module. The step-up guard is the only gate.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "admin-settings.controller.ts:update (PATCH /admin/settings/:key)",
+          "beContract": "UpdateSettingRequest (settings.dto.ts)"
+        },
+        {
+          "feature": "Pricing — per capability × asset spread / fee / base-rate view + edit",
+          "gap": "just-wire",
+          "effort": "M",
+          "detail": "FE pricing-page.tsx renders 5 hardcoded PRICING_ROWS. All underlying leaves are registry keys editable via the SAME /admin/settings API: pricing.assets.{USDT,BTC,TRX}.buySpreadBps, .sellSpreadBps, .baseRates.NGN, and pricing.processingFeeBps (category 'Pricing'). So both read and edit are just-wire against GET/PATCH /admin/settings filtered by category=Pricing. Missing: a FE mapper that pivots the flat dot-path settings into per-asset Buy/Sell rows (types/components.ts already anticipates this) and DERIVES the 'user-sees rate' + amber operator margin from baseRate+spread. The min/max column shown per row maps to limits.NGN.*.perTxFiatMax (a different category) — needs cross-category assembly.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "admin-settings.controller.ts:list/update (category=Pricing)",
+          "beContract": "EffectiveSetting / UpdateSettingRequest"
+        },
+        {
+          "feature": "Limits — per-tier amount caps (per-tx max, daily max, daily tx-count) view + edit",
+          "gap": "just-wire",
+          "effort": "M",
+          "detail": "FE limits-page.tsx renders hardcoded TIER_SEED. The three core caps per tier ARE registry keys: limits.NGN.{tier_1,tier_2,tier_3}.perTxFiatMax, .dailyFiatMax, .dailyTxCountMax (category 'KYC', positiveInt bounds). Read+edit are just-wire via /admin/settings?category=KYC + PATCH. Missing: a FE mapper that groups the flat keys into the two-card per-tier layout.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "admin-settings.controller.ts:list/update (limits.NGN.tier_N.*)",
+          "beContract": "EffectiveSetting / UpdateSettingRequest"
+        },
+        {
+          "feature": "Limits — extra velocity/count rows shown but NOT in the registry (Weekly max, Single on-chain send max, Sends/10-min window, Cooling-off after tier change, New-beneficiary hold)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "The FE 'Amount caps' card shows 'Weekly max' + 'Single on-chain send max' and the 'Velocity & counts' card shows 'Transactions/day', 'Sends/10-min window', 'Cooling-off after tier change', 'New-beneficiary hold' per tier. Only 'Transactions/day' maps (limits.NGN.tier.dailyTxCountMax). SETTING_REGISTRY has NO per-tier weekly cap, single-send cap, 10-min send velocity window, or per-tier cooling-off/new-beneficiary-hold. (There IS a single global beneficiary.cryptoCoolingOffSeconds, not per-tier.) These leaves must be added to configuration.ts + SETTING_REGISTRY (and enforced by the engine's velocity/limit checks) before they can be surfaced.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Capabilities — crypto.buy/sell/send/receive/swap kill-switch view + toggle",
+          "gap": "just-wire",
+          "effort": "M",
+          "detail": "FE capabilities-page.tsx renders hardcoded CAPABILITY_SEED. The five crypto capabilities ARE boolean registry keys: catalog.capabilities.crypto.{buy,sell,send,receive,swap} (category 'Catalog'). Toggle = PATCH /admin/settings/:key with a boolean — just-wire via the generic settings API. Missing: settings client/hooks + a FE mapper from the dot-path flags to the switchboard rows (types/components.ts line ~664 already anticipates useSettings('Catalog')). Same maker-checker caveat: FE frames the toggle as dual-control but BE is single-actor + step-up.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "admin-settings.controller.ts:update (catalog.capabilities.crypto.*)",
+          "beContract": "EffectiveSetting / UpdateSettingRequest"
+        },
+        {
+          "feature": "Capabilities — ticketing vendor rows (ticketing.eventbrite, ticketing.tix) with per-provider port + enable",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "FE shows two ticketing capability rows bound to 'Eventbrite port' / 'Tix.Africa port' with independent enable toggles. The registry only has a single global 'ticketing.enabled' flag (category 'Tickets') and 'ticketing.commissionBps' — there are NO per-vendor capability flags (catalog.capabilities.ticketing.eventbrite / .tix do not exist). Per-vendor enablement + the provider-port binding shown need registry keys + a TicketProvider registry surface built before this is real. The single ticketing.enabled flag IS just-wire but does not match the FE's two-vendor row shape.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Assets — asset catalog read (symbol, chain/network, decimals, live/enabled)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "M",
+          "detail": "GET /config (PublicConfigController, unauthenticated) returns enabled assets {symbol,displayName,decimals,networks} + capabilities via AssetRegistry.publicView(), and usePublicConfig() hook already exists in hooks.ts. But assets-page.tsx ignores it and renders hardcoded INITIAL_ASSET_ROWS. Gap for the READ: publicView is filtered to ENABLED-only and strips contract address + min/max (secrets), so it cannot back the FE's 'Contract' column, 'Min/max' column, or the paused/BTC(non-live) rows. Surfacing the full admin asset view (incl. disabled + contract + per-asset min/max) needs an ADMIN assets endpoint, not the public /config. So: the enabled-list read is just-wire against usePublicConfig, but the columns the design shows exceed what /config exposes.",
+          "feMock": true,
+          "feApiClient": "getPublicConfig (config.ts) / usePublicConfig (hooks.ts)",
+          "beEndpoint": "public-config.controller.ts:getPublicConfig (GET /config)",
+          "beContract": "PublicConfigResponse (config.dto.ts)"
+        },
+        {
+          "feature": "Assets — Live toggle (enable/disable a listing), Blockradar catalog sync, 'newly discovered · review to add'",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "detail": "FE offers a per-asset Live toggle (maker-checker), a 'Sync Blockradar catalog' action advancing a last-sync line, and a 'Newly discovered' review-to-add card. NONE are backed: there is no catalog.assets.*.enabled registry key for a live toggle (only catalog.capabilities.crypto.* exist; asset enablement lives in the AssetRegistry/JSON catalog, not an admin-editable AppSetting), no admin asset-sync endpoint (grep for sync/discoverAssets in admin/* finds only permission-catalog syncCatalog, unrelated), and no discovered-asset store surfaced to admin. Needs: admin asset-catalog endpoints (list-all incl. disabled, toggle-enabled, trigger Blockradar sync, list-discovered) + repo/service. AssetRegistry already has a discovered-asset overlay internally but it is not exposed to admin.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Currencies — fiat catalog read (code, symbol, name, live)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "detail": "GET /config returns enabled fiats {code,displayName,symbol,decimals} and usePublicConfig() exists, but currencies-page.tsx renders hardcoded NGN/RWF/GHS. The enabled-fiat read is just-wire via usePublicConfig; however publicView filters to ENABLED-only, so the FE's off/disabled rows (RWF, GHS) and the 'rounding (dp)'→decimals map partly, but 'name-enquiry availability' is NOT in PublicFiat. So the read is only partially backable; full parity needs an admin fiat view.",
+          "feMock": true,
+          "feApiClient": "getPublicConfig (config.ts) / usePublicConfig (hooks.ts)",
+          "beEndpoint": "public-config.controller.ts:getPublicConfig (GET /config)",
+          "beContract": "PublicConfigResponse (config.dto.ts)"
+        },
+        {
+          "feature": "Currencies — Live toggle (enable/disable a fiat), rounding + name-enquiry configuration",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "FE Live pill toggles a currency through maker-checker; the design also shows editable rounding (dp) + name-enquiry availability. SETTING_REGISTRY has NO catalog.fiats.*.enabled / .rounding / .nameEnquiry keys — fiat enablement lives in the JSON catalog (AssetRegistry), not an admin AppSetting. AdminSettingsService.assertMultiCurrencyInvariant EXISTS and validates catalog.* changes, which implies catalog fiat toggles were intended to be admin-editable, but no such registry key is declared, so PATCH would 404 ('Unknown config key'). Needs catalog.fiats.<code>.enabled (+ rounding/nameEnquiry) registry keys wired to the catalog + the invariant.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Providers — WhatsApp Cloud API provider card (non-secret wiring + secret-presence)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "detail": "GET /admin/whatsapp/config exists (WhatsAppConfigView: graphVersion/ids + hasAppSecret/hasFlowPrivateKey/hasVerifyToken booleans, values never returned) and useWhatsAppConfig() hook exists in hooks.ts — but providers-page.tsx hardcodes the WhatsApp card. Surfacing the real WhatsApp provider status/secret-presence is just-wire against the existing hook, but this endpoint only covers WhatsApp, not the other 4 provider cards.",
+          "feMock": true,
+          "feApiClient": "getWhatsAppConfig (whatsapp.ts) / useWhatsAppConfig (hooks.ts)",
+          "beEndpoint": "admin-whatsapp.controller.ts:getConfig (GET /admin/whatsapp/config)",
+          "beContract": "WhatsAppConfigView (whatsapp.dto.ts)"
+        },
+        {
+          "feature": "Providers — Anthropic/agent provider card (model id, enabled, prompt preview)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "detail": "GET /admin/agent/config exists (AgentConfigView: modelId, enabled, systemPromptPreview; API key never surfaced) with useAgentConfig() hook — the Anthropic card's kind/model line ('claude-opus-4-8') and enablement are backable here. Not surfaced by the mock. Just-wire for that single card; the other provider cards remain unbacked.",
+          "feMock": true,
+          "feApiClient": "getAgentConfig (agent.ts) / useAgentConfig (hooks.ts)",
+          "beEndpoint": "admin-agent.controller.ts:getConfig (GET /admin/agent/config)",
+          "beContract": "AgentConfigView (agent.dto.ts)"
+        },
+        {
+          "feature": "Providers — Blockradar / Flutterwave / Resend provider cards (status, latency, mock-mode, bound capabilities)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "detail": "FE shows 5 provider cards with live status ('ok'/'degraded'), latency, MOCK-MODE banner, masked API key, and bound-capabilities. Only WhatsApp + Anthropic have read endpoints. There is NO general provider-registry endpoint returning Blockradar/Flutterwave/Resend status+latency+mock-mode+secret-presence+bound-caps. The mock-mode flags DO exist as env (PAYMENTS_MOCK_MODE/WALLET_MOCK_MODE per memory) but are not exposed via an admin provider endpoint. Needs a unified GET /admin/providers (provider registry view with per-provider status/mockMode/secretPresence/boundCapabilities). A live status/latency probe would additionally need a health-check mechanism.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Providers — Reveal API key (step-up gated, auto-remask) + Test connection probe",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "detail": "FE 'Reveal · step-up' shows a (fake) full secret after a TOTP modal and auto-remasks after 30s; 'Test connection' toasts with no probe. No backend supports either: secret VALUES are deliberately never returned by any admin endpoint (whatsapp/agent DTOs expose only presence booleans, per §3.5), so a reveal-secret endpoint would be a NEW, security-sensitive surface (contradicts current secret-handling posture — likely intentionally omitted; flag for product decision). 'Test connection' needs a per-provider live probe endpoint. Both are net-new backend.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Providers — Mock→live readiness checklist",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "FE renders a 5-item readiness checklist (live keys provisioned, mock-mode off, webhook sigs verified, recon cron scheduled, swap route enrolled) with hardcoded done/pending. No backend computes readiness. Needs a GET /admin/providers/readiness (or fold into a provider-registry endpoint) that evaluates env/config posture (mock-mode flags, key presence, cron enablement, swap enrollment). Derivable from config but not exposed today.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Flags — product feature flags that ARE registry keys (ticketing.enabled, swap-related, kyc/agent enable)",
+          "gap": "just-wire",
+          "effort": "M",
+          "detail": "Of the FE FLAG_ROWS, the ones backable by SETTING_REGISTRY are: ticketing.enabled (Tickets), catalog.capabilities.crypto.swap (maps to the FE's 'swap.enabled'), and agent.enabled. These are boolean keys toggled via PATCH /admin/settings — just-wire once the settings client/hooks exist. The FE key names differ from registry dot-paths (e.g. FE 'swap.enabled' vs registry 'catalog.capabilities.crypto.swap'), so a key-mapping layer is needed.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "admin-settings.controller.ts:update",
+          "beContract": "EffectiveSetting / UpdateSettingRequest"
+        },
+        {
+          "feature": "Flags — flags with NO registry key (voice_notes.web, voice_notes.whatsapp, beneficiary_flow.whatsapp, kyc.tier_3) + per-cohort/percentage rollout",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "detail": "voice_notes.web, voice_notes.whatsapp, beneficiary_flow.whatsapp, and kyc.tier_3 are NOT in SETTING_REGISTRY (voice/media + beneficiary-flow are hard-wired on per memory, not flag-gated). More fundamentally, the FE shows per-cohort / percentage rollout ('gradual · 25% cohort', 'cohort · early access') and an 'eval → on/off' effective-evaluation preview — the layered config is a single global boolean per key with NO cohort/percentage rollout engine at all. Supporting the design needs (a) new boolean registry keys for the unbacked flags AND (b) a genuinely new rollout/targeting subsystem (cohort + percentage evaluation) that does not exist in configuration.ts or EffectiveConfigService.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Cross-cutting — Maker-checker / dual-control approval workflow for ALL config edits",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "detail": "Every config screen routes edits through the shared MakerCheckerModal and its copy promises 'edits enter Pending approval, then hot-reload' / 'requires a second admin before it takes effect'. There is NO maker-checker/approvals backend in the admin module (no approvals controller/service/table wiring; the separate approvals-page.tsx is itself a mock). The real PATCH /admin/settings/:key applies immediately under a single admin's AdminStepUpGuard — no second-approver, no pending state. Either the FE promise must be dropped to match the single-actor+step-up reality, or a dual-control approval subsystem (proposed-change store, approve/reject, deferred apply) must be built. This affects EVERY config edit action above.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        }
+      ]
+    },
+    {
+      "domain": "Comms (notifications / templates / whatsapp)",
+      "summary": "Comms has a sharp split. The TEMPLATES sub-domain is fully built on the backend (Prisma-backed CRUD + deterministic preview at /admin/notification-templates, contracts, lib/api clients, and a fully-wired TemplateEditorDialog + hooks) — but the design-repro TemplatesPage renders 6 mock cards and never imports the editor or calls useNotificationTemplates, so every templates feature is a pure \"just-wire\". WhatsApp has ONE real endpoint (GET /admin/whatsapp/config, non-secret wiring + secret-presence flags) that WhatsAppPage ignores, plus the config view omits every operational metric the design health card shows (quality rating, messaging limit, webhook health, template rejections) — those need backend. NOTIFICATIONS is emptiest: broadcast composer, delivery log, bounce/complaint rates, WhatsApp Flows registry, live conversation monitor, and the topbar alerts feed have NO endpoint/contract/service — all mock-only-needs-backend. Net: ~5 just-wire, ~9 mock-only-needs-backend, 1 backend-only-not-surfaced (composite-key GET-one + PATCH edit exists in the dialog but no page opens it). Phasing: Phase 1 wire templates list+editor (backend done) and whatsapp config; Phase 2 build WhatsApp health/metrics + Flows registry + conversation monitor; Phase 3 build the broadcast engine + delivery log + bounce/complaint + alerts feed (all net-new, maker-checker-gated).",
+      "items": [
+        {
+          "feature": "Templates list (grid of template cards: channel chip, key, locale, vars, body)",
+          "gap": "just-wire",
+          "effort": "S",
+          "detail": "TemplatesPage (templates-page.tsx) renders module-level const TEMPLATE_ROWS of 6 fabricated cards. Real GET /admin/notification-templates (Prisma-backed via NOTIFICATION_TEMPLATE_REPOSITORY), NotificationTemplateListResponse contract, listNotificationTemplates() client, and useNotificationTemplates() hook (30s stale) ALL exist and go unused. Wiring = replace the const with the hook + loading/error/empty/data branches. NOTE the design's `approval` pill (Approved/Pending/Rejected) is NOT a field on the real NotificationTemplate DTO (it has no approval/status) — that one sub-field is mock-only-needs-backend if an approval workflow is wanted.",
+          "feMock": true,
+          "feApiClient": "listNotificationTemplates",
+          "beEndpoint": "admin-notifications.controller.ts:list",
+          "beContract": "NotificationTemplateListResponse / NotificationTemplate"
+        },
+        {
+          "feature": "Template create (New template editor: key/language/channel/subject/contentText/contentHtml/whatsappTemplateId/variables + step-up)",
+          "gap": "just-wire",
+          "effort": "S",
+          "detail": "A complete TemplateEditorDialog (template-editor-dialog.tsx) is already wired to useUpsertTemplate -> upsertNotificationTemplate() -> POST /admin/notification-templates (step-up-guarded, audited as config_change) with NotificationTemplateUpsertRequestSchema parse + useStepUpRetry. It is NOT imported or mounted by TemplatesPage (grep confirms no reference in app/ or the page). Wiring = add an 'Add template' trigger + <TemplateEditorDialog template={null}> on the page. Backend + client + hook + dialog all done; only the page mount is missing.",
+          "feMock": true,
+          "feApiClient": "upsertNotificationTemplate",
+          "beEndpoint": "admin-notifications.controller.ts:create",
+          "beContract": "NotificationTemplateUpsertRequest"
+        },
+        {
+          "feature": "Template edit (open a card -> edit existing, immutable composite key, PATCH)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "detail": "PATCH /admin/notification-templates/:templateKey/:language/:channel (step-up, audited) + updateNotificationTemplate() client + the isEdit branch of TemplateEditorDialog (immutable key/lang/channel) all exist. But TemplatesPage renders static cards with NO click handler / no editor trigger (the page's own comment states the design markup is read-only). Needs FE work: make each card open <TemplateEditorDialog template={row}>. The GET-one (get()) endpoint + getNotificationTemplate() + useNotificationTemplate() also exist but are unused since the list already carries full rows.",
+          "feMock": true,
+          "feApiClient": "updateNotificationTemplate",
+          "beEndpoint": "admin-notifications.controller.ts:update",
+          "beContract": "NotificationTemplateUpsertRequest"
+        },
+        {
+          "feature": "Template live preview (deterministic render of content + sample variables JSON)",
+          "gap": "just-wire",
+          "effort": "S",
+          "detail": "PreviewPanel inside TemplateEditorDialog is fully wired to usePreviewTemplate -> previewNotificationTemplate() -> POST /admin/notification-templates/preview (pure renderTemplate, no persistence). This becomes end-to-end the moment the dialog is mounted (see the create/edit rows). Listed separately because it is the one Comms feature genuinely wired FE->BE inside its (currently unmounted) component.",
+          "feMock": false,
+          "feApiClient": "previewNotificationTemplate",
+          "beEndpoint": "admin-notifications.controller.ts:preview",
+          "beContract": "NotificationTemplatePreviewRequest / NotificationTemplatePreviewResponse"
+        },
+        {
+          "feature": "WhatsApp wiring view (phone number ID, WABA/app ids, graph version, Flow ids, secret-presence flags)",
+          "gap": "just-wire",
+          "effort": "S",
+          "detail": "WhatsAppPage HealthCard renders a WA_HEALTH const with masked number/id. GET /admin/whatsapp/config (AdminWhatsAppConfigService, reads layered env, returns non-secret ids + hasAppSecret/hasFlowPrivateKey/hasVerifyToken), WhatsAppConfigView contract, getWhatsAppConfig() client, useWhatsAppConfig() hook ALL exist and are unused. Wiring = replace WA_HEALTH with the hook, rendering graphVersion/phoneNumberId/wabaId/appId/flowId/beneficiaryFlowId + presence booleans. Design's masked display number is NOT in the DTO (only phoneNumberId) — minor: show phoneNumberId or add displayNumber to the config view.",
+          "feMock": true,
+          "feApiClient": "getWhatsAppConfig",
+          "beEndpoint": "admin-whatsapp.controller.ts:getConfig",
+          "beContract": "WhatsAppConfigView"
+        },
+        {
+          "feature": "WhatsApp operational health metrics (quality rating GREEN/High, messaging limit tier, webhook subscribed/200, last-webhook age, template rejections 7d)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "WA_HEALTH shows live Cloud-API operational signals (quality rating, per-tier messaging limit, webhook subscription status, last-webhook timestamp, 7d template-rejection count). NONE are in WhatsAppConfigView (pure static wiring + secret-presence). No endpoint/contract/service fetches them from the Meta Graph API or from stored webhook receipts. Needs backend: a WhatsApp health service querying Graph (phone_number quality/limit) + deriving webhook liveness from stored inbound events + counting template rejections, plus a new contract, client, hook.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "WhatsApp 'ban-risk: low / Official Cloud API only' assurance note",
+          "gap": "mock-only-needs-backend",
+          "effort": "S",
+          "detail": "HealthCard renders a static success note. If meant to be a real computed posture (e.g. derived from quality rating + no-unofficial-automation), it needs backing; today it is a hardcoded string with no endpoint. Could ride the health-metrics endpoint above as a derived field, or be accepted as a static assurance label (intentional-static — needs a product decision).",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "WhatsApp Flows registry (KYC / itemized confirmation / PIN entry rows with Live pills)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "FlowsCard renders WA_FLOWS const (3 hardcoded flows, all live:true). WhatsAppConfigView exposes flowId + beneficiaryFlowId only — not a per-flow registry with name/description/published-status. No endpoint lists registered Flows or their live state from Meta. Needs backend: a Flows list (id, name, desc, published/live) built from config-registered flow ids checked against the Graph Flows API, plus contract/client/hook. The two flow ids in config are a partial seed; per-flow name/desc/live status is net-new.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "WhatsApp live conversation monitor (read-only redacted inbound/outbound chat bubbles)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "detail": "ConversationMonitorCard renders WA_CONVO const (4 fabricated redacted bubbles). There is NO WhatsApp-conversation endpoint. The closest existing surface is GET /admin/agent/conversations (admin-agent.controller.ts, listConversations()/getConversation(), ConversationLogList contract) — but that is the AGENT domain's channel-agnostic intent log, not a WhatsApp-specific redacted live-message monitor. Needs backend: a WhatsApp inbound/outbound message read model with PII redaction, list/detail contract, client, hook, and a live/polling story. Reusing the agent log would need a channel=whatsapp filter + message-level redaction that don't exist today. Largest Comms build.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Broadcast composer audience cohorts with reach counts (Lagos / tier_1 / verified / all)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "BroadcastComposer AUDIENCE_OPTIONS + AUDIENCE_REACH are hardcoded consts (fabricated cohort labels + reach numbers). No endpoint returns segmentable audiences or their live sizes. Needs backend: an audiences/cohorts service (query the user base by cohort predicate, return count), contract, client, hook. The LARGE_AUDIENCE_THRESHOLD (10000) that flips maker-checker is also a hardcoded FE literal that should be a config-sourced (AppSetting) value per root §7.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Broadcast send / queue-for-approval (maker-checker on large audience, template + schedule)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "detail": "The composer's send only opens a MakerCheckerModal then calls pushToast + setQueued(true) — nothing is submitted. No POST /admin/broadcasts, no broadcast contract, no service, no maker-checker approval persistence. Needs backend: a broadcast create endpoint (audience + templateKey + schedule now/tomorrow-9/custom), a proposal-only + maker-checker approval flow for large audiences (mirroring engine-disposes), idempotency, and integration with the notifications delivery pipeline. The composer's TEMPLATE dropdown (kyc_reminder/tx_confirmation/promo_ticketing) is a separate hardcoded const that should draw from the real template list. Largest net-new action.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Broadcast schedule options (Send now / Tomorrow 9:00 / Custom datetime)",
+          "gap": "mock-only-needs-backend",
+          "effort": "S",
+          "detail": "SCHEDULE_OPTIONS const + a datetime-local input feed a broadcast POST body that does not exist. Part of the broadcast-send backend above, but the scheduling semantics (queue-at-time) are a distinct concern (a scheduler/cron consuming scheduled broadcasts). No endpoint/contract today.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Delivery log (per-message channel chip + template name + audience + time + status Delivered/Sent/Sending/Bounced/Queued/Scheduled/Failed)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "DeliveryLog renders DELIVERY_ROWS const (5 fabricated rows). No endpoint returns sent-message delivery records with per-channel status. Needs backend: a notification/delivery read model (message log with channel, template, audience, sent-at, provider delivery status), contract, client, hook, likely paginated. The schema models message delivery elsewhere (ReceiptDeliveryStatus in transactions) but there is no admin-facing notifications delivery-log read path.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Bounce / complaint rate footnote (bounce 0.4% · complaint 0.02% via Resend)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "Hardcoded string in the DeliveryLog header. No endpoint aggregates Resend (email) bounce/complaint webhooks into rates. Needs backend: ingest Resend bounce/complaint webhooks (or query Resend), aggregate into rates over a window, expose on a metrics/delivery-log endpoint, contract, client, hook.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Topbar operator alerts feed (reconciliation break / sanctions hit / stuck-settlement + unread badge)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "NotificationsMenu (notifications-menu.tsx, the bell dropdown) renders an ALERTS const of 3 hardcoded operator alerts with unread=ALERTS.length; its own comment says 'there is no alerts-feed endpoint yet'. No endpoint/contract aggregates cross-domain operational alerts (recon breaks, sanctions hits, stuck txns) into an admin alert feed. Needs backend: an operator-alerts aggregation endpoint (or per-domain alert counts), contract, client, hook, plus unread/ack semantics. Cross-cutting but surfaced in the notifications chrome.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        }
+      ]
+    },
+    {
+      "domain": "Tickets & Agent (Handshake operator admin console)",
+      "summary": "The two design screens (tickets-page.tsx, agent-page.tsx) are pure design reproductions rendering module-level mock consts with zero fetching. The backend built earlier covers only a thin read-only slice: Tickets exposes ONLY a ticket-order list (GET /admin/tickets/orders) — its \"Recent orders\" panel is a clean just-wire. Agent exposes a config view (modelId/enabled/prompt-preview) plus conversation-log list+detail with full clients, hooks, and even an already-wired-but-unmounted conversation-log-detail.tsx component — but the design's Agent screen surfaces NONE of that (it shows guardrails/prompt-versions/tool-registry/usage instead, all of which lack any backend). Net: of ~12 concrete features, exactly ONE (ticket orders) is a clean just-wire; the Vendor-ports panel and the entire Agent screen's four panels are mock-only-needs-backend or settings-adjacent; conversation logs are a substantial backend-only-not-surfaced capability the design forgot. The vendor enablement/commission and agent model/enablement values exist as /admin/settings registry keys (ticketing.enabled, ticketing.commissionBps, agent.enabled, agent.modelId) but there is NO settings client/hook in web-admin and no vendor-ports LIST endpoint, so those pills cannot be wired without either the settings CRUD client or a new vendor-registry endpoint. Guardrail params (checkpointer, max tool calls), prompt-version maker-checker workflow, tool-registry listing, and 24h cost/usage/token telemetry have no backend at all.",
+      "items": [
+        {
+          "feature": "Tickets: Recent orders list (event/id · user · amount · payment+settlement status)",
+          "gap": "just-wire",
+          "effort": "S",
+          "detail": "The design's RecentOrdersCard renders ORDER_ROWS mock consts. A complete backend read path already exists: GET /admin/tickets/orders (AdminTicketsController.listOrders) → AdminTicketService.listOrders → ITicketOrderReadRepository keyset pagination, contract TicketOrderItem/TicketOrderListResponse, client listTicketOrders(), hook useTicketOrders(), qk.ticketOrders. Just replace ORDER_ROWS with useTicketOrders() and add loading/error/empty branches. NOTE shape drift the FE must map: BE returns paymentStatus + settlementStatus + deliveryStatus + ticketType + quantity + userId (uuid), whereas the mock collapses to a single `status` + a human `user` name + a preformatted `amt` string and an `event` label. There is no user-name join and no event/title field on TicketOrderItem — FE must render vendorKey/ticketType and userId (or add a join server-side), and format totalAmount (canonical NGN string) itself. Cursor pagination (nextCursor) is available but the mock has no 'load more'.",
+          "feMock": true,
+          "feApiClient": "listTicketOrders",
+          "beEndpoint": "admin-tickets.controller.ts:listOrders",
+          "beContract": "TicketOrderListResponse / TicketOrderItem"
+        },
+        {
+          "feature": "Tickets: Vendor ports list (port name · commission · live/paused/onboarding status)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "The design's VendorPortsCard renders VENDOR_ROWS mock consts (ticketing.eventbrite 6.5% live, ticketing.tix 5.0% onboarding). There is NO endpoint, contract, service, or repository that lists registered ticketing vendor ports. The only related backend is generic /admin/settings registry keys ticketing.enabled (single platform flag) and ticketing.commissionBps (single platform commission) — a SINGLE vertical-wide flag+commission, NOT a per-vendor list with per-vendor status/commission as the design implies. Per CLAUDE.md §7 each ticketing.<vendor> should be a registered provider port behind an admin flag, but no such registry is enumerated over an endpoint. Building this requires: a vendor-port registry read endpoint (GET /admin/tickets/vendors), a contract DTO (name/commissionBps/status), and a service that reads the registered TicketProvider ports + their layered enablement flags. Also note the design's three-state status (live/paused/onboarding) is richer than the boolean enablement flag that exists.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none (only settings.ts registry keys ticketing.enabled + ticketing.commissionBps)"
+        },
+        {
+          "feature": "Tickets: Event catalog (headed 'Vendor ports, event catalog, orders and vendor payout reconciliation')",
+          "gap": "both-missing",
+          "effort": "L",
+          "detail": "The page subheader promises an event catalog but neither the design nor the backend implements it — there is no catalog panel in tickets-page.tsx and no events endpoint/contract/service anywhere in admin. There is no tickets domain module at all (AdminTicketService comment: 'There is NO tickets module'); only existing TicketOrder rows are projected. Building event-catalog oversight needs the whole tickets vertical (event ingestion from vendor ports, an Event entity/repo, and an admin list endpoint) — out of scope for a repro-screen wire-up and effectively a new vertical.",
+          "feMock": false,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Tickets: Vendor payout reconciliation (also promised in subheader)",
+          "gap": "both-missing",
+          "effort": "L",
+          "detail": "Subheader promises 'vendor payout reconciliation' but there is no panel in the design and no reconciliation endpoint/contract/service. settlementStatus exists on TicketOrderItem (pending/settled/refunded/failed) but there is no payout-batch or vendor-reconciliation aggregation surface. Would require a new reconciliation read model (per-vendor owed/paid/pending rollups) plus endpoint+contract — a full feature, not a wire-up.",
+          "feMock": false,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Agent: Model & guardrails panel — Model id + Enabled",
+          "gap": "just-wire",
+          "effort": "S",
+          "detail": "AGENT_PARAMS mock hardcodes Model=claude-opus-4-8. Two of these fields are real: GET /admin/agent/config (AdminAgentController.getConfig → AdminAgentService.getConfig) returns modelId + enabled (both from EffectiveConfigService) + systemPromptPreview, via contract AgentConfigView, client getAgentConfig(), hook useAgentConfig(). So 'Model' and an enablement indicator can be wired directly from useAgentConfig(). The mock does NOT currently show systemPromptPreview even though the backend returns it — a small addition. Only the model-id/enabled rows are just-wire; the other three rows in this panel are separate (see next).",
+          "feMock": true,
+          "feApiClient": "getAgentConfig",
+          "beEndpoint": "admin-agent.controller.ts:getConfig",
+          "beContract": "AgentConfigView"
+        },
+        {
+          "feature": "Agent: Guardrail params — Structured output / Checkpointer / PIN+step-up / Max tool calls per turn",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "Four of the five AGENT_PARAMS rows (Structured output='IntentSchema (enforced)', Checkpointer='none (extractable)', PIN+step-up='required to execute', Max tool calls/turn='6') are static mock strings with NO backend. AgentConfigView returns only modelId/enabled/systemPromptPreview. These are architectural facts (some genuinely static/constant per §3.1/§6) — but if they are to be operator-visible/config-driven they need either (a) additional read-only fields on AgentConfigView sourced from the agent runtime/layered config (e.g. agent.maxToolCallsPerTurn), or (b) an accepted decision to keep them as FE-side static constants documenting the architecture. 'Max tool calls / turn = 6' in particular smells like it should be a config value (§7) but no such registry key exists. Recommend: extend AgentConfigView with a small set of read-only guardrail booleans/numbers rather than leaving four hardcoded strings.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none (AgentConfigView lacks these fields)",
+          "beContract": "none (would extend AgentConfigView)"
+        },
+        {
+          "feature": "Agent: System-prompt versions panel (v4.2.0 live / v4.3.0 staged / v4.1.3 archived, View diff/Review/Restore, maker-checker)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "detail": "PROMPT_VERSIONS mock renders a full versioned prompt-management workflow with maker-checker (promoted-by, awaiting-checker, rolled-back) and action buttons (View diff/Review/Restore) that currently only pushToast. There is NO backend for this and it directly CONTRADICTS the current invariant: AdminAgentService/AgentConfigView expose only a read-only systemPromptPreview string and the code+contract comments explicitly state the system prompt is 'read-only and never editable (§3.1/§6)' and 'NOT registered' in settings. So a versioned, promotable, restorable prompt store with a maker-checker approval flow is a substantial new capability (schema for prompt versions + status, promote/review/restore endpoints with maker-checker + audit, diff endpoint) that also requires a product/architecture decision to reverse the 'prompt is not editable' stance. Flag for triage before building.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Agent: Tool registry list (get_quote/get_wallet_balance/... read + propose_buy/sell/send/swap write chips)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "TOOL_ROWS mock hardcodes 8 tool names with read/write kind chips. There is NO endpoint/contract/service that enumerates the agent's registered tool registry with each tool's kind. The real tools live in the agent module's typed tool layer (modules/agent), but nothing projects them to the admin surface. Building this needs a read-only tool-registry endpoint (GET /admin/agent/tools) + contract (name + kind: read|write) whose source is the agent's ToolGateway/tool definitions. Must respect §3.2 (admin cannot import agent internals directly) — likely a small registry-descriptor the agent module exposes. Static-ish data but currently zero backend.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Agent: Cost & usage (24h) — Conversations / Input tokens / Output tokens / Est. cost",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "detail": "AGENT_USAGE mock hardcodes 1,842 conversations / 1,284,930 input tokens / 312,547 output tokens / $48.20 est cost. There is NO usage/cost/token telemetry endpoint anywhere in admin (grep for token/usage/cost in admin returns only auth-token and metrics-window code, no LLM usage aggregation). Requires capturing per-call token usage from the LLM provider adapter, persisting it, and an aggregation read endpoint (GET /admin/agent/usage?range=24h) + contract with token counts and a cost computation (needs per-model pricing config). Substantial: new persistence + aggregation + pricing config. Note admin-metrics module exists for other operational metrics but does not cover agent token/cost.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Agent: Conversation / intent logs — list + detail (messages, per-message intent, replies)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "M",
+          "detail": "A complete backend + FE client layer exists and is UNUSED by the design's Agent screen. Backend: GET /admin/agent/conversations (list) and GET /admin/agent/conversations/:id (detail with messages+per-message intent action/confidence+replies) via AdminAgentController + AdminAgentService (ConversationLogItem/ConversationLogDetail contracts), clients listConversations()/getConversation(), hooks useConversations()/useConversation(), qk.conversations/conversation. There is even an already-built component web-admin/components/admin/conversation-log-detail.tsx that consumes useConversation — but it is NOT mounted in any route and agent-page.tsx does not reference it. This is a real oversight capability (agent intent auditing, directly supporting §3.1 'model proposes' visibility) that the design screen simply omits. Needs FE work: add a conversations list + detail section (or a dedicated sub-screen) to the Agent surface and mount the existing conversation-log-detail component. Low backend risk (fully built), medium FE effort (new list view + wiring). Not an intentional omission — the built-but-unmounted component indicates it was intended.",
+          "feMock": false,
+          "feApiClient": "listConversations / getConversation",
+          "beEndpoint": "admin-agent.controller.ts:listConversations / getConversation",
+          "beContract": "ConversationLogListResponse / ConversationLogDetail"
+        },
+        {
+          "feature": "Agent: System-prompt preview (read-only) surfaced to operators",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "detail": "AgentConfigView.systemPromptPreview is a real backend field (a fixed read-only description of the agent's role, deliberately not the live prompt, never editable) returned by GET /admin/agent/config and parsed by client getAgentConfig(). The design's Agent screen never displays it — the prompt is instead (mis)represented by the mock 'System-prompt versions' panel. Wiring is trivial (render config.systemPromptPreview in a read-only card). Distinct from the versions/maker-checker feature above, which the backend intentionally does NOT support.",
+          "feMock": false,
+          "feApiClient": "getAgentConfig",
+          "beEndpoint": "admin-agent.controller.ts:getConfig",
+          "beContract": "AgentConfigView (systemPromptPreview)"
+        },
+        {
+          "feature": "Tickets/Agent: editing vendor commission/enablement & agent model/enablement (settings-adjacent)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "M",
+          "detail": "The design shows vendor commission and 'read-mostly' agent params as display-only, but the actual tunable values live in the generic settings registry: ticketing.enabled, ticketing.commissionBps, agent.enabled, agent.modelId (packages/contracts/src/admin/settings.ts), writable via GET/GET:key/PATCH /admin/settings (AdminSettingsController). However there is NO settings client or hook in web-admin (grep found no listSettings/updateSetting/useSettings; admin.ts has no settings fn) and settings-page.tsx is itself a pure mock whose keys (agent.model, ticketing.commission.pct) do not even match the real registry keys (agent.modelId, ticketing.commissionBps). So to make the tickets/agent screens' enablement/commission/model actionable (or even to correctly reflect effective values beyond agent config), a settings CRUD client+hook must be built and pointed at the real keys. Backend fully exists; FE plumbing (client + hook + correct keys) is missing across the whole settings surface, which these two domains depend on for their write-side values.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "admin-settings.controller.ts:list / getOne / update",
+          "beContract": "settings registry (ticketing.enabled, ticketing.commissionBps, agent.enabled, agent.modelId)"
+        }
+      ]
+    },
+    {
+      "domain": "Metrics & Dashboard (operator admin console — home \"/\" mock OperatorDashboard vs. wired \"/metrics\" MetricsDashboard + admin-metrics backend)",
+      "summary": "The target FE mock is web-admin/components/admin/operator-dashboard.tsx (rendered at home \"/\" via app/page.tsx), which renders entirely module-level mock consts. A SEPARATE, fully-wired real dashboard already exists at web-admin/components/admin/metrics-dashboard.tsx (rendered at \"/metrics\"), backed by GET /admin/metrics/{dashboard,transactions,revenue,kyc-funnel} (admin-metrics.controller.ts) with contracts in admin-metrics.dto.ts and client metrics.ts / hook useDashboardMetrics. So the metrics-family data views are \"just-wire\" against the existing composite endpoint (the home screen simply renders mock instead of calling getDashboardMetrics). The gaps are the NON-metrics widgets the mock invented: GMV KPI (no backend), a per-day-per-capability STACKED volume series (backend only gives a flat daily total + per-type totals, not a cross-tab), System health with provider LATENCY + webhook-queue depth + recon-drift (no backend at all), a Live activity feed (no backend), an \"Approvals awaiting me\" maker-checker inbox (NO approvals/maker-checker controller, contract, or lib client anywhere), and the Alerts card (sanctions + treasury alerts + compliance events have real endpoints but no unified \"dashboard alerts\" feed, and \"provider incident\" has no source). Recommended build order: Phase 1 wire the metrics-family KPIs/charts on the home screen to the existing composite (or just route \"/\" to the real MetricsDashboard); Phase 2 build the maker-checker approvals inbox + activity feed (both entirely missing); Phase 3 build system-health/provider-latency + a unified alerts aggregator and GMV/stacked-series aggregations.",
+      "items": [
+        {
+          "feature": "Transaction volume KPI tile (money sum, range-scaled)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "getDashboardMetrics",
+          "beEndpoint": "admin-metrics.controller.ts:dashboard (GET /admin/metrics/dashboard)",
+          "beContract": "DashboardSummary.txnVolume (TxnVolumeMetrics)",
+          "detail": "Mock KPI_DEFS[0] uses a hardcoded base 23,774,629 scaled by RANGE_MUL. The real composite returns txnVolume.byType counts (not a fiat money sum). A true fiat 'volume' amount is NOT computed by the backend today — only per-type COUNTS + successRate. To show a money figure you either surface counts (just-wire) or add a summed-amount aggregation (then it becomes mock-only-needs-backend). Counts are wire-ready; a fiat-notional volume sum is not."
+        },
+        {
+          "feature": "GMV KPI tile (gross merchandise value)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "Mock KPI_DEFS[1] shows GMV base 41,209,800. grep for gmv/grossMerchandise across contracts + api returns nothing. No ledger/transaction aggregation sums gross notional. Needs a new repo aggregation (sum of transaction fiat notionals over range) + a field on RevenueMetrics/DashboardSummary + FE wiring."
+        },
+        {
+          "feature": "Revenue (fees + FX) KPI tile",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "getRevenueMetrics / getDashboardMetrics",
+          "beEndpoint": "admin-metrics.controller.ts:revenue (GET /admin/metrics/revenue)",
+          "beContract": "RevenueMetrics.totalFeesByCurrency",
+          "detail": "Mock shows a single ₦ figure 'Revenue (fees + FX)'. Backend computes totalFeesByCurrency exactly (platform_float legs of COMPLETED txns, scaled-BigInt) but deliberately returns totalSpreadByCurrency: [] because spread is folded into the fx rate and not separately ledgered (see repo comment). So 'fees' wire directly; the '+ FX' (spread) portion of the label cannot be honored without new ledgering — surface fees only, drop the FX claim, or spawn spread-ledgering work."
+        },
+        {
+          "feature": "Transactions count KPI tile",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "getDashboardMetrics",
+          "beEndpoint": "admin-metrics.controller.ts:dashboard",
+          "beContract": "DashboardSummary.txnVolume.byType[].count (sum) / revenue.txnCount",
+          "detail": "Mock KPI_DEFS[3] base 1284. Real dashboard already derives totalTxns = sum(byType.count) in metrics-dashboard.tsx KpiGrid. Pure wire — sum byType counts client-side."
+        },
+        {
+          "feature": "New signups KPI tile",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "getDashboardMetrics",
+          "beEndpoint": "admin-metrics.controller.ts:dashboard",
+          "beContract": "DashboardSummary.activeUsers.newInRange",
+          "detail": "Mock KPI_DEFS[4] base 96. Backend already returns activeUsers.newInRange (User.count where createdAt in range) — exact match. Pure wire."
+        },
+        {
+          "feature": "KYC pending KPI tile (attention/warn)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "getKycFunnelMetrics / getDashboardMetrics",
+          "beEndpoint": "admin-metrics.controller.ts:kycFunnel (GET /admin/metrics/kyc-funnel)",
+          "beContract": "DashboardSummary.kycFunnel.byStatus",
+          "detail": "Mock hardcodes KYC_PENDING=13. Backend returns kycFunnel.byStatus grouped by kycStatus; the FE derives 'pending' by summing the pending/needs_info status buckets. The live KYC review queue also exists (useKycQueue → GET /admin/kyc). Both are wire-ready; no new backend."
+        },
+        {
+          "feature": "Failed / stuck tx KPI tile (attention/warn)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "getDashboardMetrics",
+          "beEndpoint": "admin-metrics.controller.ts:dashboard",
+          "beContract": "DashboardSummary.txnVolume.byType[].failed / serviceHealth",
+          "detail": "Mock hardcodes FAILED_STUCK=9. Backend txnVolume.byType[].failed and serviceHealth[].failed give per-type failed counts; sum them for the tile. 'Stuck' (pending_settlement) is a distinct status not in the failed bucket — the byType.count minus completed minus failed captures pending, so a true failed+stuck figure needs a small client derivation (or a pending field). Mostly wire; pending-status count needs surfacing."
+        },
+        {
+          "feature": "Open compliance cases KPI tile (attention/warn)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none (metrics); compliance.listComplianceEvents exists",
+          "beEndpoint": "admin-compliance.controller.ts (GET /admin/compliance/events)",
+          "beContract": "compliance.dto ComplianceEvent list (not a metrics count)",
+          "detail": "Mock hardcodes OPEN_CASES=3. There is NO count of open cases in the metrics contract, but GET /admin/compliance/events (+ useComplianceEvents) can be filtered to open and its length used. For the dashboard tile you either count client-side from the events list (backend exists, just not a metric) or add an openCases count to DashboardSummary. Classify as backend-exists-but-not-as-a-metric."
+        },
+        {
+          "feature": "Transaction volume chart — daily bars stacked by capability (buy/sell/send/swap/ticket)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "getDashboardMetrics (partial)",
+          "beEndpoint": "admin-metrics.controller.ts:transactions / dashboard",
+          "beContract": "TxnVolumeMetrics.series (flat count) + byType (totals)",
+          "detail": "Mock volBarsFor() builds a 14-day series where each day is split into buy/sell/send/swap/ticket segments. Backend series is a FLAT per-day total count (MetricsBucket{date,count}); byType gives per-type totals but NOT a per-day-per-type cross-tab. The real MetricsDashboard sidesteps this by rendering a flat daily bar + a byType table. To reproduce the stacked-by-capability silhouette you must add a per-day-per-type series to the repo/contract. Also note the backend has no 'ticket' type in SERVICE_TYPES (buy/sell/send/swap only)."
+        },
+        {
+          "feature": "System health — provider list with latency (Blockradar/Flutterwave/Resend/WhatsApp/Anthropic + ms)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "Mock HEALTH const shows 5 named providers with dot color + latency ('120ms', '890ms'). No backend measures provider latency/health. ServiceHealthMetrics is per-transactable-service SUCCESS RATE (buy/sell/send/swap from Transaction rows), NOT provider uptime/latency. A real provider-health probe (ping/circuit-breaker/last-webhook-age per external client) + endpoint + contract must be built. Largest single gap here."
+        },
+        {
+          "feature": "System health — Webhook queue depth stat box",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "Mock WEBHOOK_Q='3'. No admin endpoint exposes a webhook/queue depth. Requires surfacing the inbound-webhook backlog (pending/retrying webhook events) as a counted metric + endpoint + contract, then wiring."
+        },
+        {
+          "feature": "System health — Recon drift stat box ('3 open')",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none (settlement-reconciliation.service + wallet reconcile exist internally)",
+          "beContract": "none",
+          "detail": "Mock RECON_DRIFT='3 open'. A settlement-reconciliation.service and a wallet-reconcile endpoint (admin-wallets.controller) exist internally, but there is NO admin read endpoint exposing open reconciliation breaks/drift as a count for the dashboard. Needs a reconciliation-breaks read endpoint + contract + client."
+        },
+        {
+          "feature": "Live activity feed (settled/kyc-approved/config-change/send-failed/sweep/refund events)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none (audit log exists but is admin-config actions, not this event stream)",
+          "beContract": "none (AuditLog covers admin actions only)",
+          "detail": "Mock ACTIVITY const is a hand-authored 6-item event feed spanning txn settlement, KYC, config changes, send failures, sweeps, engine refunds. No single 'platform activity feed' endpoint aggregates these. The admin AuditLog (GET /admin/audit) captures admin/config actions but not end-user txn lifecycle events. Building this needs a cross-domain activity aggregator (or an events table) + endpoint + contract."
+        },
+        {
+          "feature": "Approvals awaiting me — maker-checker inbox list",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "Mock MY_APPROVALS (3 items) + the /approvals route + MakerCheckerModal render a from→to diff and 'submit for second approval' flow. There is NO approvals/maker-checker controller, service, contract, or lib/api client anywhere in the repo (grep for approval/makerChecker in api/src/modules/admin returns nothing; no approvals.ts client). The entire two-person-integrity approval subsystem (list pending approvals, open one, second-admin disposition) must be built backend-first. This is the single largest missing subsystem the dashboard implies."
+        },
+        {
+          "feature": "Approvals — 'Open inbox →' link + open a pending approval (maker-checker modal submit)",
+          "gap": "both-missing",
+          "effort": "L",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "The mock's onSubmit just navigates to /approvals with no API call; the /approvals page itself is also a design repro with no wired client. No approval-disposition endpoint exists. Both the action wiring and its backend are absent — depends entirely on building the maker-checker subsystem above."
+        },
+        {
+          "feature": "Alerts — Sanctions hit (name match) row → /sanctions",
+          "gap": "backend-only-not-surfaced",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none (on dashboard); compliance.listSanctions exists",
+          "beEndpoint": "admin-compliance.controller.ts (GET /admin/compliance/sanctions, GET /admin/compliance/events)",
+          "beContract": "compliance.dto (sanctions runs / flagged events)",
+          "detail": "Mock ALERTS[0] is a static sanctions-match card linking to /sanctions. Real sanctions screening-run history (useSanctions) and flagged compliance events (useComplianceEvents) endpoints exist. The dashboard alert would derive from open compliance events of type sanctions — backend exists, just not surfaced as a dashboard alert. Wire by pulling top open sanctions events."
+        },
+        {
+          "feature": "Alerts — Over-credit flagged row → /reconciliation",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none (no over-credit read endpoint)",
+          "beContract": "none",
+          "detail": "Mock ALERTS[1] 'tx_80257 +70.00 USDT above ledger. Not auto-debited.' No endpoint surfaces over-credit/ledger-drift flags. Related settlement-reconciliation logic exists internally but is not exposed as a queryable over-credit list. Needs a reconciliation/over-credit read endpoint + contract."
+        },
+        {
+          "feature": "Alerts — Provider incident row → /ops",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "Mock ALERTS[2] 'Flutterwave NGN payouts degraded' links to /ops. No provider-incident/status source exists (ties to the missing System-health provider probe). Needs the provider-health backend before this alert can be real."
+        },
+        {
+          "feature": "KPI date-range switcher (24h / 7d / 30d)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "getDashboardMetrics (range param)",
+          "beEndpoint": "admin-metrics.controller.ts:dashboard (MetricsRangeQueryDto from/to)",
+          "beContract": "MetricsRangeQuery",
+          "detail": "Mock applies a client-side RANGE_MUL multiplier to fake ranges. Backend already accepts {from,to} and the real MetricsDashboard uses presets (7d/30d/90d) → rangeForDays → useDashboardMetrics. Note the mock's presets (24h/7d/30d) differ from the wired ones (7d/30d/90d); 24h is sub-day. Pure wire once ranges are reconciled."
+        },
+        {
+          "feature": "Active users metric (distinct transactors + new + total)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "feMock": false,
+          "feApiClient": "getDashboardMetrics",
+          "beEndpoint": "admin-metrics.controller.ts:dashboard",
+          "beContract": "DashboardSummary.activeUsers (ActiveUsersMetrics)",
+          "detail": "The backend computes activeUsers (activeInRange/newInRange/totalUsers) and the real MetricsDashboard surfaces it, but the MOCK OperatorDashboard has NO active-users tile (it shows New signups only). Backend + real-dashboard exist; the mock home screen just omits an active-users KPI — an intentional-ish omission the home screen could add. Also: there is no STANDALONE /admin/metrics/active-users or /service-health route — both are only inside the composite dashboard payload."
+        },
+        {
+          "feature": "Service health success-rate metric (per buy/sell/send/swap)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "feMock": false,
+          "feApiClient": "getDashboardMetrics",
+          "beEndpoint": "admin-metrics.controller.ts:dashboard",
+          "beContract": "DashboardSummary.serviceHealth (ServiceHealthMetrics)",
+          "detail": "Backend serviceHealth (per-service total/completed/failed/successRate) is surfaced by the real MetricsDashboard ServiceHealthCard but is NOT what the mock's 'System health' card shows (the mock shows provider latency, a different concept). So serviceHealth exists and is surfaced on /metrics, but the home mock's System-health widget maps to a different, unbuilt concept. Flag to avoid conflating the two."
+        }
+      ]
+    },
+    {
+      "domain": "RBAC & Admins",
+      "summary": "The RBAC & Admins domain is split: /roles and /sessions are already fully real-wired FE→BE (complete), but the two screens the task names — /admins (AdminsPage) and /admin-settings (AdminSettingsPage) — are still design mocks rendering module-level consts, even though a complete backend (admin-users/roles/sessions/auth/invitation controllers + services + repos), contracts, api-client (lib/api/admin.ts), and query hooks all exist. Crucially, real-wired FE building blocks already exist but sit UNMOUNTED: AdminRowActions (role/status change with step-up), RolePermissionMatrix (real derived matrix), and the useAdmins hook — the routed /admins page just doesn't import them. So most /admins work is \"just-wire\" (swap the mock consts for useAdmins/useRoles/usePermissions + the existing real subcomponents). Three genuine backend gaps: (1) \"Reset 2FA\" for ANOTHER admin has no endpoint/service (admin-mfa.service only does self-enroll); (2) admin notification preferences (prefRows toggles) have no endpoint/contract; (3) the admin's own display name is not modeled in AdminMe (email only), so the mock's \"Amara Okeke\" identity cannot be sourced. The /admin-settings profile card can be wired to getMe/useAdminMe for email+role+mfa, but name+preferences need backend. MFA self-enroll IS fully wired, but via the app-shell MfaEnrollDialog, not surfaced on the admin-settings screen where the design shows the \"2FA enrolled\" pill.",
+      "items": [
+        {
+          "feature": "Admins list (table of admin users: name/email, role, 2FA, status)",
+          "gap": "just-wire",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "listAdmins (lib/api/admin.ts) via useAdmins hook",
+          "beEndpoint": "admin-users.controller.ts:list (GET /admin/admins)",
+          "beContract": "AdminUserListResponse / AdminUser",
+          "detail": "AdminsPage renders a hardcoded ADMINS const (6 fake rows: Amara Okeke etc.). A full backend exists — GET /admin/admins returns AdminUser rows (id,email,status,mfaEnabled,role{id,name},createdAt,lastLoginAt) backed by AdminUserService + admin-user.prisma.repository, and useAdmins() already fetches it. Wiring = replace the mock const with useAdmins(), add the 4 async branches (loading/error/empty/data). NOTE contract mismatch to reconcile: the mock shows a display NAME + boolean tfa/active; the DTO has NO personal name (email only), mfaEnabled boolean, and a 4-state status enum (pending/active/suspended/offboarded) not a boolean active. Render from email + status enum + mfaEnabled instead of the fabricated name/active."
+        },
+        {
+          "feature": "Role permission matrix (categories x roles, full/read/none tiles)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "listRoles + listPermissions (useRoles + usePermissions)",
+          "beEndpoint": "admin-roles.controller.ts:listRoles (GET /admin/roles) + listPermissions (GET /admin/permissions)",
+          "beContract": "RoleListResponse + PermissionListResponse (AdminPermissionRecord)",
+          "detail": "AdminsPage hardcodes MATRIX_COLS (6 role labels) + MATRIX_ROWS (7 capability rows with hand-authored full/read/none cells). A REAL, already-built component — RolePermissionMatrix (components/admin/role-permission-matrix.tsx) — derives the exact same matrix from useRoles() columns and levelFor() over the usePermissions() catalog, but it is NOT mounted anywhere. Wiring = drop AdminsPage's mock matrix block and render <RolePermissionMatrix roles=... permissions=.../> with the two hooks. Pure swap; component already tested/live-shaped."
+        },
+        {
+          "feature": "Change an admin's role (per-row)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": false,
+          "feApiClient": "updateAdminRole via useUpdateAdminRole (+ useStepUpRetry)",
+          "beEndpoint": "admin-users.controller.ts:updateRole (PATCH /admin/admins/:id/role)",
+          "beContract": "AdminUserUpdateRoleRequest",
+          "detail": "The mock AdminsPage exposes NO role-change control (it only shows a static role dot+label). But a fully real-wired AdminRowActions component already implements role change via a NativeSelect -> useUpdateAdminRole -> stepUp.run() retry against PATCH /admin/admins/:id/role (step-up-guarded, ADMIN_STEP_UP_REQUIRED handled). It is unmounted. Wiring = render AdminRowActions per row in the wired AdminsPage, passing the roles list. Backend + step-up already complete."
+        },
+        {
+          "feature": "Change an admin's status (suspend / reactivate / offboard)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "setAdminStatus via useSetAdminStatus (+ useStepUpRetry)",
+          "beEndpoint": "admin-users.controller.ts:setStatus (PATCH /admin/admins/:id/status)",
+          "beContract": "AdminUserStatusRequest (active|suspended|offboarded)",
+          "detail": "The mock's row action is a fake 'Deactivate/Reactivate' that only opens presentation ReasonModal->MakerCheckerModal stubs (no side effect). The real AdminRowActions already maps a 4-state transition table (active->suspend/offboard, suspended->reactivate/offboard, etc.) to useSetAdminStatus -> PATCH /admin/admins/:id/status with step-up retry. Wiring = use AdminRowActions. NOTE the mock's binary active/Deactivated must become the real 4-state status enum; the mock's maker-checker modal is not backed by any dual-control endpoint (the real path is single step-up, not maker-checker)."
+        },
+        {
+          "feature": "Invite a new admin (email + role -> one-time token)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "createInvitation via useCreateInvitation",
+          "beEndpoint": "admin-users.controller.ts:invite (POST /admin/invitations)",
+          "beContract": "AdminInvitationCreateRequest / AdminInvitationCreateResponse",
+          "detail": "AdminsPage opens InviteAdminDialog, and that dialog is ALREADY fully real-wired (react-hook-form + zodResolver(AdminInvitationCreateRequestSchema) -> useCreateInvitation -> POST /admin/invitations, renders the one-time invitationToken on success). The ONLY mock part is that AdminsPage passes a hardcoded INVITE_ROLES const (6 fake roles with placeholder UUIDs) instead of real roles. Wiring = feed useRoles().data.roles into the dialog. Backend + dialog complete; near-zero effort."
+        },
+        {
+          "feature": "Accept invitation (invitee sets password)",
+          "gap": "complete",
+          "effort": "S",
+          "feMock": false,
+          "feApiClient": "acceptInvite via useAcceptInvite",
+          "beEndpoint": "admin-auth.controller.ts:acceptInvitation (POST /admin/invitations/accept)",
+          "beContract": "AdminInvitationAcceptRequest / AdminInvitationAcceptResponse",
+          "detail": "AcceptInviteForm at /accept-invite is fully real-wired: reads ?token=, validates password>=12 + confirm client-side, POSTs to /admin/invitations/accept, redirects to /login. Backend service (AdminInvitationService.accept) + argon2 hasher exist. No gap — included for completeness of the domain."
+        },
+        {
+          "feature": "Roles list + create/edit role via permission-matrix editor",
+          "gap": "complete",
+          "effort": "S",
+          "feMock": false,
+          "feApiClient": "listRoles/createRole/updateRole (useRoles/useCreateRole/useUpdateRole)",
+          "beEndpoint": "admin-roles.controller.ts:listRoles/createRole/updateRole (GET/POST/PATCH /admin/roles)",
+          "beContract": "RoleListResponse / RoleCreateRequest / RoleUpdateRequest",
+          "detail": "The routed /roles page (RolesPage) is already fully real-wired: useRoles() with 4 async branches, a real derived matrix, and RoleEditorDialog that creates/edits via useCreateRole/useUpdateRole against the PERMISSION_CATALOG, disabling all controls for isBuiltin roles (BuiltinRoleImmutableError -> 409). RoleService + role.prisma.repository + PermissionCatalogService back it. Complete."
+        },
+        {
+          "feature": "Sessions list + revoke session",
+          "gap": "complete",
+          "effort": "S",
+          "feMock": false,
+          "feApiClient": "listSessions/revokeSession (useSessions/useRevokeSession)",
+          "beEndpoint": "admin-sessions.controller.ts:list/revoke (GET /admin/sessions, DELETE /admin/sessions/:id)",
+          "beContract": "AdminSessionListResponse / AdminSessionView",
+          "detail": "The routed /sessions page (SessionsPage) is already fully real-wired: useSessions() with 4 async branches, per-row revoke via useRevokeSession -> DELETE /admin/sessions/:id, active/expired/revoked state derived from expiresAt/revokedAt, stepped-up badge. Backed by IAdminSessionRepository + admin-session.prisma.repository. Complete."
+        },
+        {
+          "feature": "Admin-settings profile card (own identity: email, role, MFA-enrolled pill)",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "getMe via useAdminMe",
+          "beEndpoint": "admin-auth.controller.ts:me (GET /admin/me)",
+          "beContract": "AdminMe",
+          "detail": "AdminSettingsPage hardcodes OPERATOR={name:'Amara Okeke',email:'amara@handshake.ng',roleLabel:'Super Admin'} and a hardcoded '2FA enrolled' pill. useAdminMe()/GET /admin/me returns the real signed-in identity: email, role{name}, status, mfaEnabled. Wiring = read useAdminMe() for email + role.name + drive the 2FA pill off mfaEnabled (show 'enroll 2FA' when false). PARTIAL: the display NAME ('Amara Okeke') cannot be wired — AdminMe has no personal name field (see separate backend gap)."
+        },
+        {
+          "feature": "Admin display name (personal name shown on profile + admins table)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none (would extend getMe/listAdmins)",
+          "beEndpoint": "none",
+          "beContract": "none (AdminMe + AdminUser have email only)",
+          "detail": "Both the AdminsPage rows and the AdminSettingsPage profile show a human name (Amara Okeke, Ifeoma Bello, ...). Neither AdminMe nor AdminUser contract carries a name — only email. There is no name column captured at invite/accept time either (AdminInvitationCreateRequest = email+roleId; accept = token+password). Building it entails: add name to the admin Prisma model + capture at invite or accept, add name to AdminUser + AdminMe schemas, thread through admin-user/admin-auth services and both serializers. Until then the FE must display email (or an email-derived label) instead of a name."
+        },
+        {
+          "feature": "Reset 2FA for another admin (row action)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "AdminsPage shows a 'Reset 2FA' per-row action that only opens a presentation StepUpModal (no side effect). There is NO backend for resetting/disabling another admin's MFA: admin-mfa.service.ts only does self-enroll (POST /admin/auth/mfa/enroll for the current admin). Building it entails a new permissioned + step-up-guarded endpoint (e.g. POST /admin/admins/:id/mfa/reset) that clears the target's mfaSecret (via mfa-secret.cipher + admin-user repo), forces re-enrollment, and writes an immutable audit entry; plus a contract DTO, api-client fn, and mutation hook. Distinct from self-enroll."
+        },
+        {
+          "feature": "Admin notification preferences (email alerts / approval mentions / weekly digest toggles)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "AdminSettingsPage's Preferences card holds 3 toggles (emailAlerts/approvalMentions/weeklyDigest) in local useState with DEFAULT_PREFS — nothing persists. Grep finds no preferences endpoint/contract/service anywhere in api/src/modules/admin or contracts. Building it entails a per-admin preferences model (Prisma), a GET+PATCH /admin/me/preferences (or similar) endpoint + service, an AdminPreferences contract DTO, api-client fns, and read/mutation hooks. Only after that can the toggles be wired."
+        },
+        {
+          "feature": "Theme preference (light/dark)",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "none (client-only Zustand)",
+          "beEndpoint": "none",
+          "beContract": "none",
+          "detail": "The Theme row in AdminSettingsPage is genuinely functional but purely client-side (Zustand theme-store -> DOM), not persisted to any backend. This is intentional UI/client state per web-admin conventions (Zustand owns client/UI state), so it is correctly NOT backed by an endpoint. Classified backend-only-not-surfaced in the sense that it is an intentional omission — no server persistence is expected or needed; no action unless cross-device theme sync is desired (then it becomes part of the preferences backend above)."
+        },
+        {
+          "feature": "MFA self-enrollment (TOTP QR + recovery codes) on the settings screen",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "feMock": true,
+          "feApiClient": "enrollMfa via useEnrollMfa (MfaEnrollDialog)",
+          "beEndpoint": "admin-auth.controller.ts:enrollMfa (POST /admin/auth/mfa/enroll)",
+          "beContract": "AdminMfaEnrollResponse",
+          "detail": "Self-MFA enrollment is fully built end-to-end (POST /admin/auth/mfa/enroll -> otpauthUri+qrSvg+recoveryCodes, AdminMfaService, otplib adapter, mfa-secret cipher) and a real MfaEnrollDialog is wired via useEnrollMfa — but it is mounted only in app-shell.tsx (global chrome), NOT on the AdminSettingsPage where the design shows the '2FA enrolled' pill. Surfacing = on the settings profile card, when useAdminMe().mfaEnabled is false, show an 'Enroll 2FA' button that opens the existing MfaEnrollDialog. Backend + dialog already exist; only the settings-screen entry point is missing."
+        },
+        {
+          "feature": "Step-up re-authentication (password/TOTP) for sensitive admin actions",
+          "gap": "complete",
+          "effort": "S",
+          "feMock": false,
+          "feApiClient": "stepUp via useStepUpRetry + StepUpDialog",
+          "beEndpoint": "admin-auth.controller.ts:stepUpChallenge (POST /admin/auth/step-up)",
+          "beContract": "AdminStepUpRequest",
+          "detail": "Step-up is fully wired for the real admin row actions: AdminStepUpService challenge, AdminStepUpGuard on PATCH role/status, and FE useStepUpRetry + StepUpDialog that catch ADMIN_STEP_UP_REQUIRED 403 and retry after re-auth (password vs TOTP chosen off useAdminMe().mfaEnabled). Complete on the real path. NOTE the MOCK AdminsPage instead uses cosmetic StepUpModal/ReasonModal/MakerCheckerModal stubs from components/admin/flows with no side effects — those get discarded when /admins is wired to AdminRowActions."
+        },
+        {
+          "feature": "Page-level permission gating (RequirePermission) for the admins/roles/sessions surfaces",
+          "gap": "just-wire",
+          "effort": "S",
+          "feMock": false,
+          "feApiClient": "getMe via useAdminMe",
+          "beEndpoint": "admin-auth.controller.ts:me (GET /admin/me) + PermissionGuard on every /admin route",
+          "beContract": "AdminMe (permissions/menus/pages)",
+          "detail": "RequirePermission is a real, working UX gate that reads useAdminMe().pages/menus/role and hides page bodies for un-granted operators (API still enforces via PermissionGuard/default-deny). It exists and works, but confirm each RBAC route (app/admins, app/roles, app/sessions, app/admin-settings pages) actually wraps its content in RequirePermission with the correct web_page resourceId. If any of the four is unwrapped, wiring = wrap it. Low effort; purely FE composition. Server-side enforcement is already complete."
+        }
+      ]
+    },
+    {
+      "domain": "Approvals & Ops",
+      "summary": "Both screens are pure design reproductions rendering module-level mock consts — NO api client, NO query hook, NO route-level fetch on either. The Approvals maker-checker inbox has ZERO backend: no ChangeRequest/ApprovalRequest Prisma model, no controller, no contract DTO, no dual-control anywhere (admin settings PATCH / KYC approve / tier override all apply DIRECTLY with a single admin, no second-approver queue). So the entire approval-request lifecycle (raise → awaiting-me/mine buckets → approve → reject-with-reason) is mock-only and must be BUILT — though the underlying mutations each kind wraps (settings PATCH, txn retry/mark-failed, KYC approve, tier set) mostly already exist. The Ops screen likewise has no ops/jobs API: serviceHealth exists but is buy/sell/send/swap SUCCESS-RATE metrics, NOT provider latency/uptime tiles; there is no webhook-queue-depth endpoint and no generic cron-job list/run-now endpoint. The only real ops primitives are Bull Board (Basic-auth Express dashboard, not a JSON API), the BackfillRun enqueue/poll + wallet reconcile endpoints (two specific jobs, permission-gated, engine-brokered), and the BullMQ JobQueue port. Recommended phasing: P1 build the maker-checker ChangeRequest engine + approvals inbox endpoints (highest value, funds-safety-adjacent, entirely missing); P2 build the ops read endpoints (provider health probe, webhook-queue depth, cron-job registry) surfacing existing BullMQ/BackfillRun/reconcile as first-class \"run now\" jobs; P3 wire the FE screens to both.",
+      "items": [
+        {
+          "feature": "Approvals inbox — list dual-control change-requests (Awaiting me / My requests buckets with count badges)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "detail": "FE ApprovalsPage renders SAMPLE_REQUESTS (4 hardcoded consts, id/kind/title/by/byRole/ago/resource/reason/diff) and computes awaiting/mine by comparing byRole to a hardcoded ROLE='super_admin'. There is NO backend for a maker-checker approval queue anywhere: no ApprovalRequest/ChangeRequest Prisma model (schema has only AuditLog + BackfillRun as run-like models; 03-admin.prisma has AdminUser/AdminSession/Role/Permission/RolePermissionAssignment/AdminInvitation — no change-request), no controller route, no contract DTO, no lib/api client, no query hook. Building this requires a whole dual-control engine: a ChangeRequest model (kind, target resource, proposed diff, maker adminId+role, status, reason), a GET /admin/approvals?bucket= endpoint that partitions by whether the current admin is the maker, and permission gating (only approver roles see actions). This is the core missing piece.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Approve a change-request (applies the pending change after a second admin confirms)",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "detail": "FE Approve button (RequestCard, gated by CAN_APPROVE=true && !mine) just calls dismiss(request.id) to remove the local row — no network, no modal. No POST /admin/approvals/:id/approve endpoint, DTO, client, or hook exists. Building it means: a ChangeRequest lifecycle service that, on second-admin approval, atomically applies the deferred mutation (e.g. settings PATCH, capability flip, tier set, refund) via the SAME underlying service the maker would have called, records the approver in the immutable AuditLog, and enforces maker≠approver (the FE's 'your own request needs a different admin' guard must be server-side, root §3.3). Funds-relevant kinds (Refund) must route through the engine, never a raw side-effect. The underlying per-kind mutations largely exist (settings.service PATCH, txn-triage retry/mark-failed, kyc-review approve, end-user tier) — what's missing is the deferred-apply-on-approval orchestration.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Reject a change-request with a reason (ReasonModal flow)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "FE Reject opens the shared ReasonModal (design rejectItem → runFlow(['reason'])) and on continue just dismisses the local row (confirmReject → dismiss). No POST /admin/approvals/:id/reject endpoint, DTO, client, or hook. Building it: a reject transition on the ChangeRequest service that captures the mandatory reason, marks the request rejected without applying the change, and audits the rejector. Depends on the ChangeRequest model/engine from the inbox item above; smaller than approve because it applies nothing.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Maker-checker enforcement of high-risk config changes (pricing spread, capability flip, tier override) — the write path that CREATES an approval request",
+          "gap": "mock-only-needs-backend",
+          "effort": "L",
+          "detail": "The approvals inbox implies that certain admin mutations must ENQUEUE a change-request instead of applying immediately. Today they apply directly with one admin: admin-settings.controller PATCH /admin/settings/:key (used for the 'Pricing change' and 'Capability' approval kinds) writes straight through admin-settings.service (grep for dual/maker/checker/pendingChange in that service = zero matches); admin-end-users tier set and admin-kyc-review approve are also single-admin. So the 'requires a second admin before it takes effect' promise in the page header is entirely unimplemented server-side. Building it: a policy that classifies which settings keys / capabilities / tier jumps are high-risk and, for those, diverts the write into a ChangeRequest (status=pending) rather than committing — the maker path of the maker-checker loop.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Refund approval kind (partial refund of a transaction, engine-brokered)",
+          "gap": "both-missing",
+          "effort": "L",
+          "detail": "The 'Refund' approval row (apr_5003, ₦180,000 partial refund of tx_80257) references a refund capability that does not exist as either an approval OR a direct action. admin-transactions.controller exposes only GET /transactions and GET /transactions/:id (read-only); admin-txn-triage.controller has POST /transactions/:id/mark-failed and /retry but NO refund route. There is no refund DTO, service, client, or hook. So a refund needs BOTH an engine-brokered refund execution path (build in transactions/engine, funds-moving → §3.1: propose→validate→idempotency-key→execute) AND its maker-checker wrapper. Highest-risk item; do not ship without the deterministic engine path.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Provider status board — per-provider health tiles (Blockradar/Flutterwave/Resend/WhatsApp/Anthropic) with latency + Operational/Degraded status",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "FE OpsPage renders PROVIDER_TILES (5 hardcoded consts with fake latencies/status). No backend provider-health probe exists. The nearest thing — AdminMetricsService.dashboard's serviceHealth (contracts ServiceHealthMetricsSchema, GET /admin/metrics/dashboard) — is NOT this: it reports per-transactable-SERVICE (buy/sell/send/swap) total/completed/failed/successRate computed from Transaction rows, not per-external-PROVIDER latency/uptime. Building the tiles needs a new health/probe endpoint that pings each registered provider adapter (or reads a health cache) and returns {name, latencyMs, status}. Entirely new contract + service + client + hook.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Webhook queues panel — per-ingest-queue depth + retries + health (blockradar.deposit/withdraw, flutterwave.collection, whatsapp.inbound)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "FE renders WEBHOOK_QUEUES (4 hardcoded consts: name/depth/retries/status). No JSON endpoint exposes queue depth/retries. A BullMQ JobQueue port exists (core/jobs/application/job-queue.port.ts) and Bull Board is mounted at /admin/queues, but Bull Board is an HTML dashboard behind Basic-auth Express middleware (bull-board.middleware.ts) — not a typed JSON API the FE can consume, and it's queue metrics for BullMQ jobs, not inbound-webhook ingest queues specifically. Building this needs a GET /admin/ops/queues endpoint that reads BullMQ queue counts (waiting/failed/active) and maps them to the webhook-ingest queues, plus contract + client + hook.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Background jobs & cron list — registry of scheduled jobs with schedule/last-run/status (reconciliation, child-address sweep, sanctions refresh, statement-link regen)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "FE renders JOB_ROWS (4 hardcoded consts: id/name/schedule/last/status/health). No endpoint enumerates cron/background jobs with their schedules and last-run outcomes. Real cron behaviour is scattered (settlement-reconciliation.service, wallet reconcile is admin-triggered not cron by default, child-address sweep, sanctions) but there is no job-registry read model or GET /admin/ops/jobs endpoint, DTO, client, or hook. Building it needs a jobs registry (name→schedule→last run/status, likely a new JobRun read model or a scheduler introspection) surfaced via a new contract + service + client + hook.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Run a background job now (Run now → reason → step-up → engine-action, engine-brokered)",
+          "gap": "mock-only-needs-backend",
+          "effort": "M",
+          "detail": "FE 'Run now' opens the shared ReasonModal→StepUpModal→EngineActionModal flow and executeRun just pushes a toast + closes — no network. There is no generic POST /admin/ops/jobs/:id/run endpoint. Two SPECIFIC job triggers DO exist and are the model to follow: admin-wallets.controller POST /admin/wallets/backfill-networks (enqueues BackfillRun via BullMQ, 202 + runId, @RequirePermission execute) and POST /admin/wallets/reconcile (WalletReconciliationService, idempotent, engine-brokered, no auto-debit). Building 'Run now' means a per-job dispatch endpoint that maps the ops-job id to its enqueue path, permission-gated + step-up, returning a run handle — reusing the BackfillRun/reconcile pattern. Not just-wire because there is no unified job-run endpoint and no client/hook.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "none",
+          "beContract": "none"
+        },
+        {
+          "feature": "Service health (per-transactable-service success rate) — already-built read model NOT surfaced on the Ops screen",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "detail": "AdminMetricsService.serviceHealth (ServiceHealthMetricsSchema: per service {total, completed, failed, successRate}) is fully built, wired into GET /admin/metrics/dashboard, has a contract, a client (metrics.getDashboardMetrics), and a hook (useDashboardMetrics), and already renders on the operational-metrics dashboard (per recent commit 031b677). The Ops screen's header promises 'error rates' but its tiles show PROVIDER health, not this per-service success-rate block — so this existing signal is simply not surfaced on /ops. Small effort to add a service-error-rate strip to OpsPage using the existing hook (intentional-ish omission — the data lives on the metrics dashboard today; decide whether Ops should duplicate it).",
+          "feMock": false,
+          "feApiClient": "getDashboardMetrics",
+          "beEndpoint": "admin-metrics.controller.ts:dashboard (GET /admin/metrics/dashboard)",
+          "beContract": "ServiceHealthMetrics / DashboardSummary"
+        },
+        {
+          "feature": "Wallet backfill run — enqueue + poll status (existing engine-brokered job) not surfaced as an Ops job",
+          "gap": "backend-only-not-surfaced",
+          "effort": "S",
+          "detail": "admin-wallets.controller POST /admin/wallets/backfill-networks (→ EnqueueBackfillResponse {runId}, 202) and GET /admin/wallets/backfill-runs/:id (→ BackfillRunStatusDto with scanned/perNetwork/failures/timestamps) are fully built + permission-gated, and BackfillRun is a real Prisma model. The Ops screen invents its own JOB_ROWS list and never surfaces this real, pollable job. No web-admin lib/api client or hook wraps these routes yet, so surfacing it is FE work (add a client fn + hook + a real job row / progress card). Good candidate to be the first real entry in the ops job registry.",
+          "feMock": true,
+          "feApiClient": "none",
+          "beEndpoint": "admin-wallets.controller.ts:backfillNetworks / getBackfillRun",
+          "beContract": "EnqueueBackfillResponse / BackfillRunStatusDto"
+        }
+      ]
+    }
+  ]
+}

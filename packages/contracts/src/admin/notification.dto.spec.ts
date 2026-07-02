@@ -6,6 +6,10 @@ import {
   NotificationTemplateUpsertRequestSchema,
   NotificationTemplatePreviewRequestSchema,
   NotificationTemplatePreviewResponseSchema,
+  DeliveryLogStatusSchema,
+  DeliveryLogEntrySchema,
+  DeliveryStatsSchema,
+  DeliveryLogResponseSchema,
 } from "./notification.dto";
 
 describe("NotificationChannelSchema", () => {
@@ -78,9 +82,9 @@ describe("NotificationTemplateSchema", () => {
 
 describe("NotificationTemplateListResponseSchema", () => {
   it("wraps an array of templates under items", () => {
-    expect(
-      NotificationTemplateListResponseSchema.parse({ items: [] }),
-    ).toEqual({ items: [] });
+    expect(NotificationTemplateListResponseSchema.parse({ items: [] })).toEqual(
+      { items: [] },
+    );
   });
 });
 
@@ -166,5 +170,94 @@ describe("NotificationTemplatePreviewResponseSchema", () => {
         renderedText: "Hi Ada",
       }).renderedSubject,
     ).toBe("Welcome");
+  });
+});
+
+describe("DeliveryLogStatusSchema", () => {
+  it("accepts the five terminal delivery states", () => {
+    for (const s of [
+      "delivered",
+      "sent",
+      "sending",
+      "bounced",
+      "failed",
+    ] as const) {
+      expect(DeliveryLogStatusSchema.parse(s)).toBe(s);
+    }
+  });
+
+  it("rejects an unmodelled status", () => {
+    expect(() => DeliveryLogStatusSchema.parse("queued")).toThrow();
+  });
+});
+
+describe("DeliveryLogEntrySchema", () => {
+  const valid = {
+    id: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+    channel: "whatsapp" as const,
+    templateKey: "kyc.approved",
+    eventType: "kyc_approved",
+    createdAt: "2026-07-01T09:00:00.000Z",
+    status: "delivered" as const,
+  };
+
+  it("accepts a well-formed delivery-log entry", () => {
+    expect(DeliveryLogEntrySchema.parse(valid)).toEqual(valid);
+  });
+
+  it("accepts a null templateKey (plain fallback message)", () => {
+    expect(
+      DeliveryLogEntrySchema.parse({ ...valid, templateKey: null }).templateKey,
+    ).toBeNull();
+  });
+
+  it("rejects a non-ISO createdAt", () => {
+    expect(() =>
+      DeliveryLogEntrySchema.parse({ ...valid, createdAt: "yesterday" }),
+    ).toThrow();
+  });
+
+  it("rejects an invalid channel", () => {
+    expect(() =>
+      DeliveryLogEntrySchema.parse({ ...valid, channel: "web" }),
+    ).toThrow();
+  });
+});
+
+describe("DeliveryStatsSchema", () => {
+  it("accepts rates within [0,1] and a non-negative sample size", () => {
+    const stats = { bounceRate: 0.004, complaintRate: 0.0002, sampleSize: 500 };
+    expect(DeliveryStatsSchema.parse(stats)).toEqual(stats);
+  });
+
+  it("rejects a rate above 1", () => {
+    expect(() =>
+      DeliveryStatsSchema.parse({
+        bounceRate: 1.2,
+        complaintRate: 0,
+        sampleSize: 10,
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a non-integer sample size", () => {
+    expect(() =>
+      DeliveryStatsSchema.parse({
+        bounceRate: 0,
+        complaintRate: 0,
+        sampleSize: 1.5,
+      }),
+    ).toThrow();
+  });
+});
+
+describe("DeliveryLogResponseSchema", () => {
+  it("wraps items + stats", () => {
+    const parsed = DeliveryLogResponseSchema.parse({
+      items: [],
+      stats: { bounceRate: 0, complaintRate: 0, sampleSize: 0 },
+    });
+    expect(parsed.items).toEqual([]);
+    expect(parsed.stats.sampleSize).toBe(0);
   });
 });

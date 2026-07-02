@@ -1,6 +1,7 @@
 import {
   AdminTxnMarkFailedRequestSchema,
   AdminTxnActionResponseSchema,
+  TxnRerunReconRequestSchema,
 } from "./txn-action.dto";
 
 describe("AdminTxnMarkFailedRequestSchema", () => {
@@ -53,6 +54,25 @@ describe("AdminTxnActionResponseSchema", () => {
         status: "failed",
         refunded: "yes",
       }),
+    ).toThrow();
+  });
+});
+
+describe("TxnRerunReconRequestSchema", () => {
+  it("accepts an optional reason", () => {
+    const parsed = TxnRerunReconRequestSchema.parse({
+      reason: "Re-running settlement recon after provider webhook replay.",
+    });
+    expect(parsed.reason).toContain("recon");
+  });
+
+  it("accepts an omitted reason (re-run recon is a read-only detection)", () => {
+    expect(TxnRerunReconRequestSchema.parse({})).toEqual({});
+  });
+
+  it("rejects a reason longer than 500 characters", () => {
+    expect(() =>
+      TxnRerunReconRequestSchema.parse({ reason: "x".repeat(501) }),
     ).toThrow();
   });
 });

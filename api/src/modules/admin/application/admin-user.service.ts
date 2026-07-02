@@ -18,6 +18,21 @@ import {
 
 export type AdminUserStatusChange = 'active' | 'suspended' | 'offboarded';
 
+/**
+ * The admin display name to persist/show: the caller-supplied name when it is
+ * non-blank, otherwise the email local-part (the part before the '@'). Never
+ * returns an empty string. Shared by invitation-accept, the AdminMe view, and
+ * the list serializer so the fallback is identical everywhere.
+ */
+export function resolveAdminDisplayName(
+  email: string,
+  displayName?: string | null,
+): string {
+  const trimmed = displayName?.trim();
+  if (trimmed) return trimmed;
+  return email.split('@')[0]?.trim() || email;
+}
+
 // ADM-01 admin user management: listing, lookup, role changes, and lifecycle
 // status changes. Offboarding additionally revokes every live session for the
 // admin so access is cut immediately. All mutations are audited.

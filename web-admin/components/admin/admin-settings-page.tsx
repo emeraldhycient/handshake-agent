@@ -2,27 +2,38 @@
 
 /**
  * AdminSettingsPage — the signed-in operator's OWN profile + preferences
- * (design §6.16). Pixel-for-pixel reproduction of
- * `docs/design-ref/screens/AdminSettings.html`: a profile card (52px striped
- * avatar, name, email · role, "2FA enrolled" pill) followed by a Preferences
- * card whose first row is the Theme toggle and whose remaining rows are the
- * design's `prefRows` notification-preference toggles.
+ * (design §6.16, `docs/design-ref/screens/AdminSettings.html`), wired to real data.
  *
- * DESIGN REPRODUCTION ONLY — no real API data. The profile identity is the
- * design's own seed content (`admins[0]` = "Amara Okeke", amara@handshake.ng,
- * Super Admin, tfa:true → "2FA enrolled"; logic.js lines 132 / 168 / 411-412).
- * Real-data reintegration (the old `useAdminMe` wiring) is a separate later step.
+ * Reads: the profile card (real displayName + email · role + the "2FA enrolled"
+ * pill) comes from `useAdminMe()`, and an Active-sessions card lists the operator's
+ * own console sessions from `useSessions()` (metadata only — device, IP, expiry;
+ * the token hash is never surfaced). The Theme row stays wired to the Zustand theme
+ * store.
  *
- * The only live behaviour is the design's own:
- * - the Theme row is wired to the Zustand theme store (`toggleTheme`, mirrored to
- *   the DOM by `components/theme-provider.tsx`), matching the markup's
- *   `onClick="{{ toggleTheme }}"` + `{{ themeName }}` label; and
- * - the `prefRows` toggles hold design-faithful local UI state (no endpoint yet),
- *   matching the markup's `p.track` / `p.knob` soft toggle.
+ * Phase 8: when the operator is not enrolled, the profile card offers an "Enroll 2FA"
+ * button that opens the shared `MfaEnrollDialog`. The three notification-preference
+ * toggles are wired to `useAdminPreferences()` / `useUpdateAdminPreferences()`: the
+ * ON/OFF state is DERIVED (useMemo) from the fetched preferences layered with local
+ * optimistic overrides — never seeded into state via an effect — and flipping a row
+ * PATCHes the FULL preference set (the endpoint is a full-state replace). Every
+ * fetched surface has four branches (loading/error/empty/data).
  */
-import { useState } from "react"
+import { useMemo, useState } from "react"
 
+import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
+import { MfaEnrollDialog } from "@/components/admin/mfa-enroll-dialog"
+import {
+  useAdminMe,
+  useAdminPreferences,
+  useSessions,
+  useUpdateAdminPreferences,
+} from "@/lib/query/hooks"
 import { useThemeStore } from "@/lib/store/theme-store"
+import type {
+  AdminPreferences,
+  AdminSessionView,
+} from "@handshake-agent/contracts"
 import type { AdminPreferenceKey, AdminPreferenceRow } from "@/types/components"
 
 /**
@@ -35,20 +46,8 @@ const STRIPE_AVATAR =
   "repeating-linear-gradient(45deg, color-mix(in srgb, var(--brand-green) 72%, white) 0 5px, var(--brand-green) 5px 10px)"
 
 /**
- * The design's own operator identity (logic.js `admins[0]`, line 132) surfaced by
- * `adminName` / `roleLabel` (lines 411-412). Reproduced verbatim so the screen
- * shows exactly what the design shows.
- */
-const OPERATOR = {
-  name: "Amara Okeke",
-  email: "amara@handshake.ng",
-  roleLabel: "Super Admin",
-} as const
-
-/**
- * The design's `prefRows` (markup line 8, `hint-placeholder-count="3"`). The
- * markup truncates the row content, so these reproduce the three representative
- * comms-preference rows faithfully with their default toggle values.
+ * The three notification-preference rows (design markup line 8). Each `key` maps
+ * to a boolean on the `AdminPreferences` DTO; the label/desc are display copy.
  */
 const PREFERENCE_ROWS: readonly AdminPreferenceRow[] = [
   {
@@ -68,18 +67,25 @@ const PREFERENCE_ROWS: readonly AdminPreferenceRow[] = [
   },
 ]
 
-/** The default `prefRows` toggle values shown in the design. */
-const DEFAULT_PREFS: Record<AdminPreferenceKey, boolean> = {
-  emailAlerts: true,
-  approvalMentions: true,
-  weeklyDigest: false,
-}
-
 /**
- * Profile card (markup line 4) — 52px striped avatar, name, email · role, and the
- * "2FA enrolled" success pill (the markup hardcodes the enrolled state).
+ * Profile card (markup line 4) — 52px striped avatar, the real displayName, email ·
+ * role, and the MFA state. The pill reflects the real `mfaEnabled`: enrolled
+ * (success) or a neutral "2FA not set" so the operator sees their true posture; when
+ * not enrolled it also offers an "Enroll 2FA" button that opens the MFA dialog.
  */
-function ProfileCard() {
+function ProfileCard({
+  displayName,
+  email,
+  roleLabel,
+  mfaEnabled,
+  onEnroll,
+}: {
+  displayName: string
+  email: string
+  roleLabel: string
+  mfaEnabled: boolean
+  onEnroll: () => void
+}) {
   return (
     <div className="mb-[14px] flex items-center gap-[15px] rounded-[16px] border border-line bg-card p-[18px_20px]">
       <span
@@ -89,37 +95,84 @@ function ProfileCard() {
       />
       <div className="min-w-0 flex-1">
         <div className="truncate text-[16px] font-extrabold text-ink">
-          {OPERATOR.name}
+          {displayName}
         </div>
         <div className="truncate text-[12.5px] text-ink3">
-          {OPERATOR.email} · {OPERATOR.roleLabel}
+          {email} · {roleLabel}
         </div>
       </div>
-      <div className="flex items-center gap-[7px] rounded-full bg-sok px-[12px] py-[6px] text-[11.5px] font-bold text-tok">
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          aria-hidden="true"
-        >
-          <path
-            d="M7 11V8a5 5 0 0 1 10 0v3"
-            stroke="currentColor"
-            strokeWidth="1.7"
-          />
-          <rect
-            x="5"
-            y="11"
+      {mfaEnabled ? (
+        <div className="flex items-center gap-[7px] rounded-full bg-sok px-[12px] py-[6px] text-[11.5px] font-bold text-tok">
+          <svg
             width="14"
-            height="9"
-            rx="2"
-            stroke="currentColor"
-            strokeWidth="1.7"
-          />
-        </svg>
-        2FA enrolled
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M7 11V8a5 5 0 0 1 10 0v3"
+              stroke="currentColor"
+              strokeWidth="1.7"
+            />
+            <rect
+              x="5"
+              y="11"
+              width="14"
+              height="9"
+              rx="2"
+              stroke="currentColor"
+              strokeWidth="1.7"
+            />
+          </svg>
+          2FA enrolled
+        </div>
+      ) : (
+        <div className="flex flex-none items-center gap-[10px]">
+          <div className="flex items-center gap-[7px] rounded-full bg-swn px-[12px] py-[6px] text-[11.5px] font-bold text-twn">
+            2FA not set
+          </div>
+          <button
+            type="button"
+            onClick={onEnroll}
+            className="cursor-pointer rounded-[10px] bg-brand-green px-[14px] py-2 text-[12.5px] font-bold text-white transition-opacity outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            Enroll 2FA
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Loading skeleton mirroring the profile card's height + shape. */
+function ProfileCardSkeleton() {
+  return (
+    <div className="mb-[14px] flex items-center gap-[15px] rounded-[16px] border border-line bg-card p-[18px_20px]">
+      <Skeleton className="size-[52px] flex-none rounded-full" />
+      <div className="min-w-0 flex-1">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="mt-2 h-3 w-52" />
       </div>
+      <Skeleton className="h-7 w-24 rounded-full" />
+    </div>
+  )
+}
+
+/** Inline error card for a failed profile fetch, with a retry affordance. */
+function ProfileCardError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="mb-[14px] rounded-[16px] border border-sdn bg-sdn/40 p-[18px_20px] text-center">
+      <div className="text-[13.5px] font-bold text-tdn">
+        Couldn&apos;t load your profile
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-2 text-[12.5px] font-bold text-tif transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        Try again
+      </button>
     </div>
   )
 }
@@ -153,9 +206,9 @@ function ThemeRow() {
 }
 
 /**
- * One `prefRows` toggle row (markup line 8) — label/desc + the design's soft
- * toggle: a 46×26 track whose `background` = `p.track` and whose 20px knob sits at
- * `left = p.knob`, transitioning on `left`.
+ * One notification-preference toggle row (markup line 8) — label/desc + the shared
+ * `Switch` primitive. Controlled by the derived `checked`; flipping it fires
+ * `onToggle(next)` (which PATCHes the full preference set).
  */
 function PreferenceRow({
   row,
@@ -164,7 +217,7 @@ function PreferenceRow({
 }: {
   row: AdminPreferenceRow
   checked: boolean
-  onToggle: () => void
+  onToggle: (next: boolean) => void
 }) {
   return (
     <div className="flex items-center justify-between border-b border-line2 py-[12px]">
@@ -172,51 +225,184 @@ function PreferenceRow({
         <div className="text-[12.5px] font-bold text-ink">{row.label}</div>
         <div className="text-[11px] text-ink3">{row.desc}</div>
       </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
+      <Switch
+        checked={checked}
+        onCheckedChange={onToggle}
         aria-label={row.label}
-        onClick={onToggle}
-        style={{
-          background: checked ? "var(--brand-green)" : "var(--card2)",
-        }}
-        className="relative h-[26px] w-[46px] cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-      >
-        <span
-          className="absolute top-[3px] size-[20px] rounded-full bg-white transition-[left] duration-150"
-          style={{ left: checked ? "23px" : "3px" }}
-        />
-      </button>
+      />
     </div>
   )
 }
 
-/** Preferences card (markup lines 5-9) — the Theme row then the `prefRows`. */
-function PreferencesCard() {
-  const [prefs, setPrefs] =
-    useState<Record<AdminPreferenceKey, boolean>>(DEFAULT_PREFS)
+/** Card chrome shared by every branch of the preferences section (Theme row + body). */
+function PreferencesCardShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="rounded-[16px] border border-line bg-card p-[18px_20px]">
       <div className="mb-[6px] text-[13px] font-extrabold text-ink">
         Preferences
       </div>
       <ThemeRow />
+      {children}
+    </div>
+  )
+}
+
+/**
+ * Preferences card (markup lines 5-9) — the Theme row then the notification toggles.
+ * The toggles' ON/OFF is DERIVED (useMemo) from the fetched `AdminPreferences`
+ * layered with local optimistic overrides — never seeded into state via an effect.
+ * Flipping a row records the override immediately (so the Switch holds) and PATCHes
+ * the FULL preference set (a full-state replace). Four branches (loading/error/
+ * empty(n.a.)/data).
+ */
+function PreferencesCard() {
+  const query = useAdminPreferences()
+  const update = useUpdateAdminPreferences()
+
+  // Local optimistic overrides layered over the fetched preferences; the mutation's
+  // onSuccess primes the cache so server + override agree post-write.
+  const [overrides, setOverrides] = useState<Partial<AdminPreferences>>({})
+
+  const effective = useMemo<AdminPreferences | null>(
+    () => (query.data ? { ...query.data, ...overrides } : null),
+    [query.data, overrides]
+  )
+
+  /** Flip one flag: hold it optimistically, then PATCH the full set. */
+  function toggle(key: AdminPreferenceKey, next: boolean) {
+    if (!effective) return
+    const nextPrefs: AdminPreferences = { ...effective, [key]: next }
+    setOverrides((prev) => ({ ...prev, [key]: next }))
+    update.mutate(nextPrefs)
+  }
+
+  if (query.isLoading) {
+    return (
+      <PreferencesCardShell>
+        <div className="flex flex-col gap-2.5 py-2" aria-busy="true">
+          <Skeleton className="h-6 w-full" />
+          <Skeleton className="h-6 w-full" />
+          <Skeleton className="h-6 w-full" />
+        </div>
+      </PreferencesCardShell>
+    )
+  }
+
+  if (query.isError || !effective) {
+    return (
+      <PreferencesCardShell>
+        <div className="py-4">
+          <div className="text-[12.5px] font-bold text-tdn">
+            Couldn&apos;t load your preferences
+          </div>
+          <button
+            type="button"
+            onClick={() => void query.refetch()}
+            className="mt-2 text-[12.5px] font-bold text-tif transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            Try again
+          </button>
+        </div>
+      </PreferencesCardShell>
+    )
+  }
+
+  return (
+    <PreferencesCardShell>
       {PREFERENCE_ROWS.map((row) => (
         <PreferenceRow
           key={row.key}
           row={row}
-          checked={prefs[row.key]}
-          onToggle={() =>
-            setPrefs((prev) => ({ ...prev, [row.key]: !prev[row.key] }))
-          }
+          checked={effective[row.key]}
+          onToggle={(next) => toggle(row.key, next)}
         />
       ))}
+    </PreferencesCardShell>
+  )
+}
+
+/** Human-readable expiry label for a session (falls back to the raw string). */
+function expiryLabel(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return date.toLocaleString()
+}
+
+/** One active-session row — device (UA), IP, and expiry. Metadata only. */
+function SessionRow({ session }: { session: AdminSessionView }) {
+  const stepUp = session.stepUpCompletedAt !== null
+  return (
+    <div className="flex items-center justify-between border-b border-line2 py-[12px] last:border-b-0">
+      <div className="min-w-0">
+        <div className="truncate text-[12.5px] font-bold text-ink">
+          {session.userAgent ?? "Unknown device"}
+        </div>
+        <div className="mt-0.5 truncate text-[11px] text-ink3 tabular-nums">
+          {session.ipAddress ?? "—"} · expires {expiryLabel(session.expiresAt)}
+        </div>
+      </div>
+      {stepUp && (
+        <span className="ml-3 flex-none rounded-full bg-sok px-[9px] py-[2px] text-[10.5px] font-bold text-tok">
+          Stepped up
+        </span>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Active-sessions card — the operator's own console sessions (`useSessions`).
+ * Metadata only; the token hash is never surfaced. Read-only here — revoking a
+ * session is a later phase. Four branches (loading/error/empty/data).
+ */
+function SessionsCard() {
+  const query = useSessions()
+  const sessions = query.data?.items ?? []
+
+  return (
+    <div className="mt-[14px] rounded-[16px] border border-line bg-card p-[18px_20px]">
+      <div className="mb-[6px] text-[13px] font-extrabold text-ink">
+        Active sessions
+      </div>
+
+      {query.isLoading && (
+        <div className="flex flex-col gap-2 py-1" aria-busy="true">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+        </div>
+      )}
+
+      {query.isError && (
+        <div className="py-6 text-center">
+          <div className="text-[13px] font-bold text-tdn">
+            Couldn&apos;t load your sessions
+          </div>
+          <button
+            type="button"
+            onClick={() => void query.refetch()}
+            className="mt-2 text-[12.5px] font-bold text-tif transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            Try again
+          </button>
+        </div>
+      )}
+
+      {query.isSuccess && sessions.length === 0 && (
+        <p className="py-4 text-[12.5px] text-ink3">No active sessions.</p>
+      )}
+
+      {query.isSuccess &&
+        sessions.map((session) => (
+          <SessionRow key={session.id} session={session} />
+        ))}
     </div>
   )
 }
 
 export function AdminSettingsPage() {
+  const meQuery = useAdminMe()
+  const [enrollOpen, setEnrollOpen] = useState(false)
+
   return (
     <div className="mx-auto max-w-[820px] p-[26px_30px_60px]">
       <div className="mb-4">
@@ -228,8 +414,24 @@ export function AdminSettingsPage() {
         </p>
       </div>
 
-      <ProfileCard />
+      {meQuery.isLoading && <ProfileCardSkeleton />}
+      {meQuery.isError && (
+        <ProfileCardError onRetry={() => void meQuery.refetch()} />
+      )}
+      {meQuery.isSuccess && (
+        <ProfileCard
+          displayName={meQuery.data.displayName}
+          email={meQuery.data.email}
+          roleLabel={meQuery.data.role.name}
+          mfaEnabled={meQuery.data.mfaEnabled}
+          onEnroll={() => setEnrollOpen(true)}
+        />
+      )}
+
       <PreferencesCard />
+      <SessionsCard />
+
+      <MfaEnrollDialog open={enrollOpen} onOpenChange={setEnrollOpen} />
     </div>
   )
 }

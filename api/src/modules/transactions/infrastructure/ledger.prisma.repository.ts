@@ -12,13 +12,24 @@
 
 import { Injectable } from '@nestjs/common';
 
-import { LedgerAccountType } from '../../../../generated/prisma/client';
+import { LedgerAccountType, Prisma } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   ILedgerRepository,
   LedgerEntryRecord,
+  LedgerGlobalFilter,
+  LedgerGlobalPage,
   LedgerIntegrityResult,
+  LedgerSequenceIntegrityResult,
 } from '../application/ports/ledger.repository.port';
+
+/** Matches a syntactically valid UUID — a `@db.Uuid` column rejects anything else. */
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isValidUuid(value: string): boolean {
+  return UUID_REGEX.test(value);
+}
 
 /** A Prisma Decimal exposes a canonical `toString()`. */
 function decimalToString(value: { toString(): string }): string {
@@ -224,6 +235,101 @@ export class LedgerPrismaRepository implements ILedgerRepository {
       balanced: brokenAt === null,
       legCount: rows.length,
       brokenAt,
+    };
+  }
+
+  /**
+   * Admin oversight (READ-ONLY): a keyset page of ledger legs across ALL accounts,
+   * filtered by an optional accountType and/or currency, newest-first by
+   * (postedAt desc, id desc). The per-account `sequence` cannot order across
+   * accounts, so `id` (a time-ordered uuid7) is the stable global tiebreaker.
+   *
+   * Fetches `limit + 1` rows to derive `nextCursor` without a count query. The
+   * cursor is the last-seen entry id; its postedAt is resolved so the keyset seek
+   * compares on (postedAt, id). A malformed/unknown cursor yields the first page.
+   */
+  async listGlobal(
+    filter: LedgerGlobalFilter,
+    page: { cursor?: string; limit: number },
+  ): Promise<LedgerGlobalPage> {
+    const where: Prisma.LedgerEntryWhereInput = {
+      ...(filter.accountType !== undefined
+        ? { accountType: filter.accountType as LedgerAccountType }
+        : {}),
+      ...(filter.currency !== undefined ? { currency: filter.currency } : {}),
+    };
+
+    // Resolve the cursor row's postedAt so the keyset compares on (postedAt, id).
+    // A non-UUID or unknown cursor yields no anchor → return the first page.
+    const cursorAnchor =
+      page.cursor !== undefined && isValidUuid(page.cursor)
+        ? await this.prisma.ledgerEntry.findUnique({
+            where: { id: page.cursor },
+            select: { postedAt: true, id: true },
+          })
+        : null;
+
+    const keysetWhere: Prisma.LedgerEntryWhereInput =
+      cursorAnchor !== null
+        ? {
+            OR: [
+              { postedAt: { lt: cursorAnchor.postedAt } },
+              {
+                postedAt: cursorAnchor.postedAt,
+                id: { lt: cursorAnchor.id },
+              },
+            ],
+          }
+        : {};
+
+    const rows = await this.prisma.ledgerEntry.findMany({
+      where: { AND: [where, keysetWhere] },
+      orderBy: [{ postedAt: 'desc' }, { id: 'desc' }],
+      take: page.limit + 1,
+      select: LEDGER_FIELDS,
+    });
+
+    // A full +1 page means there is at least one more row → emit a cursor.
+    const hasMore = rows.length > page.limit;
+    const items = hasMore ? rows.slice(0, page.limit) : rows;
+    const nextCursor = hasMore ? items[items.length - 1].id : null;
+
+    return { items: items.map(toLedgerRecord), nextCursor };
+  }
+
+  /**
+   * Admin oversight (READ-ONLY): walks every (accountType, accountId, currency)
+   * sub-ledger and asserts its `sequence` column is a gapless, correctly-ordered
+   * 1..N run. The unique constraint (accountType, accountId, currency, sequence)
+   * guarantees no duplicates, so continuity is proven by: min sequence === 1,
+   * max sequence === count, and count === distinct-count (always true given the
+   * constraint). Reports the first offending sub-ledger key; NEVER mutates.
+   */
+  async verifyGlobalSequenceIntegrity(): Promise<LedgerSequenceIntegrityResult> {
+    // One grouped aggregate per sub-ledger: the row count plus the min/max
+    // sequence. A continuous 1..N run has min=1 and max=count.
+    const groups = await this.prisma.ledgerEntry.groupBy({
+      by: ['accountType', 'accountId', 'currency'],
+      _count: { _all: true },
+      _min: { sequence: true },
+      _max: { sequence: true },
+    });
+
+    let brokenAccount: string | null = null;
+    for (const g of groups) {
+      const count = g._count._all;
+      const min = g._min.sequence;
+      const max = g._max.sequence;
+      if (min !== 1 || max !== count) {
+        brokenAccount = `${g.accountType}:${g.accountId}:${g.currency}`;
+        break;
+      }
+    }
+
+    return {
+      ok: brokenAccount === null,
+      accountsChecked: groups.length,
+      brokenAccount,
     };
   }
 }

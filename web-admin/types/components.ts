@@ -17,6 +17,7 @@ import type {
   KycSubmissionDetail,
   NotificationTemplate,
   Role,
+  TreasuryAlert,
 } from "@handshake-agent/contracts"
 
 // ─── Shell + gating ──────────────────────────────────────────────────────────────
@@ -62,32 +63,26 @@ export interface CommandPaletteProps {
   destinations: readonly NavDestination[]
 }
 
-/**
- * The "view-as" impersonation roles offered by the account menu. Not RBAC —
- * a UX affordance that scopes the banner + displayed role label (the real
- * permission-gated nav is left untouched; see app-shell §view-as).
- */
-export type ViewAsRoleId =
-  | "super_admin"
-  | "operations"
-  | "compliance"
-  | "finance"
-  | "support"
+/** The four alert-pip badges the sidebar can show on a nav item. */
+export type NavBadgeKey = "kyc" | "stuck" | "recon" | "approvals"
 
-export interface ViewAsRole {
-  id: ViewAsRoleId
-  label: string
-}
+/**
+ * Live counts for the sidebar nav-item alert pips, keyed by badge. Sourced from
+ * the real read endpoints (KYC review-queue depth / stuck-transaction count /
+ * open reconciliation breaks / maker-checker requests awaiting the caller) — the
+ * design's hardcoded counts are gone. A `0` renders no pip.
+ */
+export type NavBadgeCounts = Record<NavBadgeKey, number>
 
 export interface AccountMenuProps {
   /** The signed-in operator's email (from `useAdminMe`). */
   email: string
-  /** The operator's real role label (from `useAdminMe`), shown when not viewing-as. */
+  /**
+   * The operator's real role label (from `useAdminMe`), shown as an honest
+   * read-only display on the account pill. There is no view-as impersonation
+   * switcher — the console never re-scopes to another role client-side.
+   */
   realRoleLabel: string
-  /** The currently selected view-as role, or null when unset. */
-  viewAs: ViewAsRole | null
-  /** Select a view-as role (lifted to the shell). */
-  onViewAs: (role: ViewAsRole) => void
   /** Sign the operator out (the shell's auth-store `clear`). */
   onSignOut: () => void
 }
@@ -235,6 +230,16 @@ export interface UserActionsProps {
   user: AdminEndUserDetail
 }
 
+/**
+ * The Users-directory bulk-bar actions (tag + message) over the current selection.
+ * `selectedIds` is the explicit set the two operations target; `onDone` is called
+ * after a successful op so the page can clear the selection.
+ */
+export interface UsersBulkActionsProps {
+  selectedIds: readonly string[]
+  onDone: () => void
+}
+
 // ─── KYC review page ─────────────────────────────────────────────────────────────
 
 /**
@@ -341,6 +346,13 @@ export interface ComplianceReportSubmitDialogProps {
 export interface BeneficiaryOverrideProps {
   /** The beneficiary whose first-use cooling-off lock can be cleared. */
   beneficiary: AdminBeneficiary
+}
+
+// ─── Treasury writes (§6.13) ────────────────────────────────────────────────────────
+
+export interface TreasuryAlertAcknowledgeProps {
+  /** The threshold-breach alert to acknowledge (captures an audited note). */
+  alert: TreasuryAlert
 }
 
 // ─── Blocked list page (§6.7) ──────────────────────────────────────────────────────
@@ -714,39 +726,11 @@ export interface DiscoveredAssetRow {
 }
 
 // ─── Templates page (design §6.19) ──────────────────────────────────────────────────
-// The console has no dedicated notification-template listing endpoint wired to this
-// screen, and the design reproduction is markup-first: the Templates screen renders a
-// `1fr 1fr` grid of static preview cards (channel chip + mono name + approval pill,
-// a locale·vars line, and a body preview). These shapes describe the component's local
-// design-faithful sample content, not a contracts DTO. Nothing here moves money (§3.1).
-
-/**
- * The channel a template sends on — selects the channel chip's status-token color
- * pair (WhatsApp=success sok/tok, Email=info sif/tif).
- */
-export type TemplateChannel = "WhatsApp" | "Email"
-
-/**
- * A template's Meta/Resend approval state — selects the trailing approval pill's
- * status-token color pair (Approved=success, Pending=warn, Rejected=danger).
- */
-export type TemplateApproval = "Approved" | "Pending" | "Rejected"
-
-/** One template preview card in the design §6.19 grid. */
-export interface TemplateCardRow {
-  /** Stable key for the React list (the template's mono name). */
-  id: string
-  channel: TemplateChannel
-  /** Mono template key (e.g. "kyc_verified_v2"). */
-  name: string
-  approval: TemplateApproval
-  /** Locale tag (e.g. "en" / "en_NG"). */
-  locale: string
-  /** Number of interpolated variables the body carries. */
-  vars: number
-  /** Body preview text shown in the inset `bg-card2` box. */
-  body: string
-}
+// The Templates screen is WIRED to the real GET /admin/notification-templates
+// endpoint (Phase 6a) and maps the contract's `NotificationTemplate` directly onto
+// each card, so it no longer needs local design-faithful card types here. The
+// design's approval pill has no backing contract field and is omitted (recorded as a
+// shape gap for a later backend-enrichment pass).
 
 // ─── Currency catalog page (design §6.24) ───────────────────────────────────────────
 // Design-reproduction: the table renders the design's OWN mock currency seed
@@ -781,22 +765,6 @@ export interface CurrencyCatalogRow {
 // panels render the design's own representative sample content (module-level consts,
 // matching the seed() dataset shapes + operator/vendor names). Real-data reintegration
 // is a separate later step. Nothing here moves money (§3.1).
-
-/** A vendor port's operational status → the canonical status pill token pair. */
-export type TicketVendorStatus = "live" | "paused" | "onboarding"
-
-/**
- * One "Vendor ports" row (design §6.21). Design-reproduction sample content —
- * `name` is the design's vendor port label (mono); `commission` + `status` are the
- * design's representative per-vendor values.
- */
-export interface TicketVendorPort {
-  /** The vendor port label (mono, e.g. "ticketing.eventbrite"). */
-  name: string
-  /** Per-vendor commission label (e.g. "6.5%"). */
-  commission: string
-  status: TicketVendorStatus
-}
 
 /** A recent-order row's payment status → the canonical status pill (§5 map). */
 export type TicketOrderStatus =
@@ -934,33 +902,6 @@ export interface WhatsAppHealthRow {
   tone: "ok" | "warn" | "neutral"
 }
 
-/**
- * One "Flows (E2E encrypted)" row (design `waFlows`). `live` drives the trailing
- * pill: a live flow renders the success "Live" pill.
- */
-export interface WhatsAppFlowRow {
-  /** Stable key for the row (used as the React list key). */
-  id: string
-  /** The flow's display name (e.g. "KYC & confirmation flow"). */
-  name: string
-  /** The one-line description under the name. */
-  desc: string
-  /** Whether this E2E flow is live (drives the trailing pill). */
-  live: boolean
-}
-
-/**
- * design-faithful: one redacted chat bubble in the live-conversation monitor. No
- * conversation-monitor endpoint exists yet, so these are representative samples.
- */
-export interface WhatsAppConvoBubble {
-  id: string
-  /** `in` = inbound user message (left, card2) · `out` = agent reply (right, brand green). */
-  direction: "in" | "out"
-  /** The (redacted) bubble text. */
-  text: string
-}
-
 // ─── Limits & velocity page (design §6.26) ─────────────────────────────────────────
 // DESIGN REPRODUCTION (markup docs/design-ref/screens/Limits.html): tier tabs +
 // two cards ("Amount caps · {tier}" | "Velocity & counts · {tier}"). The rows are
@@ -1055,73 +996,25 @@ export interface OpsJobRow {
 }
 
 // ─── Providers page (design §6.27) ──────────────────────────────────────────────────
-// Provider adapter cards + a mock→live readiness checklist. No provider-config /
-// provider-registry endpoint exists yet, so every field here is design-faithful
-// representative content shaped exactly like the design markup
-// (docs/design-ref/screens/Providers.html). The screen is read-only apart from the
-// "Reveal · step-up" gesture, which routes through the REAL step-up re-auth before
-// the (still design-faithful sample) key value is shown, and a "Test connection"
-// button that runs no live probe yet. Nothing here moves money (§3.1).
-
-/**
- * A provider adapter's operational status → the canonical status pill token pair
- * (ok=success, degraded=warn, down=danger, mock=info). Colour is never the sole
- * signal — the pill's status word carries the state in text. `ok` / `degraded`
- * mirror the design's seed provider records (docs/design-ref/logic.js line 139).
- */
-export type ProviderStatus = "ok" | "degraded" | "down" | "mock"
-
-/**
- * One provider adapter card (design §6.27). Every field is the design's own seed
- * content (docs/design-ref/logic.js `providers`, line 139) — a design reproduction,
- * not live data — mirroring the platform's real adapters: Blockradar (crypto WaaS),
- * Flutterwave (fiat rails), Resend (email), WhatsApp Cloud API, Anthropic (agent LLM).
- */
-export interface ProviderCard {
-  /** Stable key + a11y label root (e.g. "blockradar"). */
-  id: string
-  /** The 2-letter mark shown in the rounded tile (design `ini()` of the name). */
-  mark: string
-  /** Provider display name. */
-  name: string
-  /** The adapter category line under the name (design `p.kind`). */
-  kind: string
-  status: ProviderStatus
-  /** Round-trip latency suffix shown after the status word (design `p.latency`). */
-  latency: string
-  /** True → the amber MOCK-MODE banner is shown (the adapter is wrapped in a mock). */
-  mock: boolean
-  /** The masked API-key preview (design seed sample — never a real secret). */
-  keyMasked: string
-  /**
-   * The (design-faithful) revealed key value, shown only after a real step-up. The
-   * seed masks the key, so this is a representative full sample, never a live secret.
-   */
-  keyRevealed: string
-  /** The bound capabilities line (design `p.caps`, e.g. "crypto.buy, sell, send, swap"). */
-  caps: string
-}
-
-/**
- * One "Mock → live readiness checklist" row (design §6.27). `done` selects the
- * check vs pending-dash icon + its tinted tile; the label carries the requirement.
- */
-export interface ProviderReadinessItem {
-  id: string
-  label: string
-  /** True → a green check tile; false → a muted pending-dash tile. */
-  done: boolean
-}
+// Provider adapter cards + a mock→live readiness checklist, WIRED to the real
+// provider-registry read endpoint (GET /admin/providers, Phase 6b). The card/
+// readiness data shapes are contract-owned (`ProviderCardView` /
+// `ProviderReadinessItem` from `@handshake-agent/contracts`) — this file keeps only
+// the presentational prop type. The screen is READ-ONLY: the API returns
+// secret-PRESENCE booleans, never key values (§3.4/§3.5), so there is no reveal of
+// any real secret; "Test connection" / key reveal are Phase 7. Nothing moves money
+// (§3.1). Status → pill token pair: ok=success, degraded=warn, down=danger,
+// mock=info — colour is never the sole signal (the status word carries the state).
 
 export interface ProviderCardViewProps {
-  /** The provider adapter this card renders. */
-  provider: ProviderCard
-  /** Open the step-up dialog to reveal this provider's masked key. */
-  onReveal: (id: string) => void
-  /** True while this provider's key is revealed (post step-up). */
-  revealed: boolean
-  /** Re-mask this provider's key. */
-  onRemask: (id: string) => void
+  /** The provider adapter card this row renders (contract-owned shape). */
+  provider: import("@handshake-agent/contracts").ProviderCardView
+}
+
+/** Props for the ProviderTestButton (the Phase-7 "Test connection" liveness probe). */
+export interface ProviderTestButtonProps {
+  /** The stable provider key to probe (e.g. "blockradar"). */
+  providerKey: string
 }
 
 // ─── Approvals page (design §6 Approvals, `screens/Approvals.html`) ──────────────
@@ -1180,7 +1073,7 @@ export interface ApprovalRequest {
 }
 
 // ─── Shared flow modals (design template §5 "Flow modals", lines 1161-1259) ─────────
-// The five funds-safety flow modals share one frame (fixed scrim rgba(10,20,15,0.55)
+// The funds-safety flow modals share one frame (fixed scrim rgba(10,20,15,0.55)
 // + blur, centred radius-20 panel, flow shadow, hsPop). Each is opened by a caller
 // (`open` + `onOpenChange`) and takes the design's per-step content props. They are
 // pure presentation — they do NOT move money; a real callsite wires their submit to a
@@ -1255,6 +1148,21 @@ export interface EngineActionModalProps extends FlowModalBaseProps {
   onExecute: () => void
 }
 
+/**
+ * ManualCreditModal — the input step for a manual wallet credit (Phase 7 WRITE).
+ * Collects the asset (from the user's live wallet assets) + a positive amount, then
+ * hands them to the flow via `onContinue`. It is presentation only: it moves no money
+ * (the engine-brokered credit runs only after reason → step-up → maker-checker →
+ * approval by a SECOND admin, §3.1). The Continue CTA activates only for a valid,
+ * positive amount.
+ */
+export interface ManualCreditModalProps extends FlowModalBaseProps {
+  /** The assets the operator can credit (the user's live wallet assets). */
+  assets: readonly string[]
+  /** Called with the chosen asset + entered amount once both are valid. */
+  onContinue: (asset: string, amount: string) => void
+}
+
 /** One from→to diff row in the maker-checker modal. */
 export interface MakerCheckerDiffRow {
   /** The changed field's label. */
@@ -1275,21 +1183,6 @@ export interface MakerCheckerModalProps extends FlowModalBaseProps {
   diff: MakerCheckerDiffRow[]
   /** Fired when the operator submits for a second admin's approval. */
   onSubmit: () => void
-}
-
-/**
- * PiiRevealModal (design line 1234) — red eye icon + danger warning, "access logged"
- * copy, Cancel / dark "Continue to step-up". `onContinue` fires when the dark CTA is
- * pressed (the caller then opens the StepUpModal). The title is fixed ("Reveal
- * decrypted PII"), so only the PII label varies.
- */
-export interface PiiRevealModalProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  /** The identity field about to be revealed (e.g. "NIN", "BVN"). */
-  piiLabel: string
-  /** Fired when the operator confirms and proceeds to step-up. */
-  onContinue: () => void
 }
 
 // ─── Shared UI primitives (design §5) ──────────────────────────────────────────────

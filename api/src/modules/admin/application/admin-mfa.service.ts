@@ -1,7 +1,8 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 import { Inject, Injectable } from '@nestjs/common';
 
+import { AuditService } from '../../../core/audit/application/audit.service';
 import {
   ADMIN_USER_REPOSITORY,
   type IAdminUserRepository,
@@ -41,6 +42,7 @@ export class AdminMfaService {
     private readonly hasher: IPasswordHasher,
     @Inject(MFA_CIPHER)
     private readonly cipher: IMfaCipher,
+    private readonly audit: AuditService,
   ) {}
 
   async enroll(
@@ -60,6 +62,30 @@ export class AdminMfaService {
       otpauthUri: this.totp.keyUri(adminEmail, secret),
       recoveryCodes,
     };
+  }
+
+  /**
+   * Reset MFA for ANOTHER admin (a sensitive RBAC action): clear the target's
+   * encrypted secret + recovery codes and set mfaEnabled=false. The target must
+   * re-enroll to regain a second factor. Never reveals any secret; the immutable
+   * audit annotation records who did it and why (§3.4 — RBAC mutations are
+   * reason → step-up → audit; step-up + write permission are enforced at the
+   * controller).
+   */
+  async resetForAdmin(
+    targetAdminId: string,
+    actorAdminId: string,
+    reason: string,
+    now: Date,
+  ): Promise<void> {
+    await this.userRepo.disableMfa(targetAdminId);
+    await this.audit.record({
+      correlationId: randomUUID(),
+      actorAdminId,
+      subject: `Admin:${targetAdminId}`,
+      action: 'admin_override',
+      details: { reason, at: now.toISOString() },
+    });
   }
 
   async verifyForLogin(

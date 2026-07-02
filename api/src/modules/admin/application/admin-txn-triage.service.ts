@@ -2,8 +2,16 @@ import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable } from '@nestjs/common';
 
+import type {
+  ReconBreak,
+  ReconBreakListResponse,
+  ReconBreakSeverity,
+} from '@handshake-agent/contracts';
+
 import { AuditService } from '../../../core/audit/application/audit.service';
 import { CLOCK, type Clock } from '../../../core/common/clock';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
+import type { ReconciliationConfig } from '../../../core/config/configuration';
 import {
   SETTLEMENT_REPOSITORY,
   type ISettlementRepository,
@@ -19,6 +27,12 @@ import {
 } from '../../transactions/application/ports/settlement-outbox.repository.port';
 import { AdminNotFoundError } from '../domain/admin-errors';
 import { TxnNotTriageableError } from '../domain/txn-triage-errors';
+import {
+  RECONCILIATION_READ_REPOSITORY,
+  type IReconciliationReadRepository,
+  type ReconBreakKind,
+  type ReconBreakRecord,
+} from './ports/reconciliation-read.repository.port';
 
 /** Outcome of a triage action (mark-failed or retry). */
 export interface AdminTxnActionResult {
@@ -34,6 +48,17 @@ const REFUNDABLE_TYPES: ReadonlySet<string> = new Set<RefundableType>([
   'send',
   'swap',
 ]);
+
+/** Fallback stale window when the reconciliation config is absent (mirrors the read). */
+const DEFAULT_STALE_AFTER_SEC = 120;
+
+/** Break kind → severity: over/duplicate credits are high; the rest medium (read parity). */
+const SEVERITY_BY_KIND: Record<ReconBreakKind, ReconBreakSeverity> = {
+  over_credit: 'high',
+  duplicate_credit: 'high',
+  amount_mismatch: 'medium',
+  missing_settlement: 'medium',
+};
 
 /**
  * ADM Phase 3 (sub-area B) — engine-brokered, audited, idempotent admin TRIAGE of
@@ -56,6 +81,9 @@ export class AdminTxnTriageService {
     private readonly outbox: ISettlementOutboxRepository,
     private readonly audit: AuditService,
     @Inject(CLOCK) private readonly clock: Clock,
+    @Inject(RECONCILIATION_READ_REPOSITORY)
+    private readonly recon: IReconciliationReadRepository,
+    private readonly config: EffectiveConfigService,
   ) {}
 
   /**
@@ -142,7 +170,53 @@ export class AdminTxnTriageService {
     return { transactionId: txn.id, status: txn.status, refunded: false };
   }
 
+  /**
+   * Re-runs provider-vs-ledger reconciliation for ONE transaction and surfaces any
+   * break it currently exhibits. This is READ-ONLY DETECTION (distinct from
+   * `retrySettlement`, which re-arms the settlement outbox): it re-runs the same
+   * projection the reconciliation screen uses, scoped to this transaction, and moves
+   * NO money and mutates NO ledger row (§3.1). An unknown transaction fails closed
+   * (§3.6). `reason` is an optional audited note. Returns the detected breaks (empty
+   * when the transaction reconciles cleanly).
+   */
+  async rerunReconciliation(
+    txnId: string,
+    adminId: string,
+    reason?: string,
+  ): Promise<ReconBreakListResponse> {
+    const txn = await this.transactions.findById(txnId);
+    if (txn === null) throw new AdminNotFoundError('Transaction');
+
+    const records = await this.recon.findBreaksByTransactionId(
+      txn.id,
+      this.staleAfterSec(),
+    );
+
+    await this.audit.record({
+      correlationId: randomUUID(),
+      actorAdminId: adminId,
+      subject: `Transaction:${txn.id}`,
+      action: 'admin_review',
+      before: null,
+      after: {
+        action: 'reconciliation_rerun',
+        breakCount: records.length,
+        reason: reason ?? null,
+      },
+    });
+
+    return { items: records.map((row) => toBreak(row)) };
+  }
+
   // ── private ───────────────────────────────────────────────────────────────────
+
+  /** The stale window (seconds) that scopes which pending settlements are breaks. */
+  private staleAfterSec(): number {
+    const recon = this.config.get<ReconciliationConfig | undefined>(
+      'reconciliation',
+    );
+    return recon?.gracePeriodSec ?? DEFAULT_STALE_AFTER_SEC;
+  }
 
   /**
    * Dispatches to the engine's atomic refund method for the txn type, reading the
@@ -234,4 +308,26 @@ export class AdminTxnTriageService {
     }
     return out;
   }
+}
+
+// ── mapper (record → contract shape) ──────────────────────────────────────────────
+
+/**
+ * Projects a per-transaction break record into the wire `ReconBreak` shape, deriving
+ * its severity from the kind exactly as the reconciliation read surface does, so the
+ * re-run result is consistent with the reconciliation screen. Every projected break
+ * is `open` (a re-run only detects). Dates are ISO; no PII crosses this boundary.
+ */
+function toBreak(row: ReconBreakRecord): ReconBreak {
+  return {
+    id: row.id,
+    kind: row.kind,
+    severity: SEVERITY_BY_KIND[row.kind],
+    transactionId: row.transactionId,
+    asset: row.asset,
+    delta: row.delta,
+    detail: row.detail,
+    status: 'open',
+    detectedAt: row.detectedAt.toISOString(),
+  };
 }

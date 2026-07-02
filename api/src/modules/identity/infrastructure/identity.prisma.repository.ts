@@ -6,10 +6,12 @@ import {
   DeviceTrustState,
   KycStatus,
   KycTier,
+  ScreeningVerdict,
   UserStatus,
 } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
+  AdminUserBalanceSummaryRecord,
   AdminUserListFilters,
   AdminUserListPage,
   AdminUserListRecord,
@@ -19,12 +21,55 @@ import type {
   DeviceRecord,
   IIdentityRepository,
   KycProfileRecord,
+  KycQueueFilters,
+  KycQueueListResult,
+  KycQueueRecord,
   UserAdminDetailRecord,
   OriginatorIdentityRecord,
   UserRecord,
 } from '../application/ports/identity.repository.port';
 
-/** Columns selected for the admin user-list projection. */
+/** Columns selected for the KYC review-queue projection (user + KYC name/tier). */
+const KYC_QUEUE_SELECT = {
+  id: true,
+  email: true,
+  kycStatus: true,
+  createdAt: true,
+  kycProfile: {
+    select: { firstName: true, lastName: true, tier: true },
+  },
+} as const;
+
+interface KycQueueRow {
+  id: string;
+  email: string | null;
+  kycStatus: string;
+  createdAt: Date;
+  kycProfile: {
+    firstName: string | null;
+    lastName: string | null;
+    tier: string;
+  } | null;
+}
+
+function toKycQueueRecord(row: KycQueueRow): KycQueueRecord {
+  return {
+    id: row.id,
+    email: row.email,
+    firstName: row.kycProfile?.firstName ?? null,
+    lastName: row.kycProfile?.lastName ?? null,
+    requestedTier: row.kycProfile?.tier ?? null,
+    kycStatus: row.kycStatus,
+    createdAt: row.createdAt,
+  };
+}
+
+/**
+ * Columns + relations selected for the admin user-list projection. The KYC name
+ * join backs the derived displayName; `lastTransactionAt` is one of the three
+ * last-active inputs (the other two — session + device — are batched below to
+ * avoid N+1 fan-out per row).
+ */
 const ADMIN_USER_LIST_SELECT = {
   id: true,
   email: true,
@@ -32,7 +77,9 @@ const ADMIN_USER_LIST_SELECT = {
   kycStatus: true,
   kycTier: true,
   simSwapDetectedAt: true,
+  lastTransactionAt: true,
   createdAt: true,
+  kycProfile: { select: { firstName: true, lastName: true } },
 } as const;
 
 interface AdminUserListRow {
@@ -42,19 +89,45 @@ interface AdminUserListRow {
   kycStatus: string;
   kycTier: string;
   simSwapDetectedAt: Date | null;
+  lastTransactionAt: Date | null;
   createdAt: Date;
+  kycProfile: { firstName: string | null; lastName: string | null } | null;
 }
 
-function toAdminUserListRecord(row: AdminUserListRow): AdminUserListRecord {
+/** Per-user enrichment resolved in batch for a page of list rows. */
+interface AdminUserListEnrichment {
+  sanctionsFlaggedIds: Set<string>;
+  balancesByUser: Map<string, AdminUserBalanceSummaryRecord[]>;
+  lastActiveByUser: Map<string, Date>;
+}
+
+function toAdminUserListRecord(
+  row: AdminUserListRow,
+  enrichment: AdminUserListEnrichment,
+): AdminUserListRecord {
+  const sessionOrDevice = enrichment.lastActiveByUser.get(row.id) ?? null;
+  const lastActiveAt = maxDate(sessionOrDevice, row.lastTransactionAt);
   return {
     id: row.id,
     email: row.email,
+    firstName: row.kycProfile?.firstName ?? null,
+    lastName: row.kycProfile?.lastName ?? null,
     status: row.status,
     kycStatus: row.kycStatus,
     kycTier: row.kycTier,
     simSwapDetectedAt: row.simSwapDetectedAt,
+    sanctionsFlagged: enrichment.sanctionsFlaggedIds.has(row.id),
+    balances: enrichment.balancesByUser.get(row.id) ?? [],
+    lastActiveAt,
     createdAt: row.createdAt,
   };
+}
+
+/** The later of two nullable dates (null only when both are null). */
+function maxDate(a: Date | null, b: Date | null): Date | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return a.getTime() >= b.getTime() ? a : b;
 }
 
 /**
@@ -271,6 +344,7 @@ export class IdentityPrismaRepository implements IIdentityRepository {
           ? { email: { contains: filters.query, mode: 'insensitive' } }
           : {}),
         ...(filters.status ? { status: filters.status } : {}),
+        ...(filters.kycStatus ? { kycStatus: filters.kycStatus } : {}),
         ...(filters.kycTier ? { kycTier: filters.kycTier } : {}),
       },
       page,
@@ -286,18 +360,13 @@ export class IdentityPrismaRepository implements IIdentityRepository {
     );
   }
 
-  /**
-   * Shared keyset pagination over the users table. Fetches `limit + 1` rows so
-   * the presence of an extra row determines `nextCursor` without a count query.
-   * Ordered by createdAt desc, id desc for a stable, deterministic cursor.
-   */
-  private async paginatedUserList(
-    where: Record<string, unknown>,
+  async listKycReviewQueue(
+    filters: KycQueueFilters,
     page: AdminUserListPage,
-  ): Promise<AdminUserListResult> {
+  ): Promise<KycQueueListResult> {
     const rows = await this.prisma.user.findMany({
-      where: { deletedAt: null, ...where },
-      select: ADMIN_USER_LIST_SELECT,
+      where: { deletedAt: null, kycStatus: filters.status as KycStatus },
+      select: KYC_QUEUE_SELECT,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: page.limit + 1,
       ...(page.cursor ? { cursor: { id: page.cursor }, skip: 1 } : {}),
@@ -305,11 +374,127 @@ export class IdentityPrismaRepository implements IIdentityRepository {
 
     const hasMore = rows.length > page.limit;
     const items = (hasMore ? rows.slice(0, page.limit) : rows).map(
-      toAdminUserListRecord,
+      toKycQueueRecord,
     );
     const nextCursor = hasMore ? items[items.length - 1].id : null;
 
     return { items, nextCursor };
+  }
+
+  /**
+   * Shared keyset pagination over the users table. Fetches `limit + 1` rows so
+   * the presence of an extra row determines `nextCursor`, plus a matching
+   * `count` for the filter-wide total. Ordered by createdAt desc, id desc for a
+   * stable, deterministic cursor. Per-row extras (sanctions hit, wallet-balance
+   * aggregate, true last-active) are resolved in one batch per relation over the
+   * page's user ids — never a query per row.
+   */
+  private async paginatedUserList(
+    where: Record<string, unknown>,
+    page: AdminUserListPage,
+  ): Promise<AdminUserListResult> {
+    const scopedWhere = { deletedAt: null, ...where };
+    const [rows, total] = await Promise.all([
+      this.prisma.user.findMany({
+        where: scopedWhere,
+        select: ADMIN_USER_LIST_SELECT,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: page.limit + 1,
+        ...(page.cursor ? { cursor: { id: page.cursor }, skip: 1 } : {}),
+      }),
+      this.prisma.user.count({ where: scopedWhere }),
+    ]);
+
+    const hasMore = rows.length > page.limit;
+    const pageRows = hasMore ? rows.slice(0, page.limit) : rows;
+    const enrichment = await this.enrichListRows(pageRows.map((r) => r.id));
+    const items = pageRows.map((r) => toAdminUserListRecord(r, enrichment));
+    const nextCursor = hasMore ? items[items.length - 1].id : null;
+
+    return { items, nextCursor, total };
+  }
+
+  /**
+   * Batch-resolves the list-row extras for a page of user ids: which users have
+   * a prior sanctions `hit`, their per-asset wallet-balance aggregate, and the
+   * latest session/device activity (combined with lastTransactionAt by the
+   * mapper). One query per relation — no N+1.
+   */
+  private async enrichListRows(
+    userIds: string[],
+  ): Promise<AdminUserListEnrichment> {
+    if (userIds.length === 0) {
+      return {
+        sanctionsFlaggedIds: new Set(),
+        balancesByUser: new Map(),
+        lastActiveByUser: new Map(),
+      };
+    }
+
+    const [sanctionRows, balanceRows, sessionRows, deviceRows] =
+      await Promise.all([
+        this.prisma.sanctionsRecord.findMany({
+          where: { userId: { in: userIds }, verdict: ScreeningVerdict.hit },
+          select: { userId: true },
+          distinct: ['userId'],
+        }),
+        this.prisma.walletBalance.findMany({
+          where: { wallet: { userId: { in: userIds } } },
+          select: {
+            asset: true,
+            amount: true,
+            syncedAt: true,
+            wallet: { select: { userId: true } },
+          },
+          orderBy: { syncedAt: 'desc' },
+        }),
+        this.prisma.session.groupBy({
+          by: ['userId'],
+          where: { userId: { in: userIds } },
+          _max: { lastActivityAt: true },
+        }),
+        this.prisma.device.groupBy({
+          by: ['userId'],
+          where: { userId: { in: userIds } },
+          _max: { lastUsedAt: true },
+        }),
+      ]);
+
+    const sanctionsFlaggedIds = new Set(
+      sanctionRows
+        .map((r) => r.userId)
+        .filter((id): id is string => id !== null),
+    );
+
+    // Aggregate wallet balances to one line per (user, asset), keeping only the
+    // newest snapshot per asset (rows are pre-sorted syncedAt desc).
+    const balancesByUser = new Map<string, AdminUserBalanceSummaryRecord[]>();
+    const seenAsset = new Map<string, Set<string>>();
+    for (const row of balanceRows) {
+      const uid = row.wallet.userId;
+      const seen = seenAsset.get(uid) ?? new Set<string>();
+      if (seen.has(row.asset)) continue;
+      seen.add(row.asset);
+      seenAsset.set(uid, seen);
+      const list = balancesByUser.get(uid) ?? [];
+      list.push({ asset: row.asset, amount: row.amount.toString() });
+      balancesByUser.set(uid, list);
+    }
+
+    const lastActiveByUser = new Map<string, Date>();
+    for (const s of sessionRows) {
+      if (s._max.lastActivityAt) {
+        lastActiveByUser.set(s.userId, s._max.lastActivityAt);
+      }
+    }
+    for (const d of deviceRows) {
+      const at = d._max.lastUsedAt;
+      if (!at) continue;
+      const current = lastActiveByUser.get(d.userId) ?? null;
+      lastActiveByUser.set(d.userId, maxDate(current, at) as Date);
+    }
+
+    return { sanctionsFlaggedIds, balancesByUser, lastActiveByUser };
   }
 
   async loadUserWithKycAndDevices(
@@ -385,6 +570,14 @@ export class IdentityPrismaRepository implements IIdentityRepository {
         boundAt: d.boundAt,
       })),
     };
+  }
+
+  async hasSanctionsHit(userId: string): Promise<boolean> {
+    const hit = await this.prisma.sanctionsRecord.findFirst({
+      where: { userId, verdict: ScreeningVerdict.hit },
+      select: { id: true },
+    });
+    return hit !== null;
   }
 
   async listDevicesForUser(userId: string): Promise<DeviceRecord[]> {

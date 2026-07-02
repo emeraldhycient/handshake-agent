@@ -2,6 +2,7 @@ import { AdminMetricsService } from './admin-metrics.service';
 import type {
   IMetricsReadRepository,
   TransactionVolumeResult,
+  GmvResult,
   RevenueResult,
   KycFunnelResult,
   ActiveUsersResult,
@@ -12,9 +13,26 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 function makeVolume(): TransactionVolumeResult {
   return {
-    byType: [{ type: 'buy', count: 3, completed: 2, failed: 1 }],
+    byType: [{ type: 'buy', count: 6, completed: 2, failed: 1, stuck: 3 }],
     series: [{ date: '2026-06-01', count: 3 }],
+    stackedSeries: [
+      {
+        date: '2026-06-01',
+        buy: 3,
+        sell: 0,
+        send: 0,
+        swap: 0,
+        ticket: 0,
+        total: 3,
+      },
+    ],
     successRate: 0.6667,
+  };
+}
+function makeGmv(): GmvResult {
+  return {
+    totalByCurrency: [{ currency: 'NGN', amount: '1250000' }],
+    txnCount: 2,
   };
 }
 function makeRevenue(): RevenueResult {
@@ -54,6 +72,7 @@ describe('AdminMetricsService', () => {
   beforeEach(() => {
     repo = {
       transactionVolume: jest.fn().mockResolvedValue(makeVolume()),
+      gmv: jest.fn().mockResolvedValue(makeGmv()),
       revenue: jest.fn().mockResolvedValue(makeRevenue()),
       kycFunnel: jest.fn().mockResolvedValue(makeFunnel()),
       activeUsers: jest.fn().mockResolvedValue(makeActive()),
@@ -102,6 +121,29 @@ describe('AdminMetricsService', () => {
       });
       expect(result).toEqual(makeVolume());
     });
+
+    it('surfaces per-type stuck (in-flight) counts alongside failed', async () => {
+      const result = await service.transactions({
+        from: '2026-06-01',
+        to: '2026-06-30',
+      });
+      const buy = result.byType.find((t) => t.type === 'buy')!;
+      // The dashboard "Failed / stuck tx" card reads both — stuck is the sibling
+      // of failed, matching the sidebar stuck-badge slice.
+      expect(buy.failed).toBe(1);
+      expect(buy.stuck).toBe(3);
+    });
+  });
+
+  describe('gmv', () => {
+    it('maps the GMV result to the contract shape', async () => {
+      const result = await service.gmv({
+        from: '2026-06-01',
+        to: '2026-06-30',
+      });
+      expect(repo.gmv).toHaveBeenCalled();
+      expect(result).toEqual(makeGmv());
+    });
   });
 
   describe('revenue', () => {
@@ -133,6 +175,7 @@ describe('AdminMetricsService', () => {
       });
       expect(result).toEqual({
         txnVolume: makeVolume(),
+        gmv: makeGmv(),
         revenue: makeRevenue(),
         kycFunnel: {
           byStatus: [{ status: 'verified', count: 5 }],
@@ -141,14 +184,27 @@ describe('AdminMetricsService', () => {
         activeUsers: makeActive(),
         serviceHealth: makeHealth(),
       });
-      // All five aggregations were consulted with the same resolved range.
+      // All six aggregations were consulted with the same resolved range.
       const [vFrom, vTo] = repo.transactionVolume.mock.calls[0];
+      const [gFrom, gTo] = repo.gmv.mock.calls[0];
       const [rFrom, rTo] = repo.revenue.mock.calls[0];
+      expect(gFrom.getTime()).toBe(vFrom.getTime());
+      expect(gTo.getTime()).toBe(vTo.getTime());
       expect(rFrom.getTime()).toBe(vFrom.getTime());
       expect(rTo.getTime()).toBe(vTo.getTime());
       expect(repo.kycFunnel).toHaveBeenCalled();
       expect(repo.activeUsers).toHaveBeenCalled();
       expect(repo.serviceHealth).toHaveBeenCalled();
+    });
+
+    it('carries per-type stuck counts through into txnVolume.byType', async () => {
+      const result = await service.dashboard({
+        from: '2026-06-01',
+        to: '2026-06-30',
+      });
+      const buy = result.txnVolume.byType.find((t) => t.type === 'buy')!;
+      expect(buy.stuck).toBe(3);
+      expect(buy.failed).toBe(1);
     });
   });
 });

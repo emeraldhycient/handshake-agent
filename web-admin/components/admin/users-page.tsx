@@ -1,412 +1,61 @@
 "use client"
 
 /**
- * UsersPage — the end-user directory (design §6, `docs/design-ref/screens/Users.html`
- * + `vUsers()` / `seed()` in `docs/design-ref/logic.js`).
+ * UsersPage — the end-user directory (design §6, `docs/design-ref/screens/Users.html`).
  *
- * PIXEL-FAITHFUL DESIGN REPRODUCTION. This screen renders the design's OWN mock
- * dataset (the 28-user `seed()` records translated to a module-level const below) so
- * it looks exactly like the design — it deliberately does NOT wire real API data
- * (no TanStack Query). Real-data reintegration is a separate later step.
+ * WIRED to real data: the design's 28-row module mock is replaced by
+ * `useEndUsers(query)` (GET /admin/users → `AdminEndUserListResponse`). The layout,
+ * tokens, spacing, pills and 7-column grid are preserved 1:1 — only the data source
+ * changed. Phase-6b enrichment now backs the customer NAME (`displayName`), the
+ * per-asset BALANCE summary (`balances`), the SANCTIONS risk flag (`sanctionsFlagged`),
+ * and true LAST-ACTIVE (`lastActiveAt` — latest session/device/transaction, not
+ * registration); the header also shows the server `total`. Still-unbacked shape gaps:
+ * the Country column (no country field in the schema) and the VELOCITY risk flag
+ * (no per-user breach state) render "—" / match nothing.
  *
- * Header (total · shown counts) + Export CSV · a filter row (search pill, KYC / tier
- * / country selects, three risk-toggle chips) · a dark bulk-action bar when rows are
- * selected · the 7-column customer table (checkbox / Customer / KYC / Country /
- * Balance / Risk / Last active) · Pagination (10/page). Row click → `/users/[id]`.
+ * Server-side filtering: the search box → `query`, the KYC-status select → `kycStatus`
+ * (design bucket → contract status), the tier select → `kycTier`. The country select
+ * and the sanctions/velocity risk chips have no matching query param, so they narrow
+ * client-side over the fetched page (sanctions/simSwap chips map onto the row's real
+ * booleans; velocity + country match nothing — shape gaps). Pagination is cursor/keyset
+ * (the contract returns `nextCursor`) — the pager walks a cursor stack; the header
+ * total comes from the response's filter-wide `total`.
  *
- * The header "Export CSV" and the bulk-bar Export / Tag / Message actions are
- * read-shaped confirmations that emit a toast (design `logic.js`) — presentation
- * only; nothing here moves money (root §3.1).
+ * Four async branches: loading skeleton / error (inline, retryable) / empty / data.
+ * The bulk-bar Tag / Message actions are now REAL step-up-guarded writes (Phase 7,
+ * via `UsersBulkActions` → POST /admin/users/tags · /admin/users/message): a tag is
+ * a pure annotation and a message enqueues onto the notifications outbox — nothing
+ * here moves money (root §3.1). The header "Export CSV" and the bulk-bar Export
+ * remain read-shaped toasts.
  */
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 
 import { cn } from "@/lib/utils"
 import { pushToast } from "@/lib/store/toast-store"
+import { downloadFile, exportFilename } from "@/lib/download"
+import { exportEndUsers } from "@/lib/api/users"
 import { FilterSelect } from "@/components/admin/filter-select"
-import { Pagination } from "@/components/admin/pagination"
+import { UsersBulkActions } from "@/components/admin/users-bulk-actions"
+import { Skeleton } from "@/components/ui/skeleton"
+import { useEndUsers } from "@/lib/query/hooks"
+import type {
+  AdminEndUserListItem,
+  AdminEndUserSearchQuery,
+  KycTier,
+} from "@handshake-agent/contracts"
 import type {
   UserKycStatus,
   UserRiskChip,
   UserRiskFlag,
-  UserTableRow,
 } from "@/types/components"
 
 const PAGE_SIZE = 10
 const MAX_WIDTH = "1360px"
+const SEARCH_DEBOUNCE_MS = 250
 
-// ─── Design-faithful mock dataset (the design's `seed()` 28-user records) ───────────
-// Translated verbatim from docs/design-ref/logic.js `seed()` (deterministic
-// `Math.sin`-seeded generator). Module-level const — no fetching (design reproduction).
-const USERS: readonly UserTableRow[] = [
-  {
-    id: "usr_10480",
-    name: "Amara Okeke",
-    email: "amara.okeke@example.com",
-    initials: "AO",
-    avatar: "#2a6f55",
-    kyc: "pending",
-    tier: "tier_3",
-    country: "NG",
-    ngn: 841839,
-    flags: [],
-    lastActive: "2m ago",
-  },
-  {
-    id: "usr_10487",
-    name: "Chidi Adeyemi",
-    email: "chidi.adeyemi@example.com",
-    initials: "CA",
-    avatar: "#c07a2a",
-    kyc: "pending",
-    tier: "tier_2",
-    country: "NG",
-    ngn: 4096697,
-    flags: [],
-    lastActive: "3m ago",
-  },
-  {
-    id: "usr_10494",
-    name: "Ngozi Balogun",
-    email: "ngozi.balogun@example.com",
-    initials: "NB",
-    avatar: "#3a6ea5",
-    kyc: "pending",
-    tier: "tier_1",
-    country: "NG",
-    ngn: 3181964,
-    flags: ["simSwap"],
-    lastActive: "4m ago",
-  },
-  {
-    id: "usr_10501",
-    name: "Emeka Okonkwo",
-    email: "emeka.okonkwo@example.com",
-    initials: "EO",
-    avatar: "#8a4b8a",
-    kyc: "pending",
-    tier: "tier_3",
-    country: "NG",
-    ngn: 3550576,
-    flags: [],
-    lastActive: "5m ago",
-  },
-  {
-    id: "usr_10508",
-    name: "Ifeoma Eze",
-    email: "ifeoma.eze@example.com",
-    initials: "IE",
-    avatar: "#b0563f",
-    kyc: "needs_info",
-    tier: "tier_1",
-    country: "NG",
-    ngn: 3638646,
-    flags: ["velocity"],
-    lastActive: "6m ago",
-  },
-  {
-    id: "usr_10515",
-    name: "Tunde Bello",
-    email: "tunde.bello@example.com",
-    initials: "TB",
-    avatar: "#4a8a6a",
-    kyc: "rejected",
-    tier: "tier_1",
-    country: "NG",
-    ngn: 2447858,
-    flags: ["sanctions"],
-    lastActive: "7m ago",
-  },
-  {
-    id: "usr_10522",
-    name: "Bola Nwosu",
-    email: "bola.nwosu@example.com",
-    initials: "BN",
-    avatar: "#7a6aa0",
-    kyc: "verified",
-    tier: "tier_3",
-    country: "NG",
-    ngn: 777880,
-    flags: [],
-    lastActive: "4h ago",
-  },
-  {
-    id: "usr_10529",
-    name: "Yusuf Abubakar",
-    email: "yusuf.abubakar@example.com",
-    initials: "YA",
-    avatar: "#a0834a",
-    kyc: "pending",
-    tier: "tier_1",
-    country: "RW",
-    ngn: 3314843,
-    flags: [],
-    lastActive: "5h ago",
-  },
-  {
-    id: "usr_10536",
-    name: "Fatima Ojo",
-    email: "fatima.ojo@example.com",
-    initials: "FO",
-    avatar: "#2a6f55",
-    kyc: "verified",
-    tier: "tier_3",
-    country: "NG",
-    ngn: 412825,
-    flags: [],
-    lastActive: "6h ago",
-  },
-  {
-    id: "usr_10543",
-    name: "Kelechi Danjuma",
-    email: "kelechi.danjuma@example.com",
-    initials: "KD",
-    avatar: "#c07a2a",
-    kyc: "verified",
-    tier: "tier_3",
-    country: "NG",
-    ngn: 1138944,
-    flags: ["simSwap"],
-    lastActive: "7h ago",
-  },
-  {
-    id: "usr_10550",
-    name: "Adaeze Ibrahim",
-    email: "adaeze.ibrahim@example.com",
-    initials: "AI",
-    avatar: "#3a6ea5",
-    kyc: "verified",
-    tier: "tier_1",
-    country: "NG",
-    ngn: 2817047,
-    flags: [],
-    lastActive: "8h ago",
-  },
-  {
-    id: "usr_10557",
-    name: "Obinna Chukwu",
-    email: "obinna.chukwu@example.com",
-    initials: "OC",
-    avatar: "#8a4b8a",
-    kyc: "pending",
-    tier: "tier_1",
-    country: "NG",
-    ngn: 310439,
-    flags: [],
-    lastActive: "9h ago",
-  },
-  {
-    id: "usr_10564",
-    name: "Zainab Mohammed",
-    email: "zainab.mohammed@example.com",
-    initials: "ZM",
-    avatar: "#b0563f",
-    kyc: "needs_info",
-    tier: "tier_3",
-    country: "NG",
-    ngn: 3690787,
-    flags: ["velocity"],
-    lastActive: "10h ago",
-  },
-  {
-    id: "usr_10571",
-    name: "Segun Adebayo",
-    email: "segun.adebayo@example.com",
-    initials: "SA",
-    avatar: "#4a8a6a",
-    kyc: "rejected",
-    tier: "tier_2",
-    country: "NG",
-    ngn: 4062200,
-    flags: [],
-    lastActive: "11h ago",
-  },
-  {
-    id: "usr_10578",
-    name: "Chinwe Okafor",
-    email: "chinwe.okafor@example.com",
-    initials: "CO",
-    avatar: "#7a6aa0",
-    kyc: "verified",
-    tier: "tier_2",
-    country: "NG",
-    ngn: 106841,
-    flags: [],
-    lastActive: "4d ago",
-  },
-  {
-    id: "usr_10585",
-    name: "Uche Yakubu",
-    email: "uche.yakubu@example.com",
-    initials: "UY",
-    avatar: "#a0834a",
-    kyc: "pending",
-    tier: "tier_2",
-    country: "NG",
-    ngn: 537136,
-    flags: [],
-    lastActive: "5d ago",
-  },
-  {
-    id: "usr_10592",
-    name: "Aisha Lawal",
-    email: "aisha.lawal@example.com",
-    initials: "AL",
-    avatar: "#2a6f55",
-    kyc: "verified",
-    tier: "tier_3",
-    country: "NG",
-    ngn: 3244306,
-    flags: [],
-    lastActive: "6d ago",
-  },
-  {
-    id: "usr_10599",
-    name: "Kunle Obi",
-    email: "kunle.obi@example.com",
-    initials: "KO",
-    avatar: "#c07a2a",
-    kyc: "verified",
-    tier: "tier_1",
-    country: "NG",
-    ngn: 1902031,
-    flags: ["sanctions"],
-    lastActive: "7d ago",
-  },
-  {
-    id: "usr_10606",
-    name: "Ada Sani",
-    email: "ada.sani@example.com",
-    initials: "AS",
-    avatar: "#3a6ea5",
-    kyc: "verified",
-    tier: "tier_2",
-    country: "NG",
-    ngn: 2338319,
-    flags: [],
-    lastActive: "8d ago",
-  },
-  {
-    id: "usr_10613",
-    name: "Musa Uche",
-    email: "musa.uche@example.com",
-    initials: "MU",
-    avatar: "#8a4b8a",
-    kyc: "pending",
-    tier: "tier_2",
-    country: "RW",
-    ngn: 2046510,
-    flags: [],
-    lastActive: "9d ago",
-  },
-  {
-    id: "usr_10620",
-    name: "Blessing Oluwaseun",
-    email: "blessing.oluwaseun@example.com",
-    initials: "BO",
-    avatar: "#b0563f",
-    kyc: "needs_info",
-    tier: "tier_3",
-    country: "NG",
-    ngn: 3344525,
-    flags: [],
-    lastActive: "10d ago",
-  },
-  {
-    id: "usr_10627",
-    name: "Ibrahim Aliyu",
-    email: "ibrahim.aliyu@example.com",
-    initials: "IA",
-    avatar: "#4a8a6a",
-    kyc: "rejected",
-    tier: "tier_1",
-    country: "NG",
-    ngn: 910296,
-    flags: ["velocity"],
-    lastActive: "11d ago",
-  },
-  {
-    id: "usr_10634",
-    name: "Halima Nnamdi",
-    email: "halima.nnamdi@example.com",
-    initials: "HN",
-    avatar: "#7a6aa0",
-    kyc: "verified",
-    tier: "tier_2",
-    country: "NG",
-    ngn: 2027996,
-    flags: [],
-    lastActive: "12d ago",
-  },
-  {
-    id: "usr_10641",
-    name: "Femi Kalu",
-    email: "femi.kalu@example.com",
-    initials: "FK",
-    avatar: "#a0834a",
-    kyc: "pending",
-    tier: "tier_3",
-    country: "NG",
-    ngn: 2456420,
-    flags: [],
-    lastActive: "13d ago",
-  },
-  {
-    id: "usr_10648",
-    name: "Nneka Effiong",
-    email: "nneka.effiong@example.com",
-    initials: "NE",
-    avatar: "#2a6f55",
-    kyc: "verified",
-    tier: "tier_2",
-    country: "NG",
-    ngn: 3190493,
-    flags: [],
-    lastActive: "14d ago",
-  },
-  {
-    id: "usr_10655",
-    name: "Chuka Musa",
-    email: "chuka.musa@example.com",
-    initials: "CM",
-    avatar: "#c07a2a",
-    kyc: "verified",
-    tier: "tier_1",
-    country: "NG",
-    ngn: 244609,
-    flags: [],
-    lastActive: "15d ago",
-  },
-  {
-    id: "usr_10662",
-    name: "Damilola Onyeka",
-    email: "damilola.onyeka@example.com",
-    initials: "DO",
-    avatar: "#3a6ea5",
-    kyc: "verified",
-    tier: "tier_1",
-    country: "NG",
-    ngn: 2778363,
-    flags: [],
-    lastActive: "16d ago",
-  },
-  {
-    id: "usr_10669",
-    name: "Grace Adewale",
-    email: "grace.adewale@example.com",
-    initials: "GA",
-    avatar: "#8a4b8a",
-    kyc: "pending",
-    tier: "tier_3",
-    country: "NG",
-    ngn: 2873288,
-    flags: [],
-    lastActive: "17d ago",
-  },
-]
-
-// KYC bucket → pill tokens (design `kycMeta`, logic.js line 496). Tailwind token
-// utilities, not raw hex. Colour is never the sole signal — the label carries state.
+// KYC bucket → pill tokens (design `kycMeta`). Tailwind token utilities, not raw hex.
+// Colour is never the sole signal — the label carries state.
 const KYC_META: Record<
   UserKycStatus,
   { label: string; bg: string; fg: string }
@@ -417,7 +66,36 @@ const KYC_META: Record<
   rejected: { label: "Rejected", bg: "bg-sdn", fg: "text-tdn" },
 }
 
-// Risk flag → badge label + tokens (design `flagMeta`, logic.js line 497).
+// Contract `KycStatus` (not_started/pending/pending_review/verified/rejected/expired)
+// → the design's four presentation buckets. `pending_review` and `not_started` map to
+// the "Needs info" / "Pending" pills; `expired` reads as a rejected-style pill.
+const KYC_STATUS_TO_BUCKET: Record<
+  AdminEndUserListItem["kycStatus"],
+  UserKycStatus
+> = {
+  not_started: "pending",
+  pending: "pending",
+  pending_review: "needs_info",
+  verified: "verified",
+  rejected: "rejected",
+  expired: "rejected",
+}
+
+// The design's KYC-status filter buckets → the contract `KycStatus` sent to the
+// server-side `kycStatus` param. One canonical status per bucket (the pending →
+// `pending` and needs_info → `pending_review` cases are the meaningful splits);
+// `not_started`/`expired` are not directly selectable from the four-bucket UI.
+const KYC_BUCKET_TO_STATUS: Record<
+  UserKycStatus,
+  AdminEndUserListItem["kycStatus"]
+> = {
+  verified: "verified",
+  pending: "pending",
+  needs_info: "pending_review",
+  rejected: "rejected",
+}
+
+// Risk flag → badge label + tokens (design `flagMeta`).
 const FLAG_META: Record<
   UserRiskFlag,
   { label: string; full: string; bg: string; fg: string }
@@ -442,7 +120,7 @@ const FLAG_META: Record<
   },
 }
 
-// Filter-select option sets (design `uFilters`, logic.js line 507).
+// Filter-select option sets (design `uFilters`).
 const KYC_OPTIONS = [
   { value: "all", label: "All KYC" },
   { value: "verified", label: "Verified" },
@@ -453,6 +131,7 @@ const KYC_OPTIONS = [
 
 const TIER_OPTIONS = [
   { value: "all", label: "All tiers" },
+  { value: "unverified", label: "unverified" },
   { value: "tier_1", label: "tier_1" },
   { value: "tier_2", label: "tier_2" },
   { value: "tier_3", label: "tier_3" },
@@ -464,7 +143,7 @@ const COUNTRY_OPTIONS = [
   { value: "RW", label: "Rwanda" },
 ] as const
 
-// Risk-toggle chips (design `riskDef`, logic.js line 512).
+// Risk-toggle chips (design `riskDef`).
 const RISK_DEFS: ReadonlyArray<{ value: UserRiskFlag; label: string }> = [
   { value: "simSwap", label: "SIM-swap" },
   { value: "sanctions", label: "Sanctions" },
@@ -481,55 +160,167 @@ const FILTER_SELECT_CLASS =
 const GRID_COLS =
   "grid grid-cols-[38px_2fr_1.1fr_0.9fr_1.2fr_1fr_1fr] items-center gap-3"
 
-// Design `ngn()` formatter (logic.js line 332) — ₦ + en-NG grouping, 2 fraction digits.
-function ngn(n: number): string {
-  return (
-    "₦" +
-    Number(n).toLocaleString("en-NG", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
-  )
+// Deterministic avatar hue palette (design `AVA`) — the list contract carries no
+// avatar colour, so hue is derived from the id so a user keeps a stable colour.
+const AVATAR_HUES = [
+  "#2a6f55",
+  "#c07a2a",
+  "#3a6ea5",
+  "#8a4b8a",
+  "#b0563f",
+  "#4a8a6a",
+  "#7a6aa0",
+  "#a0834a",
+] as const
+
+/** 1–2 letter initials from a display name (design `ini()`). */
+function initialsOf(name: string): string {
+  const parts = name.split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return "?"
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
+
+/** Stable avatar hue from a user id (no colour field in the list contract). */
+function avatarHue(id: string): string {
+  let sum = 0
+  for (let i = 0; i < id.length; i++) sum = (sum + id.charCodeAt(i)) % 997
+  return AVATAR_HUES[sum % AVATAR_HUES.length]
+}
+
+/**
+ * Relative "last active" label from a nullable ISO timestamp. Now sourced from
+ * the contract's real `lastActiveAt` (latest session / device / transaction),
+ * not the registration time. Null (never active) renders an em dash.
+ */
+function relativeTime(iso: string | null): string {
+  if (!iso) return "—"
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return "—"
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000))
+  if (secs < 60) return `${secs}s ago`
+  const mins = Math.round(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.round(hours / 24)
+  return `${days}d ago`
+}
+
+/**
+ * Compact balance label from the per-asset aggregate. Shows the primary asset's
+ * amount + symbol (e.g. "100.50 USDT"); "+N" when the user holds more assets.
+ * Native crypto amounts only — the contract carries no fiat total for the list.
+ */
+function balanceLabel(balances: AdminEndUserListItem["balances"]): string {
+  const held = balances.filter((b) => Number(b.amount) > 0)
+  if (held.length === 0) return "—"
+  const [primary, ...rest] = held
+  const amount = Number(primary.amount).toLocaleString(undefined, {
+    maximumFractionDigits: 2,
+  })
+  const base = `${amount} ${primary.asset}`
+  return rest.length > 0 ? `${base} +${rest.length}` : base
+}
+
+/** A presentation row derived from an `AdminEndUserListItem`. */
+interface UsersRow {
+  id: string
+  name: string
+  email: string
+  initials: string
+  avatar: string
+  kyc: UserKycStatus
+  tier: KycTier
+  simSwapFlagged: boolean
+  sanctionsFlagged: boolean
+  balance: string
+  lastActive: string
+}
+
+function toRow(item: AdminEndUserListItem): UsersRow {
+  const name = item.displayName
+  return {
+    id: item.id,
+    name,
+    email: item.email ?? "—",
+    initials: initialsOf(name),
+    avatar: avatarHue(item.id),
+    kyc: KYC_STATUS_TO_BUCKET[item.kycStatus],
+    tier: item.kycTier,
+    simSwapFlagged: item.simSwapFlagged,
+    sanctionsFlagged: item.sanctionsFlagged,
+    balance: balanceLabel(item.balances),
+    lastActive: relativeTime(item.lastActiveAt),
+  }
 }
 
 export function UsersPage() {
   const router = useRouter()
 
   const [search, setSearch] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
   const [kyc, setKyc] = useState("all")
   const [tier, setTier] = useState("all")
   const [country, setCountry] = useState("all")
   const [risk, setRisk] = useState<UserRiskFlag | "">("")
   const [selected, setSelected] = useState<readonly string[]>([])
-  const [page, setPage] = useState(1)
+  // Cursor stack for keyset pagination: [null, cursorForPage2, …]. The last entry
+  // is the cursor that fetched the current page (null = first page).
+  const [cursorStack, setCursorStack] = useState<readonly (string | null)[]>([
+    null,
+  ])
 
-  // filteredUsers() — the design's client-side filter (logic.js line 268).
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase()
-    return USERS.filter((u) => {
-      if (
-        q &&
-        !(
-          u.name.toLowerCase().includes(q) ||
-          u.email.includes(q) ||
-          u.id.includes(q)
-        )
-      )
-        return false
-      if (kyc !== "all" && u.kyc !== kyc) return false
-      if (tier !== "all" && u.tier !== tier) return false
-      if (country !== "all" && u.country !== country) return false
-      if (risk && !u.flags.includes(risk)) return false
-      return true
-    })
-  }, [search, kyc, tier, country, risk])
+  // Debounce the free-text search before it hits the server-side `query` param (§7).
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [search])
 
-  const pageRows = useMemo(
-    () => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
-    [filtered, page]
+  // Reset to the first page whenever a filter changes (a new keyset window).
+  function resetPaging() {
+    setCursorStack([null])
+  }
+
+  const cursor = cursorStack[cursorStack.length - 1]
+  const queryArg: AdminEndUserSearchQuery = useMemo(
+    () => ({
+      ...(debouncedSearch ? { query: debouncedSearch } : {}),
+      // KYC status is now a server-side param (mapped from the design bucket).
+      ...(kyc !== "all"
+        ? { kycStatus: KYC_BUCKET_TO_STATUS[kyc as UserKycStatus] }
+        : {}),
+      ...(tier !== "all" ? { kycTier: tier as KycTier } : {}),
+      ...(cursor ? { cursor } : {}),
+      limit: PAGE_SIZE,
+    }),
+    [debouncedSearch, kyc, tier, cursor]
   )
 
-  const allSelected = selected.length >= filtered.length && filtered.length > 0
+  const { data, isLoading, isError, isSuccess, refetch, isFetching } =
+    useEndUsers(queryArg)
+
+  // The fetched page → presentation rows. Search / KYC-status / tier now filter
+  // SERVER-side (query / kycStatus / kycTier params). The remaining client-only
+  // narrowing is the risk chips (simSwap + sanctions are on the row) and country
+  // (still not in the contract — a country selection matches nothing, a shape gap).
+  const rows = useMemo(() => {
+    const mapped = (data?.items ?? []).map(toRow)
+    return mapped.filter((u) => {
+      // Country is not in the list contract — a country filter can't match any row.
+      if (country !== "all") return false
+      if (risk === "simSwap" && !u.simSwapFlagged) return false
+      if (risk === "sanctions" && !u.sanctionsFlagged) return false
+      // Velocity breach is not modeled on the list item — no row can match.
+      if (risk === "velocity") return false
+      return true
+    })
+  }, [data, country, risk])
+
+  const canPrev = cursorStack.length > 1
+  const canNext = Boolean(data?.nextCursor)
+
+  const allSelected = selected.length >= rows.length && rows.length > 0
   const hasSelection = selected.length > 0
 
   const riskChips: UserRiskChip[] = RISK_DEFS.map((r) => ({
@@ -540,7 +331,7 @@ export function UsersPage() {
 
   function toggleRisk(value: UserRiskFlag) {
     setRisk((prev) => (prev === value ? "" : value))
-    setPage(1)
+    resetPaging()
   }
 
   function toggleSelect(id: string) {
@@ -551,12 +342,46 @@ export function UsersPage() {
 
   function toggleSelectAll() {
     setSelected((prev) =>
-      prev.length >= filtered.length ? [] : filtered.map((u) => u.id)
+      prev.length >= rows.length ? [] : rows.map((u) => u.id)
     )
+  }
+
+  function goNext() {
+    if (!data?.nextCursor) return
+    setSelected([])
+    setCursorStack((prev) => [...prev, data.nextCursor])
+  }
+
+  function goPrev() {
+    setSelected([])
+    setCursorStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))
   }
 
   function openUser(id: string) {
     router.push(`/users/${id}`)
+  }
+
+  const [exporting, setExporting] = useState(false)
+
+  /**
+   * Download a PII-minimised CSV (last-4 only, §3.4) of the users matching the
+   * current filters — or just the selected rows when there's a selection. The
+   * server streams the CSV + records an `admin_export` audit event.
+   */
+  async function onExport() {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const blob = await exportEndUsers(
+        queryArg,
+        selected.length > 0 ? [...selected] : undefined
+      )
+      downloadFile(blob, exportFilename("users"))
+    } catch {
+      pushToast("Couldn't export users. Try again.", "warn")
+    } finally {
+      setExporting(false)
+    }
   }
 
   return (
@@ -572,20 +397,26 @@ export function UsersPage() {
             Users
           </h1>
           <p className="mt-[5px] mb-0 text-[13.5px] text-ink2">
-            <span className="tabular-nums">{USERS.length}</span> customers ·{" "}
-            <span className="tabular-nums">{filtered.length}</span> shown
+            <span className="tabular-nums">{rows.length}</span> shown
+            {typeof data?.total === "number" ? (
+              <>
+                {" · "}
+                <span className="tabular-nums">
+                  {data.total.toLocaleString()}
+                </span>{" "}
+                total
+              </>
+            ) : (
+              canNext && " · more available"
+            )}
           </p>
         </div>
         <div className="flex gap-[9px]">
           <button
             type="button"
-            onClick={() =>
-              pushToast(
-                `Exporting ${selected.length || filtered.length} users to CSV…`,
-                "info"
-              )
-            }
-            className="flex h-[38px] items-center gap-[7px] rounded-[11px] border border-line bg-card px-[15px] text-[13px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            onClick={() => void onExport()}
+            disabled={exporting}
+            className="flex h-[38px] items-center gap-[7px] rounded-[11px] border border-line bg-card px-[15px] text-[13px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
           >
             <svg
               width="15"
@@ -602,7 +433,7 @@ export function UsersPage() {
                 strokeLinejoin="round"
               />
             </svg>
-            Export CSV
+            {exporting ? "Exporting…" : "Export CSV"}
           </button>
         </div>
       </div>
@@ -636,7 +467,7 @@ export function UsersPage() {
             value={search}
             onChange={(e) => {
               setSearch(e.target.value)
-              setPage(1)
+              resetPaging()
             }}
             placeholder="Name, email, phone…"
             aria-label="Search users by name, email or phone"
@@ -650,7 +481,7 @@ export function UsersPage() {
           value={kyc}
           onChange={(e) => {
             setKyc(e.target.value)
-            setPage(1)
+            resetPaging()
           }}
           className={FILTER_SELECT_CLASS}
         />
@@ -660,7 +491,7 @@ export function UsersPage() {
           value={tier}
           onChange={(e) => {
             setTier(e.target.value)
-            setPage(1)
+            resetPaging()
           }}
           className={FILTER_SELECT_CLASS}
         />
@@ -670,7 +501,7 @@ export function UsersPage() {
           value={country}
           onChange={(e) => {
             setCountry(e.target.value)
-            setPage(1)
+            resetPaging()
           }}
           className={FILTER_SELECT_CLASS}
         />
@@ -702,34 +533,16 @@ export function UsersPage() {
           <div className="h-[18px] w-px bg-white/20" />
           <button
             type="button"
-            onClick={() =>
-              pushToast(
-                `Exporting ${selected.length || filtered.length} users to CSV…`,
-                "info"
-              )
-            }
-            className="text-[12.5px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
+            onClick={() => void onExport()}
+            disabled={exporting}
+            className="text-[12.5px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none disabled:opacity-50"
           >
-            Export
+            {exporting ? "Exporting…" : "Export"}
           </button>
-          <button
-            type="button"
-            onClick={() =>
-              pushToast(`Tag applied to ${selected.length} users`, "ok")
-            }
-            className="text-[12.5px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
-          >
-            Tag
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              pushToast(`Composer opened for ${selected.length} users`, "info")
-            }
-            className="text-[12.5px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
-          >
-            Message
-          </button>
+          <UsersBulkActions
+            selectedIds={selected}
+            onDone={() => setSelected([])}
+          />
           <div className="flex-1" />
           <button
             type="button"
@@ -775,8 +588,54 @@ export function UsersPage() {
           <div>Last active</div>
         </div>
 
+        {/* Loading */}
+        {isLoading &&
+          Array.from({ length: 6 }).map((_, i) => (
+            <div
+              key={i}
+              className={cn(
+                GRID_COLS,
+                "min-h-[52px] border-b border-line2 px-[18px] last:border-b-0"
+              )}
+              aria-busy="true"
+            >
+              <Skeleton className="size-4 rounded-[5px]" />
+              <div className="flex items-center gap-[11px]">
+                <Skeleton className="size-8 flex-none rounded-full" />
+                <div className="flex flex-col gap-1.5">
+                  <Skeleton className="h-3 w-28" />
+                  <Skeleton className="h-2.5 w-40" />
+                </div>
+              </div>
+              <Skeleton className="h-4 w-16" />
+              <Skeleton className="h-3 w-8" />
+              <Skeleton className="h-3 w-20 justify-self-end" />
+              <Skeleton className="h-3 w-14" />
+              <Skeleton className="h-3 w-12" />
+            </div>
+          ))}
+
+        {/* Error */}
+        {isError && (
+          <div className="px-5 py-[52px] text-center">
+            <div className="text-[14px] font-bold text-tdn">
+              Couldn&apos;t load users
+            </div>
+            <div className="mt-1 text-[12.5px] text-ink2">
+              The directory failed to load. Check your connection and try again.
+            </div>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              className="mt-3 inline-flex h-[34px] items-center rounded-[10px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
         {/* Empty */}
-        {filtered.length === 0 && (
+        {isSuccess && rows.length === 0 && (
           <div className="px-5 py-[60px] text-center text-ink3">
             <div className="text-[14px] font-bold text-ink2">
               No users match these filters
@@ -788,131 +647,173 @@ export function UsersPage() {
         )}
 
         {/* Rows */}
-        {pageRows.map((u) => {
-          const km = KYC_META[u.kyc]
-          const isSelected = selected.includes(u.id)
-          return (
-            <div
-              key={u.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => openUser(u.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault()
-                  openUser(u.id)
-                }
-              }}
-              aria-label={`Open ${u.name}`}
-              className={cn(
-                GRID_COLS,
-                "min-h-[52px] cursor-pointer border-b border-line2 px-[18px] transition-colors last:border-b-0 hover:bg-hov focus-visible:bg-hov focus-visible:outline-none"
-              )}
-            >
-              {/* Checkbox */}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  toggleSelect(u.id)
+        {isSuccess &&
+          rows.map((u) => {
+            const km = KYC_META[u.kyc]
+            const isSelected = selected.includes(u.id)
+            return (
+              <div
+                key={u.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => openUser(u.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    openUser(u.id)
+                  }
                 }}
-                aria-label={
-                  isSelected ? `Deselect ${u.name}` : `Select ${u.name}`
-                }
-                aria-pressed={isSelected}
-                className="justify-self-start focus-visible:outline-none"
+                aria-label={`Open ${u.name}`}
+                className={cn(
+                  GRID_COLS,
+                  "min-h-[52px] cursor-pointer border-b border-line2 px-[18px] transition-colors last:border-b-0 hover:bg-hov focus-visible:bg-hov focus-visible:outline-none"
+                )}
               >
-                <span
-                  aria-hidden
-                  className={cn(
-                    "inline-block size-4 rounded-[5px] border-[1.5px]",
-                    isSelected
-                      ? "border-brand-green bg-brand-green"
-                      : "border-line"
-                  )}
-                />
-              </button>
-
-              {/* Customer */}
-              <div className="flex min-w-0 items-center gap-[11px]">
-                <span
-                  aria-hidden
-                  className="flex size-8 flex-none items-center justify-center rounded-full text-[12px] font-extrabold text-white"
-                  style={{ background: u.avatar }}
+                {/* Checkbox */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    toggleSelect(u.id)
+                  }}
+                  aria-label={
+                    isSelected ? `Deselect ${u.name}` : `Select ${u.name}`
+                  }
+                  aria-pressed={isSelected}
+                  className="justify-self-start focus-visible:outline-none"
                 >
-                  {u.initials}
-                </span>
-                <div className="min-w-0">
-                  <div className="truncate text-[13px] font-bold text-ink">
-                    {u.name}
-                  </div>
-                  <div className="truncate text-[11px] text-ink3">
-                    {u.email}
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "inline-block size-4 rounded-[5px] border-[1.5px]",
+                      isSelected
+                        ? "border-brand-green bg-brand-green"
+                        : "border-line"
+                    )}
+                  />
+                </button>
+
+                {/* Customer */}
+                <div className="flex min-w-0 items-center gap-[11px]">
+                  <span
+                    aria-hidden
+                    className="flex size-8 flex-none items-center justify-center rounded-full text-[12px] font-extrabold text-white"
+                    style={{ background: u.avatar }}
+                  >
+                    {u.initials}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="truncate text-[13px] font-bold text-ink">
+                      {u.name}
+                    </div>
+                    <div className="truncate text-[11px] text-ink3">
+                      {u.email}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* KYC */}
-              <div>
-                <span
+                {/* KYC */}
+                <div>
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-[5px] rounded-full px-[9px] py-[3px] text-[11px] font-bold",
+                      km.bg,
+                      km.fg
+                    )}
+                  >
+                    {km.label}
+                  </span>
+                  <div className="mt-0.5 text-[10px] text-ink3">{u.tier}</div>
+                </div>
+
+                {/* Country — not in the list contract (shape gap) */}
+                <div className="text-[12px] font-semibold text-ink3">—</div>
+
+                {/* Balance — per-asset aggregate of cached wallet balances */}
+                <div
                   className={cn(
-                    "inline-flex items-center gap-[5px] rounded-full px-[9px] py-[3px] text-[11px] font-bold",
-                    km.bg,
-                    km.fg
+                    "text-right text-[12.5px] font-bold tabular-nums",
+                    u.balance === "—" ? "text-ink3" : "text-ink"
                   )}
                 >
-                  {km.label}
-                </span>
-                <div className="mt-0.5 text-[10px] text-ink3">{u.tier}</div>
-              </div>
+                  {u.balance}
+                </div>
 
-              {/* Country */}
-              <div className="text-[12px] font-semibold text-ink2">
-                {u.country}
-              </div>
-
-              {/* Balance */}
-              <div className="text-right text-[12.5px] font-bold text-ink tabular-nums">
-                {ngn(u.ngn)}
-              </div>
-
-              {/* Risk */}
-              <div className="flex flex-wrap gap-[4px]">
-                {u.flags.map((fl) => {
-                  const fm = FLAG_META[fl]
-                  return (
+                {/* Risk — simSwap + sanctions are modeled on the list item */}
+                <div className="flex flex-wrap gap-[4px]">
+                  {u.simSwapFlagged && (
                     <span
-                      key={fl}
-                      title={fm.full}
+                      title={FLAG_META.simSwap.full}
                       className={cn(
                         "rounded-[5px] px-[6px] py-[2px] text-[9.5px] font-extrabold tracking-[0.03em]",
-                        fm.bg,
-                        fm.fg
+                        FLAG_META.simSwap.bg,
+                        FLAG_META.simSwap.fg
                       )}
                     >
-                      {fm.label}
+                      {FLAG_META.simSwap.label}
                     </span>
-                  )
-                })}
-              </div>
+                  )}
+                  {u.sanctionsFlagged && (
+                    <span
+                      title={FLAG_META.sanctions.full}
+                      className={cn(
+                        "rounded-[5px] px-[6px] py-[2px] text-[9.5px] font-extrabold tracking-[0.03em]",
+                        FLAG_META.sanctions.bg,
+                        FLAG_META.sanctions.fg
+                      )}
+                    >
+                      {FLAG_META.sanctions.label}
+                    </span>
+                  )}
+                </div>
 
-              {/* Last active */}
-              <div className="text-[11.5px] text-ink2 tabular-nums">
-                {u.lastActive}
+                {/* Last active — real latest session/device/transaction activity */}
+                <div className="text-[11.5px] text-ink2 tabular-nums">
+                  {u.lastActive}
+                </div>
               </div>
-            </div>
-          )
-        })}
+            )
+          })}
       </div>
 
-      {/* ── Pagination (shared §5) ─────────────────────────────────────────── */}
-      <Pagination
-        total={filtered.length}
-        pageSize={PAGE_SIZE}
-        page={page}
-        onPageChange={setPage}
-        maxWidth={MAX_WIDTH}
-      />
+      {/* ── Pagination — cursor/keyset Prev · Next (the contract has no total) ── */}
+      {isSuccess && rows.length > 0 && (canPrev || canNext) && (
+        <nav
+          aria-label="Pagination"
+          className="mx-auto mt-2 flex items-center justify-between gap-3 border-t border-line2 px-1 pt-3"
+          style={{ maxWidth: MAX_WIDTH }}
+        >
+          <span className="text-xs text-ink3 tabular-nums">
+            Showing {rows.length} · page {cursorStack.length}
+          </span>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={goPrev}
+              disabled={!canPrev || isFetching}
+              aria-label="Previous page"
+              className={cn(
+                "h-8 rounded-[9px] border border-line bg-card px-3 text-xs font-bold text-ink2 transition-colors hover:bg-hov focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                (!canPrev || isFetching) && "pointer-events-none opacity-45"
+              )}
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              onClick={goNext}
+              disabled={!canNext || isFetching}
+              aria-label="Next page"
+              className={cn(
+                "h-8 rounded-[9px] border border-line bg-card px-3 text-xs font-bold text-ink2 transition-colors hover:bg-hov focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                (!canNext || isFetching) && "pointer-events-none opacity-45"
+              )}
+            >
+              Next
+            </button>
+          </div>
+        </nav>
+      )}
     </div>
   )
 }

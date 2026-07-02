@@ -118,7 +118,7 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
   // ── transactionVolume ──────────────────────────────────────────────────────
 
   describe('transactionVolume', () => {
-    it('groups by type with completed/failed counts, a daily series, and success rate', async () => {
+    it('groups by type with completed/failed/stuck counts, a daily series, and success rate', async () => {
       const u = await seedUser();
       // 2 buys completed (one on 06-01, one on 06-02), 1 buy failed (06-01).
       await seedTxn({
@@ -139,6 +139,20 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
         status: 'failed',
         createdAt: new Date('2026-06-01T09:00:00.000Z'),
       });
+      // 2 buys STUCK (in-flight): one settling, one pending — must count toward
+      // `stuck` (the sidebar-badge slice) but NOT toward successRate.
+      await seedTxn({
+        userId: u,
+        type: 'buy',
+        status: 'settling',
+        createdAt: new Date('2026-06-02T09:00:00.000Z'),
+      });
+      await seedTxn({
+        userId: u,
+        type: 'buy',
+        status: 'pending',
+        createdAt: new Date('2026-06-02T09:30:00.000Z'),
+      });
       // 1 send completed (06-02).
       await seedTxn({
         userId: u,
@@ -157,23 +171,28 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
       const result = await repo.transactionVolume(FROM, TO);
 
       const buy = result.byType.find((t) => t.type === 'buy')!;
-      expect(buy.count).toBe(3);
+      expect(buy.count).toBe(5);
       expect(buy.completed).toBe(2);
       expect(buy.failed).toBe(1);
+      expect(buy.stuck).toBe(2);
       const send = result.byType.find((t) => t.type === 'send')!;
       expect(send.count).toBe(1);
       expect(send.completed).toBe(1);
       expect(send.failed).toBe(0);
+      expect(send.stuck).toBe(0);
 
-      // Daily series: 06-01 has 2 (buy completed + buy failed), 06-02 has 2.
+      // Daily series counts ALL statuses per day: 06-01 has 2 (buy completed +
+      // buy failed); 06-02 has 4 (buy completed + buy settling + buy pending +
+      // send completed).
       const d1 = result.series.find((b) => b.date === '2026-06-01')!;
       const d2 = result.series.find((b) => b.date === '2026-06-02')!;
       expect(d1.count).toBe(2);
-      expect(d2.count).toBe(2);
+      expect(d2.count).toBe(4);
       // No out-of-range date.
       expect(result.series.some((b) => b.date === '2026-05-15')).toBe(false);
 
-      // successRate = completed (3) / (completed 3 + failed 1) = 0.75.
+      // successRate = completed (3) / (completed 3 + failed 1) = 0.75 — the two
+      // stuck (in-flight) txns do NOT enter the success-rate denominator.
       expect(result.successRate).toBeCloseTo(0.75, 6);
     });
 

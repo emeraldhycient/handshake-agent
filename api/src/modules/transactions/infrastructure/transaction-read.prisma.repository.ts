@@ -30,14 +30,58 @@ export class TransactionReadPrismaRepository implements ITransactionReadReposito
       where: { userId },
       orderBy: { createdAt: 'desc' },
       take: limit,
-      select: { id: true, type: true, status: true, createdAt: true },
+      select: {
+        id: true,
+        type: true,
+        status: true,
+        metadata: true,
+        createdAt: true,
+      },
     });
 
-    return rows.map((row) => ({
-      id: row.id,
-      type: row.type,
-      status: row.status,
-      createdAt: row.createdAt,
-    }));
+    return rows.map((row) => {
+      const econ = projectEconomics(row.metadata);
+      return {
+        id: row.id,
+        type: row.type,
+        status: row.status,
+        asset: econ.asset,
+        amount: econ.amount,
+        fiatAmount: econ.fiatAmount,
+        fiatCurrency: econ.fiatCurrency,
+        createdAt: row.createdAt,
+      };
+    });
   }
+}
+
+/**
+ * Best-effort projection of the amount/asset/fiat leg from Transaction.metadata
+ * (a Json blob: { asset, amount, fiatAmount, fiatCurrency, ... }). Any field the
+ * JSON does not carry as a primitive string/number resolves to null — this is a
+ * trust boundary (§13.6): unknown-shaped JSON never throws, it degrades to null.
+ */
+function projectEconomics(metadata: unknown): {
+  asset: string | null;
+  amount: string | null;
+  fiatAmount: string | null;
+  fiatCurrency: string | null;
+} {
+  const m =
+    metadata !== null && typeof metadata === 'object'
+      ? (metadata as Record<string, unknown>)
+      : {};
+  return {
+    asset: readString(m.asset),
+    amount: readString(m.amount),
+    fiatAmount: readString(m.fiatAmount),
+    fiatCurrency: readString(m.fiatCurrency),
+  };
+}
+
+/** Reads a metadata value as a string when it is a string or finite number, else null. */
+function readString(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return null;
 }

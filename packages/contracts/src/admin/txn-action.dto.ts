@@ -31,3 +31,13 @@ export const AdminTxnActionResponseSchema = z.object({
 export type AdminTxnActionResponse = z.infer<
   typeof AdminTxnActionResponseSchema
 >;
+
+// ── Request: re-run settlement reconciliation for ONE transaction ────────────────
+// Re-drives read-only recon detection for a single transaction (re-checks the
+// provider vs ledger state); it MOVES NO MONEY and writes no ledger entry. `reason`
+// is an optional audited note. Response reuses `AdminTxnActionResponseSchema`
+// (`refunded` is false — a re-run only detects, it never reverses a reserve).
+export const TxnRerunReconRequestSchema = z.object({
+  reason: z.string().max(500).optional(),
+});
+export type TxnRerunReconRequest = z.infer<typeof TxnRerunReconRequestSchema>;

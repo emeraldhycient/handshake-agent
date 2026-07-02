@@ -25,6 +25,7 @@ type UserWithPassword = AdminUserRecord & { passwordHash: string };
 const activeUser: UserWithPassword = {
   id: 'admin-1',
   email: 'admin@x.io',
+  displayName: 'Admin One',
   status: 'active',
   mfaEnabled: false,
   mfaSecret: null,
@@ -248,6 +249,7 @@ describe('AdminAuthService', () => {
       expect(me).toEqual({
         id: 'admin-1',
         email: 'admin@x.io',
+        displayName: 'Admin One',
         role: { id: 'role-1', name: 'compliance' },
         status: 'active',
         mfaEnabled: false,
@@ -255,6 +257,16 @@ describe('AdminAuthService', () => {
         menus: ['menu.audit'],
         pages: ['/admin/audit'],
       });
+    });
+
+    it('falls back to the email local-part when displayName is blank', async () => {
+      const { svc, userRepo } = build();
+      (userRepo.findById as jest.Mock).mockResolvedValue({
+        ...activeUser,
+        displayName: '',
+      });
+      const me = await svc.me('admin-1');
+      expect(me.displayName).toBe('admin');
     });
   });
 });

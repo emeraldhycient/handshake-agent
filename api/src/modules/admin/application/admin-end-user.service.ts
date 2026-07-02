@@ -48,15 +48,58 @@ const RECENT_TRANSACTIONS_LIMIT = 10;
 /** How many recent ledger entries to read per user wallet (reserved for future detail growth). */
 const RECENT_LEDGER_LIMIT = 10;
 
+/** Page size used to DRAIN the full result set for a CSV export (keyset walk). */
+const EXPORT_PAGE_SIZE = 200;
+
+/**
+ * Hard safety cap on export pages, so a malformed cursor loop can never hang the
+ * request. At {@link EXPORT_PAGE_SIZE} rows/page this bounds an export to 100k
+ * rows — far beyond any realistic filtered admin export.
+ */
+const EXPORT_MAX_PAGES = 500;
+
 export type AdminEndUserStatusChange = 'active' | 'suspended' | 'deactivated';
 export type AdminEndUserKycTier = 'unverified' | 'tier_1' | 'tier_2' | 'tier_3';
 
 export interface AdminEndUserListQuery {
   query?: string;
   status?: string;
+  kycStatus?: string;
   kycTier?: string;
   cursor?: string;
   limit?: number;
+}
+
+/** Filters for a CSV export — the list filters plus an optional id allow-list. */
+export interface AdminEndUserExportQuery {
+  query?: string;
+  status?: string;
+  kycStatus?: string;
+  kycTier?: string;
+  /** When present, export only these hand-picked user ids from the matched set. */
+  includedIds?: string[];
+}
+
+/**
+ * One PII-minimised CSV export row for an end user. Balances are pre-joined to a
+ * single cell and NIN/BVN are last-4 only — the full identifier NEVER leaves the
+ * backend (§3.4).
+ */
+export interface AdminEndUserExportRow {
+  id: string;
+  email: string | null;
+  displayName: string;
+  status: string;
+  kycStatus: string;
+  kycTier: string;
+  simSwapFlagged: boolean;
+  sanctionsFlagged: boolean;
+  /** e.g. "USDT:100.50 NGN:5000" — one CSV cell (empty when no balances). */
+  balances: string;
+  ninLast4: string | null;
+  bvnLast4: string | null;
+  lastActiveAt: string | null;
+  createdAt: string;
 }
 
 /**
@@ -88,16 +131,91 @@ export class AdminEndUserService {
 
   // ── list ───────────────────────────────────────────────────────────────────
 
-  async list(
-    query: AdminEndUserListQuery,
-  ): Promise<{ items: AdminEndUserListItem[]; nextCursor: string | null }> {
+  async list(query: AdminEndUserListQuery): Promise<{
+    items: AdminEndUserListItem[];
+    nextCursor: string | null;
+    total: number;
+  }> {
     const result = await this.identity.listUsers(
-      { query: query.query, status: query.status, kycTier: query.kycTier },
+      {
+        query: query.query,
+        status: query.status,
+        kycStatus: query.kycStatus,
+        kycTier: query.kycTier,
+      },
       { cursor: query.cursor, limit: query.limit ?? DEFAULT_LIST_LIMIT },
     );
     return {
       items: result.items.map((u) => this.toListItem(u)),
       nextCursor: result.nextCursor,
+      total: result.total,
+    };
+  }
+
+  // ── exportRows ─────────────────────────────────────────────────────────────
+
+  /**
+   * Build the FULL set of export rows for the CSV download — the SAME filter
+   * pipeline as {@link list}, but with no caller cursor/limit: every matching
+   * row is drained by walking the keyset pages. An optional `includedIds`
+   * allow-list narrows the matched set to the operator's hand-picked rows.
+   *
+   * PII-minimised (§3.4): NIN/BVN are truncated to last-4 via the KYC detail —
+   * the full identifier never leaves the backend. The controller records the
+   * `admin_export` audit event with the resulting rowCount; this method moves no
+   * money and mutates nothing.
+   */
+  async exportRows(
+    query: AdminEndUserExportQuery,
+  ): Promise<AdminEndUserExportRow[]> {
+    const included = query.includedIds ? new Set(query.includedIds) : null;
+    const matched: AdminUserListRecord[] = [];
+
+    let cursor: string | undefined;
+    for (let page = 0; page < EXPORT_MAX_PAGES; page += 1) {
+      const result = await this.identity.listUsers(
+        {
+          query: query.query,
+          status: query.status,
+          kycStatus: query.kycStatus,
+          kycTier: query.kycTier,
+        },
+        { cursor, limit: EXPORT_PAGE_SIZE },
+      );
+      for (const record of result.items) {
+        if (!included || included.has(record.id)) matched.push(record);
+      }
+      if (!result.nextCursor) break;
+      cursor = result.nextCursor;
+    }
+
+    return Promise.all(matched.map((record) => this.toExportRow(record)));
+  }
+
+  private async toExportRow(
+    record: AdminUserListRecord,
+  ): Promise<AdminEndUserExportRow> {
+    // Load the KYC detail so NIN/BVN can be surfaced as last-4 only (§3.4). The
+    // list projection deliberately omits raw PII, so the detail is the source.
+    const detail = await this.identity.loadUserWithKycAndDevices(record.id);
+    return {
+      id: record.id,
+      email: record.email,
+      displayName: deriveDisplayName(
+        record.firstName,
+        record.lastName,
+        record.email,
+      ),
+      status: record.status,
+      kycStatus: record.kycStatus,
+      kycTier: record.kycTier,
+      simSwapFlagged: record.simSwapDetectedAt !== null,
+      sanctionsFlagged: record.sanctionsFlagged,
+      balances: record.balances.map((b) => `${b.asset}:${b.amount}`).join(' '),
+      ninLast4: last4(detail?.kyc?.nin ?? null),
+      bvnLast4: last4(detail?.kyc?.bvn ?? null),
+      lastActiveAt: toIso(record.lastActiveAt),
+      createdAt: record.createdAt.toISOString(),
     };
   }
 
@@ -112,11 +230,18 @@ export class AdminEndUserService {
       recentTransactions,
       bankBeneficiaries,
       cryptoBeneficiaries,
+      userWallets,
+      phone,
     ] = await Promise.all([
       this.walletBalance.getBalances(userId),
       this.transactions.listForUser(userId, RECENT_TRANSACTIONS_LIMIT),
       this.beneficiaries.listForUser(userId, 'bank_account'),
       this.beneficiaries.listForUser(userId, 'crypto_address'),
+      // Provisioned per-network child wallets — surface their deposit addresses.
+      this.wallets.findByUser(userId),
+      // Routing phone from the active WhatsApp channel identity (a routing key
+      // only, never the identity anchor — §3.4). Null when no phone channel.
+      this.identity.findWhatsAppAddressByUserId(userId),
     ]);
 
     // Recent double-entry ledger lines for the user's wallet account.
@@ -129,6 +254,7 @@ export class AdminEndUserService {
       kycStatus: detail.kycStatus as AdminEndUserDetail['kycStatus'],
       kycTier: detail.kycTier as AdminEndUserDetail['kycTier'],
       simSwapDetectedAt: toIso(detail.simSwapDetectedAt),
+      phone,
       createdAt: detail.createdAt.toISOString(),
       devices: detail.devices.map((d) =>
         this.toDevice(d, detail.pinnedDeviceId),
@@ -137,11 +263,23 @@ export class AdminEndUserService {
         asset: a.symbol,
         network: a.network,
         amount: a.amount,
+        // Pending (unconfirmed inbound) balance is not surfaced by the ledger
+        // read yet — null until a pending-deposit projection is added.
+        pending: null,
+      })),
+      depositAddresses: userWallets.map((w) => ({
+        network: w.network,
+        address: w.address,
+        status: w.status,
       })),
       recentTransactions: recentTransactions.map((t) => ({
         id: t.id,
         type: t.type,
         status: t.status,
+        asset: t.asset,
+        amount: t.amount,
+        fiatAmount: t.fiatAmount,
+        fiatCurrency: t.fiatCurrency,
         createdAt: t.createdAt.toISOString(),
       })),
       recentLedger,
@@ -262,10 +400,14 @@ export class AdminEndUserService {
     return {
       id: u.id,
       email: u.email,
+      displayName: deriveDisplayName(u.firstName, u.lastName, u.email),
       status: u.status as AdminEndUserListItem['status'],
       kycStatus: u.kycStatus as AdminEndUserListItem['kycStatus'],
       kycTier: u.kycTier as AdminEndUserListItem['kycTier'],
       simSwapFlagged: u.simSwapDetectedAt !== null,
+      sanctionsFlagged: u.sanctionsFlagged,
+      balances: u.balances.map((b) => ({ asset: b.asset, amount: b.amount })),
+      lastActiveAt: toIso(u.lastActiveAt),
       createdAt: u.createdAt.toISOString(),
     };
   }
@@ -314,4 +456,34 @@ export class AdminEndUserService {
 
 function toIso(value: Date | null): string | null {
   return value ? value.toISOString() : null;
+}
+
+/**
+ * Truncate a sensitive identifier (NIN/BVN) to its last 4 digits — the same
+ * masking the KYC-review surface uses. The full value NEVER leaves the backend
+ * (§3.4). Null in → null out.
+ */
+function last4(value: string | null): string | null {
+  return value ? value.slice(-4) : null;
+}
+
+/**
+ * Human display name for the admin list: KYC first/last name, else the email
+ * local-part, else a generic label. Never exposes a raw PII identifier (§3.4).
+ */
+function deriveDisplayName(
+  firstName: string | null,
+  lastName: string | null,
+  email: string | null,
+): string {
+  const kycName = [firstName, lastName]
+    .map((p) => p?.trim())
+    .filter((p): p is string => Boolean(p))
+    .join(' ');
+  if (kycName) return kycName;
+
+  const local = email?.split('@')[0]?.trim();
+  if (local) return local;
+
+  return 'Unnamed user';
 }

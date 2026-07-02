@@ -1,139 +1,41 @@
 "use client"
 
 /**
- * ProvidersPage — the provider-adapters operator screen (design §6.27), a PIXEL
- * reproduction of `docs/design-ref/screens/Providers.html`.
+ * ProvidersPage — the provider-adapters operator screen (design §6.27), WIRED to
+ * the real provider-registry read endpoint (`GET /admin/providers`, Phase 6b) via
+ * `useProviderRegistry()`.
  *
- * Layout: a `1fr 1fr` grid of provider cards (mark tile + name/kind + status·latency
- * pill; an optional amber MOCK-MODE banner; a masked API-KEY row with "Reveal ·
- * step-up"; a bound-capabilities line + a "Test connection" button), then a
- * full-width "Mock → live readiness checklist" card of check-icon rows.
+ * Layout: a `1fr 1fr` grid of provider cards (mark tile + name/kind + status pill;
+ * an optional amber MOCK-MODE banner; an API-KEY presence row; a bound-capabilities
+ * line), then a full-width "Mock → live readiness checklist" card of check-icon
+ * rows. Each card's status is DERIVED server-side from configuration posture
+ * (mock-mode + secret presence), and every readiness gate is computed from a real
+ * config signal.
  *
- * DATA: this is a DESIGN REPRODUCTION — no data is fetched (no TanStack Query). The
- * five provider cards and the readiness checklist are the design's OWN seed content
- * (docs/design-ref/logic.js `providers`, line 139) embedded as module-level consts,
- * so the screen renders the same values the design shows. Real-data reintegration is
- * a separate later step.
- *
- * FUNDS-SAFETY: the screen is read-only apart from the "Reveal · step-up" gesture,
- * which opens the shared step-up TOTP flow modal before the (design-faithful sample)
- * key value is shown, with an auto-remask countdown — secrets are never surfaced
- * without re-authentication (root CLAUDE.md §3.4). The shown key digits are sample
- * content, never a live secret. "Test connection" runs no live probe (§3.1).
+ * FUNDS-SAFETY / SECRETS: the API returns secret-PRESENCE booleans only — the key
+ * VALUES never cross the boundary (root CLAUDE.md §3.4/§3.5), so this screen shows
+ * whether each provider's key is configured, never the key itself. There is no
+ * reveal of a real secret. Phase 7 adds the wired "Test connection" liveness probe
+ * (ProviderTestButton) — a real, credential-free reachability check that exposes NO
+ * secret and moves NO money (§3.1). Reads stay read-only; the probe is step-up-gated.
  */
-import { useCallback, useEffect, useState } from "react"
+import type {
+  ProviderCardView,
+  ProviderRegistryStatus,
+} from "@handshake-agent/contracts"
 
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { StepUpModal } from "@/components/admin/flows"
-import { pushToast } from "@/lib/store/toast-store"
-import type {
-  ProviderCard,
-  ProviderCardViewProps,
-  ProviderReadinessItem,
-  ProviderStatus,
-} from "@/types/components"
-
-// design reproduction: the design's own seed provider records (docs/design-ref/
-// logic.js `providers`, line 139) — five cards, the exact masked keys, statuses,
-// latencies, and bound-capability strings the design renders. Not live data.
-const PROVIDERS: readonly ProviderCard[] = [
-  {
-    id: "blockradar",
-    mark: "BL",
-    name: "Blockradar",
-    kind: "Custodial crypto WaaS · TRON",
-    status: "ok",
-    latency: "120ms",
-    mock: false,
-    keyMasked: "sk_live_••••4821",
-    keyRevealed: "sk_live_9c31a8d5e07b4821",
-    caps: "crypto.buy, sell, send, swap",
-  },
-  {
-    id: "flutterwave",
-    mark: "FL",
-    name: "Flutterwave",
-    kind: "Fiat NGN rails",
-    status: "degraded",
-    latency: "890ms",
-    mock: false,
-    keyMasked: "FLWSECK-••••0b2a",
-    keyRevealed: "FLWSECK-4d2b9a1c7e0b2a",
-    caps: "payout, collection",
-  },
-  {
-    id: "resend",
-    mark: "RE",
-    name: "Resend",
-    kind: "Transactional email",
-    status: "ok",
-    latency: "70ms",
-    mock: false,
-    keyMasked: "re_••••9f31",
-    keyRevealed: "re_7a4f0e9b12c69f31",
-    caps: "email",
-  },
-  {
-    id: "whatsapp",
-    mark: "WC",
-    name: "WhatsApp Cloud API",
-    kind: "Messaging + Flows",
-    status: "ok",
-    latency: "210ms",
-    mock: false,
-    keyMasked: "EAAG••••c7",
-    keyRevealed: "EAAG2f8c14d7a03ec7",
-    caps: "chat, flows",
-  },
-  {
-    id: "anthropic",
-    mark: "AN",
-    name: "Anthropic",
-    kind: "Agent LLM · claude-opus-4-8",
-    status: "ok",
-    latency: "640ms",
-    mock: false,
-    keyMasked: "sk-ant-••••1k",
-    keyRevealed: "sk-ant-api03-2f8c14d71k",
-    caps: "agent",
-  },
-]
-
-// design reproduction: the design's mock→live readiness gates. `done` reflects a
-// representative pre-launch posture (some gates still open before go-live).
-const READINESS: readonly ProviderReadinessItem[] = [
-  {
-    id: "keys",
-    label: "Live API keys provisioned for every enabled provider",
-    done: true,
-  },
-  {
-    id: "mock-off",
-    label: "PAYMENTS_MOCK_MODE / WALLET_MOCK_MODE flipped to false",
-    done: true,
-  },
-  {
-    id: "webhooks",
-    label: "Provider webhook signatures verified end-to-end",
-    done: true,
-  },
-  {
-    id: "recon",
-    label: "Reconciliation cron scheduled against live balances",
-    done: false,
-  },
-  {
-    id: "swap",
-    label: "Swap route (USDT ↔ TRX) enrolled on Blockradar",
-    done: false,
-  },
-]
+import { Skeleton } from "@/components/ui/skeleton"
+import { ProviderTestButton } from "@/components/admin/provider-test-button"
+import { useProviderRegistry } from "@/lib/query/hooks"
+import type { ProviderCardViewProps } from "@/types/components"
 
 // Provider status word → the canonical status→token pill variant (§5). Colour is
-// never the sole signal — the status word text carries the state.
+// never the sole signal — the status word text carries the state. `degraded` is
+// reserved for a future live probe (Phase 7); the read endpoint emits only the
+// posture-derived ok / down / mock today, but the map stays exhaustive.
 const STATUS_VARIANT: Record<
-  ProviderStatus,
+  ProviderRegistryStatus,
   React.ComponentProps<typeof Badge>["variant"]
 > = {
   ok: "success",
@@ -142,8 +44,13 @@ const STATUS_VARIANT: Record<
   mock: "info",
 }
 
-/** The re-auth window (seconds) before a revealed key auto-remasks — design PII copy. */
-const REMASK_SECONDS = 30
+/** The 2-letter mark shown in a provider's rounded tile (initials of the name). */
+function providerMark(name: string): string {
+  const words = name.trim().split(/\s+/)
+  const first = words[0]?.[0] ?? ""
+  const second = words[1]?.[0] ?? words[0]?.[1] ?? ""
+  return (first + second).toUpperCase()
+}
 
 // ─── Icons (inline stroke SVG, matching the design's 24×24 paths) ───────────────────
 
@@ -167,7 +74,7 @@ function WarningTriangleIcon() {
   )
 }
 
-/** The readiness-row glyph — a check when done, a dash while pending (design `r.icon`). */
+/** The readiness-row glyph — a check when done, a dash while pending. */
 function ReadinessIcon({ done }: { done: boolean }) {
   return (
     <svg
@@ -190,21 +97,16 @@ function ReadinessIcon({ done }: { done: boolean }) {
 
 // ─── Provider card (design markup lines 6-11) ───────────────────────────────────────
 
-function ProviderCardView({
-  provider,
-  onReveal,
-  revealed,
-  onRemask,
-}: ProviderCardViewProps) {
+function ProviderCardView({ provider }: ProviderCardViewProps) {
   return (
     <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
-      {/* Header: mark + name/kind + status·latency pill (design line 7) */}
+      {/* Header: mark + name/kind + status pill (design line 7) */}
       <div className="mb-3 flex items-center gap-3">
         <span
           aria-hidden="true"
           className="flex size-10 flex-none items-center justify-center rounded-[11px] bg-card2 text-sm font-extrabold text-ink"
         >
-          {provider.mark}
+          {providerMark(provider.name)}
         </span>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-extrabold text-ink">{provider.name}</div>
@@ -215,7 +117,8 @@ function ProviderCardView({
             aria-hidden="true"
             className="size-1.5 rounded-full bg-current"
           />
-          {provider.status} · {provider.latency}
+          {provider.status}
+          {provider.latencyMs !== null ? ` · ${provider.latencyMs}ms` : ""}
         </Badge>
       </div>
 
@@ -229,79 +132,90 @@ function ProviderCardView({
         </div>
       )}
 
-      {/* Masked API-KEY row with "Reveal · step-up" (design line 9) */}
+      {/* API-KEY presence row — the VALUE is never returned (§3.4/§3.5); we show
+          only whether the provider's secret is configured (design line 9). */}
       <div className="mb-2.5 flex items-center gap-2.5 rounded-[10px] bg-field px-3 py-[9px]">
         <span className="text-[10.5px] font-bold text-ink3">API KEY</span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs font-semibold text-ink">
-          {revealed ? provider.keyRevealed : provider.keyMasked}
+          {provider.hasSecret ? "•••• configured" : "not configured"}
         </span>
-        <button
-          type="button"
-          onClick={() =>
-            revealed ? onRemask(provider.id) : onReveal(provider.id)
-          }
-          aria-label={
-            revealed
-              ? `Hide ${provider.name} API key`
-              : `Reveal ${provider.name} API key — requires step-up`
-          }
-          className={`cursor-pointer rounded-md px-1 text-[11px] font-bold outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
-            revealed ? "text-tdn" : "text-tif"
-          }`}
-        >
-          {revealed ? "Hide" : "Reveal · step-up"}
-        </button>
+        <Badge variant={provider.hasSecret ? "success" : "danger"}>
+          {provider.hasSecret ? "present" : "missing"}
+        </Badge>
       </div>
 
-      {/* Bound capabilities + Test connection (design line 10) */}
-      <div className="flex items-center justify-between gap-3">
+      {/* Bound capabilities (design line 10) */}
+      <div className="flex items-center gap-3">
         <span className="min-w-0 truncate text-[11px] text-ink3">
-          Bound: {provider.caps}
+          Bound:{" "}
+          {provider.capabilities.length > 0
+            ? provider.capabilities.join(" · ")
+            : "—"}
         </span>
-        {/* design reproduction: read-shaped confirmation, no live probe (§3.1). */}
-        <Button
-          variant="outline"
-          size="sm"
-          type="button"
-          aria-label={`Test connection to ${provider.name}`}
-          onClick={() =>
-            pushToast(`Testing connection to ${provider.name}…`, "info")
-          }
-        >
-          Test connection
-        </Button>
       </div>
+
+      {/* Phase 7: the "Test connection" liveness probe (no secret exposure). */}
+      <ProviderTestButton providerKey={provider.key} />
     </div>
   )
 }
 
 // ─── Readiness checklist (design markup lines 14-17) ────────────────────────────────
 
-function ReadinessCard() {
+function ReadinessCard({
+  items,
+}: {
+  items: readonly { key: string; label: string; done: boolean }[]
+}) {
   return (
     <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
       <div className="mb-3 text-[13px] font-extrabold text-ink">
         Mock → live readiness checklist
       </div>
-      {READINESS.map((item) => (
-        <div
-          key={item.id}
-          className="flex items-center gap-[11px] border-b border-line2 py-2 last:border-b-0"
-        >
-          <span
-            aria-hidden="true"
-            className={`flex size-5 flex-none items-center justify-center rounded-md ${
-              item.done ? "bg-sok text-tok" : "bg-card2 text-ink3"
-            }`}
+      {items.length === 0 ? (
+        <p className="py-2 text-[12.5px] text-ink3">
+          No readiness signals available.
+        </p>
+      ) : (
+        items.map((item) => (
+          <div
+            key={item.key}
+            className="flex items-center gap-[11px] border-b border-line2 py-2 last:border-b-0"
           >
-            <ReadinessIcon done={item.done} />
-          </span>
-          <span className="text-[12.5px] font-semibold text-ink2">
-            {item.label}
-          </span>
-          <span className="sr-only">{item.done ? "done" : "pending"}</span>
+            <span
+              aria-hidden="true"
+              className={`flex size-5 flex-none items-center justify-center rounded-md ${
+                item.done ? "bg-sok text-tok" : "bg-card2 text-ink3"
+              }`}
+            >
+              <ReadinessIcon done={item.done} />
+            </span>
+            <span className="text-[12.5px] font-semibold text-ink2">
+              {item.label}
+            </span>
+            <span className="sr-only">{item.done ? "done" : "pending"}</span>
+          </div>
+        ))
+      )}
+    </div>
+  )
+}
+
+// ─── Loading / error skeletons ──────────────────────────────────────────────────────
+
+function ProviderCardSkeleton() {
+  return (
+    <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
+      <div className="mb-3 flex items-center gap-3" aria-busy="true">
+        <Skeleton className="size-10 flex-none rounded-[11px]" />
+        <div className="flex-1 space-y-1.5">
+          <Skeleton className="h-3.5 w-28" />
+          <Skeleton className="h-2.5 w-40" />
         </div>
-      ))}
+        <Skeleton className="h-5 w-16 rounded-full" />
+      </div>
+      <Skeleton className="mb-2.5 h-9 w-full rounded-[10px]" />
+      <Skeleton className="h-3 w-48" />
     </div>
   )
 }
@@ -309,54 +223,7 @@ function ReadinessCard() {
 // ─── Page ───────────────────────────────────────────────────────────────────────────
 
 export function ProvidersPage() {
-  // Which provider's key the operator is trying to reveal (drives the step-up modal).
-  const [pendingReveal, setPendingReveal] = useState<string | null>(null)
-  // The set of providers whose keys are currently revealed (post step-up).
-  const [revealedIds, setRevealedIds] = useState<ReadonlySet<string>>(
-    () => new Set()
-  )
-  const [remaskIn, setRemaskIn] = useState(REMASK_SECONDS)
-
-  const onReveal = useCallback((id: string) => setPendingReveal(id), [])
-
-  const onRemask = useCallback((id: string) => {
-    setRevealedIds((prev) => {
-      const next = new Set(prev)
-      next.delete(id)
-      return next
-    })
-  }, [])
-
-  // On a completed step-up (6-digit TOTP), reveal the pending provider + reset the
-  // countdown, then close the modal. Presentation-only: the code is not verified
-  // against a real endpoint (this is a design reproduction).
-  const onStepUpComplete = useCallback(() => {
-    setPendingReveal((id) => {
-      if (id) {
-        setRevealedIds((prev) => new Set(prev).add(id))
-        setRemaskIn(REMASK_SECONDS)
-      }
-      return null
-    })
-  }, [])
-
-  // Auto-remask every revealed key once the window elapses — ticks only while at
-  // least one key is revealed, then clears them all and resets the counter.
-  useEffect(() => {
-    if (revealedIds.size === 0) return
-    const timer = setInterval(() => {
-      setRemaskIn((s) => {
-        if (s <= 1) {
-          setRevealedIds(new Set())
-          return REMASK_SECONDS
-        }
-        return s - 1
-      })
-    }, 1000)
-    return () => clearInterval(timer)
-  }, [revealedIds])
-
-  const pendingProvider = PROVIDERS.find((p) => p.id === pendingReveal)
+  const query = useProviderRegistry()
 
   return (
     <div className="mx-auto w-full max-w-[1200px] px-[30px] pt-[26px] pb-[60px]">
@@ -366,62 +233,57 @@ export function ProvidersPage() {
           Providers
         </h1>
         <p className="mt-[5px] text-[13.5px] text-ink2">
-          Provider adapters per capability. Secrets are masked — reveal requires
-          step-up.
+          Provider adapters per capability. Status is derived from configuration
+          posture; API keys are never revealed — only their presence is shown.
         </p>
       </div>
 
-      {/* Auto-remask banner — visible whenever any key is revealed. */}
-      {revealedIds.size > 0 && (
-        <div
-          role="status"
-          className="mb-4 flex items-center gap-2.5 rounded-xl border border-[color:var(--sdn)] bg-sdn px-[15px] py-[11px]"
-        >
-          <WarningTriangleIcon />
-          <span className="flex-1 text-[12.5px] font-semibold text-tdn">
-            A provider secret is visible · this access is logged to the audit
-            trail. Auto-remasking in{" "}
-            <span className="tabular-nums">{remaskIn}</span>s.
-          </span>
+      {/* Error branch (§5) */}
+      {query.isError && (
+        <div className="mb-4 rounded-xl border border-sdn bg-sdn/40 px-4 py-3.5 text-center">
+          <p className="text-xs font-bold text-tdn">
+            Couldn&apos;t load the provider registry
+          </p>
           <button
             type="button"
-            onClick={() => setRevealedIds(new Set())}
-            className="text-[12px] font-bold text-tdn underline outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            onClick={() => query.refetch()}
+            className="mt-1.5 cursor-pointer rounded-md px-1.5 text-[11.5px] font-bold text-tif hover:bg-hov focus-visible:outline focus-visible:outline-2 focus-visible:outline-tif"
           >
-            Re-mask now
+            Retry
           </button>
         </div>
       )}
 
-      {/* ── Provider cards · 1fr 1fr (design markup line 4) ────────────────────── */}
-      <div className="mb-4 grid grid-cols-1 gap-3.5 md:grid-cols-2">
-        {PROVIDERS.map((provider) => (
-          <ProviderCardView
-            key={provider.id}
-            provider={provider}
-            onReveal={onReveal}
-            revealed={revealedIds.has(provider.id)}
-            onRemask={onRemask}
-          />
-        ))}
-      </div>
+      {/* Loading branch (§5) */}
+      {query.isLoading && (
+        <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
+          <ProviderCardSkeleton />
+          <ProviderCardSkeleton />
+          <ProviderCardSkeleton />
+          <ProviderCardSkeleton />
+        </div>
+      )}
 
-      {/* ── Readiness checklist (design markup line 14) ────────────────────────── */}
-      <ReadinessCard />
+      {/* Data / empty branches (§5) */}
+      {query.data && (
+        <>
+          {query.data.providers.length === 0 ? (
+            <div className="mb-4 rounded-2xl border border-line bg-card px-5 py-8 text-center">
+              <p className="text-[12.5px] text-ink3">
+                No provider adapters registered.
+              </p>
+            </div>
+          ) : (
+            <div className="mb-4 grid grid-cols-1 gap-3.5 md:grid-cols-2">
+              {query.data.providers.map((provider: ProviderCardView) => (
+                <ProviderCardView key={provider.key} provider={provider} />
+              ))}
+            </div>
+          )}
 
-      {/* Reveal-gated step-up: on completion the pending provider's key is shown. */}
-      <StepUpModal
-        open={pendingReveal !== null}
-        title={
-          pendingProvider
-            ? `Reveal ${pendingProvider.name} API key`
-            : "Reveal API key"
-        }
-        onComplete={onStepUpComplete}
-        onOpenChange={(open) => {
-          if (!open) setPendingReveal(null)
-        }}
-      />
+          <ReadinessCard items={query.data.readiness} />
+        </>
+      )}
     </div>
   )
 }

@@ -2,9 +2,11 @@ import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 
 import {
   AgentConfigViewSchema,
+  AgentInsightsViewSchema,
   ConversationLogDetailSchema,
   ConversationLogListResponseSchema,
   type AgentConfigView,
+  type AgentInsightsView,
   type ConversationLogDetail,
   type ConversationLogListResponse,
 } from '@handshake-agent/contracts';
@@ -31,6 +33,12 @@ export class AdminAgentController {
   @RequirePermission('api_route', 'GET /admin/agent/config', 'read')
   getConfig(): AgentConfigView {
     return AgentConfigViewSchema.parse(this.agent.getConfig());
+  }
+
+  @Get('agent/insights')
+  @RequirePermission('api_route', 'GET /admin/agent/insights', 'read')
+  async getInsights(): Promise<AgentInsightsView> {
+    return AgentInsightsViewSchema.parse(await this.agent.getInsights());
   }
 
   @Get('agent/conversations')

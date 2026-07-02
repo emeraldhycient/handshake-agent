@@ -68,6 +68,74 @@ export interface TreasuryAlertListFilter {
   acknowledged?: boolean;
 }
 
+/**
+ * A per-child receive address + its gas-sweep state (Phase 6b). `address`,
+ * `network` come from the real Wallet row; `balance` (native gas) + `status` +
+ * `lastSweptAt` are the operational sweep view. `balance` is a canonical string.
+ */
+export interface TreasurySweepRecord {
+  id: string;
+  address: string;
+  network: string;
+  asset: string;
+  balance: string;
+  status: 'swept' | 'pending' | 'below_threshold';
+  lastSweptAt: Date | null;
+}
+
+/** The sweep feed + the configured threshold (native-asset amount + its symbol). */
+export interface TreasurySweepFeed {
+  rows: TreasurySweepRecord[];
+  sweepThreshold: string;
+  thresholdAsset: string;
+}
+
+/**
+ * A pending outbound settlement awaiting release (Phase 6b, READ-ONLY): a
+ * processor payout or on-chain send that has not completed. `amount` is the
+ * outbound asset amount; `fiatAmount` is the NGN leg when the asset is crypto,
+ * else null. Both are canonical strings; `submittedAt` is a `Date`.
+ */
+export interface TreasuryPayoutQueueRecord {
+  id: string;
+  transactionId: string;
+  beneficiaryLabel: string;
+  reference: string;
+  method: string;
+  asset: string;
+  amount: string;
+  fiatAmount: string | null;
+  requiresApproval: boolean;
+  submittedAt: Date;
+}
+
+/**
+ * The platform fiat-float position for one currency (Phase 6b): the running
+ * `balance` of the platform_float ledger account vs a configured `targetFloat`.
+ * `utilizationBps` = balance/target in bps; `status` is derived; the caller
+ * supplies the configured target + low-float floor (config is a service concern).
+ */
+export interface TreasuryFiatFloatRecord {
+  currency: string;
+  balance: string;
+}
+
+/**
+ * A signed net inventory position per (asset, fiat) valued in the fiat currency
+ * (Phase 6b), carrying the underlying exposure limit + net for the headroom
+ * derivation. Amounts are canonical strings; `exposureLimitBps` is the configured
+ * inventory cap in bps.
+ */
+export interface TreasuryFxPositionRecord {
+  asset: string;
+  fiatCurrency: string;
+  netPositionFiat: string;
+  netExposure: string;
+  fiatEquivalent: string;
+  exposureLimitBps: number;
+  status: 'safe' | 'warning' | 'critical';
+}
+
 // ---------------------------------------------------------------------------
 // Port interface
 // ---------------------------------------------------------------------------
@@ -103,4 +171,37 @@ export interface ITreasuryReadRepository {
 
   /** Active per-wallet withdrawal policies (disabledAt IS NULL), newest-first. */
   listWithdrawalPolicies(): Promise<WithdrawalPolicyRecord[]>;
+
+  /**
+   * Child-address gas-sweep view (Phase 6b): per-child receive address + native
+   * gas balance + sweep lifecycle, newest-first. `sweepThreshold` /
+   * `thresholdAsset` describe the configured gas-sweep floor.
+   */
+  listSweeps(): Promise<TreasurySweepFeed>;
+
+  /**
+   * Pending outbound settlements awaiting release (Phase 6b, READ-ONLY): payouts
+   * + on-chain sends that have not completed, newest-first. Never releases funds.
+   */
+  listPayoutQueue(): Promise<TreasuryPayoutQueueRecord[]>;
+
+  /**
+   * A single pending payout-queue item by its opaque id (Phase 7 — the approve
+   * maker-checker needs the item's transactionId + reference to raise the change
+   * request). Returns null when the id is unknown or no longer pending. READ-ONLY —
+   * never releases funds.
+   */
+  findPayoutQueueItem(id: string): Promise<TreasuryPayoutQueueRecord | null>;
+
+  /**
+   * Running platform_float ledger balance per fiat currency (Phase 6b). Returns
+   * the raw balances; the service applies the configured target + threshold.
+   */
+  listFiatFloat(): Promise<TreasuryFiatFloatRecord[]>;
+
+  /**
+   * Signed net FX inventory positions per (asset, fiat) with the underlying
+   * exposure fields (Phase 6b) — the service derives direction + headroom.
+   */
+  listFxPositions(): Promise<TreasuryFxPositionRecord[]>;
 }

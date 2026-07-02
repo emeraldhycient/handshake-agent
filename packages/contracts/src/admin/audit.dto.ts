@@ -13,6 +13,7 @@ export const AuditActionSchema = z.enum([
   "admin_update",
   "admin_review",
   "admin_override",
+  "admin_export",
   "sanctions_hit",
   "aml_flag",
   "rule_violation",
@@ -37,11 +38,18 @@ export const AuditLogEntrySchema = z.object({
   actor: z.string(),
   actorAdminId: z.string().uuid().nullable(),
   actorUserId: z.string().uuid().nullable(),
+  // The actor's admin role name, resolved from `actorAdminId` at read time. `null`
+  // for non-admin actors (system / end user) or when the admin can't be resolved.
+  // Derived on read — NOT part of the hash-chained row (§ audit immutability).
+  actorRole: z.string().nullable(),
   subject: z.string(),
   action: AuditActionSchema,
   details: z.record(z.unknown()),
   before: z.unknown().nullable(),
   after: z.unknown().nullable(),
+  // A first-class human reason for the action, projected from `details.reason`
+  // when a non-empty string is present, else `null`. Read-time projection only.
+  reason: z.string().nullable(),
   currentHash: z.string(),
   prevHash: z.string(),
   createdAt: z.string(),

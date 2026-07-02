@@ -4,6 +4,7 @@ import { Inject, Injectable } from '@nestjs/common';
 
 import { AuditService } from '../../../core/audit/application/audit.service';
 import { AdminInvitationInvalidError } from '../domain/admin-errors';
+import { resolveAdminDisplayName } from './admin-user.service';
 import {
   ADMIN_INVITATION_REPOSITORY,
   type IAdminInvitationRepository,
@@ -20,6 +21,8 @@ export interface CreateInvitationCommand {
   email: string;
   roleId: string;
   reason?: string;
+  /** Optional display name; defaults server-side to the email local-part. */
+  displayName?: string;
 }
 
 export interface CreateInvitationResult {
@@ -34,6 +37,8 @@ export interface AcceptInvitationCommand {
   token: string;
   /** Already hashed by the caller; this service never sees the plaintext password. */
   passwordHash: string;
+  /** Optional display name the invitee sets; defaults to the email local-part. */
+  displayName?: string;
 }
 
 function genToken(): string {
@@ -65,6 +70,7 @@ export class AdminInvitationService {
     await this.users.createInvited({
       email: input.email,
       roleId: input.roleId,
+      displayName: input.displayName,
     });
     const token = genToken();
     const invitation = await this.invitations.create({
@@ -103,14 +109,25 @@ export class AdminInvitationService {
     const user = await this.users.findByEmail(invitation.email);
     if (!user) throw new AdminInvitationInvalidError();
 
-    await this.users.setPasswordAndActivate(user.id, input.passwordHash, now);
+    // Capture the invitee's display name (defaulting to the email local-part),
+    // persisted in the same activation write.
+    const displayName = resolveAdminDisplayName(
+      invitation.email,
+      input.displayName,
+    );
+    await this.users.setPasswordAndActivate(
+      user.id,
+      input.passwordHash,
+      now,
+      displayName,
+    );
     await this.invitations.markAccepted(invitation.id, now);
     await this.audit.record({
       correlationId: randomUUID(),
       actorAdminId: user.id,
       subject: `AdminInvitation:${invitation.id}`,
       action: 'admin_update',
-      after: { adminId: user.id },
+      after: { adminId: user.id, displayName },
     });
     return { adminId: user.id };
   }

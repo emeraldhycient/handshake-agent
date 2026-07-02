@@ -26,6 +26,7 @@ function makeUser(over?: Partial<AdminUserRecord>): AdminUserRecord {
   return {
     id: 'user-1',
     email: 'a@b.co',
+    displayName: 'a',
     status: 'pending',
     mfaEnabled: false,
     mfaSecret: null,
@@ -67,10 +68,20 @@ function makeInvRepo(active?: ActiveAdminInvitationRecord | null): {
 function makeUserRepo(user?: AdminUserRecord | null): {
   repo: IAdminUserRepository;
   invited: CreateInvitedAdminInput[];
-  activated: { id: string; passwordHash: string; at: Date }[];
+  activated: {
+    id: string;
+    passwordHash: string;
+    at: Date;
+    displayName?: string;
+  }[];
 } {
   const invited: CreateInvitedAdminInput[] = [];
-  const activated: { id: string; passwordHash: string; at: Date }[] = [];
+  const activated: {
+    id: string;
+    passwordHash: string;
+    at: Date;
+    displayName?: string;
+  }[] = [];
   const repo = {
     createInvited(input: CreateInvitedAdminInput): Promise<AdminUserRecord> {
       invited.push(input);
@@ -83,8 +94,9 @@ function makeUserRepo(user?: AdminUserRecord | null): {
       id: string,
       passwordHash: string,
       at: Date,
+      displayName?: string,
     ): Promise<void> {
-      activated.push({ id, passwordHash, at });
+      activated.push({ id, passwordHash, at, displayName });
       return Promise.resolve();
     },
   } as unknown as IAdminUserRepository;
@@ -167,12 +179,68 @@ describe('AdminInvitationService', () => {
       ).accept({ token: 'plaintext-token', passwordHash: 'hashed-pw' }, now);
 
       expect(result).toEqual({ adminId: 'user-1' });
+      // No display name supplied → defaults to the email local-part ("a").
       expect(users.activated).toEqual([
-        { id: 'user-1', passwordHash: 'hashed-pw', at: now },
+        { id: 'user-1', passwordHash: 'hashed-pw', at: now, displayName: 'a' },
       ]);
       expect(inv.accepted).toEqual([{ id: 'inv-1', at: now }]);
       expect(calls).toHaveLength(1);
       expect(calls[0].action).toBe('admin_update');
+    });
+
+    it('persists an explicit display name on accept', async () => {
+      const active: ActiveAdminInvitationRecord = {
+        id: 'inv-1',
+        email: 'a@b.co',
+        roleId: 'role-1',
+      };
+      const inv = makeInvRepo(active);
+      const users = makeUserRepo(makeUser({ id: 'user-1', email: 'a@b.co' }));
+      const { audit } = makeAudit();
+      const now = new Date('2026-06-30T00:00:00Z');
+
+      await new AdminInvitationService(inv.repo, users.repo, audit).accept(
+        {
+          token: 'plaintext-token',
+          passwordHash: 'hashed-pw',
+          displayName: 'Ada Lovelace',
+        },
+        now,
+      );
+
+      expect(users.activated).toEqual([
+        {
+          id: 'user-1',
+          passwordHash: 'hashed-pw',
+          at: now,
+          displayName: 'Ada Lovelace',
+        },
+      ]);
+    });
+
+    it('defaults a blank display name to the email local-part', async () => {
+      const active: ActiveAdminInvitationRecord = {
+        id: 'inv-1',
+        email: 'ops.lead@b.co',
+        roleId: 'role-1',
+      };
+      const inv = makeInvRepo(active);
+      const users = makeUserRepo(
+        makeUser({ id: 'user-1', email: 'ops.lead@b.co' }),
+      );
+      const { audit } = makeAudit();
+      const now = new Date('2026-06-30T00:00:00Z');
+
+      await new AdminInvitationService(inv.repo, users.repo, audit).accept(
+        {
+          token: 'plaintext-token',
+          passwordHash: 'hashed-pw',
+          displayName: '  ',
+        },
+        now,
+      );
+
+      expect(users.activated[0].displayName).toBe('ops.lead');
     });
 
     it('throws AdminInvitationInvalidError on an unknown token', async () => {

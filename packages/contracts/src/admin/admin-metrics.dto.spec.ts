@@ -1,7 +1,9 @@
 import {
   MetricsRangeQuerySchema,
   MetricsBucketSchema,
+  TxnCapabilityBucketSchema,
   TxnVolumeMetricsSchema,
+  GmvMetricsSchema,
   RevenueMetricsSchema,
   KycFunnelMetricsSchema,
   ActiveUsersMetricsSchema,
@@ -26,36 +28,136 @@ describe("MetricsRangeQuerySchema", () => {
 
 describe("MetricsBucketSchema", () => {
   it("parses a date + count bucket", () => {
-    expect(MetricsBucketSchema.parse({ date: "2026-06-01", count: 4 })).toEqual({
+    expect(MetricsBucketSchema.parse({ date: "2026-06-01", count: 4 })).toEqual(
+      {
+        date: "2026-06-01",
+        count: 4,
+      },
+    );
+  });
+});
+
+describe("TxnCapabilityBucketSchema", () => {
+  it("parses a per-day stacked-by-capability bucket", () => {
+    const value = TxnCapabilityBucketSchema.parse({
       date: "2026-06-01",
-      count: 4,
+      buy: 3,
+      sell: 1,
+      send: 2,
+      swap: 0,
+      ticket: 1,
+      total: 7,
     });
+    expect(value.date).toBe("2026-06-01");
+    expect(value.buy).toBe(3);
+    expect(value.total).toBe(7);
+  });
+
+  it("rejects a bucket missing a capability segment", () => {
+    expect(
+      TxnCapabilityBucketSchema.safeParse({
+        date: "2026-06-01",
+        buy: 3,
+        sell: 1,
+        send: 2,
+        swap: 0,
+        total: 6,
+      }).success,
+    ).toBe(false);
   });
 });
 
 describe("TxnVolumeMetricsSchema", () => {
-  it("parses byType rows, a series, and a successRate", () => {
+  it("parses byType rows (with a stuck sibling of failed), a series, a stacked series, and a successRate", () => {
     const value = TxnVolumeMetricsSchema.parse({
-      byType: [{ type: "buy", count: 3, completed: 2, failed: 1 }],
+      byType: [{ type: "buy", count: 3, completed: 2, failed: 1, stuck: 0 }],
       series: [{ date: "2026-06-01", count: 3 }],
+      stackedSeries: [
+        {
+          date: "2026-06-01",
+          buy: 3,
+          sell: 0,
+          send: 0,
+          swap: 0,
+          ticket: 0,
+          total: 3,
+        },
+      ],
       successRate: 0.6667,
     });
     expect(value.byType[0].type).toBe("buy");
+    expect(value.byType[0].failed).toBe(1);
+    expect(value.byType[0].stuck).toBe(0);
     expect(value.series).toHaveLength(1);
+    expect(value.stackedSeries[0].buy).toBe(3);
     expect(value.successRate).toBeCloseTo(0.6667);
+  });
+
+  it("rejects a byType row missing the stuck count", () => {
+    expect(
+      TxnVolumeMetricsSchema.safeParse({
+        byType: [{ type: "buy", count: 3, completed: 2, failed: 1 }],
+        series: [],
+        stackedSeries: [],
+        successRate: 0,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a negative or non-integer stuck count", () => {
+    expect(
+      TxnVolumeMetricsSchema.safeParse({
+        byType: [{ type: "buy", count: 3, completed: 2, failed: 1, stuck: -1 }],
+        series: [],
+        stackedSeries: [],
+        successRate: 0,
+      }).success,
+    ).toBe(false);
+    expect(
+      TxnVolumeMetricsSchema.safeParse({
+        byType: [{ type: "buy", count: 3, completed: 2, failed: 1, stuck: 1.5 }],
+        series: [],
+        stackedSeries: [],
+        successRate: 0,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects when the stacked series is missing", () => {
+    expect(
+      TxnVolumeMetricsSchema.safeParse({
+        byType: [],
+        series: [],
+        successRate: 0,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("GmvMetricsSchema", () => {
+  it("keeps GMV amounts as strings (no float drift) and carries a txn count", () => {
+    const value = GmvMetricsSchema.parse({
+      totalByCurrency: [
+        { currency: "NGN", amount: "1250000.000000000000000000" },
+      ],
+      txnCount: 42,
+    });
+    expect(value.totalByCurrency[0].currency).toBe("NGN");
+    expect(value.totalByCurrency[0].amount).toBe("1250000.000000000000000000");
+    expect(value.txnCount).toBe(42);
   });
 });
 
 describe("RevenueMetricsSchema", () => {
   it("keeps fee/spread amounts as strings (no float drift)", () => {
     const value = RevenueMetricsSchema.parse({
-      totalFeesByCurrency: [{ currency: "NGN", amount: "150.000000000000000000" }],
+      totalFeesByCurrency: [
+        { currency: "NGN", amount: "150.000000000000000000" },
+      ],
       totalSpreadByCurrency: [],
       txnCount: 2,
     });
-    expect(value.totalFeesByCurrency[0].amount).toBe(
-      "150.000000000000000000",
-    );
+    expect(value.totalFeesByCurrency[0].amount).toBe("150.000000000000000000");
     expect(value.totalSpreadByCurrency).toEqual([]);
     expect(value.txnCount).toBe(2);
   });
@@ -105,13 +207,19 @@ describe("ServiceHealthMetricsSchema", () => {
 describe("DashboardSummarySchema", () => {
   it("parses the composite dashboard payload", () => {
     const value = DashboardSummarySchema.parse({
-      txnVolume: { byType: [], series: [], successRate: 0 },
-      revenue: { totalFeesByCurrency: [], totalSpreadByCurrency: [], txnCount: 0 },
+      txnVolume: { byType: [], series: [], stackedSeries: [], successRate: 0 },
+      gmv: { totalByCurrency: [], txnCount: 0 },
+      revenue: {
+        totalFeesByCurrency: [],
+        totalSpreadByCurrency: [],
+        txnCount: 0,
+      },
       kycFunnel: { byStatus: [], byTier: [] },
       activeUsers: { activeInRange: 0, newInRange: 0, totalUsers: 0 },
       serviceHealth: { services: [] },
     });
     expect(value.txnVolume.successRate).toBe(0);
+    expect(value.gmv.txnCount).toBe(0);
     expect(value.revenue.txnCount).toBe(0);
   });
 });

@@ -49,6 +49,9 @@ enum AuditAction {
   admin_update
   admin_review
   admin_override
+  /// A PII-minimised CSV export of a list surface (users/ledger/audit) — records
+  /// the rowCount + applied filters; never the full data set or full PII (§3.4).
+  admin_export
   sanctions_hit
   aml_flag
   rule_violation
@@ -133,11 +136,11 @@ enum ComplianceStatus {
 /// Immutable record of each screening run on a counterparty. Append-only; plain
 /// refs keep it decoupled from the operational graph (AUD-06).
 model SanctionsRecord {
-  id                     String            @id @default(uuid(7)) @db.Uuid
+  id                     String                @id @default(uuid(7)) @db.Uuid
   /// "beneficiary:<id>" | "address:<addr>" | "user:<id>" | free-form.
   counterpartyId         String
-  userId                 String?           @db.Uuid
-  beneficiaryId          String?           @db.Uuid
+  userId                 String?               @db.Uuid
+  beneficiaryId          String?               @db.Uuid
   screeningType          ScreeningType
   provider               ScreeningProvider
   query                  Json
@@ -145,7 +148,15 @@ model SanctionsRecord {
   verdict                ScreeningVerdict
   /// Provider-side request id for traceability.
   screeningCorrelationId String?
-  createdAt              DateTime          @default(now()) @db.Timestamptz
+  /// Operator disposition of the match (ADM Phase 7). The screener `verdict` above
+  /// is immutable evidence and is never mutated; this is the ANNOTATION of the
+  /// human decision (cleared/escalated/blocked). null == open / awaiting review.
+  /// The full before/after decision trail lives in the hash-chained AuditLog.
+  disposition            SanctionsDisposition?
+  dispositionAdminId     String?               @db.Uuid
+  dispositionComment     String?
+  dispositionAt          DateTime?             @db.Timestamptz
+  createdAt              DateTime              @default(now()) @db.Timestamptz
 
   @@index([counterpartyId, createdAt])
   @@index([verdict, createdAt])
@@ -175,6 +186,17 @@ enum ScreeningVerdict {
   inconclusive
 
   @@map("screening_verdict")
+}
+
+/// Operator disposition of a screening match (ADM Phase 7). Distinct from the
+/// immutable screener `verdict`: this records the human decision the admin console
+/// applies through the audited service path (never a raw write, §3.1).
+enum SanctionsDisposition {
+  cleared
+  escalated
+  blocked
+
+  @@map("sanctions_disposition")
 }
 
 /// Admin-configurable, versioned AML rules evaluated by the engine at txn time.

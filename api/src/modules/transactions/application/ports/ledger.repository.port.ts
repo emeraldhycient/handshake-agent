@@ -47,6 +47,36 @@ export interface LedgerIntegrityResult {
   brokenAt: string | null;
 }
 
+/** Optional filters for the global cross-account ledger browse. */
+export interface LedgerGlobalFilter {
+  accountType?: string;
+  currency?: string;
+}
+
+/**
+ * A keyset page of global ledger entries (newest-first) plus the cursor to fetch
+ * the next page (`null` when the last page has been returned). `cursor` on the
+ * request is an opaque ledger-entry id (the last row of the previous page).
+ */
+export interface LedgerGlobalPage {
+  items: LedgerEntryRecord[];
+  nextCursor: string | null;
+}
+
+/**
+ * Global sequence-continuity result (READ-ONLY). Walks every
+ * (accountType, accountId, currency) sub-ledger and asserts its `sequence`
+ * column is a gapless, correctly-ordered 1..N run.
+ *   - `ok` is true only when NO sub-ledger has a gap or reorder.
+ *   - `brokenAccount` is the first offending "accountType:accountId:currency"
+ *     key (else null).
+ */
+export interface LedgerSequenceIntegrityResult {
+  ok: boolean;
+  accountsChecked: number;
+  brokenAccount: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Port interface
 // ---------------------------------------------------------------------------
@@ -106,4 +136,27 @@ export interface ILedgerRepository {
   verifyTransactionIntegrity(
     transactionId: string,
   ): Promise<LedgerIntegrityResult>;
+
+  /**
+   * Admin oversight read (READ-ONLY): a keyset page of ledger legs across ALL
+   * accounts, filtered by an optional accountType and/or currency, newest-first
+   * by (postedAt, id). `cursor` is the last-seen entry id from the previous page
+   * (a malformed/unknown cursor yields the first page). Returns at most `limit`
+   * items plus `nextCursor` (null when there is no further page). The ledger's
+   * per-account `sequence` cannot order across accounts, so the id (uuid7,
+   * time-ordered) is the stable global tiebreaker.
+   */
+  listGlobal(
+    filter: LedgerGlobalFilter,
+    page: { cursor?: string; limit: number },
+  ): Promise<LedgerGlobalPage>;
+
+  /**
+   * Admin oversight read (READ-ONLY): walks every
+   * (accountType, accountId, currency) sub-ledger and asserts its `sequence`
+   * column is a gapless, correctly-ordered 1..N run. NEVER mutates — it only
+   * reads and checks the append-only ledger (§3.1). Reports the first offending
+   * sub-ledger key, or null when all are continuous.
+   */
+  verifyGlobalSequenceIntegrity(): Promise<LedgerSequenceIntegrityResult>;
 }

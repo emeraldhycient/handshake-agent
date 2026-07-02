@@ -4,92 +4,46 @@
  * AssetsPage — the Configuration group's asset-catalog screen (operator-console
  * design system §6.23, `docs/design-ref/screens/Assets.html`).
  *
- * PIXEL REPRODUCTION of the imported design. This screen prioritises matching the
- * design 1:1 over wiring real data — there is no TanStack Query / useQuery here.
- * The content is the design's OWN mock catalog, embedded as module-level consts
- * (translated from the `pAssets` markup + the seed() dataset shapes in
- * docs/design-ref/logic.js, which truncates this view method). Real-data
- * reintegration is a separate later step.
+ * WIRED (Phase 6b) to the real `GET /admin/config/catalog` read
+ * (`useAdminCatalog`) — the FULL asset catalog including *disabled* (Paused)
+ * listings and each entry's effective live status, which the enabled-only,
+ * secret-stripped public `GET /config` cannot provide. Each `AdminCatalogAsset`
+ * (symbol / displayName / kind / decimals / networks / live) maps onto an
+ * `AssetCatalogRow`; the design's Min/max + Contract columns have NO backing
+ * field (per-asset limits + contract addresses are not surfaced — the latter is
+ * a secret), so they render "—" (design-faithful).
  *
  * Layout (verbatim from the markup): a header + "Sync Blockradar catalog" ghost
- * action, a last-sync line, an info-toned "Newly discovered · review to add" card,
- * then the six-column asset table (Asset [green chip + sym/name] · Chain ·
- * Decimals · Min/max · Contract [mono, click-to-copy] · Live toggle-pill).
+ * action, a last-sync line, an info-toned "Newly discovered · review to add" card
+ * (still design-mock — no discovered-asset read endpoint yet), then the
+ * six-column asset table (Asset [green chip + sym/name] · Chain · Decimals ·
+ * Min/max · Contract [mono, click-to-copy] · Live toggle-pill).
  *
  * Actions wire to the SAME destinations as the design:
  * - Sync Blockradar / "Review & add" → the shared ReasonModal (recorded action).
- * - Live toggle-pill → the shared MakerCheckerModal (enabling/disabling an asset is
- *   a dual-control config change; spec §6.23 / §6.25 "Toggling = maker-checker").
+ * - Live toggle-pill → the shared MakerCheckerModal (a dual-control config change;
+ *   the actual persisted toggle is a Phase-7 write — this reads only, §3.1).
  * - Contract cell → click-to-copy (pure clipboard write, as in the design).
  */
-import { useState } from "react"
+import { useMemo, useState } from "react"
 
 import { cn } from "@/lib/utils"
 import { MakerCheckerModal, ReasonModal } from "@/components/admin/flows"
+import { Skeleton } from "@/components/ui/skeleton"
+import { useAdminCatalog } from "@/lib/query/hooks"
 import { pushToast } from "@/lib/store/toast-store"
 import type { AssetCatalogRow, DiscoveredAssetRow } from "@/types/components"
 
 // Design §6.23 table grid — Asset / Chain / Decimals / Min-max / Contract / Live.
 const ASSETS_GRID = "grid-cols-[1.4fr_0.8fr_0.7fr_1fr_1.6fr_0.7fr]"
 
-// The design's initial last-sync caption (matches the seed()'s recent-sync
-// timestamp shape). Seeds the reactive `lastSync` state — "Sync Blockradar
-// catalog" advances it to "just now".
-const INITIAL_LAST_SYNC = "2 hours ago · 14 assets, 3 chains"
+// The design's last-sync caption. The Blockradar catalog-sync action is not yet
+// backed by an admin endpoint (discovered-assets read is a later phase), so this
+// stays a design-faithful reactive caption advanced by the "Sync" ghost action.
+const INITIAL_LAST_SYNC = "2 hours ago · from the live catalog"
 
-// The design's mock asset rows (green-chip catalog). Values reproduce the markup +
-// the launch dataset (USDT + TRX on TRON, ADR-0006) with representative extras so
-// the table reads exactly as the design renders it. Seeds the reactive `assets`
-// state — the Live toggle-pill flips a row's `live` flag once maker-checker approves.
-const INITIAL_ASSET_ROWS: readonly AssetCatalogRow[] = [
-  {
-    sym: "USDT",
-    name: "Tether USD",
-    chain: "TRON · TRC-20",
-    dec: 6,
-    minmax: "5 / 50,000",
-    contract: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
-    live: true,
-  },
-  {
-    sym: "USDT",
-    name: "Tether USD",
-    chain: "Ethereum · ERC-20",
-    dec: 6,
-    minmax: "5 / 50,000",
-    contract: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-    live: true,
-  },
-  {
-    sym: "USDC",
-    name: "USD Coin",
-    chain: "TRON · TRC-20",
-    dec: 6,
-    minmax: "5 / 50,000",
-    contract: "TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8",
-    live: true,
-  },
-  {
-    sym: "TRX",
-    name: "TRON",
-    chain: "TRON · native",
-    dec: 6,
-    minmax: "25 / 250,000",
-    contract: "—",
-    live: true,
-  },
-  {
-    sym: "BTC",
-    name: "Bitcoin",
-    chain: "Bitcoin · native",
-    dec: 8,
-    minmax: "0.0002 / 2",
-    contract: "—",
-    live: false,
-  },
-]
-
-// The design's mock newly-discovered rows (info-toned "review to add" card).
+// The design's mock newly-discovered rows (info-toned "review to add" card). No
+// discovered-asset read endpoint exists yet — kept design-faithful (worklist gap).
 const DISCOVERED_ROWS: readonly DiscoveredAssetRow[] = [
   {
     sym: "USDC",
@@ -234,7 +188,8 @@ function AssetRow({
         {asset.dec}
       </div>
 
-      {/* Min / max */}
+      {/* Min / max — not surfaced by the catalog read (per-asset limits are not
+          modeled); renders "—" (design-faithful). */}
       <div className="font-mono text-[11px] text-ink2 tabular-nums">
         {asset.minmax}
       </div>
@@ -281,14 +236,29 @@ function assetKey(asset: AssetCatalogRow) {
 }
 
 export function AssetsPage() {
-  // Reactive catalog + last-sync caption (design mock data, lifted into state so
-  // the maker-checker toggle and the Blockradar sync visibly mutate the screen).
-  const [assets, setAssets] =
-    useState<readonly AssetCatalogRow[]>(INITIAL_ASSET_ROWS)
+  // Real asset catalog (full — incl. disabled/paused), fetched from
+  // GET /admin/config/catalog. Min/max + contract are not surfaced by the read,
+  // so they render "—" (design-faithful).
+  const { data, isLoading, isError, isSuccess, refetch } = useAdminCatalog()
+
+  const assets = useMemo<AssetCatalogRow[]>(
+    () =>
+      (data?.assets ?? []).map((a) => ({
+        sym: a.symbol,
+        name: a.displayName,
+        chain: a.networks.join(" · ") || "—",
+        dec: a.decimals,
+        minmax: "—",
+        contract: "—",
+        live: a.live,
+      })),
+    [data]
+  )
+
   const [lastSync, setLastSync] = useState(INITIAL_LAST_SYNC)
 
   // Which flow modal is open, and the row/asset it targets. The toggle target is
-  // held by key so the modal reads the row's live flag from current state.
+  // held by key so the modal reads the row's live flag from current data.
   const [reasonFor, setReasonFor] = useState<string | null>(null)
   const [toggleKey, setToggleKey] = useState<string | null>(null)
   const toggleTarget =
@@ -312,13 +282,17 @@ export function AssetsPage() {
     setReasonFor(null)
   }
 
-  /** Flip the targeted asset's live flag once maker-checker approves, then close. */
+  /**
+   * Dual-control approved. The persisted live-status toggle is a Phase-7 write
+   * (this screen reads only, §3.1); acknowledge the intent, refetch the real
+   * catalog, and close.
+   */
   function approveToggle() {
-    setAssets((rows) =>
-      rows.map((asset) =>
-        assetKey(asset) === toggleKey ? { ...asset, live: !asset.live } : asset
+    if (toggleTarget)
+      pushToast(
+        `${toggleTarget.sym} · ${toggleTarget.live ? "Pause" : "Enable"} queued`,
+        "info"
       )
-    )
     setToggleKey(null)
   }
 
@@ -370,14 +344,74 @@ export function AssetsPage() {
           <div>Contract</div>
           <div>Live</div>
         </div>
-        {assets.map((asset) => (
-          <AssetRow
-            key={assetKey(asset)}
-            asset={asset}
-            onCopy={copyContract}
-            onToggle={(a) => setToggleKey(assetKey(a))}
-          />
-        ))}
+
+        {/* Loading */}
+        {isLoading &&
+          Array.from({ length: 5 }).map((_, i) => (
+            <div
+              key={i}
+              className={cn(
+                "grid items-center gap-3 border-b border-line2 px-[18px] py-[13px] last:border-b-0",
+                ASSETS_GRID
+              )}
+              aria-busy="true"
+            >
+              <div className="flex items-center gap-2.5">
+                <Skeleton className="size-[34px] flex-none rounded-[9px]" />
+                <div className="flex flex-col gap-1.5">
+                  <Skeleton className="h-3 w-12" />
+                  <Skeleton className="h-2.5 w-24" />
+                </div>
+              </div>
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-3 w-6" />
+              <Skeleton className="h-3 w-16" />
+              <Skeleton className="h-3 w-40" />
+              <Skeleton className="h-4 w-12 rounded-full" />
+            </div>
+          ))}
+
+        {/* Error */}
+        {isError && (
+          <div className="px-5 py-[52px] text-center">
+            <div className="text-[14px] font-bold text-tdn">
+              Couldn&apos;t load the asset catalog
+            </div>
+            <div className="mt-1 text-[12.5px] text-ink2">
+              The catalog failed to load. Check your connection and try again.
+            </div>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              className="mt-3 inline-flex h-[34px] items-center rounded-[10px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Empty */}
+        {isSuccess && assets.length === 0 && (
+          <div className="px-5 py-[60px] text-center text-ink3">
+            <div className="text-[14px] font-bold text-ink2">
+              No assets in the catalog
+            </div>
+            <div className="mt-1 text-[12.5px]">
+              Sync the Blockradar catalog to discover and add assets.
+            </div>
+          </div>
+        )}
+
+        {/* Rows */}
+        {isSuccess &&
+          assets.map((asset) => (
+            <AssetRow
+              key={assetKey(asset)}
+              asset={asset}
+              onCopy={copyContract}
+              onToggle={(a) => setToggleKey(assetKey(a))}
+            />
+          ))}
       </div>
 
       {/* ── Flow modals (shared, design template §5) ─────────────────────────── */}

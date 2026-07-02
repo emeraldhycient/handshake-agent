@@ -33,12 +33,14 @@ import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   ActiveUsersResult,
   CurrencyAmount,
+  GmvResult,
   IMetricsReadRepository,
   KycFunnelResult,
   RevenueResult,
   ServiceHealthResult,
   ServiceHealthRow,
   TransactionVolumeResult,
+  TxnCapabilityBucketRow,
   TxnDailyBucket,
   TxnTypeCount,
 } from '../application/ports/metrics-read.repository.port';
@@ -49,6 +51,40 @@ const SCALE_FACTOR = 10n ** BigInt(LEDGER_SCALE);
 
 /** The transactable services surfaced on the dashboard, in display order. */
 const SERVICE_TYPES = ['buy', 'sell', 'send', 'swap'] as const;
+
+/**
+ * In-flight (non-terminal) statuses folded into the per-type `stuck` count — the
+ * same slice the admin txn-read repo counts for the sidebar "Stuck" badge, so the
+ * dashboard "Failed / stuck tx" card and the badge agree.
+ */
+const STUCK_STATUSES: TransactionStatus[] = [
+  TransactionStatus.pending,
+  TransactionStatus.validating,
+  TransactionStatus.confirmed,
+  TransactionStatus.settling,
+];
+
+/** The five capability segments of the stacked volume chart, in stacking order. */
+const CAPABILITIES = ['buy', 'sell', 'send', 'swap', 'ticket'] as const;
+type Capability = (typeof CAPABILITIES)[number];
+
+/**
+ * Maps a Transaction.type onto a stacked-chart capability. `ticket_purchase`
+ * collapses onto `ticket`; non-capability types (reward/refund/deposit) return
+ * null and are excluded from the stacked series. Keeps the chart 1:1 with the
+ * five design capabilities.
+ */
+function capabilityOf(type: string): Capability | null {
+  if (type === 'ticket_purchase') return 'ticket';
+  return (CAPABILITIES as readonly string[]).includes(type)
+    ? (type as Capability)
+    : null;
+}
+
+/** A fresh zeroed per-capability bucket for one day. */
+function emptyStackedBucket(date: string): TxnCapabilityBucketRow {
+  return { date, buy: 0, sell: 0, send: 0, swap: 0, ticket: 0, total: 0 };
+}
 
 /**
  * Parses a signed decimal string into a scaled BigInt (×10^18) for exact integer
@@ -112,7 +148,13 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
       const count = row._count._all;
       const entry =
         byTypeMap.get(type) ??
-        ({ type, count: 0, completed: 0, failed: 0 } satisfies TxnTypeCount);
+        ({
+          type,
+          count: 0,
+          completed: 0,
+          failed: 0,
+          stuck: 0,
+        } satisfies TxnTypeCount);
       entry.count += count;
       if (status === TransactionStatus.completed) {
         entry.completed += count;
@@ -120,24 +162,45 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
       } else if (status === TransactionStatus.failed) {
         entry.failed += count;
         failedTotal += count;
+      } else if ((STUCK_STATUSES as readonly string[]).includes(status)) {
+        // In-flight (non-terminal) — pending/validating/confirmed/settling. Does
+        // NOT contribute to successRate (only completed/failed do); it is the
+        // sibling of `failed` the dashboard card renders next to it.
+        entry.stuck += count;
       }
       byTypeMap.set(type, entry);
     }
 
     // Daily series: count transactions per UTC day (createdAt). Read the minimal
-    // createdAt set and bucket in memory — exact, and avoids DB-specific date SQL.
+    // (createdAt, type) set once and bucket in memory — exact, avoids DB-specific
+    // date SQL, and lets us build both the flat total series and the per-capability
+    // stacked series from a single scan. The stacked series drives the dashboard
+    // chart (buy/sell/send/swap/ticket per day); non-capability types (reward/
+    // refund/deposit) count toward the flat total but not the stacked segments.
     const rows = await this.prisma.transaction.findMany({
       where: { createdAt: { gte: from, lte: to } },
-      select: { createdAt: true },
+      select: { createdAt: true, type: true },
     });
     const seriesMap = new Map<string, number>();
+    const stackedMap = new Map<string, TxnCapabilityBucketRow>();
     for (const r of rows) {
       const key = dateKey(r.createdAt);
       seriesMap.set(key, (seriesMap.get(key) ?? 0) + 1);
+
+      const capability = capabilityOf(r.type);
+      if (capability !== null) {
+        const bucket = stackedMap.get(key) ?? emptyStackedBucket(key);
+        bucket[capability] += 1;
+        bucket.total += 1;
+        stackedMap.set(key, bucket);
+      }
     }
     const series: TxnDailyBucket[] = [...seriesMap.entries()]
       .map(([date, count]) => ({ date, count }))
       .sort((a, b) => a.date.localeCompare(b.date));
+    const stackedSeries: TxnCapabilityBucketRow[] = [
+      ...stackedMap.values(),
+    ].sort((a, b) => a.date.localeCompare(b.date));
 
     const denom = completedTotal + failedTotal;
     const successRate = denom === 0 ? 0 : completedTotal / denom;
@@ -147,8 +210,55 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
         a.type.localeCompare(b.type),
       ),
       series,
+      stackedSeries,
       successRate,
     };
+  }
+
+  async gmv(from: Date, to: Date): Promise<GmvResult> {
+    // GMV = summed fiat notional of COMPLETED, money-moving txns in range. The
+    // notional lives in Transaction.metadata as { fiatAmount, fiatCurrency } (set
+    // by the execution engine at settle) — there is no first-class column. We sum
+    // per currency with EXACT scaled-integer (×10^18) arithmetic; a txn without a
+    // fiat notional (e.g. a pure on-chain send with no fiat leg) is skipped and
+    // does NOT count toward txnCount.
+    const rows = await this.prisma.transaction.findMany({
+      where: {
+        status: TransactionStatus.completed,
+        createdAt: { gte: from, lte: to },
+      },
+      select: { metadata: true },
+    });
+
+    const sums = new Map<string, bigint>();
+    const order: string[] = [];
+    let txnCount = 0;
+    for (const row of rows) {
+      const meta = (row.metadata ?? {}) as Record<string, unknown>;
+      const fiatAmount = meta.fiatAmount;
+      const fiatCurrency = meta.fiatCurrency;
+      if (typeof fiatAmount !== 'string' || typeof fiatCurrency !== 'string') {
+        continue;
+      }
+      if (!sums.has(fiatCurrency)) {
+        order.push(fiatCurrency);
+        sums.set(fiatCurrency, 0n);
+      }
+      sums.set(
+        fiatCurrency,
+        sums.get(fiatCurrency)! + toScaledBigInt(fiatAmount),
+      );
+      txnCount += 1;
+    }
+
+    const totalByCurrency: CurrencyAmount[] = order
+      .map((currency) => ({
+        currency,
+        amount: fromScaledBigInt(sums.get(currency)!),
+      }))
+      .sort((a, b) => a.currency.localeCompare(b.currency));
+
+    return { totalByCurrency, txnCount };
   }
 
   async revenue(from: Date, to: Date): Promise<RevenueResult> {

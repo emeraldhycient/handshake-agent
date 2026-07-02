@@ -2,6 +2,9 @@ import {
   AdminLedgerEntrySchema,
   AdminLedgerHistoryResponseSchema,
   AdminLedgerIntegrityResultSchema,
+  AdminLedgerIntegritySummarySchema,
+  AdminLedgerListQuerySchema,
+  AdminLedgerListResponseSchema,
 } from "./admin-ledger.dto";
 
 const UUID = "11111111-1111-1111-1111-111111111111";
@@ -69,9 +72,115 @@ describe("AdminLedgerHistoryResponseSchema", () => {
   });
 
   it("accepts an empty entries array", () => {
-    expect(AdminLedgerHistoryResponseSchema.parse({ entries: [] }).entries).toEqual(
-      [],
-    );
+    expect(
+      AdminLedgerHistoryResponseSchema.parse({ entries: [] }).entries,
+    ).toEqual([]);
+  });
+});
+
+describe("AdminLedgerListQuerySchema", () => {
+  it("accepts an empty query (both filters optional)", () => {
+    expect(AdminLedgerListQuerySchema.parse({})).toEqual({});
+  });
+
+  it("accepts accountType + currency + cursor + coerced limit", () => {
+    const q = AdminLedgerListQuerySchema.parse({
+      accountType: "user_wallet",
+      currency: "USDT",
+      cursor: UUID,
+      limit: "25",
+    });
+    expect(q).toEqual({
+      accountType: "user_wallet",
+      currency: "USDT",
+      cursor: UUID,
+      limit: 25,
+    });
+  });
+
+  it("rejects an empty-string accountType", () => {
+    expect(() =>
+      AdminLedgerListQuerySchema.parse({ accountType: "" }),
+    ).toThrow();
+  });
+
+  it("rejects a limit over the 200 cap", () => {
+    expect(() => AdminLedgerListQuerySchema.parse({ limit: 201 })).toThrow();
+  });
+
+  it("rejects a non-positive limit", () => {
+    expect(() => AdminLedgerListQuerySchema.parse({ limit: 0 })).toThrow();
+  });
+});
+
+describe("AdminLedgerListResponseSchema", () => {
+  const entry = {
+    id: UUID,
+    transactionId: "txn-1",
+    accountType: "treasury_reserve",
+    accountId: "usdt_treasury",
+    currency: "USDT",
+    amount: "5",
+    direction: "credit" as const,
+    balanceAfter: "5",
+    sequence: 1,
+    postedAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  it("accepts entries with a string nextCursor", () => {
+    const res = AdminLedgerListResponseSchema.parse({
+      entries: [entry],
+      nextCursor: UUID,
+    });
+    expect(res.entries).toHaveLength(1);
+    expect(res.nextCursor).toBe(UUID);
+  });
+
+  it("accepts an empty page with a null nextCursor", () => {
+    const res = AdminLedgerListResponseSchema.parse({
+      entries: [],
+      nextCursor: null,
+    });
+    expect(res.entries).toEqual([]);
+    expect(res.nextCursor).toBeNull();
+  });
+
+  it("rejects a missing nextCursor", () => {
+    expect(() =>
+      AdminLedgerListResponseSchema.parse({ entries: [] }),
+    ).toThrow();
+  });
+});
+
+describe("AdminLedgerIntegritySummarySchema", () => {
+  it("accepts an all-clear summary with a null brokenAccount", () => {
+    const s = AdminLedgerIntegritySummarySchema.parse({
+      ok: true,
+      accountsChecked: 12,
+      brokenAccount: null,
+    });
+    expect(s.ok).toBe(true);
+    expect(s.brokenAccount).toBeNull();
+  });
+
+  it("accepts a broken summary naming the offending sub-ledger", () => {
+    const s = AdminLedgerIntegritySummarySchema.parse({
+      ok: false,
+      accountsChecked: 12,
+      brokenAccount: "user_wallet:wallet-1:NGN",
+    });
+    expect(s.ok).toBe(false);
+    expect(s.brokenAccount).toBe("user_wallet:wallet-1:NGN");
+  });
+
+  it("rejects a non-boolean ok", () => {
+    expect(() =>
+      AdminLedgerIntegritySummarySchema.parse({
+        ok: "yes",
+        accountsChecked: 1,
+        brokenAccount: null,
+      }),
+    ).toThrow();
   });
 });
 

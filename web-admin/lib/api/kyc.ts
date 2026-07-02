@@ -11,10 +11,12 @@
  * This file lives in `lib/` and must NOT import from `components/` or `app/`.
  */
 import {
+  KycQueueQuerySchema,
   KycQueueResponseSchema,
   KycSubmissionDetailSchema,
   KycApproveRequestSchema,
   KycRejectRequestSchema,
+  type KycQueueQuery,
   type KycQueueResponse,
   type KycSubmissionDetail,
   type KycApproveRequest,
@@ -23,9 +25,16 @@ import {
 
 import { api } from "./client"
 
-/** GET /admin/kyc/queue — submissions awaiting review. */
-export async function listKycQueue(): Promise<KycQueueResponse> {
-  const res = await api.get("/admin/kyc/queue")
+/**
+ * GET /admin/kyc/queue — submissions in a KYC-status bucket. `status` feeds the
+ * console's status tabs (defaults to pending_review server-side when omitted).
+ * The query is parsed before it fires (§3.3 / §8).
+ */
+export async function listKycQueue(
+  query: KycQueueQuery = {}
+): Promise<KycQueueResponse> {
+  const params = KycQueueQuerySchema.parse(query)
+  const res = await api.get("/admin/kyc/queue", { params })
   return KycQueueResponseSchema.parse(res.data)
 }
 

@@ -1,100 +1,70 @@
 "use client"
 
 /**
- * LedgerPage — the double-entry ledger viewer (design §6.11 Ledger).
+ * LedgerPage — the GLOBAL double-entry ledger viewer (design §6.11 Ledger), wired
+ * to the real global cross-account read via `useGlobalLedger` (GET /admin/ledger/all)
+ * plus the sequence-integrity summary via `useLedgerIntegrity` (GET /admin/ledger/integrity).
  *
- * Reproduces `docs/design-ref/screens/Ledger.html` 1:1: a header with a
- * "Sequence integrity OK" pill, a two-select filter row (account type · currency)
- * with an Export action, and the six-column table
+ * Reproduces `docs/design-ref/screens/Ledger.html` 1:1: a header with a live
+ * "Sequence integrity" pill, a filter row (account TYPE prefix · currency) with an
+ * Export action, and the six-column table
  * (Seq · Account · Dir · Amount · Running · Source). The Source cell links to the
  * transaction's detail route (`/transactions/[id]`), exactly as the design's
  * `onSource` navigates to `txDetail`.
  *
- * This is a design reproduction, not a data-wired screen: the row set, running
- * balances, sequence numbers, and amount/currency formatting are all translated
- * verbatim from the design's `vLedger()` + `ngn()` logic (docs/design-ref/logic.js
- * lines 332, 791-817) and embedded as module-level mock data. Real-data
- * reintegration is a separate later step.
+ * Phase 6b: unlike the old account-scoped triple, this browses across ALL accounts
+ * by account-TYPE prefix (or "All") + currency (or "All"), newest-first, with real
+ * server-side keyset pagination — a "Load more" button pages beyond the first slice
+ * via the response `nextCursor`. The header pill reflects the real global
+ * gap/reorder check.
+ *
+ * Read-only (§3.1): nothing here moves money. Four async branches:
+ * loading skeletons / error / empty / data. The Export button remains a toast
+ * stand-in — its backend and the write path are a later phase.
  */
 import { useMemo, useState } from "react"
 import Link from "next/link"
 
 import { FilterSelect } from "@/components/admin/filter-select"
-import { Pagination } from "@/components/admin/pagination"
+import { Skeleton } from "@/components/ui/skeleton"
 import { pushToast } from "@/lib/store/toast-store"
+import { downloadFile, exportFilename } from "@/lib/download"
+import { exportLedger as exportLedgerCsv } from "@/lib/api/ledger"
+import { useGlobalLedger, useLedgerIntegrity } from "@/lib/query/hooks"
+import type {
+  AdminLedgerEntry,
+  AdminLedgerListQuery,
+} from "@handshake-agent/contracts"
 
-// ── Design data (translated from vLedger(), logic.js 791-817) ────────────────
+// ── Filter axes ──────────────────────────────────────────────────────────────
 
-/** One raw ledger leg from the design's `base` array (logic.js 794-805). */
-interface LedgerLeg {
-  acct: string
-  dir: "DEBIT" | "CREDIT"
-  raw: number
-  ccy: "NGN" | "USDT" | "TRX"
-  src: string
-}
+/**
+ * The account-TYPE filter (design's coarse prefix filter). "All" (empty value)
+ * omits the `accountType` param → the endpoint browses every account type. The
+ * non-empty values are the real `LedgerAccountType` enum (api `06-engine.prisma`).
+ */
+const ACCOUNT_OPTIONS = [
+  { value: "", label: "All account types" },
+  { value: "user_wallet", label: "User wallet" },
+  { value: "platform_float", label: "Platform float" },
+  { value: "processor_settlement", label: "Processor settlement" },
+  { value: "treasury_reserve", label: "Treasury reserve" },
+  { value: "clearing", label: "Clearing" },
+  { value: "compensation", label: "Compensation" },
+] as const
 
-/** The design's `base` legs, verbatim. */
-const BASE_LEGS: readonly LedgerLeg[] = [
-  {
-    acct: "user:usr_10480:NGN",
-    dir: "DEBIT",
-    raw: 106469,
-    ccy: "NGN",
-    src: "tx_80231",
-  },
-  {
-    acct: "treasury:USDT",
-    dir: "DEBIT",
-    raw: 100,
-    ccy: "USDT",
-    src: "tx_80231",
-  },
-  {
-    acct: "user:usr_10480:USDT",
-    dir: "CREDIT",
-    raw: 100,
-    ccy: "USDT",
-    src: "tx_80231",
-  },
-  {
-    acct: "revenue:fees:NGN",
-    dir: "CREDIT",
-    raw: 1178,
-    ccy: "NGN",
-    src: "tx_80231",
-  },
-  {
-    acct: "user:usr_10487:NGN",
-    dir: "CREDIT",
-    raw: 53200,
-    ccy: "NGN",
-    src: "tx_80244",
-  },
-  { acct: "float:NGN", dir: "DEBIT", raw: 53200, ccy: "NGN", src: "tx_80244" },
-  {
-    acct: "user:usr_10501:USDT",
-    dir: "DEBIT",
-    raw: 50,
-    ccy: "USDT",
-    src: "tx_80257",
-  },
-  {
-    acct: "treasury:USDT",
-    dir: "CREDIT",
-    raw: 50,
-    ccy: "USDT",
-    src: "tx_80257",
-  },
-  {
-    acct: "revenue:spread:NGN",
-    dir: "CREDIT",
-    raw: 905,
-    ccy: "NGN",
-    src: "tx_80231",
-  },
-  { acct: "float:TRX", dir: "DEBIT", raw: 42.4, ccy: "TRX", src: "sweep_221" },
-]
+/** Currency axis — "All" (empty) omits the filter; else the launch currencies. */
+const CURRENCY_OPTIONS = [
+  { value: "", label: "All currencies" },
+  { value: "NGN", label: "NGN" },
+  { value: "USDT", label: "USDT" },
+  { value: "TRX", label: "TRX" },
+] as const
+
+/** Server page size for each "Load more" fetch. */
+const PAGE_SIZE = 25
+
+// ── Formatting (mirrors the design's `ngn()` + per-currency `fmt`) ───────────
 
 /** The design's `ngn()` helper (logic.js 332): "₦" + en-NG 2-dp grouping. */
 function ngn(n: number): string {
@@ -107,69 +77,11 @@ function ngn(n: number): string {
   )
 }
 
-/** Format an absolute amount per its currency, as the design's inner `fmt`/amt do. */
-function formatAmount(value: number, ccy: LedgerLeg["ccy"]): string {
-  if (ccy === "NGN") return ngn(Math.abs(value))
-  return Math.abs(value).toFixed(ccy === "TRX" ? 4 : 6) + " " + ccy
-}
-
-/** A derived, display-ready ledger row (mirrors vLedger()'s returned row shape). */
-interface LedgerRow {
-  seq: string
-  acct: string
-  dir: LedgerLeg["dir"]
-  dirDanger: boolean
-  amt: string
-  run: string
-  src: string
-  /** The tx-detail route, or null for non-tx sources (e.g. sweeps) — no link then. */
-  href: string | null
-}
-
-/** The design's two filter axes (logic.js 806-816). */
-type AccountFilter = "all" | "user" | "treasury" | "revenue" | "float"
-type CurrencyFilter = "all" | "NGN" | "USDT" | "TRX"
-
-const ACCOUNT_OPTIONS = [
-  { value: "all", label: "All accounts" },
-  { value: "user", label: "User" },
-  { value: "treasury", label: "Treasury" },
-  { value: "revenue", label: "Fees / revenue" },
-  { value: "float", label: "Float" },
-] as const
-
-const CURRENCY_OPTIONS = [
-  { value: "all", label: "All currencies" },
-  { value: "NGN", label: "NGN" },
-  { value: "USDT", label: "USDT" },
-  { value: "TRX", label: "TRX" },
-] as const
-
-/**
- * Build the filtered, running-balance-carrying rows, exactly as vLedger() does:
- * filter by account prefix + currency, then reduce a per-currency running total
- * (CREDIT adds, DEBIT subtracts), formatting each amount/running per currency.
- */
-function buildRows(acct: AccountFilter, ccy: CurrencyFilter): LedgerRow[] {
-  const run: Record<string, number> = {}
-  return BASE_LEGS.filter((leg) => {
-    if (acct !== "all" && !leg.acct.startsWith(acct)) return false
-    if (ccy !== "all" && leg.ccy !== ccy) return false
-    return true
-  }).map((leg, i) => {
-    run[leg.ccy] =
-      (run[leg.ccy] ?? 0) + (leg.dir === "CREDIT" ? leg.raw : -leg.raw)
-    return {
-      seq: "44" + (920 + i),
-      acct: leg.acct,
-      dir: leg.dir,
-      dirDanger: leg.dir === "DEBIT",
-      amt: formatAmount(leg.raw, leg.ccy),
-      run: formatAmount(run[leg.ccy], leg.ccy),
-      src: leg.src,
-      href: leg.src.startsWith("tx") ? `/transactions/${leg.src}` : null,
-    }
-  })
+/** Format a canonical decimal string per its OWN currency (each row is global). */
+function formatAmount(value: string, currency: string): string {
+  const n = Number(value)
+  if (currency === "NGN") return ngn(Math.abs(n))
+  return Math.abs(n).toFixed(currency === "TRX" ? 4 : 6) + " " + currency
 }
 
 /** Six-column grid (Seq · Account · Dir · Amount · Running · Source), shared by
@@ -177,20 +89,83 @@ function buildRows(acct: AccountFilter, ccy: CurrencyFilter): LedgerRow[] {
 const LEDGER_GRID =
   "grid grid-cols-[0.7fr_1.8fr_0.8fr_1.1fr_1.1fr_1fr] gap-3 px-[18px]"
 
-const PAGE_SIZE = 6
+/** One display-ready row projected from a real `AdminLedgerEntry`. */
+interface LedgerRow {
+  key: string
+  seq: string
+  acct: string
+  dir: string
+  dirDanger: boolean
+  amt: string
+  run: string
+  src: string
+  /** The tx-detail route, or null when the source is not a transaction. */
+  href: string | null
+}
+
+/** Project entries onto the design's row shape (newest-first, as returned). Each
+ *  row formats against its OWN currency (this is a mixed-currency global view). */
+function toRows(entries: readonly AdminLedgerEntry[]): LedgerRow[] {
+  return entries.map((e) => ({
+    key: e.id,
+    seq: String(e.sequence),
+    acct: `${e.accountType}:${e.accountId}:${e.currency}`,
+    dir: e.direction.toUpperCase(),
+    dirDanger: e.direction === "debit",
+    amt: formatAmount(e.amount, e.currency),
+    run: formatAmount(e.balanceAfter, e.currency),
+    src: e.transactionId,
+    href: e.transactionId ? `/transactions/${e.transactionId}` : null,
+  }))
+}
 
 export function LedgerPage() {
-  const [account, setAccount] = useState<AccountFilter>("all")
-  const [currency, setCurrency] = useState<CurrencyFilter>("all")
-  const [page, setPage] = useState(1)
+  const [account, setAccount] = useState("")
+  const [currency, setCurrency] = useState("")
 
-  const rows = useMemo(() => buildRows(account, currency), [account, currency])
-  const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  // Both filters are optional; empty → omit the param (global across that axis).
+  const filters: AdminLedgerListQuery = useMemo(
+    () => ({
+      ...(account ? { accountType: account } : {}),
+      ...(currency ? { currency } : {}),
+      limit: PAGE_SIZE,
+    }),
+    [account, currency]
+  )
 
-  /** Export toast stand-in — mirrors the design's `exportLedger()` (logic.js 790). */
-  function exportLedger() {
-    pushToast("Exporting ledger to CSV…", "info")
+  const ledger = useGlobalLedger(filters)
+  const integrity = useLedgerIntegrity()
+
+  const rows = useMemo(
+    () => toRows(ledger.data?.pages.flatMap((p) => p.entries) ?? []),
+    [ledger.data]
+  )
+
+  const [exporting, setExporting] = useState(false)
+
+  /** Download a CSV of the ledger legs matching the current global-browse filters. */
+  async function exportLedger() {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const blob = await exportLedgerCsv(filters)
+      downloadFile(blob, exportFilename("ledger"))
+    } catch {
+      pushToast("Couldn't export the ledger. Try again.", "warn")
+    } finally {
+      setExporting(false)
+    }
   }
+
+  // Header pill: reflects the real integrity summary (ok/broken), degrading to a
+  // neutral "checking" label while the summary loads or if it errors.
+  const integrityOk = integrity.data?.ok === true
+  const integrityBroken = integrity.data?.ok === false
+  const pillLabel = integrityBroken
+    ? `Sequence gap: ${integrity.data?.brokenAccount ?? "unknown"}`
+    : integrityOk
+      ? "Sequence integrity OK"
+      : "Checking integrity…"
 
   return (
     <div className="mx-auto w-full max-w-[1300px] px-[30px] pt-[26px] pb-[60px]">
@@ -205,7 +180,13 @@ export function LedgerPage() {
             advisory-locked.
           </p>
         </div>
-        <div className="flex h-[34px] items-center gap-[9px] rounded-full bg-sok px-[13px] text-[11.5px] font-bold text-tok">
+        <div
+          className={`flex h-[34px] items-center gap-[9px] rounded-full px-[13px] text-[11.5px] font-bold ${
+            integrityBroken
+              ? "bg-sdn text-tdn"
+              : "bg-sok text-tok"
+          }`}
+        >
           <svg
             width="14"
             height="14"
@@ -214,44 +195,39 @@ export function LedgerPage() {
             aria-hidden="true"
           >
             <path
-              d="m5 12 5 5L20 7"
+              d={integrityBroken ? "M12 9v4m0 4h.01" : "m5 12 5 5L20 7"}
               stroke="currentColor"
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
             />
           </svg>
-          Sequence integrity OK
+          {pillLabel}
         </div>
       </div>
 
-      {/* ── Filter row: account · currency selects + Export ─────────────────── */}
+      {/* ── Filter row: account type · currency + Export ────────────────────── */}
       <div className="mb-[14px] flex flex-wrap gap-[10px]">
         <FilterSelect
-          label="Filter by account"
+          label="Filter by account type"
           value={account}
-          onChange={(e) => {
-            setAccount(e.target.value as AccountFilter)
-            setPage(1)
-          }}
+          onChange={(e) => setAccount(e.target.value)}
           options={ACCOUNT_OPTIONS}
         />
         <FilterSelect
           label="Filter by currency"
           value={currency}
-          onChange={(e) => {
-            setCurrency(e.target.value as CurrencyFilter)
-            setPage(1)
-          }}
+          onChange={(e) => setCurrency(e.target.value)}
           options={CURRENCY_OPTIONS}
         />
         <div className="flex-1" />
         <button
           type="button"
-          onClick={exportLedger}
-          className="flex h-[38px] items-center gap-[7px] rounded-[11px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          onClick={() => void exportLedger()}
+          disabled={exporting}
+          className="flex h-[38px] items-center gap-[7px] rounded-[11px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
         >
-          Export
+          {exporting ? "Exporting…" : "Export"}
         </button>
       </div>
 
@@ -268,57 +244,107 @@ export function LedgerPage() {
           <div className="text-right">Running</div>
           <div>Source</div>
         </div>
-        {/* Body rows */}
-        {pageRows.map((row) => (
-          <div
-            key={row.seq}
-            className={`${LEDGER_GRID} items-center border-b border-line2 py-[11px] last:border-b-0`}
-          >
-            <div className="font-mono text-[11px] text-ink3 tabular-nums">
-              {row.seq}
-            </div>
-            <div className="font-mono text-[12px] text-ink2">{row.acct}</div>
-            <div>
-              <span
-                className={`text-[10.5px] font-extrabold ${
-                  row.dirDanger ? "text-tdn" : "text-tok"
-                }`}
+
+        {/* Loading */}
+        {ledger.isLoading && (
+          <div aria-busy="true">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div
+                key={i}
+                className={`${LEDGER_GRID} items-center border-b border-line2 py-[11px] last:border-b-0`}
               >
-                {row.dir}
-              </span>
-            </div>
-            <div className="text-right font-mono text-[12px] font-bold tabular-nums">
-              {row.amt}
-            </div>
-            <div className="text-right font-mono text-[12px] text-ink2 tabular-nums">
-              {row.run}
-            </div>
-            <div>
-              {row.href ? (
-                <Link
-                  href={row.href}
-                  className="font-mono text-[11.5px] font-bold text-tif hover:underline"
-                >
-                  {row.src}
-                </Link>
-              ) : (
-                <span className="font-mono text-[11.5px] font-bold text-tif">
-                  {row.src}
-                </span>
-              )}
-            </div>
+                <Skeleton className="h-3.5 w-10" />
+                <Skeleton className="h-3.5 w-40" />
+                <Skeleton className="h-3.5 w-12" />
+                <Skeleton className="ml-auto h-3.5 w-16" />
+                <Skeleton className="ml-auto h-3.5 w-16" />
+                <Skeleton className="h-3.5 w-14" />
+              </div>
+            ))}
           </div>
-        ))}
+        )}
+
+        {/* Error */}
+        {ledger.isError && (
+          <div className="flex flex-col items-center gap-2.5 px-[18px] py-[50px] text-center">
+            <p className="text-[13px] font-bold text-tdn">
+              Couldn&apos;t load ledger entries
+            </p>
+            <button
+              type="button"
+              onClick={() => ledger.refetch()}
+              className="flex h-[34px] items-center rounded-[10px] border border-line bg-card px-3.5 text-[12px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Empty */}
+        {!ledger.isLoading && !ledger.isError && rows.length === 0 && (
+          <div className="px-[18px] py-[50px] text-center text-[13px] text-ink3">
+            No ledger entries match these filters.
+          </div>
+        )}
+
+        {/* Data */}
+        {!ledger.isLoading &&
+          !ledger.isError &&
+          rows.map((row) => (
+            <div
+              key={row.key}
+              className={`${LEDGER_GRID} items-center border-b border-line2 py-[11px] last:border-b-0`}
+            >
+              <div className="font-mono text-[11px] text-ink3 tabular-nums">
+                {row.seq}
+              </div>
+              <div className="font-mono text-[12px] text-ink2">{row.acct}</div>
+              <div>
+                <span
+                  className={`text-[10.5px] font-extrabold ${
+                    row.dirDanger ? "text-tdn" : "text-tok"
+                  }`}
+                >
+                  {row.dir}
+                </span>
+              </div>
+              <div className="text-right font-mono text-[12px] font-bold tabular-nums">
+                {row.amt}
+              </div>
+              <div className="text-right font-mono text-[12px] text-ink2 tabular-nums">
+                {row.run}
+              </div>
+              <div>
+                {row.href ? (
+                  <Link
+                    href={row.href}
+                    className="font-mono text-[11.5px] font-bold text-tif hover:underline"
+                  >
+                    {row.src}
+                  </Link>
+                ) : (
+                  <span className="font-mono text-[11.5px] font-bold text-tif">
+                    {row.src}
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
       </div>
 
-      {/* ── Pagination (shared, page size 6) ────────────────────────────────── */}
-      <Pagination
-        total={rows.length}
-        pageSize={PAGE_SIZE}
-        page={page}
-        onPageChange={setPage}
-        maxWidth="1300px"
-      />
+      {/* ── Keyset "Load more" (server-side cursor, newest-first) ────────────── */}
+      {!ledger.isLoading && !ledger.isError && ledger.hasNextPage && (
+        <div className="mt-[14px] flex justify-center">
+          <button
+            type="button"
+            onClick={() => ledger.fetchNextPage()}
+            disabled={ledger.isFetchingNextPage}
+            className="flex h-[38px] items-center rounded-[11px] border border-line bg-card px-[16px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
+          >
+            {ledger.isFetchingNextPage ? "Loading…" : "Load more"}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

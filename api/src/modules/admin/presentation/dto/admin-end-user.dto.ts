@@ -3,6 +3,7 @@ import {
   AdminEndUserSearchQuerySchema,
   AdminEndUserStatusRequestSchema,
   AdminEndUserTierRequestSchema,
+  CreateManualCreditRequestSchema,
   KycApproveRequestSchema,
   KycRejectRequestSchema,
 } from '@handshake-agent/contracts';
@@ -27,3 +28,8 @@ export class KycApproveDto extends createZodDto(KycApproveRequestSchema) {}
 
 /** Request DTO for POST /admin/kyc/:userId/reject. */
 export class KycRejectDto extends createZodDto(KycRejectRequestSchema) {}
+
+/** Request DTO for POST /admin/users/:id/credit (raise a manual-credit request). */
+export class CreateManualCreditDto extends createZodDto(
+  CreateManualCreditRequestSchema,
+) {}

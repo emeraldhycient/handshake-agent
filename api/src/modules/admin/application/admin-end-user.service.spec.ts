@@ -108,6 +108,10 @@ function makeTxn(over?: Partial<TransactionListRecord>): TransactionListRecord {
     id: 'txn-1',
     type: 'buy',
     status: 'completed',
+    asset: 'USDT',
+    amount: '100.00',
+    fiatAmount: '150000.00',
+    fiatCurrency: 'NGN',
     createdAt: new Date('2026-06-28T00:00:00.000Z'),
     ...over,
   };
@@ -158,6 +162,7 @@ function makeMocks(): { service: AdminEndUserService; m: Mocks } {
     listUsersPendingKycReview: jest.fn(),
     loadUserWithKycAndDevices: jest.fn(),
     listDevicesForUser: jest.fn(),
+    findWhatsAppAddressByUserId: jest.fn().mockResolvedValue(null),
     setUserStatus: jest.fn().mockResolvedValue(undefined),
     setKycTier: jest.fn().mockResolvedValue(undefined),
     setSimSwapDetectedAt: jest.fn().mockResolvedValue(undefined),
@@ -229,66 +234,92 @@ function makeMocks(): { service: AdminEndUserService; m: Mocks } {
 
 // ── list ─────────────────────────────────────────────────────────────────────
 
+function makeListRecord(
+  over?: Partial<AdminUserListResult['items'][number]>,
+): AdminUserListResult['items'][number] {
+  return {
+    id: USER_ID,
+    email: 'ada.lovelace@example.com',
+    firstName: 'Ada',
+    lastName: 'Lovelace',
+    status: 'active',
+    kycStatus: 'verified',
+    kycTier: 'tier_2',
+    simSwapDetectedAt: new Date('2026-06-01T00:00:00.000Z'),
+    sanctionsFlagged: true,
+    balances: [{ asset: 'USDT', amount: '100.50' }],
+    lastActiveAt: new Date('2026-06-29T09:30:00.000Z'),
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    ...over,
+  };
+}
+
 describe('AdminEndUserService.list', () => {
-  it('maps records to list items (ISO dates, simSwapFlagged) and forwards cursor', async () => {
+  it('maps records to enriched list items and forwards cursor + total', async () => {
     const { service, m } = makeMocks();
     const result: AdminUserListResult = {
-      items: [
-        {
-          id: USER_ID,
-          email: 'user@example.com',
-          status: 'active',
-          kycStatus: 'verified',
-          kycTier: 'tier_2',
-          simSwapDetectedAt: new Date('2026-06-01T00:00:00.000Z'),
-          createdAt: new Date('2026-01-01T00:00:00.000Z'),
-        },
-      ],
+      items: [makeListRecord()],
       nextCursor: 'cursor-2',
+      total: 42,
     };
     m.identity.listUsers.mockResolvedValue(result);
 
     const out = await service.list({
       query: 'ada',
       status: 'active',
+      kycStatus: 'verified',
       kycTier: 'tier_2',
       cursor: 'cursor-1',
       limit: 25,
     });
 
     expect(m.identity.listUsers).toHaveBeenCalledWith(
-      { query: 'ada', status: 'active', kycTier: 'tier_2' },
+      {
+        query: 'ada',
+        status: 'active',
+        kycStatus: 'verified',
+        kycTier: 'tier_2',
+      },
       { cursor: 'cursor-1', limit: 25 },
     );
     expect(out.nextCursor).toBe('cursor-2');
+    expect(out.total).toBe(42);
     expect(out.items).toEqual([
       {
         id: USER_ID,
-        email: 'user@example.com',
+        email: 'ada.lovelace@example.com',
+        displayName: 'Ada Lovelace',
         status: 'active',
         kycStatus: 'verified',
         kycTier: 'tier_2',
         simSwapFlagged: true,
+        sanctionsFlagged: true,
+        balances: [{ asset: 'USDT', amount: '100.50' }],
+        lastActiveAt: '2026-06-29T09:30:00.000Z',
         createdAt: '2026-01-01T00:00:00.000Z',
       },
     ]);
   });
 
-  it('defaults the limit when not supplied and sets simSwapFlagged false when null', async () => {
+  it('defaults the limit, flags off when null, and derives displayName from email', async () => {
     const { service, m } = makeMocks();
     m.identity.listUsers.mockResolvedValue({
       items: [
-        {
-          id: USER_ID,
-          email: null,
+        makeListRecord({
+          email: 'trader99@example.com',
+          firstName: null,
+          lastName: null,
           status: 'provisional',
           kycStatus: 'not_started',
           kycTier: 'unverified',
           simSwapDetectedAt: null,
-          createdAt: new Date('2026-02-01T00:00:00.000Z'),
-        },
+          sanctionsFlagged: false,
+          balances: [],
+          lastActiveAt: null,
+        }),
       ],
       nextCursor: null,
+      total: 1,
     });
 
     const out = await service.list({});
@@ -296,8 +327,26 @@ describe('AdminEndUserService.list', () => {
     const [, page] = m.identity.listUsers.mock.calls[0];
     expect(page.limit).toBeGreaterThan(0);
     expect(out.items[0].simSwapFlagged).toBe(false);
-    expect(out.items[0].email).toBeNull();
+    expect(out.items[0].sanctionsFlagged).toBe(false);
+    expect(out.items[0].balances).toEqual([]);
+    expect(out.items[0].lastActiveAt).toBeNull();
+    // No KYC name → email local-part.
+    expect(out.items[0].displayName).toBe('trader99');
     expect(out.nextCursor).toBeNull();
+  });
+
+  it('falls back to "Unnamed user" when there is no KYC name and no email', async () => {
+    const { service, m } = makeMocks();
+    m.identity.listUsers.mockResolvedValue({
+      items: [makeListRecord({ email: null, firstName: null, lastName: null })],
+      nextCursor: null,
+      total: 1,
+    });
+
+    const out = await service.list({});
+
+    expect(out.items[0].displayName).toBe('Unnamed user');
+    expect(out.items[0].email).toBeNull();
   });
 });
 
@@ -369,17 +418,29 @@ describe('AdminEndUserService.getDetail', () => {
     expect(detail.simSwapDetectedAt).toBeNull();
     expect(detail.createdAt).toBe('2026-01-01T00:00:00.000Z');
 
-    // balances mapped from WalletBalanceService assets
+    // balances mapped from WalletBalanceService assets (pending not yet sourced)
     expect(detail.balances).toEqual([
-      { asset: 'USDT', network: 'TRON', amount: '10.00' },
+      { asset: 'USDT', network: 'TRON', amount: '10.00', pending: null },
     ]);
 
-    // recent transactions
+    // deposit addresses from the user's provisioned child wallets
+    expect(detail.depositAddresses).toEqual([
+      { network: 'TRON', address: 'TXyz...', status: 'active' },
+    ]);
+
+    // phone resolved from the WhatsApp channel identity (null in this fixture)
+    expect(detail.phone).toBeNull();
+
+    // recent transactions carry the projected economics
     expect(detail.recentTransactions).toEqual([
       {
         id: 'txn-1',
         type: 'buy',
         status: 'completed',
+        asset: 'USDT',
+        amount: '100.00',
+        fiatAmount: '150000.00',
+        fiatCurrency: 'NGN',
         createdAt: '2026-06-28T00:00:00.000Z',
       },
     ]);
@@ -590,5 +651,163 @@ describe('AdminEndUserService.triggerSimSwapReverify', () => {
     expect(a.action).toBe('admin_override');
     expect(a.actorAdminId).toBe(ADMIN_ID);
     expect(a.subject).toContain(USER_ID);
+  });
+});
+
+// ── exportRows ───────────────────────────────────────────────────────────────
+
+describe('AdminEndUserService.exportRows', () => {
+  it('runs the same filter pipeline as list with NO cursor and drains every page', async () => {
+    const { service, m } = makeMocks();
+    const first = makeListRecord({ id: USER_ID });
+    const second = makeListRecord({
+      id: '22222222-2222-2222-2222-222222222222',
+    });
+    m.identity.listUsers
+      .mockResolvedValueOnce({
+        items: [first],
+        nextCursor: 'page-2',
+        total: 2,
+      })
+      .mockResolvedValueOnce({ items: [second], nextCursor: null, total: 2 });
+    m.identity.loadUserWithKycAndDevices.mockResolvedValue(makeDetail());
+
+    const rows = await service.exportRows({
+      query: 'ada',
+      status: 'active',
+      kycStatus: 'verified',
+      kycTier: 'tier_2',
+    });
+
+    // The SAME filters are forwarded; the first call carries no cursor.
+    expect(m.identity.listUsers).toHaveBeenCalledTimes(2);
+    const [filters0, page0] = m.identity.listUsers.mock.calls[0];
+    expect(filters0).toEqual({
+      query: 'ada',
+      status: 'active',
+      kycStatus: 'verified',
+      kycTier: 'tier_2',
+    });
+    expect(page0.cursor).toBeUndefined();
+    // The second page is driven by the first page's cursor.
+    expect(m.identity.listUsers.mock.calls[1][1].cursor).toBe('page-2');
+    // Every matching row is returned (across all pages).
+    expect(rows).toHaveLength(2);
+    expect(rows[0].id).toBe(USER_ID);
+    expect(rows[1].id).toBe('22222222-2222-2222-2222-222222222222');
+  });
+
+  it('masks NIN/BVN to last-4 only — the full identifier never leaves the backend', async () => {
+    const { service, m } = makeMocks();
+    m.identity.listUsers.mockResolvedValue({
+      items: [makeListRecord({ id: USER_ID })],
+      nextCursor: null,
+      total: 1,
+    });
+    m.identity.loadUserWithKycAndDevices.mockResolvedValue(
+      makeDetail({
+        kyc: {
+          firstName: 'Ada',
+          lastName: 'Lovelace',
+          dateOfBirth: null,
+          nin: '12345678901',
+          bvn: '22345678901',
+          idDocumentType: 'passport',
+          livenessCheckResult: 'pass',
+          status: 'verified',
+          tier: 'tier_2',
+          rejectionReason: null,
+        },
+      }),
+    );
+
+    const rows = await service.exportRows({});
+
+    expect(rows[0].ninLast4).toBe('8901');
+    expect(rows[0].bvnLast4).toBe('8901');
+    // Defensive: no full identifier anywhere on the row.
+    const serialized = JSON.stringify(rows[0]);
+    expect(serialized).not.toContain('12345678901');
+    expect(serialized).not.toContain('22345678901');
+  });
+
+  it('yields null last-4 when the user has no KYC profile', async () => {
+    const { service, m } = makeMocks();
+    m.identity.listUsers.mockResolvedValue({
+      items: [makeListRecord({ id: USER_ID })],
+      nextCursor: null,
+      total: 1,
+    });
+    m.identity.loadUserWithKycAndDevices.mockResolvedValue(
+      makeDetail({ kyc: null }),
+    );
+
+    const rows = await service.exportRows({});
+    expect(rows[0].ninLast4).toBeNull();
+    expect(rows[0].bvnLast4).toBeNull();
+  });
+
+  it('restricts the export to includedIds when the operator hand-picked rows', async () => {
+    const { service, m } = makeMocks();
+    const keep = makeListRecord({ id: USER_ID });
+    const drop = makeListRecord({
+      id: '33333333-3333-3333-3333-333333333333',
+    });
+    m.identity.listUsers.mockResolvedValue({
+      items: [keep, drop],
+      nextCursor: null,
+      total: 2,
+    });
+    m.identity.loadUserWithKycAndDevices.mockResolvedValue(makeDetail());
+
+    const rows = await service.exportRows({ includedIds: [USER_ID] });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(USER_ID);
+    // Detail is only loaded for the kept row (never for the dropped one).
+    expect(m.identity.loadUserWithKycAndDevices).toHaveBeenCalledTimes(1);
+    expect(m.identity.loadUserWithKycAndDevices).toHaveBeenCalledWith(USER_ID);
+  });
+
+  it('projects the list fields (displayName, flags, joined balances) onto the row', async () => {
+    const { service, m } = makeMocks();
+    m.identity.listUsers.mockResolvedValue({
+      items: [
+        makeListRecord({
+          id: USER_ID,
+          email: 'ada.lovelace@example.com',
+          firstName: 'Ada',
+          lastName: 'Lovelace',
+          simSwapDetectedAt: new Date('2026-06-01T00:00:00.000Z'),
+          sanctionsFlagged: true,
+          balances: [
+            { asset: 'USDT', amount: '100.50' },
+            { asset: 'NGN', amount: '5000' },
+          ],
+          lastActiveAt: new Date('2026-06-29T09:30:00.000Z'),
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        }),
+      ],
+      nextCursor: null,
+      total: 1,
+    });
+    m.identity.loadUserWithKycAndDevices.mockResolvedValue(makeDetail());
+
+    const rows = await service.exportRows({});
+    expect(rows[0]).toEqual({
+      id: USER_ID,
+      email: 'ada.lovelace@example.com',
+      displayName: 'Ada Lovelace',
+      status: 'active',
+      kycStatus: 'verified',
+      kycTier: 'tier_2',
+      simSwapFlagged: true,
+      sanctionsFlagged: true,
+      balances: 'USDT:100.50 NGN:5000',
+      ninLast4: '8901',
+      bvnLast4: '8901',
+      lastActiveAt: '2026-06-29T09:30:00.000Z',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 });

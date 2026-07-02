@@ -24,6 +24,7 @@ import type {
   IComplianceReportRepository,
   ComplianceReportRecord,
 } from '../../compliance/application/ports/compliance-report.repository.port';
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 
 const EVENT_ID = '11111111-1111-1111-1111-111111111111';
 const USER_ID = '22222222-2222-2222-2222-222222222222';
@@ -89,6 +90,7 @@ describe('AdminComplianceService', () => {
   let reportRepo: jest.Mocked<IComplianceReportRepository>;
   let audit: jest.Mocked<Pick<AuditService, 'record'>>;
   let auditCalls: RecordAuditInput[];
+  let config: jest.Mocked<Pick<EffectiveConfigService, 'get'>>;
   let service: AdminComplianceService;
 
   beforeEach(() => {
@@ -98,7 +100,11 @@ describe('AdminComplianceService', () => {
       findById: jest.fn(),
       updateDisposition: jest.fn(),
     };
-    sanctionsRepo = { list: jest.fn() };
+    sanctionsRepo = {
+      list: jest.fn(),
+      findById: jest.fn(),
+      disposition: jest.fn(),
+    };
     amlRepo = {
       list: jest.fn(),
       findById: jest.fn(),
@@ -119,6 +125,7 @@ describe('AdminComplianceService', () => {
         return Promise.resolve();
       }),
     };
+    config = { get: jest.fn() };
 
     service = new AdminComplianceService(
       eventRepo,
@@ -127,6 +134,7 @@ describe('AdminComplianceService', () => {
       travelRepo,
       reportRepo,
       audit as unknown as AuditService,
+      config as unknown as EffectiveConfigService,
     );
   });
 
@@ -242,13 +250,14 @@ describe('AdminComplianceService', () => {
   // ── sanctions / travel-rule reads ──────────────────────────────────────────
 
   describe('listSanctions / listTravelRule', () => {
-    it('wraps sanctions records into a list response', async () => {
+    it('wraps sanctions records and derives the match-card enrichment', async () => {
       const rec: SanctionsRecordRecord = {
         id: '55555555-5555-5555-5555-555555555555',
         counterpartyId: 'address:T1',
         verdict: 'hit',
         provider: 'open_sanctions',
         screeningType: 'transaction_counterparty',
+        disposition: null,
         createdAt: new Date('2026-01-01T00:00:00.000Z'),
       };
       sanctionsRepo.list.mockResolvedValue([rec]);
@@ -260,9 +269,57 @@ describe('AdminComplianceService', () => {
           verdict: 'hit',
           provider: 'open_sanctions',
           screeningType: 'transaction_counterparty',
+          // provider → human matched-list name
+          matchedList: 'OpenSanctions',
+          // screeningType → human match-type label
+          matchType: 'Counterparty match',
+          // hit → high-confidence band
+          matchScore: 92,
+          // still-open match → no disposition yet
+          disposition: null,
           createdAt: '2026-01-01T00:00:00.000Z',
         },
       ]);
+    });
+
+    it('bands matchScore by verdict (hit > inconclusive > clear)', async () => {
+      const base: SanctionsRecordRecord = {
+        id: '55555555-5555-5555-5555-555555555555',
+        counterpartyId: 'address:T1',
+        verdict: 'hit',
+        provider: 'trm',
+        screeningType: 'identity_verification',
+        disposition: null,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      };
+      sanctionsRepo.list.mockResolvedValue([
+        { ...base, id: 'a', verdict: 'hit' },
+        { ...base, id: 'b', verdict: 'inconclusive' },
+        { ...base, id: 'c', verdict: 'clear' },
+      ]);
+      const res = await service.listSanctions({ limit: 50 });
+      const [hit, inconclusive, clear] = res.items;
+      expect(hit.matchScore).toBeGreaterThan(inconclusive.matchScore);
+      expect(inconclusive.matchScore).toBeGreaterThan(clear.matchScore);
+      // provider passthrough label + unmapped screeningType humanized
+      expect(hit.matchedList).toBe('TRM Labs');
+      expect(hit.matchType).toBe('Identity match');
+    });
+
+    it('falls back to the raw provider / screeningType when unmapped', async () => {
+      const rec: SanctionsRecordRecord = {
+        id: '55555555-5555-5555-5555-555555555555',
+        counterpartyId: 'address:T1',
+        verdict: 'clear',
+        provider: 'some_new_list',
+        screeningType: 'brand_new_type',
+        disposition: null,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      };
+      sanctionsRepo.list.mockResolvedValue([rec]);
+      const [item] = (await service.listSanctions({ limit: 50 })).items;
+      expect(item.matchedList).toBe('some_new_list');
+      expect(item.matchType).toBe('brand_new_type');
     });
 
     it('wraps travel-rule records into a list response', async () => {
@@ -281,6 +338,138 @@ describe('AdminComplianceService', () => {
       expect(res.items[0].amountFiat).toBe('2400000');
       expect(res.items[0].reportedAt).toBeNull();
       expect(res.items[0].capturedAt).toBe('2026-01-01T00:00:00.000Z');
+    });
+  });
+
+  // ── sanctions disposition (Clear / Escalate / Block) ────────────────────────────
+
+  describe('disposeSanctions', () => {
+    const SANCTIONS_ID = '55555555-5555-5555-5555-555555555555';
+
+    function makeSanctions(
+      over?: Partial<SanctionsRecordRecord>,
+    ): SanctionsRecordRecord {
+      return {
+        id: SANCTIONS_ID,
+        counterpartyId: 'address:T1',
+        verdict: 'hit',
+        provider: 'open_sanctions',
+        screeningType: 'transaction_counterparty',
+        disposition: null,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        ...over,
+      };
+    }
+
+    it('writes the operator disposition through the port (never the verdict) and audits before/after', async () => {
+      sanctionsRepo.findById
+        .mockResolvedValueOnce(makeSanctions())
+        .mockResolvedValueOnce(makeSanctions({ disposition: 'blocked' }));
+
+      const item = await service.disposeSanctions(
+        SANCTIONS_ID,
+        { disposition: 'blocked', comment: 'OFAC SDN confirmed' },
+        ADMIN_ID,
+      );
+
+      // The disposition write hits only the annotation columns via the port — the
+      // immutable screener verdict is NOT part of the write payload (§3.1).
+      expect(sanctionsRepo.disposition).toHaveBeenCalledTimes(1);
+      const [id, input] = sanctionsRepo.disposition.mock.calls[0];
+      expect(id).toBe(SANCTIONS_ID);
+      expect(input).toMatchObject({
+        disposition: 'blocked',
+        adminId: ADMIN_ID,
+        comment: 'OFAC SDN confirmed',
+      });
+      expect(input.at).toBeInstanceOf(Date);
+      expect(input).not.toHaveProperty('verdict');
+
+      // The projection reflects the applied disposition; verdict is unchanged.
+      expect(item.disposition).toBe('blocked');
+      expect(item.verdict).toBe('hit');
+
+      // An immutable admin_review audit records the before/after disposition.
+      expect(auditCalls).toHaveLength(1);
+      expect(auditCalls[0]).toMatchObject({
+        actorAdminId: ADMIN_ID,
+        subject: `SanctionsRecord:${SANCTIONS_ID}`,
+        action: 'admin_review',
+        before: { disposition: null },
+        after: { disposition: 'blocked' },
+      });
+    });
+
+    it('records each disposition value (cleared / escalated / blocked)', async () => {
+      for (const disposition of ['cleared', 'escalated', 'blocked'] as const) {
+        sanctionsRepo.disposition.mockClear();
+        sanctionsRepo.findById
+          .mockResolvedValueOnce(makeSanctions())
+          .mockResolvedValueOnce(makeSanctions({ disposition }));
+        const item = await service.disposeSanctions(
+          SANCTIONS_ID,
+          { disposition },
+          ADMIN_ID,
+        );
+        expect(item.disposition).toBe(disposition);
+        expect(sanctionsRepo.disposition.mock.calls[0][1].disposition).toBe(
+          disposition,
+        );
+      }
+    });
+
+    it('throws AdminNotFoundError and never writes when the record is absent', async () => {
+      sanctionsRepo.findById.mockResolvedValue(null);
+      await expect(
+        service.disposeSanctions(
+          SANCTIONS_ID,
+          { disposition: 'cleared' },
+          ADMIN_ID,
+        ),
+      ).rejects.toBeInstanceOf(AdminNotFoundError);
+      expect(sanctionsRepo.disposition).not.toHaveBeenCalled();
+      expect(auditCalls).toHaveLength(0);
+    });
+  });
+
+  // ── ongoing-monitoring policy view ────────────────────────────────────────────
+
+  describe('getMonitoring', () => {
+    it('projects the four monitoring flags from layered config', () => {
+      config.get.mockReturnValue({
+        reScreenDaily: true,
+        screenOnOutbound: false,
+        pepAlert: true,
+        autoBlockOfac: false,
+      });
+      const view = service.getMonitoring();
+      expect(config.get).toHaveBeenCalledWith('compliance.ongoingMonitoring');
+      expect(view).toEqual({
+        reScreenDaily: true,
+        screenOnOutbound: false,
+        pepAlert: true,
+        autoBlockOfac: false,
+      });
+    });
+
+    it('falls back to safe defaults when config is absent', () => {
+      config.get.mockReturnValue(undefined);
+      expect(service.getMonitoring()).toEqual({
+        reScreenDaily: true,
+        screenOnOutbound: true,
+        pepAlert: true,
+        autoBlockOfac: false,
+      });
+    });
+
+    it('coerces missing individual flags to their default', () => {
+      config.get.mockReturnValue({ autoBlockOfac: true });
+      expect(service.getMonitoring()).toEqual({
+        reScreenDaily: true,
+        screenOnOutbound: true,
+        pepAlert: true,
+        autoBlockOfac: true,
+      });
     });
   });
 

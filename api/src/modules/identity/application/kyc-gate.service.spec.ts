@@ -105,7 +105,11 @@ function makeIdentityRepo(
     listUsersPendingKycReview: jest
       .fn()
       .mockResolvedValue({ items: [], nextCursor: null }),
+    listKycReviewQueue: jest
+      .fn()
+      .mockResolvedValue({ items: [], nextCursor: null }),
     loadUserWithKycAndDevices: jest.fn().mockResolvedValue(null),
+    hasSanctionsHit: jest.fn().mockResolvedValue(false),
     listDevicesForUser: jest.fn().mockResolvedValue([]),
     setUserStatus: jest.fn(),
     setKycTier: jest.fn(),

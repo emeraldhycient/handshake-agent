@@ -1,0 +1,12 @@
+-- Phase 7 (Manual credit, maker-checker): a new change-request kind.
+--   change_request_kind += 'manual_credit'  (the four-eyes wallet-credit approval)
+--
+-- Raising a manual credit for a user's wallet enters a pending `manual_credit`
+-- ChangeRequest; a second admin's approval routes the credit through the engine's
+-- atomic settleManualCreditAtomic (AdminManualCreditService) — a balanced
+-- double-entry, never a raw ledger write (root CLAUDE.md §3.1). Additive enum value
+-- only; no data migration.
+--
+-- `ADD VALUE IF NOT EXISTS` is idempotent so re-running is safe; it stands alone
+-- (Postgres cannot add an enum value inside a transaction that later uses it).
+ALTER TYPE "change_request_kind" ADD VALUE IF NOT EXISTS 'manual_credit';

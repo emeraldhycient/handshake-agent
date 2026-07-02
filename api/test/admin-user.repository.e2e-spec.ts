@@ -54,6 +54,55 @@ describe('AdminUserPrismaRepository (integration)', () => {
     expect(created.roleId).toBe(roleId);
   });
 
+  it('createInvited stores the display name when supplied', async () => {
+    const created = await repo.createInvited({
+      email: email(),
+      roleId,
+      displayName: 'Ada Lovelace',
+    });
+    expect(created.displayName).toBe('Ada Lovelace');
+  });
+
+  it('read falls back to the email local-part when displayName is blank', async () => {
+    const addr = `ops.lead-${randomUUID()}@admin.test`;
+    const created = await repo.createInvited({ email: addr, roleId });
+    // Stored blank, surfaced as the local-part.
+    expect(created.displayName).toBe(addr.split('@')[0]);
+    expect((await repo.findById(created.id))?.displayName).toBe(
+      addr.split('@')[0],
+    );
+  });
+
+  it('setDisplayName persists a new name', async () => {
+    const created = await repo.createInvited({ email: email(), roleId });
+    await repo.setDisplayName(created.id, 'Grace Hopper');
+    expect((await repo.findById(created.id))?.displayName).toBe('Grace Hopper');
+  });
+
+  it('setPasswordAndActivate persists the display name when supplied', async () => {
+    const created = await repo.createInvited({ email: email(), roleId });
+    await repo.setPasswordAndActivate(
+      created.id,
+      'argon2-hash',
+      new Date(),
+      'Katherine Johnson',
+    );
+    expect((await repo.findById(created.id))?.displayName).toBe(
+      'Katherine Johnson',
+    );
+  });
+
+  it('disableMfa clears the secret + recovery codes and flips the flag off', async () => {
+    const created = await repo.createInvited({ email: email(), roleId });
+    await repo.enableMfa(created.id, 'enc-secret', ['h1', 'h2']);
+    await repo.disableMfa(created.id);
+
+    const found = await repo.findById(created.id);
+    expect(found?.mfaEnabled).toBe(false);
+    expect(found?.mfaSecret).toBeNull();
+    expect(found?.mfaRecoveryCodes).toEqual([]);
+  });
+
   it('findByEmail returns the unique row, or null when absent', async () => {
     const addr = email();
     await repo.createInvited({ email: addr, roleId });

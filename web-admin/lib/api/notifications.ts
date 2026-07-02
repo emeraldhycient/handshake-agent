@@ -16,12 +16,18 @@ import {
   NotificationTemplateUpsertRequestSchema,
   NotificationTemplatePreviewRequestSchema,
   NotificationTemplatePreviewResponseSchema,
+  DeliveryLogResponseSchema,
+  BroadcastSendRequestSchema,
+  BroadcastSendResponseSchema,
   type NotificationChannel,
   type NotificationTemplate,
   type NotificationTemplateListResponse,
   type NotificationTemplateUpsertRequest,
   type NotificationTemplatePreviewRequest,
   type NotificationTemplatePreviewResponse,
+  type DeliveryLogResponse,
+  type BroadcastSendRequest,
+  type BroadcastSendResponse,
 } from "@handshake-agent/contracts"
 
 import { api } from "./client"
@@ -43,6 +49,16 @@ function refPath({ templateKey, language, channel }: TemplateRef): string {
 export async function listNotificationTemplates(): Promise<NotificationTemplateListResponse> {
   const res = await api.get("/admin/notification-templates")
   return NotificationTemplateListResponseSchema.parse(res.data)
+}
+
+/**
+ * GET /admin/notifications/delivery-log — the read-only delivery log (recent
+ * issued notifications + aggregate bounce/complaint rates). Read-only; parses the
+ * response through the contract schema.
+ */
+export async function getDeliveryLog(): Promise<DeliveryLogResponse> {
+  const res = await api.get("/admin/notifications/delivery-log")
+  return DeliveryLogResponseSchema.parse(res.data)
 }
 
 /** GET /admin/notification-templates/:templateKey/:language/:channel — one template. */
@@ -89,4 +105,21 @@ export async function previewNotificationTemplate(
   const body = NotificationTemplatePreviewRequestSchema.parse(input)
   const res = await api.post("/admin/notification-templates/preview", body)
   return NotificationTemplatePreviewResponseSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/notifications/broadcast — send (or queue-for-approval) a broadcast to
+ * an audience cohort via the notifications outbox. Sensitive + high-impact: may 403
+ * with ADMIN_STEP_UP_REQUIRED (the caller wraps it in `useStepUpRetry`). The SERVER
+ * decides the disposition from the resolved cohort size — a large audience returns
+ * `queued_for_approval` (a maker-checker request for a second admin), a small one
+ * `dispatched`. Moves no money (§3.1). Parses the body before the request and the
+ * response after.
+ */
+export async function sendBroadcast(
+  input: BroadcastSendRequest
+): Promise<BroadcastSendResponse> {
+  const body = BroadcastSendRequestSchema.parse(input)
+  const res = await api.post("/admin/notifications/broadcast", body)
+  return BroadcastSendResponseSchema.parse(res.data)
 }

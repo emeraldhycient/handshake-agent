@@ -7,6 +7,10 @@ import { z } from "zod";
 export const AdminUserSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
+  // Human display name (the backend always sends it, defaulting to the email
+  // local-part when unset). Non-optional on the response — a stable label for
+  // the admins list / row actions surface.
+  displayName: z.string(),
   status: z.enum(["pending", "active", "suspended", "offboarded"]),
   mfaEnabled: z.boolean(),
   role: z.object({ id: z.string().uuid(), name: z.string() }),
@@ -52,3 +56,12 @@ export const AdminBootstrapResponseSchema = z.object({
 export type AdminBootstrapResponse = z.infer<
   typeof AdminBootstrapResponseSchema
 >;
+
+// Reset-2FA-for-another-admin request — a sensitive RBAC action (clears the
+// target admin's mfaSecret / recovery codes / mfaEnabled). Carries an audited,
+// non-empty `reason`; the endpoint additionally requires step-up + write
+// permission server-side (§3.4 — every RBAC mutation is reason→step-up→audit).
+export const AdminMfaResetRequestSchema = z.object({
+  reason: z.string().min(3).max(500),
+});
+export type AdminMfaResetRequest = z.infer<typeof AdminMfaResetRequestSchema>;

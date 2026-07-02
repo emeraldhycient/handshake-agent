@@ -1,4 +1,5 @@
 import { AdminMfaService } from './admin-mfa.service';
+import type { AuditService } from '../../../core/audit/application/audit.service';
 import type { IAdminUserRepository } from './ports/admin-user.repository.port';
 import type { ITotpProvider } from './ports/totp.port';
 import type { IPasswordHasher } from './ports/password-hasher.port';
@@ -18,6 +19,7 @@ type Mocked = {
   totp: jest.Mocked<ITotpProvider>;
   hasher: jest.Mocked<IPasswordHasher>;
   cipher: IMfaCipher;
+  audit: jest.Mocked<AuditService>;
 };
 
 function build(): Mocked {
@@ -28,8 +30,10 @@ function build(): Mocked {
     list: jest.fn(),
     setStatus: jest.fn(),
     updateRole: jest.fn(),
+    setDisplayName: jest.fn().mockResolvedValue(undefined),
     setPasswordAndActivate: jest.fn(),
     enableMfa: jest.fn().mockResolvedValue(undefined),
+    disableMfa: jest.fn().mockResolvedValue(undefined),
     consumeRecoveryCode: jest.fn(),
     recordLogin: jest.fn(),
   } as unknown as jest.Mocked<IAdminUserRepository>;
@@ -47,8 +51,12 @@ function build(): Mocked {
     ),
   } as unknown as jest.Mocked<IPasswordHasher>;
 
-  const svc = new AdminMfaService(userRepo, totp, hasher, fakeCipher);
-  return { svc, userRepo, totp, hasher, cipher: fakeCipher };
+  const audit = {
+    record: jest.fn().mockResolvedValue(undefined),
+  } as unknown as jest.Mocked<AuditService>;
+
+  const svc = new AdminMfaService(userRepo, totp, hasher, fakeCipher, audit);
+  return { svc, userRepo, totp, hasher, cipher: fakeCipher, audit };
 }
 
 describe('AdminMfaService', () => {
@@ -131,6 +139,37 @@ describe('AdminMfaService', () => {
     it('returns false when neither a totp nor a recovery code is supplied', async () => {
       const { svc } = build();
       await expect(svc.verifyForLogin(user)).resolves.toBe(false);
+    });
+  });
+
+  describe('resetForAdmin', () => {
+    const now = new Date('2026-07-02T00:00:00Z');
+
+    it('clears the target admin MFA via the repo and records an audit', async () => {
+      const { svc, userRepo, audit } = build();
+
+      await svc.resetForAdmin('target-1', 'actor-9', 'lost device', now);
+
+      expect(userRepo.disableMfa).toHaveBeenCalledTimes(1);
+      expect(userRepo.disableMfa).toHaveBeenCalledWith('target-1');
+
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      const call = audit.record.mock.calls[0][0];
+      expect(call.action).toBe('admin_override');
+      expect(call.subject).toBe('Admin:target-1');
+      expect(call.actorAdminId).toBe('actor-9');
+      expect(call.details?.reason).toBe('lost device');
+    });
+
+    it('never surfaces any secret (returns void)', async () => {
+      const { svc } = build();
+      const result = await svc.resetForAdmin(
+        'target-1',
+        'actor-9',
+        'reason',
+        now,
+      );
+      expect(result).toBeUndefined();
     });
   });
 });

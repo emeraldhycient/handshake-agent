@@ -9,6 +9,10 @@ import {
   type ConversationLogRecord,
   type IConversationLogReadRepository,
 } from '../../conversations/application/ports/conversation-log-read.repository.port';
+import {
+  AGENT_USAGE_READ_REPOSITORY,
+  type IAgentUsageReadRepository,
+} from './ports/agent-usage-read.repository.port';
 
 const conversationRecord: ConversationLogRecord = {
   id: '11111111-1111-1111-1111-111111111111',
@@ -51,14 +55,17 @@ const detailRecord: ConversationLogDetailRecord = {
 describe('AdminAgentService', () => {
   let service: AdminAgentService;
   let repo: jest.Mocked<IConversationLogReadRepository>;
+  let usageRepo: jest.Mocked<IAgentUsageReadRepository>;
   let effectiveConfig: jest.Mocked<Pick<EffectiveConfigService, 'get'>>;
 
   beforeEach(async () => {
     repo = { listAll: jest.fn(), loadConversationLog: jest.fn() };
+    usageRepo = { countUsageSince: jest.fn() };
     effectiveConfig = {
       get: jest.fn((key: string) => {
         if (key === 'agent.modelId') return 'claude-opus-4-8';
         if (key === 'agent.enabled') return true;
+        if (key === 'agent.maxToolCallsPerTurn') return 1;
         return undefined;
       }) as jest.Mock,
     };
@@ -67,6 +74,7 @@ describe('AdminAgentService', () => {
       providers: [
         AdminAgentService,
         { provide: CONVERSATION_LOG_READ_REPOSITORY, useValue: repo },
+        { provide: AGENT_USAGE_READ_REPOSITORY, useValue: usageRepo },
         { provide: EffectiveConfigService, useValue: effectiveConfig },
       ],
     }).compile();
@@ -94,6 +102,79 @@ describe('AdminAgentService', () => {
       expect(serialized).not.toContain('api_key');
       // enablement flows through from the config.
       expect(view.enabled).toBe(false);
+    });
+  });
+
+  describe('getInsights', () => {
+    beforeEach(() => {
+      usageRepo.countUsageSince.mockResolvedValue({
+        conversations: 12,
+        inboundMessages: 44,
+        outboundReplies: 41,
+      });
+    });
+
+    it('surfaces the four guardrails incl. max-tool-calls from the layered config', async () => {
+      const view = await service.getInsights();
+      const maxRow = view.guardrails.find(
+        (g) => g.label === 'Max tool calls / turn',
+      );
+      expect(maxRow?.value).toBe('1');
+      expect(effectiveConfig.get).toHaveBeenCalledWith(
+        'agent.maxToolCallsPerTurn',
+      );
+      expect(view.guardrails.map((g) => g.label)).toEqual([
+        'Structured output',
+        'Checkpointer',
+        'PIN + step-up',
+        'Max tool calls / turn',
+      ]);
+    });
+
+    it('derives the tool registry from the real intent-action set (read-first)', async () => {
+      const view = await service.getInsights();
+      const names = view.tools.map((t) => t.name);
+      // Every real intent action is present.
+      expect(names).toContain('check_balance');
+      expect(names).toContain('buy_crypto');
+      // read/write classification is correct.
+      const byName = new Map(view.tools.map((t) => [t.name, t.kind]));
+      expect(byName.get('check_balance')).toBe('read');
+      expect(byName.get('query_transactions')).toBe('read');
+      expect(byName.get('receive_crypto')).toBe('read');
+      expect(byName.get('buy_crypto')).toBe('write');
+      expect(byName.get('sell_crypto')).toBe('write');
+      expect(byName.get('send_crypto')).toBe('write');
+      expect(byName.get('swap')).toBe('write');
+      // read rows sort before write rows.
+      const firstWrite = view.tools.findIndex((t) => t.kind === 'write');
+      const lastRead = view.tools.map((t) => t.kind).lastIndexOf('read');
+      expect(lastRead).toBeLessThan(firstWrite);
+    });
+
+    it('reports the live prompt version with the prompt length as a fingerprint', async () => {
+      const view = await service.getInsights();
+      expect(view.promptVersion.status).toBe('live');
+      expect(view.promptVersion.promptChars).toBeGreaterThan(0);
+    });
+
+    it('returns REAL 24h usage counts and never fabricates tokens or cost', async () => {
+      const view = await service.getInsights();
+      expect(view.usage24h).toEqual({
+        conversations: 12,
+        inboundMessages: 44,
+        outboundReplies: 41,
+        windowHours: 24,
+      });
+      // Counts the window from ~now-24h.
+      const since = usageRepo.countUsageSince.mock.calls[0][0];
+      const ageMs = Date.now() - since.getTime();
+      expect(ageMs).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 5_000);
+      expect(ageMs).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 5_000);
+      // No secret / token / cost anywhere in the serialized view.
+      const serialized = JSON.stringify(view).toLowerCase();
+      expect(serialized).not.toContain('anthropic_api_key');
+      expect(serialized).not.toContain('sk-ant');
     });
   });
 

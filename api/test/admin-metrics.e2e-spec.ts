@@ -73,6 +73,7 @@ interface DashboardBody {
       count: number;
       completed: number;
       failed: number;
+      stuck: number;
     }[];
     series: { date: string; count: number }[];
     successRate: number;
@@ -341,7 +342,8 @@ describe('Admin metrics / dashboard — e2e (AppModule, Testcontainers Postgres)
       createdAt: new Date('2026-05-01T00:00:00.000Z'),
     });
 
-    // buy: 1 completed (u1), 1 failed (u2). sell: 1 completed (u1).
+    // buy: 1 completed (u1), 1 failed (u2), 1 settling (u2, STUCK). sell: 1
+    // completed (u1).
     const t1 = await seedTxn({
       userId: u1,
       type: 'buy',
@@ -353,6 +355,12 @@ describe('Admin metrics / dashboard — e2e (AppModule, Testcontainers Postgres)
       type: 'buy',
       status: 'failed',
       createdAt: new Date('2026-06-07T08:00:00.000Z'),
+    });
+    await seedTxn({
+      userId: u2,
+      type: 'buy',
+      status: 'settling',
+      createdAt: new Date('2026-06-07T09:00:00.000Z'),
     });
     const t3 = await seedTxn({
       userId: u1,
@@ -382,11 +390,17 @@ describe('Admin metrics / dashboard — e2e (AppModule, Testcontainers Postgres)
       .expect(200);
     const dash = dashRes.body as DashboardBody;
 
-    // txn volume: 3 txns in range; success rate = completed 2 / (2 + 1) = 0.6667.
+    // txn volume: 4 txns in range; success rate = completed 2 / (2 + 1) = 0.6667
+    // (the settling buy is stuck, so it stays OUT of the success-rate denominator).
     const totalTxns = dash.txnVolume.byType.reduce((s, t) => s + t.count, 0);
-    expect(totalTxns).toBe(3);
+    expect(totalTxns).toBe(4);
     expect(dash.txnVolume.successRate).toBeCloseTo(2 / 3, 4);
     expect(dash.txnVolume.series.length).toBeGreaterThan(0);
+    // The endpoint surfaces per-type stuck alongside failed (the dashboard
+    // "Failed / stuck tx" card reads both). buy: 1 failed, 1 settling → stuck 1.
+    const buyVol = dash.txnVolume.byType.find((t) => t.type === 'buy')!;
+    expect(buyVol.failed).toBe(1);
+    expect(buyVol.stuck).toBe(1);
 
     // revenue: NGN fees sum to 150; spread is not separately ledgered → [].
     const ngn = dash.revenue.totalFeesByCurrency.find(
@@ -410,7 +424,9 @@ describe('Admin metrics / dashboard — e2e (AppModule, Testcontainers Postgres)
     const services = dash.serviceHealth.services.map((s) => s.service).sort();
     expect(services).toEqual(['buy', 'sell', 'send', 'swap']);
     const buy = dash.serviceHealth.services.find((s) => s.service === 'buy')!;
-    expect(buy.total).toBe(2);
+    // serviceHealth counts every in-range buy regardless of status: 1 completed,
+    // 1 failed, 1 settling → total 3.
+    expect(buy.total).toBe(3);
     expect(buy.completed).toBe(1);
     expect(buy.failed).toBe(1);
 

@@ -1,61 +1,24 @@
 "use client"
 
 /**
- * NotificationsMenu — the topbar bell dropdown (design chrome §4.2
- * `toggleNotif`). A DropdownMenu anchored to the bell showing a short list of
- * operational alerts; selecting one navigates to the screen that resolves it.
+ * NotificationsMenu — the topbar bell dropdown (design chrome §4.2 `toggleNotif`).
+ * A DropdownMenu anchored to the bell showing the operator's LIVE alerts; selecting
+ * one navigates to the screen that resolves it.
  *
- * The alerts are LOCAL mock data (there is no alerts-feed endpoint yet) — kept
- * here rather than imported from any page so this component stands alone. The
- * unread badge count is derived from the list length.
+ * The alerts are DERIVED from existing read hooks (no alerts-feed endpoint yet, and
+ * no new one is needed — §4.1's nav-badge composition principle): approvals awaiting
+ * this admin, open reconciliation breaks, stuck transactions, and open compliance
+ * cases. Each source is independently cached; a source still loading or errored
+ * contributes `0`, so its row simply doesn't show rather than flashing a stale count.
+ * The unread badge is the number of ACTIVE alerts (non-zero signal); when every
+ * signal is zero the dropdown shows an "All clear" empty state and the bell carries
+ * no badge. Nothing here moves money (§3.1).
  */
 import { useRouter } from "next/navigation"
 import { DropdownMenu } from "radix-ui"
-import {
-  Bell,
-  Scale,
-  ScanSearch,
-  ArrowLeftRight,
-  type LucideIcon,
-} from "lucide-react"
+import { Bell, CheckCircle2 } from "lucide-react"
 
-interface AdminAlert {
-  id: string
-  icon: LucideIcon
-  title: string
-  description: string
-  href: string
-  /** Accent token for the icon chip — a status semantic, never a raw colour. */
-  tone: "danger" | "warn" | "info"
-}
-
-/** Mock operator alerts — the design's reconciliation / sanctions / stuck-tx set. */
-const ALERTS: readonly AdminAlert[] = [
-  {
-    id: "recon-break",
-    icon: Scale,
-    title: "Reconciliation break — 3 unresolved",
-    description: "Provider ledger diverges from internal balances.",
-    href: "/reconciliation",
-    tone: "warn",
-  },
-  {
-    id: "sanctions-hit",
-    icon: ScanSearch,
-    title: "Sanctions hit — Musa Sani flagged",
-    description: "A screening match needs a compliance decision.",
-    href: "/sanctions",
-    tone: "danger",
-  },
-  {
-    id: "stuck-settlement",
-    icon: ArrowLeftRight,
-    title: "5 transactions stuck in settlement",
-    description: "Awaiting provider confirmation past SLA.",
-    href: "/transactions",
-    tone: "info",
-  },
-]
+import { useOperatorAlerts, type AdminAlert } from "./use-operator-alerts"
 
 const TONE_CHIP: Record<AdminAlert["tone"], string> = {
   danger: "bg-[color:var(--danger-muted)] text-[color:var(--destructive)]",
@@ -65,7 +28,8 @@ const TONE_CHIP: Record<AdminAlert["tone"], string> = {
 
 export function NotificationsMenu() {
   const router = useRouter()
-  const unread = ALERTS.length
+  const alerts = useOperatorAlerts()
+  const unread = alerts.length
 
   return (
     <DropdownMenu.Root>
@@ -94,30 +58,46 @@ export function NotificationsMenu() {
             Notifications
           </DropdownMenu.Label>
 
-          {ALERTS.map((alert) => {
-            const Icon = alert.icon
-            return (
-              <DropdownMenu.Item
-                key={alert.id}
-                onSelect={() => router.push(alert.href)}
-                className="flex cursor-pointer items-start gap-[10px] rounded-xl px-[10px] py-[9px] outline-none data-[highlighted]:bg-hov"
-              >
-                <span
-                  className={`mt-px flex size-[26px] flex-none items-center justify-center rounded-[8px] ${TONE_CHIP[alert.tone]}`}
+          {unread === 0 ? (
+            <div className="flex items-center gap-[10px] px-[10px] py-[14px]">
+              <span className="flex size-[26px] flex-none items-center justify-center rounded-[8px] bg-[color:var(--success-muted)] text-[color:var(--success)]">
+                <CheckCircle2 aria-hidden="true" className="size-[15px]" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12.5px] font-semibold text-ink">
+                  All clear
+                </span>
+                <span className="block text-[11.5px] leading-snug text-ink2">
+                  No operator alerts need your attention.
+                </span>
+              </span>
+            </div>
+          ) : (
+            alerts.map((alert) => {
+              const Icon = alert.icon
+              return (
+                <DropdownMenu.Item
+                  key={alert.id}
+                  onSelect={() => router.push(alert.href)}
+                  className="flex cursor-pointer items-start gap-[10px] rounded-xl px-[10px] py-[9px] outline-none data-[highlighted]:bg-hov"
                 >
-                  <Icon aria-hidden="true" className="size-[15px]" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[12.5px] font-semibold text-ink">
-                    {alert.title}
+                  <span
+                    className={`mt-px flex size-[26px] flex-none items-center justify-center rounded-[8px] ${TONE_CHIP[alert.tone]}`}
+                  >
+                    <Icon aria-hidden="true" className="size-[15px]" />
                   </span>
-                  <span className="block text-[11.5px] leading-snug text-ink2">
-                    {alert.description}
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[12.5px] font-semibold text-ink">
+                      {alert.title}
+                    </span>
+                    <span className="block text-[11.5px] leading-snug text-ink2">
+                      {alert.description}
+                    </span>
                   </span>
-                </span>
-              </DropdownMenu.Item>
-            )
-          })}
+                </DropdownMenu.Item>
+              )
+            })
+          )}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

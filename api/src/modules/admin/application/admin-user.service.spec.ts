@@ -15,6 +15,7 @@ function makeUser(over?: Partial<AdminUserRecord>): AdminUserRecord {
   return {
     id: 'user-1',
     email: 'a@b.co',
+    displayName: 'a',
     status: 'active',
     mfaEnabled: false,
     mfaSecret: null,

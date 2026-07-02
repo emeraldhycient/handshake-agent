@@ -26,8 +26,8 @@
  * - The theme toggle drives the Zustand theme store (mirrored to the DOM by
  *   `components/theme-provider.tsx`).
  * - The ⌘K search pill opens a CommandPalette over the shell's own nav; the
- *   bell opens a NotificationsMenu; the account pill opens an AccountMenu with a
- *   "view-as" role switcher that drives the view-as banner + role label below.
+ *   bell opens a NotificationsMenu; the account pill opens an AccountMenu that
+ *   shows the operator's real email + role (honest read-only, no impersonation).
  * - The KYC-review nav badge is wired to the live queue count; the other design
  *   badges (stuck txns / recon breaks / approvals) have no count endpoint yet.
  *
@@ -45,7 +45,6 @@ import {
   Cable,
   CircleCheckBig,
   Coins,
-  Eye,
   Flag,
   Gauge,
   LayoutGrid,
@@ -75,7 +74,7 @@ import {
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
-import { useAdminMe } from "@/lib/query/hooks"
+import { useAdminMe, useNavBadges } from "@/lib/query/hooks"
 import { useAdminAuthStore } from "@/lib/store/admin-auth-store"
 import { useThemeStore } from "@/lib/store/theme-store"
 import { cn } from "@/lib/utils"
@@ -85,11 +84,7 @@ import { EnvIndicator } from "@/components/admin/env-indicator"
 import { MfaEnrollDialog } from "@/components/admin/mfa-enroll-dialog"
 import { NotificationsMenu } from "@/components/admin/notifications-menu"
 import { Toaster } from "@/components/shared/toaster"
-import type {
-  AppShellProps,
-  NavDestination,
-  ViewAsRole,
-} from "@/types/components"
+import type { AppShellProps, NavDestination } from "@/types/components"
 
 interface NavItem {
   href: string
@@ -290,6 +285,7 @@ const NAV_GROUPS: readonly NavGroup[] = [
         label: "Approvals",
         icon: CircleCheckBig,
         menu: "menu.access",
+        badge: "approvals",
       },
       { href: "/ops", label: "System / ops", icon: Server, menu: "menu.audit" },
       {
@@ -347,9 +343,6 @@ export function AppShell({ children }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false)
   const [mfaOpen, setMfaOpen] = useState(false)
   const [cmdkOpen, setCmdkOpen] = useState(false)
-  // View-as impersonation (UX only): scopes the banner + role label. It does
-  // NOT re-filter the real permission-gated nav — that is a later integration.
-  const [viewAs, setViewAs] = useState<ViewAsRole | null>(null)
 
   const menus = me.data?.menus ?? []
   // A group renders only when at least one of its items is grant-visible.
@@ -361,15 +354,9 @@ export function AppShell({ children }: AppShellProps) {
   // The command palette searches the same grant-visible screens the sidebar shows.
   const destinations = flattenNav(visibleGroups)
 
-  // Design nav badges (§4.1) — mock counts matching the design reproduction
-  // (KYC 13 / stuck txns 5 / recon breaks 3 / approvals 4). Live-count wiring
-  // is a data-reintegration step.
-  const DESIGN_BADGES: Record<string, number> = {
-    kyc: 13,
-    stuck: 5,
-    recon: 3,
-    approvals: 4,
-  }
+  // Live nav-badge counts (§4.1) — KYC review-queue depth / stuck txns / open
+  // recon breaks / approvals awaiting me, each from its real read endpoint.
+  const badges = useNavBadges()
 
   const ThemeIcon = theme === "light" ? Moon : Sun
   const CollapseIcon = collapsed ? PanelLeftOpen : PanelLeftClose
@@ -443,9 +430,7 @@ export function AppShell({ children }: AppShellProps) {
                   {group.items.map((item) => {
                     const active = isActive(pathname, item.href)
                     const Icon = item.icon
-                    const badge = item.badge
-                      ? (DESIGN_BADGES[item.badge] ?? 0)
-                      : 0
+                    const badge = item.badge ? (badges[item.badge] ?? 0) : 0
                     return (
                       <li key={item.href} className="mb-px">
                         <Link
@@ -579,37 +564,14 @@ export function AppShell({ children }: AppShellProps) {
           {/* Notification bell → alerts dropdown (§4.2) */}
           <NotificationsMenu />
 
-          {/* Account / role switcher (§4.2) — reuses adminMe email + role. The
-              view-as selection is lifted here to drive the banner + label. */}
+          {/* Account pill (§4.2) — reuses adminMe email + the operator's REAL
+              role as an honest read-only display (no view-as impersonation). */}
           <AccountMenu
             email={me.data?.email ?? ""}
             realRoleLabel={me.data?.role.name ?? ""}
-            viewAs={viewAs}
-            onViewAs={setViewAs}
             onSignOut={clear}
           />
         </header>
-
-        {/* View-as banner (§view-as) — amber, only while impersonating a role. */}
-        {viewAs && (
-          <div
-            role="status"
-            className="flex flex-none items-center gap-[9px] border-b border-[color:var(--warn-muted)] bg-[color:var(--warn-muted)] px-[22px] py-[7px] text-[12px] font-semibold text-[color:var(--warn)]"
-          >
-            <Eye aria-hidden="true" className="size-[15px] flex-none" />
-            <span>
-              Viewing as <b className="mx-0.5">{viewAs.label}</b> — permissions
-              and nav are scoped to this role.
-            </span>
-            <button
-              type="button"
-              onClick={() => setViewAs(null)}
-              className="ml-1 rounded-sm underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            >
-              Reset to Super Admin
-            </button>
-          </div>
-        )}
 
         {/* Screen area — scrolls independently of the sidebar (§4). */}
         <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
