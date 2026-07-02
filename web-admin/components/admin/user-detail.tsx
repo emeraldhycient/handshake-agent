@@ -11,8 +11,9 @@
  * The design's layout, tokens, spacing, pills and columns are preserved 1:1 —
  * this is wiring, not redesign. Design fields the contract does not provide
  * (phone / locale / on-chain addresses / auth sessions / per-user limits &
- * velocity / full-PII reveal) render gracefully ("—" / a subtle note) and are
- * recorded as backend-enrichment gaps; those tabs keep the design's own content.
+ * velocity) render gracefully ("—" / a subtle note) and are recorded as
+ * backend-enrichment gaps; those tabs keep the design's own content. Identity
+ * PII is last-4 only — the console never reveals a full NIN/BVN (§3.4).
  *
  * Four async branches (loading skeletons / error+retry / empty / data) wrap the
  * aggregate. Write actions (Freeze / Approve-Reject / tier / device revoke /
@@ -31,7 +32,6 @@ import {
   EngineActionModal,
   MakerCheckerModal,
   ManualCreditModal,
-  PiiRevealModal,
   ReasonModal,
   StepUpModal,
 } from "@/components/admin/flows"
@@ -176,10 +176,11 @@ const TABS: readonly { id: Tab; label: string }[] = [
 
 /** Header-action keys — the render dispatches on the key so the freeze label can
  * toggle (Freeze ↔ Unfreeze) without changing the dispatch target. */
-type UActionKey = "freeze" | "note" | "resend" | "viewas"
+type UActionKey = "freeze" | "note" | "resend"
 
 /** Header action buttons (vUserDetail uActions, line 584). The freeze label is set
- * at render time from the user's status; the rest are static. */
+ * at render time from the user's status; the rest are static. (There is no
+ * "View as" impersonation action — the console never re-scopes to a user, §3.4.) */
 const U_ACTIONS: readonly {
   key: UActionKey
   label: string
@@ -194,11 +195,6 @@ const U_ACTIONS: readonly {
   },
   { key: "note", label: "Add note", icon: "M12 5v14M5 12h14" },
   { key: "resend", label: "Resend", icon: "M4 4h16v12H8l-4 4z" },
-  {
-    key: "viewas",
-    label: "View as",
-    icon: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z",
-  },
 ]
 
 // The Profile admin-action timeline, Security auth-sessions, and Limits/velocity
@@ -320,7 +316,7 @@ function Panel({ children }: { children: React.ReactNode }) {
 
 // ─── Flow-modal orchestration (design runFlow: reason → step-up → engine / maker) ────
 
-type FlowStep = "credit" | "reason" | "stepup" | "engine" | "maker" | "pii"
+type FlowStep = "credit" | "reason" | "stepup" | "engine" | "maker"
 
 interface FlowConfig {
   title: string
@@ -328,9 +324,6 @@ interface FlowConfig {
   effect?: EngineEffectRow[]
   ledger?: EngineLedgerRow[]
   diff?: MakerCheckerDiffRow[]
-  piiLabel?: string
-  /** When the flow completes, reveal decrypted PII (the reveal-NIN flow). */
-  reveals?: boolean
   /**
    * Side-effect to run once the flow's final step is confirmed (mutations, toasts).
    * Receives the reason text captured by the ReasonModal step, if any.
@@ -601,7 +594,6 @@ export function UserDetail({ userId }: UserDetailProps) {
     const q = searchParams.get("tab")
     return TABS.some((t) => t.id === q) ? (q as Tab) : "profile"
   })
-  const [piiRevealed, setPiiRevealed] = useState(false)
 
   // Sequential flow-modal machine: the active step index walks the config's steps.
   const [flow, setFlow] = useState<FlowConfig | null>(null)
@@ -636,7 +628,6 @@ export function UserDetail({ userId }: UserDetailProps) {
     if (reason !== undefined) setFlowReason(reason)
     if (flowStep + 1 >= flow.steps.length) {
       // Completed the last step.
-      if (flow.reveals) setPiiRevealed(true)
       flow.onComplete?.(nextReason)
       setFlow(null)
       setFlowStep(0)
@@ -673,20 +664,6 @@ export function UserDetail({ userId }: UserDetailProps) {
               .then(() => undefined),
           isSuspended ? "Account reactivated" : "Account frozen"
         ),
-    })
-  }
-  const revealNin = () => {
-    // The API only ever surfaces the last-4 (PII minimization), so "reveal" toggles a
-    // logged-access banner — the full NIN/BVN is never fetched. See shapeGaps.
-    if (piiRevealed) {
-      setPiiRevealed(false)
-      return
-    }
-    runFlow({
-      title: "Reveal NIN",
-      steps: ["pii", "stepup"],
-      piiLabel: "NIN & BVN",
-      reveals: true,
     })
   }
   // Fire a sensitive mutation through the step-up-retry wrapper: run it; a 403
@@ -873,11 +850,6 @@ export function UserDetail({ userId }: UserDetailProps) {
       onComplete: () => pushToast("Beneficiary removed", "ok"),
     })
 
-  const revealLabel = piiRevealed ? "Hide" : "Reveal"
-  const revealIcon = piiRevealed
-    ? "M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.4 5.2A9 9 0 0 1 21 12a17 17 0 0 1-2.2 3M6.2 6.2A17 17 0 0 0 3 12s3.5 7 9 7a9 9 0 0 0 3-.5"
-    : "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"
-
   // ── Async branches for the aggregate that gates the whole screen. ────────────────────
   if (detailQuery.isLoading) {
     return <UserDetailSkeleton />
@@ -1052,8 +1024,6 @@ export function UserDetail({ userId }: UserDetailProps) {
                     else if (a.key === "note") addNote()
                     else if (a.key === "resend")
                       pushToast("Verification link re-sent", "info")
-                    else if (a.key === "viewas")
-                      pushToast(`Now viewing as ${name}`, "ok")
                   }}
                   className={cn(
                     "flex h-9 cursor-pointer items-center gap-[7px] rounded-[10px] border px-[13px] text-[12.5px] font-bold focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
@@ -1107,38 +1077,6 @@ export function UserDetail({ userId }: UserDetailProps) {
           )
         })}
       </div>
-
-      {/* PII BANNER */}
-      {piiRevealed && (
-        <div className="mb-3.5 flex items-center gap-2.5 rounded-xl border border-[#f2cfc9] bg-sdn px-[15px] py-[11px]">
-          <svg
-            width="17"
-            height="17"
-            viewBox="0 0 24 24"
-            fill="none"
-            aria-hidden
-            className="text-tdn"
-          >
-            <path
-              d="M12 3l7 3v5c0 5-3.5 8-7 9-3.5-1-7-4-7-9V6z"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinejoin="round"
-            />
-          </svg>
-          <span className="flex-1 text-[12.5px] font-semibold text-tdn">
-            Decrypted PII is visible · this access is logged to the audit trail.
-            Auto-remasking in 20s.
-          </span>
-          <button
-            type="button"
-            onClick={() => setPiiRevealed(false)}
-            className="cursor-pointer text-xs font-bold text-tdn underline focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-          >
-            Re-mask now
-          </button>
-        </div>
-      )}
 
       {/* ===== PROFILE ===== */}
       {tab === "profile" && (
@@ -1273,33 +1211,10 @@ export function UserDetail({ userId }: UserDetailProps) {
                       {ninShown}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={revealNin}
-                    className={cn(
-                      "flex cursor-pointer items-center gap-1.5 rounded-[9px] border px-3 py-[7px] text-xs font-bold focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-                      piiRevealed
-                        ? "border-[#f0d0cb] bg-sdn text-tdn"
-                        : "border-line bg-card text-ink"
-                    )}
-                  >
-                    <svg
-                      width="13"
-                      height="13"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      aria-hidden
-                    >
-                      <path
-                        d={revealIcon}
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                    {revealLabel}
-                  </button>
+                  {/* Last-4 only — the full NIN is never fetched or revealed (§3.4). */}
+                  <span className="rounded-full bg-sok px-2.5 py-[5px] text-[11px] font-bold text-tok">
+                    Encrypted at rest
+                  </span>
                 </div>
                 {/* BVN */}
                 <div className="flex items-center gap-[13px] rounded-xl border border-line p-[12px_14px]">
@@ -2043,7 +1958,7 @@ export function UserDetail({ userId }: UserDetailProps) {
         />
       )}
 
-      {/* ===== FLOW MODALS (credit → reason → step-up → engine / maker / pii) ===== */}
+      {/* ===== FLOW MODALS (credit → reason → step-up → engine / maker) ===== */}
       <ManualCreditModal
         open={current === "credit"}
         onOpenChange={(o) => !o && cancelFlow()}
@@ -2073,12 +1988,6 @@ export function UserDetail({ userId }: UserDetailProps) {
         onOpenChange={(o) => !o && cancelFlow()}
         title={flow?.title ?? ""}
         onComplete={() => advance()}
-      />
-      <PiiRevealModal
-        open={current === "pii"}
-        onOpenChange={(o) => !o && cancelFlow()}
-        piiLabel={flow?.piiLabel ?? "NIN & BVN"}
-        onContinue={() => advance()}
       />
       <EngineActionModal
         open={current === "engine"}

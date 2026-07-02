@@ -235,6 +235,62 @@ describe("AppShell live nav badges", () => {
   })
 })
 
+describe("AppShell account menu (honest role display, no view-as)", () => {
+  it("shows the operator's real role on the account pill and offers no view-as switcher", async () => {
+    mockGetMe.mockResolvedValue(
+      adminMe({
+        role: {
+          id: "00000000-0000-0000-0000-0000000000ff",
+          name: "super_admin",
+        },
+        menus: ["menu.audit"],
+      })
+    )
+
+    renderShell()
+
+    // The account pill opens once me resolves; it shows the signed-in email.
+    const account = await screen.findByRole("button", { name: "Account menu" })
+    await userEvent.click(account)
+
+    // The honest read-only role display renders the operator's REAL role (shown
+    // on both the pill and inside the open menu).
+    await waitFor(() =>
+      expect(screen.getAllByText("super_admin").length).toBeGreaterThan(0)
+    )
+    // Sign out stays.
+    expect(screen.getByRole("menuitem", { name: "Sign out" })).toBeInTheDocument()
+
+    // The view-as role SWITCHER is gone: no section header, no per-role items.
+    expect(screen.queryByText(/view as role/i)).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("menuitem", { name: "Operations" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("menuitem", { name: "Compliance" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("menuitem", { name: "Finance" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("menuitem", { name: "Support" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("never renders a view-as impersonation banner", async () => {
+    mockGetMe.mockResolvedValue(adminMe({ menus: ["menu.audit"] }))
+
+    renderShell()
+
+    // Wait for the shell to resolve, then assert the amber view-as banner is absent.
+    await screen.findByRole("button", { name: "Account menu" })
+    expect(screen.queryByText(/viewing as/i)).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /reset to super admin/i })
+    ).not.toBeInTheDocument()
+  })
+})
+
 describe("AppShell MFA enrollment affordance", () => {
   it("shows a Set up MFA control when not enrolled and opens the enroll dialog", async () => {
     mockGetMe.mockResolvedValue(adminMe({ mfaEnabled: false }))

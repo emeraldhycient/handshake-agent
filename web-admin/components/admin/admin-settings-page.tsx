@@ -4,22 +4,36 @@
  * AdminSettingsPage — the signed-in operator's OWN profile + preferences
  * (design §6.16, `docs/design-ref/screens/AdminSettings.html`), wired to real data.
  *
- * Reads (Phase 6a): the profile card (email · role · "2FA enrolled" pill) comes
- * from `useAdminMe()`, and an Active-sessions card lists the operator's own console
- * sessions from `useSessions()` (metadata only — device, IP, expiry; the token hash
- * is never surfaced). The Theme row stays wired to the Zustand theme store, and the
- * notification-preference toggles remain design-faithful local UI state (no
- * endpoint yet). Both fetched surfaces have four branches (loading/error/empty/data).
+ * Reads: the profile card (real displayName + email · role + the "2FA enrolled"
+ * pill) comes from `useAdminMe()`, and an Active-sessions card lists the operator's
+ * own console sessions from `useSessions()` (metadata only — device, IP, expiry;
+ * the token hash is never surfaced). The Theme row stays wired to the Zustand theme
+ * store.
  *
- * WRITE actions (MFA re-enroll, saving preferences, revoking a session) stay for a
- * later phase — this pass wires only the read display.
+ * Phase 8: when the operator is not enrolled, the profile card offers an "Enroll 2FA"
+ * button that opens the shared `MfaEnrollDialog`. The three notification-preference
+ * toggles are wired to `useAdminPreferences()` / `useUpdateAdminPreferences()`: the
+ * ON/OFF state is DERIVED (useMemo) from the fetched preferences layered with local
+ * optimistic overrides — never seeded into state via an effect — and flipping a row
+ * PATCHes the FULL preference set (the endpoint is a full-state replace). Every
+ * fetched surface has four branches (loading/error/empty/data).
  */
-import { useState } from "react"
+import { useMemo, useState } from "react"
 
 import { Skeleton } from "@/components/ui/skeleton"
-import { useAdminMe, useSessions } from "@/lib/query/hooks"
+import { Switch } from "@/components/ui/switch"
+import { MfaEnrollDialog } from "@/components/admin/mfa-enroll-dialog"
+import {
+  useAdminMe,
+  useAdminPreferences,
+  useSessions,
+  useUpdateAdminPreferences,
+} from "@/lib/query/hooks"
 import { useThemeStore } from "@/lib/store/theme-store"
-import type { AdminSessionView } from "@handshake-agent/contracts"
+import type {
+  AdminPreferences,
+  AdminSessionView,
+} from "@handshake-agent/contracts"
 import type { AdminPreferenceKey, AdminPreferenceRow } from "@/types/components"
 
 /**
@@ -32,9 +46,8 @@ const STRIPE_AVATAR =
   "repeating-linear-gradient(45deg, color-mix(in srgb, var(--brand-green) 72%, white) 0 5px, var(--brand-green) 5px 10px)"
 
 /**
- * The design's `prefRows` (markup line 8, `hint-placeholder-count="3"`). The
- * markup truncates the row content, so these reproduce the three representative
- * comms-preference rows faithfully with their default toggle values.
+ * The three notification-preference rows (design markup line 8). Each `key` maps
+ * to a boolean on the `AdminPreferences` DTO; the label/desc are display copy.
  */
 const PREFERENCE_ROWS: readonly AdminPreferenceRow[] = [
   {
@@ -54,31 +67,24 @@ const PREFERENCE_ROWS: readonly AdminPreferenceRow[] = [
   },
 ]
 
-/** The default `prefRows` toggle values shown in the design. */
-const DEFAULT_PREFS: Record<AdminPreferenceKey, boolean> = {
-  emailAlerts: true,
-  approvalMentions: true,
-  weeklyDigest: false,
-}
-
-/** The operator's display name — the email local-part (no name on `AdminMe`). */
-function operatorName(email: string): string {
-  return email.split("@")[0] ?? email
-}
-
 /**
- * Profile card (markup line 4) — 52px striped avatar, name, email · role, and the
- * MFA pill. The pill reflects the real `mfaEnabled` state: enrolled (success) or a
- * neutral "2FA not set" so the operator sees their true posture.
+ * Profile card (markup line 4) — 52px striped avatar, the real displayName, email ·
+ * role, and the MFA state. The pill reflects the real `mfaEnabled`: enrolled
+ * (success) or a neutral "2FA not set" so the operator sees their true posture; when
+ * not enrolled it also offers an "Enroll 2FA" button that opens the MFA dialog.
  */
 function ProfileCard({
+  displayName,
   email,
   roleLabel,
   mfaEnabled,
+  onEnroll,
 }: {
+  displayName: string
   email: string
   roleLabel: string
   mfaEnabled: boolean
+  onEnroll: () => void
 }) {
   return (
     <div className="mb-[14px] flex items-center gap-[15px] rounded-[16px] border border-line bg-card p-[18px_20px]">
@@ -89,7 +95,7 @@ function ProfileCard({
       />
       <div className="min-w-0 flex-1">
         <div className="truncate text-[16px] font-extrabold text-ink">
-          {operatorName(email)}
+          {displayName}
         </div>
         <div className="truncate text-[12.5px] text-ink3">
           {email} · {roleLabel}
@@ -122,8 +128,17 @@ function ProfileCard({
           2FA enrolled
         </div>
       ) : (
-        <div className="flex items-center gap-[7px] rounded-full bg-swn px-[12px] py-[6px] text-[11.5px] font-bold text-twn">
-          2FA not set
+        <div className="flex flex-none items-center gap-[10px]">
+          <div className="flex items-center gap-[7px] rounded-full bg-swn px-[12px] py-[6px] text-[11.5px] font-bold text-twn">
+            2FA not set
+          </div>
+          <button
+            type="button"
+            onClick={onEnroll}
+            className="cursor-pointer rounded-[10px] bg-brand-green px-[14px] py-2 text-[12.5px] font-bold text-white transition-opacity outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            Enroll 2FA
+          </button>
         </div>
       )}
     </div>
@@ -191,9 +206,9 @@ function ThemeRow() {
 }
 
 /**
- * One `prefRows` toggle row (markup line 8) — label/desc + the design's soft
- * toggle: a 46×26 track whose `background` = `p.track` and whose 20px knob sits at
- * `left = p.knob`, transitioning on `left`.
+ * One notification-preference toggle row (markup line 8) — label/desc + the shared
+ * `Switch` primitive. Controlled by the derived `checked`; flipping it fires
+ * `onToggle(next)` (which PATCHes the full preference set).
  */
 function PreferenceRow({
   row,
@@ -202,7 +217,7 @@ function PreferenceRow({
 }: {
   row: AdminPreferenceRow
   checked: boolean
-  onToggle: () => void
+  onToggle: (next: boolean) => void
 }) {
   return (
     <div className="flex items-center justify-between border-b border-line2 py-[12px]">
@@ -210,47 +225,99 @@ function PreferenceRow({
         <div className="text-[12.5px] font-bold text-ink">{row.label}</div>
         <div className="text-[11px] text-ink3">{row.desc}</div>
       </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
+      <Switch
+        checked={checked}
+        onCheckedChange={onToggle}
         aria-label={row.label}
-        onClick={onToggle}
-        style={{
-          background: checked ? "var(--brand-green)" : "var(--card2)",
-        }}
-        className="relative h-[26px] w-[46px] cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-      >
-        <span
-          className="absolute top-[3px] size-[20px] rounded-full bg-white transition-[left] duration-150"
-          style={{ left: checked ? "23px" : "3px" }}
-        />
-      </button>
+      />
     </div>
   )
 }
 
-/** Preferences card (markup lines 5-9) — the Theme row then the `prefRows`. */
-function PreferencesCard() {
-  const [prefs, setPrefs] =
-    useState<Record<AdminPreferenceKey, boolean>>(DEFAULT_PREFS)
+/** Card chrome shared by every branch of the preferences section (Theme row + body). */
+function PreferencesCardShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="rounded-[16px] border border-line bg-card p-[18px_20px]">
       <div className="mb-[6px] text-[13px] font-extrabold text-ink">
         Preferences
       </div>
       <ThemeRow />
+      {children}
+    </div>
+  )
+}
+
+/**
+ * Preferences card (markup lines 5-9) — the Theme row then the notification toggles.
+ * The toggles' ON/OFF is DERIVED (useMemo) from the fetched `AdminPreferences`
+ * layered with local optimistic overrides — never seeded into state via an effect.
+ * Flipping a row records the override immediately (so the Switch holds) and PATCHes
+ * the FULL preference set (a full-state replace). Four branches (loading/error/
+ * empty(n.a.)/data).
+ */
+function PreferencesCard() {
+  const query = useAdminPreferences()
+  const update = useUpdateAdminPreferences()
+
+  // Local optimistic overrides layered over the fetched preferences; the mutation's
+  // onSuccess primes the cache so server + override agree post-write.
+  const [overrides, setOverrides] = useState<Partial<AdminPreferences>>({})
+
+  const effective = useMemo<AdminPreferences | null>(
+    () => (query.data ? { ...query.data, ...overrides } : null),
+    [query.data, overrides]
+  )
+
+  /** Flip one flag: hold it optimistically, then PATCH the full set. */
+  function toggle(key: AdminPreferenceKey, next: boolean) {
+    if (!effective) return
+    const nextPrefs: AdminPreferences = { ...effective, [key]: next }
+    setOverrides((prev) => ({ ...prev, [key]: next }))
+    update.mutate(nextPrefs)
+  }
+
+  if (query.isLoading) {
+    return (
+      <PreferencesCardShell>
+        <div className="flex flex-col gap-2.5 py-2" aria-busy="true">
+          <Skeleton className="h-6 w-full" />
+          <Skeleton className="h-6 w-full" />
+          <Skeleton className="h-6 w-full" />
+        </div>
+      </PreferencesCardShell>
+    )
+  }
+
+  if (query.isError || !effective) {
+    return (
+      <PreferencesCardShell>
+        <div className="py-4">
+          <div className="text-[12.5px] font-bold text-tdn">
+            Couldn&apos;t load your preferences
+          </div>
+          <button
+            type="button"
+            onClick={() => void query.refetch()}
+            className="mt-2 text-[12.5px] font-bold text-tif transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            Try again
+          </button>
+        </div>
+      </PreferencesCardShell>
+    )
+  }
+
+  return (
+    <PreferencesCardShell>
       {PREFERENCE_ROWS.map((row) => (
         <PreferenceRow
           key={row.key}
           row={row}
-          checked={prefs[row.key]}
-          onToggle={() =>
-            setPrefs((prev) => ({ ...prev, [row.key]: !prev[row.key] }))
-          }
+          checked={effective[row.key]}
+          onToggle={(next) => toggle(row.key, next)}
         />
       ))}
-    </div>
+    </PreferencesCardShell>
   )
 }
 
@@ -334,6 +401,7 @@ function SessionsCard() {
 
 export function AdminSettingsPage() {
   const meQuery = useAdminMe()
+  const [enrollOpen, setEnrollOpen] = useState(false)
 
   return (
     <div className="mx-auto max-w-[820px] p-[26px_30px_60px]">
@@ -352,14 +420,18 @@ export function AdminSettingsPage() {
       )}
       {meQuery.isSuccess && (
         <ProfileCard
+          displayName={meQuery.data.displayName}
           email={meQuery.data.email}
           roleLabel={meQuery.data.role.name}
           mfaEnabled={meQuery.data.mfaEnabled}
+          onEnroll={() => setEnrollOpen(true)}
         />
       )}
 
       <PreferencesCard />
       <SessionsCard />
+
+      <MfaEnrollDialog open={enrollOpen} onOpenChange={setEnrollOpen} />
     </div>
   )
 }

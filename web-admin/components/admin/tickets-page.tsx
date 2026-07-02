@@ -4,20 +4,21 @@
  * TicketsPage — the operator ticketing surface (design §6.21), rebuilt 1:1 against
  * `docs/design-ref/screens/Ticketing.html`.
  *
- * Layout: a `1fr 1.4fr` row — **Vendor ports** (mono name + commission + status pill)
- * | **Recent orders** (event/id · user · amount · status). Order rows are pure
- * read-only display (plain mono text, no navigation), matching the design markup.
+ * Layout: a `1fr 1.4fr` row — **Vendor ports** (shape-gap note) | **Recent orders**
+ * (event/id · user · amount · status). Order rows are pure read-only display (plain
+ * mono text, no navigation), matching the design markup.
  *
- * DATA (Phase 6a):
- *  • **Recent orders** now reads the REAL engine feed via `useTicketOrders()` →
+ * DATA (Phase 6a → Phase 8):
+ *  • **Recent orders** reads the REAL engine feed via `useTicketOrders()` →
  *    `TicketOrderListResponse` (id/userId/vendorKey/ticketType/quantity/totalAmount/
  *    paymentStatus/settlementStatus/deliveryStatus/createdAt), with the four async
  *    branches (loading / error / empty / data). The design's own mock `ORDER_ROWS`
  *    const is gone.
- *  • **Vendor ports** stays design-mock: there is NO vendor-port registry endpoint
- *    (only single `ticketing.enabled` + `ticketing.commissionBps` settings keys),
- *    so the per-vendor list/status/commission the design shows cannot be wired —
- *    recorded as a shape gap for a later backend-enrichment pass.
+ *  • **Vendor ports** no longer fabricates per-vendor rows: there is NO vendor-port
+ *    registry endpoint (only single `ticketing.enabled` + `ticketing.commissionBps`
+ *    settings keys), so instead of inventing `ticketing.eventbrite`/`ticketing.tix`
+ *    rows the panel now renders an HONEST shape-gap note. Wiring it needs a backend
+ *    registry enrichment (deferred).
  *
  * Contract → design mapping (`TicketOrderItem` has no event/title and no user display
  * name): the bold order line renders `ticketType`, the mono id renders `id`, the user
@@ -29,33 +30,9 @@
  */
 import { StatusPill } from "@/components/admin/status-pill"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Badge } from "@/components/ui/badge"
 import { useTicketOrders } from "@/lib/query/hooks"
 import type { TicketOrderItem } from "@handshake-agent/contracts"
-import type {
-  TicketOrderStatus,
-  TicketVendorPort,
-  TicketVendorStatus,
-} from "@/types/components"
-
-// ─── Vendor-port status → the canonical status-pill token pair (§5) ───────────────
-// Not a transaction/KYC status, so it maps onto Badge variants directly (StatusPill
-// only knows the stMeta/kycMeta keys). Colour is never the sole signal — the label
-// carries the state.
-const VENDOR_VARIANT: Record<
-  TicketVendorStatus,
-  React.ComponentProps<typeof Badge>["variant"]
-> = {
-  live: "success",
-  paused: "warn",
-  onboarding: "info",
-}
-
-const VENDOR_LABEL: Record<TicketVendorStatus, string> = {
-  live: "Live",
-  paused: "Paused",
-  onboarding: "Onboarding",
-}
+import type { TicketOrderStatus } from "@/types/components"
 
 /**
  * The engine's `settlementStatus` → the design's `StatusPill` status. Unknown/other
@@ -68,19 +45,6 @@ const SETTLEMENT_STATUS: Record<string, TicketOrderStatus> = {
   refunded: "refunded",
   failed: "failed",
 }
-
-// ─── Design-reproduction mock content (Vendor ports — no backend registry yet) ─────
-
-/**
- * Vendor ports — from the design's capability seed (`ticketing.<vendor>` ports).
- * MOCK: there is no vendor-port registry endpoint to enumerate these (only the
- * single `ticketing.enabled` + `ticketing.commissionBps` settings keys), so this
- * panel stays design-mock and is recorded as a shape gap.
- */
-const VENDOR_ROWS: readonly TicketVendorPort[] = [
-  { name: "ticketing.eventbrite", commission: "6.5%", status: "live" },
-  { name: "ticketing.tix", commission: "5.0%", status: "onboarding" },
-]
 
 // ─── Formatting ─────────────────────────────────────────────────────────────────────
 
@@ -103,31 +67,29 @@ function orderPillStatus(order: TicketOrderItem): TicketOrderStatus {
 
 // ─── Cards ────────────────────────────────────────────────────────────────────────
 
-/** Left panel — Vendor ports (mono name + commission + status pill). MOCK. */
+/**
+ * Left panel — Vendor ports. There is NO vendor-port registry endpoint yet (only the
+ * single `ticketing.enabled` + `ticketing.commissionBps` settings keys), so instead
+ * of fabricating per-vendor rows this panel renders an HONEST shape-gap note. Wiring
+ * it needs a backend registry enrichment (deferred).
+ */
 function VendorPortsCard() {
   return (
     <div className="rounded-[16px] border border-line bg-card px-5 py-[18px]">
       <div className="mb-3 text-[13px] font-extrabold text-ink">
         Vendor ports
       </div>
-      {VENDOR_ROWS.map((port) => (
-        <div
-          key={port.name}
-          className="flex items-center gap-[11px] border-b border-line2 py-[11px] last:border-b-0"
-        >
-          <div className="flex-1">
-            <div className="font-mono text-[12.5px] font-bold text-ink">
-              {port.name}
-            </div>
-            <div className="text-[10.5px] text-ink3">
-              commission {port.commission}
-            </div>
-          </div>
-          <Badge variant={VENDOR_VARIANT[port.status]}>
-            {VENDOR_LABEL[port.status]}
-          </Badge>
-        </div>
-      ))}
+      <div className="rounded-[12px] border border-dashed border-line2 px-4 py-6 text-center">
+        <p className="text-[13px] font-bold text-ink">
+          No vendor-port registry yet
+        </p>
+        <p className="mt-1 text-[12px] leading-snug text-ink2">
+          There is no vendor-port registry endpoint to enumerate ticketing
+          vendors — only the global <span className="font-mono">ticketing</span>{" "}
+          enablement + commission settings. Per-vendor status will appear here
+          once a backend registry is added.
+        </p>
+      </div>
     </div>
   )
 }

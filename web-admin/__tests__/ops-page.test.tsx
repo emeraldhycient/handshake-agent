@@ -16,7 +16,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { OpsBoard } from "@handshake-agent/contracts"
+import type {
+  BackfillRunStatusDto,
+  DashboardSummary,
+  OpsBoard,
+} from "@handshake-agent/contracts"
 
 import { OpsPage } from "@/components/admin/ops-page"
 import { defaultToastStore } from "@/lib/store/toast-store"
@@ -24,6 +28,13 @@ import { defaultToastStore } from "@/lib/store/toast-store"
 vi.mock("@/lib/api/ops", () => ({
   getOpsBoard: vi.fn(),
   runOpsJob: vi.fn(),
+  enqueueBackfill: vi.fn(),
+  getBackfillRun: vi.fn(),
+}))
+
+// The service-health card reuses useDashboardMetrics → metrics.getDashboardMetrics.
+vi.mock("@/lib/api/metrics", () => ({
+  getDashboardMetrics: vi.fn(),
 }))
 
 // The page reads the signed-in admin (mfaEnabled) via useAdminMe → admin.getMe.
@@ -31,10 +42,19 @@ vi.mock("@/lib/api/admin", () => ({
   getMe: vi.fn().mockResolvedValue({ mfaEnabled: true, permissions: [] }),
 }))
 
-import { getOpsBoard, runOpsJob } from "@/lib/api/ops"
+import {
+  enqueueBackfill,
+  getBackfillRun,
+  getOpsBoard,
+  runOpsJob,
+} from "@/lib/api/ops"
+import { getDashboardMetrics } from "@/lib/api/metrics"
 
 const mockBoard = vi.mocked(getOpsBoard)
 const mockRun = vi.mocked(runOpsJob)
+const mockEnqueue = vi.mocked(enqueueBackfill)
+const mockRunStatus = vi.mocked(getBackfillRun)
+const mockDashboard = vi.mocked(getDashboardMetrics)
 
 const BOARD: OpsBoard = {
   providers: [
@@ -82,9 +102,53 @@ function renderPage() {
   )
 }
 
+// A minimal DashboardSummary whose serviceHealth block drives the health card;
+// the other metric blocks are unused by OpsPage but the contract requires them.
+const SERVICE_HEALTH: DashboardSummary = {
+  txnVolume: { byType: [], series: [], stackedSeries: [], successRate: 1 },
+  gmv: { totalByCurrency: [], txnCount: 0 },
+  revenue: {
+    totalFeesByCurrency: [],
+    totalSpreadByCurrency: [],
+    txnCount: 0,
+  },
+  kycFunnel: { byStatus: [], byTier: [] },
+  activeUsers: { activeInRange: 0, newInRange: 0, totalUsers: 0 },
+  serviceHealth: {
+    services: [
+      { service: "buy", total: 200, completed: 198, failed: 2, successRate: 0.99 },
+      { service: "send", total: 200, completed: 190, failed: 10, successRate: 0.95 },
+    ],
+  },
+}
+
+function backfillRun(
+  over: Partial<BackfillRunStatusDto> = {}
+): BackfillRunStatusDto {
+  return {
+    id: "11111111-1111-4111-8111-111111111111",
+    status: "running",
+    dryRun: false,
+    totalUsers: 1000,
+    scannedUsers: 400,
+    perNetwork: {},
+    failures: [],
+    createdAt: new Date().toISOString(),
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    ...over,
+  }
+}
+
 beforeEach(() => {
   mockBoard.mockReset()
   mockRun.mockReset()
+  mockEnqueue.mockReset()
+  mockRunStatus.mockReset()
+  mockDashboard.mockReset()
+  // Safe defaults so the always-present service-health card doesn't hang the
+  // existing board tests; backfill polling only fires once a run is enqueued.
+  mockDashboard.mockResolvedValue(SERVICE_HEALTH)
   defaultToastStore.setState({ toasts: [] })
 })
 
@@ -210,5 +274,142 @@ describe("OpsPage", () => {
       expect(toasts[0].message).toMatch(/not manually triggerable/i)
       expect(toasts[0].kind).toBe("warn")
     })
+  })
+})
+
+describe("OpsPage — service health card", () => {
+  it("renders per-service success + error rate with a status word (colour never the sole signal)", async () => {
+    mockBoard.mockResolvedValue(BOARD)
+    renderPage()
+
+    // The card heading + one row per service (await the async data branch).
+    expect(await screen.findByText("Service health")).toBeInTheDocument()
+    expect(await screen.findByText("buy")).toBeInTheDocument()
+    expect(screen.getByText("send")).toBeInTheDocument()
+
+    // Success rate is surfaced as a percentage (0.99 → "99.0%").
+    expect(screen.getByText("99.0%")).toBeInTheDocument()
+    // The complementary error rate is derived (0.95 success → 5.0% error).
+    expect(screen.getByText(/5\.0% errors/)).toBeInTheDocument()
+
+    // An elevated-error service carries an explicit status WORD, not just a colour.
+    expect(screen.getByText("Elevated errors")).toBeInTheDocument()
+    // A high-success service reads "Nominal".
+    expect(screen.getByText("Nominal")).toBeInTheDocument()
+    // The completed / failed counts render (colour + text).
+    expect(screen.getByText(/198 completed/)).toBeInTheDocument()
+    expect(screen.getByText(/10 failed/)).toBeInTheDocument()
+  })
+
+  it("shows the service-health error branch when the metrics feed fails", async () => {
+    mockBoard.mockResolvedValue(BOARD)
+    mockDashboard.mockRejectedValue(new Error("nope"))
+    renderPage()
+
+    expect(
+      await screen.findByText(/Couldn't load service health/i)
+    ).toBeInTheDocument()
+  })
+
+  it("shows the service-health empty branch when no service has activity", async () => {
+    mockBoard.mockResolvedValue(BOARD)
+    mockDashboard.mockResolvedValue({
+      ...SERVICE_HEALTH,
+      serviceHealth: { services: [] },
+    })
+    renderPage()
+
+    expect(
+      await screen.findByText(/No service activity in the last 30 days/i)
+    ).toBeInTheDocument()
+  })
+})
+
+describe("OpsPage — wallet backfill panel", () => {
+  it("enqueues a backfill then polls the run to a terminal completed state", async () => {
+    mockBoard.mockResolvedValue(BOARD)
+    mockEnqueue.mockResolvedValue({
+      runId: "11111111-1111-4111-8111-111111111111",
+    })
+    // First poll: running (400/1000); second: completed.
+    mockRunStatus
+      .mockResolvedValueOnce(backfillRun({ status: "running", scannedUsers: 400 }))
+      .mockResolvedValue(
+        backfillRun({
+          status: "completed",
+          scannedUsers: 1000,
+          completedAt: new Date().toISOString(),
+        })
+      )
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: /Backfill wallet networks/i })
+    )
+
+    // The enqueue mutation fired; polling begins on the returned runId.
+    await waitFor(() => {
+      expect(mockEnqueue).toHaveBeenCalledTimes(1)
+    })
+
+    // Live progress renders while running (scanned / total).
+    expect(await screen.findByText(/400 \/ 1,000/)).toBeInTheDocument()
+
+    // Eventually reaches the terminal completed state (after one 3s poll cycle).
+    expect(
+      await screen.findByText(/Backfill complete/i, undefined, {
+        timeout: 5000,
+      })
+    ).toBeInTheDocument()
+  })
+
+  it("passes dryRun + batchSize through to the enqueue mutation", async () => {
+    mockBoard.mockResolvedValue(BOARD)
+    mockEnqueue.mockResolvedValue({
+      runId: "11111111-1111-4111-8111-111111111111",
+    })
+    mockRunStatus.mockResolvedValue(
+      backfillRun({ status: "completed", scannedUsers: 1000 })
+    )
+    const user = userEvent.setup()
+    renderPage()
+
+    // Toggle dry-run + set a batch size, then enqueue.
+    await user.click(await screen.findByLabelText(/Dry run/i))
+    const batch = screen.getByLabelText(/Batch size/i)
+    await user.clear(batch)
+    await user.type(batch, "250")
+    await user.click(
+      screen.getByRole("button", { name: /Backfill wallet networks/i })
+    )
+
+    await waitFor(() => {
+      expect(mockEnqueue).toHaveBeenCalledWith({ dryRun: true, batchSize: 250 })
+    })
+  })
+
+  it("shows the backfill error branch when the run fails", async () => {
+    mockBoard.mockResolvedValue(BOARD)
+    mockEnqueue.mockResolvedValue({
+      runId: "11111111-1111-4111-8111-111111111111",
+    })
+    mockRunStatus.mockResolvedValue(
+      backfillRun({
+        status: "failed",
+        scannedUsers: 120,
+        failures: [{ userId: "u1", error: "provider timeout" }],
+      })
+    )
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: /Backfill wallet networks/i })
+    )
+
+    expect(await screen.findByText(/Backfill failed/i)).toBeInTheDocument()
+    // The failure count surfaces so the operator can audit the run.
+    expect(await screen.findByText(/1 failure/i)).toBeInTheDocument()
   })
 })

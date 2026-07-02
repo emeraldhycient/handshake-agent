@@ -12,87 +12,28 @@
  * plaintext secret.
  *
  * The design's operational-health signals (quality rating, messaging-limit tier,
- * webhook subscription status, last-webhook age, 7d template rejections), the
- * Flows registry (per-flow name/desc/live), and the live conversation monitor
- * have NO read endpoint yet — those remain design-representative module constants
- * (recorded as shapeGaps for the later backend-enrichment pass).
+ * webhook subscription status, last-webhook age, 7d template rejections), the Flows
+ * registry (per-flow name/desc/live), and the live conversation monitor have NO read
+ * endpoint yet. Rather than fabricate design-representative sample data, each of
+ * those surfaces now renders an HONEST shape-gap note (Phase 8) — deferred to a
+ * later backend-enrichment pass.
  *
  * Structure (matching the markup 1:1, `max-width:1200px` · `padding:26px 30px 60px`):
  *   Row 1 (`grid-template-columns:1fr 1fr; gap:14px`):
- *     • "Number & webhook health" — real wiring rows + secret-presence, then the
- *       (mock) operational rows, closed by the "Official Cloud API only" note.
- *     • "Flows (E2E encrypted)" — `WA_FLOWS` lock-icon rows + "Live" pills (mock).
- *   Row 2 (full-width): "Live conversation monitor" — read-only, redacted chat
- *     bubbles (`WA_CONVO`), inbound left/`card2`, outbound right/`brand-green` (mock).
+ *     • "Number & webhook health" — real wiring rows + secret-presence, an
+ *       operational-signals shape-gap note, closed by the "Official Cloud API only" note.
+ *     • "Flows (E2E encrypted)" — a shape-gap note (no per-flow registry endpoint).
+ *   Row 2 (full-width): "Live conversation monitor" — a shape-gap note (no monitor
+ *     feed endpoint).
  *
  * The screen is entirely read-only — it moves no money and takes no sensitive
  * action, so it opens none of the shared flow modals and there is no step-up here
  * (root CLAUDE.md §3.5).
  */
-import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useWhatsAppConfig } from "@/lib/query/hooks"
 import type { WhatsAppConfigView } from "@handshake-agent/contracts"
-import type {
-  WhatsAppConvoBubble,
-  WhatsAppFlowRow,
-  WhatsAppHealthRow,
-} from "@/types/components"
-
-// Operational-health signals the design shows but the config view does NOT provide
-// (quality rating, messaging limit, webhook status, last-webhook age, template
-// rejections). These have no read endpoint yet — kept as design-representative
-// samples and recorded as shapeGaps. Neutral wiring renders `--ink`; healthy
-// states `--tok`; degraded `--twn`.
-const WA_HEALTH_OPERATIONAL: readonly WhatsAppHealthRow[] = [
-  { label: "Quality rating", value: "GREEN · High", tone: "ok" },
-  { label: "Messaging limit", value: "Tier 3 · 100K / 24h", tone: "neutral" },
-  { label: "Webhook", value: "Subscribed · 200 OK", tone: "ok" },
-  { label: "Last webhook", value: "3s ago", tone: "ok" },
-  { label: "Template rejections (7d)", value: "1", tone: "warn" },
-]
-
-// design mock (`waFlows`): the E2E-encrypted in-thread Flows — KYC, itemized confirm
-// and PIN entry (root CLAUDE.md §3.5). No per-flow registry endpoint exists yet
-// (the config view exposes only flowId + beneficiaryFlowId), so name/desc/live are
-// design-representative samples — recorded as a shapeGap.
-const WA_FLOWS: readonly WhatsAppFlowRow[] = [
-  {
-    id: "kyc",
-    name: "KYC verification",
-    desc: "Identity capture · NIN/BVN · liveness selfie",
-    live: true,
-  },
-  {
-    id: "confirm",
-    name: "Itemized confirmation",
-    desc: "Exact parameters · rate · fees · total",
-    live: true,
-  },
-  {
-    id: "pin",
-    name: "PIN entry",
-    desc: "Encrypted PIN · step-up authorization",
-    live: true,
-  },
-]
-
-// design mock (`waConvo`): the read-only, redacted live-conversation transcript.
-// No WhatsApp conversation-monitor endpoint exists yet — recorded as a shapeGap.
-const WA_CONVO: readonly WhatsAppConvoBubble[] = [
-  { id: "c1", direction: "in", text: "I want to buy 50 USDT" },
-  {
-    id: "c2",
-    direction: "out",
-    text: "You'll get ~50 USDT for ₦••,•••. Confirm the itemized details in the secure Flow to continue.",
-  },
-  { id: "c3", direction: "in", text: "sent ✓ — where's my money?" },
-  {
-    id: "c4",
-    direction: "out",
-    text: "Settlement is in progress. I'll message you here the moment the engine confirms it.",
-  },
-]
+import type { WhatsAppHealthRow } from "@/types/components"
 
 /** The mono value's text-token utility for a health-row tone (design per-row `fg`). */
 function toneClass(tone: WhatsAppHealthRow["tone"]): string {
@@ -169,30 +110,16 @@ function CheckIcon() {
   )
 }
 
-function LockIcon() {
+/**
+ * An honest shape-gap note for a panel whose backing read endpoint does not exist
+ * yet. Shown instead of fabricating design-representative data.
+ */
+function ShapeGapNote({ title, children }: { title: string; children: string }) {
   return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      aria-hidden="true"
-    >
-      <path
-        d="M7 11V8a5 5 0 0 1 10 0v3"
-        stroke="currentColor"
-        strokeWidth="1.6"
-      />
-      <rect
-        x="5"
-        y="11"
-        width="14"
-        height="9"
-        rx="2"
-        stroke="currentColor"
-        strokeWidth="1.6"
-      />
-    </svg>
+    <div className="rounded-[12px] border border-dashed border-line2 px-4 py-6 text-center">
+      <p className="text-[13px] font-bold text-ink">{title}</p>
+      <p className="mt-1 text-[12px] leading-snug text-ink2">{children}</p>
+    </div>
   )
 }
 
@@ -229,8 +156,10 @@ function HealthRowsSkeleton() {
 
 /**
  * Number & webhook health — real Cloud-API / Flows wiring + secret-presence
- * (from `useWhatsAppConfig`), then the design's (mock) operational rows, closed
- * by the "Official Cloud API only" note. Four async branches.
+ * (from `useWhatsAppConfig`), closed by the "Official Cloud API only" note. The
+ * design's operational signals (quality rating, messaging limit, webhook status,
+ * template rejections) have NO read endpoint yet, so instead of fabricating them the
+ * card carries an honest shape-gap note. Four async branches.
  */
 function HealthCard() {
   const { data, isLoading, isError, refetch } = useWhatsAppConfig()
@@ -259,18 +188,19 @@ function HealthCard() {
           </div>
         )}
 
-        {data && (
-          <>
-            {wiringRows(data).map((row) => (
-              <HealthRow key={row.label} row={row} />
-            ))}
-            {/* Operational signals the config view does not yet provide (shapeGap). */}
-            {WA_HEALTH_OPERATIONAL.map((row) => (
-              <HealthRow key={row.label} row={row} />
-            ))}
-          </>
-        )}
+        {data &&
+          wiringRows(data).map((row) => (
+            <HealthRow key={row.label} row={row} />
+          ))}
       </dl>
+
+      {data && (
+        <p className="mt-2 text-[11px] leading-snug text-ink3">
+          Operational signals (quality rating, messaging-limit tier, webhook
+          subscription, template rejections) have no read endpoint yet and are
+          intentionally omitted rather than shown as sample data.
+        </p>
+      )}
 
       <div className="mt-3 flex items-center gap-2 rounded-[9px] bg-sok px-3 py-[9px]">
         <CheckIcon />
@@ -282,39 +212,31 @@ function HealthCard() {
   )
 }
 
-/** Flows (E2E encrypted) — lock rows + a Live pill. */
+/**
+ * Flows (E2E encrypted) — the config view exposes only `flowId` + `beneficiaryFlowId`,
+ * with no per-flow registry (name/description/live status) to enumerate. Rather than
+ * fabricate KYC/confirm/PIN flow rows, this shows an honest shape-gap note (deferred).
+ */
 function FlowsCard() {
   return (
     <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
       <h2 className="mb-3 text-[13px] font-extrabold text-ink">
         Flows (E2E encrypted)
       </h2>
-      <div>
-        {WA_FLOWS.map((flow) => (
-          <div
-            key={flow.id}
-            className="flex items-center gap-[11px] border-b border-line2 py-2.5 last:border-b-0"
-          >
-            <span className="flex size-[30px] flex-none items-center justify-center rounded-lg bg-card2 text-ink2">
-              <LockIcon />
-            </span>
-            <div className="flex-1">
-              <div className="text-[12.5px] font-bold text-ink">
-                {flow.name}
-              </div>
-              <div className="text-[10.5px] text-ink3">{flow.desc}</div>
-            </div>
-            <Badge variant={flow.live ? "success" : "neutral"}>
-              {flow.live ? "Live" : "Not set"}
-            </Badge>
-          </div>
-        ))}
-      </div>
+      <ShapeGapNote title="No Flows registry yet">
+        There is no per-flow read endpoint yet — the config view exposes only the
+        flow ids. The E2E-encrypted KYC, itemized-confirmation and PIN flows will be
+        listed here once a registry is added.
+      </ShapeGapNote>
     </div>
   )
 }
 
-/** Live conversation monitor — read-only, redacted chat bubbles. */
+/**
+ * Live conversation monitor — there is NO WhatsApp conversation-monitor read endpoint
+ * yet, so rather than fabricate redacted chat bubbles this shows an honest shape-gap
+ * note (deferred).
+ */
 function ConversationMonitorCard() {
   return (
     <div className="rounded-2xl border border-line bg-card px-5 py-[18px]">
@@ -324,25 +246,10 @@ function ConversationMonitorCard() {
         </div>
         <span className="text-[11px] text-ink3">read-only · redacted</span>
       </div>
-      <div className="flex max-w-[560px] flex-col gap-[9px]">
-        {WA_CONVO.map((bubble) => {
-          const outbound = bubble.direction === "out"
-          return (
-            <div
-              key={bubble.id}
-              className={`flex ${outbound ? "justify-end" : "justify-start"}`}
-            >
-              <div
-                className={`max-w-[75%] rounded-[13px] px-[13px] py-[9px] text-[12.5px] leading-[1.4] ${
-                  outbound ? "bg-brand-green text-white" : "bg-card2 text-ink"
-                }`}
-              >
-                {bubble.text}
-              </div>
-            </div>
-          )
-        })}
-      </div>
+      <ShapeGapNote title="No conversation feed yet">
+        There is no read endpoint for live WhatsApp conversations yet. A read-only,
+        redacted transcript will appear here once a monitor feed is added.
+      </ShapeGapNote>
     </div>
   )
 }

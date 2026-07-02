@@ -38,6 +38,7 @@ vi.mock("@/lib/api/admin", () => ({
   // WRITE mutations wired into the row actions + role editor + invite dialog.
   updateAdminRole: vi.fn(),
   setAdminStatus: vi.fn(),
+  resetAdminMfa: vi.fn(),
   createRole: vi.fn(),
   updateRole: vi.fn(),
   createInvitation: vi.fn(),
@@ -52,6 +53,7 @@ import {
   getMe,
   updateAdminRole,
   setAdminStatus,
+  resetAdminMfa,
   createRole,
   updateRole,
 } from "@/lib/api/admin"
@@ -62,6 +64,7 @@ const mockPermissions = vi.mocked(listPermissions)
 const mockGetMe = vi.mocked(getMe)
 const mockUpdateAdminRole = vi.mocked(updateAdminRole)
 const mockSetAdminStatus = vi.mocked(setAdminStatus)
+const mockResetAdminMfa = vi.mocked(resetAdminMfa)
 const mockCreateRole = vi.mocked(createRole)
 const mockUpdateRole = vi.mocked(updateRole)
 
@@ -76,7 +79,7 @@ const ADMINS: AdminUserListResponse = {
       id: "11111111-1111-1111-1111-111111111111",
       email: "amara@handshake.ng",
       status: "active",
-      displayName: "Test Admin",
+      displayName: "Amara Okoro",
       mfaEnabled: true,
       role: { id: SUPER_ROLE_ID, name: "Super Admin" },
       createdAt: "2026-06-01T00:00:00.000Z",
@@ -86,7 +89,7 @@ const ADMINS: AdminUserListResponse = {
       id: "22222222-2222-2222-2222-222222222222",
       email: "segun@handshake.ng",
       status: "suspended",
-      displayName: "Test Admin",
+      displayName: "Segun Bello",
       mfaEnabled: false,
       role: { id: SUPPORT_ROLE_ID, name: "Support Agent" },
       createdAt: "2026-06-02T00:00:00.000Z",
@@ -173,6 +176,7 @@ beforeEach(() => {
   // returns the created Role.
   mockUpdateAdminRole.mockReset().mockResolvedValue(undefined)
   mockSetAdminStatus.mockReset().mockResolvedValue(undefined)
+  mockResetAdminMfa.mockReset().mockResolvedValue(undefined)
   mockCreateRole.mockReset().mockResolvedValue(ROLES.roles[0])
   mockUpdateRole.mockReset().mockResolvedValue(undefined)
 })
@@ -183,8 +187,11 @@ describe("AdminsPage (real-data wiring)", () => {
   it("renders admin rows and the derived role permission matrix from the api", async () => {
     renderPage()
 
-    // Admin rows — email (sub-row) + role name + 2FA/status derived from the DTO.
-    expect(await screen.findByText("amara@handshake.ng")).toBeInTheDocument()
+    // Admin rows — the contract `displayName` is the primary label (not the email
+    // local-part), with the email as the sub-row.
+    expect(await screen.findByText("Amara Okoro")).toBeInTheDocument()
+    expect(screen.getByText("Segun Bello")).toBeInTheDocument()
+    expect(screen.getByText("amara@handshake.ng")).toBeInTheDocument()
     expect(screen.getByText("segun@handshake.ng")).toBeInTheDocument()
     // Role names appear both as a row label AND as a matrix column header.
     expect(screen.getAllByText("Super Admin").length).toBeGreaterThanOrEqual(1)
@@ -199,16 +206,22 @@ describe("AdminsPage (real-data wiring)", () => {
     expect(screen.getByText("Active")).toBeInTheDocument()
     expect(screen.getByText("suspended")).toBeInTheDocument()
 
-    // The matrix has a "Users" category row (derived from the catalog).
+    // The shared RolePermissionMatrix mounts with a "Users" category row (derived
+    // from the catalog).
     expect(screen.getByText("Users")).toBeInTheDocument()
-    // Access-level legend renders once the matrix has data.
-    expect(screen.getByText("Full access")).toBeInTheDocument()
-    expect(screen.getByText("Read-only")).toBeInTheDocument()
+    // Access-level labels render once the matrix has data (the legend + each tile's
+    // sr-only label both carry the meaning — colour is never the sole signal).
+    expect(screen.getAllByText("Full access").length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText("Read-only").length).toBeGreaterThanOrEqual(1)
 
     // Super Admin (holds write) → a full-access tile on the Users row; Support
     // Agent (read only) → a read-only tile. The cell titles carry the meaning.
-    expect(screen.getByTitle("Super Admin · Full access")).toBeInTheDocument()
-    expect(screen.getByTitle("Support Agent · Read-only")).toBeInTheDocument()
+    expect(
+      screen.getByTitle("Super Admin · Users: Full access")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTitle("Support Agent · Users: Read-only")
+    ).toBeInTheDocument()
   })
 
   it("shows the empty state when there are no admins", async () => {
@@ -274,6 +287,37 @@ describe("AdminsPage (write wiring)", () => {
       expect(mockSetAdminStatus).toHaveBeenCalledWith(
         "11111111-1111-1111-1111-111111111111",
         { status: "suspended" }
+      )
+    )
+  })
+
+  it("resets an admin's 2FA through the reason → step-up chain", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // Open the Reset 2FA action for the active admin (amara). The button carries
+    // the target's identity so the right admin is reset.
+    const reset = await screen.findByRole("button", {
+      name: /Reset 2FA for amara@handshake\.ng/i,
+    })
+    await user.click(reset)
+
+    // Step 1 — the reason modal (audited). Type a reason and continue.
+    const reason = await screen.findByLabelText("Reason")
+    await user.type(reason, "Lost authenticator device")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+
+    // Step 2 — the step-up modal. Enter the 6-digit TOTP via the on-screen keypad.
+    await screen.findByText("Step-up authentication")
+    for (const digit of ["1", "2", "3", "4", "5", "6"]) {
+      await user.click(screen.getByRole("button", { name: digit }))
+    }
+
+    // The reset client fires with the target admin id + the entered reason.
+    await waitFor(() =>
+      expect(mockResetAdminMfa).toHaveBeenCalledWith(
+        "11111111-1111-1111-1111-111111111111",
+        "Lost authenticator device"
       )
     )
   })

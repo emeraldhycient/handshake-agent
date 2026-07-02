@@ -5,8 +5,9 @@
  * mocked `@/lib/api/tickets` client; its rows come from `TicketOrderListResponse`.
  * These tests assert the loading→data branch, the empty branch, and the error branch,
  * plus that the order rows stay pure READ-ONLY display (no button/link — no navigation
- * to a non-existent transaction route). The "Vendor ports" panel is still design-mock
- * (no vendor-registry endpoint), so `ticketing.eventbrite` renders unconditionally.
+ * to a non-existent transaction route). The "Vendor ports" panel no longer fabricates
+ * per-vendor rows: there is no vendor-registry endpoint, so it renders an HONEST
+ * shape-gap note (no invented `ticketing.eventbrite`/`ticketing.tix` rows). (Phase 8)
  */
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
@@ -84,10 +85,12 @@ describe("TicketsPage (real-data wiring)", () => {
 
     renderPage()
 
-    // Card headers + the still-mock Vendor ports panel are always present.
+    // Card headers are always present; the Vendor ports panel now carries an honest
+    // shape-gap note rather than any fabricated vendor rows.
     expect(screen.getByText("Recent orders")).toBeInTheDocument()
     expect(screen.getByText("Vendor ports")).toBeInTheDocument()
-    expect(screen.getByText("ticketing.eventbrite")).toBeInTheDocument()
+    expect(screen.queryByText("ticketing.eventbrite")).not.toBeInTheDocument()
+    expect(screen.queryByText("ticketing.tix")).not.toBeInTheDocument()
     // Loading branch.
     expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument()
 
@@ -114,6 +117,15 @@ describe("TicketsPage (real-data wiring)", () => {
     expect(id.tagName).not.toBe("A")
     // No order row is a button or link (rows are pure display).
     expect(screen.queryAllByRole("link")).toHaveLength(0)
+  })
+
+  it("renders an honest shape-gap note in Vendor ports (no vendor-registry endpoint)", async () => {
+    renderPage()
+
+    // The panel explains why it is empty rather than showing invented vendor rows.
+    expect(
+      await screen.findByText(/no vendor-port registry endpoint/i)
+    ).toBeInTheDocument()
   })
 
   it("renders the design-consistent empty state when there are no orders", async () => {

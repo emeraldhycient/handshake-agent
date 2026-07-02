@@ -16,9 +16,10 @@
  * Phase 7 (write path): RESOLVE and ACCEPT are now WIRED to the real endpoints —
  * resolve re-drives the offending transaction's settlement through the engine's atomic
  * path (POST /breaks/:id/resolve, step-up-gated), and accept records a dual-control
- * no-debit disposition (POST /breaks/:id/accept, step-up-gated). ESCALATE has no
- * endpoint in this slice, so it stays a local-only outcome. "Run now" still re-fetches
- * the live queries (the server-run trigger lives on the ops board).
+ * no-debit disposition (POST /breaks/:id/accept, step-up-gated). Phase 8: ESCALATE is
+ * now WIRED too — reason → the real POST /breaks/:id/escalate (step-up-gated) opens a
+ * compliance case from the break (moves no money). "Run now" still re-fetches the live
+ * queries (the server-run trigger lives on the ops board).
  *
  * Funds-safety invariant preserved in the UI (root §3.1): over-credits are flagged for
  * human action, NEVER auto-debited — resolution is engine-brokered, never a raw ledger
@@ -32,6 +33,7 @@ import { cn } from "@/lib/utils"
 import {
   useAcceptReconBreak,
   useAdminMe,
+  useEscalateReconBreak,
   useReconBreaks,
   useReconStatus,
   useResolveReconBreak,
@@ -182,6 +184,7 @@ export function ReconciliationPage() {
   const me = useAdminMe()
   const resolveBreak = useResolveReconBreak()
   const acceptBreak = useAcceptReconBreak()
+  const escalateBreak = useEscalateReconBreak()
   const stepUp = useStepUpRetry()
 
   // Optimistic outcomes keyed by break id — reflect the disposition in the closed-card
@@ -200,7 +203,7 @@ export function ReconciliationPage() {
   // The disposition awaiting a step-up retry — re-marked locally on retry success.
   const pendingDisposition = useRef<{
     id: string
-    resolution: "resolved" | "accepted"
+    resolution: ReconBreakResolution
   } | null>(null)
 
   const breaks: BreakView[] = useMemo(
@@ -225,19 +228,30 @@ export function ReconciliationPage() {
     setActive(null)
   }
 
-  // Apply a local outcome to a break (drives the closed-card footer) + close.
-  function markLocal(id: string, resolution: ReconBreakResolution) {
-    setLocalOutcomes((prev) => ({ ...prev, [id]: resolution }))
-    closeFlow()
+  // The real mutation for a given disposition (mirrors the endpoint shapes). RESOLVE is
+  // engine-brokered (re-drives settlement); ACCEPT is a no-debit disposition; ESCALATE
+  // opens a compliance case — none moves money here (§3.1).
+  function dispositionMutation(
+    id: string,
+    resolution: ReconBreakResolution,
+    capturedReason: string
+  ): Promise<unknown> {
+    switch (resolution) {
+      case "resolved":
+        return resolveBreak.mutateAsync({ id, input: { reason: capturedReason } })
+      case "accepted":
+        return acceptBreak.mutateAsync({ id, input: { reason: capturedReason } })
+      case "escalated":
+        return escalateBreak.mutateAsync({ id, reason: capturedReason })
+    }
   }
 
   // Run a real disposition mutation via step-up-retry. On a 403 the StepUpDialog
   // opens and replays on re-auth; on success the break is marked locally + the query
-  // invalidation re-resolves the list. RESOLVE is engine-brokered (re-drives
-  // settlement); ACCEPT is a no-debit disposition — neither moves money here (§3.1).
+  // invalidation re-resolves the list.
   function runDisposition(
     id: string,
-    resolution: "resolved" | "accepted",
+    resolution: ReconBreakResolution,
     capturedReason: string
   ) {
     setLocalError(null)
@@ -246,10 +260,7 @@ export function ReconciliationPage() {
     void (async () => {
       try {
         const completed = await stepUp.run(() =>
-          (resolution === "resolved"
-            ? resolveBreak.mutateAsync({ id, input: { reason: capturedReason } })
-            : acceptBreak.mutateAsync({ id, input: { reason: capturedReason } })
-          ).then(() => undefined)
+          dispositionMutation(id, resolution, capturedReason).then(() => undefined)
         )
         if (completed) {
           setLocalOutcomes((prev) => ({ ...prev, [id]: resolution }))
@@ -543,12 +554,19 @@ export function ReconciliationPage() {
           are step-up-gated (the StepUpDialog opens on a 403 and replays on re-auth). */}
       {activeBreak && (
         <>
-          {/* Escalate: reason only → local escalated outcome (no endpoint in-slice). */}
+          {/* Escalate: reason (audit) → the REAL escalate mutation (step-up-gated;
+              opens a compliance case — never a debit). */}
           <ReasonModal
             open={active?.flow.kind === "escalate"}
             onOpenChange={(o) => !o && closeFlow()}
             title={`Escalate ${activeBreak.transactionId} to case`}
-            onContinue={() => markLocal(activeBreak.id, "escalated")}
+            onContinue={(r, category) =>
+              runDisposition(
+                activeBreak.id,
+                "escalated",
+                category ? `${category}: ${r}` : r
+              )
+            }
           />
 
           {/* Accept: reason (audit) → maker-checker confirm → the REAL accept mutation. */}

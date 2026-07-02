@@ -33,6 +33,9 @@
  *   - Refund → `useCreateChange` of kind `refund` — a maker-checker request that
  *     APPLIES NOTHING until a SECOND admin approves it (four-eyes); on approval the
  *     engine's atomic refund runs. reason → maker-checker submit.
+ *   - Re-run recon → `useRerunReconciliation` (Phase 8) — a READ-ONLY provider-vs-
+ *     ledger detection for this one transaction; moves no money. confirm → step-up →
+ *     the returned break list renders inline (four branches: loading/error/empty/data).
  * None of these writes a raw ledger entry (§3.1). Each is sensitive: on a 403 with
  * ADMIN_STEP_UP_REQUIRED we open the real StepUpDialog and replay via
  * `useStepUpRetry`. The invalidation (tx + list, inbox) lives in the hooks.
@@ -49,6 +52,7 @@ import {
   useAdminMe,
   useCreateChange,
   useMarkFailed,
+  useRerunReconciliation,
   useRetrySettlement,
   useTransactionDetail,
 } from "@/lib/query/hooks"
@@ -66,6 +70,7 @@ import type {
   AdminTxnStatus,
   AdminTxnTimelineEntry,
   CreateChangeRequest,
+  ReconBreak,
 } from "@handshake-agent/contracts"
 import type {
   EngineLedgerRow,
@@ -122,6 +127,15 @@ const STATUS_LABEL: Record<AdminTxnStatus, string> = {
   failed: "Failed",
   rolled_back: "Rolled back",
   cancelled: "Cancelled",
+}
+
+// Human labels for the re-run-recon break kinds (mirrors the recon page's KIND_META,
+// label-only — this surface renders a compact result row, not the full break card).
+const RECON_KIND_LABEL: Record<ReconBreak["kind"], string> = {
+  over_credit: "Over-credit",
+  missing_settlement: "Missing settlement",
+  amount_mismatch: "Amount mismatch",
+  duplicate_credit: "Duplicate credit",
 }
 
 // ── Engine state timeline ────────────────────────────────────────────────────────
@@ -262,11 +276,18 @@ function flowSpecFor(kind: FlowKind, tx: AdminTxnDetail): FlowSpec | null {
         ledger: engineLedger,
       }
     case "recon":
+      // Read-only provider-vs-ledger detection (not a settlement re-drive). No reason
+      // step: it moves no money, so it goes straight to a confirm → step-up → run.
       return {
         steps: ["engine"],
         title: "Re-run reconciliation",
-        cta: "Execute via engine",
-        effect: [],
+        cta: "Run reconciliation",
+        effect: [
+          { k: "Transaction", v: tx.id },
+          { k: "Check", v: "Provider-vs-ledger reconciliation" },
+          { k: "Effect", v: "Read-only — detects breaks, moves no money" },
+        ],
+        // A detection pass posts no ledger legs (§3.1).
         ledger: [],
       }
     case "receipt":
@@ -322,6 +343,7 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
   const retry = useRetrySettlement()
   const markFailed = useMarkFailed()
   const createChange = useCreateChange()
+  const rerunRecon = useRerunReconciliation()
   const stepUp = useStepUpRetry()
 
   const [copied, setCopied] = useState<string | null>(null)
@@ -330,6 +352,9 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
   const [phase, setPhase] = useState<ActivePhase>(null)
   // The reason captured in the ReasonModal — threaded into the audited mutation.
   const [reason, setReason] = useState("")
+  // The last re-run-reconciliation outcome (breaks it detected) — shown inline once a
+  // run completes. `null` = no run yet; the reconciled path returns an empty list.
+  const [reconResult, setReconResult] = useState<ReconBreak[] | null>(null)
 
   const spec = useMemo(
     () => (activeKind && tx ? flowSpecFor(activeKind, tx) : null),
@@ -337,7 +362,19 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
   )
 
   const executing =
-    retry.isPending || markFailed.isPending || createChange.isPending
+    retry.isPending ||
+    markFailed.isPending ||
+    createChange.isPending ||
+    rerunRecon.isPending
+
+  // The re-run-recon result panel's loading / error branches, derived (never seeded
+  // into state). A step-up 403 is an expected re-auth prompt (the StepUpDialog is up
+  // and will replay) — not a failure — so the error is suppressed while it is open.
+  const reconLoading = rerunRecon.isPending
+  const reconError =
+    rerunRecon.isError && activeKind === "recon" && !stepUp.open
+      ? errorMessage(rerunRecon.error)
+      : null
 
   function copy(value: string) {
     void navigator.clipboard?.writeText(value)
@@ -351,15 +388,12 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
       pushToast("Receipt re-sent to the customer", "info")
       return
     }
-    if (kind === "recon") {
-      // No dedicated recon-run endpoint yet — flag the gap rather than fake it.
-      pushToast("Re-run reconciliation is not available yet.", "info")
-      return
-    }
     if (!tx) return
     const next = flowSpecFor(kind, tx)
     if (!next) return
     setReason("")
+    // A fresh recon run supersedes any prior result panel.
+    if (kind === "recon") setReconResult(null)
     setActiveKind(kind)
     setPhase(next.steps[0])
   }
@@ -399,6 +433,14 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
         }
         return createChange.mutateAsync(input).then(() => undefined)
       }
+      case "recon":
+        // Read-only detection: re-run recon for this txn and stash the detected
+        // breaks for the inline result panel (reason is optional — omitted here).
+        return rerunRecon
+          .mutateAsync({ id: tx.id, reason: reason || undefined })
+          .then((res) => {
+            setReconResult(res.items)
+          })
       default:
         return Promise.resolve()
     }
@@ -416,12 +458,15 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
       // `completed` is false when a step-up challenge opened (retry pending) — keep
       // the flow open so the StepUpDialog's success can replay it.
       if (completed) {
-        pushToast(
-          kind === "refund"
-            ? "Refund submitted for approval"
-            : "Action executed via the engine",
-          "ok"
-        )
+        // Re-run recon's feedback is its inline result panel — no toast needed.
+        if (kind !== "recon") {
+          pushToast(
+            kind === "refund"
+              ? "Refund submitted for approval"
+              : "Action executed via the engine",
+            "ok"
+          )
+        }
         closeFlow()
       }
     })()
@@ -724,6 +769,19 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
             </div>
           </div>
 
+          {/* ── Re-run reconciliation result (four branches) ────────────────────── */}
+          {/* loading = mutation in flight; error = the re-run rejected; empty =
+              reconciled (no breaks); data = the detected breaks for this txn. A
+              step-up 403 is NOT a failure — the StepUpDialog handles re-auth and
+              replays, so its error is suppressed while that dialog is open. */}
+          {(reconLoading || reconError !== null || reconResult !== null) && (
+            <ReconResultPanel
+              loading={reconLoading}
+              error={reconError}
+              breaks={reconResult}
+            />
+          )}
+
           {/* ── Flow modals (design runFlow: reason → engine [→ maker]) ─────────── */}
           {/* Suppressed while the real StepUpDialog is up so there is one dialog at
               a time; the step-up success replays the stashed mutation. */}
@@ -766,12 +824,15 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
                 .retry()
                 .then((replayed) => {
                   if (!replayed) return
-                  pushToast(
-                    kind === "refund"
-                      ? "Refund submitted for approval"
-                      : "Action executed via the engine",
-                    "ok"
-                  )
+                  // Re-run recon's feedback is its inline result panel — no toast.
+                  if (kind !== "recon") {
+                    pushToast(
+                      kind === "refund"
+                        ? "Refund submitted for approval"
+                        : "Action executed via the engine",
+                      "ok"
+                    )
+                  }
                   closeFlow()
                 })
                 .catch((error) => pushToast(errorMessage(error), "warn"))
@@ -938,4 +999,70 @@ function providerRefs(tx: AdminTxnDetail): RefRow[] {
   })
   refs.push({ label: "Idempotency", value: tx.idempotencyKey })
   return refs
+}
+
+/**
+ * The inline result of a "Re-run recon" pass (four branches): loading while the
+ * detection runs, an error if it rejected, the reconciled (no-break) note when the
+ * list is empty, or the detected breaks. Read-only — this panel only surfaces the
+ * provider-vs-ledger discrepancy; remediation lives on the Reconciliation surface.
+ */
+function ReconResultPanel({
+  loading,
+  error,
+  breaks,
+}: {
+  loading: boolean
+  error: string | null
+  breaks: ReconBreak[] | null
+}) {
+  return (
+    <div className="mt-3.5">
+      <Panel>
+        <PanelTitle>Reconciliation re-run</PanelTitle>
+        {loading ? (
+          <div className="flex flex-col gap-2" aria-busy="true">
+            <Skeleton className="h-5 w-full rounded" />
+            <Skeleton className="h-5 w-2/3 rounded" />
+          </div>
+        ) : error ? (
+          <div className="rounded-[10px] border border-sdn bg-sdn/40 px-3 py-2.5">
+            <p className="text-[12.5px] font-bold text-tdn">
+              Reconciliation re-run failed
+            </p>
+            <p className="mt-0.5 text-[11.5px] text-ink2">{error}</p>
+          </div>
+        ) : breaks && breaks.length > 0 ? (
+          <ul className="flex flex-col gap-2">
+            {breaks.map((b) => (
+              <li
+                key={b.id}
+                className="flex items-center justify-between gap-3 rounded-[10px] border border-sdn bg-card px-3 py-2.5"
+              >
+                <span className="text-[12.5px] font-bold text-ink">
+                  {RECON_KIND_LABEL[b.kind]}
+                </span>
+                <span className="font-mono text-[12px] font-extrabold tabular-nums text-tdn">
+                  {`${b.delta} ${b.asset}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="flex items-center gap-[7px] text-[12.5px] font-bold text-tok">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <path
+                d="m5 12 5 5L20 7"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Provider and ledger reconcile — no breaks detected.
+          </div>
+        )}
+      </Panel>
+    </div>
+  )
 }

@@ -74,32 +74,15 @@ export type NavBadgeKey = "kyc" | "stuck" | "recon" | "approvals"
  */
 export type NavBadgeCounts = Record<NavBadgeKey, number>
 
-/**
- * The "view-as" impersonation roles offered by the account menu. Not RBAC —
- * a UX affordance that scopes the banner + displayed role label (the real
- * permission-gated nav is left untouched; see app-shell §view-as).
- */
-export type ViewAsRoleId =
-  | "super_admin"
-  | "operations"
-  | "compliance"
-  | "finance"
-  | "support"
-
-export interface ViewAsRole {
-  id: ViewAsRoleId
-  label: string
-}
-
 export interface AccountMenuProps {
   /** The signed-in operator's email (from `useAdminMe`). */
   email: string
-  /** The operator's real role label (from `useAdminMe`), shown when not viewing-as. */
+  /**
+   * The operator's real role label (from `useAdminMe`), shown as an honest
+   * read-only display on the account pill. There is no view-as impersonation
+   * switcher — the console never re-scopes to another role client-side.
+   */
   realRoleLabel: string
-  /** The currently selected view-as role, or null when unset. */
-  viewAs: ViewAsRole | null
-  /** Select a view-as role (lifted to the shell). */
-  onViewAs: (role: ViewAsRole) => void
   /** Sign the operator out (the shell's auth-store `clear`). */
   onSignOut: () => void
 }
@@ -783,22 +766,6 @@ export interface CurrencyCatalogRow {
 // matching the seed() dataset shapes + operator/vendor names). Real-data reintegration
 // is a separate later step. Nothing here moves money (§3.1).
 
-/** A vendor port's operational status → the canonical status pill token pair. */
-export type TicketVendorStatus = "live" | "paused" | "onboarding"
-
-/**
- * One "Vendor ports" row (design §6.21). Design-reproduction sample content —
- * `name` is the design's vendor port label (mono); `commission` + `status` are the
- * design's representative per-vendor values.
- */
-export interface TicketVendorPort {
-  /** The vendor port label (mono, e.g. "ticketing.eventbrite"). */
-  name: string
-  /** Per-vendor commission label (e.g. "6.5%"). */
-  commission: string
-  status: TicketVendorStatus
-}
-
 /** A recent-order row's payment status → the canonical status pill (§5 map). */
 export type TicketOrderStatus =
   | "settled"
@@ -933,33 +900,6 @@ export interface WhatsAppHealthRow {
    * (`text-twn`), `neutral` = a plain wiring value (`text-ink`).
    */
   tone: "ok" | "warn" | "neutral"
-}
-
-/**
- * One "Flows (E2E encrypted)" row (design `waFlows`). `live` drives the trailing
- * pill: a live flow renders the success "Live" pill.
- */
-export interface WhatsAppFlowRow {
-  /** Stable key for the row (used as the React list key). */
-  id: string
-  /** The flow's display name (e.g. "KYC & confirmation flow"). */
-  name: string
-  /** The one-line description under the name. */
-  desc: string
-  /** Whether this E2E flow is live (drives the trailing pill). */
-  live: boolean
-}
-
-/**
- * design-faithful: one redacted chat bubble in the live-conversation monitor. No
- * conversation-monitor endpoint exists yet, so these are representative samples.
- */
-export interface WhatsAppConvoBubble {
-  id: string
-  /** `in` = inbound user message (left, card2) · `out` = agent reply (right, brand green). */
-  direction: "in" | "out"
-  /** The (redacted) bubble text. */
-  text: string
 }
 
 // ─── Limits & velocity page (design §6.26) ─────────────────────────────────────────
@@ -1133,7 +1073,7 @@ export interface ApprovalRequest {
 }
 
 // ─── Shared flow modals (design template §5 "Flow modals", lines 1161-1259) ─────────
-// The five funds-safety flow modals share one frame (fixed scrim rgba(10,20,15,0.55)
+// The funds-safety flow modals share one frame (fixed scrim rgba(10,20,15,0.55)
 // + blur, centred radius-20 panel, flow shadow, hsPop). Each is opened by a caller
 // (`open` + `onOpenChange`) and takes the design's per-step content props. They are
 // pure presentation — they do NOT move money; a real callsite wires their submit to a
@@ -1243,21 +1183,6 @@ export interface MakerCheckerModalProps extends FlowModalBaseProps {
   diff: MakerCheckerDiffRow[]
   /** Fired when the operator submits for a second admin's approval. */
   onSubmit: () => void
-}
-
-/**
- * PiiRevealModal (design line 1234) — red eye icon + danger warning, "access logged"
- * copy, Cancel / dark "Continue to step-up". `onContinue` fires when the dark CTA is
- * pressed (the caller then opens the StepUpModal). The title is fixed ("Reveal
- * decrypted PII"), so only the PII label varies.
- */
-export interface PiiRevealModalProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  /** The identity field about to be revealed (e.g. "NIN", "BVN"). */
-  piiLabel: string
-  /** Fired when the operator confirms and proceeds to step-up. */
-  onContinue: () => void
 }
 
 // ─── Shared UI primitives (design §5) ──────────────────────────────────────────────

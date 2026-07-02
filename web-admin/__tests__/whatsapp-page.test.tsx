@@ -1,5 +1,5 @@
 /**
- * WhatsAppPage test (design §6.20).
+ * WhatsAppPage test (design §6.20) — Phase 8 (F-mock-b) honest shape-gap wiring.
  *
  * The "Number & webhook health" card is WIRED to `useWhatsAppConfig()`
  * (GET /admin/whatsapp/config): the non-secret Cloud-API / Flows wiring ids +
@@ -7,15 +7,18 @@
  * cross the boundary (root CLAUDE.md §3.5) — presence rows read only "Set" /
  * "Not set". The api layer is mocked; no server.
  *
- * The Flows registry, live conversation monitor and operational-health signals
- * (quality rating, messaging limit, webhook status, template rejections) have no
- * read endpoint yet and remain design-representative constants (shapeGaps).
+ * Phase 8: the fabricated Flows registry (WA_FLOWS), the fabricated live
+ * conversation monitor (WA_CONVO), and the fabricated operational-health rows
+ * (quality rating, messaging limit, webhook status, template rejections) have NO
+ * read endpoint yet, so instead of showing invented data they now render HONEST
+ * shape-gap notes.
  *
  * Tests:
  *  1. loading → data: skeletons first, then the real wiring ids + secret-presence
  *     labels resolve; never a plaintext secret; the Cloud-API note is shown.
  *  2. error: a tokened inline error with a Retry affordance renders on failure.
- *  3. The (mock) Flows card + redacted conversation monitor still render.
+ *  3. The Flows card + conversation monitor render HONEST shape-gap notes (no invented
+ *     "KYC verification" flow rows, no fabricated chat bubbles).
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
@@ -92,6 +95,17 @@ describe("WhatsAppPage", () => {
     ).toBeInTheDocument()
   })
 
+  it("renders no fabricated operational-health signals (shape-gap)", async () => {
+    mockConfig.mockResolvedValue(CONFIG)
+    renderPage()
+
+    await screen.findByText("109920857462311")
+
+    // The invented operational values are gone (no fabricated quality/limit rows).
+    expect(screen.queryByText("GREEN · High")).not.toBeInTheDocument()
+    expect(screen.queryByText("Tier 3 · 100K / 24h")).not.toBeInTheDocument()
+  })
+
   it("renders a tokened inline error with a Retry affordance on failure", async () => {
     mockConfig.mockRejectedValue(new Error("boom"))
     renderPage()
@@ -102,20 +116,24 @@ describe("WhatsAppPage", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
   })
 
-  it("renders the (mock) Flows registry and redacted conversation monitor", async () => {
+  it("renders honest shape-gap notes for the Flows registry and conversation monitor", async () => {
     mockConfig.mockResolvedValue(CONFIG)
     renderPage()
 
-    // Wait for the wired card to settle so no act() warnings leak.
     await waitFor(() => expect(mockConfig).toHaveBeenCalled())
 
+    // Flows card is present but shows an honest note — NOT invented flow rows.
     expect(screen.getByText("Flows (E2E encrypted)")).toBeInTheDocument()
-    expect(screen.getByText("KYC verification")).toBeInTheDocument()
-    // All three E2E flows read "Live".
-    expect(screen.getAllByText("Live").length).toBeGreaterThanOrEqual(3)
+    expect(screen.queryByText("KYC verification")).not.toBeInTheDocument()
+    expect(screen.queryByText("Itemized confirmation")).not.toBeInTheDocument()
 
-    // The read-only conversation monitor renders (design-faithful sample).
+    // Conversation monitor is present but shows an honest note — NOT invented bubbles.
     expect(screen.getByText("Live conversation monitor")).toBeInTheDocument()
-    expect(screen.getByText("read-only · redacted")).toBeInTheDocument()
+    expect(screen.queryByText("I want to buy 50 USDT")).not.toBeInTheDocument()
+
+    // Each deferred panel explains WHY it is empty (no read endpoint).
+    expect(
+      screen.getAllByText(/no .*read endpoint/i).length
+    ).toBeGreaterThanOrEqual(2)
   })
 })

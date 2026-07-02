@@ -29,17 +29,28 @@
 import { useState } from "react"
 
 import type {
+  MetricsRangeQuery,
   OpsJob,
   OpsProviderStatus,
+  ServiceHealthMetrics,
   OpsWebhookQueue as OpsWebhookQueueDto,
 } from "@handshake-agent/contracts"
 
 import { cn } from "@/lib/utils"
 import { pushToast } from "@/lib/store/toast-store"
-import { useOps, useRunOpsJob, useAdminMe } from "@/lib/query/hooks"
+import {
+  useAdminMe,
+  useBackfillRun,
+  useDashboardMetrics,
+  useEnqueueBackfill,
+  useOps,
+  useRunOpsJob,
+} from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { ApiError } from "@/lib/api/client"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
+import { Input } from "@/components/ui/input"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { EngineActionModal, ReasonModal } from "@/components/admin/flows"
 import type {
@@ -316,6 +327,304 @@ function PanelSkeleton() {
   )
 }
 
+// ─── service-health card ──────────────────────────────────────────────────────────────
+// Reuses the dashboard's `serviceHealth` block (per transactable service success/
+// error rates over the default 30-day window). Status semantics follow the success
+// rate; colour is NEVER the sole signal — an explicit status word sits alongside every
+// tone. Read-only oversight — it moves no money (§3.1).
+
+/** Empty range → the metrics service defaults to the last 30 days server-side. */
+const DEFAULT_RANGE: MetricsRangeQuery = {}
+
+/** Success-rate thresholds → the canonical health tone. */
+const SERVICE_OK_FLOOR = 0.98
+const SERVICE_WARN_FLOOR = 0.9
+
+/** A 0–1 success rate → the health tone (≥98% ok, ≥90% warn, else down). */
+function serviceHealth(successRate: number): OpsHealth {
+  if (successRate >= SERVICE_OK_FLOOR) return "ok"
+  if (successRate >= SERVICE_WARN_FLOOR) return "warn"
+  return "down"
+}
+
+/** Explicit status word per tone (distinct from the provider/queue vocab). */
+const SERVICE_STATUS_LABEL: Record<OpsHealth, string> = {
+  ok: "Nominal",
+  warn: "Elevated errors",
+  down: "Failing",
+}
+
+/** A 0–1 rate → a one-decimal percentage label (0.99 → "99.0%"). */
+function pctLabel(rate: number): string {
+  return `${(rate * 100).toFixed(1)}%`
+}
+
+/** One service-health row (name + success/error rate + status word + counts). */
+function ServiceHealthRow({
+  service,
+}: {
+  service: ServiceHealthMetrics["services"][number]
+}) {
+  const health = serviceHealth(service.successRate)
+  const errorRate = Math.max(0, 1 - service.successRate)
+  return (
+    <div className="flex items-center gap-[11px] border-b border-line2 py-[11px] last:border-b-0">
+      <div className="min-w-0 flex-1">
+        <div className="text-[12.5px] font-bold text-ink">
+          {service.service}
+        </div>
+        <div className="text-[10.5px] text-ink3 tabular-nums">
+          <span className="text-tok">
+            {service.completed.toLocaleString()} completed
+          </span>{" "}
+          ·{" "}
+          <span className="text-tdn">
+            {service.failed.toLocaleString()} failed
+          </span>{" "}
+          · <span>{pctLabel(errorRate)} errors</span>
+        </div>
+      </div>
+      <div className="flex-none text-right">
+        <div
+          className={cn(
+            "text-sm font-extrabold tabular-nums",
+            HEALTH_TEXT[health]
+          )}
+        >
+          {pctLabel(service.successRate)}
+        </div>
+        <div className={cn("text-[10px] font-bold", HEALTH_TEXT[health])}>
+          {SERVICE_STATUS_LABEL[health]}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Service-health card — reuses `useDashboardMetrics().serviceHealth`. Four async
+ * branches (loading / error / empty / data). Its own query so it renders alongside
+ * the ops board without coupling either fetch.
+ */
+function ServiceHealthCard() {
+  const { data, isLoading, isError, isSuccess, refetch } =
+    useDashboardMetrics(DEFAULT_RANGE)
+  const services = data?.serviceHealth.services ?? []
+
+  return (
+    <div className="mt-[14px] rounded-2xl border border-line bg-card px-5 py-[18px]">
+      <div className="mb-3 text-[13px] font-extrabold text-ink">
+        Service health
+      </div>
+
+      {isLoading && (
+        <div className="flex flex-col gap-2.5" aria-busy="true">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-8 w-full" />
+          ))}
+        </div>
+      )}
+
+      {isError && (
+        <div className="text-center">
+          <p className="text-[12.5px] font-bold text-tdn">
+            Couldn&apos;t load service health
+          </p>
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            className="mt-2 inline-flex h-8 items-center rounded-[9px] border border-line bg-card px-3.5 text-[12px] font-bold text-ink2 transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {isSuccess && services.length === 0 && (
+        <p className="text-[12.5px] text-ink3">
+          No service activity in the last 30 days.
+        </p>
+      )}
+
+      {isSuccess && services.length > 0 && (
+        <div>
+          {services.map((service) => (
+            <ServiceHealthRow key={service.service} service={service} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── wallet-backfill panel ──────────────────────────────────────────────────────────────
+// Enqueues an async wallet-network backfill (§3.1 — provisions missing wallet-network
+// rows for existing custody wallets; no money moves), then POLLS the run to a terminal
+// state (completed / failed) showing live scanned/total progress. Four branches
+// (idle / enqueuing / running / terminal).
+
+/** A backfill run's status → the health tone driving the progress accent. */
+const BACKFILL_HEALTH: Record<
+  "queued" | "running" | "completed" | "failed",
+  OpsHealth
+> = {
+  queued: "warn",
+  running: "warn",
+  completed: "ok",
+  failed: "down",
+}
+
+/** A backfill run's status → the explicit status word. */
+const BACKFILL_STATUS_LABEL: Record<
+  "queued" | "running" | "completed" | "failed",
+  string
+> = {
+  queued: "Queued",
+  running: "Running",
+  completed: "Backfill complete",
+  failed: "Backfill failed",
+}
+
+function WalletBackfillPanel() {
+  const enqueue = useEnqueueBackfill()
+  const [runId, setRunId] = useState<string | null>(null)
+  const run = useBackfillRun(runId, { poll: true })
+
+  // Transient form state (UI state — a controlled dry-run toggle + batch size).
+  const [dryRun, setDryRun] = useState(false)
+  const [batchSizeText, setBatchSizeText] = useState("")
+  const [localError, setLocalError] = useState<string | null>(null)
+
+  const isEnqueuing = enqueue.isPending
+  const isRunning =
+    run.data?.status === "queued" || run.data?.status === "running"
+
+  function start() {
+    setLocalError(null)
+    const trimmed = batchSizeText.trim()
+    const parsed = trimmed === "" ? undefined : Number(trimmed)
+    const batchSize =
+      parsed !== undefined && Number.isInteger(parsed) && parsed > 0
+        ? parsed
+        : undefined
+    void enqueue
+      .mutateAsync({
+        ...(dryRun ? { dryRun: true } : {}),
+        ...(batchSize !== undefined ? { batchSize } : {}),
+      })
+      .then((res) => setRunId(res.runId))
+      .catch((error) => {
+        if (error instanceof ApiError) setLocalError(error.message)
+        else if (error instanceof Error) setLocalError(error.message)
+        else setLocalError("Failed to enqueue backfill")
+      })
+  }
+
+  const status = run.data?.status
+  const failureCount = run.data?.failures.length ?? 0
+
+  return (
+    <div className="mt-[14px] rounded-2xl border border-line bg-card px-5 py-[18px]">
+      <div className="mb-1 text-[13px] font-extrabold text-ink">
+        Wallet-network backfill
+      </div>
+      <p className="mb-3 text-[11.5px] text-ink3">
+        Provision missing wallet-network rows for existing custody wallets. No
+        money moves.
+      </p>
+
+      {/* Controls */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+        <label className="flex items-center gap-2 text-[12px] font-semibold text-ink2">
+          <Switch
+            checked={dryRun}
+            onCheckedChange={setDryRun}
+            aria-label="Dry run"
+            disabled={isEnqueuing || isRunning}
+          />
+          Dry run
+        </label>
+        <label className="flex items-center gap-2 text-[12px] font-semibold text-ink2">
+          Batch size
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            value={batchSizeText}
+            onChange={(e) => setBatchSizeText(e.target.value)}
+            placeholder="100"
+            aria-label="Batch size"
+            disabled={isEnqueuing || isRunning}
+            className="h-8 w-24 text-[12px]"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={start}
+          disabled={isEnqueuing || isRunning}
+          className="inline-flex h-8 items-center rounded-[9px] bg-ink px-3.5 text-[12px] font-bold text-bg transition-opacity hover:opacity-90 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-50"
+        >
+          {isEnqueuing ? "Enqueuing…" : "Backfill wallet networks"}
+        </button>
+      </div>
+
+      {/* Enqueue-error branch. */}
+      {localError && (
+        <p role="alert" className="mt-3 text-[12px] font-semibold text-tdn">
+          {localError}
+        </p>
+      )}
+
+      {/* Live run branch (loading/running → terminal). */}
+      {runId && (
+        <div className="mt-4 rounded-[12px] border border-line2 bg-card2 px-4 py-3">
+          {run.isLoading && !run.data && (
+            <div aria-busy="true">
+              <Skeleton className="h-4 w-40" />
+            </div>
+          )}
+          {run.isError && (
+            <p className="text-[12px] font-bold text-tdn">
+              Couldn&apos;t read the backfill run
+            </p>
+          )}
+          {status && (
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div
+                  className={cn(
+                    "text-[12.5px] font-bold",
+                    HEALTH_TEXT[BACKFILL_HEALTH[status]]
+                  )}
+                >
+                  {BACKFILL_STATUS_LABEL[status]}
+                </div>
+                <div className="text-[10.5px] text-ink3 tabular-nums">
+                  {(run.data?.scannedUsers ?? 0).toLocaleString()} /{" "}
+                  {(run.data?.totalUsers ?? 0).toLocaleString()} scanned
+                  {failureCount > 0 && (
+                    <span className="text-tdn">
+                      {" · "}
+                      {failureCount.toLocaleString()} failure
+                      {failureCount === 1 ? "" : "s"}
+                    </span>
+                  )}
+                </div>
+              </div>
+              {isRunning && (
+                <span
+                  className="size-2 animate-pulse rounded-full bg-twn"
+                  aria-hidden
+                />
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── page ─────────────────────────────────────────────────────────────────────────────
 
 /** The stage the active "Run now" flow is currently showing. */
@@ -441,6 +750,11 @@ export function OpsPage() {
           </div>
         </>
       )}
+
+      {/* Service-health + wallet-backfill sections — independent queries, each with
+          their own four-branch handling, so they render regardless of the board state. */}
+      <ServiceHealthCard />
+      <WalletBackfillPanel />
 
       {/* ── "Run now" flow: reason (audit) → engine-action → the REAL mutation.
           The mutation is step-up-gated (StepUpDialog opens on a 403 + replays). A

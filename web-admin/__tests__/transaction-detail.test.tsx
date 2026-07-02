@@ -29,6 +29,7 @@ vi.mock("@/lib/api/transactions", () => ({
   getTransaction: vi.fn(),
   retryTransaction: vi.fn(),
   markTransactionFailed: vi.fn(),
+  rerunReconciliation: vi.fn(),
 }))
 
 vi.mock("@/lib/api/approvals", () => ({
@@ -44,6 +45,7 @@ import {
   getTransaction,
   retryTransaction,
   markTransactionFailed,
+  rerunReconciliation,
 } from "@/lib/api/transactions"
 import { createChange } from "@/lib/api/approvals"
 import { getMe } from "@/lib/api/admin"
@@ -52,6 +54,7 @@ const mockGet = vi.mocked(getTransaction)
 const mockRetry = vi.mocked(retryTransaction)
 const mockMarkFailed = vi.mocked(markTransactionFailed)
 const mockCreateChange = vi.mocked(createChange)
+const mockRerunRecon = vi.mocked(rerunReconciliation)
 const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixture ────────────────────────────────────────────────────────────────────
@@ -132,8 +135,11 @@ beforeEach(() => {
   mockRetry.mockReset()
   mockMarkFailed.mockReset()
   mockCreateChange.mockReset()
+  mockRerunRecon.mockReset()
   mockGetMe.mockReset()
   mockGet.mockResolvedValue(DETAIL)
+  // Default: re-run recon finds no discrepancies (the reconciled path).
+  mockRerunRecon.mockResolvedValue({ items: [] })
   mockGetMe.mockResolvedValue({
     id: "00000000-0000-0000-0000-000000000001",
     email: "ops@example.com",
@@ -348,6 +354,107 @@ describe("TransactionDetail (read-wired)", () => {
     // A refund NEVER executes an engine action from this surface — it only proposes.
     expect(mockMarkFailed).not.toHaveBeenCalled()
     expect(mockRetry).not.toHaveBeenCalled()
+  })
+
+  it("Re-run recon → engine modal → fires the re-run for this tx and shows the reconciled (no-breaks) result", async () => {
+    const user = userEvent.setup()
+    renderDetail()
+    await screen.findByText(TXN_ID)
+
+    await user.click(screen.getByRole("button", { name: "Re-run recon" }))
+    await user.click(
+      screen.getByRole("button", { name: "Run reconciliation" })
+    )
+
+    await waitFor(() =>
+      expect(mockRerunRecon).toHaveBeenCalledWith(TXN_ID, undefined)
+    )
+    // The reconciled (empty) result renders — provider and ledger agree.
+    expect(
+      await screen.findByText(/Provider and ledger reconcile/i)
+    ).toBeInTheDocument()
+    // A read-only detection — it never moves money from this surface.
+    expect(mockRetry).not.toHaveBeenCalled()
+    expect(mockMarkFailed).not.toHaveBeenCalled()
+    expect(mockCreateChange).not.toHaveBeenCalled()
+  })
+
+  it("Re-run recon → shows the detected break rows when the re-run finds discrepancies", async () => {
+    const user = userEvent.setup()
+    mockRerunRecon.mockResolvedValue({
+      items: [
+        {
+          id: "brk_1",
+          kind: "over_credit",
+          severity: "high",
+          transactionId: TXN_ID,
+          asset: "USDT",
+          delta: "+50.00",
+          detail: "Ledger credited 50.00 USDT more than the provider confirmed.",
+          status: "open",
+          detectedAt: "2026-07-02T04:00:00.000Z",
+        },
+      ],
+    })
+    renderDetail()
+    await screen.findByText(TXN_ID)
+
+    await user.click(screen.getByRole("button", { name: "Re-run recon" }))
+    await user.click(
+      screen.getByRole("button", { name: "Run reconciliation" })
+    )
+
+    // The detected break renders (kind label + signed delta).
+    expect(await screen.findByText("Over-credit")).toBeInTheDocument()
+    expect(screen.getByText("+50.00 USDT")).toBeInTheDocument()
+  })
+
+  it("Re-run recon → surfaces an error branch when the re-run fails", async () => {
+    const user = userEvent.setup()
+    mockRerunRecon.mockRejectedValue(new Error("recon boom"))
+    renderDetail()
+    await screen.findByText(TXN_ID)
+
+    await user.click(screen.getByRole("button", { name: "Re-run recon" }))
+    await user.click(
+      screen.getByRole("button", { name: "Run reconciliation" })
+    )
+
+    expect(
+      await screen.findByText(/Reconciliation re-run failed/i)
+    ).toBeInTheDocument()
+  })
+
+  it("Re-run recon → opens step-up and replays after re-auth when the server demands it", async () => {
+    const user = userEvent.setup()
+    mockGetMe.mockResolvedValue({
+      id: "00000000-0000-0000-0000-000000000001",
+      email: "ops@example.com",
+      role: { id: "00000000-0000-0000-0000-0000000000aa", name: "ops" },
+      status: "active",
+      displayName: "Test Admin",
+      mfaEnabled: true,
+      permissions: [],
+      menus: [],
+      pages: [],
+    })
+    const { ApiError } = await import("@/lib/api/client")
+    mockRerunRecon
+      .mockRejectedValueOnce(
+        new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce({ items: [] })
+    renderDetail()
+    await screen.findByText(TXN_ID)
+
+    await user.click(screen.getByRole("button", { name: "Re-run recon" }))
+    await user.click(
+      screen.getByRole("button", { name: "Run reconciliation" })
+    )
+
+    // The re-auth dialog appears (TOTP mode, since mfaEnabled).
+    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    expect(mockRerunRecon).toHaveBeenCalledTimes(1)
   })
 
   it("Resend receipt is a local confirmation — it fires no mutation", async () => {

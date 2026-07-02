@@ -1,17 +1,27 @@
 /**
- * NotificationsPage (broadcast composer) — Phase 7 template-authoring WRITE wiring.
+ * NotificationsPage (broadcast composer) — Phase 7 template-authoring WRITE wiring +
+ * Phase 8 (F-mock-b) honest-audience wiring.
  *
- * The composer reads the template list for its TEMPLATE select (mocked) and now
- * exposes a "New template" affordance that opens the shared `TemplateEditorDialog`
- * in create mode — its Save drives POST /admin/notification-templates via
- * `useUpsertTemplate` (with a step-up retry on a 403). The api layer is mocked — no
- * server. Nothing here moves money (§3.1).
+ * The composer reads the template list for its TEMPLATE select and exposes a
+ * "New template" affordance that opens the shared `TemplateEditorDialog` in create
+ * mode — its Save drives POST /admin/notification-templates via `useUpsertTemplate`
+ * (with a step-up retry on a 403). The api layer is mocked — no server. Nothing here
+ * moves money (§3.1).
+ *
+ * Phase 8: the AUDIENCE select now offers exactly the real `BroadcastAudience`
+ * contract cohorts (all / verified / tier_1 / lagos) — the fabricated client-side
+ * reach counts + the client-side "large audience" gate are gone. The SERVER is the
+ * sole authority on cohort size and whether the send defers to maker-checker (§3.5),
+ * so the composer only advises that a large blast may require approval.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { NotificationTemplateListResponse } from "@handshake-agent/contracts"
+import {
+  BroadcastAudienceSchema,
+  type NotificationTemplateListResponse,
+} from "@handshake-agent/contracts"
 
 import { NotificationsPage } from "@/components/admin/notifications-page"
 
@@ -97,6 +107,29 @@ describe("NotificationsPage (broadcast composer — template authoring)", () => 
     // The TEMPLATE select resolves the real template key.
     expect(await screen.findByRole("option", { name: "kyc_reminder" }))
       .toBeInTheDocument()
+  })
+
+  it("offers exactly the real BroadcastAudience cohorts as audience options", () => {
+    renderPage()
+
+    const select = screen.getByRole("combobox", { name: /Broadcast audience/i })
+    const options = Array.from(
+      select.querySelectorAll("option")
+    ) as HTMLOptionElement[]
+    const values = options.map((o) => o.value)
+
+    // The audience <option> values ARE the contract's enum cohorts — no fabricated
+    // reach counts, no client-invented cohort ids.
+    expect(new Set(values)).toEqual(new Set(BroadcastAudienceSchema.options))
+    // Each rendered value is a valid enum member (parses without throwing).
+    for (const value of values) {
+      expect(() => BroadcastAudienceSchema.parse(value)).not.toThrow()
+    }
+    // No fabricated per-cohort reach count leaks into a label (the SERVER is the
+    // sole authority on cohort size, §3.5) — the mock "(2,140)"-style counts are gone.
+    for (const option of options) {
+      expect(option.textContent ?? "").not.toMatch(/\(\s*[\d,]{2,}\s*\)/)
+    }
   })
 
   it("opens the shared template editor in create mode from the New template affordance", async () => {

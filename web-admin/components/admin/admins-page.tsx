@@ -4,39 +4,35 @@
  * AdminsPage — the "Admins & roles" surface (Operator Console design
  * `docs/design-ref/screens/Admins.html`, spec §6.15), wired to real data.
  *
- * Reads (Phase 6a): the admin table comes from `useAdmins()`
- * (`AdminUserListResponse`), and the role permission matrix is derived live from
+ * Reads: the admin table comes from `useAdmins()` (`AdminUserListResponse`) and the
+ * role permission matrix is the shared `RolePermissionMatrix` component, fed the live
  * `useRoles()` (each role's granted `permissionIds`) × `usePermissions()` (the
- * permission catalog, grouped by category). Each cell's access level is computed
- * from the role's grants in that category: `full` if it holds any write / delete /
- * execute, `read` if only read, `none` otherwise — the same semantics the design's
- * `can()` matrix expressed, now sourced from the RBAC catalog rather than a mock.
+ * permission catalog). Each admin's `displayName` (the contract field) is the primary
+ * row label with the email as the sub-row. Every async surface has four branches
+ * (loading / error / empty / data).
  *
- * Layout is preserved 1:1: header (title + subtitle + dark "+ Invite admin" CTA)
- * → the admin table (Admin · Role · 2FA · Status · row actions) → the Role
- * permission matrix card (roles × capabilities, access-level icon tiles + legend).
- * Every async surface has four branches (loading / error / empty / data).
- *
- * WRITE actions (Phase 7) are wired through the canonical mutation components so
- * the reason → step-up → mutation → invalidate chain lives in one place (§13.1):
- * per-row change-role / suspend-reactivate-offboard is `AdminRowActions`
- * (useUpdateAdminRole / useSetAdminStatus, step-up-gated); create-role and
- * edit-role-permissions open `RoleEditorDialog` (useCreateRole / useUpdateRole);
- * "+ Invite admin" is `InviteAdminDialog` (useCreateInvitation). Each mutation
- * invalidates its query key so the table + matrix re-resolve.
+ * WRITE actions are wired through the canonical step-up-gated components so the reason
+ * → step-up → mutation → invalidate chain lives in one place (§13.1 / §3.4):
+ *  - per-row change-role / suspend-reactivate-offboard → `AdminRowActions`
+ *    (useUpdateAdminRole / useSetAdminStatus);
+ *  - per-row "Reset 2FA" → `AdminResetMfaAction`, which chains ReasonModal (audited) →
+ *    StepUpModal (TOTP) → `useResetAdminMfa`, replaying through `StepUpDialog` on a
+ *    server 403 ADMIN_STEP_UP_REQUIRED (the sanctions-page pattern);
+ *  - create-role / edit-role-permissions → `RoleEditorDialog`;
+ *  - "+ Invite admin" → `InviteAdminDialog`.
+ * Each mutation invalidates its query key so the table + matrix re-resolve. No LLM
+ * output and no funds move — RBAC writes only (§3.1); resetting 2FA reveals no secret.
  */
-import { useMemo, useState } from "react"
-import type {
-  AdminPermissionRecord,
-  AdminUser,
-  Role,
-} from "@handshake-agent/contracts"
+import { useState } from "react"
+import type { AdminUser, Role } from "@handshake-agent/contracts"
 
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { InviteAdminDialog } from "@/components/admin/invite-admin-dialog"
 import { AdminRowActions } from "@/components/admin/admin-row-actions"
+import { AdminResetMfaAction } from "@/components/admin/admin-reset-mfa-action"
 import { RoleEditorDialog } from "@/components/admin/role-editor-dialog"
+import { RolePermissionMatrix } from "@/components/admin/role-permission-matrix"
 import { useAdmins, usePermissions, useRoles } from "@/lib/query/hooks"
 
 // ─── Brand + status constants (mapped to design tokens; §1.3 / stMeta) ─────────
@@ -46,10 +42,10 @@ const AVATAR_STRIPE =
   "repeating-linear-gradient(45deg,#2a6f55 0 5px,#1a4536 5px 10px)"
 
 /**
- * The design's role-dot palette (`roleMeta()`, logic.js 168-173). Roles now
- * arrive by display name, not a fixed slug, so a role's dot colour is assigned by
- * hashing its name into this palette — deterministic per role, design-consistent
- * tokens, and stable across renders.
+ * The design's role-dot palette (`roleMeta()`, logic.js 168-173). Roles arrive by
+ * display name, not a fixed slug, so a role's dot colour is assigned by hashing its
+ * name into this palette — deterministic per role, design-consistent tokens, and
+ * stable across renders.
  */
 const ROLE_DOT_PALETTE: readonly string[] = [
   "var(--brand-amber)",
@@ -69,132 +65,19 @@ function roleDot(name: string): string {
   return ROLE_DOT_PALETTE[hash % ROLE_DOT_PALETTE.length]
 }
 
-/** Two-letter initials from an admin's email local-part (no name on the DTO). */
-function emailInitials(email: string): string {
-  const local = email.split("@")[0] ?? ""
-  const parts = local.split(/[.\-_+]/).filter(Boolean)
-  const chars =
-    parts.length >= 2
-      ? parts[0][0] + parts[1][0]
-      : local.slice(0, 2).padEnd(2, local.slice(0, 1) || "?")
-  return chars.toUpperCase()
+/** Two-letter initials from an admin's display name (first + last word, or first two
+ *  chars of a single word). Falls back to "?" for an empty name. */
+function nameInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+  const single = parts[0] ?? ""
+  return (single.slice(0, 2) || "?").toUpperCase()
 }
 
 /** Shared grid template for the admin table header + every body row (design 5/6).
- * The last column hosts the wired row-actions (role select + status buttons), so
+ * The last column hosts the wired row-actions (role select + status + reset-2FA), so
  * it is given more room than the design's original text-only actions column. */
-const ADMIN_GRID =
-  "grid-cols-[1.4fr_1fr_0.7fr_0.8fr_2.1fr] gap-3 px-[18px]"
-
-// ─── Role permission matrix (design lines 9-14) ────────────────────────────────
-
-/**
- * Access level per matrix cell → its icon tile (design line 12/14): full-access
- * (check, `--sok`/`--tok`), read-only (eye, `--sif`/`--tif`), no-access (cross,
- * `--card2`/`--ink3`). The label beside each column + the title tooltip carry the
- * meaning, so colour is never the sole signal.
- */
-type Access = "full" | "read" | "none"
-
-const ACCESS_META: Record<
-  Access,
-  { icon: string; bg: string; fg: string; title: string; strokeWidth: number }
-> = {
-  full: {
-    icon: "m5 12 5 5L20 7",
-    bg: "var(--sok,#e6f3ec)",
-    fg: "var(--tok,#1f8a5b)",
-    title: "Full access",
-    strokeWidth: 2.4,
-  },
-  read: {
-    icon: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z",
-    bg: "var(--sif,#e9f0fd)",
-    fg: "var(--tif,#3168e6)",
-    title: "Read-only",
-    strokeWidth: 2,
-  },
-  none: {
-    icon: "M6 6l12 12M18 6L6 18",
-    bg: "var(--card2,#faf8f2)",
-    fg: "var(--ink3,#8b948a)",
-    title: "No access",
-    strokeWidth: 2.4,
-  },
-}
-
-/** One capability row in the matrix — its label and the access level per role. */
-interface MatrixRow {
-  label: string
-  cells: readonly Access[]
-}
-
-/** The derived matrix: role columns (full objects, for the editor) + category rows. */
-interface MatrixData {
-  cols: readonly Role[]
-  rows: readonly MatrixRow[]
-}
-
-/**
- * Reduce a set of granted actions in a category to one access level: `full` if any
- * write/delete/execute is held (the role can act), `read` if only reads are held,
- * `none` if nothing is granted there. This is the RBAC-backed equivalent of the
- * design's `can()` grant, computed from the live catalog + role assignments.
- */
-function accessFromActions(actions: Set<string>): Access {
-  if (actions.has("write") || actions.has("delete") || actions.has("execute")) {
-    return "full"
-  }
-  if (actions.has("read")) return "read"
-  return "none"
-}
-
-/**
- * Build the role × category access matrix from the catalog + roles. Columns are
- * the roles (in list order); rows are the catalog categories (in first-seen
- * order). For each (role, category) cell we gather the actions the role is granted
- * on that category's permissions and collapse them to an access level.
- */
-function buildMatrix(
-  roles: readonly Role[],
-  permissions: readonly AdminPermissionRecord[]
-): MatrixData {
-  // Category → set of permission ids in that category (in catalog order).
-  const categories: string[] = []
-  const permsByCategory = new Map<string, string[]>()
-  for (const perm of permissions) {
-    if (!permsByCategory.has(perm.category)) {
-      permsByCategory.set(perm.category, [])
-      categories.push(perm.category)
-    }
-    permsByCategory.get(perm.category)!.push(perm.id)
-    permsByCategory.get(perm.category)!.push(perm.action)
-  }
-  // Permission id → its action, for looking up a role's granted actions.
-  const actionById = new Map<string, string>(
-    permissions.map((p) => [p.id, p.action])
-  )
-
-  const rows: MatrixRow[] = categories.map((category) => {
-    const idsInCategory = permissions
-      .filter((p) => p.category === category)
-      .map((p) => p.id)
-    const cells: Access[] = roles.map((role) => {
-      const granted = new Set(role.permissionIds)
-      const actions = new Set<string>()
-      for (const id of idsInCategory) {
-        if (granted.has(id)) {
-          const action = actionById.get(id)
-          if (action) actions.add(action)
-        }
-      }
-      return accessFromActions(actions)
-    })
-    return { label: category, cells }
-  })
-
-  return { cols: roles, rows }
-}
+const ADMIN_GRID = "grid-cols-[1.4fr_1fr_0.7fr_0.8fr_2.4fr] gap-3 px-[18px]"
 
 // ─── Page ──────────────────────────────────────────────────────────────────────
 
@@ -207,15 +90,12 @@ export function AdminsPage() {
 
   const admins = adminsQuery.data?.items ?? []
   const roles = rolesQuery.data?.roles ?? []
-
-  // Derive the role × category access matrix once per roles/permissions change.
-  const matrix = useMemo<MatrixData | null>(() => {
-    if (!rolesQuery.data || !permissionsQuery.data) return null
-    return buildMatrix(rolesQuery.data.roles, permissionsQuery.data.permissions)
-  }, [rolesQuery.data, permissionsQuery.data])
+  const permissions = permissionsQuery.data?.permissions ?? []
 
   const matrixLoading = rolesQuery.isLoading || permissionsQuery.isLoading
   const matrixError = rolesQuery.isError || permissionsQuery.isError
+  const matrixReady = rolesQuery.isSuccess && permissionsQuery.isSuccess
+  const matrixEmpty = matrixReady && roles.length === 0
 
   // Role editor (create / edit permissions) — `roleEdit` holds the target role, or
   // null when creating. The wired RoleEditorDialog runs useCreateRole / useUpdateRole
@@ -225,11 +105,6 @@ export function AdminsPage() {
 
   function openCreateRole() {
     setRoleEdit(null)
-    setRoleEditorOpen(true)
-  }
-
-  function openEditRole(role: Role) {
-    setRoleEdit(role)
     setRoleEditorOpen(true)
   }
 
@@ -330,168 +205,59 @@ export function AdminsPage() {
           ))}
       </div>
 
-      {/* ── Role permission matrix ─────────────────────────────────────────── */}
-      <div className="scr overflow-x-auto rounded-[16px] border border-line bg-card px-[20px] py-[18px]">
-        <div className="mb-[14px] flex items-center justify-between gap-3">
-          <div className="text-[13px] font-extrabold text-ink">
-            Role permission matrix
-          </div>
-          <button
-            type="button"
-            onClick={openCreateRole}
-            className="flex h-[32px] items-center gap-[6px] rounded-[10px] border border-line bg-card px-3 text-[12px] font-bold text-ink2 transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-          >
-            + New role
-          </button>
-        </div>
+      {/* ── Role permission matrix (shared component) ──────────────────────── */}
+      <div className="mb-1 flex items-center justify-end">
+        <button
+          type="button"
+          onClick={openCreateRole}
+          className="flex h-[32px] items-center gap-[6px] rounded-[10px] border border-line bg-card px-3 text-[12px] font-bold text-ink2 transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          + New role
+        </button>
+      </div>
 
-        {/* Loading */}
-        {matrixLoading && (
-          <div className="flex flex-col gap-2" aria-busy="true">
+      {matrixLoading && (
+        <div
+          className="rounded-[16px] border border-line bg-card px-5 py-[18px]"
+          aria-busy="true"
+        >
+          <div className="flex flex-col gap-2">
             {[0, 1, 2, 3, 4].map((i) => (
               <Skeleton key={i} className="h-8 w-full rounded-[8px]" />
             ))}
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Error */}
-        {!matrixLoading && matrixError && (
-          <div className="py-8 text-center">
-            <div className="text-[13.5px] font-bold text-tdn">
-              Couldn&apos;t load the permission matrix
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                void rolesQuery.refetch()
-                void permissionsQuery.refetch()
-              }}
-              className="mt-2 text-[12.5px] font-bold text-tif transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-            >
-              Try again
-            </button>
+      {!matrixLoading && matrixError && (
+        <div className="rounded-[16px] border border-line bg-card px-5 py-8 text-center">
+          <div className="text-[13.5px] font-bold text-tdn">
+            Couldn&apos;t load the permission matrix
           </div>
-        )}
+          <button
+            type="button"
+            onClick={() => {
+              void rolesQuery.refetch()
+              void permissionsQuery.refetch()
+            }}
+            className="mt-2 text-[12.5px] font-bold text-tif transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            Try again
+          </button>
+        </div>
+      )}
 
-        {/* Empty */}
-        {!matrixLoading &&
-          !matrixError &&
-          matrix &&
-          (matrix.cols.length === 0 || matrix.rows.length === 0) && (
-            <div className="py-8 text-center text-ink3">
-              <div className="text-[13.5px] font-bold text-ink2">
-                No roles to display
-              </div>
-            </div>
-          )}
+      {!matrixLoading && !matrixError && matrixEmpty && (
+        <div className="rounded-[16px] border border-line bg-card px-5 py-8 text-center text-ink3">
+          <div className="text-[13.5px] font-bold text-ink2">
+            No roles to display
+          </div>
+        </div>
+      )}
 
-        {/* Data */}
-        {!matrixLoading &&
-          !matrixError &&
-          matrix &&
-          matrix.cols.length > 0 &&
-          matrix.rows.length > 0 && (
-            <>
-              <div className="min-w-[640px]">
-                {/* Column header */}
-                <div
-                  className="grid gap-2 border-b border-line pb-[10px]"
-                  style={{
-                    gridTemplateColumns: `1.4fr repeat(${matrix.cols.length}, 1fr)`,
-                  }}
-                >
-                  <div />
-                  {matrix.cols.map((role) => (
-                    <button
-                      key={role.id}
-                      type="button"
-                      onClick={() => openEditRole(role)}
-                      title={
-                        role.isBuiltin
-                          ? `View ${role.name} permissions`
-                          : `Edit ${role.name} permissions`
-                      }
-                      className="text-center text-[10px] leading-[1.2] font-bold text-ink3 transition-colors hover:text-tif focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                    >
-                      {role.name}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Capability rows */}
-                {matrix.rows.map((row) => (
-                  <div
-                    key={row.label}
-                    className="grid items-center gap-2 border-b border-line2 py-[11px] last:border-b-0"
-                    style={{
-                      gridTemplateColumns: `1.4fr repeat(${matrix.cols.length}, 1fr)`,
-                    }}
-                  >
-                    <div className="text-[12.5px] font-bold text-ink">
-                      {row.label}
-                    </div>
-                    {row.cells.map((access, i) => {
-                      const meta = ACCESS_META[access]
-                      return (
-                        <div
-                          key={`${row.label}-${matrix.cols[i].id}`}
-                          className="flex justify-center"
-                        >
-                          <span
-                            title={`${matrix.cols[i].name} · ${meta.title}`}
-                            className="flex size-6 items-center justify-center rounded-[7px]"
-                            style={{ background: meta.bg, color: meta.fg }}
-                          >
-                            <svg
-                              width="13"
-                              height="13"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              aria-hidden="true"
-                            >
-                              <path
-                                d={meta.icon}
-                                stroke="currentColor"
-                                strokeWidth={meta.strokeWidth}
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
-                            </svg>
-                          </span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                ))}
-              </div>
-
-              {/* Legend */}
-              <div className="mt-[14px] flex flex-wrap gap-4">
-                <LegendItem
-                  bg="var(--sok,#e6f3ec)"
-                  fg="var(--tok,#1f8a5b)"
-                  icon="m5 12 5 5L20 7"
-                  strokeWidth={2.4}
-                  label="Full access"
-                />
-                <LegendItem
-                  bg="var(--sif,#e9f0fd)"
-                  fg="var(--tif,#3168e6)"
-                  icon="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"
-                  strokeWidth={2}
-                  label="Read-only"
-                />
-                <LegendItem
-                  bg="var(--card2,#faf8f2)"
-                  fg="var(--ink3,#8b948a)"
-                  icon="M6 6l12 12M18 6L6 18"
-                  strokeWidth={2.4}
-                  label="No access"
-                />
-              </div>
-            </>
-          )}
-      </div>
+      {!matrixLoading && !matrixError && matrixReady && !matrixEmpty && (
+        <RolePermissionMatrix roles={roles} permissions={permissions} />
+      )}
 
       {/* ── Role editor (create / edit permissions) · Invite ───────────────── */}
       {roleEditorOpen && (
@@ -515,13 +281,12 @@ export function AdminsPage() {
 
 /**
  * One admin table row (design line 6). The sensitive row actions (change role,
- * suspend / reactivate / offboard) are the wired `AdminRowActions` — it runs the
- * useUpdateAdminRole / useSetAdminStatus mutations, step-up-gated, and invalidates
- * the admins query on success.
+ * suspend / reactivate / offboard) are the wired `AdminRowActions`; "Reset 2FA" is
+ * `AdminResetMfaAction` — both run their step-up-gated mutations and invalidate the
+ * admins query on success. The `displayName` is the primary label with the email
+ * beneath it.
  */
 function AdminRow({ admin, roles }: { admin: AdminUser; roles: Role[] }) {
-  // No display name on the DTO — the email local-part stands in as the name.
-  const displayName = admin.email.split("@")[0] ?? admin.email
   const isActive = admin.status === "active"
   return (
     <div
@@ -530,18 +295,18 @@ function AdminRow({ admin, roles }: { admin: AdminUser; roles: Role[] }) {
         ADMIN_GRID
       )}
     >
-      {/* Admin — striped avatar (initials from email) + name + email */}
+      {/* Admin — striped avatar (initials from the display name) + name + email */}
       <div className="flex min-w-0 items-center gap-[11px]">
         <span
           aria-hidden="true"
           className="flex size-8 flex-none items-center justify-center rounded-full text-[11px] font-extrabold text-white"
           style={{ background: AVATAR_STRIPE }}
         >
-          {emailInitials(admin.email)}
+          {nameInitials(admin.displayName)}
         </span>
         <div className="min-w-0">
           <div className="truncate text-[13px] font-bold text-ink">
-            {displayName}
+            {admin.displayName}
           </div>
           <div className="truncate text-[11px] text-ink3">{admin.email}</div>
         </div>
@@ -581,51 +346,12 @@ function AdminRow({ admin, roles }: { admin: AdminUser; roles: Role[] }) {
         )}
       </div>
 
-      {/* Row actions — change role + suspend/reactivate/offboard (step-up-gated) */}
-      <div className="flex justify-end">
+      {/* Row actions — change role + suspend/reactivate/offboard + reset 2FA
+          (all step-up-gated) */}
+      <div className="flex items-center justify-end gap-2">
+        <AdminResetMfaAction admin={admin} />
         <AdminRowActions admin={admin} roles={roles} />
       </div>
-    </div>
-  )
-}
-
-/** One legend swatch under the matrix (design line 14). */
-function LegendItem({
-  bg,
-  fg,
-  icon,
-  strokeWidth,
-  label,
-}: {
-  bg: string
-  fg: string
-  icon: string
-  strokeWidth: number
-  label: string
-}) {
-  return (
-    <div className="flex items-center gap-1.5 text-[11px] text-ink2">
-      <span
-        className="flex size-4 items-center justify-center rounded-[5px]"
-        style={{ background: bg, color: fg }}
-      >
-        <svg
-          width="10"
-          height="10"
-          viewBox="0 0 24 24"
-          fill="none"
-          aria-hidden="true"
-        >
-          <path
-            d={icon}
-            stroke="currentColor"
-            strokeWidth={strokeWidth}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </span>
-      {label}
     </div>
   )
 }

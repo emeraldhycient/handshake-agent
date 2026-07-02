@@ -324,6 +324,36 @@ describe("UserDetail (real data)", () => {
     expect(container.textContent).not.toContain("23000")
   })
 
+  it("shows the last-4 KYC identity but offers NO full-PII reveal (§3.4)", async () => {
+    searchParams = new URLSearchParams("tab=kyc")
+    renderDetail()
+
+    // Last-4 mask still renders (admin keeps last-4 only).
+    await waitFor(() =>
+      expect(screen.getByText("••• ••• ••89")).toBeInTheDocument()
+    )
+
+    // The full-PII reveal flow is stripped: no Reveal/Hide toggle button.
+    expect(
+      screen.queryByRole("button", { name: /^Reveal$/ })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /^Hide$/ })
+    ).not.toBeInTheDocument()
+    // The decrypted-PII banner never appears.
+    expect(screen.queryByText(/decrypted pii/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/re-mask/i)).not.toBeInTheDocument()
+  })
+
+  it("offers no 'View as' header action (view-as removed)", async () => {
+    renderDetail()
+    await screen.findByRole("heading", { name: "Ada Lovelace" })
+
+    expect(
+      screen.queryByRole("button", { name: "View as" })
+    ).not.toBeInTheDocument()
+  })
+
   it("renders the real devices list on the Devices tab", async () => {
     searchParams = new URLSearchParams("tab=devices")
     renderDetail()

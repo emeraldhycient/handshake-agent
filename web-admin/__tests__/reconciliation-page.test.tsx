@@ -24,6 +24,7 @@ vi.mock("@/lib/api/reconciliation", () => ({
   getReconStatus: vi.fn(),
   resolveReconBreak: vi.fn(),
   acceptReconBreak: vi.fn(),
+  escalateReconBreak: vi.fn(),
 }))
 
 // useAdminMe (mfaEnabled) drives the StepUpDialog rendered by the page.
@@ -37,12 +38,27 @@ import {
   getReconStatus,
   resolveReconBreak,
   acceptReconBreak,
+  escalateReconBreak,
 } from "@/lib/api/reconciliation"
 
 const mockBreaks = vi.mocked(listReconBreaks)
 const mockStatus = vi.mocked(getReconStatus)
 const mockResolve = vi.mocked(resolveReconBreak)
 const mockAccept = vi.mocked(acceptReconBreak)
+const mockEscalate = vi.mocked(escalateReconBreak)
+
+// A ComplianceEventItem returned by the escalate endpoint (the opened case).
+const ESCALATED_EVENT = {
+  id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+  userId: "22222222-2222-4222-8222-222222222222",
+  transactionId: "tx_9f2a41c7",
+  eventType: "recon_break_escalation",
+  severity: "high" as const,
+  status: "flagged" as const,
+  screeningProvider: "manual",
+  ruleOrHit: null,
+  createdAt: "2026-07-02T04:05:00.000Z",
+}
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -107,6 +123,7 @@ beforeEach(() => {
     disposition: "accepted",
     moved: false,
   })
+  mockEscalate.mockReset().mockResolvedValue(ESCALATED_EVENT)
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -219,5 +236,59 @@ describe("ReconciliationPage (wired)", () => {
       reason: "Rounding drift",
     })
     expect(mockResolve).not.toHaveBeenCalled()
+  })
+})
+
+describe("ReconciliationPage (Phase 8 — escalate to compliance WRITE)", () => {
+  it("does not call escalateReconBreak until the reason modal's Continue fires", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: /Escalate to case/i }))[0]
+    )
+    // The ReasonModal appears but nothing is escalated yet.
+    await screen.findByLabelText("Reason")
+    expect(mockEscalate).not.toHaveBeenCalled()
+  })
+
+  it("fires the REAL escalate mutation with the captured reason via reason → server", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: /Escalate to case/i }))[0]
+    )
+    await user.type(screen.getByLabelText("Reason"), "Confirmed AML concern")
+    await user.click(screen.getByRole("button", { name: /Continue/ }))
+
+    await waitFor(() => expect(mockEscalate).toHaveBeenCalledTimes(1))
+    expect(mockEscalate).toHaveBeenCalledWith("comp_1", "Confirmed AML concern")
+    // The escalated break's footer reflects the disposition.
+    expect(await screen.findByText("Escalated to case")).toBeInTheDocument()
+    // Escalate never moves money — no resolve/accept side effect.
+    expect(mockResolve).not.toHaveBeenCalled()
+    expect(mockAccept).not.toHaveBeenCalled()
+  })
+
+  it("opens step-up and replays the escalate POST after re-auth when the server demands step-up", async () => {
+    const user = userEvent.setup()
+    const { ApiError } = await import("@/lib/api/client")
+    mockEscalate
+      .mockRejectedValueOnce(
+        new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce(ESCALATED_EVENT)
+
+    renderPage()
+    await user.click(
+      (await screen.findAllByRole("button", { name: /Escalate to case/i }))[0]
+    )
+    await user.type(screen.getByLabelText("Reason"), "Confirmed AML concern")
+    await user.click(screen.getByRole("button", { name: /Continue/ }))
+
+    // The re-auth dialog appears (TOTP mode, since mfaEnabled).
+    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    expect(mockEscalate).toHaveBeenCalledTimes(1)
   })
 })
