@@ -40,6 +40,7 @@ import { useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { KpiCard } from "@/components/admin/kpi-card"
 import { ChartBars } from "@/components/admin/chart-bars"
+import { useOperatorAlerts, type AdminAlert } from "@/components/admin/use-operator-alerts"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   useApprovalsInbox,
@@ -382,45 +383,6 @@ const APPROVAL_KIND_LABEL: Record<ChangeRequestKind, string> = {
 /** How many awaiting-me requests the dashboard teaser shows. */
 const APPROVALS_PANEL_LIMIT = 3
 
-// ─── Alerts (design `alerts`, logic.js 482-486) ──────────────────────────────────────
-
-interface AlertItem {
-  title: string
-  desc: string
-  bg: string
-  fg: string
-  icon: string
-  /** Destination route (design `onTap`). */
-  route: string
-}
-
-const ALERTS: readonly AlertItem[] = [
-  {
-    title: "Sanctions hit — name match",
-    desc: "Bola Balogun matched OFAC SDN at 0.82. Review required.",
-    bg: "var(--sdn)",
-    fg: "var(--tdn)",
-    icon: "M12 4l9 16H3zM12 10v4",
-    route: "/sanctions",
-  },
-  {
-    title: "Over-credit flagged",
-    desc: "tx_80257 — +70.00 USDT above ledger. Not auto-debited.",
-    bg: "var(--swn)",
-    fg: "var(--twn)",
-    icon: "M12 13l4-4M4 18a8 8 0 1 1 16 0",
-    route: "/reconciliation",
-  },
-  {
-    title: "Provider incident",
-    desc: "Flutterwave NGN payouts degraded.",
-    bg: "var(--swn)",
-    fg: "var(--twn)",
-    icon: "M12 4l9 16H3z",
-    route: "/ops",
-  },
-]
-
 // ─── Shared card + title primitives (design §5) ──────────────────────────────────────
 
 /** Feature card — radius 18px, 1px `--line` border, `--card` surface, 20/22 padding. */
@@ -695,41 +657,56 @@ function ApprovalsCard() {
   )
 }
 
+/** Icon-chip token per alert tone (status semantic, never colour alone). */
+const ALERT_TONE_CHIP: Record<AdminAlert["tone"], string> = {
+  danger: "bg-[color:var(--danger-muted)] text-[color:var(--destructive)]",
+  warn: "bg-[color:var(--warn-muted)] text-[color:var(--warn)]",
+  info: "bg-[color:var(--info-muted)] text-[color:var(--info)]",
+}
+
 function AlertsCard() {
   const router = useRouter()
+  // LIVE alerts derived from the same source hooks as the topbar bell (shared
+  // useOperatorAlerts) — never a hardcoded list. Empty = "All clear".
+  const alerts = useOperatorAlerts()
   return (
     <FeatureCard className="flex-1">
       <div className="mb-3 text-sm font-bold text-ink">Alerts</div>
-      {ALERTS.map((a, i) => (
-        <button
-          key={i}
-          type="button"
-          onClick={() => router.push(a.route)}
-          className="flex w-full items-start gap-[11px] border-b border-line2 py-2.5 text-left last:border-0 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          <span
-            aria-hidden
-            className="mt-px flex size-[26px] flex-none items-center justify-center rounded-lg"
-            style={{ background: a.bg, color: a.fg }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path
-                d={a.icon}
-                stroke="currentColor"
-                strokeWidth="1.9"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-[12.5px] font-semibold text-ink">
-              {a.title}
-            </div>
-            <div className="text-[11px] leading-[1.4] text-ink2">{a.desc}</div>
-          </div>
-        </button>
-      ))}
+      {alerts.length === 0 ? (
+        <div className="py-2.5 text-[12px] text-ink2">
+          All clear — no operational alerts.
+        </div>
+      ) : (
+        alerts.map((a) => {
+          const Icon = a.icon
+          return (
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => router.push(a.href)}
+              className="flex w-full items-start gap-[11px] border-b border-line2 py-2.5 text-left last:border-0 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "mt-px flex size-[26px] flex-none items-center justify-center rounded-lg",
+                  ALERT_TONE_CHIP[a.tone]
+                )}
+              >
+                <Icon className="size-[14px]" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[12.5px] font-semibold text-ink">
+                  {a.title}
+                </div>
+                <div className="text-[11px] leading-[1.4] text-ink2">
+                  {a.description}
+                </div>
+              </div>
+            </button>
+          )
+        })
+      )}
     </FeatureCard>
   )
 }
