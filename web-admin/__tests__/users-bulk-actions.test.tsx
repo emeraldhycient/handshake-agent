@@ -64,6 +64,7 @@ beforeEach(() => {
     email: "ops@handshake.ng",
     role: { id: "00000000-0000-0000-0000-000000000001", name: "Super Admin" },
     status: "active",
+    displayName: "Test Admin",
     mfaEnabled: false,
     permissions: [],
     menus: [],

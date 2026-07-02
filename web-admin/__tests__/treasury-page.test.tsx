@@ -199,6 +199,7 @@ const ME = {
     name: "Super Admin",
   },
   status: "active" as const,
+  displayName: "Test Admin",
   mfaEnabled: false,
   permissions: [],
   menus: [],

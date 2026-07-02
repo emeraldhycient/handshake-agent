@@ -63,6 +63,7 @@ const ME: AdminMe = {
   email: "me@handshake.test",
   role: { id: "cccccccc-cccc-cccc-cccc-cccccccccccc", name: "super_admin" },
   status: "active",
+  displayName: "Test Admin",
   mfaEnabled: true,
   permissions: [],
   menus: [],

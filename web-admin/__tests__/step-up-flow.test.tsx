@@ -35,6 +35,7 @@ const ME: AdminMe = {
   email: "me@example.com",
   role: { id: "00000000-0000-0000-0000-0000000000ff", name: "super_admin" },
   status: "active",
+  displayName: "Test Admin",
   mfaEnabled: false, // → step-up asks for a password
   permissions: [],
   menus: ["menu.access"],
@@ -45,6 +46,7 @@ const TARGET: AdminUser = {
   id: "00000000-0000-0000-0000-000000000099",
   email: "target@example.com",
   status: "active",
+  displayName: "Test Admin",
   mfaEnabled: false,
   role: { id: "00000000-0000-0000-0000-0000000000aa", name: "ops" },
   createdAt: new Date().toISOString(),

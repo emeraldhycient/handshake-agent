@@ -58,6 +58,28 @@ export async function listEndUsers(
   return AdminEndUserListResponseSchema.parse(res.data)
 }
 
+/**
+ * GET /admin/users/export — a PII-minimised CSV of ALL end users matching the
+ * current filters (last-4 NIN/BVN only, §3.4; cursor/limit ignored server-side).
+ * `includedIds` scopes it to a selection (bulk-bar export). Returns the raw Blob for
+ * `downloadFile`; the server records an `admin_export` audit event with the rowCount.
+ */
+export async function exportEndUsers(
+  query: AdminEndUserSearchQuery,
+  includedIds?: string[],
+  reason?: string
+): Promise<Blob> {
+  const res = await api.get<Blob>("/admin/users/export", {
+    params: {
+      ...query,
+      ...(includedIds && includedIds.length > 0 ? { includedIds } : {}),
+      ...(reason ? { reason } : {}),
+    },
+    responseType: "blob",
+  })
+  return res.data
+}
+
 /** GET /admin/users/:id — the full end-user aggregate (identity + devices + balances + history). */
 export async function getEndUser(id: string): Promise<AdminEndUserDetail> {
   const res = await api.get(`/admin/users/${id}`)

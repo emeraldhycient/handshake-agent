@@ -12,9 +12,15 @@ import {
   AdminOpsRunRequestSchema,
   AdminOpsRunResponseSchema,
   OpsBoardSchema,
+  BackfillNetworksRequestSchema,
+  EnqueueBackfillResponseSchema,
+  BackfillRunStatusSchema,
   type AdminOpsRunRequest,
   type AdminOpsRunResponse,
   type OpsBoard,
+  type BackfillNetworksRequest,
+  type EnqueueBackfillResponse,
+  type BackfillRunStatusDto,
 } from "@handshake-agent/contracts"
 
 import { api } from "./client"
@@ -42,4 +48,23 @@ export async function runOpsJob(
   const body = AdminOpsRunRequestSchema.parse(input)
   const res = await api.post(`/admin/ops/jobs/${id}/run`, body)
   return AdminOpsRunResponseSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/wallets/backfill-networks — enqueue an async wallet-network backfill
+ * (Phase 8 ops surfacing). Returns { runId }; poll `getBackfillRun`. Moves no money
+ * (§3.1) — it backfills wallet-network rows for existing custody wallets.
+ */
+export async function enqueueBackfill(
+  input: BackfillNetworksRequest
+): Promise<EnqueueBackfillResponse> {
+  const body = BackfillNetworksRequestSchema.parse(input)
+  const res = await api.post("/admin/wallets/backfill-networks", body)
+  return EnqueueBackfillResponseSchema.parse(res.data)
+}
+
+/** GET /admin/wallets/backfill-runs/:id — a backfill run's live status/progress. */
+export async function getBackfillRun(id: string): Promise<BackfillRunStatusDto> {
+  const res = await api.get(`/admin/wallets/backfill-runs/${id}`)
+  return BackfillRunStatusSchema.parse(res.data)
 }

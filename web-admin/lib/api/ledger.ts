@@ -55,6 +55,22 @@ export async function listGlobalLedger(
 }
 
 /**
+ * GET /admin/ledger/export — a CSV of ALL ledger legs matching the current global-
+ * browse filters (cursor/limit ignored server-side). Read-only (§3.1). Returns the
+ * raw Blob for `downloadFile`; the server records an `admin_export` audit event.
+ */
+export async function exportLedger(
+  query: AdminLedgerListQuery,
+  reason?: string
+): Promise<Blob> {
+  const res = await api.get<Blob>("/admin/ledger/export", {
+    params: reason ? { ...query, reason } : query,
+    responseType: "blob",
+  })
+  return res.data
+}
+
+/**
  * GET /admin/ledger/integrity — the GLOBAL sequence-integrity summary that feeds
  * the header pill (gap/reorder detection across every sub-ledger). Read-only.
  */

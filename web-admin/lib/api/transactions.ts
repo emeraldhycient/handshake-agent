@@ -18,11 +18,14 @@ import {
   AdminTxnDetailSchema,
   AdminTxnMarkFailedRequestSchema,
   AdminTxnActionResponseSchema,
+  TxnRerunReconRequestSchema,
+  ReconBreakListResponseSchema,
   type AdminTxnSearchQuery,
   type AdminTxnListResponse,
   type AdminTxnDetail,
   type AdminTxnMarkFailedRequest,
   type AdminTxnActionResponse,
+  type ReconBreakListResponse,
 } from "@handshake-agent/contracts"
 
 import { api } from "./client"
@@ -58,4 +61,18 @@ export async function retryTransaction(
 ): Promise<AdminTxnActionResponse> {
   const res = await api.post(`/admin/transactions/${id}/retry`, {})
   return AdminTxnActionResponseSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/transactions/:id/reconcile — re-run reconciliation for ONE transaction
+ * (Phase 8). READ-ONLY provider-vs-ledger detection (distinct from retry, which
+ * re-drives settlement); moves no money (§3.1). Returns any detected breaks.
+ */
+export async function rerunReconciliation(
+  id: string,
+  reason?: string
+): Promise<ReconBreakListResponse> {
+  const body = TxnRerunReconRequestSchema.parse(reason ? { reason } : {})
+  const res = await api.post(`/admin/transactions/${id}/reconcile`, body)
+  return ReconBreakListResponseSchema.parse(res.data)
 }

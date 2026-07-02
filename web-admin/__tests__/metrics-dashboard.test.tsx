@@ -35,8 +35,8 @@ const mockDashboard = vi.mocked(getDashboardMetrics)
 const SUMMARY: DashboardSummary = {
   txnVolume: {
     byType: [
-      { type: "buy", count: 120, completed: 110, failed: 10 },
-      { type: "send", count: 40, completed: 38, failed: 2 },
+      { type: "buy", count: 120, completed: 110, failed: 10, stuck: 0 },
+      { type: "send", count: 40, completed: 38, failed: 2, stuck: 0 },
     ],
     series: [
       { date: "2026-06-28", count: 12 },

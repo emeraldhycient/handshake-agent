@@ -21,6 +21,8 @@ import type {
   AdminOpsRunRequest,
   AdminTxnMarkFailedRequest,
   AdminTxnSearchQuery,
+  AdminPreferencesUpdateRequest,
+  BackfillNetworksRequest,
   AdminUserStatusRequest,
   AdminUserUpdateRoleRequest,
   AmlRuleCreateRequest,
@@ -1062,6 +1064,94 @@ export function useAcceptReconBreak() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: qk.reconBreaks })
       void queryClient.invalidateQueries({ queryKey: qk.reconStatus })
+    },
+  })
+}
+
+// ─── Phase 8: preferences · MFA reset · recon escalate/re-run · wallet backfill ──
+
+/** GET /admin/me/preferences — the caller's own notification toggles (60s stale). */
+export function useAdminPreferences() {
+  return useQuery({
+    queryKey: qk.adminPreferences,
+    queryFn: () => admin.getAdminPreferences(),
+    staleTime: 60_000,
+  })
+}
+
+/** PATCH /admin/me/preferences — replace the caller's own toggles; caches the result. */
+export function useUpdateAdminPreferences() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: AdminPreferencesUpdateRequest) =>
+      admin.updateAdminPreferences(input),
+    onSuccess: (data) => {
+      queryClient.setQueryData(qk.adminPreferences, data)
+    },
+  })
+}
+
+/**
+ * POST /admin/admins/:id/mfa/reset — reset ANOTHER admin's 2FA (step-up-gated; the
+ * caller wraps in useStepUpRetry). Refreshes the admins list on success.
+ */
+export function useResetAdminMfa() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      admin.resetAdminMfa(id, reason),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.admins })
+    },
+  })
+}
+
+/**
+ * POST /admin/reconciliation/breaks/:id/escalate — open a compliance case from a
+ * break (step-up-gated). Refreshes the break list + the compliance events.
+ */
+export function useEscalateReconBreak() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      reconciliation.escalateReconBreak(id, reason),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.reconBreaks })
+      void queryClient.invalidateQueries({
+        queryKey: ["admin", "compliance", "events"],
+      })
+    },
+  })
+}
+
+/** POST /admin/transactions/:id/reconcile — read-only re-run recon for one txn. */
+export function useRerunReconciliation() {
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
+      transactions.rerunReconciliation(id, reason),
+  })
+}
+
+/** POST /admin/wallets/backfill-networks — enqueue a wallet-network backfill run. */
+export function useEnqueueBackfill() {
+  return useMutation({
+    mutationFn: (input: BackfillNetworksRequest) => ops.enqueueBackfill(input),
+  })
+}
+
+/**
+ * GET /admin/wallets/backfill-runs/:id — a run's live status. When `poll` is set,
+ * refetch every 3s until the run reaches a terminal state (completed / failed).
+ */
+export function useBackfillRun(id: string | null, opts?: { poll?: boolean }) {
+  return useQuery({
+    queryKey: qk.backfillRun(id ?? ""),
+    queryFn: () => ops.getBackfillRun(id as string),
+    enabled: id !== null,
+    refetchInterval: (query) => {
+      if (opts?.poll !== true) return false
+      const status = query.state.data?.status
+      return status === "completed" || status === "failed" ? false : 3000
     },
   })
 }

@@ -30,6 +30,11 @@ import {
   AuditLogListResponseSchema,
   AuditChainVerifyResponseSchema,
   AdminSessionListResponseSchema,
+  AdminPreferencesSchema,
+  AdminPreferencesUpdateRequestSchema,
+  AdminMfaResetRequestSchema,
+  type AdminPreferences,
+  type AdminPreferencesUpdateRequest,
   type AdminSessionListResponse,
   type AdminLoginRequest,
   type AdminLoginResponse,
@@ -170,6 +175,22 @@ export async function verifyAuditChain(): Promise<AuditChainVerifyResponse> {
   return AuditChainVerifyResponseSchema.parse(res.data)
 }
 
+/**
+ * GET /admin/audit/export — a PII-minimised CSV of ALL audit entries matching the
+ * current filters (cursor/limit are ignored server-side). Returns the raw Blob for
+ * `downloadFile`; the server records an `admin_export` audit event with the rowCount.
+ */
+export async function exportAuditLog(
+  query: AuditLogQuery,
+  reason?: string
+): Promise<Blob> {
+  const res = await api.get<Blob>("/admin/audit/export", {
+    params: reason ? { ...query, reason } : query,
+    responseType: "blob",
+  })
+  return res.data
+}
+
 // ─── Sessions ─────────────────────────────────────────────────────────────────
 
 export async function listSessions(): Promise<AdminSessionListResponse> {
@@ -180,4 +201,33 @@ export async function listSessions(): Promise<AdminSessionListResponse> {
 /** Revoke a session by id. 204 on success. */
 export async function revokeSession(id: string): Promise<void> {
   await api.delete(`/admin/sessions/${id}`)
+}
+
+// ─── Admin MFA reset (for ANOTHER admin) ────────────────────────────────────────
+
+/**
+ * POST /admin/admins/:id/mfa/reset — reset another admin's 2FA (they must re-enroll).
+ * Sensitive: step-up-gated (may 403 with ADMIN_STEP_UP_REQUIRED) + reason-audited.
+ * Reveals no secret; returns nothing on success.
+ */
+export async function resetAdminMfa(id: string, reason: string): Promise<void> {
+  const body = AdminMfaResetRequestSchema.parse({ reason })
+  await api.post(`/admin/admins/${id}/mfa/reset`, body)
+}
+
+// ─── Self notification preferences (self-scoped; no catalog perm, like /me) ─────
+
+/** GET /admin/me/preferences — the caller's own notification toggles. */
+export async function getAdminPreferences(): Promise<AdminPreferences> {
+  const res = await api.get("/admin/me/preferences")
+  return AdminPreferencesSchema.parse(res.data)
+}
+
+/** PATCH /admin/me/preferences — replace the caller's own notification toggles. */
+export async function updateAdminPreferences(
+  input: AdminPreferencesUpdateRequest
+): Promise<AdminPreferences> {
+  const body = AdminPreferencesUpdateRequestSchema.parse(input)
+  const res = await api.patch("/admin/me/preferences", body)
+  return AdminPreferencesSchema.parse(res.data)
 }

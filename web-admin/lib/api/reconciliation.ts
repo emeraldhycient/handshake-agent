@@ -16,11 +16,14 @@ import {
   ReconBreakListResponseSchema,
   ReconResolveRequestSchema,
   ReconStatusSchema,
+  EscalateBreakRequestSchema,
+  ComplianceEventItemSchema,
   type ReconAcceptRequest,
   type ReconActionResponse,
   type ReconBreakListResponse,
   type ReconResolveRequest,
   type ReconStatus,
+  type ComplianceEventItem,
 } from "@handshake-agent/contracts"
 
 import { api } from "./client"
@@ -64,4 +67,21 @@ export async function acceptReconBreak(
   const body = ReconAcceptRequestSchema.parse(input)
   const res = await api.post(`/admin/reconciliation/breaks/${id}/accept`, body)
   return ReconActionResponseSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/reconciliation/breaks/:id/escalate — escalate a break into a
+ * compliance case (Phase 8, WRITE). Opens a ComplianceEvent from the break; moves
+ * no money (§3.1). Sensitive — step-up-gated (may 403 with ADMIN_STEP_UP_REQUIRED).
+ */
+export async function escalateReconBreak(
+  id: string,
+  reason: string
+): Promise<ComplianceEventItem> {
+  const body = EscalateBreakRequestSchema.parse({ reason })
+  const res = await api.post(
+    `/admin/reconciliation/breaks/${id}/escalate`,
+    body
+  )
+  return ComplianceEventItemSchema.parse(res.data)
 }

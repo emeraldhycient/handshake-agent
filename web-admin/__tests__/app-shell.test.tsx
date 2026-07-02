@@ -100,6 +100,7 @@ function adminMe(overrides: Partial<AdminMe>): AdminMe {
     email: "admin@example.com",
     role: { id: "00000000-0000-0000-0000-0000000000aa", name: "ops" },
     status: "active",
+    displayName: "Test Admin",
     mfaEnabled: true,
     permissions: [],
     menus: [],
