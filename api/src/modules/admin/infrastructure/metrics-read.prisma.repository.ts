@@ -52,6 +52,18 @@ const SCALE_FACTOR = 10n ** BigInt(LEDGER_SCALE);
 /** The transactable services surfaced on the dashboard, in display order. */
 const SERVICE_TYPES = ['buy', 'sell', 'send', 'swap'] as const;
 
+/**
+ * In-flight (non-terminal) statuses folded into the per-type `stuck` count — the
+ * same slice the admin txn-read repo counts for the sidebar "Stuck" badge, so the
+ * dashboard "Failed / stuck tx" card and the badge agree.
+ */
+const STUCK_STATUSES: TransactionStatus[] = [
+  TransactionStatus.pending,
+  TransactionStatus.validating,
+  TransactionStatus.confirmed,
+  TransactionStatus.settling,
+];
+
 /** The five capability segments of the stacked volume chart, in stacking order. */
 const CAPABILITIES = ['buy', 'sell', 'send', 'swap', 'ticket'] as const;
 type Capability = (typeof CAPABILITIES)[number];
@@ -136,7 +148,13 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
       const count = row._count._all;
       const entry =
         byTypeMap.get(type) ??
-        ({ type, count: 0, completed: 0, failed: 0 } satisfies TxnTypeCount);
+        ({
+          type,
+          count: 0,
+          completed: 0,
+          failed: 0,
+          stuck: 0,
+        } satisfies TxnTypeCount);
       entry.count += count;
       if (status === TransactionStatus.completed) {
         entry.completed += count;
@@ -144,6 +162,11 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
       } else if (status === TransactionStatus.failed) {
         entry.failed += count;
         failedTotal += count;
+      } else if ((STUCK_STATUSES as readonly string[]).includes(status)) {
+        // In-flight (non-terminal) — pending/validating/confirmed/settling. Does
+        // NOT contribute to successRate (only completed/failed do); it is the
+        // sibling of `failed` the dashboard card renders next to it.
+        entry.stuck += count;
       }
       byTypeMap.set(type, entry);
     }

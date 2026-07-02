@@ -12,6 +12,7 @@ import { TransactionsModule } from '../transactions/transactions.module';
 import { BeneficiariesModule } from '../beneficiaries/beneficiaries.module';
 import { ComplianceModule } from '../compliance/compliance.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { NotificationTemplateSeedService } from '../notifications/application/notification-template-seed.service';
 import { ConversationsModule } from '../conversations/conversations.module';
 import { AuthModule } from '../../core/auth/auth.module';
 import { PIN_REPOSITORY } from '../../core/auth/ports/pin.repository.port';
@@ -57,6 +58,10 @@ import { AdminCatalogController } from './presentation/admin-catalog.controller'
 import { AdminProvidersController } from './presentation/admin-providers.controller';
 import { AdminReconciliationController } from './presentation/admin-reconciliation.controller';
 import { AdminApprovalsController } from './presentation/admin-approvals.controller';
+import { AdminPreferencesController } from './presentation/admin-preferences.controller';
+import { AdminPreferencesService } from './application/admin-preferences.service';
+import { ADMIN_PREFERENCES_REPOSITORY } from './application/ports/admin-preferences.repository.port';
+import { AdminPreferencesPrismaRepository } from './infrastructure/admin-preferences.prisma.repository';
 import { AdminSessionGuard } from './presentation/admin-session.guard';
 import { PermissionGuard } from './presentation/permission.guard';
 import { AdminStepUpGuard } from './presentation/admin-step-up.guard';
@@ -258,10 +263,17 @@ import type { Env } from '../../core/config/env.schema';
     AdminProvidersController,
     AdminReconciliationController,
     AdminApprovalsController,
+    AdminPreferencesController,
   ],
   providers: [
     AdminTokenGuard,
     BullBoardBasicAuthMiddleware,
+    // ── Admin notification preferences (Phase 8): self-scoped GET/PATCH /me/preferences ──
+    AdminPreferencesService,
+    {
+      provide: ADMIN_PREFERENCES_REPOSITORY,
+      useClass: AdminPreferencesPrismaRepository,
+    },
     // ── Admin RBAC console (Task 11): repo bindings, adapters, services, guards ──
     { provide: ADMIN_USER_REPOSITORY, useClass: AdminUserPrismaRepository },
     {
@@ -578,16 +590,20 @@ export class AdminModule implements OnModuleInit {
   constructor(
     private readonly catalog: PermissionCatalogService,
     private readonly roles: RoleService,
+    private readonly notificationTemplates: NotificationTemplateSeedService,
   ) {}
 
   /**
-   * Idempotently sync the permission catalog and seed the built-in roles on boot,
-   * so a fresh deployment always has the canonical RBAC surface present (the
-   * bootstrap path also runs these, but seeding here keeps every environment in
-   * lock-step with the contracts catalog without requiring a bootstrap call).
+   * Idempotently sync the permission catalog, seed the built-in roles, and seed
+   * the platform's default notification templates on boot, so a fresh deployment
+   * always has the canonical RBAC surface + Comms templates present (the bootstrap
+   * path also runs the RBAC seeds; seeding here keeps every environment in
+   * lock-step with the contracts catalog without requiring a bootstrap call). The
+   * template seed skips any key an admin has already authored/edited (§3.6).
    */
   async onModuleInit(): Promise<void> {
     await this.catalog.syncCatalog();
     await this.roles.seedBuiltins();
+    await this.notificationTemplates.seedDefaults();
   }
 }

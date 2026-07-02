@@ -37,6 +37,7 @@ function makeAdmin(over?: Partial<AdminUserRecord>): AdminUserRecord {
   return {
     id: ADMIN_A,
     email: 'ops@example.com',
+    displayName: 'Ops Admin',
     status: 'active',
     mfaEnabled: true,
     mfaSecret: null,
@@ -199,6 +200,78 @@ describe('AdminAuditService.list', () => {
     await service.list(query);
 
     expect(listCalls).toEqual([query]);
+  });
+});
+
+/** Audit mock that serves a queue of pages, one per `list` call (for drains). */
+function makeAuditPages(pages: AuditListResult[]): {
+  audit: Pick<AuditService, 'list' | 'verifyChain'>;
+  listCalls: AuditListQuery[];
+} {
+  const listCalls: AuditListQuery[] = [];
+  let index = 0;
+  const audit = {
+    list(query: AuditListQuery): Promise<AuditListResult> {
+      listCalls.push(query);
+      const page = pages[index] ?? { items: [], nextCursor: null };
+      index += 1;
+      return Promise.resolve(page);
+    },
+    verifyChain: () =>
+      Promise.resolve({ ok: true, checked: 0, brokenAt: null }),
+  };
+  return { audit, listCalls };
+}
+
+describe('AdminAuditService.exportRows', () => {
+  it('drains every page with NO caller cursor and enriches each row (role + reason)', async () => {
+    const { audit, listCalls } = makeAuditPages([
+      {
+        items: [makeRecord({ id: 'r1', actorAdminId: ADMIN_A })],
+        nextCursor: 'r1',
+      },
+      {
+        items: [makeRecord({ id: 'r2', actorAdminId: ADMIN_B })],
+        nextCursor: null,
+      },
+    ]);
+    const { users, findByIdCalls } = makeUsers({
+      [ADMIN_A]: makeAdmin({ id: ADMIN_A, roleName: 'Compliance officer' }),
+      [ADMIN_B]: makeAdmin({ id: ADMIN_B, roleName: 'Treasury' }),
+    });
+    const service = new AdminAuditService(
+      audit as AuditService,
+      users as IAdminUserRepository,
+    );
+
+    const rows = await service.exportRows({
+      subject: 'User:abc',
+      action: 'admin_review',
+    });
+
+    // Same filters forwarded; the first call carries no cursor.
+    expect(listCalls[0].subject).toBe('User:abc');
+    expect(listCalls[0].action).toBe('admin_review');
+    expect(listCalls[0].cursor).toBeUndefined();
+    // The second page is driven by the first page's nextCursor.
+    expect(listCalls[1].cursor).toBe('r1');
+    // Both pages' rows are returned and enriched.
+    expect(rows).toHaveLength(2);
+    expect(rows[0].actorRole).toBe('Compliance officer');
+    expect(rows[0].reason).toBe('suspicious velocity');
+    expect(rows[1].actorRole).toBe('Treasury');
+    // Roles resolved (one lookup each across the whole export).
+    expect(findByIdCalls.sort()).toEqual([ADMIN_A, ADMIN_B].sort());
+  });
+
+  it('returns [] for an empty result set', async () => {
+    const { audit } = makeAuditPages([{ items: [], nextCursor: null }]);
+    const { users } = makeUsers({});
+    const service = new AdminAuditService(
+      audit as AuditService,
+      users as IAdminUserRepository,
+    );
+    expect(await service.exportRows({})).toEqual([]);
   });
 });
 

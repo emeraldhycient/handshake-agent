@@ -68,9 +68,9 @@ describe("TxnCapabilityBucketSchema", () => {
 });
 
 describe("TxnVolumeMetricsSchema", () => {
-  it("parses byType rows, a series, a stacked series, and a successRate", () => {
+  it("parses byType rows (with a stuck sibling of failed), a series, a stacked series, and a successRate", () => {
     const value = TxnVolumeMetricsSchema.parse({
-      byType: [{ type: "buy", count: 3, completed: 2, failed: 1 }],
+      byType: [{ type: "buy", count: 3, completed: 2, failed: 1, stuck: 0 }],
       series: [{ date: "2026-06-01", count: 3 }],
       stackedSeries: [
         {
@@ -86,9 +86,41 @@ describe("TxnVolumeMetricsSchema", () => {
       successRate: 0.6667,
     });
     expect(value.byType[0].type).toBe("buy");
+    expect(value.byType[0].failed).toBe(1);
+    expect(value.byType[0].stuck).toBe(0);
     expect(value.series).toHaveLength(1);
     expect(value.stackedSeries[0].buy).toBe(3);
     expect(value.successRate).toBeCloseTo(0.6667);
+  });
+
+  it("rejects a byType row missing the stuck count", () => {
+    expect(
+      TxnVolumeMetricsSchema.safeParse({
+        byType: [{ type: "buy", count: 3, completed: 2, failed: 1 }],
+        series: [],
+        stackedSeries: [],
+        successRate: 0,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a negative or non-integer stuck count", () => {
+    expect(
+      TxnVolumeMetricsSchema.safeParse({
+        byType: [{ type: "buy", count: 3, completed: 2, failed: 1, stuck: -1 }],
+        series: [],
+        stackedSeries: [],
+        successRate: 0,
+      }).success,
+    ).toBe(false);
+    expect(
+      TxnVolumeMetricsSchema.safeParse({
+        byType: [{ type: "buy", count: 3, completed: 2, failed: 1, stuck: 1.5 }],
+        series: [],
+        stackedSeries: [],
+        successRate: 0,
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects when the stacked series is missing", () => {

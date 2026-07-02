@@ -169,6 +169,50 @@ describe('AdminLedgerService', () => {
     });
   });
 
+  describe('exportRows', () => {
+    it('drains every keyset page with NO caller cursor and returns all matching legs', async () => {
+      ledgerRepo.listGlobal
+        .mockResolvedValueOnce({
+          items: [makeEntry({ id: 'a' })],
+          nextCursor: 'a',
+        })
+        .mockResolvedValueOnce({
+          items: [makeEntry({ id: 'b' })],
+          nextCursor: null,
+        });
+
+      const rows = await service.exportRows({
+        accountType: 'user_wallet',
+        currency: 'USDT',
+      });
+
+      // Same filters forwarded on the first page; that call carries no cursor.
+      const [filters0, page0] = ledgerRepo.listGlobal.mock.calls[0];
+      expect(filters0).toEqual({
+        accountType: 'user_wallet',
+        currency: 'USDT',
+      });
+      expect(page0.cursor).toBeUndefined();
+      // The second page is driven by the first page's nextCursor.
+      expect(ledgerRepo.listGlobal.mock.calls[1][1].cursor).toBe('a');
+      // Both pages' legs are returned, projected to the entry shape.
+      expect(rows).toHaveLength(2);
+      expect(rows[0].id).toBe('a');
+      expect(rows[1].id).toBe('b');
+      expect(rows[0].postedAt).toBe('2026-01-01T00:00:00.000Z');
+    });
+
+    it('passes undefined filters through and returns [] for an empty ledger', async () => {
+      ledgerRepo.listGlobal.mockResolvedValue({ items: [], nextCursor: null });
+
+      const rows = await service.exportRows({});
+
+      const [filters0] = ledgerRepo.listGlobal.mock.calls[0];
+      expect(filters0).toEqual({ accountType: undefined, currency: undefined });
+      expect(rows).toEqual([]);
+    });
+  });
+
   describe('verifyGlobalSequenceIntegrity', () => {
     it('surfaces an all-clear summary', async () => {
       ledgerRepo.verifyGlobalSequenceIntegrity.mockResolvedValue({

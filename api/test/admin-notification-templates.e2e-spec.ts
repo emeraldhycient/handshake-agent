@@ -219,6 +219,44 @@ describe('Admin notification templates + WhatsApp config — e2e (AppModule, Tes
     await stopContainer?.();
   });
 
+  it('seeds the platform default notification templates on boot (platform-authored, idempotent)', async () => {
+    // AdminModule.onModuleInit ran the seed during app.init(). Every committed
+    // default (from default-notification-templates.ts) is present, keyed to a real
+    // NotificationEventType value, authored by the platform (updatedByAdminId null).
+    const templatesModule =
+      await import('../src/modules/notifications/application/default-notification-templates');
+    const { DEFAULT_NOTIFICATION_TEMPLATES } = templatesModule;
+    const seedModule =
+      await import('../src/modules/notifications/application/notification-template-seed.service');
+    const { NotificationTemplateSeedService } = seedModule;
+
+    for (const def of DEFAULT_NOTIFICATION_TEMPLATES) {
+      const row = await prisma.notificationTemplate.findUnique({
+        where: {
+          templateKey_language_channel: {
+            templateKey: def.templateKey,
+            language: def.language,
+            channel: def.channel,
+          },
+        },
+      });
+      expect(row).not.toBeNull();
+      expect(row?.contentText).toBe(def.contentText);
+      // Platform-authored: no admin edited the seed row.
+      expect(row?.updatedByAdminId).toBeNull();
+    }
+
+    // Idempotent: a second seed inserts nothing and does not duplicate rows.
+    const seedService = app.get(NotificationTemplateSeedService);
+    const insertedOnRerun = await seedService.seedDefaults();
+    expect(insertedOnRerun).toBe(0);
+
+    const total = await prisma.notificationTemplate.count({
+      where: { updatedByAdminId: null },
+    });
+    expect(total).toBe(DEFAULT_NOTIFICATION_TEMPLATES.length);
+  }, 60_000);
+
   it('super_admin creates, lists, previews a template and reads non-secret WhatsApp config', async () => {
     // 1. Bootstrap + accept + login as the first super_admin.
     const bootstrap = await request(app.getHttpServer())

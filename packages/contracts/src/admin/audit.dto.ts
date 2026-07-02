@@ -13,6 +13,7 @@ export const AuditActionSchema = z.enum([
   "admin_update",
   "admin_review",
   "admin_override",
+  "admin_export",
   "sanctions_hit",
   "aml_flag",
   "rule_violation",

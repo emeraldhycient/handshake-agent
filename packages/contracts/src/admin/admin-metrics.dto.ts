@@ -46,6 +46,11 @@ export const TxnVolumeMetricsSchema = z.object({
       count: z.number(),
       completed: z.number(),
       failed: z.number(),
+      // Count of stuck (in-flight, non-terminal) transactions of this type —
+      // the sibling of `failed` so the dashboard "Failed / stuck tx" card can
+      // show BOTH (matching the sidebar stuck badge semantics). Non-negative
+      // integer; `failed` is retained unchanged.
+      stuck: z.number().int().nonnegative(),
     }),
   ),
   series: z.array(MetricsBucketSchema),

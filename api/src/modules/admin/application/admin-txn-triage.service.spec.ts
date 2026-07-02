@@ -5,6 +5,11 @@ import type { ISettlementRepository } from '../../transactions/application/ports
 import type { ITransactionRepository } from '../../transactions/application/ports/transaction.repository.port';
 import type { ISettlementOutboxRepository } from '../../transactions/application/ports/settlement-outbox.repository.port';
 import type { AuditService } from '../../../core/audit/application/audit.service';
+import type {
+  IReconciliationReadRepository,
+  ReconBreakRecord,
+} from './ports/reconciliation-read.repository.port';
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 
 // ---------------------------------------------------------------------------
 // Test doubles
@@ -65,6 +70,36 @@ function makeAudit(): jest.Mocked<AuditService> {
   } as unknown as jest.Mocked<AuditService>;
 }
 
+function makeReconRepo(): jest.Mocked<IReconciliationReadRepository> {
+  return {
+    listBreaks: jest.fn(),
+    findBreak: jest.fn(),
+    findBreaksByTransactionId: jest.fn().mockResolvedValue([]),
+    cronStatus: jest.fn(),
+  };
+}
+
+function makeConfig(): jest.Mocked<Pick<EffectiveConfigService, 'get'>> {
+  // The stale window drives the missing-settlement projection; the repo is mocked,
+  // so the value is irrelevant to these unit tests — return undefined.
+  return { get: jest.fn().mockReturnValue(undefined) };
+}
+
+function makeBreak(
+  overrides: Partial<ReconBreakRecord> = {},
+): ReconBreakRecord {
+  return {
+    id: 'cmp-1',
+    kind: 'missing_settlement',
+    transactionId: 'txn-1',
+    asset: 'NGN',
+    delta: '-185000.00',
+    detail: 'The provider settled but the ledger entry has not posted.',
+    detectedAt: new Date('2026-06-30T11:30:00.000Z'),
+    ...overrides,
+  };
+}
+
 const NOW = new Date('2026-06-30T12:00:00.000Z');
 
 function makeTxn(overrides: Record<string, unknown> = {}) {
@@ -99,6 +134,8 @@ describe('AdminTxnTriageService', () => {
   let txns: jest.Mocked<ITransactionRepository>;
   let outbox: jest.Mocked<ISettlementOutboxRepository>;
   let audit: jest.Mocked<AuditService>;
+  let recon: ReturnType<typeof makeReconRepo>;
+  let config: ReturnType<typeof makeConfig>;
   let service: AdminTxnTriageService;
 
   beforeEach(() => {
@@ -106,9 +143,17 @@ describe('AdminTxnTriageService', () => {
     txns = makeTxnRepo();
     outbox = makeOutboxRepo();
     audit = makeAudit();
-    service = new AdminTxnTriageService(settlement, txns, outbox, audit, {
-      now: () => NOW,
-    });
+    recon = makeReconRepo();
+    config = makeConfig();
+    service = new AdminTxnTriageService(
+      settlement,
+      txns,
+      outbox,
+      audit,
+      { now: () => NOW },
+      recon,
+      config as unknown as EffectiveConfigService,
+    );
   });
 
   /** Asserts the service NEVER reached past the injected refund methods into a
@@ -384,6 +429,83 @@ describe('AdminTxnTriageService', () => {
       ).rejects.toBeInstanceOf(TxnNotTriageableError);
       expect(outbox.resetToPending).not.toHaveBeenCalled();
       expect(audit.record).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── rerunReconciliation (READ-ONLY per-tx detection) ─────────────────────────────
+
+  describe('rerunReconciliation', () => {
+    it('throws AdminNotFoundError when the transaction does not exist', async () => {
+      txns.findById.mockResolvedValue(null);
+
+      await expect(
+        service.rerunReconciliation('missing', ADMIN_ID),
+      ).rejects.toBeInstanceOf(AdminNotFoundError);
+      expect(recon.findBreaksByTransactionId).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('returns an empty break list for a cleanly-reconciled transaction', async () => {
+      txns.findById.mockResolvedValue(makeTxn());
+      recon.findBreaksByTransactionId.mockResolvedValue([]);
+
+      const result = await service.rerunReconciliation('txn-1', ADMIN_ID);
+
+      expect(recon.findBreaksByTransactionId).toHaveBeenCalledWith(
+        'txn-1',
+        expect.any(Number),
+      );
+      expect(result).toEqual({ items: [] });
+      // Detection is read-only — it NEVER moves money or re-drives settlement (§3.1).
+      expect(outbox.resetToPending).not.toHaveBeenCalled();
+      expectNoRawWrites();
+    });
+
+    it('surfaces a detected break in the contract shape (severity derived)', async () => {
+      txns.findById.mockResolvedValue(makeTxn());
+      recon.findBreaksByTransactionId.mockResolvedValue([
+        makeBreak({ kind: 'over_credit', transactionId: 'txn-1' }),
+      ]);
+
+      const result = await service.rerunReconciliation('txn-1', ADMIN_ID);
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]).toMatchObject({
+        id: 'cmp-1',
+        kind: 'over_credit',
+        // over_credit → high severity (mirrors the read-surface mapping).
+        severity: 'high',
+        transactionId: 'txn-1',
+        asset: 'NGN',
+        delta: '-185000.00',
+        status: 'open',
+      });
+      expect(typeof result.items[0].detectedAt).toBe('string');
+      expectNoRawWrites();
+    });
+
+    it('audits the re-run as an admin_review carrying the break count + optional reason', async () => {
+      txns.findById.mockResolvedValue(makeTxn());
+      recon.findBreaksByTransactionId.mockResolvedValue([
+        makeBreak({ transactionId: 'txn-1' }),
+      ]);
+
+      await service.rerunReconciliation(
+        'txn-1',
+        ADMIN_ID,
+        'post-webhook replay',
+      );
+
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      const arg = audit.record.mock.calls[0][0];
+      expect(arg.action).toBe('admin_review');
+      expect(arg.subject).toBe('Transaction:txn-1');
+      expect(arg.actorAdminId).toBe(ADMIN_ID);
+      expect(arg.after).toMatchObject({
+        action: 'reconciliation_rerun',
+        breakCount: 1,
+        reason: 'post-webhook replay',
+      });
     });
   });
 });

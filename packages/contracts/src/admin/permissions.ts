@@ -118,6 +118,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Access",
     "Invite a new admin user",
   ),
+  r(
+    "api_route",
+    "POST /admin/admins/:id/mfa/reset",
+    "write",
+    "Access",
+    "Reset another admin user's 2FA (they must re-enroll)",
+  ),
   // Access — roles & permissions
   r("api_route", "GET /admin/roles", "read", "Access", "List roles"),
   r("api_route", "POST /admin/roles", "write", "Access", "Create a role"),
@@ -381,6 +388,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Transactions",
     "Re-enqueue a stuck transaction's settlement for the reconciliation worker",
   ),
+  r(
+    "api_route",
+    "POST /admin/transactions/:id/reconcile",
+    "write",
+    "Transactions",
+    "Re-run reconciliation for one transaction (read-only provider-vs-ledger detection; moves no money)",
+  ),
 
   // Ledger — read-only double-entry history + integrity verification (Phase 3)
   r(
@@ -613,6 +627,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "write",
     "Treasury",
     "Accept a reconciliation break as-is (dual-control, no debit)",
+  ),
+  r(
+    "api_route",
+    "POST /admin/reconciliation/breaks/:id/escalate",
+    "write",
+    "Treasury",
+    "Escalate a reconciliation break into a compliance case (step-up-gated; opens a ComplianceEvent)",
   ),
   // Treasury payout / withdrawal approval (Phase 7, WRITE — maker-checker). Raising
   // an approval APPLIES NOTHING — it enters the four-eyes inbox for a SECOND admin to

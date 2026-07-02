@@ -49,6 +49,9 @@ enum AuditAction {
   admin_update
   admin_review
   admin_override
+  /// A PII-minimised CSV export of a list surface (users/ledger/audit) — records
+  /// the rowCount + applied filters; never the full data set or full PII (§3.4).
+  admin_export
   sanctions_hit
   aml_flag
   rule_violation

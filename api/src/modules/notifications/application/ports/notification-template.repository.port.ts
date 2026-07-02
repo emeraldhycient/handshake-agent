@@ -33,6 +33,21 @@ export interface UpsertNotificationTemplateInput {
   updatedByAdminId: string;
 }
 
+/**
+ * A platform-default seed row (NTF-07). Distinct from the admin upsert input:
+ * it carries no `updatedByAdminId` (the platform authored it, so the column is
+ * written null) and is inserted ONLY when the composite key is absent — an
+ * admin's later edit is never overwritten.
+ */
+export interface SeedNotificationTemplateInput {
+  templateKey: string;
+  language: string;
+  channel: string;
+  subject?: string;
+  contentText: string;
+  variables: unknown;
+}
+
 export interface INotificationTemplateRepository {
   list(): Promise<NotificationTemplateRecord[]>;
   find(
@@ -43,4 +58,11 @@ export interface INotificationTemplateRepository {
   upsert(
     input: UpsertNotificationTemplateInput,
   ): Promise<NotificationTemplateRecord>;
+  /**
+   * Idempotently insert platform-default rows, skipping any whose composite key
+   * (templateKey, language, channel) already exists. Returns the number of rows
+   * newly inserted (0 on a re-run). Rows are platform-authored: updatedByAdminId
+   * is written null, and existing (possibly admin-edited) rows are never touched.
+   */
+  seedDefaults(rows: SeedNotificationTemplateInput[]): Promise<number>;
 }

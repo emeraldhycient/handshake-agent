@@ -64,6 +64,7 @@ function makeRepo(rows: NotificationTemplateRecord[] = []): {
       });
       return Promise.resolve(row);
     },
+    seedDefaults: () => Promise.resolve(0),
   };
   return { repo, state };
 }

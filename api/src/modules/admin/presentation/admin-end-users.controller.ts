@@ -9,8 +9,10 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { z } from 'zod';
 
 import {
@@ -34,6 +36,7 @@ import {
   type ChangeRequest,
 } from '@handshake-agent/contracts';
 
+import { AuditService } from '../../../core/audit/application/audit.service';
 import { AdminEndUserService } from '../application/admin-end-user.service';
 import { AdminUserSecurityService } from '../application/admin-user-security.service';
 import { AdminUserBulkService } from '../application/admin-user-bulk.service';
@@ -43,13 +46,32 @@ import { AdminStepUpGuard } from './admin-step-up.guard';
 import { PermissionGuard } from './permission.guard';
 import { CurrentAdmin, type AdminContext } from './current-admin.decorator';
 import { RequirePermission } from './require-permission.decorator';
+import { sendCsvExport } from './csv-response';
 import {
   AdminEndUserSearchQueryDto,
   AdminEndUserStatusDto,
   AdminEndUserTierDto,
   CreateManualCreditDto,
 } from './dto/admin-end-user.dto';
+import { AdminEndUsersExportQueryDto } from './dto/admin-export.dto';
 import { ApplyUserTagsDto, BulkMessageDto } from './dto/admin-user-bulk.dto';
+
+/** CSV header for the end-user export (matches AdminEndUserExportRow order). */
+const USER_EXPORT_HEADER = [
+  'id',
+  'email',
+  'displayName',
+  'status',
+  'kycStatus',
+  'kycTier',
+  'simSwapFlagged',
+  'sanctionsFlagged',
+  'balances',
+  'ninLast4',
+  'bvnLast4',
+  'lastActiveAt',
+  'createdAt',
+] as const;
 
 /**
  * Response shape for GET /admin/users/:id/devices — a thin list wrapper around
@@ -78,6 +100,7 @@ export class AdminEndUsersController {
     private readonly security: AdminUserSecurityService,
     private readonly bulk: AdminUserBulkService,
     private readonly approvals: AdminApprovalsService,
+    private readonly audit: AuditService,
   ) {}
 
   @Get('users')
@@ -87,6 +110,52 @@ export class AdminEndUsersController {
   ): Promise<AdminEndUserListResponse> {
     const result = await this.users.list(query);
     return AdminEndUserListResponseSchema.parse(result);
+  }
+
+  /**
+   * CSV export of ALL end users matching the current filters (not just the
+   * visible page). Same `read` permission as the list — an export reveals no
+   * more than the on-screen table, and is PII-minimised (NIN/BVN last-4 only,
+   * §3.4). Declared BEFORE `users/:id` so Express never matches `:id='export'`.
+   * Records an `admin_export` audit event with the resulting rowCount.
+   */
+  @Get('users/export')
+  @RequirePermission('api_route', 'GET /admin/users', 'read')
+  async exportCsv(
+    @Query() query: AdminEndUsersExportQueryDto,
+    @CurrentAdmin() admin: AdminContext,
+    @Res() res: Response,
+  ): Promise<void> {
+    const rows = await this.users.exportRows(query);
+    await sendCsvExport({
+      res,
+      audit: this.audit,
+      actorAdminId: admin.adminId,
+      subject: 'users',
+      header: USER_EXPORT_HEADER,
+      rows: rows.map((r) => [
+        r.id,
+        r.email,
+        r.displayName,
+        r.status,
+        r.kycStatus,
+        r.kycTier,
+        r.simSwapFlagged,
+        r.sanctionsFlagged,
+        r.balances,
+        r.ninLast4,
+        r.bvnLast4,
+        r.lastActiveAt,
+        r.createdAt,
+      ]),
+      filters: {
+        query: query.query,
+        status: query.status,
+        kycStatus: query.kycStatus,
+        kycTier: query.kycTier,
+        includedIds: query.includedIds,
+      },
+    });
   }
 
   /**

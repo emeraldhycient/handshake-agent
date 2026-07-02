@@ -8,6 +8,9 @@ export const AdminInvitationCreateRequestSchema = z.object({
   email: z.string().email(),
   roleId: z.string().uuid(),
   reason: z.string().optional(),
+  // Optional human display name (defaults server-side to the email local-part
+  // when omitted — see Phase 8 locked decision).
+  displayName: z.string().max(120).optional(),
 });
 export type AdminInvitationCreateRequest = z.infer<
   typeof AdminInvitationCreateRequestSchema
@@ -27,6 +30,9 @@ export type AdminInvitationCreateResponse = z.infer<
 export const AdminInvitationAcceptRequestSchema = z.object({
   token: z.string().min(1),
   password: z.string().min(12),
+  // Optional human display name the invitee sets on accept (defaults
+  // server-side to the email local-part when omitted).
+  displayName: z.string().max(120).optional(),
 });
 export type AdminInvitationAcceptRequest = z.infer<
   typeof AdminInvitationAcceptRequestSchema

@@ -42,7 +42,12 @@ export class AdminMetricsService {
     private readonly metrics: IMetricsReadRepository,
   ) {}
 
-  /** Transaction-volume + success-rate metrics for the (defaulted/clamped) range. */
+  /**
+   * Transaction-volume + success-rate metrics for the (defaulted/clamped) range.
+   * Each `byType` row carries completed / failed / stuck breakdowns; `stuck`
+   * counts the in-flight statuses (pending/validating/confirmed/settling) so the
+   * dashboard "Failed / stuck tx" card can show BOTH, matching the sidebar badge.
+   */
   async transactions(query: MetricsRangeQuery): Promise<TxnVolumeMetrics> {
     const { from, to } = this.resolveRange(query);
     return this.metrics.transactionVolume(from, to);

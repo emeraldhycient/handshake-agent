@@ -8,6 +8,9 @@
 model AdminUser {
   id               String      @id @default(uuid(7)) @db.Uuid
   email            String      @unique
+  /// Operator display name (optional; defaults to the email local-part when unset).
+  /// Not sensitive PII — safe to show in the admin UI + audit trails.
+  displayName      String      @default("")
   /// Argon2id hash — never plaintext.
   passwordHash     String
   status           AdminStatus @default(pending)
@@ -25,12 +28,29 @@ model AdminUser {
   offboardedAt     DateTime?   @db.Timestamptz
   updatedAt        DateTime    @updatedAt @db.Timestamptz
 
-  role               Role              @relation(fields: [roleId], references: [id])
+  role               Role               @relation(fields: [roleId], references: [id])
   sessions           AdminSession[]
-  invitationsCreated AdminInvitation[] @relation("InvitationCreatedBy")
+  invitationsCreated AdminInvitation[]  @relation("InvitationCreatedBy")
+  preferences        AdminPreferences?
 
   @@index([status])
   @@map("admin_users")
+}
+
+/// Per-admin notification preferences (ADM Phase 8) — self-scoped: an admin edits
+/// only their own row via GET/PATCH /admin/me/preferences. Consumed by the comms
+/// dispatcher when addressing an operator; every change is audited.
+model AdminPreferences {
+  adminId           String   @id @db.Uuid
+  emailAlerts       Boolean  @default(true)
+  approvalMentions  Boolean  @default(true)
+  weeklyDigest      Boolean  @default(true)
+  createdAt         DateTime @default(now()) @db.Timestamptz
+  updatedAt         DateTime @updatedAt @db.Timestamptz
+
+  admin AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@map("admin_preferences")
 }
 
 enum AdminStatus {

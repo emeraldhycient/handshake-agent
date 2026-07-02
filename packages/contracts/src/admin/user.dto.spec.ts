@@ -5,6 +5,7 @@ import {
   AdminUserStatusRequestSchema,
   AdminBootstrapRequestSchema,
   AdminBootstrapResponseSchema,
+  AdminMfaResetRequestSchema,
 } from "./user.dto";
 
 const ID = "11111111-1111-1111-1111-111111111111";
@@ -13,6 +14,7 @@ const ROLE_ID = "22222222-2222-2222-2222-222222222222";
 const adminUser = {
   id: ID,
   email: "admin@example.com",
+  displayName: "Ops Admin",
   status: "active" as const,
   mfaEnabled: true,
   role: { id: ROLE_ID, name: "ops" },
@@ -26,9 +28,38 @@ describe("AdminUserSchema", () => {
     expect(parsed.lastLoginAt).toBeNull();
   });
 
+  it("carries a non-optional displayName", () => {
+    const parsed = AdminUserSchema.parse(adminUser);
+    expect(parsed.displayName).toBe("Ops Admin");
+  });
+
+  it("rejects a missing displayName", () => {
+    const { displayName: _omit, ...withoutName } = adminUser;
+    expect(() => AdminUserSchema.parse(withoutName)).toThrow();
+  });
+
   it("rejects an unknown status", () => {
     expect(() =>
       AdminUserSchema.parse({ ...adminUser, status: "deleted" }),
+    ).toThrow();
+  });
+});
+
+describe("AdminMfaResetRequestSchema", () => {
+  it("parses a valid reset-2FA reason", () => {
+    const parsed = AdminMfaResetRequestSchema.parse({
+      reason: "Lost authenticator device; resetting after identity check.",
+    });
+    expect(parsed.reason).toContain("authenticator");
+  });
+
+  it("rejects a reason shorter than 3 characters", () => {
+    expect(() => AdminMfaResetRequestSchema.parse({ reason: "no" })).toThrow();
+  });
+
+  it("rejects a reason longer than 500 characters", () => {
+    expect(() =>
+      AdminMfaResetRequestSchema.parse({ reason: "x".repeat(501) }),
     ).toThrow();
   });
 });

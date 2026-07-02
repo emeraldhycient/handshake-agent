@@ -27,6 +27,7 @@ const session: AdminSessionRecord = {
 const user: AdminUserRecord = {
   id: 'admin-1',
   email: 'admin@x.io',
+  displayName: 'Admin One',
   status: 'active',
   mfaEnabled: false,
   mfaSecret: null,

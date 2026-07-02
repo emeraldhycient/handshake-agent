@@ -13,7 +13,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 function makeVolume(): TransactionVolumeResult {
   return {
-    byType: [{ type: 'buy', count: 3, completed: 2, failed: 1 }],
+    byType: [{ type: 'buy', count: 6, completed: 2, failed: 1, stuck: 3 }],
     series: [{ date: '2026-06-01', count: 3 }],
     stackedSeries: [
       {
@@ -121,6 +121,18 @@ describe('AdminMetricsService', () => {
       });
       expect(result).toEqual(makeVolume());
     });
+
+    it('surfaces per-type stuck (in-flight) counts alongside failed', async () => {
+      const result = await service.transactions({
+        from: '2026-06-01',
+        to: '2026-06-30',
+      });
+      const buy = result.byType.find((t) => t.type === 'buy')!;
+      // The dashboard "Failed / stuck tx" card reads both — stuck is the sibling
+      // of failed, matching the sidebar stuck-badge slice.
+      expect(buy.failed).toBe(1);
+      expect(buy.stuck).toBe(3);
+    });
   });
 
   describe('gmv', () => {
@@ -183,6 +195,16 @@ describe('AdminMetricsService', () => {
       expect(repo.kycFunnel).toHaveBeenCalled();
       expect(repo.activeUsers).toHaveBeenCalled();
       expect(repo.serviceHealth).toHaveBeenCalled();
+    });
+
+    it('carries per-type stuck counts through into txnVolume.byType', async () => {
+      const result = await service.dashboard({
+        from: '2026-06-01',
+        to: '2026-06-30',
+      });
+      const buy = result.txnVolume.byType.find((t) => t.type === 'buy')!;
+      expect(buy.stuck).toBe(3);
+      expect(buy.failed).toBe(1);
     });
   });
 });

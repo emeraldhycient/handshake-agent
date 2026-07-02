@@ -23,6 +23,9 @@ export type AdminRoleRef = z.infer<typeof AdminRoleRefSchema>;
 export const AdminMeSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
+  // Human display name (backend always sends it, defaulting to the email
+  // local-part when unset). Non-optional on the resolved identity.
+  displayName: z.string(),
   role: AdminRoleRefSchema,
   status: z.enum(["pending", "active", "suspended", "offboarded"]),
   mfaEnabled: z.boolean(),

@@ -2,6 +2,7 @@ import { createZodDto } from 'nestjs-zod';
 
 import {
   AdminOpsRunRequestSchema,
+  EscalateBreakRequestSchema,
   ReconResolveRequestSchema,
   ReconAcceptRequestSchema,
   TreasuryPayoutApproveRequestSchema,
@@ -15,6 +16,11 @@ export class ReconResolveDto extends createZodDto(ReconResolveRequestSchema) {}
 
 /** Body DTO for POST /admin/reconciliation/breaks/:id/accept (non-empty reason). */
 export class ReconAcceptDto extends createZodDto(ReconAcceptRequestSchema) {}
+
+/** Body DTO for POST /admin/reconciliation/breaks/:id/escalate (3–500 char reason). */
+export class EscalateBreakDto extends createZodDto(
+  EscalateBreakRequestSchema,
+) {}
 
 /** Body DTO for POST /admin/treasury/payouts/:id/approve (3–500 char reason). */
 export class TreasuryPayoutApproveDto extends createZodDto(

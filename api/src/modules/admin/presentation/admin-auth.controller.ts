@@ -103,7 +103,7 @@ export class AdminAuthController {
   ): Promise<{ adminId: string }> {
     const passwordHash = await this.hasher.hash(dto.password);
     return this.invitations.accept(
-      { token: dto.token, passwordHash },
+      { token: dto.token, passwordHash, displayName: dto.displayName },
       new Date(),
     );
   }

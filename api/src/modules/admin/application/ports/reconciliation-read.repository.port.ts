@@ -84,6 +84,19 @@ export interface IReconciliationReadRepository {
   ): Promise<ReconBreakRecord | null>;
 
   /**
+   * READ-ONLY per-transaction break detection (Phase 8 — the "re-run reconciliation"
+   * action for a single transaction). Re-runs the SAME provider-vs-ledger projection
+   * as `listBreaks`, scoped to one transaction's id — returning every break currently
+   * open for that transaction (empty when the transaction reconciles cleanly). This
+   * only DETECTS; it moves no money and mutates nothing (§3.1). `staleAfterSec` scopes
+   * the missing-settlement projection identically to `listBreaks`.
+   */
+  findBreaksByTransactionId(
+    transactionId: string,
+    staleAfterSec: number,
+  ): Promise<ReconBreakRecord[]>;
+
+  /**
    * The reconciler-cron run timeline: the most recent observed run (latest
    * SettlementOutbox attempt/completion) and the next due run (last + interval).
    * `intervalSec` is the reconciler tick cadence used to project the next run.

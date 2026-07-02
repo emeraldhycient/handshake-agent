@@ -5,6 +5,7 @@ import {
   AdminLedgerListQuerySchema,
   AdminTxnMarkFailedRequestSchema,
   AdminTxnSearchQuerySchema,
+  TxnRerunReconRequestSchema,
 } from '@handshake-agent/contracts';
 
 /** Query DTO for GET /admin/transactions (status/type/userId/window + cursor). */
@@ -15,6 +16,11 @@ export class AdminTxnSearchQueryDto extends createZodDto(
 /** Body DTO for POST /admin/transactions/:id/mark-failed (non-empty reason). */
 export class AdminTxnMarkFailedDto extends createZodDto(
   AdminTxnMarkFailedRequestSchema,
+) {}
+
+/** Body DTO for POST /admin/transactions/:id/reconcile (optional ≤500-char reason). */
+export class TxnRerunReconDto extends createZodDto(
+  TxnRerunReconRequestSchema,
 ) {}
 
 /**

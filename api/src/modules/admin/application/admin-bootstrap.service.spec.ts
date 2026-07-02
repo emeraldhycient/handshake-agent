@@ -68,6 +68,7 @@ function makeUserRepo(): {
       return Promise.resolve({
         id: 'user-boot',
         email: input.email,
+        displayName: input.displayName ?? '',
         status: 'pending',
         mfaEnabled: false,
         mfaSecret: null,

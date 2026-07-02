@@ -10,9 +10,11 @@ import {
 } from '@nestjs/common';
 
 import {
+  ComplianceEventItemSchema,
   ReconActionResponseSchema,
   ReconBreakListResponseSchema,
   ReconStatusSchema,
+  type ComplianceEventItem,
   type ReconActionResponse,
   type ReconBreakListResponse,
   type ReconStatus,
@@ -26,6 +28,7 @@ import { AdminStepUpGuard } from './admin-step-up.guard';
 import { CurrentAdmin, type AdminContext } from './current-admin.decorator';
 import { RequirePermission } from './require-permission.decorator';
 import {
+  EscalateBreakDto,
   ReconAcceptDto,
   ReconResolveDto,
 } from './dto/admin-ops-recon-treasury-action.dto';
@@ -103,6 +106,26 @@ export class AdminReconciliationController {
   ): Promise<ReconActionResponse> {
     return ReconActionResponseSchema.parse(
       await this.actions.accept(id, dto.reason, admin.adminId),
+    );
+  }
+
+  // ── escalate (Phase 8, WRITE — opens a compliance case; step-up-gated) ───────────
+
+  @Post('breaks/:id/escalate')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission(
+    'api_route',
+    'POST /admin/reconciliation/breaks/:id/escalate',
+    'write',
+  )
+  async escalate(
+    @Param('id') id: string,
+    @Body() dto: EscalateBreakDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<ComplianceEventItem> {
+    return ComplianceEventItemSchema.parse(
+      await this.actions.escalate(id, dto.reason, admin.adminId),
     );
   }
 }

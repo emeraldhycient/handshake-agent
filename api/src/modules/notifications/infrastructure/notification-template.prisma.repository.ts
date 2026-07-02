@@ -9,6 +9,7 @@ import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   INotificationTemplateRepository,
   NotificationTemplateRecord,
+  SeedNotificationTemplateInput,
   UpsertNotificationTemplateInput,
 } from '../application/ports/notification-template.repository.port';
 
@@ -87,6 +88,31 @@ export class NotificationTemplatePrismaRepository implements INotificationTempla
       },
     });
     return toRecord(row);
+  }
+
+  async seedDefaults(rows: SeedNotificationTemplateInput[]): Promise<number> {
+    // Idempotent, boot-safe insert: `skipDuplicates` skips any row whose composite
+    // unique (templateKey, language, channel) already exists — so a re-run inserts
+    // nothing and an admin's later edit is never overwritten. Platform-authored,
+    // so `updatedByAdminId` is written null.
+    const result = await this.prisma.notificationTemplate.createMany({
+      data: rows.map((r) => {
+        const variables = (r.variables ?? []) as Prisma.InputJsonValue;
+        return {
+          templateKey: r.templateKey,
+          language: r.language,
+          channel: r.channel as Channel,
+          subject: r.subject ?? null,
+          contentText: r.contentText,
+          contentHtml: null,
+          whatsappTemplateId: null,
+          variables,
+          updatedByAdminId: null,
+        };
+      }),
+      skipDuplicates: true,
+    });
+    return result.count;
   }
 }
 

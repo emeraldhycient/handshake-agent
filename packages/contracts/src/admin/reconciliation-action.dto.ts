@@ -51,3 +51,12 @@ export const ReconActionResponseSchema = z.object({
   moved: z.literal(false),
 });
 export type ReconActionResponse = z.infer<typeof ReconActionResponseSchema>;
+
+// ── Request: escalate a break into a compliance case ─────────────────────────────
+// Opens a `ComplianceEvent` from the offending break for human review. `reason`
+// is the operator's audited justification. Escalating moves NO money — it only
+// records a compliance case (step-up + reason + audit enforced server-side).
+export const EscalateBreakRequestSchema = z.object({
+  reason: z.string().min(3).max(500),
+});
+export type EscalateBreakRequest = z.infer<typeof EscalateBreakRequestSchema>;

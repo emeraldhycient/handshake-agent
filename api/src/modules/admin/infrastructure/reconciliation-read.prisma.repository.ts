@@ -99,6 +99,20 @@ export class ReconciliationReadPrismaRepository implements IReconciliationReadRe
     return breaks.find((b) => b.id === id) ?? null;
   }
 
+  /**
+   * Every OPEN break for one transaction (Phase 8 — the per-transaction re-run
+   * reconciliation detection). Reuses the SAME projection as `listBreaks` scoped to
+   * the transaction id, so a break is surfaced here iff it is currently open (identical
+   * open-set semantics). READ-ONLY — never mutates anything (§3.1).
+   */
+  async findBreaksByTransactionId(
+    transactionId: string,
+    staleAfterSec: number,
+  ): Promise<ReconBreakRecord[]> {
+    const breaks = await this.listBreaks(staleAfterSec);
+    return breaks.filter((b) => b.transactionId === transactionId);
+  }
+
   /** Unresolved compensation drifts → duplicate / mismatch / over-credit breaks. */
   private async compensationBreaks(): Promise<ReconBreakRecord[]> {
     const rows = await this.prisma.compensationRecord.findMany({

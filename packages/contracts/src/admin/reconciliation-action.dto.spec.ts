@@ -2,6 +2,7 @@ import {
   ReconResolveRequestSchema,
   ReconAcceptRequestSchema,
   ReconActionResponseSchema,
+  EscalateBreakRequestSchema,
 } from "./reconciliation-action.dto";
 
 describe("ReconResolveRequestSchema / ReconAcceptRequestSchema", () => {
@@ -55,6 +56,25 @@ describe("ReconActionResponseSchema", () => {
         disposition: "resolved",
         moved: true,
       }),
+    ).toThrow();
+  });
+});
+
+describe("EscalateBreakRequestSchema", () => {
+  it("accepts a non-empty reason (opens a compliance case from the break)", () => {
+    const parsed = EscalateBreakRequestSchema.parse({
+      reason: "Persistent over-credit; escalating to compliance for review.",
+    });
+    expect(parsed.reason).toContain("compliance");
+  });
+
+  it("rejects a reason shorter than 3 characters", () => {
+    expect(() => EscalateBreakRequestSchema.parse({ reason: "no" })).toThrow();
+  });
+
+  it("rejects a reason longer than 500 characters", () => {
+    expect(() =>
+      EscalateBreakRequestSchema.parse({ reason: "x".repeat(501) }),
     ).toThrow();
   });
 });

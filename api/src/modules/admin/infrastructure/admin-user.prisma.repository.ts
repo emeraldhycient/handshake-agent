@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import type { AdminUser } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { resolveAdminDisplayName } from '../application/admin-user.service';
 import {
   type AdminUserRecord,
   type CreateInvitedAdminInput,
@@ -24,6 +25,8 @@ export class AdminUserPrismaRepository implements IAdminUserRepository {
       data: {
         email: input.email,
         roleId: input.roleId,
+        // Blank when unset; readers (toRecord) fall back to the email local-part.
+        displayName: input.displayName?.trim() ?? '',
         // Pending admins have no usable credential until they accept.
         passwordHash: '',
         status: 'pending',
@@ -86,14 +89,28 @@ export class AdminUserPrismaRepository implements IAdminUserRepository {
     await this.prisma.adminUser.update({ where: { id }, data: { roleId } });
   }
 
+  async setDisplayName(id: string, displayName: string): Promise<void> {
+    await this.prisma.adminUser.update({
+      where: { id },
+      data: { displayName },
+    });
+  }
+
   async setPasswordAndActivate(
     id: string,
     passwordHash: string,
     at: Date,
+    displayName?: string,
   ): Promise<void> {
     await this.prisma.adminUser.update({
       where: { id },
-      data: { passwordHash, status: 'active', acceptedAt: at },
+      data: {
+        passwordHash,
+        status: 'active',
+        acceptedAt: at,
+        // Only overwrite when a non-empty name is supplied.
+        ...(displayName?.trim() ? { displayName: displayName.trim() } : {}),
+      },
     });
   }
 
@@ -108,6 +125,19 @@ export class AdminUserPrismaRepository implements IAdminUserRepository {
         mfaEnabled: true,
         mfaSecret: encSecret,
         mfaRecoveryCodes: hashedRecoveryCodes,
+      },
+    });
+  }
+
+  async disableMfa(id: string): Promise<void> {
+    // Reset-2FA-for-another-admin: clear the second factor entirely. The target
+    // must re-enroll. No secret is read or returned (§3.4).
+    await this.prisma.adminUser.update({
+      where: { id },
+      data: {
+        mfaEnabled: false,
+        mfaSecret: null,
+        mfaRecoveryCodes: [],
       },
     });
   }
@@ -158,6 +188,8 @@ function toRecord(
   return {
     id: row.id,
     email: row.email,
+    // Fall back to the email local-part when the stored column is blank.
+    displayName: resolveAdminDisplayName(row.email, row.displayName),
     status: row.status,
     mfaEnabled: row.mfaEnabled,
     mfaSecret: row.mfaSecret,

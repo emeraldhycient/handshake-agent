@@ -18,6 +18,33 @@ describe("AdminInvitationCreateRequestSchema", () => {
     expect(parsed.roleId).toBe(ROLE_ID);
   });
 
+  it("accepts an optional displayName", () => {
+    const parsed = AdminInvitationCreateRequestSchema.parse({
+      email: "new@example.com",
+      roleId: ROLE_ID,
+      displayName: "New Ops Hire",
+    });
+    expect(parsed.displayName).toBe("New Ops Hire");
+  });
+
+  it("omits displayName when not provided (defaults to email local-part server-side)", () => {
+    const parsed = AdminInvitationCreateRequestSchema.parse({
+      email: "new@example.com",
+      roleId: ROLE_ID,
+    });
+    expect(parsed.displayName).toBeUndefined();
+  });
+
+  it("rejects a displayName longer than 120 characters", () => {
+    expect(() =>
+      AdminInvitationCreateRequestSchema.parse({
+        email: "new@example.com",
+        roleId: ROLE_ID,
+        displayName: "x".repeat(121),
+      }),
+    ).toThrow();
+  });
+
   it("rejects a non-uuid roleId", () => {
     expect(() =>
       AdminInvitationCreateRequestSchema.parse({
@@ -57,6 +84,25 @@ describe("AdminInvitationAcceptRequestSchema", () => {
       password: "a-strong-password",
     });
     expect(parsed.token).toBe("tok_abc123");
+  });
+
+  it("accepts an optional displayName the invitee sets on accept", () => {
+    const parsed = AdminInvitationAcceptRequestSchema.parse({
+      token: "tok_abc123",
+      password: "a-strong-password",
+      displayName: "Ada Ops",
+    });
+    expect(parsed.displayName).toBe("Ada Ops");
+  });
+
+  it("rejects a displayName longer than 120 characters", () => {
+    expect(() =>
+      AdminInvitationAcceptRequestSchema.parse({
+        token: "tok_abc123",
+        password: "a-strong-password",
+        displayName: "x".repeat(121),
+      }),
+    ).toThrow();
   });
 
   it("rejects a password shorter than 12 characters", () => {

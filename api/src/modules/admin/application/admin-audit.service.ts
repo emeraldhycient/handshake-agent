@@ -6,6 +6,16 @@ import type {
   AuditLogListResponse,
 } from '@handshake-agent/contracts';
 
+/** Page size used to DRAIN the full audit log for a CSV export (keyset walk). */
+const EXPORT_PAGE_SIZE = 200;
+
+/**
+ * Hard safety cap on export pages so a malformed cursor loop can never hang the
+ * request. At {@link EXPORT_PAGE_SIZE} rows/page this bounds an export to 200k
+ * rows — far beyond any realistic filtered admin export.
+ */
+const EXPORT_MAX_PAGES = 1000;
+
 import { AuditService } from '../../../core/audit/application/audit.service';
 import type {
   AuditListQuery,
@@ -43,11 +53,51 @@ export class AdminAuditService {
 
   async list(query: AuditListQuery): Promise<AuditLogListResponse> {
     const page = await this.audit.list(query);
+    return {
+      items: await this.enrich(page.items),
+      nextCursor: page.nextCursor,
+    };
+  }
 
-    // Resolve each distinct actor-admin id exactly once, then map every row.
+  /**
+   * Build the FULL set of audit rows for a CSV export — the SAME filter pipeline
+   * as {@link list}, but with no caller cursor/limit: every matching row is
+   * drained by walking the keyset pages, and each row is enriched with the same
+   * (actorRole + projected reason) display fields. READ-ONLY — the hash-chained
+   * log is never mutated; the controller records the `admin_export` event with
+   * the resulting rowCount.
+   */
+  async exportRows(query: AuditListQuery): Promise<AuditLogEntry[]> {
+    const rows: AuditLogEntry[] = [];
+
+    let cursor: string | undefined = undefined;
+    for (let page = 0; page < EXPORT_MAX_PAGES; page += 1) {
+      const result = await this.audit.list({
+        ...query,
+        cursor,
+        limit: EXPORT_PAGE_SIZE,
+      });
+      rows.push(...(await this.enrich(result.items)));
+      if (!result.nextCursor) break;
+      cursor = result.nextCursor;
+    }
+
+    return rows;
+  }
+
+  verifyChain(): Promise<AuditChainVerifyResponse> {
+    return this.audit.verifyChain();
+  }
+
+  /**
+   * Enrich a page of raw audit records with the two display-only fields the
+   * console needs (per-actor role + projected reason). Resolves each distinct
+   * actor-admin id exactly once per call (no N+1), then maps every row.
+   */
+  private async enrich(records: AuditLogRecord[]): Promise<AuditLogEntry[]> {
     const distinctAdminIds = [
       ...new Set(
-        page.items
+        records
           .map((r) => r.actorAdminId)
           .filter((id): id is string => id !== null),
       ),
@@ -59,17 +109,9 @@ export class AdminAuditService {
         roleById.set(id, admin?.roleName ?? null);
       }),
     );
-
-    return {
-      items: page.items.map((record) =>
-        toEntry(record, roleFor(record.actorAdminId, roleById)),
-      ),
-      nextCursor: page.nextCursor,
-    };
-  }
-
-  verifyChain(): Promise<AuditChainVerifyResponse> {
-    return this.audit.verifyChain();
+    return records.map((record) =>
+      toEntry(record, roleFor(record.actorAdminId, roleById)),
+    );
   }
 }
 
