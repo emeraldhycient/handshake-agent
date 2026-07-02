@@ -23,12 +23,20 @@ import { AuditPage } from "@/components/admin/audit-page"
 vi.mock("@/lib/api/admin", () => ({
   listAudit: vi.fn(),
   verifyAuditChain: vi.fn(),
+  exportAuditLog: vi.fn(),
+}))
+vi.mock("@/lib/download", () => ({
+  downloadFile: vi.fn(),
+  exportFilename: (subject: string) => `${subject}-export.csv`,
 }))
 
-import { listAudit, verifyAuditChain } from "@/lib/api/admin"
+import { listAudit, verifyAuditChain, exportAuditLog } from "@/lib/api/admin"
+import { downloadFile } from "@/lib/download"
 
 const mockList = vi.mocked(listAudit)
 const mockVerify = vi.mocked(verifyAuditChain)
+const mockExport = vi.mocked(exportAuditLog)
+const mockDownloadFile = vi.mocked(downloadFile)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -145,19 +153,16 @@ describe("AuditPage", () => {
     )
   })
 
-  it("still toasts the CSV export confirmation when Export is clicked", async () => {
-    const { defaultToastStore } = await import("@/lib/store/toast-store")
+  it("downloads a CSV of the audit log when Export is clicked", async () => {
     const userEvent = (await import("@testing-library/user-event")).default
-    defaultToastStore.setState({ toasts: [] })
+    mockExport.mockResolvedValue(new Blob(["ts,action\n"]))
     const user = userEvent.setup()
     renderAudit()
 
     await screen.findByText("Amara Okeke")
     await user.click(screen.getByRole("button", { name: /Export/i }))
 
-    const { toasts } = defaultToastStore.getState()
-    expect(toasts).toHaveLength(1)
-    expect(toasts[0].message).toBe("Exporting audit log to CSV…")
-    expect(toasts[0].kind).toBe("info")
+    await waitFor(() => expect(mockExport).toHaveBeenCalledTimes(1))
+    expect(mockDownloadFile).toHaveBeenCalledTimes(1)
   })
 })

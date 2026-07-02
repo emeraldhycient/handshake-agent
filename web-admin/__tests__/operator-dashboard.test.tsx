@@ -53,8 +53,8 @@ const mockApprovalsInbox = vi.mocked(getApprovalsInbox)
 const SUMMARY: DashboardSummary = {
   txnVolume: {
     byType: [
-      { type: "buy", count: 120, completed: 110, failed: 10, stuck: 0 },
-      { type: "send", count: 40, completed: 38, failed: 2, stuck: 0 },
+      { type: "buy", count: 120, completed: 110, failed: 10, stuck: 3 },
+      { type: "send", count: 40, completed: 38, failed: 2, stuck: 1 },
     ],
     series: [
       { date: "2026-06-28", count: 12 },
@@ -193,8 +193,8 @@ describe("OperatorDashboard — KPI tiles wired to metrics", () => {
     expect(screen.getByText("14")).toBeInTheDocument()
     // KYC pending = pending (25) + needs_info (5) = 30.
     expect(screen.getByText("30")).toBeInTheDocument()
-    // Failed / stuck tx = sum of byType.failed (10 + 2 = 12).
-    expect(screen.getByText("12")).toBeInTheDocument()
+    // Failed · stuck tx = failed (10 + 2 = 12) · stuck (3 + 1 = 4).
+    expect(screen.getByText("12 · 4")).toBeInTheDocument()
   })
 
   it("renders the GMV tile and the open-compliance count from the ops metric", async () => {

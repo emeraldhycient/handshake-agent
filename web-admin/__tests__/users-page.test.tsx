@@ -31,11 +31,19 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/lib/api/users", () => ({
   listEndUsers: vi.fn(),
+  exportEndUsers: vi.fn(),
+}))
+vi.mock("@/lib/download", () => ({
+  downloadFile: vi.fn(),
+  exportFilename: (subject: string) => `${subject}-export.csv`,
 }))
 
-import { listEndUsers } from "@/lib/api/users"
+import { listEndUsers, exportEndUsers } from "@/lib/api/users"
+import { downloadFile } from "@/lib/download"
 
 const mockListEndUsers = vi.mocked(listEndUsers)
+const mockExportEndUsers = vi.mocked(exportEndUsers)
+const mockDownloadFile = vi.mocked(downloadFile)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -185,17 +193,18 @@ describe("UsersPage (wired)", () => {
     )
   })
 
-  it("toasts a CSV export over the shown set from the header button", async () => {
+  it("downloads a CSV export over the shown set from the header button", async () => {
     const user = userEvent.setup()
     mockListEndUsers.mockResolvedValue(RESPONSE)
+    mockExportEndUsers.mockResolvedValue(new Blob(["id,email\n"]))
     renderPage()
 
     await screen.findByText("Amara Okeke")
     await user.click(screen.getByRole("button", { name: "Export CSV" }))
 
-    const { toasts } = defaultToastStore.getState()
-    expect(toasts).toHaveLength(1)
-    expect(toasts[0].message).toBe("Exporting 2 users to CSV…")
-    expect(toasts[0].kind).toBe("info")
+    // No selection → export ALL matching filters (includedIds undefined).
+    await waitFor(() => expect(mockExportEndUsers).toHaveBeenCalledTimes(1))
+    expect(mockExportEndUsers.mock.calls[0][1]).toBeUndefined()
+    expect(mockDownloadFile).toHaveBeenCalledTimes(1)
   })
 })

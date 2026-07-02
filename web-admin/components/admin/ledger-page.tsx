@@ -28,6 +28,8 @@ import Link from "next/link"
 import { FilterSelect } from "@/components/admin/filter-select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { pushToast } from "@/lib/store/toast-store"
+import { downloadFile, exportFilename } from "@/lib/download"
+import { exportLedger as exportLedgerCsv } from "@/lib/api/ledger"
 import { useGlobalLedger, useLedgerIntegrity } from "@/lib/query/hooks"
 import type {
   AdminLedgerEntry,
@@ -139,9 +141,20 @@ export function LedgerPage() {
     [ledger.data]
   )
 
-  /** Export toast stand-in — mirrors the design's `exportLedger()` (logic.js 790). */
-  function exportLedger() {
-    pushToast("Exporting ledger to CSV…", "info")
+  const [exporting, setExporting] = useState(false)
+
+  /** Download a CSV of the ledger legs matching the current global-browse filters. */
+  async function exportLedger() {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const blob = await exportLedgerCsv(filters)
+      downloadFile(blob, exportFilename("ledger"))
+    } catch {
+      pushToast("Couldn't export the ledger. Try again.", "warn")
+    } finally {
+      setExporting(false)
+    }
   }
 
   // Header pill: reflects the real integrity summary (ok/broken), degrading to a
@@ -210,10 +223,11 @@ export function LedgerPage() {
         <div className="flex-1" />
         <button
           type="button"
-          onClick={exportLedger}
-          className="flex h-[38px] items-center gap-[7px] rounded-[11px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          onClick={() => void exportLedger()}
+          disabled={exporting}
+          className="flex h-[38px] items-center gap-[7px] rounded-[11px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
         >
-          Export
+          {exporting ? "Exporting…" : "Export"}
         </button>
       </div>
 

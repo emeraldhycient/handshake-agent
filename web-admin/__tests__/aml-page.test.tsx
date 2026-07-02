@@ -274,6 +274,21 @@ describe("AmlPage", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
   })
 
+  it("exposes a help affordance listing example AML rule types", async () => {
+    const userEvent = (await import("@testing-library/user-event")).default
+    const user = userEvent.setup()
+    renderPage()
+
+    const help = await screen.findByRole("button", {
+      name: "Example AML rule types",
+    })
+    await user.click(help)
+
+    expect(await screen.findByText("velocity_daily_limit")).toBeInTheDocument()
+    expect(screen.getByText("amount_threshold")).toBeInTheDocument()
+    expect(screen.getByText("sanctions_rescreen")).toBeInTheDocument()
+  })
+
   it("renders the compliance-reports list (type, status pill, submission ref)", async () => {
     renderPage()
 

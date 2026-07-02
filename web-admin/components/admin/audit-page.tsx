@@ -31,6 +31,8 @@ import { FilterSelect } from "@/components/admin/filter-select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAudit, useVerifyAuditChain } from "@/lib/query/hooks"
 import { pushToast } from "@/lib/store/toast-store"
+import { downloadFile, exportFilename } from "@/lib/download"
+import { exportAuditLog } from "@/lib/api/admin"
 import {
   AuditActionSchema,
   type AuditLogEntry,
@@ -184,6 +186,21 @@ export function AuditPage() {
 
   const audit = useAudit(query)
   const verify = useVerifyAuditChain()
+  const [exporting, setExporting] = useState(false)
+
+  /** Download a CSV of the audit entries matching the current filters. */
+  async function onExport() {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const blob = await exportAuditLog(query)
+      downloadFile(blob, exportFilename("audit"))
+    } catch {
+      pushToast("Couldn't export the audit log. Try again.", "warn")
+    } finally {
+      setExporting(false)
+    }
+  }
 
   // Run the chain-integrity verify once on mount so the header pill is real.
   useEffect(() => {
@@ -216,8 +233,9 @@ export function AuditPage() {
           <ChainPill verify={verify} />
           <button
             type="button"
-            onClick={() => pushToast("Exporting audit log to CSV…", "info")}
-            className="flex h-[34px] cursor-pointer items-center gap-[7px] rounded-[10px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+            onClick={() => void onExport()}
+            disabled={exporting}
+            className="flex h-[34px] cursor-pointer items-center gap-[7px] rounded-[10px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
           >
             <svg
               width="14"

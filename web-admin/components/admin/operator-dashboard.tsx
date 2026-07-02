@@ -121,6 +121,9 @@ function deriveKpis(
   const { txnVolume, gmv, revenue, kycFunnel, activeUsers } = data
   const totalTxns = txnVolume.byType.reduce((sum, t) => sum + t.count, 0)
   const failedTxns = txnVolume.byType.reduce((sum, t) => sum + t.failed, 0)
+  // Stuck = in-flight (pending/validating/confirmed/settling) per the same
+  // definition as the sidebar stuck badge, so the two agree (Phase 8 drift fix).
+  const stuckTxns = txnVolume.byType.reduce((sum, t) => sum + t.stuck, 0)
   const pendingKyc = kycFunnel.byStatus
     .filter((s) => PENDING_KYC_STATUSES.has(s.status))
     .reduce((sum, s) => sum + s.count, 0)
@@ -188,10 +191,10 @@ function deriveKpis(
       tone: "warn",
     },
     {
-      label: "Failed / stuck tx",
-      value: fmtInt(failedTxns),
+      label: "Failed · stuck tx",
+      value: `${fmtInt(failedTxns)} · ${fmtInt(stuckTxns)}`,
       delta: "attention",
-      deltaNote: "needs action",
+      deltaNote: "failed · stuck",
       tone: "warn",
     },
     // Open compliance cases: the open (flagged + under_review) count from the ops

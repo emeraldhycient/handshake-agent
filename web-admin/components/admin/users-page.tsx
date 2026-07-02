@@ -33,6 +33,8 @@ import { useRouter } from "next/navigation"
 
 import { cn } from "@/lib/utils"
 import { pushToast } from "@/lib/store/toast-store"
+import { downloadFile, exportFilename } from "@/lib/download"
+import { exportEndUsers } from "@/lib/api/users"
 import { FilterSelect } from "@/components/admin/filter-select"
 import { UsersBulkActions } from "@/components/admin/users-bulk-actions"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -359,7 +361,28 @@ export function UsersPage() {
     router.push(`/users/${id}`)
   }
 
-  const exportCount = selected.length || rows.length
+  const [exporting, setExporting] = useState(false)
+
+  /**
+   * Download a PII-minimised CSV (last-4 only, §3.4) of the users matching the
+   * current filters — or just the selected rows when there's a selection. The
+   * server streams the CSV + records an `admin_export` audit event.
+   */
+  async function onExport() {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const blob = await exportEndUsers(
+        queryArg,
+        selected.length > 0 ? [...selected] : undefined
+      )
+      downloadFile(blob, exportFilename("users"))
+    } catch {
+      pushToast("Couldn't export users. Try again.", "warn")
+    } finally {
+      setExporting(false)
+    }
+  }
 
   return (
     <div
@@ -391,10 +414,9 @@ export function UsersPage() {
         <div className="flex gap-[9px]">
           <button
             type="button"
-            onClick={() =>
-              pushToast(`Exporting ${exportCount} users to CSV…`, "info")
-            }
-            className="flex h-[38px] items-center gap-[7px] rounded-[11px] border border-line bg-card px-[15px] text-[13px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            onClick={() => void onExport()}
+            disabled={exporting}
+            className="flex h-[38px] items-center gap-[7px] rounded-[11px] border border-line bg-card px-[15px] text-[13px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
           >
             <svg
               width="15"
@@ -411,7 +433,7 @@ export function UsersPage() {
                 strokeLinejoin="round"
               />
             </svg>
-            Export CSV
+            {exporting ? "Exporting…" : "Export CSV"}
           </button>
         </div>
       </div>
@@ -511,12 +533,11 @@ export function UsersPage() {
           <div className="h-[18px] w-px bg-white/20" />
           <button
             type="button"
-            onClick={() =>
-              pushToast(`Exporting ${exportCount} users to CSV…`, "info")
-            }
-            className="text-[12.5px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
+            onClick={() => void onExport()}
+            disabled={exporting}
+            className="text-[12.5px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none disabled:opacity-50"
           >
-            Export
+            {exporting ? "Exporting…" : "Export"}
           </button>
           <UsersBulkActions
             selectedIds={selected}

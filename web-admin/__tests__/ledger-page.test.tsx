@@ -29,12 +29,24 @@ import { defaultToastStore } from "@/lib/store/toast-store"
 vi.mock("@/lib/api/ledger", () => ({
   listGlobalLedger: vi.fn(),
   getLedgerIntegrity: vi.fn(),
+  exportLedger: vi.fn(),
+}))
+vi.mock("@/lib/download", () => ({
+  downloadFile: vi.fn(),
+  exportFilename: (subject: string) => `${subject}-export.csv`,
 }))
 
-import { listGlobalLedger, getLedgerIntegrity } from "@/lib/api/ledger"
+import {
+  listGlobalLedger,
+  getLedgerIntegrity,
+  exportLedger,
+} from "@/lib/api/ledger"
+import { downloadFile } from "@/lib/download"
 
 const mockList = vi.mocked(listGlobalLedger)
 const mockIntegrity = vi.mocked(getLedgerIntegrity)
+const mockExport = vi.mocked(exportLedger)
+const mockDownloadFile = vi.mocked(downloadFile)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -198,15 +210,14 @@ describe("LedgerPage", () => {
     ).toBeInTheDocument()
   })
 
-  it("toasts the CSV export confirmation when Export is clicked", async () => {
+  it("downloads a CSV of the ledger when Export is clicked", async () => {
     const user = userEvent.setup()
+    mockExport.mockResolvedValue(new Blob(["seq,account\n"]))
     renderPage()
 
     await user.click(screen.getByRole("button", { name: /Export/i }))
 
-    const { toasts } = defaultToastStore.getState()
-    expect(toasts).toHaveLength(1)
-    expect(toasts[0].message).toBe("Exporting ledger to CSV…")
-    expect(toasts[0].kind).toBe("info")
+    await waitFor(() => expect(mockExport).toHaveBeenCalledTimes(1))
+    expect(mockDownloadFile).toHaveBeenCalledTimes(1)
   })
 })
