@@ -40,6 +40,7 @@ const ROLES: Role[] = [
     id: "role-super",
     name: "super_admin",
     description: "Full access",
+    isBuiltin: true,
     permissionIds: [
       "api_route:GET /admin/users:read",
       "api_route:PATCH /admin/users/:id/status:write",
@@ -50,6 +51,7 @@ const ROLES: Role[] = [
     id: "role-support",
     name: "support",
     description: "Support",
+    isBuiltin: true,
     permissionIds: ["api_route:GET /admin/audit:read"],
   },
 ]
