@@ -209,6 +209,25 @@ describe("OperatorDashboard — KPI tiles wired to metrics", () => {
     expect(await screen.findByText("7")).toBeInTheDocument()
   })
 
+  it("requests a non-empty 24h window that includes now (regression: today's txns were excluded)", async () => {
+    renderDashboard()
+    await screen.findByText("NGN 45000.00")
+
+    const range = mockDashboard.mock.calls[0][0] as { from: string; to: string }
+    // The 24h preset must be a REAL window — the old bug truncated both bounds to a
+    // date string, so `from === to` (zero-width) and nothing ever matched.
+    expect(range.from < range.to).toBe(true)
+    // `to` must carry the current time-of-day, not be floored to midnight-of-today
+    // (which excluded everything created today). It should be within seconds of now.
+    const toMs = new Date(range.to).getTime()
+    expect(Number.isNaN(toMs)).toBe(false)
+    expect(Date.now() - toMs).toBeLessThan(60_000)
+    // The 24h window spans roughly a day back (not zero, not the 30-day default).
+    const spanMs = toMs - new Date(range.from).getTime()
+    expect(spanMs).toBeGreaterThan(23 * 60 * 60_000)
+    expect(spanMs).toBeLessThan(25 * 60 * 60_000)
+  })
+
   it("re-fetches with a wider window when the range preset changes", async () => {
     const user = userEvent.setup()
     renderDashboard()

@@ -38,6 +38,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 
 import { cn } from "@/lib/utils"
+import { rangeForDays } from "@/lib/metrics-range"
 import { KpiCard } from "@/components/admin/kpi-card"
 import { ChartBars } from "@/components/admin/chart-bars"
 import { useOperatorAlerts, type AdminAlert } from "@/components/admin/use-operator-alerts"
@@ -70,27 +71,18 @@ const VOL_COLORS = {
 } as const
 
 // ─── KPI range switcher (design `kpiRanges`, logic.js 487) ───────────────────────────
-// The switcher drives the real metrics window: each preset resolves to an inclusive
-// `{ from, to }` ISO-date window that `useDashboardMetrics` fetches. "24h" is sub-day
-// so it maps to today only (a 1-day window — the backend takes date bounds).
+// The switcher drives the real metrics window: each preset resolves to a rolling
+// `{ from, to }` window that `useDashboardMetrics` fetches. The bounds are FULL ISO
+// timestamps ending at `now` — NOT date-only strings. Date-only `to` floored to
+// midnight-of-today, which excluded everything created today and made "24h" a
+// zero-width (from === to) window that always returned zeros.
 
 type RangeId = "24h" | "7d" | "30d"
 
 const KPI_RANGES: readonly RangeId[] = ["24h", "7d", "30d"]
 
-/** How many days back each preset spans (inclusive of today). "24h" → today only. */
+/** How many rolling days back each preset spans. "24h" → the last 24 hours. */
 const RANGE_DAYS: Record<RangeId, number> = { "24h": 1, "7d": 7, "30d": 30 }
-
-/** Build an inclusive `{ from, to }` ISO-date window ending today, N days back. */
-function rangeForDays(days: number): { from: string; to: string } {
-  const to = new Date()
-  const from = new Date(to)
-  from.setDate(from.getDate() - (days - 1))
-  return {
-    from: from.toISOString().slice(0, 10),
-    to: to.toISOString().slice(0, 10),
-  }
-}
 
 /** `f()` — design integer formatter (vDash line 438): `en-NG` grouping, no decimals. */
 function fmtInt(n: number): string {
