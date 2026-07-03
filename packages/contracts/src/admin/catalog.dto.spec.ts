@@ -67,6 +67,7 @@ describe("AdminCatalogFiatSchema", () => {
     displayName: "Nigerian Naira",
     decimals: 2,
     live: true,
+    custom: false,
   };
 
   it("parses a well-formed live fiat row", () => {
@@ -92,6 +93,7 @@ describe("AdminCatalogFiatSchema", () => {
       "displayName",
       "decimals",
       "live",
+      "custom",
     ]);
   });
 });
@@ -116,6 +118,7 @@ describe("AdminCatalogViewSchema", () => {
           displayName: "Nigerian Naira",
           decimals: 2,
           live: true,
+          custom: false,
         },
       ],
     };

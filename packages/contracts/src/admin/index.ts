@@ -35,3 +35,4 @@ export * from "./audit.dto";
 export * from "./session.dto";
 export * from "./approvals.dto";
 export * from "./phase9.dto";
+export * from "./currency.dto";

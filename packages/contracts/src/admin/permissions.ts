@@ -220,6 +220,28 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Config",
     "View the full asset + currency catalog (incl. disabled)",
   ),
+  // Runtime "Add currency" — a custom fiat moves no money; step-up-gated + audited.
+  r(
+    "api_route",
+    "GET /admin/config/currencies",
+    "read",
+    "Config",
+    "List the runtime custom currencies",
+  ),
+  r(
+    "api_route",
+    "POST /admin/config/currencies",
+    "write",
+    "Config",
+    "Add a runtime custom currency (created disabled; enable needs pricing)",
+  ),
+  r(
+    "api_route",
+    "PATCH /admin/config/currencies/:code",
+    "write",
+    "Config",
+    "Enable/disable or edit a runtime custom currency",
+  ),
 
   // Users — end-user management & device/SIM-swap admin (Phase 2)
   r(

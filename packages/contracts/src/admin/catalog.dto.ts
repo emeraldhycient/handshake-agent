@@ -50,6 +50,13 @@ export const AdminCatalogFiatSchema = z.object({
   decimals: z.number().int().nonnegative(),
   /** Effective live status — the fiat's `enabled` flag in the merged config. */
   live: z.boolean(),
+  /**
+   * True for a runtime admin-added currency (CustomFiat overlay), false for a
+   * built-in JSON-default catalog fiat. The console toggles a custom fiat via the
+   * currency endpoint (PATCH /admin/config/currencies/:code) and a built-in via the
+   * settings key (catalog.fiats.<code>.enabled). Defaults false for back-compat.
+   */
+  custom: z.boolean().optional().default(false),
 });
 export type AdminCatalogFiat = z.infer<typeof AdminCatalogFiatSchema>;
 
