@@ -328,6 +328,7 @@ const UNVERIFIED_USER: UserRecord = {
   kycStatus: 'pending',
   kycTier: 'unverified',
   simSwapDetectedAt: null,
+  tierChangedAt: null,
 };
 
 /** Already-verified user record returned by loadUser. */
@@ -337,6 +338,7 @@ const VERIFIED_USER: UserRecord = {
   kycStatus: 'verified',
   kycTier: 'tier_1',
   simSwapDetectedAt: null,
+  tierChangedAt: null,
 };
 
 describe('KycService.completeVerificationForUser', () => {

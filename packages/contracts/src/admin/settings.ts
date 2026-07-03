@@ -222,6 +222,14 @@ export const SETTING_REGISTRY: readonly SettingRegistryEntry[] = [
     "Travel Rule threshold (NGN)",
     "Fiat-equivalent NGN value at or above which a send proposal sets requiresTravelRule=true (CBN circular / FATF Travel Rule).",
   ),
+  s(
+    "compliance.tierChangeCoolingOffSeconds",
+    "Compliance",
+    "number",
+    "Tier-change cooling-off (seconds)",
+    "Cooling-off window after a KYC tier change during which money moves are blocked (anti-abuse after a tier grant). 0 disables the hold.",
+    { min: 0, max: SECONDS_IN_A_WEEK },
+  ),
   // The sanctions denylist is edited via the existing /admin/settings API (no new
   // endpoint): a string[] of addresses/identifiers blocked by sanctions screening.
   s(

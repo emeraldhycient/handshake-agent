@@ -26,6 +26,8 @@ export interface UserRecord {
   kycStatus: string;
   kycTier: string;
   simSwapDetectedAt: Date | null;
+  /** When the KYC tier last changed; drives the tier-change cooling-off gate. */
+  tierChangedAt: Date | null;
 }
 
 /**

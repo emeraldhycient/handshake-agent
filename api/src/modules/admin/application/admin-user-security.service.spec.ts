@@ -48,6 +48,7 @@ function makeUser(over?: Partial<UserRecord>): UserRecord {
     kycStatus: 'verified',
     kycTier: 'tier_2',
     simSwapDetectedAt: null,
+    tierChangedAt: null,
     ...over,
   };
 }

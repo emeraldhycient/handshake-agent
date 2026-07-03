@@ -3,6 +3,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type {
+  ComplianceConfig,
   FiatLimits,
   LimitsConfig,
   TierLimits,
@@ -11,6 +12,7 @@ import {
   KycNotVerifiedError,
   OnChainSendLimitExceededError,
   SimSwapBlockedError,
+  TierChangeCoolingOffError,
   TierLimitExceededError,
   VelocityExceededError,
 } from '../domain/gate-errors';
@@ -191,6 +193,24 @@ export class KycGateService {
     }
     if (user.kycTier === 'unverified') {
       throw new KycNotVerifiedError('tier');
+    }
+
+    // 2b. Tier-change cooling-off — a time-based hold on ALL money moves within
+    // `compliance.tierChangeCoolingOffSeconds` of the last tier change (§3.3, anti-abuse
+    // after a fresh tier grant). 0 (default) or a null tierChangedAt = no hold.
+    const coolingOffSeconds = this.config.get<ComplianceConfig>('compliance')
+      ?.tierChangeCoolingOffSeconds;
+    if (
+      coolingOffSeconds !== undefined &&
+      coolingOffSeconds > 0 &&
+      user.tierChangedAt !== null
+    ) {
+      const holdUntil = new Date(
+        user.tierChangedAt.getTime() + coolingOffSeconds * 1000,
+      );
+      if (this.clock.now() < holdUntil) {
+        throw new TierChangeCoolingOffError(holdUntil, user.kycTier);
+      }
     }
 
     // 3. Resolve tier limits from config (never hardcoded in the service).

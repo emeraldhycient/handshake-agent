@@ -23,6 +23,7 @@ import {
   KycNotVerifiedError,
   OnChainSendLimitExceededError,
   SimSwapBlockedError,
+  TierChangeCoolingOffError,
   TierLimitExceededError,
   VelocityExceededError,
 } from '../domain/gate-errors';
@@ -63,9 +64,14 @@ const DEFAULT_LIMITS: AppConfig['limits'] = {
  */
 function makeConfig(
   limits: AppConfig['limits'] = DEFAULT_LIMITS,
+  tierChangeCoolingOffSeconds = 0,
 ): EffectiveConfigService {
   return {
-    get: (key: string) => (key === 'limits' ? limits : undefined),
+    get: (key: string) => {
+      if (key === 'limits') return limits;
+      if (key === 'compliance') return { tierChangeCoolingOffSeconds };
+      return undefined;
+    },
   } as unknown as EffectiveConfigService;
 }
 
@@ -80,6 +86,7 @@ function makeUser(overrides: Partial<UserRecord> = {}): UserRecord {
     kycStatus: 'verified',
     kycTier: 'tier_1',
     simSwapDetectedAt: null,
+    tierChangedAt: null,
     ...overrides,
   };
 }
@@ -483,6 +490,58 @@ describe('KycGateService.assertCanTransact', () => {
     const svc = makeService(makeUser(), '0', 0);
     const input = { ...BASE_INPUT, fiatAmount: '40000', onChainSend: true };
     await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
+  });
+
+  // ── Tier-change cooling-off (compliance.tierChangeCoolingOffSeconds) ──────
+  // Blocks ALL money moves for a window after the KYC tier last changed.
+
+  it('throws TierChangeCoolingOffError when within the cooling-off window after a tier change', async () => {
+    // tier changed 1h ago; 2h cooling-off → still held (hold until 13:00 > now 12:00).
+    const changedAt = new Date(FIXED_NOW.getTime() - 60 * 60 * 1000);
+    const svc = makeService(
+      makeUser({ tierChangedAt: changedAt }),
+      '0',
+      0,
+      makeConfig(DEFAULT_LIMITS, 7200),
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toBeInstanceOf(
+      TierChangeCoolingOffError,
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toMatchObject({
+      code: 'TIER_CHANGE_COOLING_OFF',
+    });
+  });
+
+  it('does NOT throw once the cooling-off window has elapsed', async () => {
+    // tier changed 3h ago; 2h cooling-off → elapsed (hold until 11:00 < now 12:00).
+    const changedAt = new Date(FIXED_NOW.getTime() - 3 * 60 * 60 * 1000);
+    const svc = makeService(
+      makeUser({ tierChangedAt: changedAt }),
+      '0',
+      0,
+      makeConfig(DEFAULT_LIMITS, 7200),
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
+  });
+
+  it('does NOT hold when the cooling-off is 0 (disabled), even right after a tier change', async () => {
+    const svc = makeService(
+      makeUser({ tierChangedAt: FIXED_NOW }),
+      '0',
+      0,
+      makeConfig(DEFAULT_LIMITS, 0),
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
+  });
+
+  it('does NOT hold a user whose tier has never changed (tierChangedAt null)', async () => {
+    const svc = makeService(
+      makeUser({ tierChangedAt: null }),
+      '0',
+      0,
+      makeConfig(DEFAULT_LIMITS, 7200),
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
   });
 
   // ── Error hierarchy ───────────────────────────────────────────────────────

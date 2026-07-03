@@ -66,6 +66,7 @@ const LIMIT_SETTINGS: EffectiveSetting[] = [
   limit("limits.NGN.tier_1.perSendOnChainFiatMax", 100000),
   limit("limits.NGN.tier_1.dailyTxCountMax", 10),
   limit("beneficiary.cryptoCoolingOffSeconds", 86400, "Beneficiary"),
+  limit("compliance.tierChangeCoolingOffSeconds", 3600, "Compliance"),
 ]
 
 function renderPage() {
@@ -199,17 +200,40 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     const user = userEvent.setup()
     renderPage()
     await screen.findByRole("tab", { name: "Tier 1" })
-    // "Cooling-off after tier change" is not yet enforced (renders "—"); no edit pencil.
+    // "Sends / 10-min window" is not yet enforced (renders "—"); no edit pencil.
     expect(
-      screen.queryByRole("button", {
-        name: "Edit Cooling-off after tier change",
-      })
+      screen.queryByRole("button", { name: "Edit Sends / 10-min window" })
     ).not.toBeInTheDocument()
     // The backed per-tx cap still has its edit pencil.
     expect(
       await screen.findByRole("button", { name: "Edit Per-transaction max" })
     ).toBeInTheDocument()
     void user
+  })
+
+  it("edits the enforced tier-change cooling-off (a global seconds leaf) via setSetting", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // 3600s renders humanized as "1h".
+    expect(await screen.findByText("1h")).toBeInTheDocument()
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Edit Cooling-off after tier change",
+      })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (seconds)" })
+    await user.clear(input)
+    await user.type(input, "7200")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith(
+      "compliance.tierChangeCoolingOffSeconds",
+      { value: 7200, scope: "global", scopeValue: null }
+    )
   })
 
   it("edits the enforced single on-chain send max via setSetting", async () => {

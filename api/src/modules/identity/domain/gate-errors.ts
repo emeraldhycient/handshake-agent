@@ -81,6 +81,25 @@ export class OnChainSendLimitExceededError extends GateError {
 }
 
 /**
+ * The user's KYC tier changed recently and is still inside the cooling-off window
+ * (`compliance.tierChangeCoolingOffSeconds`) — money moves are held to blunt abuse of a
+ * freshly-granted tier on a possibly-compromised account (§3.3).
+ */
+export class TierChangeCoolingOffError extends GateError {
+  readonly code = 'TIER_CHANGE_COOLING_OFF' as const;
+
+  constructor(
+    readonly holdUntil: Date,
+    readonly tier: string,
+  ) {
+    super(
+      `Transaction blocked: a tier-change cooling-off is in effect for tier ${tier} ` +
+        `until ${holdUntil.toISOString()}.`,
+    );
+  }
+}
+
+/**
  * A velocity cap for the user's KYC tier would be exceeded:
  *  - `fiat`   → rolling 24-hour spend cap (`dailyFiatMax`)
  *  - `count`  → rolling 24-hour transaction-count cap (`dailyTxCountMax`)

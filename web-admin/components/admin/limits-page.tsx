@@ -13,10 +13,10 @@
  * resolve). A row is EDITABLE only when its config key exists AND is enforced
  * server-side — currently the per-tier `perTxFiatMax` / `dailyFiatMax` /
  * `weeklyFiatMax` (rolling 7-day) / `perSendOnChainFiatMax` (single on-chain send) /
- * `dailyTxCountMax`, and the new-beneficiary cooling-off. Rows the engine does NOT yet
- * enforce (Sends / 10-min window, Cooling-off after tier change) render "—" with NO edit
- * affordance: exposing an editor for a cap nothing enforces would be a fake, dangerous
- * control (root §3.6). Each becomes editable as its enforcement lands.
+ * `dailyTxCountMax`, the tier-change cooling-off, and the new-beneficiary cooling-off.
+ * The one row the engine does NOT yet enforce (Sends / 10-min window) renders "—" with
+ * NO edit affordance: exposing an editor for a cap nothing enforces would be a fake,
+ * dangerous control (root §3.6). It becomes editable as its enforcement lands.
  *
  * Editing is maker-checker: the pencil opens a new-value prompt → reason (audit) →
  * step-up (TOTP) → maker-checker, then fires the real step-up-guarded PATCH
@@ -120,6 +120,7 @@ function leafRow(
 function buildTiers(settings: readonly EffectiveSetting[]): LimitTier[] {
   const byKey = new Map(settings.map((s) => [s.key, s]))
   const benefHold = byKey.get("beneficiary.cryptoCoolingOffSeconds")
+  const tierChangeHold = byKey.get("compliance.tierChangeCoolingOffSeconds")
   return TIER_META.map(({ id, label }) => {
     const base = `limits.NGN.${id}`
     const amountCaps: LimitAmountRow[] = [
@@ -135,7 +136,7 @@ function buildTiers(settings: readonly EffectiveSetting[]): LimitTier[] {
     const velocity: LimitVelocityRow[] = [
       leafRow("Transactions / day", byKey.get(`${base}.dailyTxCountMax`), "count"),
       { k: "Sends / 10-min window", v: NO_KEY },
-      { k: "Cooling-off after tier change", v: NO_KEY },
+      leafRow("Cooling-off after tier change", tierChangeHold, "seconds"),
       leafRow("New-beneficiary hold", benefHold, "seconds"),
     ]
     return { id, label, amountCaps, velocity }

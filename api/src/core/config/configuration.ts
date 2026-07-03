@@ -220,6 +220,15 @@ export interface ComplianceConfig {
   travelRuleThresholds: Record<string, number>;
 
   /**
+   * Cooling-off window in SECONDS after a user's KYC tier changes (grant or admin
+   * change) during which money moves are blocked (anti-abuse after a tier grant on a
+   * possibly-compromised account, §3.3). Enforced by KycGateService against
+   * User.tierChangedAt. 0 (default) disables the hold — fully configurable, always
+   * enforced (enforce-when-present with a real 0-length window when 0).
+   */
+  tierChangeCoolingOffSeconds: number;
+
+  /**
    * Denylist of crypto addresses that MockSanctionsScreener flags as
    * sanctioned. Used in test / staging environments to exercise the blocked
    * path without a real sanctions provider.  The JSON-defaults baseline is an
@@ -714,6 +723,9 @@ const buildConfig = (): AppConfig => ({
       ZAR: 18_000, // ~R18,000 ≈ USD 1,000 (indicative)
       USD: 1_000, // Standard FATF threshold
     },
+    // Cooling-off after a KYC tier change, in seconds. 0 = disabled (no hold) by
+    // default; an operator sets it > 0 to hold money moves after a tier grant/change.
+    tierChangeCoolingOffSeconds: 0,
     // Empty by default — no addresses flagged. Populate in config to test the
     // blocked path with MockSanctionsScreener (see mock-sanctions.screener.ts).
     sanctionsDenylist: [] as string[],

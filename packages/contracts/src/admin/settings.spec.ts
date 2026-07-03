@@ -84,6 +84,14 @@ describe("SETTING_REGISTRY", () => {
     }
   });
 
+  it("registers the tier-change cooling-off (seconds, enforced server-side)", () => {
+    const e = entry("compliance.tierChangeCoolingOffSeconds");
+    expect(e.category).toBe("Compliance");
+    expect(e.valueType).toBe("number");
+    expect(e.editable).toBe(true);
+    expect(e.min).toBe(0);
+  });
+
   it("registers the Tickets enablement + commission tunables (Phase 4 wave 2)", () => {
     const enabled = entry("ticketing.enabled");
     expect(enabled.category).toBe("Tickets");

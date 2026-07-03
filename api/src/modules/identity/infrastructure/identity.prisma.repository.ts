@@ -195,6 +195,7 @@ export class IdentityPrismaRepository implements IIdentityRepository {
         kycStatus: true,
         kycTier: true,
         simSwapDetectedAt: true,
+        tierChangedAt: true,
       },
     });
 
@@ -206,6 +207,7 @@ export class IdentityPrismaRepository implements IIdentityRepository {
       kycStatus: row.kycStatus,
       kycTier: row.kycTier,
       simSwapDetectedAt: row.simSwapDetectedAt,
+      tierChangedAt: row.tierChangedAt,
     };
   }
 
@@ -605,7 +607,8 @@ export class IdentityPrismaRepository implements IIdentityRepository {
   async setKycTier(userId: string, tier: string): Promise<void> {
     await this.prisma.user.update({
       where: { id: userId },
-      data: { kycTier: tier as KycTier },
+      // Stamp the tier-change time so the gate can enforce the post-change cooling-off.
+      data: { kycTier: tier as KycTier, tierChangedAt: new Date() },
     });
   }
 

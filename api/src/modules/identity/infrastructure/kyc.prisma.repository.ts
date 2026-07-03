@@ -115,6 +115,8 @@ export class KycPrismaRepository implements IKycRepository {
           kycStatus: KycStatus.verified,
           // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           kycTier: KycTier.tier_1,
+          // Stamp the initial tier grant so the gate can enforce the cooling-off.
+          tierChangedAt: new Date(),
           pinHash,
         },
         select: { id: true },
@@ -212,6 +214,8 @@ export class KycPrismaRepository implements IKycRepository {
           kycStatus: KycStatus.verified,
           // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           kycTier: KycTier.tier_1,
+          // Stamp the tier grant so the gate can enforce the post-change cooling-off.
+          tierChangedAt: new Date(),
           status: UserStatus.active,
           pinHash,
         },
