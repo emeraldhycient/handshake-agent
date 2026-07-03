@@ -121,4 +121,20 @@ export interface IKycRepository {
     userId: string,
     decision: UpdateKycProfileDecisionInput,
   ): Promise<void>;
+
+  /**
+   * Bounces a KYC submission back to the user for more information (Phase 9
+   * admin "Request info"). Atomically (one $transaction):
+   *   1. Sets the KycProfile status to `needs_info` and stamps
+   *      `reviewedByAdminId` (attribution — the full trail lives in AuditLog).
+   *      Tier, verifiedAt, and rejectionReason are left untouched — the review
+   *      is PAUSED, not decided, so this is neither a verification nor a
+   *      rejection.
+   *   2. Mirrors `needs_info` onto the User's kycStatus so the server-side gate
+   *      (§3.3) reflects the paused state without a second read.
+   *
+   * The operator's reason is captured in the immutable audit trail, not as a
+   * KycProfile column. Pre-condition: the KycProfile already exists.
+   */
+  markKycNeedsInfo(userId: string, reviewedByAdminId: string): Promise<void>;
 }

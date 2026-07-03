@@ -34,3 +34,4 @@ export * from "./providers-action.dto";
 export * from "./audit.dto";
 export * from "./session.dto";
 export * from "./approvals.dto";
+export * from "./phase9.dto";

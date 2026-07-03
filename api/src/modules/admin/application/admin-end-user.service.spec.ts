@@ -168,6 +168,7 @@ function makeMocks(): { service: AdminEndUserService; m: Mocks } {
     setSimSwapDetectedAt: jest.fn().mockResolvedValue(undefined),
     revokeDevice: jest.fn().mockResolvedValue(undefined),
     unpinDevice: jest.fn().mockResolvedValue(undefined),
+    resetKycToPending: jest.fn().mockResolvedValue(undefined),
   } as unknown as jest.Mocked<IIdentityRepository>;
 
   const walletBalance = {
@@ -651,6 +652,36 @@ describe('AdminEndUserService.triggerSimSwapReverify', () => {
     expect(a.action).toBe('admin_override');
     expect(a.actorAdminId).toBe(ADMIN_ID);
     expect(a.subject).toContain(USER_ID);
+  });
+});
+
+// ── forceReKyc ───────────────────────────────────────────────────────────────
+
+describe('AdminEndUserService.forceReKyc', () => {
+  const REASON = 'Identity concern raised after a SIM-swap report';
+
+  it('resets the user to pending KYC and audits admin_override with the reason', async () => {
+    const { service, m } = makeMocks();
+
+    await service.forceReKyc(USER_ID, REASON, ADMIN_ID);
+
+    expect(m.identity.resetKycToPending).toHaveBeenCalledWith(USER_ID);
+    expect(m.auditCalls).toHaveLength(1);
+    const a = m.auditCalls[0];
+    expect(a.action).toBe('admin_override');
+    expect(a.actorAdminId).toBe(ADMIN_ID);
+    expect(a.subject).toContain(USER_ID);
+    expect(a.details).toMatchObject({ reason: REASON, forceReKyc: true });
+  });
+
+  it('never exposes PII in the audit payload (§3.4) — only the opaque user id + reason', async () => {
+    const { service, m } = makeMocks();
+
+    await service.forceReKyc(USER_ID, REASON, ADMIN_ID);
+
+    const serialized = JSON.stringify(m.auditCalls[0]);
+    expect(serialized).not.toContain('12345678901'); // nin
+    expect(serialized).not.toContain('22345678901'); // bvn
   });
 });
 

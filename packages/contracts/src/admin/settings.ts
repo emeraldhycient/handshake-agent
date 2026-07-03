@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { SupportedAssetSchema, FiatCurrencySchema } from "../common";
+
 // The admin-tunable config-key registry — the SINGLE source of truth for which
 // JSON/env config leaf values the admin console may override (root CLAUDE.md §7,
 // DB-admin › env › JSON). Every entry mirrors a dot-path in the API's
@@ -129,6 +131,26 @@ const assetPricing = (asset: string): SettingRegistryEntry[] => [
   ),
 ];
 
+// Per-asset / per-fiat catalog LIVE toggles (Phase 9). These are real config
+// dot-paths — `catalog.assets.<sym>.enabled` / `catalog.fiats.<code>.enabled`
+// (verified: cfg.catalog.fiats['NGN'].enabled) — that gate which assets/currencies
+// can settle real transactions (root CLAUDE.md §7: flipping a flag enables a
+// service without a deploy). Fail-closed: an absent flag resolves to false.
+// Enumerated from the canonical contract enums so the registry never drifts from
+// the SupportedAsset / FiatCurrency sets.
+const assetToggle = (asset: string): SettingRegistryEntry =>
+  flag(
+    `catalog.assets.${asset}.enabled`,
+    `Asset live: ${asset}`,
+    `Enable ${asset} as a live tradeable asset (buy/sell/send/swap). Fail-closed: off means the asset is not tradeable.`,
+  );
+const fiatToggle = (code: string): SettingRegistryEntry =>
+  flag(
+    `catalog.fiats.${code}.enabled`,
+    `Currency live: ${code}`,
+    `Enable ${code} as a live settlement currency. Fail-closed: off means no transaction can settle in ${code}.`,
+  );
+
 // NGN KYC-tier limits (root CLAUDE.md §3.3: server-side gate). Other fiats are
 // not yet live (catalog enabled:false), so only NGN is enumerated here.
 const TIERS = ["tier_1", "tier_2", "tier_3"] as const;
@@ -222,6 +244,10 @@ export const SETTING_REGISTRY: readonly SettingRegistryEntry[] = [
     "Send quote validity (seconds)",
     "Validity window for send quotes; the user must confirm before it expires.",
   ),
+
+  // ── Catalog asset / fiat live toggles (Phase 9; fail-closed) ────────────────
+  ...SupportedAssetSchema.options.map(assetToggle),
+  ...FiatCurrencySchema.options.map(fiatToggle),
 
   // ── Beneficiary ─────────────────────────────────────────────────────────────
   s(

@@ -318,4 +318,13 @@ export interface IIdentityRepository {
 
   /** Clears User.pinnedDeviceId. */
   unpinDevice(userId: string): Promise<void>;
+
+  /**
+   * Forces the user back to a pending KYC state so re-verification is required
+   * (Phase 9 admin "Force re-KYC"). Sets User.kycStatus = 'pending' and, when a
+   * KycProfile row exists, mirrors its status to 'pending' in the SAME
+   * transaction so the server-side gate (§3.3) never observes a partial reset.
+   * A no-op on the profile when none exists. Moves no money (§3.1).
+   */
+  resetKycToPending(userId: string): Promise<void>;
 }

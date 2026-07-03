@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 import {
+  SupportedAssetSchema,
+  FiatCurrencySchema,
+} from "../common";
+import {
   SETTING_REGISTRY,
   settingSchemaFor,
   type SettingRegistryEntry,
@@ -94,6 +98,36 @@ describe("SETTING_REGISTRY", () => {
     expect(
       keys.some((k) => k.toLowerCase().includes("api_key")),
     ).toBe(false);
+  });
+
+  it("registers a catalog live-toggle for every SupportedAsset (Phase 9)", () => {
+    for (const sym of SupportedAssetSchema.options) {
+      const e = entry(`catalog.assets.${sym}.enabled`);
+      expect(e.category).toBe("Catalog");
+      expect(e.valueType).toBe("boolean");
+      expect(e.editable).toBe(true);
+      expect(e.secret).toBe(false);
+    }
+  });
+
+  it("registers a catalog live-toggle for every FiatCurrency (Phase 9)", () => {
+    for (const code of FiatCurrencySchema.options) {
+      const e = entry(`catalog.fiats.${code}.enabled`);
+      expect(e.category).toBe("Catalog");
+      expect(e.valueType).toBe("boolean");
+      expect(e.editable).toBe(true);
+      expect(e.secret).toBe(false);
+    }
+  });
+
+  it("builds a boolean schema for a catalog asset/fiat toggle (Phase 9)", () => {
+    const assetSchema = settingSchemaFor("catalog.assets.USDT.enabled");
+    expect(assetSchema.parse(true)).toBe(true);
+    expect(() => assetSchema.parse("yes")).toThrow();
+
+    const fiatSchema = settingSchemaFor("catalog.fiats.NGN.enabled");
+    expect(fiatSchema.parse(false)).toBe(false);
+    expect(() => fiatSchema.parse(0)).toThrow();
   });
 
   it("registers the sanctions denylist as a Compliance string[] (Phase 3C)", () => {

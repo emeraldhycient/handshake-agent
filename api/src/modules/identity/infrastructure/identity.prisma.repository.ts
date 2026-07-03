@@ -629,4 +629,21 @@ export class IdentityPrismaRepository implements IIdentityRepository {
       data: { pinnedDeviceId: null },
     });
   }
+
+  async resetKycToPending(userId: string): Promise<void> {
+    // User + KycProfile move together (§3.3): a single transaction so the gate
+    // never observes a partial reset. updateMany scoped by userId is a no-op
+    // (count 0) when no profile exists — the reset must not throw for a user
+    // who never completed KYC.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: { kycStatus: KycStatus.pending },
+      });
+      await tx.kycProfile.updateMany({
+        where: { userId },
+        data: { status: KycStatus.pending },
+      });
+    });
+  }
 }

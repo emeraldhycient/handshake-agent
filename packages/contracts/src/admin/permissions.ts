@@ -257,6 +257,49 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Users",
     "Trigger an end user's PIN reset",
   ),
+  // Phase 9 — user-detail deferred writes (all step-up-gated + audited, no money).
+  r(
+    "api_route",
+    "DELETE /admin/users/:id/sessions",
+    "write",
+    "Users",
+    "Revoke ALL of an end user's active sessions",
+  ),
+  r(
+    "api_route",
+    "DELETE /admin/users/:id/sessions/:sessionId",
+    "write",
+    "Users",
+    "Revoke one of an end user's sessions",
+  ),
+  r(
+    "api_route",
+    "GET /admin/users/:id/notes",
+    "read",
+    "Users",
+    "List an end user's operator notes",
+  ),
+  r(
+    "api_route",
+    "POST /admin/users/:id/notes",
+    "write",
+    "Users",
+    "Add an operator note to an end user's timeline",
+  ),
+  r(
+    "api_route",
+    "POST /admin/users/:id/resend-verification",
+    "write",
+    "Users",
+    "Re-send an end user's verification / onboarding link",
+  ),
+  r(
+    "api_route",
+    "POST /admin/users/:id/force-rekyc",
+    "write",
+    "Users",
+    "Force an end user to re-complete KYC (resets their KYC status)",
+  ),
   // Manual credit is a MAKER action: it raises a pending `manual_credit`
   // ChangeRequest a SECOND admin must approve (four-eyes, §3.1) — it never moves
   // money itself. `write` (it only creates a request; the engine credit happens
@@ -353,6 +396,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "write",
     "KYC",
     "Reject a KYC submission",
+  ),
+  r(
+    "api_route",
+    "POST /admin/kyc/:userId/request-info",
+    "write",
+    "KYC",
+    "Ask a user for more KYC information (sets KYC status to needs_info)",
   ),
 
   // Transactions — read-only oversight of the deterministic engine (Phase 3)
@@ -457,6 +507,28 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "read",
     "Compliance",
     "List sanctions screening records",
+  ),
+  // Phase 9 — the append-only blocked list (users / addresses / banks).
+  r(
+    "api_route",
+    "GET /admin/blocked",
+    "read",
+    "Compliance",
+    "List the active blocked entries (users / addresses / banks)",
+  ),
+  r(
+    "api_route",
+    "POST /admin/blocked",
+    "write",
+    "Compliance",
+    "Add a blocked entry (step-up-gated)",
+  ),
+  r(
+    "api_route",
+    "POST /admin/blocked/:id/supersede",
+    "write",
+    "Compliance",
+    "Lift (supersede) a blocked entry — append-only, never deleted",
   ),
   r(
     "api_route",
@@ -690,6 +762,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "read",
     "Beneficiaries",
     "List end-user beneficiaries (payout destinations)",
+  ),
+  r(
+    "api_route",
+    "DELETE /admin/beneficiaries/:id",
+    "write",
+    "Beneficiaries",
+    "Remove (soft-delete) an end user's beneficiary",
   ),
   r(
     "api_route",

@@ -75,12 +75,14 @@ interface Mocks {
   identity: jest.Mocked<Pick<IIdentityRepository, 'loadUser'>>;
   config: jest.Mocked<Pick<EffectiveConfigService, 'get'>>;
   registry: jest.Mocked<Pick<AssetRegistry, 'defaultFiat'>>;
-  audit: jest.Mocked<Pick<AuditService, 'list'>>;
+  audit: jest.Mocked<Pick<AuditService, 'list' | 'record'>>;
 }
 
 function makeMocks(): { service: AdminUserSecurityService; m: Mocks } {
   const sessions = {
     listForUser: jest.fn(),
+    revokeSession: jest.fn(),
+    revokeAllForUser: jest.fn(),
   } as unknown as jest.Mocked<IUserSessionReadRepository>;
 
   const velocity = {
@@ -101,7 +103,8 @@ function makeMocks(): { service: AdminUserSecurityService; m: Mocks } {
 
   const audit = {
     list: jest.fn(),
-  } as unknown as jest.Mocked<Pick<AuditService, 'list'>>;
+    record: jest.fn().mockResolvedValue(undefined),
+  } as unknown as jest.Mocked<Pick<AuditService, 'list' | 'record'>>;
 
   const clock = { now: () => NOW };
 
@@ -290,5 +293,115 @@ describe('AdminUserSecurityService.listTimeline', () => {
     ]);
     // Sensitive before/after/details snapshots are NOT surfaced in the timeline.
     expect(JSON.stringify(out)).not.toContain('should-not-be-surfaced');
+  });
+});
+
+// ── revokeSession ─────────────────────────────────────────────────────────────
+
+const SESSION_ID = '22222222-2222-2222-2222-222222222222';
+const REASON = 'compromised device reported by user';
+
+describe('AdminUserSecurityService.revokeSession', () => {
+  it('throws AdminNotFoundError when the user does not exist', async () => {
+    const { service, m } = makeMocks();
+    m.identity.loadUser.mockResolvedValue(null);
+
+    await expect(
+      service.revokeSession(USER_ID, SESSION_ID, REASON, ADMIN_ID),
+    ).rejects.toBeInstanceOf(AdminNotFoundError);
+    expect(m.sessions.revokeSession).not.toHaveBeenCalled();
+    expect(m.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('throws AdminNotFoundError when no live session matched (fails closed, no audit)', async () => {
+    const { service, m } = makeMocks();
+    m.identity.loadUser.mockResolvedValue(makeUser());
+    m.sessions.revokeSession.mockResolvedValue(false);
+
+    await expect(
+      service.revokeSession(USER_ID, SESSION_ID, REASON, ADMIN_ID),
+    ).rejects.toBeInstanceOf(AdminNotFoundError);
+    expect(m.sessions.revokeSession).toHaveBeenCalledWith(
+      USER_ID,
+      SESSION_ID,
+      NOW,
+      REASON,
+    );
+    // No live session was revoked → nothing to audit.
+    expect(m.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('revokes the session scoped to the user and records a session_revoke audit', async () => {
+    const { service, m } = makeMocks();
+    m.identity.loadUser.mockResolvedValue(makeUser());
+    m.sessions.revokeSession.mockResolvedValue(true);
+
+    await service.revokeSession(USER_ID, SESSION_ID, REASON, ADMIN_ID);
+
+    // The user id from the path scopes the revoke — never a cross-user revoke.
+    expect(m.sessions.revokeSession).toHaveBeenCalledWith(
+      USER_ID,
+      SESSION_ID,
+      NOW,
+      REASON,
+    );
+    expect(m.audit.record).toHaveBeenCalledTimes(1);
+    const entry = m.audit.record.mock.calls[0][0];
+    expect(entry).toMatchObject({
+      actorAdminId: ADMIN_ID,
+      subject: `User:${USER_ID}`,
+      action: 'session_revoke',
+      after: { sessionId: SESSION_ID, reason: REASON },
+    });
+  });
+});
+
+// ── revokeAllSessions ─────────────────────────────────────────────────────────
+
+describe('AdminUserSecurityService.revokeAllSessions', () => {
+  it('throws AdminNotFoundError when the user does not exist', async () => {
+    const { service, m } = makeMocks();
+    m.identity.loadUser.mockResolvedValue(null);
+
+    await expect(
+      service.revokeAllSessions(USER_ID, REASON, ADMIN_ID),
+    ).rejects.toBeInstanceOf(AdminNotFoundError);
+    expect(m.sessions.revokeAllForUser).not.toHaveBeenCalled();
+    expect(m.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('revokes all live sessions and audits the count (idempotent when zero)', async () => {
+    const { service, m } = makeMocks();
+    m.identity.loadUser.mockResolvedValue(makeUser());
+    m.sessions.revokeAllForUser.mockResolvedValue(0);
+
+    await service.revokeAllSessions(USER_ID, REASON, ADMIN_ID);
+
+    // Force sign-out is idempotent: zero live sessions is a no-op success, and
+    // is still audited (the operator's intent to sign the user out is recorded).
+    expect(m.sessions.revokeAllForUser).toHaveBeenCalledWith(
+      USER_ID,
+      NOW,
+      REASON,
+    );
+    expect(m.audit.record).toHaveBeenCalledTimes(1);
+    const entry = m.audit.record.mock.calls[0][0];
+    expect(entry).toMatchObject({
+      actorAdminId: ADMIN_ID,
+      subject: `User:${USER_ID}`,
+      action: 'session_revoke',
+      after: { scope: 'all', revokedCount: 0, reason: REASON },
+    });
+  });
+
+  it('records the number of sessions revoked when there were live sessions', async () => {
+    const { service, m } = makeMocks();
+    m.identity.loadUser.mockResolvedValue(makeUser());
+    m.sessions.revokeAllForUser.mockResolvedValue(3);
+
+    await service.revokeAllSessions(USER_ID, REASON, ADMIN_ID);
+
+    const entry = m.audit.record.mock.calls[0][0];
+    expect(entry.after).toMatchObject({ scope: 'all', revokedCount: 3 });
   });
 });

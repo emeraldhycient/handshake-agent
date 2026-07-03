@@ -116,6 +116,7 @@ function makeIdentityRepo(
     setSimSwapDetectedAt: jest.fn(),
     revokeDevice: jest.fn(),
     unpinDevice: jest.fn(),
+    resetKycToPending: jest.fn(),
   };
 }
 
