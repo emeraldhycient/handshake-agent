@@ -38,10 +38,14 @@ const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
 
-function limit(key: string, value: number): EffectiveSetting {
+function limit(
+  key: string,
+  value: number,
+  category = "KYC"
+): EffectiveSetting {
   return {
     key,
-    category: "KYC",
+    category,
     label: key,
     description: `Limit ${key}`,
     valueType: "number",
@@ -54,10 +58,12 @@ function limit(key: string, value: number): EffectiveSetting {
 }
 
 // Only tier_1 needs real values for the assertions; the mapper handles missing tiers.
+// The new-beneficiary hold is a GLOBAL Beneficiary-category leaf (not per-tier).
 const LIMIT_SETTINGS: EffectiveSetting[] = [
   limit("limits.NGN.tier_1.perTxFiatMax", 200000),
   limit("limits.NGN.tier_1.dailyFiatMax", 500000),
   limit("limits.NGN.tier_1.dailyTxCountMax", 10),
+  limit("beneficiary.cryptoCoolingOffSeconds", 86400, "Beneficiary"),
 ]
 
 function renderPage() {
@@ -135,7 +141,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
       await screen.findByRole("button", { name: "Edit Per-transaction max" })
     )
 
-    const input = screen.getByRole("textbox", { name: "New value" })
+    const input = screen.getByRole("textbox", { name: "New value (NGN)" })
     await user.clear(input)
     await user.type(input, "300000")
     await user.click(screen.getByRole("button", { name: "Continue" }))
@@ -170,7 +176,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     await user.click(
       await screen.findByRole("button", { name: "Edit Daily max · rolling 24h" })
     )
-    const input = screen.getByRole("textbox", { name: "New value" })
+    const input = screen.getByRole("textbox", { name: "New value (NGN)" })
     await user.clear(input)
     await user.type(input, "750000")
     await user.click(screen.getByRole("button", { name: "Continue" }))
@@ -215,7 +221,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     await user.click(
       await screen.findByRole("button", { name: "Edit Per-transaction max" })
     )
-    const input = screen.getByRole("textbox", { name: "New value" })
+    const input = screen.getByRole("textbox", { name: "New value (NGN)" })
     await user.clear(input)
     await user.type(input, "300000")
     await user.click(screen.getByRole("button", { name: "Continue" }))
@@ -234,5 +240,56 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
 
     expect(await screen.findByText("Failed to load limits")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
+  })
+
+  it("edits the enforced daily transaction-count cap (a count leaf) via setSetting", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Transactions / day" })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (count)" })
+    await user.clear(input)
+    await user.type(input, "20")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("limits.NGN.tier_1.dailyTxCountMax", {
+      value: 20,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("edits the global new-beneficiary cooling-off (a seconds leaf) via setSetting", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // 86400s renders humanized as "1d".
+    expect(await screen.findByText("1d")).toBeInTheDocument()
+    await user.click(
+      await screen.findByRole("button", { name: "Edit New-beneficiary hold" })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (seconds)" })
+    await user.clear(input)
+    await user.type(input, "172800")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    // The global leaf (no tier suffix) is patched with the raw seconds value.
+    expect(mockSet).toHaveBeenCalledWith("beneficiary.cryptoCoolingOffSeconds", {
+      value: 172800,
+      scope: "global",
+      scopeValue: null,
+    })
+    // The toast omits any tier for the global leaf.
+    expect(defaultToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({ message: "New-beneficiary hold → 2d" })
+    )
   })
 })

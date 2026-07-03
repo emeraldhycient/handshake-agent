@@ -4,29 +4,26 @@
  * LimitsPage — the "Limits & velocity" screen (design §6.26; markup
  * docs/design-ref/screens/Limits.html).
  *
- * Structure (from the markup): a page header, a row of tier tabs, then a `1fr 1fr`
- * grid of two cards — "Amount caps · {tier}" (key/value rows each with an edit
- * pencil) and "Velocity & counts · {tier}" (display-only key/value rows). Switching
- * the tier tab swaps the rows shown in both cards.
+ * Structure: a page header, tier tabs, then a `1fr 1fr` grid of two cards — "Amount
+ * caps · {tier}" and "Velocity & counts · {tier}". Switching the tier tab swaps the
+ * rows shown in both cards.
  *
- * WIRED (Phase 6a): the per-tier caps are REAL, resolved from the
- * `limits.NGN.{tier}.perTxFiatMax` / `.dailyFiatMax` / `.dailyTxCountMax` registry
- * keys via GET /admin/settings (`useSettings("KYC")`). The design ALSO shows rows the
- * registry has no key for — "Weekly max", "Single on-chain send max", "Sends / 10-min
- * window", "Cooling-off after tier change", "New-beneficiary hold" — those render a
- * subtle "—" (no backing key) and are recorded as shapeGaps for later backend
- * enrichment. Four async branches: loading / error / empty / data.
+ * WIRED to the real registry via GET /admin/settings (all categories, so both the
+ * `limits.NGN.<tier>.*` tier caps AND the global `beneficiary.cryptoCoolingOffSeconds`
+ * resolve). A row is EDITABLE only when its config key exists AND is enforced
+ * server-side — currently the per-tier `perTxFiatMax` / `dailyFiatMax` /
+ * `dailyTxCountMax`, and the new-beneficiary cooling-off. Rows the engine does NOT yet
+ * enforce (Weekly max, Single on-chain send max, Sends / 10-min window, Cooling-off
+ * after tier change) render "—" with NO edit affordance: exposing an editor for a cap
+ * nothing enforces would be a fake, dangerous control (root §3.6). Each becomes editable
+ * as its enforcement lands.
  *
- * Editing an amount cap is maker-checker: the pencil opens a new-value prompt →
- * reason (audit) → step-up (TOTP) → maker-checker. WIRED (Phase 9 — WRITE): the
- * maker-checker submit fires the real step-up-guarded PATCH /admin/settings/:key
- * (`useSetSetting`) for the edited cap's `limits.NGN.<tier>.<field>` key, carrying the
- * setting's own scope. The server re-validates + hot-reloads + audits `config_change`;
- * the settings query then invalidates so the cap re-resolves. A 403
- * ADMIN_STEP_UP_REQUIRED opens the StepUpDialog and the PATCH replays after re-auth
- * (`useStepUpRetry`). Only caps with a backing registry key are editable — the
- * design rows the registry has no key for (Weekly max, Single on-chain send max) render
- * "—" and expose no edit affordance. Nothing moves money (§3.1).
+ * Editing is maker-checker: the pencil opens a new-value prompt → reason (audit) →
+ * step-up (TOTP) → maker-checker, then fires the real step-up-guarded PATCH
+ * /admin/settings/:key (`useSetSetting`) for the row's backing leaf. A 403
+ * ADMIN_STEP_UP_REQUIRED opens the StepUpDialog and the PATCH replays after re-auth. The
+ * server re-validates + hot-reloads + audits; the settings query then invalidates so the
+ * row re-resolves. Nothing moves money (§3.1). Four async branches: loading/error/empty/data.
  */
 import { useMemo, useState } from "react"
 
@@ -45,15 +42,17 @@ import { useAdminMe, useSetSetting, useSettings } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import type {
   LimitAmountRow,
+  LimitEditLeaf,
+  LimitLeafKind,
   LimitTier,
   LimitTierId,
   LimitVelocityRow,
 } from "@/types/components"
 
-// The design's edit pencil (logic.js `editIcon`-shaped path); reused per amount row.
+// The design's edit pencil (logic.js `editIcon`-shaped path); reused per editable row.
 const EDIT_ICON = "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"
 
-// Placeholder for a design row the registry has no backing key for (shapeGap).
+// Placeholder for a row whose cap the engine does not yet enforce (no editor — §3.6).
 const NO_KEY = "—"
 
 /** The three NGN KYC tiers the registry enumerates (`limits.NGN.<tier>.*`). */
@@ -63,108 +62,93 @@ const TIER_META: readonly { id: LimitTierId; label: string }[] = [
   { id: "tier_3", label: "Tier 3" },
 ]
 
+/** Humanize a seconds duration for display (e.g. 86400 → "24h", 0 → "None"). */
+function humanizeSeconds(s: number): string {
+  if (s === 0) return "None"
+  if (s % 86400 === 0) return `${s / 86400}d`
+  if (s % 3600 === 0) return `${s / 3600}h`
+  if (s % 60 === 0) return `${s / 60}m`
+  return `${s}s`
+}
+
+/** Format a numeric leaf value by its kind (NGN amount / plain count / duration). */
+function formatLeaf(kind: LimitLeafKind, n: number): string {
+  if (kind === "ngn") return `₦${n.toLocaleString()}`
+  if (kind === "count") return n.toLocaleString()
+  return humanizeSeconds(n)
+}
+
+/** The edit field's label + a11y name for a leaf kind (units are explicit). */
+function fieldLabelFor(kind: LimitLeafKind): string {
+  if (kind === "ngn") return "New value (NGN)"
+  if (kind === "count") return "New value (count)"
+  return "New value (seconds)"
+}
+
 /**
- * The editable amount caps' registry leaves, in display order. Each maps the design's
- * amount-cap label to the `limits.NGN.<tier>.<field>` key suffix so an edit targets the
- * same leaf the read resolved. Rows not listed here (Weekly max, Single on-chain send
- * max) have no backing key and are display-only.
+ * Build a key/value row. When the setting resolved to a number, the row is EDITABLE —
+ * it carries an `edit` leaf (key + scope + kind). When absent (unconfigured or
+ * unenforced), the row renders "—" with no editor.
  */
-const EDITABLE_CAPS: readonly { label: string; field: string }[] = [
-  { label: "Per-transaction max", field: "perTxFiatMax" },
-  { label: "Daily max · rolling 24h", field: "dailyFiatMax" },
-]
-
-/**
- * The setting leaf backing an editable cap — its full key + scope, carried so the write
- * targets the same leaf the read resolved. Keyed `${tierId}::${label}` in a lookup map.
- */
-interface CapSetting {
-  settingKey: string
-  scope: EffectiveSetting["scope"]
-  scopeValue: string | null
-}
-
-/** Format an NGN integer cap as the design's mono string, else the no-key dash. */
-function ngn(value: unknown): string {
-  return typeof value === "number" ? `₦${value.toLocaleString()}` : NO_KEY
-}
-
-/** Format a plain count cap (tx/day), else the no-key dash. */
-function count(value: unknown): string {
-  return typeof value === "number" ? value.toLocaleString() : NO_KEY
+function leafRow(
+  label: string,
+  setting: EffectiveSetting | undefined,
+  kind: LimitLeafKind
+): LimitAmountRow {
+  if (setting && typeof setting.value === "number") {
+    return {
+      k: label,
+      v: formatLeaf(kind, setting.value),
+      edit: {
+        key: setting.key,
+        scope: setting.scope,
+        scopeValue: setting.scopeValue,
+        kind,
+      },
+    }
+  }
+  return { k: label, v: NO_KEY }
 }
 
 /**
- * Build the per-tier cards from the real KYC-category settings. Amount caps map the
- * three registry keys; the extra design rows (Weekly / Single on-chain send) have no
- * key and render "—". Velocity maps the one backed count (Transactions / day); the
- * rest (10-min window / cooling-off / new-beneficiary hold) render "—" (shapeGaps).
+ * Build the per-tier cards from the real settings. Amount caps map the per-tier NGN
+ * keys; the extra design rows (Weekly / Single on-chain send) are not yet enforced and
+ * render "—". Velocity maps the enforced count (Transactions / day) and the global
+ * new-beneficiary cooling-off; the rest (10-min window / tier-change cooling-off) are
+ * not yet enforced and render "—".
  */
 function buildTiers(settings: readonly EffectiveSetting[]): LimitTier[] {
-  const byKey = new Map(settings.map((s) => [s.key, s.value]))
+  const byKey = new Map(settings.map((s) => [s.key, s]))
+  const benefHold = byKey.get("beneficiary.cryptoCoolingOffSeconds")
   return TIER_META.map(({ id, label }) => {
     const base = `limits.NGN.${id}`
     const amountCaps: LimitAmountRow[] = [
-      { k: "Per-transaction max", v: ngn(byKey.get(`${base}.perTxFiatMax`)) },
-      {
-        k: "Daily max · rolling 24h",
-        v: ngn(byKey.get(`${base}.dailyFiatMax`)),
-      },
+      leafRow("Per-transaction max", byKey.get(`${base}.perTxFiatMax`), "ngn"),
+      leafRow("Daily max · rolling 24h", byKey.get(`${base}.dailyFiatMax`), "ngn"),
       { k: "Weekly max", v: NO_KEY },
       { k: "Single on-chain send max", v: NO_KEY },
     ]
     const velocity: LimitVelocityRow[] = [
-      {
-        k: "Transactions / day",
-        v: count(byKey.get(`${base}.dailyTxCountMax`)),
-      },
+      leafRow("Transactions / day", byKey.get(`${base}.dailyTxCountMax`), "count"),
       { k: "Sends / 10-min window", v: NO_KEY },
       { k: "Cooling-off after tier change", v: NO_KEY },
-      { k: "New-beneficiary hold", v: NO_KEY },
+      leafRow("New-beneficiary hold", benefHold, "seconds"),
     ]
     return { id, label, amountCaps, velocity }
   })
 }
 
 /**
- * Build the `${tierId}::${label}` → backing-setting lookup for the editable caps. Only
- * caps whose `limits.NGN.<tier>.<field>` key is present in the settings response get an
- * entry — so an edit affordance appears only where a real PATCH can land.
+ * One key/value row. The edit pencil shows ONLY when the row is backed by an enforced,
+ * editable leaf (`row.edit`) — a "—" placeholder for an unenforced cap never exposes an
+ * editor, so an un-persistable (or fake) edit is impossible.
  */
-function buildCapSettings(
-  settings: readonly EffectiveSetting[]
-): Map<string, CapSetting> {
-  const byKey = new Map(settings.map((s) => [s.key, s]))
-  const map = new Map<string, CapSetting>()
-  for (const { id } of TIER_META) {
-    const base = `limits.NGN.${id}`
-    for (const { label, field } of EDITABLE_CAPS) {
-      const key = `${base}.${field}`
-      const setting = byKey.get(key)
-      if (!setting || typeof setting.value !== "number") continue
-      map.set(`${id}::${label}`, {
-        settingKey: key,
-        scope: setting.scope,
-        scopeValue: setting.scopeValue,
-      })
-    }
-  }
-  return map
-}
-
-/**
- * One amount-cap key/value row. The design's edit pencil is shown ONLY for caps with a
- * backing registry key (`editable`) — display-only design rows (no key, value "—") never
- * expose an edit affordance, so an un-persistable edit is impossible.
- */
-function AmountRow({
+function LimitLeafRow({
   row,
-  editable,
   onEdit,
 }: {
-  row: LimitAmountRow
-  editable: boolean
-  onEdit: (row: LimitAmountRow) => void
+  row: LimitAmountRow | LimitVelocityRow
+  onEdit: (row: LimitAmountRow | LimitVelocityRow) => void
 }) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-line2 py-[10px] last:border-b-0">
@@ -173,20 +157,14 @@ function AmountRow({
         <span className="font-mono text-[13px] font-bold text-ink tabular-nums">
           {row.v}
         </span>
-        {editable && (
+        {row.edit && (
           <button
             type="button"
             onClick={() => onEdit(row)}
             aria-label={`Edit ${row.k}`}
             className="flex size-[28px] items-center justify-center rounded-lg border border-line text-ink2 transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
           >
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              aria-hidden
-            >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden>
               <path
                 d={EDIT_ICON}
                 stroke="currentColor"
@@ -202,29 +180,16 @@ function AmountRow({
   )
 }
 
-/** One velocity/count key/value row (display-only per the markup). */
-function VelocityRow({ row }: { row: LimitVelocityRow }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-line2 py-[10px] last:border-b-0">
-      <span className="text-[12.5px] text-ink2">{row.k}</span>
-      <span className="font-mono text-[13px] font-bold text-ink tabular-nums">
-        {row.v}
-      </span>
-    </div>
-  )
-}
-
 /** The flow steps in the design's order — a new-value prompt precedes the audit chain. */
 type LimitFlowStep = "value" | "reason" | "stepup" | "maker"
 
-/** Normalizes a mutation/step-up failure into a user-facing message. */
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message
   if (error instanceof Error) return error.message
   return "Something went wrong."
 }
 
-/** Parse a cap input (plain integer NGN) → a finite non-negative integer, else null. */
+/** Parse a limit input (plain non-negative integer) → a number, else null. */
 function parseCap(text: string): number | null {
   const trimmed = text.trim()
   if (trimmed === "") return null
@@ -232,35 +197,37 @@ function parseCap(text: string): number | null {
   return Number.isInteger(n) && n >= 0 ? n : null
 }
 
+type EditableRow = LimitAmountRow | LimitVelocityRow
+
 export function LimitsPage() {
-  const query = useSettings("KYC")
+  // All categories: the tier caps live under "KYC", the new-beneficiary hold under
+  // "Beneficiary" — one read resolves both.
+  const query = useSettings()
 
   const me = useAdminMe()
   const setSetting = useSetSetting()
   const stepUp = useStepUpRetry()
 
-  // Tiers + the editable-cap → backing-setting lookup, both derived from the real
-  // settings. The displayed caps re-resolve from the invalidated query after a write.
-  const tiers = useMemo<LimitTier[]>(
-    () => buildTiers(query.data ?? []),
-    [query.data]
-  )
-  const capSettings = useMemo(
-    () => buildCapSettings(query.data ?? []),
-    [query.data]
+  const settings = useMemo(() => query.data ?? [], [query.data])
+  const tiers = useMemo<LimitTier[]>(() => buildTiers(settings), [settings])
+  const settingsByKey = useMemo(
+    () => new Map(settings.map((s) => [s.key, s])),
+    [settings]
   )
 
   const [tierId, setTierId] = useState<LimitTierId>("tier_1")
   const tier = tiers.find((t) => t.id === tierId) ?? tiers[0]
 
   // The maker-checker flow chain (design order): value → reason → step-up → maker.
-  const [editing, setEditing] = useState<LimitAmountRow | null>(null)
+  const [editing, setEditing] = useState<EditableRow | null>(null)
   const [newValue, setNewValue] = useState("")
   const [flow, setFlow] = useState<LimitFlowStep | null>(null)
 
-  function startEdit(row: LimitAmountRow) {
+  function startEdit(row: EditableRow) {
+    if (!row.edit) return
+    const raw = settingsByKey.get(row.edit.key)?.value
     setEditing(row)
-    setNewValue(row.v)
+    setNewValue(typeof raw === "number" ? String(raw) : "")
     setFlow("value")
   }
 
@@ -271,49 +238,44 @@ export function LimitsPage() {
   }
 
   const parsed = parseCap(newValue)
+  const leaf: LimitEditLeaf | undefined = editing?.edit
+
+  // A per-tier leaf (`limits.NGN.<tier>.*`) is labelled with the active tier; a global
+  // leaf (e.g. the new-beneficiary hold) carries no tier, so no misleading tier suffix.
+  const tierSuffix = (l: LimitEditLeaf | undefined): string =>
+    l && l.key.startsWith("limits.NGN.") && tier ? ` · ${tier.label}` : ""
 
   /**
-   * Approve the dual-control edit. Persists the new cap via the real step-up-guarded
-   * PATCH /admin/settings/:key (`useSetSetting`) against the edited cap's backing key,
-   * carrying the setting's own scope. The server re-validates + hot-reloads + audits; the
-   * settings query then invalidates so the cap re-resolves. A 403 ADMIN_STEP_UP_REQUIRED
-   * opens the StepUpDialog and the PATCH replays after re-auth. Nothing moves money (§3.1).
+   * Approve the dual-control edit. Persists the new value via the real step-up-guarded
+   * PATCH /admin/settings/:key against the row's backing leaf, carrying its scope. The
+   * server re-validates + hot-reloads + audits; the settings query then invalidates so the
+   * row re-resolves. A 403 opens the StepUpDialog and the PATCH replays after re-auth.
+   * Nothing moves money (§3.1).
    */
   function applyEdit() {
-    if (!editing || !tier || parsed === null) return
-    const backing = capSettings.get(`${tier.id}::${editing.k}`)
-    if (!backing) return
-    const label = editing.k
-    const tierLabel = tier.label
+    if (!editing || !leaf || parsed === null) return
+    const label = `${editing.k}${tierSuffix(leaf)}`
+    const kind = leaf.kind
     const value = parsed
+    const key = leaf.key
+    const scope = leaf.scope
+    const scopeValue = leaf.scopeValue
     closeFlow()
     void (async () => {
       try {
         const ok = await stepUp.run(() =>
           setSetting
-            .mutateAsync({
-              key: backing.settingKey,
-              input: {
-                value,
-                scope: backing.scope,
-                scopeValue: backing.scopeValue,
-              },
-            })
+            .mutateAsync({ key, input: { value, scope, scopeValue } })
             .then(() => undefined)
         )
-        if (ok)
-          pushToast(
-            `${label} · ${tierLabel} → ₦${value.toLocaleString()}`,
-            "ok"
-          )
+        if (ok) pushToast(`${label} → ${formatLeaf(kind, value)}`, "ok")
       } catch (error) {
         pushToast(errorMessage(error), "warn")
       }
     })()
   }
 
-  const flowTitle =
-    editing && tier ? `Edit ${editing.k} · ${tier.label}` : "Edit limit"
+  const flowTitle = editing ? `Edit ${editing.k}${tierSuffix(leaf)}` : "Edit limit"
 
   return (
     <div className="mx-auto max-w-[1080px] px-[30px] pt-[26px] pb-[60px]">
@@ -364,11 +326,7 @@ export function LimitsPage() {
       {query.isSuccess && tier && (
         <>
           {/* Tier tabs */}
-          <div
-            role="tablist"
-            aria-label="KYC tier"
-            className="mb-4 flex gap-[9px]"
-          >
+          <div role="tablist" aria-label="KYC tier" className="mb-4 flex gap-[9px]">
             {tiers.map((t) => {
               const active = t.id === tierId
               return (
@@ -393,28 +351,21 @@ export function LimitsPage() {
 
           {/* Cards: Amount caps | Velocity & counts */}
           <div className="grid grid-cols-2 gap-[14px]">
-            {/* Amount caps · {tier} */}
             <section className="rounded-[16px] border border-line bg-card px-5 py-[18px]">
               <h2 className="mb-3 text-[13px] font-extrabold text-ink">
                 Amount caps · {tier.label}
               </h2>
               {tier.amountCaps.map((row) => (
-                <AmountRow
-                  key={row.k}
-                  row={row}
-                  editable={capSettings.has(`${tier.id}::${row.k}`)}
-                  onEdit={startEdit}
-                />
+                <LimitLeafRow key={row.k} row={row} onEdit={startEdit} />
               ))}
             </section>
 
-            {/* Velocity & counts · {tier} */}
             <section className="rounded-[16px] border border-line bg-card px-5 py-[18px]">
               <h2 className="mb-3 text-[13px] font-extrabold text-ink">
                 Velocity &amp; counts · {tier.label}
               </h2>
               {tier.velocity.map((row) => (
-                <VelocityRow key={row.k} row={row} />
+                <LimitLeafRow key={row.k} row={row} onEdit={startEdit} />
               ))}
             </section>
           </div>
@@ -426,7 +377,7 @@ export function LimitsPage() {
         open={flow === "value"}
         onOpenChange={(open) => (open ? setFlow("value") : closeFlow())}
         title={flowTitle}
-        fieldLabel="New value"
+        fieldLabel={leaf ? fieldLabelFor(leaf.kind) : "New value"}
         currentValue={editing?.v ?? ""}
         value={newValue}
         onValueChange={setNewValue}
@@ -450,12 +401,12 @@ export function LimitsPage() {
         onOpenChange={(open) => (open ? setFlow("maker") : closeFlow())}
         title="Update limit"
         diff={
-          editing && tier && parsed !== null
+          editing && leaf && parsed !== null
             ? [
                 {
-                  field: `${editing.k} · ${tier.label}`,
+                  field: `${editing.k}${tierSuffix(leaf)}`,
                   from: editing.v,
-                  to: `₦${parsed.toLocaleString()}`,
+                  to: formatLeaf(leaf.kind, parsed),
                 },
               ]
             : []
@@ -463,8 +414,8 @@ export function LimitsPage() {
         onSubmit={applyEdit}
       />
 
-      {/* Server-side step-up re-auth: a 403 on the cap PATCH opens this; the PATCH
-          replays after re-authentication (settings then invalidate). */}
+      {/* Server-side step-up re-auth: a 403 on the PATCH opens this; it replays after
+          re-authentication (settings then invalidate). */}
       <StepUpDialog
         open={stepUp.open}
         mfaEnabled={me.data?.mfaEnabled ?? false}

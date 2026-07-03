@@ -972,20 +972,43 @@ export interface WhatsAppHealthRow {
 /** The three NGN KYC tiers the registry enumerates (`limits.NGN.<tier>.*`). */
 export type LimitTierId = "tier_1" | "tier_2" | "tier_3"
 
+/**
+ * How a limit leaf's value is formatted + parsed: an NGN amount, a plain count, or a
+ * duration in seconds. Drives the display string, the edit field label, and the diff.
+ */
+export type LimitLeafKind = "ngn" | "count" | "seconds"
+
+/**
+ * The setting leaf backing an editable limit row — its full key + scope (so the write
+ * targets the same leaf the read resolved) + its value kind. Present ONLY on rows whose
+ * config key exists AND is enforced server-side; a row without one is display-only (a
+ * placeholder cap the engine does not enforce is never made editable — root §3.6).
+ */
+export interface LimitEditLeaf {
+  key: string
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
+  kind: LimitLeafKind
+}
+
 /** One "Amount caps" key/value row (edit pencil opens the maker-checker flow). */
 export interface LimitAmountRow {
   /** The cap label shown on the left (e.g. "Per-transaction max"). */
   k: string
   /** The cap value shown on the right (mono/tabular, e.g. "₦200,000"). */
   v: string
+  /** Present when the row is backed by an enforced, editable config leaf. */
+  edit?: LimitEditLeaf
 }
 
-/** One "Velocity & counts" key/value row (display-only per the markup). */
+/** One "Velocity & counts" key/value row. Editable when backed by an enforced leaf. */
 export interface LimitVelocityRow {
   /** The metric label shown on the left (e.g. "Transactions / day"). */
   k: string
   /** The metric value shown on the right (mono/tabular, e.g. "10"). */
   v: string
+  /** Present when the row is backed by an enforced, editable config leaf. */
+  edit?: LimitEditLeaf
 }
 
 /** A tier tab's full content — its amount caps and velocity/count rows. */
