@@ -13,10 +13,11 @@
  * resolve). A row is EDITABLE only when its config key exists AND is enforced
  * server-side — currently the per-tier `perTxFiatMax` / `dailyFiatMax` /
  * `weeklyFiatMax` (rolling 7-day) / `perSendOnChainFiatMax` (single on-chain send) /
- * `dailyTxCountMax`, the tier-change cooling-off, and the new-beneficiary cooling-off.
- * The one row the engine does NOT yet enforce (Sends / 10-min window) renders "—" with
- * NO edit affordance: exposing an editor for a cap nothing enforces would be a fake,
- * dangerous control (root §3.6). It becomes editable as its enforcement lands.
+ * `sendsPer10MinMax` (rolling 10-minute send count) / `dailyTxCountMax`, the
+ * tier-change cooling-off, and the new-beneficiary cooling-off — every row is now
+ * backed by real server-side enforcement. A row still renders "—" with NO edit
+ * affordance ONLY if its config key is absent from the read (defence: never expose an
+ * editor for a cap that isn't resolvable/enforced — root §3.6).
  *
  * Editing is maker-checker: the pencil opens a new-value prompt → reason (audit) →
  * step-up (TOTP) → maker-checker, then fires the real step-up-guarded PATCH
@@ -135,7 +136,11 @@ function buildTiers(settings: readonly EffectiveSetting[]): LimitTier[] {
     ]
     const velocity: LimitVelocityRow[] = [
       leafRow("Transactions / day", byKey.get(`${base}.dailyTxCountMax`), "count"),
-      { k: "Sends / 10-min window", v: NO_KEY },
+      leafRow(
+        "Sends / 10-min window",
+        byKey.get(`${base}.sendsPer10MinMax`),
+        "count"
+      ),
       leafRow("Cooling-off after tier change", tierChangeHold, "seconds"),
       leafRow("New-beneficiary hold", benefHold, "seconds"),
     ]

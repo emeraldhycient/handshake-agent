@@ -8,6 +8,7 @@ import { PrismaService } from '../../../core/prisma/prisma.service';
 // the module resolver resolves the same path used everywhere else in infrastructure.
 import {
   FiatCurrency,
+  TransactionType,
   VelocityCounterType,
 } from '../../../../generated/prisma/client';
 // Fix-C: reuse the ledger's toScaled for exact-decimal string accumulation so
@@ -124,6 +125,27 @@ export class VelocityPrismaRepository implements IVelocityRepository {
     }
 
     return { fiatTotal: scaledToDecimalString(fiatScaled, SCALE) };
+  }
+
+  /**
+   * Count on-chain (crypto-address) SEND transactions this user created in the last
+   * `windowMs` (the rolling-10-minute rapid-fire cap). Counts actual `send`-type
+   * Transaction rows regardless of status — a burst of attempts is the risk — so there
+   * is no dedicated counter to maintain/reverse.
+   */
+  async getRecentSendCount(
+    userId: string,
+    asOf: Date,
+    windowMs: number,
+  ): Promise<number> {
+    const since = new Date(asOf.getTime() - windowMs);
+    return this.prisma.transaction.count({
+      where: {
+        userId,
+        type: TransactionType.send,
+        createdAt: { gt: since, lte: asOf },
+      },
+    });
   }
 }
 

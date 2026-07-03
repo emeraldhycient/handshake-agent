@@ -101,25 +101,30 @@ export class TierChangeCoolingOffError extends GateError {
 
 /**
  * A velocity cap for the user's KYC tier would be exceeded:
- *  - `fiat`   → rolling 24-hour spend cap (`dailyFiatMax`)
- *  - `count`  → rolling 24-hour transaction-count cap (`dailyTxCountMax`)
- *  - `weekly` → rolling 7-day spend cap (`weeklyFiatMax`)
+ *  - `fiat`        → rolling 24-hour spend cap (`dailyFiatMax`)
+ *  - `count`       → rolling 24-hour transaction-count cap (`dailyTxCountMax`)
+ *  - `weekly`      → rolling 7-day spend cap (`weeklyFiatMax`)
+ *  - `sends_10min` → rolling 10-minute on-chain send-count cap (`sendsPer10MinMax`)
  */
+export type VelocityKind = 'fiat' | 'count' | 'weekly' | 'sends_10min';
+
 export class VelocityExceededError extends GateError {
   readonly code = 'VELOCITY_EXCEEDED' as const;
 
   constructor(
-    readonly kind: 'fiat' | 'count' | 'weekly',
+    readonly kind: VelocityKind,
     readonly used: number,
     readonly limit: number,
     readonly tier: string,
     readonly fiatCurrency: string,
   ) {
-    super(VelocityExceededError.messageFor(kind, used, limit, tier, fiatCurrency));
+    super(
+      VelocityExceededError.messageFor(kind, used, limit, tier, fiatCurrency),
+    );
   }
 
   private static messageFor(
-    kind: 'fiat' | 'count' | 'weekly',
+    kind: VelocityKind,
     used: number,
     limit: number,
     tier: string,
@@ -129,6 +134,12 @@ export class VelocityExceededError extends GateError {
       return (
         `Transaction blocked: daily transaction count of ${used} would exceed ` +
         `the daily limit of ${limit} for tier ${tier}.`
+      );
+    }
+    if (kind === 'sends_10min') {
+      return (
+        `Transaction blocked: ${used} on-chain sends in 10 minutes would exceed ` +
+        `the limit of ${limit} for tier ${tier}.`
       );
     }
     const window = kind === 'weekly' ? 'weekly' : 'daily';

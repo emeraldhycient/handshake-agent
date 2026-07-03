@@ -189,6 +189,12 @@ const tierLimits = (tier: string): SettingRegistryEntry[] => [
     `Maximum NGN-equivalent of a single on-chain (crypto-address) send for ${tier}. On-chain sends are irreversible, so this can be set tighter than the general per-transaction cap.`,
   ),
   positiveInt(
+    `limits.NGN.${tier}.sendsPer10MinMax`,
+    "KYC",
+    `${tier} sends / 10-min window`,
+    `Maximum number of on-chain (crypto-address) sends within a rolling 10-minute window for ${tier} — an anti-rapid-fire (structuring/exfiltration) velocity cap.`,
+  ),
+  positiveInt(
     `limits.NGN.${tier}.dailyTxCountMax`,
     "KYC",
     `NGN ${tier} daily transaction count`,

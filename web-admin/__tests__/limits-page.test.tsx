@@ -64,6 +64,7 @@ const LIMIT_SETTINGS: EffectiveSetting[] = [
   limit("limits.NGN.tier_1.dailyFiatMax", 500000),
   limit("limits.NGN.tier_1.weeklyFiatMax", 3000000),
   limit("limits.NGN.tier_1.perSendOnChainFiatMax", 100000),
+  limit("limits.NGN.tier_1.sendsPer10MinMax", 5),
   limit("limits.NGN.tier_1.dailyTxCountMax", 10),
   limit("beneficiary.cryptoCoolingOffSeconds", 86400, "Beneficiary"),
   limit("compliance.tierChangeCoolingOffSeconds", 3600, "Compliance"),
@@ -196,19 +197,42 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     })
   })
 
-  it("does not offer to edit a row the engine does not enforce (§3.6)", async () => {
-    const user = userEvent.setup()
+  it("does not offer to edit a row whose config key is absent from the read (§3.6 guard)", async () => {
+    // A read missing the sends/10-min key → that row renders "—" with NO editor, even
+    // though every other row is backed. The guard is about resolvability, not the label.
+    mockList.mockResolvedValue(
+      LIMIT_SETTINGS.filter((s) => !s.key.endsWith("sendsPer10MinMax"))
+    )
     renderPage()
     await screen.findByRole("tab", { name: "Tier 1" })
-    // "Sends / 10-min window" is not yet enforced (renders "—"); no edit pencil.
     expect(
       screen.queryByRole("button", { name: "Edit Sends / 10-min window" })
     ).not.toBeInTheDocument()
-    // The backed per-tx cap still has its edit pencil.
     expect(
       await screen.findByRole("button", { name: "Edit Per-transaction max" })
     ).toBeInTheDocument()
-    void user
+  })
+
+  it("edits the enforced sends / 10-min window (a count leaf) via setSetting", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Sends / 10-min window" })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (count)" })
+    await user.clear(input)
+    await user.type(input, "8")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("limits.NGN.tier_1.sendsPer10MinMax", {
+      value: 8,
+      scope: "global",
+      scopeValue: null,
+    })
   })
 
   it("edits the enforced tier-change cooling-off (a global seconds leaf) via setSetting", async () => {

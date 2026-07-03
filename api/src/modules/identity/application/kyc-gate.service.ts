@@ -109,12 +109,16 @@ export interface AssertCanTransactInput {
  * frontend gate is UX-only, this is the security gate.
  *
  * Checks (in order — first failing check throws, remaining are skipped):
- *   1. SIM-swap block (high-severity; blocks regardless of KYC state)
- *   2. KYC status must be `verified` AND tier must not be `unverified`
- *   3. Per-transaction fiat amount ≤ tier limit
- *   4. Rolling 24-h fiat total would not exceed daily limit
- *   5. Rolling 24-h tx count + 1 would not exceed daily count limit
+ *   1.  SIM-swap block (high-severity; blocks regardless of KYC state)
+ *   2.  KYC status must be `verified` AND tier must not be `unverified`
+ *   2b. Tier-change cooling-off hold (compliance.tierChangeCoolingOffSeconds)
+ *   3.  Positive-amount guard + per-transaction fiat amount ≤ tier limit
+ *   4c. Single on-chain send cap (perSendOnChainFiatMax; on-chain sends only)
+ *   5.  Rolling 24-h fiat total ≤ dailyFiatMax and 24-h tx count + 1 ≤ dailyTxCountMax
+ *   6.  Rolling 7-day fiat total ≤ weeklyFiatMax
+ *   7.  Rolling 10-min on-chain send count + 1 ≤ sendsPer10MinMax (on-chain sends only)
  *
+ * Each cap enforced only when configured (§3.6); the shipped defaults set them all.
  * Tier limits are tunable via EffectiveConfigService / AppSetting (root CLAUDE.md §7):
  * an admin override flows through the same `get('limits')` call site at runtime.
  */
@@ -198,8 +202,10 @@ export class KycGateService {
     // 2b. Tier-change cooling-off — a time-based hold on ALL money moves within
     // `compliance.tierChangeCoolingOffSeconds` of the last tier change (§3.3, anti-abuse
     // after a fresh tier grant). 0 (default) or a null tierChangedAt = no hold.
-    const coolingOffSeconds = this.config.get<ComplianceConfig>('compliance')
-      ?.tierChangeCoolingOffSeconds;
+    const coolingOffSeconds =
+      this.config.get<ComplianceConfig>(
+        'compliance',
+      )?.tierChangeCoolingOffSeconds;
     if (
       coolingOffSeconds !== undefined &&
       coolingOffSeconds > 0 &&
@@ -331,5 +337,28 @@ export class KycGateService {
         );
       }
     }
+
+    // 7. Rolling 10-minute on-chain SEND-count velocity — an anti-rapid-fire cap for
+    // on-chain (irreversible) sends only (§3.6: enforced only when the tier carries it;
+    // the shipped defaults always do). Counts this send toward the window (+1).
+    if (input.onChainSend && tierLimits.sendsPer10MinMax !== undefined) {
+      const recentSends = await this.velocityRepo.getRecentSendCount(
+        userId,
+        asOf,
+        TEN_MINUTES_MS,
+      );
+      if (recentSends + 1 > tierLimits.sendsPer10MinMax) {
+        throw new VelocityExceededError(
+          'sends_10min',
+          recentSends + 1,
+          tierLimits.sendsPer10MinMax,
+          user.kycTier,
+          fiatCurrency,
+        );
+      }
+    }
   }
 }
+
+/** Rolling window for the on-chain send-count velocity cap. */
+const TEN_MINUTES_MS = 10 * 60 * 1000;

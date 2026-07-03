@@ -60,4 +60,17 @@ export interface IVelocityRepository {
     asOf: Date,
     fiatCurrency: string,
   ): Promise<WeeklyUsage>;
+
+  /**
+   * Count the user's on-chain (crypto-address) SEND transactions created within the
+   * `windowMs` window ending at `asOf` — the rolling-10-minute anti-rapid-fire cap.
+   * Counts by actual Transaction rows (all statuses — a rapid burst of attempts is the
+   * risk), so it needs no dedicated counter. Required so every implementor provides it
+   * (a missing impl would silently drop the cap, §3.6).
+   */
+  getRecentSendCount(
+    userId: string,
+    asOf: Date,
+    windowMs: number,
+  ): Promise<number>;
 }

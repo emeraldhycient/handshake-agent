@@ -52,6 +52,13 @@ export interface TierLimits {
    * present). On-chain sends are irreversible, so it may be set tighter than perTxFiatMax.
    */
   perSendOnChainFiatMax?: number;
+  /**
+   * Maximum number of on-chain (crypto-address) sends within a rolling 10-minute
+   * window — an anti-rapid-fire velocity cap. Optional on the type (fixtures for other
+   * caps need not set it) but the shipped defaults ALWAYS set it; enforced for on-chain
+   * sends when present.
+   */
+  sendsPer10MinMax?: number;
   /** Maximum number of transactions within a rolling 24-hour window. */
   dailyTxCountMax: number;
 }
@@ -785,6 +792,7 @@ const buildConfig = (): AppConfig => ({
         dailyFiatMax: 200_000,
         weeklyFiatMax: 1_000_000,
         perSendOnChainFiatMax: 50_000,
+        sendsPer10MinMax: 5,
         dailyTxCountMax: 10,
       },
       // Tier 2 — enhanced KYC: higher throughput for regular users.
@@ -793,6 +801,7 @@ const buildConfig = (): AppConfig => ({
         dailyFiatMax: 2_000_000,
         weeklyFiatMax: 10_000_000,
         perSendOnChainFiatMax: 500_000,
+        sendsPer10MinMax: 20,
         dailyTxCountMax: 30,
       },
       // Tier 3 — full KYC: high-volume / business users.
@@ -801,6 +810,7 @@ const buildConfig = (): AppConfig => ({
         dailyFiatMax: 20_000_000,
         weeklyFiatMax: 100_000_000,
         perSendOnChainFiatMax: 5_000_000,
+        sendsPer10MinMax: 50,
         dailyTxCountMax: 100,
       },
     },

@@ -132,10 +132,12 @@ function makeVelocityRepo(
   fiatTotal: string,
   txCount: number,
   weeklyTotal = '0',
+  recentSendCount = 0,
 ): IVelocityRepository {
   return {
     getDailyUsage: jest.fn().mockResolvedValue({ fiatTotal, txCount }),
     getWeeklyUsage: jest.fn().mockResolvedValue({ fiatTotal: weeklyTotal }),
+    getRecentSendCount: jest.fn().mockResolvedValue(recentSendCount),
   };
 }
 
@@ -145,10 +147,11 @@ function makeService(
   txCount = 0,
   config: EffectiveConfigService = stubConfig,
   weeklyTotal = '0',
+  recentSendCount = 0,
 ): KycGateService {
   return new KycGateService(
     makeIdentityRepo(user),
-    makeVelocityRepo(fiatTotal, txCount, weeklyTotal),
+    makeVelocityRepo(fiatTotal, txCount, weeklyTotal, recentSendCount),
     config,
     stubClock,
   );
@@ -492,6 +495,74 @@ describe('KycGateService.assertCanTransact', () => {
     await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
   });
 
+  // ── Rolling 10-minute on-chain send-count velocity (sendsPer10MinMax) ──────
+
+  const SENDS_LIMITS: AppConfig['limits'] = {
+    NGN: {
+      tier_1: { ...TIER_1_LIMITS, sendsPer10MinMax: 3 },
+      tier_2: DEFAULT_LIMITS.NGN.tier_2,
+      tier_3: DEFAULT_LIMITS.NGN.tier_3,
+    },
+  };
+
+  it('throws VelocityExceededError (sends_10min) when this on-chain send would exceed sendsPer10MinMax', async () => {
+    // 3 sends already in the last 10 min + this one = 4 > 3 cap.
+    const svc = makeService(
+      makeUser(),
+      '0',
+      0,
+      makeConfig(SENDS_LIMITS),
+      '0',
+      3,
+    );
+    const input = { ...BASE_INPUT, onChainSend: true };
+    await expect(svc.assertCanTransact(input)).rejects.toThrow(
+      VelocityExceededError,
+    );
+    await expect(svc.assertCanTransact(input)).rejects.toMatchObject({
+      code: 'VELOCITY_EXCEEDED',
+      kind: 'sends_10min',
+      limit: 3,
+      tier: 'tier_1',
+    });
+  });
+
+  it('does NOT apply the 10-min send cap to a non-send tx (buy/sell/swap)', async () => {
+    // A huge recent-send count, but this is NOT an on-chain send → the cap never gates it.
+    const svc = makeService(
+      makeUser(),
+      '0',
+      0,
+      makeConfig(SENDS_LIMITS),
+      '0',
+      99,
+    );
+    await expect(
+      svc.assertCanTransact(BASE_INPUT), // onChainSend absent
+    ).resolves.toBeUndefined();
+  });
+
+  it('does NOT throw when this on-chain send lands exactly on sendsPer10MinMax', async () => {
+    // 2 sends already + this one = 3 = cap (> is the boundary, not >=).
+    const svc = makeService(
+      makeUser(),
+      '0',
+      0,
+      makeConfig(SENDS_LIMITS),
+      '0',
+      2,
+    );
+    const input = { ...BASE_INPUT, onChainSend: true };
+    await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
+  });
+
+  it('skips the 10-min send cap when the tier has no sendsPer10MinMax', async () => {
+    // Default tier_1 has no sendsPer10MinMax; even a huge recent-send count passes.
+    const svc = makeService(makeUser(), '0', 0, stubConfig, '0', 99);
+    const input = { ...BASE_INPUT, onChainSend: true };
+    await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
+  });
+
   // ── Tier-change cooling-off (compliance.tierChangeCoolingOffSeconds) ──────
   // Blocks ALL money moves for a window after the KYC tier last changed.
 
@@ -743,7 +814,7 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn() },
+      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn(), getRecentSendCount: jest.fn() },
       stubConfig,
       stubClock,
     );
@@ -757,7 +828,7 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn() },
+      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn(), getRecentSendCount: jest.fn() },
       stubConfig,
       stubClock,
     );
@@ -768,7 +839,7 @@ describe('KycGateService.getOriginatorName', () => {
     const identityRepo = makeIdentityRepo(defaultUser, null);
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn() },
+      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn(), getRecentSendCount: jest.fn() },
       stubConfig,
       stubClock,
     );
@@ -782,7 +853,7 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn() },
+      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn(), getRecentSendCount: jest.fn() },
       stubConfig,
       stubClock,
     );
@@ -796,7 +867,7 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn() },
+      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn(), getRecentSendCount: jest.fn() },
       stubConfig,
       stubClock,
     );
@@ -819,7 +890,7 @@ describe('KycGateService.getOriginatorIdentity', () => {
   ): KycGateService {
     return new KycGateService(
       makeIdentityRepo(defaultUser, null, originator),
-      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn() },
+      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn(), getRecentSendCount: jest.fn() },
       stubConfig,
       stubClock,
     );
