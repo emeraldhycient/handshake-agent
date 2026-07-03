@@ -73,6 +73,12 @@ import { AdminUserNotePrismaRepository } from './infrastructure/admin-user-note.
 import { AdminResendVerificationService } from './application/admin-resend-verification.service';
 import { VERIFICATION_OUTBOX_REPOSITORY } from './application/ports/verification-outbox.repository.port';
 import { VerificationOutboxPrismaRepository } from './infrastructure/verification-outbox.prisma.repository';
+// Runtime "Add currency" (custom fiats).
+import { AdminCurrencyController } from './presentation/admin-currency.controller';
+import { AdminCurrencyService } from './application/admin-currency.service';
+import { CustomFiatSyncService } from './application/custom-fiat-sync.service';
+import { CUSTOM_FIAT_REPOSITORY } from './application/ports/custom-fiat.repository.port';
+import { CustomFiatPrismaRepository } from './infrastructure/custom-fiat.prisma.repository';
 import { AdminSessionGuard } from './presentation/admin-session.guard';
 import { PermissionGuard } from './presentation/permission.guard';
 import { AdminStepUpGuard } from './presentation/admin-step-up.guard';
@@ -276,6 +282,7 @@ import type { Env } from '../../core/config/env.schema';
     AdminApprovalsController,
     AdminPreferencesController,
     AdminBlockedController,
+    AdminCurrencyController,
   ],
   providers: [
     AdminTokenGuard,
@@ -299,6 +306,10 @@ import type { Env } from '../../core/config/env.schema';
       provide: VERIFICATION_OUTBOX_REPOSITORY,
       useClass: VerificationOutboxPrismaRepository,
     },
+    // ── Runtime "Add currency" (custom fiats) ──
+    AdminCurrencyService,
+    CustomFiatSyncService,
+    { provide: CUSTOM_FIAT_REPOSITORY, useClass: CustomFiatPrismaRepository },
     // ── Admin RBAC console (Task 11): repo bindings, adapters, services, guards ──
     { provide: ADMIN_USER_REPOSITORY, useClass: AdminUserPrismaRepository },
     {

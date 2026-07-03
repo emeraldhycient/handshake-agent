@@ -5,6 +5,11 @@ import { AdminCatalogViewSchema } from '@handshake-agent/contracts';
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { AdminCatalogService } from './admin-catalog.service';
 import type { CatalogConfig } from '../../../core/config/configuration';
+import {
+  CUSTOM_FIAT_REPOSITORY,
+  type CustomFiatRecord,
+  type ICustomFiatRepository,
+} from './ports/custom-fiat.repository.port';
 
 // A representative merged catalog: enabled + disabled assets/fiats + networks, so
 // the projection is exercised over both live and paused rows and the network-id →
@@ -68,9 +73,20 @@ const catalog: CatalogConfig = {
   sendQuoteExpiresInSec: 30,
 };
 
+const customRow = (over: Partial<CustomFiatRecord> = {}): CustomFiatRecord => ({
+  code: 'EUR',
+  displayName: 'Euro',
+  symbol: '€',
+  decimals: 2,
+  enabled: false,
+  createdAt: new Date('2026-07-03T00:00:00.000Z'),
+  ...over,
+});
+
 describe('AdminCatalogService', () => {
   let service: AdminCatalogService;
   let effectiveConfig: jest.Mocked<Pick<EffectiveConfigService, 'get'>>;
+  let customFiatRepo: jest.Mocked<ICustomFiatRepository>;
 
   beforeEach(async () => {
     effectiveConfig = {
@@ -78,35 +94,42 @@ describe('AdminCatalogService', () => {
         key === 'catalog' ? catalog : undefined,
       ) as jest.Mock,
     };
+    customFiatRepo = {
+      listAll: jest.fn().mockResolvedValue([]),
+      findByCode: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AdminCatalogService,
         { provide: EffectiveConfigService, useValue: effectiveConfig },
+        { provide: CUSTOM_FIAT_REPOSITORY, useValue: customFiatRepo },
       ],
     }).compile();
 
     service = module.get(AdminCatalogService);
   });
 
-  it('reads the catalog from the effective (merged, hot-reloaded) config, not the static base', () => {
-    service.getCatalog();
+  it('reads the catalog from the effective (merged, hot-reloaded) config, not the static base', async () => {
+    await service.getCatalog();
     expect(effectiveConfig.get).toHaveBeenCalledWith('catalog');
   });
 
-  it('projects a shape that satisfies the AdminCatalogView contract', () => {
-    const view = service.getCatalog();
+  it('projects a shape that satisfies the AdminCatalogView contract', async () => {
+    const view = await service.getCatalog();
     expect(() => AdminCatalogViewSchema.parse(view)).not.toThrow();
   });
 
-  it('includes DISABLED assets and fiats (not just enabled ones)', () => {
-    const view = service.getCatalog();
+  it('includes DISABLED assets and fiats (not just enabled ones)', async () => {
+    const view = await service.getCatalog();
     expect(view.assets.map((a) => a.symbol).sort()).toEqual(['BTC', 'USDT']);
     expect(view.fiats.map((f) => f.code).sort()).toEqual(['NGN', 'RWF']);
   });
 
-  it("maps each entry's `enabled` flag onto the `live` field", () => {
-    const view = service.getCatalog();
+  it("maps each entry's `enabled` flag onto the `live` field", async () => {
+    const view = await service.getCatalog();
     const usdt = view.assets.find((a) => a.symbol === 'USDT');
     const btc = view.assets.find((a) => a.symbol === 'BTC');
     const ngn = view.fiats.find((f) => f.code === 'NGN');
@@ -117,8 +140,8 @@ describe('AdminCatalogService', () => {
     expect(rwf?.live).toBe(false);
   });
 
-  it('resolves network ids to their display names, falling back to the id when the network is unregistered', () => {
-    const view = service.getCatalog();
+  it('resolves network ids to their display names, falling back to the id when the network is unregistered', async () => {
+    const view = await service.getCatalog();
     const usdt = view.assets.find((a) => a.symbol === 'USDT');
     const btc = view.assets.find((a) => a.symbol === 'BTC');
     // TRON/ETHEREUM resolve to display names; BITCOIN is absent → id fallback.
@@ -126,8 +149,8 @@ describe('AdminCatalogService', () => {
     expect(btc?.networks).toEqual(['BITCOIN']);
   });
 
-  it('surfaces asset display metadata (symbol/name/kind/decimals) without any secret field', () => {
-    const view = service.getCatalog();
+  it('surfaces asset display metadata (symbol/name/kind/decimals) without any secret field', async () => {
+    const view = await service.getCatalog();
     const usdt = view.assets.find((a) => a.symbol === 'USDT')!;
     expect(usdt).toEqual({
       symbol: 'USDT',
@@ -142,8 +165,8 @@ describe('AdminCatalogService', () => {
     expect(JSON.stringify(view)).not.toContain('secret-wallet');
   });
 
-  it('surfaces fiat display metadata (code/symbol/name/decimals-as-rounding)', () => {
-    const view = service.getCatalog();
+  it('surfaces built-in fiat display metadata with custom:false', async () => {
+    const view = await service.getCatalog();
     const ngn = view.fiats.find((f) => f.code === 'NGN')!;
     expect(ngn).toEqual({
       code: 'NGN',
@@ -151,14 +174,59 @@ describe('AdminCatalogService', () => {
       displayName: 'Nigerian Naira',
       decimals: 2,
       live: true,
+      custom: false,
     });
   });
 
-  it('returns empty arrays when the catalog has no assets or fiats', () => {
+  it('returns empty arrays when the catalog and custom store are empty', async () => {
     effectiveConfig.get.mockImplementation((key: string) =>
       key === 'catalog' ? { ...catalog, assets: {}, fiats: {} } : undefined,
     );
-    const view = service.getCatalog();
+    const view = await service.getCatalog();
     expect(view).toEqual({ assets: [], fiats: [] });
+  });
+
+  describe('custom-fiat merge', () => {
+    it('merges runtime custom fiats (custom:true, live=enabled) alongside built-ins', async () => {
+      customFiatRepo.listAll.mockResolvedValue([
+        customRow({ code: 'EUR', enabled: true }),
+        customRow({
+          code: 'GHS',
+          displayName: 'Ghana Cedi',
+          symbol: '₵',
+          enabled: false,
+        }),
+      ]);
+
+      const view = await service.getCatalog();
+
+      // Built-ins remain, marked custom:false.
+      expect(view.fiats.find((f) => f.code === 'NGN')?.custom).toBe(false);
+      // Custom rows appended, marked custom:true with live mapped from enabled.
+      const eur = view.fiats.find((f) => f.code === 'EUR')!;
+      expect(eur).toEqual({
+        code: 'EUR',
+        symbol: '€',
+        displayName: 'Euro',
+        decimals: 2,
+        live: true,
+        custom: true,
+      });
+      const ghs = view.fiats.find((f) => f.code === 'GHS')!;
+      expect(ghs.custom).toBe(true);
+      expect(ghs.live).toBe(false);
+    });
+
+    it('includes PAUSED (disabled) custom fiats too', async () => {
+      customFiatRepo.listAll.mockResolvedValue([
+        customRow({ code: 'EUR', enabled: false }),
+      ]);
+      const view = await service.getCatalog();
+      expect(view.fiats.map((f) => f.code).sort()).toEqual([
+        'EUR',
+        'NGN',
+        'RWF',
+      ]);
+    });
   });
 });

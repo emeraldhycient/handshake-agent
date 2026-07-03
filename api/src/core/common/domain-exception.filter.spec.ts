@@ -54,6 +54,7 @@ import {
   SettingValidationError,
   MultiCurrencyInvariantError,
 } from '../../modules/admin/domain/settings-errors';
+import { CurrencyCollisionError } from '../../modules/admin/domain/currency-errors';
 
 interface ErrorBody {
   statusCode: number;
@@ -164,6 +165,7 @@ describe('DomainExceptionFilter', () => {
     [new SettingNotEditableError('auth.pin.maxAttempts'), 409],
     [new SettingValidationError('bad value'), 422],
     [new MultiCurrencyInvariantError('NGN has no limits'), 422],
+    [new CurrencyCollisionError('EUR'), 409],
     [new TxnNotTriageableError(), 409],
   ])('maps admin %s → %i with its code echoed', (err, expected) => {
     const { statusCode, body } = run(filter, err);

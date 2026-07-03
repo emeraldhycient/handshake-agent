@@ -263,6 +263,12 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     message:
       'This change would leave an enabled currency without limits or pricing.',
   },
+  // Runtime "Add currency": the proposed code collides with a built-in catalog
+  // fiat or an existing custom fiat (a custom fiat may not shadow a currency) → 409.
+  ADMIN_CURRENCY_COLLISION: {
+    status: HttpStatus.CONFLICT,
+    message: 'A currency with this code already exists.',
+  },
 
   // ── Amount guards (engine) → 422 — clear, non-sensitive validation copy ─────
   AMOUNT_TOO_SMALL: {
