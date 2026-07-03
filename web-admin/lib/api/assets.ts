@@ -7,9 +7,9 @@
  *   POST /admin/config/assets/sync       — re-run discovery against the live wallet(s)
  *
  * Neither moves money (§3.1): discovery reads the provider's asset listing. The sync is
- * step-up-gated server-side (it may 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps
- * it in `useStepUpRetry`) + immutably audited. Responses are parsed through the contract
- * schema after the request (§8). This file lives in `lib/` — no `components/`/`app/` imports.
+ * permissioned (default-deny) + immutably audited server-side, but NOT step-up-gated — it
+ * is a catalog refresh (the same discovery boot runs). Responses are parsed through the
+ * contract schema after the request (§8). This file lives in `lib/` — no `components/`/`app/` imports.
  */
 import {
   AdminAssetsSyncResponseSchema,

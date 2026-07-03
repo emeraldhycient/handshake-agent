@@ -304,26 +304,23 @@ export function AssetsPage() {
   }
 
   /**
-   * Real "Sync Blockradar catalog" — POST /admin/config/assets/sync via the step-up
-   * chain (the sync can bring assets into the tradeable overlay, so it is step-up-gated
-   * + audited server-side). On success advances the last-sync caption + toasts the
-   * counts; the mutation invalidates the discovered list + admin catalog. A 403 opens
-   * the StepUpDialog and the sync replays (with its toast) after re-auth. Nothing here
+   * Real "Sync Blockradar catalog" — a one-click POST /admin/config/assets/sync
+   * (permissioned + audited server-side; NOT step-up-gated — it is a catalog refresh, the
+   * same discovery boot runs). On success advances the last-sync caption + toasts the
+   * counts; the mutation invalidates the discovered list + admin catalog. Nothing here
    * moves money (§3.1) — discovery reads the provider's asset listing.
    */
   function runSync() {
     void (async () => {
       try {
-        await stepUp.run(async () => {
-          const res = await syncAssets.mutateAsync()
-          setLastSync("just now")
-          pushToast(
-            res.newCount > 0
-              ? `Blockradar sync — ${res.newCount} new asset(s) discovered`
-              : `Blockradar synced — ${res.discoveredCount} asset(s), none new`,
-            res.newCount > 0 ? "ok" : "info"
-          )
-        })
+        const res = await syncAssets.mutateAsync()
+        setLastSync("just now")
+        pushToast(
+          res.newCount > 0
+            ? `Blockradar sync — ${res.newCount} new asset(s) discovered`
+            : `Blockradar synced — ${res.discoveredCount} asset(s), none new`,
+          res.newCount > 0 ? "ok" : "info"
+        )
       } catch (error) {
         pushToast(errorMessage(error), "warn")
       }
