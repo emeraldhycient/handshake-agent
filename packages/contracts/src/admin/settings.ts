@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { SupportedAssetSchema, FiatCurrencySchema } from "../common";
+import { SupportedAssetSchema, KNOWN_FIAT_CURRENCIES } from "../common";
 
 // The admin-tunable config-key registry — the SINGLE source of truth for which
 // JSON/env config leaf values the admin console may override (root CLAUDE.md §7,
@@ -247,7 +247,7 @@ export const SETTING_REGISTRY: readonly SettingRegistryEntry[] = [
 
   // ── Catalog asset / fiat live toggles (Phase 9; fail-closed) ────────────────
   ...SupportedAssetSchema.options.map(assetToggle),
-  ...FiatCurrencySchema.options.map(fiatToggle),
+  ...KNOWN_FIAT_CURRENCIES.map(fiatToggle),
 
   // ── Beneficiary ─────────────────────────────────────────────────────────────
   s(

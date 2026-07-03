@@ -71,3 +71,26 @@ enum OutboxMessageStatus {
 
   @@map("outbox_message_status")
 }
+
+/// A runtime admin-added fiat currency (the "Add currency" feature). Layered ON TOP
+/// of the JSON-default catalog fiats via the AssetRegistry customFiats overlay, so a
+/// currency added here is recognised by the whole money path once synced — but stays
+/// fail-closed: `enabled` only takes effect after pricing is configured (the same
+/// enabled-needs-pricing invariant the built-in fiats obey). Never moves money itself.
+model CustomFiat {
+  /// ISO-ish uppercase code, e.g. "EUR". Unique — a custom fiat may not shadow a
+  /// built-in catalog code.
+  code           String   @id
+  displayName    String
+  /// Display symbol, e.g. "€".
+  symbol         String
+  /// Decimal places shown for the currency.
+  decimals       Int      @default(2)
+  /// Live flag; fail-closed — enabling requires pricing (re-checked server-side).
+  enabled        Boolean  @default(false)
+  addedByAdminId String   @db.Uuid
+  createdAt      DateTime @default(now()) @db.Timestamptz
+  updatedAt      DateTime @updatedAt @db.Timestamptz
+
+  @@map("custom_fiats")
+}

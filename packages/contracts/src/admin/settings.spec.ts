@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import {
   SupportedAssetSchema,
-  FiatCurrencySchema,
+  KNOWN_FIAT_CURRENCIES,
 } from "../common";
 import {
   SETTING_REGISTRY,
@@ -111,7 +111,7 @@ describe("SETTING_REGISTRY", () => {
   });
 
   it("registers a catalog live-toggle for every FiatCurrency (Phase 9)", () => {
-    for (const code of FiatCurrencySchema.options) {
+    for (const code of KNOWN_FIAT_CURRENCIES) {
       const e = entry(`catalog.fiats.${code}.enabled`);
       expect(e.category).toBe("Catalog");
       expect(e.valueType).toBe("boolean");

@@ -34,8 +34,19 @@ describe('FiatCurrencySchema', () => {
     expect(FiatCurrencySchema.parse('USD')).toBe('USD')
   })
 
-  it('rejects junk values', () => {
-    expect(() => FiatCurrencySchema.parse('XYZ')).toThrow()
+  it('accepts a well-formed unknown code (validation is catalog-driven, runtime-addable)', () => {
+    // EUR is not a built-in, but the schema is a boundary format-check now — the
+    // server re-validates against the live catalog (AssetRegistry). This is what
+    // lets an operator ADD a currency at runtime without a code change.
+    expect(FiatCurrencySchema.parse('EUR')).toBe('EUR')
+    expect(FiatCurrencySchema.parse('XYZ')).toBe('XYZ')
+  })
+
+  it('rejects malformed codes (lowercase, wrong length, non-letters)', () => {
+    expect(() => FiatCurrencySchema.parse('ngn')).toThrow()
+    expect(() => FiatCurrencySchema.parse('US')).toThrow()
+    expect(() => FiatCurrencySchema.parse('USDT')).toThrow()
+    expect(() => FiatCurrencySchema.parse('N1G')).toThrow()
   })
 
   it('rejects an empty string', () => {

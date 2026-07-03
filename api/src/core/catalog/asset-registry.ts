@@ -114,6 +114,17 @@ export class AssetRegistry {
    */
   private readonly discoveredLogoUrls: Map<string, string> = new Map();
 
+  /**
+   * Overlay of runtime admin-added fiat currencies (the "Add currency" feature),
+   * keyed by upper-case code. Populated from the CustomFiat table by
+   * CustomFiatSyncService on boot and after every admin add/update. Layered on top of
+   * the static catalog fiats (a custom code may not shadow a built-in), so the whole
+   * money path recognises a runtime currency once synced — but `enabled` stays
+   * fail-closed exactly like a built-in fiat (enabling requires pricing, re-checked
+   * server-side). Kept as a separate overlay so the static config type stays immutable.
+   */
+  private readonly customFiats: Map<string, CatalogFiat> = new Map();
+
   constructor(private readonly config: ConfigService) {
     const catalog = this.config.get<CatalogConfig>('catalog');
     if (!catalog) {
@@ -316,11 +327,38 @@ export class AssetRegistry {
   // ── Fiat lookups ───────────────────────────────────────────────────────
 
   /**
-   * Returns metadata for the given fiat currency code.
+   * Replace the runtime custom-fiat overlay with the given set (the "Add currency"
+   * feature). Called by CustomFiatSyncService on boot and after every admin add/update.
+   * A custom fiat whose code collides with a built-in static catalog fiat is IGNORED
+   * (built-ins win) so a runtime currency can never shadow a platform currency.
+   */
+  syncCustomFiats(fiats: readonly CatalogFiat[]): void {
+    this.customFiats.clear();
+    for (const f of fiats) {
+      if (this.catalog.fiats[f.code]) continue; // never shadow a built-in
+      this.customFiats.set(f.code, f);
+    }
+  }
+
+  /** Merged fiat metadata for a code — static catalog first, then the custom overlay. */
+  private resolveFiatMeta(code: string): CatalogFiat | undefined {
+    return this.catalog.fiats[code] ?? this.customFiats.get(code);
+  }
+
+  /** All fiat entries (static built-ins + runtime custom overlay). */
+  private allFiats(): CatalogFiat[] {
+    return [
+      ...Object.values(this.catalog.fiats),
+      ...this.customFiats.values(),
+    ];
+  }
+
+  /**
+   * Returns metadata for the given fiat currency code (built-in OR runtime custom).
    * @throws {UnsupportedFiatError} when the code is not registered or is disabled.
    */
   fiat(code: string): FiatMeta {
-    const meta = this.catalog.fiats[code];
+    const meta = this.resolveFiatMeta(code);
     if (!meta || !meta.enabled) {
       throw new UnsupportedFiatError(code);
     }
@@ -333,7 +371,7 @@ export class AssetRegistry {
    * @throws {UnsupportedFiatError} when no enabled fiat is registered.
    */
   defaultFiat(): string {
-    const code = Object.values(this.catalog.fiats).find((f) => f.enabled)?.code;
+    const code = this.allFiats().find((f) => f.enabled)?.code;
     if (!code) {
       throw new UnsupportedFiatError(
         'default',
@@ -347,8 +385,7 @@ export class AssetRegistry {
    * Returns `true` if the fiat is registered AND enabled; `false` otherwise.
    */
   isFiatEnabled(code: string): boolean {
-    const meta = this.catalog.fiats[code];
-    return !!meta?.enabled;
+    return !!this.resolveFiatMeta(code)?.enabled;
   }
 
   /**
@@ -356,12 +393,11 @@ export class AssetRegistry {
    * Semantically equivalent to `isFiatEnabled` but named for the multi-currency
    * foundation where "live" means the currency can settle real transactions.
    *
-   * Non-live currencies are in the FiatCurrencySchema supported set (contracts)
-   * but have `enabled: false` in config — their flows surface `currency_not_live`.
+   * Non-live currencies are recognised (built-in or runtime-added) but have
+   * `enabled: false` — their flows surface `currency_not_live`.
    */
   isCurrencyLive(code: string): boolean {
-    const meta = this.catalog.fiats[code];
-    return !!meta?.enabled;
+    return !!this.resolveFiatMeta(code)?.enabled;
   }
 
   /**
@@ -373,21 +409,20 @@ export class AssetRegistry {
    * `supportedFiats()`.
    */
   enabledFiats(): string[] {
-    return Object.values(this.catalog.fiats)
+    return this.allFiats()
       .filter((f) => f.enabled)
       .map((f) => f.code);
   }
 
   /**
-   * Returns the fiat codes for ALL currencies registered in the catalog,
-   * regardless of their `enabled` flag. This is the config-layer equivalent
-   * of the `FiatCurrencySchema` enum in `@handshake-agent/contracts`.
+   * Returns the fiat codes for ALL currencies recognised (built-in static catalog
+   * + runtime custom overlay), regardless of their `enabled` flag.
    *
    * Use this when you need to recognise a currency without asserting liveness
    * (e.g. to emit `currency_not_live` rather than rejecting as unknown).
    */
   supportedFiats(): string[] {
-    return Object.keys(this.catalog.fiats);
+    return this.allFiats().map((f) => f.code);
   }
 
   // ── Network lookups ───────────────────────────────────────────────────

@@ -7,13 +7,29 @@ import { z } from 'zod'
 export const SupportedAssetSchema = z.enum(['USDT', 'BTC', 'TRX'])
 export type SupportedAsset = z.infer<typeof SupportedAssetSchema>
 
-// FiatCurrency: the SUPPORTED currency set for the entire platform.
-// Which currencies are actually LIVE (i.e. can settle real transactions) is
-// governed by the catalog `enabled` flag in the layered config (CLAUDE.md §7),
-// not this enum. Adding a currency here means the system recognises it;
-// flipping its catalog `enabled` flag to true makes it live.
-// At launch: NGN is the only LIVE currency — all others are enabled:false in config.
-export const FiatCurrencySchema = z.enum(['NGN', 'GHS', 'KES', 'UGX', 'TZS', 'RWF', 'ZAR', 'USD'])
+// FiatCurrency: currency validation is CATALOG-DRIVEN, not a fixed enum. The schema
+// accepts any well-formed 3-letter code; the SERVER re-validates it against the live
+// catalog (AssetRegistry) — an unknown or disabled currency is rejected fail-closed at
+// the money-path boundary (§3.3), and only an ACTIVE catalog fiat with pricing can
+// settle. This lets operators ADD currencies at runtime ("Add currency" → CustomFiat
+// overlay) without a code change. `KNOWN_FIAT_CURRENCIES` is the built-in (JSON-default
+// catalog) set, used only where the code must ENUMERATE the built-ins (registry keys,
+// defaults) — never as the validation boundary.
+export const KNOWN_FIAT_CURRENCIES = [
+  'NGN',
+  'GHS',
+  'KES',
+  'UGX',
+  'TZS',
+  'RWF',
+  'ZAR',
+  'USD',
+] as const
+
+export const FiatCurrencySchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Z]{3}$/, 'must be a 3-letter uppercase currency code')
 export type FiatCurrency = z.infer<typeof FiatCurrencySchema>
 
 // Money is carried as a validated string until the execution boundary, then
