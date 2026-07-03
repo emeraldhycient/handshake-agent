@@ -27,9 +27,23 @@ vi.mock("@/lib/api/catalog", () => ({
   getAdminCatalog: vi.fn(),
 }))
 
+// The live-toggle write path patches catalog.assets.<sym>.enabled via setSetting.
+vi.mock("@/lib/api/config", () => ({
+  setSetting: vi.fn(),
+}))
+
+// The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn(),
+}))
+
 import { getAdminCatalog } from "@/lib/api/catalog"
+import { setSetting } from "@/lib/api/config"
+import { getMe } from "@/lib/api/admin"
 
 const mockGetAdminCatalog = vi.mocked(getAdminCatalog)
+const mockSet = vi.mocked(setSetting)
+const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -69,6 +83,31 @@ function renderPage() {
 beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
   mockGetAdminCatalog.mockReset()
+  mockSet.mockReset()
+  mockSet.mockResolvedValue({
+    key: "catalog.assets.USDT.enabled",
+    category: "Catalog",
+    label: "catalog.assets.USDT.enabled",
+    description: "USDT enabled",
+    valueType: "boolean",
+    editable: true,
+    value: false,
+    source: "default",
+    scope: "global",
+    scopeValue: null,
+  })
+  mockGetMe.mockReset()
+  mockGetMe.mockResolvedValue({
+    id: "11111111-1111-1111-1111-111111111111",
+    email: "amara@handshake.ng",
+    role: { id: "00000000-0000-0000-0000-000000000001", name: "Super Admin" },
+    status: "active",
+    displayName: "Test Admin",
+    mfaEnabled: true,
+    permissions: [],
+    menus: [],
+    pages: [],
+  })
 })
 
 describe("AssetsPage", () => {
@@ -120,6 +159,101 @@ describe("AssetsPage", () => {
     expect(
       screen.getByRole("button", { name: /Retry/i })
     ).toBeInTheDocument()
+  })
+
+  it("persists the live toggle via setSetting on catalog.assets.<sym>.enabled when approved", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Tether USD")
+
+    // USDT is Live → the toggle proposes to pause (enabled=false).
+    await user.click(
+      screen.getByRole("button", { name: /Toggle USDT on TRON · Ethereum live status/i })
+    )
+    await user.click(
+      screen.getByRole("button", { name: /Submit for approval/i })
+    )
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("catalog.assets.USDT.enabled", {
+      value: false,
+      scope: "global",
+      scopeValue: null,
+    })
+    // Enabling BTC (currently Paused) would persist `true`.
+    const { toasts } = defaultToastStore.getState()
+    expect(toasts.some((t) => /USDT/.test(t.message))).toBe(true)
+  })
+
+  it("enables a paused asset (persists true) when approved", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Tether USD")
+
+    // BTC is Paused → the toggle proposes to enable (enabled=true).
+    await user.click(
+      screen.getByRole("button", { name: /Toggle BTC on Bitcoin live status/i })
+    )
+    await user.click(
+      screen.getByRole("button", { name: /Submit for approval/i })
+    )
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("catalog.assets.BTC.enabled", {
+      value: true,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("does not persist until the maker-checker submit fires", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Tether USD")
+
+    await user.click(
+      screen.getByRole("button", { name: /Toggle USDT on TRON · Ethereum live status/i })
+    )
+    // The dialog is open but nothing persisted yet.
+    expect(screen.getByRole("dialog")).toBeInTheDocument()
+    expect(mockSet).not.toHaveBeenCalled()
+  })
+
+  it("opens step-up and retries the PATCH after re-auth when the server demands step-up", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    const { ApiError } = await import("@/lib/api/client")
+    mockSet
+      .mockRejectedValueOnce(
+        new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce({
+        key: "catalog.assets.USDT.enabled",
+        category: "Catalog",
+        label: "catalog.assets.USDT.enabled",
+        description: "USDT enabled",
+        valueType: "boolean",
+        editable: true,
+        value: false,
+        source: "default",
+        scope: "global",
+        scopeValue: null,
+      })
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Tether USD")
+
+    await user.click(
+      screen.getByRole("button", { name: /Toggle USDT on TRON · Ethereum live status/i })
+    )
+    await user.click(
+      screen.getByRole("button", { name: /Submit for approval/i })
+    )
+
+    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    expect(mockSet).toHaveBeenCalledTimes(1)
   })
 
   it("opens the Blockradar sync ReasonModal (design-mock action)", async () => {

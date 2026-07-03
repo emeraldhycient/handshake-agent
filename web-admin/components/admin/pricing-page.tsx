@@ -18,8 +18,14 @@
  * `1.2fr 1fr 0.8fr 0.8fr 1fr 1.4fr 0.7fr` — Capability · Asset/ccy · Spread · Fee ·
  * Min/max · Effective-rate preview (user-sees rate + amber `--twn` margin) · Edit.
  *
- * The Edit control opens the shared funds-safety flow chain (reason → step-up TOTP →
- * maker-checker). The edit SUBMIT is a Phase-7 write; this phase wires the READ path only.
+ * The Edit control opens the shared funds-safety flow chain (new value → reason →
+ * step-up TOTP → maker-checker). WIRED (Phase 9 — WRITE): the maker-checker submit
+ * fires the real step-up-guarded PATCH /admin/settings/:key (`useSetSetting`) for the
+ * edited row's spread key, carrying the setting's own scope so the write targets the
+ * same leaf the read resolved. The server re-validates + hot-reloads + audits
+ * `config_change`; the settings query then invalidates so the row re-derives. A 403
+ * ADMIN_STEP_UP_REQUIRED opens the StepUpDialog and the PATCH replays after re-auth
+ * (`useStepUpRetry`). Nothing moves money (§3.1).
  */
 import { useMemo, useState } from "react"
 
@@ -30,8 +36,13 @@ import {
   ReasonModal,
   StepUpModal,
 } from "@/components/admin/flows"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useSettings } from "@/lib/query/hooks"
+import { ApiError } from "@/lib/api/client"
+import { pushToast } from "@/lib/store/toast-store"
+import { useAdminMe, useSetSetting, useSettings } from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
+import { SettingValueModal } from "@/components/admin/flows/setting-value-modal"
 import { cn } from "@/lib/utils"
 
 // The design's exact 7-column grid template (Pricing.html) — kept once and shared by
@@ -61,8 +72,13 @@ interface PricingRow {
   userRate: string
   /** The operator-only margin (amber), spread + fee combined. */
   margin: string
-  /** The editable spread setting key the Edit action patches (Phase 7). */
+  /** The editable spread setting key the Edit action patches. */
   spreadKey: string
+  /** The current spread in basis points (the value-capture step's starting point). */
+  spreadBps: number | null
+  /** The spread setting's scope + scopeValue, carried so the write targets its leaf. */
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
 }
 
 /** basis points → a percentage label, e.g. 85 → "0.85%". */
@@ -99,8 +115,10 @@ function buildRows(settings: readonly EffectiveSetting[]): PricingRow[] {
     const base = `pricing.assets.${asset}`
     const baseRate = num(byKey.get(`${base}.baseRates.NGN`))
     // Only include an asset that has at least one resolvable pricing leaf.
-    const buyBps = num(byKey.get(`${base}.buySpreadBps`))
-    const sellBps = num(byKey.get(`${base}.sellSpreadBps`))
+    const buySetting = byKey.get(`${base}.buySpreadBps`)
+    const sellSetting = byKey.get(`${base}.sellSpreadBps`)
+    const buyBps = num(buySetting)
+    const sellBps = num(sellSetting)
     if (baseRate === null && buyBps === null && sellBps === null) continue
 
     const derive = (spreadBps: number | null, dir: "buy" | "sell") => {
@@ -125,6 +143,9 @@ function buildRows(settings: readonly EffectiveSetting[]): PricingRow[] {
       userRate: derive(buyBps, "buy"),
       margin: margin(buyBps),
       spreadKey: `${base}.buySpreadBps`,
+      spreadBps: buyBps,
+      scope: buySetting?.scope ?? "global",
+      scopeValue: buySetting?.scopeValue ?? null,
     })
     rows.push({
       id: `${asset}-sell`,
@@ -136,22 +157,33 @@ function buildRows(settings: readonly EffectiveSetting[]): PricingRow[] {
       userRate: derive(sellBps, "sell"),
       margin: margin(sellBps),
       spreadKey: `${base}.sellSpreadBps`,
+      spreadBps: sellBps,
+      scope: sellSetting?.scope ?? "global",
+      scopeValue: sellSetting?.scopeValue ?? null,
     })
   }
   return rows
 }
 
-/** The from→to spread change a maker-checker request would apply for a row. */
+/** The from→to spread change the maker-checker request applies (bps → percentage). */
 function spreadDiff(
-  row: PricingRow
+  row: PricingRow,
+  newBps: number
 ): { field: string; from: string; to: string }[] {
   return [
     {
       field: `${row.cap} · ${row.pair} spread`,
       from: row.spread,
-      to: "—",
+      to: bpsToPct(newBps),
     },
   ]
+}
+
+/** Normalizes a mutation/step-up failure into a user-facing message. */
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "Something went wrong."
 }
 
 /** One body row of the design's pricing grid — including the inline Edit pill. */
@@ -213,27 +245,79 @@ function PricingTableRow({
   )
 }
 
+/** The edit flow's steps in the design order — value capture precedes the audit chain. */
+type PricingFlowStep = "value" | "reason" | "stepup" | "maker"
+
 export function PricingPage() {
   const query = useSettings("Pricing")
   const rows = useMemo(() => buildRows(query.data ?? []), [query.data])
 
-  // The row being edited + which flow step is open (reason → step-up → maker-checker).
+  const me = useAdminMe()
+  const setSetting = useSetSetting()
+  const stepUp = useStepUpRetry()
+
+  // The row being edited, the captured new spread (bps), + which flow step is open
+  // (value → reason → step-up → maker-checker).
   const [editing, setEditing] = useState<PricingRow | null>(null)
-  const [step, setStep] = useState<"reason" | "stepup" | "maker" | null>(null)
+  const [newSpread, setNewSpread] = useState("")
+  const [step, setStep] = useState<PricingFlowStep | null>(null)
 
   function startEdit(row: PricingRow) {
     setEditing(row)
-    setStep("reason")
+    setNewSpread(row.spreadBps === null ? "" : String(row.spreadBps))
+    setStep("value")
   }
 
   function closeFlow() {
     setStep(null)
     setEditing(null)
+    setNewSpread("")
   }
 
   const flowTitle = editing
     ? `Edit ${editing.cap} spread · ${editing.pair}`
     : "Edit spread"
+
+  // The captured spread as a finite integer bps, or null while it is not yet valid.
+  const parsedBps = (() => {
+    const trimmed = newSpread.trim()
+    if (trimmed === "") return null
+    const n = Number(trimmed)
+    return Number.isInteger(n) && n >= 0 ? n : null
+  })()
+
+  /**
+   * Approve the spread edit. Persists the new bps via the real step-up-guarded PATCH
+   * /admin/settings/:key (`useSetSetting`) against the edited row's spread key, carrying
+   * the setting's own scope. The server re-validates + hot-reloads + audits; the settings
+   * query then invalidates so the row re-derives. A 403 ADMIN_STEP_UP_REQUIRED opens the
+   * StepUpDialog and the PATCH replays after re-auth. Nothing moves money (§3.1).
+   */
+  const approveEdit = () => {
+    if (!editing || parsedBps === null) return
+    const row = editing
+    const value = parsedBps
+    closeFlow()
+    void (async () => {
+      try {
+        const ok = await stepUp.run(() =>
+          setSetting
+            .mutateAsync({
+              key: row.spreadKey,
+              input: { value, scope: row.scope, scopeValue: row.scopeValue },
+            })
+            .then(() => undefined)
+        )
+        if (ok)
+          pushToast(
+            `${row.cap} · ${row.pair} spread → ${bpsToPct(value)}`,
+            "ok"
+          )
+      } catch (error) {
+        pushToast(errorMessage(error), "warn")
+      }
+    })()
+  }
 
   return (
     <div className="mx-auto w-full max-w-[1300px] px-[30px] pt-[26px] pb-[60px]">
@@ -325,7 +409,18 @@ export function PricingPage() {
           ))}
       </div>
 
-      {/* ── Funds-safety flow chain: reason → step-up → maker-checker ─────────── */}
+      {/* ── Funds-safety flow chain: value → reason → step-up → maker-checker ─── */}
+      <SettingValueModal
+        open={step === "value"}
+        onOpenChange={(next) => (next ? undefined : closeFlow())}
+        title={flowTitle}
+        fieldLabel="New spread (basis points)"
+        currentValue={editing?.spread ?? ""}
+        value={newSpread}
+        onValueChange={setNewSpread}
+        canContinue={parsedBps !== null}
+        onContinue={() => setStep("reason")}
+      />
       <ReasonModal
         open={step === "reason"}
         onOpenChange={(next) => (next ? undefined : closeFlow())}
@@ -342,8 +437,24 @@ export function PricingPage() {
         open={step === "maker"}
         onOpenChange={(next) => (next ? undefined : closeFlow())}
         title={flowTitle}
-        diff={editing ? spreadDiff(editing) : []}
-        onSubmit={closeFlow}
+        diff={
+          editing && parsedBps !== null ? spreadDiff(editing, parsedBps) : []
+        }
+        onSubmit={approveEdit}
+      />
+
+      {/* Server-side step-up re-auth: a 403 on the spread PATCH opens this; the
+          PATCH replays after re-authentication (settings then invalidate). */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then(() => undefined)
+            .catch((error) => pushToast(errorMessage(error), "warn"))
+        }}
       />
     </div>
   )

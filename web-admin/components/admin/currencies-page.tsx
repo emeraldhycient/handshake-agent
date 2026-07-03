@@ -18,14 +18,21 @@
  * (mono) · Rounding (dp, mono/tabular) · Name-enquiry (colored label) · Live
  * (clickable status pill). The design's Live pill carries an `onToggle` handler:
  * enabling / disabling a currency is a dual-control config change, so clicking it
- * opens the shared MakerCheckerModal (the actual persisted toggle is a Phase-7
- * write — this reads only, §3.1). Nothing moves money.
+ * opens the shared MakerCheckerModal. WIRED (Phase 9 — WRITE): approving fires the real
+ * step-up-guarded PATCH /admin/settings/:key (`useSetSetting`) on
+ * `catalog.fiats.<code>.enabled`, which the server re-validates (multi-currency
+ * invariant) + hot-reloads + audits; the catalog query then invalidates so the row
+ * re-resolves. A 403 opens the StepUpDialog and the PATCH replays after re-auth
+ * (`useStepUpRetry`). Nothing moves money (§3.1).
  */
 import { useMemo, useState } from "react"
 
 import { MakerCheckerModal } from "@/components/admin/flows"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useAdminCatalog } from "@/lib/query/hooks"
+import { ApiError } from "@/lib/api/client"
+import { useAdminCatalog, useAdminMe, useSetSetting } from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { pushToast } from "@/lib/store/toast-store"
 import { cn } from "@/lib/utils"
 import type {
@@ -111,11 +118,21 @@ function CurrencyRow({
   )
 }
 
+/** Normalizes a mutation/step-up failure into a user-facing message. */
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "Something went wrong."
+}
+
 export function CurrenciesPage() {
   // Real fiat catalog (full — incl. disabled/off), fetched from
   // GET /admin/config/catalog. Name-enquiry availability is not surfaced by the
   // read, so it renders the design-faithful "Unavailable" for every row.
   const { data, isLoading, isError, isSuccess, refetch } = useAdminCatalog()
+  const me = useAdminMe()
+  const setSetting = useSetSetting()
+  const stepUp = useStepUpRetry()
 
   const rows = useMemo<CurrencyCatalogRow[]>(
     () =>
@@ -144,15 +161,38 @@ export function CurrenciesPage() {
       ]
     : []
 
-  // Dual-control approved. The persisted live-status toggle is a Phase-7 write
-  // (this screen reads only, §3.1); acknowledge the intent and close the modal.
+  // Dual-control approved. Persists the new live status via the real step-up-guarded
+  // PATCH /admin/settings/:key (`useSetSetting`) on `catalog.fiats.<code>.enabled` — the
+  // server re-validates the multi-currency invariant + hot-reloads + audits. A 403 opens
+  // the StepUpDialog and the PATCH replays after re-auth. Nothing moves money (§3.1).
   const applyToggle = () => {
     if (!pending) return
-    pushToast(
-      `${pending.code} · ${pending.live ? "Disable" : "Enable"} queued`,
-      "info"
-    )
+    const fiat = pending
+    const enabling = !fiat.live
     setPending(null)
+    void (async () => {
+      try {
+        const ok = await stepUp.run(() =>
+          setSetting
+            .mutateAsync({
+              key: `catalog.fiats.${fiat.code}.enabled`,
+              input: { value: enabling, scope: "global", scopeValue: null },
+            })
+            .then(() => undefined)
+        )
+        if (ok) {
+          // useSetSetting invalidates the settings prefix, not the admin catalog this
+          // page reads from — refetch it so the Live/Off pill re-resolves.
+          void refetch()
+          pushToast(
+            `${fiat.code} ${enabling ? "enabled" : "disabled"}`,
+            enabling ? "ok" : "warn"
+          )
+        }
+      } catch (error) {
+        pushToast(errorMessage(error), "warn")
+      }
+    })()
   }
 
   return (
@@ -262,6 +302,22 @@ export function CurrenciesPage() {
         }
         diff={diff}
         onSubmit={applyToggle}
+      />
+
+      {/* Server-side step-up re-auth: a 403 on the enabled PATCH opens this; the
+          PATCH replays after re-authentication (the catalog then invalidates). */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then((done) => {
+              if (done) void refetch()
+            })
+            .catch((error) => pushToast(errorMessage(error), "warn"))
+        }}
       />
     </div>
   )

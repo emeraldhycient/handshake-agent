@@ -30,6 +30,7 @@ export const qk = {
   endUserSessions: (id: string) => ["admin", "users", id, "sessions"] as const,
   endUserLimits: (id: string) => ["admin", "users", id, "limits"] as const,
   endUserTimeline: (id: string) => ["admin", "users", id, "timeline"] as const,
+  userNotes: (id: string) => ["admin", "users", id, "notes"] as const,
   kycQueue: (status?: string) =>
     ["admin", "kyc", "queue", status ?? "pending_review"] as const,
   kycSubmission: (userId: string) => ["admin", "kyc", userId] as const,
@@ -62,6 +63,7 @@ export const qk = {
   reconStatus: ["admin", "reconciliation", "status"] as const,
   adminBeneficiaries: (userId?: string) =>
     ["admin", "beneficiaries", userId ?? "all"] as const,
+  blocked: ["admin", "blocked"] as const,
   notificationTemplates: ["admin", "notification-templates"] as const,
   notificationDeliveryLog: ["admin", "notifications", "delivery-log"] as const,
   notificationTemplate: (ref: TemplateRef) =>

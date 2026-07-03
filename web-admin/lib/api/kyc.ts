@@ -16,6 +16,7 @@ import {
   KycSubmissionDetailSchema,
   KycApproveRequestSchema,
   KycRejectRequestSchema,
+  KycRequestInfoRequestSchema,
   type KycQueueQuery,
   type KycQueueResponse,
   type KycSubmissionDetail,
@@ -62,4 +63,17 @@ export async function rejectKyc(
 ): Promise<void> {
   const body = KycRejectRequestSchema.parse(input)
   await api.post(`/admin/kyc/${userId}/reject`, body)
+}
+
+/**
+ * POST /admin/kyc/:userId/request-info — bounce the review back to the user for
+ * more information (the required reason is the audited justification). Sensitive
+ * — may 403 with ADMIN_STEP_UP_REQUIRED. Reason parsed before the request fires.
+ */
+export async function requestKycInfo(
+  userId: string,
+  reason: string
+): Promise<void> {
+  const body = KycRequestInfoRequestSchema.parse({ reason })
+  await api.post(`/admin/kyc/${userId}/request-info`, body)
 }

@@ -21,16 +21,23 @@
  *
  * Actions wire to the SAME destinations as the design:
  * - Sync Blockradar / "Review & add" → the shared ReasonModal (recorded action).
- * - Live toggle-pill → the shared MakerCheckerModal (a dual-control config change;
- *   the actual persisted toggle is a Phase-7 write — this reads only, §3.1).
+ * - Live toggle-pill → the shared MakerCheckerModal (a dual-control config change).
+ *   WIRED (Phase 9 — WRITE): approving the maker-checker fires the real step-up-guarded
+ *   PATCH /admin/settings/:key (`useSetSetting`) on `catalog.assets.<sym>.enabled`, which
+ *   the server re-validates (multi-currency invariant) + hot-reloads + audits; the
+ *   catalog query then invalidates so the row re-resolves. A 403 opens the StepUpDialog
+ *   and the PATCH replays after re-auth (`useStepUpRetry`). Nothing moves money (§3.1).
  * - Contract cell → click-to-copy (pure clipboard write, as in the design).
  */
 import { useMemo, useState } from "react"
 
 import { cn } from "@/lib/utils"
 import { MakerCheckerModal, ReasonModal } from "@/components/admin/flows"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useAdminCatalog } from "@/lib/query/hooks"
+import { ApiError } from "@/lib/api/client"
+import { useAdminCatalog, useAdminMe, useSetSetting } from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { pushToast } from "@/lib/store/toast-store"
 import type { AssetCatalogRow, DiscoveredAssetRow } from "@/types/components"
 
@@ -235,11 +242,26 @@ function assetKey(asset: AssetCatalogRow) {
   return `${asset.sym}-${asset.chain}`
 }
 
+/** The registry key backing an asset's live status (`catalog.assets.<sym>.enabled`). */
+function assetEnabledKey(asset: AssetCatalogRow) {
+  return `catalog.assets.${asset.sym}.enabled`
+}
+
+/** Normalizes a mutation/step-up failure into a user-facing message. */
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "Something went wrong."
+}
+
 export function AssetsPage() {
   // Real asset catalog (full — incl. disabled/paused), fetched from
   // GET /admin/config/catalog. Min/max + contract are not surfaced by the read,
   // so they render "—" (design-faithful).
   const { data, isLoading, isError, isSuccess, refetch } = useAdminCatalog()
+  const me = useAdminMe()
+  const setSetting = useSetSetting()
+  const stepUp = useStepUpRetry()
 
   const assets = useMemo<AssetCatalogRow[]>(
     () =>
@@ -283,17 +305,40 @@ export function AssetsPage() {
   }
 
   /**
-   * Dual-control approved. The persisted live-status toggle is a Phase-7 write
-   * (this screen reads only, §3.1); acknowledge the intent, refetch the real
-   * catalog, and close.
+   * Dual-control approved. Persists the new live status via the real step-up-guarded
+   * PATCH /admin/settings/:key (`useSetSetting`) on `catalog.assets.<sym>.enabled` — the
+   * server re-validates the multi-currency invariant + hot-reloads + audits; the catalog
+   * query then invalidates so the row re-resolves. A 403 opens the StepUpDialog and the
+   * PATCH replays after re-auth. Nothing moves money (§3.1).
    */
   function approveToggle() {
-    if (toggleTarget)
-      pushToast(
-        `${toggleTarget.sym} · ${toggleTarget.live ? "Pause" : "Enable"} queued`,
-        "info"
-      )
+    if (!toggleTarget) return
+    const asset = toggleTarget
+    const enabling = !asset.live
     setToggleKey(null)
+    void (async () => {
+      try {
+        const ok = await stepUp.run(() =>
+          setSetting
+            .mutateAsync({
+              key: assetEnabledKey(asset),
+              input: { value: enabling, scope: "global", scopeValue: null },
+            })
+            .then(() => undefined)
+        )
+        if (ok) {
+          // useSetSetting invalidates the settings prefix, not the admin catalog this
+          // page reads from — refetch it so the Live/Paused pill re-resolves.
+          void refetch()
+          pushToast(
+            `${asset.sym} ${enabling ? "enabled" : "paused"}`,
+            enabling ? "ok" : "warn"
+          )
+        }
+      } catch (error) {
+        pushToast(errorMessage(error), "warn")
+      }
+    })()
   }
 
   return (
@@ -442,6 +487,22 @@ export function AssetsPage() {
             : []
         }
         onSubmit={approveToggle}
+      />
+
+      {/* Server-side step-up re-auth: a 403 on the enabled PATCH opens this; the
+          PATCH replays after re-authentication (the catalog then invalidates). */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then((done) => {
+              if (done) void refetch()
+            })
+            .catch((error) => pushToast(errorMessage(error), "warn"))
+        }}
       />
     </div>
   )

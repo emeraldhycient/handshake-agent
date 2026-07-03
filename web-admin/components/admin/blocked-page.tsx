@@ -1,139 +1,200 @@
 "use client"
 
 /**
- * BlockedPage — the blocked-list surface, reproduced pixel-for-pixel from
- * `docs/design-ref/screens/Blocked.html` (SPEC §6.7). A title + subtitle header
- * with a dark "+ Add entry" CTA, then a single card holding a grid table:
- * Type (chip) · Value (mono) · Reason · Added by/when · Remove.
+ * BlockedPage — the deny-list surface (SPEC §6.7), WIRED to real data (Phase 9).
+ * A title + subtitle header with a dark "+ Add entry" CTA, then a single card
+ * holding a grid table: Kind (chip) · Value (mono) · Reason · Added-when · Unblock.
  *
  * "Blocked users, addresses and banks. Nothing is deleted — entries are
- * superseded." Over-blocking is reversible; the store is append-only.
+ * superseded." The list is append-only (§3.4): lifting a block SUPERSEDES the row
+ * rather than deleting it, so the history stays auditable. Superseded rows still
+ * render (dimmed, no Unblock action) so the audit trail is visible.
  *
- * DESIGN REPRODUCTION (not data-wired): the design's `logic.js` has no
- * `vBlocked()` view method (truncated), so the rows are the design's own
- * representative sample, embedded as a module-level constant below — matching the
- * markup + SPEC §6.7 + the `seed()` dataset shapes (operator names like
- * "Amara Okeke", USDT `T…` addresses, NUBAN account numbers). No fetching;
- * real-data reintegration is a separate later step.
- *
- * Mutating actions match the design's two write paths:
- *  - Add → the purpose-built AddBlockedDialog (type is derived from the value
- *    shape; value + reason collected in the form), which appends the entry.
- *  - Remove → the shared funds-safety flow modals exactly as the design chains
- *    them (SPEC §5): ReasonModal (recorded in the immutable audit log) →
- *    StepUpModal (TOTP).
- * On completion the local list updates, matching the design's optimistic
- * per-row state.
+ * DATA WIRING: the rows come from the real `useBlockedList()` (GET /admin/blocked);
+ * the four async branches (loading / error / empty / data) each render. The two
+ * write paths go through the shared funds-safety flow (SPEC §5), exactly as the
+ * sanctions-page does:
+ *  - Add → the purpose-built AddBlockedDialog collects a value; the page then
+ *    captures an audited reason via the shared ReasonModal and fires the
+ *    step-up-guarded `useAddBlocked` POST (the kind is DERIVED from the value
+ *    shape). A 403 ADMIN_STEP_UP_REQUIRED opens the StepUpDialog and the POST
+ *    replays after re-auth (`useStepUpRetry`).
+ *  - Unblock → ReasonModal (audited reason) → StepUpModal (client TOTP) →
+ *    step-up-guarded `useSupersedeBlocked` POST. Same server-side re-auth replay.
+ * Neither moves money (§3.1); the list re-resolves via query invalidation in the
+ * hooks and any error surfaces as a toast.
  */
-import { useMemo, useState } from "react"
+import { useState } from "react"
+import type {
+  BlockedEntry,
+  BlockedEntryKind,
+} from "@handshake-agent/contracts"
 
 import { AddBlockedDialog } from "@/components/admin/add-blocked-dialog"
 import { ReasonModal, StepUpModal } from "@/components/admin/flows"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  useAddBlocked,
+  useAdminMe,
+  useBlockedList,
+  useSupersedeBlocked,
+} from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
+import { ApiError } from "@/lib/api/client"
 import { pushToast } from "@/lib/store/toast-store"
-import type { BlockedEntry } from "@/types/components"
 
-// ── The design's blocked entries (representative sample; SPEC §6.7 + seed() shapes) ──
-
-const SEED_ENTRIES: readonly BlockedEntry[] = [
-  {
-    index: 0,
-    type: "Address",
-    value: "TQmByr1s6dLPU9Xz8y7Gk2f4Nc3Vw5Hj8",
-    reason: "OFAC SDN-list match · sanctions screening",
-    by: "Ifeoma Bello",
-    when: "Jun 30",
-  },
-  {
-    index: 1,
-    type: "User",
-    value: "usr_10494 · Bola Balogun",
-    reason: "SIM-swap flag + velocity breach — account frozen",
-    by: "Amara Okeke",
-    when: "Jun 30",
-  },
-  {
-    index: 2,
-    type: "Bank",
-    value: "0114227781 · Access Bank",
-    reason: "Confirmed mule account (fraud report)",
-    by: "Kelechi Chukwu",
-    when: "Jun 28",
-  },
-  {
-    index: 3,
-    type: "Address",
-    value: "0x9f2a4B7c1D8e5F0a3C6b9E2d1A4f7C0b3E6d8A21",
-    reason: "Linked to phishing campaign proceeds",
-    by: "Ifeoma Bello",
-    when: "Jun 25",
-  },
-]
-
-// Design §6.7 table grid — Type · Value · Reason · Added-by · Remove.
+// Design §6.7 table grid — Kind · Value · Reason · Added · Unblock.
 const BLOCKED_GRID = "grid-cols-[0.7fr_1.6fr_1.8fr_1.2fr_0.7fr]"
 
-// The active Remove flow (mirrors the design's `runFlow` step chain): Remove is
-// audited (reason) then step-up-gated. Add uses its own AddBlockedDialog.
-type RemoveFlow = { index: number; step: "reason" | "stepup" } | null
+/** The human label for a deny-list kind chip. */
+const KIND_LABEL: Record<BlockedEntryKind, string> = {
+  user: "User",
+  address: "Address",
+  bank: "Bank",
+}
 
 /**
- * Derive the Type chip from the value's shape (heuristic — the store keeps only
- * the raw string; SPEC §6.7 + BlockedEntry.type). On-chain addresses → "Address",
- * everything else → "Identifier" (covers user/bank identifiers).
+ * Derive the entry kind from the value's shape (the AddBlockedDialog collects only
+ * the raw string). On-chain addresses (EVM / TRON) → "address"; a bare 10-digit
+ * NUBAN → "bank"; everything else (a user id / handle) → "user".
  */
-function typeForValue(value: string): string {
+function deriveKind(value: string): BlockedEntryKind {
   const v = value.trim()
-  const isEvm = /^0x[0-9a-fA-F]{40}$/.test(v)
-  const isTron = /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(v)
-  return isEvm || isTron ? "Address" : "Identifier"
+  if (/^0x[0-9a-fA-F]{40}$/.test(v) || /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(v)) {
+    return "address"
+  }
+  if (/^\d{10}(\s|·|$)/.test(v)) return "bank"
+  return "user"
+}
+
+/** Render an ISO timestamp as a short, locale-stable "Jun 30" label. */
+function shortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  })
+}
+
+/** Normalizes a mutation/step-up failure into a user-facing message. */
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "Something went wrong."
+}
+
+// The active supersede (unblock) flow (mirrors the sanctions-page `runFlow` chain):
+// Unblock → reason (audited) → step-up (client TOTP) → the POST. The reason captured
+// at the reason step is carried into the step-up step so the POST sends it.
+type SupersedeFlow = {
+  id: string
+  value: string
+  reason: string
+  step: "reason" | "stepup"
+}
+
+// The pending add awaiting its audited reason: the dialog collected the value, the
+// ReasonModal now captures the reason before the POST fires.
+type PendingAdd = { value: string }
+
+// A disposition awaiting a server step-up replay (so the toast after re-auth reads
+// right). `kind: "add" | "supersede"` selects which mutation the replay targets.
+type PendingReplay =
+  | { kind: "add"; value: string }
+  | { kind: "supersede"; value: string }
+
+/** Loading placeholder for the deny-list rows (matches the row silhouette). */
+function LoadingRows() {
+  return (
+    <div className="flex flex-col gap-0" aria-busy="true">
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className="border-b border-line2 px-[18px] py-[13px] last:border-b-0"
+        >
+          <Skeleton className="h-5 w-full" />
+        </div>
+      ))}
+    </div>
+  )
 }
 
 export function BlockedPage() {
-  const [entries, setEntries] = useState<readonly BlockedEntry[]>(SEED_ENTRIES)
+  const list = useBlockedList()
+  const entries = list.data?.items ?? []
+
+  const me = useAdminMe()
+  const add = useAddBlocked()
+  const supersede = useSupersedeBlocked()
+  const stepUp = useStepUpRetry()
+
   const [addOpen, setAddOpen] = useState(false)
-  const [flow, setFlow] = useState<RemoveFlow>(null)
+  const [pendingAdd, setPendingAdd] = useState<PendingAdd | null>(null)
+  const [flow, setFlow] = useState<SupersedeFlow | null>(null)
+  // The action awaiting a server step-up replay (so the success toast reads right).
+  const [replay, setReplay] = useState<PendingReplay | null>(null)
 
-  const valueOf = useMemo(
-    () => (index: number) =>
-      entries.find((e) => e.index === index)?.value ?? "entry",
-    [entries]
-  )
+  const denylist = entries.map((e) => e.value)
 
-  // The dialog dedupes against + appends to this array; we recover the new value
-  // as the tail-of-next diff (the store is the raw string[] behind the rows).
-  const denylist = useMemo(() => entries.map((e) => e.value), [entries])
-
-  // AddBlockedDialog.onSave hands back the whole next denylist; prepend a row for
-  // each value it added (design §6.7 appends the entry to the table).
-  async function addFromDenylist(next: string[]) {
-    const added = next.filter((v) => !denylist.includes(v))
-    if (added.length === 0) return
-    setEntries((prev) => {
-      const startIndex = prev.reduce((max, e) => Math.max(max, e.index), -1) + 1
-      const rows: BlockedEntry[] = added.map((value, i) => ({
-        index: startIndex + i,
-        type: typeForValue(value),
-        value,
-        reason: "Added to blocked list · sanctions screening",
-        by: "You",
-        when: "just now",
-      }))
-      return [...rows, ...prev]
-    })
+  /**
+   * The AddBlockedDialog's onSave: it hands back the whole next denylist. We recover
+   * the newly added value, close the dialog, and open the ReasonModal to capture the
+   * audited reason before the POST fires (the reason is required server-side, §3.3).
+   */
+  async function onDialogSave(next: string[]) {
+    const value = next.find((v) => !denylist.includes(v))
+    if (!value) return
     setAddOpen(false)
-    pushToast(`Added to blocked list · ${added[added.length - 1]}`, "ok")
+    setPendingAdd({ value })
   }
 
-  function removeAt(index: number) {
-    const removed = entries.find((e) => e.index === index)
-    setEntries((prev) => prev.filter((e) => e.index !== index))
+  /** Fire the add through the server step-up guard; a 403 opens StepUpDialog. */
+  function submitAdd(value: string, reason: string) {
+    setPendingAdd(null)
+    setReplay({ kind: "add", value })
+    void (async () => {
+      try {
+        const ok = await stepUp.run(() =>
+          add
+            .mutateAsync({ kind: deriveKind(value), value, reason })
+            .then(() => undefined)
+        )
+        if (ok) {
+          pushToast(`Added to blocked list · ${value}`, "ok")
+          setReplay(null)
+        }
+        // ok === false → a step-up challenge opened; StepUpDialog replays it.
+      } catch (error) {
+        pushToast(errorMessage(error), "warn")
+        setReplay(null)
+      }
+    })()
+  }
+
+  /** Fire the supersede through the server step-up guard; a 403 opens StepUpDialog. */
+  function submitSupersede(id: string, value: string, reason: string) {
     setFlow(null)
-    if (removed) pushToast(`Removed from blocked list · ${removed.value}`, "ok")
+    setReplay({ kind: "supersede", value })
+    void (async () => {
+      try {
+        const ok = await stepUp.run(() =>
+          supersede.mutateAsync({ id, reason })
+        )
+        if (ok) {
+          pushToast(`Unblocked · ${value}`, "ok")
+          setReplay(null)
+        }
+        // ok === false → a step-up challenge opened; StepUpDialog replays it.
+      } catch (error) {
+        pushToast(errorMessage(error), "warn")
+        setReplay(null)
+      }
+    })()
   }
 
   return (
     <div className="mx-auto w-full max-w-[1120px] px-[30px] pt-[26px] pb-[60px]">
-      {/* ── Header (design line 3) ─────────────────────────────────────────── */}
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="mb-4 flex items-end justify-between gap-4">
         <div>
           <h1 className="text-[24px] font-extrabold tracking-[-0.02em] text-ink">
@@ -153,98 +214,185 @@ export function BlockedPage() {
         </button>
       </div>
 
-      {/* ── Blocked table (design lines 4–7) ───────────────────────────────── */}
+      {/* ── Blocked table ──────────────────────────────────────────────────── */}
       <div className="overflow-hidden rounded-[16px] border border-line bg-card">
         {/* Column header row */}
         <div
           className={`grid ${BLOCKED_GRID} gap-3 border-b border-line bg-card2 px-[18px] py-[11px] text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase`}
         >
-          <div>Type</div>
+          <div>Kind</div>
           <div>Value</div>
           <div>Reason</div>
-          <div>Added by</div>
+          <div>Added</div>
           <div aria-hidden="true" />
         </div>
 
-        {entries.length === 0 ? (
+        {list.isLoading && <LoadingRows />}
+
+        {list.isError && (
+          <div className="px-[18px] py-10 text-center">
+            <p className="text-[13px] font-bold text-tdn">
+              Failed to load the blocked list
+            </p>
+            <button
+              type="button"
+              onClick={() => void list.refetch()}
+              className="mt-2 cursor-pointer rounded-[9px] border border-line bg-card px-[14px] py-2 text-xs font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {list.isSuccess && entries.length === 0 && (
           <div className="px-[18px] py-10 text-center text-[12.5px] text-ink3">
             Nothing blocked. No users, addresses or banks are on the list.
           </div>
-        ) : (
-          entries.map((entry) => (
-            <div
-              key={`${entry.index}-${entry.value}`}
-              className={`grid ${BLOCKED_GRID} items-center gap-3 border-b border-line2 px-[18px] py-[13px] last:border-b-0`}
-            >
-              {/* Type chip */}
-              <div>
-                <span className="rounded-[6px] bg-card2 px-2 py-[2px] text-[10.5px] font-bold text-ink2">
-                  {entry.type}
-                </span>
-              </div>
-
-              {/* Value (mono, truncated) */}
-              <div
-                className="truncate font-mono text-[12px] font-semibold text-ink"
-                title={entry.value}
-              >
-                {entry.value}
-              </div>
-
-              {/* Reason */}
-              <div className="text-[12px] text-ink2">{entry.reason}</div>
-
-              {/* Added by · when */}
-              <div className="text-[11.5px] text-ink3">
-                {entry.by} · {entry.when}
-              </div>
-
-              {/* Remove (audited, step-up-gated) */}
-              <div className="text-right">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setFlow({ index: entry.index, step: "reason" })
-                  }
-                  aria-label={`Remove ${entry.value} from the blocked list`}
-                  className="inline-flex text-[11.5px] font-bold text-tif transition-opacity hover:opacity-80 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          ))
         )}
+
+        {list.isSuccess &&
+          entries.map((entry) => (
+            <BlockedRow
+              key={entry.id}
+              entry={entry}
+              onUnblock={() =>
+                setFlow({
+                  id: entry.id,
+                  value: entry.value,
+                  reason: "",
+                  step: "reason",
+                })
+              }
+            />
+          ))}
       </div>
 
-      {/* ── Add entry (purpose-built dialog: type derived, value + reason) ──── */}
+      {/* ── Add entry (purpose-built dialog collects the value) ────────────── */}
       <AddBlockedDialog
         open={addOpen}
         onOpenChange={setAddOpen}
         denylist={denylist}
-        onSave={addFromDenylist}
+        onSave={onDialogSave}
       />
 
-      {/* ── Remove flow modals (shared funds-safety flows, SPEC §5) ─────────── */}
-      {/* Remove → ReasonModal → StepUpModal (audited, sensitive write). */}
+      {/* ── Add reason (audited) → step-up-guarded POST ────────────────────── */}
+      <ReasonModal
+        open={pendingAdd !== null}
+        onOpenChange={(next) => !next && setPendingAdd(null)}
+        title={
+          pendingAdd
+            ? `Add to blocked list — ${pendingAdd.value}`
+            : "Add to blocked list"
+        }
+        onContinue={(reason) =>
+          pendingAdd && submitAdd(pendingAdd.value, reason)
+        }
+      />
+
+      {/* ── Unblock flow: reason (audited) → step-up (client TOTP) → POST ───── */}
       <ReasonModal
         open={flow?.step === "reason"}
         onOpenChange={(next) => !next && setFlow(null)}
-        title={
-          flow ? `Remove from blocked list — ${valueOf(flow.index)}` : "Remove"
-        }
-        onContinue={() =>
-          flow && setFlow({ index: flow.index, step: "stepup" })
+        title={flow ? `Unblock — ${flow.value}` : "Unblock"}
+        onContinue={(reason) =>
+          flow && setFlow({ ...flow, reason, step: "stepup" })
         }
       />
       <StepUpModal
         open={flow?.step === "stepup"}
         onOpenChange={(next) => !next && setFlow(null)}
-        title={
-          flow ? `Remove from blocked list — ${valueOf(flow.index)}` : "Remove"
+        title={flow ? `Unblock — ${flow.value}` : "Unblock"}
+        onComplete={() =>
+          flow && submitSupersede(flow.id, flow.value, flow.reason)
         }
-        onComplete={() => flow && removeAt(flow.index)}
       />
+
+      {/* Server-side step-up re-auth: a 403 on either POST opens this; the POST
+          replays after re-authentication, then toasts. */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then((ok) => {
+              if (ok && replay) {
+                pushToast(
+                  replay.kind === "add"
+                    ? `Added to blocked list · ${replay.value}`
+                    : `Unblocked · ${replay.value}`,
+                  "ok"
+                )
+              }
+              setReplay(null)
+            })
+            .catch((error) => {
+              pushToast(errorMessage(error), "warn")
+              setReplay(null)
+            })
+        }}
+      />
+    </div>
+  )
+}
+
+/**
+ * One deny-list row. An active entry offers the Unblock action; a superseded entry
+ * (append-only history, §3.4) renders dimmed with a "Superseded" marker and no
+ * action — nothing is ever deleted.
+ */
+function BlockedRow({
+  entry,
+  onUnblock,
+}: {
+  entry: BlockedEntry
+  onUnblock: () => void
+}) {
+  const superseded = entry.supersededAt !== null
+
+  return (
+    <div
+      className={`grid ${BLOCKED_GRID} items-center gap-3 border-b border-line2 px-[18px] py-[13px] last:border-b-0 ${
+        superseded ? "opacity-55" : ""
+      }`}
+    >
+      {/* Kind chip */}
+      <div>
+        <span className="rounded-[6px] bg-card2 px-2 py-[2px] text-[10.5px] font-bold text-ink2">
+          {KIND_LABEL[entry.kind]}
+        </span>
+      </div>
+
+      {/* Value (mono, truncated) */}
+      <div
+        className="truncate font-mono text-[12px] font-semibold text-ink"
+        title={entry.value}
+      >
+        {entry.value}
+      </div>
+
+      {/* Reason */}
+      <div className="text-[12px] text-ink2">{entry.reason}</div>
+
+      {/* Added when */}
+      <div className="text-[11.5px] text-ink3">{shortDate(entry.createdAt)}</div>
+
+      {/* Unblock (active only — superseded rows are audit history) */}
+      <div className="text-right">
+        {superseded ? (
+          <span className="text-[11px] font-bold text-ink3">Superseded</span>
+        ) : (
+          <button
+            type="button"
+            onClick={onUnblock}
+            aria-label={`Unblock ${entry.value}`}
+            className="inline-flex text-[11.5px] font-bold text-tif transition-opacity hover:opacity-80 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            Unblock
+          </button>
+        )}
+      </div>
     </div>
   )
 }

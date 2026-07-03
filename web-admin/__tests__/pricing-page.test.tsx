@@ -1,29 +1,41 @@
 /**
- * PricingPage test (design §6.22) — wired to real pricing settings.
+ * PricingPage test (design §6.22) — wired to real pricing settings + real persistence.
  *
  * The pricing figures resolve from `pricing.assets.<A>.buySpreadBps` /
  * `.sellSpreadBps` / `.baseRates.NGN` + the global `pricing.processingFeeBps` (GET
  * /admin/settings, mocked). Each priced asset contributes a Buy + Sell row; the
  * user-sees rate + operator margin are DERIVED from base rate + spread + fee. The Edit
- * pill opens the reason → step-up → maker-checker chain (submit is a Phase-7 stub).
- * The api layer is mocked — no server.
+ * pill opens the reason → step-up → maker-checker chain; the maker-checker submit fires
+ * the REAL step-up-guarded PATCH /admin/settings/:key (setSetting) for the edited row's
+ * spread key. The api layer is mocked — no server.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { EffectiveSetting } from "@handshake-agent/contracts"
 
 import { PricingPage } from "@/components/admin/pricing-page"
+import { defaultToastStore } from "@/lib/store/toast-store"
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────────
 
 vi.mock("@/lib/api/config", () => ({
   listEffectiveSettings: vi.fn(),
+  setSetting: vi.fn(),
 }))
 
-import { listEffectiveSettings } from "@/lib/api/config"
+// The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn(),
+}))
+
+import { listEffectiveSettings, setSetting } from "@/lib/api/config"
+import { getMe } from "@/lib/api/admin"
 
 const mockList = vi.mocked(listEffectiveSettings)
+const mockSet = vi.mocked(setSetting)
+const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
 
@@ -62,9 +74,47 @@ function renderPage() {
   )
 }
 
+/** Drive the shared flow chain: reason → step-up (6 digits) → maker-checker submit. */
+async function advanceToApproval(
+  user: ReturnType<typeof userEvent.setup>,
+  newSpread: string
+) {
+  const input = screen.getByRole("textbox", { name: "New spread (basis points)" })
+  await user.clear(input)
+  await user.type(input, newSpread)
+  await user.click(screen.getByRole("button", { name: "Continue" }))
+  // reason leg
+  await user.type(
+    screen.getByRole("textbox", { name: "Reason" }),
+    "Repricing"
+  )
+  await user.click(screen.getByRole("button", { name: "Continue" }))
+  // step-up leg (presentational TOTP keypad)
+  for (const d of "123456") {
+    await user.click(screen.getByRole("button", { name: d }))
+  }
+  // maker-checker submit
+  await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+}
+
 beforeEach(() => {
+  defaultToastStore.setState({ toasts: [] })
   mockList.mockReset()
   mockList.mockResolvedValue(PRICING_SETTINGS)
+  mockSet.mockReset()
+  mockSet.mockResolvedValue(n("pricing.assets.USDT.buySpreadBps", 120))
+  mockGetMe.mockReset()
+  mockGetMe.mockResolvedValue({
+    id: "11111111-1111-1111-1111-111111111111",
+    email: "amara@handshake.ng",
+    role: { id: "00000000-0000-0000-0000-000000000001", name: "Super Admin" },
+    status: "active",
+    displayName: "Test Admin",
+    mfaEnabled: true,
+    permissions: [],
+    menus: [],
+    pages: [],
+  })
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -111,5 +161,92 @@ describe("PricingPage (wired to pricing settings)", () => {
     await waitFor(() =>
       expect(screen.getByText("No pricing rows")).toBeInTheDocument()
     )
+  })
+
+  it("persists the edited spread via setSetting (PATCH) when the maker-checker is approved", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Edit crypto.buy USDT / NGN spread",
+      })
+    )
+    await advanceToApproval(user, "120")
+
+    // The real PATCH fires against the buy row's spread key with the new bps value.
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("pricing.assets.USDT.buySpreadBps", {
+      value: 120,
+      scope: "global",
+      scopeValue: null,
+    })
+    // A feedback toast fired and the flow closed.
+    expect(defaultToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({
+        message: expect.stringMatching(/crypto\.buy/),
+      })
+    )
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  })
+
+  it("targets the sell spread key when the sell row is edited", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Edit crypto.sell USDT / NGN spread",
+      })
+    )
+    await advanceToApproval(user, "75")
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("pricing.assets.USDT.sellSpreadBps", {
+      value: 75,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("does not persist until the maker-checker submit fires", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Edit crypto.buy USDT / NGN spread",
+      })
+    )
+    // Open the flow but stop before submitting.
+    const input = screen.getByRole("textbox", {
+      name: "New spread (basis points)",
+    })
+    await user.clear(input)
+    await user.type(input, "120")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    expect(mockSet).not.toHaveBeenCalled()
+  })
+
+  it("opens the step-up dialog and retries the PATCH after re-auth when the server demands step-up", async () => {
+    const user = userEvent.setup()
+    const { ApiError } = await import("@/lib/api/client")
+    mockSet
+      .mockRejectedValueOnce(
+        new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce(n("pricing.assets.USDT.buySpreadBps", 120))
+
+    renderPage()
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Edit crypto.buy USDT / NGN spread",
+      })
+    )
+    await advanceToApproval(user, "120")
+
+    // The re-auth dialog appears (TOTP mode, since mfaEnabled).
+    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    expect(mockSet).toHaveBeenCalledTimes(1)
   })
 })

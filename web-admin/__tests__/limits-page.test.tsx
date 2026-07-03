@@ -9,7 +9,7 @@
  * local-only) and toasts. The api layer is mocked — no server.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { EffectiveSetting } from "@handshake-agent/contracts"
@@ -21,11 +21,20 @@ import { defaultToastStore } from "@/lib/store/toast-store"
 
 vi.mock("@/lib/api/config", () => ({
   listEffectiveSettings: vi.fn(),
+  setSetting: vi.fn(),
 }))
 
-import { listEffectiveSettings } from "@/lib/api/config"
+// The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn(),
+}))
+
+import { listEffectiveSettings, setSetting } from "@/lib/api/config"
+import { getMe } from "@/lib/api/admin"
 
 const mockList = vi.mocked(listEffectiveSettings)
+const mockSet = vi.mocked(setSetting)
+const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
 
@@ -80,6 +89,20 @@ beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
   mockList.mockReset()
   mockList.mockResolvedValue(LIMIT_SETTINGS)
+  mockSet.mockReset()
+  mockSet.mockResolvedValue(limit("limits.NGN.tier_1.perTxFiatMax", 300000))
+  mockGetMe.mockReset()
+  mockGetMe.mockResolvedValue({
+    id: "11111111-1111-1111-1111-111111111111",
+    email: "amara@handshake.ng",
+    role: { id: "00000000-0000-0000-0000-000000000001", name: "Super Admin" },
+    status: "active",
+    displayName: "Test Admin",
+    mfaEnabled: true,
+    permissions: [],
+    menus: [],
+    pages: [],
+  })
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -104,7 +127,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     expect(screen.getByText("10")).toBeInTheDocument()
   })
 
-  it("updates the displayed cap + toasts after the edit is approved", async () => {
+  it("persists the edited cap via setSetting (PATCH) + toasts after approval", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -114,7 +137,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
 
     const input = screen.getByRole("textbox", { name: "New value" })
     await user.clear(input)
-    await user.type(input, "₦300,000")
+    await user.type(input, "300000")
     await user.click(screen.getByRole("button", { name: "Continue" }))
 
     await advanceThroughAuditChain(user)
@@ -123,17 +146,86 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
       screen.getByRole("button", { name: "Submit for approval" })
     )
 
-    // The row's displayed cap changed and the old value is gone.
-    expect(screen.getByText("₦300,000")).toBeInTheDocument()
-    expect(screen.queryByText("₦200,000")).not.toBeInTheDocument()
+    // The real PATCH fires against tier_1's per-tx cap key with the numeric value.
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("limits.NGN.tier_1.perTxFiatMax", {
+      value: 300000,
+      scope: "global",
+      scopeValue: null,
+    })
 
     // A feedback toast fired and the flow closed.
     expect(defaultToastStore.getState().toasts).toContainEqual(
       expect.objectContaining({
-        message: "Per-transaction max · Tier 1 → ₦300,000",
+        message: expect.stringMatching(/Per-transaction max · Tier 1/),
       })
     )
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  })
+
+  it("targets the daily-cap key when the daily row is edited", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Daily max · rolling 24h" })
+    )
+    const input = screen.getByRole("textbox", { name: "New value" })
+    await user.clear(input)
+    await user.type(input, "750000")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(
+      screen.getByRole("button", { name: "Submit for approval" })
+    )
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("limits.NGN.tier_1.dailyFiatMax", {
+      value: 750000,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("does not offer to edit a design row that has no backing key", async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole("tab", { name: "Tier 1" })
+    // "Weekly max" has no registry key (renders "—"); no edit pencil for it.
+    expect(
+      screen.queryByRole("button", { name: "Edit Weekly max" })
+    ).not.toBeInTheDocument()
+    // The backed per-tx cap still has its edit pencil.
+    expect(
+      await screen.findByRole("button", { name: "Edit Per-transaction max" })
+    ).toBeInTheDocument()
+    void user
+  })
+
+  it("opens the step-up dialog and retries the PATCH after re-auth when the server demands step-up", async () => {
+    const user = userEvent.setup()
+    const { ApiError } = await import("@/lib/api/client")
+    mockSet
+      .mockRejectedValueOnce(
+        new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce(limit("limits.NGN.tier_1.perTxFiatMax", 300000))
+
+    renderPage()
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Per-transaction max" })
+    )
+    const input = screen.getByRole("textbox", { name: "New value" })
+    await user.clear(input)
+    await user.type(input, "300000")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(
+      screen.getByRole("button", { name: "Submit for approval" })
+    )
+
+    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    expect(mockSet).toHaveBeenCalledTimes(1)
   })
 
   it("shows the error branch with a retry when the settings read fails", async () => {

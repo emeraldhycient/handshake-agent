@@ -27,6 +27,11 @@ vi.mock("@/lib/api/reconciliation", () => ({
   escalateReconBreak: vi.fn(),
 }))
 
+// The "Run now" button triggers the settlement-reconciliation ops job.
+vi.mock("@/lib/api/ops", () => ({
+  runOpsJob: vi.fn(),
+}))
+
 // useAdminMe (mfaEnabled) drives the StepUpDialog rendered by the page.
 vi.mock("@/lib/api/admin", () => ({
   getMe: vi.fn().mockResolvedValue({ mfaEnabled: true, permissions: [] }),
@@ -40,12 +45,14 @@ import {
   acceptReconBreak,
   escalateReconBreak,
 } from "@/lib/api/reconciliation"
+import { runOpsJob } from "@/lib/api/ops"
 
 const mockBreaks = vi.mocked(listReconBreaks)
 const mockStatus = vi.mocked(getReconStatus)
 const mockResolve = vi.mocked(resolveReconBreak)
 const mockAccept = vi.mocked(acceptReconBreak)
 const mockEscalate = vi.mocked(escalateReconBreak)
+const mockRunOpsJob = vi.mocked(runOpsJob)
 
 // A ComplianceEventItem returned by the escalate endpoint (the opened case).
 const ESCALATED_EVENT = {
@@ -124,6 +131,11 @@ beforeEach(() => {
     moved: false,
   })
   mockEscalate.mockReset().mockResolvedValue(ESCALATED_EVENT)
+  mockRunOpsJob.mockReset().mockResolvedValue({
+    jobId: "settlement-reconciliation",
+    triggered: true,
+    status: "running",
+  })
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -290,5 +302,64 @@ describe("ReconciliationPage (Phase 8 — escalate to compliance WRITE)", () => 
     // The re-auth dialog appears (TOTP mode, since mfaEnabled).
     expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
     expect(mockEscalate).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("ReconciliationPage (Phase 9 — Run now triggers the reconciler ops job)", () => {
+  it("does not run the job until the reason modal's Continue fires", async () => {
+    const user = userEvent.setup()
+    renderPage()
+    // Wait for the board to settle so the status-bar Run-now button is present.
+    await screen.findByText("Over-credit")
+
+    await user.click(screen.getByRole("button", { name: /Run now/i }))
+    // The ReasonModal appears but nothing has run yet.
+    await screen.findByLabelText("Reason")
+    expect(mockRunOpsJob).not.toHaveBeenCalled()
+  })
+
+  it("triggers settlement-reconciliation with the captured reason via reason → server", async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Over-credit")
+
+    await user.click(screen.getByRole("button", { name: /Run now/i }))
+    await user.type(
+      screen.getByLabelText("Reason"),
+      "Manual reconciliation sweep"
+    )
+    await user.click(screen.getByRole("button", { name: /Continue/ }))
+
+    await waitFor(() => expect(mockRunOpsJob).toHaveBeenCalledTimes(1))
+    expect(mockRunOpsJob).toHaveBeenCalledWith("settlement-reconciliation", {
+      reason: "Manual reconciliation sweep",
+    })
+    // Triggering the reconciler moves no money — no disposition mutation fires.
+    expect(mockResolve).not.toHaveBeenCalled()
+    expect(mockAccept).not.toHaveBeenCalled()
+  })
+
+  it("opens step-up and replays the run POST after re-auth when the server demands step-up", async () => {
+    const user = userEvent.setup()
+    const { ApiError } = await import("@/lib/api/client")
+    mockRunOpsJob
+      .mockRejectedValueOnce(
+        new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce({
+        jobId: "settlement-reconciliation",
+        triggered: true,
+        status: "running",
+      })
+
+    renderPage()
+    await screen.findByText("Over-credit")
+
+    await user.click(screen.getByRole("button", { name: /Run now/i }))
+    await user.type(screen.getByLabelText("Reason"), "Manual sweep")
+    await user.click(screen.getByRole("button", { name: /Continue/ }))
+
+    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    expect(mockRunOpsJob).toHaveBeenCalledTimes(1)
   })
 })

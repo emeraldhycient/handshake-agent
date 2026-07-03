@@ -28,9 +28,23 @@ vi.mock("@/lib/api/catalog", () => ({
   getAdminCatalog: vi.fn(),
 }))
 
+// The live-toggle write path patches catalog.fiats.<code>.enabled via setSetting.
+vi.mock("@/lib/api/config", () => ({
+  setSetting: vi.fn(),
+}))
+
+// The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn(),
+}))
+
 import { getAdminCatalog } from "@/lib/api/catalog"
+import { setSetting } from "@/lib/api/config"
+import { getMe } from "@/lib/api/admin"
 
 const mockGetAdminCatalog = vi.mocked(getAdminCatalog)
+const mockSet = vi.mocked(setSetting)
+const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -68,6 +82,31 @@ function renderPage() {
 beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
   mockGetAdminCatalog.mockReset()
+  mockSet.mockReset()
+  mockSet.mockResolvedValue({
+    key: "catalog.fiats.RWF.enabled",
+    category: "Catalog",
+    label: "catalog.fiats.RWF.enabled",
+    description: "RWF enabled",
+    valueType: "boolean",
+    editable: true,
+    value: true,
+    source: "default",
+    scope: "global",
+    scopeValue: null,
+  })
+  mockGetMe.mockReset()
+  mockGetMe.mockResolvedValue({
+    id: "11111111-1111-1111-1111-111111111111",
+    email: "amara@handshake.ng",
+    role: { id: "00000000-0000-0000-0000-000000000001", name: "Super Admin" },
+    status: "active",
+    displayName: "Test Admin",
+    mfaEnabled: true,
+    permissions: [],
+    menus: [],
+    pages: [],
+  })
 })
 
 describe("CurrenciesPage", () => {
@@ -86,8 +125,78 @@ describe("CurrenciesPage", () => {
     expect(screen.getByText("0 dp")).toBeInTheDocument()
   })
 
-  it("opens the maker-checker modal and toasts the queued change on submit", async () => {
+  it("persists the toggle via setSetting on catalog.fiats.<code>.enabled when approved", async () => {
     mockGetAdminCatalog.mockResolvedValue(VIEW)
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Nigerian Naira")
+
+    // RWF is Off → enabling persists `true`.
+    await user.click(screen.getByRole("button", { name: /Enable RWF/i }))
+    await user.click(
+      screen.getByRole("button", { name: /Submit for approval/i })
+    )
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("catalog.fiats.RWF.enabled", {
+      value: true,
+      scope: "global",
+      scopeValue: null,
+    })
+    const { toasts } = defaultToastStore.getState()
+    expect(toasts.some((t) => /RWF/.test(t.message))).toBe(true)
+  })
+
+  it("disables a live currency (persists false) when approved", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Nigerian Naira")
+
+    // NGN is Live → disabling persists `false`.
+    await user.click(screen.getByRole("button", { name: /Disable NGN/i }))
+    await user.click(
+      screen.getByRole("button", { name: /Submit for approval/i })
+    )
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("catalog.fiats.NGN.enabled", {
+      value: false,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("does not persist until the maker-checker submit fires", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Nigerian Naira")
+
+    await user.click(screen.getByRole("button", { name: /Enable RWF/i }))
+    expect(screen.getByRole("dialog")).toBeInTheDocument()
+    expect(mockSet).not.toHaveBeenCalled()
+  })
+
+  it("opens step-up and retries the PATCH after re-auth when the server demands step-up", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    const { ApiError } = await import("@/lib/api/client")
+    mockSet
+      .mockRejectedValueOnce(
+        new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce({
+        key: "catalog.fiats.RWF.enabled",
+        category: "Catalog",
+        label: "catalog.fiats.RWF.enabled",
+        description: "RWF enabled",
+        valueType: "boolean",
+        editable: true,
+        value: true,
+        source: "default",
+        scope: "global",
+        scopeValue: null,
+      })
     const user = userEvent.setup()
     renderPage()
     await screen.findByText("Nigerian Naira")
@@ -97,11 +206,8 @@ describe("CurrenciesPage", () => {
       screen.getByRole("button", { name: /Submit for approval/i })
     )
 
-    await waitFor(() => {
-      const { toasts } = defaultToastStore.getState()
-      expect(toasts).toHaveLength(1)
-      expect(toasts[0].message).toMatch(/RWF/)
-    })
+    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    expect(mockSet).toHaveBeenCalledTimes(1)
   })
 
   it("renders the empty state when the catalog has no currencies", async () => {

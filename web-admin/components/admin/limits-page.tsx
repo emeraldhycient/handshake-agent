@@ -18,8 +18,15 @@
  * enrichment. Four async branches: loading / error / empty / data.
  *
  * Editing an amount cap is maker-checker: the pencil opens a new-value prompt →
- * reason (audit) → step-up (TOTP) → maker-checker. The edit SUBMIT is a Phase-7
- * write (it updates local state only for now — the real PATCH + re-read lands later).
+ * reason (audit) → step-up (TOTP) → maker-checker. WIRED (Phase 9 — WRITE): the
+ * maker-checker submit fires the real step-up-guarded PATCH /admin/settings/:key
+ * (`useSetSetting`) for the edited cap's `limits.NGN.<tier>.<field>` key, carrying the
+ * setting's own scope. The server re-validates + hot-reloads + audits `config_change`;
+ * the settings query then invalidates so the cap re-resolves. A 403
+ * ADMIN_STEP_UP_REQUIRED opens the StepUpDialog and the PATCH replays after re-auth
+ * (`useStepUpRetry`). Only caps with a backing registry key are editable — the
+ * design rows the registry has no key for (Weekly max, Single on-chain send max) render
+ * "—" and expose no edit affordance. Nothing moves money (§3.1).
  */
 import { useMemo, useState } from "react"
 
@@ -30,14 +37,12 @@ import { cn } from "@/lib/utils"
 import { ReasonModal } from "@/components/admin/flows/reason-modal"
 import { StepUpModal } from "@/components/admin/flows/step-up-modal"
 import { MakerCheckerModal } from "@/components/admin/flows/maker-checker-modal"
+import { SettingValueModal } from "@/components/admin/flows/setting-value-modal"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
+import { ApiError } from "@/lib/api/client"
 import { pushToast } from "@/lib/store/toast-store"
-import { useSettings } from "@/lib/query/hooks"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { useAdminMe, useSetSetting, useSettings } from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import type {
   LimitAmountRow,
   LimitTier,
@@ -57,6 +62,27 @@ const TIER_META: readonly { id: LimitTierId; label: string }[] = [
   { id: "tier_2", label: "Tier 2" },
   { id: "tier_3", label: "Tier 3" },
 ]
+
+/**
+ * The editable amount caps' registry leaves, in display order. Each maps the design's
+ * amount-cap label to the `limits.NGN.<tier>.<field>` key suffix so an edit targets the
+ * same leaf the read resolved. Rows not listed here (Weekly max, Single on-chain send
+ * max) have no backing key and are display-only.
+ */
+const EDITABLE_CAPS: readonly { label: string; field: string }[] = [
+  { label: "Per-transaction max", field: "perTxFiatMax" },
+  { label: "Daily max · rolling 24h", field: "dailyFiatMax" },
+]
+
+/**
+ * The setting leaf backing an editable cap — its full key + scope, carried so the write
+ * targets the same leaf the read resolved. Keyed `${tierId}::${label}` in a lookup map.
+ */
+interface CapSetting {
+  settingKey: string
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
+}
 
 /** Format an NGN integer cap as the design's mono string, else the no-key dash. */
 function ngn(value: unknown): string {
@@ -100,12 +126,44 @@ function buildTiers(settings: readonly EffectiveSetting[]): LimitTier[] {
   })
 }
 
-/** One amount-cap key/value row with the design's edit pencil affordance. */
+/**
+ * Build the `${tierId}::${label}` → backing-setting lookup for the editable caps. Only
+ * caps whose `limits.NGN.<tier>.<field>` key is present in the settings response get an
+ * entry — so an edit affordance appears only where a real PATCH can land.
+ */
+function buildCapSettings(
+  settings: readonly EffectiveSetting[]
+): Map<string, CapSetting> {
+  const byKey = new Map(settings.map((s) => [s.key, s]))
+  const map = new Map<string, CapSetting>()
+  for (const { id } of TIER_META) {
+    const base = `limits.NGN.${id}`
+    for (const { label, field } of EDITABLE_CAPS) {
+      const key = `${base}.${field}`
+      const setting = byKey.get(key)
+      if (!setting || typeof setting.value !== "number") continue
+      map.set(`${id}::${label}`, {
+        settingKey: key,
+        scope: setting.scope,
+        scopeValue: setting.scopeValue,
+      })
+    }
+  }
+  return map
+}
+
+/**
+ * One amount-cap key/value row. The design's edit pencil is shown ONLY for caps with a
+ * backing registry key (`editable`) — display-only design rows (no key, value "—") never
+ * expose an edit affordance, so an un-persistable edit is impossible.
+ */
 function AmountRow({
   row,
+  editable,
   onEdit,
 }: {
   row: LimitAmountRow
+  editable: boolean
   onEdit: (row: LimitAmountRow) => void
 }) {
   return (
@@ -115,28 +173,30 @@ function AmountRow({
         <span className="font-mono text-[13px] font-bold text-ink tabular-nums">
           {row.v}
         </span>
-        <button
-          type="button"
-          onClick={() => onEdit(row)}
-          aria-label={`Edit ${row.k}`}
-          className="flex size-[28px] items-center justify-center rounded-lg border border-line text-ink2 transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          <svg
-            width="13"
-            height="13"
-            viewBox="0 0 24 24"
-            fill="none"
-            aria-hidden
+        {editable && (
+          <button
+            type="button"
+            onClick={() => onEdit(row)}
+            aria-label={`Edit ${row.k}`}
+            className="flex size-[28px] items-center justify-center rounded-lg border border-line text-ink2 transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
           >
-            <path
-              d={EDIT_ICON}
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden
+            >
+              <path
+                d={EDIT_ICON}
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        )}
       </div>
     </div>
   )
@@ -157,25 +217,37 @@ function VelocityRow({ row }: { row: LimitVelocityRow }) {
 /** The flow steps in the design's order — a new-value prompt precedes the audit chain. */
 type LimitFlowStep = "value" | "reason" | "stepup" | "maker"
 
+/** Normalizes a mutation/step-up failure into a user-facing message. */
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "Something went wrong."
+}
+
+/** Parse a cap input (plain integer NGN) → a finite non-negative integer, else null. */
+function parseCap(text: string): number | null {
+  const trimmed = text.trim()
+  if (trimmed === "") return null
+  const n = Number(trimmed)
+  return Number.isInteger(n) && n >= 0 ? n : null
+}
+
 export function LimitsPage() {
   const query = useSettings("KYC")
 
-  // Base tiers derived from the real settings. Local edits overlay on top so an
-  // approved maker-checker edit updates the displayed cap (Phase-7 write is local-only).
-  const baseTiers = useMemo(() => buildTiers(query.data ?? []), [query.data])
-  // Overlay of applied edits, keyed `tierId::capLabel` → new value string.
-  const [edits, setEdits] = useState<Record<string, string>>({})
+  const me = useAdminMe()
+  const setSetting = useSetSetting()
+  const stepUp = useStepUpRetry()
 
+  // Tiers + the editable-cap → backing-setting lookup, both derived from the real
+  // settings. The displayed caps re-resolve from the invalidated query after a write.
   const tiers = useMemo<LimitTier[]>(
-    () =>
-      baseTiers.map((t) => ({
-        ...t,
-        amountCaps: t.amountCaps.map((r) => {
-          const override = edits[`${t.id}::${r.k}`]
-          return override !== undefined ? { ...r, v: override } : r
-        }),
-      })),
-    [baseTiers, edits]
+    () => buildTiers(query.data ?? []),
+    [query.data]
+  )
+  const capSettings = useMemo(
+    () => buildCapSettings(query.data ?? []),
+    [query.data]
   )
 
   const [tierId, setTierId] = useState<LimitTierId>("tier_1")
@@ -198,14 +270,46 @@ export function LimitsPage() {
     setNewValue("")
   }
 
-  // Approve the dual-control edit: overlay the captured value on the edited row in
-  // the active tier (the displayed cap changes), toast, then close the flow.
+  const parsed = parseCap(newValue)
+
+  /**
+   * Approve the dual-control edit. Persists the new cap via the real step-up-guarded
+   * PATCH /admin/settings/:key (`useSetSetting`) against the edited cap's backing key,
+   * carrying the setting's own scope. The server re-validates + hot-reloads + audits; the
+   * settings query then invalidates so the cap re-resolves. A 403 ADMIN_STEP_UP_REQUIRED
+   * opens the StepUpDialog and the PATCH replays after re-auth. Nothing moves money (§3.1).
+   */
   function applyEdit() {
-    if (!editing || !tier) return
-    const next = newValue.trim()
-    setEdits((prev) => ({ ...prev, [`${tier.id}::${editing.k}`]: next }))
-    pushToast(`${editing.k} · ${tier.label} → ${next}`, "ok")
+    if (!editing || !tier || parsed === null) return
+    const backing = capSettings.get(`${tier.id}::${editing.k}`)
+    if (!backing) return
+    const label = editing.k
+    const tierLabel = tier.label
+    const value = parsed
     closeFlow()
+    void (async () => {
+      try {
+        const ok = await stepUp.run(() =>
+          setSetting
+            .mutateAsync({
+              key: backing.settingKey,
+              input: {
+                value,
+                scope: backing.scope,
+                scopeValue: backing.scopeValue,
+              },
+            })
+            .then(() => undefined)
+        )
+        if (ok)
+          pushToast(
+            `${label} · ${tierLabel} → ₦${value.toLocaleString()}`,
+            "ok"
+          )
+      } catch (error) {
+        pushToast(errorMessage(error), "warn")
+      }
+    })()
   }
 
   const flowTitle =
@@ -295,7 +399,12 @@ export function LimitsPage() {
                 Amount caps · {tier.label}
               </h2>
               {tier.amountCaps.map((row) => (
-                <AmountRow key={row.k} row={row} onEdit={startEdit} />
+                <AmountRow
+                  key={row.k}
+                  row={row}
+                  editable={capSettings.has(`${tier.id}::${row.k}`)}
+                  onEdit={startEdit}
+                />
               ))}
             </section>
 
@@ -313,13 +422,15 @@ export function LimitsPage() {
       )}
 
       {/* ── Edit flow: new value → reason → step-up → maker-checker ────────── */}
-      <NewValueModal
+      <SettingValueModal
         open={flow === "value"}
         onOpenChange={(open) => (open ? setFlow("value") : closeFlow())}
         title={flowTitle}
+        fieldLabel="New value"
         currentValue={editing?.v ?? ""}
         value={newValue}
         onValueChange={setNewValue}
+        canContinue={parsed !== null}
         onContinue={() => setFlow("reason")}
       />
       <ReasonModal
@@ -339,120 +450,32 @@ export function LimitsPage() {
         onOpenChange={(open) => (open ? setFlow("maker") : closeFlow())}
         title="Update limit"
         diff={
-          editing && tier
+          editing && tier && parsed !== null
             ? [
                 {
                   field: `${editing.k} · ${tier.label}`,
                   from: editing.v,
-                  to: newValue.trim() || editing.v,
+                  to: `₦${parsed.toLocaleString()}`,
                 },
               ]
             : []
         }
         onSubmit={applyEdit}
       />
+
+      {/* Server-side step-up re-auth: a 403 on the cap PATCH opens this; the PATCH
+          replays after re-authentication (settings then invalidate). */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then(() => undefined)
+            .catch((error) => pushToast(errorMessage(error), "warn"))
+        }}
+      />
     </div>
-  )
-}
-
-/**
- * NewValueModal — the edit flow's first step. Captures the new cap value before the
- * audit chain (reason → step-up → maker-checker). Built on the shared Dialog primitive
- * (focus-trap + Esc close), styled like the other flow modals (radius-20 panel, tokens
- * only). Continue is refused while the field is empty; the change only enters the
- * dual-control chain once a value is present.
- */
-function NewValueModal({
-  open,
-  onOpenChange,
-  title,
-  currentValue,
-  value,
-  onValueChange,
-  onContinue,
-}: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  title: string
-  currentValue: string
-  value: string
-  onValueChange: (value: string) => void
-  onContinue: () => void
-}) {
-  const canContinue = value.trim().length > 0
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        showCloseButton={false}
-        className="w-[440px] max-w-[94vw] gap-0 p-6"
-      >
-        <div className="mb-1.5 flex items-center gap-[11px]">
-          <span className="flex size-[34px] items-center justify-center rounded-[10px] bg-sif text-tif">
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              aria-hidden
-            >
-              <path
-                d={EDIT_ICON}
-                stroke="currentColor"
-                strokeWidth="1.7"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </span>
-          <DialogTitle>{title}</DialogTitle>
-        </div>
-        <DialogDescription className="mb-4 text-[13px] leading-normal text-ink2">
-          Enter the new cap. The current value is{" "}
-          <span className="font-mono font-bold text-ink tabular-nums">
-            {currentValue}
-          </span>
-          .
-        </DialogDescription>
-
-        <label
-          htmlFor="limit-new-value"
-          className="mb-1.5 block text-[11px] font-bold tracking-[0.05em] text-ink3 uppercase"
-        >
-          New value
-        </label>
-        <input
-          id="limit-new-value"
-          value={value}
-          onChange={(e) => onValueChange(e.target.value)}
-          placeholder={currentValue}
-          aria-label="New value"
-          className="w-full rounded-xl border border-line bg-field px-3.5 py-3 font-mono text-[14px] font-bold text-ink tabular-nums outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-        />
-
-        <div className="mt-[18px] flex gap-2.5">
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            className="flex-1 rounded-xl border border-line px-3 py-3 text-center text-sm font-bold text-ink2 transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => canContinue && onContinue()}
-            disabled={!canContinue}
-            className={cn(
-              "flex-1 rounded-xl px-3 py-3 text-center text-sm font-bold transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-              canContinue
-                ? "bg-btn-dark text-white"
-                : "cursor-not-allowed bg-line text-ink3"
-            )}
-          >
-            Continue
-          </button>
-        </div>
-      </DialogContent>
-    </Dialog>
   )
 }
