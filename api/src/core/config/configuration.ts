@@ -25,6 +25,16 @@ export interface AssetPricing {
    * buy/sell proposal flows fail-closed without any per-asset code in the engine.
    */
   fiatTradeable?: boolean;
+  /**
+   * Optional per-(capability × currency) fiat MIN/MAX transaction bounds — the
+   * pricing screen's MIN/MAX column. A product/market cap set by an operator,
+   * distinct from the per-user KYC-tier limit. ENFORCE-WHEN-PRESENT (absent → no
+   * per-row bound). `buy` bounds the fiat spend; `sell` bounds the fiat proceeds
+   * (quote.netFiatAmount). Structurally matches the domain `AssetFiatBounds`
+   * resolver shape (amount-floors.ts) — the proposal engine reads these keys.
+   */
+  minFiat?: Partial<Record<'buy' | 'sell', Record<string, number>>>;
+  maxFiat?: Partial<Record<'buy' | 'sell', Record<string, number>>>;
 }
 
 export interface PricingConfig {

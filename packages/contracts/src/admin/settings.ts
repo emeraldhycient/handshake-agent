@@ -124,6 +124,28 @@ const baseRate = (asset: string, code: string): SettingRegistryEntry =>
     `Mid-market ${code} rate per 1 ${asset}. Production replaces this with a live feed; the config value is the fallback baseline.`,
     { min: 0, max: POSITIVE_INT_MAX },
   );
+// Per-(capability × currency) fiat MIN/MAX transaction bounds — the pricing
+// screen's MIN/MAX column. ENFORCE-WHEN-PRESENT product/market caps (distinct
+// from the per-user KYC-tier limit): the engine bounds a buy's fiat spend and a
+// sell's fiat proceeds against these when set. Registering the full matrix (per
+// priced asset × {buy,sell} × every known fiat) is what lets an operator set them
+// from the console — the settings PATCH rejects unregistered keys.
+const PRICING_CAPABILITIES = ["buy", "sell"] as const;
+const fiatBound = (
+  asset: string,
+  kind: "minFiat" | "maxFiat",
+  cap: (typeof PRICING_CAPABILITIES)[number],
+  code: string,
+): SettingRegistryEntry =>
+  s(
+    `pricing.assets.${asset}.${kind}.${cap}.${code}`,
+    "Pricing",
+    "number",
+    `${asset} ${cap} ${kind === "minFiat" ? "min" : "max"} (${code})`,
+    `${kind === "minFiat" ? "Minimum" : "Maximum"} ${code} transaction amount for ${asset} ${cap}. A per-market cap; leave unset for no bound. The engine rejects a ${cap} outside this band (enforced server-side).`,
+    { min: 0, max: POSITIVE_INT_MAX },
+  );
+
 const assetPricing = (asset: string): SettingRegistryEntry[] => [
   ...KNOWN_FIAT_CURRENCIES.map((code) => baseRate(asset, code)),
   bps(
@@ -137,6 +159,12 @@ const assetPricing = (asset: string): SettingRegistryEntry[] => [
     "Pricing",
     `${asset} sell spread (bps)`,
     `Platform spread folded into SELL quotes for ${asset} (marks down the rate; user receives less fiat).`,
+  ),
+  ...PRICING_CAPABILITIES.flatMap((cap) =>
+    KNOWN_FIAT_CURRENCIES.flatMap((code) => [
+      fiatBound(asset, "minFiat", cap, code),
+      fiatBound(asset, "maxFiat", cap, code),
+    ]),
   ),
 ];
 

@@ -283,6 +283,10 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.UNPROCESSABLE_ENTITY,
     message: 'That amount is below the minimum allowed for this transaction.',
   },
+  AMOUNT_TOO_LARGE: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'That amount is above the maximum allowed for this transaction.',
+  },
   SELF_SEND_BLOCKED: {
     status: HttpStatus.UNPROCESSABLE_ENTITY,
     message: "That's your own wallet address — no transfer is needed.",

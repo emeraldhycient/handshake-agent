@@ -285,6 +285,7 @@ function makeSellSvc(opts?: {
   beneficiaryService?: Pick<BeneficiaryService, 'getById'>;
   assetRegistry?: Pick<AssetRegistry, 'defaultNetworkFor'>;
   ledgerRepo?: ILedgerRepository;
+  configService?: { get: (key: string) => unknown };
 }): ProposalService {
   return new ProposalService(
     (opts?.quotesService ?? {
@@ -301,7 +302,7 @@ function makeSellSvc(opts?: {
     (opts?.assetRegistry ?? makeAssetRegistry()) as unknown as AssetRegistry,
     opts?.ledgerRepo ?? makeLedgerRepo(),
     NOOP_COMPLIANCE_SERVICE,
-    NOOP_CONFIG_SERVICE,
+    (opts?.configService ?? NOOP_CONFIG_SERVICE) as never,
     // swapProvider: not needed on sell path; undefined is fine (@Optional)
     undefined as never,
   );
@@ -651,6 +652,113 @@ describe('ProposalService.createBuyProposal', () => {
         intent: { ...BASE_INPUT.intent, fiatAmount: '500' },
       }),
     ).resolves.toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-(capability × asset × currency) FIAT bounds — the pricing MIN/MAX column.
+// A product/market cap distinct from the per-user KYC-tier limit, enforce-when-
+// present: an unset bound is a no-op. `buy` bounds the fiat spend; `sell` bounds
+// the fiat proceeds (quote.netFiatAmount).
+// ---------------------------------------------------------------------------
+
+describe('ProposalService per-(capability × asset × currency) fiat bounds', () => {
+  const pricingWith = (assets: Record<string, unknown>) => ({
+    get: jest.fn((key: string) => (key === 'pricing' ? { assets } : undefined)),
+  });
+
+  const makeBuySvc = (configService: {
+    get: (key: string) => unknown;
+  }): ProposalService =>
+    new ProposalService(
+      makeQuotesService() as unknown as QuotesService,
+      makeKycGate() as unknown as KycGateService,
+      makeQuoteRepo(),
+      makeProposalRepo(),
+      stubClock,
+      makeWalletService() as unknown as WalletService,
+      makeBeneficiaryService() as unknown as BeneficiaryService,
+      makeAssetRegistry() as unknown as AssetRegistry,
+      makeLedgerRepo(),
+      NOOP_COMPLIANCE_SERVICE,
+      configService as never,
+      undefined as never,
+    );
+
+  it('rejects a buy above maxFiat[buy][NGN] with AMOUNT_TOO_LARGE (before quoting)', async () => {
+    const quotesService = makeQuotesService();
+    const svc = new ProposalService(
+      quotesService as unknown as QuotesService,
+      makeKycGate() as unknown as KycGateService,
+      makeQuoteRepo(),
+      makeProposalRepo(),
+      stubClock,
+      makeWalletService() as unknown as WalletService,
+      makeBeneficiaryService() as unknown as BeneficiaryService,
+      makeAssetRegistry() as unknown as AssetRegistry,
+      makeLedgerRepo(),
+      NOOP_COMPLIANCE_SERVICE,
+      pricingWith({ USDT: { maxFiat: { buy: { NGN: 5000 } } } }) as never,
+      undefined as never,
+    );
+
+    await expect(
+      svc.createBuyProposal({
+        ...BASE_INPUT,
+        intent: { ...BASE_INPUT.intent, fiatAmount: '6000' },
+      }),
+    ).rejects.toMatchObject({ code: 'AMOUNT_TOO_LARGE' });
+    expect(quotesService.quoteBuy).not.toHaveBeenCalled();
+  });
+
+  it('accepts a buy exactly at the maxFiat boundary', async () => {
+    const svc = makeBuySvc(
+      pricingWith({ USDT: { maxFiat: { buy: { NGN: 5000 } } } }),
+    );
+    await expect(
+      svc.createBuyProposal({
+        ...BASE_INPUT,
+        intent: { ...BASE_INPUT.intent, fiatAmount: '5000' },
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it('rejects a buy below the per-row minFiat with AMOUNT_TOO_SMALL (even above the global floor)', async () => {
+    const svc = makeBuySvc(
+      pricingWith({ USDT: { minFiat: { buy: { NGN: 1000 } } } }),
+    );
+    // 500 clears the global 100 floor but not the per-row 1000 minimum.
+    await expect(
+      svc.createBuyProposal({
+        ...BASE_INPUT,
+        intent: { ...BASE_INPUT.intent, fiatAmount: '500' },
+      }),
+    ).rejects.toMatchObject({ code: 'AMOUNT_TOO_SMALL' });
+  });
+
+  it('does not bound a buy when the cap is set for a DIFFERENT currency (enforce-when-present)', async () => {
+    const svc = makeBuySvc(
+      pricingWith({ USDT: { maxFiat: { buy: { GHS: 100 } } } }),
+    );
+    await expect(svc.createBuyProposal(BASE_INPUT)).resolves.toBeDefined();
+  });
+
+  it('rejects a sell whose fiat PROCEEDS exceed maxFiat[sell][NGN] with AMOUNT_TOO_LARGE', async () => {
+    // STUB_SELL_QUOTE.netFiatAmount = '7500' > 5000.
+    const svc = makeSellSvc({
+      configService: pricingWith({ USDT: { maxFiat: { sell: { NGN: 5000 } } } }),
+    });
+    await expect(
+      svc.createSellProposal(BASE_SELL_INPUT),
+    ).rejects.toMatchObject({ code: 'AMOUNT_TOO_LARGE' });
+  });
+
+  it('scopes bounds by CAPABILITY — a buy cap does not bound a sell', async () => {
+    // Only a BUY cap is set; the sell proceeds (7500) must still pass.
+    const svc = makeSellSvc({
+      configService: pricingWith({ USDT: { maxFiat: { buy: { NGN: 100 } } } }),
+    });
+    await expect(svc.createSellProposal(BASE_SELL_INPUT)).resolves.toBeDefined();
   });
 });
 

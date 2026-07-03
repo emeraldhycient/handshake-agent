@@ -48,8 +48,10 @@ import type { AddPriceOption, PricingBaseRateRow } from "@/types/components"
 // The design's exact 7-column spread-grid template (Pricing.html).
 const PRICING_GRID = "grid-cols-[1.2fr_1fr_0.8fr_0.8fr_1fr_1.4fr_0.7fr]"
 const PRICED_ASSETS = ["USDT", "BTC", "TRX"] as const
-const NO_MINMAX = "—"
 const BASE_RATE_RE = /^pricing\.assets\.([A-Za-z0-9]+)\.baseRates\.([A-Z]{3})$/
+
+/** The two priced, fiat-denominated capabilities that carry per-row MIN/MAX bounds. */
+type PricingCap = "buy" | "sell"
 
 /** One resolved spread row (buy or sell) of the design's pricing grid. */
 interface SpreadRow {
@@ -58,13 +60,20 @@ interface SpreadRow {
   pair: string
   spread: string
   fee: string
-  minmax: string
   userRate: string
   margin: string
   spreadKey: string
   spreadBps: number | null
   scope: EffectiveSetting["scope"]
   scopeValue: string | null
+  // Per-(capability × asset × currency) fiat MIN/MAX (the pricing MIN/MAX column).
+  dir: PricingCap
+  asset: string
+  currency: string
+  minKey: string
+  maxKey: string
+  minValue: number | null
+  maxValue: number | null
 }
 
 /**
@@ -102,6 +111,11 @@ function fiatRate(currency: string, rate: number): string {
 }
 function formatRate(code: string, n: number): string {
   return `${n.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${code}`
+}
+/** Compact fiat bound (no forced decimals) — "₦5,000,000" / "5,000,000 GHS". */
+function formatBound(currency: string, n: number): string {
+  const v = n.toLocaleString(undefined, { maximumFractionDigits: 2 })
+  return currency === "NGN" ? `₦${v}` : `${v} ${currency}`
 }
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message
@@ -155,23 +169,33 @@ function buildSpreadRows(
       return `${(spreadPct + feePct).toFixed(2)}%`
     }
     const mk = (
-      dir: "buy" | "sell",
+      dir: PricingCap,
       bpsVal: number | null,
       setting?: EffectiveSetting
-    ): SpreadRow => ({
-      id: `${asset}-${dir}`,
-      cap: `crypto.${dir}`,
-      pair: `${asset} / ${currency}`,
-      spread: bpsVal === null ? "—" : bpsToPct(bpsVal),
-      fee: feeLabel,
-      minmax: NO_MINMAX,
-      userRate: derive(bpsVal, dir),
-      margin: margin(bpsVal),
-      spreadKey: `${base}.${dir}SpreadBps`,
-      spreadBps: bpsVal,
-      scope: setting?.scope ?? "global",
-      scopeValue: setting?.scopeValue ?? null,
-    })
+    ): SpreadRow => {
+      const minKey = `${base}.minFiat.${dir}.${currency}`
+      const maxKey = `${base}.maxFiat.${dir}.${currency}`
+      return {
+        id: `${asset}-${dir}`,
+        cap: `crypto.${dir}`,
+        pair: `${asset} / ${currency}`,
+        spread: bpsVal === null ? "—" : bpsToPct(bpsVal),
+        fee: feeLabel,
+        userRate: derive(bpsVal, dir),
+        margin: margin(bpsVal),
+        spreadKey: `${base}.${dir}SpreadBps`,
+        spreadBps: bpsVal,
+        scope: setting?.scope ?? "global",
+        scopeValue: setting?.scopeValue ?? null,
+        dir,
+        asset,
+        currency,
+        minKey,
+        maxKey,
+        minValue: num(byKey.get(minKey)),
+        maxValue: num(byKey.get(maxKey)),
+      }
+    }
     rows.push(mk("buy", buyBps, buySetting), mk("sell", sellBps, sellSetting))
   }
   return rows
@@ -231,9 +255,13 @@ function buildBaseRates(settings: readonly EffectiveSetting[]): {
 function SpreadTableRow({
   row,
   onEdit,
+  onEditMin,
+  onEditMax,
 }: {
   row: SpreadRow
   onEdit: (row: SpreadRow) => void
+  onEditMin: (row: SpreadRow) => void
+  onEditMax: (row: SpreadRow) => void
 }) {
   return (
     <div
@@ -250,8 +278,37 @@ function SpreadTableRow({
       <div className="font-mono text-[11.5px] text-ink2 tabular-nums">
         {row.fee}
       </div>
-      <div className="font-mono text-[11px] text-ink2 tabular-nums">
-        {row.minmax}
+      {/* Min / max — per-(capability × asset × currency) fiat bounds, each editable
+          (enforced server-side). "+ min/max" when unset (no bound). */}
+      <div className="flex flex-col items-start gap-0.5 font-mono text-[11px] tabular-nums">
+        <button
+          type="button"
+          onClick={() => onEditMin(row)}
+          aria-label={`Edit ${row.cap} ${row.pair} minimum`}
+          className="rounded text-left transition-colors hover:text-ink focus-visible:text-ink focus-visible:outline-none"
+        >
+          {row.minValue !== null ? (
+            <span className="text-ink2">
+              min {formatBound(row.currency, row.minValue)}
+            </span>
+          ) : (
+            <span className="text-ink3">+ min</span>
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={() => onEditMax(row)}
+          aria-label={`Edit ${row.cap} ${row.pair} maximum`}
+          className="rounded text-left transition-colors hover:text-ink focus-visible:text-ink focus-visible:outline-none"
+        >
+          {row.maxValue !== null ? (
+            <span className="text-ink2">
+              max {formatBound(row.currency, row.maxValue)}
+            </span>
+          ) : (
+            <span className="text-ink3">+ max</span>
+          )}
+        </button>
       </div>
       <div className="text-[11px]">
         <div className="text-ink">
@@ -345,6 +402,26 @@ export function PricingPage() {
     format: bpsToPct,
     integer: true,
   })
+  // Per-(capability × asset × currency) fiat MIN/MAX bound. Persists to a registered
+  // `pricing.assets.<A>.{min,max}Fiat.<cap>.<ccy>` key that the engine enforces
+  // server-side (§3.6) — the editor is safe precisely because the guard exists.
+  const boundTarget = (row: SpreadRow, kind: "min" | "max"): EditTarget => {
+    const isMin = kind === "min"
+    const value = isMin ? row.minValue : row.maxValue
+    return {
+      key: isMin ? row.minKey : row.maxKey,
+      title: `Edit ${row.cap} ${kind} · ${row.pair}`,
+      fieldLabel: `New ${isMin ? "minimum" : "maximum"} (${row.currency})`,
+      currentLabel: value !== null ? formatBound(row.currency, value) : "—",
+      seed: value === null ? "" : String(value),
+      scope: "global",
+      scopeValue: null,
+      diffField: `${row.cap} · ${row.pair} ${kind}`,
+      toastLabel: `${row.cap} · ${row.pair} ${kind}`,
+      format: (n) => formatBound(row.currency, n),
+      integer: false,
+    }
+  }
   const feeTarget = (): EditTarget => ({
     key: "pricing.processingFeeBps",
     title: "Edit processing fee",
@@ -553,6 +630,8 @@ export function PricingPage() {
               key={row.id}
               row={row}
               onEdit={(r) => startEdit(spreadTarget(r))}
+              onEditMin={(r) => startEdit(boundTarget(r, "min"))}
+              onEditMax={(r) => startEdit(boundTarget(r, "max"))}
             />
           ))}
       </div>

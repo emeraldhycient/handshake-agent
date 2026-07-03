@@ -63,3 +63,50 @@ export function resolveMinCryptoAmount(
   const configured = pricing?.minCryptoAmount?.[operation]?.[asset];
   return configured !== undefined ? String(configured) : DEFAULT_MIN_CRYPTO;
 }
+
+// ---------------------------------------------------------------------------
+// Per-(capability × currency) fiat transaction bounds (pricing MIN/MAX column)
+// ---------------------------------------------------------------------------
+
+/** The priced fiat-denominated capabilities that carry per-row min/max bounds. */
+export type FiatBoundCapability = 'buy' | 'sell';
+
+/**
+ * The optional per-(capability × currency) fiat bounds that live on a single
+ * asset's pricing entry (`PricingConfig.assets.<ASSET>`). Each map is
+ * `capability → { fiatCode → amount }`. Unlike the always-on `minBuyFiat` floor,
+ * these are ENFORCE-WHEN-PRESENT: an absent entry means "no per-row bound" (the
+ * min still has the global floor beneath it; the max means "no cap"). This is a
+ * PRODUCT/market cap set by an operator on the pricing screen — distinct from the
+ * per-user KYC-tier limit.
+ */
+export interface AssetFiatBounds {
+  minFiat?: Partial<Record<FiatBoundCapability, Record<string, number>>>;
+  maxFiat?: Partial<Record<FiatBoundCapability, Record<string, number>>>;
+}
+
+/**
+ * Resolves the configured fiat MINIMUM (decimal string) for (capability, currency)
+ * on an asset's pricing entry, or `null` when none is configured (unbounded here).
+ */
+export function resolveFiatMin(
+  bounds: AssetFiatBounds | undefined,
+  capability: FiatBoundCapability,
+  fiatCurrency: string,
+): string | null {
+  const configured = bounds?.minFiat?.[capability]?.[fiatCurrency];
+  return configured !== undefined ? String(configured) : null;
+}
+
+/**
+ * Resolves the configured fiat MAXIMUM (decimal string) for (capability, currency)
+ * on an asset's pricing entry, or `null` when none is configured (no cap).
+ */
+export function resolveFiatMax(
+  bounds: AssetFiatBounds | undefined,
+  capability: FiatBoundCapability,
+  fiatCurrency: string,
+): string | null {
+  const configured = bounds?.maxFiat?.[capability]?.[fiatCurrency];
+  return configured !== undefined ? String(configured) : null;
+}

@@ -224,6 +224,74 @@ describe("PricingPage (wired to pricing settings)", () => {
     })
   })
 
+  it("shows configured per-row min/max, and '+ min/+ max' affordances when unset", async () => {
+    mockList.mockResolvedValue([
+      ...PRICING_SETTINGS,
+      n("pricing.assets.USDT.minFiat.buy.NGN", 100),
+      n("pricing.assets.USDT.maxFiat.buy.NGN", 5_000_000),
+    ])
+    renderPage()
+
+    // The buy row shows its configured fiat bounds…
+    expect(await screen.findByText("min ₦100")).toBeInTheDocument()
+    expect(screen.getByText("max ₦5,000,000")).toBeInTheDocument()
+    // …and the (unconfigured) sell row still exposes editable add affordances.
+    expect(
+      screen.getByRole("button", {
+        name: "Edit crypto.sell USDT / NGN minimum",
+      })
+    ).toBeInTheDocument()
+  })
+
+  it("persists a per-(capability × asset × currency) MINIMUM via setSetting when approved", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Edit crypto.buy USDT / NGN minimum",
+      })
+    )
+    const input = screen.getByRole("textbox", { name: "New minimum (NGN)" })
+    await user.clear(input)
+    await user.type(input, "250")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await finishAuditChain(user)
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("pricing.assets.USDT.minFiat.buy.NGN", {
+      value: 250,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("persists a per-row MAXIMUM (sell) via setSetting when approved", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Edit crypto.sell USDT / NGN maximum",
+      })
+    )
+    const input = screen.getByRole("textbox", { name: "New maximum (NGN)" })
+    await user.clear(input)
+    await user.type(input, "9000000")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await finishAuditChain(user)
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith(
+      "pricing.assets.USDT.maxFiat.sell.NGN",
+      {
+        value: 9000000,
+        scope: "global",
+        scopeValue: null,
+      }
+    )
+  })
+
   it("does not persist until the maker-checker submit fires", async () => {
     const user = userEvent.setup()
     renderPage()
