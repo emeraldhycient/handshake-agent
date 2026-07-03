@@ -28,6 +28,7 @@
 import { useEffect, useMemo, useState } from "react"
 
 import { FilterSelect } from "@/components/admin/filter-select"
+import { TableFilterBar } from "@/components/admin/table-filter-bar"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAudit, useVerifyAuditChain } from "@/lib/query/hooks"
 import { pushToast } from "@/lib/store/toast-store"
@@ -257,82 +258,81 @@ export function AuditPage() {
         </div>
       </div>
 
-      {/* ── Filters: search (→ subject) · action · date range ───────────────── */}
-      <div className="mb-[14px] flex flex-wrap items-center gap-[10px]">
-        <div className="flex h-[38px] min-w-[230px] items-center gap-2 rounded-[11px] border border-line bg-card px-3">
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            aria-hidden="true"
-            className="text-ink3"
-          >
-            <circle
-              cx="11"
-              cy="11"
-              r="7"
-              stroke="currentColor"
-              strokeWidth="1.8"
-            />
-            <path
-              d="m20 20-3.5-3.5"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-            />
-          </svg>
-          <input
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value)
-              resetPaging()
-            }}
-            placeholder="target, subject…"
-            aria-label="Search audit log by target or subject"
-            className="flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink3"
-          />
-        </div>
-        <FilterSelect
-          label="Filter by action"
-          options={ACTION_OPTIONS}
-          value={action}
-          onChange={(e) => {
-            setAction(e.target.value)
-            resetPaging()
-          }}
-          className={FILTER_SELECT_CLASS}
-        />
-        <label className="flex h-[38px] items-center gap-2 rounded-[11px] border border-line bg-card px-3 text-[12px] text-ink2">
-          <span className="text-ink3">From</span>
-          <input
-            type="date"
-            value={from}
-            onChange={(e) => {
-              setFrom(e.target.value)
-              resetPaging()
-            }}
-            aria-label="Filter from date"
-            className="bg-transparent text-[12.5px] text-ink outline-none"
-          />
-        </label>
-        <label className="flex h-[38px] items-center gap-2 rounded-[11px] border border-line bg-card px-3 text-[12px] text-ink2">
-          <span className="text-ink3">To</span>
-          <input
-            type="date"
-            value={to}
-            onChange={(e) => {
-              setTo(e.target.value)
-              resetPaging()
-            }}
-            aria-label="Filter to date"
-            className="bg-transparent text-[12.5px] text-ink outline-none"
-          />
-        </label>
-      </div>
-
-      {/* ── Table ───────────────────────────────────────────────────────────── */}
+      {/* ── Table — filters live in its header strip ─────────────────────────── */}
       <div className="overflow-hidden rounded-[16px] border border-line bg-card">
+        <TableFilterBar>
+          <div className="flex h-[38px] min-w-[230px] items-center gap-2 rounded-[11px] border border-line bg-card px-3">
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden="true"
+              className="text-ink3"
+            >
+              <circle
+                cx="11"
+                cy="11"
+                r="7"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              />
+              <path
+                d="m20 20-3.5-3.5"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
+            <input
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value)
+                resetPaging()
+              }}
+              placeholder="target, subject…"
+              aria-label="Search audit log by target or subject"
+              className="flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink3"
+            />
+          </div>
+          <FilterSelect
+            label="Filter by action"
+            options={ACTION_OPTIONS}
+            value={action}
+            onChange={(e) => {
+              setAction(e.target.value)
+              resetPaging()
+            }}
+            className={FILTER_SELECT_CLASS}
+          />
+          <label className="flex h-[38px] items-center gap-2 rounded-[11px] border border-line bg-card px-3 text-[12px] text-ink2">
+            <span className="text-ink3">From</span>
+            <input
+              type="date"
+              value={from}
+              onChange={(e) => {
+                setFrom(e.target.value)
+                resetPaging()
+              }}
+              aria-label="Filter from date"
+              className="bg-transparent text-[12.5px] text-ink outline-none"
+            />
+          </label>
+          <label className="flex h-[38px] items-center gap-2 rounded-[11px] border border-line bg-card px-3 text-[12px] text-ink2">
+            <span className="text-ink3">To</span>
+            <input
+              type="date"
+              value={to}
+              onChange={(e) => {
+                setTo(e.target.value)
+                resetPaging()
+              }}
+              aria-label="Filter to date"
+              className="bg-transparent text-[12.5px] text-ink outline-none"
+            />
+          </label>
+        </TableFilterBar>
+
         {/* Header row */}
         <div
           className={`grid ${GRID_COLS} gap-3 border-b border-line bg-card2 px-[18px] py-[11px] text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase`}

@@ -37,15 +37,13 @@ import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { SettingValueModal } from "@/components/admin/flows/setting-value-modal"
 import { Skeleton } from "@/components/ui/skeleton"
 import { NativeSelect } from "@/components/ui/native-select"
+import { TableFilterBar } from "@/components/admin/table-filter-bar"
 import { ApiError } from "@/lib/api/client"
 import { pushToast } from "@/lib/store/toast-store"
 import { useAdminMe, useSetSetting, useSettings } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { cn } from "@/lib/utils"
-import type {
-  AddPriceOption,
-  PricingBaseRateRow,
-} from "@/types/components"
+import type { AddPriceOption, PricingBaseRateRow } from "@/types/components"
 
 // The design's exact 7-column spread-grid template (Pricing.html).
 const PRICING_GRID = "grid-cols-[1.2fr_1fr_0.8fr_0.8fr_1fr_1.4fr_0.7fr]"
@@ -156,7 +154,11 @@ function buildSpreadRows(
       const feePct = feeBps === null ? 0 : feeBps / 100
       return `${(spreadPct + feePct).toFixed(2)}%`
     }
-    const mk = (dir: "buy" | "sell", bpsVal: number | null, setting?: EffectiveSetting): SpreadRow => ({
+    const mk = (
+      dir: "buy" | "sell",
+      bpsVal: number | null,
+      setting?: EffectiveSetting
+    ): SpreadRow => ({
       id: `${asset}-${dir}`,
       cap: `crypto.${dir}`,
       pair: `${asset} / ${currency}`,
@@ -179,7 +181,9 @@ function buildSpreadRows(
 function pricingCurrencies(settings: readonly EffectiveSetting[]): string[] {
   const codes = new Set<string>()
   for (const s of settings) {
-    const m = /^pricing\.assets\.[A-Za-z0-9]+\.baseRates\.([A-Z]{3})$/.exec(s.key)
+    const m = /^pricing\.assets\.[A-Za-z0-9]+\.baseRates\.([A-Z]{3})$/.exec(
+      s.key
+    )
     if (m) codes.add(m[1])
   }
   if (codes.size === 0) codes.add("NGN")
@@ -214,8 +218,10 @@ function buildBaseRates(settings: readonly EffectiveSetting[]): {
       options.push({ asset, code })
     }
   }
-  const byAssetThenCode = (a: { asset: string; code: string }, b: { asset: string; code: string }) =>
-    a.asset.localeCompare(b.asset) || a.code.localeCompare(b.code)
+  const byAssetThenCode = (
+    a: { asset: string; code: string },
+    b: { asset: string; code: string }
+  ) => a.asset.localeCompare(b.asset) || a.code.localeCompare(b.code)
   rows.sort(byAssetThenCode)
   options.sort(byAssetThenCode)
   return { rows, options }
@@ -241,12 +247,18 @@ function SpreadTableRow({
       <div className="font-mono text-[12.5px] font-bold text-ink tabular-nums">
         {row.spread}
       </div>
-      <div className="font-mono text-[11.5px] text-ink2 tabular-nums">{row.fee}</div>
-      <div className="font-mono text-[11px] text-ink2 tabular-nums">{row.minmax}</div>
+      <div className="font-mono text-[11.5px] text-ink2 tabular-nums">
+        {row.fee}
+      </div>
+      <div className="font-mono text-[11px] text-ink2 tabular-nums">
+        {row.minmax}
+      </div>
       <div className="text-[11px]">
         <div className="text-ink">
           User sees{" "}
-          <span className="font-mono font-bold tabular-nums">{row.userRate}</span>
+          <span className="font-mono font-bold tabular-nums">
+            {row.userRate}
+          </span>
         </div>
         <div className="text-twn">
           margin{" "}
@@ -359,7 +371,11 @@ export function PricingPage() {
     format: (n) => formatRate(row.code, n),
     integer: false,
   })
-  const baseRateAddTarget = (asset: string, code: string, rate: number): EditTarget => ({
+  const baseRateAddTarget = (
+    asset: string,
+    code: string,
+    rate: number
+  ): EditTarget => ({
     key: `pricing.assets.${asset}.baseRates.${code}`,
     title: `Add ${asset} / ${code} base rate`,
     fieldLabel: `New base rate (${code} per 1 ${asset})`,
@@ -403,7 +419,13 @@ export function PricingPage() {
   const flowTitle = target?.title ?? "Edit pricing"
   const diff =
     target && parsed !== null
-      ? [{ field: target.diffField, from: target.currentLabel, to: target.format(parsed) }]
+      ? [
+          {
+            field: target.diffField,
+            from: target.currentLabel,
+            to: target.format(parsed),
+          },
+        ]
       : []
 
   return (
@@ -420,22 +442,6 @@ export function PricingPage() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
-          {/* Preview currency — drives the effective-rate preview (per-currency base rate). */}
-          <label className="flex items-center gap-2 text-[12px] font-bold text-ink2">
-            Preview
-            <NativeSelect
-              aria-label="Preview currency"
-              value={previewCurrency}
-              onChange={(e) => setCurrency(e.target.value)}
-              className="h-[36px] w-[110px]"
-            >
-              {currencies.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </NativeSelect>
-          </label>
           <div className="flex items-center gap-2 rounded-[12px] border border-line bg-card px-3 py-2">
             <div className="text-right">
               <div className="text-[10px] font-bold tracking-[0.05em] text-ink3 uppercase">
@@ -457,8 +463,26 @@ export function PricingPage() {
         </div>
       </div>
 
-      {/* ── Spread card (design 7-column grid table) ─────────────────────────── */}
+      {/* ── Spread card — Preview currency lives in its header strip ─────────── */}
       <div className="overflow-hidden rounded-[16px] border border-line bg-card">
+        <TableFilterBar>
+          {/* Preview currency — drives the effective-rate preview (per-currency base rate). */}
+          <label className="flex items-center gap-2 text-[12px] font-bold text-ink2">
+            Preview
+            <NativeSelect
+              aria-label="Preview currency"
+              value={previewCurrency}
+              onChange={(e) => setCurrency(e.target.value)}
+              className="h-[36px] w-[110px] bg-card"
+            >
+              {currencies.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </NativeSelect>
+          </label>
+        </TableFilterBar>
         <div
           className={cn(
             "grid gap-3 border-b border-line bg-card2 px-[18px] py-[11px] text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase",
@@ -479,7 +503,10 @@ export function PricingPage() {
             {Array.from({ length: 5 }).map((_, i) => (
               <div
                 key={i}
-                className={cn("grid items-center gap-3 px-[18px] py-[13px]", PRICING_GRID)}
+                className={cn(
+                  "grid items-center gap-3 px-[18px] py-[13px]",
+                  PRICING_GRID
+                )}
               >
                 <Skeleton className="h-4 w-24" />
                 <Skeleton className="h-4 w-20" />
@@ -495,7 +522,9 @@ export function PricingPage() {
 
         {query.isError && (
           <div className="px-[18px] py-10 text-center">
-            <p className="text-[14px] font-bold text-tdn">Failed to load pricing</p>
+            <p className="text-[14px] font-bold text-tdn">
+              Failed to load pricing
+            </p>
             <p className="mt-1 text-[12.5px] text-ink3">
               The pricing config could not be read.
             </p>

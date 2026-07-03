@@ -26,6 +26,7 @@ import { useMemo, useState } from "react"
 import Link from "next/link"
 
 import { FilterSelect } from "@/components/admin/filter-select"
+import { TableFilterBar } from "@/components/admin/table-filter-bar"
 import { Skeleton } from "@/components/ui/skeleton"
 import { pushToast } from "@/lib/store/toast-store"
 import { downloadFile, exportFilename } from "@/lib/download"
@@ -63,6 +64,11 @@ const CURRENCY_OPTIONS = [
 
 /** Server page size for each "Load more" fetch. */
 const PAGE_SIZE = 25
+
+// Compact filter-select styling (matches the audit/users header strips): auto width,
+// white `--card` surface so the pills pop on the cream `--card2` header strip.
+const FILTER_SELECT_CLASS =
+  "h-[38px] w-auto min-w-0 rounded-[11px] border-line bg-card py-0 pr-[30px] pl-3 text-[12.5px] font-semibold"
 
 // ── Formatting (mirrors the design's `ngn()` + per-currency `fmt`) ───────────
 
@@ -182,9 +188,7 @@ export function LedgerPage() {
         </div>
         <div
           className={`flex h-[34px] items-center gap-[9px] rounded-full px-[13px] text-[11.5px] font-bold ${
-            integrityBroken
-              ? "bg-sdn text-tdn"
-              : "bg-sok text-tok"
+            integrityBroken ? "bg-sdn text-tdn" : "bg-sok text-tok"
           }`}
         >
           <svg
@@ -206,33 +210,34 @@ export function LedgerPage() {
         </div>
       </div>
 
-      {/* ── Filter row: account type · currency + Export ────────────────────── */}
-      <div className="mb-[14px] flex flex-wrap gap-[10px]">
-        <FilterSelect
-          label="Filter by account type"
-          value={account}
-          onChange={(e) => setAccount(e.target.value)}
-          options={ACCOUNT_OPTIONS}
-        />
-        <FilterSelect
-          label="Filter by currency"
-          value={currency}
-          onChange={(e) => setCurrency(e.target.value)}
-          options={CURRENCY_OPTIONS}
-        />
-        <div className="flex-1" />
-        <button
-          type="button"
-          onClick={() => void exportLedger()}
-          disabled={exporting}
-          className="flex h-[38px] items-center gap-[7px] rounded-[11px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
-        >
-          {exporting ? "Exporting…" : "Export"}
-        </button>
-      </div>
-
-      {/* ── Table: Seq · Account · Dir · Amount · Running · Source ──────────── */}
+      {/* ── Table — filters live in its header strip ────────────────────────── */}
       <div className="overflow-hidden rounded-[16px] border border-line bg-card">
+        <TableFilterBar>
+          <FilterSelect
+            label="Filter by account type"
+            value={account}
+            onChange={(e) => setAccount(e.target.value)}
+            options={ACCOUNT_OPTIONS}
+            className={FILTER_SELECT_CLASS}
+          />
+          <FilterSelect
+            label="Filter by currency"
+            value={currency}
+            onChange={(e) => setCurrency(e.target.value)}
+            options={CURRENCY_OPTIONS}
+            className={FILTER_SELECT_CLASS}
+          />
+          <div className="flex-1" />
+          <button
+            type="button"
+            onClick={() => void exportLedger()}
+            disabled={exporting}
+            className="flex h-[38px] items-center gap-[7px] rounded-[11px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
+          >
+            {exporting ? "Exporting…" : "Export"}
+          </button>
+        </TableFilterBar>
+
         {/* Header row */}
         <div
           className={`${LEDGER_GRID} border-b border-line bg-card2 py-[11px] text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase`}

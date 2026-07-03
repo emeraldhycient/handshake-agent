@@ -716,6 +716,15 @@ export interface AssetCatalogRow {
 }
 
 /**
+ * TableFilterBar props — the filter/search strip rendered inside a table card's
+ * header. `children` are the page-specific controls; `className` tweaks the strip.
+ */
+export interface TableFilterBarProps {
+  children: import("react").ReactNode
+  className?: string
+}
+
+/**
  * AssetLogo primitive props. Renders the provider logo image when a `logoUrl` is
  * supplied and loads; on a missing URL or an image load error it falls back to the
  * `sym` text badge. `className` styles the container (size, rounding, background,

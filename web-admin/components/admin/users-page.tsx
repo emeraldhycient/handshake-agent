@@ -36,6 +36,7 @@ import { pushToast } from "@/lib/store/toast-store"
 import { downloadFile, exportFilename } from "@/lib/download"
 import { exportEndUsers } from "@/lib/api/users"
 import { FilterSelect } from "@/components/admin/filter-select"
+import { TableFilterBar } from "@/components/admin/table-filter-bar"
 import { UsersBulkActions } from "@/components/admin/users-bulk-actions"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useEndUsers } from "@/lib/query/hooks"
@@ -438,124 +439,123 @@ export function UsersPage() {
         </div>
       </div>
 
-      {/* ── Filters ────────────────────────────────────────────────────────── */}
-      <div className="mb-[14px] flex flex-wrap items-center gap-[10px]">
-        <div className="flex h-[38px] min-w-[230px] items-center gap-2 rounded-[11px] border border-line bg-card px-3">
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            aria-hidden
-            className="text-ink3"
-          >
-            <circle
-              cx="11"
-              cy="11"
-              r="7"
-              stroke="currentColor"
-              strokeWidth="1.8"
+      {/* ── Table — filters + bulk actions live in its header ───────────────── */}
+      <div className="overflow-hidden rounded-[16px] border border-line bg-card">
+        <TableFilterBar>
+          <div className="flex h-[38px] min-w-[230px] items-center gap-2 rounded-[11px] border border-line bg-card px-3">
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden
+              className="text-ink3"
+            >
+              <circle
+                cx="11"
+                cy="11"
+                r="7"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              />
+              <path
+                d="m20 20-3.5-3.5"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
+            <input
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value)
+                resetPaging()
+              }}
+              placeholder="Name, email, phone…"
+              aria-label="Search users by name, email or phone"
+              className="min-w-0 flex-1 border-none bg-transparent text-[13px] text-ink outline-none placeholder:text-ink3"
             />
-            <path
-              d="m20 20-3.5-3.5"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-            />
-          </svg>
-          <input
-            value={search}
+          </div>
+
+          <FilterSelect
+            label="Filter by KYC status"
+            options={KYC_OPTIONS}
+            value={kyc}
             onChange={(e) => {
-              setSearch(e.target.value)
+              setKyc(e.target.value)
               resetPaging()
             }}
-            placeholder="Name, email, phone…"
-            aria-label="Search users by name, email or phone"
-            className="min-w-0 flex-1 border-none bg-transparent text-[13px] text-ink outline-none placeholder:text-ink3"
+            className={FILTER_SELECT_CLASS}
           />
-        </div>
-
-        <FilterSelect
-          label="Filter by KYC status"
-          options={KYC_OPTIONS}
-          value={kyc}
-          onChange={(e) => {
-            setKyc(e.target.value)
-            resetPaging()
-          }}
-          className={FILTER_SELECT_CLASS}
-        />
-        <FilterSelect
-          label="Filter by tier"
-          options={TIER_OPTIONS}
-          value={tier}
-          onChange={(e) => {
-            setTier(e.target.value)
-            resetPaging()
-          }}
-          className={FILTER_SELECT_CLASS}
-        />
-        <FilterSelect
-          label="Filter by country"
-          options={COUNTRY_OPTIONS}
-          value={country}
-          onChange={(e) => {
-            setCountry(e.target.value)
-            resetPaging()
-          }}
-          className={FILTER_SELECT_CLASS}
-        />
-
-        {riskChips.map((c) => (
-          <button
-            key={c.value}
-            type="button"
-            aria-pressed={c.active}
-            onClick={() => toggleRisk(c.value)}
-            className={cn(
-              "flex h-[38px] items-center gap-[6px] rounded-[11px] border px-[13px] text-[12.5px] font-bold transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
-              c.active
-                ? "border-btn-dark bg-btn-dark text-white"
-                : "border-line bg-card text-ink2 hover:bg-hov"
-            )}
-          >
-            {c.label}
-          </button>
-        ))}
-      </div>
-
-      {/* ── Bulk bar ───────────────────────────────────────────────────────── */}
-      {hasSelection && (
-        <div className="mb-3 flex items-center gap-[14px] rounded-[13px] bg-btn-dark px-4 py-[11px] text-white motion-safe:animate-hs-in">
-          <span className="text-[13px] font-bold tabular-nums">
-            {selected.length} selected
-          </span>
-          <div className="h-[18px] w-px bg-white/20" />
-          <button
-            type="button"
-            onClick={() => void onExport()}
-            disabled={exporting}
-            className="text-[12.5px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none disabled:opacity-50"
-          >
-            {exporting ? "Exporting…" : "Export"}
-          </button>
-          <UsersBulkActions
-            selectedIds={selected}
-            onDone={() => setSelected([])}
+          <FilterSelect
+            label="Filter by tier"
+            options={TIER_OPTIONS}
+            value={tier}
+            onChange={(e) => {
+              setTier(e.target.value)
+              resetPaging()
+            }}
+            className={FILTER_SELECT_CLASS}
           />
-          <div className="flex-1" />
-          <button
-            type="button"
-            onClick={() => setSelected([])}
-            className="text-[12.5px] font-semibold opacity-70 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
-          >
-            Clear
-          </button>
-        </div>
-      )}
+          <FilterSelect
+            label="Filter by country"
+            options={COUNTRY_OPTIONS}
+            value={country}
+            onChange={(e) => {
+              setCountry(e.target.value)
+              resetPaging()
+            }}
+            className={FILTER_SELECT_CLASS}
+          />
 
-      {/* ── Table ──────────────────────────────────────────────────────────── */}
-      <div className="overflow-hidden rounded-[16px] border border-line bg-card">
+          {riskChips.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              aria-pressed={c.active}
+              onClick={() => toggleRisk(c.value)}
+              className={cn(
+                "flex h-[38px] items-center gap-[6px] rounded-[11px] border px-[13px] text-[12.5px] font-bold transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+                c.active
+                  ? "border-btn-dark bg-btn-dark text-white"
+                  : "border-line bg-card text-ink2 hover:bg-hov"
+              )}
+            >
+              {c.label}
+            </button>
+          ))}
+        </TableFilterBar>
+
+        {/* ── Bulk bar (contextual, inset inside the table header) ───────────── */}
+        {hasSelection && (
+          <div className="m-[14px] flex items-center gap-[14px] rounded-[13px] bg-btn-dark px-4 py-[11px] text-white motion-safe:animate-hs-in">
+            <span className="text-[13px] font-bold tabular-nums">
+              {selected.length} selected
+            </span>
+            <div className="h-[18px] w-px bg-white/20" />
+            <button
+              type="button"
+              onClick={() => void onExport()}
+              disabled={exporting}
+              className="text-[12.5px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none disabled:opacity-50"
+            >
+              {exporting ? "Exporting…" : "Export"}
+            </button>
+            <UsersBulkActions
+              selectedIds={selected}
+              onDone={() => setSelected([])}
+            />
+            <div className="flex-1" />
+            <button
+              type="button"
+              onClick={() => setSelected([])}
+              className="text-[12.5px] font-semibold opacity-70 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
+            >
+              Clear
+            </button>
+          </div>
+        )}
+
         {/* Header row */}
         <div
           className={cn(
