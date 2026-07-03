@@ -75,6 +75,8 @@ enum KycStatus {
   not_started
   pending
   pending_review
+  /// An operator asked the user for more information (Phase 9 admin "Request info").
+  needs_info
   verified
   rejected
   expired

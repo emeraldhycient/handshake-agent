@@ -252,3 +252,47 @@ model UserTag {
   @@index([tag])
   @@map("user_tags")
 }
+
+// =============================================================================
+// Phase 9 — operator "finish the deferred writes" surfaces.
+// =============================================================================
+
+/// Operator-authored note pinned to an end user's timeline (user-detail "Add note").
+/// Append-only; not sensitive PII beyond the operator's free text. Stored with plain
+/// UUIDs (no Prisma relation) since it is queried by userId and never joined back.
+model AdminUserNote {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  userId        String   @db.Uuid
+  authorAdminId String   @db.Uuid
+  body          String
+  createdAt     DateTime @default(now()) @db.Timestamptz
+
+  @@index([userId])
+  @@map("admin_user_notes")
+}
+
+/// The append-only blocked list: users, wallet addresses, or bank accounts barred
+/// from transacting. Nothing is deleted — a block is LIFTED by stamping supersededAt
+/// (preserving the trail). Compliance-managed; a block moves no money by itself.
+enum BlockedEntryKind {
+  user
+  address
+  bank
+}
+
+model BlockedEntry {
+  id                  String           @id @default(uuid(7)) @db.Uuid
+  kind                BlockedEntryKind
+  /// The blocked value: a userId, a wallet address, or a bank account number.
+  value               String
+  reason              String
+  addedByAdminId      String           @db.Uuid
+  createdAt           DateTime         @default(now()) @db.Timestamptz
+  /// Set when the block is lifted (superseded); null while active.
+  supersededAt        DateTime?        @db.Timestamptz
+  supersededByAdminId String?          @db.Uuid
+
+  @@index([kind])
+  @@index([supersededAt])
+  @@map("blocked_entries")
+}
