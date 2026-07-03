@@ -245,4 +245,64 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
     expect(usageB.fiatTotal).toBe('0'); // userA's NGN row must NOT bleed to userB
     expect(usageB.txCount).toBe(0);
   });
+
+  // ── getWeeklyUsage (rolling 7-day amount_7d counter) ──────────────────────
+  const AMOUNT_7D = 'amount_7d';
+  const WEEK_ASOF = new Date('2024-06-08T12:00:00.000Z');
+
+  it('getWeeklyUsage returns "0" when the user has no amount_7d counter', async () => {
+    const userId = await seedUser();
+    const usage = await repo.getWeeklyUsage(userId, WEEK_ASOF, 'NGN');
+    expect(usage.fiatTotal).toBe('0');
+  });
+
+  it('getWeeklyUsage sums the amount_7d counter whose window overlaps the 7-day lookback', async () => {
+    const userId = await seedUser();
+    await prisma.velocityCounter.create({
+      data: {
+        userId,
+        counterType: AMOUNT_7D,
+        fiatCurrency: 'NGN',
+        currentValue: 750000,
+        windowStart: new Date('2024-06-05T00:00:00.000Z'),
+        windowEnd: WEEK_ASOF, // inside the 7-day window
+      },
+    });
+    const usage = await repo.getWeeklyUsage(userId, WEEK_ASOF, 'NGN');
+    expect(usage.fiatTotal).toBe('750000');
+  });
+
+  it('getWeeklyUsage ignores the daily amount_24h counter (weekly reads only amount_7d)', async () => {
+    const userId = await seedUser();
+    // Only a 24h counter exists — it must NOT count toward the weekly total, or the
+    // weekly cap would double-count daily spend.
+    await prisma.velocityCounter.create({
+      data: {
+        userId,
+        counterType: AMOUNT_24H,
+        fiatCurrency: 'NGN',
+        currentValue: 500000,
+        windowStart: new Date('2024-06-08T00:00:00.000Z'),
+        windowEnd: new Date('2024-06-09T12:00:00.000Z'),
+      },
+    });
+    const usage = await repo.getWeeklyUsage(userId, WEEK_ASOF, 'NGN');
+    expect(usage.fiatTotal).toBe('0');
+  });
+
+  it('getWeeklyUsage excludes an amount_7d row whose window expired (>7 days old)', async () => {
+    const userId = await seedUser();
+    await prisma.velocityCounter.create({
+      data: {
+        userId,
+        counterType: AMOUNT_7D,
+        fiatCurrency: 'NGN',
+        currentValue: 999999,
+        windowStart: new Date('2024-05-28T00:00:00.000Z'),
+        windowEnd: new Date('2024-05-30T00:00:00.000Z'), // >7d before asOf
+      },
+    });
+    const usage = await repo.getWeeklyUsage(userId, WEEK_ASOF, 'NGN');
+    expect(usage.fiatTotal).toBe('0');
+  });
 });

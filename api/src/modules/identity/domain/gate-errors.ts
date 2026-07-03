@@ -59,23 +59,42 @@ export class TierLimitExceededError extends GateError {
   }
 }
 
-/** Daily spend or transaction count would exceed the user's velocity cap for their KYC tier. */
+/**
+ * A velocity cap for the user's KYC tier would be exceeded:
+ *  - `fiat`   → rolling 24-hour spend cap (`dailyFiatMax`)
+ *  - `count`  → rolling 24-hour transaction-count cap (`dailyTxCountMax`)
+ *  - `weekly` → rolling 7-day spend cap (`weeklyFiatMax`)
+ */
 export class VelocityExceededError extends GateError {
   readonly code = 'VELOCITY_EXCEEDED' as const;
 
   constructor(
-    readonly kind: 'fiat' | 'count',
+    readonly kind: 'fiat' | 'count' | 'weekly',
     readonly used: number,
     readonly limit: number,
     readonly tier: string,
     readonly fiatCurrency: string,
   ) {
-    super(
-      kind === 'fiat'
-        ? `Transaction blocked: daily spend of ${used} ${fiatCurrency} would exceed the ` +
-            `daily limit of ${limit} ${fiatCurrency} for tier ${tier}.`
-        : `Transaction blocked: daily transaction count of ${used} would exceed ` +
-            `the daily limit of ${limit} for tier ${tier}.`,
+    super(VelocityExceededError.messageFor(kind, used, limit, tier, fiatCurrency));
+  }
+
+  private static messageFor(
+    kind: 'fiat' | 'count' | 'weekly',
+    used: number,
+    limit: number,
+    tier: string,
+    fiatCurrency: string,
+  ): string {
+    if (kind === 'count') {
+      return (
+        `Transaction blocked: daily transaction count of ${used} would exceed ` +
+        `the daily limit of ${limit} for tier ${tier}.`
+      );
+    }
+    const window = kind === 'weekly' ? 'weekly' : 'daily';
+    return (
+      `Transaction blocked: ${window} spend of ${used} ${fiatCurrency} would exceed the ` +
+      `${window} limit of ${limit} ${fiatCurrency} for tier ${tier}.`
     );
   }
 }

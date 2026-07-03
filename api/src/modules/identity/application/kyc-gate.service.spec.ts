@@ -123,9 +123,11 @@ function makeIdentityRepo(
 function makeVelocityRepo(
   fiatTotal: string,
   txCount: number,
+  weeklyTotal = '0',
 ): IVelocityRepository {
   return {
     getDailyUsage: jest.fn().mockResolvedValue({ fiatTotal, txCount }),
+    getWeeklyUsage: jest.fn().mockResolvedValue({ fiatTotal: weeklyTotal }),
   };
 }
 
@@ -134,10 +136,11 @@ function makeService(
   fiatTotal = '0',
   txCount = 0,
   config: EffectiveConfigService = stubConfig,
+  weeklyTotal = '0',
 ): KycGateService {
   return new KycGateService(
     makeIdentityRepo(user),
-    makeVelocityRepo(fiatTotal, txCount),
+    makeVelocityRepo(fiatTotal, txCount, weeklyTotal),
     config,
     stubClock,
   );
@@ -363,6 +366,76 @@ describe('KycGateService.assertCanTransact', () => {
     await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
   });
 
+  // ── Rolling 7-day (weekly) velocity ───────────────────────────────────────
+  // A weekly cap is enforced only when the tier config carries `weeklyFiatMax`.
+
+  const WEEKLY_LIMITS: AppConfig['limits'] = {
+    NGN: {
+      tier_1: { ...TIER_1_LIMITS, weeklyFiatMax: 1_000_000 },
+      tier_2: DEFAULT_LIMITS.NGN.tier_2,
+      tier_3: DEFAULT_LIMITS.NGN.tier_3,
+    },
+  };
+
+  it('throws VelocityExceededError (weekly) when rolling-7d spend + amount would exceed weeklyFiatMax', async () => {
+    // 995_000 used this week + 10_000 = 1_005_000 > 1_000_000 weekly cap. Daily usage
+    // is 0 and the amount is under perTx/daily, so ONLY the weekly cap trips.
+    const svc = makeService(
+      makeUser(),
+      '0',
+      0,
+      makeConfig(WEEKLY_LIMITS),
+      '995000',
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toThrow(
+      VelocityExceededError,
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toMatchObject({
+      code: 'VELOCITY_EXCEEDED',
+      kind: 'weekly',
+      limit: 1_000_000,
+      tier: 'tier_1',
+      fiatCurrency: 'NGN',
+    });
+  });
+
+  it('does NOT throw when rolling-7d spend + amount equals weeklyFiatMax exactly', async () => {
+    // 990_000 + 10_000 = 1_000_000 exactly at the cap (> is the boundary, not >=).
+    const svc = makeService(
+      makeUser(),
+      '0',
+      0,
+      makeConfig(WEEKLY_LIMITS),
+      '990000',
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
+  });
+
+  it('skips the weekly check entirely when the tier has no weeklyFiatMax', async () => {
+    // Default tier_1 config has NO weeklyFiatMax; even a huge weekly total passes —
+    // the weekly gate is enforced only where the cap is configured.
+    const svc = makeService(makeUser(), '0', 0, stubConfig, '999999999');
+    await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
+  });
+
+  it('honors a DB AppSetting override to weeklyFiatMax (flows through the gate)', async () => {
+    // Override lowers the weekly cap to 12_000; a 10_000 amount on top of 5_000 of
+    // weekly usage (15_000) must now be rejected.
+    const lowered: AppConfig['limits'] = {
+      NGN: {
+        tier_1: { ...TIER_1_LIMITS, weeklyFiatMax: 12_000 },
+        tier_2: DEFAULT_LIMITS.NGN.tier_2,
+        tier_3: DEFAULT_LIMITS.NGN.tier_3,
+      },
+    };
+    const svc = makeService(makeUser(), '0', 0, makeConfig(lowered), '5000');
+    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toMatchObject({
+      code: 'VELOCITY_EXCEEDED',
+      kind: 'weekly',
+      limit: 12_000,
+    });
+  });
+
   // ── Error hierarchy ───────────────────────────────────────────────────────
 
   it('all gate errors extend GateError', () => {
@@ -562,7 +635,7 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn() },
+      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn() },
       stubConfig,
       stubClock,
     );
@@ -576,7 +649,7 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn() },
+      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn() },
       stubConfig,
       stubClock,
     );
@@ -587,7 +660,7 @@ describe('KycGateService.getOriginatorName', () => {
     const identityRepo = makeIdentityRepo(defaultUser, null);
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn() },
+      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn() },
       stubConfig,
       stubClock,
     );
@@ -601,7 +674,7 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn() },
+      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn() },
       stubConfig,
       stubClock,
     );
@@ -615,7 +688,7 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn() },
+      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn() },
       stubConfig,
       stubClock,
     );
@@ -638,7 +711,7 @@ describe('KycGateService.getOriginatorIdentity', () => {
   ): KycGateService {
     return new KycGateService(
       makeIdentityRepo(defaultUser, null, originator),
-      { getDailyUsage: jest.fn() },
+      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn() },
       stubConfig,
       stubClock,
     );

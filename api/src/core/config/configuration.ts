@@ -39,6 +39,12 @@ export interface TierLimits {
   perTxFiatMax: number;
   /** Maximum cumulative fiat amount within a rolling 24-hour window. */
   dailyFiatMax: number;
+  /**
+   * Maximum cumulative fiat amount within a rolling 7-day window. Optional on the
+   * type so fixtures exercising other caps need not set it, but the shipped defaults
+   * ALWAYS set it — production always enforces (KycGateService checks it when present).
+   */
+  weeklyFiatMax?: number;
   /** Maximum number of transactions within a rolling 24-hour window. */
   dailyTxCountMax: number;
 }
@@ -758,18 +764,21 @@ const buildConfig = (): AppConfig => ({
       tier_1: {
         perTxFiatMax: 50_000,
         dailyFiatMax: 200_000,
+        weeklyFiatMax: 1_000_000,
         dailyTxCountMax: 10,
       },
       // Tier 2 — enhanced KYC: higher throughput for regular users.
       tier_2: {
         perTxFiatMax: 500_000,
         dailyFiatMax: 2_000_000,
+        weeklyFiatMax: 10_000_000,
         dailyTxCountMax: 30,
       },
       // Tier 3 — full KYC: high-volume / business users.
       tier_3: {
         perTxFiatMax: 5_000_000,
         dailyFiatMax: 20_000_000,
+        weeklyFiatMax: 100_000_000,
         dailyTxCountMax: 100,
       },
     },

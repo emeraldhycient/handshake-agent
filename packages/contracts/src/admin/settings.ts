@@ -177,6 +177,12 @@ const tierLimits = (tier: string): SettingRegistryEntry[] => [
     `Maximum cumulative NGN amount within a rolling 24-hour window for ${tier}.`,
   ),
   positiveInt(
+    `limits.NGN.${tier}.weeklyFiatMax`,
+    "KYC",
+    `NGN ${tier} weekly max`,
+    `Maximum cumulative NGN amount within a rolling 7-day window for ${tier}.`,
+  ),
+  positiveInt(
     `limits.NGN.${tier}.dailyTxCountMax`,
     "KYC",
     `NGN ${tier} daily transaction count`,

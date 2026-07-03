@@ -64,6 +64,16 @@ describe("SETTING_REGISTRY", () => {
     expect(keys.has("beneficiary.cryptoCoolingOffSeconds")).toBe(true);
   });
 
+  it("registers a weekly-max cap per tier (rolling 7-day fiat cap, enforced server-side)", () => {
+    for (const tier of ["tier_1", "tier_2", "tier_3"] as const) {
+      const e = entry(`limits.NGN.${tier}.weeklyFiatMax`);
+      expect(e.category).toBe("KYC");
+      expect(e.valueType).toBe("number");
+      expect(e.editable).toBe(true);
+      expect(e.min).toBe(0);
+    }
+  });
+
   it("registers the Tickets enablement + commission tunables (Phase 4 wave 2)", () => {
     const enabled = entry("ticketing.enabled");
     expect(enabled.category).toBe("Tickets");

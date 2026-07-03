@@ -131,6 +131,7 @@ function toRecord(row: {
 
 /** 24-hour window in milliseconds. */
 const WINDOW_24H_MS = 24 * 60 * 60 * 1_000;
+const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1_000;
 
 /**
  * Upserts a single VelocityCounter row inside an active Prisma interactive
@@ -157,13 +158,15 @@ async function upsertVelocityCounter(
     fiatCurrency: string;
     delta: string; // decimal string, e.g. "10000" or "1"
     now: Date;
+    /** Window length for THIS counter (24h for the daily counters, 7d for weekly). */
+    windowMs: number;
   },
 ): Promise<void> {
-  const { userId, counterType, delta, now } = params;
+  const { userId, counterType, delta, now, windowMs } = params;
   // Cast string → generated FiatCurrency enum at the infrastructure boundary
   // (application layer uses `string` to stay free of Prisma imports — §3.2).
   const fiatCurrencyEnum = params.fiatCurrency as FiatCurrency;
-  const windowEnd = new Date(now.getTime() + WINDOW_24H_MS);
+  const windowEnd = new Date(now.getTime() + windowMs);
 
   const existing = await tx.velocityCounter.findUnique({
     where: {
@@ -236,6 +239,16 @@ async function writeVelocityIncrements(
     fiatCurrency,
     delta: fiatAmountStr,
     now,
+    windowMs: WINDOW_24H_MS,
+  });
+  // Rolling 7-day spend counter (weekly cap enforcement). Same fiat delta, 7-day window.
+  await upsertVelocityCounter(tx, {
+    userId,
+    counterType: VelocityCounterType.amount_7d,
+    fiatCurrency,
+    delta: fiatAmountStr,
+    now,
+    windowMs: WINDOW_7D_MS,
   });
   await upsertVelocityCounter(tx, {
     userId,
@@ -243,6 +256,7 @@ async function writeVelocityIncrements(
     fiatCurrency,
     delta: '1',
     now,
+    windowMs: WINDOW_24H_MS,
   });
 }
 

@@ -267,5 +267,27 @@ export class KycGateService {
         fiatCurrency,
       );
     }
+
+    // 6. Rolling 7-day (weekly) fiat velocity — enforced only when the tier carries a
+    // weekly cap (the shipped defaults always do; §3.6: enforce the cap that exists,
+    // never a cap that doesn't). Same BigInt-scaled comparison as the daily check.
+    if (tierLimits.weeklyFiatMax !== undefined) {
+      const weekly = await this.velocityRepo.getWeeklyUsage(
+        userId,
+        asOf,
+        fiatCurrency,
+      );
+      const scaledWeeklyUsed = toScaled(weekly.fiatTotal);
+      const scaledWeeklyMax = toScaled(String(tierLimits.weeklyFiatMax));
+      if (scaledWeeklyUsed + scaledTxAmount > scaledWeeklyMax) {
+        throw new VelocityExceededError(
+          'weekly',
+          Number(weekly.fiatTotal) + Number(fiatAmount),
+          tierLimits.weeklyFiatMax,
+          user.kycTier,
+          fiatCurrency,
+        );
+      }
+    }
   }
 }

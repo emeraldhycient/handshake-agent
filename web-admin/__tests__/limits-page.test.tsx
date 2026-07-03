@@ -62,6 +62,7 @@ function limit(
 const LIMIT_SETTINGS: EffectiveSetting[] = [
   limit("limits.NGN.tier_1.perTxFiatMax", 200000),
   limit("limits.NGN.tier_1.dailyFiatMax", 500000),
+  limit("limits.NGN.tier_1.weeklyFiatMax", 3000000),
   limit("limits.NGN.tier_1.dailyTxCountMax", 10),
   limit("beneficiary.cryptoCoolingOffSeconds", 86400, "Beneficiary"),
 ]
@@ -193,19 +194,44 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     })
   })
 
-  it("does not offer to edit a design row that has no backing key", async () => {
+  it("does not offer to edit a row the engine does not enforce (§3.6)", async () => {
     const user = userEvent.setup()
     renderPage()
     await screen.findByRole("tab", { name: "Tier 1" })
-    // "Weekly max" has no registry key (renders "—"); no edit pencil for it.
+    // "Single on-chain send max" is not yet enforced (renders "—"); no edit pencil.
     expect(
-      screen.queryByRole("button", { name: "Edit Weekly max" })
+      screen.queryByRole("button", { name: "Edit Single on-chain send max" })
     ).not.toBeInTheDocument()
     // The backed per-tx cap still has its edit pencil.
     expect(
       await screen.findByRole("button", { name: "Edit Per-transaction max" })
     ).toBeInTheDocument()
     void user
+  })
+
+  it("edits the enforced weekly max (rolling 7-day cap) via setSetting", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // 3,000,000 → "₦3,000,000" renders, and the row is editable.
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Edit Weekly max · rolling 7d",
+      })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (NGN)" })
+    await user.clear(input)
+    await user.type(input, "4000000")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("limits.NGN.tier_1.weeklyFiatMax", {
+      value: 4000000,
+      scope: "global",
+      scopeValue: null,
+    })
   })
 
   it("opens the step-up dialog and retries the PATCH after re-auth when the server demands step-up", async () => {
