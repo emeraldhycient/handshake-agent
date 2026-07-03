@@ -35,6 +35,13 @@ export const AdminCatalogAssetSchema = z.object({
   networks: z.array(z.string()),
   /** Effective live status — the asset's `enabled` flag in the merged config. */
   live: z.boolean(),
+  /**
+   * Provider-discovered logo URL (Blockradar Cloudinary), or null when none was
+   * discovered — the console then renders the tinted text-badge fallback. Not a
+   * secret: it's a public asset image. Present on both static assets (enriched from
+   * the discovery overlay) and provider-discovered ones.
+   */
+  logoUrl: z.string().nullable(),
 });
 export type AdminCatalogAsset = z.infer<typeof AdminCatalogAssetSchema>;
 

@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AdminCatalogViewSchema } from '@handshake-agent/contracts';
 
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import { AdminCatalogService } from './admin-catalog.service';
 import type { CatalogConfig } from '../../../core/config/configuration';
 import {
@@ -87,6 +88,9 @@ describe('AdminCatalogService', () => {
   let service: AdminCatalogService;
   let effectiveConfig: jest.Mocked<Pick<EffectiveConfigService, 'get'>>;
   let customFiatRepo: jest.Mocked<ICustomFiatRepository>;
+  let registry: jest.Mocked<
+    Pick<AssetRegistry, 'logoUrl' | 'listDiscoveredAssets'>
+  >;
 
   beforeEach(async () => {
     effectiveConfig = {
@@ -100,11 +104,18 @@ describe('AdminCatalogService', () => {
       create: jest.fn(),
       update: jest.fn(),
     };
+    // Registry overlay: no discovered assets and no discovered logos by default; the
+    // logo/discovery tests below override these per case.
+    registry = {
+      logoUrl: jest.fn().mockReturnValue(null),
+      listDiscoveredAssets: jest.fn().mockReturnValue([]),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AdminCatalogService,
         { provide: EffectiveConfigService, useValue: effectiveConfig },
+        { provide: AssetRegistry, useValue: registry },
         { provide: CUSTOM_FIAT_REPOSITORY, useValue: customFiatRepo },
       ],
     }).compile();
@@ -159,6 +170,7 @@ describe('AdminCatalogService', () => {
       decimals: 6,
       networks: ['TRON', 'Ethereum'],
       live: true,
+      logoUrl: null,
     });
     // No provider ids or master-wallet ids leak into the projection.
     expect(JSON.stringify(view)).not.toContain('secret-uuid');
@@ -184,6 +196,76 @@ describe('AdminCatalogService', () => {
     );
     const view = await service.getCatalog();
     expect(view).toEqual({ assets: [], fiats: [] });
+  });
+
+  describe('provider logos + discovered assets', () => {
+    it('attaches the provider-discovered logo URL to a static asset (null when none)', async () => {
+      const usdtLogo =
+        'https://res.cloudinary.com/blockradar/image/upload/usdt.png';
+      registry.logoUrl.mockImplementation((sym: string) =>
+        sym === 'USDT' ? usdtLogo : null,
+      );
+
+      const view = await service.getCatalog();
+
+      expect(view.assets.find((a) => a.symbol === 'USDT')?.logoUrl).toBe(
+        usdtLogo,
+      );
+      expect(view.assets.find((a) => a.symbol === 'BTC')?.logoUrl).toBeNull();
+    });
+
+    it('includes a provider-discovered asset that is NOT in the static catalog (with its logo)', async () => {
+      const trxLogo =
+        'https://res.cloudinary.com/blockradar/image/upload/tron-trx-logo.png';
+      registry.listDiscoveredAssets.mockReturnValue([
+        {
+          symbol: 'TRX',
+          displayName: 'Tron',
+          decimals: 6,
+          networks: ['TRON'],
+          contractAddress: null,
+          blockradarAssetId: 'trx-uuid',
+          logoUrl: trxLogo,
+          enabled: true,
+          inStaticCatalog: false,
+        },
+      ]);
+
+      const view = await service.getCatalog();
+
+      const trx = view.assets.find((a) => a.symbol === 'TRX');
+      expect(trx).toEqual({
+        symbol: 'TRX',
+        displayName: 'Tron',
+        kind: 'crypto',
+        decimals: 6,
+        networks: ['TRON'], // network id resolved to its display name
+        live: true, // discovered assets are auto-enabled in the money-path overlay
+        logoUrl: trxLogo,
+      });
+      // The projection still satisfies the wire contract.
+      expect(() => AdminCatalogViewSchema.parse(view)).not.toThrow();
+    });
+
+    it('does NOT duplicate a discovered asset already present in the static catalog', async () => {
+      registry.listDiscoveredAssets.mockReturnValue([
+        {
+          symbol: 'USDT', // already a static catalog asset
+          displayName: 'Tether USD',
+          decimals: 6,
+          networks: ['TRON'],
+          contractAddress: null,
+          blockradarAssetId: 'usdt-uuid',
+          logoUrl: null,
+          enabled: true,
+          inStaticCatalog: true,
+        },
+      ]);
+
+      const view = await service.getCatalog();
+
+      expect(view.assets.filter((a) => a.symbol === 'USDT')).toHaveLength(1);
+    });
   });
 
   describe('custom-fiat merge', () => {

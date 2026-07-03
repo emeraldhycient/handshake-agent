@@ -704,10 +704,30 @@ export interface AssetCatalogRow {
   /** On-chain contract address (mono, click-to-copy); "—" for a native asset. */
   contract: string
   /**
+   * Provider-discovered logo URL (Blockradar Cloudinary), or null → the tinted
+   * text-badge fallback renders. A public asset image, never a secret.
+   */
+  logo: string | null
+  /**
    * Whether the asset is enabled in the live catalog. Resolved from the real
    * catalog config when a matching capability leaf exists; else design-faithful.
    */
   live: boolean
+}
+
+/**
+ * AssetLogo primitive props. Renders the provider logo image when a `logoUrl` is
+ * supplied and loads; on a missing URL or an image load error it falls back to the
+ * `sym` text badge. `className` styles the container (size, rounding, background,
+ * and — for the fallback — the text color/size, which the symbol inherits).
+ */
+export interface AssetLogoProps {
+  /** The asset ticker shown as the fallback badge text (e.g. "USDT"). */
+  sym: string
+  /** Absolute logo URL, or null when none was discovered. */
+  logoUrl: string | null
+  /** Container styling (size + rounding + background + fallback text classes). */
+  className?: string
 }
 
 // The "Newly discovered" card (design §6.23) is now WIRED to the real GET

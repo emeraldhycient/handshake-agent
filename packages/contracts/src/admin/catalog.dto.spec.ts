@@ -12,10 +12,27 @@ describe("AdminCatalogAssetSchema", () => {
     decimals: 6,
     networks: ["TRON", "Ethereum"],
     live: true,
+    logoUrl: null,
   };
 
   it("parses a well-formed live asset row", () => {
     expect(AdminCatalogAssetSchema.parse(asset)).toEqual(asset);
+  });
+
+  it("accepts a provider logo URL string and null (the public image, or absent)", () => {
+    const url = "https://res.cloudinary.com/blockradar/image/upload/trx.png";
+    expect(AdminCatalogAssetSchema.parse({ ...asset, logoUrl: url }).logoUrl).toBe(
+      url,
+    );
+    expect(
+      AdminCatalogAssetSchema.parse({ ...asset, logoUrl: null }).logoUrl,
+    ).toBeNull();
+  });
+
+  it("rejects a non-string, non-null logoUrl", () => {
+    expect(() =>
+      AdminCatalogAssetSchema.parse({ ...asset, logoUrl: 42 }),
+    ).toThrow();
   });
 
   it("parses a disabled (paused) asset row", () => {
@@ -49,6 +66,8 @@ describe("AdminCatalogAssetSchema", () => {
   });
 
   it("does NOT model any provider / contract / wallet secret field", () => {
+    // logoUrl is a PUBLIC asset image (not a secret); provider ids, contract
+    // addresses, and master-wallet ids are never surfaced.
     expect(Object.keys(AdminCatalogAssetSchema.shape)).toEqual([
       "symbol",
       "displayName",
@@ -56,6 +75,7 @@ describe("AdminCatalogAssetSchema", () => {
       "decimals",
       "networks",
       "live",
+      "logoUrl",
     ]);
   });
 });
@@ -109,6 +129,7 @@ describe("AdminCatalogViewSchema", () => {
           decimals: 6,
           networks: ["TRON"],
           live: true,
+          logoUrl: null,
         },
       ],
       fiats: [

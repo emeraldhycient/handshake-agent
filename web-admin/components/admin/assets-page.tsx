@@ -5,19 +5,22 @@
  * design system §6.23, `docs/design-ref/screens/Assets.html`).
  *
  * WIRED (Phase 6b) to the real `GET /admin/config/catalog` read
- * (`useAdminCatalog`) — the FULL asset catalog including *disabled* (Paused)
- * listings and each entry's effective live status, which the enabled-only,
- * secret-stripped public `GET /config` cannot provide. Each `AdminCatalogAsset`
- * (symbol / displayName / kind / decimals / networks / live) maps onto an
- * `AssetCatalogRow`; the design's Min/max + Contract columns have NO backing
- * field (per-asset limits + contract addresses are not surfaced — the latter is
- * a secret), so they render "—" (design-faithful).
+ * (`useAdminCatalog`) — the FULL *effective* asset catalog (static config assets
+ * PLUS provider-discovered assets not yet in the static config), including
+ * *disabled* (Paused) listings and each entry's effective live status, which the
+ * enabled-only, secret-stripped public `GET /config` cannot provide. Each
+ * `AdminCatalogAsset` (symbol / displayName / kind / decimals / networks / live /
+ * logoUrl) maps onto an `AssetCatalogRow`. The asset badge renders the discovered
+ * `logoUrl` (Blockradar Cloudinary) via `AssetLogo`, falling back to the tinted
+ * ticker chip. The design's Min/max + Contract columns have NO backing field
+ * (per-asset limits + contract addresses are not surfaced — the latter is a
+ * secret), so they render "—" (design-faithful).
  *
  * Layout (verbatim from the markup): a header + "Sync Blockradar catalog" ghost
- * action, a last-sync line, an info-toned "Newly discovered · review to add" card
- * (still design-mock — no discovered-asset read endpoint yet), then the
- * six-column asset table (Asset [green chip + sym/name] · Chain · Decimals ·
- * Min/max · Contract [mono, click-to-copy] · Live toggle-pill).
+ * action, a last-sync line, an info-toned "Newly discovered" card (WIRED to the real
+ * GET /admin/config/assets/discovered), then the six-column asset table (Asset [logo
+ * + sym/name] · Chain · Decimals · Min/max · Contract [mono, click-to-copy] · Live
+ * toggle-pill).
  *
  * Actions wire to the SAME destinations as the design:
  * - Sync Blockradar / "Review & add" → the shared ReasonModal (recorded action).
@@ -34,6 +37,7 @@ import { useMemo, useState } from "react"
 import { cn } from "@/lib/utils"
 import { MakerCheckerModal } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
+import { AssetLogo } from "@/components/ui/asset-logo"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ApiError } from "@/lib/api/client"
 import {
@@ -141,9 +145,11 @@ function DiscoveredCard({
             key={asset.symbol}
             className="flex items-center gap-3.5 py-2.5"
           >
-            <span className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-[10px] border border-[#cfe0fb] bg-white text-[11px] font-extrabold text-tif">
-              {asset.symbol}
-            </span>
+            <AssetLogo
+              sym={asset.symbol}
+              logoUrl={asset.logoUrl}
+              className="h-[38px] w-[38px] rounded-[10px] border border-[#cfe0fb] bg-white text-[11px] font-extrabold text-tif"
+            />
             <div className="min-w-0 flex-1">
               <div className="text-[13px] font-bold text-ink">
                 {asset.displayName} · {asset.symbol}
@@ -187,11 +193,13 @@ function AssetRow({
         ASSETS_GRID
       )}
     >
-      {/* Asset — green chip + ticker + name */}
+      {/* Asset — logo (or green-chip fallback) + ticker + name */}
       <div className="flex min-w-0 items-center gap-2.5">
-        <span className="flex h-[34px] w-[34px] flex-none items-center justify-center rounded-[9px] bg-brand-green text-[11px] font-extrabold text-brand-amber">
-          {asset.sym}
-        </span>
+        <AssetLogo
+          sym={asset.sym}
+          logoUrl={asset.logo}
+          className="h-[34px] w-[34px] rounded-[9px] bg-brand-green text-[11px] font-extrabold text-brand-amber"
+        />
         <div className="min-w-0">
           <div className="text-[13px] font-bold text-ink">{asset.sym}</div>
           <div className="truncate text-[11px] text-ink3">{asset.name}</div>
@@ -285,6 +293,7 @@ export function AssetsPage() {
         dec: a.decimals,
         minmax: "—",
         contract: "—",
+        logo: a.logoUrl,
         live: a.live,
       })),
     [data]

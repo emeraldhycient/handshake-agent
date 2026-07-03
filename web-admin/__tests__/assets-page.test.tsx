@@ -56,6 +56,9 @@ const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
+const USDT_LOGO =
+  "https://res.cloudinary.com/blockradar/image/upload/usdt-logo.png"
+
 const VIEW: AdminCatalogView = {
   assets: [
     {
@@ -65,6 +68,8 @@ const VIEW: AdminCatalogView = {
       decimals: 6,
       networks: ["TRON", "Ethereum"],
       live: true,
+      // A discovered logo → the row renders the provider image.
+      logoUrl: USDT_LOGO,
     },
     {
       symbol: "BTC",
@@ -73,6 +78,8 @@ const VIEW: AdminCatalogView = {
       decimals: 8,
       networks: ["Bitcoin"],
       live: false,
+      // No logo → the row falls back to the tinted ticker badge.
+      logoUrl: null,
     },
   ],
   fiats: [],
@@ -145,6 +152,20 @@ describe("AssetsPage", () => {
       name: /Toggle USDT on TRON · Ethereum live status/i,
     })
     expect(within(usdtToggle).getByText("Live")).toBeInTheDocument()
+  })
+
+  it("renders the provider logo image for an asset with a logoUrl, and the ticker badge fallback for one without", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    renderPage()
+    await screen.findByText("Tether USD")
+
+    // USDT has a discovered logo → the row renders the provider <img>.
+    const usdtLogo = screen.getByRole("img", { name: "USDT" })
+    expect(usdtLogo).toHaveAttribute("src", USDT_LOGO)
+
+    // BTC has no logo → no image; the ticker badge text renders instead.
+    expect(screen.queryByRole("img", { name: "BTC" })).not.toBeInTheDocument()
+    expect(screen.getAllByText("BTC").length).toBeGreaterThanOrEqual(1)
   })
 
   it("renders — for Min/max and Contract (no backing field in the read)", async () => {
