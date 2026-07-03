@@ -507,40 +507,18 @@ export function PricingPage() {
 
   return (
     <div className="mx-auto w-full max-w-[1300px] px-[30px] pt-[26px] pb-[60px]">
-      {/* ── Page header + editable processing fee ────────────────────────────── */}
-      <div className="mb-4 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-[24px] font-extrabold tracking-[-0.02em] text-ink">
-            Pricing
-          </h1>
-          <p className="mt-[5px] text-[13.5px] text-ink2">
-            Per capability × asset × currency. Versioned, schedulable,
-            maker-checker. Margin is operator-only — never shown to end users.
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-3">
-          <div className="flex items-center gap-2 rounded-[12px] border border-line bg-card px-3 py-2">
-            <div className="text-right">
-              <div className="text-[10px] font-bold tracking-[0.05em] text-ink3 uppercase">
-                Processing fee
-              </div>
-              <div className="font-mono text-[13px] font-bold text-ink tabular-nums">
-                {feeLabel}
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => startEdit(feeTarget())}
-              aria-label="Edit processing fee"
-              className="rounded-[9px] border border-line bg-card px-3 py-[7px] text-[11.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-            >
-              Edit
-            </button>
-          </div>
-        </div>
+      {/* ── Page header ──────────────────────────────────────────────────────── */}
+      <div className="mb-4">
+        <h1 className="text-[24px] font-extrabold tracking-[-0.02em] text-ink">
+          Pricing
+        </h1>
+        <p className="mt-[5px] text-[13.5px] text-ink2">
+          Per capability × asset × currency. Versioned, schedulable,
+          maker-checker. Margin is operator-only — never shown to end users.
+        </p>
       </div>
 
-      {/* ── Spread card — Preview currency lives in its header strip ─────────── */}
+      {/* ── Spread card — Preview currency + processing fee live in its header strip ── */}
       <div className="overflow-hidden rounded-[16px] border border-line bg-card">
         <TableFilterBar>
           {/* Preview currency — drives the effective-rate preview (per-currency base rate). */}
@@ -559,6 +537,26 @@ export function PricingPage() {
               ))}
             </NativeSelect>
           </label>
+          <div className="flex-1" />
+          {/* Editable processing fee — in the header strip for a single cohesive control row. */}
+          <div className="flex items-center gap-2 rounded-[12px] border border-line bg-card px-3 py-1.5">
+            <div className="text-right">
+              <div className="text-[10px] font-bold tracking-[0.05em] text-ink3 uppercase">
+                Processing fee
+              </div>
+              <div className="font-mono text-[13px] font-bold text-ink tabular-nums">
+                {feeLabel}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => startEdit(feeTarget())}
+              aria-label="Edit processing fee"
+              className="rounded-[9px] border border-line bg-card px-3 py-[7px] text-[11.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              Edit
+            </button>
+          </div>
         </TableFilterBar>
         <div
           className={cn(

@@ -65,10 +65,10 @@ const CURRENCY_OPTIONS = [
 /** Server page size for each "Load more" fetch. */
 const PAGE_SIZE = 25
 
-// Compact filter-select styling (matches the audit/users header strips): auto width,
-// white `--card` surface so the pills pop on the cream `--card2` header strip.
+// Filter-select styling for the 3-column header grid: fill the grid cell, white
+// `--card` surface so the control reads clearly on the cream `--card2` header strip.
 const FILTER_SELECT_CLASS =
-  "h-[38px] w-auto min-w-0 rounded-[11px] border-line bg-card py-0 pr-[30px] pl-3 text-[12.5px] font-semibold"
+  "h-[38px] w-full min-w-0 rounded-[11px] border-line bg-card py-0 pr-[30px] pl-3 text-[12.5px] font-semibold"
 
 // ── Formatting (mirrors the design's `ngn()` + per-currency `fmt`) ───────────
 
@@ -210,9 +210,9 @@ export function LedgerPage() {
         </div>
       </div>
 
-      {/* ── Table — filters live in its header strip ────────────────────────── */}
+      {/* ── Table — filters live in its header strip (3-in-a-row grid) ──────── */}
       <div className="overflow-hidden rounded-[16px] border border-line bg-card">
-        <TableFilterBar>
+        <TableFilterBar className="grid grid-cols-3">
           <FilterSelect
             label="Filter by account type"
             value={account}
@@ -227,12 +227,11 @@ export function LedgerPage() {
             options={CURRENCY_OPTIONS}
             className={FILTER_SELECT_CLASS}
           />
-          <div className="flex-1" />
           <button
             type="button"
             onClick={() => void exportLedger()}
             disabled={exporting}
-            className="flex h-[38px] items-center gap-[7px] rounded-[11px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
+            className="flex h-[38px] w-full items-center justify-center gap-[7px] rounded-[11px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
           >
             {exporting ? "Exporting…" : "Export"}
           </button>
