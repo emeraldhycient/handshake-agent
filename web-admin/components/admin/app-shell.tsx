@@ -75,6 +75,7 @@ import {
 import type { LucideIcon } from "lucide-react"
 
 import { useAdminMe, useNavBadges } from "@/lib/query/hooks"
+import { useRequireAuth } from "@/lib/hooks/use-require-auth"
 import { useAdminAuthStore } from "@/lib/store/admin-auth-store"
 import { useThemeStore } from "@/lib/store/theme-store"
 import { cn } from "@/lib/utils"
@@ -83,6 +84,7 @@ import { CommandPalette } from "@/components/admin/command-palette"
 import { EnvIndicator } from "@/components/admin/env-indicator"
 import { MfaEnrollDialog } from "@/components/admin/mfa-enroll-dialog"
 import { NotificationsMenu } from "@/components/admin/notifications-menu"
+import { RouteGuard } from "@/components/admin/route-guard"
 import { Toaster } from "@/components/shared/toaster"
 import type { AppShellProps, NavDestination } from "@/types/components"
 
@@ -333,7 +335,20 @@ function flattenNav(
   )
 }
 
+/**
+ * The centralized admin guard: authentication runs here (before ANY chrome or data
+ * hooks mount), so an unauthenticated visitor is redirected to /login and never
+ * fires an admin API call. Once authenticated, AppShellInner renders the chrome and
+ * gates the page body by route permission via RouteGuard. Every authenticated screen
+ * renders through here, so both checks run on every page load.
+ */
 export function AppShell({ children }: AppShellProps) {
+  const authPhase = useRequireAuth()
+  if (authPhase !== "authenticated") return null
+  return <AppShellInner>{children}</AppShellInner>
+}
+
+function AppShellInner({ children }: AppShellProps) {
   const pathname = usePathname()
   const me = useAdminMe()
   const clear = useAdminAuthStore((s) => s.clear)
@@ -574,7 +589,9 @@ export function AppShell({ children }: AppShellProps) {
         </header>
 
         {/* Screen area — scrolls independently of the sidebar (§4). */}
-        <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
+        <main className="min-h-0 flex-1 overflow-y-auto">
+          <RouteGuard>{children}</RouteGuard>
+        </main>
       </div>
 
       {/* ⌘K command palette — opened by the search pill or the global shortcut. */}

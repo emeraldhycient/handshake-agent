@@ -22,24 +22,12 @@ import type {
 
 // ─── Shell + gating ──────────────────────────────────────────────────────────────
 
-export interface RequireAuthProps {
-  children: ReactNode
-}
-
-export interface RequirePermissionProps {
-  /** The `web_page` resourceId that must be present in `adminMe.pages`. */
-  page: string
-  /**
-   * Optional `menu_item` resourceId that also grants access when present in
-   * `adminMe.menus`. Lets newer screens without a dedicated `web_page` perm
-   * (the config group under `/admin/settings`) gate on their nav-group menu
-   * instead. `super_admin` is always allowed regardless of either.
-   */
-  menu?: string
-  children: ReactNode
-}
-
 export interface AppShellProps {
+  children: ReactNode
+}
+
+/** The permission gate wrapped around the shell's main content (RouteGuard). */
+export interface RouteGuardProps {
   children: ReactNode
 }
 
