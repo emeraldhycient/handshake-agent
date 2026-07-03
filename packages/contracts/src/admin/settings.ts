@@ -228,11 +228,15 @@ export const SETTING_REGISTRY: readonly SettingRegistryEntry[] = [
   ),
 
   // ── Compliance ──────────────────────────────────────────────────────────────
-  positiveInt(
-    "compliance.travelRuleThresholds.NGN",
-    "Compliance",
-    "Travel Rule threshold (NGN)",
-    "Fiat-equivalent NGN value at or above which a send proposal sets requiresTravelRule=true (CBN circular / FATF Travel Rule).",
+  // A Travel-Rule threshold per KNOWN fiat (not just NGN) — an operator can tune the
+  // requiresTravelRule trigger for every currency (config defaults ship a value per code).
+  ...KNOWN_FIAT_CURRENCIES.map((code) =>
+    positiveInt(
+      `compliance.travelRuleThresholds.${code}`,
+      "Compliance",
+      `Travel Rule threshold (${code})`,
+      `Fiat-equivalent ${code} value at or above which a send proposal sets requiresTravelRule=true (FATF Travel Rule / local circular).`,
+    ),
   ),
   s(
     "compliance.tierChangeCoolingOffSeconds",

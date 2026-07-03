@@ -36,6 +36,7 @@ import {
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { SettingValueModal } from "@/components/admin/flows/setting-value-modal"
 import { Skeleton } from "@/components/ui/skeleton"
+import { NativeSelect } from "@/components/ui/native-select"
 import { ApiError } from "@/lib/api/client"
 import { pushToast } from "@/lib/store/toast-store"
 import { useAdminMe, useSetSetting, useSettings } from "@/lib/query/hooks"
@@ -93,11 +94,13 @@ function bpsToPct(bps: number): string {
 function num(setting: EffectiveSetting | undefined): number | null {
   return setting && typeof setting.value === "number" ? setting.value : null
 }
-function ngnRate(rate: number): string {
-  return `₦${rate.toLocaleString(undefined, {
+/** A fiat rate shown in `currency` — ₦ for Naira, ISO-code suffix otherwise. */
+function fiatRate(currency: string, rate: number): string {
+  const n = rate.toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  })}`
+  })
+  return currency === "NGN" ? `₦${n}` : `${n} ${currency}`
 }
 function formatRate(code: string, n: number): string {
   return `${n.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${code}`
@@ -118,8 +121,16 @@ function parseValue(input: string, integer: boolean): number | null {
   return n
 }
 
-/** Pivot the flat pricing settings into per-asset Buy + Sell spread rows (NGN preview). */
-function buildSpreadRows(settings: readonly EffectiveSetting[]): SpreadRow[] {
+/**
+ * Pivot the flat pricing settings into per-asset Buy + Sell spread rows, with the
+ * effective-rate preview shown in `currency` (its base rate drives the preview; the
+ * spread itself is per-asset and currency-agnostic). A currency with no base rate for an
+ * asset previews "—".
+ */
+function buildSpreadRows(
+  settings: readonly EffectiveSetting[],
+  currency: string
+): SpreadRow[] {
   const byKey = new Map(settings.map((s) => [s.key, s]))
   const feeBps = num(byKey.get("pricing.processingFeeBps"))
   const feeLabel = feeBps === null ? "—" : bpsToPct(feeBps)
@@ -127,7 +138,7 @@ function buildSpreadRows(settings: readonly EffectiveSetting[]): SpreadRow[] {
   const rows: SpreadRow[] = []
   for (const asset of PRICED_ASSETS) {
     const base = `pricing.assets.${asset}`
-    const baseRate = num(byKey.get(`${base}.baseRates.NGN`))
+    const baseRate = num(byKey.get(`${base}.baseRates.${currency}`))
     const buySetting = byKey.get(`${base}.buySpreadBps`)
     const sellSetting = byKey.get(`${base}.sellSpreadBps`)
     const buyBps = num(buySetting)
@@ -138,7 +149,7 @@ function buildSpreadRows(settings: readonly EffectiveSetting[]): SpreadRow[] {
       if (baseRate === null || spreadBps === null) return "—"
       const factor =
         dir === "buy" ? 1 + spreadBps / 10_000 : 1 - spreadBps / 10_000
-      return ngnRate(baseRate * factor)
+      return fiatRate(currency, baseRate * factor)
     }
     const margin = (spreadBps: number | null) => {
       const spreadPct = spreadBps === null ? 0 : spreadBps / 100
@@ -148,7 +159,7 @@ function buildSpreadRows(settings: readonly EffectiveSetting[]): SpreadRow[] {
     const mk = (dir: "buy" | "sell", bpsVal: number | null, setting?: EffectiveSetting): SpreadRow => ({
       id: `${asset}-${dir}`,
       cap: `crypto.${dir}`,
-      pair: `${asset} / NGN`,
+      pair: `${asset} / ${currency}`,
       spread: bpsVal === null ? "—" : bpsToPct(bpsVal),
       fee: feeLabel,
       minmax: NO_MINMAX,
@@ -162,6 +173,19 @@ function buildSpreadRows(settings: readonly EffectiveSetting[]): SpreadRow[] {
     rows.push(mk("buy", buyBps, buySetting), mk("sell", sellBps, sellSetting))
   }
   return rows
+}
+
+/** Distinct fiat codes that have any base rate registered in the read (NGN first). */
+function pricingCurrencies(settings: readonly EffectiveSetting[]): string[] {
+  const codes = new Set<string>()
+  for (const s of settings) {
+    const m = /^pricing\.assets\.[A-Za-z0-9]+\.baseRates\.([A-Z]{3})$/.exec(s.key)
+    if (m) codes.add(m[1])
+  }
+  if (codes.size === 0) codes.add("NGN")
+  return [...codes].sort((a, b) =>
+    a === "NGN" ? -1 : b === "NGN" ? 1 : a.localeCompare(b)
+  )
 }
 
 /** Split base-rate settings into configured rows (value present) and unpriced options. */
@@ -248,7 +272,20 @@ type FlowStep = "value" | "reason" | "stepup" | "maker"
 export function PricingPage() {
   const query = useSettings("Pricing")
   const settings = useMemo(() => query.data ?? [], [query.data])
-  const spreadRows = useMemo(() => buildSpreadRows(settings), [settings])
+
+  // The currency the spread table's effective-rate preview is shown in (its base rate
+  // drives the preview). Base rates for each currency are configured below in the
+  // "Base rates" table (the "Add price" surface).
+  const currencies = useMemo(() => pricingCurrencies(settings), [settings])
+  const [currency, setCurrency] = useState("NGN")
+  const previewCurrency = currencies.includes(currency)
+    ? currency
+    : (currencies[0] ?? "NGN")
+
+  const spreadRows = useMemo(
+    () => buildSpreadRows(settings, previewCurrency),
+    [settings, previewCurrency]
+  )
   const { rows: baseRateRows, options: addOptions } = useMemo(
     () => buildBaseRates(settings),
     [settings]
@@ -382,23 +419,41 @@ export function PricingPage() {
             maker-checker. Margin is operator-only — never shown to end users.
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2 rounded-[12px] border border-line bg-card px-3 py-2">
-          <div className="text-right">
-            <div className="text-[10px] font-bold tracking-[0.05em] text-ink3 uppercase">
-              Processing fee
+        <div className="flex shrink-0 items-center gap-3">
+          {/* Preview currency — drives the effective-rate preview (per-currency base rate). */}
+          <label className="flex items-center gap-2 text-[12px] font-bold text-ink2">
+            Preview
+            <NativeSelect
+              aria-label="Preview currency"
+              value={previewCurrency}
+              onChange={(e) => setCurrency(e.target.value)}
+              className="h-[36px] w-[110px]"
+            >
+              {currencies.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </NativeSelect>
+          </label>
+          <div className="flex items-center gap-2 rounded-[12px] border border-line bg-card px-3 py-2">
+            <div className="text-right">
+              <div className="text-[10px] font-bold tracking-[0.05em] text-ink3 uppercase">
+                Processing fee
+              </div>
+              <div className="font-mono text-[13px] font-bold text-ink tabular-nums">
+                {feeLabel}
+              </div>
             </div>
-            <div className="font-mono text-[13px] font-bold text-ink tabular-nums">
-              {feeLabel}
-            </div>
+            <button
+              type="button"
+              onClick={() => startEdit(feeTarget())}
+              aria-label="Edit processing fee"
+              className="rounded-[9px] border border-line bg-card px-3 py-[7px] text-[11.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              Edit
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => startEdit(feeTarget())}
-            aria-label="Edit processing fee"
-            className="rounded-[9px] border border-line bg-card px-3 py-[7px] text-[11.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-          >
-            Edit
-          </button>
         </div>
       </div>
 

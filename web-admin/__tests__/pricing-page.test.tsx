@@ -321,6 +321,28 @@ describe("PricingPage (wired to pricing settings)", () => {
     })
   })
 
+  it("previews spread rates in the selected currency (multi-currency, not just NGN)", async () => {
+    // Add a GHS base rate (19 per USDT). Switching the Preview currency to GHS re-derives
+    // the effective-rate preview + the pair label in GHS.
+    mockList.mockResolvedValue([
+      ...PRICING_SETTINGS,
+      n("pricing.assets.USDT.baseRates.GHS", 19),
+    ])
+    const user = userEvent.setup()
+    renderPage()
+    // Default (NGN) preview — buy + sell rows.
+    expect(await screen.findAllByText("USDT / NGN")).toHaveLength(2)
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Preview currency" }),
+      "GHS"
+    )
+
+    // The pair + derived rate now show GHS. Buy: 19 × (1 + 0.01) = 19.19 → "19.19 GHS".
+    expect(await screen.findAllByText("USDT / GHS")).toHaveLength(2)
+    expect(screen.getByText("19.19 GHS")).toBeInTheDocument()
+  })
+
   it("adds a base rate for an unpriced currency through the Add-price dialog", async () => {
     mockList.mockResolvedValue([
       ...PRICING_SETTINGS,
