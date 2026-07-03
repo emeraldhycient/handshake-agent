@@ -108,15 +108,24 @@ const flag = (
 // Per-asset pricing entries (root CLAUDE.md §3.1: spreads are NEVER a line item,
 // but they ARE admin-tunable). USDT/BTC/TRX are the money-path assets at launch.
 const PRICED_ASSETS = ["USDT", "BTC", "TRX"] as const;
-const assetPricing = (asset: string): SettingRegistryEntry[] => [
+
+// A base rate is registered per priced asset × EVERY known fiat — not just NGN. A
+// currency is fail-closed on enablement (AdminCurrencyService.assertPricingExists)
+// unless a base rate keyed by its code exists on at least one priced asset, so
+// without these keys a non-NGN currency could never be priced (the settings PATCH
+// rejects unregistered keys) and therefore never enabled. Registering the full
+// matrix is what makes "add a currency, price it, enable it" work end-to-end (§7).
+const baseRate = (asset: string, code: string): SettingRegistryEntry =>
   s(
-    `pricing.assets.${asset}.baseRates.NGN`,
+    `pricing.assets.${asset}.baseRates.${code}`,
     "Pricing",
     "number",
-    `${asset} base rate (NGN)`,
-    `Mid-market NGN rate per 1 ${asset}. Production replaces this with a live feed; the config value is the fallback baseline.`,
+    `${asset} base rate (${code})`,
+    `Mid-market ${code} rate per 1 ${asset}. Production replaces this with a live feed; the config value is the fallback baseline.`,
     { min: 0, max: POSITIVE_INT_MAX },
-  ),
+  );
+const assetPricing = (asset: string): SettingRegistryEntry[] => [
+  ...KNOWN_FIAT_CURRENCIES.map((code) => baseRate(asset, code)),
   bps(
     `pricing.assets.${asset}.buySpreadBps`,
     "Pricing",

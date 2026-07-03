@@ -844,6 +844,57 @@ export interface PricingRowActionsProps {
   canEdit: boolean
 }
 
+/**
+ * One configured base rate — a mid-market `<code>`-per-1-`<asset>` price resolved from
+ * `pricing.assets.<asset>.baseRates.<code>`. A currency is fail-closed on enablement
+ * until at least one such rate exists (root §7), so this is the "add prices" surface.
+ */
+export interface PricingBaseRateRow {
+  /** Stable row id + a11y anchor, e.g. "USDT-GHS". */
+  id: string
+  /** The priced asset (USDT / BTC / TRX). */
+  asset: string
+  /** The fiat code the rate is denominated in (e.g. "GHS"). */
+  code: string
+  /** The editable base-rate setting key this row patches. */
+  key: string
+  /** The current rate (fiat units per 1 asset). */
+  value: number
+  /** Pre-formatted rate label (e.g. "19.5 GHS"). */
+  label: string
+  /** The setting's scope + scopeValue, carried so the write targets its leaf. */
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
+}
+
+/** An (asset, currency) pair that has no base rate yet — offered in the Add-price dialog. */
+export interface AddPriceOption {
+  asset: string
+  code: string
+}
+
+export interface PricingBaseRatesProps {
+  /** Configured base rates (value present), in display order. */
+  rows: PricingBaseRateRow[]
+  /** Whether any unpriced (asset, currency) pair remains to add. */
+  canAdd: boolean
+  /** Loading branch (settings still resolving). */
+  loading: boolean
+  /** Edit an existing base rate (opens the shared audit chain). */
+  onEdit: (row: PricingBaseRateRow) => void
+  /** Open the Add-price dialog. */
+  onAdd: () => void
+}
+
+export interface AddPriceDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** Unpriced (asset, currency) pairs the operator may add a rate for. */
+  options: AddPriceOption[]
+  /** Hand the captured (asset, currency, rate) up to start the audit chain. */
+  onContinue: (choice: { asset: string; code: string; rate: number }) => void
+}
+
 // ─── Capabilities / service registry page (design §6.25) ─────────────────────────
 // PIXEL reproduction of `docs/design-ref/screens/Capabilities.html`: the master
 // switchboard. Each transactable capability is bound to a provider port and rendered

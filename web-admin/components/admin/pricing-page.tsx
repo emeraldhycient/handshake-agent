@@ -4,117 +4,130 @@
  * PricingPage — per capability × asset × currency pricing (design §6.22 /
  * docs/design-ref/screens/Pricing.html).
  *
- * WIRED (Phase 6a): the pricing figures are REAL, resolved from the
- * `pricing.assets.<ASSET>.buySpreadBps` / `.sellSpreadBps` / `.baseRates.NGN` and the
- * global `pricing.processingFeeBps` registry keys via GET /admin/settings
- * (`useSettings("Pricing")`). Each priced asset (USDT/BTC/TRX) with a resolvable base
- * rate contributes a Buy row (from its buy spread) and a Sell row (from its sell
- * spread). The effective-rate preview (the NGN rate the user sees) and the amber
- * operator-only margin are DERIVED from base rate + spread + fee — never a stored line
- * item (root §3.1). The per-capability Min/max column has NO config key, so that cell
- * renders "—" (recorded as a shapeGap). Four async branches: loading / error / empty / data.
+ * WIRED to the real `pricing.*` registry keys via GET /admin/settings
+ * (`useSettings("Pricing")`). Three editable families, all funds-safety-gated
+ * (value → reason → step-up → maker-checker → PATCH /admin/settings/:key), all
+ * DERIVING the user-facing rate/margin (never storing a line item, root §3.1):
  *
- * Faithful to the design markup: a single card with the exact 7-column grid
- * `1.2fr 1fr 0.8fr 0.8fr 1fr 1.4fr 0.7fr` — Capability · Asset/ccy · Spread · Fee ·
- * Min/max · Effective-rate preview (user-sees rate + amber `--twn` margin) · Edit.
+ *   1. SPREADS — each priced asset (USDT/BTC/TRX) contributes a Buy + Sell row
+ *      (`…buySpreadBps` / `…sellSpreadBps`); the NGN base rate drives the preview.
+ *   2. PROCESSING FEE — the global `pricing.processingFeeBps`, editable from the header.
+ *   3. BASE RATES — one per (asset × currency) `…baseRates.<code>`. This is the
+ *      "add more prices" surface: a currency is fail-closed on enablement until at
+ *      least one base rate keyed by its code exists (root §7), so an operator prices
+ *      a newly-added currency here (edit an existing rate, or "Add price" a new pair).
  *
- * The Edit control opens the shared funds-safety flow chain (new value → reason →
- * step-up TOTP → maker-checker). WIRED (Phase 9 — WRITE): the maker-checker submit
- * fires the real step-up-guarded PATCH /admin/settings/:key (`useSetSetting`) for the
- * edited row's spread key, carrying the setting's own scope so the write targets the
- * same leaf the read resolved. The server re-validates + hot-reloads + audits
- * `config_change`; the settings query then invalidates so the row re-derives. A 403
- * ADMIN_STEP_UP_REQUIRED opens the StepUpDialog and the PATCH replays after re-auth
- * (`useStepUpRetry`). Nothing moves money (§3.1).
+ * The generalized edit flow patches ANY numeric pricing leaf through the same audit
+ * chain; a 403 ADMIN_STEP_UP_REQUIRED opens the StepUpDialog and replays after
+ * re-auth (`useStepUpRetry`). The server re-validates + hot-reloads + audits; the
+ * settings query then invalidates so the rows re-derive. Nothing moves money (§3.1).
  */
 import { useMemo, useState } from "react"
 
 import type { EffectiveSetting } from "@handshake-agent/contracts"
 
+import { AddPriceDialog } from "@/components/admin/add-price-dialog"
+import { PricingBaseRates } from "@/components/admin/pricing-base-rates"
 import {
   MakerCheckerModal,
   ReasonModal,
   StepUpModal,
 } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
+import { SettingValueModal } from "@/components/admin/flows/setting-value-modal"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ApiError } from "@/lib/api/client"
 import { pushToast } from "@/lib/store/toast-store"
 import { useAdminMe, useSetSetting, useSettings } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
-import { SettingValueModal } from "@/components/admin/flows/setting-value-modal"
 import { cn } from "@/lib/utils"
+import type {
+  AddPriceOption,
+  PricingBaseRateRow,
+} from "@/types/components"
 
-// The design's exact 7-column grid template (Pricing.html) — kept once and shared by
-// the header row and every body row so columns line up pixel-for-pixel.
+// The design's exact 7-column spread-grid template (Pricing.html).
 const PRICING_GRID = "grid-cols-[1.2fr_1fr_0.8fr_0.8fr_1fr_1.4fr_0.7fr]"
-
-// The money-path assets at launch, in display order (root §3.1 / registry PRICED_ASSETS).
 const PRICED_ASSETS = ["USDT", "BTC", "TRX"] as const
-// Per-capability min/max has no registry key — design-faithful placeholder (shapeGap).
 const NO_MINMAX = "—"
+const BASE_RATE_RE = /^pricing\.assets\.([A-Za-z0-9]+)\.baseRates\.([A-Z]{3})$/
 
-/** One resolved pricing row (matches the Pricing.html body-row shape). */
-interface PricingRow {
-  /** Stable key + a11y anchor, e.g. "USDT-buy". */
+/** One resolved spread row (buy or sell) of the design's pricing grid. */
+interface SpreadRow {
   id: string
-  /** Capability label (mono) — "crypto.buy" / "crypto.sell". */
   cap: string
-  /** Asset / currency pairing (mono), e.g. "USDT / NGN". */
   pair: string
-  /** FX spread label (e.g. "0.85%"), or "—" when the key is absent. */
   spread: string
-  /** Processing-fee label (from the shared processing-fee key). */
   fee: string
-  /** Per-capability min / max label (no config key yet → "—"). */
   minmax: string
-  /** The NGN rate the end user sees (spread-folded), or "—" without a base rate. */
   userRate: string
-  /** The operator-only margin (amber), spread + fee combined. */
   margin: string
-  /** The editable spread setting key the Edit action patches. */
   spreadKey: string
-  /** The current spread in basis points (the value-capture step's starting point). */
   spreadBps: number | null
-  /** The spread setting's scope + scopeValue, carried so the write targets its leaf. */
   scope: EffectiveSetting["scope"]
   scopeValue: string | null
 }
 
-/** basis points → a percentage label, e.g. 85 → "0.85%". */
+/**
+ * A single numeric-pricing edit in flight — the generalized target the audit chain
+ * patches. `format` renders the value for the diff/toast; `integer` restricts the
+ * captured value (bps are whole; a base rate may be a decimal).
+ */
+interface EditTarget {
+  key: string
+  title: string
+  fieldLabel: string
+  currentLabel: string
+  seed: string
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
+  diffField: string
+  toastLabel: string
+  format: (n: number) => string
+  integer: boolean
+}
+
 function bpsToPct(bps: number): string {
   return `${(bps / 100).toFixed(2)}%`
 }
-
-/** Read a numeric effective value, or null when absent / non-numeric. */
 function num(setting: EffectiveSetting | undefined): number | null {
   return setting && typeof setting.value === "number" ? setting.value : null
 }
-
-/** Format an NGN rate (spread-folded) as the design's mono string. */
 function ngnRate(rate: number): string {
   return `₦${rate.toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`
 }
+function formatRate(code: string, n: number): string {
+  return `${n.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${code}`
+}
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "Something went wrong."
+}
 
-/**
- * Pivot the flat pricing settings into per-asset Buy + Sell rows. Buy marks the rate
- * UP by its spread (user receives less crypto); Sell marks it DOWN. The operator
- * margin folds spread + processing fee. Assets without a resolvable base rate still
- * render (with "—" for the derived rate) so the design's rows stay stable.
- */
-function buildRows(settings: readonly EffectiveSetting[]): PricingRow[] {
+/** Parse the captured value: a finite non-negative number (whole when `integer`). */
+function parseValue(input: string, integer: boolean): number | null {
+  const t = input.trim()
+  if (t === "") return null
+  const n = Number(t)
+  if (!Number.isFinite(n) || n < 0) return null
+  if (integer && !Number.isInteger(n)) return null
+  return n
+}
+
+/** Pivot the flat pricing settings into per-asset Buy + Sell spread rows (NGN preview). */
+function buildSpreadRows(settings: readonly EffectiveSetting[]): SpreadRow[] {
   const byKey = new Map(settings.map((s) => [s.key, s]))
   const feeBps = num(byKey.get("pricing.processingFeeBps"))
   const feeLabel = feeBps === null ? "—" : bpsToPct(feeBps)
 
-  const rows: PricingRow[] = []
+  const rows: SpreadRow[] = []
   for (const asset of PRICED_ASSETS) {
     const base = `pricing.assets.${asset}`
     const baseRate = num(byKey.get(`${base}.baseRates.NGN`))
-    // Only include an asset that has at least one resolvable pricing leaf.
     const buySetting = byKey.get(`${base}.buySpreadBps`)
     const sellSetting = byKey.get(`${base}.sellSpreadBps`)
     const buyBps = num(buySetting)
@@ -132,67 +145,65 @@ function buildRows(settings: readonly EffectiveSetting[]): PricingRow[] {
       const feePct = feeBps === null ? 0 : feeBps / 100
       return `${(spreadPct + feePct).toFixed(2)}%`
     }
-
-    rows.push({
-      id: `${asset}-buy`,
-      cap: "crypto.buy",
+    const mk = (dir: "buy" | "sell", bpsVal: number | null, setting?: EffectiveSetting): SpreadRow => ({
+      id: `${asset}-${dir}`,
+      cap: `crypto.${dir}`,
       pair: `${asset} / NGN`,
-      spread: buyBps === null ? "—" : bpsToPct(buyBps),
+      spread: bpsVal === null ? "—" : bpsToPct(bpsVal),
       fee: feeLabel,
       minmax: NO_MINMAX,
-      userRate: derive(buyBps, "buy"),
-      margin: margin(buyBps),
-      spreadKey: `${base}.buySpreadBps`,
-      spreadBps: buyBps,
-      scope: buySetting?.scope ?? "global",
-      scopeValue: buySetting?.scopeValue ?? null,
+      userRate: derive(bpsVal, dir),
+      margin: margin(bpsVal),
+      spreadKey: `${base}.${dir}SpreadBps`,
+      spreadBps: bpsVal,
+      scope: setting?.scope ?? "global",
+      scopeValue: setting?.scopeValue ?? null,
     })
-    rows.push({
-      id: `${asset}-sell`,
-      cap: "crypto.sell",
-      pair: `${asset} / NGN`,
-      spread: sellBps === null ? "—" : bpsToPct(sellBps),
-      fee: feeLabel,
-      minmax: NO_MINMAX,
-      userRate: derive(sellBps, "sell"),
-      margin: margin(sellBps),
-      spreadKey: `${base}.sellSpreadBps`,
-      spreadBps: sellBps,
-      scope: sellSetting?.scope ?? "global",
-      scopeValue: sellSetting?.scopeValue ?? null,
-    })
+    rows.push(mk("buy", buyBps, buySetting), mk("sell", sellBps, sellSetting))
   }
   return rows
 }
 
-/** The from→to spread change the maker-checker request applies (bps → percentage). */
-function spreadDiff(
-  row: PricingRow,
-  newBps: number
-): { field: string; from: string; to: string }[] {
-  return [
-    {
-      field: `${row.cap} · ${row.pair} spread`,
-      from: row.spread,
-      to: bpsToPct(newBps),
-    },
-  ]
+/** Split base-rate settings into configured rows (value present) and unpriced options. */
+function buildBaseRates(settings: readonly EffectiveSetting[]): {
+  rows: PricingBaseRateRow[]
+  options: AddPriceOption[]
+} {
+  const rows: PricingBaseRateRow[] = []
+  const options: AddPriceOption[] = []
+  for (const st of settings) {
+    const m = BASE_RATE_RE.exec(st.key)
+    if (!m) continue
+    const [, asset, code] = m
+    if (typeof st.value === "number") {
+      rows.push({
+        id: `${asset}-${code}`,
+        asset,
+        code,
+        key: st.key,
+        value: st.value,
+        label: formatRate(code, st.value),
+        scope: st.scope,
+        scopeValue: st.scopeValue,
+      })
+    } else {
+      options.push({ asset, code })
+    }
+  }
+  const byAssetThenCode = (a: { asset: string; code: string }, b: { asset: string; code: string }) =>
+    a.asset.localeCompare(b.asset) || a.code.localeCompare(b.code)
+  rows.sort(byAssetThenCode)
+  options.sort(byAssetThenCode)
+  return { rows, options }
 }
 
-/** Normalizes a mutation/step-up failure into a user-facing message. */
-function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) return error.message
-  if (error instanceof Error) return error.message
-  return "Something went wrong."
-}
-
-/** One body row of the design's pricing grid — including the inline Edit pill. */
-function PricingTableRow({
+/** One body row of the spread grid — including the inline Edit pill. */
+function SpreadTableRow({
   row,
   onEdit,
 }: {
-  row: PricingRow
-  onEdit: (row: PricingRow) => void
+  row: SpreadRow
+  onEdit: (row: SpreadRow) => void
 }) {
   return (
     <div
@@ -201,36 +212,23 @@ function PricingTableRow({
         PRICING_GRID
       )}
     >
-      {/* Capability */}
       <div className="font-mono text-[12px] font-bold text-ink">{row.cap}</div>
-      {/* Asset / ccy */}
       <div className="font-mono text-[11.5px] text-ink2">{row.pair}</div>
-      {/* Spread */}
       <div className="font-mono text-[12.5px] font-bold text-ink tabular-nums">
         {row.spread}
       </div>
-      {/* Fee */}
-      <div className="font-mono text-[11.5px] text-ink2 tabular-nums">
-        {row.fee}
-      </div>
-      {/* Min / max */}
-      <div className="font-mono text-[11px] text-ink2 tabular-nums">
-        {row.minmax}
-      </div>
-      {/* Effective rate preview — user-sees rate + operator-only amber margin */}
+      <div className="font-mono text-[11.5px] text-ink2 tabular-nums">{row.fee}</div>
+      <div className="font-mono text-[11px] text-ink2 tabular-nums">{row.minmax}</div>
       <div className="text-[11px]">
         <div className="text-ink">
           User sees{" "}
-          <span className="font-mono font-bold tabular-nums">
-            {row.userRate}
-          </span>
+          <span className="font-mono font-bold tabular-nums">{row.userRate}</span>
         </div>
         <div className="text-twn">
           margin{" "}
           <span className="font-mono font-bold tabular-nums">{row.margin}</span>
         </div>
       </div>
-      {/* Edit (opens the maker-checker flow chain) */}
       <div className="flex justify-end">
         <button
           type="button"
@@ -245,96 +243,167 @@ function PricingTableRow({
   )
 }
 
-/** The edit flow's steps in the design order — value capture precedes the audit chain. */
-type PricingFlowStep = "value" | "reason" | "stepup" | "maker"
+type FlowStep = "value" | "reason" | "stepup" | "maker"
 
 export function PricingPage() {
   const query = useSettings("Pricing")
-  const rows = useMemo(() => buildRows(query.data ?? []), [query.data])
+  const settings = useMemo(() => query.data ?? [], [query.data])
+  const spreadRows = useMemo(() => buildSpreadRows(settings), [settings])
+  const { rows: baseRateRows, options: addOptions } = useMemo(
+    () => buildBaseRates(settings),
+    [settings]
+  )
+  const feeSetting = useMemo(
+    () => settings.find((s) => s.key === "pricing.processingFeeBps"),
+    [settings]
+  )
+  const feeBps = num(feeSetting)
+  const feeLabel = feeBps === null ? "—" : bpsToPct(feeBps)
 
   const me = useAdminMe()
   const setSetting = useSetSetting()
   const stepUp = useStepUpRetry()
 
-  // The row being edited, the captured new spread (bps), + which flow step is open
-  // (value → reason → step-up → maker-checker).
-  const [editing, setEditing] = useState<PricingRow | null>(null)
-  const [newSpread, setNewSpread] = useState("")
-  const [step, setStep] = useState<PricingFlowStep | null>(null)
+  const [target, setTarget] = useState<EditTarget | null>(null)
+  const [newValue, setNewValue] = useState("")
+  const [step, setStep] = useState<FlowStep | null>(null)
+  const [addOpen, setAddOpen] = useState(false)
 
-  function startEdit(row: PricingRow) {
-    setEditing(row)
-    setNewSpread(row.spreadBps === null ? "" : String(row.spreadBps))
-    setStep("value")
+  const parsed = target ? parseValue(newValue, target.integer) : null
+
+  function startEdit(t: EditTarget, fromValueStep = true) {
+    setTarget(t)
+    setNewValue(t.seed)
+    setStep(fromValueStep ? "value" : "reason")
   }
-
   function closeFlow() {
     setStep(null)
-    setEditing(null)
-    setNewSpread("")
+    setTarget(null)
+    setNewValue("")
   }
 
-  const flowTitle = editing
-    ? `Edit ${editing.cap} spread · ${editing.pair}`
-    : "Edit spread"
-
-  // The captured spread as a finite integer bps, or null while it is not yet valid.
-  const parsedBps = (() => {
-    const trimmed = newSpread.trim()
-    if (trimmed === "") return null
-    const n = Number(trimmed)
-    return Number.isInteger(n) && n >= 0 ? n : null
-  })()
+  // ── Edit-target builders ────────────────────────────────────────────────────
+  const spreadTarget = (row: SpreadRow): EditTarget => ({
+    key: row.spreadKey,
+    title: `Edit ${row.cap} spread · ${row.pair}`,
+    fieldLabel: "New spread (basis points)",
+    currentLabel: row.spread,
+    seed: row.spreadBps === null ? "" : String(row.spreadBps),
+    scope: row.scope,
+    scopeValue: row.scopeValue,
+    diffField: `${row.cap} · ${row.pair} spread`,
+    toastLabel: `${row.cap} · ${row.pair} spread`,
+    format: bpsToPct,
+    integer: true,
+  })
+  const feeTarget = (): EditTarget => ({
+    key: "pricing.processingFeeBps",
+    title: "Edit processing fee",
+    fieldLabel: "New processing fee (basis points)",
+    currentLabel: feeLabel,
+    seed: feeBps === null ? "" : String(feeBps),
+    scope: feeSetting?.scope ?? "global",
+    scopeValue: feeSetting?.scopeValue ?? null,
+    diffField: "Processing fee",
+    toastLabel: "Processing fee",
+    format: bpsToPct,
+    integer: true,
+  })
+  const baseRateEditTarget = (row: PricingBaseRateRow): EditTarget => ({
+    key: row.key,
+    title: `Edit ${row.asset} / ${row.code} base rate`,
+    fieldLabel: `New base rate (${row.code} per 1 ${row.asset})`,
+    currentLabel: row.label,
+    seed: String(row.value),
+    scope: row.scope,
+    scopeValue: row.scopeValue,
+    diffField: `${row.asset} / ${row.code} base rate`,
+    toastLabel: `${row.asset} / ${row.code} base rate`,
+    format: (n) => formatRate(row.code, n),
+    integer: false,
+  })
+  const baseRateAddTarget = (asset: string, code: string, rate: number): EditTarget => ({
+    key: `pricing.assets.${asset}.baseRates.${code}`,
+    title: `Add ${asset} / ${code} base rate`,
+    fieldLabel: `New base rate (${code} per 1 ${asset})`,
+    currentLabel: "—",
+    seed: String(rate),
+    scope: "global",
+    scopeValue: null,
+    diffField: `${asset} / ${code} base rate`,
+    toastLabel: `${asset} / ${code} base rate`,
+    format: (n) => formatRate(code, n),
+    integer: false,
+  })
 
   /**
-   * Approve the spread edit. Persists the new bps via the real step-up-guarded PATCH
-   * /admin/settings/:key (`useSetSetting`) against the edited row's spread key, carrying
-   * the setting's own scope. The server re-validates + hot-reloads + audits; the settings
-   * query then invalidates so the row re-derives. A 403 ADMIN_STEP_UP_REQUIRED opens the
+   * Approve the edit. Persists the captured value via the real step-up-guarded PATCH
+   * /admin/settings/:key against the target key, carrying its scope. A 403 opens the
    * StepUpDialog and the PATCH replays after re-auth. Nothing moves money (§3.1).
    */
-  const approveEdit = () => {
-    if (!editing || parsedBps === null) return
-    const row = editing
-    const value = parsedBps
+  const approve = () => {
+    if (!target || parsed === null) return
+    const t = target
+    const value = parsed
     closeFlow()
     void (async () => {
       try {
         const ok = await stepUp.run(() =>
           setSetting
             .mutateAsync({
-              key: row.spreadKey,
-              input: { value, scope: row.scope, scopeValue: row.scopeValue },
+              key: t.key,
+              input: { value, scope: t.scope, scopeValue: t.scopeValue },
             })
             .then(() => undefined)
         )
-        if (ok)
-          pushToast(
-            `${row.cap} · ${row.pair} spread → ${bpsToPct(value)}`,
-            "ok"
-          )
+        if (ok) pushToast(`${t.toastLabel} → ${t.format(value)}`, "ok")
       } catch (error) {
         pushToast(errorMessage(error), "warn")
       }
     })()
   }
 
+  const flowTitle = target?.title ?? "Edit pricing"
+  const diff =
+    target && parsed !== null
+      ? [{ field: target.diffField, from: target.currentLabel, to: target.format(parsed) }]
+      : []
+
   return (
     <div className="mx-auto w-full max-w-[1300px] px-[30px] pt-[26px] pb-[60px]">
-      {/* ── Page header ──────────────────────────────────────────────────────── */}
-      <div className="mb-4">
-        <h1 className="text-[24px] font-extrabold tracking-[-0.02em] text-ink">
-          Pricing
-        </h1>
-        <p className="mt-[5px] text-[13.5px] text-ink2">
-          Per capability × asset × currency. Versioned, schedulable,
-          maker-checker. Margin is operator-only — never shown to end users.
-        </p>
+      {/* ── Page header + editable processing fee ────────────────────────────── */}
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-[24px] font-extrabold tracking-[-0.02em] text-ink">
+            Pricing
+          </h1>
+          <p className="mt-[5px] text-[13.5px] text-ink2">
+            Per capability × asset × currency. Versioned, schedulable,
+            maker-checker. Margin is operator-only — never shown to end users.
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 rounded-[12px] border border-line bg-card px-3 py-2">
+          <div className="text-right">
+            <div className="text-[10px] font-bold tracking-[0.05em] text-ink3 uppercase">
+              Processing fee
+            </div>
+            <div className="font-mono text-[13px] font-bold text-ink tabular-nums">
+              {feeLabel}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => startEdit(feeTarget())}
+            aria-label="Edit processing fee"
+            className="rounded-[9px] border border-line bg-card px-3 py-[7px] text-[11.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            Edit
+          </button>
+        </div>
       </div>
 
-      {/* ── Pricing card (design 7-column grid table) ────────────────────────── */}
+      {/* ── Spread card (design 7-column grid table) ─────────────────────────── */}
       <div className="overflow-hidden rounded-[16px] border border-line bg-card">
-        {/* Column header row (design grid) */}
         <div
           className={cn(
             "grid gap-3 border-b border-line bg-card2 px-[18px] py-[11px] text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase",
@@ -350,16 +419,12 @@ export function PricingPage() {
           <div aria-hidden="true" />
         </div>
 
-        {/* Loading */}
         {query.isLoading && (
           <div className="divide-y divide-line2" aria-busy="true">
             {Array.from({ length: 5 }).map((_, i) => (
               <div
                 key={i}
-                className={cn(
-                  "grid items-center gap-3 px-[18px] py-[13px]",
-                  PRICING_GRID
-                )}
+                className={cn("grid items-center gap-3 px-[18px] py-[13px]", PRICING_GRID)}
               >
                 <Skeleton className="h-4 w-24" />
                 <Skeleton className="h-4 w-20" />
@@ -373,12 +438,9 @@ export function PricingPage() {
           </div>
         )}
 
-        {/* Error */}
         {query.isError && (
           <div className="px-[18px] py-10 text-center">
-            <p className="text-[14px] font-bold text-tdn">
-              Failed to load pricing
-            </p>
+            <p className="text-[14px] font-bold text-tdn">Failed to load pricing</p>
             <p className="mt-1 text-[12.5px] text-ink3">
               The pricing config could not be read.
             </p>
@@ -392,8 +454,7 @@ export function PricingPage() {
           </div>
         )}
 
-        {/* Empty */}
-        {query.isSuccess && rows.length === 0 && (
+        {query.isSuccess && spreadRows.length === 0 && (
           <div className="px-[18px] py-10 text-center">
             <p className="text-[14px] font-bold text-ink">No pricing rows</p>
             <p className="mt-1 text-[12.5px] text-ink3">
@@ -402,23 +463,45 @@ export function PricingPage() {
           </div>
         )}
 
-        {/* Data */}
         {query.isSuccess &&
-          rows.map((row) => (
-            <PricingTableRow key={row.id} row={row} onEdit={startEdit} />
+          spreadRows.map((row) => (
+            <SpreadTableRow
+              key={row.id}
+              row={row}
+              onEdit={(r) => startEdit(spreadTarget(r))}
+            />
           ))}
       </div>
+
+      {/* ── Base rates (the "add more prices" surface) ───────────────────────── */}
+      <PricingBaseRates
+        rows={baseRateRows}
+        canAdd={addOptions.length > 0}
+        loading={query.isLoading}
+        onEdit={(r) => startEdit(baseRateEditTarget(r))}
+        onAdd={() => setAddOpen(true)}
+      />
+
+      {/* ── Add-price value capture → hands off to the audit chain ───────────── */}
+      <AddPriceDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        options={addOptions}
+        onContinue={({ asset, code, rate }) =>
+          startEdit(baseRateAddTarget(asset, code, rate), false)
+        }
+      />
 
       {/* ── Funds-safety flow chain: value → reason → step-up → maker-checker ─── */}
       <SettingValueModal
         open={step === "value"}
         onOpenChange={(next) => (next ? undefined : closeFlow())}
         title={flowTitle}
-        fieldLabel="New spread (basis points)"
-        currentValue={editing?.spread ?? ""}
-        value={newSpread}
-        onValueChange={setNewSpread}
-        canContinue={parsedBps !== null}
+        fieldLabel={target?.fieldLabel ?? "New value"}
+        currentValue={target?.currentLabel ?? ""}
+        value={newValue}
+        onValueChange={setNewValue}
+        canContinue={parsed !== null}
         onContinue={() => setStep("reason")}
       />
       <ReasonModal
@@ -437,14 +520,12 @@ export function PricingPage() {
         open={step === "maker"}
         onOpenChange={(next) => (next ? undefined : closeFlow())}
         title={flowTitle}
-        diff={
-          editing && parsedBps !== null ? spreadDiff(editing, parsedBps) : []
-        }
-        onSubmit={approveEdit}
+        diff={diff}
+        onSubmit={approve}
       />
 
-      {/* Server-side step-up re-auth: a 403 on the spread PATCH opens this; the
-          PATCH replays after re-authentication (settings then invalidate). */}
+      {/* Server-side step-up re-auth: a 403 on the PATCH opens this; it replays after
+          re-authentication (settings then invalidate). */}
       <StepUpDialog
         open={stepUp.open}
         mfaEnabled={me.data?.mfaEnabled ?? false}

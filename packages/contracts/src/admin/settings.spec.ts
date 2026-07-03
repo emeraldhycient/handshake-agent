@@ -120,6 +120,25 @@ describe("SETTING_REGISTRY", () => {
     }
   });
 
+  it("registers a base-rate key for every priced asset × known fiat (a currency must be priceable to be enabled)", () => {
+    const PRICED = ["USDT", "BTC", "TRX"] as const;
+    for (const asset of PRICED) {
+      for (const code of KNOWN_FIAT_CURRENCIES) {
+        const e = entry(`pricing.assets.${asset}.baseRates.${code}`);
+        expect(e.category).toBe("Pricing");
+        expect(e.valueType).toBe("number");
+        expect(e.editable).toBe(true);
+        expect(e.min).toBe(0);
+      }
+    }
+  });
+
+  it("builds a base-rate number schema for a non-NGN currency (accepts a positive rate, rejects negatives)", () => {
+    const schema = settingSchemaFor("pricing.assets.USDT.baseRates.GHS");
+    expect(schema.parse(19)).toBe(19);
+    expect(() => schema.parse(-1)).toThrow();
+  });
+
   it("builds a boolean schema for a catalog asset/fiat toggle (Phase 9)", () => {
     const assetSchema = settingSchemaFor("catalog.assets.USDT.enabled");
     expect(assetSchema.parse(true)).toBe(true);

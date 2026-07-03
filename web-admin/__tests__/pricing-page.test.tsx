@@ -10,7 +10,7 @@
  * spread key. The api layer is mocked — no server.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { EffectiveSetting } from "@handshake-agent/contracts"
@@ -54,6 +54,11 @@ function n(key: string, value: number): EffectiveSetting {
   }
 }
 
+/** An unpriced base-rate leaf (no value) — the "Add price" flow's raw material. */
+function unpriced(key: string): EffectiveSetting {
+  return { ...n(key, 0), value: undefined }
+}
+
 // USDT only: base 1000 NGN, buy spread 100 bps (1.00%), sell 50 bps (0.50%),
 // processing fee 50 bps (0.50%).
 const PRICING_SETTINGS: EffectiveSetting[] = [
@@ -94,6 +99,16 @@ async function advanceToApproval(
     await user.click(screen.getByRole("button", { name: d }))
   }
   // maker-checker submit
+  await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+}
+
+/** Drive only the audit chain (reason → step-up → maker-checker), value already captured. */
+async function finishAuditChain(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(screen.getByRole("textbox", { name: "Reason" }), "Repricing")
+  await user.click(screen.getByRole("button", { name: "Continue" }))
+  for (const d of "123456") {
+    await user.click(screen.getByRole("button", { name: d }))
+  }
   await user.click(screen.getByRole("button", { name: "Submit for approval" }))
 }
 
@@ -248,5 +263,86 @@ describe("PricingPage (wired to pricing settings)", () => {
     // The re-auth dialog appears (TOTP mode, since mfaEnabled).
     expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
     expect(mockSet).toHaveBeenCalledTimes(1)
+  })
+
+  it("renders configured base rates (the add-more-prices surface)", async () => {
+    renderPage()
+    expect(await screen.findByText("Base rates")).toBeInTheDocument()
+    // USDT / NGN base rate 1000 → "1,000 NGN" (rendered once the read resolves).
+    expect(await screen.findByText("1,000 NGN")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Edit USDT / NGN base rate" })
+    ).toBeInTheDocument()
+  })
+
+  it("edits the processing fee via setSetting (PATCH) when approved", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Edit processing fee" })
+    )
+    const input = screen.getByRole("textbox", {
+      name: "New processing fee (basis points)",
+    })
+    await user.clear(input)
+    await user.type(input, "75")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await finishAuditChain(user)
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("pricing.processingFeeBps", {
+      value: 75,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("edits an existing base rate via setSetting (PATCH) when approved", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Edit USDT / NGN base rate" })
+    )
+    const input = screen.getByRole("textbox", {
+      name: "New base rate (NGN per 1 USDT)",
+    })
+    await user.clear(input)
+    await user.type(input, "1650")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await finishAuditChain(user)
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("pricing.assets.USDT.baseRates.NGN", {
+      value: 1650,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("adds a base rate for an unpriced currency through the Add-price dialog", async () => {
+    mockList.mockResolvedValue([
+      ...PRICING_SETTINGS,
+      unpriced("pricing.assets.USDT.baseRates.GHS"),
+    ])
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole("button", { name: "Add price" }))
+    const dialog = await screen.findByRole("dialog")
+    await user.selectOptions(within(dialog).getByLabelText("Asset"), "USDT")
+    await user.selectOptions(within(dialog).getByLabelText("Currency"), "GHS")
+    await user.type(within(dialog).getByLabelText(/Base rate/), "19")
+    await user.click(within(dialog).getByRole("button", { name: "Continue" }))
+    // The dialog captured the value; finish the audit chain to persist.
+    await finishAuditChain(user)
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("pricing.assets.USDT.baseRates.GHS", {
+      value: 19,
+      scope: "global",
+      scopeValue: null,
+    })
   })
 })
