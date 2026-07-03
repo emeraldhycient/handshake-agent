@@ -167,7 +167,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     // A feedback toast fired and the flow closed.
     expect(defaultToastStore.getState().toasts).toContainEqual(
       expect.objectContaining({
-        message: expect.stringMatching(/Per-transaction max · Tier 1/),
+        message: expect.stringMatching(/Per-transaction max · NGN Tier 1/),
       })
     )
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
@@ -281,6 +281,42 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
       "limits.NGN.tier_1.perSendOnChainFiatMax",
       { value: 80000, scope: "global", scopeValue: null }
     )
+  })
+
+  it("configures limits for a NON-NGN currency via the currency selector (multi-currency)", async () => {
+    // GHS per-tx key is registered but UNSET (value undefined) — the editor must still
+    // appear (shown as "Not set") so the operator can configure a new currency's limits.
+    mockList.mockResolvedValue([
+      ...LIMIT_SETTINGS,
+      { ...limit("limits.GHS.tier_1.perTxFiatMax", 0), value: undefined },
+    ])
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole("tab", { name: "Tier 1" })
+
+    // Switch the currency selector to GHS.
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Limits currency" }),
+      "GHS"
+    )
+
+    // The (unset) GHS per-tx cap is editable; the field label reflects the currency.
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Per-transaction max" })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (GHS)" })
+    await user.clear(input)
+    await user.type(input, "5000")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("limits.GHS.tier_1.perTxFiatMax", {
+      value: 5000,
+      scope: "global",
+      scopeValue: null,
+    })
   })
 
   it("edits the enforced weekly max (rolling 7-day cap) via setSetting", async () => {

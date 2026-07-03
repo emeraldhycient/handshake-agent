@@ -959,10 +959,11 @@ export interface WhatsAppHealthRow {
 export type LimitTierId = "tier_1" | "tier_2" | "tier_3"
 
 /**
- * How a limit leaf's value is formatted + parsed: an NGN amount, a plain count, or a
- * duration in seconds. Drives the display string, the edit field label, and the diff.
+ * How a limit leaf's value is formatted + parsed: a fiat amount (rendered in the
+ * selected currency), a plain count, or a duration in seconds. Drives the display
+ * string, the edit field label, and the diff.
  */
-export type LimitLeafKind = "ngn" | "count" | "seconds"
+export type LimitLeafKind = "amount" | "count" | "seconds"
 
 /**
  * The setting leaf backing an editable limit row — its full key + scope (so the write

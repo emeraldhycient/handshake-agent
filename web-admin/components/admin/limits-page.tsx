@@ -31,6 +31,7 @@ import { useMemo, useState } from "react"
 import type { EffectiveSetting } from "@handshake-agent/contracts"
 
 import { Skeleton } from "@/components/ui/skeleton"
+import { NativeSelect } from "@/components/ui/native-select"
 import { cn } from "@/lib/utils"
 import { ReasonModal } from "@/components/admin/flows/reason-modal"
 import { StepUpModal } from "@/components/admin/flows/step-up-modal"
@@ -72,80 +73,106 @@ function humanizeSeconds(s: number): string {
   return `${s}s`
 }
 
-/** Format a numeric leaf value by its kind (NGN amount / plain count / duration). */
-function formatLeaf(kind: LimitLeafKind, n: number): string {
-  if (kind === "ngn") return `₦${n.toLocaleString()}`
+/** A fiat amount shown in `currency`. Naira keeps its familiar symbol; the rest use the
+ * ISO code suffix so every currency is unambiguous. */
+function formatAmount(currency: string, n: number): string {
+  return currency === "NGN"
+    ? `₦${n.toLocaleString()}`
+    : `${n.toLocaleString()} ${currency}`
+}
+
+/** Format a numeric leaf value by its kind (fiat amount / plain count / duration). */
+function formatLeaf(kind: LimitLeafKind, n: number, currency: string): string {
+  if (kind === "amount") return formatAmount(currency, n)
   if (kind === "count") return n.toLocaleString()
   return humanizeSeconds(n)
 }
 
 /** The edit field's label + a11y name for a leaf kind (units are explicit). */
-function fieldLabelFor(kind: LimitLeafKind): string {
-  if (kind === "ngn") return "New value (NGN)"
+function fieldLabelFor(kind: LimitLeafKind, currency: string): string {
+  if (kind === "amount") return `New value (${currency})`
   if (kind === "count") return "New value (count)"
   return "New value (seconds)"
 }
 
 /**
- * Build a key/value row. When the setting resolved to a number, the row is EDITABLE —
- * it carries an `edit` leaf (key + scope + kind). When absent (unconfigured or
- * unenforced), the row renders "—" with no editor.
+ * Build a key/value row. A row is EDITABLE whenever its config key is PRESENT in the
+ * read (registered + enforced-when-present) — even if the value is unset (shown as "Not
+ * set"), so an operator can configure a currency's limits from scratch. A key ABSENT
+ * from the read (not registered) renders "—" with no editor (§3.6 guard).
  */
 function leafRow(
   label: string,
   setting: EffectiveSetting | undefined,
-  kind: LimitLeafKind
+  kind: LimitLeafKind,
+  currency: string
 ): LimitAmountRow {
-  if (setting && typeof setting.value === "number") {
-    return {
-      k: label,
-      v: formatLeaf(kind, setting.value),
-      edit: {
-        key: setting.key,
-        scope: setting.scope,
-        scopeValue: setting.scopeValue,
-        kind,
-      },
-    }
+  if (setting === undefined) return { k: label, v: NO_KEY }
+  const value = setting.value
+  return {
+    k: label,
+    v: typeof value === "number" ? formatLeaf(kind, value, currency) : "Not set",
+    edit: {
+      key: setting.key,
+      scope: setting.scope,
+      scopeValue: setting.scopeValue,
+      kind,
+    },
   }
-  return { k: label, v: NO_KEY }
 }
 
 /**
- * Build the per-tier cards from the real settings. Amount caps map the per-tier NGN
- * keys; the extra design rows (Weekly / Single on-chain send) are not yet enforced and
- * render "—". Velocity maps the enforced count (Transactions / day) and the global
- * new-beneficiary cooling-off; the rest (10-min window / tier-change cooling-off) are
- * not yet enforced and render "—".
+ * Build the per-tier cards for `currency` from the real settings. Amount caps map the
+ * per-currency, per-tier keys (`limits.<currency>.<tier>.*`); every one is registered +
+ * enforced-when-present, so an unset cap shows "Not set" with an editor. The two
+ * cooling-offs are GLOBAL leaves (tier/currency-independent), shown on every card.
  */
-function buildTiers(settings: readonly EffectiveSetting[]): LimitTier[] {
+function buildTiers(
+  settings: readonly EffectiveSetting[],
+  currency: string
+): LimitTier[] {
   const byKey = new Map(settings.map((s) => [s.key, s]))
   const benefHold = byKey.get("beneficiary.cryptoCoolingOffSeconds")
   const tierChangeHold = byKey.get("compliance.tierChangeCoolingOffSeconds")
   return TIER_META.map(({ id, label }) => {
-    const base = `limits.NGN.${id}`
+    const base = `limits.${currency}.${id}`
     const amountCaps: LimitAmountRow[] = [
-      leafRow("Per-transaction max", byKey.get(`${base}.perTxFiatMax`), "ngn"),
-      leafRow("Daily max · rolling 24h", byKey.get(`${base}.dailyFiatMax`), "ngn"),
-      leafRow("Weekly max · rolling 7d", byKey.get(`${base}.weeklyFiatMax`), "ngn"),
+      leafRow("Per-transaction max", byKey.get(`${base}.perTxFiatMax`), "amount", currency),
+      leafRow("Daily max · rolling 24h", byKey.get(`${base}.dailyFiatMax`), "amount", currency),
+      leafRow("Weekly max · rolling 7d", byKey.get(`${base}.weeklyFiatMax`), "amount", currency),
       leafRow(
         "Single on-chain send max",
         byKey.get(`${base}.perSendOnChainFiatMax`),
-        "ngn"
+        "amount",
+        currency
       ),
     ]
     const velocity: LimitVelocityRow[] = [
-      leafRow("Transactions / day", byKey.get(`${base}.dailyTxCountMax`), "count"),
+      leafRow("Transactions / day", byKey.get(`${base}.dailyTxCountMax`), "count", currency),
       leafRow(
         "Sends / 10-min window",
         byKey.get(`${base}.sendsPer10MinMax`),
-        "count"
+        "count",
+        currency
       ),
-      leafRow("Cooling-off after tier change", tierChangeHold, "seconds"),
-      leafRow("New-beneficiary hold", benefHold, "seconds"),
+      leafRow("Cooling-off after tier change", tierChangeHold, "seconds", currency),
+      leafRow("New-beneficiary hold", benefHold, "seconds", currency),
     ]
     return { id, label, amountCaps, velocity }
   })
+}
+
+/** Distinct fiat codes that have registered `limits.<code>.*` keys in the read. */
+function availableCurrencies(settings: readonly EffectiveSetting[]): string[] {
+  const codes = new Set<string>()
+  for (const s of settings) {
+    const m = /^limits\.([A-Z]{3})\./.exec(s.key)
+    if (m) codes.add(m[1])
+  }
+  // NGN first (the primary currency), then the rest alphabetically.
+  return [...codes].sort((a, b) =>
+    a === "NGN" ? -1 : b === "NGN" ? 1 : a.localeCompare(b)
+  )
 }
 
 /**
@@ -219,10 +246,20 @@ export function LimitsPage() {
   const stepUp = useStepUpRetry()
 
   const settings = useMemo(() => query.data ?? [], [query.data])
-  const tiers = useMemo<LimitTier[]>(() => buildTiers(settings), [settings])
+  const currencies = useMemo(() => availableCurrencies(settings), [settings])
   const settingsByKey = useMemo(
     () => new Map(settings.map((s) => [s.key, s])),
     [settings]
+  )
+
+  // The currency whose per-tier limits are shown (default NGN — the primary currency).
+  const [currency, setCurrency] = useState("NGN")
+  const activeCurrency = currencies.includes(currency)
+    ? currency
+    : (currencies[0] ?? "NGN")
+  const tiers = useMemo<LimitTier[]>(
+    () => buildTiers(settings, activeCurrency),
+    [settings, activeCurrency]
   )
 
   const [tierId, setTierId] = useState<LimitTierId>("tier_1")
@@ -250,10 +287,12 @@ export function LimitsPage() {
   const parsed = parseCap(newValue)
   const leaf: LimitEditLeaf | undefined = editing?.edit
 
-  // A per-tier leaf (`limits.NGN.<tier>.*`) is labelled with the active tier; a global
-  // leaf (e.g. the new-beneficiary hold) carries no tier, so no misleading tier suffix.
+  // A per-currency leaf (`limits.<code>.<tier>.*`) is labelled with the currency + tier;
+  // a global leaf (e.g. the new-beneficiary hold) carries neither, so no misleading suffix.
   const tierSuffix = (l: LimitEditLeaf | undefined): string =>
-    l && l.key.startsWith("limits.NGN.") && tier ? ` · ${tier.label}` : ""
+    l && l.key.startsWith("limits.") && tier
+      ? ` · ${activeCurrency} ${tier.label}`
+      : ""
 
   /**
    * Approve the dual-control edit. Persists the new value via the real step-up-guarded
@@ -278,7 +317,8 @@ export function LimitsPage() {
             .mutateAsync({ key, input: { value, scope, scopeValue } })
             .then(() => undefined)
         )
-        if (ok) pushToast(`${label} → ${formatLeaf(kind, value)}`, "ok")
+        if (ok)
+          pushToast(`${label} → ${formatLeaf(kind, value, activeCurrency)}`, "ok")
       } catch (error) {
         pushToast(errorMessage(error), "warn")
       }
@@ -332,38 +372,56 @@ export function LimitsPage() {
         </div>
       )}
 
-      {/* ── Data (tier tabs + cards) ───────────────────────────────────────── */}
+      {/* ── Data (currency selector + tier tabs + cards) ───────────────────── */}
       {query.isSuccess && tier && (
         <>
-          {/* Tier tabs */}
-          <div role="tablist" aria-label="KYC tier" className="mb-4 flex gap-[9px]">
-            {tiers.map((t) => {
-              const active = t.id === tierId
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setTierId(t.id)}
-                  className={cn(
-                    "cursor-pointer rounded-[10px] border px-4 py-[9px] text-[12.5px] font-bold transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-                    active
-                      ? "border-btn-dark bg-btn-dark text-white"
-                      : "border-line bg-card text-ink2 hover:bg-hov"
-                  )}
-                >
-                  {t.label}
-                </button>
-              )
-            })}
+          {/* Currency selector + tier tabs */}
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div role="tablist" aria-label="KYC tier" className="flex gap-[9px]">
+              {tiers.map((t) => {
+                const active = t.id === tierId
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setTierId(t.id)}
+                    className={cn(
+                      "cursor-pointer rounded-[10px] border px-4 py-[9px] text-[12.5px] font-bold transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                      active
+                        ? "border-btn-dark bg-btn-dark text-white"
+                        : "border-line bg-card text-ink2 hover:bg-hov"
+                    )}
+                  >
+                    {t.label}
+                  </button>
+                )
+              })}
+            </div>
+
+            <label className="flex items-center gap-2 text-[12px] font-bold text-ink2">
+              Currency
+              <NativeSelect
+                aria-label="Limits currency"
+                value={activeCurrency}
+                onChange={(e) => setCurrency(e.target.value)}
+                className="h-[36px] w-[110px]"
+              >
+                {currencies.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </NativeSelect>
+            </label>
           </div>
 
           {/* Cards: Amount caps | Velocity & counts */}
           <div className="grid grid-cols-2 gap-[14px]">
             <section className="rounded-[16px] border border-line bg-card px-5 py-[18px]">
               <h2 className="mb-3 text-[13px] font-extrabold text-ink">
-                Amount caps · {tier.label}
+                Amount caps · {activeCurrency} {tier.label}
               </h2>
               {tier.amountCaps.map((row) => (
                 <LimitLeafRow key={row.k} row={row} onEdit={startEdit} />
@@ -372,7 +430,7 @@ export function LimitsPage() {
 
             <section className="rounded-[16px] border border-line bg-card px-5 py-[18px]">
               <h2 className="mb-3 text-[13px] font-extrabold text-ink">
-                Velocity &amp; counts · {tier.label}
+                Velocity &amp; counts · {activeCurrency} {tier.label}
               </h2>
               {tier.velocity.map((row) => (
                 <LimitLeafRow key={row.k} row={row} onEdit={startEdit} />
@@ -387,7 +445,7 @@ export function LimitsPage() {
         open={flow === "value"}
         onOpenChange={(open) => (open ? setFlow("value") : closeFlow())}
         title={flowTitle}
-        fieldLabel={leaf ? fieldLabelFor(leaf.kind) : "New value"}
+        fieldLabel={leaf ? fieldLabelFor(leaf.kind, activeCurrency) : "New value"}
         currentValue={editing?.v ?? ""}
         value={newValue}
         onValueChange={setNewValue}
@@ -416,7 +474,7 @@ export function LimitsPage() {
                 {
                   field: `${editing.k}${tierSuffix(leaf)}`,
                   from: editing.v,
-                  to: formatLeaf(leaf.kind, parsed),
+                  to: formatLeaf(leaf.kind, parsed, activeCurrency),
                 },
               ]
             : []

@@ -92,6 +92,28 @@ describe("SETTING_REGISTRY", () => {
     expect(e.min).toBe(0);
   });
 
+  it("registers the full tier-limit family for EVERY known fiat, not just NGN", () => {
+    const FIELDS = [
+      "perTxFiatMax",
+      "dailyFiatMax",
+      "weeklyFiatMax",
+      "perSendOnChainFiatMax",
+      "sendsPer10MinMax",
+      "dailyTxCountMax",
+    ];
+    for (const code of KNOWN_FIAT_CURRENCIES) {
+      for (const tier of ["tier_1", "tier_2", "tier_3"]) {
+        for (const field of FIELDS) {
+          const e = entry(`limits.${code}.${tier}.${field}`);
+          expect(e.category).toBe("KYC");
+          expect(e.valueType).toBe("number");
+          expect(e.editable).toBe(true);
+          expect(e.min).toBe(0);
+        }
+      }
+    }
+  });
+
   it("registers a rolling 10-minute send-count cap per tier (enforced server-side)", () => {
     for (const tier of ["tier_1", "tier_2", "tier_3"] as const) {
       const e = entry(`limits.NGN.${tier}.sendsPer10MinMax`);

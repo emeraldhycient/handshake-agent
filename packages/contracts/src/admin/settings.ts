@@ -160,44 +160,48 @@ const fiatToggle = (code: string): SettingRegistryEntry =>
     `Enable ${code} as a live settlement currency. Fail-closed: off means no transaction can settle in ${code}.`,
   );
 
-// NGN KYC-tier limits (root CLAUDE.md §3.3: server-side gate). Other fiats are
-// not yet live (catalog enabled:false), so only NGN is enumerated here.
+// Per-CURRENCY, per-KYC-tier limits (root CLAUDE.md §3.3: server-side gate). Registered
+// for every known fiat — not just NGN — so an operator can configure limits for any
+// currency (the gate resolves limits[fiatCurrency] per-currency; a currency is
+// fail-closed until its limits + pricing are set, mirroring the multi-currency
+// invariant). Only NGN carries shipped config defaults; the rest are set by the operator
+// before that currency goes live.
 const TIERS = ["tier_1", "tier_2", "tier_3"] as const;
-const tierLimits = (tier: string): SettingRegistryEntry[] => [
+const tierLimits = (code: string, tier: string): SettingRegistryEntry[] => [
   positiveInt(
-    `limits.NGN.${tier}.perTxFiatMax`,
+    `limits.${code}.${tier}.perTxFiatMax`,
     "KYC",
-    `NGN ${tier} per-transaction max`,
-    `Maximum NGN amount per single transaction for ${tier}.`,
+    `${code} ${tier} per-transaction max`,
+    `Maximum ${code} amount per single transaction for ${tier}.`,
   ),
   positiveInt(
-    `limits.NGN.${tier}.dailyFiatMax`,
+    `limits.${code}.${tier}.dailyFiatMax`,
     "KYC",
-    `NGN ${tier} daily max`,
-    `Maximum cumulative NGN amount within a rolling 24-hour window for ${tier}.`,
+    `${code} ${tier} daily max`,
+    `Maximum cumulative ${code} amount within a rolling 24-hour window for ${tier}.`,
   ),
   positiveInt(
-    `limits.NGN.${tier}.weeklyFiatMax`,
+    `limits.${code}.${tier}.weeklyFiatMax`,
     "KYC",
-    `NGN ${tier} weekly max`,
-    `Maximum cumulative NGN amount within a rolling 7-day window for ${tier}.`,
+    `${code} ${tier} weekly max`,
+    `Maximum cumulative ${code} amount within a rolling 7-day window for ${tier}.`,
   ),
   positiveInt(
-    `limits.NGN.${tier}.perSendOnChainFiatMax`,
+    `limits.${code}.${tier}.perSendOnChainFiatMax`,
     "KYC",
-    `NGN ${tier} single on-chain send max`,
-    `Maximum NGN-equivalent of a single on-chain (crypto-address) send for ${tier}. On-chain sends are irreversible, so this can be set tighter than the general per-transaction cap.`,
+    `${code} ${tier} single on-chain send max`,
+    `Maximum ${code}-equivalent of a single on-chain (crypto-address) send for ${tier}. On-chain sends are irreversible, so this can be set tighter than the general per-transaction cap.`,
   ),
   positiveInt(
-    `limits.NGN.${tier}.sendsPer10MinMax`,
+    `limits.${code}.${tier}.sendsPer10MinMax`,
     "KYC",
-    `${tier} sends / 10-min window`,
+    `${code} ${tier} sends / 10-min window`,
     `Maximum number of on-chain (crypto-address) sends within a rolling 10-minute window for ${tier} — an anti-rapid-fire (structuring/exfiltration) velocity cap.`,
   ),
   positiveInt(
-    `limits.NGN.${tier}.dailyTxCountMax`,
+    `limits.${code}.${tier}.dailyTxCountMax`,
     "KYC",
-    `NGN ${tier} daily transaction count`,
+    `${code} ${tier} daily transaction count`,
     `Maximum number of transactions within a rolling 24-hour window for ${tier}.`,
   ),
 ];
@@ -218,8 +222,10 @@ export const SETTING_REGISTRY: readonly SettingRegistryEntry[] = [
   ),
   ...PRICED_ASSETS.flatMap(assetPricing),
 
-  // ── KYC tier limits (NGN) ───────────────────────────────────────────────────
-  ...TIERS.flatMap(tierLimits),
+  // ── KYC tier limits (per currency × tier) ───────────────────────────────────
+  ...KNOWN_FIAT_CURRENCIES.flatMap((code) =>
+    TIERS.flatMap((tier) => tierLimits(code, tier)),
+  ),
 
   // ── Compliance ──────────────────────────────────────────────────────────────
   positiveInt(
