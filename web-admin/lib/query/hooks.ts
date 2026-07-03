@@ -12,6 +12,8 @@ import {
   useQueryClient,
 } from "@tanstack/react-query"
 import type {
+  AdminCustomFiatCreateRequest,
+  AdminCustomFiatUpdateRequest,
   AdminEndUserSearchQuery,
   AdminEndUserStatusRequest,
   AdminEndUserTierRequest,
@@ -61,6 +63,7 @@ import * as beneficiaries from "@/lib/api/beneficiaries"
 import * as blocked from "@/lib/api/blocked"
 import * as catalog from "@/lib/api/catalog"
 import * as config from "@/lib/api/config"
+import * as currencies from "@/lib/api/currencies"
 import * as compliance from "@/lib/api/compliance"
 import * as kyc from "@/lib/api/kyc"
 import * as ledger from "@/lib/api/ledger"
@@ -670,6 +673,42 @@ export function useSetSetting() {
     }) => config.setSetting(key, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["admin", "settings"] })
+    },
+  })
+}
+
+/**
+ * POST /admin/config/currencies — add a runtime currency ("Add currency"). Refreshes
+ * the admin catalog so the Currency-catalog screen shows the new (disabled) row.
+ * Step-up-gated server-side — the caller wraps in useStepUpRetry.
+ */
+export function useAddCurrency() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: AdminCustomFiatCreateRequest) =>
+      currencies.addCurrency(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.adminCatalog })
+    },
+  })
+}
+
+/**
+ * PATCH /admin/config/currencies/:code — enable/disable or edit a runtime currency.
+ * Enabling without pricing is rejected server-side (422). Refreshes the catalog.
+ */
+export function useUpdateCurrency() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      code,
+      patch,
+    }: {
+      code: string
+      patch: AdminCustomFiatUpdateRequest
+    }) => currencies.updateCurrency(code, patch),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.adminCatalog })
     },
   })
 }

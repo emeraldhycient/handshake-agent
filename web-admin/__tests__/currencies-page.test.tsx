@@ -16,7 +16,7 @@
  *  - error: a rejected fetch renders the inline retry affordance.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { AdminCatalogView } from "@handshake-agent/contracts"
@@ -33,6 +33,13 @@ vi.mock("@/lib/api/config", () => ({
   setSetting: vi.fn(),
 }))
 
+// A custom (runtime-added) currency toggles + is added via the currency endpoint.
+vi.mock("@/lib/api/currencies", () => ({
+  addCurrency: vi.fn(),
+  updateCurrency: vi.fn(),
+  listCustomFiats: vi.fn(),
+}))
+
 // The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
 vi.mock("@/lib/api/admin", () => ({
   getMe: vi.fn(),
@@ -40,10 +47,13 @@ vi.mock("@/lib/api/admin", () => ({
 
 import { getAdminCatalog } from "@/lib/api/catalog"
 import { setSetting } from "@/lib/api/config"
+import { addCurrency, updateCurrency } from "@/lib/api/currencies"
 import { getMe } from "@/lib/api/admin"
 
 const mockGetAdminCatalog = vi.mocked(getAdminCatalog)
 const mockSet = vi.mocked(setSetting)
+const mockAdd = vi.mocked(addCurrency)
+const mockUpdate = vi.mocked(updateCurrency)
 const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -57,6 +67,7 @@ const VIEW: AdminCatalogView = {
       displayName: "Nigerian Naira",
       decimals: 2,
       live: true,
+      custom: false,
     },
     {
       code: "RWF",
@@ -64,6 +75,15 @@ const VIEW: AdminCatalogView = {
       displayName: "Rwandan Franc",
       decimals: 0,
       live: false,
+      custom: false,
+    },
+    {
+      code: "GHS",
+      symbol: "₵",
+      displayName: "Ghanaian Cedi",
+      decimals: 2,
+      live: false,
+      custom: true,
     },
   ],
 }
@@ -95,6 +115,8 @@ beforeEach(() => {
     scope: "global",
     scopeValue: null,
   })
+  mockAdd.mockReset()
+  mockUpdate.mockReset()
   mockGetMe.mockReset()
   mockGetMe.mockResolvedValue({
     id: "11111111-1111-1111-1111-111111111111",
@@ -225,5 +247,102 @@ describe("CurrenciesPage", () => {
       await screen.findByText(/Couldn't load the currency catalog/i)
     ).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /Retry/i })).toBeInTheDocument()
+  })
+
+  it("marks a runtime-added currency with a Custom chip", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    renderPage()
+    // GHS is the custom (runtime-added) row.
+    expect(await screen.findByText("Ghanaian Cedi")).toBeInTheDocument()
+    expect(screen.getByText("Custom")).toBeInTheDocument()
+    // The built-in NGN row is NOT tagged custom → exactly one chip.
+    expect(screen.getAllByText("Custom")).toHaveLength(1)
+  })
+
+  it("toggles a custom currency via updateCurrency, not setSetting", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    mockUpdate.mockResolvedValue({
+      code: "GHS",
+      displayName: "Ghanaian Cedi",
+      symbol: "₵",
+      decimals: 2,
+      enabled: true,
+      createdAt: "2026-07-03T12:00:00.000Z",
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Ghanaian Cedi")
+
+    // GHS is Off → enabling routes through the currency endpoint.
+    await user.click(screen.getByRole("button", { name: /Enable GHS/i }))
+    await user.click(
+      screen.getByRole("button", { name: /Submit for approval/i })
+    )
+
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1))
+    expect(mockUpdate).toHaveBeenCalledWith("GHS", { enabled: true })
+    // The built-in settings path is NOT used for a custom currency.
+    expect(mockSet).not.toHaveBeenCalled()
+  })
+
+  it("adds a currency through the New currency dialog", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    mockAdd.mockResolvedValue({
+      code: "KES",
+      displayName: "Kenyan Shilling",
+      symbol: "KSh",
+      decimals: 2,
+      enabled: false,
+      createdAt: "2026-07-03T12:00:00.000Z",
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Nigerian Naira")
+
+    await user.click(screen.getByRole("button", { name: /New currency/i }))
+    // The dialog is open with the code field focused.
+    const dialog = await screen.findByRole("dialog")
+    await user.type(within(dialog).getByLabelText(/Code/i), "kes")
+    await user.type(within(dialog).getByLabelText(/Symbol/i), "KSh")
+    await user.type(
+      within(dialog).getByLabelText(/Display name/i),
+      "Kenyan Shilling"
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: /Add currency/i })
+    )
+
+    await waitFor(() => expect(mockAdd).toHaveBeenCalledTimes(1))
+    expect(mockAdd).toHaveBeenCalledWith({
+      code: "KES",
+      symbol: "KSh",
+      displayName: "Kenyan Shilling",
+      decimals: 2,
+    })
+  })
+
+  it("blocks a duplicate code in the add dialog before hitting the server", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Nigerian Naira")
+
+    await user.click(screen.getByRole("button", { name: /New currency/i }))
+    const dialog = await screen.findByRole("dialog")
+    // NGN already exists in the catalog.
+    await user.type(within(dialog).getByLabelText(/Code/i), "NGN")
+    await user.type(within(dialog).getByLabelText(/Symbol/i), "₦")
+    await user.type(
+      within(dialog).getByLabelText(/Display name/i),
+      "Nigerian Naira"
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: /Add currency/i })
+    )
+
+    expect(
+      await within(dialog).findByText(/already in the catalog/i)
+    ).toBeInTheDocument()
+    expect(mockAdd).not.toHaveBeenCalled()
   })
 })

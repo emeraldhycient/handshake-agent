@@ -6,6 +6,7 @@
 import type { ComponentPropsWithoutRef, ReactNode } from "react"
 import type {
   AdminBeneficiary,
+  AdminCustomFiatCreateRequest,
   AdminEndUserDetail,
   AdminEndUserDevice,
   AdminEndUserListItem,
@@ -379,6 +380,20 @@ export interface AddBlockedDialogProps {
   onSave: (next: string[]) => Promise<void>
 }
 
+export interface AddCurrencyDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** Existing fiat codes (built-in + custom), upper-cased — for a fast local
+   * duplicate check before the server's 409. */
+  existingCodes: string[]
+  /**
+   * Persist the new custom currency. Returns the mutation promise so the dialog
+   * can await, surface its own error inline, and close on success. May trigger a
+   * step-up challenge that the parent resolves.
+   */
+  onSave: (input: AdminCustomFiatCreateRequest) => Promise<void>
+}
+
 // ─── Notifications page (Phase 4) ──────────────────────────────────────────────────
 
 export interface TemplateEditorDialogProps {
@@ -745,6 +760,12 @@ export interface CurrencyCatalogRow {
   nameEnquiry: boolean
   /** Whether the currency is live (enabled) — drives the Live pill (design seed `live`). */
   live: boolean
+  /**
+   * True for a runtime admin-added currency (CustomFiat) — toggled via the currency
+   * endpoint; false for a built-in catalog fiat — toggled via the settings key. Drives
+   * the "custom" chip + which mutation the Live toggle calls.
+   */
+  custom: boolean
 }
 
 // ─── Ticketing page (design §6.21) ──────────────────────────────────────────────────

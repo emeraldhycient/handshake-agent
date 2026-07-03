@@ -27,14 +27,22 @@
  */
 import { useMemo, useState } from "react"
 
+import { AddCurrencyDialog } from "@/components/admin/add-currency-dialog"
 import { MakerCheckerModal } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ApiError } from "@/lib/api/client"
-import { useAdminCatalog, useAdminMe, useSetSetting } from "@/lib/query/hooks"
+import {
+  useAdminCatalog,
+  useAdminMe,
+  useAddCurrency,
+  useSetSetting,
+  useUpdateCurrency,
+} from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { pushToast } from "@/lib/store/toast-store"
 import { cn } from "@/lib/utils"
+import type { AdminCustomFiatCreateRequest } from "@handshake-agent/contracts"
 import type {
   CurrencyCatalogRow,
   MakerCheckerDiffRow,
@@ -68,7 +76,14 @@ function CurrencyRow({
           {row.symbol}
         </span>
         <div>
-          <div className="text-[13px] font-bold text-ink">{row.code}</div>
+          <div className="flex items-center gap-[6px]">
+            <span className="text-[13px] font-bold text-ink">{row.code}</span>
+            {row.custom && (
+              <span className="rounded-full bg-card2 px-[6px] py-px text-[9px] font-bold tracking-[0.04em] text-ink3 uppercase">
+                Custom
+              </span>
+            )}
+          </div>
           <div className="text-[11px] text-ink3">{row.name}</div>
         </div>
       </div>
@@ -132,7 +147,12 @@ export function CurrenciesPage() {
   const { data, isLoading, isError, isSuccess, refetch } = useAdminCatalog()
   const me = useAdminMe()
   const setSetting = useSetSetting()
+  const addCurrency = useAddCurrency()
+  const updateCurrency = useUpdateCurrency()
   const stepUp = useStepUpRetry()
+
+  // Whether the "Add currency" dialog is open.
+  const [addOpen, setAddOpen] = useState(false)
 
   const rows = useMemo<CurrencyCatalogRow[]>(
     () =>
@@ -144,6 +164,7 @@ export function CurrenciesPage() {
         rounding: f.decimals,
         live: f.live,
         nameEnquiry: false,
+        custom: f.custom,
       })),
     [data]
   )
@@ -172,13 +193,20 @@ export function CurrenciesPage() {
     setPending(null)
     void (async () => {
       try {
+        // A CUSTOM fiat toggles via the currency endpoint (PATCH /admin/config/
+        // currencies/:code — enabling is fail-closed on pricing server-side); a
+        // BUILT-IN toggles the settings key. Both are step-up-gated + audited.
         const ok = await stepUp.run(() =>
-          setSetting
-            .mutateAsync({
-              key: `catalog.fiats.${fiat.code}.enabled`,
-              input: { value: enabling, scope: "global", scopeValue: null },
-            })
-            .then(() => undefined)
+          (fiat.custom
+            ? updateCurrency.mutateAsync({
+                code: fiat.code,
+                patch: { enabled: enabling },
+              })
+            : setSetting.mutateAsync({
+                key: `catalog.fiats.${fiat.code}.enabled`,
+                input: { value: enabling, scope: "global", scopeValue: null },
+              })
+          ).then(() => undefined)
         )
         if (ok) {
           // useSetSetting invalidates the settings prefix, not the admin catalog this
@@ -195,18 +223,49 @@ export function CurrenciesPage() {
     })()
   }
 
+  // Every code already in the catalog (built-in + custom), for the dialog's fast
+  // local duplicate check ahead of the server's 409.
+  const existingCodes = useMemo(
+    () => (data?.fiats ?? []).map((f) => f.code),
+    [data]
+  )
+
+  // Add-currency submit. The new fiat is created DISABLED (the enabled-needs-pricing
+  // invariant is fail-closed server-side); the write is step-up-gated + audited. On a
+  // step-up challenge the add dialog resolves + closes and the StepUpDialog takes over
+  // (its onSuccess replays the add). A collision/validation error rejects so the dialog
+  // shows it inline. Nothing moves money (§3.1).
+  async function saveNewCurrency(input: AdminCustomFiatCreateRequest) {
+    const ok = await stepUp.run(() =>
+      addCurrency.mutateAsync(input).then(() => undefined)
+    )
+    if (ok) {
+      void refetch()
+      pushToast(`${input.code} added — enable it once pricing is set`, "ok")
+    }
+  }
+
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
       <div className="mx-auto w-full max-w-[1000px] px-[30px] pt-[26px] pb-[60px]">
         {/* ── Header ────────────────────────────────────────────────────────── */}
-        <div className="mb-4">
-          <h1 className="text-[24px] font-extrabold tracking-[-0.02em] text-ink">
-            Currency catalog
-          </h1>
-          <p className="mt-[5px] text-[13.5px] text-ink2">
-            Fiat currencies, live status, rounding and name-enquiry
-            availability.
-          </p>
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-[24px] font-extrabold tracking-[-0.02em] text-ink">
+              Currency catalog
+            </h1>
+            <p className="mt-[5px] text-[13.5px] text-ink2">
+              Fiat currencies, live status, rounding and name-enquiry
+              availability.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAddOpen(true)}
+            className="shrink-0 rounded-[10px] bg-btn-dark px-3.5 py-2 text-[12.5px] font-extrabold text-white transition-colors hover:bg-btn-dark/90 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            New currency
+          </button>
         </div>
 
         {/* ── Table card ────────────────────────────────────────────────────── */}
@@ -288,6 +347,14 @@ export function CurrenciesPage() {
             ))}
         </div>
       </div>
+
+      {/* ── Add-currency dialog (runtime custom fiat, created disabled) ─────── */}
+      <AddCurrencyDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        existingCodes={existingCodes}
+        onSave={saveNewCurrency}
+      />
 
       {/* ── Maker-checker flow (design's Live-toggle destination) ───────────── */}
       <MakerCheckerModal
