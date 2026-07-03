@@ -242,6 +242,20 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Config",
     "Enable/disable or edit a runtime custom currency",
   ),
+  r(
+    "api_route",
+    "GET /admin/config/assets/discovered",
+    "read",
+    "Config",
+    "List provider-discovered (Blockradar) assets for review",
+  ),
+  r(
+    "api_route",
+    "POST /admin/config/assets/sync",
+    "write",
+    "Config",
+    "Trigger a Blockradar catalog re-sync (re-discover on-chain assets)",
+  ),
 
   // Users — end-user management & device/SIM-swap admin (Phase 2)
   r(

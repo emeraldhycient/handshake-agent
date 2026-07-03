@@ -710,23 +710,9 @@ export interface AssetCatalogRow {
   live: boolean
 }
 
-/**
- * A newly-discovered asset awaiting review (design §6.23 "Newly discovered" card).
- * Surfaced by a Blockradar catalog sync — no admin endpoint yet, so these are
- * design-faithful representative rows.
- */
-export interface DiscoveredAssetRow {
-  /** Ticker rendered in the info-toned chip (e.g. "USDC"). */
-  sym: string
-  /** Human display name (e.g. "USD Coin"). */
-  name: string
-  /** Settlement network label. */
-  chain: string
-  /** On-chain decimals. */
-  dec: number
-  /** Truncated on-chain contract address (mono). */
-  contract: string
-}
+// The "Newly discovered" card (design §6.23) is now WIRED to the real GET
+// /admin/config/assets/discovered read and maps `AdminDiscoveredAsset` from
+// `@handshake-agent/contracts` directly — so it no longer needs a local row type here.
 
 // ─── Templates page (design §6.19) ──────────────────────────────────────────────────
 // The Templates screen is WIRED to the real GET /admin/notification-templates

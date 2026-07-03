@@ -92,6 +92,7 @@ export const qk = {
     ["admin", "settings", category ?? "all"] as const,
   setting: (key: string) => ["admin", "settings", "key", key] as const,
   adminCatalog: ["admin", "config", "catalog"] as const,
+  discoveredAssets: ["admin", "config", "assets", "discovered"] as const,
   adminPreferences: ["admin", "me", "preferences"] as const,
   backfillRun: (id: string) =>
     ["admin", "wallets", "backfill-runs", id] as const,

@@ -129,6 +129,9 @@ export function selectSwapProvider(
     SWAP_PROVIDER,
     WALLET_REPOSITORY,
     BACKFILL_RUN_REPOSITORY,
+    // Exported so AdminModule can trigger an on-demand Blockradar re-sync from the
+    // asset-catalog discovery screen (POST /admin/config/assets/sync).
+    CatalogSyncService,
   ],
 })
 export class WalletsModule {}

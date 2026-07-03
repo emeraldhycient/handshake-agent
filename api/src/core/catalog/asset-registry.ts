@@ -46,6 +46,22 @@ export type AssetProviderMeta = AssetProviderConfig;
 /** Crypto asset metadata. */
 export type AssetMeta = CatalogAsset;
 
+/**
+ * A provider-discovered asset projected for the admin discovery-review screen — the
+ * overlay contents plus whether the symbol already exists in the static catalog.
+ */
+export interface DiscoveredAssetView {
+  symbol: string;
+  displayName: string;
+  decimals: number;
+  networks: string[];
+  contractAddress: string | null;
+  blockradarAssetId: string | null;
+  logoUrl: string | null;
+  enabled: boolean;
+  inStaticCatalog: boolean;
+}
+
 /** Fiat currency metadata. */
 export type FiatMeta = CatalogFiat;
 
@@ -113,6 +129,14 @@ export class AssetRegistry {
    * synthetic entry.
    */
   private readonly discoveredLogoUrls: Map<string, string> = new Map();
+
+  /**
+   * Overlay of provider-discovered on-chain contract addresses, keyed by SYMBOL
+   * (upper-case). Populated by `mergeDiscoveredAssets`; surfaced ONLY to the admin
+   * discovery-review screen (`listDiscoveredAssets`) so an operator can identify a
+   * newly-discovered token by its contract. Not consulted by the money path.
+   */
+  private readonly discoveredContractAddresses: Map<string, string> = new Map();
 
   /**
    * Overlay of runtime admin-added fiat currencies (the "Add currency" feature),
@@ -184,6 +208,12 @@ export class AssetRegistry {
         this.discoveredLogoUrls.set(sym, discovered.logoUrl);
       }
 
+      // Capture the on-chain contract address for the admin discovery-review screen
+      // (last non-null sync wins). Native assets (no contract) leave it unset.
+      if (discovered.contractAddress) {
+        this.discoveredContractAddresses.set(sym, discovered.contractAddress);
+      }
+
       // If the symbol is not in the static catalog, synthesise a CatalogAsset.
       if (!this.catalog.assets[sym] && !this.discoveredAssets.has(sym)) {
         const synthetic: CatalogAsset = {
@@ -238,6 +268,38 @@ export class AssetRegistry {
     const staticMeta = this.catalog.assets[symbol];
     if (staticMeta !== undefined) return !!staticMeta.enabled;
     return !!this.discoveredAssets.get(symbol)?.enabled;
+  }
+
+  /**
+   * The provider-discovered asset overlay, projected for the admin discovery-review
+   * screen. One entry per symbol seen during a Blockradar sync (union of the synthetic
+   * and provider-id overlays), each flagged with whether it already exists in the static
+   * catalog. Read-only projection — does not touch the money path.
+   */
+  listDiscoveredAssets(): DiscoveredAssetView[] {
+    const symbols = new Set<string>([
+      ...this.discoveredAssets.keys(),
+      ...this.discoveredProviderIds.keys(),
+    ]);
+    const views: DiscoveredAssetView[] = [];
+    for (const sym of symbols) {
+      const synth = this.discoveredAssets.get(sym);
+      const staticMeta = this.catalog.assets[sym];
+      const inStaticCatalog = staticMeta !== undefined;
+      views.push({
+        symbol: sym,
+        displayName: synth?.displayName ?? staticMeta?.displayName ?? sym,
+        decimals: synth?.decimals ?? staticMeta?.decimals ?? 0,
+        networks: synth?.networks ?? staticMeta?.networks ?? [],
+        contractAddress: this.discoveredContractAddresses.get(sym) ?? null,
+        blockradarAssetId:
+          this.discoveredProviderIds.get(sym)?.['blockradar'] ?? null,
+        logoUrl: this.discoveredLogoUrls.get(sym) ?? null,
+        enabled: inStaticCatalog ? !!staticMeta.enabled : !!synth?.enabled,
+        inStaticCatalog,
+      });
+    }
+    return views.sort((a, b) => a.symbol.localeCompare(b.symbol));
   }
 
   /**
@@ -347,10 +409,7 @@ export class AssetRegistry {
 
   /** All fiat entries (static built-ins + runtime custom overlay). */
   private allFiats(): CatalogFiat[] {
-    return [
-      ...Object.values(this.catalog.fiats),
-      ...this.customFiats.values(),
-    ];
+    return [...Object.values(this.catalog.fiats), ...this.customFiats.values()];
   }
 
   /**

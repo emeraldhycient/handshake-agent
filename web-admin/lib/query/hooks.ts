@@ -61,6 +61,7 @@ import * as agent from "@/lib/api/agent"
 import * as approvals from "@/lib/api/approvals"
 import * as beneficiaries from "@/lib/api/beneficiaries"
 import * as blocked from "@/lib/api/blocked"
+import * as assets from "@/lib/api/assets"
 import * as catalog from "@/lib/api/catalog"
 import * as config from "@/lib/api/config"
 import * as currencies from "@/lib/api/currencies"
@@ -708,6 +709,34 @@ export function useUpdateCurrency() {
       patch: AdminCustomFiatUpdateRequest
     }) => currencies.updateCurrency(code, patch),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.adminCatalog })
+    },
+  })
+}
+
+/**
+ * GET /admin/config/assets/discovered — the newly-discovered (Blockradar) assets awaiting
+ * review on the Asset-catalog screen.
+ */
+export function useDiscoveredAssets() {
+  return useQuery({
+    queryKey: qk.discoveredAssets,
+    queryFn: assets.listDiscoveredAssets,
+    staleTime: 60_000,
+  })
+}
+
+/**
+ * POST /admin/config/assets/sync — trigger a Blockradar catalog re-sync. Step-up-gated
+ * server-side (the caller wraps in useStepUpRetry). Refreshes the discovered list + the
+ * admin catalog (a sync can bring new assets into the tradeable overlay).
+ */
+export function useSyncAssets() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: assets.syncAssets,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.discoveredAssets })
       void queryClient.invalidateQueries({ queryKey: qk.adminCatalog })
     },
   })

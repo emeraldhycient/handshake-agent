@@ -32,41 +32,28 @@
 import { useMemo, useState } from "react"
 
 import { cn } from "@/lib/utils"
-import { MakerCheckerModal, ReasonModal } from "@/components/admin/flows"
+import { MakerCheckerModal } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ApiError } from "@/lib/api/client"
-import { useAdminCatalog, useAdminMe, useSetSetting } from "@/lib/query/hooks"
+import {
+  useAdminCatalog,
+  useAdminMe,
+  useDiscoveredAssets,
+  useSetSetting,
+  useSyncAssets,
+} from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { pushToast } from "@/lib/store/toast-store"
-import type { AssetCatalogRow, DiscoveredAssetRow } from "@/types/components"
+import type { AdminDiscoveredAsset } from "@handshake-agent/contracts"
+import type { AssetCatalogRow } from "@/types/components"
 
 // Design §6.23 table grid — Asset / Chain / Decimals / Min-max / Contract / Live.
 const ASSETS_GRID = "grid-cols-[1.4fr_0.8fr_0.7fr_1fr_1.6fr_0.7fr]"
 
-// The design's last-sync caption. The Blockradar catalog-sync action is not yet
-// backed by an admin endpoint (discovered-assets read is a later phase), so this
-// stays a design-faithful reactive caption advanced by the "Sync" ghost action.
-const INITIAL_LAST_SYNC = "2 hours ago · from the live catalog"
-
-// The design's mock newly-discovered rows (info-toned "review to add" card). No
-// discovered-asset read endpoint exists yet — kept design-faithful (worklist gap).
-const DISCOVERED_ROWS: readonly DiscoveredAssetRow[] = [
-  {
-    sym: "USDC",
-    name: "USD Coin",
-    chain: "Ethereum",
-    dec: 6,
-    contract: "0xA0b8…eB48",
-  },
-  {
-    sym: "DAI",
-    name: "Dai Stablecoin",
-    chain: "Ethereum",
-    dec: 18,
-    contract: "0x6B17…1d0F",
-  },
-]
+// The last-sync caption, advanced when a manual Blockradar re-sync completes. Boot runs
+// a sync automatically (CatalogSyncService), so the initial state reflects that.
+const INITIAL_LAST_SYNC = "on boot · from the live catalog"
 
 /** The circular refresh glyph beside "Sync Blockradar catalog". */
 function SyncIcon() {
@@ -111,47 +98,71 @@ function DiscoveredIcon() {
 }
 
 /**
- * The info-toned "Newly discovered · review to add" card (design §6.23). Each row
- * carries an info chip, the asset name + ticker, its chain/decimals/contract meta,
- * and a "Review & add" affordance that opens the reason flow (a recorded action).
+ * The info-toned "Newly discovered on-chain assets" card (design §6.23), WIRED to the
+ * real GET /admin/config/assets/discovered read. It lists assets the Blockradar sync
+ * found that are NOT yet in the static catalog, with their live status (discovered
+ * assets are auto-enabled in the money-path overlay). Read-only review surface — the
+ * card renders nothing when no new assets were discovered. Loading / empty / data.
  */
 function DiscoveredCard({
-  onReview,
+  items,
+  loading,
 }: {
-  onReview: (asset: DiscoveredAssetRow) => void
+  items: readonly AdminDiscoveredAsset[]
+  loading: boolean
 }) {
   return (
     <div className="mb-3.5 rounded-[16px] border border-[#cfe0fb] bg-sif px-5 py-4">
       <div className="mb-2.5 flex items-center gap-2 text-[13px] font-extrabold text-tif">
         <DiscoveredIcon />
-        Newly discovered · review to add
+        Newly discovered on-chain assets
       </div>
-      {DISCOVERED_ROWS.map((asset) => (
-        <div
-          key={`${asset.sym}-${asset.chain}`}
-          className="flex items-center gap-3.5 py-2.5"
-        >
-          <span className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-[10px] border border-[#cfe0fb] bg-white text-[11px] font-extrabold text-tif">
-            {asset.sym}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-[13px] font-bold text-ink">
-              {asset.name} · {asset.sym}
-            </div>
-            <div className="truncate font-mono text-[11px] text-ink3">
-              {asset.chain} · {asset.dec} dp · {asset.contract}
-            </div>
+
+      {loading && (
+        <div className="flex items-center gap-3.5 py-2.5" aria-busy="true">
+          <Skeleton className="size-[38px] flex-none rounded-[10px]" />
+          <div className="flex flex-1 flex-col gap-1.5">
+            <Skeleton className="h-3 w-32" />
+            <Skeleton className="h-2.5 w-48" />
           </div>
-          <button
-            type="button"
-            onClick={() => onReview(asset)}
-            aria-label={`Review and add ${asset.name}`}
-            className="flex-none rounded-[9px] bg-tif px-[15px] py-2 text-[12px] font-extrabold text-white transition-opacity hover:opacity-90 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-          >
-            Review &amp; add
-          </button>
         </div>
-      ))}
+      )}
+
+      {!loading && items.length === 0 && (
+        <div className="py-2 text-[12px] text-ink2">
+          No new assets discovered. Run a sync to check the Blockradar catalog for
+          assets not yet in this catalog.
+        </div>
+      )}
+
+      {!loading &&
+        items.map((asset) => (
+          <div
+            key={asset.symbol}
+            className="flex items-center gap-3.5 py-2.5"
+          >
+            <span className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-[10px] border border-[#cfe0fb] bg-white text-[11px] font-extrabold text-tif">
+              {asset.symbol}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-bold text-ink">
+                {asset.displayName} · {asset.symbol}
+              </div>
+              <div className="truncate font-mono text-[11px] text-ink3">
+                {asset.networks.join(" · ") || "—"} · {asset.decimals} dp ·{" "}
+                {asset.contractAddress ?? "native"}
+              </div>
+            </div>
+            <span
+              className={cn(
+                "flex-none rounded-full px-[10px] py-[3px] text-[10.5px] font-bold",
+                asset.enabled ? "bg-sok text-tok" : "bg-card2 text-ink3"
+              )}
+            >
+              {asset.enabled ? "Live" : "Off"}
+            </span>
+          </div>
+        ))}
     </div>
   )
 }
@@ -259,6 +270,8 @@ export function AssetsPage() {
   // GET /admin/config/catalog. Min/max + contract are not surfaced by the read,
   // so they render "—" (design-faithful).
   const { data, isLoading, isError, isSuccess, refetch } = useAdminCatalog()
+  const discovered = useDiscoveredAssets()
+  const syncAssets = useSyncAssets()
   const me = useAdminMe()
   const setSetting = useSetSetting()
   const stepUp = useStepUpRetry()
@@ -279,9 +292,8 @@ export function AssetsPage() {
 
   const [lastSync, setLastSync] = useState(INITIAL_LAST_SYNC)
 
-  // Which flow modal is open, and the row/asset it targets. The toggle target is
-  // held by key so the modal reads the row's live flag from current data.
-  const [reasonFor, setReasonFor] = useState<string | null>(null)
+  // The toggle target is held by key so the modal reads the row's live flag from
+  // current data.
   const [toggleKey, setToggleKey] = useState<string | null>(null)
   const toggleTarget =
     assets.find((asset) => assetKey(asset) === toggleKey) ?? null
@@ -291,17 +303,31 @@ export function AssetsPage() {
       void navigator.clipboard?.writeText(asset.contract)
   }
 
-  // The ReasonModal is shared by the sync action and the discovered-card
-  // "Review & add" action; this title marks the sync path.
-  const SYNC_REASON = "Sync Blockradar catalog"
-
-  /** ReasonModal continue — the sync path advances last-sync + toasts. */
-  function continueReason() {
-    if (reasonFor === SYNC_REASON) {
-      setLastSync("just now")
-      pushToast("Blockradar catalog synced", "info")
-    }
-    setReasonFor(null)
+  /**
+   * Real "Sync Blockradar catalog" — POST /admin/config/assets/sync via the step-up
+   * chain (the sync can bring assets into the tradeable overlay, so it is step-up-gated
+   * + audited server-side). On success advances the last-sync caption + toasts the
+   * counts; the mutation invalidates the discovered list + admin catalog. A 403 opens
+   * the StepUpDialog and the sync replays (with its toast) after re-auth. Nothing here
+   * moves money (§3.1) — discovery reads the provider's asset listing.
+   */
+  function runSync() {
+    void (async () => {
+      try {
+        await stepUp.run(async () => {
+          const res = await syncAssets.mutateAsync()
+          setLastSync("just now")
+          pushToast(
+            res.newCount > 0
+              ? `Blockradar sync — ${res.newCount} new asset(s) discovered`
+              : `Blockradar synced — ${res.discoveredCount} asset(s), none new`,
+            res.newCount > 0 ? "ok" : "info"
+          )
+        })
+      } catch (error) {
+        pushToast(errorMessage(error), "warn")
+      }
+    })()
   }
 
   /**
@@ -356,21 +382,23 @@ export function AssetsPage() {
         </div>
         <button
           type="button"
-          onClick={() => setReasonFor(SYNC_REASON)}
+          onClick={runSync}
+          disabled={syncAssets.isPending}
           aria-label="Sync Blockradar catalog"
-          className="flex h-[38px] items-center gap-2 rounded-[11px] border border-line bg-card px-[15px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="flex h-[38px] items-center gap-2 rounded-[11px] border border-line bg-card px-[15px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
         >
           <SyncIcon />
-          Sync Blockradar catalog
+          {syncAssets.isPending ? "Syncing…" : "Sync Blockradar catalog"}
         </button>
       </div>
 
       {/* Last-sync line */}
       <div className="mb-3.5 text-[11px] text-ink3">Last sync: {lastSync}</div>
 
-      {/* ── Newly discovered — review-to-add card ────────────────────────────── */}
+      {/* ── Newly discovered — real Blockradar discovery review ──────────────── */}
       <DiscoveredCard
-        onReview={(asset) => setReasonFor(`Add ${asset.name} (${asset.sym})`)}
+        items={discovered.data?.items ?? []}
+        loading={discovered.isLoading}
       />
 
       {/* ── Asset table ──────────────────────────────────────────────────────── */}
@@ -460,13 +488,6 @@ export function AssetsPage() {
       </div>
 
       {/* ── Flow modals (shared, design template §5) ─────────────────────────── */}
-      <ReasonModal
-        open={reasonFor !== null}
-        onOpenChange={(open) => !open && setReasonFor(null)}
-        title={reasonFor ?? ""}
-        onContinue={continueReason}
-      />
-
       <MakerCheckerModal
         open={toggleTarget !== null}
         onOpenChange={(open) => !open && setToggleKey(null)}

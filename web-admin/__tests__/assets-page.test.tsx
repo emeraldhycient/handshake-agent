@@ -32,6 +32,12 @@ vi.mock("@/lib/api/config", () => ({
   setSetting: vi.fn(),
 }))
 
+// Asset discovery: the real Sync button + the newly-discovered read.
+vi.mock("@/lib/api/assets", () => ({
+  listDiscoveredAssets: vi.fn(),
+  syncAssets: vi.fn(),
+}))
+
 // The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
 vi.mock("@/lib/api/admin", () => ({
   getMe: vi.fn(),
@@ -39,10 +45,13 @@ vi.mock("@/lib/api/admin", () => ({
 
 import { getAdminCatalog } from "@/lib/api/catalog"
 import { setSetting } from "@/lib/api/config"
+import { listDiscoveredAssets, syncAssets } from "@/lib/api/assets"
 import { getMe } from "@/lib/api/admin"
 
 const mockGetAdminCatalog = vi.mocked(getAdminCatalog)
 const mockSet = vi.mocked(setSetting)
+const mockListDiscovered = vi.mocked(listDiscoveredAssets)
+const mockSyncAssets = vi.mocked(syncAssets)
 const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -83,6 +92,10 @@ function renderPage() {
 beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
   mockGetAdminCatalog.mockReset()
+  mockListDiscovered.mockReset()
+  mockListDiscovered.mockResolvedValue({ items: [] })
+  mockSyncAssets.mockReset()
+  mockSyncAssets.mockResolvedValue({ discoveredCount: 0, newCount: 0 })
   mockSet.mockReset()
   mockSet.mockResolvedValue({
     key: "catalog.assets.USDT.enabled",
@@ -256,8 +269,9 @@ describe("AssetsPage", () => {
     expect(mockSet).toHaveBeenCalledTimes(1)
   })
 
-  it("opens the Blockradar sync ReasonModal (design-mock action)", async () => {
+  it("triggers a real Blockradar sync and toasts the discovered counts", async () => {
     mockGetAdminCatalog.mockResolvedValue(VIEW)
+    mockSyncAssets.mockResolvedValue({ discoveredCount: 4, newCount: 2 })
     const user = userEvent.setup()
     renderPage()
     await screen.findByText("Tether USD")
@@ -265,13 +279,36 @@ describe("AssetsPage", () => {
     await user.click(
       screen.getByRole("button", { name: /Sync Blockradar catalog/i })
     )
-    await user.type(screen.getByLabelText("Reason"), "Weekly catalog refresh")
-    await user.click(screen.getByRole("button", { name: /Continue/i }))
 
+    // The real POST fires (no mock reason flow), and the counts are toasted.
+    await waitFor(() => expect(mockSyncAssets).toHaveBeenCalledTimes(1))
     await waitFor(() => {
       const { toasts } = defaultToastStore.getState()
-      expect(toasts).toHaveLength(1)
-      expect(toasts[0].message).toMatch(/Blockradar catalog synced/i)
+      expect(toasts.some((t) => /2 new asset/i.test(t.message))).toBe(true)
     })
+  })
+
+  it("renders the newly-discovered assets from the discovery read", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    mockListDiscovered.mockResolvedValue({
+      items: [
+        {
+          symbol: "USDC",
+          displayName: "USD Coin",
+          decimals: 6,
+          networks: ["TRON"],
+          contractAddress: "TXusdcContract",
+          blockradarAssetId: "usdc-id",
+          logoUrl: null,
+          enabled: true,
+          inStaticCatalog: false,
+        },
+      ],
+    })
+    renderPage()
+
+    // The discovered card shows the real asset (name · ticker) + its live status.
+    expect(await screen.findByText("USD Coin · USDC")).toBeInTheDocument()
+    expect(screen.getByText(/TXusdcContract/)).toBeInTheDocument()
   })
 })

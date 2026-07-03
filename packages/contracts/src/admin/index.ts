@@ -2,6 +2,7 @@ export * from "./permissions";
 export * from "./settings";
 export * from "./settings.dto";
 export * from "./catalog.dto";
+export * from "./assets.dto";
 export * from "./auth.dto";
 export * from "./invitation.dto";
 export * from "./rbac.dto";
