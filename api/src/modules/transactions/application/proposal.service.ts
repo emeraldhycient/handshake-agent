@@ -629,6 +629,9 @@ export class ProposalService {
       fiatAmount: ngnEquivalentStr,
       fiatCurrency: baseFiat,
       asset: intent.asset,
+      // A crypto-address send is on-chain + irreversible → the single on-chain send
+      // cap (perSendOnChainFiatMax) applies on top of the general per-tx cap.
+      onChainSend: true,
     });
 
     // Keep a numeric form only for the Travel Rule threshold comparison and metadata

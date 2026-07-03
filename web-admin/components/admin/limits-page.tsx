@@ -12,9 +12,9 @@
  * `limits.NGN.<tier>.*` tier caps AND the global `beneficiary.cryptoCoolingOffSeconds`
  * resolve). A row is EDITABLE only when its config key exists AND is enforced
  * server-side — currently the per-tier `perTxFiatMax` / `dailyFiatMax` /
- * `weeklyFiatMax` (rolling 7-day) / `dailyTxCountMax`, and the new-beneficiary
- * cooling-off. Rows the engine does NOT yet enforce (Single on-chain send max,
- * Sends / 10-min window, Cooling-off after tier change) render "—" with NO edit
+ * `weeklyFiatMax` (rolling 7-day) / `perSendOnChainFiatMax` (single on-chain send) /
+ * `dailyTxCountMax`, and the new-beneficiary cooling-off. Rows the engine does NOT yet
+ * enforce (Sends / 10-min window, Cooling-off after tier change) render "—" with NO edit
  * affordance: exposing an editor for a cap nothing enforces would be a fake, dangerous
  * control (root §3.6). Each becomes editable as its enforcement lands.
  *
@@ -126,7 +126,11 @@ function buildTiers(settings: readonly EffectiveSetting[]): LimitTier[] {
       leafRow("Per-transaction max", byKey.get(`${base}.perTxFiatMax`), "ngn"),
       leafRow("Daily max · rolling 24h", byKey.get(`${base}.dailyFiatMax`), "ngn"),
       leafRow("Weekly max · rolling 7d", byKey.get(`${base}.weeklyFiatMax`), "ngn"),
-      { k: "Single on-chain send max", v: NO_KEY },
+      leafRow(
+        "Single on-chain send max",
+        byKey.get(`${base}.perSendOnChainFiatMax`),
+        "ngn"
+      ),
     ]
     const velocity: LimitVelocityRow[] = [
       leafRow("Transactions / day", byKey.get(`${base}.dailyTxCountMax`), "count"),

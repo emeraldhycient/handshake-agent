@@ -74,6 +74,16 @@ describe("SETTING_REGISTRY", () => {
     }
   });
 
+  it("registers a per-send on-chain cap per tier (single on-chain send max, enforced server-side)", () => {
+    for (const tier of ["tier_1", "tier_2", "tier_3"] as const) {
+      const e = entry(`limits.NGN.${tier}.perSendOnChainFiatMax`);
+      expect(e.category).toBe("KYC");
+      expect(e.valueType).toBe("number");
+      expect(e.editable).toBe(true);
+      expect(e.min).toBe(0);
+    }
+  });
+
   it("registers the Tickets enablement + commission tunables (Phase 4 wave 2)", () => {
     const enabled = entry("ticketing.enabled");
     expect(enabled.category).toBe("Tickets");

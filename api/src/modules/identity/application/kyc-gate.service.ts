@@ -9,6 +9,7 @@ import type {
 } from '../../../core/config/configuration';
 import {
   KycNotVerifiedError,
+  OnChainSendLimitExceededError,
   SimSwapBlockedError,
   TierLimitExceededError,
   VelocityExceededError,
@@ -90,6 +91,12 @@ export interface AssertCanTransactInput {
   /** ISO fiat currency code for this transaction (e.g. 'NGN'). Used to resolve per-fiat tier limits. */
   fiatCurrency: string;
   asset: string;
+  /**
+   * True when this is an on-chain (crypto-address) send. On-chain sends are irreversible,
+   * so they get an ADDITIONAL single-send cap (`perSendOnChainFiatMax`) beyond the general
+   * per-transaction cap. Absent/false for buys, sells, swaps, and fiat payouts.
+   */
+  onChainSend?: boolean;
 }
 
 /**
@@ -232,6 +239,21 @@ export class KycGateService {
         user.kycTier,
         fiatCurrency,
       );
+    }
+
+    // 4c. Single on-chain send cap — an ADDITIONAL per-send limit applied ONLY to
+    // on-chain (crypto-address) sends, which are irreversible (§3.6: enforce the cap
+    // where it exists; the shipped defaults always set it). Never gates buy/sell/swap.
+    if (input.onChainSend && tierLimits.perSendOnChainFiatMax !== undefined) {
+      const scaledSendMax = toScaled(String(tierLimits.perSendOnChainFiatMax));
+      if (scaledTxAmount > scaledSendMax) {
+        throw new OnChainSendLimitExceededError(
+          Number(fiatAmount),
+          tierLimits.perSendOnChainFiatMax,
+          user.kycTier,
+          fiatCurrency,
+        );
+      }
     }
 
     // 5. Velocity checks — load rolling 24-h usage, scoped to the transaction's fiat currency.

@@ -63,6 +63,7 @@ const LIMIT_SETTINGS: EffectiveSetting[] = [
   limit("limits.NGN.tier_1.perTxFiatMax", 200000),
   limit("limits.NGN.tier_1.dailyFiatMax", 500000),
   limit("limits.NGN.tier_1.weeklyFiatMax", 3000000),
+  limit("limits.NGN.tier_1.perSendOnChainFiatMax", 100000),
   limit("limits.NGN.tier_1.dailyTxCountMax", 10),
   limit("beneficiary.cryptoCoolingOffSeconds", 86400, "Beneficiary"),
 ]
@@ -198,15 +199,40 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     const user = userEvent.setup()
     renderPage()
     await screen.findByRole("tab", { name: "Tier 1" })
-    // "Single on-chain send max" is not yet enforced (renders "—"); no edit pencil.
+    // "Cooling-off after tier change" is not yet enforced (renders "—"); no edit pencil.
     expect(
-      screen.queryByRole("button", { name: "Edit Single on-chain send max" })
+      screen.queryByRole("button", {
+        name: "Edit Cooling-off after tier change",
+      })
     ).not.toBeInTheDocument()
     // The backed per-tx cap still has its edit pencil.
     expect(
       await screen.findByRole("button", { name: "Edit Per-transaction max" })
     ).toBeInTheDocument()
     void user
+  })
+
+  it("edits the enforced single on-chain send max via setSetting", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Edit Single on-chain send max",
+      })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (NGN)" })
+    await user.clear(input)
+    await user.type(input, "80000")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith(
+      "limits.NGN.tier_1.perSendOnChainFiatMax",
+      { value: 80000, scope: "global", scopeValue: null }
+    )
   })
 
   it("edits the enforced weekly max (rolling 7-day cap) via setSetting", async () => {

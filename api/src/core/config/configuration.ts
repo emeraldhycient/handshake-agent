@@ -45,6 +45,13 @@ export interface TierLimits {
    * ALWAYS set it — production always enforces (KycGateService checks it when present).
    */
   weeklyFiatMax?: number;
+  /**
+   * Maximum NGN-equivalent of a single on-chain (crypto-address) send. Optional on the
+   * type (fixtures for other caps need not set it) but the shipped defaults ALWAYS set
+   * it — production always enforces (KycGateService checks it for on-chain sends when
+   * present). On-chain sends are irreversible, so it may be set tighter than perTxFiatMax.
+   */
+  perSendOnChainFiatMax?: number;
   /** Maximum number of transactions within a rolling 24-hour window. */
   dailyTxCountMax: number;
 }
@@ -765,6 +772,7 @@ const buildConfig = (): AppConfig => ({
         perTxFiatMax: 50_000,
         dailyFiatMax: 200_000,
         weeklyFiatMax: 1_000_000,
+        perSendOnChainFiatMax: 50_000,
         dailyTxCountMax: 10,
       },
       // Tier 2 — enhanced KYC: higher throughput for regular users.
@@ -772,6 +780,7 @@ const buildConfig = (): AppConfig => ({
         perTxFiatMax: 500_000,
         dailyFiatMax: 2_000_000,
         weeklyFiatMax: 10_000_000,
+        perSendOnChainFiatMax: 500_000,
         dailyTxCountMax: 30,
       },
       // Tier 3 — full KYC: high-volume / business users.
@@ -779,6 +788,7 @@ const buildConfig = (): AppConfig => ({
         perTxFiatMax: 5_000_000,
         dailyFiatMax: 20_000_000,
         weeklyFiatMax: 100_000_000,
+        perSendOnChainFiatMax: 5_000_000,
         dailyTxCountMax: 100,
       },
     },

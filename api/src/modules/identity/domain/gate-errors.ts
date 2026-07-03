@@ -60,6 +60,27 @@ export class TierLimitExceededError extends GateError {
 }
 
 /**
+ * The requested on-chain (crypto-address) send exceeds the single-send cap for the
+ * user's KYC tier (`perSendOnChainFiatMax`). Separate from TierLimitExceededError so an
+ * irreversible-send cap is legible in logs/audits distinct from the general per-tx cap.
+ */
+export class OnChainSendLimitExceededError extends GateError {
+  readonly code = 'SEND_LIMIT_EXCEEDED' as const;
+
+  constructor(
+    readonly requestedAmount: number,
+    readonly limitAmount: number,
+    readonly tier: string,
+    readonly fiatCurrency: string,
+  ) {
+    super(
+      `Transaction blocked: on-chain send of ${requestedAmount} ${fiatCurrency} exceeds ` +
+        `the single on-chain send limit of ${limitAmount} ${fiatCurrency} for tier ${tier}.`,
+    );
+  }
+}
+
+/**
  * A velocity cap for the user's KYC tier would be exceeded:
  *  - `fiat`   → rolling 24-hour spend cap (`dailyFiatMax`)
  *  - `count`  → rolling 24-hour transaction-count cap (`dailyTxCountMax`)

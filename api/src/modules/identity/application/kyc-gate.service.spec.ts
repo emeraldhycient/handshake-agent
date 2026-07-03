@@ -21,6 +21,7 @@ import type { Clock } from '../../../core/common/clock';
 import {
   GateError,
   KycNotVerifiedError,
+  OnChainSendLimitExceededError,
   SimSwapBlockedError,
   TierLimitExceededError,
   VelocityExceededError,
@@ -434,6 +435,54 @@ describe('KycGateService.assertCanTransact', () => {
       kind: 'weekly',
       limit: 12_000,
     });
+  });
+
+  // ── Single on-chain send cap (perSendOnChainFiatMax) ──────────────────────
+  // Applies ONLY to on-chain (crypto-address) sends — irreversible, so tighter.
+
+  const ONCHAIN_LIMITS: AppConfig['limits'] = {
+    NGN: {
+      tier_1: { ...TIER_1_LIMITS, perSendOnChainFiatMax: 30_000 },
+      tier_2: DEFAULT_LIMITS.NGN.tier_2,
+      tier_3: DEFAULT_LIMITS.NGN.tier_3,
+    },
+  };
+
+  it('throws OnChainSendLimitExceededError when an on-chain send exceeds perSendOnChainFiatMax', async () => {
+    // 40_000 is under perTx (50_000) but over the on-chain cap (30_000).
+    const svc = makeService(makeUser(), '0', 0, makeConfig(ONCHAIN_LIMITS));
+    const input = { ...BASE_INPUT, fiatAmount: '40000', onChainSend: true };
+    await expect(svc.assertCanTransact(input)).rejects.toBeInstanceOf(
+      OnChainSendLimitExceededError,
+    );
+    await expect(svc.assertCanTransact(input)).rejects.toMatchObject({
+      code: 'SEND_LIMIT_EXCEEDED',
+      limitAmount: 30_000,
+      tier: 'tier_1',
+      fiatCurrency: 'NGN',
+    });
+  });
+
+  it('does NOT apply the on-chain cap to a non-send tx (buy/sell/swap) of the same amount', async () => {
+    // Same 40_000, but NOT an on-chain send → only the general perTx cap (50_000)
+    // applies, which it passes. The on-chain cap must never gate a buy/sell/swap.
+    const svc = makeService(makeUser(), '0', 0, makeConfig(ONCHAIN_LIMITS));
+    const input = { ...BASE_INPUT, fiatAmount: '40000' }; // onChainSend absent
+    await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
+  });
+
+  it('does NOT throw when an on-chain send equals perSendOnChainFiatMax exactly', async () => {
+    const svc = makeService(makeUser(), '0', 0, makeConfig(ONCHAIN_LIMITS));
+    const input = { ...BASE_INPUT, fiatAmount: '30000', onChainSend: true };
+    await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
+  });
+
+  it('skips the on-chain cap when the tier has no perSendOnChainFiatMax', async () => {
+    // Default tier_1 config (no perSendOnChainFiatMax); a 40_000 on-chain send passes
+    // (only perTx 50_000 applies).
+    const svc = makeService(makeUser(), '0', 0);
+    const input = { ...BASE_INPUT, fiatAmount: '40000', onChainSend: true };
+    await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
   });
 
   // ── Error hierarchy ───────────────────────────────────────────────────────

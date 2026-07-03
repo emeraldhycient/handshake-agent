@@ -78,6 +78,10 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.FORBIDDEN,
     message: 'This transaction is not permitted on your account.',
   },
+  SEND_LIMIT_EXCEEDED: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'This transaction is not permitted on your account.',
+  },
   VELOCITY_EXCEEDED: {
     status: HttpStatus.FORBIDDEN,
     message: 'This transaction is not permitted on your account.',

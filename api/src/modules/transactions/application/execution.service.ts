@@ -1328,6 +1328,9 @@ export class ExecutionService {
       fiatAmount: ngnEquivalentStr,
       fiatCurrency: baseFiat,
       asset,
+      // Settle-time re-check of a crypto-address send (on-chain, irreversible) — mirror
+      // the proposal-time flag so the single on-chain send cap is re-enforced (§3.3).
+      onChainSend: true,
     });
 
     // Numeric form retained only for metadata storage (approximate use — Fix-C scope).
