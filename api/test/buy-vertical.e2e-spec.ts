@@ -305,6 +305,9 @@ describe('Buy vertical — capstone acceptance e2e (AppModule, Testcontainers Po
       WHATSAPP_FLOW_ID: WA_FLOW_ID,
       DIRECTIVE_SIGNING_KEY,
       RECEIPT_SIGNING_KEY: 'e2e-buy-vertical-receipt-signing-key-32b!',
+      // AppModule pulls in admin.module.ts, whose MFA_CIPHER useFactory
+      // constructs MfaSecretCipher and requires a 64-hex-char (32-byte) key.
+      ADMIN_MFA_ENC_KEY: '0'.repeat(64),
       BLOCKRADAR_API_KEY: 'fake-blockradar-key-e2e',
       BLOCKRADAR_MASTER_WALLET_ID: 'fake-master-wallet-id-e2e',
       FLUTTERWAVE_SECRET_KEY: 'fake-flw-secret-key-e2e',
