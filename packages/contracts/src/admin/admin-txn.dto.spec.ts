@@ -209,6 +209,9 @@ describe("AdminTxnEconomicsSchema", () => {
     processingFee: "82.50",
     fxSpreadBps: "150",
     internalMargin: "247.50",
+    realizedFee: "82.50",
+    realizedSpread: "165",
+    realizedProfit: "247.50",
   };
 
   it("accepts a fully-populated economics block", () => {
@@ -225,6 +228,9 @@ describe("AdminTxnEconomicsSchema", () => {
       processingFee: null,
       fxSpreadBps: null,
       internalMargin: null,
+      realizedFee: null,
+      realizedSpread: null,
+      realizedProfit: null,
     };
     expect(AdminTxnEconomicsSchema.parse(empty)).toEqual(empty);
   });
@@ -280,6 +286,9 @@ describe("AdminTxnDetailSchema", () => {
       processingFee: null,
       fxSpreadBps: null,
       internalMargin: null,
+      realizedFee: null,
+      realizedSpread: null,
+      realizedProfit: null,
     },
     ledgerLegs: [
       {

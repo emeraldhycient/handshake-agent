@@ -23,7 +23,7 @@ describe('computeTxProfit', () => {
           baseRate: '1000',
           processingFeeAmount: '0',
         }),
-      ).toEqual({ fee: '0', spread: '15' });
+      ).toEqual({ fee: '0', spread: '15', profit: '15' });
     });
 
     it('nets the fee out of gross fiat before the spread (fee > 0)', () => {
@@ -36,7 +36,7 @@ describe('computeTxProfit', () => {
           baseRate: '1000',
           processingFeeAmount: '100',
         }),
-      ).toEqual({ fee: '100', spread: '15' });
+      ).toEqual({ fee: '100', spread: '15', profit: '115' });
     });
 
     it('holds decimal precision (6-dp crypto, 2-dp fiat) exactly', () => {
@@ -49,7 +49,7 @@ describe('computeTxProfit', () => {
           baseRate: '1600',
           processingFeeAmount: '100',
         }),
-      ).toEqual({ fee: '100', spread: '146.3056' });
+      ).toEqual({ fee: '100', spread: '146.3056', profit: '246.3056' });
     });
   });
 
@@ -65,7 +65,7 @@ describe('computeTxProfit', () => {
           baseRate: '1000',
           processingFeeAmount: '50',
         }),
-      ).toEqual({ fee: '50', spread: '15' });
+      ).toEqual({ fee: '50', spread: '15', profit: '65' });
     });
   });
 
@@ -80,6 +80,6 @@ describe('computeTxProfit', () => {
         baseRate: '100000000',
         processingFeeAmount: '0',
       }),
-    ).toEqual({ fee: '0', spread: '1500' });
+    ).toEqual({ fee: '0', spread: '1500', profit: '1500' });
   });
 });

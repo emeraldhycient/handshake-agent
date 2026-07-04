@@ -123,6 +123,15 @@ export const AdminTxnEconomicsSchema = z.object({
    * to end users; the console gates it behind the operator surface.
    */
   internalMargin: z.string().nullable(),
+  /**
+   * Realized platform economics for a completed buy/sell, DERIVED from the
+   * settle-stamped metadata via `computeTxProfit` (fee + spread; go-readiness #4/#5).
+   * `realizedProfit` = fee + spread. Null for non-priced types (send/swap) or when
+   * the quote fields are absent. Operator-only; nothing here moves money (§3.1).
+   */
+  realizedFee: z.string().nullable(),
+  realizedSpread: z.string().nullable(),
+  realizedProfit: z.string().nullable(),
 });
 export type AdminTxnEconomics = z.infer<typeof AdminTxnEconomicsSchema>;
 

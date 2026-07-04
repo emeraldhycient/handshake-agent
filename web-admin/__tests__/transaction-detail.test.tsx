@@ -85,6 +85,9 @@ const DETAIL: AdminTxnDetail = {
     processingFee: "1250.00",
     fxSpreadBps: "150",
     internalMargin: "3778.57",
+    realizedFee: "1250",
+    realizedSpread: "2528.57",
+    realizedProfit: "3778.57",
   },
   ledgerLegs: [
     {
@@ -214,14 +217,17 @@ describe("TransactionDetail (read-wired)", () => {
     renderDetail()
 
     await screen.findByText(TXN_ID)
-    // Itemized economics projected from metadata.
+    // Itemized economics projected from metadata (fiat amounts currency-formatted).
     expect(screen.getByText("236.599531 USDT")).toBeInTheDocument()
-    expect(screen.getByText("NGN 251904.85")).toBeInTheDocument()
+    expect(screen.getByText("₦251,904.85")).toBeInTheDocument()
     expect(screen.getByText("1064.72")).toBeInTheDocument()
-    expect(screen.getByText("1250.00")).toBeInTheDocument()
     expect(screen.getByText("150 bps")).toBeInTheDocument()
-    // Operator-only internal margin.
+    // Operator-only internal margin (unformatted rate delta).
     expect(screen.getByText("3778.57")).toBeInTheDocument()
+    // Operator-only realized economics (fee + spread from computeTxProfit).
+    expect(screen.getByText("Realized profit (operator)")).toBeInTheDocument()
+    expect(screen.getByText("₦3,778.57")).toBeInTheDocument()
+    expect(screen.getByText("₦2,528.57")).toBeInTheDocument()
     // Ledger Seq column shows the per-account sequence numbers.
     expect(screen.getByText("11")).toBeInTheDocument()
     expect(screen.getByText("12")).toBeInTheDocument()

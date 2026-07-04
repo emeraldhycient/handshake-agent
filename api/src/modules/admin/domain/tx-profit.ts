@@ -67,6 +67,8 @@ export interface TxProfitInput {
 export interface TxProfit {
   fee: string;
   spread: string;
+  /** Total realized profit = fee + spread (exact; computed once at scale-18). */
+  profit: string;
 }
 
 /**
@@ -94,5 +96,9 @@ export function computeTxProfit(input: TxProfitInput): TxProfit {
       ? fiat - fee - midValue // netFiat − mid
       : midValue - (fiat + fee); // mid − fiatBeforeFee
 
-  return { fee: fromScaled(fee), spread: fromScaled(spread) };
+  return {
+    fee: fromScaled(fee),
+    spread: fromScaled(spread),
+    profit: fromScaled(fee + spread),
+  };
 }
