@@ -35,6 +35,8 @@ function makeUser(over?: Partial<AdminUserRecord>): AdminUserRecord {
     roleName: 'super_admin',
     createdAt: new Date('2026-01-01T00:00:00Z'),
     lastLoginAt: null,
+    failedLoginCount: 0,
+    loginLockedUntil: null,
     ...over,
   };
 }

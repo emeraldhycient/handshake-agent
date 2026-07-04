@@ -175,6 +175,60 @@ export class AdminUserPrismaRepository implements IAdminUserRepository {
       data: { lastLoginAt: at },
     });
   }
+
+  async registerFailedLogin(
+    id: string,
+    now: Date,
+  ): Promise<{ count: number; lockedUntil: Date | null }> {
+    // ONE atomic statement folds the expired-window reset INTO the increment.
+    // A separate resetLoginFailures()-then-increment could interleave under a
+    // concurrent credential-stuffing burst on a just-expired lock and let every
+    // attempt reach the argon2 verify — the TOCTOU brute-force bypass (§3.3,
+    // mirrors PinService.registerFailedAttempt). Postgres serializes the row
+    // update, so concurrent callers observe strictly increasing counts. `now`
+    // is the service clock (not the DB clock) so lockout timing is deterministic.
+    const rows = await this.prisma.$queryRaw<
+      Array<{ failedLoginCount: number; loginLockedUntil: Date | null }>
+    >`
+      UPDATE "admin_users"
+      SET
+        "failedLoginCount" = CASE
+          WHEN "loginLockedUntil" IS NOT NULL AND "loginLockedUntil" >  ${now} THEN "failedLoginCount"
+          WHEN "loginLockedUntil" IS NOT NULL AND "loginLockedUntil" <= ${now} THEN 1
+          ELSE "failedLoginCount" + 1
+        END,
+        "loginLockedUntil" = CASE
+          WHEN "loginLockedUntil" IS NOT NULL AND "loginLockedUntil" <= ${now} THEN NULL
+          ELSE "loginLockedUntil"
+        END
+      WHERE "id" = ${id}::uuid
+      RETURNING "failedLoginCount", "loginLockedUntil"
+    `;
+
+    const row = rows[0];
+    // Row vanished between the caller's read and this update (rare delete race):
+    // report a cleared counter so the caller does not lock a ghost.
+    if (!row) return { count: 0, lockedUntil: null };
+
+    return {
+      count: Number(row.failedLoginCount),
+      lockedUntil: row.loginLockedUntil ?? null,
+    };
+  }
+
+  async setLoginLock(id: string, until: Date): Promise<void> {
+    await this.prisma.adminUser.update({
+      where: { id },
+      data: { loginLockedUntil: until },
+    });
+  }
+
+  async resetLoginFailures(id: string): Promise<void> {
+    await this.prisma.adminUser.update({
+      where: { id },
+      data: { failedLoginCount: 0, loginLockedUntil: null },
+    });
+  }
 }
 
 // The record carries `passwordHash` as an extra field beyond AdminUserRecord:
@@ -198,6 +252,8 @@ function toRecord(
     roleName: row.role.name,
     createdAt: row.createdAt,
     lastLoginAt: row.lastLoginAt,
+    failedLoginCount: row.failedLoginCount,
+    loginLockedUntil: row.loginLockedUntil,
     passwordHash: row.passwordHash,
   };
 }

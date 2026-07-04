@@ -194,7 +194,8 @@ function makeMocks(): { service: AdminEndUserService; m: Mocks } {
   const pin = {
     getPinState: jest.fn(),
     setPinHash: jest.fn(),
-    recordFailure: jest.fn(),
+    registerFailedAttempt: jest.fn(),
+    setLock: jest.fn(),
     resetFailures: jest.fn(),
     clearPin: jest.fn().mockResolvedValue(undefined),
   } as unknown as jest.Mocked<IPinRepository>;

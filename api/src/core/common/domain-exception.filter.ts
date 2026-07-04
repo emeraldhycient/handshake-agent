@@ -190,6 +190,12 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.UNAUTHORIZED,
     message: 'Invalid credentials.',
   },
+  // Per-account lockout after too many failed logins (credential-stuffing guard,
+  // §3.3) → 429, mirroring the end-user OTP/PIN lockout.
+  ADMIN_ACCOUNT_LOCKED: {
+    status: HttpStatus.TOO_MANY_REQUESTS,
+    message: 'Too many failed attempts. This account is temporarily locked.',
+  },
   ADMIN_MFA_REQUIRED: {
     status: HttpStatus.UNAUTHORIZED,
     message: 'A multi-factor code is required.',

@@ -9,7 +9,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import * as QRCode from 'qrcode';
 import type { Request } from 'express';
 
@@ -37,8 +37,17 @@ import { AdminLoginDto, AdminStepUpDto } from './dto/admin-auth.dto';
 import { AdminBootstrapDto } from './dto/admin-bootstrap.dto';
 import { AdminInvitationAcceptDto } from './dto/admin-invitation.dto';
 
-/** A throttle for the public, unauthenticated admin auth/bootstrap routes. */
+/** A throttle for the public, unauthenticated admin bootstrap/invitation routes. */
 const AUTH_THROTTLE = { auth: { limit: 30, ttl: 60_000 } };
+
+/**
+ * A strict, dedicated throttle for the credential-stuffing-exposed login route:
+ * far tighter than the shared 30/min 'auth' bucket. This IP-keyed limit is the
+ * first line; the per-account atomic lockout in AdminAuthService (§3.3) is the
+ * one that actually caps a proxy-pool spray, since a rotating IP defeats any
+ * IP-keyed throttle.
+ */
+const LOGIN_THROTTLE = { auth: { limit: 5, ttl: 60_000 } };
 
 /**
  * Admin authentication surface: public login / bootstrap / invitation-accept,
@@ -47,7 +56,6 @@ const AUTH_THROTTLE = { auth: { limit: 30, ttl: 60_000 } };
  * its contract schema before it leaves the controller (§3.3 / §8).
  */
 @Controller('admin')
-@UseGuards(ThrottlerGuard)
 export class AdminAuthController {
   constructor(
     private readonly auth: AdminAuthService,
@@ -63,7 +71,7 @@ export class AdminAuthController {
 
   @Post('auth/login')
   @HttpCode(HttpStatus.OK)
-  @Throttle(AUTH_THROTTLE)
+  @Throttle(LOGIN_THROTTLE)
   async login(
     @Body() dto: AdminLoginDto,
     @Req() req: Request,
