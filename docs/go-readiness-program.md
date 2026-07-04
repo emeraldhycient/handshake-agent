@@ -181,7 +181,40 @@ baseRate/fxRate and asserting exact fee/spread/profit; unit for the pure per-tx 
 
 ---
 
+## Newly reported (2026-07-04 — queued AFTER the current #5→#10 list)
+
+### 11. Platform-wide currency formatting — ⬜
+No consistent money formatting across the platform. Implement a single canonical
+formatter (symbol/decimals per currency, grouping, locale) used by BOTH `web/` and
+`web-admin/` (and any receipt/notification text) — no ad-hoc `₦`+`toLocaleString`.
+Ties into #9 (user display currency) and #7/#8 (per-currency metrics display).
+**Effort: M** (shared util in `contracts` or each app's `lib` + swap every call site).
+
+### 12. Dashboard figure tracking assumes NGN (multi-currency) — ⬜ (part of #7/#8)
+Admin dashboard KPI tiles (GMV, revenue, profit) render/aggregate as if every tx is
+Naira. The data layer IS per-currency (GMV/revenue return `byCurrency`), so this is a
+DISPLAY/aggregation bug: show per-currency (or a currency selector), never sum across
+currencies as one figure. Fold into #7 (metrics filters) + #8 (multi-currency tracking)
++ #11 (formatting). **Effort: M.**
+
+### 13. System health tracking not working (dashboard + System/Ops) — ⬜ bug
+The "System health" panel (dashboard) + the System/Ops page don't reflect real
+provider/health state. Investigate `AdminMetricsOpsService` / the health/probe source and
+the FE panel; wire real provider status (mock/ok/down/degraded + latency) and job/queue
+health. **Effort: S–M.** (Overlaps the spun-off webhook queue-depth + the capabilities
+vendor-status endpoint #6.)
+
+### 14. Admin console header search bar doesn't work — ⬜ bug
+The global search pill (⌘K / "Search users, tx, tickets…") in the admin header is
+non-functional. Wire it to a real search endpoint (users / transactions / tickets) or the
+command palette with real navigation. **Effort: S–M.**
+
+---
+
 ## Spun-off tracks (separate sessions, own worktrees — audit their PRs)
+**Status (2026-07-04): all three LAUNCHED and running independently** — task_c1880f4f
+(webhook), task_cd9019b9 (security), task_738da713 (PWA/SEO/WCAG). Audit their PRs when
+they land.
 
 ### 🔀 A. Webhook module → durable queue + console replay
 Move every inbound webhook (Blockradar, Flutterwave, WhatsApp, swap) onto a durable queue
