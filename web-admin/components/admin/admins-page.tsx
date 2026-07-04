@@ -37,7 +37,6 @@ import {
 } from "@/components/ui/table"
 import { InviteAdminDialog } from "@/components/admin/invite-admin-dialog"
 import { AdminRowActions } from "@/components/admin/admin-row-actions"
-import { AdminResetMfaAction } from "@/components/admin/admin-reset-mfa-action"
 import { RoleEditorDialog } from "@/components/admin/role-editor-dialog"
 import { RolePermissionMatrix } from "@/components/admin/role-permission-matrix"
 import { useAdmins, usePermissions, useRoles } from "@/lib/query/hooks"
@@ -79,6 +78,24 @@ function nameInitials(name: string): string {
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
   const single = parts[0] ?? ""
   return (single.slice(0, 2) || "?").toUpperCase()
+}
+
+/** Compact last-login stamp ("Jul 3, 2026 · 16:23"); "Never" when the admin has
+ *  not signed in yet (null / unparseable). */
+function formatLastLogin(iso: string | null): string {
+  if (!iso) return "Never"
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return "Never"
+  const date = d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  })
+  const time = d.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+  return `${date} · ${time}`
 }
 
 // ─── Page ──────────────────────────────────────────────────────────────────────
@@ -145,6 +162,7 @@ export function AdminsPage() {
               <TableHead>Role</TableHead>
               <TableHead>2FA</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Last login</TableHead>
               <TableHead className="text-right">
                 <span className="sr-only">Actions</span>
               </TableHead>
@@ -173,6 +191,9 @@ export function AdminsPage() {
                   <TableCell>
                     <Skeleton className="h-4 w-16 rounded-full" />
                   </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-3 w-28" />
+                  </TableCell>
                   <TableCell />
                 </TableRow>
               ))}
@@ -181,7 +202,7 @@ export function AdminsPage() {
             {adminsQuery.isError && (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={6}
                   className="py-[46px] text-center whitespace-normal"
                 >
                   <div className="text-[13.5px] font-bold text-tdn">
@@ -202,7 +223,7 @@ export function AdminsPage() {
             {adminsQuery.isSuccess && admins.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={6}
                   className="py-[46px] text-center text-ink3 whitespace-normal"
                 >
                   <div className="text-[14px] font-bold text-ink2">
@@ -362,11 +383,16 @@ function AdminRow({ admin, roles }: { admin: AdminUser; roles: Role[] }) {
         )}
       </TableCell>
 
-      {/* Row actions — change role + suspend/reactivate/offboard + reset 2FA
-          (all step-up-gated) */}
+      {/* Last login — absolute stamp, or "Never" for an admin who has not signed in */}
+      <TableCell className="text-[12px] text-ink2 tabular-nums">
+        {formatLastLogin(admin.lastLoginAt)}
+      </TableCell>
+
+      {/* Row actions — reset 2FA + change role + suspend/reactivate/offboard, each
+          RBAC-gated (permission + self-guard) inside AdminRowActions; a read-only
+          operator sees a muted dash. All step-up-gated. */}
       <TableCell className="text-right">
-        <div className="flex items-center justify-end gap-2">
-          <AdminResetMfaAction admin={admin} />
+        <div className="flex justify-end">
           <AdminRowActions admin={admin} roles={roles} />
         </div>
       </TableCell>

@@ -56,7 +56,14 @@ describe("AccountMenu (honest role, no view-as)", () => {
         screen.queryByRole("menuitem", { name: role })
       ).not.toBeInTheDocument()
     }
-    // Sign out is the only actionable menu item.
-    expect(screen.getAllByRole("menuitem")).toHaveLength(1)
+    // The only actionable items are the self-service "My account" link and
+    // "Sign out" — no per-role impersonation items.
+    expect(screen.getAllByRole("menuitem")).toHaveLength(2)
+    expect(
+      screen.getByRole("menuitem", { name: "My account" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("menuitem", { name: "Sign out" })
+    ).toBeInTheDocument()
   })
 })

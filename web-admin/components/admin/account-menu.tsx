@@ -10,8 +10,9 @@
  * itself to another role client-side. The role shown is always the operator's own,
  * and RBAC is enforced server-side regardless (§3.3).
  */
+import Link from "next/link"
 import { DropdownMenu } from "radix-ui"
-import { ChevronDown, LogOut } from "lucide-react"
+import { ChevronDown, LogOut, UserRound } from "lucide-react"
 
 import type { AccountMenuProps } from "@/types/components"
 
@@ -72,6 +73,17 @@ export function AccountMenu({
           </div>
 
           <DropdownMenu.Separator className="my-[2px] h-px bg-line" />
+
+          {/* My account — self-service profile (edit own display name) */}
+          <DropdownMenu.Item asChild>
+            <Link
+              href="/account"
+              className="flex cursor-pointer items-center gap-[9px] rounded-xl px-[10px] py-[8px] text-[13px] font-semibold text-ink outline-none data-[highlighted]:bg-hov"
+            >
+              <UserRound aria-hidden="true" className="size-[15px] flex-none" />
+              My account
+            </Link>
+          </DropdownMenu.Item>
 
           {/* Sign out */}
           <DropdownMenu.Item

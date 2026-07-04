@@ -24,6 +24,7 @@ vi.mock("@/lib/api/admin", () => ({
 }))
 
 import { getMe, updateAdminRole, stepUp } from "@/lib/api/admin"
+import { ADMIN_MGMT_PERMS } from "@/lib/permissions"
 const mockGetMe = vi.mocked(getMe)
 const mockUpdateRole = vi.mocked(updateAdminRole)
 const mockStepUp = vi.mocked(stepUp)
@@ -37,7 +38,9 @@ const ME: AdminMe = {
   status: "active",
   displayName: "Test Admin",
   mfaEnabled: false, // → step-up asks for a password
-  permissions: [],
+  // Holds the admin-management permissions so the row actions render (the gating
+  // is covered in admins-page.test.tsx; here we exercise the step-up flow).
+  permissions: Object.values(ADMIN_MGMT_PERMS),
   menus: ["menu.access"],
   pages: ["/admin/admins"],
 }
@@ -102,12 +105,15 @@ describe("Step-up flow", () => {
     const user = userEvent.setup()
     renderActions()
 
-    // Wait for useAdminMe so mfaEnabled is known to the dialog.
-    await waitFor(() => expect(mockGetMe).toHaveBeenCalled())
+    // Wait for useAdminMe to resolve — the role select is permission-gated, so it
+    // renders only once the operator's permissions are known.
+    const roleSelect = await screen.findByLabelText(
+      /change role for target@example.com/i
+    )
 
     // Change the role → triggers the first (rejected) mutation.
     await user.selectOptions(
-      screen.getByLabelText(/change role for target@example.com/i),
+      roleSelect,
       "00000000-0000-0000-0000-0000000000bb"
     )
 

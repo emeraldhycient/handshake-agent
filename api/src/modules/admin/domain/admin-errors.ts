@@ -22,7 +22,8 @@ export type AdminErrorCode =
   | 'ADMIN_CHANGE_REQUEST_NOT_APPLICABLE'
   | 'ADMIN_BULK_CONFIRMATION_REQUIRED'
   | 'ADMIN_MANUAL_CREDIT_NOT_ALLOWED'
-  | 'ADMIN_PAYOUT_RETRY_BLOCKED';
+  | 'ADMIN_PAYOUT_RETRY_BLOCKED'
+  | 'ADMIN_SELF_ACTION_FORBIDDEN';
 
 export abstract class AdminError extends Error {
   abstract readonly code: AdminErrorCode;
@@ -125,6 +126,19 @@ export class AdminNotFoundError extends AdminError {
   readonly code = 'ADMIN_NOT_FOUND' as const;
   constructor(what = 'Resource') {
     super(`${what} not found.`);
+  }
+}
+
+/**
+ * An operator attempted a lifecycle action on their OWN account that would lock
+ * them out — suspending or offboarding themselves. Blocked server-side (§3.3)
+ * regardless of the operator's permissions; the UI also hides the control on the
+ * self row. Maps to HTTP 403.
+ */
+export class AdminSelfActionForbiddenError extends AdminError {
+  readonly code = 'ADMIN_SELF_ACTION_FORBIDDEN' as const;
+  constructor(action = 'perform this action on') {
+    super(`You cannot ${action} your own admin account.`);
   }
 }
 

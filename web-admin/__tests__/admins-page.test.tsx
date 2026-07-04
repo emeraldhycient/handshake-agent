@@ -25,6 +25,7 @@ import type {
 } from "@handshake-agent/contracts"
 
 import { AdminsPage } from "@/components/admin/admins-page"
+import { ADMIN_MGMT_PERMS } from "@/lib/permissions"
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────────
 
@@ -155,14 +156,18 @@ function renderPage() {
   )
 }
 
+// The signed-in operator is a DISTINCT super-admin (not one of the two rows), so
+// every row is an "other admin" and holds the three admin-management permissions —
+// the row actions render for the wiring tests below. The gating tests override
+// `mockGetMe` to strip permissions or to make a row the self row.
 const ME = {
-  id: "11111111-1111-1111-1111-111111111111",
-  email: "amara@handshake.ng",
+  id: "99999999-9999-9999-9999-999999999999",
+  email: "root@handshake.ng",
   role: { id: SUPER_ROLE_ID, name: "Super Admin" },
   status: "active" as const,
-  displayName: "Test Admin",
+  displayName: "Root Operator",
   mfaEnabled: false,
-  permissions: [],
+  permissions: Object.values(ADMIN_MGMT_PERMS),
   menus: [],
   pages: [],
 }
@@ -338,5 +343,54 @@ describe("AdminsPage (write wiring)", () => {
         expect.objectContaining({ name: "analyst" })
       )
     )
+  })
+})
+
+// ─── RBAC gating (permission + self-guard) ─────────────────────────────────────────
+// The UI mirrors the server-side gate (§3.3): an operator only sees an action they
+// hold the permission for, and can never suspend/offboard/reset-2FA their own row.
+
+describe("AdminsPage (RBAC gating)", () => {
+  it("hides every row action for an operator without admin-management permissions", async () => {
+    mockGetMe.mockResolvedValue({ ...ME, permissions: [] })
+    renderPage()
+
+    // The rows still render (read access), but no management controls do.
+    expect(await screen.findByText("Amara Okoro")).toBeInTheDocument()
+    expect(
+      screen.queryAllByLabelText(/Change role for .+@handshake\.ng/)
+    ).toHaveLength(0)
+    expect(screen.queryByRole("button", { name: "Suspend" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Offboard" })).toBeNull()
+    expect(screen.queryByRole("button", { name: /Reset 2FA/i })).toBeNull()
+  })
+
+  it("hides suspend/offboard and reset-2FA on the operator's OWN row (self-guard)", async () => {
+    // The signed-in operator IS the first row (amara).
+    mockGetMe.mockResolvedValue({
+      ...ME,
+      id: "11111111-1111-1111-1111-111111111111",
+    })
+    renderPage()
+
+    // Wait until the identity has resolved and gating applied — segun (the OTHER
+    // admin) shows a reset-2FA action once `useAdminMe` settles.
+    expect(
+      await screen.findByRole("button", {
+        name: /Reset 2FA for segun@handshake\.ng/i,
+      })
+    ).toBeInTheDocument()
+
+    // Amara is active + self → her only transitions (Suspend/Offboard) are filtered
+    // out; no other row is active, so there is no Suspend button anywhere.
+    expect(screen.queryByRole("button", { name: "Suspend" })).toBeNull()
+    // Reset-2FA is hidden on the self row.
+    expect(
+      screen.queryByRole("button", { name: /Reset 2FA for amara@handshake\.ng/i })
+    ).toBeNull()
+    // Self can still change their own role (permission held; not a lockout action).
+    expect(
+      screen.getByLabelText("Change role for amara@handshake.ng")
+    ).toBeInTheDocument()
   })
 })
