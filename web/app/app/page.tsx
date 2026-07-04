@@ -13,7 +13,10 @@ export default function AppPage() {
   return (
     <RequireAuth>
       <RequireVerified>
-        <main className="h-svh w-full overflow-hidden bg-background">
+        <main
+          id="main-content"
+          className="h-svh w-full overflow-hidden bg-background"
+        >
           <MobileShell />
         </main>
       </RequireVerified>

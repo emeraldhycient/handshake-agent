@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Handshake Agent">
+  <defs>
+    <linearGradient id="mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f5a623" />
+      <stop offset="1" stop-color="#e8961a" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#0e241c" />
+  <rect x="92" y="92" width="328" height="328" rx="102" fill="url(#mark)" />
+  <rect x="194" y="194" width="125" height="125" rx="39" fill="#0e241c" />
+</svg>

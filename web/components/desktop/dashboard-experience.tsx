@@ -123,10 +123,10 @@ export function DashboardExperience() {
           onQuickAction={handleQuickAction}
         />
 
-        {/* Active page — fills remaining height */}
-        <div className="flex min-h-0 flex-1 overflow-hidden">
+        {/* Active page — fills remaining height (main landmark + skip target) */}
+        <main id="main-content" className="flex min-h-0 flex-1 overflow-hidden">
           {renderPage()}
-        </div>
+        </main>
       </div>
 
       {/* ── Chat rail (hidden below lg) ────────────────────────────────────── */}
