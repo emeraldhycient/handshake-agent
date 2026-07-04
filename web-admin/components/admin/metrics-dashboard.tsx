@@ -32,6 +32,7 @@ import { rangeForDays } from "@/lib/metrics-range"
 import { formatMoneyList } from "@/lib/format"
 import { TrendChart } from "@/components/admin/trend-chart"
 import { MoneyTrendCard } from "@/components/admin/money-trend-card"
+import { ExportCsvButton } from "@/components/admin/export-csv-button"
 import { useDashboardMetrics, useMoneySeries } from "@/lib/query/hooks"
 import { ApiError } from "@/lib/api/client"
 import type { DashboardSummary } from "@handshake-agent/contracts"
@@ -234,7 +235,7 @@ function TxnVolumeCard({ data }: { data: DashboardSummary }) {
     <FeatureCard>
       <div className="mb-1 flex items-center justify-between gap-3">
         <CardHeading title="Transaction volume" note="by day · total settled" />
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {VOLUME_SEGMENTS.map((seg) => (
             <div key={seg.key} className="flex items-center gap-1.5">
               <span
@@ -246,6 +247,21 @@ function TxnVolumeCard({ data }: { data: DashboardSummary }) {
               </span>
             </div>
           ))}
+          <ExportCsvButton
+            label="Export"
+            filename="transaction-volume.csv"
+            disabled={byType.length === 0}
+            build={() => ({
+              headers: ["type", "count", "completed", "failed", "stuck"],
+              rows: byType.map((t) => [
+                t.type,
+                t.count,
+                t.completed,
+                t.failed,
+                t.stuck,
+              ]),
+            })}
+          />
         </div>
       </div>
 

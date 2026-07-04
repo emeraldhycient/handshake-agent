@@ -31,6 +31,25 @@ export interface TrendChartProps {
   className?: string
 }
 
+/** A header + rows payload ready to serialize to CSV. */
+export interface CsvExportData {
+  headers: readonly string[]
+  rows: (string | number)[][]
+}
+
+/**
+ * ExportCsvButton props (go-readiness #7 per-area export). `build` runs at click
+ * time so the CSV is serialized only on demand. `onDownload` is injectable for
+ * tests; it defaults to the real browser download in `lib/csv`.
+ */
+export interface ExportCsvButtonProps {
+  filename: string
+  build: () => CsvExportData
+  label?: string
+  disabled?: boolean
+  onDownload?: (filename: string, csv: string) => void
+}
+
 /** Which money metric a trend chart is plotting. */
 export type MoneyMetric = "gmv" | "revenue" | "profit"
 

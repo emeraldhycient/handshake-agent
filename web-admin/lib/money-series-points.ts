@@ -37,3 +37,39 @@ export function peakPoint(points: MoneySeriesPoint[]): MoneySeriesPoint | null {
   if (points.length === 0) return null
   return points.reduce((max, p) => (p.value > max.value ? p : max))
 }
+
+/** Header row for the money-series CSV export. */
+export const MONEY_SERIES_CSV_HEADERS = [
+  "date",
+  "currency",
+  "gmv",
+  "revenue",
+  "profit",
+] as const
+
+/**
+ * Flatten the money-series into CSV rows — one row per (day × currency present
+ * that day), amounts as exact decimal strings, zero-filled where a currency is
+ * absent from a metric. Pairs with {@link MONEY_SERIES_CSV_HEADERS}.
+ */
+export function moneySeriesCsvRows(
+  data: MoneySeriesMetrics
+): (string | number)[][] {
+  const rows: (string | number)[][] = []
+  for (const bucket of data.buckets) {
+    const present = new Set<string>()
+    for (const arr of [bucket.gmv, bucket.revenue, bucket.profit]) {
+      for (const entry of arr) present.add(entry.currency)
+    }
+    for (const currency of [...present].sort()) {
+      rows.push([
+        bucket.date,
+        currency,
+        amountFor(bucket.gmv, currency),
+        amountFor(bucket.revenue, currency),
+        amountFor(bucket.profit, currency),
+      ])
+    }
+  }
+  return rows
+}

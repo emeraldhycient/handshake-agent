@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest"
 import type { MoneySeriesMetrics } from "@handshake-agent/contracts"
 
-import { moneySeriesPoints, peakPoint } from "@/lib/money-series-points"
+import {
+  moneySeriesPoints,
+  peakPoint,
+  moneySeriesCsvRows,
+  MONEY_SERIES_CSV_HEADERS,
+} from "@/lib/money-series-points"
 
 const DATA: MoneySeriesMetrics = {
   buckets: [
@@ -56,5 +61,24 @@ describe("peakPoint", () => {
 
   it("returns null for an empty series", () => {
     expect(peakPoint([])).toBeNull()
+  })
+})
+
+describe("moneySeriesCsvRows", () => {
+  it("emits one row per (day × currency present), zero-filling absent metrics", () => {
+    const rows = moneySeriesCsvRows(DATA)
+    expect(MONEY_SERIES_CSV_HEADERS).toEqual([
+      "date",
+      "currency",
+      "gmv",
+      "revenue",
+      "profit",
+    ])
+    // Day 1 has NGN + USD; USD only has gmv → revenue/profit zero-filled.
+    expect(rows).toContainEqual(["2026-06-01", "NGN", "50000", "150", "240"])
+    expect(rows).toContainEqual(["2026-06-01", "USD", "120", "0", "0"])
+    // Day 2 has NGN only.
+    expect(rows).toContainEqual(["2026-06-02", "NGN", "80000", "300", "500"])
+    expect(rows).toHaveLength(3)
   })
 })

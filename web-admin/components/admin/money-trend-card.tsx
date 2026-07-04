@@ -17,7 +17,13 @@ import { useState } from "react"
 
 import { Skeleton } from "@/components/ui/skeleton"
 import { TrendChart } from "@/components/admin/trend-chart"
-import { moneySeriesPoints, peakPoint } from "@/lib/money-series-points"
+import { ExportCsvButton } from "@/components/admin/export-csv-button"
+import {
+  moneySeriesPoints,
+  peakPoint,
+  moneySeriesCsvRows,
+  MONEY_SERIES_CSV_HEADERS,
+} from "@/lib/money-series-points"
 import { formatFiat } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { MoneyMetric, MoneyTrendCardProps } from "@/types/components"
@@ -111,6 +117,14 @@ export function MoneyTrendCard({
         </div>
 
         <div className="flex items-center gap-2">
+          <ExportCsvButton
+            label="Export"
+            filename="money-series.csv"
+            build={() => ({
+              headers: MONEY_SERIES_CSV_HEADERS,
+              rows: moneySeriesCsvRows(data),
+            })}
+          />
           {currencies.length > 1 && (
             <select
               aria-label="Currency"
