@@ -72,6 +72,7 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
     type: string;
     status: string;
     createdAt: Date;
+    metadata?: Record<string, unknown>;
   }): Promise<string> {
     const txn = await prisma.transaction.create({
       data: {
@@ -80,7 +81,7 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
         status: over.status as never,
         idempotencyKey: randomUUID(),
         requestChecksum: `chk-${randomUUID()}`,
-        metadata: {},
+        metadata: (over.metadata ?? {}) as never,
         createdAt: over.createdAt,
       },
       select: { id: true },
@@ -102,6 +103,7 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
     baseRate: string;
     processingFeeAmount: string;
     asset?: string;
+    metadata?: Record<string, unknown>;
   }): Promise<string> {
     const expiresAt = new Date(over.createdAt.getTime() + 60_000);
     const quote = await prisma.quote.create({
@@ -109,7 +111,7 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
         userId: over.userId,
         type: over.type as never,
         asset: over.asset ?? 'USDT',
-        fiatCurrency: 'NGN' as never,
+        fiatCurrency: (over.metadata?.fiatCurrency ?? 'NGN') as never,
         fiatAmount: over.fiatAmount,
         cryptoAmount: over.cryptoAmount,
         fxRate: over.baseRate, // effective rate — not read by revenue()
@@ -139,7 +141,7 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
         status: over.status as never,
         idempotencyKey: randomUUID(),
         requestChecksum: `chk-${randomUUID()}`,
-        metadata: {},
+        metadata: (over.metadata ?? {}) as never,
         createdAt: over.createdAt,
         proposalId: proposal.id,
       },
@@ -311,6 +313,106 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
       expect(result.totalSpreadByCurrency).toEqual([]);
       expect(result.totalProfitByCurrency).toEqual([]);
       expect(result.txnCount).toBe(0);
+    });
+  });
+
+  // ── moneySeries ──────────────────────────────────────────────────────────────
+
+  describe('moneySeries', () => {
+    it('buckets per-day GMV (all money txns) + fee/profit (buy/sell Quote) per currency', async () => {
+      const u = await seedUser();
+      // 06-01 completed BUY: gross fiat 1115, mid 1000, fee 100 → fee 100, spread
+      // 15, profit 115; GMV notional 1115 NGN.
+      await seedTxnWithQuote({
+        userId: u,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-06-01T08:00:00.000Z'),
+        fiatAmount: '1115',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '100',
+        metadata: { fiatAmount: '1115', fiatCurrency: 'NGN' },
+      });
+      // 06-01 completed SEND (no quote): GMV-only, a SECOND currency (USD 2000).
+      await seedTxn({
+        userId: u,
+        type: 'send',
+        status: 'completed',
+        createdAt: new Date('2026-06-01T12:00:00.000Z'),
+        metadata: { fiatAmount: '2000', fiatCurrency: 'USD' },
+      });
+      // 06-02 completed SELL: net fiat 935, mid 1000, fee 50 → fee 50, spread 15,
+      // profit 65; GMV notional 935 NGN.
+      await seedTxnWithQuote({
+        userId: u,
+        type: 'sell',
+        status: 'completed',
+        createdAt: new Date('2026-06-02T08:00:00.000Z'),
+        fiatAmount: '935',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '50',
+        metadata: { fiatAmount: '935', fiatCurrency: 'NGN' },
+      });
+      // FAILED buy — excluded from every leg.
+      await seedTxnWithQuote({
+        userId: u,
+        type: 'buy',
+        status: 'failed',
+        createdAt: new Date('2026-06-01T09:00:00.000Z'),
+        fiatAmount: '9999',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '999',
+        metadata: { fiatAmount: '9999', fiatCurrency: 'NGN' },
+      });
+      // OUT-OF-RANGE completed buy — excluded.
+      await seedTxnWithQuote({
+        userId: u,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-05-01T08:00:00.000Z'),
+        fiatAmount: '8888',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '888',
+        metadata: { fiatAmount: '8888', fiatCurrency: 'NGN' },
+      });
+
+      const result = await repo.moneySeries(FROM, TO);
+
+      // Distinct currencies across the range, sorted.
+      expect(result.currencies).toEqual(['NGN', 'USD']);
+
+      // Two days with data, sorted ascending.
+      expect(result.buckets.map((b) => b.date)).toEqual([
+        '2026-06-01',
+        '2026-06-02',
+      ]);
+
+      const pick = (arr: { currency: string; amount: string }[], c: string) =>
+        arr.find((x) => x.currency === c)?.amount;
+
+      const d1 = result.buckets[0];
+      expect(pick(d1.gmv, 'NGN')).toBe('1115');
+      expect(pick(d1.gmv, 'USD')).toBe('2000');
+      expect(pick(d1.revenue, 'NGN')).toBe('100');
+      // USD had GMV but no buy/sell quote → its fee/profit are 0.
+      expect(pick(d1.revenue, 'USD')).toBe('0');
+      expect(pick(d1.profit, 'NGN')).toBe('115');
+      expect(pick(d1.profit, 'USD')).toBe('0');
+
+      const d2 = result.buckets[1];
+      expect(pick(d2.gmv, 'NGN')).toBe('935');
+      expect(pick(d2.revenue, 'NGN')).toBe('50');
+      expect(pick(d2.profit, 'NGN')).toBe('65');
+    });
+
+    it('returns empty buckets + currencies when no completed txns in range', async () => {
+      const result = await repo.moneySeries(FROM, TO);
+      expect(result.buckets).toEqual([]);
+      expect(result.currencies).toEqual([]);
     });
   });
 

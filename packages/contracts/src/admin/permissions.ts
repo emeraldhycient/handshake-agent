@@ -962,6 +962,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   ),
   r(
     "api_route",
+    "GET /admin/metrics/money-series",
+    "read",
+    "Metrics",
+    "Read the daily money time-series (per-currency GMV / revenue / profit trend)",
+  ),
+  r(
+    "api_route",
     "GET /admin/metrics/kyc-funnel",
     "read",
     "Metrics",

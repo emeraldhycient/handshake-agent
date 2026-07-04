@@ -4,6 +4,7 @@ import type {
   TransactionVolumeResult,
   GmvResult,
   RevenueResult,
+  MoneySeriesResult,
   KycFunnelResult,
   ActiveUsersResult,
   ServiceHealthResult,
@@ -43,6 +44,19 @@ function makeRevenue(): RevenueResult {
     txnCount: 2,
   };
 }
+function makeMoneySeries(): MoneySeriesResult {
+  return {
+    buckets: [
+      {
+        date: '2026-06-01',
+        gmv: [{ currency: 'NGN', amount: '50000' }],
+        revenue: [{ currency: 'NGN', amount: '150' }],
+        profit: [{ currency: 'NGN', amount: '240' }],
+      },
+    ],
+    currencies: ['NGN'],
+  };
+}
 function makeFunnel(): KycFunnelResult {
   return {
     byStatus: [{ key: 'verified', count: 5 }],
@@ -75,6 +89,7 @@ describe('AdminMetricsService', () => {
       transactionVolume: jest.fn().mockResolvedValue(makeVolume()),
       gmv: jest.fn().mockResolvedValue(makeGmv()),
       revenue: jest.fn().mockResolvedValue(makeRevenue()),
+      moneySeries: jest.fn().mockResolvedValue(makeMoneySeries()),
       kycFunnel: jest.fn().mockResolvedValue(makeFunnel()),
       activeUsers: jest.fn().mockResolvedValue(makeActive()),
       serviceHealth: jest.fn().mockResolvedValue(makeHealth()),
@@ -144,6 +159,19 @@ describe('AdminMetricsService', () => {
       });
       expect(repo.gmv).toHaveBeenCalled();
       expect(result).toEqual(makeGmv());
+    });
+  });
+
+  describe('moneySeries', () => {
+    it('maps the daily money-series result to the contract shape over the resolved range', async () => {
+      const result = await service.moneySeries({
+        from: '2026-06-01',
+        to: '2026-06-30',
+      });
+      const [from, to] = repo.moneySeries.mock.calls[0];
+      expect(from.toISOString().slice(0, 10)).toBe('2026-06-01');
+      expect(to.toISOString().slice(0, 10)).toBe('2026-06-30');
+      expect(result).toEqual(makeMoneySeries());
     });
   });
 

@@ -90,6 +90,25 @@ export interface RevenueResult {
   txnCount: number;
 }
 
+/** One day of the money time-series: per-currency GMV, revenue (fees) and profit. */
+export interface MoneySeriesBucketRow {
+  /** ISO date (YYYY-MM-DD, UTC). */
+  date: string;
+  /** Fiat notional (GMV) settled that day, per currency. */
+  gmv: CurrencyAmount[];
+  /** Processing-fee revenue realized that day, per currency. */
+  revenue: CurrencyAmount[];
+  /** Total profit (fees + realized spread) that day, per currency. */
+  profit: CurrencyAmount[];
+}
+
+export interface MoneySeriesResult {
+  /** Sorted ascending by date; only days with a completed money-moving txn. */
+  buckets: MoneySeriesBucketRow[];
+  /** Distinct fiat currencies present anywhere in the range, sorted. */
+  currencies: string[];
+}
+
 export interface CountByKey {
   key: string;
   count: number;
@@ -144,12 +163,23 @@ export interface IMetricsReadRepository {
   gmv(from: Date, to: Date): Promise<GmvResult>;
 
   /**
-   * Sum of the platform-fee ledger legs (`platform_float` credits) for COMPLETED
-   * transactions in [from, to), grouped by currency — EXACT scaled-integer math.
-   * Spread is folded into the fx rate and not separately ledgered, so
-   * `totalSpreadByCurrency` is always empty. `txnCount` is completed txns in range.
+   * Platform profit for COMPLETED transactions in [from, to), grouped by currency
+   * and DERIVED from each buy/sell Quote (fee + realized spread; see `tx-profit.ts`)
+   * — EXACT scaled-integer math. Recovers sell fees + all spread the double-entry
+   * ledger never records, so `totalSpreadByCurrency` is populated (not empty).
+   * `txnCount` is completed txns in range.
    */
   revenue(from: Date, to: Date): Promise<RevenueResult>;
+
+  /**
+   * Daily money time-series over [from, to): for each UTC day with a completed
+   * money-moving transaction, the per-currency GMV (fiat notional from
+   * `metadata`), revenue (processing fees) and profit (fees + realized spread),
+   * the latter two DERIVED from each buy/sell Quote (see `tx-profit.ts`). Buckets
+   * are sorted ascending; `currencies` lists every fiat present in the range.
+   * EXACT scaled-integer math — never floats.
+   */
+  moneySeries(from: Date, to: Date): Promise<MoneySeriesResult>;
 
   /**
    * Point-in-time user counts grouped by kycStatus and by kycTier (soft-deleted

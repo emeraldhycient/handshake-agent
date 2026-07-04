@@ -95,6 +95,29 @@ export const RevenueMetricsSchema = z.object({
 });
 export type RevenueMetrics = z.infer<typeof RevenueMetricsSchema>;
 
+// One day of the money time-series: an ISO UTC date (YYYY-MM-DD) and the per-
+// currency GMV, revenue (processing fees) and profit (fees + realized spread)
+// realized that day. Amounts are canonical decimal STRINGS (exact scaled-integer
+// arithmetic — never floats). Only days with at least one completed money-moving
+// transaction appear; the FE zero-fills gaps at chart time.
+export const MoneySeriesBucketSchema = z.object({
+  date: z.string(),
+  gmv: z.array(CurrencyAmountSchema),
+  revenue: z.array(CurrencyAmountSchema),
+  profit: z.array(CurrencyAmountSchema),
+});
+export type MoneySeriesBucket = z.infer<typeof MoneySeriesBucketSchema>;
+
+// The daily money time-series for the range: the sorted (ascending) per-day
+// buckets plus the distinct fiat currencies present anywhere in the range (sorted)
+// so the FE can build a currency selector without re-scanning every bucket. Feeds
+// the operator "Revenue & profit trend" chart. Read-only; nothing moves money (§3.1).
+export const MoneySeriesMetricsSchema = z.object({
+  buckets: z.array(MoneySeriesBucketSchema),
+  currencies: z.array(z.string()),
+});
+export type MoneySeriesMetrics = z.infer<typeof MoneySeriesMetricsSchema>;
+
 // KYC funnel: user counts grouped by kycStatus and by kycTier (point-in-time, not
 // date-ranged — the funnel reflects the current population).
 export const KycFunnelMetricsSchema = z.object({

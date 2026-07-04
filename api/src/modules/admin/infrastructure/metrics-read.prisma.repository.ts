@@ -37,6 +37,8 @@ import type {
   GmvResult,
   IMetricsReadRepository,
   KycFunnelResult,
+  MoneySeriesBucketRow,
+  MoneySeriesResult,
   RevenueResult,
   ServiceHealthResult,
   ServiceHealthRow,
@@ -351,6 +353,118 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
       totalProfitByCurrency,
       txnCount,
     };
+  }
+
+  async moneySeries(from: Date, to: Date): Promise<MoneySeriesResult> {
+    // One scan of every COMPLETED txn in range, pulling BOTH the fiat notional
+    // (metadata → GMV, ALL money-moving types, consistent with `gmv()`) and the
+    // buy/sell Quote (→ fee + spread via `computeTxProfit`, consistent with
+    // `revenue()`). Bucket per UTC day and currency with EXACT scaled-integer math.
+    // A txn may contribute to GMV, to fee/profit, or to both; the GMV currency
+    // (metadata.fiatCurrency) and the fee currency (quote.fiatCurrency) are tracked
+    // independently.
+    const rows = await this.prisma.transaction.findMany({
+      where: {
+        status: TransactionStatus.completed,
+        createdAt: { gte: from, lte: to },
+      },
+      select: {
+        createdAt: true,
+        metadata: true,
+        proposal: {
+          select: {
+            quote: {
+              select: {
+                type: true,
+                fiatCurrency: true,
+                fiatAmount: true,
+                cryptoAmount: true,
+                baseRate: true,
+                processingFeeAmount: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    interface Cell {
+      gmv: bigint;
+      fee: bigint;
+      profit: bigint;
+    }
+    // day (YYYY-MM-DD) → currency → accumulated scaled amounts.
+    const days = new Map<string, Map<string, Cell>>();
+    const currencySet = new Set<string>();
+
+    const cellFor = (day: string, currency: string): Cell => {
+      let byCurrency = days.get(day);
+      if (!byCurrency) {
+        byCurrency = new Map<string, Cell>();
+        days.set(day, byCurrency);
+      }
+      let cell = byCurrency.get(currency);
+      if (!cell) {
+        cell = { gmv: 0n, fee: 0n, profit: 0n };
+        byCurrency.set(currency, cell);
+      }
+      currencySet.add(currency);
+      return cell;
+    };
+
+    for (const row of rows) {
+      const day = dateKey(row.createdAt);
+
+      // GMV leg — fiat notional the engine stamped at settle.
+      const meta = (row.metadata ?? {}) as Record<string, unknown>;
+      const fiatAmount = meta.fiatAmount;
+      const fiatCurrency = meta.fiatCurrency;
+      if (typeof fiatAmount === 'string' && typeof fiatCurrency === 'string') {
+        cellFor(day, fiatCurrency).gmv += toScaledBigInt(fiatAmount);
+      }
+
+      // Fee + profit leg — derived from the buy/sell Quote snapshot.
+      const q = row.proposal?.quote;
+      if (q && (q.type === QuoteType.buy || q.type === QuoteType.sell)) {
+        const { fee, spread } = computeTxProfit({
+          type: q.type === QuoteType.sell ? 'sell' : 'buy',
+          fiatAmount: (q.fiatAmount as { toString(): string }).toString(),
+          cryptoAmount: q.cryptoAmount,
+          baseRate: q.baseRate,
+          processingFeeAmount: (
+            q.processingFeeAmount as { toString(): string }
+          ).toString(),
+        });
+        const cell = cellFor(day, q.fiatCurrency);
+        const scaledFee = toScaledBigInt(fee);
+        cell.fee += scaledFee;
+        cell.profit += scaledFee + toScaledBigInt(spread);
+      }
+    }
+
+    const project = (
+      byCurrency: Map<string, Cell>,
+      pick: keyof Cell,
+    ): CurrencyAmount[] =>
+      [...byCurrency.entries()]
+        .map(([currency, cell]) => ({
+          currency,
+          amount: fromScaledBigInt(cell[pick]),
+        }))
+        .sort((a, b) => a.currency.localeCompare(b.currency));
+
+    const buckets: MoneySeriesBucketRow[] = [...days.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, byCurrency]) => ({
+        date,
+        gmv: project(byCurrency, 'gmv'),
+        revenue: project(byCurrency, 'fee'),
+        profit: project(byCurrency, 'profit'),
+      }));
+
+    const currencies = [...currencySet].sort((a, b) => a.localeCompare(b));
+
+    return { buckets, currencies };
   }
 
   async kycFunnel(): Promise<KycFunnelResult> {

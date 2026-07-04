@@ -4,11 +4,13 @@ import {
   DashboardSummarySchema,
   GmvMetricsSchema,
   KycFunnelMetricsSchema,
+  MoneySeriesMetricsSchema,
   RevenueMetricsSchema,
   TxnVolumeMetricsSchema,
   type DashboardSummary,
   type GmvMetrics,
   type KycFunnelMetrics,
+  type MoneySeriesMetrics,
   type RevenueMetrics,
   type TxnVolumeMetrics,
 } from '@handshake-agent/contracts';
@@ -57,6 +59,16 @@ export class AdminMetricsController {
   @RequirePermission('api_route', 'GET /admin/metrics/revenue', 'read')
   async revenue(@Query() query: MetricsRangeQueryDto): Promise<RevenueMetrics> {
     return RevenueMetricsSchema.parse(await this.metrics.revenue(query));
+  }
+
+  @Get('metrics/money-series')
+  @RequirePermission('api_route', 'GET /admin/metrics/money-series', 'read')
+  async moneySeries(
+    @Query() query: MetricsRangeQueryDto,
+  ): Promise<MoneySeriesMetrics> {
+    return MoneySeriesMetricsSchema.parse(
+      await this.metrics.moneySeries(query),
+    );
   }
 
   @Get('metrics/kyc-funnel')

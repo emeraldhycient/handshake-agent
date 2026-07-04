@@ -5,6 +5,7 @@ import type {
   GmvMetrics,
   KycFunnelMetrics,
   MetricsRangeQuery,
+  MoneySeriesMetrics,
   RevenueMetrics,
   TxnVolumeMetrics,
 } from '@handshake-agent/contracts';
@@ -63,6 +64,15 @@ export class AdminMetricsService {
   async revenue(query: MetricsRangeQuery): Promise<RevenueMetrics> {
     const { from, to } = this.resolveRange(query);
     return this.metrics.revenue(from, to);
+  }
+
+  /**
+   * Daily money time-series (per-currency GMV / revenue / profit) for the
+   * (defaulted/clamped) range — feeds the operator "Revenue & profit trend" chart.
+   */
+  async moneySeries(query: MetricsRangeQuery): Promise<MoneySeriesMetrics> {
+    const { from, to } = this.resolveRange(query);
+    return this.metrics.moneySeries(from, to);
   }
 
   /** Point-in-time KYC funnel (counts by status + tier). */

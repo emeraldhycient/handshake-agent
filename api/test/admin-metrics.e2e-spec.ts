@@ -103,6 +103,15 @@ interface DashboardBody {
     }[];
   };
 }
+interface MoneySeriesBody {
+  buckets: {
+    date: string;
+    gmv: { currency: string; amount: string }[];
+    revenue: { currency: string; amount: string }[];
+    profit: { currency: string; amount: string }[];
+  }[];
+  currencies: string[];
+}
 
 describe('Admin metrics / dashboard — e2e (AppModule, Testcontainers Postgres)', () => {
   let app: INestApplication;
@@ -470,6 +479,24 @@ describe('Admin metrics / dashboard — e2e (AppModule, Testcontainers Postgres)
     expect(buy.total).toBe(3);
     expect(buy.completed).toBe(1);
     expect(buy.failed).toBe(1);
+
+    // 3b. GET /admin/metrics/money-series — the daily revenue/profit trend,
+    // derived from the same buy/sell Quotes. Two completed days: 06-06 (buy →
+    // fee 100, profit 115) and 06-08 (sell → fee 50, profit 65).
+    const seriesRes = await request(app.getHttpServer())
+      .get(`/admin/metrics/money-series?from=${FROM}&to=${TO}`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .expect(200);
+    const money = seriesRes.body as MoneySeriesBody;
+    expect(money.currencies).toContain('NGN');
+    const ngn = (arr: { currency: string; amount: string }[]) =>
+      arr.find((c) => c.currency === 'NGN')?.amount;
+    const buyDay = money.buckets.find((b) => b.date === '2026-06-06')!;
+    const sellDay = money.buckets.find((b) => b.date === '2026-06-08')!;
+    expect(ngn(buyDay.revenue)).toBe('100');
+    expect(ngn(buyDay.profit)).toBe('115');
+    expect(ngn(sellDay.revenue)).toBe('50');
+    expect(ngn(sellDay.profit)).toBe('65');
 
     // 4. Invite a 'support' admin (holds Metrics:read) and read the dashboard.
     const rolesRes = await request(app.getHttpServer())

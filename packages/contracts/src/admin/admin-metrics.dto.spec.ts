@@ -5,6 +5,8 @@ import {
   TxnVolumeMetricsSchema,
   GmvMetricsSchema,
   RevenueMetricsSchema,
+  MoneySeriesBucketSchema,
+  MoneySeriesMetricsSchema,
   KycFunnelMetricsSchema,
   ActiveUsersMetricsSchema,
   ServiceHealthMetricsSchema,
@@ -115,7 +117,9 @@ describe("TxnVolumeMetricsSchema", () => {
     ).toBe(false);
     expect(
       TxnVolumeMetricsSchema.safeParse({
-        byType: [{ type: "buy", count: 3, completed: 2, failed: 1, stuck: 1.5 }],
+        byType: [
+          { type: "buy", count: 3, completed: 2, failed: 1, stuck: 1.5 },
+        ],
         series: [],
         stackedSeries: [],
         successRate: 0,
@@ -162,6 +166,48 @@ describe("RevenueMetricsSchema", () => {
     expect(value.totalSpreadByCurrency[0].amount).toBe("90");
     expect(value.totalProfitByCurrency[0].amount).toBe("240");
     expect(value.txnCount).toBe(2);
+  });
+});
+
+describe("MoneySeriesBucketSchema", () => {
+  it("parses a per-day bucket with per-currency gmv/revenue/profit strings", () => {
+    const value = MoneySeriesBucketSchema.parse({
+      date: "2026-06-01",
+      gmv: [{ currency: "NGN", amount: "50000" }],
+      revenue: [{ currency: "NGN", amount: "150" }],
+      profit: [{ currency: "NGN", amount: "240" }],
+    });
+    expect(value.date).toBe("2026-06-01");
+    expect(value.gmv[0].amount).toBe("50000");
+    expect(value.profit[0].currency).toBe("NGN");
+  });
+
+  it("rejects a bucket missing the profit array", () => {
+    expect(
+      MoneySeriesBucketSchema.safeParse({
+        date: "2026-06-01",
+        gmv: [],
+        revenue: [],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("MoneySeriesMetricsSchema", () => {
+  it("parses sorted daily buckets plus the distinct currencies present", () => {
+    const value = MoneySeriesMetricsSchema.parse({
+      buckets: [
+        {
+          date: "2026-06-01",
+          gmv: [{ currency: "NGN", amount: "50000" }],
+          revenue: [{ currency: "NGN", amount: "150" }],
+          profit: [{ currency: "NGN", amount: "240" }],
+        },
+      ],
+      currencies: ["NGN"],
+    });
+    expect(value.buckets).toHaveLength(1);
+    expect(value.currencies).toEqual(["NGN"]);
   });
 });
 
