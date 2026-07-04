@@ -8,8 +8,10 @@ import { WhatsAppWebhookController } from './presentation/whatsapp-webhook.contr
 import { WhatsAppFlowModule } from './whatsapp-flow.module';
 import { WhatsAppSenderModule } from './whatsapp-sender.module';
 import { WhatsAppInboundService } from './application/whatsapp-inbound.service';
+import { WhatsAppWebhookHandler } from './application/whatsapp-webhook.handler';
 import { WHATSAPP_MEDIA_CLIENT } from './application/ports/whatsapp-media.port';
 import { CloudApiMediaClient } from './infrastructure/cloud-api.media-client';
+import { WebhooksModule } from '../webhooks/webhooks.module';
 
 /**
  * Wires the WhatsApp surface.
@@ -44,13 +46,18 @@ import { CloudApiMediaClient } from './infrastructure/cloud-api.media-client';
     WhatsAppFlowModule,
     // Provides + exports TRANSCRIPTION_PORT + DOCUMENT_EXTRACTION_PORT.
     MediaModule,
+    // WebhooksModule: the thin controller persists+enqueues via WebhookIngestionService.
+    WebhooksModule,
   ],
   controllers: [WhatsAppWebhookController],
   providers: [
     WhatsAppSignatureGuard,
     { provide: WHATSAPP_MEDIA_CLIENT, useClass: CloudApiMediaClient },
     WhatsAppInboundService,
+    // The async processing body — registered into the handler registry by
+    // WebhookProcessingModule.
+    WhatsAppWebhookHandler,
   ],
-  exports: [WhatsAppFlowModule],
+  exports: [WhatsAppFlowModule, WhatsAppWebhookHandler],
 })
 export class WhatsAppModule {}

@@ -39,8 +39,10 @@ import { IdentityPrismaRepository } from '../src/modules/identity/infrastructure
 import { IdentityService } from '../src/modules/identity/application/identity.service';
 import { AssetRegistry } from '../src/core/catalog/asset-registry';
 
-// Controller under test
-import { BlockradarWebhookController } from '../src/modules/wallets/presentation/blockradar-webhook.controller';
+// Handler under test — settlement moved off the (now thin) controller onto the
+// async worker handler; signature verification is unit-tested on the controller.
+import { BlockradarWebhookHandler } from '../src/modules/wallets/application/blockradar-webhook.handler';
+import type { WebhookEventRecord } from '../src/modules/webhooks/application/ports/webhook-event.repository.port';
 
 // Ports/types
 import type { PrismaService } from '../src/core/prisma/prisma.service';
@@ -50,7 +52,6 @@ import type {
 } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 
 // Crypto (signature generation)
-import { hmacHex } from '../src/core/crypto/hmac';
 
 // Config defaults
 import configuration from '../src/core/config/configuration';
@@ -144,13 +145,23 @@ function buildDepositBody(txHash: string, amount = DEPOSIT_AMOUNT) {
   };
 }
 
-function signBody(body: Record<string, unknown>): {
-  rawBody: Buffer;
-  sig: string;
-} {
-  const rawBody = Buffer.from(JSON.stringify(body), 'utf8');
-  const sig = hmacHex('sha512', BLOCKRADAR_API_KEY, rawBody);
-  return { rawBody, sig };
+/** Wrap a webhook body in a persisted WebhookEvent record (what the worker sees). */
+function makeEvent(body: Record<string, unknown>): WebhookEventRecord {
+  return {
+    id: `wh-${randomUUID()}`,
+    provider: 'blockradar',
+    providerEventId: `evt-${randomUUID()}`,
+    payload: body,
+    headers: {},
+    signature: null,
+    status: 'processing',
+    attempts: 1,
+    lastError: null,
+    receivedAt: new Date(),
+    lastAttemptAt: new Date(),
+    processedAt: null,
+    deadAt: null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +171,7 @@ function signBody(body: Record<string, unknown>): {
 describe('BlockradarWebhookController (integration, Testcontainers Postgres)', () => {
   let prisma: PrismaClient;
   let stop: () => Promise<void>;
-  let controller: BlockradarWebhookController;
+  let handler: BlockradarWebhookHandler;
 
   let userId: string;
   let walletId: string;
@@ -192,8 +203,7 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
       settleSendOnChain: jest.fn().mockResolvedValue({ status: 'pending' }),
     };
 
-    controller = new BlockradarWebhookController(
-      config,
+    handler = new BlockradarWebhookHandler(
       walletRepo,
       settlementRepo,
       identityService,
@@ -247,11 +257,8 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
   it('happy path: LedgerEntry rows balanced, WalletBalance credited, DepositConfirmation confirmed, Transaction type=deposit, Receipt minted, WhatsApp receipt sent', async () => {
     const txHash = `0x${randomUUID().replace(/-/g, '')}`;
     const body = buildDepositBody(txHash);
-    const { rawBody, sig } = signBody(body);
 
-    const result = await controller.handleWebhook(body, rawBody, sig);
-
-    expect(result).toEqual({ status: 'ok' });
+    await handler.handle(makeEvent(body));
 
     // ── LedgerEntry assertions ──────────────────────────────────────────────
 
@@ -351,8 +358,7 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
     const txHash1 = `0x${randomUUID().replace(/-/g, '')}`;
     const amount1 = '5.0';
     const body1 = buildDepositBody(txHash1, amount1);
-    const { rawBody: rawBody1, sig: sig1 } = signBody(body1);
-    await controller.handleWebhook(body1, rawBody1, sig1);
+    await handler.handle(makeEvent(body1));
 
     capturedSentMessages = [];
 
@@ -360,8 +366,7 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
     const txHash2 = `0x${randomUUID().replace(/-/g, '')}`;
     const amount2 = '3.0';
     const body2 = buildDepositBody(txHash2, amount2);
-    const { rawBody: rawBody2, sig: sig2 } = signBody(body2);
-    await controller.handleWebhook(body2, rawBody2, sig2);
+    await handler.handle(makeEvent(body2));
 
     expect(capturedSentMessages).toHaveLength(1);
     const text2 = capturedSentMessages[0].body;
@@ -391,10 +396,12 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
   it('idempotent: second webhook with same txHash does NOT double-credit', async () => {
     const txHash = `0x${randomUUID().replace(/-/g, '')}`;
     const body = buildDepositBody(txHash);
-    const { rawBody, sig } = signBody(body);
+    // Reuse the same event so a re-delivery is exercised; settleDepositAtomic
+    // dedups on txHash regardless of the webhook-event id.
+    const event = makeEvent(body);
 
     // First call.
-    await controller.handleWebhook(body, rawBody, sig);
+    await handler.handle(event);
 
     const ledgerCountAfterFirst = await prisma.ledgerEntry.count({
       where: { accountId: { in: [walletId, 'usdt_external_deposits'] } },
@@ -413,8 +420,7 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
     capturedSentMessages = [];
 
     // Second identical call.
-    const second = await controller.handleWebhook(body, rawBody, sig);
-    expect(second).toEqual({ status: 'ok' });
+    await handler.handle(event);
 
     // Nothing new should have been created.
     const ledgerCountAfterSecond = await prisma.ledgerEntry.count({
@@ -481,8 +487,7 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
     const fakeExecutionService = {
       settleSendOnChain: jest.fn().mockResolvedValue({ status: 'pending' }),
     };
-    const trxController = new BlockradarWebhookController(
-      config,
+    const trxHandler = new BlockradarWebhookHandler(
       walletRepo,
       settlementRepo,
       identityService,
@@ -505,10 +510,7 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
         id: `webhook-id-${txHash.slice(0, 8)}`,
       },
     };
-    const { rawBody, sig } = signBody(body);
-
-    const result = await trxController.handleWebhook(body, rawBody, sig);
-    expect(result).toEqual({ status: 'ok' });
+    await trxHandler.handle(makeEvent(body));
 
     // The regression: WalletBalance must be created with asset='TRX'
     // (before the fix this threw "Invalid value for argument 'asset'. Expected SupportedAsset.")
@@ -521,22 +523,7 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
     expect(parseFloat(balance!.amount.toString())).toBe(50);
   });
 
-  // ── Invalid signature ──────────────────────────────────────────────────────
-
-  it('invalid signature → 401, nothing written to DB', async () => {
-    const txHash = `0x${randomUUID().replace(/-/g, '')}`;
-    const body = buildDepositBody(txHash);
-    const rawBody = Buffer.from(JSON.stringify(body), 'utf8');
-    const badSig = 'deadbeef'.repeat(16); // wrong but same length as sha512 hex (128 chars)
-
-    await expect(
-      controller.handleWebhook(body, rawBody, badSig),
-    ).rejects.toMatchObject({ status: 401 });
-
-    // DepositConfirmation must not have been created.
-    const confirmation = await prisma.depositConfirmation.findUnique({
-      where: { txHash },
-    });
-    expect(confirmation).toBeNull();
-  });
+  // Signature verification (bad sig → 401) is unit-tested on the thin controller
+  // (blockradar-webhook.controller.spec.ts); the handler here runs on an already-
+  // verified, persisted WebhookEvent, so there is no signature to reject.
 });

@@ -69,6 +69,7 @@ import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/
 import type { ITranscriptionPort } from '../src/modules/media/application/ports/transcription.port';
 import type { IWhatsAppMediaClient } from '../src/modules/whatsapp/application/ports/whatsapp-media.port';
 import type { IDocumentExtractionPort } from '../src/modules/media/application/ports/document-extraction.port';
+import { drainWebhooks } from './helpers/drain-webhooks';
 
 jest.setTimeout(180_000);
 
@@ -462,6 +463,7 @@ describe('WhatsApp inbound image → beneficiary saved — e2e (AppModule, Testc
       .set('Content-Type', 'application/json')
       .set('X-Hub-Signature-256', signature)
       .send(imagePayload);
+    await drainWebhooks(app);
 
     expect(webhookRes.status).toBe(200);
     expect(webhookRes.body).toEqual({ status: 'received' });
@@ -552,6 +554,7 @@ describe('WhatsApp inbound image → beneficiary saved — e2e (AppModule, Testc
       .set('Content-Type', 'application/json')
       .set('X-Hub-Signature-256', signature)
       .send(imagePayload);
+    await drainWebhooks(app);
 
     expect(webhookRes.status).toBe(200);
     expect(webhookRes.body).toEqual({ status: 'received' });

@@ -1,0 +1,66 @@
+// =============================================================================
+// Durable inbound-webhook queue (Track A — go-readiness). Every provider webhook
+// (Blockradar deposit/withdraw/swap, Flutterwave collection/payout, WhatsApp
+// Cloud API) is persisted here BEFORE the 2xx ACK, then drained asynchronously by
+// a BullMQ worker. Persist-first + dedup on (provider, providerEventId) is the
+// funds-safety guarantee: a redelivery finds the existing row and never
+// re-processes a succeeded one (§3.1 — never double-credit). Money never moves
+// from this table — the worker calls the existing idempotent engine paths; the
+// admin retry only re-enqueues.
+// =============================================================================
+
+/// One durable record per inbound provider webhook delivery.
+model WebhookEvent {
+  id              String             @id @default(uuid(7)) @db.Uuid
+  provider        WebhookProvider
+  /// Provider's event id (Blockradar data.id / Flutterwave data.id / WhatsApp
+  /// wamid); falls back to sha256(rawBody) when the provider gives no natural id.
+  /// Combined with `provider` this is the dedup key.
+  providerEventId String
+  /// Verbatim request body (parsed JSON, or `{ raw: "<string>" }` for non-JSON) —
+  /// the replay source shown in the admin console.
+  payload         Json
+  /// Captured request headers (lowercased keys) for audit + replay.
+  headers         Json
+  /// The provider signature header value (audit only; never re-verified from here).
+  signature       String?
+  status          WebhookEventStatus @default(received)
+  attempts        Int                @default(0)
+  lastError       String?
+  receivedAt      DateTime           @default(now()) @db.Timestamptz
+  lastAttemptAt   DateTime?          @db.Timestamptz
+  processedAt     DateTime?          @db.Timestamptz
+  deadAt          DateTime?          @db.Timestamptz
+  createdAt       DateTime           @default(now()) @db.Timestamptz
+  updatedAt       DateTime           @updatedAt @db.Timestamptz
+
+  @@unique([provider, providerEventId])
+  @@index([status, receivedAt])
+  @@index([provider, status, receivedAt])
+  // Keyset pagination for the admin list: seek on (receivedAt desc, id desc).
+  @@index([receivedAt(sort: Desc), id(sort: Desc)])
+  @@map("webhook_events")
+}
+
+enum WebhookProvider {
+  blockradar
+  flutterwave
+  whatsapp
+
+  @@map("webhook_provider")
+}
+
+enum WebhookEventStatus {
+  /// Persisted, awaiting (or queued for) processing.
+  received
+  /// A worker has claimed it and is running the handler.
+  processing
+  /// Handler succeeded — terminal.
+  succeeded
+  /// Handler failed; BullMQ will retry (non-terminal until attempts exhausted).
+  failed
+  /// Retries exhausted — terminal dead-letter; awaits an admin replay.
+  dead
+
+  @@map("webhook_event_status")
+}

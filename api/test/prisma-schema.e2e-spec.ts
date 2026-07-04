@@ -66,21 +66,20 @@ describe('Prisma schema (integration, Testcontainers Postgres)', () => {
       `SELECT count(*)::bigint AS tables FROM information_schema.tables
        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
     );
-    // 51 domain tables + Prisma's _prisma_migrations bookkeeping table.
-    // +1 for backfill_runs (BQ-2).
-    // +1 for auth_challenges (web-auth-vertical, Task 3).
-    expect(Number(tables)).toBe(53);
+    // Every domain table + Prisma's _prisma_migrations bookkeeping table. This
+    // count grows with the schema; +1 for webhook_events (Track A durable-webhook
+    // queue).
+    expect(Number(tables)).toBe(60);
 
     const [{ enums }] = await prisma.$queryRawUnsafe<{ enums: bigint }[]>(
       `SELECT count(DISTINCT t.typname)::bigint AS enums
        FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid`,
     );
-    // +1 for backfill_run_status (BQ-2).
-    // +1 for auth_challenge_type (web-auth-vertical, Task 3).
-    // -1: the supported_asset enum was dropped when asset columns moved to TEXT
-    //     for the dynamic (Blockradar-sourced) catalog — assets are no longer a
-    //     fixed enum (migration 20260629200000_asset_columns_text_dynamic_catalog).
-    expect(Number(enums)).toBe(72);
+    // Every native enum the schema declares. supported_asset was dropped when
+    // asset columns moved to TEXT for the dynamic (Blockradar-sourced) catalog
+    // (migration 20260629200000_asset_columns_text_dynamic_catalog). +2 for
+    // webhook_provider + webhook_event_status (Track A durable-webhook queue).
+    expect(Number(enums)).toBe(78);
   });
 
   it('generates time-sortable uuid v7 ids on the client (the only sanctioned DB door)', async () => {

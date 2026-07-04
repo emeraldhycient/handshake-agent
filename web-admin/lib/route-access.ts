@@ -63,13 +63,15 @@ const STATIC_ROUTE_ACCESS: Readonly<Record<string, RouteAccess>> = {
   "/approvals": { menu: "menu.access" },
   "/audit": { menu: "menu.audit" },
   "/ops": { menu: "menu.audit" },
+  "/webhooks": { menu: "menu.webhooks" },
 }
 
 /** Prefix requirements for dynamic/detail routes (`/users/[id]`, `/transactions/[id]`). */
-const DYNAMIC_ROUTE_ACCESS: readonly { prefix: string; access: RouteAccess }[] = [
-  { prefix: "/users/", access: { menu: "menu.users" } },
-  { prefix: "/transactions/", access: { menu: "menu.transactions" } },
-]
+const DYNAMIC_ROUTE_ACCESS: readonly { prefix: string; access: RouteAccess }[] =
+  [
+    { prefix: "/users/", access: { menu: "menu.users" } },
+    { prefix: "/transactions/", access: { menu: "menu.transactions" } },
+  ]
 
 /**
  * Resolve the access requirement for a pathname. Unknown routes resolve to
