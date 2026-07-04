@@ -154,6 +154,7 @@ function DetailRow({
           "flex items-center text-right text-[12.5px] font-semibold tabular-nums",
           mono && "font-mono"
         )}
+        translate="no"
       >
         {value}
         {explorerHref !== undefined && <ExplorerLink href={explorerHref} />}
@@ -250,7 +251,7 @@ export function TransactionDetailModal({
                 <DetailRow
                   label={data.direction === "in" ? "From" : "To"}
                   value={
-                    <span className="font-mono">
+                    <span className="font-mono" translate="no">
                       {shortAddress(data.counterparty)}
                     </span>
                   }
@@ -264,7 +265,9 @@ export function TransactionDetailModal({
                 <DetailRow
                   label="Tx hash"
                   value={
-                    <span className="font-mono">{shortHash(data.txHash)}</span>
+                    <span className="font-mono" translate="no">
+                      {shortHash(data.txHash)}
+                    </span>
                   }
                   copyValue={data.txHash}
                   explorerHref={
@@ -323,7 +326,9 @@ export function TransactionDetailModal({
                 <DetailRow
                   label="Transaction ID"
                   value={
-                    <span className="font-mono">{shortHash(data.id)}</span>
+                    <span className="font-mono" translate="no">
+                      {shortHash(data.id)}
+                    </span>
                   }
                   copyValue={data.id}
                 />

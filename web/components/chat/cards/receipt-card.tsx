@@ -116,6 +116,7 @@ export function ReceiptCard({
         <span
           className="font-mono text-muted-foreground-subtle"
           style={{ fontSize: isMobile ? "11.5px" : "11px" }}
+          translate="no"
         >
           {txRef}
         </span>

@@ -72,6 +72,26 @@ function ActivityIcon() {
   )
 }
 
+function SettingsIcon() {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 22 22"
+      fill="none"
+      aria-hidden="true"
+    >
+      <circle cx="11" cy="11" r="3" stroke="currentColor" strokeWidth="1.7" />
+      <path
+        d="M11 2.5v2M11 17.5v2M2.5 11h2M17.5 11h2M5 5l1.4 1.4M15.6 15.6L17 17M17 5l-1.4 1.4M6.4 15.6L5 17"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 const TABS: {
   id: MobileTabId
   label: string
@@ -80,6 +100,7 @@ const TABS: {
   { id: "chat", label: "Chat", Icon: ChatIcon },
   { id: "wallet", label: "Wallet", Icon: WalletIcon },
   { id: "activity", label: "Activity", Icon: ActivityIcon },
+  { id: "settings", label: "Settings", Icon: SettingsIcon },
 ] as const
 
 export function MobileTabbar({

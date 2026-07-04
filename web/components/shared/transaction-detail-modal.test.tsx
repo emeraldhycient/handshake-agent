@@ -316,12 +316,33 @@ describe("TransactionDetailModal", () => {
     await user.click(copyIdBtn)
     expect(writeText).toHaveBeenCalledWith(depositDetail.id)
 
+    // The displayed (truncated) id is excluded from translation, like the
+    // tx hash and counterparty rows — it's a reference identifier, not
+    // translatable prose.
+    expect(screen.getByText("aaaaaaaa…aaaaaaaa")).toHaveAttribute(
+      "translate",
+      "no"
+    )
+
     // Provider reference, copyable.
     expect(screen.getByText("Provider reference")).toBeInTheDocument()
     expect(screen.getByText("FLW-REF-999")).toBeInTheDocument()
     expect(
       screen.getByRole("button", { name: /copy provider reference/i })
     ).toBeInTheDocument()
+
+    // The account number and provider reference values are rendered via the
+    // local DetailRow (not a pre-wrapped inner span) — its value span must
+    // also carry translate="no" so Google Translate never reformats a bank
+    // account number or settlement reference (§3.1 funds-safety).
+    expect(screen.getByText("0123456789").closest("span")).toHaveAttribute(
+      "translate",
+      "no"
+    )
+    expect(screen.getByText("FLW-REF-999").closest("span")).toHaveAttribute(
+      "translate",
+      "no"
+    )
   })
 
   it("omits the provider reference row when no provider ref is present", async () => {

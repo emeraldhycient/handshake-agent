@@ -8,5 +8,9 @@ import type { MoneyProps } from "@/types/components"
  */
 export function Money({ value, as, className }: MoneyProps) {
   const Tag = as ?? "span"
-  return <Tag className={cn("tabular-nums", className)}>{value}</Tag>
+  return (
+    <Tag className={cn("tabular-nums", className)} translate="no">
+      {value}
+    </Tag>
+  )
 }

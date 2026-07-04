@@ -17,6 +17,7 @@ import { ChatHeader } from "./chat-header"
 import { MobileTabbar } from "./mobile-tabbar"
 import { WalletTab } from "./wallet-tab"
 import { ActivityTab } from "./activity-tab"
+import { SettingsPanel } from "@/components/settings/settings-panel"
 import { ChatThread } from "@/components/chat/chat-thread"
 import { ChatComposer } from "@/components/chat/chat-composer"
 import { ConfirmSheet } from "@/components/chat/overlays/confirm-sheet"
@@ -150,6 +151,7 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
 
         {tab === "wallet" && <WalletTab onQuickAction={handleQuickAction} />}
         {tab === "activity" && <ActivityTab />}
+        {tab === "settings" && <SettingsPanel density="mobile" />}
       </main>
 
       <MobileTabbar active={tab} onSelect={setTab} />

@@ -315,3 +315,26 @@
     animation: none !important;
   }
 }
+
+/* ── Google Translate widget: hide all Google chrome ──────────────────────
+   Our own LanguageSelector is the control; the embedded engine must be
+   invisible and must not shift the layout (Google injects `body { top }`). */
+.goog-te-banner-frame,
+.skiptranslate iframe,
+#goog-gt-tt,
+.goog-te-balloon-frame,
+.goog-tooltip,
+.goog-te-gadget-icon {
+  display: none !important;
+}
+
+body {
+  top: 0 !important;
+  position: static !important;
+}
+
+/* Google adds `.translated-ltr`/`.translated-rtl` to <body>; keep offsets flat. */
+body.translated-ltr,
+body.translated-rtl {
+  top: 0 !important;
+}

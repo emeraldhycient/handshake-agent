@@ -42,4 +42,10 @@ describe("Money", () => {
     expect(el.tagName).toBe("P")
     expect(el).toHaveClass("tabular-nums")
   })
+
+  it("marks the amount as non-translatable", () => {
+    const { container } = render(<Money value="₦50,000" />)
+    // The value-bearing element carries translate="no".
+    expect(container.querySelector('[translate="no"]')).not.toBeNull()
+  })
 })

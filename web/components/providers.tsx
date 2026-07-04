@@ -4,6 +4,7 @@ import { useState } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProvider } from "@/components/auth/AuthProvider"
+import { TranslationProvider } from "@/components/shared/translation-provider"
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [client] = useState(
@@ -15,7 +16,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider attribute="class" forcedTheme="light">
       <QueryClientProvider client={client}>
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <TranslationProvider>{children}</TranslationProvider>
+        </AuthProvider>
       </QueryClientProvider>
     </ThemeProvider>
   )

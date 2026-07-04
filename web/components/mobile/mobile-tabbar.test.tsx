@@ -55,4 +55,17 @@ describe("MobileTabbar", () => {
       screen.getByRole("button", { name: /activity/i })
     ).not.toHaveAttribute("aria-current", "page")
   })
+
+  it("renders a Settings tab", () => {
+    render(<MobileTabbar active="chat" onSelect={() => {}} />)
+    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument()
+  })
+
+  it("calls onSelect('settings') when the Settings tab is tapped", async () => {
+    const onSelect = vi.fn()
+    const user = userEvent.setup()
+    render(<MobileTabbar active="chat" onSelect={onSelect} />)
+    await user.click(screen.getByRole("button", { name: "Settings" }))
+    expect(onSelect).toHaveBeenCalledWith("settings")
+  })
 })

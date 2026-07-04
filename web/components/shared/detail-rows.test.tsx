@@ -50,4 +50,9 @@ describe("DetailRows", () => {
     const container = labelEl.closest(".mt-4")
     expect(container).toBeInTheDocument()
   })
+
+  it("marks row values as non-translatable", () => {
+    render(<DetailRows rows={[{ label: "Reference", value: "HS-abc123" }]} />)
+    expect(screen.getByText("HS-abc123")).toHaveAttribute("translate", "no")
+  })
 })

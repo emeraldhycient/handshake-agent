@@ -14,7 +14,7 @@ export function DetailRows({ rows, className }: DetailRowsProps) {
           className="flex items-center justify-between"
         >
           <span className="text-sm text-muted-foreground">{row.label}</span>
-          <span className="text-sm font-semibold tabular-nums">
+          <span className="text-sm font-semibold tabular-nums" translate="no">
             {row.value}
           </span>
         </div>

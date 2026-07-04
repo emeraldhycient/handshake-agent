@@ -24,6 +24,7 @@ import type {
   DashboardPage,
   SearchResult,
 } from "@/lib/schemas"
+import type { Language } from "@/lib/i18n/languages"
 
 // ─── Density ──────────────────────────────────────────────────────────────────
 
@@ -431,7 +432,7 @@ export interface ChatHeaderProps {
 }
 
 /** 15.1 — bottom navigation tabbar */
-export type MobileTabId = "chat" | "wallet" | "activity"
+export type MobileTabId = "chat" | "wallet" | "activity" | "settings"
 export interface MobileTabbarProps {
   active: MobileTabId
   onSelect: (tab: MobileTabId) => void
@@ -454,4 +455,24 @@ export interface ActivityTabProps {
 /** 15.3 — MobileShell accepts an optional injected store for tests */
 export interface MobileShellProps {
   store?: import("@/lib/store/chat-store").ChatStore
+}
+
+// ─── Multi-language (TranslationProvider) ────────────────────────────────────
+
+export interface TranslationContextValue {
+  language: Language
+  languages: readonly Language[]
+  setLanguage: (code: string) => void
+  resetLanguage: () => void
+}
+
+export interface LanguageSelectorProps {
+  className?: string
+}
+
+// ─── Shared SettingsPanel (Task 7) ────────────────────────────────────────────
+
+export interface SettingsPanelProps {
+  density?: "desktop" | "mobile"
+  className?: string
 }
