@@ -149,6 +149,8 @@ import { AdminTreasuryPayoutService } from './application/admin-treasury-payout.
 import { AdminProviderProbeService } from './application/admin-provider-probe.service';
 import { PROVIDER_PROBE } from './application/ports/provider-probe.port';
 import { HttpProviderProbeAdapter } from './infrastructure/http-provider-probe.adapter';
+import { PROVIDER_CONNECTIVITY } from './application/ports/provider-connectivity.port';
+import { CachedProviderConnectivityAdapter } from './infrastructure/cached-provider-connectivity.adapter';
 import { AdminApprovalsService } from './application/admin-approvals.service';
 import { AdminManualCreditService } from './application/admin-manual-credit.service';
 import { CHANGE_REQUEST_REPOSITORY } from './application/ports/change-request.repository.port';
@@ -487,6 +489,14 @@ import type { Env } from '../../core/config/env.schema';
     // NO money (§3.1). Execute-gated + step-up-gated at the controller.
     AdminProviderProbeService,
     { provide: PROVIDER_PROBE, useClass: HttpProviderProbeAdapter },
+    // System-health card: cached, credential-free provider LIVENESS view (45s TTL +
+    // single-flight) behind PROVIDER_CONNECTIVITY. Wraps the PROVIDER_PROBE adapter
+    // (bound above) + ConfigService + CLOCK; feeds MetricsOpsReadPrismaRepository's
+    // non-settling providers. Read-only, no secret leaves the boundary (§3.1/§3.4).
+    {
+      provide: PROVIDER_CONNECTIVITY,
+      useClass: CachedProviderConnectivityAdapter,
+    },
     // Phase 7 (WRITES — maker-checker): the APPROVALS change-request engine. A
     // pending request raised by one admin is applied ONLY on a DIFFERENT admin's
     // approval, and the apply RE-EXECUTES through the target service's atomic path
