@@ -138,18 +138,25 @@ baseRate/fxRate and asserting exact fee/spread/profit; unit for the pure per-tx 
 - **Accept:** a second ticketing vendor can be registered + toggled from the console with
   zero FE/caller edits; backend gates per-vendor.
 
-### 7. Platform metrics — ⬜ enterprise-grade oversight (biggest)
+### 7. Platform metrics — 🟡 enterprise-grade oversight (biggest) — CHARTS DONE
 - **State:** Has txn volume (per-type, daily series, success rate), GMV (per currency),
-  revenue (fees, now positive), KYC funnel, active users, service health. **No charts**
-  (no charting lib), only 7/30/90d presets, all-currency aggregate, no export.
-- **Gaps (vs the ask):** user growth rate, churn rate, profit/margin (needs #5), failed-jobs
-  KPI, jobs-enqueued/queue-depth, per-service / per-currency / per-tier filters, custom
-  date range, **graphs**, **exportable per-area (selectable)**.
-- **Do:** add a charting lib (inline-only where CSP applies), line/bar/area charts for
-  revenue/GMV/active-users/profit over time; churn + growth + failed-jobs + queue-depth
-  metrics; a filter bar (range picker, currency, capability, tier); a per-area export
-  (CSV/what to include selectable). Profit tile depends on #5; queue metrics depend on
-  the webhook/queue work (spun off). **Effort: L. Priority: HIGH (explicitly emphasized).**
+  revenue (fees + spread + profit, per currency), KYC funnel, active users, service health.
+  **Charts DONE** (self-contained SVG, no lib — chosen over recharts to dodge React19/Next16
+  + CSP risk): 7/30/90d presets.
+- **Done:**
+  - `6f96b1a` — `TrendChart` primitive (dependency-free SVG line/area, 100×40 viewBox,
+    currentColor, empty→"No data") + daily-volume trend line above the TxnVolume bars.
+  - `489cf00` — backend `GET /admin/metrics/money-series` → `MoneySeriesMetrics` (per-day,
+    per-currency GMV/revenue/profit); repo `moneySeries()` = one scan, GMV from metadata +
+    fee/spread derived from each buy/sell Quote (exact scale-18); permission-catalog entry.
+    TDD: contract + service + repo-integration + full-stack e2e.
+  - `242b8d8` — FE `MoneyTrendCard` (GMV/Revenue/Profit toggle + currency selector +
+    peak-day caption) on /metrics; pure `moneySeriesPoints` helper. web-admin vitest 416.
+    Live-verified (Profit peak ₦1,477.83; toggle GMV → ₦60,000.00).
+- **Remaining gaps:** user growth rate, churn rate, failed-jobs KPI, jobs-enqueued/queue-depth
+  (queue-depth needs the spun-off webhook queue), per-service / per-currency / per-tier
+  filters, custom date range, **exportable per-area (selectable)** — CSV export is the
+  self-contained next slice. **Effort: M remaining. Priority: HIGH (explicitly emphasized).**
 - **Accept:** each requested metric present with a graph; filters work; operator exports a
   chosen subset.
 
