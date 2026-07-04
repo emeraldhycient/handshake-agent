@@ -279,16 +279,20 @@ describe('Admin metrics / dashboard — e2e (AppModule, Testcontainers Postgres)
     sequence: number;
     postedAt: Date;
   }): Promise<void> {
+    // Fees are booked as NEGATIVE DEBITS on platform_float (the settlement engine's
+    // convention — buildBuyLedgerEntries `amount: fromScaled(-scaledFee)`), so
+    // `revenue()` negates the sum to a positive figure. Seed the production sign.
+    const debitAmount = `-${over.amount}`;
     await prisma.ledgerEntry.create({
       data: {
         transactionId: over.txnId,
         accountType: 'platform_float' as never,
         accountId: 'ngn_fees',
         currency: 'NGN',
-        amount: over.amount,
-        direction: 'credit' as never,
+        amount: debitAmount,
+        direction: 'debit' as never,
         description: 'fee revenue',
-        balanceAfter: over.amount,
+        balanceAfter: debitAmount,
         sequence: over.sequence,
         postedAt: over.postedAt,
       },

@@ -266,6 +266,13 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     // through the transaction so only completed, in-range fees count. SUM cast to
     // text keeps engine-precision values byte-stable strings (never a JS float);
     // we re-sum with scaled BigInt to normalize to a canonical decimal string.
+    //
+    // SIGN: fee-revenue legs are booked to `platform_float/${fc}_fees` as DEBITS
+    // (negative amount) so each transaction's per-currency legs net to zero
+    // (buildBuyLedgerEntries — `amount: fromScaled(-scaledFee)`). The raw signed sum
+    // is therefore −(total fees); we NEGATE it so revenue is reported as a positive
+    // magnitude (a full fee reversal on refund credits +fee, netting the revenue
+    // back down correctly). Without this the dashboard card showed a negative value.
     const feeRows = await this.prisma.ledgerEntry.findMany({
       where: {
         accountType: LedgerAccountType.platform_float,
@@ -295,7 +302,9 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     const totalFeesByCurrency: CurrencyAmount[] = order
       .map((currency) => ({
         currency,
-        amount: fromScaledBigInt(sums.get(currency)!),
+        // Negate: platform_float fee legs are debits (negative); revenue is the
+        // positive magnitude of collected fees.
+        amount: fromScaledBigInt(-sums.get(currency)!),
       }))
       .sort((a, b) => a.currency.localeCompare(b.currency));
 

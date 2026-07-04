@@ -89,6 +89,11 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
    * per-(accountType, accountId) monotonic counter — callers pass a distinct value
    * per leg to satisfy the @@unique([accountType, accountId, sequence]) constraint.
    */
+  // Seeds a platform_float fee leg the way the settlement engine does: a fee of
+  // `amount` (a positive magnitude) is booked as a NEGATIVE DEBIT
+  // (buildBuyLedgerEntries → `amount: fromScaled(-scaledFee)`), so the account
+  // accumulates fees as debits and `revenue()` must negate the sum to report a
+  // positive figure. Seeding a positive credit here (as before) hid that bug.
   async function seedFeeLeg(
     txnId: string,
     over: {
@@ -99,16 +104,17 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
       sequence: number;
     },
   ): Promise<void> {
+    const debitAmount = `-${over.amount}`;
     await prisma.ledgerEntry.create({
       data: {
         transactionId: txnId,
         accountType: 'platform_float' as never,
         accountId: over.accountId,
         currency: over.currency,
-        amount: over.amount,
-        direction: 'credit' as never,
+        amount: debitAmount,
+        direction: 'debit' as never,
         description: 'fee revenue',
-        balanceAfter: over.amount,
+        balanceAfter: debitAmount,
         sequence: over.sequence,
         postedAt: over.postedAt,
       },
