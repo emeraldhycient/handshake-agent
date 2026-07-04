@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Inject,
+  Patch,
   Post,
   Req,
   UseGuards,
@@ -23,6 +24,7 @@ import {
 } from '@handshake-agent/contracts';
 
 import { AdminAuthService } from '../application/admin-auth.service';
+import { AdminUserService } from '../application/admin-user.service';
 import { AdminMfaService } from '../application/admin-mfa.service';
 import { AdminStepUpService } from '../application/admin-step-up.service';
 import { AdminBootstrapService } from '../application/admin-bootstrap.service';
@@ -33,7 +35,11 @@ import {
 } from '../application/ports/password-hasher.port';
 import { AdminSessionGuard } from './admin-session.guard';
 import { CurrentAdmin, type AdminContext } from './current-admin.decorator';
-import { AdminLoginDto, AdminStepUpDto } from './dto/admin-auth.dto';
+import {
+  AdminLoginDto,
+  AdminSelfUpdateDto,
+  AdminStepUpDto,
+} from './dto/admin-auth.dto';
 import { AdminBootstrapDto } from './dto/admin-bootstrap.dto';
 import { AdminInvitationAcceptDto } from './dto/admin-invitation.dto';
 
@@ -63,6 +69,7 @@ export class AdminAuthController {
     private readonly stepUp: AdminStepUpService,
     private readonly bootstrapService: AdminBootstrapService,
     private readonly invitations: AdminInvitationService,
+    private readonly users: AdminUserService,
     @Inject(PASSWORD_HASHER)
     private readonly hasher: IPasswordHasher,
   ) {}
@@ -128,6 +135,24 @@ export class AdminAuthController {
   @Get('me')
   @UseGuards(AdminSessionGuard)
   async me(@CurrentAdmin() admin: AdminContext): Promise<AdminMe> {
+    return AdminMeSchema.parse(await this.auth.me(admin.adminId));
+  }
+
+  // Self-service profile edit: the signed-in operator updates their OWN display
+  // name. Session-bound, no RBAC (self-edit is always allowed — managing OTHER
+  // admins is the permissioned /admin/admins surface). Returns the refreshed
+  // identity so the client updates in place.
+  @Patch('me')
+  @UseGuards(AdminSessionGuard)
+  async updateMe(
+    @CurrentAdmin() admin: AdminContext,
+    @Body() dto: AdminSelfUpdateDto,
+  ): Promise<AdminMe> {
+    await this.users.updateOwnDisplayName(
+      admin.adminId,
+      dto.displayName,
+      new Date(),
+    );
     return AdminMeSchema.parse(await this.auth.me(admin.adminId));
   }
 

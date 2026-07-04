@@ -14,10 +14,12 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { NativeSelect } from "@/components/ui/native-select"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
+import { AdminResetMfaAction } from "@/components/admin/admin-reset-mfa-action"
 import { useAdminMe } from "@/lib/query/hooks"
 import { useSetAdminStatus, useUpdateAdminRole } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { ApiError } from "@/lib/api/client"
+import { adminMgmtAccess } from "@/lib/permissions"
 import type { AdminRowActionsProps } from "@/types/components"
 
 // Status transitions offered per current status (settable statuses only).
@@ -74,24 +76,49 @@ export function AdminRowActions({ admin, roles }: AdminRowActionsProps) {
   }
 
   const busy = updateRole.isPending || setStatus.isPending
-  const transitions = NEXT_STATUS[admin.status] ?? []
+
+  // RBAC gating (§3.3 — the API re-enforces all of this server-side). An operator
+  // only sees an action they hold the permission for, and the lifecycle self-guard
+  // hides suspend/offboard on their OWN row (they cannot lock themselves out).
+  const access = adminMgmtAccess(me.data, admin.id)
+  const transitions = access.canChangeStatus
+    ? (NEXT_STATUS[admin.status] ?? []).filter(
+        (t) =>
+          !(
+            access.isSelf &&
+            (t.status === "suspended" || t.status === "offboarded")
+          )
+      )
+    : []
+  const hasAnyAction =
+    access.canChangeRole || access.canResetMfa || transitions.length > 0
+
+  // Read-only row (operator lacks every admin-management permission, or only
+  // self-forbidden actions remain) → a muted dash, never blank.
+  if (!hasAnyAction) {
+    return <span className="text-[12px] text-ink3">—</span>
+  }
 
   return (
     <div className="flex flex-col items-end gap-1.5">
       <div className="flex items-center gap-2">
-        <NativeSelect
-          aria-label={`Change role for ${admin.email}`}
-          value={admin.role.id}
-          disabled={busy}
-          onChange={(e) => changeRole(e.target.value)}
-          className="h-8 w-40 rounded-[10px] text-xs"
-        >
-          {roles.map((role) => (
-            <option key={role.id} value={role.id}>
-              {role.name}
-            </option>
-          ))}
-        </NativeSelect>
+        {access.canResetMfa && <AdminResetMfaAction admin={admin} />}
+
+        {access.canChangeRole && (
+          <NativeSelect
+            aria-label={`Change role for ${admin.email}`}
+            value={admin.role.id}
+            disabled={busy}
+            onChange={(e) => changeRole(e.target.value)}
+            className="h-8 w-40 rounded-[10px] text-xs"
+          >
+            {roles.map((role) => (
+              <option key={role.id} value={role.id}>
+                {role.name}
+              </option>
+            ))}
+          </NativeSelect>
+        )}
 
         {transitions.map((t) => (
           <Button

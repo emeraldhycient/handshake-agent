@@ -37,6 +37,17 @@ export const AdminMeSchema = z.object({
 });
 export type AdminMe = z.infer<typeof AdminMeSchema>;
 
+// Self-service account edit (`PATCH /admin/me`) — an operator updating their OWN
+// profile. Session-bound, no elevated permission (self-edit is always allowed);
+// managing OTHER admins' details/roles is the permissioned admins surface. Only
+// the display name is editable here (email is the login identity).
+export const AdminSelfUpdateRequestSchema = z.object({
+  displayName: z.string().trim().min(1).max(80),
+});
+export type AdminSelfUpdateRequest = z.infer<
+  typeof AdminSelfUpdateRequestSchema
+>;
+
 export const AdminLoginResponseSchema = z.object({
   accessToken: z.string(),
   expiresAt: z.string(),

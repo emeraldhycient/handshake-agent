@@ -11,6 +11,7 @@ import {
   AdminLoginRequestSchema,
   AdminLoginResponseSchema,
   AdminMeSchema,
+  AdminSelfUpdateRequestSchema,
   AdminStepUpRequestSchema,
   AdminMfaEnrollResponseSchema,
   AdminInvitationCreateRequestSchema,
@@ -39,6 +40,7 @@ import {
   type AdminLoginRequest,
   type AdminLoginResponse,
   type AdminMe,
+  type AdminSelfUpdateRequest,
   type AdminStepUpRequest,
   type AdminMfaEnrollResponse,
   type AdminInvitationCreateRequest,
@@ -81,6 +83,16 @@ export async function acceptInvite(
 
 export async function getMe(): Promise<AdminMe> {
   const res = await api.get("/admin/me")
+  return AdminMeSchema.parse(res.data)
+}
+
+/** Self-serve profile edit (`PATCH /admin/me`) — the operator's own display name.
+ *  Returns the refreshed identity so the caller can update the cache in place. */
+export async function updateOwnProfile(
+  input: AdminSelfUpdateRequest,
+): Promise<AdminMe> {
+  const body = AdminSelfUpdateRequestSchema.parse(input)
+  const res = await api.patch("/admin/me", body)
   return AdminMeSchema.parse(res.data)
 }
 

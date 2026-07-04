@@ -1,4 +1,7 @@
-import { AdminNotFoundError } from '../domain/admin-errors';
+import {
+  AdminNotFoundError,
+  AdminSelfActionForbiddenError,
+} from '../domain/admin-errors';
 import { AdminUserService } from './admin-user.service';
 import type {
   AuditService,
@@ -34,10 +37,12 @@ function makeUserRepo(user?: AdminUserRecord | null): {
   repo: IAdminUserRepository;
   roleUpdates: { id: string; roleId: string }[];
   statusUpdates: { id: string; status: string; at: Date }[];
+  displayNameUpdates: { id: string; displayName: string }[];
   listCalls: unknown[];
 } {
   const roleUpdates: { id: string; roleId: string }[] = [];
   const statusUpdates: { id: string; status: string; at: Date }[] = [];
+  const displayNameUpdates: { id: string; displayName: string }[] = [];
   const listCalls: unknown[] = [];
   const listResult: ListAdminUsersResult = { items: [], nextCursor: null };
   const repo = {
@@ -54,8 +59,12 @@ function makeUserRepo(user?: AdminUserRecord | null): {
       statusUpdates.push({ id, status, at });
       return Promise.resolve();
     },
+    setDisplayName(id: string, displayName: string): Promise<void> {
+      displayNameUpdates.push({ id, displayName });
+      return Promise.resolve();
+    },
   } as unknown as IAdminUserRepository;
-  return { repo, roleUpdates, statusUpdates, listCalls };
+  return { repo, roleUpdates, statusUpdates, displayNameUpdates, listCalls };
 }
 
 function makeSessionRepo(): {
@@ -174,6 +183,69 @@ describe('AdminUserService', () => {
       ]);
       expect(sessions.revokeAllCalls).toHaveLength(0);
       expect(calls).toHaveLength(1);
+    });
+
+    it('rejects self-suspend and self-offboard (cannot lock yourself out)', async () => {
+      const now = new Date('2026-06-30T00:00:00Z');
+      for (const status of ['suspended', 'offboarded'] as const) {
+        const users = makeUserRepo();
+        const sessions = makeSessionRepo();
+        const { audit, calls } = makeAudit();
+
+        await expect(
+          new AdminUserService(users.repo, sessions.repo, audit).setStatus(
+            'admin-9',
+            status,
+            'admin-9',
+            now,
+          ),
+        ).rejects.toBeInstanceOf(AdminSelfActionForbiddenError);
+
+        // No write, no session revoke, no audit when the guard fires.
+        expect(users.statusUpdates).toHaveLength(0);
+        expect(sessions.revokeAllCalls).toHaveLength(0);
+        expect(calls).toHaveLength(0);
+      }
+    });
+
+    it('allows reactivating yourself (status active is not a lockout)', async () => {
+      const users = makeUserRepo();
+      const sessions = makeSessionRepo();
+      const { audit } = makeAudit();
+      const now = new Date('2026-06-30T00:00:00Z');
+
+      await new AdminUserService(users.repo, sessions.repo, audit).setStatus(
+        'admin-9',
+        'active',
+        'admin-9',
+        now,
+      );
+      expect(users.statusUpdates).toEqual([
+        { id: 'admin-9', status: 'active', at: now },
+      ]);
+    });
+  });
+
+  describe('updateOwnDisplayName', () => {
+    it('persists the display name for the acting admin and audits it', async () => {
+      const users = makeUserRepo();
+      const sessions = makeSessionRepo();
+      const { audit, calls } = makeAudit();
+      const now = new Date('2026-06-30T00:00:00Z');
+
+      await new AdminUserService(
+        users.repo,
+        sessions.repo,
+        audit,
+      ).updateOwnDisplayName('admin-9', 'Ada Lovelace', now);
+
+      expect(users.displayNameUpdates).toEqual([
+        { id: 'admin-9', displayName: 'Ada Lovelace' },
+      ]);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].action).toBe('admin_update');
+      expect(calls[0].subject).toBe('AdminUser:admin-9');
+      expect(calls[0].actorAdminId).toBe('admin-9');
     });
   });
 

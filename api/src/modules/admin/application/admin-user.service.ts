@@ -3,7 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 
 import { AuditService } from '../../../core/audit/application/audit.service';
-import { AdminNotFoundError } from '../domain/admin-errors';
+import {
+  AdminNotFoundError,
+  AdminSelfActionForbiddenError,
+} from '../domain/admin-errors';
 import {
   ADMIN_SESSION_REPOSITORY,
   type IAdminSessionRepository,
@@ -73,12 +76,46 @@ export class AdminUserService {
     });
   }
 
+  /**
+   * Self-service profile edit: an operator updating their OWN display name
+   * (`PATCH /admin/me`). No elevated permission — self-edit is always allowed;
+   * the value is already validated (trimmed, 1–80 chars) at the DTO boundary.
+   * Audited under the acting admin as both actor and subject.
+   */
+  async updateOwnDisplayName(
+    adminId: string,
+    displayName: string,
+    now: Date,
+  ): Promise<void> {
+    await this.users.setDisplayName(adminId, displayName);
+    await this.audit.record({
+      correlationId: randomUUID(),
+      actorAdminId: adminId,
+      subject: `AdminUser:${adminId}`,
+      action: 'admin_update',
+      details: { at: now.toISOString() },
+      after: { displayName },
+    });
+  }
+
   async setStatus(
     id: string,
     status: AdminUserStatusChange,
     actorAdminId: string,
     now: Date,
   ): Promise<void> {
+    // Self-guard (§3.3): an operator may not suspend or offboard their own
+    // account — that would lock them (and possibly the last super-admin) out.
+    // Enforced server-side regardless of permissions; the UI also hides these
+    // controls on the self row. Reactivating yourself (→ active) is harmless.
+    if (
+      id === actorAdminId &&
+      (status === 'suspended' || status === 'offboarded')
+    ) {
+      throw new AdminSelfActionForbiddenError(
+        status === 'suspended' ? 'suspend' : 'offboard',
+      );
+    }
     await this.users.setStatus(id, status, now);
     if (status === 'offboarded') {
       await this.sessions.revokeAllForAdmin(id, now);

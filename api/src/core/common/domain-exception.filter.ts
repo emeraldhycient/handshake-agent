@@ -250,6 +250,11 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.FORBIDDEN,
     message: 'You cannot approve or reject your own change request.',
   },
+  // Admin lifecycle self-guard: an operator cannot suspend/offboard themselves.
+  ADMIN_SELF_ACTION_FORBIDDEN: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'You cannot suspend or offboard your own admin account.',
+  },
   ADMIN_CHANGE_REQUEST_NOT_PENDING: {
     status: HttpStatus.CONFLICT,
     message: 'This change request has already been decided.',

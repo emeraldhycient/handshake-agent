@@ -25,6 +25,7 @@ import type {
   AdminTxnSearchQuery,
   AdminPreferencesUpdateRequest,
   BackfillNetworksRequest,
+  AdminSelfUpdateRequest,
   AdminUserStatusRequest,
   AdminUserUpdateRoleRequest,
   AdminUserNoteCreateRequest,
@@ -657,6 +658,21 @@ export function useUpdateAdminRole() {
       input: AdminUserUpdateRoleRequest
     }) => admin.updateAdminRole(id, input),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.admins })
+    },
+  })
+}
+
+/** Self-serve profile edit — the signed-in operator's own display name. Seeds the
+ *  `me` cache with the fresh identity and invalidates the admins list (the row
+ *  label reflects the new name). */
+export function useUpdateOwnProfile() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: AdminSelfUpdateRequest) =>
+      admin.updateOwnProfile(input),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(qk.me, updated)
       void queryClient.invalidateQueries({ queryKey: qk.admins })
     },
   })
