@@ -35,6 +35,7 @@ import {
   Res,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 
 import {
@@ -94,7 +95,12 @@ interface FlowDecryptedPayload {
 // Controller
 // ---------------------------------------------------------------------------
 
+// Meta machine-to-machine callback (E2E-encrypted Flow data exchange), delivered
+// from Meta's shared egress IPs. Exempt from the global IP-keyed throttler (which
+// would rate-limit all users together); requests are authenticated by RSA/AES
+// decryption + the signed flow_token, not by IP.
 @Controller('whatsapp')
+@SkipThrottle()
 export class WhatsAppFlowController {
   private readonly logger = new Logger(WhatsAppFlowController.name);
 

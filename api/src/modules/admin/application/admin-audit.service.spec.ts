@@ -46,6 +46,8 @@ function makeAdmin(over?: Partial<AdminUserRecord>): AdminUserRecord {
     roleName: 'Compliance officer',
     createdAt: new Date(),
     lastLoginAt: null,
+    failedLoginCount: 0,
+    loginLockedUntil: null,
     ...over,
   };
 }

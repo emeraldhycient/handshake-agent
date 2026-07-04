@@ -23,6 +23,7 @@ import {
   Post,
   Req,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
 
 import {
@@ -33,7 +34,14 @@ import { WebhookIngestionService } from '../../webhooks/application/webhook-inge
 
 type AckResponse = { status: 'ok' };
 
+// Provider machine-to-machine callback: authenticated by the verif-hash secret,
+// not by IP. Exempt from the global IP-keyed throttler so a legitimate
+// collection/payout settlement burst from Flutterwave is never 429'd (funds-safety
+// — settlement must not be dropped). Forged calls are rejected fast (401). The
+// payload shape lives on the worker (FlutterwaveWebhookHandler), which now parses
+// it — the controller only persists + enqueues, so no body interface is needed here.
 @Controller('webhooks')
+@SkipThrottle()
 export class FlutterwaveWebhookController {
   private readonly logger = new Logger(FlutterwaveWebhookController.name);
 

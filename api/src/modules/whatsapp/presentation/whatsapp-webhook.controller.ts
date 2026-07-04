@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
+import { SkipThrottle } from '@nestjs/throttler';
 
 import type { Env } from '../../../core/config/env.schema';
 import { WebhookIngestionService } from '../../webhooks/application/webhook-ingestion.service';
@@ -38,7 +39,12 @@ type VerifyQuery = {
  *   WhatsAppWebhookHandler (the worker), with retry + dead-letter. A persistence
  *   failure propagates (5xx) so Meta redelivers.
  */
+// Meta machine-to-machine callback: authenticated by X-Hub-Signature-256, not by
+// IP — and ALL users' inbound messages arrive from Meta's shared egress IPs, so an
+// IP-keyed throttle would wrongly rate-limit every user together. Exempt from the
+// global throttler; forged POSTs are rejected by WhatsAppSignatureGuard.
 @Controller('whatsapp')
+@SkipThrottle()
 export class WhatsAppWebhookController {
   constructor(
     private readonly configService: ConfigService<Env, true>,

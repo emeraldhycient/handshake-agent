@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { APP_PIPE, APP_FILTER } from '@nestjs/core';
+import { APP_PIPE, APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -8,6 +8,7 @@ import { ZodValidationPipe } from 'nestjs-zod';
 
 import configuration from './core/config/configuration';
 import { validateEnv } from './core/config/env.schema';
+import { buildPinoHttpOptions } from './core/logging/pino-options';
 import { PrismaModule } from './core/prisma/prisma.module';
 import { AuditModule } from './core/audit/audit.module';
 import { EffectiveConfigModule } from './core/config/effective-config.module';
@@ -29,6 +30,7 @@ import { JobsModule } from './core/jobs/jobs.module';
 import { WebAuthModule } from './modules/auth/auth.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { DomainExceptionFilter } from './core/common/domain-exception.filter';
+import { EnvAwareThrottlerGuard } from './core/common/env-aware-throttler.guard';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
@@ -56,13 +58,10 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     // ScheduleModule enables @Cron / @Interval decorators in provider classes.
     // Registered globally so any module's service can use @Cron without re-importing.
     ScheduleModule.forRoot(),
+    // pinoHttp options (incl. `redact` for sensitive headers, H1) live in a pure
+    // builder so the redaction contract is unit-testable independent of DI.
     LoggerModule.forRoot({
-      pinoHttp: {
-        transport:
-          process.env.NODE_ENV !== 'production'
-            ? { target: 'pino-pretty' }
-            : undefined,
-      },
+      pinoHttp: buildPinoHttpOptions(process.env.NODE_ENV),
     }),
     PrismaModule,
     AuditModule,
@@ -98,6 +97,11 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     // Global error mapping: domain errors → correct HTTP status + clean message,
     // never an opaque 500 or leaked internal detail (I1/I2).
     { provide: APP_FILTER, useClass: DomainExceptionFilter },
+    // Global rate limiting (M1): EVERY endpoint is throttled by the configured
+    // named throttlers — no longer only the 3 controllers that opted in. The
+    // subclass no-ops under NODE_ENV=test so e2e (single-IP supertest) isn't
+    // 429ed; prod/dev stay strict.
+    { provide: APP_GUARD, useClass: EnvAwareThrottlerGuard },
   ],
 })
 export class AppModule {}

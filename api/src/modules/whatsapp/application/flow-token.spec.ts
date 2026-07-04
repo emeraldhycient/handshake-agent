@@ -83,4 +83,25 @@ describe('signFlowToken / verifyFlowToken', () => {
       FlowTokenError,
     );
   });
+
+  // --- Fail-closed on an empty signing key (security hardening) ---
+  // With key='' the HMAC is attacker-computable, so a forged flow_token binding
+  // an arbitrary victim userId would verify. Both sign and verify must refuse an
+  // empty key (mirrors DirectiveService/TokenService), independent of env validation.
+
+  it('signFlowToken throws FlowTokenError when the key is empty', () => {
+    expect(() =>
+      signFlowToken({ proposalId: 'p', directiveId: 'd', userId: 'u' }, ''),
+    ).toThrow(FlowTokenError);
+  });
+
+  it('verifyFlowToken throws FlowTokenError when the key is empty', () => {
+    // Sign with a real key so the token is otherwise well-formed; the empty
+    // verify key must still be rejected (not silently accepted via attacker HMAC).
+    const token = signFlowToken(
+      { proposalId: 'p', directiveId: 'd', userId: 'u' },
+      TEST_KEY,
+    );
+    expect(() => verifyFlowToken(token, '')).toThrow(FlowTokenError);
+  });
 });

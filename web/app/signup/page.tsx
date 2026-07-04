@@ -14,7 +14,10 @@ export const metadata: Metadata = {
 
 export default function SignupPage() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
+    <main
+      id="main-content"
+      className="flex min-h-screen items-center justify-center bg-background px-4 py-12"
+    >
       <div className="w-full max-w-md">
         <header className="mb-8 text-center">
           <h1 className="text-2xl font-semibold text-foreground">

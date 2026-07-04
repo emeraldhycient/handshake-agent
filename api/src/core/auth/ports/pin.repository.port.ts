@@ -28,15 +28,34 @@ export interface IPinRepository {
   setPinHash(userId: string, pinHash: string): Promise<void>;
 
   /**
-   * Records an incremented failure count and, when the account is being locked,
-   * the `lockedUntil` timestamp. Pass null for `lockedUntil` when under the
-   * maxAttempts threshold (not yet locked).
+   * Registers a single failed-verify attempt and returns the resulting counter
+   * state. This MUST be executed as ONE atomic SQL statement that, evaluated
+   * against the row's current `pinLockedUntil`:
+   *   - if a lockout window has EXPIRED (`pinLockedUntil` in the past) → starts a
+   *     fresh window: sets `pinFailureCount = 1` and clears `pinLockedUntil`;
+   *   - otherwise → increments `pinFailureCount` by 1;
+   *   - if a lock is still ACTIVE (`pinLockedUntil` in the future) → leaves the
+   *     count untouched (the caller rejects without counting the attempt).
+   * Folding the expired-window reset INTO the increment in a single statement is
+   * what closes the TOCTOU brute-force bypass (CLAUDE.md §3.4): a separate
+   * reset-then-increment could interleave under a concurrent burst on a just-
+   * expired lock and let every guess reach the comparison. `now` is supplied by
+   * the caller's injected clock so the decision is deterministic/testable.
+   *
+   * Returns the post-update `count` and `lockedUntil` (the latter lets the caller
+   * detect a concurrently-set active lock).
    */
-  recordFailure(
+  registerFailedAttempt(
     userId: string,
-    count: number,
-    lockedUntil: Date | null,
-  ): Promise<void>;
+    now: Date,
+  ): Promise<{ count: number; lockedUntil: Date | null }>;
+
+  /**
+   * Persists `pinLockedUntil` when the failure threshold is crossed. Kept
+   * separate from the increment so the lock is written only once, right after
+   * the atomic counter reveals the threshold was reached.
+   */
+  setLock(userId: string, lockedUntil: Date): Promise<void>;
 
   /** Resets `pinFailureCount` to 0 and clears `pinLockedUntil` after a successful verify. */
   resetFailures(userId: string): Promise<void>;

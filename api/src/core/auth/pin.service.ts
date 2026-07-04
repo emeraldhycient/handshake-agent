@@ -104,25 +104,61 @@ export class PinService {
    *
    * Throws:
    *   - `PinNotSetError`  — no user record, or `pinHash` is null.
-   *   - `PinLockedError`  — `pinLockedUntil` is in the future.
+   *   - `PinLockedError`  — `pinLockedUntil` is in the future, OR a concurrent
+   *      burst pushed the failure count past `maxAttempts` before this call
+   *      could compare (see below).
    *   - `PinInvalidError` — PIN does not match (failure recorded).
    *
    * On success: if there were prior failures, they are reset. Returns void.
+   *
+   * TOCTOU brute-force guard (CLAUDE.md §3.4): the failure counter is
+   * incremented ATOMICALLY at the DB *before* the scrypt comparison. Because
+   * one valid directive+nonce authorizes the PIN check, a stolen session could
+   * otherwise fire many concurrent guesses that all read the same stale count
+   * and never advance the lockout. Incrementing first means at most
+   * `maxAttempts` concurrent calls ever reach the constant-time comparison; the
+   * rest are short-circuited to `PinLockedError`, and the account ends locked.
    */
   async verifyPin(userId: string, pin: string): Promise<void> {
     const state = await this.pinRepo.getPinState(userId);
 
-    // 1. No state or no hash → PIN not set.
+    // a. No state or no hash → PIN not set.
     if (!state || state.pinHash === null) {
       throw new PinNotSetError();
     }
 
-    // 2. Account locked?
-    if (state.pinLockedUntil && state.pinLockedUntil > this.clock.now()) {
+    const now = this.clock.now();
+
+    // b. Still within an active lockout window → reject, no increment, no compare.
+    if (state.pinLockedUntil && state.pinLockedUntil > now) {
       throw new PinLockedError(state.pinLockedUntil);
     }
 
-    // 3. Re-derive the hash with the stored salt and compare (constant-time).
+    // c. Register this attempt ATOMICALLY. One DB statement either starts a fresh
+    //    window (when the prior lock has expired) or increments the counter —
+    //    never a separate reset-THEN-increment, which a concurrent burst on a
+    //    just-expired lock could interleave to keep every guess under the cap
+    //    (the TOCTOU brute-force bypass, CLAUDE.md §3.4). Runs BEFORE the scrypt
+    //    compare so at most `maxAttempts` concurrent calls ever reach it.
+    const { count: newCount, lockedUntil } =
+      await this.pinRepo.registerFailedAttempt(userId, now);
+
+    // d. A concurrent racer set an active lock between our read and this write →
+    //    reject without comparing (the atomic statement left the count untouched).
+    if (lockedUntil && lockedUntil > now) {
+      throw new PinLockedError(lockedUntil);
+    }
+
+    // e. Burst overflow: this call's atomic count raced past the threshold. Lock
+    //    and reject WITHOUT running scrypt — this is what caps concurrent
+    //    comparisons at maxAttempts.
+    if (newCount > this.maxAttempts) {
+      const until = new Date(now.getTime() + this.lockoutMs);
+      await this.pinRepo.setLock(userId, until);
+      throw new PinLockedError(until);
+    }
+
+    // f. Re-derive the hash with the stored salt and compare (constant-time).
     const [saltHex, storedHashHex] = state.pinHash.split(':');
     const salt = Buffer.from(saltHex, 'hex');
     const storedHash = Buffer.from(storedHashHex, 'hex');
@@ -137,23 +173,20 @@ export class PinService {
       candidateHash.length === storedHash.length &&
       timingSafeEqual(candidateHash, storedHash);
 
-    if (!match) {
-      // 4. Mismatch — increment failure count.
-      const newCount = state.pinFailureCount + 1;
-      const lockedUntil =
-        newCount >= this.maxAttempts
-          ? new Date(this.clock.now().getTime() + this.lockoutMs)
-          : null;
-
-      await this.pinRepo.recordFailure(userId, newCount, lockedUntil);
-
-      const remaining = Math.max(this.maxAttempts - newCount, 0);
-      throw new PinInvalidError(remaining);
-    }
-
-    // 5. Match — clear prior failures if any.
-    if (state.pinFailureCount > 0) {
+    // g. Match — clear the failure state and return.
+    if (match) {
       await this.pinRepo.resetFailures(userId);
+      return;
     }
+
+    // h. Mismatch — the atomic register already advanced the counter. If that
+    //    reached maxAttempts, persist the lock now.
+    if (newCount >= this.maxAttempts) {
+      const lockedUntil = new Date(now.getTime() + this.lockoutMs);
+      await this.pinRepo.setLock(userId, lockedUntil);
+    }
+
+    const remaining = Math.max(this.maxAttempts - newCount, 0);
+    throw new PinInvalidError(remaining);
   }
 }
