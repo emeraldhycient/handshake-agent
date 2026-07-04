@@ -52,7 +52,8 @@ import { ConfigRateProvider } from '../src/modules/quotes/infrastructure/config-
 import { AssetRegistry } from '../src/core/catalog/asset-registry';
 
 // Controller under test
-import { FlutterwaveWebhookController } from '../src/modules/treasury/presentation/flutterwave-webhook.controller';
+import { FlutterwaveWebhookHandler } from '../src/modules/treasury/application/flutterwave-webhook.handler';
+import type { WebhookEventRecord } from '../src/modules/webhooks/application/ports/webhook-event.repository.port';
 
 // Ports/types
 import type { PrismaService } from '../src/core/prisma/prisma.service';
@@ -181,7 +182,7 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
   let proposalService: ProposalService;
   let identityService: IdentityService;
   let pinService: PinService;
-  let controller: FlutterwaveWebhookController;
+  let handler: FlutterwaveWebhookHandler;
 
   let fakePaymentProvider: IPaymentProvider;
 
@@ -314,9 +315,8 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
       undefined, // swapProvider: not needed on this path
     );
 
-    // Wire the controller under test.
-    controller = new FlutterwaveWebhookController(
-      fakePaymentProvider,
+    // Wire the handler under test (settlement moved off the thin controller).
+    handler = new FlutterwaveWebhookHandler(
       executionService,
       identityService,
       fakeSender,
@@ -390,9 +390,22 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
     return { transactionId: result.transactionId, reference: idempotencyKey };
   }
 
-  function buildWebhookRequest() {
+  /** Wrap a webhook body in a persisted WebhookEvent record (what the worker sees). */
+  function makeEvent(body: Record<string, unknown>): WebhookEventRecord {
     return {
-      headers: { 'verif-hash': WEBHOOK_SECRET },
+      id: `wh-${randomUUID()}`,
+      provider: 'flutterwave',
+      providerEventId: `evt-${randomUUID()}`,
+      payload: body,
+      headers: {},
+      signature: null,
+      status: 'processing',
+      attempts: 1,
+      lastError: null,
+      receivedAt: new Date(),
+      lastAttemptAt: new Date(),
+      processedAt: null,
+      deadAt: null,
     };
   }
 
@@ -420,12 +433,9 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
   it('happy path: Transaction completed, Receipt exists, WhatsApp receipt sent', async () => {
     const { transactionId, reference } = await seedSettlingTransaction();
 
-    const req = buildWebhookRequest();
     const body = buildWebhookBody(reference);
 
-    const result = await controller.handleWebhook(body, req as any);
-
-    expect(result).toEqual({ status: 'ok' });
+    await handler.handle(makeEvent(body));
 
     // Transaction must be completed.
     const txn = await prisma.transaction.findUnique({
@@ -455,11 +465,11 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
   it('idempotent: second identical POST does not double-credit (ledger count unchanged)', async () => {
     const { transactionId, reference } = await seedSettlingTransaction();
 
-    const req = buildWebhookRequest();
     const body = buildWebhookBody(reference);
+    const event = makeEvent(body);
 
     // First webhook.
-    await controller.handleWebhook(body, req as any);
+    await handler.handle(event);
 
     const ledgerCountAfterFirst = await prisma.ledgerEntry.count({
       where: { transactionId },
@@ -474,9 +484,8 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
 
     capturedSentMessages = []; // reset captured messages
 
-    // Second identical webhook.
-    const secondResult = await controller.handleWebhook(body, req as any);
-    expect(secondResult).toEqual({ status: 'ok' });
+    // Second identical webhook (a re-delivery / re-drive).
+    await handler.handle(event);
 
     // Ledger and WalletBalance must not have grown.
     const ledgerCountAfterSecond = await prisma.ledgerEntry.count({
@@ -490,24 +499,7 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
     expect(balanceCountAfterSecond).toBe(balanceCountAfterFirst);
   });
 
-  // ---------------------------------------------------------------------------
-  // Signature check
-  // ---------------------------------------------------------------------------
-
-  it('invalid verif-hash → throws 401, Transaction stays in settling', async () => {
-    const { transactionId, reference } = await seedSettlingTransaction();
-
-    const badReq = { headers: { 'verif-hash': 'wrong-secret' } };
-    const body = buildWebhookBody(reference);
-
-    await expect(
-      controller.handleWebhook(body, badReq as any),
-    ).rejects.toMatchObject({ status: 401 });
-
-    // Transaction must still be 'settling'.
-    const txn = await prisma.transaction.findUnique({
-      where: { id: transactionId },
-    });
-    expect(txn!.status).toBe('settling');
-  });
+  // Signature verification (invalid verif-hash → 401) is unit-tested on the thin
+  // FlutterwaveWebhookController (flutterwave-webhook.controller.spec.ts). The
+  // handler here runs on an already-verified, persisted WebhookEvent.
 });

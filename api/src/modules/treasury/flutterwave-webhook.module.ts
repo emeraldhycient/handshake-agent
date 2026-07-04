@@ -20,7 +20,9 @@ import { TreasuryModule } from './treasury.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { WhatsAppSenderModule } from '../whatsapp/whatsapp-sender.module';
 import { IdentityModule } from '../identity/identity.module';
+import { WebhooksModule } from '../webhooks/webhooks.module';
 import { FlutterwaveWebhookController } from './presentation/flutterwave-webhook.controller';
+import { FlutterwaveWebhookHandler } from './application/flutterwave-webhook.handler';
 
 @Module({
   imports: [
@@ -28,7 +30,11 @@ import { FlutterwaveWebhookController } from './presentation/flutterwave-webhook
     TransactionsModule,
     WhatsAppSenderModule,
     IdentityModule,
+    // WebhooksModule: the thin controller persists+enqueues via WebhookIngestionService.
+    WebhooksModule,
   ],
   controllers: [FlutterwaveWebhookController],
+  providers: [FlutterwaveWebhookHandler],
+  exports: [FlutterwaveWebhookHandler],
 })
 export class FlutterwaveWebhookModule {}

@@ -25,9 +25,11 @@ import { WalletsModule } from './wallets.module';
 import { IdentityModule } from '../identity/identity.module';
 import { WhatsAppSenderModule } from '../whatsapp/whatsapp-sender.module';
 import { TransactionsModule } from '../transactions/transactions.module';
+import { WebhooksModule } from '../webhooks/webhooks.module';
 import { DEPOSIT_SETTLEMENT_REPOSITORY } from './application/ports/deposit-settlement.repository.port';
 import { DepositSettlementPrismaRepository } from './infrastructure/deposit-settlement.prisma.repository';
 import { BlockradarWebhookController } from './presentation/blockradar-webhook.controller';
+import { BlockradarWebhookHandler } from './application/blockradar-webhook.handler';
 
 @Module({
   imports: [
@@ -35,6 +37,8 @@ import { BlockradarWebhookController } from './presentation/blockradar-webhook.c
     IdentityModule,
     WhatsAppSenderModule,
     TransactionsModule,
+    // WebhooksModule: the thin controller persists+enqueues via WebhookIngestionService.
+    WebhooksModule,
   ],
   controllers: [BlockradarWebhookController],
   providers: [
@@ -42,6 +46,10 @@ import { BlockradarWebhookController } from './presentation/blockradar-webhook.c
       provide: DEPOSIT_SETTLEMENT_REPOSITORY,
       useClass: DepositSettlementPrismaRepository,
     },
+    // The async processing body — registered into the handler registry by
+    // WebhookProcessingModule. Reuses the deps the controller used to hold.
+    BlockradarWebhookHandler,
   ],
+  exports: [BlockradarWebhookHandler],
 })
 export class BlockradarWebhookModule {}

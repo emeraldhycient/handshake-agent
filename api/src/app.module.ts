@@ -20,6 +20,8 @@ import { ConversationsModule } from './modules/conversations/conversations.modul
 import { WhatsAppModule } from './modules/whatsapp/whatsapp.module';
 import { FlutterwaveWebhookModule } from './modules/treasury/flutterwave-webhook.module';
 import { BlockradarWebhookModule } from './modules/wallets/blockradar-webhook.module';
+import { WebhooksModule } from './modules/webhooks/webhooks.module';
+import { WebhookProcessingModule } from './modules/webhooks/webhook-processing.module';
 import { ComplianceModule } from './modules/compliance/compliance.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { PublicConfigModule } from './modules/config/config.module';
@@ -75,6 +77,12 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     WhatsAppModule,
     FlutterwaveWebhookModule,
     BlockradarWebhookModule,
+    // Durable inbound-webhook queue (Track A): WebhooksModule = producer
+    // (ingestion + persistence + metrics + sweeper); WebhookProcessingModule =
+    // the handler registry + lifecycle service (NO @Processor here — the BullMQ
+    // consumer lives in the worker so the API never opens a Worker connection).
+    WebhooksModule,
+    WebhookProcessingModule,
     ComplianceModule,
     // JobsModule: BullMQ / Redis capability (BQ-1). Uses lazyConnect so the app
     // boots without a live Redis; existing e2e suites never enqueue, so they pass.

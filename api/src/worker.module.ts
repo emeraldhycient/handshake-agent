@@ -34,6 +34,7 @@ import { EchoProcessor } from './core/jobs/infrastructure/echo.processor';
 import { CoordinateBackfillProcessor } from './modules/wallets/infrastructure/coordinate-backfill.processor';
 import { ProvisionUserProcessor } from './modules/wallets/infrastructure/provision-user.processor';
 import { WALLET_BACKFILL_QUEUE_NAME } from './modules/wallets/application/wallet-backfill-queue.constants';
+import { WebhookWorkerModule } from './modules/webhooks/webhook-worker.module';
 
 @Module({
   imports: [
@@ -46,6 +47,9 @@ import { WALLET_BACKFILL_QUEUE_NAME } from './modules/wallets/application/wallet
       // Worker concurrency: process up to 3 provision-user jobs in parallel.
       // Combined with the limiter below, this gives ≤5 Blockradar calls/sec.
     }),
+    // Track A: the durable-webhook consumer (WebhookProcessor @Processor). Lives
+    // ONLY in the worker graph so the API process never opens a Worker connection.
+    WebhookWorkerModule,
   ],
   providers: [
     EchoProcessor,
