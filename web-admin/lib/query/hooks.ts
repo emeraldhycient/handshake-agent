@@ -54,6 +54,7 @@ import type {
   TreasuryAlertAcknowledgeRequest,
   TreasuryPayoutApproveRequest,
   UpdateSettingRequest,
+  WebhookRetryRequest,
 } from "@handshake-agent/contracts"
 
 import * as admin from "@/lib/api/admin"
@@ -77,10 +78,12 @@ import * as tickets from "@/lib/api/tickets"
 import * as transactions from "@/lib/api/transactions"
 import * as treasury from "@/lib/api/treasury"
 import * as users from "@/lib/api/users"
+import * as webhooks from "@/lib/api/webhooks"
 import * as whatsapp from "@/lib/api/whatsapp"
 import type { ComplianceEventQuery } from "@/lib/api/compliance"
 import type { LedgerHistoryQuery } from "@/lib/api/ledger"
 import type { TemplateRef } from "@/lib/api/notifications"
+import type { WebhookQuery } from "@/lib/api/webhooks"
 import type { NavBadgeCounts } from "@/types/components"
 import { qk } from "./keys"
 
@@ -1576,6 +1579,51 @@ export function useOps() {
     queryFn: () => ops.getOpsBoard(),
     staleTime: 30_000,
     retry: false,
+  })
+}
+
+// ─── Webhooks console read hooks (Track A) ────────────────────────────────────────
+
+/** The filtered, keyset-paginated inbound-webhook queue. Keyed by the filter. */
+export function useWebhooks(query: WebhookQuery) {
+  return useQuery({
+    queryKey: qk.webhooks(query),
+    queryFn: () => webhooks.listWebhooks(query),
+    staleTime: 15_000,
+  })
+}
+
+/** The webhook-queue metrics (depth / failed / dead) for the metrics strip. */
+export function useWebhookMetrics() {
+  return useQuery({
+    queryKey: qk.webhookMetrics,
+    queryFn: () => webhooks.getWebhookMetrics(),
+    staleTime: 15_000,
+  })
+}
+
+/** One webhook's detail (verbatim payload + headers). Disabled until an `id` is set. */
+export function useWebhookDetail(id: string | null) {
+  return useQuery({
+    queryKey: qk.webhookDetail(id ?? ""),
+    queryFn: () => webhooks.getWebhookDetail(id as string),
+    enabled: id !== null,
+    staleTime: 15_000,
+  })
+}
+
+// The operator's replay of an inbound webhook. Sensitive (may 403 with
+// ADMIN_STEP_UP_REQUIRED — the caller wraps in `useStepUpRetry`); the server
+// re-enqueues (engine-brokered, §3.1) and records the audited reason. On success it
+// invalidates the webhooks prefix so the list + the replayed detail re-resolve.
+export function useRetryWebhook() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: WebhookRetryRequest }) =>
+      webhooks.retryWebhook(id, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "webhooks"] })
+    },
   })
 }
 
