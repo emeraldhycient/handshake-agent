@@ -109,7 +109,10 @@ export function NeedsBeneficiaryCard({
                   )}
                 >
                   <span className="truncate font-medium">{b.label}</span>
-                  <span className="ml-2 shrink-0 text-[12px] text-muted-foreground">
+                  <span
+                    className="ml-2 shrink-0 text-[12px] text-muted-foreground"
+                    translate="no"
+                  >
                     {isBank
                       ? `${b.accountNumber ?? ""} · ${b.bankCode ? (bankNameForCode(b.bankCode) ?? b.bankCode) : ""}`
                       : truncateMiddle(b.cryptoAddress ?? "")}
@@ -199,10 +202,16 @@ function AddBankForm({ onResolve }: { onResolve: (id: string) => void }) {
           We found this account — is this you?
         </p>
         <div className="rounded-[12px] border border-border bg-background px-3 py-2.5">
-          <p className="text-[14px] font-semibold text-foreground">
+          <p
+            className="text-[14px] font-semibold text-foreground"
+            translate="no"
+          >
             {added.accountHolderName ?? added.label}
           </p>
-          <p className="pt-0.5 text-[12px] text-muted-foreground">
+          <p
+            className="pt-0.5 text-[12px] text-muted-foreground"
+            translate="no"
+          >
             {added.accountNumber ?? ""}
             {added.bankCode
               ? ` · ${bankNameForCode(added.bankCode) ?? added.bankCode}`

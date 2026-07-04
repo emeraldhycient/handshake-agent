@@ -132,8 +132,15 @@ describe("NeedsBeneficiaryCard", () => {
     // The resolved name is shown and onResolve must NOT have fired yet — the
     // user has to confirm the name belongs to them (funds-safety, prevents a
     // typo paying a stranger).
-    expect(await screen.findByText(/ADA LOVELACE/)).toBeInTheDocument()
+    const resolvedName = await screen.findByText(/ADA LOVELACE/)
+    expect(resolvedName).toBeInTheDocument()
     expect(onResolve).not.toHaveBeenCalled()
+
+    // The confirm-step name and account number must be excluded from
+    // translation — Google Translate must never reformat the identity/number
+    // the user is confirming before money moves (§3.1 funds-safety).
+    expect(resolvedName).toHaveAttribute("translate", "no")
+    expect(resolvedName.nextElementSibling).toHaveAttribute("translate", "no")
 
     await userEvent.click(
       screen.getByRole("button", { name: /yes, that'?s correct/i })

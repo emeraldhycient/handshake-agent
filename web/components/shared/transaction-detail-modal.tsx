@@ -154,6 +154,7 @@ function DetailRow({
           "flex items-center text-right text-[12.5px] font-semibold tabular-nums",
           mono && "font-mono"
         )}
+        translate="no"
       >
         {value}
         {explorerHref !== undefined && <ExplorerLink href={explorerHref} />}

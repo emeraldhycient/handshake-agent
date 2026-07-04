@@ -330,6 +330,19 @@ describe("TransactionDetailModal", () => {
     expect(
       screen.getByRole("button", { name: /copy provider reference/i })
     ).toBeInTheDocument()
+
+    // The account number and provider reference values are rendered via the
+    // local DetailRow (not a pre-wrapped inner span) — its value span must
+    // also carry translate="no" so Google Translate never reformats a bank
+    // account number or settlement reference (§3.1 funds-safety).
+    expect(screen.getByText("0123456789").closest("span")).toHaveAttribute(
+      "translate",
+      "no"
+    )
+    expect(screen.getByText("FLW-REF-999").closest("span")).toHaveAttribute(
+      "translate",
+      "no"
+    )
   })
 
   it("omits the provider reference row when no provider ref is present", async () => {
