@@ -53,7 +53,6 @@ export function buildStructuredData(): StructuredData {
         applicationCategory: "FinanceApplication",
         operatingSystem: "Web, Android, iOS",
         description: SITE_DESCRIPTION,
-        offers: { "@type": "Offer", price: "0", priceCurrency: "NGN" },
       },
     ],
   }

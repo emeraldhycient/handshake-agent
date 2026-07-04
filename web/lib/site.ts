@@ -19,10 +19,10 @@ export const SITE_SHORT_NAME = "Handshake"
 
 /** One-line marketing description — meta description, OG, manifest. */
 export const SITE_DESCRIPTION =
-  "Buy, sell, send and receive crypto and discover event tickets — all through a chat you can talk to. The chat-native money app for Nigeria."
+  "Buy, sell, send and receive crypto and discover event tickets — all through a chat you can talk to. The chat-native money app for a borderless world."
 
 /** Terse tagline for OG cards and the install screen. */
-export const SITE_TAGLINE = "Chat-native crypto & payments for Nigeria"
+export const SITE_TAGLINE = "Chat-native crypto & payments, across borders"
 
 /**
  * Brand colours as hex (manifest + theme-color meta need hex, not oklch).
