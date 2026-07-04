@@ -13,6 +13,7 @@ import {
   MetricsOpsSchema,
   MetricsRangeQuerySchema,
   MoneySeriesMetricsSchema,
+  PlatformKpisSchema,
   RevenueMetricsSchema,
   TxnVolumeMetricsSchema,
   type DashboardSummary,
@@ -20,6 +21,7 @@ import {
   type MetricsOps,
   type MetricsRangeQuery,
   type MoneySeriesMetrics,
+  type PlatformKpis,
   type RevenueMetrics,
   type TxnVolumeMetrics,
 } from "@handshake-agent/contracts"
@@ -66,6 +68,18 @@ export async function getMoneySeriesMetrics(
   const params = MetricsRangeQuerySchema.parse(range ?? {})
   const res = await api.get("/admin/metrics/money-series", { params })
   return MoneySeriesMetricsSchema.parse(res.data)
+}
+
+/**
+ * GET /admin/metrics/kpis — platform lifecycle KPIs (new-user growth, churn,
+ * failed jobs) for the range, each period-over-period.
+ */
+export async function getPlatformKpis(
+  range?: MetricsRangeQuery
+): Promise<PlatformKpis> {
+  const params = MetricsRangeQuerySchema.parse(range ?? {})
+  const res = await api.get("/admin/metrics/kpis", { params })
+  return PlatformKpisSchema.parse(res.data)
 }
 
 /** GET /admin/metrics/kyc-funnel — point-in-time user counts by status + tier. */

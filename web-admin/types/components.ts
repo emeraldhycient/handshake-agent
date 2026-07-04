@@ -71,6 +71,16 @@ export interface MetricsFilterBarProps {
   onChange: (next: MetricsFilterState) => void
 }
 
+/**
+ * PlatformKpisCard props — presentational (parent owns the `usePlatformKpis`
+ * query and passes the async branches as props).
+ */
+export interface PlatformKpisCardProps {
+  data: import("@handshake-agent/contracts").PlatformKpis | undefined
+  isLoading: boolean
+  isError: boolean
+}
+
 /** Which money metric a trend chart is plotting. */
 export type MoneyMetric = "gmv" | "revenue" | "profit"
 

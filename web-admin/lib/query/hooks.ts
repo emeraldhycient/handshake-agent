@@ -1565,6 +1565,20 @@ export function useMoneySeries(range: MetricsRangeQuery) {
 }
 
 /**
+ * Platform lifecycle KPIs (new-user growth, churn, failed jobs) for a date range,
+ * period-over-period. Range is part of the key; 60 s stale; `retry: false` so a 403
+ * surfaces immediately for graceful degradation.
+ */
+export function usePlatformKpis(range: MetricsRangeQuery) {
+  return useQuery({
+    queryKey: qk.platformKpis(range),
+    queryFn: () => metrics.getPlatformKpis(range),
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/**
  * The operational-health payload (system health, live-activity feed, open-compliance
  * count) for the dashboard's three formerly-mock panels. 30 s stale — these signals
  * shift more often than the aggregations. `retry: false` so a 403 (no Metrics grant)

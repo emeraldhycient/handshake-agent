@@ -34,8 +34,13 @@ import { TrendChart } from "@/components/admin/trend-chart"
 import { MoneyTrendCard } from "@/components/admin/money-trend-card"
 import { ExportCsvButton } from "@/components/admin/export-csv-button"
 import { MetricsFilterBar } from "@/components/admin/metrics-filter-bar"
+import { PlatformKpisCard } from "@/components/admin/platform-kpis-card"
 import { FeatureCard, CardHeading } from "@/components/admin/feature-card"
-import { useDashboardMetrics, useMoneySeries } from "@/lib/query/hooks"
+import {
+  useDashboardMetrics,
+  useMoneySeries,
+  usePlatformKpis,
+} from "@/lib/query/hooks"
 import { ApiError } from "@/lib/api/client"
 import type { DashboardSummary } from "@handshake-agent/contracts"
 import type {
@@ -411,6 +416,7 @@ export function MetricsDashboard({
 
   const query = useDashboardMetrics(rangeQuery)
   const moneySeries = useMoneySeries(rangeQuery)
+  const platformKpis = usePlatformKpis(rangeQuery)
   const isForbidden =
     query.error instanceof ApiError && query.error.status === 403
 
@@ -474,6 +480,13 @@ export function MetricsDashboard({
         {query.isSuccess && (
           <>
             <KpiGrid data={query.data} />
+            <div className="mb-4">
+              <PlatformKpisCard
+                data={platformKpis.data}
+                isLoading={platformKpis.isLoading}
+                isError={platformKpis.isError}
+              />
+            </div>
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.7fr_1fr]">
               <TxnVolumeCard data={query.data} />
               <ServiceHealthCard data={query.data} />
