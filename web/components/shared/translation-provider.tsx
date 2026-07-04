@@ -8,7 +8,10 @@ import {
   findLanguage,
   type Language,
 } from "@/lib/i18n/languages"
-import { detectBrowserLanguage } from "@/lib/i18n/browser-language"
+import {
+  detectBrowserLanguage,
+  readNavigatorLanguages,
+} from "@/lib/i18n/browser-language"
 import {
   getActiveLanguageCode,
   setActiveLanguageCode,
@@ -25,45 +28,38 @@ const DEFAULT_LANGUAGE =
 
 const TranslationContext = createContext<TranslationContextValue | null>(null)
 
-// Resolve the initial language synchronously (stored choice wins; else
-// browser detection) so the first render already reflects it — no
-// setState-in-effect cascade (react-hooks/set-state-in-effect).
-function resolveInitialLanguage(): {
-  language: Language
-  stored: string | null
-} {
-  const stored = getActiveLanguageCode()
-  const detected = detectBrowserLanguage(
-    typeof navigator !== "undefined" ? (navigator.languages ?? []) : []
-  )
-  const code = stored ?? detected
-  return { language: findLanguage(code) ?? DEFAULT_LANGUAGE, stored }
-}
-
 export function TranslationProvider({
   children,
 }: {
   children: React.ReactNode
 }) {
-  const [language, setLanguageState] = useState<Language>(
-    () => resolveInitialLanguage().language
-  )
+  // SSR-safe two-pass: the initial render (server AND client hydration) must
+  // always be the constant default, since cookie/navigator are unavailable
+  // during SSR. The real (cookie/navigator-derived) language is resolved and
+  // applied only after hydration, in the effect below, to avoid a mismatch.
+  const [language, setLanguageState] = useState<Language>(DEFAULT_LANGUAGE)
   const initialised = useRef(false)
 
-  // One-time: install the DOM-safety patch, and persist the resolved language
-  // so Google's engine reads the cookie when its async script initialises —
-  // no reload needed on first paint. The language itself is already resolved
-  // in the lazy `useState` initializer above (kept out of this effect).
+  // One-time, client-only: install the DOM-safety patch, resolve the real
+  // language (stored choice wins; else browser detection), persist it so
+  // Google's engine reads the cookie when its async script initialises (no
+  // reload needed), and apply it to state now that hydration is done.
   useEffect(() => {
     if (initialised.current) return
     initialised.current = true
 
     installReactSafetyPatch()
 
-    const { language: resolved, stored } = resolveInitialLanguage()
-    if (resolved.code !== DEFAULT_LANGUAGE_CODE && !stored) {
+    const stored = getActiveLanguageCode()
+    const detected = detectBrowserLanguage(readNavigatorLanguages())
+    const code = stored ?? detected
+    const resolved = findLanguage(code) ?? DEFAULT_LANGUAGE
+
+    if (resolved.code !== DEFAULT_LANGUAGE_CODE) {
       // Persist so the engine auto-applies on init; no live reload on mount.
-      setActiveLanguageCode(resolved.code)
+      if (!stored) setActiveLanguageCode(resolved.code)
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- SSR-safe two-pass hydration: initial render must equal the server's DEFAULT_LANGUAGE; the real (cookie/navigator-derived) language is applied only after hydration to avoid a mismatch.
+      setLanguageState(resolved)
     }
   }, [])
 

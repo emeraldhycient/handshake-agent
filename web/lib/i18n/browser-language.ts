@@ -40,3 +40,10 @@ export function detectBrowserLanguage(
   }
   return DEFAULT_LANGUAGE_CODE
 }
+
+// SSR-guarded read of the browser's language preference list. Callers (e.g.
+// TranslationProvider) must go through this instead of reading `navigator`
+// inline, keeping all browser-global access inside the lib/i18n layer.
+export function readNavigatorLanguages(): readonly string[] {
+  return typeof navigator !== "undefined" ? (navigator.languages ?? []) : []
+}

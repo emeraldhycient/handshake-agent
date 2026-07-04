@@ -25,6 +25,7 @@ vi.mock("@/lib/i18n/translate-cookie", () => ({
 
 vi.mock("@/lib/i18n/browser-language", () => ({
   detectBrowserLanguage: () => "de",
+  readNavigatorLanguages: () => [],
 }))
 
 import { TranslationProvider, useTranslation } from "./translation-provider"

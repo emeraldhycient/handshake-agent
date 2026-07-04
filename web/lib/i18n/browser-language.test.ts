@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest"
-import { detectBrowserLanguage } from "./browser-language"
+import {
+  detectBrowserLanguage,
+  readNavigatorLanguages,
+} from "./browser-language"
 
 describe("detectBrowserLanguage", () => {
   it("matches an exact supported code", () => {
@@ -33,5 +36,11 @@ describe("detectBrowserLanguage", () => {
   it("falls back to English for unsupported or empty input", () => {
     expect(detectBrowserLanguage(["zz-ZZ"])).toBe("en")
     expect(detectBrowserLanguage([])).toBe("en")
+  })
+})
+
+describe("readNavigatorLanguages", () => {
+  it("returns an array (jsdom's navigator.languages, possibly empty)", () => {
+    expect(Array.isArray(readNavigatorLanguages())).toBe(true)
   })
 })
