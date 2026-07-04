@@ -432,7 +432,7 @@ export interface ChatHeaderProps {
 }
 
 /** 15.1 — bottom navigation tabbar */
-export type MobileTabId = "chat" | "wallet" | "activity"
+export type MobileTabId = "chat" | "wallet" | "activity" | "settings"
 export interface MobileTabbarProps {
   active: MobileTabId
   onSelect: (tab: MobileTabId) => void
