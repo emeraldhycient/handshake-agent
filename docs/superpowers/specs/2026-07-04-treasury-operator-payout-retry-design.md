@@ -35,7 +35,9 @@ The task brief was written against an earlier snapshot. Verified ground truth on
 
 ---
 
-## 2. Chosen semantics (Option A — retry a stuck settling sell payout)
+> **Update 2026-07-04 (follow-up):** generalized from sell-only to **sell + on-chain send** payouts (both are the non-terminal types in the payout queue). The re-check reads the uniform `velocityFiatAmount`/`velocityFiatCurrency` metadata (present on both), and a **send additionally re-screens the destination address** via `ComplianceService.screenSendDestination`. Method renamed `retrySellPayout` → `retryPayout`; type is resolved server-side and dispatched to the matching outbox type (`processor_payout` / `onchain_send`). Swap is not a beneficiary payout (not in the payout queue) and float/reserve sweep remain out of scope.
+
+## 2. Chosen semantics (Option A — retry a stuck settling sell/send payout)
 
 **Operator intent:** "This sell's bank payout is stuck (missed webhook / provider pending / outbox wedged in a non-`pending` status the autonomous reconciler can't pick up). Re-drive it now, after re-confirming the user is still allowed."
 
@@ -68,8 +70,10 @@ Input: `payoutId` (the opaque payout-queue item id — server resolves the real 
 6. **Audit.** `AuditService.record({ actorAdminId: adminId, subject: 'Transaction:<id>', action: 'admin_override', before: { status, outboxStatus }, after: { action: 'payout_retry_enqueued', reason } })`.
 7. **Return** `{ payoutId, transactionId, status: 'retry_enqueued', reChecked: true }`.
 
-### Known limitation (stated, not hidden — §13)
-The autonomous `SettlementReconciliationService` re-drives `pending` settling payouts every 2 min with **no** KYC/sanctions re-check. This slice's re-check therefore has teeth for (a) the operator's explicit action and (b) un-sticking rows the reconciler can't pick up (status `enqueued`/`in_progress`), and it **escalates** flagged users — but it does not, by itself, stop the background reconciler from finalizing an already-`pending` flagged payout. Closing that (having the reconciler consult the same gate, or freezing the account) is an explicit **follow-up slice**, out of scope here.
+### On the autonomous reconciler (corrected 2026-07-04)
+An earlier draft flagged "the reconciler finalizes flagged users' payouts without the re-check" as a limitation. On closer inspection that is **not a funds-safety hole**: every reconciler settle path (`settleSellPayout`, `settleSendOnChain`, `settleSwap`, `settleBuyPayment`) is **verify-only** — it calls the provider's *verify* endpoint and books the already-determined outcome (finalize the ledger, or refund); **none ever initiate a new outbound payment** (no `createPayout`/`withdraw`). A KYC/sanctions re-check can only prevent money movement at `executeSell`/`executeSend` (before the provider call); at retry/settle the payment has already happened or not. So making the reconciler "consult the gate and block" would be **harmful** — it would strand the clearing balance for a payout the provider already sent, with nothing to recover.
+
+The re-check therefore belongs where it is: the **operator surface**. Its value is (a) it stops an operator from actively re-driving a flagged user's payout and (b) it **escalates** the flag (a compliance case) for human review. The autonomous reconciler correctly books provider-verified outcomes regardless of current flag state; a genuinely-sanctioned user is handled by account freeze + SAR, not by holding an already-sent payout's ledger entry.
 
 ---
 
@@ -127,7 +131,8 @@ Coverage target: ~100% on the new service (money-path, §9).
 
 ## 8. Out of scope (explicitly deferred)
 
-- Send/swap payout retry (this slice is **sell** only).
-- Float / reserve sweep / rebalance (must never move *customer* funds — only platform float).
-- Making the autonomous reconciler consult the retry gate (the "known limitation" follow-up).
+- ~~Send payout retry~~ — **done** in the 2026-07-04 follow-up (see the §2 update).
+- **Swap** re-drive — a swap is not a beneficiary "payout" and is not surfaced by the payout queue; it needs a separate lookup + concept.
+- Float / reserve sweep / rebalance (must never move *customer* funds — only platform float; the original task explicitly deferred it).
+- ~~Making the autonomous reconciler consult the retry gate~~ — **withdrawn**: the reconciler is verify-only and never initiates a payment, so this would strand funds, not add safety (see the corrected note in §3).
 - Any new outbound-send retry semantics (Option B) — not chosen.
