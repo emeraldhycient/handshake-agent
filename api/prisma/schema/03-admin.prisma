@@ -20,6 +20,11 @@ model AdminUser {
   /// Hashed one-time MFA recovery codes; consumed atomically.
   mfaRecoveryCodes String[]
   roleId           String      @db.Uuid
+  /// Consecutive failed-login count; reset to 0 on any fully successful login.
+  /// Drives the per-account credential-stuffing lockout (CLAUDE.md §3.3).
+  failedLoginCount Int         @default(0)
+  /// When set and in the future, login is refused until the window elapses.
+  loginLockedUntil DateTime?   @db.Timestamptz
   createdAt        DateTime    @default(now()) @db.Timestamptz
   acceptedAt       DateTime?   @db.Timestamptz
   lastLoginAt      DateTime?   @db.Timestamptz

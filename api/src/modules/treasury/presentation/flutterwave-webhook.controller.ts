@@ -41,6 +41,7 @@ import {
   Post,
   Req,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
 
 import {
@@ -93,7 +94,12 @@ interface FlutterwaveWebhookBody {
 // Controller
 // ---------------------------------------------------------------------------
 
+// Provider machine-to-machine callback: authenticated by the verif-hash secret,
+// not by IP. Exempt from the global IP-keyed throttler so a legitimate
+// collection/payout settlement burst from Flutterwave is never 429'd (funds-safety
+// — settlement must not be dropped). Forged calls are rejected fast (401).
 @Controller('webhooks')
+@SkipThrottle()
 export class FlutterwaveWebhookController {
   private readonly logger = new Logger(FlutterwaveWebhookController.name);
 

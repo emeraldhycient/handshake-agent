@@ -69,26 +69,80 @@ describe('PinPrismaRepository (integration, Testcontainers Postgres)', () => {
     expect(state!.pinFailureCount).toBe(0);
   });
 
-  // ── Test 4: recordFailure (without lock) ──────────────────────────────────
-  it('recordFailure increments the failure count and leaves pinLockedUntil null when not locking', async () => {
+  // ── Test 4: registerFailedAttempt is atomic and returns the new count ─────
+  it('registerFailedAttempt atomically bumps the count by 1 and returns the new state', async () => {
     const userId = await seedUser();
 
-    await repo.recordFailure(userId, 2, null);
+    const first = await repo.registerFailedAttempt(userId, new Date());
+    expect(first.count).toBe(1);
+    expect(first.lockedUntil).toBeNull();
+    const second = await repo.registerFailedAttempt(userId, new Date());
+    expect(second.count).toBe(2);
 
     const state = await repo.getPinState(userId);
     expect(state!.pinFailureCount).toBe(2);
     expect(state!.pinLockedUntil).toBeNull();
   });
 
-  // ── Test 5: recordFailure (with lockout timestamp) ────────────────────────
-  it('recordFailure sets pinLockedUntil when a lockout timestamp is provided', async () => {
+  it('registerFailedAttempt holds under concurrency — no lost updates (TOCTOU guard)', async () => {
     const userId = await seedUser();
-    const lockedUntil = new Date('2099-01-01T00:00:00.000Z');
+    const now = new Date();
 
-    await repo.recordFailure(userId, 5, lockedUntil);
+    // Fire a concurrent burst; the atomic DB statement must count every one.
+    const BURST = 20;
+    const results = await Promise.all(
+      Array.from({ length: BURST }, () =>
+        repo.registerFailedAttempt(userId, now),
+      ),
+    );
+
+    // Every returned count is distinct and covers 1..BURST exactly.
+    expect(results.map((r) => r.count).sort((a, b) => a - b)).toEqual(
+      Array.from({ length: BURST }, (_, i) => i + 1),
+    );
 
     const state = await repo.getPinState(userId);
-    expect(state!.pinFailureCount).toBe(5);
+    expect(state!.pinFailureCount).toBe(BURST);
+  });
+
+  it('registerFailedAttempt on a just-EXPIRED lock starts a fresh window atomically under a burst', async () => {
+    const userId = await seedUser();
+
+    // Reach the cap, then lock in the PAST (window elapsed) — the attacker-
+    // inducible state the fold-in reset must handle without a TOCTOU.
+    for (let i = 0; i < 5; i += 1)
+      await repo.registerFailedAttempt(userId, new Date());
+    await repo.setLock(userId, new Date(Date.now() - 60_000));
+
+    // A concurrent burst on the expired window: because the reset is folded into
+    // the same atomic statement as the increment, counts still come out as a
+    // clean 1..BURST (no interleaved double-reset keeping guesses under the cap).
+    const now = new Date();
+    const BURST = 20;
+    const results = await Promise.all(
+      Array.from({ length: BURST }, () =>
+        repo.registerFailedAttempt(userId, now),
+      ),
+    );
+    expect(results.map((r) => r.count).sort((a, b) => a - b)).toEqual(
+      Array.from({ length: BURST }, (_, i) => i + 1),
+    );
+
+    const state = await repo.getPinState(userId);
+    expect(state!.pinFailureCount).toBe(BURST);
+  });
+
+  // ── Test 5: setLock persists pinLockedUntil ───────────────────────────────
+  it('setLock persists pinLockedUntil without changing the failure count', async () => {
+    const userId = await seedUser();
+    await repo.registerFailedAttempt(userId, new Date());
+    await repo.registerFailedAttempt(userId, new Date());
+
+    const lockedUntil = new Date('2099-01-01T00:00:00.000Z');
+    await repo.setLock(userId, lockedUntil);
+
+    const state = await repo.getPinState(userId);
+    expect(state!.pinFailureCount).toBe(2); // unchanged
     expect(state!.pinLockedUntil).not.toBeNull();
     // Timestamps may lose sub-second precision in Postgres; compare at second granularity.
     expect(state!.pinLockedUntil!.getTime()).toBeGreaterThanOrEqual(
@@ -101,8 +155,10 @@ describe('PinPrismaRepository (integration, Testcontainers Postgres)', () => {
     const userId = await seedUser();
     const lockedUntil = new Date('2099-12-31T23:59:59.000Z');
 
-    // First record a failure + lock
-    await repo.recordFailure(userId, 5, lockedUntil);
+    // First record failures + lock (via the atomic register + setLock API)
+    for (let i = 0; i < 5; i += 1)
+      await repo.registerFailedAttempt(userId, new Date());
+    await repo.setLock(userId, lockedUntil);
     const locked = await repo.getPinState(userId);
     expect(locked!.pinFailureCount).toBe(5);
     expect(locked!.pinLockedUntil).not.toBeNull();
@@ -125,18 +181,30 @@ describe('PinPrismaRepository (integration, Testcontainers Postgres)', () => {
     expect(afterSet!.pinHash).toBe(hash);
     expect(afterSet!.pinFailureCount).toBe(0);
 
-    // 2. Record incremental failures
-    await repo.recordFailure(userId, 1, null);
-    await repo.recordFailure(userId, 2, null);
-    await repo.recordFailure(userId, 3, null);
+    // 2. Record incremental failures (atomic register)
+    expect((await repo.registerFailedAttempt(userId, new Date())).count).toBe(
+      1,
+    );
+    expect((await repo.registerFailedAttempt(userId, new Date())).count).toBe(
+      2,
+    );
+    expect((await repo.registerFailedAttempt(userId, new Date())).count).toBe(
+      3,
+    );
 
     const afterThree = await repo.getPinState(userId);
     expect(afterThree!.pinFailureCount).toBe(3);
     expect(afterThree!.pinLockedUntil).toBeNull();
 
     // 3. Lock on the 5th failure
+    expect((await repo.registerFailedAttempt(userId, new Date())).count).toBe(
+      4,
+    );
+    expect((await repo.registerFailedAttempt(userId, new Date())).count).toBe(
+      5,
+    );
     const lockedAt = new Date('2099-06-01T08:00:00.000Z');
-    await repo.recordFailure(userId, 5, lockedAt);
+    await repo.setLock(userId, lockedAt);
     const afterLock = await repo.getPinState(userId);
     expect(afterLock!.pinFailureCount).toBe(5);
     expect(afterLock!.pinLockedUntil).not.toBeNull();

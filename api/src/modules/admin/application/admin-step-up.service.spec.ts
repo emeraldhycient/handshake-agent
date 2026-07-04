@@ -29,6 +29,8 @@ const userBase: AdminUserRecord = {
   roleName: 'super_admin',
   createdAt: new Date('2026-01-01'),
   lastLoginAt: null,
+  failedLoginCount: 0,
+  loginLockedUntil: null,
 };
 
 function build(session: AdminSessionRecord | null, passwordHash = 'hashed:pw') {

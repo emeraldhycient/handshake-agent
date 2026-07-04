@@ -234,8 +234,9 @@ describe('env.schema boot guards', () => {
       ...validRaw,
       NODE_ENV: 'production',
       AUTH_DEV_EXPOSE_OTP: 'false',
-      // satisfy the other prod-only guard so this test isolates the OTP one
+      // satisfy the other prod-only guards so this test isolates the OTP one
       STATEMENT_SIGNING_KEY: 'stmt-key',
+      DIRECTIVE_SIGNING_KEY: 'directive-key',
     });
     expect(env.AUTH_DEV_EXPOSE_OTP).toBe('false');
   });
@@ -289,6 +290,8 @@ describe('env.schema boot guards', () => {
       NODE_ENV: 'production',
       AUTH_DEV_EXPOSE_OTP: 'false',
       STATEMENT_SIGNING_KEY: 'stmt-key',
+      // satisfy the DIRECTIVE_SIGNING_KEY prod guard so this test isolates the statement one
+      DIRECTIVE_SIGNING_KEY: 'directive-key',
     });
     expect(env.STATEMENT_SIGNING_KEY).toBe('stmt-key');
   });
@@ -296,6 +299,48 @@ describe('env.schema boot guards', () => {
   it('tolerates an empty STATEMENT_SIGNING_KEY outside production', () => {
     const env = validateEnv({ ...validRaw, NODE_ENV: 'development' });
     expect(env.STATEMENT_SIGNING_KEY).toBe('');
+  });
+
+  // 4. DIRECTIVE_SIGNING_KEY must be present in production — it is the sole
+  //    authenticator of the stateless WhatsApp flow_token; an empty key makes
+  //    the HMAC attacker-computable (forgeable victim userId).
+  it('rejects an empty DIRECTIVE_SIGNING_KEY when NODE_ENV=production', () => {
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        NODE_ENV: 'production',
+        AUTH_DEV_EXPOSE_OTP: 'false',
+        STATEMENT_SIGNING_KEY: 'stmt-key',
+        DIRECTIVE_SIGNING_KEY: '',
+      }),
+    ).toThrow(/DIRECTIVE_SIGNING_KEY/);
+  });
+
+  it('rejects a missing DIRECTIVE_SIGNING_KEY when NODE_ENV=production', () => {
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        NODE_ENV: 'production',
+        AUTH_DEV_EXPOSE_OTP: 'false',
+        STATEMENT_SIGNING_KEY: 'stmt-key',
+      }),
+    ).toThrow(/DIRECTIVE_SIGNING_KEY/);
+  });
+
+  it('accepts a present DIRECTIVE_SIGNING_KEY in production', () => {
+    const env = validateEnv({
+      ...validRaw,
+      NODE_ENV: 'production',
+      AUTH_DEV_EXPOSE_OTP: 'false',
+      STATEMENT_SIGNING_KEY: 'stmt-key',
+      DIRECTIVE_SIGNING_KEY: 'directive-key',
+    });
+    expect(env.DIRECTIVE_SIGNING_KEY).toBe('directive-key');
+  });
+
+  it('tolerates an empty DIRECTIVE_SIGNING_KEY outside production', () => {
+    const env = validateEnv({ ...validRaw, NODE_ENV: 'development' });
+    expect(env.DIRECTIVE_SIGNING_KEY).toBe('');
   });
 });
 

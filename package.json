@@ -40,6 +40,9 @@
       "cpu-features",
       "ssh2",
       "protobufjs"
-    ]
+    ],
+    "overrides": {
+      "multer": "^2.2.0"
+    }
   }
 }

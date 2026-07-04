@@ -143,6 +143,25 @@ export interface AuthConfig {
   emailToken: EmailTokenConfig;
 }
 
+/**
+ * Admin-console login lockout (credential-stuffing / password-spray guard,
+ * root CLAUDE.md §3.3 / §7). The IP-keyed throttle is trivially bypassed with a
+ * proxy pool, so login also locks PER ACCOUNT: the failure counter is
+ * incremented atomically before the argon2 verify and, past `maxAttempts`, the
+ * account is locked for `lockoutMinutes`. Admin-tunable via the DB-admin
+ * AppSetting layer (no deploy).
+ */
+export interface AdminLoginConfig {
+  /** Maximum consecutive failed admin logins before the account is locked. */
+  maxAttempts: number;
+  /** Duration (minutes) the admin account stays locked after maxAttempts failures. */
+  lockoutMinutes: number;
+}
+
+export interface AdminConfig {
+  login: AdminLoginConfig;
+}
+
 /** Directive-grant configuration (task 4.2, ADR-0005/0006). */
 export interface DirectiveConfig {
   /**
@@ -495,6 +514,7 @@ export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
   auth: AuthConfig;
+  admin: AdminConfig;
   directive: DirectiveConfig;
   buy: BuyConfig;
   sell: SellConfig;
@@ -853,6 +873,16 @@ const buildConfig = (): AppConfig => ({
     emailToken: {
       // 24-hour email-verification link. Admin-tunable later (§7).
       ttlSeconds: 24 * 60 * 60,
+    },
+  },
+  admin: {
+    login: {
+      // Per-account admin-login lockout (credential-stuffing guard, §3.3). More
+      // permissive than the end-user PIN cap (5) since MFA is the second factor,
+      // but still finite so password-spray cannot run indefinitely behind a proxy
+      // pool. Admin-tunable later (DB-admin AppSetting layer, root CLAUDE.md §7).
+      maxAttempts: 10,
+      lockoutMinutes: 15,
     },
   },
   beneficiary: {

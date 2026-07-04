@@ -37,7 +37,6 @@ import {
   UnprocessableEntityException,
   UseGuards,
 } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
 
 import type {
   KycCompleteResponse,
@@ -62,7 +61,6 @@ import { KycSubmitDto } from './dto/kyc-submit.dto';
 import { SetPinDto } from './dto/set-pin.dto';
 
 @Controller('kyc')
-@UseGuards(ThrottlerGuard)
 export class KycController {
   private readonly logger = new Logger(KycController.name);
 
