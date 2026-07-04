@@ -93,6 +93,38 @@ dashboard shows **Revenue (fees) NGN 600** (was negative); metrics e2e 8 green.
 - **Accept:** spread appears as a real ledger leg; a profit endpoint returns derived
   fee+spread per currency; tx-detail + dashboard read from it.
 
+#### Design (worked out 2026-07-04 — implement next, strict TDD)
+**Chosen approach:** derive profit from the authoritative `Quote` snapshots (safe,
+accurate, ZERO change to the settlement double-entry ledger pre-launch). Recording an
+explicit `platform_revenue` ledger leg is a documented *future* option (correct accounting,
+higher money-path risk) — deferred.
+
+**Linkage:** `Transaction (status=completed, createdAt in range) → proposalId → Proposal
+→ Quote`. Each `Quote` carries `type`, `fiatCurrency`, `fiatAmount`, `cryptoAmount`,
+`fxRate` (effective), `baseRate` (mid), `processingFeeAmount`. All money via exact BigInt
+(`toScaled`), never floats.
+
+**Per-tx components (fiat), verified against `quote-pricing.ts` + `proposal.service.ts`:**
+- **BUY** — quote `fiatAmount` is GROSS (includes fee). `netFiat = fiatAmount −
+  processingFeeAmount`. `fee = processingFeeAmount`. `spread = netFiat −
+  cryptoAmount×baseRate`.
+- **SELL** — quote `fiatAmount = netFiatAmount` (NET, post-fee). `fiatBeforeFee =
+  fiatAmount + processingFeeAmount`. `fee = processingFeeAmount`. `spread =
+  cryptoAmount×baseRate − fiatBeforeFee`.
+
+**Gaps this closes (discovered in audit):** the current `revenue()` counts only BUY fees
+(the `platform_float` legs) — it MISSES **sell fees** and **all spread**. Replace it with
+the Quote-derived aggregation so `totalFeesByCurrency` = Σ fees (buy+sell) and
+`totalSpreadByCurrency` = Σ spread (buy+sell); `profit = fees + spread`. (This supersedes
+the `f4ec01f` platform_float negate as the fee source — that fix keeps the card correct in
+the interim.)
+
+**Steps:** (1) new `profit()`/extended `revenue()` on `MetricsReadRepository` with the join
++ per-type math; (2) contract shape for profit per currency + capability; (3) admin metrics
+endpoint + service; (4) dashboard profit tile + tx-detail per-tx profit line (#4); (5)
+e2e (Testcontainers) seeding buy+sell quotes/proposals/completed txns with known
+baseRate/fxRate and asserting exact fee/spread/profit; unit for the pure per-tx math.
+
 ### 6. Capabilities / service registry — ⬜ ticketing extensibility
 - **State:** Crypto capability kill-switches (buy/sell/send/swap) toggle via maker-checker
   + step-up, persisted to config, gated backend-side. Providers registry exists.
