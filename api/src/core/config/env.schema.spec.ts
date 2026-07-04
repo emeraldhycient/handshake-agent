@@ -62,6 +62,24 @@ describe('validateEnv', () => {
     ).toThrow(/WHATSAPP_GRAPH_BASE_URL/);
   });
 
+  it('defaults RESEND_BASE_URL to https://api.resend.com', () => {
+    expect(validateEnv(validRaw).RESEND_BASE_URL).toBe(
+      'https://api.resend.com',
+    );
+  });
+
+  it('defaults ANTHROPIC_BASE_URL to https://api.anthropic.com', () => {
+    expect(validateEnv(validRaw).ANTHROPIC_BASE_URL).toBe(
+      'https://api.anthropic.com',
+    );
+  });
+
+  it('throws when ANTHROPIC_BASE_URL is not a valid URL', () => {
+    expect(() =>
+      validateEnv({ ...validRaw, ANTHROPIC_BASE_URL: 'nope' }),
+    ).toThrow(/ANTHROPIC_BASE_URL/);
+  });
+
   it('allows operator-supplied-later secrets to be empty (dev)', () => {
     const env = validateEnv(validRaw);
 

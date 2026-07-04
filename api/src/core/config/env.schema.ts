@@ -22,6 +22,9 @@ export const envSchema = z
       z.string().min(1).optional(),
     ),
     AGENT_MODEL: z.string().min(1).default('claude-opus-4-8'),
+    // Public API host for the Anthropic liveness probe (system-health card). Non-secret;
+    // mirrors WHATSAPP_GRAPH_BASE_URL / BLOCKRADAR_BASE_URL. Only the host is probed — no key.
+    ANTHROPIC_BASE_URL: z.string().url().default('https://api.anthropic.com'),
 
     // --- WhatsApp (Meta Cloud API + Flows, ADR-0003) ---
     // Required to send/receive at all.
@@ -218,6 +221,8 @@ export const envSchema = z
       (v) => (v === '' ? undefined : v),
       z.string().min(1).optional(),
     ),
+    // Public API host for the Resend liveness probe (system-health card). Non-secret.
+    RESEND_BASE_URL: z.string().url().default('https://api.resend.com'),
     // Sender address in "Name <addr>" or plain "addr" form. Falls back to a safe
     // default when unset; provide a verified domain in production.
     EMAIL_FROM: z.preprocess(
