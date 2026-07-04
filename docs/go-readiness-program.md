@@ -79,7 +79,7 @@ dashboard shows **Revenue (fees) NGN 600** (was negative); metrics e2e 8 green.
 - **Accept:** every money-moving tx shows a non-null fx spread + a profit line; receipt
   action works or is gone.
 
-### 5. Spread / processing-fee collection + accurate profit tracking — ⬜ (foundational)
+### 5. Spread / processing-fee collection + accurate profit tracking — ✅ (9adb9cd; tx-detail profit line remains under #4)
 - **State:** Processing fee is **accurately recorded** (explicit `platform_float` leg).
   **Spread margin is implicit** — folded into the FX rate, never ledgered; profit is
   therefore *estimated*, not derived. No profit/revenue reporting endpoint; no
