@@ -214,13 +214,16 @@ export function OverviewPage({
       </div>
 
       {/* ── Recent activity ─────────────────────────────────────────────────── */}
-      <div className="flex flex-1 flex-col overflow-hidden rounded-[18px] border border-border bg-card">
+      {/* Grows with its content (no height-capping `flex-1`) so the page's own
+          `overflow-y-auto` scroll reveals every row — matches the Activity page's
+          list cards. A `flex-1` card here would clip overflowing rows because of
+          `overflow-hidden`, with no way to scroll them. */}
+      <div className="overflow-hidden rounded-[18px] border border-border bg-card">
         <p className="border-b border-border px-[22px] pt-[15px] pb-[11px] text-xs font-bold tracking-widest text-muted-foreground uppercase">
           Recent activity
         </p>
         {activityData.flatMap((g) => g.items).length === 0 && (
           <QueryEmptyState
-            className="flex-1"
             title="No recent activity"
             description="Your transactions will show up here."
           />
