@@ -21,15 +21,6 @@ export const ASSET_NAMES: Record<string, string> = {
 /** USDT deposit address shown in the receive / deposit flow */
 export const DEPOSIT_ADDRESS = "TQn9Y2khEb7g5mZ8FjpRt1cWnH4dHkLm3vQ"
 
-/** Supported UI languages (in display order) */
-export const LANGUAGES = [
-  "English",
-  "Pidgin",
-  "Hausa",
-  "Yoruba",
-  "Igbo",
-] as const
-
 /** Mobile greeting — shown as the initial assistant message in the chat thread */
 export const GREETING_M =
   "Hi — I'm your Handshake Agent. Tell me what you'd like to do: buy or sell crypto, send money, or get an event ticket. You can write in English, Pidgin, Hausa, Yoruba or Igbo."
