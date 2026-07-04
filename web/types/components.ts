@@ -469,3 +469,10 @@ export interface TranslationContextValue {
 export interface LanguageSelectorProps {
   className?: string
 }
+
+// ─── Shared SettingsPanel (Task 7) ────────────────────────────────────────────
+
+export interface SettingsPanelProps {
+  density?: "desktop" | "mobile"
+  className?: string
+}
