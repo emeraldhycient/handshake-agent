@@ -84,6 +84,8 @@ export const qk = {
     ["admin", "agent", "conversations", id] as const,
   dashboardMetrics: (range: MetricsRangeQuery) =>
     ["admin", "metrics", "dashboard", range] as const,
+  moneySeries: (range: MetricsRangeQuery) =>
+    ["admin", "metrics", "money-series", range] as const,
   metricsOps: ["admin", "metrics", "ops"] as const,
   opsBoard: ["admin", "ops", "board"] as const,
   approvalsInbox: ["admin", "approvals", "inbox"] as const,

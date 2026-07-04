@@ -30,6 +30,30 @@ export interface TrendChartProps {
   area?: boolean
   className?: string
 }
+
+/** Which money metric a trend chart is plotting. */
+export type MoneyMetric = "gmv" | "revenue" | "profit"
+
+/**
+ * MoneyTrendCard props — presentational (no fetching): the parent owns the
+ * `useMoneySeries` query and passes its result down as the four async branches.
+ */
+export interface MoneyTrendCardProps {
+  data: import("@handshake-agent/contracts").MoneySeriesMetrics | undefined
+  isLoading: boolean
+  isError: boolean
+}
+
+/**
+ * One day of a money time-series, resolved for a single currency: the exact
+ * decimal `amount` (for display via `formatFiat`) and its `value` (a JS number
+ * for chart geometry only — precision loss is acceptable for pixel positions).
+ */
+export interface MoneySeriesPoint {
+  date: string
+  amount: string
+  value: number
+}
 import type {
   AdminBeneficiary,
   AdminCustomFiatCreateRequest,

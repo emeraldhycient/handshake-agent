@@ -1550,6 +1550,21 @@ export function useDashboardMetrics(range: MetricsRangeQuery) {
 }
 
 /**
+ * The daily per-currency GMV / revenue / profit time-series for a date range —
+ * feeds the operator revenue & profit trend chart. Range is part of the key.
+ * 60 s stale (same cadence as the composite dashboard); `retry: false` so a 403
+ * (no Metrics grant) surfaces immediately for graceful degradation.
+ */
+export function useMoneySeries(range: MetricsRangeQuery) {
+  return useQuery({
+    queryKey: qk.moneySeries(range),
+    queryFn: () => metrics.getMoneySeriesMetrics(range),
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/**
  * The operational-health payload (system health, live-activity feed, open-compliance
  * count) for the dashboard's three formerly-mock panels. 30 s stale — these signals
  * shift more often than the aggregations. `retry: false` so a 403 (no Metrics grant)

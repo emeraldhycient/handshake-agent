@@ -31,7 +31,8 @@ import { cn } from "@/lib/utils"
 import { rangeForDays } from "@/lib/metrics-range"
 import { formatMoneyList } from "@/lib/format"
 import { TrendChart } from "@/components/admin/trend-chart"
-import { useDashboardMetrics } from "@/lib/query/hooks"
+import { MoneyTrendCard } from "@/components/admin/money-trend-card"
+import { useDashboardMetrics, useMoneySeries } from "@/lib/query/hooks"
 import { ApiError } from "@/lib/api/client"
 import type { DashboardSummary } from "@handshake-agent/contracts"
 import type { MetricsDashboardProps } from "@/types/components"
@@ -431,6 +432,7 @@ export function MetricsDashboard({
   const range = useMemo(() => rangeForDays(preset.days), [preset.days])
 
   const query = useDashboardMetrics(range)
+  const moneySeries = useMoneySeries(range)
   const isForbidden =
     query.error instanceof ApiError && query.error.status === 403
 
@@ -521,6 +523,13 @@ export function MetricsDashboard({
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.7fr_1fr]">
               <TxnVolumeCard data={query.data} />
               <ServiceHealthCard data={query.data} />
+            </div>
+            <div className="mt-4">
+              <MoneyTrendCard
+                data={moneySeries.data}
+                isLoading={moneySeries.isLoading}
+                isError={moneySeries.isError}
+              />
             </div>
             <div className="mt-4">
               <KycFunnelCard data={query.data} />
