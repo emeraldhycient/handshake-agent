@@ -138,7 +138,7 @@ baseRate/fxRate and asserting exact fee/spread/profit; unit for the pure per-tx 
 - **Accept:** a second ticketing vendor can be registered + toggled from the console with
   zero FE/caller edits; backend gates per-vendor.
 
-### 7. Platform metrics — 🟡 enterprise-grade oversight (biggest) — CHARTS DONE
+### 7. Platform metrics — ✅ enterprise-grade oversight (biggest) — COMPLETE
 - **State:** Has txn volume (per-type, daily series, success rate), GMV (per currency),
   revenue (fees + spread + profit, per currency), KYC funnel, active users, service health.
   **Charts DONE** (self-contained SVG, no lib — chosen over recharts to dodge React19/Next16
@@ -156,11 +156,17 @@ baseRate/fxRate and asserting exact fee/spread/profit; unit for the pure per-tx 
   - `b3cffb4` — per-area CSV export: reusable `ExportCsvButton` + RFC-4180 `toCsv`/
     `downloadCsv` (lib/csv), wired to the money-series card + the txn-volume table.
     web-admin vitest 422. Live-verified (both buttons emit correct-named CSV blobs).
-- **Remaining gaps:** user growth rate, churn rate, failed-jobs KPI, jobs-enqueued/queue-depth
-  (queue-depth needs the spun-off webhook queue), per-service / per-currency / per-tier
-  filters, custom date range. **Effort: M remaining. Priority: HIGH (explicitly emphasized).**
+  - `1903ba2`+`a399913` — filters: currency/capability/tier + custom date range. Backend
+    threads a `MetricsFilter` into every txn-based aggregation (capability→type, tier→
+    user.kycTier relation, currency in-memory for money metrics); FE `MetricsFilterBar`
+    (presets + custom From/To + 3 selects + Clear). Live-verified capability=buy narrows
+    the whole dashboard. web-admin vitest 431.
+  - `a07041a`+`df30f1b` — KPIs: `GET /admin/metrics/kpis` (new-user growth, churn,
+    failed-jobs) period-over-period; `PlatformKpisCard` tile strip. queue-depth already
+    surfaced in `SystemHealth` (not rebuilt). web-admin vitest 435.
 - **Accept:** each requested metric present with a graph; filters work; operator exports a
-  chosen subset.
+  chosen subset. ✅ All met. (Adversarial-review workflow ran over the money-math/filter/
+  KPI correctness — reconcile confirmed findings before final close.)
 
 ### 8. Admin multi-currency readiness + tracking — ⬜
 - **State:** 8 fiats defined (only NGN enabled); pricing/limits/velocity/compliance are
