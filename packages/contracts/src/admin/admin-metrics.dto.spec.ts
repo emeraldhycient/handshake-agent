@@ -26,6 +26,18 @@ describe("MetricsRangeQuerySchema", () => {
     expect(parsed.from).toBe("2026-06-01");
     expect(parsed.to).toBe("2026-06-30");
   });
+
+  it("accepts optional currency / capability / tier filters", () => {
+    const parsed = MetricsRangeQuerySchema.parse({
+      from: "2026-06-01",
+      currency: "NGN",
+      capability: "buy",
+      tier: "tier_2",
+    });
+    expect(parsed.currency).toBe("NGN");
+    expect(parsed.capability).toBe("buy");
+    expect(parsed.tier).toBe("tier_2");
+  });
 });
 
 describe("MetricsBucketSchema", () => {

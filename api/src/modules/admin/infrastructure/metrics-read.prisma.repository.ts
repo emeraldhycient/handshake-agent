@@ -25,6 +25,7 @@
 import { Injectable } from '@nestjs/common';
 
 import {
+  KycTier,
   QuoteType,
   TransactionStatus,
   TransactionType,
@@ -37,6 +38,7 @@ import type {
   GmvResult,
   IMetricsReadRepository,
   KycFunnelResult,
+  MetricsFilter,
   MoneySeriesBucketRow,
   MoneySeriesResult,
   RevenueResult,
@@ -126,6 +128,42 @@ function dateKey(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Valid enum values, used to reject stale/unknown FE filter selections (no-op). */
+const TXN_TYPE_VALUES = new Set<string>(Object.values(TransactionType));
+const KYC_TIER_VALUES = new Set<string>(Object.values(KycTier));
+
+/** A KYC tier the FE actually selected (validated against the enum), else null. */
+function validTier(filter?: MetricsFilter): KycTier | null {
+  return filter?.tier && KYC_TIER_VALUES.has(filter.tier)
+    ? (filter.tier as KycTier)
+    : null;
+}
+
+/** A Transaction type the FE actually selected (validated), else null. */
+function validCapability(filter?: MetricsFilter): TransactionType | null {
+  return filter?.capability && TXN_TYPE_VALUES.has(filter.capability)
+    ? (filter.capability as TransactionType)
+    : null;
+}
+
+/**
+ * Shared Transaction where-fragment for the optional metrics filters: `capability`
+ * → `type`, `tier` → the owning user's `kycTier` (Prisma relation filter). Unknown
+ * enum values are ignored so a stale FE selection never throws. Currency is applied
+ * per-metric (JSON metadata vs quote field), not here.
+ */
+function txnFilterWhere(filter?: MetricsFilter): {
+  type?: TransactionType;
+  user?: { kycTier: KycTier };
+} {
+  const where: { type?: TransactionType; user?: { kycTier: KycTier } } = {};
+  const capability = validCapability(filter);
+  const tier = validTier(filter);
+  if (capability) where.type = capability;
+  if (tier) where.user = { kycTier: tier };
+  return where;
+}
+
 @Injectable()
 export class MetricsReadPrismaRepository implements IMetricsReadRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -133,11 +171,16 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
   async transactionVolume(
     from: Date,
     to: Date,
+    filter?: MetricsFilter,
   ): Promise<TransactionVolumeResult> {
+    const where = {
+      createdAt: { gte: from, lte: to },
+      ...txnFilterWhere(filter),
+    };
     // One scan: group by (type, status) for the per-type breakdown + success rate.
     const grouped = await this.prisma.transaction.groupBy({
       by: ['type', 'status'],
-      where: { createdAt: { gte: from, lte: to } },
+      where,
       _count: { _all: true },
     });
 
@@ -181,7 +224,7 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     // chart (buy/sell/send/swap/ticket per day); non-capability types (reward/
     // refund/deposit) count toward the flat total but not the stacked segments.
     const rows = await this.prisma.transaction.findMany({
-      where: { createdAt: { gte: from, lte: to } },
+      where,
       select: { createdAt: true, type: true },
     });
     const seriesMap = new Map<string, number>();
@@ -218,17 +261,19 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     };
   }
 
-  async gmv(from: Date, to: Date): Promise<GmvResult> {
+  async gmv(from: Date, to: Date, filter?: MetricsFilter): Promise<GmvResult> {
     // GMV = summed fiat notional of COMPLETED, money-moving txns in range. The
     // notional lives in Transaction.metadata as { fiatAmount, fiatCurrency } (set
     // by the execution engine at settle) — there is no first-class column. We sum
     // per currency with EXACT scaled-integer (×10^18) arithmetic; a txn without a
     // fiat notional (e.g. a pure on-chain send with no fiat leg) is skipped and
-    // does NOT count toward txnCount.
+    // does NOT count toward txnCount. A `currency` filter is applied IN-MEMORY
+    // (metadata is JSON — not a queryable column); capability/tier filter in-DB.
     const rows = await this.prisma.transaction.findMany({
       where: {
         status: TransactionStatus.completed,
         createdAt: { gte: from, lte: to },
+        ...txnFilterWhere(filter),
       },
       select: { metadata: true },
     });
@@ -241,6 +286,9 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
       const fiatAmount = meta.fiatAmount;
       const fiatCurrency = meta.fiatCurrency;
       if (typeof fiatAmount !== 'string' || typeof fiatCurrency !== 'string') {
+        continue;
+      }
+      if (filter?.currency && fiatCurrency !== filter.currency) {
         continue;
       }
       if (!sums.has(fiatCurrency)) {
@@ -264,17 +312,24 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     return { totalByCurrency, txnCount };
   }
 
-  async revenue(from: Date, to: Date): Promise<RevenueResult> {
+  async revenue(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<RevenueResult> {
     // Platform profit DERIVED from the authoritative Quote of each COMPLETED
     // buy/sell in range (docs/go-readiness-program.md §5). Both the fee AND the
     // realized spread are recoverable from the Quote (baseRate vs effective fxRate,
     // cryptoAmount, fiatAmount), whereas the double-entry ledger only carries BUY
     // fees — so this correctly counts sell fees + all spread the ledger misses,
     // WITHOUT restructuring the settlement path. Exact BigInt (scale-18), no floats.
+    // capability/tier filter in-DB; `currency` filters the quote's fiatCurrency
+    // IN-MEMORY (keeps the enum-cast off the query — a stale code never throws).
     const priced = await this.prisma.transaction.findMany({
       where: {
         status: TransactionStatus.completed,
         createdAt: { gte: from, lte: to },
+        ...txnFilterWhere(filter),
         proposal: { quote: { type: { in: [QuoteType.buy, QuoteType.sell] } } },
       },
       select: {
@@ -301,6 +356,7 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     for (const t of priced) {
       const q = t.proposal?.quote;
       if (!q) continue;
+      if (filter?.currency && q.fiatCurrency !== filter.currency) continue;
       const { fee, spread } = computeTxProfit({
         type: q.type === QuoteType.sell ? 'sell' : 'buy',
         fiatAmount: (q.fiatAmount as { toString(): string }).toString(),
@@ -344,6 +400,7 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
       where: {
         status: TransactionStatus.completed,
         createdAt: { gte: from, lte: to },
+        ...txnFilterWhere(filter),
       },
     });
 
@@ -355,18 +412,24 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     };
   }
 
-  async moneySeries(from: Date, to: Date): Promise<MoneySeriesResult> {
+  async moneySeries(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<MoneySeriesResult> {
     // One scan of every COMPLETED txn in range, pulling BOTH the fiat notional
     // (metadata → GMV, ALL money-moving types, consistent with `gmv()`) and the
     // buy/sell Quote (→ fee + spread via `computeTxProfit`, consistent with
     // `revenue()`). Bucket per UTC day and currency with EXACT scaled-integer math.
     // A txn may contribute to GMV, to fee/profit, or to both; the GMV currency
     // (metadata.fiatCurrency) and the fee currency (quote.fiatCurrency) are tracked
-    // independently.
+    // independently. capability/tier filter in-DB; `currency` filters each leg
+    // IN-MEMORY (metadata JSON + quote code), consistent with gmv()/revenue().
     const rows = await this.prisma.transaction.findMany({
       where: {
         status: TransactionStatus.completed,
         createdAt: { gte: from, lte: to },
+        ...txnFilterWhere(filter),
       },
       select: {
         createdAt: true,
@@ -419,13 +482,21 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
       const meta = (row.metadata ?? {}) as Record<string, unknown>;
       const fiatAmount = meta.fiatAmount;
       const fiatCurrency = meta.fiatCurrency;
-      if (typeof fiatAmount === 'string' && typeof fiatCurrency === 'string') {
+      if (
+        typeof fiatAmount === 'string' &&
+        typeof fiatCurrency === 'string' &&
+        (!filter?.currency || fiatCurrency === filter.currency)
+      ) {
         cellFor(day, fiatCurrency).gmv += toScaledBigInt(fiatAmount);
       }
 
       // Fee + profit leg — derived from the buy/sell Quote snapshot.
       const q = row.proposal?.quote;
-      if (q && (q.type === QuoteType.buy || q.type === QuoteType.sell)) {
+      if (
+        q &&
+        (q.type === QuoteType.buy || q.type === QuoteType.sell) &&
+        (!filter?.currency || q.fiatCurrency === filter.currency)
+      ) {
         const { fee, spread } = computeTxProfit({
           type: q.type === QuoteType.sell ? 'sell' : 'buy',
           fiatAmount: (q.fiatAmount as { toString(): string }).toString(),
@@ -491,17 +562,30 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     };
   }
 
-  async activeUsers(from: Date, to: Date): Promise<ActiveUsersResult> {
+  async activeUsers(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<ActiveUsersResult> {
+    // `active` is txn-based → full filter (capability + tier). `new`/`total` are
+    // user-population counts → only the tier filter is meaningful (capability is a
+    // txn dimension), so the baselines stay tier-scoped when a tier is selected.
+    const tier = validTier(filter);
+    const tierWhere = tier ? { kycTier: tier } : {};
     const [activeGroups, newInRange, totalUsers] = await Promise.all([
       // Distinct users with a Transaction whose createdAt is in range.
       this.prisma.transaction.groupBy({
         by: ['userId'],
-        where: { createdAt: { gte: from, lte: to } },
+        where: { createdAt: { gte: from, lte: to }, ...txnFilterWhere(filter) },
       }),
       this.prisma.user.count({
-        where: { deletedAt: null, createdAt: { gte: from, lte: to } },
+        where: {
+          deletedAt: null,
+          createdAt: { gte: from, lte: to },
+          ...tierWhere,
+        },
       }),
-      this.prisma.user.count({ where: { deletedAt: null } }),
+      this.prisma.user.count({ where: { deletedAt: null, ...tierWhere } }),
     ]);
 
     return {
@@ -511,7 +595,15 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     };
   }
 
-  async serviceHealth(from: Date, to: Date): Promise<ServiceHealthResult> {
+  async serviceHealth(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<ServiceHealthResult> {
+    // This card is the cross-service health OVERVIEW, so the `capability` filter is
+    // intentionally NOT applied (it would collapse the card to one service). The
+    // `tier` filter IS applied (health for a given user segment); currency is n/a.
+    const tier = validTier(filter);
     const grouped = await this.prisma.transaction.groupBy({
       by: ['type', 'status'],
       where: {
@@ -519,6 +611,7 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
         type: {
           in: SERVICE_TYPES.map((t) => t as TransactionType),
         },
+        ...(tier ? { user: { kycTier: tier } } : {}),
       },
       _count: { _all: true },
     });

@@ -175,6 +175,43 @@ describe('AdminMetricsService', () => {
     });
   });
 
+  describe('filters', () => {
+    it('threads currency/capability/tier into the repo as the filter argument', async () => {
+      await service.dashboard({
+        from: '2026-06-01',
+        to: '2026-06-30',
+        currency: 'NGN',
+        capability: 'buy',
+        tier: 'tier_2',
+      });
+      const [, , filter] = repo.transactionVolume.mock.calls[0];
+      expect(filter).toEqual({
+        currency: 'NGN',
+        capability: 'buy',
+        tier: 'tier_2',
+      });
+      // gmv/revenue/activeUsers/serviceHealth get the same filter object.
+      expect(repo.gmv.mock.calls[0][2]).toEqual(filter);
+      expect(repo.revenue.mock.calls[0][2]).toEqual(filter);
+    });
+
+    it('maps empty-string filters to undefined (treated as no selection)', async () => {
+      await service.transactions({
+        from: '2026-06-01',
+        to: '2026-06-30',
+        currency: '',
+        capability: '',
+        tier: '',
+      });
+      const [, , filter] = repo.transactionVolume.mock.calls[0];
+      expect(filter).toEqual({
+        currency: undefined,
+        capability: undefined,
+        tier: undefined,
+      });
+    });
+  });
+
   describe('revenue', () => {
     it('maps the revenue result to the contract shape', async () => {
       const result = await service.revenue({

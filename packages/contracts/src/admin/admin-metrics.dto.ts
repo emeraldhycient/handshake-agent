@@ -8,9 +8,16 @@ import { z } from "zod";
 
 // Date-range query: both bounds are optional ISO date strings. When omitted the
 // service defaults to the last 30 days and clamps the window at 366 days.
+// Optional filters narrow the aggregations: `capability` (a Transaction type) and
+// `tier` (a KYC tier) scope every txn-based metric; `currency` (an ISO fiat code)
+// scopes the money metrics (GMV / revenue / money-series). Unknown/empty values
+// are ignored server-side (no-op), so the FE may always send the current selection.
 export const MetricsRangeQuerySchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
+  currency: z.string().optional(),
+  capability: z.string().optional(),
+  tier: z.string().optional(),
 });
 export type MetricsRangeQuery = z.infer<typeof MetricsRangeQuerySchema>;
 

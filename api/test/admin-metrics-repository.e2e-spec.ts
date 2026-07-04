@@ -416,6 +416,117 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
     });
   });
 
+  // ── filters (capability / tier / currency) ──────────────────────────────────
+
+  describe('filters', () => {
+    // Shared fixture: a tier_1 user with a completed NGN buy + a completed USD
+    // send (no quote), and a tier_2 user with a completed NGN sell.
+    async function seedFilterFixture() {
+      const uT1 = await seedUser({ kycTier: 'tier_1' });
+      const uT2 = await seedUser({ kycTier: 'tier_2' });
+      await seedTxnWithQuote({
+        userId: uT1,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-06-01T08:00:00.000Z'),
+        fiatAmount: '1115',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '100',
+        metadata: { fiatAmount: '1115', fiatCurrency: 'NGN' },
+      });
+      await seedTxn({
+        userId: uT1,
+        type: 'send',
+        status: 'completed',
+        createdAt: new Date('2026-06-01T12:00:00.000Z'),
+        metadata: { fiatAmount: '2000', fiatCurrency: 'USD' },
+      });
+      await seedTxnWithQuote({
+        userId: uT2,
+        type: 'sell',
+        status: 'completed',
+        createdAt: new Date('2026-06-02T08:00:00.000Z'),
+        fiatAmount: '935',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '50',
+        metadata: { fiatAmount: '935', fiatCurrency: 'NGN' },
+      });
+      return { uT1, uT2 };
+    }
+
+    it('transactionVolume: capability filter narrows byType to that type', async () => {
+      await seedFilterFixture();
+      const result = await repo.transactionVolume(FROM, TO, {
+        capability: 'buy',
+      });
+      expect(result.byType.map((t) => t.type)).toEqual(['buy']);
+      expect(result.byType[0].count).toBe(1);
+    });
+
+    it('transactionVolume: tier filter narrows to the owning user tier', async () => {
+      await seedFilterFixture();
+      // tier_2 owns only the sell.
+      const result = await repo.transactionVolume(FROM, TO, { tier: 'tier_2' });
+      expect(result.byType.map((t) => t.type)).toEqual(['sell']);
+      expect(result.byType[0].count).toBe(1);
+    });
+
+    it('transactionVolume: an unknown filter value is ignored (no-op)', async () => {
+      await seedFilterFixture();
+      const result = await repo.transactionVolume(FROM, TO, {
+        capability: 'not-a-type',
+        tier: 'not-a-tier',
+      });
+      // All 3 txns still counted.
+      const total = result.byType.reduce((s, t) => s + t.count, 0);
+      expect(total).toBe(3);
+    });
+
+    it('gmv: currency filter keeps only that currency (in-memory JSON filter)', async () => {
+      await seedFilterFixture();
+      const usd = await repo.gmv(FROM, TO, { currency: 'USD' });
+      expect(usd.totalByCurrency).toEqual([
+        { currency: 'USD', amount: '2000' },
+      ]);
+      expect(usd.txnCount).toBe(1);
+    });
+
+    it('gmv: capability filter narrows the notional sum', async () => {
+      await seedFilterFixture();
+      // Only the send carries a USD notional; filtering to send yields USD 2000.
+      const send = await repo.gmv(FROM, TO, { capability: 'send' });
+      expect(send.totalByCurrency).toEqual([
+        { currency: 'USD', amount: '2000' },
+      ]);
+    });
+
+    it('revenue: currency filter selects the quote currency; unmatched → empty', async () => {
+      await seedFilterFixture();
+      const ngn = await repo.revenue(FROM, TO, { currency: 'NGN' });
+      expect(
+        ngn.totalFeesByCurrency.find((c) => c.currency === 'NGN')?.amount,
+      ).toBe('150'); // buy 100 + sell 50
+      const usd = await repo.revenue(FROM, TO, { currency: 'USD' });
+      expect(usd.totalFeesByCurrency).toEqual([]);
+    });
+
+    it('moneySeries: tier filter scopes both the GMV and quote legs', async () => {
+      await seedFilterFixture();
+      // tier_1 owns the NGN buy (fee 100) + the USD send (gmv 2000, no fee).
+      const t1 = await repo.moneySeries(FROM, TO, { tier: 'tier_1' });
+      expect(t1.currencies.sort()).toEqual(['NGN', 'USD']);
+      const day1 = t1.buckets.find((b) => b.date === '2026-06-01')!;
+      expect(day1.revenue.find((c) => c.currency === 'NGN')?.amount).toBe(
+        '100',
+      );
+      expect(day1.gmv.find((c) => c.currency === 'USD')?.amount).toBe('2000');
+      // The tier_2 sell (2026-06-02) is excluded.
+      expect(t1.buckets.some((b) => b.date === '2026-06-02')).toBe(false);
+    });
+  });
+
   // ── kycFunnel ──────────────────────────────────────────────────────────────
 
   describe('kycFunnel', () => {

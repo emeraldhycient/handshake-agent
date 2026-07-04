@@ -13,6 +13,20 @@
  */
 export const METRICS_READ_REPOSITORY = Symbol('METRICS_READ_REPOSITORY');
 
+/**
+ * Optional filters that narrow the txn-based aggregations. All fields are no-ops
+ * when unset (or when an unknown value is supplied — the adapter validates against
+ * the Prisma enums and ignores anything unrecognised). `capability` (a Transaction
+ * type) and `tier` (the owning user's KYC tier) scope every txn-based metric;
+ * `currency` (an ISO fiat code) scopes the money metrics (GMV / revenue / money
+ * series). The point-in-time KYC funnel is a population snapshot and is unaffected.
+ */
+export interface MetricsFilter {
+  currency?: string;
+  capability?: string;
+  tier?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Record types (application-layer projections — never Prisma types)
 // ---------------------------------------------------------------------------
@@ -152,7 +166,11 @@ export interface IMetricsReadRepository {
    * failed); 0 when none). `stuck` counts the in-flight statuses
    * `pending | validating | confirmed | settling`.
    */
-  transactionVolume(from: Date, to: Date): Promise<TransactionVolumeResult>;
+  transactionVolume(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<TransactionVolumeResult>;
 
   /**
    * Gross Merchandise Value: the summed fiat notional (`metadata.fiatAmount`) of
@@ -160,7 +178,7 @@ export interface IMetricsReadRepository {
    * grouped by fiat currency (`metadata.fiatCurrency`) — EXACT scaled-integer math.
    * `txnCount` is the number of completed txns that carried a fiat notional.
    */
-  gmv(from: Date, to: Date): Promise<GmvResult>;
+  gmv(from: Date, to: Date, filter?: MetricsFilter): Promise<GmvResult>;
 
   /**
    * Platform profit for COMPLETED transactions in [from, to), grouped by currency
@@ -169,7 +187,7 @@ export interface IMetricsReadRepository {
    * ledger never records, so `totalSpreadByCurrency` is populated (not empty).
    * `txnCount` is completed txns in range.
    */
-  revenue(from: Date, to: Date): Promise<RevenueResult>;
+  revenue(from: Date, to: Date, filter?: MetricsFilter): Promise<RevenueResult>;
 
   /**
    * Daily money time-series over [from, to): for each UTC day with a completed
@@ -179,7 +197,11 @@ export interface IMetricsReadRepository {
    * are sorted ascending; `currencies` lists every fiat present in the range.
    * EXACT scaled-integer math — never floats.
    */
-  moneySeries(from: Date, to: Date): Promise<MoneySeriesResult>;
+  moneySeries(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<MoneySeriesResult>;
 
   /**
    * Point-in-time user counts grouped by kycStatus and by kycTier (soft-deleted
@@ -191,11 +213,19 @@ export interface IMetricsReadRepository {
    * Distinct users who transacted in [from, to) (active), users created in the
    * range (new), and the total non-soft-deleted user count.
    */
-  activeUsers(from: Date, to: Date): Promise<ActiveUsersResult>;
+  activeUsers(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<ActiveUsersResult>;
 
   /**
    * Per transactable service (buy/sell/send/swap): total / completed / failed
    * counts in [from, to) and the success rate.
    */
-  serviceHealth(from: Date, to: Date): Promise<ServiceHealthResult>;
+  serviceHealth(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<ServiceHealthResult>;
 }
