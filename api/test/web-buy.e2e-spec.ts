@@ -47,6 +47,7 @@ import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.p
 import type { IWalletProvider } from '../src/modules/wallets/application/ports/wallet-provider.port';
 import type { IPaymentProvider } from '../src/modules/treasury/application/ports/payment-provider.port';
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
+import { drainWebhooks } from './helpers/drain-webhooks';
 
 jest.setTimeout(180_000);
 
@@ -414,6 +415,7 @@ describe('Web buy — e2e (authorize → execute → settle → status)', () => 
       .set('verif-hash', FLUTTERWAVE_WEBHOOK_SECRET)
       .send(flwBody)
       .expect(200);
+    await drainWebhooks(app);
 
     expect(flwRes.body).toEqual({ status: 'ok' });
 
