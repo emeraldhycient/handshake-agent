@@ -21,7 +21,8 @@ export type AdminErrorCode =
   | 'ADMIN_CHANGE_REQUEST_NOT_PENDING'
   | 'ADMIN_CHANGE_REQUEST_NOT_APPLICABLE'
   | 'ADMIN_BULK_CONFIRMATION_REQUIRED'
-  | 'ADMIN_MANUAL_CREDIT_NOT_ALLOWED';
+  | 'ADMIN_MANUAL_CREDIT_NOT_ALLOWED'
+  | 'ADMIN_PAYOUT_RETRY_BLOCKED';
 
 export abstract class AdminError extends Error {
   abstract readonly code: AdminErrorCode;

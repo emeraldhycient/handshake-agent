@@ -49,6 +49,7 @@ import {
   AdminNotFoundError,
 } from '../../modules/admin/domain/admin-errors';
 import { TxnNotTriageableError } from '../../modules/admin/domain/txn-triage-errors';
+import { PayoutRetryBlockedError } from '../../modules/admin/domain/treasury-operator-errors';
 import {
   SettingNotEditableError,
   SettingValidationError,
@@ -167,6 +168,7 @@ describe('DomainExceptionFilter', () => {
     [new MultiCurrencyInvariantError('NGN has no limits'), 422],
     [new CurrencyCollisionError('EUR'), 409],
     [new TxnNotTriageableError(), 409],
+    [new PayoutRetryBlockedError(), 403],
   ])('maps admin %s → %i with its code echoed', (err, expected) => {
     const { statusCode, body } = run(filter, err);
     expect(statusCode).toBe(expected);

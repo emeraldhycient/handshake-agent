@@ -238,6 +238,13 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.CONFLICT,
     message: 'This transaction cannot be triaged in its current state.',
   },
+  // Payout retry (go-readiness #2): the owning user failed the server-side re-check
+  // at retry time (KYC/tier/SIM-swap/cooling-off/compliance block) → 403. The retry
+  // service opens a compliance escalation before this is thrown (§3.3).
+  ADMIN_PAYOUT_RETRY_BLOCKED: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'This payout cannot be retried for this account.',
+  },
   // Approvals / maker-checker (Phase 7): four-eyes enforcement + decision guards.
   ADMIN_SELF_APPROVAL_FORBIDDEN: {
     status: HttpStatus.FORBIDDEN,
