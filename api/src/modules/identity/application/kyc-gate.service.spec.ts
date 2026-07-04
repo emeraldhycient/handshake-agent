@@ -971,3 +971,84 @@ describe('KycGateService.getOriginatorIdentity', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// assertCanReleasePayout — velocity-free re-check for retrying a stuck payout
+// (go-readiness #2). Reuses the baseline (SIM/KYC/tier/cooling-off/per-tx) but
+// intentionally SKIPS the cumulative velocity counters (this tx already consumed
+// its allocation at execute time) — re-running them would double-count and block.
+// ---------------------------------------------------------------------------
+
+describe('KycGateService.assertCanReleasePayout', () => {
+  const PAYOUT_INPUT = {
+    userId: 'user-id-1',
+    fiatAmount: '10000',
+    fiatCurrency: 'NGN',
+    asset: 'USDT',
+  };
+
+  it('resolves for a verified tier_1 user within the per-tx cap', async () => {
+    const svc = makeService(makeUser(), '0', 0);
+    await expect(
+      svc.assertCanReleasePayout(PAYOUT_INPUT),
+    ).resolves.toBeUndefined();
+  });
+
+  it('does NOT consult the daily/weekly velocity counters (avoids double-count)', async () => {
+    const identityRepo = makeIdentityRepo(makeUser());
+    const velocityRepo = makeVelocityRepo('0', 0);
+    const svc = new KycGateService(
+      identityRepo,
+      velocityRepo,
+      stubConfig,
+      stubClock,
+    );
+    await svc.assertCanReleasePayout(PAYOUT_INPUT);
+    expect(velocityRepo.getDailyUsage).not.toHaveBeenCalled();
+    expect(velocityRepo.getWeeklyUsage).not.toHaveBeenCalled();
+    expect(velocityRepo.getRecentSendCount).not.toHaveBeenCalled();
+  });
+
+  it('passes even when daily usage is already AT the cap (velocity skipped)', async () => {
+    // tier_1 dailyFiatMax is 200_000; a fresh assertCanTransact would trip velocity.
+    const svc = makeService(makeUser(), '200000', 10);
+    await expect(
+      svc.assertCanReleasePayout(PAYOUT_INPUT),
+    ).resolves.toBeUndefined();
+  });
+
+  it('throws SimSwapBlockedError when simSwapDetectedAt is set', async () => {
+    const svc = makeService(
+      makeUser({ simSwapDetectedAt: new Date('2024-05-30T10:00:00Z') }),
+    );
+    await expect(svc.assertCanReleasePayout(PAYOUT_INPUT)).rejects.toThrow(
+      SimSwapBlockedError,
+    );
+  });
+
+  it('throws KycNotVerifiedError when kycStatus is not verified', async () => {
+    const svc = makeService(makeUser({ kycStatus: 'pending' }));
+    await expect(svc.assertCanReleasePayout(PAYOUT_INPUT)).rejects.toThrow(
+      KycNotVerifiedError,
+    );
+  });
+
+  it('throws TierLimitExceededError when amount exceeds the per-tx cap', async () => {
+    const svc = makeService(makeUser()); // tier_1 perTxFiatMax = 50_000
+    await expect(
+      svc.assertCanReleasePayout({ ...PAYOUT_INPUT, fiatAmount: '60000' }),
+    ).rejects.toThrow(TierLimitExceededError);
+  });
+
+  it('throws TierChangeCoolingOffError inside the cooling-off window', async () => {
+    const svc = makeService(
+      makeUser({ tierChangedAt: new Date(FIXED_NOW.getTime() - 1000) }),
+      '0',
+      0,
+      makeConfig(DEFAULT_LIMITS, 3600),
+    );
+    await expect(svc.assertCanReleasePayout(PAYOUT_INPUT)).rejects.toThrow(
+      TierChangeCoolingOffError,
+    );
+  });
+});

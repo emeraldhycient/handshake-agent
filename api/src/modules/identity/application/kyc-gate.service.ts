@@ -17,7 +17,10 @@ import {
   VelocityExceededError,
 } from '../domain/gate-errors';
 import { toScaled } from '../../transactions/domain/ledger';
-import type { IIdentityRepository } from './ports/identity.repository.port';
+import type {
+  IIdentityRepository,
+  UserRecord,
+} from './ports/identity.repository.port';
 import { IDENTITY_REPOSITORY } from './ports/identity.repository.port';
 import type { IVelocityRepository } from './ports/velocity.repository.port';
 import { VELOCITY_REPOSITORY } from './ports/velocity.repository.port';
@@ -181,91 +184,14 @@ export class KycGateService {
   async assertCanTransact(input: AssertCanTransactInput): Promise<void> {
     const { userId, fiatAmount, fiatCurrency } = input;
 
-    const user = await this.identityRepo.loadUser(userId);
-    if (user === null) {
-      throw new Error(`User not found: ${userId}`);
-    }
-
-    // 1. SIM-swap block — highest severity; checked before KYC.
-    if (user.simSwapDetectedAt !== null) {
-      throw new SimSwapBlockedError();
-    }
-
-    // 2. KYC status + tier gate.
-    if (user.kycStatus !== 'verified') {
-      throw new KycNotVerifiedError('status');
-    }
-    if (user.kycTier === 'unverified') {
-      throw new KycNotVerifiedError('tier');
-    }
-
-    // 2b. Tier-change cooling-off — a time-based hold on ALL money moves within
-    // `compliance.tierChangeCoolingOffSeconds` of the last tier change (§3.3, anti-abuse
-    // after a fresh tier grant). 0 (default) or a null tierChangedAt = no hold.
-    const coolingOffSeconds =
-      this.config.get<ComplianceConfig>(
-        'compliance',
-      )?.tierChangeCoolingOffSeconds;
-    if (
-      coolingOffSeconds !== undefined &&
-      coolingOffSeconds > 0 &&
-      user.tierChangedAt !== null
-    ) {
-      const holdUntil = new Date(
-        user.tierChangedAt.getTime() + coolingOffSeconds * 1000,
-      );
-      if (this.clock.now() < holdUntil) {
-        throw new TierChangeCoolingOffError(holdUntil, user.kycTier);
-      }
-    }
-
-    // 3. Resolve tier limits from config (never hardcoded in the service).
-    // getTierLimits looks up limits[fiatCurrency] first (fail-closed for unconfigured
-    // currencies), then narrows kycTier to the verified-tier union.
-    const limits = this.config.get<LimitsConfig>('limits');
-    const tierLimits: TierLimits = getTierLimits(
-      user.kycTier,
-      fiatCurrency,
-      limits,
-    );
-
-    // Fix-C: all fiat comparisons use BigInt-scaled integers via toScaled() from
-    // the ledger domain. This matches the 10^18 scale used by the ledger and avoids
-    // IEEE-754 float drift at the money boundary.
-    // Config limits are `number` (whole NGN integers from JSON); convert them to
-    // their decimal-string form before scaling so toScaled() can parse them.
-    const scaledTxAmount = toScaled(fiatAmount);
-    const scaledPerTxMax = toScaled(String(tierLimits.perTxFiatMax));
-
-    // 4a. Positive-amount guard — fail closed on a non-positive fiat-equivalent
-    // (finding #20). BUY/SELL are protected incidentally by the quote domain,
-    // but SEND/SWAP route their fiat-equivalent straight through this gate, so a
-    // zero/negative amount would otherwise pass BOTH the tier and velocity checks
-    // (and increment the velocity counters with a 0 contribution). The money gate
-    // must never pass a non-positive amount regardless of which path called it
-    // (§3.1 / §3.3). Reuse TierLimitExceededError so the global filter maps it to
-    // a clean 403 (a non-positive amount is not a permitted transaction value);
-    // requestedAmount carries the offending value, limitAmount the per-tx cap.
-    if (scaledTxAmount <= 0n) {
-      throw new TierLimitExceededError(
-        Number(fiatAmount),
-        tierLimits.perTxFiatMax,
-        user.kycTier,
+    // Steps 1–4b (SIM-swap / KYC status+tier / tier-change cooling-off / positive +
+    // per-tx cap) are shared with assertCanReleasePayout via assertBaselineEligibility.
+    const { user, tierLimits, scaledTxAmount } =
+      await this.assertBaselineEligibility({
+        userId,
+        fiatAmount,
         fiatCurrency,
-      );
-    }
-
-    // 4b. Per-transaction amount check (BigInt-exact).
-    if (scaledTxAmount > scaledPerTxMax) {
-      // Expose the original values for the error payload; convert back to numbers
-      // via Number() only for the error object (not for the comparison itself).
-      throw new TierLimitExceededError(
-        Number(fiatAmount),
-        tierLimits.perTxFiatMax,
-        user.kycTier,
-        fiatCurrency,
-      );
-    }
+      });
 
     // 4c. Single on-chain send cap — an ADDITIONAL per-send limit applied ONLY to
     // on-chain (crypto-address) sends, which are irreversible (§3.6: enforce the cap
@@ -357,6 +283,136 @@ export class KycGateService {
         );
       }
     }
+  }
+
+  /**
+   * Baseline money-gate eligibility shared by `assertCanTransact` and
+   * `assertCanReleasePayout`: SIM-swap block, KYC status + tier, tier-change
+   * cooling-off, and the positive-amount + per-transaction cap (steps 1–4b).
+   * Returns the loaded user, resolved tier limits, and the BigInt-scaled tx amount
+   * so `assertCanTransact` can continue with the cumulative velocity checks. Throws
+   * a `GateError` subclass on the first failing check.
+   */
+  private async assertBaselineEligibility(input: {
+    userId: string;
+    fiatAmount: string;
+    fiatCurrency: string;
+  }): Promise<{
+    user: UserRecord;
+    tierLimits: TierLimits;
+    scaledTxAmount: bigint;
+  }> {
+    const { userId, fiatAmount, fiatCurrency } = input;
+
+    const user = await this.identityRepo.loadUser(userId);
+    if (user === null) {
+      throw new Error(`User not found: ${userId}`);
+    }
+
+    // 1. SIM-swap block — highest severity; checked before KYC.
+    if (user.simSwapDetectedAt !== null) {
+      throw new SimSwapBlockedError();
+    }
+
+    // 2. KYC status + tier gate.
+    if (user.kycStatus !== 'verified') {
+      throw new KycNotVerifiedError('status');
+    }
+    if (user.kycTier === 'unverified') {
+      throw new KycNotVerifiedError('tier');
+    }
+
+    // 2b. Tier-change cooling-off — a time-based hold on ALL money moves within
+    // `compliance.tierChangeCoolingOffSeconds` of the last tier change (§3.3, anti-abuse
+    // after a fresh tier grant). 0 (default) or a null tierChangedAt = no hold.
+    const coolingOffSeconds =
+      this.config.get<ComplianceConfig>(
+        'compliance',
+      )?.tierChangeCoolingOffSeconds;
+    if (
+      coolingOffSeconds !== undefined &&
+      coolingOffSeconds > 0 &&
+      user.tierChangedAt !== null
+    ) {
+      const holdUntil = new Date(
+        user.tierChangedAt.getTime() + coolingOffSeconds * 1000,
+      );
+      if (this.clock.now() < holdUntil) {
+        throw new TierChangeCoolingOffError(holdUntil, user.kycTier);
+      }
+    }
+
+    // 3. Resolve tier limits from config (never hardcoded in the service).
+    // getTierLimits looks up limits[fiatCurrency] first (fail-closed for unconfigured
+    // currencies), then narrows kycTier to the verified-tier union.
+    const limits = this.config.get<LimitsConfig>('limits');
+    const tierLimits: TierLimits = getTierLimits(
+      user.kycTier,
+      fiatCurrency,
+      limits,
+    );
+
+    // Fix-C: all fiat comparisons use BigInt-scaled integers via toScaled() from
+    // the ledger domain. This matches the 10^18 scale used by the ledger and avoids
+    // IEEE-754 float drift at the money boundary.
+    // Config limits are `number` (whole NGN integers from JSON); convert them to
+    // their decimal-string form before scaling so toScaled() can parse them.
+    const scaledTxAmount = toScaled(fiatAmount);
+    const scaledPerTxMax = toScaled(String(tierLimits.perTxFiatMax));
+
+    // 4a. Positive-amount guard — fail closed on a non-positive fiat-equivalent
+    // (finding #20). BUY/SELL are protected incidentally by the quote domain,
+    // but SEND/SWAP route their fiat-equivalent straight through this gate, so a
+    // zero/negative amount would otherwise pass BOTH the tier and velocity checks
+    // (and increment the velocity counters with a 0 contribution). The money gate
+    // must never pass a non-positive amount regardless of which path called it
+    // (§3.1 / §3.3). Reuse TierLimitExceededError so the global filter maps it to
+    // a clean 403 (a non-positive amount is not a permitted transaction value);
+    // requestedAmount carries the offending value, limitAmount the per-tx cap.
+    if (scaledTxAmount <= 0n) {
+      throw new TierLimitExceededError(
+        Number(fiatAmount),
+        tierLimits.perTxFiatMax,
+        user.kycTier,
+        fiatCurrency,
+      );
+    }
+
+    // 4b. Per-transaction amount check (BigInt-exact).
+    if (scaledTxAmount > scaledPerTxMax) {
+      // Expose the original values for the error payload; convert back to numbers
+      // via Number() only for the error object (not for the comparison itself).
+      throw new TierLimitExceededError(
+        Number(fiatAmount),
+        tierLimits.perTxFiatMax,
+        user.kycTier,
+        fiatCurrency,
+      );
+    }
+
+    return { user, tierLimits, scaledTxAmount };
+  }
+
+  /**
+   * Re-check gate for RETRYING a payout whose reserve + velocity were ALREADY
+   * consumed at execute time. Runs the baseline (SIM-swap / KYC / tier /
+   * cooling-off / per-tx cap) but intentionally OMITS the cumulative daily/weekly
+   * velocity + 10-min send caps — re-adding this tx's amount would double-count and
+   * falsely block a legitimate retry (§3.3). Resolves (void) on success; throws a
+   * `GateError` subclass on failure. `asset` is accepted for call-site symmetry with
+   * `assertCanTransact`; it does not affect the fiat gate.
+   */
+  async assertCanReleasePayout(input: {
+    userId: string;
+    fiatAmount: string;
+    fiatCurrency: string;
+    asset: string;
+  }): Promise<void> {
+    await this.assertBaselineEligibility({
+      userId: input.userId,
+      fiatAmount: input.fiatAmount,
+      fiatCurrency: input.fiatCurrency,
+    });
   }
 }
 
