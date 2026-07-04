@@ -81,6 +81,7 @@ interface DashboardBody {
   revenue: {
     totalFeesByCurrency: { currency: string; amount: string }[];
     totalSpreadByCurrency: { currency: string; amount: string }[];
+    totalProfitByCurrency: { currency: string; amount: string }[];
     txnCount: number;
   };
   kycFunnel: {
@@ -273,30 +274,62 @@ describe('Admin metrics / dashboard — e2e (AppModule, Testcontainers Postgres)
     return txn.id;
   }
 
-  async function seedFeeLeg(over: {
-    txnId: string;
-    amount: string;
-    sequence: number;
-    postedAt: Date;
-  }): Promise<void> {
-    // Fees are booked as NEGATIVE DEBITS on platform_float (the settlement engine's
-    // convention — buildBuyLedgerEntries `amount: fromScaled(-scaledFee)`), so
-    // `revenue()` negates the sum to a positive figure. Seed the production sign.
-    const debitAmount = `-${over.amount}`;
-    await prisma.ledgerEntry.create({
+  // A completed buy/sell linked to its Proposal + Quote — the authoritative pricing
+  // snapshot `revenue()` derives fee + spread from (docs §5). `fiatAmount` is GROSS
+  // on buy, NET (post-fee) on sell (production convention).
+  async function seedTxnWithQuote(over: {
+    userId: string;
+    type: 'buy' | 'sell';
+    status: string;
+    createdAt: Date;
+    fiatAmount: string;
+    cryptoAmount: string;
+    baseRate: string;
+    processingFeeAmount: string;
+  }): Promise<string> {
+    const expiresAt = new Date(over.createdAt.getTime() + 60_000);
+    const quote = await prisma.quote.create({
       data: {
-        transactionId: over.txnId,
-        accountType: 'platform_float' as never,
-        accountId: 'ngn_fees',
-        currency: 'NGN',
-        amount: debitAmount,
-        direction: 'debit' as never,
-        description: 'fee revenue',
-        balanceAfter: debitAmount,
-        sequence: over.sequence,
-        postedAt: over.postedAt,
+        userId: over.userId,
+        type: over.type as never,
+        asset: 'USDT',
+        fiatCurrency: 'NGN' as never,
+        fiatAmount: over.fiatAmount,
+        cryptoAmount: over.cryptoAmount,
+        fxRate: over.baseRate,
+        baseRate: over.baseRate,
+        spreadBps: 0,
+        processingFeeBps: 0,
+        processingFeeAmount: over.processingFeeAmount,
+        expiresAt,
       },
+      select: { id: true },
     });
+    const proposal = await prisma.proposal.create({
+      data: {
+        userId: over.userId,
+        type: over.type as never,
+        parameters: {},
+        parametersChecksum: `chk-${randomUUID()}`,
+        quoteId: quote.id,
+        expiresAt,
+      },
+      select: { id: true },
+    });
+    const txn = await prisma.transaction.create({
+      data: {
+        userId: over.userId,
+        type: over.type as never,
+        status: over.status as never,
+        idempotencyKey: randomUUID(),
+        requestChecksum: `chk-${randomUUID()}`,
+        metadata: {},
+        createdAt: over.createdAt,
+        proposalId: proposal.id,
+      },
+      select: { id: true },
+    });
+    return txn.id;
   }
 
   async function acceptAndLogin(
@@ -348,11 +381,16 @@ describe('Admin metrics / dashboard — e2e (AppModule, Testcontainers Postgres)
 
     // buy: 1 completed (u1), 1 failed (u2), 1 settling (u2, STUCK). sell: 1
     // completed (u1).
-    const t1 = await seedTxn({
+    // Completed buy with a Quote → fee 100, spread 15 (netFiat 1015 vs mid 1000).
+    await seedTxnWithQuote({
       userId: u1,
       type: 'buy',
       status: 'completed',
       createdAt: new Date('2026-06-06T08:00:00.000Z'),
+      fiatAmount: '1115',
+      cryptoAmount: '1',
+      baseRate: '1000',
+      processingFeeAmount: '100',
     });
     await seedTxn({
       userId: u2,
@@ -366,25 +404,16 @@ describe('Admin metrics / dashboard — e2e (AppModule, Testcontainers Postgres)
       status: 'settling',
       createdAt: new Date('2026-06-07T09:00:00.000Z'),
     });
-    const t3 = await seedTxn({
+    // Completed sell with a Quote → fee 50, spread 15 (fiatBeforeFee 985 vs mid 1000).
+    await seedTxnWithQuote({
       userId: u1,
       type: 'sell',
       status: 'completed',
       createdAt: new Date('2026-06-08T08:00:00.000Z'),
-    });
-
-    // Fee legs for the two completed txns: NGN 100 + NGN 50 = 150.
-    await seedFeeLeg({
-      txnId: t1,
-      amount: '100',
-      sequence: 1,
-      postedAt: new Date('2026-06-06T08:00:00.000Z'),
-    });
-    await seedFeeLeg({
-      txnId: t3,
-      amount: '50',
-      sequence: 2,
-      postedAt: new Date('2026-06-08T08:00:00.000Z'),
+      fiatAmount: '935',
+      cryptoAmount: '1',
+      baseRate: '1000',
+      processingFeeAmount: '50',
     });
 
     // 3. GET /admin/metrics/dashboard — sane aggregates.
@@ -406,12 +435,20 @@ describe('Admin metrics / dashboard — e2e (AppModule, Testcontainers Postgres)
     expect(buyVol.failed).toBe(1);
     expect(buyVol.stuck).toBe(1);
 
-    // revenue: NGN fees sum to 150; spread is not separately ledgered → [].
-    const ngn = dash.revenue.totalFeesByCurrency.find(
+    // revenue: derived from the Quotes — fees 100+50=150, spread 15+15=30,
+    // profit 180; txnCount = completed in range (2).
+    const ngnFee = dash.revenue.totalFeesByCurrency.find(
       (c) => c.currency === 'NGN',
     );
-    expect(ngn?.amount).toBe('150');
-    expect(dash.revenue.totalSpreadByCurrency).toEqual([]);
+    const ngnSpread = dash.revenue.totalSpreadByCurrency.find(
+      (c) => c.currency === 'NGN',
+    );
+    const ngnProfit = dash.revenue.totalProfitByCurrency.find(
+      (c) => c.currency === 'NGN',
+    );
+    expect(ngnFee?.amount).toBe('150');
+    expect(ngnSpread?.amount).toBe('30');
+    expect(ngnProfit?.amount).toBe('180');
     expect(dash.revenue.txnCount).toBe(2);
 
     // kyc funnel: verified + pending statuses; tier_1 + unverified tiers present.

@@ -38,7 +38,8 @@ function makeGmv(): GmvResult {
 function makeRevenue(): RevenueResult {
   return {
     totalFeesByCurrency: [{ currency: 'NGN', amount: '150' }],
-    totalSpreadByCurrency: [],
+    totalSpreadByCurrency: [{ currency: 'NGN', amount: '90' }],
+    totalProfitByCurrency: [{ currency: 'NGN', amount: '240' }],
     txnCount: 2,
   };
 }

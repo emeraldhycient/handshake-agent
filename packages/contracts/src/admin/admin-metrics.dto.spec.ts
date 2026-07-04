@@ -149,16 +149,18 @@ describe("GmvMetricsSchema", () => {
 });
 
 describe("RevenueMetricsSchema", () => {
-  it("keeps fee/spread amounts as strings (no float drift)", () => {
+  it("keeps fee/spread/profit amounts as strings (no float drift)", () => {
     const value = RevenueMetricsSchema.parse({
       totalFeesByCurrency: [
         { currency: "NGN", amount: "150.000000000000000000" },
       ],
-      totalSpreadByCurrency: [],
+      totalSpreadByCurrency: [{ currency: "NGN", amount: "90" }],
+      totalProfitByCurrency: [{ currency: "NGN", amount: "240" }],
       txnCount: 2,
     });
     expect(value.totalFeesByCurrency[0].amount).toBe("150.000000000000000000");
-    expect(value.totalSpreadByCurrency).toEqual([]);
+    expect(value.totalSpreadByCurrency[0].amount).toBe("90");
+    expect(value.totalProfitByCurrency[0].amount).toBe("240");
     expect(value.txnCount).toBe(2);
   });
 });
@@ -212,6 +214,7 @@ describe("DashboardSummarySchema", () => {
       revenue: {
         totalFeesByCurrency: [],
         totalSpreadByCurrency: [],
+        totalProfitByCurrency: [],
         txnCount: 0,
       },
       kycFunnel: { byStatus: [], byTier: [] },

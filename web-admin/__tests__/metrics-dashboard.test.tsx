@@ -73,7 +73,14 @@ const SUMMARY: DashboardSummary = {
       { currency: "NGN", amount: "45000.00" },
       { currency: "USD", amount: "120.50" },
     ],
-    totalSpreadByCurrency: [],
+    totalSpreadByCurrency: [
+      { currency: "NGN", amount: "30000.00" },
+      { currency: "USD", amount: "80.00" },
+    ],
+    totalProfitByCurrency: [
+      { currency: "NGN", amount: "75000.00" },
+      { currency: "USD", amount: "200.50" },
+    ],
     txnCount: 148,
   },
   kycFunnel: {

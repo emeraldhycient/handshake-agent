@@ -77,23 +77,20 @@ export const GmvMetricsSchema = z.object({
 });
 export type GmvMetrics = z.infer<typeof GmvMetricsSchema>;
 
-// Revenue: platform fee revenue per currency (the `platform_float` fee legs) and
-// spread per currency. Spread is folded into the fx rate and NOT separately
-// ledgered, so it is reported as an empty array (see metrics-read repo comment).
-// Amounts are canonical decimal strings; txnCount is the count of COMPLETED txns.
+// Revenue: platform profit per currency, DERIVED from the authoritative Quote
+// snapshot of each completed buy/sell (safe, ledger-non-invasive — see
+// docs/go-readiness-program.md §5 and the metrics-read repo). `totalFeesByCurrency`
+// is the complete processing fee (buy AND sell), `totalSpreadByCurrency` is the
+// realized bid-ask spread margin (no longer empty), and `totalProfitByCurrency` is
+// their sum. Amounts are canonical decimal strings; txnCount = COMPLETED txns.
+const CurrencyAmountSchema = z.object({
+  currency: z.string(),
+  amount: z.string(),
+});
 export const RevenueMetricsSchema = z.object({
-  totalFeesByCurrency: z.array(
-    z.object({
-      currency: z.string(),
-      amount: z.string(),
-    }),
-  ),
-  totalSpreadByCurrency: z.array(
-    z.object({
-      currency: z.string(),
-      amount: z.string(),
-    }),
-  ),
+  totalFeesByCurrency: z.array(CurrencyAmountSchema),
+  totalSpreadByCurrency: z.array(CurrencyAmountSchema),
+  totalProfitByCurrency: z.array(CurrencyAmountSchema),
   txnCount: z.number(),
 });
 export type RevenueMetrics = z.infer<typeof RevenueMetricsSchema>;

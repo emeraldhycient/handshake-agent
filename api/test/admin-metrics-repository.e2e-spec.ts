@@ -37,8 +37,12 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
   });
 
   beforeEach(async () => {
+    // Delete children before parents: ledger/txn → proposal → quote → user
+    // (proposals FK userId + quoteId; quotes FK userId).
     await prisma.ledgerEntry.deleteMany();
     await prisma.transaction.deleteMany();
+    await prisma.proposal.deleteMany();
+    await prisma.quote.deleteMany();
     await prisma.kycProfile.deleteMany();
     await prisma.user.deleteMany();
   });
@@ -84,41 +88,64 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
     return txn.id;
   }
 
-  /**
-   * Seed a platform-fee credit leg (the fee-revenue leg). `sequence` is the
-   * per-(accountType, accountId) monotonic counter — callers pass a distinct value
-   * per leg to satisfy the @@unique([accountType, accountId, sequence]) constraint.
-   */
-  // Seeds a platform_float fee leg the way the settlement engine does: a fee of
-  // `amount` (a positive magnitude) is booked as a NEGATIVE DEBIT
-  // (buildBuyLedgerEntries → `amount: fromScaled(-scaledFee)`), so the account
-  // accumulates fees as debits and `revenue()` must negate the sum to report a
-  // positive figure. Seeding a positive credit here (as before) hid that bug.
-  async function seedFeeLeg(
-    txnId: string,
-    over: {
-      accountId: string;
-      currency: string;
-      amount: string;
-      postedAt: Date;
-      sequence: number;
-    },
-  ): Promise<void> {
-    const debitAmount = `-${over.amount}`;
-    await prisma.ledgerEntry.create({
+  // Seeds a completed/failed transaction linked to its Proposal + Quote — the
+  // authoritative pricing snapshot `revenue()` now derives profit from (docs §5).
+  // `fiatAmount` follows the production convention: GROSS on buy, NET (post-fee) on
+  // sell. Returns the transaction id.
+  async function seedTxnWithQuote(over: {
+    userId: string;
+    type: 'buy' | 'sell';
+    status: string;
+    createdAt: Date;
+    fiatAmount: string;
+    cryptoAmount: string;
+    baseRate: string;
+    processingFeeAmount: string;
+    asset?: string;
+  }): Promise<string> {
+    const expiresAt = new Date(over.createdAt.getTime() + 60_000);
+    const quote = await prisma.quote.create({
       data: {
-        transactionId: txnId,
-        accountType: 'platform_float' as never,
-        accountId: over.accountId,
-        currency: over.currency,
-        amount: debitAmount,
-        direction: 'debit' as never,
-        description: 'fee revenue',
-        balanceAfter: debitAmount,
-        sequence: over.sequence,
-        postedAt: over.postedAt,
+        userId: over.userId,
+        type: over.type as never,
+        asset: over.asset ?? 'USDT',
+        fiatCurrency: 'NGN' as never,
+        fiatAmount: over.fiatAmount,
+        cryptoAmount: over.cryptoAmount,
+        fxRate: over.baseRate, // effective rate — not read by revenue()
+        baseRate: over.baseRate,
+        spreadBps: 0,
+        processingFeeBps: 0,
+        processingFeeAmount: over.processingFeeAmount,
+        expiresAt,
       },
+      select: { id: true },
     });
+    const proposal = await prisma.proposal.create({
+      data: {
+        userId: over.userId,
+        type: over.type as never,
+        parameters: {},
+        parametersChecksum: `chk-${randomUUID()}`,
+        quoteId: quote.id,
+        expiresAt,
+      },
+      select: { id: true },
+    });
+    const txn = await prisma.transaction.create({
+      data: {
+        userId: over.userId,
+        type: over.type as never,
+        status: over.status as never,
+        idempotencyKey: randomUUID(),
+        requestChecksum: `chk-${randomUUID()}`,
+        metadata: {},
+        createdAt: over.createdAt,
+        proposalId: proposal.id,
+      },
+      select: { id: true },
+    });
+    return txn.id;
   }
 
   // ── transactionVolume ──────────────────────────────────────────────────────
@@ -213,78 +240,76 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
   // ── revenue ────────────────────────────────────────────────────────────────
 
   describe('revenue', () => {
-    it('sums platform-fee legs of COMPLETED txns by currency, exact, and reports spread []', async () => {
+    it('derives fee + spread + profit per currency from the Quote of COMPLETED buy/sell txns', async () => {
       const u = await seedUser();
-      const t1 = await seedTxn({
+      // BUY (gross fiat 1115 − fee 100 = netFiat 1015; 1 unit at mid 1000 → spread 15).
+      await seedTxnWithQuote({
         userId: u,
         type: 'buy',
         status: 'completed',
         createdAt: new Date('2026-06-01T08:00:00.000Z'),
+        fiatAmount: '1115',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '100',
       });
-      const t2 = await seedTxn({
+      // SELL (net fiat 935 + fee 50 = fiatBeforeFee 985; mid 1000 → spread 15).
+      await seedTxnWithQuote({
         userId: u,
-        type: 'buy',
+        type: 'sell',
         status: 'completed',
         createdAt: new Date('2026-06-02T08:00:00.000Z'),
+        fiatAmount: '935',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '50',
       });
-      // A failed txn whose fee leg must NOT count toward revenue.
-      const t3 = await seedTxn({
+      // A FAILED buy — its quote must NOT count toward revenue.
+      await seedTxnWithQuote({
         userId: u,
         type: 'buy',
         status: 'failed',
         createdAt: new Date('2026-06-03T08:00:00.000Z'),
+        fiatAmount: '9999',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '999',
       });
-      // Out-of-range completed txn — excluded.
-      const t4 = await seedTxn({
+      // OUT-OF-RANGE completed buy — excluded.
+      await seedTxnWithQuote({
         userId: u,
         type: 'buy',
         status: 'completed',
         createdAt: new Date('2026-05-01T08:00:00.000Z'),
-      });
-
-      await seedFeeLeg(t1, {
-        accountId: 'ngn_fees',
-        currency: 'NGN',
-        amount: '100.5',
-        postedAt: new Date('2026-06-01T08:00:00.000Z'),
-        sequence: 1,
-      });
-      await seedFeeLeg(t2, {
-        accountId: 'ngn_fees',
-        currency: 'NGN',
-        amount: '49.5',
-        postedAt: new Date('2026-06-02T08:00:00.000Z'),
-        sequence: 2,
-      });
-      await seedFeeLeg(t3, {
-        accountId: 'ngn_fees',
-        currency: 'NGN',
-        amount: '999',
-        postedAt: new Date('2026-06-03T08:00:00.000Z'),
-        sequence: 3,
-      });
-      await seedFeeLeg(t4, {
-        accountId: 'ngn_fees',
-        currency: 'NGN',
-        amount: '777',
-        postedAt: new Date('2026-05-01T08:00:00.000Z'),
-        sequence: 4,
+        fiatAmount: '9999',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '777',
       });
 
       const result = await repo.revenue(FROM, TO);
 
-      // 100.5 + 49.5 = 150 (exact; t3 failed + t4 out-of-range excluded).
-      const ngn = result.totalFeesByCurrency.find((c) => c.currency === 'NGN')!;
-      expect(ngn.amount).toBe('150');
-      expect(result.totalSpreadByCurrency).toEqual([]);
-      // txnCount = completed txns in range (t1, t2) = 2.
+      const fees = result.totalFeesByCurrency.find(
+        (c) => c.currency === 'NGN',
+      )!;
+      const spread = result.totalSpreadByCurrency.find(
+        (c) => c.currency === 'NGN',
+      )!;
+      const profit = result.totalProfitByCurrency.find(
+        (c) => c.currency === 'NGN',
+      )!;
+      expect(fees.amount).toBe('150'); // buy 100 + sell 50 (both counted)
+      expect(spread.amount).toBe('30'); // 15 + 15
+      expect(profit.amount).toBe('180'); // fees + spread
+      // txnCount = completed txns in range = 2 (failed + out-of-range excluded).
       expect(result.txnCount).toBe(2);
     });
 
-    it('returns empty fees and txnCount 0 when no completed txns in range', async () => {
+    it('returns empty fees/spread/profit and txnCount 0 when no completed txns in range', async () => {
       const result = await repo.revenue(FROM, TO);
       expect(result.totalFeesByCurrency).toEqual([]);
       expect(result.totalSpreadByCurrency).toEqual([]);
+      expect(result.totalProfitByCurrency).toEqual([]);
       expect(result.txnCount).toBe(0);
     });
   });

@@ -25,11 +25,12 @@
 import { Injectable } from '@nestjs/common';
 
 import {
-  LedgerAccountType,
+  QuoteType,
   TransactionStatus,
   TransactionType,
 } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { computeTxProfit } from '../domain/tx-profit';
 import type {
   ActiveUsersResult,
   CurrencyAmount,
@@ -262,49 +263,78 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
   }
 
   async revenue(from: Date, to: Date): Promise<RevenueResult> {
-    // Platform-fee legs of COMPLETED txns in range, grouped by currency. We join
-    // through the transaction so only completed, in-range fees count. SUM cast to
-    // text keeps engine-precision values byte-stable strings (never a JS float);
-    // we re-sum with scaled BigInt to normalize to a canonical decimal string.
-    //
-    // SIGN: fee-revenue legs are booked to `platform_float/${fc}_fees` as DEBITS
-    // (negative amount) so each transaction's per-currency legs net to zero
-    // (buildBuyLedgerEntries — `amount: fromScaled(-scaledFee)`). The raw signed sum
-    // is therefore −(total fees); we NEGATE it so revenue is reported as a positive
-    // magnitude (a full fee reversal on refund credits +fee, netting the revenue
-    // back down correctly). Without this the dashboard card showed a negative value.
-    const feeRows = await this.prisma.ledgerEntry.findMany({
+    // Platform profit DERIVED from the authoritative Quote of each COMPLETED
+    // buy/sell in range (docs/go-readiness-program.md §5). Both the fee AND the
+    // realized spread are recoverable from the Quote (baseRate vs effective fxRate,
+    // cryptoAmount, fiatAmount), whereas the double-entry ledger only carries BUY
+    // fees — so this correctly counts sell fees + all spread the ledger misses,
+    // WITHOUT restructuring the settlement path. Exact BigInt (scale-18), no floats.
+    const priced = await this.prisma.transaction.findMany({
       where: {
-        accountType: LedgerAccountType.platform_float,
-        transaction: {
-          status: TransactionStatus.completed,
-          createdAt: { gte: from, lte: to },
+        status: TransactionStatus.completed,
+        createdAt: { gte: from, lte: to },
+        proposal: { quote: { type: { in: [QuoteType.buy, QuoteType.sell] } } },
+      },
+      select: {
+        proposal: {
+          select: {
+            quote: {
+              select: {
+                type: true,
+                fiatCurrency: true,
+                fiatAmount: true,
+                cryptoAmount: true,
+                baseRate: true,
+                processingFeeAmount: true,
+              },
+            },
+          },
         },
       },
-      select: { currency: true, amount: true },
     });
 
-    const sums = new Map<string, bigint>();
+    const feeSums = new Map<string, bigint>();
+    const spreadSums = new Map<string, bigint>();
     const order: string[] = [];
-    for (const row of feeRows) {
-      const currency = row.currency;
-      if (!sums.has(currency)) {
+    for (const t of priced) {
+      const q = t.proposal?.quote;
+      if (!q) continue;
+      const { fee, spread } = computeTxProfit({
+        type: q.type === QuoteType.sell ? 'sell' : 'buy',
+        fiatAmount: (q.fiatAmount as { toString(): string }).toString(),
+        cryptoAmount: q.cryptoAmount,
+        baseRate: q.baseRate,
+        processingFeeAmount: (
+          q.processingFeeAmount as { toString(): string }
+        ).toString(),
+      });
+      const currency = q.fiatCurrency;
+      if (!feeSums.has(currency)) {
         order.push(currency);
-        sums.set(currency, 0n);
+        feeSums.set(currency, 0n);
+        spreadSums.set(currency, 0n);
       }
-      sums.set(
+      feeSums.set(currency, feeSums.get(currency)! + toScaledBigInt(fee));
+      spreadSums.set(
         currency,
-        sums.get(currency)! +
-          toScaledBigInt((row.amount as { toString(): string }).toString()),
+        spreadSums.get(currency)! + toScaledBigInt(spread),
       );
     }
 
-    const totalFeesByCurrency: CurrencyAmount[] = order
+    const project = (m: Map<string, bigint>): CurrencyAmount[] =>
+      order
+        .map((currency) => ({
+          currency,
+          amount: fromScaledBigInt(m.get(currency)!),
+        }))
+        .sort((a, b) => a.currency.localeCompare(b.currency));
+
+    const totalProfitByCurrency: CurrencyAmount[] = order
       .map((currency) => ({
         currency,
-        // Negate: platform_float fee legs are debits (negative); revenue is the
-        // positive magnitude of collected fees.
-        amount: fromScaledBigInt(-sums.get(currency)!),
+        amount: fromScaledBigInt(
+          feeSums.get(currency)! + spreadSums.get(currency)!,
+        ),
       }))
       .sort((a, b) => a.currency.localeCompare(b.currency));
 
@@ -315,9 +345,12 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
       },
     });
 
-    // Spread is folded into the fx rate and not separately ledgered — see the
-    // class-level comment. Report it as empty rather than guessing.
-    return { totalFeesByCurrency, totalSpreadByCurrency: [], txnCount };
+    return {
+      totalFeesByCurrency: project(feeSums),
+      totalSpreadByCurrency: project(spreadSums),
+      totalProfitByCurrency,
+      txnCount,
+    };
   }
 
   async kycFunnel(): Promise<KycFunnelResult> {

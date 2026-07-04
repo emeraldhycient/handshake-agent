@@ -75,14 +75,17 @@ export interface CurrencyAmount {
 }
 
 export interface RevenueResult {
-  /** Platform fee revenue per currency (the `platform_float` fee legs). */
+  /** Complete processing-fee revenue per currency (buy AND sell), from the Quote. */
   totalFeesByCurrency: CurrencyAmount[];
   /**
-   * Spread per currency. Spread is folded into the fx rate and NOT separately
-   * ledgered, so this is always empty (see the adapter comment for why it is
-   * not recoverable from the ledger).
+   * Realized bid-ask spread margin per currency, DERIVED per completed buy/sell
+   * from its authoritative Quote snapshot (baseRate vs effective fxRate) — see
+   * `tx-profit.ts` + docs §5. No longer empty: spread is not in the ledger, but it
+   * IS recoverable from the Quote.
    */
   totalSpreadByCurrency: CurrencyAmount[];
+  /** Total platform profit per currency = fees + spread. */
+  totalProfitByCurrency: CurrencyAmount[];
   /** Count of COMPLETED transactions in the range. */
   txnCount: number;
 }

@@ -128,6 +128,16 @@ function deriveKpis(
     revenue.totalFeesByCurrency.length > 1
       ? `+${revenue.totalFeesByCurrency.length - 1} more`
       : "fees"
+  // Profit = fees + realized bid-ask spread, DERIVED per completed buy/sell from
+  // its Quote (docs §5). Primary currency shown (per-currency drill-down is #12).
+  const primaryProfit = revenue.totalProfitByCurrency[0]
+  const profitValue = primaryProfit
+    ? `${primaryProfit.currency} ${primaryProfit.amount}`
+    : "—"
+  const primarySpread = revenue.totalSpreadByCurrency[0]
+  const profitNote = primarySpread
+    ? `${primarySpread.currency} ${primarySpread.amount} spread`
+    : "fees + spread"
 
   // GMV: the summed fiat notional of completed money-moving txns (primary
   // currency). "—" only when no completed txn carried a fiat notional in range.
@@ -157,12 +167,19 @@ function deriveKpis(
       delta: `${gmv.txnCount.toLocaleString()}`,
       deltaNote: gmvNote,
     },
-    // Revenue: fees only; spread is folded into FX and not separately ledgered.
+    // Revenue: complete processing fees (buy + sell), derived from the Quote.
     {
       label: "Revenue (fees)",
       value: revenueValue,
       delta: `${revenue.txnCount.toLocaleString()}`,
       deltaNote: revenueNote,
+    },
+    // Profit: fees + realized spread margin (derived per completed buy/sell).
+    {
+      label: "Profit",
+      value: profitValue,
+      delta: `${revenue.txnCount.toLocaleString()}`,
+      deltaNote: profitNote,
     },
     {
       label: "Transactions",
