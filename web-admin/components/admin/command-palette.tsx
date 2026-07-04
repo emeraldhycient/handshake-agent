@@ -18,6 +18,7 @@ import { CornerDownLeft, Search } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { Input } from "@/components/ui/input"
+import { useAdminSearch } from "@/lib/query/hooks"
 import type { CommandPaletteProps, NavDestination } from "@/types/components"
 
 /** Case-insensitive substring match on the label (and its group). */
@@ -39,10 +40,25 @@ export function CommandPalette({
   const [active, setActive] = useState(0)
   const listRef = useRef<HTMLUListElement>(null)
 
-  const results = useMemo(
-    () => destinations.filter((d) => matches(d, query)),
-    [destinations, query]
-  )
+  // Debounce the term (≥200ms, §13.7) before hitting the live search endpoint.
+  const [debounced, setDebounced] = useState("")
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(query), 220)
+    return () => clearTimeout(id)
+  }, [query])
+  const { data: entityData } = useAdminSearch(debounced)
+
+  // Entity hits (users + transactions) first — the specific query intent — then the
+  // matching nav pages. Backend results already carry an in-app href; we render them
+  // through the same NavDestination shape (label + `group` subtitle) the pages use.
+  const results = useMemo(() => {
+    const entities: NavDestination[] = (entityData?.results ?? []).map((r) => ({
+      href: r.href,
+      label: r.label,
+      group: r.sublabel,
+    }))
+    return [...entities, ...destinations.filter((d) => matches(d, query))]
+  }, [entityData, destinations, query])
 
   // The effective highlight, clamped to the current results during render — so
   // shrinking the list never leaves `active` pointing past the end (no

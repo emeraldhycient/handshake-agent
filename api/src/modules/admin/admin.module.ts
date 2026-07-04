@@ -108,6 +108,8 @@ import { UserSessionReadPrismaRepository } from './infrastructure/user-session-r
 import { VELOCITY_REPOSITORY } from '../identity/application/ports/velocity.repository.port';
 import { VelocityPrismaRepository } from '../identity/infrastructure/velocity.prisma.repository';
 import { AdminTxnOversightService } from './application/admin-txn-oversight.service';
+import { AdminSearchService } from './application/admin-search.service';
+import { AdminSearchController } from './presentation/admin-search.controller';
 import { AdminTxnTriageService } from './application/admin-txn-triage.service';
 import { AdminLedgerService } from './application/admin-ledger.service';
 import { AdminComplianceService } from './application/admin-compliance.service';
@@ -257,6 +259,7 @@ import type { Env } from '../../core/config/env.schema';
     }),
   ],
   controllers: [
+    AdminSearchController,
     AdminWalletsController,
     AdminAuthController,
     AdminUsersController,
@@ -372,6 +375,7 @@ import type { Env } from '../../core/config/env.schema';
     // TRANSACTION_REPOSITORY comes from the imported TransactionsModule;
     // LEDGER_REPOSITORY is bound locally below.
     AdminTxnOversightService,
+    AdminSearchService,
     // Phase 3, sub-area B (ENGINE-BROKERED): transaction triage — mark-failed +
     // refund (via SETTLEMENT_REPOSITORY refund methods) and retry (re-enqueue the
     // SETTLEMENT_OUTBOX_REPOSITORY row). Both tokens + CLOCK come from the imported

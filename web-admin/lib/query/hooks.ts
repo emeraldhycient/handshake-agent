@@ -69,6 +69,7 @@ import * as compliance from "@/lib/api/compliance"
 import * as kyc from "@/lib/api/kyc"
 import * as ledger from "@/lib/api/ledger"
 import * as metrics from "@/lib/api/metrics"
+import * as search from "@/lib/api/search"
 import * as ops from "@/lib/api/ops"
 import * as notifications from "@/lib/api/notifications"
 import * as providers from "@/lib/api/providers"
@@ -1560,6 +1561,22 @@ export function useMoneySeries(range: MetricsRangeQuery) {
     queryKey: qk.moneySeries(range),
     queryFn: () => metrics.getMoneySeriesMetrics(range),
     staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/**
+ * Live ⌘K global search (users + transactions). Disabled until the (already
+ * debounced by the caller) term is ≥ 2 chars; 30 s stale; `retry: false` so a 403
+ * (no Search grant) degrades quietly to no entity results.
+ */
+export function useAdminSearch(q: string) {
+  const term = q.trim()
+  return useQuery({
+    queryKey: qk.adminSearch(term),
+    queryFn: () => search.getAdminSearch(term),
+    enabled: term.length >= 2,
+    staleTime: 30_000,
     retry: false,
   })
 }

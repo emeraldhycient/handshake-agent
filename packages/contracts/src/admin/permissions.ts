@@ -260,6 +260,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   // Users — end-user management & device/SIM-swap admin (Phase 2)
   r(
     "api_route",
+    "GET /admin/search",
+    "read",
+    "Users",
+    "Global ⌘K search across users + transactions",
+  ),
+  r(
+    "api_route",
     "GET /admin/users",
     "read",
     "Users",

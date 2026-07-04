@@ -86,6 +86,7 @@ export const qk = {
     ["admin", "metrics", "dashboard", range] as const,
   moneySeries: (range: MetricsRangeQuery) =>
     ["admin", "metrics", "money-series", range] as const,
+  adminSearch: (q: string) => ["admin", "search", q] as const,
   platformKpis: (range: MetricsRangeQuery) =>
     ["admin", "metrics", "kpis", range] as const,
   metricsOps: ["admin", "metrics", "ops"] as const,
