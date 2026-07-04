@@ -192,42 +192,60 @@ describe('Treasury payout-retry — e2e (AppModule, Testcontainers Postgres)', (
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   /**
-   * Seed a verified user + a SELL transaction in the given status + a
-   * processor_payout outbox row (status in_progress, so the payout queue surfaces
-   * it). Returns the outbox id (the endpoint's :id), the txn id, and the user id.
+   * Seed a verified user + a SELL or SEND transaction in the given status + its
+   * outbox row (processor_payout / onchain_send, status in_progress so the payout
+   * queue surfaces it). velocityFiatAmount is the fiat value the re-check reads —
+   * present on both real sell + send metadata. Returns the outbox id (the endpoint's
+   * :id), the txn id, and the user id.
    */
-  async function seedSellPayout(
+  async function seedPayout(
+    type: 'sell' | 'send',
     txnStatus: 'settling' | 'completed',
   ): Promise<SeededPayout> {
     const user = await prisma.user.create({
       data: { status: 'active', kycStatus: 'verified', kycTier: 'tier_1' },
     });
     const idempotencyKey = randomUUID();
+    const metadata =
+      type === 'sell'
+        ? {
+            asset: 'USDT',
+            netFiatAmount: '10000',
+            fiatCurrency: 'NGN',
+            velocityFiatAmount: '10000',
+            velocityFiatCurrency: 'NGN',
+            cryptoAmount: '6.25',
+            walletId: 'wallet-e2e',
+            providerRef: idempotencyKey,
+          }
+        : {
+            asset: 'USDT',
+            velocityFiatAmount: '10000',
+            velocityFiatCurrency: 'NGN',
+            totalDebit: '6.30',
+            walletId: 'wallet-e2e',
+            toAddress: 'TSendDestAddrE2E123456789',
+            network: 'TRON',
+            providerRef: idempotencyKey,
+          };
     const txn = await prisma.transaction.create({
       data: {
         userId: user.id,
-        type: 'sell',
+        type,
         status: txnStatus,
         idempotencyKey,
         requestChecksum: 'e2e-checksum',
-        metadata: {
-          asset: 'USDT',
-          netFiatAmount: '10000',
-          fiatCurrency: 'NGN',
-          cryptoAmount: '6.25',
-          walletId: 'wallet-e2e',
-          providerRef: idempotencyKey,
-        },
+        metadata,
       },
     });
     const outbox = await prisma.settlementOutbox.create({
       data: {
         transactionId: txn.id,
-        settlementType: 'processor_payout',
+        settlementType: type === 'sell' ? 'processor_payout' : 'onchain_send',
         payload: { reference: idempotencyKey },
         idempotencyKey,
         status: 'in_progress',
-        processorRef: 'flw_transfer_e2e',
+        processorRef: type === 'sell' ? 'flw_transfer_e2e' : 'br_withdraw_e2e',
       },
     });
     return { outboxId: outbox.id, transactionId: txn.id, userId: user.id };
@@ -245,7 +263,7 @@ describe('Treasury payout-retry — e2e (AppModule, Testcontainers Postgres)', (
   // MAIN TEST
   // ===========================================================================
 
-  it('retries a stuck settling sell payout (step-up), resets the outbox + audits; rejects a completed one (no double-pay)', async () => {
+  it('retries a stuck settling sell + send payout (step-up), resets the outbox + audits; rejects a completed one (no double-pay)', async () => {
     // 1. Bootstrap + accept + login as super_admin (holds every grant).
     const bootstrap = await request(app.getHttpServer())
       .post('/admin/bootstrap')
@@ -265,8 +283,8 @@ describe('Treasury payout-retry — e2e (AppModule, Testcontainers Postgres)', (
     const rootToken = (rootLogin.body as LoginBody).accessToken;
     expect(rootToken).toBeDefined();
 
-    // 2. Seed a stuck settling sell payout.
-    const stuck = await seedSellPayout('settling');
+    // 2. Seed a stuck settling SELL payout.
+    const stuck = await seedPayout('sell', 'settling');
 
     // 2a. POST retry WITHOUT step-up → 403 (the write is step-up-gated).
     await request(app.getHttpServer())
@@ -302,9 +320,24 @@ describe('Treasury payout-retry — e2e (AppModule, Testcontainers Postgres)', (
     });
     expect(audit).not.toBeNull();
 
-    // 3. A COMPLETED sell payout must be rejected (no double-pay) — the outbox
-    //    row is left untouched. Step up again to pass the guard chain.
-    const done = await seedSellPayout('completed');
+    // 3. A stuck settling SEND payout retries too (re-screens the destination
+    //    address via the real ComplianceService, then re-arms the onchain_send row).
+    const send = await seedPayout('send', 'settling');
+    await stepUp(rootToken);
+    const sendRes = await request(app.getHttpServer())
+      .post(`/admin/treasury/payouts/${send.outboxId}/retry`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ reason: 'On-chain send stuck; re-driving' })
+      .expect(200);
+    expect((sendRes.body as RetryBody).status).toBe('retry_enqueued');
+    const sendRearmed = await prisma.settlementOutbox.findUniqueOrThrow({
+      where: { id: send.outboxId },
+    });
+    expect(sendRearmed.status).toBe('pending');
+
+    // 4. A COMPLETED payout must be rejected (no double-pay) — the outbox row is
+    //    left untouched. Step up again to pass the guard chain.
+    const done = await seedPayout('sell', 'completed');
     await stepUp(rootToken);
     await request(app.getHttpServer())
       .post(`/admin/treasury/payouts/${done.outboxId}/retry`)
