@@ -27,5 +27,11 @@ export default defineConfig({
     css: false,
     include: ["**/*.test.{ts,tsx}"],
     exclude: ["node_modules", ".next", "e2e"],
+    // Multi-step `userEvent` interaction tests (open dialog → type → submit →
+    // waitFor) are legitimately slow and flake against the default 5000ms on a
+    // loaded 2-core CI runner (e.g. admins-page createRole hit 5096ms). Give the
+    // suite headroom so CI is reliable; fast tests still finish fast.
+    testTimeout: 15000,
+    hookTimeout: 15000,
   },
 })

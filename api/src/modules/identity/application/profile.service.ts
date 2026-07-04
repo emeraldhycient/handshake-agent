@@ -48,7 +48,7 @@ export class ProfileService {
       phone: phone ?? null,
       kycStatus: me.kycStatus,
       kycTier: me.kycTier,
-      fiatCurrency: fiatCurrency as ProfileResponse['fiatCurrency'],
+      fiatCurrency: fiatCurrency,
       limits,
     };
   }

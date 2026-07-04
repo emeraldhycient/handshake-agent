@@ -6,6 +6,7 @@
 import type { ComponentPropsWithoutRef, ReactNode } from "react"
 import type {
   AdminBeneficiary,
+  AdminCustomFiatCreateRequest,
   AdminEndUserDetail,
   AdminEndUserDevice,
   AdminEndUserListItem,
@@ -22,24 +23,12 @@ import type {
 
 // ─── Shell + gating ──────────────────────────────────────────────────────────────
 
-export interface RequireAuthProps {
-  children: ReactNode
-}
-
-export interface RequirePermissionProps {
-  /** The `web_page` resourceId that must be present in `adminMe.pages`. */
-  page: string
-  /**
-   * Optional `menu_item` resourceId that also grants access when present in
-   * `adminMe.menus`. Lets newer screens without a dedicated `web_page` perm
-   * (the config group under `/admin/settings`) gate on their nav-group menu
-   * instead. `super_admin` is always allowed regardless of either.
-   */
-  menu?: string
-  children: ReactNode
-}
-
 export interface AppShellProps {
+  children: ReactNode
+}
+
+/** The permission gate wrapped around the shell's main content (RouteGuard). */
+export interface RouteGuardProps {
   children: ReactNode
 }
 
@@ -391,6 +380,20 @@ export interface AddBlockedDialogProps {
   onSave: (next: string[]) => Promise<void>
 }
 
+export interface AddCurrencyDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** Existing fiat codes (built-in + custom), upper-cased — for a fast local
+   * duplicate check before the server's 409. */
+  existingCodes: string[]
+  /**
+   * Persist the new custom currency. Returns the mutation promise so the dialog
+   * can await, surface its own error inline, and close on success. May trigger a
+   * step-up challenge that the parent resolves.
+   */
+  onSave: (input: AdminCustomFiatCreateRequest) => Promise<void>
+}
+
 // ─── Notifications page (Phase 4) ──────────────────────────────────────────────────
 
 export interface TemplateEditorDialogProps {
@@ -701,6 +704,11 @@ export interface AssetCatalogRow {
   /** On-chain contract address (mono, click-to-copy); "—" for a native asset. */
   contract: string
   /**
+   * Provider-discovered logo URL (Blockradar Cloudinary), or null → the tinted
+   * text-badge fallback renders. A public asset image, never a secret.
+   */
+  logo: string | null
+  /**
    * Whether the asset is enabled in the live catalog. Resolved from the real
    * catalog config when a matching capability leaf exists; else design-faithful.
    */
@@ -708,22 +716,32 @@ export interface AssetCatalogRow {
 }
 
 /**
- * A newly-discovered asset awaiting review (design §6.23 "Newly discovered" card).
- * Surfaced by a Blockradar catalog sync — no admin endpoint yet, so these are
- * design-faithful representative rows.
+ * TableFilterBar props — the filter/search strip rendered inside a table card's
+ * header. `children` are the page-specific controls; `className` tweaks the strip.
  */
-export interface DiscoveredAssetRow {
-  /** Ticker rendered in the info-toned chip (e.g. "USDC"). */
-  sym: string
-  /** Human display name (e.g. "USD Coin"). */
-  name: string
-  /** Settlement network label. */
-  chain: string
-  /** On-chain decimals. */
-  dec: number
-  /** Truncated on-chain contract address (mono). */
-  contract: string
+export interface TableFilterBarProps {
+  children: import("react").ReactNode
+  className?: string
 }
+
+/**
+ * AssetLogo primitive props. Renders the provider logo image when a `logoUrl` is
+ * supplied and loads; on a missing URL or an image load error it falls back to the
+ * `sym` text badge. `className` styles the container (size, rounding, background,
+ * and — for the fallback — the text color/size, which the symbol inherits).
+ */
+export interface AssetLogoProps {
+  /** The asset ticker shown as the fallback badge text (e.g. "USDT"). */
+  sym: string
+  /** Absolute logo URL, or null when none was discovered. */
+  logoUrl: string | null
+  /** Container styling (size + rounding + background + fallback text classes). */
+  className?: string
+}
+
+// The "Newly discovered" card (design §6.23) is now WIRED to the real GET
+// /admin/config/assets/discovered read and maps `AdminDiscoveredAsset` from
+// `@handshake-agent/contracts` directly — so it no longer needs a local row type here.
 
 // ─── Templates page (design §6.19) ──────────────────────────────────────────────────
 // The Templates screen is WIRED to the real GET /admin/notification-templates
@@ -757,6 +775,12 @@ export interface CurrencyCatalogRow {
   nameEnquiry: boolean
   /** Whether the currency is live (enabled) — drives the Live pill (design seed `live`). */
   live: boolean
+  /**
+   * True for a runtime admin-added currency (CustomFiat) — toggled via the currency
+   * endpoint; false for a built-in catalog fiat — toggled via the settings key. Drives
+   * the "custom" chip + which mutation the Live toggle calls.
+   */
+  custom: boolean
 }
 
 // ─── Ticketing page (design §6.21) ──────────────────────────────────────────────────
@@ -833,6 +857,57 @@ export interface PricingRowActionsProps {
   row: PricingRow
   /** Whether the signed-in operator may write config (drives Edit vs read-only). */
   canEdit: boolean
+}
+
+/**
+ * One configured base rate — a mid-market `<code>`-per-1-`<asset>` price resolved from
+ * `pricing.assets.<asset>.baseRates.<code>`. A currency is fail-closed on enablement
+ * until at least one such rate exists (root §7), so this is the "add prices" surface.
+ */
+export interface PricingBaseRateRow {
+  /** Stable row id + a11y anchor, e.g. "USDT-GHS". */
+  id: string
+  /** The priced asset (USDT / BTC / TRX). */
+  asset: string
+  /** The fiat code the rate is denominated in (e.g. "GHS"). */
+  code: string
+  /** The editable base-rate setting key this row patches. */
+  key: string
+  /** The current rate (fiat units per 1 asset). */
+  value: number
+  /** Pre-formatted rate label (e.g. "19.5 GHS"). */
+  label: string
+  /** The setting's scope + scopeValue, carried so the write targets its leaf. */
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
+}
+
+/** An (asset, currency) pair that has no base rate yet — offered in the Add-price dialog. */
+export interface AddPriceOption {
+  asset: string
+  code: string
+}
+
+export interface PricingBaseRatesProps {
+  /** Configured base rates (value present), in display order. */
+  rows: PricingBaseRateRow[]
+  /** Whether any unpriced (asset, currency) pair remains to add. */
+  canAdd: boolean
+  /** Loading branch (settings still resolving). */
+  loading: boolean
+  /** Edit an existing base rate (opens the shared audit chain). */
+  onEdit: (row: PricingBaseRateRow) => void
+  /** Open the Add-price dialog. */
+  onAdd: () => void
+}
+
+export interface AddPriceDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** Unpriced (asset, currency) pairs the operator may add a rate for. */
+  options: AddPriceOption[]
+  /** Hand the captured (asset, currency, rate) up to start the audit chain. */
+  onContinue: (choice: { asset: string; code: string; rate: number }) => void
 }
 
 // ─── Capabilities / service registry page (design §6.25) ─────────────────────────
@@ -912,20 +987,44 @@ export interface WhatsAppHealthRow {
 /** The three NGN KYC tiers the registry enumerates (`limits.NGN.<tier>.*`). */
 export type LimitTierId = "tier_1" | "tier_2" | "tier_3"
 
+/**
+ * How a limit leaf's value is formatted + parsed: a fiat amount (rendered in the
+ * selected currency), a plain count, or a duration in seconds. Drives the display
+ * string, the edit field label, and the diff.
+ */
+export type LimitLeafKind = "amount" | "count" | "seconds"
+
+/**
+ * The setting leaf backing an editable limit row — its full key + scope (so the write
+ * targets the same leaf the read resolved) + its value kind. Present ONLY on rows whose
+ * config key exists AND is enforced server-side; a row without one is display-only (a
+ * placeholder cap the engine does not enforce is never made editable — root §3.6).
+ */
+export interface LimitEditLeaf {
+  key: string
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
+  kind: LimitLeafKind
+}
+
 /** One "Amount caps" key/value row (edit pencil opens the maker-checker flow). */
 export interface LimitAmountRow {
   /** The cap label shown on the left (e.g. "Per-transaction max"). */
   k: string
   /** The cap value shown on the right (mono/tabular, e.g. "₦200,000"). */
   v: string
+  /** Present when the row is backed by an enforced, editable config leaf. */
+  edit?: LimitEditLeaf
 }
 
-/** One "Velocity & counts" key/value row (display-only per the markup). */
+/** One "Velocity & counts" key/value row. Editable when backed by an enforced leaf. */
 export interface LimitVelocityRow {
   /** The metric label shown on the left (e.g. "Transactions / day"). */
   k: string
   /** The metric value shown on the right (mono/tabular, e.g. "10"). */
   v: string
+  /** Present when the row is backed by an enforced, editable config leaf. */
+  edit?: LimitEditLeaf
 }
 
 /** A tier tab's full content — its amount caps and velocity/count rows. */

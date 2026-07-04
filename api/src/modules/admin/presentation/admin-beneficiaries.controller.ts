@@ -1,5 +1,7 @@
 import {
+  Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -19,6 +21,7 @@ import { PermissionGuard } from './permission.guard';
 import { AdminStepUpGuard } from './admin-step-up.guard';
 import { CurrentAdmin, type AdminContext } from './current-admin.decorator';
 import { RequirePermission } from './require-permission.decorator';
+import { AdminBeneficiaryRemoveDto } from './dto/admin-beneficiary.dto';
 
 /**
  * Phase 3 (sub-area D) — the admin BENEFICIARY OVERSIGHT surface. The list is
@@ -53,5 +56,26 @@ export class AdminBeneficiariesController {
     @CurrentAdmin() admin: AdminContext,
   ): Promise<void> {
     await this.beneficiaries.overrideCoolingOff(id, admin.adminId);
+  }
+
+  // ── remove (Phase 9, WRITE — admin-initiated soft-delete; step-up-gated) ──────
+
+  /**
+   * Admin-initiated soft-delete of a saved payout destination. Step-up-gated and
+   * audited (`beneficiary_remove`); the operator's justification (reason body) is
+   * captured. It moves NO money (§3.1) — a beneficiary is only a destination
+   * record. Returns 204; a missing/already-deleted beneficiary maps to 404 via the
+   * global filter (AdminNotFoundError).
+   */
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission('api_route', 'DELETE /admin/beneficiaries/:id', 'write')
+  async remove(
+    @Param('id') id: string,
+    @Body() dto: AdminBeneficiaryRemoveDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<void> {
+    await this.beneficiaries.remove(id, dto.reason, admin.adminId);
   }
 }

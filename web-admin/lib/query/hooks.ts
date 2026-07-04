@@ -12,6 +12,8 @@ import {
   useQueryClient,
 } from "@tanstack/react-query"
 import type {
+  AdminCustomFiatCreateRequest,
+  AdminCustomFiatUpdateRequest,
   AdminEndUserSearchQuery,
   AdminEndUserStatusRequest,
   AdminEndUserTierRequest,
@@ -25,9 +27,11 @@ import type {
   BackfillNetworksRequest,
   AdminUserStatusRequest,
   AdminUserUpdateRoleRequest,
+  AdminUserNoteCreateRequest,
   AmlRuleCreateRequest,
   AmlRuleUpdateRequest,
   ApplyUserTagsRequest,
+  BlockedEntryCreateRequest,
   AuditLogQuery,
   BroadcastSendRequest,
   BulkMessageRequest,
@@ -56,8 +60,11 @@ import * as admin from "@/lib/api/admin"
 import * as agent from "@/lib/api/agent"
 import * as approvals from "@/lib/api/approvals"
 import * as beneficiaries from "@/lib/api/beneficiaries"
+import * as blocked from "@/lib/api/blocked"
+import * as assets from "@/lib/api/assets"
 import * as catalog from "@/lib/api/catalog"
 import * as config from "@/lib/api/config"
+import * as currencies from "@/lib/api/currencies"
 import * as compliance from "@/lib/api/compliance"
 import * as kyc from "@/lib/api/kyc"
 import * as ledger from "@/lib/api/ledger"
@@ -244,6 +251,16 @@ export function useEndUserTimeline(id: string | null) {
   return useQuery({
     queryKey: qk.endUserTimeline(id ?? ""),
     queryFn: () => users.listEndUserTimeline(id as string),
+    enabled: id !== null,
+    staleTime: 15_000,
+  })
+}
+
+/** The end user's immutable case notes. Disabled until an `id` is set. */
+export function useUserNotes(id: string | null) {
+  return useQuery({
+    queryKey: qk.userNotes(id ?? ""),
+    queryFn: () => users.listUserNotes(id as string),
     enabled: id !== null,
     staleTime: 15_000,
   })
@@ -502,6 +519,15 @@ export function useAdminBeneficiaries(userId?: string) {
   })
 }
 
+/** The deny-list (blocked users / addresses / banks; active + superseded). */
+export function useBlockedList() {
+  return useQuery({
+    queryKey: qk.blocked,
+    queryFn: () => blocked.listBlocked(),
+    staleTime: 30_000,
+  })
+}
+
 // ─── Approvals inbox (Phase 7, maker-checker) ──────────────────────────────────────
 
 /**
@@ -652,6 +678,70 @@ export function useSetSetting() {
   })
 }
 
+/**
+ * POST /admin/config/currencies — add a runtime currency ("Add currency"). Refreshes
+ * the admin catalog so the Currency-catalog screen shows the new (disabled) row.
+ * Step-up-gated server-side — the caller wraps in useStepUpRetry.
+ */
+export function useAddCurrency() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: AdminCustomFiatCreateRequest) =>
+      currencies.addCurrency(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.adminCatalog })
+    },
+  })
+}
+
+/**
+ * PATCH /admin/config/currencies/:code — enable/disable or edit a runtime currency.
+ * Enabling without pricing is rejected server-side (422). Refreshes the catalog.
+ */
+export function useUpdateCurrency() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      code,
+      patch,
+    }: {
+      code: string
+      patch: AdminCustomFiatUpdateRequest
+    }) => currencies.updateCurrency(code, patch),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.adminCatalog })
+    },
+  })
+}
+
+/**
+ * GET /admin/config/assets/discovered — the newly-discovered (Blockradar) assets awaiting
+ * review on the Asset-catalog screen.
+ */
+export function useDiscoveredAssets() {
+  return useQuery({
+    queryKey: qk.discoveredAssets,
+    queryFn: assets.listDiscoveredAssets,
+    staleTime: 60_000,
+  })
+}
+
+/**
+ * POST /admin/config/assets/sync — trigger a Blockradar catalog re-sync. Step-up-gated
+ * server-side (the caller wraps in useStepUpRetry). Refreshes the discovered list + the
+ * admin catalog (a sync can bring new assets into the tradeable overlay).
+ */
+export function useSyncAssets() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: assets.syncAssets,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.discoveredAssets })
+      void queryClient.invalidateQueries({ queryKey: qk.adminCatalog })
+    },
+  })
+}
+
 // ─── End-user mutations ───────────────────────────────────────────────────────────
 // Each is sensitive (may 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps it in
 // `useStepUpRetry`). On success they invalidate the user's queries so the detail
@@ -743,6 +833,89 @@ export function useSimSwapReverify() {
   })
 }
 
+// ─── Phase 9 end-user mutations — notes / verification / re-KYC / sessions ─────────
+// None moves money (§3.4/§3.1). The step-up-gated ones (force-re-KYC, session
+// revocation) may 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps them in
+// `useStepUpRetry`. Each invalidates the reads it affects.
+
+/** Append an immutable case note. Invalidates the notes list + the user timeline. */
+export function useCreateUserNote() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: string
+      input: AdminUserNoteCreateRequest
+    }) => users.createUserNote(id, input),
+    onSuccess: (_data, { id }) => {
+      void queryClient.invalidateQueries({ queryKey: qk.userNotes(id) })
+      void queryClient.invalidateQueries({ queryKey: qk.endUserTimeline(id) })
+    },
+  })
+}
+
+/** Re-send the user's verification email/link. Low-risk — reason optional. */
+export function useResendVerification() {
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
+      users.resendVerification(id, reason),
+  })
+}
+
+/**
+ * Force the user back through KYC. Sensitive (may 403 with ADMIN_STEP_UP_REQUIRED).
+ * Invalidates the users prefix so the detail (KYC pill/tier) re-resolves.
+ */
+export function useForceReKyc() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      users.forceReKyc(id, reason),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
+/**
+ * Revoke ONE of the user's auth sessions. Sensitive (may 403 with
+ * ADMIN_STEP_UP_REQUIRED). Invalidates the user's sessions list.
+ */
+export function useRevokeUserSession() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      sessionId,
+      reason,
+    }: {
+      id: string
+      sessionId: string
+      reason: string
+    }) => users.revokeUserSession(id, sessionId, reason),
+    onSuccess: (_data, { id }) => {
+      void queryClient.invalidateQueries({ queryKey: qk.endUserSessions(id) })
+    },
+  })
+}
+
+/**
+ * Revoke ALL of the user's auth sessions (force sign-out). Sensitive (may 403
+ * with ADMIN_STEP_UP_REQUIRED). Invalidates the user's sessions list.
+ */
+export function useRevokeAllUserSessions() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      users.revokeAllUserSessions(id, reason),
+    onSuccess: (_data, { id }) => {
+      void queryClient.invalidateQueries({ queryKey: qk.endUserSessions(id) })
+    },
+  })
+}
+
 // ─── Users bulk-bar mutations (Phase 7, WRITES) ─────────────────────────────────────
 // Bulk actions over an EXPLICIT selected id set. Neither moves money (§3.1): a tag is
 // a pure annotation; a message enqueues onto the notifications outbox (never a direct
@@ -802,6 +975,24 @@ export function useRejectKyc() {
       userId: string
       input: KycRejectRequest
     }) => kyc.rejectKyc(userId, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "kyc"] })
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
+/**
+ * Bounce a KYC review back to the user for more info (Phase 9). Sensitive (may
+ * 403 with ADMIN_STEP_UP_REQUIRED — the caller wraps in `useStepUpRetry`). On
+ * success it invalidates the KYC queue (the submission leaves pending_review) and
+ * the users prefix (the detail's KYC pill re-resolves).
+ */
+export function useRequestKycInfo() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ userId, reason }: { userId: string; reason: string }) =>
+      kyc.requestKycInfo(userId, reason),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["admin", "kyc"] })
       void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
@@ -1019,6 +1210,53 @@ export function useOverrideCoolingOff() {
       void queryClient.invalidateQueries({
         queryKey: ["admin", "beneficiaries"],
       })
+    },
+  })
+}
+
+/**
+ * Admin-remove a saved payout destination (Phase 9). Sensitive (may 403 with
+ * ADMIN_STEP_UP_REQUIRED — the caller wraps in `useStepUpRetry`); moves no money
+ * (§3.1). On success it invalidates the beneficiaries prefix (the destination
+ * leaves the list) and the users prefix (the user detail re-resolves).
+ */
+export function useRemoveBeneficiary() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      beneficiaries.removeBeneficiary(id, reason),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["admin", "beneficiaries"],
+      })
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] })
+    },
+  })
+}
+
+// ─── Phase 9 blocked-entry (deny-list) mutations ──────────────────────────────────
+// A blocked entry gates a subject out of the money path; the list is append-only
+// (lifting SUPERSEDES rather than deletes, §3.4). Both are sensitive (may 403 with
+// ADMIN_STEP_UP_REQUIRED — the caller wraps in `useStepUpRetry`) and move no money
+// (§3.1). Each invalidates the blocked list so it re-resolves.
+
+export function useAddBlocked() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: BlockedEntryCreateRequest) => blocked.addBlocked(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.blocked })
+    },
+  })
+}
+
+export function useSupersedeBlocked() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      blocked.supersedeBlocked(id, reason),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qk.blocked })
     },
   })
 }

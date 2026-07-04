@@ -25,6 +25,16 @@ export interface AssetPricing {
    * buy/sell proposal flows fail-closed without any per-asset code in the engine.
    */
   fiatTradeable?: boolean;
+  /**
+   * Optional per-(capability × currency) fiat MIN/MAX transaction bounds — the
+   * pricing screen's MIN/MAX column. A product/market cap set by an operator,
+   * distinct from the per-user KYC-tier limit. ENFORCE-WHEN-PRESENT (absent → no
+   * per-row bound). `buy` bounds the fiat spend; `sell` bounds the fiat proceeds
+   * (quote.netFiatAmount). Structurally matches the domain `AssetFiatBounds`
+   * resolver shape (amount-floors.ts) — the proposal engine reads these keys.
+   */
+  minFiat?: Partial<Record<'buy' | 'sell', Record<string, number>>>;
+  maxFiat?: Partial<Record<'buy' | 'sell', Record<string, number>>>;
 }
 
 export interface PricingConfig {
@@ -39,6 +49,26 @@ export interface TierLimits {
   perTxFiatMax: number;
   /** Maximum cumulative fiat amount within a rolling 24-hour window. */
   dailyFiatMax: number;
+  /**
+   * Maximum cumulative fiat amount within a rolling 7-day window. Optional on the
+   * type so fixtures exercising other caps need not set it, but the shipped defaults
+   * ALWAYS set it — production always enforces (KycGateService checks it when present).
+   */
+  weeklyFiatMax?: number;
+  /**
+   * Maximum NGN-equivalent of a single on-chain (crypto-address) send. Optional on the
+   * type (fixtures for other caps need not set it) but the shipped defaults ALWAYS set
+   * it — production always enforces (KycGateService checks it for on-chain sends when
+   * present). On-chain sends are irreversible, so it may be set tighter than perTxFiatMax.
+   */
+  perSendOnChainFiatMax?: number;
+  /**
+   * Maximum number of on-chain (crypto-address) sends within a rolling 10-minute
+   * window — an anti-rapid-fire velocity cap. Optional on the type (fixtures for other
+   * caps need not set it) but the shipped defaults ALWAYS set it; enforced for on-chain
+   * sends when present.
+   */
+  sendsPer10MinMax?: number;
   /** Maximum number of transactions within a rolling 24-hour window. */
   dailyTxCountMax: number;
 }
@@ -205,6 +235,15 @@ export interface ComplianceConfig {
    * Overridable at runtime via AppSetting / EffectiveConfigService (DB-admin layer now exists, root CLAUDE.md §7).
    */
   travelRuleThresholds: Record<string, number>;
+
+  /**
+   * Cooling-off window in SECONDS after a user's KYC tier changes (grant or admin
+   * change) during which money moves are blocked (anti-abuse after a tier grant on a
+   * possibly-compromised account, §3.3). Enforced by KycGateService against
+   * User.tierChangedAt. 0 (default) disables the hold — fully configurable, always
+   * enforced (enforce-when-present with a real 0-length window when 0).
+   */
+  tierChangeCoolingOffSeconds: number;
 
   /**
    * Denylist of crypto addresses that MockSanctionsScreener flags as
@@ -701,6 +740,9 @@ const buildConfig = (): AppConfig => ({
       ZAR: 18_000, // ~R18,000 ≈ USD 1,000 (indicative)
       USD: 1_000, // Standard FATF threshold
     },
+    // Cooling-off after a KYC tier change, in seconds. 0 = disabled (no hold) by
+    // default; an operator sets it > 0 to hold money moves after a tier grant/change.
+    tierChangeCoolingOffSeconds: 0,
     // Empty by default — no addresses flagged. Populate in config to test the
     // blocked path with MockSanctionsScreener (see mock-sanctions.screener.ts).
     sanctionsDenylist: [] as string[],
@@ -758,18 +800,27 @@ const buildConfig = (): AppConfig => ({
       tier_1: {
         perTxFiatMax: 50_000,
         dailyFiatMax: 200_000,
+        weeklyFiatMax: 1_000_000,
+        perSendOnChainFiatMax: 50_000,
+        sendsPer10MinMax: 5,
         dailyTxCountMax: 10,
       },
       // Tier 2 — enhanced KYC: higher throughput for regular users.
       tier_2: {
         perTxFiatMax: 500_000,
         dailyFiatMax: 2_000_000,
+        weeklyFiatMax: 10_000_000,
+        perSendOnChainFiatMax: 500_000,
+        sendsPer10MinMax: 20,
         dailyTxCountMax: 30,
       },
       // Tier 3 — full KYC: high-volume / business users.
       tier_3: {
         perTxFiatMax: 5_000_000,
         dailyFiatMax: 20_000_000,
+        weeklyFiatMax: 100_000_000,
+        perSendOnChainFiatMax: 5_000_000,
+        sendsPer10MinMax: 50,
         dailyTxCountMax: 100,
       },
     },

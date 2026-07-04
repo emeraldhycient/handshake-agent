@@ -18,8 +18,12 @@
  * path (POST /breaks/:id/resolve, step-up-gated), and accept records a dual-control
  * no-debit disposition (POST /breaks/:id/accept, step-up-gated). Phase 8: ESCALATE is
  * now WIRED too — reason → the real POST /breaks/:id/escalate (step-up-gated) opens a
- * compliance case from the break (moves no money). "Run now" still re-fetches the live
- * queries (the server-run trigger lives on the ops board).
+ * compliance case from the break (moves no money). Phase 9: "Run now" is now WIRED — the
+ * reconciler IS the `settlement-reconciliation` ops job, so the button opens a reason
+ * (audit) leg and fires the real POST /admin/ops/jobs/settlement-reconciliation/run
+ * (`useRunOpsJob`, step-up-gated); on success the live queries refetch so the freshest
+ * break set + cron timeline show. Triggering the reconciler re-drives an engine worker —
+ * it moves no money (§3.1).
  *
  * Funds-safety invariant preserved in the UI (root §3.1): over-credits are flagged for
  * human action, NEVER auto-debited — resolution is engine-brokered, never a raw ledger
@@ -37,6 +41,7 @@ import {
   useReconBreaks,
   useReconStatus,
   useResolveReconBreak,
+  useRunOpsJob,
 } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { ApiError } from "@/lib/api/client"
@@ -60,6 +65,9 @@ function errorMessage(error: unknown): string | null {
   if (error instanceof Error) return error.message
   return error ? String(error) : null
 }
+
+// The reconciler IS the manual-trigger ops job — "Run now" fires this declared job.
+const RECONCILIATION_JOB_ID = "settlement-reconciliation"
 
 // Severity → the design's pill (10px/800 uppercase). Mapped onto the canonical status
 // token pairs (§5): high = danger, medium = warn, low = info. Colour is never the sole
@@ -185,7 +193,12 @@ export function ReconciliationPage() {
   const resolveBreak = useResolveReconBreak()
   const acceptBreak = useAcceptReconBreak()
   const escalateBreak = useEscalateReconBreak()
+  const runJob = useRunOpsJob()
   const stepUp = useStepUpRetry()
+
+  // "Run now" reason (audit) leg — open while capturing the operator's justification
+  // before the real settlement-reconciliation run fires. A boolean, not a break id.
+  const [runReasonOpen, setRunReasonOpen] = useState(false)
 
   // Optimistic outcomes keyed by break id — reflect the disposition in the closed-card
   // footer immediately; the query invalidation then re-resolves the authoritative list.
@@ -273,6 +286,35 @@ export function ReconciliationPage() {
     })()
   }
 
+  // Trigger a real manual run of the settlement-reconciliation job with the audited
+  // reason. Step-up-gated: on a 403 the StepUpDialog opens and replays on re-auth. The
+  // reconciler re-drives an engine worker — it moves no money (§3.1). On success the
+  // live queries refetch so the freshest break set + cron timeline show.
+  function triggerRun(capturedReason: string) {
+    setLocalError(null)
+    setRunReasonOpen(false)
+    // A run has no per-break disposition to re-apply on step-up retry.
+    pendingDisposition.current = null
+    void (async () => {
+      try {
+        const completed = await stepUp.run(() =>
+          runJob
+            .mutateAsync({
+              id: RECONCILIATION_JOB_ID,
+              input: { reason: capturedReason },
+            })
+            .then(() => undefined)
+        )
+        if (completed) {
+          void breaksQuery.refetch()
+          void statusQuery.refetch()
+        }
+      } catch (error) {
+        setLocalError(errorMessage(error))
+      }
+    })()
+  }
+
   return (
     <div
       data-screen-label="Reconciliation"
@@ -330,12 +372,7 @@ export function ReconciliationPage() {
         <div className="flex-1" />
         <button
           type="button"
-          onClick={() => {
-            // Phase 7 will trigger a server-side reconciliation run; for now re-fetch
-            // the live queries so the operator sees the freshest break set.
-            void breaksQuery.refetch()
-            void statusQuery.refetch()
-          }}
+          onClick={() => setRunReasonOpen(true)}
           className="flex h-9 items-center gap-[7px] rounded-[10px] border border-line bg-card px-[15px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
         >
           <svg
@@ -627,7 +664,20 @@ export function ReconciliationPage() {
         </>
       )}
 
-      {/* Real step-up: opened when a disposition mutation 403s; replays on re-auth. */}
+      {/* "Run now" reason (audit) leg → the REAL settlement-reconciliation run
+          (step-up-gated; re-drives an engine worker — never a debit). */}
+      <ReasonModal
+        open={runReasonOpen}
+        onOpenChange={(o) => !o && setRunReasonOpen(false)}
+        title="Run reconciliation now"
+        onContinue={(r, category) =>
+          triggerRun(category ? `${category}: ${r}` : r)
+        }
+      />
+
+      {/* Real step-up: opened when a disposition OR a "Run now" mutation 403s; replays
+          on re-auth. A disposition marks the break locally; a run (no pending
+          disposition) refetches the live queries. */}
       <StepUpDialog
         open={stepUp.open}
         mfaEnabled={me.data?.mfaEnabled ?? false}
@@ -636,14 +686,19 @@ export function ReconciliationPage() {
           void stepUp
             .retry()
             .then((done) => {
+              if (!done) return
               const pending = pendingDisposition.current
-              if (done && pending) {
+              if (pending) {
                 setLocalOutcomes((prev) => ({
                   ...prev,
                   [pending.id]: pending.resolution,
                 }))
                 setReason("")
                 pendingDisposition.current = null
+              } else {
+                // The replayed action was the reconciler run — refresh the board.
+                void breaksQuery.refetch()
+                void statusQuery.refetch()
               }
             })
             .catch((error) => setLocalError(errorMessage(error)))

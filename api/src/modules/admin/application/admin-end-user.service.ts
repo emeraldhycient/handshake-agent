@@ -373,6 +373,30 @@ export class AdminEndUserService {
     });
   }
 
+  // ── forceReKyc ───────────────────────────────────────────────────────────────
+
+  /**
+   * Forces the user back to a pending KYC state so re-verification is required
+   * — e.g. after a SIM-swap or identity concern (§3.4). Resets User.kycStatus
+   * (and any KycProfile) to 'pending' and audits an admin_override carrying the
+   * operator's reason. Moves no money (§3.1); no PII crosses this path — only
+   * the opaque user id + the reason are recorded.
+   */
+  async forceReKyc(
+    userId: string,
+    reason: string,
+    adminId: string,
+  ): Promise<void> {
+    await this.identity.resetKycToPending(userId);
+    await this.audit.record({
+      correlationId: randomUUID(),
+      actorAdminId: adminId,
+      subject: `User:${userId}`,
+      action: 'admin_override',
+      details: { forceReKyc: true, reason },
+    });
+  }
+
   // ── triggerSimSwapReverify ───────────────────────────────────────────────────
 
   /**

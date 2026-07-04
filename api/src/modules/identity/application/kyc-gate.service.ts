@@ -3,13 +3,16 @@ import { Inject, Injectable } from '@nestjs/common';
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type {
+  ComplianceConfig,
   FiatLimits,
   LimitsConfig,
   TierLimits,
 } from '../../../core/config/configuration';
 import {
   KycNotVerifiedError,
+  OnChainSendLimitExceededError,
   SimSwapBlockedError,
+  TierChangeCoolingOffError,
   TierLimitExceededError,
   VelocityExceededError,
 } from '../domain/gate-errors';
@@ -90,6 +93,12 @@ export interface AssertCanTransactInput {
   /** ISO fiat currency code for this transaction (e.g. 'NGN'). Used to resolve per-fiat tier limits. */
   fiatCurrency: string;
   asset: string;
+  /**
+   * True when this is an on-chain (crypto-address) send. On-chain sends are irreversible,
+   * so they get an ADDITIONAL single-send cap (`perSendOnChainFiatMax`) beyond the general
+   * per-transaction cap. Absent/false for buys, sells, swaps, and fiat payouts.
+   */
+  onChainSend?: boolean;
 }
 
 /**
@@ -100,12 +109,16 @@ export interface AssertCanTransactInput {
  * frontend gate is UX-only, this is the security gate.
  *
  * Checks (in order — first failing check throws, remaining are skipped):
- *   1. SIM-swap block (high-severity; blocks regardless of KYC state)
- *   2. KYC status must be `verified` AND tier must not be `unverified`
- *   3. Per-transaction fiat amount ≤ tier limit
- *   4. Rolling 24-h fiat total would not exceed daily limit
- *   5. Rolling 24-h tx count + 1 would not exceed daily count limit
+ *   1.  SIM-swap block (high-severity; blocks regardless of KYC state)
+ *   2.  KYC status must be `verified` AND tier must not be `unverified`
+ *   2b. Tier-change cooling-off hold (compliance.tierChangeCoolingOffSeconds)
+ *   3.  Positive-amount guard + per-transaction fiat amount ≤ tier limit
+ *   4c. Single on-chain send cap (perSendOnChainFiatMax; on-chain sends only)
+ *   5.  Rolling 24-h fiat total ≤ dailyFiatMax and 24-h tx count + 1 ≤ dailyTxCountMax
+ *   6.  Rolling 7-day fiat total ≤ weeklyFiatMax
+ *   7.  Rolling 10-min on-chain send count + 1 ≤ sendsPer10MinMax (on-chain sends only)
  *
+ * Each cap enforced only when configured (§3.6); the shipped defaults set them all.
  * Tier limits are tunable via EffectiveConfigService / AppSetting (root CLAUDE.md §7):
  * an admin override flows through the same `get('limits')` call site at runtime.
  */
@@ -186,6 +199,26 @@ export class KycGateService {
       throw new KycNotVerifiedError('tier');
     }
 
+    // 2b. Tier-change cooling-off — a time-based hold on ALL money moves within
+    // `compliance.tierChangeCoolingOffSeconds` of the last tier change (§3.3, anti-abuse
+    // after a fresh tier grant). 0 (default) or a null tierChangedAt = no hold.
+    const coolingOffSeconds =
+      this.config.get<ComplianceConfig>(
+        'compliance',
+      )?.tierChangeCoolingOffSeconds;
+    if (
+      coolingOffSeconds !== undefined &&
+      coolingOffSeconds > 0 &&
+      user.tierChangedAt !== null
+    ) {
+      const holdUntil = new Date(
+        user.tierChangedAt.getTime() + coolingOffSeconds * 1000,
+      );
+      if (this.clock.now() < holdUntil) {
+        throw new TierChangeCoolingOffError(holdUntil, user.kycTier);
+      }
+    }
+
     // 3. Resolve tier limits from config (never hardcoded in the service).
     // getTierLimits looks up limits[fiatCurrency] first (fail-closed for unconfigured
     // currencies), then narrows kycTier to the verified-tier union.
@@ -234,6 +267,21 @@ export class KycGateService {
       );
     }
 
+    // 4c. Single on-chain send cap — an ADDITIONAL per-send limit applied ONLY to
+    // on-chain (crypto-address) sends, which are irreversible (§3.6: enforce the cap
+    // where it exists; the shipped defaults always set it). Never gates buy/sell/swap.
+    if (input.onChainSend && tierLimits.perSendOnChainFiatMax !== undefined) {
+      const scaledSendMax = toScaled(String(tierLimits.perSendOnChainFiatMax));
+      if (scaledTxAmount > scaledSendMax) {
+        throw new OnChainSendLimitExceededError(
+          Number(fiatAmount),
+          tierLimits.perSendOnChainFiatMax,
+          user.kycTier,
+          fiatCurrency,
+        );
+      }
+    }
+
     // 5. Velocity checks — load rolling 24-h usage, scoped to the transaction's fiat currency.
     const asOf = this.clock.now();
     const usage = await this.velocityRepo.getDailyUsage(
@@ -267,5 +315,50 @@ export class KycGateService {
         fiatCurrency,
       );
     }
+
+    // 6. Rolling 7-day (weekly) fiat velocity — enforced only when the tier carries a
+    // weekly cap (the shipped defaults always do; §3.6: enforce the cap that exists,
+    // never a cap that doesn't). Same BigInt-scaled comparison as the daily check.
+    if (tierLimits.weeklyFiatMax !== undefined) {
+      const weekly = await this.velocityRepo.getWeeklyUsage(
+        userId,
+        asOf,
+        fiatCurrency,
+      );
+      const scaledWeeklyUsed = toScaled(weekly.fiatTotal);
+      const scaledWeeklyMax = toScaled(String(tierLimits.weeklyFiatMax));
+      if (scaledWeeklyUsed + scaledTxAmount > scaledWeeklyMax) {
+        throw new VelocityExceededError(
+          'weekly',
+          Number(weekly.fiatTotal) + Number(fiatAmount),
+          tierLimits.weeklyFiatMax,
+          user.kycTier,
+          fiatCurrency,
+        );
+      }
+    }
+
+    // 7. Rolling 10-minute on-chain SEND-count velocity — an anti-rapid-fire cap for
+    // on-chain (irreversible) sends only (§3.6: enforced only when the tier carries it;
+    // the shipped defaults always do). Counts this send toward the window (+1).
+    if (input.onChainSend && tierLimits.sendsPer10MinMax !== undefined) {
+      const recentSends = await this.velocityRepo.getRecentSendCount(
+        userId,
+        asOf,
+        TEN_MINUTES_MS,
+      );
+      if (recentSends + 1 > tierLimits.sendsPer10MinMax) {
+        throw new VelocityExceededError(
+          'sends_10min',
+          recentSends + 1,
+          tierLimits.sendsPer10MinMax,
+          user.kycTier,
+          fiatCurrency,
+        );
+      }
+    }
   }
 }
+
+/** Rolling window for the on-chain send-count velocity cap. */
+const TEN_MINUTES_MS = 10 * 60 * 1000;

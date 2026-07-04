@@ -45,6 +45,7 @@ vi.mock("@/lib/api/users", () => ({
   listEndUserSessions: vi.fn(),
   getEndUserLimits: vi.fn(),
   listEndUserTimeline: vi.fn(),
+  listUserNotes: vi.fn(),
   adjustTier: vi.fn(),
   setEndUserStatus: vi.fn(),
   forcePinReset: vi.fn(),
@@ -71,6 +72,7 @@ import {
   listEndUserSessions,
   getEndUserLimits,
   listEndUserTimeline,
+  listUserNotes,
   adjustTier,
   setEndUserStatus,
   forcePinReset,
@@ -86,6 +88,7 @@ const mockListDevices = vi.mocked(listEndUserDevices)
 const mockListSessions = vi.mocked(listEndUserSessions)
 const mockGetLimits = vi.mocked(getEndUserLimits)
 const mockListTimeline = vi.mocked(listEndUserTimeline)
+const mockListNotes = vi.mocked(listUserNotes)
 const mockGetKyc = vi.mocked(getKycSubmission)
 const mockAdjustTier = vi.mocked(adjustTier)
 const mockSetStatus = vi.mocked(setEndUserStatus)
@@ -226,6 +229,7 @@ beforeEach(() => {
   mockListSessions.mockReset()
   mockGetLimits.mockReset()
   mockListTimeline.mockReset()
+  mockListNotes.mockReset()
   mockGetKyc.mockReset()
   mockAdjustTier.mockReset()
   mockSetStatus.mockReset()
@@ -240,6 +244,7 @@ beforeEach(() => {
   mockListSessions.mockResolvedValue(SESSIONS)
   mockGetLimits.mockResolvedValue(LIMITS)
   mockListTimeline.mockResolvedValue(TIMELINE)
+  mockListNotes.mockResolvedValue({ items: [] })
   mockGetKyc.mockResolvedValue(KYC)
   mockAdjustTier.mockResolvedValue(undefined)
   mockSetStatus.mockResolvedValue(undefined)

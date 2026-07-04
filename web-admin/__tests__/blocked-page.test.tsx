@@ -1,96 +1,268 @@
 /**
- * BlockedPage test (design §6.7 reproduction).
+ * BlockedPage tests — WIRED to real data (Phase 9).
  *
- * The screen is a design reproduction (no fetching). These tests assert the
- * reactive mock behaviour the design chains:
+ * The deny-list is now driven by the real `useBlockedList()` (GET /admin/blocked);
+ * the api client (`@/lib/api/blocked`) is mocked so no server is needed. The two
+ * write paths go through the shared funds-safety flow (reason → step-up), matching
+ * the sanctions-page pattern:
  *
- *  1. The seed rows + header render.
- *  2. Add → the purpose-built AddBlockedDialog collects a value, and on submit a
- *     new row is prepended to the table + an "ok" toast fires.
- *  3. Remove → the shared ReasonModal → StepUpModal chain deletes the row from the
- *     same useState list + an "ok" toast fires.
+ *  - Add → the purpose-built AddBlockedDialog collects a value; on submit the page
+ *    captures an audited reason via the shared ReasonModal → step-up-guarded
+ *    `useAddBlocked` (POST /admin/blocked with a derived kind) → toast.
+ *  - Remove/unblock → ReasonModal (audited reason) → step-up-guarded
+ *    `useSupersedeBlocked` (POST /admin/blocked/:id/supersede) → toast. The entry is
+ *    SUPERSEDED, never deleted (append-only, §3.4).
+ *
+ * Asserted branches: loading → data (real rows), empty (honest empty state), error
+ * (inline retry). Plus the add + supersede write flows and the step-up 403 replay.
  */
-import { describe, expect, it, beforeEach } from "vitest"
+import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import type { BlockedEntryListResponse } from "@handshake-agent/contracts"
 
 import { BlockedPage } from "@/components/admin/blocked-page"
 import { defaultToastStore } from "@/lib/store/toast-store"
 
+// ─── Mocks ──────────────────────────────────────────────────────────────────────
+
+vi.mock("@/lib/api/blocked", () => ({
+  listBlocked: vi.fn(),
+  addBlocked: vi.fn(),
+  supersedeBlocked: vi.fn(),
+}))
+
+// The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn(),
+}))
+
+import { listBlocked, addBlocked, supersedeBlocked } from "@/lib/api/blocked"
+import { getMe } from "@/lib/api/admin"
+
+const mockList = vi.mocked(listBlocked)
+const mockAdd = vi.mocked(addBlocked)
+const mockSupersede = vi.mocked(supersedeBlocked)
+const mockGetMe = vi.mocked(getMe)
+
+// ─── Fixtures ─────────────────────────────────────────────────────────────────
+
+const BLOCKED: BlockedEntryListResponse = {
+  items: [
+    {
+      id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      kind: "address",
+      value: "TQmByr1s6dLPU9Xz8y7Gk2f4Nc3Vw5Hj8",
+      reason: "OFAC SDN-list match",
+      addedByAdminId: "admin-1",
+      createdAt: "2026-06-30T10:00:00.000Z",
+      supersededAt: null,
+    },
+    {
+      id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      kind: "bank",
+      value: "0114227781 · Access Bank",
+      reason: "Confirmed mule account",
+      addedByAdminId: "admin-2",
+      createdAt: "2026-06-28T10:00:00.000Z",
+      supersededAt: "2026-06-29T10:00:00.000Z",
+    },
+  ],
+}
+
+function renderPage() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  return render(
+    <QueryClientProvider client={client}>
+      <BlockedPage />
+    </QueryClientProvider>
+  )
+}
+
 beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
+  mockList.mockReset()
+  mockList.mockResolvedValue(BLOCKED)
+  mockAdd.mockReset()
+  mockAdd.mockResolvedValue(BLOCKED.items[0])
+  mockSupersede.mockReset()
+  mockSupersede.mockResolvedValue(undefined)
+  mockGetMe.mockReset()
+  mockGetMe.mockResolvedValue({
+    id: "11111111-1111-1111-1111-111111111111",
+    email: "amara@handshake.ng",
+    role: { id: "00000000-0000-0000-0000-000000000001", name: "Super Admin" },
+    status: "active",
+    displayName: "Test Admin",
+    mfaEnabled: true,
+    permissions: [],
+    menus: [],
+    pages: [],
+  })
 })
 
-describe("BlockedPage (design reproduction)", () => {
-  it("renders the header + a known seed row", () => {
-    render(<BlockedPage />)
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+describe("BlockedPage (wired)", () => {
+  it("renders the header and real deny-list rows (loading → data)", async () => {
+    renderPage()
 
     expect(
       screen.getByRole("heading", { name: "Blocked list" })
     ).toBeInTheDocument()
+
+    // loading → data: the mocked entries render.
     expect(
-      screen.getByText("TQmByr1s6dLPU9Xz8y7Gk2f4Nc3Vw5Hj8")
+      await screen.findByText("TQmByr1s6dLPU9Xz8y7Gk2f4Nc3Vw5Hj8")
+    ).toBeInTheDocument()
+    expect(screen.getByText("0114227781 · Access Bank")).toBeInTheDocument()
+    // The stored reason fills the Reason column.
+    expect(screen.getByText("OFAC SDN-list match")).toBeInTheDocument()
+  })
+
+  it("renders the honest empty state when nothing is blocked", async () => {
+    mockList.mockResolvedValue({ items: [] })
+    renderPage()
+
+    expect(
+      await screen.findByText(/Nothing blocked/i)
     ).toBeInTheDocument()
   })
 
-  it("appends a new row via the add dialog and toasts on save", async () => {
+  it("renders a tokened inline error with a Retry affordance on failure", async () => {
+    mockList.mockRejectedValue(new Error("boom"))
+    renderPage()
+
+    expect(
+      await screen.findByText("Failed to load the blocked list")
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
+  })
+
+  it("adds an entry via the dialog → reason flow, deriving the kind, and toasts", async () => {
     const user = userEvent.setup()
-    render(<BlockedPage />)
+    renderPage()
+
+    await screen.findByText("TQmByr1s6dLPU9Xz8y7Gk2f4Nc3Vw5Hj8")
 
     const newValue = "0xAbC1230000000000000000000000000000000009"
-    expect(screen.queryByText(newValue)).not.toBeInTheDocument()
 
-    // Open the purpose-built AddBlockedDialog (not the generic reason modal).
+    // Open the purpose-built AddBlockedDialog + fill the value.
     await user.click(screen.getByRole("button", { name: "+ Add entry" }))
     const dialog = await screen.findByRole("dialog")
     expect(dialog).toHaveTextContent("Add to the blocked list")
-
-    // Fill the value + submit.
     await user.type(within(dialog).getByLabelText("Value"), newValue)
     await user.click(within(dialog).getByRole("button", { name: "Add entry" }))
 
-    // The row is prepended to the visible table.
-    await waitFor(() => expect(screen.getByText(newValue)).toBeInTheDocument())
-    // …and the dialog closed.
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    // The dialog closes; the shared ReasonModal captures the audited reason.
+    await user.type(
+      await screen.findByRole("textbox", { name: "Reason" }),
+      "Linked to phishing proceeds"
     )
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+
+    // The POST fires with the derived kind + the entered value + reason.
+    await waitFor(() => expect(mockAdd).toHaveBeenCalledTimes(1))
+    expect(mockAdd).toHaveBeenCalledWith({
+      kind: "address",
+      value: newValue,
+      reason: "Linked to phishing proceeds",
+    })
 
     const { toasts } = defaultToastStore.getState()
     expect(toasts).toHaveLength(1)
-    expect(toasts[0].message).toBe(`Added to blocked list · ${newValue}`)
     expect(toasts[0].kind).toBe("ok")
   })
 
-  it("removes a row via the reason → step-up chain and toasts", async () => {
+  it("does not call addBlocked until the reason modal's Continue fires", async () => {
     const user = userEvent.setup()
-    render(<BlockedPage />)
+    renderPage()
 
-    const target = "0114227781 · Access Bank"
-    expect(screen.getByText(target)).toBeInTheDocument()
+    await screen.findByText("TQmByr1s6dLPU9Xz8y7Gk2f4Nc3Vw5Hj8")
+    await user.click(screen.getByRole("button", { name: "+ Add entry" }))
+    const dialog = await screen.findByRole("dialog")
+    await user.type(within(dialog).getByLabelText("Value"), "user-123")
+    await user.click(within(dialog).getByRole("button", { name: "Add entry" }))
+
+    // The ReasonModal is open but nothing is persisted yet.
+    await screen.findByRole("textbox", { name: "Reason" })
+    expect(mockAdd).not.toHaveBeenCalled()
+  })
+
+  it("supersedes (unblocks) a row via the reason → step-up flow and toasts", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    const target = "TQmByr1s6dLPU9Xz8y7Gk2f4Nc3Vw5Hj8"
+    await screen.findByText(target)
 
     // Open the Remove flow → ReasonModal.
     await user.click(
       screen.getByRole("button", {
-        name: `Remove ${target} from the blocked list`,
+        name: `Unblock ${target}`,
       })
     )
-    await user.type(screen.getByLabelText("Reason"), "Confirmed mule account")
+    await user.type(
+      await screen.findByRole("textbox", { name: "Reason" }),
+      "False positive on review"
+    )
     await user.click(screen.getByRole("button", { name: "Continue" }))
 
     // StepUpModal — enter the 6-digit code via the keypad.
     for (const digit of ["1", "2", "3", "4", "5", "6"]) {
-      await user.click(screen.getByRole("button", { name: digit }))
+      await user.click(await screen.findByRole("button", { name: digit }))
     }
 
-    // The row is gone from the visible table + the removal toast fired.
-    await waitFor(() =>
-      expect(screen.queryByText(target)).not.toBeInTheDocument()
+    await waitFor(() => expect(mockSupersede).toHaveBeenCalledTimes(1))
+    expect(mockSupersede).toHaveBeenCalledWith(
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "False positive on review"
     )
 
     const { toasts } = defaultToastStore.getState()
     expect(toasts).toHaveLength(1)
-    expect(toasts[0].message).toBe(`Removed from blocked list · ${target}`)
     expect(toasts[0].kind).toBe("ok")
+  })
+
+  it("opens the step-up dialog and retries the supersede after re-auth on a 403", async () => {
+    const user = userEvent.setup()
+    const { ApiError } = await import("@/lib/api/client")
+    mockSupersede
+      .mockRejectedValueOnce(
+        new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce(undefined)
+
+    renderPage()
+
+    const target = "TQmByr1s6dLPU9Xz8y7Gk2f4Nc3Vw5Hj8"
+    await screen.findByText(target)
+    await user.click(screen.getByRole("button", { name: `Unblock ${target}` }))
+    await user.type(
+      await screen.findByRole("textbox", { name: "Reason" }),
+      "False positive on review"
+    )
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    for (const digit of ["1", "2", "3", "4", "5", "6"]) {
+      await user.click(await screen.findByRole("button", { name: digit }))
+    }
+
+    // The re-auth dialog appears (TOTP mode, since mfaEnabled).
+    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    expect(mockSupersede).toHaveBeenCalledTimes(1)
+  })
+
+  it("marks superseded rows as inactive (append-only, not deleted)", async () => {
+    renderPage()
+
+    // The superseded bank row still renders (nothing is deleted) but is not
+    // offered an Unblock action.
+    await screen.findByText("0114227781 · Access Bank")
+    expect(
+      screen.queryByRole("button", { name: "Unblock 0114227781 · Access Bank" })
+    ).not.toBeInTheDocument()
   })
 })

@@ -53,10 +53,13 @@ interface Mocks {
       'listKycReviewQueue' | 'loadUserWithKycAndDevices'
     >
   >;
-  kyc: jest.Mocked<Pick<IKycRepository, 'updateKycProfileDecision'>>;
+  kyc: jest.Mocked<
+    Pick<IKycRepository, 'updateKycProfileDecision' | 'markKycNeedsInfo'>
+  >;
   audit: jest.Mocked<Pick<AuditService, 'record'>>;
   auditCalls: RecordAuditInput[];
   decisionCalls: { userId: string; decision: UpdateKycProfileDecisionInput }[];
+  needsInfoCalls: { userId: string; reviewedByAdminId: string }[];
 }
 
 function makeMocks(): { service: AdminKycReviewService; m: Mocks } {
@@ -65,6 +68,7 @@ function makeMocks(): { service: AdminKycReviewService; m: Mocks } {
     userId: string;
     decision: UpdateKycProfileDecisionInput;
   }[] = [];
+  const needsInfoCalls: { userId: string; reviewedByAdminId: string }[] = [];
 
   const identity = {
     listKycReviewQueue: jest.fn(),
@@ -85,7 +89,15 @@ function makeMocks(): { service: AdminKycReviewService; m: Mocks } {
           return Promise.resolve();
         },
       ),
-  } as unknown as jest.Mocked<Pick<IKycRepository, 'updateKycProfileDecision'>>;
+    markKycNeedsInfo: jest
+      .fn()
+      .mockImplementation((userId: string, reviewedByAdminId: string) => {
+        needsInfoCalls.push({ userId, reviewedByAdminId });
+        return Promise.resolve();
+      }),
+  } as unknown as jest.Mocked<
+    Pick<IKycRepository, 'updateKycProfileDecision' | 'markKycNeedsInfo'>
+  >;
 
   const audit = {
     record: jest.fn().mockImplementation((input: RecordAuditInput) => {
@@ -102,7 +114,7 @@ function makeMocks(): { service: AdminKycReviewService; m: Mocks } {
 
   return {
     service,
-    m: { identity, kyc, audit, auditCalls, decisionCalls },
+    m: { identity, kyc, audit, auditCalls, decisionCalls, needsInfoCalls },
   };
 }
 
@@ -360,6 +372,55 @@ describe('AdminKycReviewService.reject', () => {
       status: 'rejected',
       tier: 'unverified',
       rejectionReason: 'document mismatch',
+    });
+  });
+});
+
+// ── requestInfo ──────────────────────────────────────────────────────────────
+
+describe('AdminKycReviewService.requestInfo', () => {
+  it('marks the profile needs_info (via the repo) and audits kyc_state_change with the reason', async () => {
+    const { service, m } = makeMocks();
+    m.identity.loadUserWithKycAndDevices.mockResolvedValue(makeDetail());
+
+    await service.requestInfo(
+      USER_ID,
+      'proof of address is illegible',
+      ADMIN_ID,
+    );
+
+    // Bounces the review back through the dedicated repo path — never through the
+    // approve/reject decision write (this is not a decision, the review is paused).
+    expect(m.needsInfoCalls).toHaveLength(1);
+    expect(m.needsInfoCalls[0]).toEqual({
+      userId: USER_ID,
+      reviewedByAdminId: ADMIN_ID,
+    });
+    expect(m.decisionCalls).toHaveLength(0);
+
+    expect(m.auditCalls).toHaveLength(1);
+    const a = m.auditCalls[0];
+    expect(a.action).toBe('kyc_state_change');
+    expect(a.actorAdminId).toBe(ADMIN_ID);
+    expect(a.subject).toContain(USER_ID);
+    expect(a.before).toEqual({ status: 'pending_review', tier: 'unverified' });
+    expect(a.after).toEqual({
+      status: 'needs_info',
+      reason: 'proof of address is illegible',
+    });
+  });
+
+  it('null-safes the before snapshot when the user record is absent', async () => {
+    const { service, m } = makeMocks();
+    m.identity.loadUserWithKycAndDevices.mockResolvedValue(null);
+
+    await service.requestInfo(USER_ID, 'need a clearer selfie', ADMIN_ID);
+
+    expect(m.needsInfoCalls).toHaveLength(1);
+    expect(m.auditCalls[0].before).toBeNull();
+    expect(m.auditCalls[0].after).toEqual({
+      status: 'needs_info',
+      reason: 'need a clearer selfie',
     });
   });
 });

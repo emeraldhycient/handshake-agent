@@ -25,7 +25,7 @@ export class AdminCatalogController {
 
   @Get('config/catalog')
   @RequirePermission('api_route', 'GET /admin/config/catalog', 'read')
-  getCatalog(): AdminCatalogView {
-    return AdminCatalogViewSchema.parse(this.catalog.getCatalog());
+  async getCatalog(): Promise<AdminCatalogView> {
+    return AdminCatalogViewSchema.parse(await this.catalog.getCatalog());
   }
 }

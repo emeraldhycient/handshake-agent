@@ -78,6 +78,48 @@ export class AdminBeneficiaryService {
       after: { firstUseLockedUntil: null },
     });
   }
+
+  // ── remove (Phase 9 — admin-initiated soft-delete) ──────────────────────────
+
+  /**
+   * Admin-initiated removal of a saved payout destination: SOFT-deletes it (sets
+   * `deletedAt`) so it disappears from the user's picker while funds-safety history
+   * is preserved. It moves NO money (§3.1) — a beneficiary is only a destination
+   * record, never a balance.
+   *
+   * The owning `userId` is resolved SERVER-SIDE from the beneficiary record (never
+   * trusted from the client, §3.3) and passed to the existing owner-scoped
+   * `softDelete`, so the same delete path — and the same idempotency guarantees —
+   * as the end-user route is reused (no admin-only bypass of ownership scoping).
+   * The mutation is audited as `beneficiary_remove` (subject `Beneficiary:<id>`)
+   * with the operator's justification.
+   *
+   * Throws AdminNotFoundError (→ 404) when the beneficiary is absent or already
+   * soft-deleted (the delete then matches no active row).
+   */
+  async remove(
+    beneficiaryId: string,
+    reason: string,
+    adminId: string,
+  ): Promise<void> {
+    const before = await this.beneficiaries.findById(beneficiaryId);
+    if (before === null) throw new AdminNotFoundError('Beneficiary');
+
+    const deleted = await this.beneficiaries.softDelete(
+      before.userId,
+      beneficiaryId,
+    );
+    if (!deleted) throw new AdminNotFoundError('Beneficiary');
+
+    await this.audit.record({
+      correlationId: randomUUID(),
+      actorAdminId: adminId,
+      subject: `Beneficiary:${beneficiaryId}`,
+      action: 'beneficiary_remove',
+      before: { deletedAt: toIso(before.deletedAt) },
+      after: { deleted: true, reason },
+    });
+  }
 }
 
 // ── mapper (record → contract shape) ────────────────────────────────────────────

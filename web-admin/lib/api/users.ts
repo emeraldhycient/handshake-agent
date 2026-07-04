@@ -27,6 +27,15 @@ import {
   BulkMessageResponseSchema,
   CreateManualCreditRequestSchema,
   ChangeRequestSchema,
+  AdminUserNoteCreateRequestSchema,
+  AdminUserNoteSchema,
+  AdminUserNoteListResponseSchema,
+  ResendVerificationRequestSchema,
+  ForceReKycRequestSchema,
+  AdminUserSessionRevokeRequestSchema,
+  type AdminUserNoteCreateRequest,
+  type AdminUserNote,
+  type AdminUserNoteListResponse,
   type AdminEndUserSearchQuery,
   type AdminEndUserListResponse,
   type AdminEndUserDetail,
@@ -197,4 +206,79 @@ export async function sendBulkMessage(
   const body = BulkMessageRequestSchema.parse(input)
   const res = await api.post("/admin/users/message", body)
   return BulkMessageResponseSchema.parse(res.data)
+}
+
+// ─── Phase 9 — case notes / verification / re-KYC / session revocation ────────────
+// None moves money (§3.4/§3.1). Each parses its input before the request fires and
+// its response after (§8). The mutating routes are immutably audited server-side.
+
+/** GET /admin/users/:id/notes — the user's immutable case notes (newest-first). */
+export async function listUserNotes(
+  id: string
+): Promise<AdminUserNoteListResponse> {
+  const res = await api.get(`/admin/users/${id}/notes`)
+  return AdminUserNoteListResponseSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/users/:id/notes — append an immutable case note. Body parsed before
+ * send, the created note parsed after. Returns the created note (201).
+ */
+export async function createUserNote(
+  id: string,
+  input: AdminUserNoteCreateRequest
+): Promise<AdminUserNote> {
+  const body = AdminUserNoteCreateRequestSchema.parse(input)
+  const res = await api.post(`/admin/users/${id}/notes`, body)
+  return AdminUserNoteSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/users/:id/resend-verification — re-send the user's verification
+ * email/link. The reason is OPTIONAL (a resend is low-risk); when omitted an
+ * empty body is sent. Body parsed before the request fires. 204 on success.
+ */
+export async function resendVerification(
+  id: string,
+  reason?: string
+): Promise<void> {
+  const body = ResendVerificationRequestSchema.parse(reason ? { reason } : {})
+  await api.post(`/admin/users/${id}/resend-verification`, body)
+}
+
+/**
+ * POST /admin/users/:id/force-rekyc — force the user back through KYC (e.g. after
+ * a SIM-swap / identity concern). The required reason is the audited justification.
+ * Sensitive — may 403 with ADMIN_STEP_UP_REQUIRED. 204 on success.
+ */
+export async function forceReKyc(id: string, reason: string): Promise<void> {
+  const body = ForceReKycRequestSchema.parse({ reason })
+  await api.post(`/admin/users/${id}/force-rekyc`, body)
+}
+
+/**
+ * DELETE /admin/users/:id/sessions/:sessionId — revoke ONE of the user's auth
+ * sessions. The required reason rides on the request `data` body (DELETE) and is
+ * parsed before the request fires. Sensitive — may 403 with ADMIN_STEP_UP_REQUIRED.
+ */
+export async function revokeUserSession(
+  id: string,
+  sessionId: string,
+  reason: string
+): Promise<void> {
+  const data = AdminUserSessionRevokeRequestSchema.parse({ reason })
+  await api.delete(`/admin/users/${id}/sessions/${sessionId}`, { data })
+}
+
+/**
+ * DELETE /admin/users/:id/sessions — revoke ALL of the user's auth sessions (force
+ * sign-out). The required reason rides on the request `data` body (DELETE) and is
+ * parsed before the request fires. Sensitive — may 403 with ADMIN_STEP_UP_REQUIRED.
+ */
+export async function revokeAllUserSessions(
+  id: string,
+  reason: string
+): Promise<void> {
+  const data = AdminUserSessionRevokeRequestSchema.parse({ reason })
+  await api.delete(`/admin/users/${id}/sessions`, { data })
 }

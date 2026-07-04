@@ -207,6 +207,71 @@ describe('KycPrismaRepository — NIN/BVN encryption at rest (NFR-1)', () => {
     });
   });
 
+  describe('markKycNeedsInfo (Phase 9 request-info)', () => {
+    /** Captures the atomic KycProfile + User updates the needs-info write performs. */
+    interface NeedsInfoWrites {
+      kycProfileUpdate: jest.Mock<Promise<void>, [unknown]>;
+      userUpdate: jest.Mock<Promise<void>, [unknown]>;
+      transaction: jest.Mock;
+    }
+
+    function makeNeedsInfoPrisma(): {
+      prisma: PrismaService;
+      writes: NeedsInfoWrites;
+    } {
+      const kycProfileUpdate = jest.fn<Promise<void>, [unknown]>();
+      const userUpdate = jest.fn<Promise<void>, [unknown]>();
+      const tx = {
+        kycProfile: { update: kycProfileUpdate },
+        user: { update: userUpdate },
+      };
+      const transaction = jest.fn((cb: (t: typeof tx) => Promise<unknown>) =>
+        cb(tx),
+      );
+      return {
+        prisma: { $transaction: transaction } as unknown as PrismaService,
+        writes: { kycProfileUpdate, userUpdate, transaction },
+      };
+    }
+
+    it('sets the profile to needs_info + reviewedByAdminId and mirrors kycStatus onto the User, in one $transaction', async () => {
+      const { prisma, writes } = makeNeedsInfoPrisma();
+      const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+      await repo.markKycNeedsInfo('user-1', 'admin-9');
+
+      expect(writes.transaction).toHaveBeenCalledTimes(1);
+
+      expect(writes.kycProfileUpdate).toHaveBeenCalledWith({
+        where: { userId: 'user-1' },
+        data: { status: 'needs_info', reviewedByAdminId: 'admin-9' },
+      });
+
+      expect(writes.userUpdate).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { kycStatus: 'needs_info' },
+      });
+    });
+
+    it('does not touch tier, verifiedAt, or rejectionReason (a paused review, not a decision)', async () => {
+      const { prisma, writes } = makeNeedsInfoPrisma();
+      const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+      await repo.markKycNeedsInfo('user-1', 'admin-9');
+
+      const profileData = (
+        writes.kycProfileUpdate.mock.calls[0][0] as { data: object }
+      ).data;
+      expect(profileData).not.toHaveProperty('tier');
+      expect(profileData).not.toHaveProperty('verifiedAt');
+      expect(profileData).not.toHaveProperty('rejectionReason');
+
+      const userData = (writes.userUpdate.mock.calls[0][0] as { data: object })
+        .data;
+      expect(userData).not.toHaveProperty('kycTier');
+    });
+  });
+
   describe('decryptIdentifier (read path)', () => {
     it('decrypts what completeVerificationAtomic wrote (round trip on read)', async () => {
       const captured = freshCaptured();

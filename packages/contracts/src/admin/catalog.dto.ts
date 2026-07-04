@@ -35,6 +35,13 @@ export const AdminCatalogAssetSchema = z.object({
   networks: z.array(z.string()),
   /** Effective live status — the asset's `enabled` flag in the merged config. */
   live: z.boolean(),
+  /**
+   * Provider-discovered logo URL (Blockradar Cloudinary), or null when none was
+   * discovered — the console then renders the tinted text-badge fallback. Not a
+   * secret: it's a public asset image. Present on both static assets (enriched from
+   * the discovery overlay) and provider-discovered ones.
+   */
+  logoUrl: z.string().nullable(),
 });
 export type AdminCatalogAsset = z.infer<typeof AdminCatalogAssetSchema>;
 
@@ -50,6 +57,13 @@ export const AdminCatalogFiatSchema = z.object({
   decimals: z.number().int().nonnegative(),
   /** Effective live status — the fiat's `enabled` flag in the merged config. */
   live: z.boolean(),
+  /**
+   * True for a runtime admin-added currency (CustomFiat overlay), false for a
+   * built-in JSON-default catalog fiat. The console toggles a custom fiat via the
+   * currency endpoint (PATCH /admin/config/currencies/:code) and a built-in via the
+   * settings key (catalog.fiats.<code>.enabled). Defaults false for back-compat.
+   */
+  custom: z.boolean().optional().default(false),
 });
 export type AdminCatalogFiat = z.infer<typeof AdminCatalogFiatSchema>;
 

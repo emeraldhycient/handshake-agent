@@ -12,6 +12,7 @@
  */
 import {
   AdminBeneficiaryListResponseSchema,
+  AdminBeneficiaryRemoveRequestSchema,
   type AdminBeneficiaryListResponse,
 } from "@handshake-agent/contracts"
 
@@ -29,4 +30,18 @@ export async function listBeneficiaries(
 /** Sensitive — may 403 with code ADMIN_STEP_UP_REQUIRED. 204 on success. */
 export async function overrideCoolingOff(id: string): Promise<void> {
   await api.post(`/admin/beneficiaries/${id}/cooling-off-override`, {})
+}
+
+/**
+ * DELETE /admin/beneficiaries/:id — admin-remove a saved payout destination. The
+ * required reason is the audited justification; it rides on the request `data`
+ * body (DELETE) and is parsed before the request fires (§3.3 / §8). Sensitive —
+ * may 403 with ADMIN_STEP_UP_REQUIRED. 204 on success. Moves no money (§3.1).
+ */
+export async function removeBeneficiary(
+  id: string,
+  reason: string
+): Promise<void> {
+  const data = AdminBeneficiaryRemoveRequestSchema.parse({ reason })
+  await api.delete(`/admin/beneficiaries/${id}`, { data })
 }

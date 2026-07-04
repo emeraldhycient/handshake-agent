@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 import {
+  SupportedAssetSchema,
+  KNOWN_FIAT_CURRENCIES,
+} from "../common";
+import {
   SETTING_REGISTRY,
   settingSchemaFor,
   type SettingRegistryEntry,
@@ -60,6 +64,66 @@ describe("SETTING_REGISTRY", () => {
     expect(keys.has("beneficiary.cryptoCoolingOffSeconds")).toBe(true);
   });
 
+  it("registers a weekly-max cap per tier (rolling 7-day fiat cap, enforced server-side)", () => {
+    for (const tier of ["tier_1", "tier_2", "tier_3"] as const) {
+      const e = entry(`limits.NGN.${tier}.weeklyFiatMax`);
+      expect(e.category).toBe("KYC");
+      expect(e.valueType).toBe("number");
+      expect(e.editable).toBe(true);
+      expect(e.min).toBe(0);
+    }
+  });
+
+  it("registers a per-send on-chain cap per tier (single on-chain send max, enforced server-side)", () => {
+    for (const tier of ["tier_1", "tier_2", "tier_3"] as const) {
+      const e = entry(`limits.NGN.${tier}.perSendOnChainFiatMax`);
+      expect(e.category).toBe("KYC");
+      expect(e.valueType).toBe("number");
+      expect(e.editable).toBe(true);
+      expect(e.min).toBe(0);
+    }
+  });
+
+  it("registers the tier-change cooling-off (seconds, enforced server-side)", () => {
+    const e = entry("compliance.tierChangeCoolingOffSeconds");
+    expect(e.category).toBe("Compliance");
+    expect(e.valueType).toBe("number");
+    expect(e.editable).toBe(true);
+    expect(e.min).toBe(0);
+  });
+
+  it("registers the full tier-limit family for EVERY known fiat, not just NGN", () => {
+    const FIELDS = [
+      "perTxFiatMax",
+      "dailyFiatMax",
+      "weeklyFiatMax",
+      "perSendOnChainFiatMax",
+      "sendsPer10MinMax",
+      "dailyTxCountMax",
+    ];
+    for (const code of KNOWN_FIAT_CURRENCIES) {
+      for (const tier of ["tier_1", "tier_2", "tier_3"]) {
+        for (const field of FIELDS) {
+          const e = entry(`limits.${code}.${tier}.${field}`);
+          expect(e.category).toBe("KYC");
+          expect(e.valueType).toBe("number");
+          expect(e.editable).toBe(true);
+          expect(e.min).toBe(0);
+        }
+      }
+    }
+  });
+
+  it("registers a rolling 10-minute send-count cap per tier (enforced server-side)", () => {
+    for (const tier of ["tier_1", "tier_2", "tier_3"] as const) {
+      const e = entry(`limits.NGN.${tier}.sendsPer10MinMax`);
+      expect(e.category).toBe("KYC");
+      expect(e.valueType).toBe("number");
+      expect(e.editable).toBe(true);
+      expect(e.min).toBe(0);
+    }
+  });
+
   it("registers the Tickets enablement + commission tunables (Phase 4 wave 2)", () => {
     const enabled = entry("ticketing.enabled");
     expect(enabled.category).toBe("Tickets");
@@ -94,6 +158,55 @@ describe("SETTING_REGISTRY", () => {
     expect(
       keys.some((k) => k.toLowerCase().includes("api_key")),
     ).toBe(false);
+  });
+
+  it("registers a catalog live-toggle for every SupportedAsset (Phase 9)", () => {
+    for (const sym of SupportedAssetSchema.options) {
+      const e = entry(`catalog.assets.${sym}.enabled`);
+      expect(e.category).toBe("Catalog");
+      expect(e.valueType).toBe("boolean");
+      expect(e.editable).toBe(true);
+      expect(e.secret).toBe(false);
+    }
+  });
+
+  it("registers a catalog live-toggle for every FiatCurrency (Phase 9)", () => {
+    for (const code of KNOWN_FIAT_CURRENCIES) {
+      const e = entry(`catalog.fiats.${code}.enabled`);
+      expect(e.category).toBe("Catalog");
+      expect(e.valueType).toBe("boolean");
+      expect(e.editable).toBe(true);
+      expect(e.secret).toBe(false);
+    }
+  });
+
+  it("registers a base-rate key for every priced asset × known fiat (a currency must be priceable to be enabled)", () => {
+    const PRICED = ["USDT", "BTC", "TRX"] as const;
+    for (const asset of PRICED) {
+      for (const code of KNOWN_FIAT_CURRENCIES) {
+        const e = entry(`pricing.assets.${asset}.baseRates.${code}`);
+        expect(e.category).toBe("Pricing");
+        expect(e.valueType).toBe("number");
+        expect(e.editable).toBe(true);
+        expect(e.min).toBe(0);
+      }
+    }
+  });
+
+  it("builds a base-rate number schema for a non-NGN currency (accepts a positive rate, rejects negatives)", () => {
+    const schema = settingSchemaFor("pricing.assets.USDT.baseRates.GHS");
+    expect(schema.parse(19)).toBe(19);
+    expect(() => schema.parse(-1)).toThrow();
+  });
+
+  it("builds a boolean schema for a catalog asset/fiat toggle (Phase 9)", () => {
+    const assetSchema = settingSchemaFor("catalog.assets.USDT.enabled");
+    expect(assetSchema.parse(true)).toBe(true);
+    expect(() => assetSchema.parse("yes")).toThrow();
+
+    const fiatSchema = settingSchemaFor("catalog.fiats.NGN.enabled");
+    expect(fiatSchema.parse(false)).toBe(false);
+    expect(() => fiatSchema.parse(0)).toThrow();
   });
 
   it("registers the sanctions denylist as a Compliance string[] (Phase 3C)", () => {

@@ -9,7 +9,7 @@
  * local-only) and toasts. The api layer is mocked — no server.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { EffectiveSetting } from "@handshake-agent/contracts"
@@ -21,18 +21,31 @@ import { defaultToastStore } from "@/lib/store/toast-store"
 
 vi.mock("@/lib/api/config", () => ({
   listEffectiveSettings: vi.fn(),
+  setSetting: vi.fn(),
 }))
 
-import { listEffectiveSettings } from "@/lib/api/config"
+// The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn(),
+}))
+
+import { listEffectiveSettings, setSetting } from "@/lib/api/config"
+import { getMe } from "@/lib/api/admin"
 
 const mockList = vi.mocked(listEffectiveSettings)
+const mockSet = vi.mocked(setSetting)
+const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
 
-function limit(key: string, value: number): EffectiveSetting {
+function limit(
+  key: string,
+  value: number,
+  category = "KYC"
+): EffectiveSetting {
   return {
     key,
-    category: "KYC",
+    category,
     label: key,
     description: `Limit ${key}`,
     valueType: "number",
@@ -45,10 +58,16 @@ function limit(key: string, value: number): EffectiveSetting {
 }
 
 // Only tier_1 needs real values for the assertions; the mapper handles missing tiers.
+// The new-beneficiary hold is a GLOBAL Beneficiary-category leaf (not per-tier).
 const LIMIT_SETTINGS: EffectiveSetting[] = [
   limit("limits.NGN.tier_1.perTxFiatMax", 200000),
   limit("limits.NGN.tier_1.dailyFiatMax", 500000),
+  limit("limits.NGN.tier_1.weeklyFiatMax", 3000000),
+  limit("limits.NGN.tier_1.perSendOnChainFiatMax", 100000),
+  limit("limits.NGN.tier_1.sendsPer10MinMax", 5),
   limit("limits.NGN.tier_1.dailyTxCountMax", 10),
+  limit("beneficiary.cryptoCoolingOffSeconds", 86400, "Beneficiary"),
+  limit("compliance.tierChangeCoolingOffSeconds", 3600, "Compliance"),
 ]
 
 function renderPage() {
@@ -80,6 +99,20 @@ beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
   mockList.mockReset()
   mockList.mockResolvedValue(LIMIT_SETTINGS)
+  mockSet.mockReset()
+  mockSet.mockResolvedValue(limit("limits.NGN.tier_1.perTxFiatMax", 300000))
+  mockGetMe.mockReset()
+  mockGetMe.mockResolvedValue({
+    id: "11111111-1111-1111-1111-111111111111",
+    email: "amara@handshake.ng",
+    role: { id: "00000000-0000-0000-0000-000000000001", name: "Super Admin" },
+    status: "active",
+    displayName: "Test Admin",
+    mfaEnabled: true,
+    permissions: [],
+    menus: [],
+    pages: [],
+  })
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -104,7 +137,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     expect(screen.getByText("10")).toBeInTheDocument()
   })
 
-  it("updates the displayed cap + toasts after the edit is approved", async () => {
+  it("persists the edited cap via setSetting (PATCH) + toasts after approval", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -112,9 +145,9 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
       await screen.findByRole("button", { name: "Edit Per-transaction max" })
     )
 
-    const input = screen.getByRole("textbox", { name: "New value" })
+    const input = screen.getByRole("textbox", { name: "New value (NGN)" })
     await user.clear(input)
-    await user.type(input, "₦300,000")
+    await user.type(input, "300000")
     await user.click(screen.getByRole("button", { name: "Continue" }))
 
     await advanceThroughAuditChain(user)
@@ -123,17 +156,218 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
       screen.getByRole("button", { name: "Submit for approval" })
     )
 
-    // The row's displayed cap changed and the old value is gone.
-    expect(screen.getByText("₦300,000")).toBeInTheDocument()
-    expect(screen.queryByText("₦200,000")).not.toBeInTheDocument()
+    // The real PATCH fires against tier_1's per-tx cap key with the numeric value.
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("limits.NGN.tier_1.perTxFiatMax", {
+      value: 300000,
+      scope: "global",
+      scopeValue: null,
+    })
 
     // A feedback toast fired and the flow closed.
     expect(defaultToastStore.getState().toasts).toContainEqual(
       expect.objectContaining({
-        message: "Per-transaction max · Tier 1 → ₦300,000",
+        message: expect.stringMatching(/Per-transaction max · NGN Tier 1/),
       })
     )
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  })
+
+  it("targets the daily-cap key when the daily row is edited", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Daily max · rolling 24h" })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (NGN)" })
+    await user.clear(input)
+    await user.type(input, "750000")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(
+      screen.getByRole("button", { name: "Submit for approval" })
+    )
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("limits.NGN.tier_1.dailyFiatMax", {
+      value: 750000,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("does not offer to edit a row whose config key is absent from the read (§3.6 guard)", async () => {
+    // A read missing the sends/10-min key → that row renders "—" with NO editor, even
+    // though every other row is backed. The guard is about resolvability, not the label.
+    mockList.mockResolvedValue(
+      LIMIT_SETTINGS.filter((s) => !s.key.endsWith("sendsPer10MinMax"))
+    )
+    renderPage()
+    await screen.findByRole("tab", { name: "Tier 1" })
+    expect(
+      screen.queryByRole("button", { name: "Edit Sends / 10-min window" })
+    ).not.toBeInTheDocument()
+    expect(
+      await screen.findByRole("button", { name: "Edit Per-transaction max" })
+    ).toBeInTheDocument()
+  })
+
+  it("edits the enforced sends / 10-min window (a count leaf) via setSetting", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Sends / 10-min window" })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (count)" })
+    await user.clear(input)
+    await user.type(input, "8")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("limits.NGN.tier_1.sendsPer10MinMax", {
+      value: 8,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("edits the enforced tier-change cooling-off (a global seconds leaf) via setSetting", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // 3600s renders humanized as "1h".
+    expect(await screen.findByText("1h")).toBeInTheDocument()
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Edit Cooling-off after tier change",
+      })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (seconds)" })
+    await user.clear(input)
+    await user.type(input, "7200")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith(
+      "compliance.tierChangeCoolingOffSeconds",
+      { value: 7200, scope: "global", scopeValue: null }
+    )
+  })
+
+  it("edits the enforced single on-chain send max via setSetting", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Edit Single on-chain send max",
+      })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (NGN)" })
+    await user.clear(input)
+    await user.type(input, "80000")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith(
+      "limits.NGN.tier_1.perSendOnChainFiatMax",
+      { value: 80000, scope: "global", scopeValue: null }
+    )
+  })
+
+  it("configures limits for a NON-NGN currency via the currency selector (multi-currency)", async () => {
+    // GHS per-tx key is registered but UNSET (value undefined) — the editor must still
+    // appear (shown as "Not set") so the operator can configure a new currency's limits.
+    mockList.mockResolvedValue([
+      ...LIMIT_SETTINGS,
+      { ...limit("limits.GHS.tier_1.perTxFiatMax", 0), value: undefined },
+    ])
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByRole("tab", { name: "Tier 1" })
+
+    // Switch the currency selector to GHS.
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Limits currency" }),
+      "GHS"
+    )
+
+    // The (unset) GHS per-tx cap is editable; the field label reflects the currency.
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Per-transaction max" })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (GHS)" })
+    await user.clear(input)
+    await user.type(input, "5000")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("limits.GHS.tier_1.perTxFiatMax", {
+      value: 5000,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("edits the enforced weekly max (rolling 7-day cap) via setSetting", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // 3,000,000 → "₦3,000,000" renders, and the row is editable.
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Edit Weekly max · rolling 7d",
+      })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (NGN)" })
+    await user.clear(input)
+    await user.type(input, "4000000")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("limits.NGN.tier_1.weeklyFiatMax", {
+      value: 4000000,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("opens the step-up dialog and retries the PATCH after re-auth when the server demands step-up", async () => {
+    const user = userEvent.setup()
+    const { ApiError } = await import("@/lib/api/client")
+    mockSet
+      .mockRejectedValueOnce(
+        new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce(limit("limits.NGN.tier_1.perTxFiatMax", 300000))
+
+    renderPage()
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Per-transaction max" })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (NGN)" })
+    await user.clear(input)
+    await user.type(input, "300000")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(
+      screen.getByRole("button", { name: "Submit for approval" })
+    )
+
+    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    expect(mockSet).toHaveBeenCalledTimes(1)
   })
 
   it("shows the error branch with a retry when the settings read fails", async () => {
@@ -142,5 +376,56 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
 
     expect(await screen.findByText("Failed to load limits")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
+  })
+
+  it("edits the enforced daily transaction-count cap (a count leaf) via setSetting", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Transactions / day" })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (count)" })
+    await user.clear(input)
+    await user.type(input, "20")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("limits.NGN.tier_1.dailyTxCountMax", {
+      value: 20,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("edits the global new-beneficiary cooling-off (a seconds leaf) via setSetting", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // 86400s renders humanized as "1d".
+    expect(await screen.findByText("1d")).toBeInTheDocument()
+    await user.click(
+      await screen.findByRole("button", { name: "Edit New-beneficiary hold" })
+    )
+    const input = screen.getByRole("textbox", { name: "New value (seconds)" })
+    await user.clear(input)
+    await user.type(input, "172800")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await advanceThroughAuditChain(user)
+    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    // The global leaf (no tier suffix) is patched with the raw seconds value.
+    expect(mockSet).toHaveBeenCalledWith("beneficiary.cryptoCoolingOffSeconds", {
+      value: 172800,
+      scope: "global",
+      scopeValue: null,
+    })
+    // The toast omits any tier for the global leaf.
+    expect(defaultToastStore.getState().toasts).toContainEqual(
+      expect.objectContaining({ message: "New-beneficiary hold → 2d" })
+    )
   })
 })

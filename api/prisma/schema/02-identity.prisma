@@ -11,6 +11,10 @@ model User {
   /// Mirrors KycProfile.status/tier; the server-side gate reads these (IDN-12, §3.3).
   kycStatus           KycStatus  @default(not_started)
   kycTier             KycTier    @default(unverified)
+  /// When the KYC tier last changed (grant or admin change). The gate holds
+  /// money moves for `limits.tierChangeCoolingOffSeconds` after this (§3.3, anti-abuse
+  /// after a tier grant on a possibly-compromised account). Null = never changed.
+  tierChangedAt       DateTime?  @db.Timestamptz
   /// Currently trusted device; a different device requires step-up. Null until bound.
   pinnedDeviceId      String?    @unique @db.Uuid
   /// Argon2id hash of the transaction PIN — never plaintext (NFR-1). Null pre-set.
@@ -75,6 +79,8 @@ enum KycStatus {
   not_started
   pending
   pending_review
+  /// An operator asked the user for more information (Phase 9 admin "Request info").
+  needs_info
   verified
   rejected
   expired

@@ -27,6 +27,7 @@ function makeUser(overrides: Partial<UserRecord> = {}): UserRecord {
     kycStatus: 'verified',
     kycTier: 'tier_1',
     simSwapDetectedAt: null,
+    tierChangedAt: null,
     ...overrides,
   };
 }

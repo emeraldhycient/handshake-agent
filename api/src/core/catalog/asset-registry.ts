@@ -46,6 +46,22 @@ export type AssetProviderMeta = AssetProviderConfig;
 /** Crypto asset metadata. */
 export type AssetMeta = CatalogAsset;
 
+/**
+ * A provider-discovered asset projected for the admin discovery-review screen — the
+ * overlay contents plus whether the symbol already exists in the static catalog.
+ */
+export interface DiscoveredAssetView {
+  symbol: string;
+  displayName: string;
+  decimals: number;
+  networks: string[];
+  contractAddress: string | null;
+  blockradarAssetId: string | null;
+  logoUrl: string | null;
+  enabled: boolean;
+  inStaticCatalog: boolean;
+}
+
 /** Fiat currency metadata. */
 export type FiatMeta = CatalogFiat;
 
@@ -114,6 +130,25 @@ export class AssetRegistry {
    */
   private readonly discoveredLogoUrls: Map<string, string> = new Map();
 
+  /**
+   * Overlay of provider-discovered on-chain contract addresses, keyed by SYMBOL
+   * (upper-case). Populated by `mergeDiscoveredAssets`; surfaced ONLY to the admin
+   * discovery-review screen (`listDiscoveredAssets`) so an operator can identify a
+   * newly-discovered token by its contract. Not consulted by the money path.
+   */
+  private readonly discoveredContractAddresses: Map<string, string> = new Map();
+
+  /**
+   * Overlay of runtime admin-added fiat currencies (the "Add currency" feature),
+   * keyed by upper-case code. Populated from the CustomFiat table by
+   * CustomFiatSyncService on boot and after every admin add/update. Layered on top of
+   * the static catalog fiats (a custom code may not shadow a built-in), so the whole
+   * money path recognises a runtime currency once synced — but `enabled` stays
+   * fail-closed exactly like a built-in fiat (enabling requires pricing, re-checked
+   * server-side). Kept as a separate overlay so the static config type stays immutable.
+   */
+  private readonly customFiats: Map<string, CatalogFiat> = new Map();
+
   constructor(private readonly config: ConfigService) {
     const catalog = this.config.get<CatalogConfig>('catalog');
     if (!catalog) {
@@ -173,6 +208,12 @@ export class AssetRegistry {
         this.discoveredLogoUrls.set(sym, discovered.logoUrl);
       }
 
+      // Capture the on-chain contract address for the admin discovery-review screen
+      // (last non-null sync wins). Native assets (no contract) leave it unset.
+      if (discovered.contractAddress) {
+        this.discoveredContractAddresses.set(sym, discovered.contractAddress);
+      }
+
       // If the symbol is not in the static catalog, synthesise a CatalogAsset.
       if (!this.catalog.assets[sym] && !this.discoveredAssets.has(sym)) {
         const synthetic: CatalogAsset = {
@@ -227,6 +268,38 @@ export class AssetRegistry {
     const staticMeta = this.catalog.assets[symbol];
     if (staticMeta !== undefined) return !!staticMeta.enabled;
     return !!this.discoveredAssets.get(symbol)?.enabled;
+  }
+
+  /**
+   * The provider-discovered asset overlay, projected for the admin discovery-review
+   * screen. One entry per symbol seen during a Blockradar sync (union of the synthetic
+   * and provider-id overlays), each flagged with whether it already exists in the static
+   * catalog. Read-only projection — does not touch the money path.
+   */
+  listDiscoveredAssets(): DiscoveredAssetView[] {
+    const symbols = new Set<string>([
+      ...this.discoveredAssets.keys(),
+      ...this.discoveredProviderIds.keys(),
+    ]);
+    const views: DiscoveredAssetView[] = [];
+    for (const sym of symbols) {
+      const synth = this.discoveredAssets.get(sym);
+      const staticMeta = this.catalog.assets[sym];
+      const inStaticCatalog = staticMeta !== undefined;
+      views.push({
+        symbol: sym,
+        displayName: synth?.displayName ?? staticMeta?.displayName ?? sym,
+        decimals: synth?.decimals ?? staticMeta?.decimals ?? 0,
+        networks: synth?.networks ?? staticMeta?.networks ?? [],
+        contractAddress: this.discoveredContractAddresses.get(sym) ?? null,
+        blockradarAssetId:
+          this.discoveredProviderIds.get(sym)?.['blockradar'] ?? null,
+        logoUrl: this.discoveredLogoUrls.get(sym) ?? null,
+        enabled: inStaticCatalog ? !!staticMeta.enabled : !!synth?.enabled,
+        inStaticCatalog,
+      });
+    }
+    return views.sort((a, b) => a.symbol.localeCompare(b.symbol));
   }
 
   /**
@@ -316,11 +389,35 @@ export class AssetRegistry {
   // ── Fiat lookups ───────────────────────────────────────────────────────
 
   /**
-   * Returns metadata for the given fiat currency code.
+   * Replace the runtime custom-fiat overlay with the given set (the "Add currency"
+   * feature). Called by CustomFiatSyncService on boot and after every admin add/update.
+   * A custom fiat whose code collides with a built-in static catalog fiat is IGNORED
+   * (built-ins win) so a runtime currency can never shadow a platform currency.
+   */
+  syncCustomFiats(fiats: readonly CatalogFiat[]): void {
+    this.customFiats.clear();
+    for (const f of fiats) {
+      if (this.catalog.fiats[f.code]) continue; // never shadow a built-in
+      this.customFiats.set(f.code, f);
+    }
+  }
+
+  /** Merged fiat metadata for a code — static catalog first, then the custom overlay. */
+  private resolveFiatMeta(code: string): CatalogFiat | undefined {
+    return this.catalog.fiats[code] ?? this.customFiats.get(code);
+  }
+
+  /** All fiat entries (static built-ins + runtime custom overlay). */
+  private allFiats(): CatalogFiat[] {
+    return [...Object.values(this.catalog.fiats), ...this.customFiats.values()];
+  }
+
+  /**
+   * Returns metadata for the given fiat currency code (built-in OR runtime custom).
    * @throws {UnsupportedFiatError} when the code is not registered or is disabled.
    */
   fiat(code: string): FiatMeta {
-    const meta = this.catalog.fiats[code];
+    const meta = this.resolveFiatMeta(code);
     if (!meta || !meta.enabled) {
       throw new UnsupportedFiatError(code);
     }
@@ -333,7 +430,7 @@ export class AssetRegistry {
    * @throws {UnsupportedFiatError} when no enabled fiat is registered.
    */
   defaultFiat(): string {
-    const code = Object.values(this.catalog.fiats).find((f) => f.enabled)?.code;
+    const code = this.allFiats().find((f) => f.enabled)?.code;
     if (!code) {
       throw new UnsupportedFiatError(
         'default',
@@ -347,8 +444,7 @@ export class AssetRegistry {
    * Returns `true` if the fiat is registered AND enabled; `false` otherwise.
    */
   isFiatEnabled(code: string): boolean {
-    const meta = this.catalog.fiats[code];
-    return !!meta?.enabled;
+    return !!this.resolveFiatMeta(code)?.enabled;
   }
 
   /**
@@ -356,12 +452,11 @@ export class AssetRegistry {
    * Semantically equivalent to `isFiatEnabled` but named for the multi-currency
    * foundation where "live" means the currency can settle real transactions.
    *
-   * Non-live currencies are in the FiatCurrencySchema supported set (contracts)
-   * but have `enabled: false` in config — their flows surface `currency_not_live`.
+   * Non-live currencies are recognised (built-in or runtime-added) but have
+   * `enabled: false` — their flows surface `currency_not_live`.
    */
   isCurrencyLive(code: string): boolean {
-    const meta = this.catalog.fiats[code];
-    return !!meta?.enabled;
+    return !!this.resolveFiatMeta(code)?.enabled;
   }
 
   /**
@@ -373,21 +468,20 @@ export class AssetRegistry {
    * `supportedFiats()`.
    */
   enabledFiats(): string[] {
-    return Object.values(this.catalog.fiats)
+    return this.allFiats()
       .filter((f) => f.enabled)
       .map((f) => f.code);
   }
 
   /**
-   * Returns the fiat codes for ALL currencies registered in the catalog,
-   * regardless of their `enabled` flag. This is the config-layer equivalent
-   * of the `FiatCurrencySchema` enum in `@handshake-agent/contracts`.
+   * Returns the fiat codes for ALL currencies recognised (built-in static catalog
+   * + runtime custom overlay), regardless of their `enabled` flag.
    *
    * Use this when you need to recognise a currency without asserting liveness
    * (e.g. to emit `currency_not_live` rather than rejecting as unknown).
    */
   supportedFiats(): string[] {
-    return Object.keys(this.catalog.fiats);
+    return this.allFiats().map((f) => f.code);
   }
 
   // ── Network lookups ───────────────────────────────────────────────────

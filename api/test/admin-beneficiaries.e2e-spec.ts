@@ -66,6 +66,7 @@ describe('Admin beneficiary oversight — e2e (AppModule, Testcontainers Postgre
   let app: INestApplication;
   let prisma: PrismaClient;
   let stopContainer: () => Promise<void>;
+  let rootToken: string;
 
   beforeAll(async () => {
     const container = await new PostgreSqlContainer(
@@ -185,6 +186,11 @@ describe('Admin beneficiary oversight — e2e (AppModule, Testcontainers Postgre
 
     app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();
+
+    // Bootstrap + login ONCE (admins exist after the first bootstrap) so both
+    // tests share a super_admin session.
+    rootToken = await loginSuperAdmin();
+    expect(rootToken).toBeDefined();
   }, 120_000);
 
   afterAll(async () => {
@@ -215,12 +221,30 @@ describe('Admin beneficiary oversight — e2e (AppModule, Testcontainers Postgre
     return ben.id;
   }
 
-  // ===========================================================================
-  // MAIN TEST
-  // ===========================================================================
+  /** Seed a verified bank beneficiary (no cooling-off lock). Returns id + userId. */
+  async function seedBankBeneficiary(): Promise<{
+    id: string;
+    userId: string;
+  }> {
+    const owner = await prisma.user.create({ data: {} });
+    const ben = await prisma.beneficiary.create({
+      data: {
+        userId: owner.id,
+        type: 'bank_account',
+        label: 'Payout account',
+        accountNumber: '0091234567',
+        accountHolderName: 'Ada Lovelace',
+        bankCode: '044',
+        verificationStatus: 'verified',
+        verifiedAt: new Date(),
+      },
+      select: { id: true, userId: true },
+    });
+    return ben;
+  }
 
-  it('lists a cooling-off beneficiary and overrides the lock (step-up) — audited', async () => {
-    // 1. Bootstrap + accept + login as super_admin.
+  /** Bootstrap → accept → login as super_admin; returns the access token. */
+  async function loginSuperAdmin(): Promise<string> {
     const bootstrap = await request(app.getHttpServer())
       .post('/admin/bootstrap')
       .send({ token: BOOTSTRAP_TOKEN, email: ROOT_EMAIL })
@@ -236,9 +260,14 @@ describe('Admin beneficiary oversight — e2e (AppModule, Testcontainers Postgre
       .post('/admin/auth/login')
       .send({ email: ROOT_EMAIL, password: ROOT_PASSWORD })
       .expect(200);
-    const rootToken = (rootLogin.body as LoginBody).accessToken;
-    expect(rootToken).toBeDefined();
+    return (rootLogin.body as LoginBody).accessToken;
+  }
 
+  // ===========================================================================
+  // MAIN TEST
+  // ===========================================================================
+
+  it('lists a cooling-off beneficiary and overrides the lock (step-up) — audited', async () => {
     // 2. Seed a cooling-off crypto beneficiary.
     const beneficiaryId = await seedLockedBeneficiary();
 
@@ -288,5 +317,61 @@ describe('Admin beneficiary oversight — e2e (AppModule, Testcontainers Postgre
       },
     });
     expect(overrideAudit).not.toBeNull();
+  }, 90_000);
+
+  it('soft-deletes a beneficiary (DELETE, step-up) — audited, no money moved', async () => {
+    const { id: beneficiaryId } = await seedBankBeneficiary();
+    const reason = 'User reported this account as fraudulent.';
+
+    // A blank reason fails validation (400) before any delete happens.
+    await request(app.getHttpServer())
+      .delete(`/admin/beneficiaries/${beneficiaryId}`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ reason: '' })
+      .expect(400);
+
+    // Step-up, then DELETE → 204.
+    await request(app.getHttpServer())
+      .post('/admin/auth/step-up')
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ password: ROOT_PASSWORD })
+      .expect(204);
+
+    await request(app.getHttpServer())
+      .delete(`/admin/beneficiaries/${beneficiaryId}`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ reason })
+      .expect(204);
+
+    // DB: the row is SOFT-deleted (deletedAt set), not hard-deleted — history kept.
+    const dbBen = await prisma.beneficiary.findUniqueOrThrow({
+      where: { id: beneficiaryId },
+    });
+    expect(dbBen.deletedAt).not.toBeNull();
+
+    // DB: a beneficiary_remove audit row exists carrying the reason.
+    const removeAudit = await prisma.auditLog.findFirst({
+      where: {
+        action: 'beneficiary_remove',
+        subject: `Beneficiary:${beneficiaryId}`,
+      },
+    });
+    expect(removeAudit).not.toBeNull();
+    expect(JSON.stringify(removeAudit?.after)).toContain(reason);
+
+    // It has already disappeared from the admin list.
+    const listRes = await request(app.getHttpServer())
+      .get('/admin/beneficiaries')
+      .set('Authorization', `Bearer ${rootToken}`)
+      .expect(200);
+    const list = listRes.body as BeneficiaryListBody;
+    expect(list.items.find((b) => b.id === beneficiaryId)).toBeUndefined();
+
+    // Deleting it again (or an unknown id) → 404 (already gone / not found).
+    await request(app.getHttpServer())
+      .delete(`/admin/beneficiaries/${beneficiaryId}`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ reason })
+      .expect(404);
   }, 90_000);
 });

@@ -195,6 +195,7 @@ export class IdentityPrismaRepository implements IIdentityRepository {
         kycStatus: true,
         kycTier: true,
         simSwapDetectedAt: true,
+        tierChangedAt: true,
       },
     });
 
@@ -206,6 +207,7 @@ export class IdentityPrismaRepository implements IIdentityRepository {
       kycStatus: row.kycStatus,
       kycTier: row.kycTier,
       simSwapDetectedAt: row.simSwapDetectedAt,
+      tierChangedAt: row.tierChangedAt,
     };
   }
 
@@ -605,7 +607,8 @@ export class IdentityPrismaRepository implements IIdentityRepository {
   async setKycTier(userId: string, tier: string): Promise<void> {
     await this.prisma.user.update({
       where: { id: userId },
-      data: { kycTier: tier as KycTier },
+      // Stamp the tier-change time so the gate can enforce the post-change cooling-off.
+      data: { kycTier: tier as KycTier, tierChangedAt: new Date() },
     });
   }
 
@@ -627,6 +630,23 @@ export class IdentityPrismaRepository implements IIdentityRepository {
     await this.prisma.user.update({
       where: { id: userId },
       data: { pinnedDeviceId: null },
+    });
+  }
+
+  async resetKycToPending(userId: string): Promise<void> {
+    // User + KycProfile move together (§3.3): a single transaction so the gate
+    // never observes a partial reset. updateMany scoped by userId is a no-op
+    // (count 0) when no profile exists — the reset must not throw for a user
+    // who never completed KYC.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: { kycStatus: KycStatus.pending },
+      });
+      await tx.kycProfile.updateMany({
+        where: { userId },
+        data: { status: KycStatus.pending },
+      });
     });
   }
 }

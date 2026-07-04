@@ -8,6 +8,7 @@ import { PrismaService } from '../../../core/prisma/prisma.service';
 // the module resolver resolves the same path used everywhere else in infrastructure.
 import {
   FiatCurrency,
+  TransactionType,
   VelocityCounterType,
 } from '../../../../generated/prisma/client';
 // Fix-C: reuse the ledger's toScaled for exact-decimal string accumulation so
@@ -16,6 +17,7 @@ import { toScaled } from '../../transactions/domain/ledger';
 import type {
   DailyUsage,
   IVelocityRepository,
+  WeeklyUsage,
 } from '../application/ports/velocity.repository.port';
 
 /**
@@ -87,18 +89,80 @@ export class VelocityPrismaRepository implements IVelocityRepository {
     // Convert scaled bigint back to decimal string (mirrors fromScaled in ledger.ts).
     // This string is what KycGateService.assertCanTransact feeds to toScaled() for
     // the dailyFiat comparison — same scale, so no precision is lost in the round-trip.
-    const isNeg = fiatScaled < 0n;
-    const abs = isNeg ? -fiatScaled : fiatScaled;
-    const whole = abs / SCALE;
-    const frac = abs % SCALE;
-    const fiatTotalStr =
-      frac === 0n
-        ? (isNeg ? '-' : '') + whole.toString()
-        : (isNeg ? '-' : '') +
-          whole.toString() +
-          '.' +
-          frac.toString().padStart(18, '0').replace(/0+$/, '');
-
-    return { fiatTotal: fiatTotalStr, txCount };
+    return { fiatTotal: scaledToDecimalString(fiatScaled, SCALE), txCount };
   }
+
+  /**
+   * Rolling 7-day fiat total for the weekly cap. Reads the `amount_7d` VelocityCounter
+   * whose window still overlaps `(asOf - 7d, asOf]`, scoped to `fiatCurrency`. Amount
+   * only — the weekly cap is a spend cap, there is no weekly count cap. Same exact-decimal
+   * (BigInt-scaled) round-trip as getDailyUsage so the gate compares in one scale.
+   */
+  async getWeeklyUsage(
+    userId: string,
+    asOf: Date,
+    fiatCurrency: string,
+  ): Promise<WeeklyUsage> {
+    const windowCutoff = new Date(asOf.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const fiatCurrencyEnum = fiatCurrency as FiatCurrency;
+
+    const rows = await this.prisma.velocityCounter.findMany({
+      where: {
+        userId,
+        fiatCurrency: fiatCurrencyEnum,
+        counterType: VelocityCounterType.amount_7d,
+        windowEnd: { gt: windowCutoff },
+        windowStart: { lte: asOf },
+      },
+      select: { currentValue: true },
+    });
+
+    const SCALE = 10n ** 18n;
+    let fiatScaled = 0n;
+    for (const row of rows) {
+      const rowStr = (row.currentValue as { toString(): string }).toString();
+      fiatScaled += toScaled(rowStr);
+    }
+
+    return { fiatTotal: scaledToDecimalString(fiatScaled, SCALE) };
+  }
+
+  /**
+   * Count on-chain (crypto-address) SEND transactions this user created in the last
+   * `windowMs` (the rolling-10-minute rapid-fire cap). Counts actual `send`-type
+   * Transaction rows regardless of status — a burst of attempts is the risk — so there
+   * is no dedicated counter to maintain/reverse.
+   */
+  async getRecentSendCount(
+    userId: string,
+    asOf: Date,
+    windowMs: number,
+  ): Promise<number> {
+    const since = new Date(asOf.getTime() - windowMs);
+    return this.prisma.transaction.count({
+      where: {
+        userId,
+        type: TransactionType.send,
+        createdAt: { gt: since, lte: asOf },
+      },
+    });
+  }
+}
+
+/**
+ * Convert a BigInt-scaled fiat value (10^18 scale) back to its exact decimal string —
+ * the inverse of the ledger's toScaled(), matching fromScaled()'s formatting so the
+ * gate re-scales it losslessly.
+ */
+function scaledToDecimalString(scaled: bigint, scale: bigint): string {
+  const isNeg = scaled < 0n;
+  const abs = isNeg ? -scaled : scaled;
+  const whole = abs / scale;
+  const frac = abs % scale;
+  return frac === 0n
+    ? (isNeg ? '-' : '') + whole.toString()
+    : (isNeg ? '-' : '') +
+        whole.toString() +
+        '.' +
+        frac.toString().padStart(18, '0').replace(/0+$/, '');
 }

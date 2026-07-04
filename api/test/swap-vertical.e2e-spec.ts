@@ -245,7 +245,7 @@ describe('Swap vertical — propose → execute → settle (Testcontainers Postg
       directiveRepo,
       config,
       clock,
-      config as never,
+      config,
     );
     const assetRegistry = new AssetRegistry(config);
     seedRegistryAssets(assetRegistry);

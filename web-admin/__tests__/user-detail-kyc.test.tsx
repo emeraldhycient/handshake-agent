@@ -6,8 +6,8 @@
  *  - Approve → reason → step-up → maker-checker (dual control) → POST approve with
  *    the submission's requested (verified) tier. Never promotes to 'unverified'.
  *  - Reject → reason (required) → POST reject with the captured reason.
- *  - Request more info → reason only; no endpoint exists server-side yet (documented
- *    gap) → it toasts and fires NO mutation.
+ *  - Request more info → reason → step-up → POST /admin/kyc/:id/request-info, bouncing
+ *    the review back to the user (Phase 9).
  *  - A mutation that 403s with ADMIN_STEP_UP_REQUIRED opens the real StepUpDialog
  *    (server re-auth); on success the stashed mutation replays.
  *
@@ -48,6 +48,7 @@ vi.mock("@/lib/api/kyc", () => ({
   getKycSubmission: vi.fn(),
   approveKyc: vi.fn(),
   rejectKyc: vi.fn(),
+  requestKycInfo: vi.fn(),
 }))
 
 // useAdminMe backs the StepUpDialog's MFA path; stepUp POSTs the re-auth.
@@ -63,13 +64,19 @@ import {
   getEndUserLimits,
   listEndUserTimeline,
 } from "@/lib/api/users"
-import { getKycSubmission, approveKyc, rejectKyc } from "@/lib/api/kyc"
+import {
+  getKycSubmission,
+  approveKyc,
+  rejectKyc,
+  requestKycInfo,
+} from "@/lib/api/kyc"
 import { getMe, stepUp } from "@/lib/api/admin"
 
 const mockGetEndUser = vi.mocked(getEndUser)
 const mockGetKyc = vi.mocked(getKycSubmission)
 const mockApprove = vi.mocked(approveKyc)
 const mockReject = vi.mocked(rejectKyc)
+const mockRequestInfo = vi.mocked(requestKycInfo)
 const mockGetMe = vi.mocked(getMe)
 const mockStepUp = vi.mocked(stepUp)
 
@@ -138,6 +145,7 @@ beforeEach(() => {
   mockGetKyc.mockResolvedValue(KYC)
   mockApprove.mockResolvedValue(undefined)
   mockReject.mockResolvedValue(undefined)
+  mockRequestInfo.mockResolvedValue(undefined)
   mockGetMe.mockResolvedValue({ mfaEnabled: true } as never)
   mockStepUp.mockResolvedValue(undefined)
 })
@@ -197,7 +205,7 @@ describe("UserDetail — KYC decisions (Phase 7 WRITE)", () => {
     expect(mockApprove).not.toHaveBeenCalled()
   })
 
-  it("request-info records a reason but fires NO mutation (no endpoint yet)", async () => {
+  it("request-info → reason → step-up fires requestKycInfo (no approve/reject)", async () => {
     const user = userEvent.setup()
     renderDetail()
 
@@ -205,12 +213,14 @@ describe("UserDetail — KYC decisions (Phase 7 WRITE)", () => {
     await user.type(await screen.findByLabelText("Reason"), "Need a clearer ID")
     await user.click(screen.getByRole("button", { name: "Continue" }))
 
-    // Neither KYC decision endpoint is called — this is a documented backend gap.
+    // The request-info route is step-up-gated — the mutation must not fire yet.
+    expect(mockRequestInfo).not.toHaveBeenCalled()
+    await enterStepUpCode(user)
+
     await waitFor(() =>
-      expect(
-        screen.queryByRole("button", { name: "Continue" })
-      ).not.toBeInTheDocument()
+      expect(mockRequestInfo).toHaveBeenCalledWith(USER_ID, "Need a clearer ID")
     )
+    // The needs-info bounce is distinct from the approve/reject decisions.
     expect(mockApprove).not.toHaveBeenCalled()
     expect(mockReject).not.toHaveBeenCalled()
   })

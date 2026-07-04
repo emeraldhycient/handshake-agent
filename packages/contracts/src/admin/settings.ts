@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { SupportedAssetSchema, KNOWN_FIAT_CURRENCIES } from "../common";
+
 // The admin-tunable config-key registry — the SINGLE source of truth for which
 // JSON/env config leaf values the admin console may override (root CLAUDE.md §7,
 // DB-admin › env › JSON). Every entry mirrors a dot-path in the API's
@@ -106,15 +108,46 @@ const flag = (
 // Per-asset pricing entries (root CLAUDE.md §3.1: spreads are NEVER a line item,
 // but they ARE admin-tunable). USDT/BTC/TRX are the money-path assets at launch.
 const PRICED_ASSETS = ["USDT", "BTC", "TRX"] as const;
-const assetPricing = (asset: string): SettingRegistryEntry[] => [
+
+// A base rate is registered per priced asset × EVERY known fiat — not just NGN. A
+// currency is fail-closed on enablement (AdminCurrencyService.assertPricingExists)
+// unless a base rate keyed by its code exists on at least one priced asset, so
+// without these keys a non-NGN currency could never be priced (the settings PATCH
+// rejects unregistered keys) and therefore never enabled. Registering the full
+// matrix is what makes "add a currency, price it, enable it" work end-to-end (§7).
+const baseRate = (asset: string, code: string): SettingRegistryEntry =>
   s(
-    `pricing.assets.${asset}.baseRates.NGN`,
+    `pricing.assets.${asset}.baseRates.${code}`,
     "Pricing",
     "number",
-    `${asset} base rate (NGN)`,
-    `Mid-market NGN rate per 1 ${asset}. Production replaces this with a live feed; the config value is the fallback baseline.`,
+    `${asset} base rate (${code})`,
+    `Mid-market ${code} rate per 1 ${asset}. Production replaces this with a live feed; the config value is the fallback baseline.`,
     { min: 0, max: POSITIVE_INT_MAX },
-  ),
+  );
+// Per-(capability × currency) fiat MIN/MAX transaction bounds — the pricing
+// screen's MIN/MAX column. ENFORCE-WHEN-PRESENT product/market caps (distinct
+// from the per-user KYC-tier limit): the engine bounds a buy's fiat spend and a
+// sell's fiat proceeds against these when set. Registering the full matrix (per
+// priced asset × {buy,sell} × every known fiat) is what lets an operator set them
+// from the console — the settings PATCH rejects unregistered keys.
+const PRICING_CAPABILITIES = ["buy", "sell"] as const;
+const fiatBound = (
+  asset: string,
+  kind: "minFiat" | "maxFiat",
+  cap: (typeof PRICING_CAPABILITIES)[number],
+  code: string,
+): SettingRegistryEntry =>
+  s(
+    `pricing.assets.${asset}.${kind}.${cap}.${code}`,
+    "Pricing",
+    "number",
+    `${asset} ${cap} ${kind === "minFiat" ? "min" : "max"} (${code})`,
+    `${kind === "minFiat" ? "Minimum" : "Maximum"} ${code} transaction amount for ${asset} ${cap}. A per-market cap; leave unset for no bound. The engine rejects a ${cap} outside this band (enforced server-side).`,
+    { min: 0, max: POSITIVE_INT_MAX },
+  );
+
+const assetPricing = (asset: string): SettingRegistryEntry[] => [
+  ...KNOWN_FIAT_CURRENCIES.map((code) => baseRate(asset, code)),
   bps(
     `pricing.assets.${asset}.buySpreadBps`,
     "Pricing",
@@ -127,28 +160,76 @@ const assetPricing = (asset: string): SettingRegistryEntry[] => [
     `${asset} sell spread (bps)`,
     `Platform spread folded into SELL quotes for ${asset} (marks down the rate; user receives less fiat).`,
   ),
+  ...PRICING_CAPABILITIES.flatMap((cap) =>
+    KNOWN_FIAT_CURRENCIES.flatMap((code) => [
+      fiatBound(asset, "minFiat", cap, code),
+      fiatBound(asset, "maxFiat", cap, code),
+    ]),
+  ),
 ];
 
-// NGN KYC-tier limits (root CLAUDE.md §3.3: server-side gate). Other fiats are
-// not yet live (catalog enabled:false), so only NGN is enumerated here.
+// Per-asset / per-fiat catalog LIVE toggles (Phase 9). These are real config
+// dot-paths — `catalog.assets.<sym>.enabled` / `catalog.fiats.<code>.enabled`
+// (verified: cfg.catalog.fiats['NGN'].enabled) — that gate which assets/currencies
+// can settle real transactions (root CLAUDE.md §7: flipping a flag enables a
+// service without a deploy). Fail-closed: an absent flag resolves to false.
+// Enumerated from the canonical contract enums so the registry never drifts from
+// the SupportedAsset / FiatCurrency sets.
+const assetToggle = (asset: string): SettingRegistryEntry =>
+  flag(
+    `catalog.assets.${asset}.enabled`,
+    `Asset live: ${asset}`,
+    `Enable ${asset} as a live tradeable asset (buy/sell/send/swap). Fail-closed: off means the asset is not tradeable.`,
+  );
+const fiatToggle = (code: string): SettingRegistryEntry =>
+  flag(
+    `catalog.fiats.${code}.enabled`,
+    `Currency live: ${code}`,
+    `Enable ${code} as a live settlement currency. Fail-closed: off means no transaction can settle in ${code}.`,
+  );
+
+// Per-CURRENCY, per-KYC-tier limits (root CLAUDE.md §3.3: server-side gate). Registered
+// for every known fiat — not just NGN — so an operator can configure limits for any
+// currency (the gate resolves limits[fiatCurrency] per-currency; a currency is
+// fail-closed until its limits + pricing are set, mirroring the multi-currency
+// invariant). Only NGN carries shipped config defaults; the rest are set by the operator
+// before that currency goes live.
 const TIERS = ["tier_1", "tier_2", "tier_3"] as const;
-const tierLimits = (tier: string): SettingRegistryEntry[] => [
+const tierLimits = (code: string, tier: string): SettingRegistryEntry[] => [
   positiveInt(
-    `limits.NGN.${tier}.perTxFiatMax`,
+    `limits.${code}.${tier}.perTxFiatMax`,
     "KYC",
-    `NGN ${tier} per-transaction max`,
-    `Maximum NGN amount per single transaction for ${tier}.`,
+    `${code} ${tier} per-transaction max`,
+    `Maximum ${code} amount per single transaction for ${tier}.`,
   ),
   positiveInt(
-    `limits.NGN.${tier}.dailyFiatMax`,
+    `limits.${code}.${tier}.dailyFiatMax`,
     "KYC",
-    `NGN ${tier} daily max`,
-    `Maximum cumulative NGN amount within a rolling 24-hour window for ${tier}.`,
+    `${code} ${tier} daily max`,
+    `Maximum cumulative ${code} amount within a rolling 24-hour window for ${tier}.`,
   ),
   positiveInt(
-    `limits.NGN.${tier}.dailyTxCountMax`,
+    `limits.${code}.${tier}.weeklyFiatMax`,
     "KYC",
-    `NGN ${tier} daily transaction count`,
+    `${code} ${tier} weekly max`,
+    `Maximum cumulative ${code} amount within a rolling 7-day window for ${tier}.`,
+  ),
+  positiveInt(
+    `limits.${code}.${tier}.perSendOnChainFiatMax`,
+    "KYC",
+    `${code} ${tier} single on-chain send max`,
+    `Maximum ${code}-equivalent of a single on-chain (crypto-address) send for ${tier}. On-chain sends are irreversible, so this can be set tighter than the general per-transaction cap.`,
+  ),
+  positiveInt(
+    `limits.${code}.${tier}.sendsPer10MinMax`,
+    "KYC",
+    `${code} ${tier} sends / 10-min window`,
+    `Maximum number of on-chain (crypto-address) sends within a rolling 10-minute window for ${tier} — an anti-rapid-fire (structuring/exfiltration) velocity cap.`,
+  ),
+  positiveInt(
+    `limits.${code}.${tier}.dailyTxCountMax`,
+    "KYC",
+    `${code} ${tier} daily transaction count`,
     `Maximum number of transactions within a rolling 24-hour window for ${tier}.`,
   ),
 ];
@@ -169,15 +250,29 @@ export const SETTING_REGISTRY: readonly SettingRegistryEntry[] = [
   ),
   ...PRICED_ASSETS.flatMap(assetPricing),
 
-  // ── KYC tier limits (NGN) ───────────────────────────────────────────────────
-  ...TIERS.flatMap(tierLimits),
+  // ── KYC tier limits (per currency × tier) ───────────────────────────────────
+  ...KNOWN_FIAT_CURRENCIES.flatMap((code) =>
+    TIERS.flatMap((tier) => tierLimits(code, tier)),
+  ),
 
   // ── Compliance ──────────────────────────────────────────────────────────────
-  positiveInt(
-    "compliance.travelRuleThresholds.NGN",
+  // A Travel-Rule threshold per KNOWN fiat (not just NGN) — an operator can tune the
+  // requiresTravelRule trigger for every currency (config defaults ship a value per code).
+  ...KNOWN_FIAT_CURRENCIES.map((code) =>
+    positiveInt(
+      `compliance.travelRuleThresholds.${code}`,
+      "Compliance",
+      `Travel Rule threshold (${code})`,
+      `Fiat-equivalent ${code} value at or above which a send proposal sets requiresTravelRule=true (FATF Travel Rule / local circular).`,
+    ),
+  ),
+  s(
+    "compliance.tierChangeCoolingOffSeconds",
     "Compliance",
-    "Travel Rule threshold (NGN)",
-    "Fiat-equivalent NGN value at or above which a send proposal sets requiresTravelRule=true (CBN circular / FATF Travel Rule).",
+    "number",
+    "Tier-change cooling-off (seconds)",
+    "Cooling-off window after a KYC tier change during which money moves are blocked (anti-abuse after a tier grant). 0 disables the hold.",
+    { min: 0, max: SECONDS_IN_A_WEEK },
   ),
   // The sanctions denylist is edited via the existing /admin/settings API (no new
   // endpoint): a string[] of addresses/identifiers blocked by sanctions screening.
@@ -222,6 +317,10 @@ export const SETTING_REGISTRY: readonly SettingRegistryEntry[] = [
     "Send quote validity (seconds)",
     "Validity window for send quotes; the user must confirm before it expires.",
   ),
+
+  // ── Catalog asset / fiat live toggles (Phase 9; fail-closed) ────────────────
+  ...SupportedAssetSchema.options.map(assetToggle),
+  ...KNOWN_FIAT_CURRENCIES.map(fiatToggle),
 
   // ── Beneficiary ─────────────────────────────────────────────────────────────
   s(

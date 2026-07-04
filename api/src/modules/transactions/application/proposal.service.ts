@@ -38,14 +38,18 @@ import {
   SwapSameAssetError,
 } from '../domain/execution-errors';
 import {
+  AmountTooLargeError,
   AmountTooSmallError,
   SelfSendError,
 } from '../domain/amount-guard-errors';
 import {
+  resolveFiatMax,
+  resolveFiatMin,
   resolveMinBuyFiat,
   resolveMinCryptoAmount,
   type AmountFloorConfig,
   type CryptoFloorOperation,
+  type FiatBoundCapability,
 } from '../domain/amount-floors';
 import {
   BeneficiaryNotFoundError,
@@ -263,6 +267,32 @@ export class ProposalService {
     }
   }
 
+  /**
+   * Guards a transaction's FIAT VALUE against the admin-configured per-(capability,
+   * asset, currency) min/max on the pricing screen — a product/market cap distinct
+   * from the per-user KYC-tier limit. ENFORCE-WHEN-PRESENT: an unset bound is a
+   * no-op, so this never changes behaviour until an operator sets a value. `buy`
+   * bounds the fiat spend; `sell` bounds the fiat proceeds (quote.netFiatAmount).
+   * Below-min → AmountTooSmallError (422); above-max → AmountTooLargeError (422).
+   */
+  private assertFiatWithinConfiguredBounds(
+    capability: FiatBoundCapability,
+    asset: string,
+    fiatCurrency: string,
+    fiatValue: string,
+  ): void {
+    const bounds =
+      this.configService.get<PricingConfig>('pricing')?.assets?.[asset];
+    const min = resolveFiatMin(bounds, capability, fiatCurrency);
+    if (min !== null && toScaled(fiatValue) < toScaled(min)) {
+      throw new AmountTooSmallError(capability, fiatValue, min, fiatCurrency);
+    }
+    const max = resolveFiatMax(bounds, capability, fiatCurrency);
+    if (max !== null && toScaled(fiatValue) > toScaled(max)) {
+      throw new AmountTooLargeError(capability, fiatValue, max, fiatCurrency);
+    }
+  }
+
   async createBuyProposal(
     input: CreateBuyProposalInput,
   ): Promise<CreateBuyProposalOutput> {
@@ -274,6 +304,13 @@ export class ProposalService {
     // reject it as AMOUNT_TOO_SMALL (422) here so it never reaches the quote
     // domain (opaque 500) or the tier gate (confusing 403).
     this.assertFiatAmountAtLeastMin(intent.fiatAmount, intent.fiatCurrency);
+    // Per-(asset, currency) product MIN/MAX on the fiat spend (enforce-when-present).
+    this.assertFiatWithinConfiguredBounds(
+      'buy',
+      intent.asset,
+      intent.fiatCurrency,
+      intent.fiatAmount,
+    );
 
     // 1. Price the buy via the quotes service.
     const quote = await this.quotesService.quoteBuy({
@@ -403,6 +440,15 @@ export class ProposalService {
       cryptoAmount: intent.cryptoAmount,
       fiatCurrency: intent.fiatCurrency,
     });
+
+    // 2b. Per-(asset, currency) product MIN/MAX on the fiat PROCEEDS
+    // (enforce-when-present) — the sell row's fiat value is the net fiat out.
+    this.assertFiatWithinConfiguredBounds(
+      'sell',
+      intent.asset,
+      intent.fiatCurrency,
+      quote.netFiatAmount,
+    );
 
     // 3. Balance check — ledger is the authoritative balance source.
     const balance = await this.ledgerRepo.getAccountBalance(
@@ -629,6 +675,9 @@ export class ProposalService {
       fiatAmount: ngnEquivalentStr,
       fiatCurrency: baseFiat,
       asset: intent.asset,
+      // A crypto-address send is on-chain + irreversible → the single on-chain send
+      // cap (perSendOnChainFiatMax) applies on top of the general per-tx cap.
+      onChainSend: true,
     });
 
     // Keep a numeric form only for the Travel Rule threshold comparison and metadata

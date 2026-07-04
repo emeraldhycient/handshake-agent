@@ -222,9 +222,17 @@ describe('AgentTurnOutcomeSchema', () => {
     }
   })
 
-  it('rejects currency_not_live when currency is not in the FiatCurrencySchema enum', () => {
-    expect(() =>
+  it('accepts currency_not_live with a well-formed code (catalog-driven; a runtime-added currency can be not-live)', () => {
+    // EUR is a valid well-formed code now (validation is catalog-driven, not a fixed
+    // enum) — "not live" is exactly the state of a recognised-but-disabled currency.
+    expect(
       AgentTurnOutcomeSchema.parse({ kind: 'currency_not_live', currency: 'EUR' }),
+    ).toEqual({ kind: 'currency_not_live', currency: 'EUR' })
+  })
+
+  it('rejects currency_not_live with a malformed currency code', () => {
+    expect(() =>
+      AgentTurnOutcomeSchema.parse({ kind: 'currency_not_live', currency: 'eur' }),
     ).toThrow()
   })
 

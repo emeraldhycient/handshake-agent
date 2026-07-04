@@ -115,6 +115,8 @@ export class KycPrismaRepository implements IKycRepository {
           kycStatus: KycStatus.verified,
           // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           kycTier: KycTier.tier_1,
+          // Stamp the initial tier grant so the gate can enforce the cooling-off.
+          tierChangedAt: new Date(),
           pinHash,
         },
         select: { id: true },
@@ -212,6 +214,8 @@ export class KycPrismaRepository implements IKycRepository {
           kycStatus: KycStatus.verified,
           // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
           kycTier: KycTier.tier_1,
+          // Stamp the tier grant so the gate can enforce the post-change cooling-off.
+          tierChangedAt: new Date(),
           status: UserStatus.active,
           pinHash,
         },
@@ -252,6 +256,31 @@ export class KycPrismaRepository implements IKycRepository {
           kycStatus: status as KycStatus,
           kycTier: tier as KycTier,
         },
+      });
+    });
+  }
+
+  /**
+   * Bounces a submission back to the user for more information (Phase 9). Sets
+   * the KycProfile to `needs_info` + reviewer attribution and mirrors the status
+   * onto the User in one $transaction so the server-side gate (§3.3) never sees
+   * a partial state. Tier/verifiedAt/rejectionReason are deliberately left
+   * untouched — the review is PAUSED, not decided. The operator's reason lives
+   * in the AuditLog, not on this row.
+   */
+  async markKycNeedsInfo(
+    userId: string,
+    reviewedByAdminId: string,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.kycProfile.update({
+        where: { userId },
+        data: { status: KycStatus.needs_info, reviewedByAdminId },
+      });
+
+      await tx.user.update({
+        where: { id: userId },
+        data: { kycStatus: KycStatus.needs_info },
       });
     });
   }

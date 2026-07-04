@@ -40,18 +40,26 @@ import {
   useAdjustTier,
   useAdminMe,
   useApproveKyc,
+  useCreateUserNote,
   useEndUserDetail,
   useEndUserDevices,
   useEndUserLimits,
   useEndUserSessions,
   useEndUserTimeline,
   useForcePinReset,
+  useForceReKyc,
   useKycSubmission,
   useRejectKyc,
+  useRemoveBeneficiary,
+  useRequestKycInfo,
   useRequestManualCredit,
+  useResendVerification,
+  useRevokeAllUserSessions,
   useRevokeDevice,
+  useRevokeUserSession,
   useSetUserStatus,
   useSimSwapReverify,
+  useUserNotes,
 } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { SupportedAssetSchema } from "@handshake-agent/contracts"
@@ -572,6 +580,8 @@ export function UserDetail({ userId }: UserDetailProps) {
   const sessionsQuery = useEndUserSessions(userId)
   const limitsQuery = useEndUserLimits(userId)
   const timelineQuery = useEndUserTimeline(userId)
+  // The user's immutable case notes back the Profile "Notes" list (Phase 9 read).
+  const notesQuery = useUserNotes(userId)
 
   // Sensitive mutations (Phase 7 WRITE) — KYC decisions + account actions (tier /
   // status / pin-reset / device-revoke / sim-swap). Each is step-up-gated: a 403 with
@@ -587,6 +597,15 @@ export function UserDetail({ userId }: UserDetailProps) {
   const revokeDevice = useRevokeDevice()
   const simSwapReverify = useSimSwapReverify()
   const requestManualCredit = useRequestManualCredit()
+  // Phase 9 WRITE hooks — KYC needs-info / force-re-KYC, end-user session revocation,
+  // case notes, beneficiary removal, and the low-risk verification resend.
+  const requestKycInfo = useRequestKycInfo()
+  const forceReKyc = useForceReKyc()
+  const revokeAllUserSessions = useRevokeAllUserSessions()
+  const revokeUserSession = useRevokeUserSession()
+  const createUserNote = useCreateUserNote()
+  const removeBeneficiary = useRemoveBeneficiary()
+  const resendVerification = useResendVerification()
   const stepUp = useStepUpRetry()
 
   // Deep-link tab: seed from ?tab= when it names a valid tab (KYC-queue links land on KYC).
@@ -704,14 +723,19 @@ export function UserDetail({ userId }: UserDetailProps) {
           "KYC approved"
         ),
     })
-  // Request more info — no dedicated endpoint exists (only approve/reject are
-  // modelled server-side), so this records the reason and toasts; wiring a real
-  // needs-info transition is a backend gap (see notes).
+  // Request more info — reason → step-up, then POST /admin/kyc/:id/request-info,
+  // bouncing the review back to the user with the audited reason (§3.3). Sensitive
+  // (may 403 with ADMIN_STEP_UP_REQUIRED — replayed through the step-up dialog).
   const kycInfo = () =>
     runFlow({
       title: "Request more info",
-      steps: ["reason"],
-      onComplete: () => pushToast("Info requested (no endpoint yet)", "info"),
+      steps: ["reason", "stepup"],
+      onComplete: (reason) =>
+        runStepUpMutation(
+          () =>
+            requestKycInfo.mutateAsync({ userId, reason }).then(() => undefined),
+          "Information requested from user"
+        ),
     })
   // Reject — reason (required), then POST /admin/kyc/:id/reject with that reason.
   const kycReject = () =>
@@ -751,8 +775,19 @@ export function UserDetail({ userId }: UserDetailProps) {
           "Tier override submitted"
         ),
     })
-  const forceReKyc = () =>
-    runFlow({ title: "Force re-KYC", steps: ["reason", "stepup"] })
+  // Force re-KYC — reason → step-up, then POST /admin/users/:id/force-rekyc, sending
+  // the user back through verification (§3.4). Sensitive (may 403 with step-up).
+  const forceReKycFlow = () =>
+    runFlow({
+      title: "Force re-KYC",
+      steps: ["reason", "stepup"],
+      onComplete: (reason) =>
+        runStepUpMutation(
+          () =>
+            forceReKyc.mutateAsync({ id: userId, reason }).then(() => undefined),
+          "Re-KYC required from user"
+        ),
+    })
   // Reset PIN directive — reason → step-up, then POST /admin/users/:id/pin-reset.
   const resetPin = () =>
     runFlow({
@@ -764,12 +799,22 @@ export function UserDetail({ userId }: UserDetailProps) {
           "PIN reset directive issued"
         ),
     })
-  // Revoke-all: no END-USER session-revoke endpoint exists yet (only
-  // GET /admin/users/:id/sessions is modelled; the useRevokeSession hook targets an
-  // ADMIN-console session, not an end-user one, so wiring it here would revoke the
-  // wrong session). Stays a confirmed-then-toast stub until the backend route lands.
+  // Revoke-all — reason → step-up, then DELETE /admin/users/:id/sessions (force
+  // sign-out of every session). Sensitive (may 403 with step-up). The reason is the
+  // audited justification the backend route requires.
   const revokeAll = () =>
-    runFlow({ title: "Revoke all sessions", steps: ["stepup"] })
+    runFlow({
+      title: "Revoke all sessions",
+      steps: ["reason", "stepup"],
+      onComplete: (reason) =>
+        runStepUpMutation(
+          () =>
+            revokeAllUserSessions
+              .mutateAsync({ id: userId, reason })
+              .then(() => undefined),
+          "All sessions revoked"
+        ),
+    })
   // Unbind a single device — reason → step-up, then DELETE the device (per-row id).
   const unbindDevice = (deviceId: string) =>
     runFlow({
@@ -823,32 +868,70 @@ export function UserDetail({ userId }: UserDetailProps) {
     })
   }
 
-  // Add note — the timeline is now a read-only projection of the audit log, so
-  // this stays a Phase-7 write stub (persisting a note re-derives the timeline).
+  // Add note — the reason modal's free text IS the note body; onContinue POSTs
+  // /admin/users/:id/notes (an immutable case note). Low-risk (no step-up), but the
+  // wrapper still surfaces a 403 as the step-up dialog if the server ever gates it.
+  // On success the notes list + timeline invalidate (see the hook) so both re-resolve.
   const addNote = () =>
     runFlow({
       title: "Add note",
       steps: ["reason"],
-      onComplete: () => pushToast("Note recorded (pending write)", "ok"),
+      onComplete: (body) =>
+        runStepUpMutation(
+          () =>
+            createUserNote
+              .mutateAsync({ id: userId, input: { body } })
+              .then(() => undefined),
+          "Note added"
+        ),
     })
 
-  // Revoke a single END-USER session — confirm, then toast. No backend route exists
-  // for this yet (see revokeAll); it needs a BUILD (DELETE /admin/users/:id/sessions/:sid
-  // + contract + service). Left a stub rather than mis-wired to the admin-session hook.
-  const revokeSession = () =>
+  // Revoke a single END-USER session — reason → step-up, then
+  // DELETE /admin/users/:id/sessions/:sessionId (per-row id). Sensitive (may 403 with
+  // step-up). The reason is the audited justification the backend route requires.
+  const revokeSession = (sessionId: string) =>
     runFlow({
       title: "Revoke session",
-      steps: ["reason"],
-      onComplete: () => pushToast("Session revoked (pending write)", "ok"),
+      steps: ["reason", "stepup"],
+      onComplete: (reason) =>
+        runStepUpMutation(
+          () =>
+            revokeUserSession
+              .mutateAsync({ id: userId, sessionId, reason })
+              .then(() => undefined),
+          "Session revoked"
+        ),
     })
 
-  // Remove a single beneficiary — confirm, then toast (real removal is Phase 7).
-  const removeBeneficiary = () =>
+  // Remove a single beneficiary — reason → step-up, then DELETE
+  // /admin/beneficiaries/:id (per-row id). Sensitive (may 403 with step-up); moves no
+  // money (§3.1). The reason is the audited justification the backend route requires.
+  const removeBeneficiaryFlow = (beneficiaryId: string) =>
     runFlow({
       title: "Remove beneficiary",
-      steps: ["reason"],
-      onComplete: () => pushToast("Beneficiary removed", "ok"),
+      steps: ["reason", "stepup"],
+      onComplete: (reason) =>
+        runStepUpMutation(
+          () =>
+            removeBeneficiary
+              .mutateAsync({ id: beneficiaryId, reason })
+              .then(() => undefined),
+          "Beneficiary removed"
+        ),
     })
+
+  // Resend verification — a low-risk courtesy action: no reason, no step-up. Fires
+  // POST /admin/users/:id/resend-verification directly. Still routed through the
+  // step-up wrapper so an unexpected 403 surfaces the re-auth dialog rather than a
+  // dead-end error.
+  const resendUser = () =>
+    runStepUpMutation(
+      () =>
+        resendVerification
+          .mutateAsync({ id: userId })
+          .then(() => undefined),
+      "Verification link re-sent"
+    )
 
   // ── Async branches for the aggregate that gates the whole screen. ────────────────────
   if (detailQuery.isLoading) {
@@ -1022,8 +1105,7 @@ export function UserDetail({ userId }: UserDetailProps) {
                   onClick={() => {
                     if (a.key === "freeze") freezeUser()
                     else if (a.key === "note") addNote()
-                    else if (a.key === "resend")
-                      pushToast("Verification link re-sent", "info")
+                    else if (a.key === "resend") resendUser()
                   }}
                   className={cn(
                     "flex h-9 cursor-pointer items-center gap-[7px] rounded-[10px] border px-[13px] text-[12.5px] font-bold focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
@@ -1162,6 +1244,52 @@ export function UserDetail({ userId }: UserDetailProps) {
                   </div>
                   <div className="text-[11px] text-ink3">
                     {t.actor} · {t.createdAt}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {/* Case notes — the immutable free-text notes appended via "Add note"
+                (POST /admin/users/:id/notes). Its own four async branches. */}
+            <div className="mt-4 mb-2.5 text-xs font-extrabold text-ink2">
+              Case notes
+            </div>
+            {notesQuery.isLoading && (
+              <div className="space-y-3 py-2" aria-busy="true">
+                <Skeleton className="h-8 rounded-lg" />
+              </div>
+            )}
+            {notesQuery.isError && (
+              <div className="flex items-center justify-between gap-3 py-4">
+                <span className="text-[12px] font-bold text-tdn">
+                  Failed to load case notes.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void notesQuery.refetch()}
+                  className="cursor-pointer rounded-[9px] border border-line px-3 py-1.5 text-xs font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {notesQuery.isSuccess && notesQuery.data.items.length === 0 && (
+              <div className="py-4 text-center text-[12px] text-ink3">
+                No case notes for this user.
+              </div>
+            )}
+            {notesQuery.data?.items.map((n) => (
+              <div
+                key={n.id}
+                className="flex gap-[11px] border-b border-line2 py-[9px]"
+              >
+                <span className="mt-[5px] size-2 flex-none rounded-full bg-[#8b948a]" />
+                <div className="flex-1">
+                  <div className="text-[12.5px] whitespace-pre-wrap">
+                    {n.body}
+                  </div>
+                  <div className="text-[11px] text-ink3">
+                    {n.authorAdminId} · {n.createdAt}
                   </div>
                 </div>
               </div>
@@ -1379,7 +1507,7 @@ export function UserDetail({ userId }: UserDetailProps) {
             </button>
             <button
               type="button"
-              onClick={forceReKyc}
+              onClick={forceReKycFlow}
               className="flex w-full cursor-pointer items-center gap-2 rounded-[10px] border border-line p-[10px_12px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
             >
               <svg
@@ -1623,7 +1751,7 @@ export function UserDetail({ userId }: UserDetailProps) {
                 </div>
                 <button
                   type="button"
-                  onClick={revokeSession}
+                  onClick={() => revokeSession(s.id)}
                   disabled={!s.isActive}
                   className="cursor-pointer text-[11.5px] font-bold text-ink2 disabled:cursor-default disabled:opacity-40 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
                 >
@@ -1791,7 +1919,7 @@ export function UserDetail({ userId }: UserDetailProps) {
                   </span>
                   <button
                     type="button"
-                    onClick={removeBeneficiary}
+                    onClick={() => removeBeneficiaryFlow(b.id)}
                     className="cursor-pointer text-[11.5px] font-bold text-ink3 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
                   >
                     Remove

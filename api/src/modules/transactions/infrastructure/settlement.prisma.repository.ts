@@ -819,6 +819,7 @@ function toTransactionRecord(row: {
 // ---------------------------------------------------------------------------
 
 const WINDOW_24H_MS_SETTLE = 24 * 60 * 60 * 1_000;
+const WINDOW_7D_MS_SETTLE = 7 * 24 * 60 * 60 * 1_000;
 
 async function upsertVelocityCounterInSettle(
   tx: Prisma.TransactionClient,
@@ -828,13 +829,15 @@ async function upsertVelocityCounterInSettle(
     fiatCurrency: string;
     delta: string;
     now: Date;
+    /** Window length for THIS counter (24h for the daily counters, 7d for weekly). */
+    windowMs: number;
   },
 ): Promise<void> {
-  const { userId, counterType, delta, now } = params;
+  const { userId, counterType, delta, now, windowMs } = params;
   // Cast string → generated FiatCurrency enum at the infrastructure boundary
   // (application layer uses `string` to stay free of Prisma imports — §3.2).
   const fiatCurrencyEnum = params.fiatCurrency as FiatCurrency;
-  const windowEnd = new Date(now.getTime() + WINDOW_24H_MS_SETTLE);
+  const windowEnd = new Date(now.getTime() + windowMs);
 
   const existing = await tx.velocityCounter.findUnique({
     where: {
@@ -905,6 +908,16 @@ async function writeVelocityIncrementsInSettle(
     fiatCurrency,
     delta: fiatAmountStr,
     now,
+    windowMs: WINDOW_24H_MS_SETTLE,
+  });
+  // Rolling 7-day spend counter (weekly cap enforcement). Same fiat delta, 7-day window.
+  await upsertVelocityCounterInSettle(tx, {
+    userId,
+    counterType: VelocityCounterType.amount_7d,
+    fiatCurrency,
+    delta: fiatAmountStr,
+    now,
+    windowMs: WINDOW_7D_MS_SETTLE,
   });
   await upsertVelocityCounterInSettle(tx, {
     userId,
@@ -912,6 +925,7 @@ async function writeVelocityIncrementsInSettle(
     fiatCurrency,
     delta: '1',
     now,
+    windowMs: WINDOW_24H_MS_SETTLE,
   });
 }
 
@@ -996,6 +1010,15 @@ async function reverseVelocityIncrementsInSettle(
   await decrementVelocityCounterInSettle(tx, {
     userId,
     counterType: VelocityCounterType.amount_24h,
+    fiatCurrency,
+    delta: fiatAmountStr,
+    now,
+  });
+  // Reverse the rolling 7-day spend counter too, or a failed+refunded tx would keep
+  // consuming the user's weekly cap (mirror of the amount_24h reversal, BUG 2).
+  await decrementVelocityCounterInSettle(tx, {
+    userId,
+    counterType: VelocityCounterType.amount_7d,
     fiatCurrency,
     delta: fiatAmountStr,
     now,

@@ -15,15 +15,18 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { AdminMe } from "@handshake-agent/contracts"
 
 import { AppShell } from "@/components/admin/app-shell"
+import { defaultAdminAuthStore } from "@/lib/store/admin-auth-store"
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────────
 
+const { mockReplace } = vi.hoisted(() => ({ mockReplace: vi.fn() }))
 vi.mock("next/navigation", () => ({
   usePathname: () => "/",
-  // The topbar command-palette + notifications/account menus use the router.
+  // The topbar command-palette + notifications/account menus use the router; the
+  // auth gate (useRequireAuth) calls router.replace('/login') when unauthenticated.
   useRouter: () => ({
     push: vi.fn(),
-    replace: vi.fn(),
+    replace: mockReplace,
     back: vi.fn(),
     forward: vi.fn(),
     refresh: vi.fn(),
@@ -124,6 +127,12 @@ function renderShell() {
 
 beforeEach(() => {
   mockGetMe.mockReset()
+  // AppShell now embeds the auth gate (useRequireAuth) — authenticate the store so
+  // the chrome mounts (an anonymous store would redirect to /login and render null).
+  defaultAdminAuthStore.getState().setSession({
+    accessToken: "test-token",
+    admin: adminMe({}),
+  })
   // Default the badge sources to zero so nav-gating/MFA tests stay deterministic
   // (a zero count renders no pip). Badge-specific tests override these.
   mockListKycQueue.mockResolvedValue(kycQueue(0))
@@ -317,6 +326,24 @@ describe("AppShell MFA enrollment affordance", () => {
     ).toBeInTheDocument()
     expect(
       screen.queryByRole("button", { name: /set up mfa/i })
+    ).not.toBeInTheDocument()
+  })
+})
+
+describe("AppShell auth gate (centralized)", () => {
+  it("renders no chrome and redirects to /login when the store is anonymous", async () => {
+    mockReplace.mockClear()
+    mockGetMe.mockResolvedValue(adminMe({}))
+    // Override the authenticated default from beforeEach — sign the operator out.
+    defaultAdminAuthStore.getState().clear()
+
+    renderShell()
+
+    // No chrome + no page body render; the auth gate returns null.
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/login"))
+    expect(screen.queryByText("page body")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("link", { name: "Dashboard" })
     ).not.toBeInTheDocument()
   })
 })

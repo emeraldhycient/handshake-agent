@@ -25,7 +25,11 @@ import { AdminStepUpGuard } from './admin-step-up.guard';
 import { PermissionGuard } from './permission.guard';
 import { CurrentAdmin, type AdminContext } from './current-admin.decorator';
 import { RequirePermission } from './require-permission.decorator';
-import { KycApproveDto, KycRejectDto } from './dto/admin-end-user.dto';
+import {
+  KycApproveDto,
+  KycRejectDto,
+  KycRequestInfoDto,
+} from './dto/admin-end-user.dto';
 
 /**
  * Query DTO for GET /admin/kyc/queue — the shared contract query. `status` feeds
@@ -85,5 +89,27 @@ export class AdminKycReviewController {
     @CurrentAdmin() admin: AdminContext,
   ): Promise<void> {
     await this.kyc.reject(userId, body.reason, admin.adminId);
+  }
+
+  /**
+   * Phase 9 "Request info" — bounce the submission back to the user for more
+   * information (kycStatus → needs_info). A sensitive write: permissioned + a
+   * fresh step-up + an audited reason. Not a decision — approve/reject are
+   * untouched (§3.1/§3.4).
+   */
+  @Post('kyc/:userId/request-info')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission(
+    'api_route',
+    'POST /admin/kyc/:userId/request-info',
+    'write',
+  )
+  async requestInfo(
+    @Param('userId') userId: string,
+    @Body() body: KycRequestInfoDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<void> {
+    await this.kyc.requestInfo(userId, body.reason, admin.adminId);
   }
 }

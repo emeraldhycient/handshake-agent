@@ -43,6 +43,31 @@ export class AmountTooSmallError extends Error {
 }
 
 /**
+ * Thrown when a proposed transaction's fiat value EXCEEDS the admin-configured
+ * per-(capability, asset, currency) maximum on the pricing config. This is a
+ * product/market cap (distinct from the per-user KYC-tier limit) — enforced only
+ * when a max is configured for that row (enforce-when-present). `unit` is the fiat
+ * code; amount/maximum are decimal strings so the caller can echo the exact cap.
+ * Code: AMOUNT_TOO_LARGE → mapped to 422 by the global filter.
+ */
+export class AmountTooLargeError extends Error {
+  readonly code = 'AMOUNT_TOO_LARGE' as const;
+
+  constructor(
+    readonly operation: AmountGuardOperation,
+    readonly attempted: string,
+    readonly maximum: string,
+    readonly unit: string,
+  ) {
+    super(
+      `${operation} amount ${attempted} ${unit} exceeds the maximum of ${maximum} ${unit}`,
+    );
+    this.name = 'AmountTooLargeError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
  * Thrown by createSendProposal when the destination address is the user's own
  * provisioned custodial wallet address — there is no transfer to make, and the
  * masked confirmation card cannot show enough for the user to recognise their

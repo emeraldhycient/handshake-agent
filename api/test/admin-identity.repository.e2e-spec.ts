@@ -47,12 +47,15 @@ beforeAll(async () => {
   identityRepo = new IdentityPrismaRepository(
     prisma as unknown as PrismaService,
   );
-  kycRepo = new KycPrismaRepository(prisma as unknown as PrismaService, {
-    get: (k: string) =>
-      k === 'KYC_ENCRYPTION_KEY'
-        ? '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
-        : undefined,
-  } as never);
+  kycRepo = new KycPrismaRepository(
+    prisma as unknown as PrismaService,
+    {
+      get: (k: string) =>
+        k === 'KYC_ENCRYPTION_KEY'
+          ? '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+          : undefined,
+    } as never,
+  );
 }, 180_000);
 
 afterAll(async () => {
@@ -325,6 +328,46 @@ describe('IdentityPrismaRepository — admin reads (integration)', () => {
       });
       expect(row.pinnedDeviceId).toBeNull();
     });
+
+    it('resetKycToPending sets User.kycStatus AND the KycProfile status to pending', async () => {
+      const userId = await seedUser({ kycStatus: 'verified' });
+      await prisma.kycProfile.create({
+        data: {
+          userId,
+          status: 'verified' as never,
+          tier: 'tier_2' as never,
+          firstName: 'Ada',
+          lastName: 'Lovelace',
+        },
+      });
+
+      await identityRepo.resetKycToPending(userId);
+
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { id: userId },
+      });
+      const profile = await prisma.kycProfile.findUniqueOrThrow({
+        where: { userId },
+      });
+      expect(user.kycStatus).toBe('pending');
+      expect(profile.status).toBe('pending');
+    });
+
+    it('resetKycToPending is a no-op on the profile when the user has none', async () => {
+      const userId = await seedUser({ kycStatus: 'verified' });
+
+      await expect(
+        identityRepo.resetKycToPending(userId),
+      ).resolves.toBeUndefined();
+
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { id: userId },
+      });
+      expect(user.kycStatus).toBe('pending');
+      expect(
+        await prisma.kycProfile.findUnique({ where: { userId } }),
+      ).toBeNull();
+    });
   });
 });
 
@@ -397,5 +440,38 @@ describe('KycPrismaRepository — admin decision (integration)', () => {
     const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     expect(user.kycStatus).toBe('rejected');
     expect(user.kycTier).toBe('unverified');
+  });
+
+  it('markKycNeedsInfo moves profile + User to needs_info atomically, preserving tier/verifiedAt/rejectionReason', async () => {
+    const userId = await seedUser({
+      kycStatus: 'pending_review',
+      kycTier: 'tier_1',
+    });
+    await prisma.kycProfile.create({
+      data: {
+        userId,
+        status: 'pending_review' as never,
+        tier: 'tier_1' as never,
+        firstName: 'Katherine',
+        lastName: 'Johnson',
+      },
+    });
+
+    const adminId = randomUUID();
+    await kycRepo.markKycNeedsInfo(userId, adminId);
+
+    const profile = await prisma.kycProfile.findUniqueOrThrow({
+      where: { userId },
+    });
+    expect(profile.status).toBe('needs_info');
+    expect(profile.reviewedByAdminId).toBe(adminId);
+    // A paused review — not a decision: tier is preserved, no reject reason, no verifiedAt.
+    expect(profile.tier).toBe('tier_1');
+    expect(profile.rejectionReason).toBeNull();
+    expect(profile.verifiedAt).toBeNull();
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    expect(user.kycStatus).toBe('needs_info');
+    expect(user.kycTier).toBe('tier_1');
   });
 });

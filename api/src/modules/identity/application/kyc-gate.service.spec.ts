@@ -21,7 +21,9 @@ import type { Clock } from '../../../core/common/clock';
 import {
   GateError,
   KycNotVerifiedError,
+  OnChainSendLimitExceededError,
   SimSwapBlockedError,
+  TierChangeCoolingOffError,
   TierLimitExceededError,
   VelocityExceededError,
 } from '../domain/gate-errors';
@@ -62,9 +64,14 @@ const DEFAULT_LIMITS: AppConfig['limits'] = {
  */
 function makeConfig(
   limits: AppConfig['limits'] = DEFAULT_LIMITS,
+  tierChangeCoolingOffSeconds = 0,
 ): EffectiveConfigService {
   return {
-    get: (key: string) => (key === 'limits' ? limits : undefined),
+    get: (key: string) => {
+      if (key === 'limits') return limits;
+      if (key === 'compliance') return { tierChangeCoolingOffSeconds };
+      return undefined;
+    },
   } as unknown as EffectiveConfigService;
 }
 
@@ -79,6 +86,7 @@ function makeUser(overrides: Partial<UserRecord> = {}): UserRecord {
     kycStatus: 'verified',
     kycTier: 'tier_1',
     simSwapDetectedAt: null,
+    tierChangedAt: null,
     ...overrides,
   };
 }
@@ -116,15 +124,20 @@ function makeIdentityRepo(
     setSimSwapDetectedAt: jest.fn(),
     revokeDevice: jest.fn(),
     unpinDevice: jest.fn(),
+    resetKycToPending: jest.fn(),
   };
 }
 
 function makeVelocityRepo(
   fiatTotal: string,
   txCount: number,
+  weeklyTotal = '0',
+  recentSendCount = 0,
 ): IVelocityRepository {
   return {
     getDailyUsage: jest.fn().mockResolvedValue({ fiatTotal, txCount }),
+    getWeeklyUsage: jest.fn().mockResolvedValue({ fiatTotal: weeklyTotal }),
+    getRecentSendCount: jest.fn().mockResolvedValue(recentSendCount),
   };
 }
 
@@ -133,10 +146,12 @@ function makeService(
   fiatTotal = '0',
   txCount = 0,
   config: EffectiveConfigService = stubConfig,
+  weeklyTotal = '0',
+  recentSendCount = 0,
 ): KycGateService {
   return new KycGateService(
     makeIdentityRepo(user),
-    makeVelocityRepo(fiatTotal, txCount),
+    makeVelocityRepo(fiatTotal, txCount, weeklyTotal, recentSendCount),
     config,
     stubClock,
   );
@@ -362,6 +377,244 @@ describe('KycGateService.assertCanTransact', () => {
     await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
   });
 
+  // ── Rolling 7-day (weekly) velocity ───────────────────────────────────────
+  // A weekly cap is enforced only when the tier config carries `weeklyFiatMax`.
+
+  const WEEKLY_LIMITS: AppConfig['limits'] = {
+    NGN: {
+      tier_1: { ...TIER_1_LIMITS, weeklyFiatMax: 1_000_000 },
+      tier_2: DEFAULT_LIMITS.NGN.tier_2,
+      tier_3: DEFAULT_LIMITS.NGN.tier_3,
+    },
+  };
+
+  it('throws VelocityExceededError (weekly) when rolling-7d spend + amount would exceed weeklyFiatMax', async () => {
+    // 995_000 used this week + 10_000 = 1_005_000 > 1_000_000 weekly cap. Daily usage
+    // is 0 and the amount is under perTx/daily, so ONLY the weekly cap trips.
+    const svc = makeService(
+      makeUser(),
+      '0',
+      0,
+      makeConfig(WEEKLY_LIMITS),
+      '995000',
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toThrow(
+      VelocityExceededError,
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toMatchObject({
+      code: 'VELOCITY_EXCEEDED',
+      kind: 'weekly',
+      limit: 1_000_000,
+      tier: 'tier_1',
+      fiatCurrency: 'NGN',
+    });
+  });
+
+  it('does NOT throw when rolling-7d spend + amount equals weeklyFiatMax exactly', async () => {
+    // 990_000 + 10_000 = 1_000_000 exactly at the cap (> is the boundary, not >=).
+    const svc = makeService(
+      makeUser(),
+      '0',
+      0,
+      makeConfig(WEEKLY_LIMITS),
+      '990000',
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
+  });
+
+  it('skips the weekly check entirely when the tier has no weeklyFiatMax', async () => {
+    // Default tier_1 config has NO weeklyFiatMax; even a huge weekly total passes —
+    // the weekly gate is enforced only where the cap is configured.
+    const svc = makeService(makeUser(), '0', 0, stubConfig, '999999999');
+    await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
+  });
+
+  it('honors a DB AppSetting override to weeklyFiatMax (flows through the gate)', async () => {
+    // Override lowers the weekly cap to 12_000; a 10_000 amount on top of 5_000 of
+    // weekly usage (15_000) must now be rejected.
+    const lowered: AppConfig['limits'] = {
+      NGN: {
+        tier_1: { ...TIER_1_LIMITS, weeklyFiatMax: 12_000 },
+        tier_2: DEFAULT_LIMITS.NGN.tier_2,
+        tier_3: DEFAULT_LIMITS.NGN.tier_3,
+      },
+    };
+    const svc = makeService(makeUser(), '0', 0, makeConfig(lowered), '5000');
+    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toMatchObject({
+      code: 'VELOCITY_EXCEEDED',
+      kind: 'weekly',
+      limit: 12_000,
+    });
+  });
+
+  // ── Single on-chain send cap (perSendOnChainFiatMax) ──────────────────────
+  // Applies ONLY to on-chain (crypto-address) sends — irreversible, so tighter.
+
+  const ONCHAIN_LIMITS: AppConfig['limits'] = {
+    NGN: {
+      tier_1: { ...TIER_1_LIMITS, perSendOnChainFiatMax: 30_000 },
+      tier_2: DEFAULT_LIMITS.NGN.tier_2,
+      tier_3: DEFAULT_LIMITS.NGN.tier_3,
+    },
+  };
+
+  it('throws OnChainSendLimitExceededError when an on-chain send exceeds perSendOnChainFiatMax', async () => {
+    // 40_000 is under perTx (50_000) but over the on-chain cap (30_000).
+    const svc = makeService(makeUser(), '0', 0, makeConfig(ONCHAIN_LIMITS));
+    const input = { ...BASE_INPUT, fiatAmount: '40000', onChainSend: true };
+    await expect(svc.assertCanTransact(input)).rejects.toBeInstanceOf(
+      OnChainSendLimitExceededError,
+    );
+    await expect(svc.assertCanTransact(input)).rejects.toMatchObject({
+      code: 'SEND_LIMIT_EXCEEDED',
+      limitAmount: 30_000,
+      tier: 'tier_1',
+      fiatCurrency: 'NGN',
+    });
+  });
+
+  it('does NOT apply the on-chain cap to a non-send tx (buy/sell/swap) of the same amount', async () => {
+    // Same 40_000, but NOT an on-chain send → only the general perTx cap (50_000)
+    // applies, which it passes. The on-chain cap must never gate a buy/sell/swap.
+    const svc = makeService(makeUser(), '0', 0, makeConfig(ONCHAIN_LIMITS));
+    const input = { ...BASE_INPUT, fiatAmount: '40000' }; // onChainSend absent
+    await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
+  });
+
+  it('does NOT throw when an on-chain send equals perSendOnChainFiatMax exactly', async () => {
+    const svc = makeService(makeUser(), '0', 0, makeConfig(ONCHAIN_LIMITS));
+    const input = { ...BASE_INPUT, fiatAmount: '30000', onChainSend: true };
+    await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
+  });
+
+  it('skips the on-chain cap when the tier has no perSendOnChainFiatMax', async () => {
+    // Default tier_1 config (no perSendOnChainFiatMax); a 40_000 on-chain send passes
+    // (only perTx 50_000 applies).
+    const svc = makeService(makeUser(), '0', 0);
+    const input = { ...BASE_INPUT, fiatAmount: '40000', onChainSend: true };
+    await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
+  });
+
+  // ── Rolling 10-minute on-chain send-count velocity (sendsPer10MinMax) ──────
+
+  const SENDS_LIMITS: AppConfig['limits'] = {
+    NGN: {
+      tier_1: { ...TIER_1_LIMITS, sendsPer10MinMax: 3 },
+      tier_2: DEFAULT_LIMITS.NGN.tier_2,
+      tier_3: DEFAULT_LIMITS.NGN.tier_3,
+    },
+  };
+
+  it('throws VelocityExceededError (sends_10min) when this on-chain send would exceed sendsPer10MinMax', async () => {
+    // 3 sends already in the last 10 min + this one = 4 > 3 cap.
+    const svc = makeService(
+      makeUser(),
+      '0',
+      0,
+      makeConfig(SENDS_LIMITS),
+      '0',
+      3,
+    );
+    const input = { ...BASE_INPUT, onChainSend: true };
+    await expect(svc.assertCanTransact(input)).rejects.toThrow(
+      VelocityExceededError,
+    );
+    await expect(svc.assertCanTransact(input)).rejects.toMatchObject({
+      code: 'VELOCITY_EXCEEDED',
+      kind: 'sends_10min',
+      limit: 3,
+      tier: 'tier_1',
+    });
+  });
+
+  it('does NOT apply the 10-min send cap to a non-send tx (buy/sell/swap)', async () => {
+    // A huge recent-send count, but this is NOT an on-chain send → the cap never gates it.
+    const svc = makeService(
+      makeUser(),
+      '0',
+      0,
+      makeConfig(SENDS_LIMITS),
+      '0',
+      99,
+    );
+    await expect(
+      svc.assertCanTransact(BASE_INPUT), // onChainSend absent
+    ).resolves.toBeUndefined();
+  });
+
+  it('does NOT throw when this on-chain send lands exactly on sendsPer10MinMax', async () => {
+    // 2 sends already + this one = 3 = cap (> is the boundary, not >=).
+    const svc = makeService(
+      makeUser(),
+      '0',
+      0,
+      makeConfig(SENDS_LIMITS),
+      '0',
+      2,
+    );
+    const input = { ...BASE_INPUT, onChainSend: true };
+    await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
+  });
+
+  it('skips the 10-min send cap when the tier has no sendsPer10MinMax', async () => {
+    // Default tier_1 has no sendsPer10MinMax; even a huge recent-send count passes.
+    const svc = makeService(makeUser(), '0', 0, stubConfig, '0', 99);
+    const input = { ...BASE_INPUT, onChainSend: true };
+    await expect(svc.assertCanTransact(input)).resolves.toBeUndefined();
+  });
+
+  // ── Tier-change cooling-off (compliance.tierChangeCoolingOffSeconds) ──────
+  // Blocks ALL money moves for a window after the KYC tier last changed.
+
+  it('throws TierChangeCoolingOffError when within the cooling-off window after a tier change', async () => {
+    // tier changed 1h ago; 2h cooling-off → still held (hold until 13:00 > now 12:00).
+    const changedAt = new Date(FIXED_NOW.getTime() - 60 * 60 * 1000);
+    const svc = makeService(
+      makeUser({ tierChangedAt: changedAt }),
+      '0',
+      0,
+      makeConfig(DEFAULT_LIMITS, 7200),
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toBeInstanceOf(
+      TierChangeCoolingOffError,
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toMatchObject({
+      code: 'TIER_CHANGE_COOLING_OFF',
+    });
+  });
+
+  it('does NOT throw once the cooling-off window has elapsed', async () => {
+    // tier changed 3h ago; 2h cooling-off → elapsed (hold until 11:00 < now 12:00).
+    const changedAt = new Date(FIXED_NOW.getTime() - 3 * 60 * 60 * 1000);
+    const svc = makeService(
+      makeUser({ tierChangedAt: changedAt }),
+      '0',
+      0,
+      makeConfig(DEFAULT_LIMITS, 7200),
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
+  });
+
+  it('does NOT hold when the cooling-off is 0 (disabled), even right after a tier change', async () => {
+    const svc = makeService(
+      makeUser({ tierChangedAt: FIXED_NOW }),
+      '0',
+      0,
+      makeConfig(DEFAULT_LIMITS, 0),
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
+  });
+
+  it('does NOT hold a user whose tier has never changed (tierChangedAt null)', async () => {
+    const svc = makeService(
+      makeUser({ tierChangedAt: null }),
+      '0',
+      0,
+      makeConfig(DEFAULT_LIMITS, 7200),
+    );
+    await expect(svc.assertCanTransact(BASE_INPUT)).resolves.toBeUndefined();
+  });
+
   // ── Error hierarchy ───────────────────────────────────────────────────────
 
   it('all gate errors extend GateError', () => {
@@ -561,7 +814,11 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn() },
+      {
+        getDailyUsage: jest.fn(),
+        getWeeklyUsage: jest.fn(),
+        getRecentSendCount: jest.fn(),
+      },
       stubConfig,
       stubClock,
     );
@@ -575,7 +832,11 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn() },
+      {
+        getDailyUsage: jest.fn(),
+        getWeeklyUsage: jest.fn(),
+        getRecentSendCount: jest.fn(),
+      },
       stubConfig,
       stubClock,
     );
@@ -586,7 +847,11 @@ describe('KycGateService.getOriginatorName', () => {
     const identityRepo = makeIdentityRepo(defaultUser, null);
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn() },
+      {
+        getDailyUsage: jest.fn(),
+        getWeeklyUsage: jest.fn(),
+        getRecentSendCount: jest.fn(),
+      },
       stubConfig,
       stubClock,
     );
@@ -600,7 +865,11 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn() },
+      {
+        getDailyUsage: jest.fn(),
+        getWeeklyUsage: jest.fn(),
+        getRecentSendCount: jest.fn(),
+      },
       stubConfig,
       stubClock,
     );
@@ -614,7 +883,11 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn() },
+      {
+        getDailyUsage: jest.fn(),
+        getWeeklyUsage: jest.fn(),
+        getRecentSendCount: jest.fn(),
+      },
       stubConfig,
       stubClock,
     );
@@ -637,7 +910,11 @@ describe('KycGateService.getOriginatorIdentity', () => {
   ): KycGateService {
     return new KycGateService(
       makeIdentityRepo(defaultUser, null, originator),
-      { getDailyUsage: jest.fn() },
+      {
+        getDailyUsage: jest.fn(),
+        getWeeklyUsage: jest.fn(),
+        getRecentSendCount: jest.fn(),
+      },
       stubConfig,
       stubClock,
     );

@@ -59,23 +59,93 @@ export class TierLimitExceededError extends GateError {
   }
 }
 
-/** Daily spend or transaction count would exceed the user's velocity cap for their KYC tier. */
+/**
+ * The requested on-chain (crypto-address) send exceeds the single-send cap for the
+ * user's KYC tier (`perSendOnChainFiatMax`). Separate from TierLimitExceededError so an
+ * irreversible-send cap is legible in logs/audits distinct from the general per-tx cap.
+ */
+export class OnChainSendLimitExceededError extends GateError {
+  readonly code = 'SEND_LIMIT_EXCEEDED' as const;
+
+  constructor(
+    readonly requestedAmount: number,
+    readonly limitAmount: number,
+    readonly tier: string,
+    readonly fiatCurrency: string,
+  ) {
+    super(
+      `Transaction blocked: on-chain send of ${requestedAmount} ${fiatCurrency} exceeds ` +
+        `the single on-chain send limit of ${limitAmount} ${fiatCurrency} for tier ${tier}.`,
+    );
+  }
+}
+
+/**
+ * The user's KYC tier changed recently and is still inside the cooling-off window
+ * (`compliance.tierChangeCoolingOffSeconds`) — money moves are held to blunt abuse of a
+ * freshly-granted tier on a possibly-compromised account (§3.3).
+ */
+export class TierChangeCoolingOffError extends GateError {
+  readonly code = 'TIER_CHANGE_COOLING_OFF' as const;
+
+  constructor(
+    readonly holdUntil: Date,
+    readonly tier: string,
+  ) {
+    super(
+      `Transaction blocked: a tier-change cooling-off is in effect for tier ${tier} ` +
+        `until ${holdUntil.toISOString()}.`,
+    );
+  }
+}
+
+/**
+ * A velocity cap for the user's KYC tier would be exceeded:
+ *  - `fiat`        → rolling 24-hour spend cap (`dailyFiatMax`)
+ *  - `count`       → rolling 24-hour transaction-count cap (`dailyTxCountMax`)
+ *  - `weekly`      → rolling 7-day spend cap (`weeklyFiatMax`)
+ *  - `sends_10min` → rolling 10-minute on-chain send-count cap (`sendsPer10MinMax`)
+ */
+export type VelocityKind = 'fiat' | 'count' | 'weekly' | 'sends_10min';
+
 export class VelocityExceededError extends GateError {
   readonly code = 'VELOCITY_EXCEEDED' as const;
 
   constructor(
-    readonly kind: 'fiat' | 'count',
+    readonly kind: VelocityKind,
     readonly used: number,
     readonly limit: number,
     readonly tier: string,
     readonly fiatCurrency: string,
   ) {
     super(
-      kind === 'fiat'
-        ? `Transaction blocked: daily spend of ${used} ${fiatCurrency} would exceed the ` +
-            `daily limit of ${limit} ${fiatCurrency} for tier ${tier}.`
-        : `Transaction blocked: daily transaction count of ${used} would exceed ` +
-            `the daily limit of ${limit} for tier ${tier}.`,
+      VelocityExceededError.messageFor(kind, used, limit, tier, fiatCurrency),
+    );
+  }
+
+  private static messageFor(
+    kind: VelocityKind,
+    used: number,
+    limit: number,
+    tier: string,
+    fiatCurrency: string,
+  ): string {
+    if (kind === 'count') {
+      return (
+        `Transaction blocked: daily transaction count of ${used} would exceed ` +
+        `the daily limit of ${limit} for tier ${tier}.`
+      );
+    }
+    if (kind === 'sends_10min') {
+      return (
+        `Transaction blocked: ${used} on-chain sends in 10 minutes would exceed ` +
+        `the limit of ${limit} for tier ${tier}.`
+      );
+    }
+    const window = kind === 'weekly' ? 'weekly' : 'daily';
+    return (
+      `Transaction blocked: ${window} spend of ${used} ${fiatCurrency} would exceed the ` +
+      `${window} limit of ${limit} ${fiatCurrency} for tier ${tier}.`
     );
   }
 }

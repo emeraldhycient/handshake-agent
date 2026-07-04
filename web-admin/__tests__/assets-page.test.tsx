@@ -27,11 +27,37 @@ vi.mock("@/lib/api/catalog", () => ({
   getAdminCatalog: vi.fn(),
 }))
 
+// The live-toggle write path patches catalog.assets.<sym>.enabled via setSetting.
+vi.mock("@/lib/api/config", () => ({
+  setSetting: vi.fn(),
+}))
+
+// Asset discovery: the real Sync button + the newly-discovered read.
+vi.mock("@/lib/api/assets", () => ({
+  listDiscoveredAssets: vi.fn(),
+  syncAssets: vi.fn(),
+}))
+
+// The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
+vi.mock("@/lib/api/admin", () => ({
+  getMe: vi.fn(),
+}))
+
 import { getAdminCatalog } from "@/lib/api/catalog"
+import { setSetting } from "@/lib/api/config"
+import { listDiscoveredAssets, syncAssets } from "@/lib/api/assets"
+import { getMe } from "@/lib/api/admin"
 
 const mockGetAdminCatalog = vi.mocked(getAdminCatalog)
+const mockSet = vi.mocked(setSetting)
+const mockListDiscovered = vi.mocked(listDiscoveredAssets)
+const mockSyncAssets = vi.mocked(syncAssets)
+const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
+
+const USDT_LOGO =
+  "https://res.cloudinary.com/blockradar/image/upload/usdt-logo.png"
 
 const VIEW: AdminCatalogView = {
   assets: [
@@ -42,6 +68,8 @@ const VIEW: AdminCatalogView = {
       decimals: 6,
       networks: ["TRON", "Ethereum"],
       live: true,
+      // A discovered logo → the row renders the provider image.
+      logoUrl: USDT_LOGO,
     },
     {
       symbol: "BTC",
@@ -50,6 +78,8 @@ const VIEW: AdminCatalogView = {
       decimals: 8,
       networks: ["Bitcoin"],
       live: false,
+      // No logo → the row falls back to the tinted ticker badge.
+      logoUrl: null,
     },
   ],
   fiats: [],
@@ -69,6 +99,35 @@ function renderPage() {
 beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
   mockGetAdminCatalog.mockReset()
+  mockListDiscovered.mockReset()
+  mockListDiscovered.mockResolvedValue({ items: [] })
+  mockSyncAssets.mockReset()
+  mockSyncAssets.mockResolvedValue({ discoveredCount: 0, newCount: 0 })
+  mockSet.mockReset()
+  mockSet.mockResolvedValue({
+    key: "catalog.assets.USDT.enabled",
+    category: "Catalog",
+    label: "catalog.assets.USDT.enabled",
+    description: "USDT enabled",
+    valueType: "boolean",
+    editable: true,
+    value: false,
+    source: "default",
+    scope: "global",
+    scopeValue: null,
+  })
+  mockGetMe.mockReset()
+  mockGetMe.mockResolvedValue({
+    id: "11111111-1111-1111-1111-111111111111",
+    email: "amara@handshake.ng",
+    role: { id: "00000000-0000-0000-0000-000000000001", name: "Super Admin" },
+    status: "active",
+    displayName: "Test Admin",
+    mfaEnabled: true,
+    permissions: [],
+    menus: [],
+    pages: [],
+  })
 })
 
 describe("AssetsPage", () => {
@@ -93,6 +152,20 @@ describe("AssetsPage", () => {
       name: /Toggle USDT on TRON · Ethereum live status/i,
     })
     expect(within(usdtToggle).getByText("Live")).toBeInTheDocument()
+  })
+
+  it("renders the provider logo image for an asset with a logoUrl, and the ticker badge fallback for one without", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    renderPage()
+    await screen.findByText("Tether USD")
+
+    // USDT has a discovered logo → the row renders the provider <img>.
+    const usdtLogo = screen.getByRole("img", { name: "USDT" })
+    expect(usdtLogo).toHaveAttribute("src", USDT_LOGO)
+
+    // BTC has no logo → no image; the ticker badge text renders instead.
+    expect(screen.queryByRole("img", { name: "BTC" })).not.toBeInTheDocument()
+    expect(screen.getAllByText("BTC").length).toBeGreaterThanOrEqual(1)
   })
 
   it("renders — for Min/max and Contract (no backing field in the read)", async () => {
@@ -122,8 +195,104 @@ describe("AssetsPage", () => {
     ).toBeInTheDocument()
   })
 
-  it("opens the Blockradar sync ReasonModal (design-mock action)", async () => {
+  it("persists the live toggle via setSetting on catalog.assets.<sym>.enabled when approved", async () => {
     mockGetAdminCatalog.mockResolvedValue(VIEW)
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Tether USD")
+
+    // USDT is Live → the toggle proposes to pause (enabled=false).
+    await user.click(
+      screen.getByRole("button", { name: /Toggle USDT on TRON · Ethereum live status/i })
+    )
+    await user.click(
+      screen.getByRole("button", { name: /Submit for approval/i })
+    )
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("catalog.assets.USDT.enabled", {
+      value: false,
+      scope: "global",
+      scopeValue: null,
+    })
+    // Enabling BTC (currently Paused) would persist `true`.
+    const { toasts } = defaultToastStore.getState()
+    expect(toasts.some((t) => /USDT/.test(t.message))).toBe(true)
+  })
+
+  it("enables a paused asset (persists true) when approved", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Tether USD")
+
+    // BTC is Paused → the toggle proposes to enable (enabled=true).
+    await user.click(
+      screen.getByRole("button", { name: /Toggle BTC on Bitcoin live status/i })
+    )
+    await user.click(
+      screen.getByRole("button", { name: /Submit for approval/i })
+    )
+
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
+    expect(mockSet).toHaveBeenCalledWith("catalog.assets.BTC.enabled", {
+      value: true,
+      scope: "global",
+      scopeValue: null,
+    })
+  })
+
+  it("does not persist until the maker-checker submit fires", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Tether USD")
+
+    await user.click(
+      screen.getByRole("button", { name: /Toggle USDT on TRON · Ethereum live status/i })
+    )
+    // The dialog is open but nothing persisted yet.
+    expect(screen.getByRole("dialog")).toBeInTheDocument()
+    expect(mockSet).not.toHaveBeenCalled()
+  })
+
+  it("opens step-up and retries the PATCH after re-auth when the server demands step-up", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    const { ApiError } = await import("@/lib/api/client")
+    mockSet
+      .mockRejectedValueOnce(
+        new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce({
+        key: "catalog.assets.USDT.enabled",
+        category: "Catalog",
+        label: "catalog.assets.USDT.enabled",
+        description: "USDT enabled",
+        valueType: "boolean",
+        editable: true,
+        value: false,
+        source: "default",
+        scope: "global",
+        scopeValue: null,
+      })
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByText("Tether USD")
+
+    await user.click(
+      screen.getByRole("button", { name: /Toggle USDT on TRON · Ethereum live status/i })
+    )
+    await user.click(
+      screen.getByRole("button", { name: /Submit for approval/i })
+    )
+
+    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    expect(mockSet).toHaveBeenCalledTimes(1)
+  })
+
+  it("triggers a real Blockradar sync and toasts the discovered counts", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    mockSyncAssets.mockResolvedValue({ discoveredCount: 4, newCount: 2 })
     const user = userEvent.setup()
     renderPage()
     await screen.findByText("Tether USD")
@@ -131,13 +300,36 @@ describe("AssetsPage", () => {
     await user.click(
       screen.getByRole("button", { name: /Sync Blockradar catalog/i })
     )
-    await user.type(screen.getByLabelText("Reason"), "Weekly catalog refresh")
-    await user.click(screen.getByRole("button", { name: /Continue/i }))
 
+    // The real POST fires (no mock reason flow), and the counts are toasted.
+    await waitFor(() => expect(mockSyncAssets).toHaveBeenCalledTimes(1))
     await waitFor(() => {
       const { toasts } = defaultToastStore.getState()
-      expect(toasts).toHaveLength(1)
-      expect(toasts[0].message).toMatch(/Blockradar catalog synced/i)
+      expect(toasts.some((t) => /2 new asset/i.test(t.message))).toBe(true)
     })
+  })
+
+  it("renders the newly-discovered assets from the discovery read", async () => {
+    mockGetAdminCatalog.mockResolvedValue(VIEW)
+    mockListDiscovered.mockResolvedValue({
+      items: [
+        {
+          symbol: "USDC",
+          displayName: "USD Coin",
+          decimals: 6,
+          networks: ["TRON"],
+          contractAddress: "TXusdcContract",
+          blockradarAssetId: "usdc-id",
+          logoUrl: null,
+          enabled: true,
+          inStaticCatalog: false,
+        },
+      ],
+    })
+    renderPage()
+
+    // The discovered card shows the real asset (name · ticker) + its live status.
+    expect(await screen.findByText("USD Coin · USDC")).toBeInTheDocument()
+    expect(screen.getByText(/TXusdcContract/)).toBeInTheDocument()
   })
 })

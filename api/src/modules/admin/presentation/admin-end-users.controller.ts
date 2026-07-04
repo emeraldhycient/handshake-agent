@@ -22,6 +22,8 @@ import {
   AdminEndUserLimitsResponseSchema,
   AdminEndUserSessionListResponseSchema,
   AdminEndUserTimelineResponseSchema,
+  AdminUserNoteListResponseSchema,
+  AdminUserNoteSchema,
   ApplyUserTagsResponseSchema,
   BulkMessageResponseSchema,
   ChangeRequestSchema,
@@ -31,6 +33,8 @@ import {
   type AdminEndUserListResponse,
   type AdminEndUserSessionListResponse,
   type AdminEndUserTimelineResponse,
+  type AdminUserNote,
+  type AdminUserNoteListResponse,
   type ApplyUserTagsResponse,
   type BulkMessageResponse,
   type ChangeRequest,
@@ -40,6 +44,8 @@ import { AuditService } from '../../../core/audit/application/audit.service';
 import { AdminEndUserService } from '../application/admin-end-user.service';
 import { AdminUserSecurityService } from '../application/admin-user-security.service';
 import { AdminUserBulkService } from '../application/admin-user-bulk.service';
+import { AdminUserNoteService } from '../application/admin-user-note.service';
+import { AdminResendVerificationService } from '../application/admin-resend-verification.service';
 import { AdminApprovalsService } from '../application/admin-approvals.service';
 import { AdminSessionGuard } from './admin-session.guard';
 import { AdminStepUpGuard } from './admin-step-up.guard';
@@ -52,9 +58,13 @@ import {
   AdminEndUserStatusDto,
   AdminEndUserTierDto,
   CreateManualCreditDto,
+  ForceReKycDto,
+  ResendVerificationDto,
 } from './dto/admin-end-user.dto';
 import { AdminEndUsersExportQueryDto } from './dto/admin-export.dto';
 import { ApplyUserTagsDto, BulkMessageDto } from './dto/admin-user-bulk.dto';
+import { AdminUserNoteCreateDto } from './dto/admin-user-note.dto';
+import { AdminUserSessionRevokeDto } from './dto/admin-user-session.dto';
 
 /** CSV header for the end-user export (matches AdminEndUserExportRow order). */
 const USER_EXPORT_HEADER = [
@@ -99,6 +109,8 @@ export class AdminEndUsersController {
     private readonly users: AdminEndUserService,
     private readonly security: AdminUserSecurityService,
     private readonly bulk: AdminUserBulkService,
+    private readonly notes: AdminUserNoteService,
+    private readonly resendVerification: AdminResendVerificationService,
     private readonly approvals: AdminApprovalsService,
     private readonly audit: AuditService,
   ) {}
@@ -210,6 +222,57 @@ export class AdminEndUsersController {
     return AdminEndUserSessionListResponseSchema.parse({ sessions });
   }
 
+  /**
+   * Force sign-out of ALL the user's live auth sessions in one action (e.g. an
+   * account-takeover response). Step-up-guarded, permissioned (Users:write), and
+   * immutably audited (`session_revoke` against `User:<id>`) with the operator's
+   * reason. Sessions are marked revoked (never deleted — retained for audit); it
+   * is idempotent (zero live sessions → still 204). Moves no money (§3.1); the
+   * subject is the opaque :id only, re-checked server-side (§3.3, 404 on unknown).
+   * Declared BEFORE the `:sessionId` route so Express never treats a bare DELETE
+   * on the collection as `:sessionId` = undefined.
+   */
+  @Delete('users/:id/sessions')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission('api_route', 'DELETE /admin/users/:id/sessions', 'write')
+  async revokeAllSessions(
+    @Param('id') id: string,
+    @Body() body: AdminUserSessionRevokeDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<void> {
+    await this.security.revokeAllSessions(id, body.reason, admin.adminId);
+  }
+
+  /**
+   * Force sign-out of a SINGLE session (e.g. a device the user reports as
+   * compromised). Same guards/audit as the all-sessions route; the revoke is
+   * scoped SERVER-SIDE to the path user, so an admin can never revoke another
+   * user's session by id. An unknown/foreign/already-revoked session id fails
+   * closed as 404 (§3.6) — a no-op is never a silent success on this surface.
+   */
+  @Delete('users/:id/sessions/:sessionId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission(
+    'api_route',
+    'DELETE /admin/users/:id/sessions/:sessionId',
+    'write',
+  )
+  async revokeSession(
+    @Param('id') id: string,
+    @Param('sessionId') sessionId: string,
+    @Body() body: AdminUserSessionRevokeDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<void> {
+    await this.security.revokeSession(
+      id,
+      sessionId,
+      body.reason,
+      admin.adminId,
+    );
+  }
+
   @Get('users/:id/limits')
   @RequirePermission('api_route', 'GET /admin/users/:id/limits', 'read')
   async getLimits(
@@ -227,6 +290,37 @@ export class AdminEndUsersController {
   ): Promise<AdminEndUserTimelineResponse> {
     const entries = await this.security.listTimeline(id);
     return AdminEndUserTimelineResponseSchema.parse({ entries });
+  }
+
+  /**
+   * List a user's operator notes, newest-first. A pure read of case annotations —
+   * permissioned (Users:read), never audited (a read is not a mutation). No PII
+   * beyond the operator's free text; the owning userId stays server-side (§3.4).
+   */
+  @Get('users/:id/notes')
+  @RequirePermission('api_route', 'GET /admin/users/:id/notes', 'read')
+  async listNotes(@Param('id') id: string): Promise<AdminUserNoteListResponse> {
+    return AdminUserNoteListResponseSchema.parse(await this.notes.list(id));
+  }
+
+  /**
+   * Append an immutable operator note to this user's timeline. Permissioned
+   * (Users:write) + immutably audited (`admin_update` against `User:<id>`). The
+   * target user is the path :id — never trusted from the body; the author is the
+   * authenticated admin. A note is a pure annotation: it moves no money and confers
+   * no authorization (§3.1).
+   */
+  @Post('users/:id/notes')
+  @HttpCode(HttpStatus.CREATED)
+  @RequirePermission('api_route', 'POST /admin/users/:id/notes', 'write')
+  async createNote(
+    @Param('id') id: string,
+    @Body() body: AdminUserNoteCreateDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<AdminUserNote> {
+    return AdminUserNoteSchema.parse(
+      await this.notes.create(id, body.body, admin.adminId),
+    );
   }
 
   @Patch('users/:id/tier')
@@ -330,5 +424,46 @@ export class AdminEndUsersController {
     @CurrentAdmin() admin: AdminContext,
   ): Promise<void> {
     await this.users.triggerSimSwapReverify(id, admin.adminId, new Date());
+  }
+
+  /**
+   * Force re-KYC: reset the user to a pending KYC state so re-verification is
+   * required — e.g. after a SIM-swap or identity concern (§3.4). Step-up-guarded,
+   * permissioned (Users:write), and audited with the operator's reason. Moves no
+   * money (§3.1); no PII crosses this path — the subject is the opaque :id only.
+   */
+  @Post('users/:id/force-rekyc')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission('api_route', 'POST /admin/users/:id/force-rekyc', 'write')
+  async forceReKyc(
+    @Param('id') id: string,
+    @Body() body: ForceReKycDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<void> {
+    await this.users.forceReKyc(id, body.reason, admin.adminId);
+  }
+
+  /**
+   * Re-send the user's onboarding/verification nudge (e.g. the email never
+   * arrived). LOW-RISK: permissioned (Users:write) + audited, but NO step-up —
+   * a resend is a courtesy action and the reason is OPTIONAL. Enqueues onto the
+   * notifications OUTBOX (never a direct provider send); the dispatch worker
+   * sends it. Moves no money (§3.1); the subject is the opaque :id only, and the
+   * user is re-checked server-side (§3.3, 404 on an unknown id).
+   */
+  @Post('users/:id/resend-verification')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission(
+    'api_route',
+    'POST /admin/users/:id/resend-verification',
+    'write',
+  )
+  async resendVerificationEmail(
+    @Param('id') id: string,
+    @Body() body: ResendVerificationDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<void> {
+    await this.resendVerification.resend(id, admin.adminId, body.reason);
   }
 }

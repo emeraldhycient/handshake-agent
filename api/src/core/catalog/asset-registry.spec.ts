@@ -242,6 +242,69 @@ describe('AssetRegistry', () => {
         UnsupportedAssetError,
       );
     });
+  });
+
+  // ── listDiscoveredAssets() ────────────────────────────────────────────────
+  describe('listDiscoveredAssets', () => {
+    it('returns an empty list before any sync', () => {
+      expect(registry.listDiscoveredAssets()).toEqual([]);
+    });
+
+    it('projects discovered assets, flagging static vs newly-discovered + contract', () => {
+      registry.mergeDiscoveredAssets([
+        {
+          assetId: 'usdt-id',
+          symbol: 'USDT', // already in the static catalog
+          name: 'Tether USD',
+          network: 'TRON',
+          contractAddress: 'TXtetherContract',
+          decimals: 6,
+          isMainnet: false,
+        },
+        {
+          assetId: 'usdc-id',
+          symbol: 'USDC', // NOT in the static catalog → newly discovered
+          name: 'USD Coin',
+          network: 'TRON',
+          contractAddress: 'TXusdcContract',
+          decimals: 6,
+          isMainnet: false,
+        },
+      ]);
+
+      const views = registry.listDiscoveredAssets();
+      const usdt = views.find((v) => v.symbol === 'USDT')!;
+      const usdc = views.find((v) => v.symbol === 'USDC')!;
+
+      expect(usdt.inStaticCatalog).toBe(true);
+      expect(usdt.blockradarAssetId).toBe('usdt-id');
+      expect(usdt.contractAddress).toBe('TXtetherContract');
+
+      expect(usdc.inStaticCatalog).toBe(false);
+      expect(usdc.blockradarAssetId).toBe('usdc-id');
+      expect(usdc.contractAddress).toBe('TXusdcContract');
+      expect(usdc.decimals).toBe(6);
+      expect(usdc.networks).toContain('TRON');
+      // Newly-discovered synthetic assets are auto-enabled by mergeDiscoveredAssets.
+      expect(usdc.enabled).toBe(true);
+    });
+
+    it('skips discovered assets on a network absent from the static config', () => {
+      registry.mergeDiscoveredAssets([
+        {
+          assetId: 'sol-id',
+          symbol: 'SOL',
+          name: 'Solana',
+          network: 'SOLANA', // not in STUB_CATALOG.networks
+          contractAddress: null,
+          decimals: 9,
+          isMainnet: false,
+        },
+      ]);
+      expect(
+        registry.listDiscoveredAssets().find((v) => v.symbol === 'SOL'),
+      ).toBeUndefined();
+    });
 
     it('falls back to static config providers when discovered overlay has no entry', () => {
       // Build a stub with a static provider entry to verify fallback path.

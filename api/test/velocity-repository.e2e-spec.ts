@@ -8,6 +8,8 @@
  * Runs in the `test:e2e` lane only — not the default unit lane.
  */
 
+import { randomUUID } from 'node:crypto';
+
 import { PrismaClient } from '../generated/prisma/client';
 import { VelocityPrismaRepository } from '../src/modules/identity/infrastructure/velocity.prisma.repository';
 import type { PrismaService } from '../src/core/prisma/prisma.service';
@@ -244,5 +246,113 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
     const usageB = await repo.getDailyUsage(userB, now, 'NGN');
     expect(usageB.fiatTotal).toBe('0'); // userA's NGN row must NOT bleed to userB
     expect(usageB.txCount).toBe(0);
+  });
+
+  // ── getWeeklyUsage (rolling 7-day amount_7d counter) ──────────────────────
+  const AMOUNT_7D = 'amount_7d';
+  const WEEK_ASOF = new Date('2024-06-08T12:00:00.000Z');
+
+  it('getWeeklyUsage returns "0" when the user has no amount_7d counter', async () => {
+    const userId = await seedUser();
+    const usage = await repo.getWeeklyUsage(userId, WEEK_ASOF, 'NGN');
+    expect(usage.fiatTotal).toBe('0');
+  });
+
+  it('getWeeklyUsage sums the amount_7d counter whose window overlaps the 7-day lookback', async () => {
+    const userId = await seedUser();
+    await prisma.velocityCounter.create({
+      data: {
+        userId,
+        counterType: AMOUNT_7D,
+        fiatCurrency: 'NGN',
+        currentValue: 750000,
+        windowStart: new Date('2024-06-05T00:00:00.000Z'),
+        windowEnd: WEEK_ASOF, // inside the 7-day window
+      },
+    });
+    const usage = await repo.getWeeklyUsage(userId, WEEK_ASOF, 'NGN');
+    expect(usage.fiatTotal).toBe('750000');
+  });
+
+  it('getWeeklyUsage ignores the daily amount_24h counter (weekly reads only amount_7d)', async () => {
+    const userId = await seedUser();
+    // Only a 24h counter exists — it must NOT count toward the weekly total, or the
+    // weekly cap would double-count daily spend.
+    await prisma.velocityCounter.create({
+      data: {
+        userId,
+        counterType: AMOUNT_24H,
+        fiatCurrency: 'NGN',
+        currentValue: 500000,
+        windowStart: new Date('2024-06-08T00:00:00.000Z'),
+        windowEnd: new Date('2024-06-09T12:00:00.000Z'),
+      },
+    });
+    const usage = await repo.getWeeklyUsage(userId, WEEK_ASOF, 'NGN');
+    expect(usage.fiatTotal).toBe('0');
+  });
+
+  it('getWeeklyUsage excludes an amount_7d row whose window expired (>7 days old)', async () => {
+    const userId = await seedUser();
+    await prisma.velocityCounter.create({
+      data: {
+        userId,
+        counterType: AMOUNT_7D,
+        fiatCurrency: 'NGN',
+        currentValue: 999999,
+        windowStart: new Date('2024-05-28T00:00:00.000Z'),
+        windowEnd: new Date('2024-05-30T00:00:00.000Z'), // >7d before asOf
+      },
+    });
+    const usage = await repo.getWeeklyUsage(userId, WEEK_ASOF, 'NGN');
+    expect(usage.fiatTotal).toBe('0');
+  });
+
+  // ── getRecentSendCount (rolling 10-minute on-chain send count) ────────────
+  const TEN_MIN_MS = 10 * 60 * 1000;
+  const SEND_ASOF = new Date('2024-06-01T12:00:00.000Z');
+
+  async function seedSend(
+    userId: string,
+    createdAt: Date,
+    type: 'send' | 'buy' = 'send',
+  ): Promise<void> {
+    await prisma.transaction.create({
+      data: {
+        userId,
+        type,
+        idempotencyKey: randomUUID(),
+        requestChecksum: 'checksum-e2e',
+        metadata: {},
+        createdAt,
+      },
+    });
+  }
+
+  it('getRecentSendCount counts only in-window send transactions', async () => {
+    const userId = await seedUser();
+    // 2 sends inside the last 10 minutes.
+    await seedSend(userId, new Date(SEND_ASOF.getTime() - 2 * 60 * 1000));
+    await seedSend(userId, new Date(SEND_ASOF.getTime() - 8 * 60 * 1000));
+    // 1 send OUTSIDE the window (11 min ago) — excluded.
+    await seedSend(userId, new Date(SEND_ASOF.getTime() - 11 * 60 * 1000));
+    // 1 BUY inside the window — excluded (not a send).
+    await seedSend(
+      userId,
+      new Date(SEND_ASOF.getTime() - 1 * 60 * 1000),
+      'buy',
+    );
+
+    const count = await repo.getRecentSendCount(userId, SEND_ASOF, TEN_MIN_MS);
+    expect(count).toBe(2);
+  });
+
+  it('getRecentSendCount does not count another user’s sends', async () => {
+    const userA = await seedUser();
+    const userB = await seedUser();
+    await seedSend(userB, new Date(SEND_ASOF.getTime() - 1 * 60 * 1000));
+
+    const count = await repo.getRecentSendCount(userA, SEND_ASOF, TEN_MIN_MS);
+    expect(count).toBe(0);
   });
 });

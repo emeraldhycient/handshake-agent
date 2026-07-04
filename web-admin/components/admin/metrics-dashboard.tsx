@@ -28,6 +28,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { MetricsBar } from "@/components/admin/metrics-bar"
 import { cn } from "@/lib/utils"
+import { rangeForDays } from "@/lib/metrics-range"
 import { useDashboardMetrics } from "@/lib/query/hooks"
 import { ApiError } from "@/lib/api/client"
 import type { DashboardSummary } from "@handshake-agent/contracts"
@@ -48,17 +49,6 @@ const RANGE_PRESETS: readonly RangePreset[] = [
 ]
 
 const DEFAULT_PRESET_ID = "30d"
-
-/** Build an inclusive `{ from, to }` ISO-date window ending today, N days back. */
-function rangeForDays(days: number): { from: string; to: string } {
-  const to = new Date()
-  const from = new Date(to)
-  from.setDate(from.getDate() - (days - 1))
-  return {
-    from: from.toISOString().slice(0, 10),
-    to: to.toISOString().slice(0, 10),
-  }
-}
 
 function formatPct(rate: number): string {
   return `${(rate * 100).toFixed(1)}%`

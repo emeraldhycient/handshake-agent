@@ -18,16 +18,31 @@
  * (mono) · Rounding (dp, mono/tabular) · Name-enquiry (colored label) · Live
  * (clickable status pill). The design's Live pill carries an `onToggle` handler:
  * enabling / disabling a currency is a dual-control config change, so clicking it
- * opens the shared MakerCheckerModal (the actual persisted toggle is a Phase-7
- * write — this reads only, §3.1). Nothing moves money.
+ * opens the shared MakerCheckerModal. WIRED (Phase 9 — WRITE): approving fires the real
+ * step-up-guarded PATCH /admin/settings/:key (`useSetSetting`) on
+ * `catalog.fiats.<code>.enabled`, which the server re-validates (multi-currency
+ * invariant) + hot-reloads + audits; the catalog query then invalidates so the row
+ * re-resolves. A 403 opens the StepUpDialog and the PATCH replays after re-auth
+ * (`useStepUpRetry`). Nothing moves money (§3.1).
  */
 import { useMemo, useState } from "react"
 
+import { AddCurrencyDialog } from "@/components/admin/add-currency-dialog"
 import { MakerCheckerModal } from "@/components/admin/flows"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useAdminCatalog } from "@/lib/query/hooks"
+import { ApiError } from "@/lib/api/client"
+import {
+  useAdminCatalog,
+  useAdminMe,
+  useAddCurrency,
+  useSetSetting,
+  useUpdateCurrency,
+} from "@/lib/query/hooks"
+import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { pushToast } from "@/lib/store/toast-store"
 import { cn } from "@/lib/utils"
+import type { AdminCustomFiatCreateRequest } from "@handshake-agent/contracts"
 import type {
   CurrencyCatalogRow,
   MakerCheckerDiffRow,
@@ -61,7 +76,14 @@ function CurrencyRow({
           {row.symbol}
         </span>
         <div>
-          <div className="text-[13px] font-bold text-ink">{row.code}</div>
+          <div className="flex items-center gap-[6px]">
+            <span className="text-[13px] font-bold text-ink">{row.code}</span>
+            {row.custom && (
+              <span className="rounded-full bg-card2 px-[6px] py-px text-[9px] font-bold tracking-[0.04em] text-ink3 uppercase">
+                Custom
+              </span>
+            )}
+          </div>
           <div className="text-[11px] text-ink3">{row.name}</div>
         </div>
       </div>
@@ -111,11 +133,26 @@ function CurrencyRow({
   )
 }
 
+/** Normalizes a mutation/step-up failure into a user-facing message. */
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  if (error instanceof Error) return error.message
+  return "Something went wrong."
+}
+
 export function CurrenciesPage() {
   // Real fiat catalog (full — incl. disabled/off), fetched from
   // GET /admin/config/catalog. Name-enquiry availability is not surfaced by the
   // read, so it renders the design-faithful "Unavailable" for every row.
   const { data, isLoading, isError, isSuccess, refetch } = useAdminCatalog()
+  const me = useAdminMe()
+  const setSetting = useSetSetting()
+  const addCurrency = useAddCurrency()
+  const updateCurrency = useUpdateCurrency()
+  const stepUp = useStepUpRetry()
+
+  // Whether the "Add currency" dialog is open.
+  const [addOpen, setAddOpen] = useState(false)
 
   const rows = useMemo<CurrencyCatalogRow[]>(
     () =>
@@ -127,6 +164,7 @@ export function CurrenciesPage() {
         rounding: f.decimals,
         live: f.live,
         nameEnquiry: false,
+        custom: f.custom,
       })),
     [data]
   )
@@ -144,29 +182,90 @@ export function CurrenciesPage() {
       ]
     : []
 
-  // Dual-control approved. The persisted live-status toggle is a Phase-7 write
-  // (this screen reads only, §3.1); acknowledge the intent and close the modal.
+  // Dual-control approved. Persists the new live status via the real step-up-guarded
+  // PATCH /admin/settings/:key (`useSetSetting`) on `catalog.fiats.<code>.enabled` — the
+  // server re-validates the multi-currency invariant + hot-reloads + audits. A 403 opens
+  // the StepUpDialog and the PATCH replays after re-auth. Nothing moves money (§3.1).
   const applyToggle = () => {
     if (!pending) return
-    pushToast(
-      `${pending.code} · ${pending.live ? "Disable" : "Enable"} queued`,
-      "info"
-    )
+    const fiat = pending
+    const enabling = !fiat.live
     setPending(null)
+    void (async () => {
+      try {
+        // A CUSTOM fiat toggles via the currency endpoint (PATCH /admin/config/
+        // currencies/:code — enabling is fail-closed on pricing server-side); a
+        // BUILT-IN toggles the settings key. Both are step-up-gated + audited.
+        const ok = await stepUp.run(() =>
+          (fiat.custom
+            ? updateCurrency.mutateAsync({
+                code: fiat.code,
+                patch: { enabled: enabling },
+              })
+            : setSetting.mutateAsync({
+                key: `catalog.fiats.${fiat.code}.enabled`,
+                input: { value: enabling, scope: "global", scopeValue: null },
+              })
+          ).then(() => undefined)
+        )
+        if (ok) {
+          // useSetSetting invalidates the settings prefix, not the admin catalog this
+          // page reads from — refetch it so the Live/Off pill re-resolves.
+          void refetch()
+          pushToast(
+            `${fiat.code} ${enabling ? "enabled" : "disabled"}`,
+            enabling ? "ok" : "warn"
+          )
+        }
+      } catch (error) {
+        pushToast(errorMessage(error), "warn")
+      }
+    })()
+  }
+
+  // Every code already in the catalog (built-in + custom), for the dialog's fast
+  // local duplicate check ahead of the server's 409.
+  const existingCodes = useMemo(
+    () => (data?.fiats ?? []).map((f) => f.code),
+    [data]
+  )
+
+  // Add-currency submit. The new fiat is created DISABLED (the enabled-needs-pricing
+  // invariant is fail-closed server-side); the write is step-up-gated + audited. On a
+  // step-up challenge the add dialog resolves + closes and the StepUpDialog takes over
+  // (its onSuccess replays the add). A collision/validation error rejects so the dialog
+  // shows it inline. Nothing moves money (§3.1).
+  async function saveNewCurrency(input: AdminCustomFiatCreateRequest) {
+    const ok = await stepUp.run(() =>
+      addCurrency.mutateAsync(input).then(() => undefined)
+    )
+    if (ok) {
+      void refetch()
+      pushToast(`${input.code} added — enable it once pricing is set`, "ok")
+    }
   }
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
       <div className="mx-auto w-full max-w-[1000px] px-[30px] pt-[26px] pb-[60px]">
         {/* ── Header ────────────────────────────────────────────────────────── */}
-        <div className="mb-4">
-          <h1 className="text-[24px] font-extrabold tracking-[-0.02em] text-ink">
-            Currency catalog
-          </h1>
-          <p className="mt-[5px] text-[13.5px] text-ink2">
-            Fiat currencies, live status, rounding and name-enquiry
-            availability.
-          </p>
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-[24px] font-extrabold tracking-[-0.02em] text-ink">
+              Currency catalog
+            </h1>
+            <p className="mt-[5px] text-[13.5px] text-ink2">
+              Fiat currencies, live status, rounding and name-enquiry
+              availability.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAddOpen(true)}
+            className="shrink-0 rounded-[10px] bg-btn-dark px-3.5 py-2 text-[12.5px] font-extrabold text-white transition-colors hover:bg-btn-dark/90 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            New currency
+          </button>
         </div>
 
         {/* ── Table card ────────────────────────────────────────────────────── */}
@@ -249,6 +348,14 @@ export function CurrenciesPage() {
         </div>
       </div>
 
+      {/* ── Add-currency dialog (runtime custom fiat, created disabled) ─────── */}
+      <AddCurrencyDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        existingCodes={existingCodes}
+        onSave={saveNewCurrency}
+      />
+
       {/* ── Maker-checker flow (design's Live-toggle destination) ───────────── */}
       <MakerCheckerModal
         open={pending !== null}
@@ -262,6 +369,22 @@ export function CurrenciesPage() {
         }
         diff={diff}
         onSubmit={applyToggle}
+      />
+
+      {/* Server-side step-up re-auth: a 403 on the enabled PATCH opens this; the
+          PATCH replays after re-authentication (the catalog then invalidates). */}
+      <StepUpDialog
+        open={stepUp.open}
+        mfaEnabled={me.data?.mfaEnabled ?? false}
+        onOpenChange={stepUp.setOpen}
+        onSuccess={() => {
+          void stepUp
+            .retry()
+            .then((done) => {
+              if (done) void refetch()
+            })
+            .catch((error) => pushToast(errorMessage(error), "warn"))
+        }}
       />
     </div>
   )

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { Inject, Injectable } from '@nestjs/common';
 
 import type {
@@ -41,13 +43,15 @@ const VERIFIED_TIERS = ['tier_1', 'tier_2', 'tier_3'] as const;
 type VerifiedTier = (typeof VERIFIED_TIERS)[number];
 
 /**
- * ADM-02 read-only user-detail security/limits/timeline reads for the admin
- * console. Complements AdminEndUserService (the aggregate + audited mutations).
+ * ADM-02 user-detail security surface for the admin console — the security/limits/
+ * timeline reads plus the Phase-9 session-revoke writes. Complements
+ * AdminEndUserService (the user aggregate + its audited mutations).
  *
  * Never moves money (§3.1) and surfaces no secrets: sessions carry no token
  * hashes, limits are the effective config caps + live velocity usage, and the
- * timeline is the hash-chained audit log filtered to this user's subject. All
- * reads; every write on this surface is a later phase.
+ * timeline is the hash-chained audit log filtered to this user's subject. The
+ * revoke writes mark sessions revoked (never delete — retained for audit) and are
+ * every one reason→step-up (guarded at the controller) + immutably audited (§3.4).
  */
 @Injectable()
 export class AdminUserSecurityService {
@@ -122,6 +126,69 @@ export class AdminUserSecurityService {
       actorAdminId: e.actorAdminId,
       createdAt: e.createdAt.toISOString(),
     }));
+  }
+
+  // ── revokeSession ────────────────────────────────────────────────────────────
+
+  /**
+   * Force sign-out of a SINGLE end-user session. The revoke is scoped to the path
+   * user (never a cross-user revoke) and only affects a still-live session; an
+   * unknown/foreign/already-revoked id fails closed as 404 with NOTHING audited
+   * (there was no state change to record). A real revoke is immutably audited as a
+   * `session_revoke` against the user subject, carrying the operator's reason (§3.4).
+   * Moves no money (§3.1).
+   */
+  async revokeSession(
+    userId: string,
+    sessionId: string,
+    reason: string,
+    adminId: string,
+  ): Promise<void> {
+    await this.assertUserExists(userId);
+    const revoked = await this.sessions.revokeSession(
+      userId,
+      sessionId,
+      this.clock.now(),
+      reason,
+    );
+    if (!revoked) throw new AdminNotFoundError('Session');
+
+    await this.audit.record({
+      correlationId: randomUUID(),
+      actorAdminId: adminId,
+      subject: `User:${userId}`,
+      action: 'session_revoke',
+      after: { sessionId, reason },
+    });
+  }
+
+  // ── revokeAllSessions ────────────────────────────────────────────────────────
+
+  /**
+   * Force sign-out of ALL the user's live sessions in one action. Idempotent — a
+   * user with zero live sessions is a successful no-op (revokedCount 0). Always
+   * audited (the operator's sign-out intent is recorded even at count 0), carrying
+   * the revoked count + reason. Moves no money (§3.1).
+   */
+  async revokeAllSessions(
+    userId: string,
+    reason: string,
+    adminId: string,
+  ): Promise<void> {
+    await this.assertUserExists(userId);
+    const revokedCount = await this.sessions.revokeAllForUser(
+      userId,
+      this.clock.now(),
+      reason,
+    );
+
+    await this.audit.record({
+      correlationId: randomUUID(),
+      actorAdminId: adminId,
+      subject: `User:${userId}`,
+      action: 'session_revoke',
+      after: { scope: 'all', revokedCount, reason },
+    });
   }
 
   // ── private helpers ────────────────────────────────────────────────────────────

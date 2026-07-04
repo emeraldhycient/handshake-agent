@@ -53,6 +53,7 @@ const ROOT_EMAIL = 'root-endusers@e2e.test';
 const ROOT_PASSWORD = 'rootPassword123!';
 
 const SEED_USER_EMAIL = 'enduser@e2e.test';
+const SESSION_USER_EMAIL = 'session-enduser@e2e.test';
 
 interface BootstrapBody {
   invitationId: string;
@@ -254,6 +255,66 @@ describe('Admin end-user management + KYC review — e2e (AppModule, Testcontain
     return user.id;
   }
 
+  /** Log in as the (already-bootstrapped) root super_admin and return the token. */
+  async function loginRoot(): Promise<string> {
+    const rootLogin = await request(app.getHttpServer())
+      .post('/admin/auth/login')
+      .send({ email: ROOT_EMAIL, password: ROOT_PASSWORD })
+      .expect(200);
+    return (rootLogin.body as LoginBody).accessToken;
+  }
+
+  /** Complete a fresh step-up on the admin session (writes require it). */
+  async function stepUp(token: string): Promise<void> {
+    await request(app.getHttpServer())
+      .post('/admin/auth/step-up')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ password: ROOT_PASSWORD })
+      .expect(204);
+  }
+
+  /**
+   * Seed a user with two ACTIVE sessions. Returns the user id + both session ids.
+   * Token hashes are unique per the schema; they are never read back by the admin
+   * surface (only revoked).
+   */
+  async function seedUserWithSessions(): Promise<{
+    userId: string;
+    sessionIds: [string, string];
+  }> {
+    const user = await prisma.user.create({
+      data: {
+        email: SESSION_USER_EMAIL,
+        status: 'active',
+        kycStatus: 'verified',
+        kycTier: 'tier_1',
+      },
+    });
+    const suffix = user.id.slice(0, 8);
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    const s1 = await prisma.session.create({
+      data: {
+        userId: user.id,
+        accessTokenHash: `access-1-${suffix}`,
+        refreshTokenHash: `refresh-1-${suffix}`,
+        channel: 'web',
+        isActive: true,
+        expiresAt,
+      },
+    });
+    const s2 = await prisma.session.create({
+      data: {
+        userId: user.id,
+        accessTokenHash: `access-2-${suffix}`,
+        refreshTokenHash: `refresh-2-${suffix}`,
+        channel: 'whatsapp',
+        isActive: true,
+        expiresAt,
+      },
+    });
+    return { userId: user.id, sessionIds: [s1.id, s2.id] };
+  }
+
   // ===========================================================================
   // MAIN TEST — full end-user + KYC lifecycle as a super_admin
   // ===========================================================================
@@ -355,6 +416,40 @@ describe('Admin end-user management + KYC review — e2e (AppModule, Testcontain
     const verifiedQueue = verifiedRes.body as KycQueueBody;
     expect(verifiedQueue.items.some((q) => q.userId === userId)).toBe(false);
 
+    // 7c. POST /admin/kyc/:userId/request-info — bounce the review back to the user
+    //     for more info (Phase 9). The profile + mirrored User move to `needs_info`
+    //     (a PAUSED review, not a decision), the reason is audited, tier is preserved.
+    await request(app.getHttpServer())
+      .post(`/admin/kyc/${userId}/request-info`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ reason: 'proof of address is illegible — please re-upload' })
+      .expect(204);
+
+    const needsInfoProfile = await prisma.kycProfile.findUniqueOrThrow({
+      where: { userId },
+    });
+    expect(needsInfoProfile.status).toBe('needs_info');
+    // A paused review: the earlier tier adjustment (tier_1) is preserved, not reset.
+    expect(needsInfoProfile.tier).toBe('tier_1');
+    expect(needsInfoProfile.rejectionReason).toBeNull();
+
+    const needsInfoUser = await prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+    });
+    expect(needsInfoUser.kycStatus).toBe('needs_info');
+
+    const requestInfoAudit = await prisma.auditLog.findFirst({
+      where: { subject: `User:${userId}`, action: 'kyc_state_change' },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(requestInfoAudit).not.toBeNull();
+
+    // A request-info write REQUIRES an authenticated admin — no session is 401.
+    await request(app.getHttpServer())
+      .post(`/admin/kyc/${userId}/request-info`)
+      .send({ reason: 'no session at all' })
+      .expect(401);
+
     // 8. POST /admin/kyc/:userId/approve — verifies the submission (204, step-up still fresh).
     await request(app.getHttpServer())
       .post(`/admin/kyc/${userId}/approve`)
@@ -377,5 +472,129 @@ describe('Admin end-user management + KYC review — e2e (AppModule, Testcontain
       orderBy: { createdAt: 'desc' },
     });
     expect(approveAudit).not.toBeNull();
+
+    // 9. POST /admin/users/:id/notes — append two operator notes (write, not
+    //    step-up-guarded: a note moves no money). Returns 201 with the wire shape.
+    const firstNote = await request(app.getHttpServer())
+      .post(`/admin/users/${userId}/notes`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ body: 'Confirmed identity by phone.' })
+      .expect(201);
+    const firstNoteBody = firstNote.body as {
+      id: string;
+      body: string;
+      authorAdminId: string;
+      createdAt: string;
+    };
+    expect(firstNoteBody.id).toBeDefined();
+    expect(firstNoteBody.body).toBe('Confirmed identity by phone.');
+    // The wire shape never leaks the owning userId (§3.4).
+    expect(firstNoteBody).not.toHaveProperty('userId');
+
+    await request(app.getHttpServer())
+      .post(`/admin/users/${userId}/notes`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ body: 'Second note, later.' })
+      .expect(201);
+
+    // A blank body is rejected at the boundary (min 1) — 400, nothing persisted.
+    await request(app.getHttpServer())
+      .post(`/admin/users/${userId}/notes`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ body: '' })
+      .expect(400);
+
+    // 10. GET /admin/users/:id/notes — both notes, newest-first, and the create was
+    //     immutably audited as admin_update against the User subject.
+    const notesRes = await request(app.getHttpServer())
+      .get(`/admin/users/${userId}/notes`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .expect(200);
+    const notesBody = notesRes.body as {
+      items: { id: string; body: string; createdAt: string }[];
+    };
+    expect(notesBody.items).toHaveLength(2);
+    expect(notesBody.items[0].body).toBe('Second note, later.');
+    expect(notesBody.items[1].body).toBe('Confirmed identity by phone.');
+
+    const noteAudit = await prisma.auditLog.findFirst({
+      where: { subject: `User:${userId}`, action: 'admin_update' },
+    });
+    expect(noteAudit).not.toBeNull();
+  }, 90_000);
+
+  // ===========================================================================
+  // SESSION REVOKE — DELETE a single session, then force sign-out (all)
+  // ===========================================================================
+
+  it('revokes a single end-user session then force-signs-out the rest, gated + audited', async () => {
+    const rootToken = await loginRoot();
+    const { userId, sessionIds } = await seedUserWithSessions();
+    const [sid1] = sessionIds;
+
+    // A revoke is a write — without a fresh step-up it is 403 (ADMIN_STEP_UP_REQUIRED).
+    await request(app.getHttpServer())
+      .delete(`/admin/users/${userId}/sessions/${sid1}`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ reason: 'device reported compromised by user' })
+      .expect(403);
+
+    await stepUp(rootToken);
+
+    // DELETE one session → 204; the row is marked revoked (retained), the sibling stays active.
+    await request(app.getHttpServer())
+      .delete(`/admin/users/${userId}/sessions/${sid1}`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ reason: 'device reported compromised by user' })
+      .expect(204);
+
+    const afterOne = await prisma.session.findUniqueOrThrow({
+      where: { id: sid1 },
+    });
+    expect(afterOne.isActive).toBe(false);
+    expect(afterOne.revokedAt).not.toBeNull();
+    expect(afterOne.revokedReason).toBe('device reported compromised by user');
+
+    const stillActive = await prisma.session.count({
+      where: { userId, isActive: true },
+    });
+    expect(stillActive).toBe(1);
+
+    const singleAudit = await prisma.auditLog.findFirst({
+      where: { subject: `User:${userId}`, action: 'session_revoke' },
+    });
+    expect(singleAudit).not.toBeNull();
+
+    // Re-revoking the same (now-revoked) session fails closed as 404 — a no-op is
+    // never a silent success on the money-adjacent security surface.
+    await request(app.getHttpServer())
+      .delete(`/admin/users/${userId}/sessions/${sid1}`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ reason: 'device reported compromised by user' })
+      .expect(404);
+
+    // A bad reason (too short) is rejected server-side (§3.3) before any mutation.
+    await request(app.getHttpServer())
+      .delete(`/admin/users/${userId}/sessions`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ reason: 'x' })
+      .expect(400);
+
+    // DELETE all → 204; every remaining active session is revoked.
+    await request(app.getHttpServer())
+      .delete(`/admin/users/${userId}/sessions`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ reason: 'account takeover suspected — full sign-out' })
+      .expect(204);
+
+    const anyActive = await prisma.session.count({
+      where: { userId, isActive: true },
+    });
+    expect(anyActive).toBe(0);
+
+    const revokeAudits = await prisma.auditLog.count({
+      where: { subject: `User:${userId}`, action: 'session_revoke' },
+    });
+    expect(revokeAudits).toBe(2);
   }, 90_000);
 });

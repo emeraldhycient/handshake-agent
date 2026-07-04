@@ -28,6 +28,7 @@ const baseUser = (overrides: Partial<UserRecord> = {}): UserRecord => ({
   kycStatus: 'verified',
   kycTier: 'tier_1',
   simSwapDetectedAt: null,
+  tierChangedAt: null,
   ...overrides,
 });
 
@@ -78,6 +79,7 @@ function makeRepo(
     setSimSwapDetectedAt: jest.fn().mockResolvedValue(undefined),
     revokeDevice: jest.fn().mockResolvedValue(undefined),
     unpinDevice: jest.fn().mockResolvedValue(undefined),
+    resetKycToPending: jest.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }

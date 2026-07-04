@@ -143,6 +143,34 @@ export class AdminKycReviewService {
     });
   }
 
+  // ── requestInfo ──────────────────────────────────────────────────────────────
+
+  /**
+   * Phase 9 "Request info" — bounce the submission back to the user for more
+   * information. Sets the profile to `needs_info` (a PAUSED review, not a
+   * decision — approve/reject are untouched) and records an immutable audit
+   * entry carrying the operator's reason. The model never asks a user for KYC
+   * info — a human admin does, and it is audited (§3.1/§3.4).
+   */
+  async requestInfo(
+    userId: string,
+    reason: string,
+    adminId: string,
+  ): Promise<void> {
+    const before = await this.identity.loadUserWithKycAndDevices(userId);
+    await this.kyc.markKycNeedsInfo(userId, adminId);
+    await this.audit.record({
+      correlationId: randomUUID(),
+      actorAdminId: adminId,
+      subject: `User:${userId}`,
+      action: 'kyc_state_change',
+      before: before
+        ? { status: before.kycStatus, tier: before.kycTier }
+        : null,
+      after: { status: 'needs_info', reason },
+    });
+  }
+
   // ── private mappers ──────────────────────────────────────────────────────────
 
   private toQueueItem(u: KycQueueRecord): KycQueueItem {
