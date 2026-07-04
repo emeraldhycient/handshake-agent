@@ -175,7 +175,11 @@ export const envSchema = z
     ADMIN_MFA_ENC_KEY: z.string().optional().default(''),
     ADMIN_BOOTSTRAP_TOKEN: z.string().optional().default(''),
     // TTLs (seconds). Absolute admin session lifetime and step-up freshness window.
-    ADMIN_SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(28800),
+    ADMIN_SESSION_TTL_SECONDS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(28800),
     ADMIN_STEP_UP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
 
     // --- Swap provider (Blockradar crypto-to-crypto swaps) ---

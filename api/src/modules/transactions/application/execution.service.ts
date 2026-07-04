@@ -36,8 +36,6 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 
-import type { FiatCurrency } from '@handshake-agent/contracts';
-
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { PinService } from '../../../core/auth/pin.service';
@@ -413,7 +411,7 @@ export class ExecutionService {
     const freshQuote = await this.quotesService.quoteBuy({
       asset: storedQuote.asset as 'USDT' | 'BTC',
       fiatAmount: storedQuote.fiatAmount,
-      fiatCurrency: storedQuote.fiatCurrency as FiatCurrency,
+      fiatCurrency: storedQuote.fiatCurrency,
     });
 
     const storedRate = Number(storedQuote.fxRate);
@@ -788,7 +786,7 @@ export class ExecutionService {
     const freshQuote = await this.quotesService.quoteSell({
       asset: storedQuote.asset as 'USDT',
       cryptoAmount: storedQuote.cryptoAmount,
-      fiatCurrency: storedQuote.fiatCurrency as FiatCurrency,
+      fiatCurrency: storedQuote.fiatCurrency,
     });
 
     const storedRate = Number(storedQuote.fxRate);

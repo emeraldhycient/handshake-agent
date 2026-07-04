@@ -209,7 +209,7 @@ describe('Concurrent buy settlement — idempotency + advisory lock (Testcontain
       directiveRepo,
       config,
       clock,
-      config as never,
+      config,
     );
     const assetRegistry = new AssetRegistry(config);
     const walletService = new WalletService(

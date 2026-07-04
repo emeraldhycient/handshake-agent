@@ -337,7 +337,11 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
     // 1 send OUTSIDE the window (11 min ago) — excluded.
     await seedSend(userId, new Date(SEND_ASOF.getTime() - 11 * 60 * 1000));
     // 1 BUY inside the window — excluded (not a send).
-    await seedSend(userId, new Date(SEND_ASOF.getTime() - 1 * 60 * 1000), 'buy');
+    await seedSend(
+      userId,
+      new Date(SEND_ASOF.getTime() - 1 * 60 * 1000),
+      'buy',
+    );
 
     const count = await repo.getRecentSendCount(userId, SEND_ASOF, TEN_MIN_MS);
     expect(count).toBe(2);

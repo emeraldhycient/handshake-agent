@@ -18,7 +18,6 @@ import { Inject, Injectable } from '@nestjs/common';
 import type {
   BalanceLine,
   BalanceSnapshot,
-  FiatCurrency,
   SupportedAsset,
 } from '@handshake-agent/contracts';
 
@@ -124,7 +123,7 @@ export class BalanceService {
     try {
       const { baseRate, sellSpreadBps } = await this.rateProvider.getRate(
         asset as SupportedAsset,
-        fiatCurrency as FiatCurrency,
+        fiatCurrency,
       );
       if (!Number.isFinite(baseRate)) return undefined;
       return valueAtSellRate(amount, baseRate, sellSpreadBps);
@@ -134,7 +133,7 @@ export class BalanceService {
       try {
         const vRate = await this.rateProvider.getValuationRate(
           asset as SupportedAsset,
-          fiatCurrency as FiatCurrency,
+          fiatCurrency,
         );
         if (!Number.isFinite(vRate.baseRate)) return undefined;
         return valueAtSellRate(amount, vRate.baseRate, 0);

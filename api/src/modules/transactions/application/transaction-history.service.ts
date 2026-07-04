@@ -163,7 +163,7 @@ export class TransactionHistoryService {
     hasMore: boolean;
     nextCursor: string | null;
   }> {
-    const cfg = this.config.get<StatementConfig>('statement')!;
+    const cfg = this.config.get<StatementConfig>('statement');
     const types = TYPE_FILTER_MAP[input.txType] ?? ALL_MONEY_TYPES;
 
     const { rows, total, hasMore, nextCursor } =
@@ -232,7 +232,7 @@ export class TransactionHistoryService {
 
   /** Clamp a client-requested page size into [1, maxPageSize]; default when absent. */
   private resolvePageSize(requested?: number): number {
-    const cfg = this.config.get<StatementConfig>('statement')!;
+    const cfg = this.config.get<StatementConfig>('statement');
     const n = requested ?? cfg.defaultPageSize;
     return Math.min(Math.max(n, 1), cfg.maxPageSize);
   }

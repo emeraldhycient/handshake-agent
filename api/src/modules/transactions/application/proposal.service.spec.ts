@@ -746,11 +746,13 @@ describe('ProposalService per-(capability × asset × currency) fiat bounds', ()
   it('rejects a sell whose fiat PROCEEDS exceed maxFiat[sell][NGN] with AMOUNT_TOO_LARGE', async () => {
     // STUB_SELL_QUOTE.netFiatAmount = '7500' > 5000.
     const svc = makeSellSvc({
-      configService: pricingWith({ USDT: { maxFiat: { sell: { NGN: 5000 } } } }),
+      configService: pricingWith({
+        USDT: { maxFiat: { sell: { NGN: 5000 } } },
+      }),
     });
-    await expect(
-      svc.createSellProposal(BASE_SELL_INPUT),
-    ).rejects.toMatchObject({ code: 'AMOUNT_TOO_LARGE' });
+    await expect(svc.createSellProposal(BASE_SELL_INPUT)).rejects.toMatchObject(
+      { code: 'AMOUNT_TOO_LARGE' },
+    );
   });
 
   it('scopes bounds by CAPABILITY — a buy cap does not bound a sell', async () => {
@@ -758,7 +760,9 @@ describe('ProposalService per-(capability × asset × currency) fiat bounds', ()
     const svc = makeSellSvc({
       configService: pricingWith({ USDT: { maxFiat: { buy: { NGN: 100 } } } }),
     });
-    await expect(svc.createSellProposal(BASE_SELL_INPUT)).resolves.toBeDefined();
+    await expect(
+      svc.createSellProposal(BASE_SELL_INPUT),
+    ).resolves.toBeDefined();
   });
 });
 

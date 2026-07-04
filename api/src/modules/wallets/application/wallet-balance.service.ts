@@ -1,6 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type {
-  FiatCurrency,
   SupportedAsset,
   WalletBalancesResponse,
   DepositAddressResponse,
@@ -82,10 +81,7 @@ export class WalletBalanceService {
         //   3. Both throw → fiatValue: undefined (truly unpriced asset), never 500s.
         let fiatValue: string | undefined;
         try {
-          const rate = await this.rates.getRate(
-            symbol as SupportedAsset,
-            fiat as FiatCurrency,
-          );
+          const rate = await this.rates.getRate(symbol as SupportedAsset, fiat);
           fiatValue = valueAtSellRate(
             amount,
             rate.baseRate,
@@ -96,7 +92,7 @@ export class WalletBalanceService {
           try {
             const vRate = await this.rates.getValuationRate(
               symbol as SupportedAsset,
-              fiat as FiatCurrency,
+              fiat,
             );
             // Mid-market display (spread=0) for non-tradeable assets.
             fiatValue = valueAtSellRate(amount, vRate.baseRate, 0);
@@ -131,7 +127,7 @@ export class WalletBalanceService {
     const totalFiatValue = (totalMinor / 100).toFixed(2);
 
     return {
-      fiatCurrency: fiat as FiatCurrency,
+      fiatCurrency: fiat,
       fiatSymbol,
       totalFiatValue,
       assets,

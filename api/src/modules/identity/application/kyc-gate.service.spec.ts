@@ -814,7 +814,11 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn(), getRecentSendCount: jest.fn() },
+      {
+        getDailyUsage: jest.fn(),
+        getWeeklyUsage: jest.fn(),
+        getRecentSendCount: jest.fn(),
+      },
       stubConfig,
       stubClock,
     );
@@ -828,7 +832,11 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn(), getRecentSendCount: jest.fn() },
+      {
+        getDailyUsage: jest.fn(),
+        getWeeklyUsage: jest.fn(),
+        getRecentSendCount: jest.fn(),
+      },
       stubConfig,
       stubClock,
     );
@@ -839,7 +847,11 @@ describe('KycGateService.getOriginatorName', () => {
     const identityRepo = makeIdentityRepo(defaultUser, null);
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn(), getRecentSendCount: jest.fn() },
+      {
+        getDailyUsage: jest.fn(),
+        getWeeklyUsage: jest.fn(),
+        getRecentSendCount: jest.fn(),
+      },
       stubConfig,
       stubClock,
     );
@@ -853,7 +865,11 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn(), getRecentSendCount: jest.fn() },
+      {
+        getDailyUsage: jest.fn(),
+        getWeeklyUsage: jest.fn(),
+        getRecentSendCount: jest.fn(),
+      },
       stubConfig,
       stubClock,
     );
@@ -867,7 +883,11 @@ describe('KycGateService.getOriginatorName', () => {
     });
     const svc = new KycGateService(
       identityRepo,
-      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn(), getRecentSendCount: jest.fn() },
+      {
+        getDailyUsage: jest.fn(),
+        getWeeklyUsage: jest.fn(),
+        getRecentSendCount: jest.fn(),
+      },
       stubConfig,
       stubClock,
     );
@@ -890,7 +910,11 @@ describe('KycGateService.getOriginatorIdentity', () => {
   ): KycGateService {
     return new KycGateService(
       makeIdentityRepo(defaultUser, null, originator),
-      { getDailyUsage: jest.fn(), getWeeklyUsage: jest.fn(), getRecentSendCount: jest.fn() },
+      {
+        getDailyUsage: jest.fn(),
+        getWeeklyUsage: jest.fn(),
+        getRecentSendCount: jest.fn(),
+      },
       stubConfig,
       stubClock,
     );

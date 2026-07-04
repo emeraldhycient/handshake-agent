@@ -74,12 +74,16 @@ describe('resolveFiatMin (per capability × currency, enforce-when-present)', ()
 
   it('is keyed by BOTH capability and currency — a mismatch is null (unbounded)', () => {
     expect(resolveFiatMin(bounds, 'buy', 'GHS')).toBeNull();
-    expect(resolveFiatMin({ minFiat: { buy: { NGN: 100 } } }, 'sell', 'NGN')).toBeNull();
+    expect(
+      resolveFiatMin({ minFiat: { buy: { NGN: 100 } } }, 'sell', 'NGN'),
+    ).toBeNull();
   });
 });
 
 describe('resolveFiatMax (per capability × currency, enforce-when-present)', () => {
-  const bounds = { maxFiat: { buy: { NGN: 5_000_000 }, sell: { NGN: 4_000_000 } } };
+  const bounds = {
+    maxFiat: { buy: { NGN: 5_000_000 }, sell: { NGN: 4_000_000 } },
+  };
 
   it('returns null when unset (no cap = unbounded)', () => {
     expect(resolveFiatMax(undefined, 'buy', 'NGN')).toBeNull();
