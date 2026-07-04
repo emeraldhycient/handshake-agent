@@ -153,10 +153,12 @@ baseRate/fxRate and asserting exact fee/spread/profit; unit for the pure per-tx 
   - `242b8d8` — FE `MoneyTrendCard` (GMV/Revenue/Profit toggle + currency selector +
     peak-day caption) on /metrics; pure `moneySeriesPoints` helper. web-admin vitest 416.
     Live-verified (Profit peak ₦1,477.83; toggle GMV → ₦60,000.00).
+  - `b3cffb4` — per-area CSV export: reusable `ExportCsvButton` + RFC-4180 `toCsv`/
+    `downloadCsv` (lib/csv), wired to the money-series card + the txn-volume table.
+    web-admin vitest 422. Live-verified (both buttons emit correct-named CSV blobs).
 - **Remaining gaps:** user growth rate, churn rate, failed-jobs KPI, jobs-enqueued/queue-depth
   (queue-depth needs the spun-off webhook queue), per-service / per-currency / per-tier
-  filters, custom date range, **exportable per-area (selectable)** — CSV export is the
-  self-contained next slice. **Effort: M remaining. Priority: HIGH (explicitly emphasized).**
+  filters, custom date range. **Effort: M remaining. Priority: HIGH (explicitly emphasized).**
 - **Accept:** each requested metric present with a graph; filters work; operator exports a
   chosen subset.
 
