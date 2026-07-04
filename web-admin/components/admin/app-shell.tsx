@@ -72,6 +72,7 @@ import {
   TriangleAlert,
   Users,
   Vault,
+  Webhook,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
@@ -299,6 +300,12 @@ const NAV_GROUPS: readonly NavGroup[] = [
         badge: "approvals",
       },
       { href: "/ops", label: "System / ops", icon: Server, menu: "menu.audit" },
+      {
+        href: "/webhooks",
+        label: "Webhooks",
+        icon: Webhook,
+        menu: "menu.webhooks",
+      },
       {
         href: "/admin-settings",
         label: "Admin settings",

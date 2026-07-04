@@ -97,55 +97,60 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-background">
-      {tab === "chat" && (
-        <>
-          <ChatHeader />
-          <ChatThread
-            messages={state.threads.m}
-            typing={state.typing.m}
-            density="mobile"
-            onConfirm={handleConfirm}
-            onSelectTicket={handleSelectTicket}
-            onResolveBeneficiary={(id, messageId) =>
-              void state.resolveBeneficiary("m", id, messageId)
-            }
-          />
-          <ChatComposer
-            chips={state.chips.m}
-            value={state.input.m}
-            onChange={(v) => state.setInput("m", v)}
-            onSubmit={() => {
-              if (authStatus === "authenticated") {
-                void state.sendToAgent("m", state.input.m)
-              } else {
-                state.send("m", state.input.m)
+      <main
+        id="main-content"
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      >
+        {tab === "chat" && (
+          <>
+            <ChatHeader />
+            <ChatThread
+              messages={state.threads.m}
+              typing={state.typing.m}
+              density="mobile"
+              onConfirm={handleConfirm}
+              onSelectTicket={handleSelectTicket}
+              onResolveBeneficiary={(id, messageId) =>
+                void state.resolveBeneficiary("m", id, messageId)
               }
-              state.setInput("m", "")
-            }}
-            onChip={(a) => {
-              const label = chipLabel(a)
-              if (authStatus === "authenticated") {
-                void state.sendToAgent("m", label)
-              } else {
-                state.send("m", label, a)
-              }
-            }}
-            density="mobile"
-            recording={recorder.status === "recording"}
-            recordSeconds={recorder.seconds}
-            canRecord={recorder.status !== "unsupported"}
-            onRecordStart={() => void recorder.start()}
-            onRecordStop={async () => {
-              const blob = await recorder.stop()
-              if (blob) void state.sendVoiceToAgent("m", blob)
-            }}
-            onRecordCancel={() => recorder.cancel()}
-          />
-        </>
-      )}
+            />
+            <ChatComposer
+              chips={state.chips.m}
+              value={state.input.m}
+              onChange={(v) => state.setInput("m", v)}
+              onSubmit={() => {
+                if (authStatus === "authenticated") {
+                  void state.sendToAgent("m", state.input.m)
+                } else {
+                  state.send("m", state.input.m)
+                }
+                state.setInput("m", "")
+              }}
+              onChip={(a) => {
+                const label = chipLabel(a)
+                if (authStatus === "authenticated") {
+                  void state.sendToAgent("m", label)
+                } else {
+                  state.send("m", label, a)
+                }
+              }}
+              density="mobile"
+              recording={recorder.status === "recording"}
+              recordSeconds={recorder.seconds}
+              canRecord={recorder.status !== "unsupported"}
+              onRecordStart={() => void recorder.start()}
+              onRecordStop={async () => {
+                const blob = await recorder.stop()
+                if (blob) void state.sendVoiceToAgent("m", blob)
+              }}
+              onRecordCancel={() => recorder.cancel()}
+            />
+          </>
+        )}
 
-      {tab === "wallet" && <WalletTab onQuickAction={handleQuickAction} />}
-      {tab === "activity" && <ActivityTab />}
+        {tab === "wallet" && <WalletTab onQuickAction={handleQuickAction} />}
+        {tab === "activity" && <ActivityTab />}
+      </main>
 
       <MobileTabbar active={tab} onSelect={setTab} />
 

@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useNotifications, useSearchCatalog } from "@/lib/query/hooks"
 import { useMe } from "@/lib/query/auth"
 import { useAuthStore } from "@/lib/store/auth-store"
+import { InstallButton } from "@/components/pwa/install-button"
 import type { DashboardTopbarProps } from "@/types/components"
 import type { SearchResult } from "@/lib/schemas"
 
@@ -241,6 +242,9 @@ export function DashboardTopbar({
           </div>
         )}
       </div>
+
+      {/* ── Install app (PWA) — hides itself once installed ───────────────── */}
+      <InstallButton />
 
       {/* ── Notifications bell ────────────────────────────────────────────── */}
       <div className="relative">

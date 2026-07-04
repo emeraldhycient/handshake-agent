@@ -60,6 +60,7 @@ import type {
   IWhatsAppSender,
   SendFlowInput,
 } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
+import { drainWebhooks } from './helpers/drain-webhooks';
 
 jest.setTimeout(180_000);
 
@@ -519,6 +520,7 @@ describe('Buy vertical — capstone acceptance e2e (AppModule, Testcontainers Po
       .set('Content-Type', 'application/json')
       .set('X-Hub-Signature-256', signature)
       .send(inboundPayload);
+    await drainWebhooks(app);
 
     expect(webhookRes.status).toBe(200);
     expect(webhookRes.body).toEqual({ status: 'received' });
@@ -637,6 +639,7 @@ describe('Buy vertical — capstone acceptance e2e (AppModule, Testcontainers Po
       .post('/webhooks/flutterwave')
       .set('verif-hash', FLUTTERWAVE_WEBHOOK_SECRET)
       .send(flwBody);
+    await drainWebhooks(app);
 
     expect(flwRes.status).toBe(200);
     expect(flwRes.body).toEqual({ status: 'ok' });
@@ -701,6 +704,7 @@ describe('Buy vertical — capstone acceptance e2e (AppModule, Testcontainers Po
       .post('/webhooks/flutterwave')
       .set('verif-hash', FLUTTERWAVE_WEBHOOK_SECRET)
       .send(flwBody);
+    await drainWebhooks(app);
 
     expect(flwRes2.status).toBe(200);
     expect(flwRes2.body).toEqual({ status: 'ok' });

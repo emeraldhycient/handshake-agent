@@ -63,6 +63,7 @@ import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/
 import type { ITranscriptionPort } from '../src/modules/media/application/ports/transcription.port';
 import type { IWhatsAppMediaClient } from '../src/modules/whatsapp/application/ports/whatsapp-media.port';
 import type { IDocumentExtractionPort } from '../src/modules/media/application/ports/document-extraction.port';
+import { drainWebhooks } from './helpers/drain-webhooks';
 
 jest.setTimeout(180_000);
 
@@ -441,6 +442,7 @@ describe('WhatsApp voice note — e2e (AppModule, Testcontainers Postgres)', () 
       .set('Content-Type', 'application/json')
       .set('X-Hub-Signature-256', signature)
       .send(audioPayload);
+    await drainWebhooks(app);
 
     expect(webhookRes.status).toBe(200);
     expect(webhookRes.body).toEqual({ status: 'received' });
@@ -525,6 +527,7 @@ describe('WhatsApp voice note — e2e (AppModule, Testcontainers Postgres)', () 
       .set('X-Hub-Signature-256', signature)
       .send(audioPayload)
       .expect(200);
+    await drainWebhooks(app);
 
     // Second call — same external message id → handled 200 again.
     await supertest(app.getHttpServer())
@@ -533,6 +536,7 @@ describe('WhatsApp voice note — e2e (AppModule, Testcontainers Postgres)', () 
       .set('X-Hub-Signature-256', signature)
       .send(audioPayload)
       .expect(200);
+    await drainWebhooks(app);
 
     // The dedup guard fires inside handleInbound (after the audio download),
     // so the download is called once per webhook delivery but only one

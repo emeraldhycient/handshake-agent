@@ -22,6 +22,10 @@ export interface AdminUserRecord {
   roleName: string;
   createdAt: Date;
   lastLoginAt: Date | null;
+  /** Consecutive failed-login count; reset to 0 on any fully successful login. */
+  failedLoginCount: number;
+  /** When set and in the future, login is refused (account-lockout, §3.3). */
+  loginLockedUntil: Date | null;
 }
 
 export interface CreateInvitedAdminInput {
@@ -91,4 +95,24 @@ export interface IAdminUserRepository {
     matches: (codeHash: string) => boolean,
   ): Promise<boolean>;
   recordLogin(id: string, at: Date): Promise<void>;
+  /**
+   * Registers a failed-login attempt in ONE atomic SQL statement that, evaluated
+   * against the row's current `loginLockedUntil`: starts a fresh window
+   * (`failedLoginCount = 1`, clear lock) when a prior lock has EXPIRED; increments
+   * otherwise; leaves the count untouched while a lock is still ACTIVE. Folding the
+   * expired-window reset INTO the increment (rather than a separate reset-then-
+   * increment) is what keeps the credential-stuffing lockout from being bypassed
+   * by a concurrent burst on a just-expired lock (TOCTOU guard, §3.3 — mirrors
+   * PinService.registerFailedAttempt). Called BEFORE the argon2 verify so at most
+   * `maxAttempts` concurrent callers reach the expensive comparison. `now` comes
+   * from the caller so lockout timing stays deterministic/testable.
+   */
+  registerFailedLogin(
+    id: string,
+    now: Date,
+  ): Promise<{ count: number; lockedUntil: Date | null }>;
+  /** Lock the account until `until` (set when the failure count crosses the cap). */
+  setLoginLock(id: string, until: Date): Promise<void>;
+  /** Clear the failure counter + lock (on a fully successful login). */
+  resetLoginFailures(id: string): Promise<void>;
 }

@@ -77,6 +77,8 @@ function makeUserRepo(): {
         roleName: 'super_admin',
         createdAt: new Date(),
         lastLoginAt: null,
+        failedLoginCount: 0,
+        loginLockedUntil: null,
       });
     },
   } as unknown as IAdminUserRepository;

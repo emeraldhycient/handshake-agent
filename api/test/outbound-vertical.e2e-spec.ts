@@ -64,6 +64,7 @@ import type {
   IWhatsAppSender,
   SendFlowInput,
 } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
+import { drainWebhooks } from './helpers/drain-webhooks';
 
 jest.setTimeout(180_000);
 
@@ -643,6 +644,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
       .set('Content-Type', 'application/json')
       .set('X-Hub-Signature-256', signature)
       .send(inboundPayload);
+    await drainWebhooks(app);
 
     expect(webhookRes.status).toBe(200);
     expect(webhookRes.body).toEqual({ status: 'received' });
@@ -772,6 +774,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
       .set('Content-Type', 'application/json')
       .set('verif-hash', FLUTTERWAVE_WEBHOOK_SECRET)
       .send(flwWebhookBody);
+    await drainWebhooks(app);
 
     expect(flwWebhookRes.status).toBe(200);
     expect(flwWebhookRes.body).toEqual({ status: 'ok' });
@@ -879,6 +882,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
       .set('Content-Type', 'application/json')
       .set('X-Hub-Signature-256', signature)
       .send(inboundPayload);
+    await drainWebhooks(app);
 
     expect(webhookRes.status).toBe(200);
     expect(webhookRes.body).toEqual({ status: 'received' });
@@ -1031,6 +1035,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
       .set('Content-Type', 'application/json')
       .set('x-blockradar-signature', blockradarSig)
       .send(blockradarWebhookBody);
+    await drainWebhooks(app);
 
     expect(blockradarWebhookRes.status).toBe(200);
     expect(blockradarWebhookRes.body).toEqual({ status: 'ok' });

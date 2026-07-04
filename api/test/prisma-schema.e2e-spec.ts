@@ -66,28 +66,21 @@ describe('Prisma schema (integration, Testcontainers Postgres)', () => {
       `SELECT count(*)::bigint AS tables FROM information_schema.tables
        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
     );
-    // 51 domain tables + Prisma's _prisma_migrations bookkeeping table.
-    // +1 for backfill_runs (BQ-2).
-    // +1 for auth_challenges (web-auth-vertical, Task 3).
-    // +6 from the platform-hardening branch (custom_fiats + velocity/tier-change
-    //    counters etc.). NOTE: this reflects the PRE-SYNC branch state; re-bump
-    //    after merging main (the webhook-queue track adds webhook_events). The
-    //    fiat_currency enum-widen (go-readiness #8) adds VALUES, not a table.
-    expect(Number(tables)).toBe(59);
+    // Every domain table + Prisma's _prisma_migrations bookkeeping table. Post-sync
+    // = the union of the platform-hardening migrations and main's webhook_events
+    // (Track A durable-webhook queue). The fiat_currency enum-widen (go-readiness #8)
+    // adds VALUES, not a table, so it does not affect this count.
+    expect(Number(tables)).toBe(60);
 
     const [{ enums }] = await prisma.$queryRawUnsafe<{ enums: bigint }[]>(
       `SELECT count(DISTINCT t.typname)::bigint AS enums
        FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid`,
     );
-    // +1 for backfill_run_status (BQ-2).
-    // +1 for auth_challenge_type (web-auth-vertical, Task 3).
-    // -1: the supported_asset enum was dropped when asset columns moved to TEXT
-    //     for the dynamic (Blockradar-sourced) catalog — assets are no longer a
-    //     fixed enum (migration 20260629200000_asset_columns_text_dynamic_catalog).
-    // +4 from the platform-hardening branch's earlier enum-typed work (pre-sync).
-    //    The fiat_currency widen (go-readiness #8) adds VALUES to an existing enum
-    //    TYPE, so it does NOT change this DISTINCT-type count. Re-bump after sync.
-    expect(Number(enums)).toBe(76);
+    // Every native enum TYPE the schema declares. supported_asset was dropped when
+    // asset columns moved to TEXT (migration 20260629200000). +2 for webhook_provider
+    // + webhook_event_status (Track A). The fiat_currency widen adds VALUES to an
+    // existing TYPE, so this DISTINCT-type count is unaffected.
+    expect(Number(enums)).toBe(78);
   });
 
   it('generates time-sortable uuid v7 ids on the client (the only sanctioned DB door)', async () => {

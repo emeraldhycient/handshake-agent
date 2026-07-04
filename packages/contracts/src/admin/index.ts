@@ -38,3 +38,4 @@ export * from "./approvals.dto";
 export * from "./phase9.dto";
 export * from "./currency.dto";
 export * from "./admin-search.dto";
+export * from "./webhooks.dto";

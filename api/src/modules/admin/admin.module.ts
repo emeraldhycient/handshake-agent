@@ -46,6 +46,7 @@ import { AdminTransactionsController } from './presentation/admin-transactions.c
 import { AdminTxnTriageController } from './presentation/admin-txn-triage.controller';
 import { AdminLedgerController } from './presentation/admin-ledger.controller';
 import { AdminComplianceController } from './presentation/admin-compliance.controller';
+import { AdminWebhooksController } from './presentation/admin-webhooks.controller';
 import { AdminTreasuryController } from './presentation/admin-treasury.controller';
 import { AdminBeneficiariesController } from './presentation/admin-beneficiaries.controller';
 import { AdminNotificationsController } from './presentation/admin-notifications.controller';
@@ -113,6 +114,9 @@ import { AdminSearchController } from './presentation/admin-search.controller';
 import { AdminTxnTriageService } from './application/admin-txn-triage.service';
 import { AdminLedgerService } from './application/admin-ledger.service';
 import { AdminComplianceService } from './application/admin-compliance.service';
+import { AdminWebhooksService } from './application/admin-webhooks.service';
+import { WebhooksModule } from '../webhooks/webhooks.module';
+import { WEBHOOK_QUEUE_NAME } from '../webhooks/infrastructure/webhook-queue.constants';
 import { AdminTreasuryService } from './application/admin-treasury.service';
 import { AdminBeneficiaryService } from './application/admin-beneficiary.service';
 import { AdminNotificationTemplateService } from './application/admin-notification-template.service';
@@ -232,6 +236,10 @@ import type { Env } from '../../core/config/env.schema';
     // EffectiveConfigService is global (agent.modelId / agent.enabled). The ticket
     // read repo is bound locally below (no tickets module exists yet).
     ConversationsModule,
+    // Track A (Webhooks console): WebhooksModule exports WEBHOOK_EVENT_REPOSITORY,
+    // WEBHOOK_DISPATCH (for AdminWebhooksService list/detail/retry) and
+    // WebhookMetricsService (for the queue-depth reads). AuditService is global.
+    WebhooksModule,
     // AdminTokenService injects JwtService for admin session-token sign/verify.
     JwtModule.register({}),
     // Phase 7 (Providers "Test connection"): the HttpService used by the liveness
@@ -242,6 +250,9 @@ import type { Env } from '../../core/config/env.schema';
     // JobsModule (imported at AppModule level); this registerQueue call adds the
     // Queue instance to AdminModule's DI scope without duplicating the connection.
     BullModule.registerQueue({ name: WALLET_BACKFILL_QUEUE_NAME }),
+    // Track A: register the webhook-processing queue in AdminModule's DI scope so
+    // BullBoardModule.forFeature can resolve it for the dashboard.
+    BullModule.registerQueue({ name: WEBHOOK_QUEUE_NAME }),
     // Bull Board root: ExpressAdapter + fail-closed Basic-auth middleware.
     BullBoardModule.forRoot({
       route: '/admin/queues',
@@ -255,6 +266,11 @@ import type { Env } from '../../core/config/env.schema';
     }),
     BullBoardModule.forFeature({
       name: WALLET_BACKFILL_QUEUE_NAME,
+      adapter: BullMQAdapter,
+    }),
+    // Track A: surface the durable-webhook queue in the Bull Board dashboard too.
+    BullBoardModule.forFeature({
+      name: WEBHOOK_QUEUE_NAME,
       adapter: BullMQAdapter,
     }),
   ],
@@ -273,6 +289,7 @@ import type { Env } from '../../core/config/env.schema';
     AdminTxnTriageController,
     AdminLedgerController,
     AdminComplianceController,
+    AdminWebhooksController,
     AdminTreasuryController,
     AdminBeneficiariesController,
     AdminNotificationsController,
@@ -387,6 +404,7 @@ import type { Env } from '../../core/config/env.schema';
     // compliance repository ports come from the imported ComplianceModule;
     // AuditService is global. Never moves money (§3.1).
     AdminComplianceService,
+    AdminWebhooksService,
     // Phase 3, sub-area D (READ-ONLY oversight + one step-up write each):
     //   - AdminTreasuryService: aggregated balances, exposure snapshots, alerts
     //     (acknowledge = the write), withdrawal policies. Reaches data via the

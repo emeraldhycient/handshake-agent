@@ -6,6 +6,7 @@
 
 export type AdminErrorCode =
   | 'ADMIN_INVALID_CREDENTIALS'
+  | 'ADMIN_ACCOUNT_LOCKED'
   | 'ADMIN_MFA_REQUIRED'
   | 'ADMIN_MFA_INVALID'
   | 'ADMIN_INACTIVE'
@@ -37,6 +38,20 @@ export class AdminInvalidCredentialsError extends AdminError {
   readonly code = 'ADMIN_INVALID_CREDENTIALS' as const;
   constructor() {
     super('Invalid admin credentials.');
+  }
+}
+
+/**
+ * The account is temporarily locked after too many consecutive failed logins
+ * (credential-stuffing / password-spray guard, §3.3). The per-account counter is
+ * incremented atomically before the password verify so a concurrent burst is
+ * capped at maxAttempts. Maps to HTTP 429 (Too Many Requests) — mirrors the
+ * end-user OTP/PIN lockout semantics; the operator retries after the window.
+ */
+export class AdminAccountLockedError extends AdminError {
+  readonly code = 'ADMIN_ACCOUNT_LOCKED' as const;
+  constructor() {
+    super('This admin account is temporarily locked. Please try again later.');
   }
 }
 

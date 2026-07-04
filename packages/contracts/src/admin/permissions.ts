@@ -1033,6 +1033,39 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Run a provider liveness probe (no secret exposure; moves no money)",
   ),
 
+  // Webhooks — durable inbound-webhook console (Track A, go-readiness). List +
+  // detail are reads; retry RE-ENQUEUES the webhook for the worker (execute) —
+  // engine-brokered, never a raw money movement (§3.1). Grouped under Ops (the
+  // operational-run surfaces); `ops` already has Ops:[read, execute].
+  r(
+    "api_route",
+    "GET /admin/webhooks",
+    "read",
+    "Ops",
+    "List recorded inbound webhooks",
+  ),
+  r(
+    "api_route",
+    "GET /admin/webhooks/metrics",
+    "read",
+    "Ops",
+    "Read webhook queue-depth + failed/dead counts",
+  ),
+  r(
+    "api_route",
+    "GET /admin/webhooks/:id",
+    "read",
+    "Ops",
+    "View a recorded webhook (payload / headers / attempts / error)",
+  ),
+  r(
+    "api_route",
+    "POST /admin/webhooks/:id/retry",
+    "execute",
+    "Ops",
+    "Re-enqueue a webhook for processing (engine-brokered; moves no money)",
+  ),
+
   // Web pages (nav/page gating — UX only; the API still enforces api_route perms)
   r(
     "web_page",
@@ -1158,6 +1191,8 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   r("menu_item", "menu.agent", "read", "Agent", "Agent nav group"),
   r("menu_item", "menu.metrics", "read", "Metrics", "Metrics nav group"),
   r("menu_item", "menu.approvals", "read", "Approvals", "Approvals nav group"),
+  r("web_page", "/admin/webhooks", "read", "Ops", "Webhooks console page"),
+  r("menu_item", "menu.webhooks", "read", "Ops", "Webhooks nav group"),
 ];
 
 // ── Built-in roles ─────────────────────────────────────────────────────────────

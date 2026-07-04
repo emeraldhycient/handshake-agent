@@ -41,14 +41,14 @@ import { IdentityService } from '../src/modules/identity/application/identity.se
 import { AssetRegistry } from '../src/core/catalog/asset-registry';
 
 // Controller under test
-import { BlockradarWebhookController } from '../src/modules/wallets/presentation/blockradar-webhook.controller';
+import { BlockradarWebhookHandler } from '../src/modules/wallets/application/blockradar-webhook.handler';
+import type { WebhookEventRecord } from '../src/modules/webhooks/application/ports/webhook-event.repository.port';
 
 // Ports/types
 import type { PrismaService } from '../src/core/prisma/prisma.service';
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 
 // Crypto (signature generation)
-import { hmacHex } from '../src/core/crypto/hmac';
 
 // Config defaults
 import configuration from '../src/core/config/configuration';
@@ -132,13 +132,23 @@ function buildDepositBody(txHash: string, amount: string) {
   };
 }
 
-function signBody(body: Record<string, unknown>): {
-  rawBody: Buffer;
-  sig: string;
-} {
-  const rawBody = Buffer.from(JSON.stringify(body), 'utf8');
-  const sig = hmacHex('sha512', BLOCKRADAR_API_KEY, rawBody);
-  return { rawBody, sig };
+/** Wrap a webhook body in a persisted WebhookEvent record (what the worker sees). */
+function makeEvent(body: Record<string, unknown>): WebhookEventRecord {
+  return {
+    id: `wh-${randomUUID()}`,
+    provider: 'blockradar',
+    providerEventId: `evt-${randomUUID()}`,
+    payload: body,
+    headers: {},
+    signature: null,
+    status: 'processing',
+    attempts: 1,
+    lastError: null,
+    receivedAt: new Date(),
+    lastAttemptAt: new Date(),
+    processedAt: null,
+    deadAt: null,
+  };
 }
 
 // Decimal-safe scaled comparison (18 decimal places).
@@ -161,7 +171,7 @@ function toScaled(s: string): bigint {
 describe('Concurrent deposit settlement — advisory lock prevents P2002', () => {
   let prisma: PrismaClient;
   let stop: () => Promise<void>;
-  let controller: BlockradarWebhookController;
+  let handler: BlockradarWebhookHandler;
 
   let userId: string;
   let walletId: string;
@@ -186,8 +196,7 @@ describe('Concurrent deposit settlement — advisory lock prevents P2002', () =>
       settleSendOnChain: jest.fn().mockResolvedValue({ status: 'pending' }),
     };
 
-    controller = new BlockradarWebhookController(
-      config,
+    handler = new BlockradarWebhookHandler(
       walletRepo,
       settlementRepo,
       identityService,
@@ -244,18 +253,12 @@ describe('Concurrent deposit settlement — advisory lock prevents P2002', () =>
 
     const body1 = buildDepositBody(txHash1, amount1);
     const body2 = buildDepositBody(txHash2, amount2);
-    const { rawBody: raw1, sig: sig1 } = signBody(body1);
-    const { rawBody: raw2, sig: sig2 } = signBody(body2);
 
     // Fire both concurrently — this is the race that produced P2002 before the fix.
-    const [result1, result2] = await Promise.all([
-      controller.handleWebhook(body1, raw1, sig1),
-      controller.handleWebhook(body2, raw2, sig2),
+    await Promise.all([
+      handler.handle(makeEvent(body1)),
+      handler.handle(makeEvent(body2)),
     ]);
-
-    // Both must succeed.
-    expect(result1).toEqual({ status: 'ok' });
-    expect(result2).toEqual({ status: 'ok' });
 
     // ── Two DepositConfirmation rows (one per txHash) ─────────────────────────
     const conf1 = await prisma.depositConfirmation.findUnique({
@@ -344,8 +347,7 @@ describe('Concurrent deposit settlement — advisory lock prevents P2002', () =>
     const fakeExec = {
       settleSendOnChain: jest.fn().mockResolvedValue({ status: 'pending' }),
     };
-    const stressController = new BlockradarWebhookController(
-      config,
+    const stressHandler = new BlockradarWebhookHandler(
       walletRepo,
       settlementRepo,
       identityService,
@@ -373,20 +375,13 @@ describe('Concurrent deposit settlement — advisory lock prevents P2002', () =>
           id: `webhook-stress-${i}`,
         },
       };
-      return { body, ...signBody(body) };
+      return { body };
     });
 
     // Fire all five concurrently.
-    const results = await Promise.all(
-      bodies.map(({ body, rawBody, sig }) =>
-        stressController.handleWebhook(body, rawBody, sig),
-      ),
+    await Promise.all(
+      bodies.map(({ body }) => stressHandler.handle(makeEvent(body))),
     );
-
-    // All must succeed.
-    for (const result of results) {
-      expect(result).toEqual({ status: 'ok' });
-    }
 
     // All five deposits must be confirmed.
     for (const hash of hashes) {
