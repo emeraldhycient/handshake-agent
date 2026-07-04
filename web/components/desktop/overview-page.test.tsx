@@ -41,6 +41,19 @@ describe("OverviewPage", () => {
     expect(screen.getByText(/Bought USDT/i)).toBeInTheDocument()
   })
 
+  // ── Regression: the recent-activity card must not be height-capped ──────────
+  // A `flex-1` card inside the page's `overflow-y-auto` scroll container sizes
+  // itself to the leftover viewport height, and its `overflow-hidden` then CLIPS
+  // any rows past that height with no way to scroll them (the reported bug).
+  // The card must instead grow with its content so the page's own scroll reveals
+  // every transaction — matching the Activity page's list cards.
+  it("does not height-cap the recent activity list (rows must not be clipped)", async () => {
+    render(<OverviewPage onQuickAction={() => {}} />, { wrapper })
+    const heading = await screen.findByText(/Recent activity/i)
+    const card = heading.parentElement
+    expect(card?.className ?? "").not.toMatch(/\bflex-1\b/)
+  })
+
   it("fires onQuickAction when a hero action button is clicked", async () => {
     const onQuickAction = vi.fn()
     const user = userEvent.setup()
