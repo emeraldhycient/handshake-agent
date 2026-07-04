@@ -48,6 +48,7 @@ import {
   Flag,
   Gauge,
   LayoutGrid,
+  LineChart,
   List,
   LogOut,
   Mail,
@@ -115,7 +116,15 @@ interface NavGroup {
 const NAV_GROUPS: readonly NavGroup[] = [
   {
     label: "Overview",
-    items: [{ href: "/", label: "Dashboard", icon: LayoutGrid, menu: null }],
+    items: [
+      { href: "/", label: "Dashboard", icon: LayoutGrid, menu: null },
+      {
+        href: "/metrics",
+        label: "Metrics & analytics",
+        icon: LineChart,
+        menu: "menu.metrics",
+      },
+    ],
   },
   {
     label: "Customers",
