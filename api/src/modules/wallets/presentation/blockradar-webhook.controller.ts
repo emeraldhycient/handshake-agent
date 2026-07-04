@@ -36,6 +36,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
 
 import { hmacHex } from '../../../core/crypto/hmac';
@@ -90,7 +91,12 @@ interface BlockradarWebhookBody {
 // Controller
 // ---------------------------------------------------------------------------
 
+// Provider machine-to-machine callback: authenticated by HMAC signature, not by
+// IP. Exempt from the global IP-keyed throttler so a legitimate deposit/settlement
+// burst from Blockradar's egress IP is never 429'd (funds-safety — settlement must
+// not be dropped). Forged calls are still rejected fast by verifySignature (401).
 @Controller('webhooks')
+@SkipThrottle()
 export class BlockradarWebhookController {
   private readonly logger = new Logger(BlockradarWebhookController.name);
   private readonly apiKey: string;

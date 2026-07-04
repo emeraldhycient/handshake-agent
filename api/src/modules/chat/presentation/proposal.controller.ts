@@ -32,6 +32,7 @@ import {
   ForbiddenException,
   BadGatewayException,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 
 import type {
   AuthorizeProposalResponse,
@@ -173,6 +174,12 @@ export class ProposalController {
   // POST /chat/proposals/:proposalId/execute
   // ---------------------------------------------------------------------------
 
+  // M1: strict per-window rate limit on the money-movement route. This is where
+  // the PIN is verified, so brute-force must be tightly bounded — 10/min is safe
+  // for legitimate retries (re-quote, wrong-PIN correction) but blunts scripted
+  // guessing, on top of the app-wide ThrottlerGuard. Overrides the 'default'
+  // named throttler's 60/min for this route only.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post(':proposalId/execute')
   async execute(
     @Param('proposalId') proposalId: string,

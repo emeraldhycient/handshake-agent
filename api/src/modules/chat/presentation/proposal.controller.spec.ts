@@ -902,3 +902,28 @@ describe('TransactionStatusController', () => {
     expect(result.counterparty).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// M1 — the money-movement execute route carries a strict per-window throttle.
+// This is the PIN-verification route, so brute-force must be tightly bounded
+// even though a global ThrottlerGuard already covers every endpoint.
+// ---------------------------------------------------------------------------
+
+describe('ProposalController.execute throttle (M1)', () => {
+  it('has a strict @Throttle on the execute method (default throttler, <= 10/min)', () => {
+    const handler = ProposalController.prototype.execute;
+
+    // @Throttle emits metadata keyed `THROTTLER:LIMIT<name>` / `THROTTLER:TTL<name>`.
+    const limit = Reflect.getMetadata(
+      'THROTTLER:LIMITdefault',
+      handler,
+    ) as number;
+    const ttl = Reflect.getMetadata('THROTTLER:TTLdefault', handler) as number;
+
+    expect(limit).toBeDefined();
+    // Tight enough to blunt brute-force, loose enough for legitimate retries.
+    expect(limit).toBeLessThanOrEqual(10);
+    expect(limit).toBeGreaterThan(0);
+    expect(ttl).toBe(60_000);
+  });
+});
