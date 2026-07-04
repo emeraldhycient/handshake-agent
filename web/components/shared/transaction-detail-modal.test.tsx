@@ -316,6 +316,14 @@ describe("TransactionDetailModal", () => {
     await user.click(copyIdBtn)
     expect(writeText).toHaveBeenCalledWith(depositDetail.id)
 
+    // The displayed (truncated) id is excluded from translation, like the
+    // tx hash and counterparty rows — it's a reference identifier, not
+    // translatable prose.
+    expect(screen.getByText("aaaaaaaa…aaaaaaaa")).toHaveAttribute(
+      "translate",
+      "no"
+    )
+
     // Provider reference, copyable.
     expect(screen.getByText("Provider reference")).toBeInTheDocument()
     expect(screen.getByText("FLW-REF-999")).toBeInTheDocument()

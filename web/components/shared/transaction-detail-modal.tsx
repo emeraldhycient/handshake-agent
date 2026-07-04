@@ -325,7 +325,9 @@ export function TransactionDetailModal({
                 <DetailRow
                   label="Transaction ID"
                   value={
-                    <span className="font-mono">{shortHash(data.id)}</span>
+                    <span className="font-mono" translate="no">
+                      {shortHash(data.id)}
+                    </span>
                   }
                   copyValue={data.id}
                 />
