@@ -465,3 +465,7 @@ export interface TranslationContextValue {
   setLanguage: (code: string) => void
   resetLanguage: () => void
 }
+
+export interface LanguageSelectorProps {
+  className?: string
+}
