@@ -5,7 +5,7 @@ import { Injectable } from '@nestjs/common';
 import type { AdminOpsRunResponse } from '@handshake-agent/contracts';
 
 import { AuditService } from '../../../core/audit/application/audit.service';
-import { SettlementReconciliationService } from '../../transactions/application/settlement-reconciliation.service';
+import { ReconciliationPersistenceService } from '../../transactions/application/reconciliation-persistence.service';
 import { AdminNotFoundError } from '../domain/admin-errors';
 
 /**
@@ -22,7 +22,8 @@ import { AdminNotFoundError } from '../domain/admin-errors';
  * success. An unknown job id fails closed (§3.6).
  *
  * The service holds no Prisma import — it reaches the worker only through the
- * injected SettlementReconciliationService (§3.2). Every attempt is audited.
+ * injected ReconciliationPersistenceService, which persists a durable ReconRun for
+ * the manual run just as the cron does (§3.2). Every attempt is audited.
  */
 
 /** The declared jobs the board surfaces (mirrors the ops-read `JOBS` registry). */
@@ -39,7 +40,7 @@ const RECONCILIATION_JOB_ID = 'settlement-reconciliation';
 @Injectable()
 export class AdminOpsRunService {
   constructor(
-    private readonly reconciler: SettlementReconciliationService,
+    private readonly reconciler: ReconciliationPersistenceService,
     private readonly audit: AuditService,
   ) {}
 
@@ -58,9 +59,10 @@ export class AdminOpsRunService {
 
     const triggered = jobId === RECONCILIATION_JOB_ID;
     if (triggered) {
-      // Re-drive the reconciliation worker. Its @Cron tick is idempotent under an
-      // advisory lock and settles atomically — this only asks it to run now.
-      await this.reconciler.tick();
+      // Re-drive the reconciliation worker through the persistence wrapper so the
+      // manual run is recorded as a durable ReconRun (like the cron). The settle
+      // path is idempotent + atomic — this only asks it to run now.
+      await this.reconciler.runSettlementReconciliation();
     }
 
     await this.audit.record({

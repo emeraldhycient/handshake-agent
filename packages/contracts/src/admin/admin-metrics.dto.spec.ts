@@ -5,6 +5,9 @@ import {
   TxnVolumeMetricsSchema,
   GmvMetricsSchema,
   RevenueMetricsSchema,
+  MoneySeriesBucketSchema,
+  MoneySeriesMetricsSchema,
+  PlatformKpisSchema,
   KycFunnelMetricsSchema,
   ActiveUsersMetricsSchema,
   ServiceHealthMetricsSchema,
@@ -23,6 +26,18 @@ describe("MetricsRangeQuerySchema", () => {
     });
     expect(parsed.from).toBe("2026-06-01");
     expect(parsed.to).toBe("2026-06-30");
+  });
+
+  it("accepts optional currency / capability / tier filters", () => {
+    const parsed = MetricsRangeQuerySchema.parse({
+      from: "2026-06-01",
+      currency: "NGN",
+      capability: "buy",
+      tier: "tier_2",
+    });
+    expect(parsed.currency).toBe("NGN");
+    expect(parsed.capability).toBe("buy");
+    expect(parsed.tier).toBe("tier_2");
   });
 });
 
@@ -115,7 +130,9 @@ describe("TxnVolumeMetricsSchema", () => {
     ).toBe(false);
     expect(
       TxnVolumeMetricsSchema.safeParse({
-        byType: [{ type: "buy", count: 3, completed: 2, failed: 1, stuck: 1.5 }],
+        byType: [
+          { type: "buy", count: 3, completed: 2, failed: 1, stuck: 1.5 },
+        ],
         series: [],
         stackedSeries: [],
         successRate: 0,
@@ -149,17 +166,83 @@ describe("GmvMetricsSchema", () => {
 });
 
 describe("RevenueMetricsSchema", () => {
-  it("keeps fee/spread amounts as strings (no float drift)", () => {
+  it("keeps fee/spread/profit amounts as strings (no float drift)", () => {
     const value = RevenueMetricsSchema.parse({
       totalFeesByCurrency: [
         { currency: "NGN", amount: "150.000000000000000000" },
       ],
-      totalSpreadByCurrency: [],
+      totalSpreadByCurrency: [{ currency: "NGN", amount: "90" }],
+      totalProfitByCurrency: [{ currency: "NGN", amount: "240" }],
       txnCount: 2,
     });
     expect(value.totalFeesByCurrency[0].amount).toBe("150.000000000000000000");
-    expect(value.totalSpreadByCurrency).toEqual([]);
+    expect(value.totalSpreadByCurrency[0].amount).toBe("90");
+    expect(value.totalProfitByCurrency[0].amount).toBe("240");
     expect(value.txnCount).toBe(2);
+  });
+});
+
+describe("MoneySeriesBucketSchema", () => {
+  it("parses a per-day bucket with per-currency gmv/revenue/profit strings", () => {
+    const value = MoneySeriesBucketSchema.parse({
+      date: "2026-06-01",
+      gmv: [{ currency: "NGN", amount: "50000" }],
+      revenue: [{ currency: "NGN", amount: "150" }],
+      profit: [{ currency: "NGN", amount: "240" }],
+    });
+    expect(value.date).toBe("2026-06-01");
+    expect(value.gmv[0].amount).toBe("50000");
+    expect(value.profit[0].currency).toBe("NGN");
+  });
+
+  it("rejects a bucket missing the profit array", () => {
+    expect(
+      MoneySeriesBucketSchema.safeParse({
+        date: "2026-06-01",
+        gmv: [],
+        revenue: [],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("MoneySeriesMetricsSchema", () => {
+  it("parses sorted daily buckets plus the distinct currencies present", () => {
+    const value = MoneySeriesMetricsSchema.parse({
+      buckets: [
+        {
+          date: "2026-06-01",
+          gmv: [{ currency: "NGN", amount: "50000" }],
+          revenue: [{ currency: "NGN", amount: "150" }],
+          profit: [{ currency: "NGN", amount: "240" }],
+        },
+      ],
+      currencies: ["NGN"],
+    });
+    expect(value.buckets).toHaveLength(1);
+    expect(value.currencies).toEqual(["NGN"]);
+  });
+});
+
+describe("PlatformKpisSchema", () => {
+  it("parses growth / churn / failed-jobs KPIs", () => {
+    const value = PlatformKpisSchema.parse({
+      newUsers: { current: 12, previous: 8, growthRate: 0.5 },
+      churn: { activePrevious: 10, churned: 3, churnRate: 0.3 },
+      failedJobs: 2,
+    });
+    expect(value.newUsers.growthRate).toBeCloseTo(0.5);
+    expect(value.churn.churned).toBe(3);
+    expect(value.failedJobs).toBe(2);
+  });
+
+  it("rejects a payload missing the churn block", () => {
+    expect(
+      PlatformKpisSchema.safeParse({
+        newUsers: { current: 1, previous: 0, growthRate: 1 },
+        failedJobs: 0,
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -212,6 +295,7 @@ describe("DashboardSummarySchema", () => {
       revenue: {
         totalFeesByCurrency: [],
         totalSpreadByCurrency: [],
+        totalProfitByCurrency: [],
         txnCount: 0,
       },
       kycFunnel: { byStatus: [], byTier: [] },

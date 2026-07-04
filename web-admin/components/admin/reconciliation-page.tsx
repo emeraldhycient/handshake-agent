@@ -47,6 +47,7 @@ import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { ApiError } from "@/lib/api/client"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
+import { ReconRunHistoryPanel } from "@/components/admin/recon-run-history"
 import {
   EngineActionModal,
   MakerCheckerModal,
@@ -165,7 +166,11 @@ function engineLedger(b: ReconBreak): EngineLedgerRow[] {
 // disposition, matching the design's from→to change-preview shape.
 function acceptDiff(b: ReconBreak): MakerCheckerDiffRow[] {
   return [
-    { field: `Break ${b.transactionId}`, from: "Open", to: "Accepted (no debit)" },
+    {
+      field: `Break ${b.transactionId}`,
+      from: "Open",
+      to: "Accepted (no debit)",
+    },
   ]
 }
 
@@ -251,9 +256,15 @@ export function ReconciliationPage() {
   ): Promise<unknown> {
     switch (resolution) {
       case "resolved":
-        return resolveBreak.mutateAsync({ id, input: { reason: capturedReason } })
+        return resolveBreak.mutateAsync({
+          id,
+          input: { reason: capturedReason },
+        })
       case "accepted":
-        return acceptBreak.mutateAsync({ id, input: { reason: capturedReason } })
+        return acceptBreak.mutateAsync({
+          id,
+          input: { reason: capturedReason },
+        })
       case "escalated":
         return escalateBreak.mutateAsync({ id, reason: capturedReason })
     }
@@ -273,7 +284,9 @@ export function ReconciliationPage() {
     void (async () => {
       try {
         const completed = await stepUp.run(() =>
-          dispositionMutation(id, resolution, capturedReason).then(() => undefined)
+          dispositionMutation(id, resolution, capturedReason).then(
+            () => undefined
+          )
         )
         if (completed) {
           setLocalOutcomes((prev) => ({ ...prev, [id]: resolution }))
@@ -583,6 +596,10 @@ export function ReconciliationPage() {
         </div>
       )}
 
+      {/* Durable reconciliation-run history + persisted-break lifecycle
+          (Go-readiness #3) — the run log the ephemeral board above does not persist. */}
+      <ReconRunHistoryPanel />
+
       {/* ── Flow modals (shared) ──────────────────────────────────────────────
           Escalate → reason (audit) → LOCAL escalated outcome (no endpoint in-slice).
           Accept   → reason → maker-checker → the REAL accept mutation (no debit).
@@ -628,9 +645,7 @@ export function ReconciliationPage() {
             onOpenChange={(o) => !o && closeFlow()}
             title={`Accept break ${activeBreak.transactionId}`}
             diff={acceptDiff(activeBreak)}
-            onSubmit={() =>
-              runDisposition(activeBreak.id, "accepted", reason)
-            }
+            onSubmit={() => runDisposition(activeBreak.id, "accepted", reason)}
           />
 
           {/* Resolve via engine: reason (audit) → engine-action → the REAL resolve

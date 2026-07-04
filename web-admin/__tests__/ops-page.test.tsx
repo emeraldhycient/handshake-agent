@@ -110,6 +110,7 @@ const SERVICE_HEALTH: DashboardSummary = {
   revenue: {
     totalFeesByCurrency: [],
     totalSpreadByCurrency: [],
+    totalProfitByCurrency: [],
     txnCount: 0,
   },
   kycFunnel: { byStatus: [], byTier: [] },

@@ -24,7 +24,6 @@
  */
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type { ReconciliationConfig } from '../../../core/config/configuration';
@@ -48,6 +47,29 @@ const HANDLED_TYPES = new Set([
 
 // Statuses returned by settle methods that indicate the row is fully drained.
 const TERMINAL_STATUSES = new Set(['completed', 'failed']);
+
+/**
+ * One outbox row that failed to re-drive this run (Go-readiness #3). The
+ * persistence wrapper records each as a durable `settlement_failure` ReconBreak.
+ */
+export interface SettlementReconFailure {
+  outboxId: string;
+  transactionId: string;
+  settlementType: string;
+  reason: string;
+}
+
+/**
+ * The outcome of one reconciliation pass — the counts + failures the persistence
+ * wrapper turns into a durable ReconRun + its breaks. Purely a return value; the
+ * per-row settle side-effects are unchanged.
+ */
+export interface SettlementReconSummary {
+  totalChecked: number;
+  failures: SettlementReconFailure[];
+}
+
+const EMPTY_SUMMARY: SettlementReconSummary = { totalChecked: 0, failures: [] };
 
 // ---------------------------------------------------------------------------
 // Service
@@ -83,22 +105,18 @@ export class SettlementReconciliationService {
   }
 
   /**
-   * Cron tick — loads pending outbox rows past the grace window and re-drives
-   * settlement by type. Errors on individual rows are logged and do not abort
-   * the batch (§3.1: engine disposes; a failing row is a concern, not a crash).
+   * One reconciliation pass — loads pending outbox rows past the grace window and
+   * re-drives settlement by type. Errors on individual rows are logged, captured in
+   * the returned summary, and do NOT abort the batch (§3.1: engine disposes; a
+   * failing row is a concern, not a crash). Returns the run summary (totalChecked +
+   * per-row failures) so the persistence wrapper (ReconciliationPersistenceService)
+   * can record a durable ReconRun + a `settlement_failure` break per failed row.
    *
-   * The cron schedule is hard-coded to every 2 minutes (every-2-min literal).
-   * NestJS @Cron decorators are evaluated at class-compile time and cannot
-   * read runtime config values, so the expression cannot be driven from
-   * config.reconciliation without rewriting to SchedulerRegistry —
-   * a disproportionate complexity trade-off for an infra parameter that changes
-   * rarely. Changing the tick frequency requires a code change + redeploy
-   * (not admin-tunable at runtime per root CLAUDE.md §7).
-   *
-   * Tests call tick() directly to avoid the scheduler entirely.
+   * The @Cron trigger lives on the persistence wrapper (so every scheduled run is
+   * persisted); this method is a plain, directly-callable pass. Tests + the admin
+   * "Run now" trigger call it (indirectly) without the scheduler.
    */
-  @Cron('*/2 * * * *', { name: 'settlement-reconciliation' })
-  async tick(): Promise<void> {
+  async tick(): Promise<SettlementReconSummary> {
     // Re-entrancy guard (BUG 1, candidate b): if the previous tick is still
     // draining, skip this one rather than concurrently re-process the same
     // pending rows. The flag is released in `finally` so a thrown batch never
@@ -107,7 +125,7 @@ export class SettlementReconciliationService {
       this.logger.warn(
         'settlement-reconciliation: previous tick still running — skipping this tick',
       );
-      return;
+      return { ...EMPTY_SUMMARY, failures: [] };
     }
     this.isRunning = true;
 
@@ -123,7 +141,7 @@ export class SettlementReconciliationService {
         this.logger.debug(
           'settlement-reconciliation: no pending rows past grace window',
         );
-        return;
+        return { ...EMPTY_SUMMARY, failures: [] };
       }
 
       this.logger.log(
@@ -132,6 +150,7 @@ export class SettlementReconciliationService {
 
       let processed = 0;
       let skipped = 0;
+      const failures: SettlementReconFailure[] = [];
 
       for (const row of pending) {
         if (!HANDLED_TYPES.has(row.settlementType)) {
@@ -157,12 +176,20 @@ export class SettlementReconciliationService {
             'settlement-reconciliation: row failed — continuing batch',
           );
           // Do NOT rethrow — one failing row must not abort the rest of the batch.
+          failures.push({
+            outboxId: row.id,
+            transactionId: row.transactionId,
+            settlementType: row.settlementType,
+            reason: err instanceof Error ? err.message : String(err),
+          });
         }
       }
 
       this.logger.log(
         `settlement-reconciliation: done — processed=${processed} skipped=${skipped} total=${pending.length}`,
       );
+
+      return { totalChecked: pending.length, failures };
     } finally {
       this.isRunning = false;
     }

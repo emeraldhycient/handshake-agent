@@ -37,8 +37,14 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
   });
 
   beforeEach(async () => {
+    // Delete children before parents: outbox/ledger/txn → proposal → quote → user
+    // (settlementOutbox + ledger FK transaction; proposals FK userId + quoteId).
+    await prisma.settlementOutbox.deleteMany();
+    await prisma.backfillRun.deleteMany();
     await prisma.ledgerEntry.deleteMany();
     await prisma.transaction.deleteMany();
+    await prisma.proposal.deleteMany();
+    await prisma.quote.deleteMany();
     await prisma.kycProfile.deleteMany();
     await prisma.user.deleteMany();
   });
@@ -68,6 +74,7 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
     type: string;
     status: string;
     createdAt: Date;
+    metadata?: Record<string, unknown>;
   }): Promise<string> {
     const txn = await prisma.transaction.create({
       data: {
@@ -76,7 +83,7 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
         status: over.status as never,
         idempotencyKey: randomUUID(),
         requestChecksum: `chk-${randomUUID()}`,
-        metadata: {},
+        metadata: (over.metadata ?? {}) as never,
         createdAt: over.createdAt,
       },
       select: { id: true },
@@ -84,35 +91,65 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
     return txn.id;
   }
 
-  /**
-   * Seed a platform-fee credit leg (the fee-revenue leg). `sequence` is the
-   * per-(accountType, accountId) monotonic counter — callers pass a distinct value
-   * per leg to satisfy the @@unique([accountType, accountId, sequence]) constraint.
-   */
-  async function seedFeeLeg(
-    txnId: string,
-    over: {
-      accountId: string;
-      currency: string;
-      amount: string;
-      postedAt: Date;
-      sequence: number;
-    },
-  ): Promise<void> {
-    await prisma.ledgerEntry.create({
+  // Seeds a completed/failed transaction linked to its Proposal + Quote — the
+  // authoritative pricing snapshot `revenue()` now derives profit from (docs §5).
+  // `fiatAmount` follows the production convention: GROSS on buy, NET (post-fee) on
+  // sell. Returns the transaction id.
+  async function seedTxnWithQuote(over: {
+    userId: string;
+    type: 'buy' | 'sell';
+    status: string;
+    createdAt: Date;
+    fiatAmount: string;
+    cryptoAmount: string;
+    baseRate: string;
+    processingFeeAmount: string;
+    asset?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<string> {
+    const expiresAt = new Date(over.createdAt.getTime() + 60_000);
+    const quote = await prisma.quote.create({
       data: {
-        transactionId: txnId,
-        accountType: 'platform_float' as never,
-        accountId: over.accountId,
-        currency: over.currency,
-        amount: over.amount,
-        direction: 'credit' as never,
-        description: 'fee revenue',
-        balanceAfter: over.amount,
-        sequence: over.sequence,
-        postedAt: over.postedAt,
+        userId: over.userId,
+        type: over.type as never,
+        asset: over.asset ?? 'USDT',
+        fiatCurrency: (over.metadata?.fiatCurrency ?? 'NGN') as never,
+        fiatAmount: over.fiatAmount,
+        cryptoAmount: over.cryptoAmount,
+        fxRate: over.baseRate, // effective rate — not read by revenue()
+        baseRate: over.baseRate,
+        spreadBps: 0,
+        processingFeeBps: 0,
+        processingFeeAmount: over.processingFeeAmount,
+        expiresAt,
       },
+      select: { id: true },
     });
+    const proposal = await prisma.proposal.create({
+      data: {
+        userId: over.userId,
+        type: over.type as never,
+        parameters: {},
+        parametersChecksum: `chk-${randomUUID()}`,
+        quoteId: quote.id,
+        expiresAt,
+      },
+      select: { id: true },
+    });
+    const txn = await prisma.transaction.create({
+      data: {
+        userId: over.userId,
+        type: over.type as never,
+        status: over.status as never,
+        idempotencyKey: randomUUID(),
+        requestChecksum: `chk-${randomUUID()}`,
+        metadata: (over.metadata ?? {}) as never,
+        createdAt: over.createdAt,
+        proposalId: proposal.id,
+      },
+      select: { id: true },
+    });
+    return txn.id;
   }
 
   // ── transactionVolume ──────────────────────────────────────────────────────
@@ -207,79 +244,413 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
   // ── revenue ────────────────────────────────────────────────────────────────
 
   describe('revenue', () => {
-    it('sums platform-fee legs of COMPLETED txns by currency, exact, and reports spread []', async () => {
+    it('derives fee + spread + profit per currency from the Quote of COMPLETED buy/sell txns', async () => {
       const u = await seedUser();
-      const t1 = await seedTxn({
+      // BUY (gross fiat 1115 − fee 100 = netFiat 1015; 1 unit at mid 1000 → spread 15).
+      await seedTxnWithQuote({
         userId: u,
         type: 'buy',
         status: 'completed',
         createdAt: new Date('2026-06-01T08:00:00.000Z'),
+        fiatAmount: '1115',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '100',
       });
-      const t2 = await seedTxn({
+      // SELL (net fiat 935 + fee 50 = fiatBeforeFee 985; mid 1000 → spread 15).
+      await seedTxnWithQuote({
         userId: u,
-        type: 'buy',
+        type: 'sell',
         status: 'completed',
         createdAt: new Date('2026-06-02T08:00:00.000Z'),
+        fiatAmount: '935',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '50',
       });
-      // A failed txn whose fee leg must NOT count toward revenue.
-      const t3 = await seedTxn({
+      // A FAILED buy — its quote must NOT count toward revenue.
+      await seedTxnWithQuote({
         userId: u,
         type: 'buy',
         status: 'failed',
         createdAt: new Date('2026-06-03T08:00:00.000Z'),
+        fiatAmount: '9999',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '999',
       });
-      // Out-of-range completed txn — excluded.
-      const t4 = await seedTxn({
+      // OUT-OF-RANGE completed buy — excluded.
+      await seedTxnWithQuote({
         userId: u,
         type: 'buy',
         status: 'completed',
         createdAt: new Date('2026-05-01T08:00:00.000Z'),
-      });
-
-      await seedFeeLeg(t1, {
-        accountId: 'ngn_fees',
-        currency: 'NGN',
-        amount: '100.5',
-        postedAt: new Date('2026-06-01T08:00:00.000Z'),
-        sequence: 1,
-      });
-      await seedFeeLeg(t2, {
-        accountId: 'ngn_fees',
-        currency: 'NGN',
-        amount: '49.5',
-        postedAt: new Date('2026-06-02T08:00:00.000Z'),
-        sequence: 2,
-      });
-      await seedFeeLeg(t3, {
-        accountId: 'ngn_fees',
-        currency: 'NGN',
-        amount: '999',
-        postedAt: new Date('2026-06-03T08:00:00.000Z'),
-        sequence: 3,
-      });
-      await seedFeeLeg(t4, {
-        accountId: 'ngn_fees',
-        currency: 'NGN',
-        amount: '777',
-        postedAt: new Date('2026-05-01T08:00:00.000Z'),
-        sequence: 4,
+        fiatAmount: '9999',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '777',
       });
 
       const result = await repo.revenue(FROM, TO);
 
-      // 100.5 + 49.5 = 150 (exact; t3 failed + t4 out-of-range excluded).
-      const ngn = result.totalFeesByCurrency.find((c) => c.currency === 'NGN')!;
-      expect(ngn.amount).toBe('150');
-      expect(result.totalSpreadByCurrency).toEqual([]);
-      // txnCount = completed txns in range (t1, t2) = 2.
+      const fees = result.totalFeesByCurrency.find(
+        (c) => c.currency === 'NGN',
+      )!;
+      const spread = result.totalSpreadByCurrency.find(
+        (c) => c.currency === 'NGN',
+      )!;
+      const profit = result.totalProfitByCurrency.find(
+        (c) => c.currency === 'NGN',
+      )!;
+      expect(fees.amount).toBe('150'); // buy 100 + sell 50 (both counted)
+      expect(spread.amount).toBe('30'); // 15 + 15
+      expect(profit.amount).toBe('180'); // fees + spread
+      // txnCount = completed txns in range = 2 (failed + out-of-range excluded).
       expect(result.txnCount).toBe(2);
     });
 
-    it('returns empty fees and txnCount 0 when no completed txns in range', async () => {
+    it('returns empty fees/spread/profit and txnCount 0 when no completed txns in range', async () => {
       const result = await repo.revenue(FROM, TO);
       expect(result.totalFeesByCurrency).toEqual([]);
       expect(result.totalSpreadByCurrency).toEqual([]);
+      expect(result.totalProfitByCurrency).toEqual([]);
       expect(result.txnCount).toBe(0);
+    });
+  });
+
+  // ── moneySeries ──────────────────────────────────────────────────────────────
+
+  describe('moneySeries', () => {
+    it('buckets per-day GMV (all money txns) + fee/profit (buy/sell Quote) per currency', async () => {
+      const u = await seedUser();
+      // 06-01 completed BUY: gross fiat 1115, mid 1000, fee 100 → fee 100, spread
+      // 15, profit 115; GMV notional 1115 NGN.
+      await seedTxnWithQuote({
+        userId: u,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-06-01T08:00:00.000Z'),
+        fiatAmount: '1115',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '100',
+        metadata: { fiatAmount: '1115', fiatCurrency: 'NGN' },
+      });
+      // 06-01 completed SEND (no quote): GMV-only, a SECOND currency (USD 2000).
+      await seedTxn({
+        userId: u,
+        type: 'send',
+        status: 'completed',
+        createdAt: new Date('2026-06-01T12:00:00.000Z'),
+        metadata: { fiatAmount: '2000', fiatCurrency: 'USD' },
+      });
+      // 06-02 completed SELL: net fiat 935, mid 1000, fee 50 → fee 50, spread 15,
+      // profit 65; GMV notional 935 NGN.
+      await seedTxnWithQuote({
+        userId: u,
+        type: 'sell',
+        status: 'completed',
+        createdAt: new Date('2026-06-02T08:00:00.000Z'),
+        fiatAmount: '935',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '50',
+        metadata: { fiatAmount: '935', fiatCurrency: 'NGN' },
+      });
+      // FAILED buy — excluded from every leg.
+      await seedTxnWithQuote({
+        userId: u,
+        type: 'buy',
+        status: 'failed',
+        createdAt: new Date('2026-06-01T09:00:00.000Z'),
+        fiatAmount: '9999',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '999',
+        metadata: { fiatAmount: '9999', fiatCurrency: 'NGN' },
+      });
+      // OUT-OF-RANGE completed buy — excluded.
+      await seedTxnWithQuote({
+        userId: u,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-05-01T08:00:00.000Z'),
+        fiatAmount: '8888',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '888',
+        metadata: { fiatAmount: '8888', fiatCurrency: 'NGN' },
+      });
+
+      const result = await repo.moneySeries(FROM, TO);
+
+      // Distinct currencies across the range, sorted.
+      expect(result.currencies).toEqual(['NGN', 'USD']);
+
+      // Two days with data, sorted ascending.
+      expect(result.buckets.map((b) => b.date)).toEqual([
+        '2026-06-01',
+        '2026-06-02',
+      ]);
+
+      const pick = (arr: { currency: string; amount: string }[], c: string) =>
+        arr.find((x) => x.currency === c)?.amount;
+
+      const d1 = result.buckets[0];
+      expect(pick(d1.gmv, 'NGN')).toBe('1115');
+      expect(pick(d1.gmv, 'USD')).toBe('2000');
+      expect(pick(d1.revenue, 'NGN')).toBe('100');
+      // USD had GMV but no buy/sell quote → its fee/profit are 0.
+      expect(pick(d1.revenue, 'USD')).toBe('0');
+      expect(pick(d1.profit, 'NGN')).toBe('115');
+      expect(pick(d1.profit, 'USD')).toBe('0');
+
+      const d2 = result.buckets[1];
+      expect(pick(d2.gmv, 'NGN')).toBe('935');
+      expect(pick(d2.revenue, 'NGN')).toBe('50');
+      expect(pick(d2.profit, 'NGN')).toBe('65');
+    });
+
+    it('returns empty buckets + currencies when no completed txns in range', async () => {
+      const result = await repo.moneySeries(FROM, TO);
+      expect(result.buckets).toEqual([]);
+      expect(result.currencies).toEqual([]);
+    });
+  });
+
+  // ── platformKpis (growth / churn / failed-jobs) ─────────────────────────────
+
+  describe('platformKpis', () => {
+    // Current window is [FROM, TO] (~30d); the previous window is the equal-length
+    // window immediately before FROM, i.e. roughly [2026-05-02, 2026-06-01).
+    it('computes new-user growth and churn period-over-period', async () => {
+      // uPrev1: new in the PREVIOUS window, active previously, silent now → churned.
+      const uPrev1 = await seedUser({
+        createdAt: new Date('2026-05-10T00:00:00.000Z'),
+      });
+      await seedTxn({
+        userId: uPrev1,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-05-15T00:00:00.000Z'),
+      });
+      // uRet: created before both windows; active in BOTH → retained (not churned).
+      const uRet = await seedUser({
+        createdAt: new Date('2026-04-01T00:00:00.000Z'),
+      });
+      await seedTxn({
+        userId: uRet,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-05-20T00:00:00.000Z'),
+      });
+      await seedTxn({
+        userId: uRet,
+        type: 'sell',
+        status: 'completed',
+        createdAt: new Date('2026-06-20T00:00:00.000Z'),
+      });
+      // uCur1 + uCur2: new in the CURRENT window (uCur1 also active now).
+      const uCur1 = await seedUser({
+        createdAt: new Date('2026-06-05T00:00:00.000Z'),
+      });
+      await seedTxn({
+        userId: uCur1,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-06-05T00:00:00.000Z'),
+      });
+      await seedUser({ createdAt: new Date('2026-06-10T00:00:00.000Z') });
+
+      const kpis = await repo.platformKpis(FROM, TO);
+
+      // New users: current 2 (uCur1, uCur2) vs previous 1 (uPrev1) → +100%.
+      expect(kpis.newUsers.current).toBe(2);
+      expect(kpis.newUsers.previous).toBe(1);
+      expect(kpis.newUsers.growthRate).toBeCloseTo(1, 6);
+
+      // Churn: active-previous {uPrev1, uRet} = 2; churned {uPrev1} = 1 → 0.5.
+      expect(kpis.churn.activePrevious).toBe(2);
+      expect(kpis.churn.churned).toBe(1);
+      expect(kpis.churn.churnRate).toBeCloseTo(0.5, 6);
+    });
+
+    it('counts failed settlement-outbox + wallet-backfill jobs in range', async () => {
+      const u = await seedUser();
+      const txnId = await seedTxn({
+        userId: u,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-06-05T00:00:00.000Z'),
+      });
+      // 1 failed outbox IN range (counts), 1 completed IN range (excluded),
+      // 1 failed OUT of range (excluded). Distinct settlementType keeps the
+      // [transactionId, settlementType] unique constraint satisfied on one txn.
+      await prisma.settlementOutbox.create({
+        data: {
+          transactionId: txnId,
+          settlementType: 'onchain_send' as never,
+          payload: {} as never,
+          status: 'failed' as never,
+          createdAt: new Date('2026-06-06T00:00:00.000Z'),
+        },
+      });
+      await prisma.settlementOutbox.create({
+        data: {
+          transactionId: txnId,
+          settlementType: 'processor_payout' as never,
+          payload: {} as never,
+          status: 'completed' as never,
+          createdAt: new Date('2026-06-07T00:00:00.000Z'),
+        },
+      });
+      await prisma.settlementOutbox.create({
+        data: {
+          transactionId: txnId,
+          settlementType: 'processor_collection' as never,
+          payload: {} as never,
+          status: 'failed' as never,
+          createdAt: new Date('2026-07-15T00:00:00.000Z'),
+        },
+      });
+      // 1 failed backfill IN range (counts), 1 queued IN range (excluded).
+      await prisma.backfillRun.create({
+        data: {
+          status: 'failed' as never,
+          createdAt: new Date('2026-06-10T00:00:00.000Z'),
+        },
+      });
+      await prisma.backfillRun.create({
+        data: {
+          status: 'queued' as never,
+          createdAt: new Date('2026-06-11T00:00:00.000Z'),
+        },
+      });
+
+      const kpis = await repo.platformKpis(FROM, TO);
+      // 1 failed outbox + 1 failed backfill in range.
+      expect(kpis.failedJobs).toBe(2);
+    });
+
+    it('reports +100% growth from a zero baseline and zero churn with no prior activity', async () => {
+      await seedUser({ createdAt: new Date('2026-06-05T00:00:00.000Z') });
+      const kpis = await repo.platformKpis(FROM, TO);
+      expect(kpis.newUsers.previous).toBe(0);
+      expect(kpis.newUsers.growthRate).toBe(1);
+      expect(kpis.churn.activePrevious).toBe(0);
+      expect(kpis.churn.churnRate).toBe(0);
+      expect(kpis.failedJobs).toBe(0);
+    });
+  });
+
+  // ── filters (capability / tier / currency) ──────────────────────────────────
+
+  describe('filters', () => {
+    // Shared fixture: a tier_1 user with a completed NGN buy + a completed USD
+    // send (no quote), and a tier_2 user with a completed NGN sell.
+    async function seedFilterFixture() {
+      const uT1 = await seedUser({ kycTier: 'tier_1' });
+      const uT2 = await seedUser({ kycTier: 'tier_2' });
+      await seedTxnWithQuote({
+        userId: uT1,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-06-01T08:00:00.000Z'),
+        fiatAmount: '1115',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '100',
+        metadata: { fiatAmount: '1115', fiatCurrency: 'NGN' },
+      });
+      await seedTxn({
+        userId: uT1,
+        type: 'send',
+        status: 'completed',
+        createdAt: new Date('2026-06-01T12:00:00.000Z'),
+        metadata: { fiatAmount: '2000', fiatCurrency: 'USD' },
+      });
+      await seedTxnWithQuote({
+        userId: uT2,
+        type: 'sell',
+        status: 'completed',
+        createdAt: new Date('2026-06-02T08:00:00.000Z'),
+        fiatAmount: '935',
+        cryptoAmount: '1',
+        baseRate: '1000',
+        processingFeeAmount: '50',
+        metadata: { fiatAmount: '935', fiatCurrency: 'NGN' },
+      });
+      return { uT1, uT2 };
+    }
+
+    it('transactionVolume: capability filter narrows byType to that type', async () => {
+      await seedFilterFixture();
+      const result = await repo.transactionVolume(FROM, TO, {
+        capability: 'buy',
+      });
+      expect(result.byType.map((t) => t.type)).toEqual(['buy']);
+      expect(result.byType[0].count).toBe(1);
+    });
+
+    it('transactionVolume: tier filter narrows to the owning user tier', async () => {
+      await seedFilterFixture();
+      // tier_2 owns only the sell.
+      const result = await repo.transactionVolume(FROM, TO, { tier: 'tier_2' });
+      expect(result.byType.map((t) => t.type)).toEqual(['sell']);
+      expect(result.byType[0].count).toBe(1);
+    });
+
+    it('transactionVolume: an unknown filter value is ignored (no-op)', async () => {
+      await seedFilterFixture();
+      const result = await repo.transactionVolume(FROM, TO, {
+        capability: 'not-a-type',
+        tier: 'not-a-tier',
+      });
+      // All 3 txns still counted.
+      const total = result.byType.reduce((s, t) => s + t.count, 0);
+      expect(total).toBe(3);
+    });
+
+    it('gmv: currency filter keeps only that currency (in-memory JSON filter)', async () => {
+      await seedFilterFixture();
+      const usd = await repo.gmv(FROM, TO, { currency: 'USD' });
+      expect(usd.totalByCurrency).toEqual([
+        { currency: 'USD', amount: '2000' },
+      ]);
+      expect(usd.txnCount).toBe(1);
+    });
+
+    it('gmv: capability filter narrows the notional sum', async () => {
+      await seedFilterFixture();
+      // Only the send carries a USD notional; filtering to send yields USD 2000.
+      const send = await repo.gmv(FROM, TO, { capability: 'send' });
+      expect(send.totalByCurrency).toEqual([
+        { currency: 'USD', amount: '2000' },
+      ]);
+    });
+
+    it('revenue: currency filter selects the quote currency; unmatched → empty', async () => {
+      await seedFilterFixture();
+      const ngn = await repo.revenue(FROM, TO, { currency: 'NGN' });
+      expect(
+        ngn.totalFeesByCurrency.find((c) => c.currency === 'NGN')?.amount,
+      ).toBe('150'); // buy 100 + sell 50
+      const usd = await repo.revenue(FROM, TO, { currency: 'USD' });
+      expect(usd.totalFeesByCurrency).toEqual([]);
+    });
+
+    it('moneySeries: tier filter scopes both the GMV and quote legs', async () => {
+      await seedFilterFixture();
+      // tier_1 owns the NGN buy (fee 100) + the USD send (gmv 2000, no fee).
+      const t1 = await repo.moneySeries(FROM, TO, { tier: 'tier_1' });
+      expect(t1.currencies.sort()).toEqual(['NGN', 'USD']);
+      const day1 = t1.buckets.find((b) => b.date === '2026-06-01')!;
+      expect(day1.revenue.find((c) => c.currency === 'NGN')?.amount).toBe(
+        '100',
+      );
+      expect(day1.gmv.find((c) => c.currency === 'USD')?.amount).toBe('2000');
+      // The tier_2 sell (2026-06-02) is excluded.
+      expect(t1.buckets.some((b) => b.date === '2026-06-02')).toBe(false);
     });
   });
 

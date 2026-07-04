@@ -18,6 +18,7 @@ import { QUOTE_REPOSITORY } from './application/ports/quote.repository.port';
 import { DIRECTIVE_REPOSITORY } from './application/ports/directive.repository.port';
 import { TRANSACTION_REPOSITORY } from './application/ports/transaction.repository.port';
 import { SETTLEMENT_OUTBOX_REPOSITORY } from './application/ports/settlement-outbox.repository.port';
+import { RECONCILIATION_REPOSITORY } from './application/ports/reconciliation.repository.port';
 import { SETTLEMENT_REPOSITORY } from './application/ports/settlement.repository.port';
 import { LEDGER_REPOSITORY } from './application/ports/ledger.repository.port';
 import { TRANSACTION_READ_REPOSITORY } from './application/ports/transaction-read.repository.port';
@@ -26,6 +27,8 @@ import { QuotePrismaRepository } from './infrastructure/quote.prisma.repository'
 import { DirectivePrismaRepository } from './infrastructure/directive.prisma.repository';
 import { TransactionPrismaRepository } from './infrastructure/transaction.prisma.repository';
 import { SettlementOutboxPrismaRepository } from './infrastructure/settlement-outbox.prisma.repository';
+import { ReconciliationPrismaRepository } from './infrastructure/reconciliation.prisma.repository';
+import { ReconciliationPersistenceService } from './application/reconciliation-persistence.service';
 import { SettlementPrismaRepository } from './infrastructure/settlement.prisma.repository';
 import { LedgerPrismaRepository } from './infrastructure/ledger.prisma.repository';
 import { TransactionReadPrismaRepository } from './infrastructure/transaction-read.prisma.repository';
@@ -66,6 +69,14 @@ import { PdfStatementGenerator } from './infrastructure/pdf-statement.generator'
     DirectiveService,
     ExecutionService,
     SettlementReconciliationService,
+    // Go-readiness #3: the durable reconciliation run + break store, and the
+    // persistence service that owns the settlement-reconciliation @Cron (wraps
+    // SettlementReconciliationService.tick(), persisting each run + its breaks).
+    ReconciliationPersistenceService,
+    {
+      provide: RECONCILIATION_REPOSITORY,
+      useClass: ReconciliationPrismaRepository,
+    },
     { provide: QUOTE_REPOSITORY, useClass: QuotePrismaRepository },
     { provide: PROPOSAL_REPOSITORY, useClass: ProposalPrismaRepository },
     { provide: DIRECTIVE_REPOSITORY, useClass: DirectivePrismaRepository },
@@ -105,6 +116,11 @@ import { PdfStatementGenerator } from './infrastructure/pdf-statement.generator'
     // Exported for AdminModule's ops "Run now" (Phase 7): a manual trigger re-drives
     // the reconciler's tick() — an engine-brokered re-drive that moves no money.
     SettlementReconciliationService,
+    // Go-readiness #3: exported so AdminModule can (a) route "Run now" + the wallet
+    // reconcile endpoint through the persistence wrapper, and (b) read the durable
+    // run history / break lifecycle via RECONCILIATION_REPOSITORY.
+    ReconciliationPersistenceService,
+    RECONCILIATION_REPOSITORY,
     TransactionHistoryService,
     StatementTokenService,
     STATEMENT_GENERATOR,

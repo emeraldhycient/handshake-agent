@@ -13,6 +13,20 @@
  */
 export const METRICS_READ_REPOSITORY = Symbol('METRICS_READ_REPOSITORY');
 
+/**
+ * Optional filters that narrow the txn-based aggregations. All fields are no-ops
+ * when unset (or when an unknown value is supplied — the adapter validates against
+ * the Prisma enums and ignores anything unrecognised). `capability` (a Transaction
+ * type) and `tier` (the owning user's KYC tier) scope every txn-based metric;
+ * `currency` (an ISO fiat code) scopes the money metrics (GMV / revenue / money
+ * series). The point-in-time KYC funnel is a population snapshot and is unaffected.
+ */
+export interface MetricsFilter {
+  currency?: string;
+  capability?: string;
+  tier?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Record types (application-layer projections — never Prisma types)
 // ---------------------------------------------------------------------------
@@ -75,16 +89,47 @@ export interface CurrencyAmount {
 }
 
 export interface RevenueResult {
-  /** Platform fee revenue per currency (the `platform_float` fee legs). */
+  /** Complete processing-fee revenue per currency (buy AND sell), from the Quote. */
   totalFeesByCurrency: CurrencyAmount[];
   /**
-   * Spread per currency. Spread is folded into the fx rate and NOT separately
-   * ledgered, so this is always empty (see the adapter comment for why it is
-   * not recoverable from the ledger).
+   * Realized bid-ask spread margin per currency, DERIVED per completed buy/sell
+   * from its authoritative Quote snapshot (baseRate vs effective fxRate) — see
+   * `tx-profit.ts` + docs §5. No longer empty: spread is not in the ledger, but it
+   * IS recoverable from the Quote.
    */
   totalSpreadByCurrency: CurrencyAmount[];
+  /** Total platform profit per currency = fees + spread. */
+  totalProfitByCurrency: CurrencyAmount[];
   /** Count of COMPLETED transactions in the range. */
   txnCount: number;
+}
+
+/** One day of the money time-series: per-currency GMV, revenue (fees) and profit. */
+export interface MoneySeriesBucketRow {
+  /** ISO date (YYYY-MM-DD, UTC). */
+  date: string;
+  /** Fiat notional (GMV) settled that day, per currency. */
+  gmv: CurrencyAmount[];
+  /** Processing-fee revenue realized that day, per currency. */
+  revenue: CurrencyAmount[];
+  /** Total profit (fees + realized spread) that day, per currency. */
+  profit: CurrencyAmount[];
+}
+
+export interface MoneySeriesResult {
+  /** Sorted ascending by date; only days with a completed money-moving txn. */
+  buckets: MoneySeriesBucketRow[];
+  /** Distinct fiat currencies present anywhere in the range, sorted. */
+  currencies: string[];
+}
+
+export interface PlatformKpisResult {
+  /** New users this window vs the previous equal window; growthRate = signed ratio. */
+  newUsers: { current: number; previous: number; growthRate: number };
+  /** Users active in the previous window with no activity this window. */
+  churn: { activePrevious: number; churned: number; churnRate: number };
+  /** Failed background jobs (settlement-outbox + wallet-backfill) in range. */
+  failedJobs: number;
 }
 
 export interface CountByKey {
@@ -130,7 +175,11 @@ export interface IMetricsReadRepository {
    * failed); 0 when none). `stuck` counts the in-flight statuses
    * `pending | validating | confirmed | settling`.
    */
-  transactionVolume(from: Date, to: Date): Promise<TransactionVolumeResult>;
+  transactionVolume(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<TransactionVolumeResult>;
 
   /**
    * Gross Merchandise Value: the summed fiat notional (`metadata.fiatAmount`) of
@@ -138,15 +187,30 @@ export interface IMetricsReadRepository {
    * grouped by fiat currency (`metadata.fiatCurrency`) — EXACT scaled-integer math.
    * `txnCount` is the number of completed txns that carried a fiat notional.
    */
-  gmv(from: Date, to: Date): Promise<GmvResult>;
+  gmv(from: Date, to: Date, filter?: MetricsFilter): Promise<GmvResult>;
 
   /**
-   * Sum of the platform-fee ledger legs (`platform_float` credits) for COMPLETED
-   * transactions in [from, to), grouped by currency — EXACT scaled-integer math.
-   * Spread is folded into the fx rate and not separately ledgered, so
-   * `totalSpreadByCurrency` is always empty. `txnCount` is completed txns in range.
+   * Platform profit for COMPLETED transactions in [from, to), grouped by currency
+   * and DERIVED from each buy/sell Quote (fee + realized spread; see `tx-profit.ts`)
+   * — EXACT scaled-integer math. Recovers sell fees + all spread the double-entry
+   * ledger never records, so `totalSpreadByCurrency` is populated (not empty).
+   * `txnCount` is completed txns in range.
    */
-  revenue(from: Date, to: Date): Promise<RevenueResult>;
+  revenue(from: Date, to: Date, filter?: MetricsFilter): Promise<RevenueResult>;
+
+  /**
+   * Daily money time-series over [from, to): for each UTC day with a completed
+   * money-moving transaction, the per-currency GMV (fiat notional from
+   * `metadata`), revenue (processing fees) and profit (fees + realized spread),
+   * the latter two DERIVED from each buy/sell Quote (see `tx-profit.ts`). Buckets
+   * are sorted ascending; `currencies` lists every fiat present in the range.
+   * EXACT scaled-integer math — never floats.
+   */
+  moneySeries(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<MoneySeriesResult>;
 
   /**
    * Point-in-time user counts grouped by kycStatus and by kycTier (soft-deleted
@@ -158,11 +222,28 @@ export interface IMetricsReadRepository {
    * Distinct users who transacted in [from, to) (active), users created in the
    * range (new), and the total non-soft-deleted user count.
    */
-  activeUsers(from: Date, to: Date): Promise<ActiveUsersResult>;
+  activeUsers(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<ActiveUsersResult>;
 
   /**
    * Per transactable service (buy/sell/send/swap): total / completed / failed
    * counts in [from, to) and the success rate.
    */
-  serviceHealth(from: Date, to: Date): Promise<ServiceHealthResult>;
+  serviceHealth(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<ServiceHealthResult>;
+
+  /**
+   * Platform lifecycle/ops KPIs for [from, to), each compared against the
+   * immediately preceding equal-length window: new-user growth rate, churn (users
+   * active in the previous window but not this one), and failed background jobs
+   * (settlement-outbox + wallet-backfill) in range. Period-over-period — range
+   * scoped only (the capability/tier/currency filters do NOT apply here).
+   */
+  platformKpis(from: Date, to: Date): Promise<PlatformKpisResult>;
 }

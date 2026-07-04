@@ -15,8 +15,48 @@ import type {
   ITransactionRepository,
   TransactionRecord,
 } from '../../transactions/application/ports/transaction.repository.port';
+import type {
+  IReconciliationRepository,
+  ReconBreakRecord as PersistedBreakRecord,
+} from '../../transactions/application/ports/reconciliation.repository.port';
 
 const ADMIN_ID = 'admin-uuid-1';
+
+function makeRunsRepo(): jest.Mocked<IReconciliationRepository> {
+  return {
+    createRun: jest.fn(),
+    recordBreak: jest.fn(),
+    completeRun: jest.fn(),
+    listRuns: jest.fn(),
+    findRun: jest.fn(),
+    listBreaksByRun: jest.fn(),
+    findBreak: jest.fn().mockResolvedValue(null),
+    findBreaksByUser: jest.fn(),
+    updateBreakStatus: jest.fn(),
+  };
+}
+
+function makePersistedBreak(
+  overrides: Partial<PersistedBreakRecord> = {},
+): PersistedBreakRecord {
+  return {
+    id: 'brk-1',
+    reconRunId: 'run-1',
+    breakType: 'over_credit',
+    userId: 'user-1',
+    walletId: 'wallet-1',
+    outboxId: null,
+    currency: 'USDT',
+    delta: '-50',
+    status: 'detected',
+    approvedByAdminId: null,
+    reason: null,
+    actionAt: null,
+    createdAt: new Date('2026-07-04T04:00:00.000Z'),
+    updatedAt: new Date('2026-07-04T04:00:00.000Z'),
+    ...overrides,
+  };
+}
 
 function makeConfig(): jest.Mocked<Pick<EffectiveConfigService, 'get'>> {
   // The stale window drives the missing-settlement projection; the value itself
@@ -131,6 +171,7 @@ describe('AdminReconciliationActionService', () => {
   let config: ReturnType<typeof makeConfig>;
   let events: ReturnType<typeof makeComplianceEventRepo>;
   let txns: ReturnType<typeof makeTxnRepo>;
+  let runs: jest.Mocked<IReconciliationRepository>;
   let service: AdminReconciliationActionService;
 
   beforeEach(() => {
@@ -140,6 +181,7 @@ describe('AdminReconciliationActionService', () => {
     config = makeConfig();
     events = makeComplianceEventRepo();
     txns = makeTxnRepo();
+    runs = makeRunsRepo();
     service = new AdminReconciliationActionService(
       repo,
       triage as unknown as AdminTxnTriageService,
@@ -147,6 +189,7 @@ describe('AdminReconciliationActionService', () => {
       config as unknown as EffectiveConfigService,
       events,
       txns as unknown as ITransactionRepository,
+      runs,
     );
   });
 
@@ -347,6 +390,93 @@ describe('AdminReconciliationActionService', () => {
       ).rejects.toBeInstanceOf(AdminNotFoundError);
       expect(events.create).not.toHaveBeenCalled();
       expect(audit.record).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── persisted-break lifecycle (Go-readiness #3) ─────────────────────────────────
+
+  describe('acknowledgeBreak', () => {
+    it('transitions the break to acknowledged (annotation-only) + audits admin_review', async () => {
+      runs.findBreak.mockResolvedValue(
+        makePersistedBreak({ status: 'detected' }),
+      );
+      runs.updateBreakStatus.mockResolvedValue(
+        makePersistedBreak({
+          status: 'acknowledged',
+          approvedByAdminId: ADMIN_ID,
+          reason: 'Investigating.',
+          actionAt: new Date('2026-07-04T05:00:00.000Z'),
+        }),
+      );
+
+      const result = await service.acknowledgeBreak(
+        'brk-1',
+        'Investigating.',
+        ADMIN_ID,
+      );
+
+      // Engine is never touched — annotation only, no money moves.
+      expect(triage.retrySettlement).not.toHaveBeenCalled();
+      expect(runs.updateBreakStatus).toHaveBeenCalledWith(
+        'brk-1',
+        expect.objectContaining({
+          status: 'acknowledged',
+          approvedByAdminId: ADMIN_ID,
+          reason: 'Investigating.',
+        }),
+      );
+      expect(result.status).toBe('acknowledged');
+      expect(result.approvedByAdminId).toBe(ADMIN_ID);
+
+      const arg = audit.record.mock.calls[0][0];
+      expect(arg.action).toBe('admin_review');
+      expect(arg.subject).toBe('ReconBreak:brk-1');
+      expect(arg.before).toEqual({ status: 'detected' });
+      expect(arg.after).toMatchObject({ status: 'acknowledged' });
+    });
+
+    it('fails closed on an unknown break id (no write, no audit)', async () => {
+      runs.findBreak.mockResolvedValue(null);
+      await expect(
+        service.acknowledgeBreak('nope', 'why', ADMIN_ID),
+      ).rejects.toBeInstanceOf(AdminNotFoundError);
+      expect(runs.updateBreakStatus).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resolveBreak', () => {
+    it('transitions the break to resolved (annotation-only) + audits admin_review', async () => {
+      runs.findBreak.mockResolvedValue(
+        makePersistedBreak({ status: 'acknowledged' }),
+      );
+      runs.updateBreakStatus.mockResolvedValue(
+        makePersistedBreak({ status: 'resolved', approvedByAdminId: ADMIN_ID }),
+      );
+
+      const result = await service.resolveBreak(
+        'brk-1',
+        'Confirmed.',
+        ADMIN_ID,
+      );
+
+      expect(triage.retrySettlement).not.toHaveBeenCalled();
+      expect(runs.updateBreakStatus).toHaveBeenCalledWith(
+        'brk-1',
+        expect.objectContaining({ status: 'resolved' }),
+      );
+      expect(result.status).toBe('resolved');
+      const arg = audit.record.mock.calls[0][0];
+      expect(arg.action).toBe('admin_review');
+      expect(arg.after).toMatchObject({ status: 'resolved' });
+    });
+
+    it('fails closed on an unknown break id', async () => {
+      runs.findBreak.mockResolvedValue(null);
+      await expect(
+        service.resolveBreak('nope', 'why', ADMIN_ID),
+      ).rejects.toBeInstanceOf(AdminNotFoundError);
+      expect(runs.updateBreakStatus).not.toHaveBeenCalled();
     });
   });
 });

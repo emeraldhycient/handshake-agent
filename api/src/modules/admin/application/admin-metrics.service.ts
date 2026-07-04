@@ -5,6 +5,8 @@ import type {
   GmvMetrics,
   KycFunnelMetrics,
   MetricsRangeQuery,
+  MoneySeriesMetrics,
+  PlatformKpis,
   RevenueMetrics,
   TxnVolumeMetrics,
 } from '@handshake-agent/contracts';
@@ -12,6 +14,7 @@ import type {
 import {
   METRICS_READ_REPOSITORY,
   type IMetricsReadRepository,
+  type MetricsFilter,
 } from './ports/metrics-read.repository.port';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -50,19 +53,38 @@ export class AdminMetricsService {
    */
   async transactions(query: MetricsRangeQuery): Promise<TxnVolumeMetrics> {
     const { from, to } = this.resolveRange(query);
-    return this.metrics.transactionVolume(from, to);
+    return this.metrics.transactionVolume(from, to, this.resolveFilter(query));
   }
 
   /** GMV (summed fiat notional of completed txns, per currency) for the range. */
   async gmv(query: MetricsRangeQuery): Promise<GmvMetrics> {
     const { from, to } = this.resolveRange(query);
-    return this.metrics.gmv(from, to);
+    return this.metrics.gmv(from, to, this.resolveFilter(query));
   }
 
   /** Revenue (fees by currency; spread folded into fx → empty) for the range. */
   async revenue(query: MetricsRangeQuery): Promise<RevenueMetrics> {
     const { from, to } = this.resolveRange(query);
-    return this.metrics.revenue(from, to);
+    return this.metrics.revenue(from, to, this.resolveFilter(query));
+  }
+
+  /**
+   * Daily money time-series (per-currency GMV / revenue / profit) for the
+   * (defaulted/clamped) range — feeds the operator "Revenue & profit trend" chart.
+   */
+  async moneySeries(query: MetricsRangeQuery): Promise<MoneySeriesMetrics> {
+    const { from, to } = this.resolveRange(query);
+    return this.metrics.moneySeries(from, to, this.resolveFilter(query));
+  }
+
+  /**
+   * Platform lifecycle/ops KPIs (new-user growth, churn, failed jobs) for the
+   * (defaulted/clamped) range, each period-over-period. Range-scoped only — the
+   * capability/tier/currency filters do not apply to these platform-wide metrics.
+   */
+  async platformKpis(query: MetricsRangeQuery): Promise<PlatformKpis> {
+    const { from, to } = this.resolveRange(query);
+    return this.metrics.platformKpis(from, to);
   }
 
   /** Point-in-time KYC funnel (counts by status + tier). */
@@ -77,14 +99,15 @@ export class AdminMetricsService {
   /** The composite dashboard — every metric block for one resolved range. */
   async dashboard(query: MetricsRangeQuery): Promise<DashboardSummary> {
     const { from, to } = this.resolveRange(query);
+    const filter = this.resolveFilter(query);
     const [txnVolume, gmv, revenue, kycFunnel, activeUsers, serviceHealth] =
       await Promise.all([
-        this.metrics.transactionVolume(from, to),
-        this.metrics.gmv(from, to),
-        this.metrics.revenue(from, to),
+        this.metrics.transactionVolume(from, to, filter),
+        this.metrics.gmv(from, to, filter),
+        this.metrics.revenue(from, to, filter),
         this.metrics.kycFunnel(),
-        this.metrics.activeUsers(from, to),
-        this.metrics.serviceHealth(from, to),
+        this.metrics.activeUsers(from, to, filter),
+        this.metrics.serviceHealth(from, to, filter),
       ]);
 
     return {
@@ -122,6 +145,19 @@ export class AdminMetricsService {
         : from;
 
     return { from: clampedFrom, to };
+  }
+
+  /**
+   * Extracts the optional currency/capability/tier filters from the query, mapping
+   * empty strings to `undefined` so the repo treats "no selection" and "" alike.
+   * The adapter validates each value against its Prisma enum (unknown → no-op).
+   */
+  private resolveFilter(query: MetricsRangeQuery): MetricsFilter {
+    return {
+      currency: query.currency || undefined,
+      capability: query.capability || undefined,
+      tier: query.tier || undefined,
+    };
   }
 
   /** Parses an ISO date string; returns null for missing/invalid input. */

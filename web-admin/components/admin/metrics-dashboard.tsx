@@ -28,65 +28,31 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { MetricsBar } from "@/components/admin/metrics-bar"
 import { cn } from "@/lib/utils"
-import { rangeForDays } from "@/lib/metrics-range"
-import { useDashboardMetrics } from "@/lib/query/hooks"
+import { metricsQueryFromFilter } from "@/lib/metrics-range"
+import { formatMoneyList } from "@/lib/format"
+import { TrendChart } from "@/components/admin/trend-chart"
+import { MoneyTrendCard } from "@/components/admin/money-trend-card"
+import { ExportCsvButton } from "@/components/admin/export-csv-button"
+import { MetricsFilterBar } from "@/components/admin/metrics-filter-bar"
+import { PlatformKpisCard } from "@/components/admin/platform-kpis-card"
+import { FeatureCard, CardHeading } from "@/components/admin/feature-card"
+import {
+  useDashboardMetrics,
+  useMoneySeries,
+  usePlatformKpis,
+} from "@/lib/query/hooks"
 import { ApiError } from "@/lib/api/client"
 import type { DashboardSummary } from "@handshake-agent/contracts"
-import type { MetricsDashboardProps } from "@/types/components"
-
-// ─── Range presets ────────────────────────────────────────────────────────────────
-
-interface RangePreset {
-  readonly id: string
-  readonly label: string
-  readonly days: number
-}
-
-const RANGE_PRESETS: readonly RangePreset[] = [
-  { id: "7d", label: "7d", days: 7 },
-  { id: "30d", label: "30d", days: 30 },
-  { id: "90d", label: "90d", days: 90 },
-]
-
-const DEFAULT_PRESET_ID = "30d"
+import type {
+  MetricsDashboardProps,
+  MetricsFilterState,
+} from "@/types/components"
 
 function formatPct(rate: number): string {
   return `${(rate * 100).toFixed(1)}%`
 }
 
 // ─── Shared layout primitives ───────────────────────────────────────────────────────
-
-/** Feature card — radius 18px, 1px line border, card surface, 20/22 padding (§3). */
-function FeatureCard({
-  className,
-  children,
-}: {
-  className?: string
-  children: React.ReactNode
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-[18px] border border-line bg-card px-[22px] py-5",
-        className
-      )}
-    >
-      {children}
-    </div>
-  )
-}
-
-/** Card title (14px/700) with an optional muted suffix line beneath (§3 / §5). */
-function CardHeading({ title, note }: { title: string; note?: string }) {
-  return (
-    <div>
-      <div className="text-sm font-bold text-ink">{title}</div>
-      {note && (
-        <div className="mt-0.5 text-xs text-ink2 tabular-nums">{note}</div>
-      )}
-    </div>
-  )
-}
 
 /**
  * KPI stat tile (§5). Tile 0 is the dark-green "hero" — a brand-green→deep
@@ -177,16 +143,12 @@ function KpiTile({
 function KpiGrid({ data }: { data: DashboardSummary }) {
   const { txnVolume, activeUsers, revenue } = data
   const totalTxns = txnVolume.byType.reduce((sum, t) => sum + t.count, 0)
-  const primaryFee = revenue.totalFeesByCurrency[0]
-  const revenueValue = primaryFee
-    ? `${primaryFee.currency} ${primaryFee.amount}`
-    : "—"
+  // Per-currency (each with its own symbol), never first-currency-only (#11/#12).
+  const revenueValue = formatMoneyList(revenue.totalFeesByCurrency)
   const revenueNote =
-    revenue.totalFeesByCurrency.length > 1
-      ? `+${revenue.totalFeesByCurrency.length - 1} more currencies`
-      : revenue.totalFeesByCurrency.length === 0
-        ? "No fee revenue"
-        : "fees collected"
+    revenue.totalFeesByCurrency.length === 0 ? "No fee revenue" : "fees collected"
+  // Profit = fees + realized spread, derived per completed buy/sell (docs §5).
+  const profitFootnote = `Profit ${formatMoneyList(revenue.totalProfitByCurrency)} (fees + spread)`
 
   return (
     <div className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
@@ -213,7 +175,7 @@ function KpiGrid({ data }: { data: DashboardSummary }) {
         label="Revenue (fees)"
         value={revenueValue}
         deltaNote={revenueNote}
-        footnote="Spread folded into FX — not separately tracked."
+        footnote={profitFootnote}
         warn={revenue.totalFeesByCurrency.length === 0}
       />
     </div>
@@ -235,7 +197,7 @@ function TxnVolumeCard({ data }: { data: DashboardSummary }) {
     <FeatureCard>
       <div className="mb-1 flex items-center justify-between gap-3">
         <CardHeading title="Transaction volume" note="by day · total settled" />
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {VOLUME_SEGMENTS.map((seg) => (
             <div key={seg.key} className="flex items-center gap-1.5">
               <span
@@ -247,13 +209,34 @@ function TxnVolumeCard({ data }: { data: DashboardSummary }) {
               </span>
             </div>
           ))}
+          <ExportCsvButton
+            label="Export"
+            filename="transaction-volume.csv"
+            disabled={byType.length === 0}
+            build={() => ({
+              headers: ["type", "count", "completed", "failed", "stuck"],
+              rows: byType.map((t) => [
+                t.type,
+                t.count,
+                t.completed,
+                t.failed,
+                t.stuck,
+              ]),
+            })}
+          />
         </div>
       </div>
 
       {series.length > 0 ? (
         <>
+          <div className="mt-4 h-[64px]">
+            <TrendChart
+              ariaLabel={`Daily transaction-volume trend over ${series.length} days`}
+              points={series.map((b) => ({ label: b.date, value: b.count }))}
+            />
+          </div>
           <div
-            className="mt-4 flex h-[180px] items-end gap-[5px]"
+            className="mt-3 flex h-[140px] items-end gap-[5px]"
             role="img"
             aria-label={`Daily transaction volume, ${series.length} days, peak ${seriesMax.toLocaleString()}`}
           >
@@ -421,12 +404,19 @@ function ServiceHealthCard({ data }: { data: DashboardSummary }) {
 export function MetricsDashboard({
   gracefulOnForbidden = false,
 }: MetricsDashboardProps) {
-  const [presetId, setPresetId] = useState(DEFAULT_PRESET_ID)
-  const preset =
-    RANGE_PRESETS.find((p) => p.id === presetId) ?? RANGE_PRESETS[1]
-  const range = useMemo(() => rangeForDays(preset.days), [preset.days])
+  const [filter, setFilter] = useState<MetricsFilterState>({
+    presetId: "30d",
+    from: "",
+    to: "",
+    capability: "",
+    tier: "",
+    currency: "",
+  })
+  const rangeQuery = useMemo(() => metricsQueryFromFilter(filter), [filter])
 
-  const query = useDashboardMetrics(range)
+  const query = useDashboardMetrics(rangeQuery)
+  const moneySeries = useMoneySeries(rangeQuery)
+  const platformKpis = usePlatformKpis(rangeQuery)
   const isForbidden =
     query.error instanceof ApiError && query.error.status === 403
 
@@ -434,41 +424,17 @@ export function MetricsDashboard({
     <div className="flex flex-1 flex-col overflow-y-auto bg-bg">
       <div className="mx-auto w-full max-w-[1320px] px-[30px] pt-[26px] pb-[60px]">
         {/* ── Header ────────────────────────────────────────────────────────── */}
-        <div className="mb-[22px] flex flex-wrap items-end justify-between gap-5">
-          <div>
-            <h1 className="text-2xl font-extrabold tracking-tight text-ink">
-              Operations overview
-            </h1>
-            <p className="mt-1.5 text-[13.5px] text-ink2">
-              Live platform health, money movement, and what needs your
-              attention.
-            </p>
-          </div>
-          <div
-            role="group"
-            aria-label="Date range"
-            className="flex rounded-[11px] border border-line bg-card p-[3px]"
-          >
-            {RANGE_PRESETS.map((p) => {
-              const active = p.id === presetId
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => setPresetId(p.id)}
-                  className={cn(
-                    "cursor-pointer rounded-[8px] px-3.5 py-1.5 text-[12.5px] font-bold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                    active
-                      ? "bg-btn-dark text-white"
-                      : "text-ink2 hover:text-ink"
-                  )}
-                >
-                  {p.label}
-                </button>
-              )
-            })}
-          </div>
+        <div className="mb-[18px]">
+          <h1 className="text-2xl font-extrabold tracking-tight text-ink">
+            Operations overview
+          </h1>
+          <p className="mt-1.5 text-[13.5px] text-ink2">
+            Live platform health, money movement, and what needs your attention.
+          </p>
+        </div>
+        {/* ── Filter bar ────────────────────────────────────────────────────── */}
+        <div className="mb-[22px]">
+          <MetricsFilterBar value={filter} onChange={setFilter} />
         </div>
 
         {/* ── Loading ──────────────────────────────────────────────────────── */}
@@ -514,9 +480,23 @@ export function MetricsDashboard({
         {query.isSuccess && (
           <>
             <KpiGrid data={query.data} />
+            <div className="mb-4">
+              <PlatformKpisCard
+                data={platformKpis.data}
+                isLoading={platformKpis.isLoading}
+                isError={platformKpis.isError}
+              />
+            </div>
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.7fr_1fr]">
               <TxnVolumeCard data={query.data} />
               <ServiceHealthCard data={query.data} />
+            </div>
+            <div className="mt-4">
+              <MoneyTrendCard
+                data={moneySeries.data}
+                isLoading={moneySeries.isLoading}
+                isError={moneySeries.isError}
+              />
             </div>
             <div className="mt-4">
               <KycFunnelCard data={query.data} />

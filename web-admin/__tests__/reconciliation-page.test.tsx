@@ -25,6 +25,12 @@ vi.mock("@/lib/api/reconciliation", () => ({
   resolveReconBreak: vi.fn(),
   acceptReconBreak: vi.fn(),
   escalateReconBreak: vi.fn(),
+  // Go-readiness #3 durable-history clients (the run-history panel on the page).
+  listReconRuns: vi.fn(),
+  getReconRun: vi.fn(),
+  getReconRunBreak: vi.fn(),
+  acknowledgeReconRunBreak: vi.fn(),
+  resolveReconRunBreak: vi.fn(),
 }))
 
 // The "Run now" button triggers the settlement-reconciliation ops job.
@@ -44,6 +50,7 @@ import {
   resolveReconBreak,
   acceptReconBreak,
   escalateReconBreak,
+  listReconRuns,
 } from "@/lib/api/reconciliation"
 import { runOpsJob } from "@/lib/api/ops"
 
@@ -53,6 +60,7 @@ const mockResolve = vi.mocked(resolveReconBreak)
 const mockAccept = vi.mocked(acceptReconBreak)
 const mockEscalate = vi.mocked(escalateReconBreak)
 const mockRunOpsJob = vi.mocked(runOpsJob)
+const mockListRuns = vi.mocked(listReconRuns)
 
 // A ComplianceEventItem returned by the escalate endpoint (the opened case).
 const ESCALATED_EVENT = {
@@ -136,6 +144,9 @@ beforeEach(() => {
     triggered: true,
     status: "running",
   })
+  // The run-history panel renders on the page; default to an empty history so the
+  // existing break-board assertions are unaffected.
+  mockListRuns.mockReset().mockResolvedValue({ items: [], nextCursor: null })
 })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

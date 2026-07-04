@@ -60,6 +60,7 @@ import {
 import type { CoordinateBackfillPayload } from '../../wallets/infrastructure/coordinate-backfill.processor';
 import { WalletReconciliationService } from '../../wallets/application/wallet-reconciliation.service';
 import type { AssetReconciliationResult } from '../../wallets/application/wallet-reconciliation.service';
+import { ReconciliationPersistenceService } from '../../transactions/application/reconciliation-persistence.service';
 import { EnqueueBackfillDto } from './dto/enqueue-backfill.dto';
 import { ReconcileWalletDto } from './dto/reconcile-wallet.dto';
 
@@ -75,6 +76,7 @@ export class AdminWalletsController {
     @InjectQueue(WALLET_BACKFILL_QUEUE_NAME)
     private readonly backfillQueue: Queue,
     private readonly reconciliationService: WalletReconciliationService,
+    private readonly reconciliationPersistence: ReconciliationPersistenceService,
   ) {}
 
   /**
@@ -173,6 +175,10 @@ export class AdminWalletsController {
     @Body() dto: ReconcileWalletDto,
   ): Promise<{ results: AssetReconciliationResult[] }> {
     const results = await this.reconciliationService.reconcileUser(dto.userId);
+    // Go-readiness #3: record this run + its breaks in the durable history so the
+    // admin console has a run trail + break lifecycle. Persist-only (moves no
+    // money); the credit/flag decisions already happened above.
+    await this.reconciliationPersistence.persistWalletRun(dto.userId, results);
     return { results };
   }
 }

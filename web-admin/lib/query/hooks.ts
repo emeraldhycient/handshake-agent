@@ -70,6 +70,7 @@ import * as compliance from "@/lib/api/compliance"
 import * as kyc from "@/lib/api/kyc"
 import * as ledger from "@/lib/api/ledger"
 import * as metrics from "@/lib/api/metrics"
+import * as search from "@/lib/api/search"
 import * as ops from "@/lib/api/ops"
 import * as notifications from "@/lib/api/notifications"
 import * as providers from "@/lib/api/providers"
@@ -501,6 +502,63 @@ export function useReconBreaks() {
     queryKey: qk.reconBreaks,
     queryFn: () => reconciliation.listReconBreaks(),
     staleTime: 30_000,
+  })
+}
+
+/** Persisted reconciliation-run history, newest-first (Go-readiness #3). */
+export function useReconRuns() {
+  return useQuery({
+    queryKey: qk.reconRuns,
+    queryFn: () => reconciliation.listReconRuns(),
+    staleTime: 30_000,
+  })
+}
+
+/** A single persisted run with its detected breaks. Enabled only when opened. */
+export function useReconRun(id: string | null) {
+  return useQuery({
+    queryKey: qk.reconRun(id ?? ""),
+    queryFn: () => reconciliation.getReconRun(id as string),
+    enabled: id !== null,
+    staleTime: 30_000,
+  })
+}
+
+/**
+ * POST /admin/reconciliation/run-breaks/:id/acknowledge — triage a persisted break
+ * (annotation-only, step-up-gated). Invalidates the run list + the owning run detail
+ * so the fresh lifecycle state shows.
+ */
+export function useAcknowledgeReconRunBreak() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      reconciliation.acknowledgeReconRunBreak(id, reason),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: qk.reconRuns })
+      void queryClient.invalidateQueries({
+        queryKey: qk.reconRun(result.reconRunId),
+      })
+    },
+  })
+}
+
+/**
+ * POST /admin/reconciliation/run-breaks/:id/resolve — close a persisted break
+ * (annotation-only, no engine re-drive, step-up-gated). Invalidates the run list +
+ * the owning run detail.
+ */
+export function useResolveReconRunBreak() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      reconciliation.resolveReconRunBreak(id, reason),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: qk.reconRuns })
+      void queryClient.invalidateQueries({
+        queryKey: qk.reconRun(result.reconRunId),
+      })
+    },
   })
 }
 
@@ -1547,6 +1605,51 @@ export function useDashboardMetrics(range: MetricsRangeQuery) {
   return useQuery({
     queryKey: qk.dashboardMetrics(range),
     queryFn: () => metrics.getDashboardMetrics(range),
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/**
+ * The daily per-currency GMV / revenue / profit time-series for a date range —
+ * feeds the operator revenue & profit trend chart. Range is part of the key.
+ * 60 s stale (same cadence as the composite dashboard); `retry: false` so a 403
+ * (no Metrics grant) surfaces immediately for graceful degradation.
+ */
+export function useMoneySeries(range: MetricsRangeQuery) {
+  return useQuery({
+    queryKey: qk.moneySeries(range),
+    queryFn: () => metrics.getMoneySeriesMetrics(range),
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/**
+ * Live ⌘K global search (users + transactions). Disabled until the (already
+ * debounced by the caller) term is ≥ 2 chars; 30 s stale; `retry: false` so a 403
+ * (no Search grant) degrades quietly to no entity results.
+ */
+export function useAdminSearch(q: string) {
+  const term = q.trim()
+  return useQuery({
+    queryKey: qk.adminSearch(term),
+    queryFn: () => search.getAdminSearch(term),
+    enabled: term.length >= 2,
+    staleTime: 30_000,
+    retry: false,
+  })
+}
+
+/**
+ * Platform lifecycle KPIs (new-user growth, churn, failed jobs) for a date range,
+ * period-over-period. Range is part of the key; 60 s stale; `retry: false` so a 403
+ * surfaces immediately for graceful degradation.
+ */
+export function usePlatformKpis(range: MetricsRangeQuery) {
+  return useQuery({
+    queryKey: qk.platformKpis(range),
+    queryFn: () => metrics.getPlatformKpis(range),
     staleTime: 60_000,
     retry: false,
   })

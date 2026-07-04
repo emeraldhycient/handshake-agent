@@ -61,6 +61,9 @@ export const qk = {
   treasuryFxPosition: ["admin", "treasury", "fx-position"] as const,
   reconBreaks: ["admin", "reconciliation", "breaks"] as const,
   reconStatus: ["admin", "reconciliation", "status"] as const,
+  // Durable run history + a single run's detail (Go-readiness #3).
+  reconRuns: ["admin", "reconciliation", "runs"] as const,
+  reconRun: (id: string) => ["admin", "reconciliation", "runs", id] as const,
   adminBeneficiaries: (userId?: string) =>
     ["admin", "beneficiaries", userId ?? "all"] as const,
   blocked: ["admin", "blocked"] as const,
@@ -84,6 +87,11 @@ export const qk = {
     ["admin", "agent", "conversations", id] as const,
   dashboardMetrics: (range: MetricsRangeQuery) =>
     ["admin", "metrics", "dashboard", range] as const,
+  moneySeries: (range: MetricsRangeQuery) =>
+    ["admin", "metrics", "money-series", range] as const,
+  adminSearch: (q: string) => ["admin", "search", q] as const,
+  platformKpis: (range: MetricsRangeQuery) =>
+    ["admin", "metrics", "kpis", range] as const,
   metricsOps: ["admin", "metrics", "ops"] as const,
   opsBoard: ["admin", "ops", "board"] as const,
   webhooks: (query: unknown) => ["admin", "webhooks", "list", query] as const,

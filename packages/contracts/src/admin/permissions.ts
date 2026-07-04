@@ -260,6 +260,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   // Users — end-user management & device/SIM-swap admin (Phase 2)
   r(
     "api_route",
+    "GET /admin/search",
+    "read",
+    "Users",
+    "Global ⌘K search across users + transactions",
+  ),
+  r(
+    "api_route",
     "GET /admin/users",
     "read",
     "Users",
@@ -743,6 +750,47 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Treasury",
     "Escalate a reconciliation break into a compliance case (step-up-gated; opens a ComplianceEvent)",
   ),
+  // Reconciliation RUN HISTORY + persisted-break lifecycle (Go-readiness #3). The
+  // ephemeral break projection above is computed on read; these surface the DURABLE
+  // ReconRun log + the ReconBreak acknowledge/resolve lifecycle that survives a
+  // restart. Reads are read-only; the acknowledge/resolve dispositions are
+  // annotation-only (record an operator decision + immutable audit) and move no
+  // money (§3.1) — they are step-up-gated at the controller.
+  r(
+    "api_route",
+    "GET /admin/reconciliation/runs",
+    "read",
+    "Treasury",
+    "List persisted reconciliation runs (keyset-paginated history)",
+  ),
+  r(
+    "api_route",
+    "GET /admin/reconciliation/runs/:id",
+    "read",
+    "Treasury",
+    "View a reconciliation run with its detected breaks",
+  ),
+  r(
+    "api_route",
+    "GET /admin/reconciliation/run-breaks/:id",
+    "read",
+    "Treasury",
+    "View a persisted reconciliation break's detail + disposition",
+  ),
+  r(
+    "api_route",
+    "POST /admin/reconciliation/run-breaks/:id/acknowledge",
+    "write",
+    "Treasury",
+    "Acknowledge a persisted reconciliation break (triage annotation; no debit)",
+  ),
+  r(
+    "api_route",
+    "POST /admin/reconciliation/run-breaks/:id/resolve",
+    "write",
+    "Treasury",
+    "Resolve a persisted reconciliation break (annotation-only disposition; no debit)",
+  ),
   // Treasury payout / withdrawal approval (Phase 7, WRITE — maker-checker). Raising
   // an approval APPLIES NOTHING — it enters the four-eyes inbox for a SECOND admin to
   // confirm; the release is then applied through the engine's atomic path (§3.1).
@@ -752,6 +800,17 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "execute",
     "Treasury",
     "Approve a queued payout via maker-checker (raises a four-eyes change request)",
+  ),
+  // Treasury payout RETRY (go-readiness #2, WRITE — single-admin step-up). Re-drives a
+  // STUCK settling sell payout through the engine after a server-side re-check; it
+  // re-arms the EXISTING settlement outbox row (original idempotency key), never
+  // re-sends a payout, and rejects a completed one (no double-pay).
+  r(
+    "api_route",
+    "POST /admin/treasury/payouts/:id/retry",
+    "execute",
+    "Treasury",
+    "Retry a stuck settling sell payout via the engine (re-checks the user; re-drives the existing settlement)",
   ),
 
   // Approvals — the maker-checker change-request subsystem (Phase 7, WRITES). A
@@ -959,6 +1018,20 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "read",
     "Metrics",
     "Read revenue (fees + spread) metrics by currency",
+  ),
+  r(
+    "api_route",
+    "GET /admin/metrics/money-series",
+    "read",
+    "Metrics",
+    "Read the daily money time-series (per-currency GMV / revenue / profit trend)",
+  ),
+  r(
+    "api_route",
+    "GET /admin/metrics/kpis",
+    "read",
+    "Metrics",
+    "Read platform lifecycle KPIs (new-user growth, churn, failed jobs)",
   ),
   r(
     "api_route",

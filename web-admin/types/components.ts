@@ -4,6 +4,106 @@
  * (root §13.4). Shapes that cross the FE/BE boundary come from contracts.
  */
 import type { ComponentPropsWithoutRef, ReactNode } from "react"
+
+/** One per-currency money figure (mirrors the metrics `byCurrency` entries). */
+export interface CurrencyAmount {
+  currency: string
+  amount: string
+}
+
+/** One point on a trend chart (an x label + a numeric y value). */
+export interface TrendPoint {
+  label: string
+  value: number
+}
+
+/**
+ * TrendChart props — a self-contained SVG line/area chart (no chart lib). Renders
+ * `points` as a normalized line (optional area fill) using `currentColor`, so the
+ * caller sets the hue via a `text-*` class. Empty points → an inline "No data".
+ */
+export interface TrendChartProps {
+  points: readonly TrendPoint[]
+  /** Accessible description of the series (required — the chart is an image). */
+  ariaLabel: string
+  /** Fill the area under the line (default true). */
+  area?: boolean
+  className?: string
+}
+
+/** A header + rows payload ready to serialize to CSV. */
+export interface CsvExportData {
+  headers: readonly string[]
+  rows: (string | number)[][]
+}
+
+/**
+ * ExportCsvButton props (go-readiness #7 per-area export). `build` runs at click
+ * time so the CSV is serialized only on demand. `onDownload` is injectable for
+ * tests; it defaults to the real browser download in `lib/csv`.
+ */
+export interface ExportCsvButtonProps {
+  filename: string
+  build: () => CsvExportData
+  label?: string
+  disabled?: boolean
+  onDownload?: (filename: string, csv: string) => void
+}
+
+/**
+ * Metrics filter-bar state: the selected range preset (or "custom"), the custom
+ * from/to date-only strings ('' when a preset is active), and the optional
+ * capability / tier / currency filters ('' = all). Resolved into a MetricsRangeQuery
+ * by `metricsQueryFromFilter`.
+ */
+export interface MetricsFilterState {
+  presetId: string
+  from: string
+  to: string
+  capability: string
+  tier: string
+  currency: string
+}
+
+/** MetricsFilterBar props — controlled: parent owns the state + resolves the query. */
+export interface MetricsFilterBarProps {
+  value: MetricsFilterState
+  onChange: (next: MetricsFilterState) => void
+}
+
+/**
+ * PlatformKpisCard props — presentational (parent owns the `usePlatformKpis`
+ * query and passes the async branches as props).
+ */
+export interface PlatformKpisCardProps {
+  data: import("@handshake-agent/contracts").PlatformKpis | undefined
+  isLoading: boolean
+  isError: boolean
+}
+
+/** Which money metric a trend chart is plotting. */
+export type MoneyMetric = "gmv" | "revenue" | "profit"
+
+/**
+ * MoneyTrendCard props — presentational (no fetching): the parent owns the
+ * `useMoneySeries` query and passes its result down as the four async branches.
+ */
+export interface MoneyTrendCardProps {
+  data: import("@handshake-agent/contracts").MoneySeriesMetrics | undefined
+  isLoading: boolean
+  isError: boolean
+}
+
+/**
+ * One day of a money time-series, resolved for a single currency: the exact
+ * decimal `amount` (for display via `formatFiat`) and its `value` (a JS number
+ * for chart geometry only — precision loss is acceptable for pixel positions).
+ */
+export interface MoneySeriesPoint {
+  date: string
+  amount: string
+  value: number
+}
 import type {
   AdminBeneficiary,
   AdminCustomFiatCreateRequest,

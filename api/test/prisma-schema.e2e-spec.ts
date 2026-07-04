@@ -66,20 +66,24 @@ describe('Prisma schema (integration, Testcontainers Postgres)', () => {
       `SELECT count(*)::bigint AS tables FROM information_schema.tables
        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
     );
-    // Every domain table + Prisma's _prisma_migrations bookkeeping table. This
-    // count grows with the schema; +1 for webhook_events (Track A durable-webhook
-    // queue).
-    expect(Number(tables)).toBe(60);
+    // Every domain table + Prisma's _prisma_migrations bookkeeping table. Post-sync
+    // = the union of the platform-hardening migrations and main's webhook_events
+    // (Track A durable-webhook queue). The fiat_currency enum-widen (go-readiness #8)
+    // adds VALUES, not a table, so it does not affect this count. +2 for recon_runs
+    // + recon_breaks (go-readiness #3 durable recon log).
+    expect(Number(tables)).toBe(62);
 
     const [{ enums }] = await prisma.$queryRawUnsafe<{ enums: bigint }[]>(
       `SELECT count(DISTINCT t.typname)::bigint AS enums
        FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid`,
     );
-    // Every native enum the schema declares. supported_asset was dropped when
-    // asset columns moved to TEXT for the dynamic (Blockradar-sourced) catalog
-    // (migration 20260629200000_asset_columns_text_dynamic_catalog). +2 for
-    // webhook_provider + webhook_event_status (Track A durable-webhook queue).
-    expect(Number(enums)).toBe(78);
+    // Every native enum TYPE the schema declares. supported_asset was dropped when
+    // asset columns moved to TEXT (migration 20260629200000). +2 for webhook_provider
+    // + webhook_event_status (Track A). The fiat_currency widen adds VALUES to an
+    // existing TYPE, so this DISTINCT-type count is unaffected. +4 for
+    // recon_run_type/recon_run_status/recon_break_type/recon_break_status
+    // (go-readiness #3 durable recon log).
+    expect(Number(enums)).toBe(82);
   });
 
   it('generates time-sortable uuid v7 ids on the client (the only sanctioned DB door)', async () => {

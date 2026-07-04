@@ -6,17 +6,24 @@ import {
   HttpStatus,
   Param,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 
 import {
   ComplianceEventItemSchema,
+  PersistedReconBreakSchema,
   ReconActionResponseSchema,
   ReconBreakListResponseSchema,
+  ReconRunDetailSchema,
+  ReconRunListResponseSchema,
   ReconStatusSchema,
   type ComplianceEventItem,
+  type PersistedReconBreak,
   type ReconActionResponse,
   type ReconBreakListResponse,
+  type ReconRunDetail,
+  type ReconRunListResponse,
   type ReconStatus,
 } from '@handshake-agent/contracts';
 
@@ -30,7 +37,9 @@ import { RequirePermission } from './require-permission.decorator';
 import {
   EscalateBreakDto,
   ReconAcceptDto,
+  ReconBreakActionDto,
   ReconResolveDto,
+  ReconRunListQueryDto,
 } from './dto/admin-ops-recon-treasury-action.dto';
 
 /**
@@ -67,6 +76,72 @@ export class AdminReconciliationController {
   @RequirePermission('api_route', 'GET /admin/reconciliation/status', 'read')
   async status(): Promise<ReconStatus> {
     return ReconStatusSchema.parse(await this.reconciliation.status());
+  }
+
+  // ── durable run history + persisted-break lifecycle (Go-readiness #3) ────────────
+
+  @Get('runs')
+  @RequirePermission('api_route', 'GET /admin/reconciliation/runs', 'read')
+  async listRuns(
+    @Query() query: ReconRunListQueryDto,
+  ): Promise<ReconRunListResponse> {
+    return ReconRunListResponseSchema.parse(
+      await this.reconciliation.listRuns(query),
+    );
+  }
+
+  @Get('runs/:id')
+  @RequirePermission('api_route', 'GET /admin/reconciliation/runs/:id', 'read')
+  async getRun(@Param('id') id: string): Promise<ReconRunDetail> {
+    return ReconRunDetailSchema.parse(await this.reconciliation.getRun(id));
+  }
+
+  @Get('run-breaks/:id')
+  @RequirePermission(
+    'api_route',
+    'GET /admin/reconciliation/run-breaks/:id',
+    'read',
+  )
+  async getBreak(@Param('id') id: string): Promise<PersistedReconBreak> {
+    return PersistedReconBreakSchema.parse(
+      await this.reconciliation.getBreak(id),
+    );
+  }
+
+  @Post('run-breaks/:id/acknowledge')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission(
+    'api_route',
+    'POST /admin/reconciliation/run-breaks/:id/acknowledge',
+    'write',
+  )
+  async acknowledgeBreak(
+    @Param('id') id: string,
+    @Body() dto: ReconBreakActionDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<PersistedReconBreak> {
+    return PersistedReconBreakSchema.parse(
+      await this.actions.acknowledgeBreak(id, dto.reason, admin.adminId),
+    );
+  }
+
+  @Post('run-breaks/:id/resolve')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission(
+    'api_route',
+    'POST /admin/reconciliation/run-breaks/:id/resolve',
+    'write',
+  )
+  async resolveBreak(
+    @Param('id') id: string,
+    @Body() dto: ReconBreakActionDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<PersistedReconBreak> {
+    return PersistedReconBreakSchema.parse(
+      await this.actions.resolveBreak(id, dto.reason, admin.adminId),
+    );
   }
 
   // ── resolve (Phase 7, WRITE — engine-brokered; step-up-gated) ────────────────────

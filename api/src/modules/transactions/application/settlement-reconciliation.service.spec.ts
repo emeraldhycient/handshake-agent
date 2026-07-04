@@ -442,6 +442,52 @@ describe('SettlementReconciliationService', () => {
     expect(outboxRepo.complete).toHaveBeenCalledWith('row-good');
   });
 
+  // ── tick() returns a run summary (Go-readiness #3: the persistence wrapper reads
+  //    it to record a durable run + a settlement_failure break per failed row). ──
+
+  it('returns a summary with totalChecked and a failure entry per thrown row', async () => {
+    const failingRow = makeRecord({
+      id: 'row-fail',
+      transactionId: 'txn-fail',
+      settlementType: 'processor_payout',
+      payload: { reference: 'ref-fail' },
+      idempotencyKey: 'ref-fail',
+    });
+    const goodRow = makeRecord({
+      id: 'row-good',
+      transactionId: 'txn-good',
+      settlementType: 'processor_payout',
+      payload: { reference: 'ref-good' },
+      idempotencyKey: 'ref-good',
+    });
+    outboxRepo.findPending.mockResolvedValue([failingRow, goodRow]);
+    executionService.settleSellPayout
+      .mockRejectedValueOnce(new Error('provider timeout'))
+      .mockResolvedValueOnce({
+        transactionId: 'txn-good',
+        status: 'completed',
+      });
+
+    const summary = await service.tick();
+
+    expect(summary.totalChecked).toBe(2);
+    expect(summary.failures).toHaveLength(1);
+    expect(summary.failures[0]).toEqual(
+      expect.objectContaining({
+        outboxId: 'row-fail',
+        transactionId: 'txn-fail',
+        settlementType: 'processor_payout',
+      }),
+    );
+    expect(summary.failures[0].reason).toContain('provider timeout');
+  });
+
+  it('returns an empty summary when there are no pending rows', async () => {
+    outboxRepo.findPending.mockResolvedValue([]);
+    const summary = await service.tick();
+    expect(summary).toEqual({ totalChecked: 0, failures: [] });
+  });
+
   // ── findPending is called with the configured batch size ─────────────────
 
   it('passes batchSize and gracePeriodSec to findPending', async () => {
@@ -530,7 +576,10 @@ describe('SettlementReconciliationService', () => {
 
     // Guard released in finally → the next tick proceeds (not wedged).
     outboxRepo.findPending.mockResolvedValue([]);
-    await expect(service.tick()).resolves.toBeUndefined();
+    await expect(service.tick()).resolves.toEqual({
+      totalChecked: 0,
+      failures: [],
+    });
     expect(outboxRepo.findPending).toHaveBeenCalledTimes(2);
   });
 

@@ -13,17 +13,24 @@
 import {
   ReconAcceptRequestSchema,
   ReconActionResponseSchema,
+  ReconBreakActionRequestSchema,
   ReconBreakListResponseSchema,
   ReconResolveRequestSchema,
+  ReconRunDetailSchema,
+  ReconRunListResponseSchema,
   ReconStatusSchema,
   EscalateBreakRequestSchema,
   ComplianceEventItemSchema,
+  PersistedReconBreakSchema,
   type ReconAcceptRequest,
   type ReconActionResponse,
   type ReconBreakListResponse,
   type ReconResolveRequest,
+  type ReconRunDetail,
+  type ReconRunListResponse,
   type ReconStatus,
   type ComplianceEventItem,
+  type PersistedReconBreak,
 } from "@handshake-agent/contracts"
 
 import { api } from "./client"
@@ -84,4 +91,66 @@ export async function escalateReconBreak(
     body
   )
   return ComplianceEventItemSchema.parse(res.data)
+}
+
+// ─── Durable run history + persisted-break lifecycle (Go-readiness #3) ─────────────
+// The DURABLE reconciliation-run log + the ReconBreak acknowledge/resolve lifecycle
+// (distinct from the ephemeral projected breaks above). Reads are read-only; the
+// acknowledge/resolve dispositions are annotation-only + step-up-gated — they move no
+// money (§3.1). Each parses its request before + response after the request (§8).
+
+/** GET /admin/reconciliation/runs — persisted run history, newest-first (keyset). */
+export async function listReconRuns(
+  params: { cursor?: string; limit?: number } = {}
+): Promise<ReconRunListResponse> {
+  const res = await api.get("/admin/reconciliation/runs", { params })
+  return ReconRunListResponseSchema.parse(res.data)
+}
+
+/** GET /admin/reconciliation/runs/:id — a run with every break it detected. */
+export async function getReconRun(id: string): Promise<ReconRunDetail> {
+  const res = await api.get(`/admin/reconciliation/runs/${id}`)
+  return ReconRunDetailSchema.parse(res.data)
+}
+
+/** GET /admin/reconciliation/run-breaks/:id — a single persisted break's detail. */
+export async function getReconRunBreak(
+  id: string
+): Promise<PersistedReconBreak> {
+  const res = await api.get(`/admin/reconciliation/run-breaks/${id}`)
+  return PersistedReconBreakSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/reconciliation/run-breaks/:id/acknowledge — triage a persisted break
+ * (detected → acknowledged). Annotation-only; sensitive — may 403 with
+ * ADMIN_STEP_UP_REQUIRED.
+ */
+export async function acknowledgeReconRunBreak(
+  id: string,
+  reason: string
+): Promise<PersistedReconBreak> {
+  const body = ReconBreakActionRequestSchema.parse({ reason })
+  const res = await api.post(
+    `/admin/reconciliation/run-breaks/${id}/acknowledge`,
+    body
+  )
+  return PersistedReconBreakSchema.parse(res.data)
+}
+
+/**
+ * POST /admin/reconciliation/run-breaks/:id/resolve — close a persisted break
+ * (→ resolved). Annotation-only, no engine re-drive; sensitive — may 403 with
+ * ADMIN_STEP_UP_REQUIRED.
+ */
+export async function resolveReconRunBreak(
+  id: string,
+  reason: string
+): Promise<PersistedReconBreak> {
+  const body = ReconBreakActionRequestSchema.parse({ reason })
+  const res = await api.post(
+    `/admin/reconciliation/run-breaks/${id}/resolve`,
+    body
+  )
+  return PersistedReconBreakSchema.parse(res.data)
 }

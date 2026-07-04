@@ -35,3 +35,31 @@ export const TreasuryPayoutApproveResponseSchema = z.object({
 export type TreasuryPayoutApproveResponse = z.infer<
   typeof TreasuryPayoutApproveResponseSchema
 >;
+
+// ── Retry a stuck settling sell payout (go-readiness #2, WRITE — single-admin) ────
+// `reason` is the operator's audited justification (3–500 chars, mirroring the
+// approve/change-request bounds). Unlike approve, retry APPLIES the re-drive
+// synchronously (single-admin step-up), but it moves NO money on this surface: it
+// re-arms the EXISTING settlement outbox row so the engine's reconciler re-verifies
+// the payout with the provider and finalises/refunds atomically (§3.1).
+export const TreasuryPayoutRetryRequestSchema = z.object({
+  reason: z.string().min(3).max(500),
+});
+export type TreasuryPayoutRetryRequest = z.infer<
+  typeof TreasuryPayoutRetryRequestSchema
+>;
+
+// ── Response: the re-drive was enqueued for the offending sell payout ──────────────
+// `payoutId` echoes the queued payout; `transactionId` is the SERVER-resolved sell
+// transaction; `status` is always "retry_enqueued" (the engine settles asynchronously
+// — no money moves here); `reChecked` is always true (the user passed the server-side
+// KYC/status/compliance re-check before the re-drive was armed, §3.3).
+export const TreasuryPayoutRetryResponseSchema = z.object({
+  payoutId: z.string(),
+  transactionId: z.string(),
+  status: z.literal("retry_enqueued"),
+  reChecked: z.boolean(),
+});
+export type TreasuryPayoutRetryResponse = z.infer<
+  typeof TreasuryPayoutRetryResponseSchema
+>;

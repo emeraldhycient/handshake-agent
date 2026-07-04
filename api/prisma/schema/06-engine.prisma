@@ -368,3 +368,96 @@ enum DirectiveOrigin {
 
   @@map("directive_origin")
 }
+
+/// Durable reconciliation run log (Go-readiness #3). Each execution of a reconciler
+/// (the settlement-outbox cron re-drive, or the admin-triggered wallet-deposit
+/// on-chain-vs-ledger check) persists ONE run — persist-first, so a run row exists
+/// even if the batch crashes mid-flight. Replaces the previous behaviour where runs
+/// emitted only to logs/HTTP responses and left no durable history. Read/annotate
+/// only — reconciliation moves no money itself (§3.1).
+model ReconRun {
+  id             String         @id @default(uuid(7)) @db.Uuid
+  runType        ReconRunType
+  status         ReconRunStatus @default(running)
+  /// Rows/assets examined this run.
+  totalChecked   Int            @default(0)
+  /// Discrepancies recorded this run (== count of related ReconBreak rows).
+  breaksDetected Int            @default(0)
+  startedAt      DateTime       @db.Timestamptz
+  completedAt    DateTime?      @db.Timestamptz
+  createdAt      DateTime       @default(now()) @db.Timestamptz
+
+  breaks ReconBreak[]
+
+  @@index([status, createdAt])
+  @@map("recon_runs")
+}
+
+enum ReconRunType {
+  settlement_outbox
+  wallet_deposit
+
+  @@map("recon_run_type")
+}
+
+enum ReconRunStatus {
+  running
+  completed
+  failed
+
+  @@map("recon_run_status")
+}
+
+/// One detected reconciliation discrepancy, tied to the run that found it. The
+/// detected facts (breakType/delta/currency + the offending id refs) are immutable;
+/// only the disposition annotation (status/approvedByAdminId/reason/actionAt) is
+/// ever mutated — an operator moves a break detected → acknowledged → resolved/
+/// rejected, each write immutably audited (mirrors the ComplianceEvent disposition
+/// pattern, §3.6). userId/walletId/outboxId/approvedByAdminId are PLAIN refs (not
+/// FKs) — decoupled from the offending aggregate's lifecycle. An over_credit is
+/// FLAGGED, never auto-debited (§3.1).
+model ReconBreak {
+  id                String               @id @default(uuid(7)) @db.Uuid
+  reconRunId        String               @db.Uuid
+  breakType         ReconBreakType
+  /// Opaque refs to the offending records (nullable — a settlement break carries an
+  /// outboxId, a wallet break carries userId+walletId). Plain refs, not FKs.
+  userId            String?              @db.Uuid
+  walletId          String?              @db.Uuid
+  outboxId          String?              @db.Uuid
+  /// "NGN" | "USDT" | "TRX" — the delta's unit.
+  currency          String
+  /// Signed discrepancy (provider/on-chain minus ledger).
+  delta             Decimal              @db.Decimal(38, 18)
+  status            ReconBreakStatus     @default(detected)
+  /// Disposition annotation — null until an operator acts. Plain admin ref, not FK.
+  approvedByAdminId String?              @db.Uuid
+  /// Operator's audited justification for the disposition.
+  reason            String?
+  actionAt          DateTime?            @db.Timestamptz
+  createdAt         DateTime             @default(now()) @db.Timestamptz
+  updatedAt         DateTime             @updatedAt @db.Timestamptz
+
+  run ReconRun @relation(fields: [reconRunId], references: [id])
+
+  @@index([reconRunId, status])
+  @@index([userId, status])
+  @@map("recon_breaks")
+}
+
+enum ReconBreakType {
+  balance_mismatch
+  over_credit
+  settlement_failure
+
+  @@map("recon_break_type")
+}
+
+enum ReconBreakStatus {
+  detected
+  acknowledged
+  resolved
+  rejected
+
+  @@map("recon_break_status")
+}

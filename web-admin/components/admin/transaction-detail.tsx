@@ -78,6 +78,7 @@ import type {
   StatusPillStatus,
   TransactionDetailProps,
 } from "@/types/components"
+import { formatFiat } from "@/lib/format"
 
 // ─── Presentation helpers ─────────────────────────────────────────────────────────
 
@@ -856,16 +857,16 @@ function economicsRows(
 ): { label: string; value: string; warn?: boolean }[] {
   const amount =
     e.amount && e.asset ? `${e.amount} ${e.asset}` : e.amount ?? DASH
-  const fiat =
-    e.fiatAmount && e.fiatCurrency
-      ? `${e.fiatCurrency} ${e.fiatAmount}`
-      : e.fiatAmount ?? DASH
+  const fc = e.fiatCurrency
+  const money = (v: string | null): string =>
+    v !== null && fc ? formatFiat(v, fc) : v ?? DASH
+  const fiat = e.fiatAmount ? money(e.fiatAmount) : DASH
   const spread = e.fxSpreadBps ? `${e.fxSpreadBps} bps` : DASH
-  return [
+  const rows: { label: string; value: string; warn?: boolean }[] = [
     { label: "Amount", value: amount },
     { label: "Fiat leg", value: fiat },
     { label: "Rate (spread-folded)", value: e.rate ?? DASH },
-    { label: "Processing fee", value: e.processingFee ?? DASH },
+    { label: "Processing fee", value: money(e.processingFee) },
     { label: "FX spread", value: spread },
     {
       label: "Internal margin (operator)",
@@ -873,6 +874,24 @@ function economicsRows(
       warn: true,
     },
   ]
+  // Realized economics (operator-only) — only for priced buy/sell (realizedProfit
+  // non-null); derived from the settle-stamped metadata via computeTxProfit.
+  if (e.realizedProfit !== null) {
+    rows.push(
+      { label: "Realized fee (operator)", value: money(e.realizedFee), warn: true },
+      {
+        label: "Realized spread (operator)",
+        value: money(e.realizedSpread),
+        warn: true,
+      },
+      {
+        label: "Realized profit (operator)",
+        value: money(e.realizedProfit),
+        warn: true,
+      },
+    )
+  }
+  return rows
 }
 
 /** One double-entry ledger leg → the design's Account/Dir/Amount/Seq row. */

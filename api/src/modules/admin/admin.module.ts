@@ -109,6 +109,8 @@ import { UserSessionReadPrismaRepository } from './infrastructure/user-session-r
 import { VELOCITY_REPOSITORY } from '../identity/application/ports/velocity.repository.port';
 import { VelocityPrismaRepository } from '../identity/infrastructure/velocity.prisma.repository';
 import { AdminTxnOversightService } from './application/admin-txn-oversight.service';
+import { AdminSearchService } from './application/admin-search.service';
+import { AdminSearchController } from './presentation/admin-search.controller';
 import { AdminTxnTriageService } from './application/admin-txn-triage.service';
 import { AdminLedgerService } from './application/admin-ledger.service';
 import { AdminComplianceService } from './application/admin-compliance.service';
@@ -144,9 +146,12 @@ import { ReconciliationReadPrismaRepository } from './infrastructure/reconciliat
 // and the provider liveness probe (port + HttpService adapter).
 import { AdminOpsRunService } from './application/admin-ops-run.service';
 import { AdminTreasuryPayoutService } from './application/admin-treasury-payout.service';
+import { AdminTreasuryPayoutRetryService } from './application/admin-treasury-payout-retry.service';
 import { AdminProviderProbeService } from './application/admin-provider-probe.service';
 import { PROVIDER_PROBE } from './application/ports/provider-probe.port';
 import { HttpProviderProbeAdapter } from './infrastructure/http-provider-probe.adapter';
+import { PROVIDER_CONNECTIVITY } from './application/ports/provider-connectivity.port';
+import { CachedProviderConnectivityAdapter } from './infrastructure/cached-provider-connectivity.adapter';
 import { AdminApprovalsService } from './application/admin-approvals.service';
 import { AdminManualCreditService } from './application/admin-manual-credit.service';
 import { CHANGE_REQUEST_REPOSITORY } from './application/ports/change-request.repository.port';
@@ -273,6 +278,7 @@ import type { Env } from '../../core/config/env.schema';
     }),
   ],
   controllers: [
+    AdminSearchController,
     AdminWalletsController,
     AdminAuthController,
     AdminUsersController,
@@ -389,6 +395,7 @@ import type { Env } from '../../core/config/env.schema';
     // TRANSACTION_REPOSITORY comes from the imported TransactionsModule;
     // LEDGER_REPOSITORY is bound locally below.
     AdminTxnOversightService,
+    AdminSearchService,
     // Phase 3, sub-area B (ENGINE-BROKERED): transaction triage — mark-failed +
     // refund (via SETTLEMENT_REPOSITORY refund methods) and retry (re-enqueue the
     // SETTLEMENT_OUTBOX_REPOSITORY row). Both tokens + CLOCK come from the imported
@@ -467,6 +474,11 @@ import type { Env } from '../../core/config/env.schema';
     // releases NO money here; a second admin's approval re-drives settlement via the
     // engine's atomic path (§3.1). Reaches the payout via TREASURY_READ_REPOSITORY.
     AdminTreasuryPayoutService,
+    // Go-readiness #2 (WRITE — single-admin step-up): retry a STUCK settling sell
+    // payout, engine-brokered (re-arms the existing outbox row) + server-side
+    // re-checked. Reaches data via the treasury-read/transaction/outbox/compliance
+    // ports + KycGateService + AuditService — no ExecutionService import (§3.1/§3.2).
+    AdminTreasuryPayoutRetryService,
     // Phase 6b (READ-ONLY): full asset + fiat catalog view (Config group's Asset /
     // Currency screens). AdminCatalogService reads the merged catalog via the global
     // EffectiveConfigService — no repo, no Prisma, never moves money (§3.1/§3.2).
@@ -483,6 +495,14 @@ import type { Env } from '../../core/config/env.schema';
     // NO money (§3.1). Execute-gated + step-up-gated at the controller.
     AdminProviderProbeService,
     { provide: PROVIDER_PROBE, useClass: HttpProviderProbeAdapter },
+    // System-health card: cached, credential-free provider LIVENESS view (45s TTL +
+    // single-flight) behind PROVIDER_CONNECTIVITY. Wraps the PROVIDER_PROBE adapter
+    // (bound above) + ConfigService + CLOCK; feeds MetricsOpsReadPrismaRepository's
+    // non-settling providers. Read-only, no secret leaves the boundary (§3.1/§3.4).
+    {
+      provide: PROVIDER_CONNECTIVITY,
+      useClass: CachedProviderConnectivityAdapter,
+    },
     // Phase 7 (WRITES — maker-checker): the APPROVALS change-request engine. A
     // pending request raised by one admin is applied ONLY on a DIFFERENT admin's
     // approval, and the apply RE-EXECUTES through the target service's atomic path

@@ -19,6 +19,7 @@ import {
   TreasuryFxPositionResponseSchema,
   TreasuryPayoutQueueResponseSchema,
   TreasuryPayoutApproveResponseSchema,
+  TreasuryPayoutRetryResponseSchema,
   TreasurySweepListResponseSchema,
   WithdrawalPolicyListResponseSchema,
   type TreasuryAlert,
@@ -29,12 +30,14 @@ import {
   type TreasuryFxPositionResponse,
   type TreasuryPayoutQueueResponse,
   type TreasuryPayoutApproveResponse,
+  type TreasuryPayoutRetryResponse,
   type TreasurySweepListResponse,
   type WithdrawalPolicyListResponse,
 } from '@handshake-agent/contracts';
 
 import { AdminTreasuryService } from '../application/admin-treasury.service';
 import { AdminTreasuryPayoutService } from '../application/admin-treasury-payout.service';
+import { AdminTreasuryPayoutRetryService } from '../application/admin-treasury-payout-retry.service';
 import { AdminSessionGuard } from './admin-session.guard';
 import { PermissionGuard } from './permission.guard';
 import { AdminStepUpGuard } from './admin-step-up.guard';
@@ -43,6 +46,7 @@ import { RequirePermission } from './require-permission.decorator';
 import {
   TreasuryAlertAcknowledgeDto,
   TreasuryAlertQueryDto,
+  TreasuryPayoutRetryDto,
 } from './dto/admin-treasury.dto';
 import { TreasuryPayoutApproveDto } from './dto/admin-ops-recon-treasury-action.dto';
 
@@ -59,6 +63,7 @@ export class AdminTreasuryController {
   constructor(
     private readonly treasury: AdminTreasuryService,
     private readonly payouts: AdminTreasuryPayoutService,
+    private readonly payoutRetry: AdminTreasuryPayoutRetryService,
   ) {}
 
   // ── balances ─────────────────────────────────────────────────────────────────
@@ -164,6 +169,30 @@ export class AdminTreasuryController {
   ): Promise<TreasuryPayoutApproveResponse> {
     return TreasuryPayoutApproveResponseSchema.parse(
       await this.payouts.approve(id, dto.reason, admin.adminId),
+    );
+  }
+
+  // ── stuck payout retry (go-readiness #2, WRITE — single-admin step-up) ────────────
+  // Re-drives a STUCK settling payout (sell fiat payout OR on-chain send) through the
+  // engine after a server-side re-check. It re-arms the EXISTING settlement outbox row
+  // (original idempotency key) — it moves NO money here and rejects a completed payout
+  // (no double-pay, §3.1). The txn type (sell/send) is resolved server-side from :id.
+
+  @Post('payouts/:id/retry')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AdminStepUpGuard)
+  @RequirePermission(
+    'api_route',
+    'POST /admin/treasury/payouts/:id/retry',
+    'execute',
+  )
+  async retryPayout(
+    @Param('id') id: string,
+    @Body() dto: TreasuryPayoutRetryDto,
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<TreasuryPayoutRetryResponse> {
+    return TreasuryPayoutRetryResponseSchema.parse(
+      await this.payoutRetry.retryPayout(id, dto.reason, admin.adminId),
     );
   }
 

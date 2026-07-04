@@ -39,8 +39,10 @@ import { useRouter } from "next/navigation"
 
 import { cn } from "@/lib/utils"
 import { rangeForDays } from "@/lib/metrics-range"
+import { formatMoneyList } from "@/lib/format"
 import { KpiCard } from "@/components/admin/kpi-card"
 import { ChartBars } from "@/components/admin/chart-bars"
+import { FeatureCard } from "@/components/admin/feature-card"
 import { useOperatorAlerts, type AdminAlert } from "@/components/admin/use-operator-alerts"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -120,25 +122,20 @@ function deriveKpis(
   const pendingKyc = kycFunnel.byStatus
     .filter((s) => PENDING_KYC_STATUSES.has(s.status))
     .reduce((sum, s) => sum + s.count, 0)
-  const primaryFee = revenue.totalFeesByCurrency[0]
-  const revenueValue = primaryFee
-    ? `${primaryFee.currency} ${primaryFee.amount}`
-    : "—"
-  const revenueNote =
-    revenue.totalFeesByCurrency.length > 1
-      ? `+${revenue.totalFeesByCurrency.length - 1} more`
-      : "fees"
-
-  // GMV: the summed fiat notional of completed money-moving txns (primary
-  // currency). "—" only when no completed txn carried a fiat notional in range.
-  const primaryGmv = gmv.totalByCurrency[0]
-  const gmvValue = primaryGmv
-    ? `${primaryGmv.currency} ${primaryGmv.amount}`
-    : "—"
-  const gmvNote =
-    gmv.totalByCurrency.length > 1
-      ? `+${gmv.totalByCurrency.length - 1} more`
-      : "gross"
+  // Money tiles show EVERY currency (each with its own symbol via formatFiat),
+  // never the first-currency-only or a cross-currency sum (go-readiness #11/#12).
+  const revenueValue = formatMoneyList(revenue.totalFeesByCurrency)
+  const revenueNote = "fees"
+  // Profit = fees + realized bid-ask spread, DERIVED per completed buy/sell from
+  // its Quote (docs §5).
+  const profitValue = formatMoneyList(revenue.totalProfitByCurrency)
+  const profitNote =
+    revenue.totalSpreadByCurrency.length > 0
+      ? `${formatMoneyList(revenue.totalSpreadByCurrency)} spread`
+      : "fees + spread"
+  // GMV: summed fiat notional of completed money-moving txns, per currency.
+  const gmvValue = formatMoneyList(gmv.totalByCurrency)
+  const gmvNote = "gross"
 
   return [
     // Hero: the backend surfaces per-type COUNTS, not a fiat money sum — show the
@@ -157,12 +154,19 @@ function deriveKpis(
       delta: `${gmv.txnCount.toLocaleString()}`,
       deltaNote: gmvNote,
     },
-    // Revenue: fees only; spread is folded into FX and not separately ledgered.
+    // Revenue: complete processing fees (buy + sell), derived from the Quote.
     {
       label: "Revenue (fees)",
       value: revenueValue,
       delta: `${revenue.txnCount.toLocaleString()}`,
       deltaNote: revenueNote,
+    },
+    // Profit: fees + realized spread margin (derived per completed buy/sell).
+    {
+      label: "Profit",
+      value: profitValue,
+      delta: `${revenue.txnCount.toLocaleString()}`,
+      deltaNote: profitNote,
     },
     {
       label: "Transactions",
@@ -374,28 +378,6 @@ const APPROVAL_KIND_LABEL: Record<ChangeRequestKind, string> = {
 
 /** How many awaiting-me requests the dashboard teaser shows. */
 const APPROVALS_PANEL_LIMIT = 3
-
-// ─── Shared card + title primitives (design §5) ──────────────────────────────────────
-
-/** Feature card — radius 18px, 1px `--line` border, `--card` surface, 20/22 padding. */
-function FeatureCard({
-  className,
-  children,
-}: {
-  className?: string
-  children: React.ReactNode
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-[18px] border border-line bg-card px-[22px] py-5",
-        className
-      )}
-    >
-      {children}
-    </div>
-  )
-}
 
 // ─── Cards ───────────────────────────────────────────────────────────────────────────
 

@@ -11,6 +11,7 @@ import type {
   AdminTxnViewCounts,
 } from '@handshake-agent/contracts';
 
+import { computeTxProfit } from '../domain/tx-profit';
 import {
   LEDGER_REPOSITORY,
   type ILedgerRepository,
@@ -140,7 +141,7 @@ export class AdminTxnOversightService {
       executedAt: toIso(txn.executedAt),
       completedAt: toIso(txn.completedAt),
       failedAt: toIso(txn.failedAt),
-      economics: this.deriveEconomics(txn.metadata),
+      economics: this.deriveEconomics(txn.metadata, txn.type),
       ledgerLegs: legs.map((l) => this.toLeg(l)),
       timeline: this.deriveTimeline(txn),
       providerReferences: this.deriveProviderReferences(txn),
@@ -189,19 +190,44 @@ export class AdminTxnOversightService {
    * Absent values stay null — nothing is fabricated. The operator-only internal
    * margin is the (effective − base) rate delta applied to the crypto amount.
    */
-  private deriveEconomics(meta: Record<string, unknown>): AdminTxnEconomics {
+  private deriveEconomics(
+    meta: Record<string, unknown>,
+    type: string,
+  ): AdminTxnEconomics {
     const amount = cryptoAmount(meta);
     const rate = str(meta.fxRate);
     const baseRate = str(meta.baseRate);
+    const fiatAmount = str(meta.fiatAmount) ?? str(meta.netFiatAmount);
+    const processingFee = str(meta.processingFeeAmount);
+    // Realized fee + spread for a completed buy/sell, from the settle-stamped
+    // metadata (buy fiatAmount = GROSS, sell = NET — the computeTxProfit convention).
+    // Non-priced types (send/swap) or absent quote fields → null (nothing fabricated).
+    const realized =
+      (type === 'buy' || type === 'sell') &&
+      fiatAmount !== null &&
+      amount !== null &&
+      baseRate !== null &&
+      processingFee !== null
+        ? computeTxProfit({
+            type,
+            fiatAmount,
+            cryptoAmount: amount,
+            baseRate,
+            processingFeeAmount: processingFee,
+          })
+        : null;
     return {
       asset: str(meta.asset) ?? str(meta.fromAsset),
       amount,
-      fiatAmount: str(meta.fiatAmount) ?? str(meta.netFiatAmount),
+      fiatAmount,
       fiatCurrency: str(meta.fiatCurrency),
       rate,
-      processingFee: str(meta.processingFeeAmount),
+      processingFee,
       fxSpreadBps: str(meta.spreadBps),
       internalMargin: internalMargin(rate, baseRate, amount),
+      realizedFee: realized?.fee ?? null,
+      realizedSpread: realized?.spread ?? null,
+      realizedProfit: realized?.profit ?? null,
     };
   }
 

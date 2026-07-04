@@ -7,19 +7,21 @@
  * (dependency-cruiser rule §3.2). Maps Prisma rows → application-layer records; the
  * service never sees Prisma types. Nothing here mutates anything (§3.1).
  *
- * SYSTEM HEALTH (how it is derived):
- *   There is no synthetic provider probe. We infer each provider's health from the
- *   recent SettlementOutbox dispatch history for the settlement types it serves
- *   (Flutterwave = processor collection/payout; Blockradar = on-chain send/swap):
- *   all-failed → `down`, some-failed → `degraded`, else `ok`. Providers with no
- *   settlement source (Resend/WhatsApp/Anthropic) report `ok` / latency null — we
- *   never fabricate a latency figure. `lastLatencyMs` is the most recent observed
- *   dispatch (createdAt/lastAttemptAt → completedAt) duration.
+ * SYSTEM HEALTH (how it is derived) — two paths:
+ *   SETTLING providers (Flutterwave = processor collection/payout; Blockradar =
+ *   on-chain send/swap) are inferred from the recent SettlementOutbox dispatch
+ *   history for the settlement types they serve: all-failed → `down`, some-failed →
+ *   `degraded`, else `ok`; `lastLatencyMs` is the most recent observed dispatch
+ *   (createdAt/lastAttemptAt → completedAt) duration.
+ *   NON-SETTLING providers (Resend/WhatsApp/Anthropic) have no outbox source, so they
+ *   derive from a short-TTL cached liveness probe (PROVIDER_CONNECTIVITY) — real
+ *   reachability + latency. An unobserved result (mock / not-configured / no host)
+ *   falls back to `ok` / latency null; we never fabricate a latency figure.
  *   `webhookQueueDepth` = SettlementOutbox rows still awaiting completion.
  *   `reconDriftCount`   = CompensationRecord rows not yet issued/declined/cancelled.
  */
 
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 
 import {
   AuditAction,
@@ -38,6 +40,10 @@ import type {
   ProviderHealthRow,
   SystemHealthResult,
 } from '../application/ports/metrics-ops-read.repository.port';
+import {
+  PROVIDER_CONNECTIVITY,
+  type IProviderConnectivity,
+} from '../application/ports/provider-connectivity.port';
 
 /** How many recent SettlementOutbox rows to sample per provider for health. */
 const HEALTH_SAMPLE = 25;
@@ -103,7 +109,11 @@ const OPEN_COMPLIANCE_STATUSES: ComplianceStatus[] = [
 
 @Injectable()
 export class MetricsOpsReadPrismaRepository implements IMetricsOpsReadRepository {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(PROVIDER_CONNECTIVITY)
+    private readonly connectivity: IProviderConnectivity,
+  ) {}
 
   async systemHealth(): Promise<SystemHealthResult> {
     const [providers, webhookQueueDepth, reconDriftCount] = await Promise.all([
@@ -124,8 +134,19 @@ export class MetricsOpsReadPrismaRepository implements IMetricsOpsReadRepository
     return Promise.all(
       PROVIDERS.map(async (provider) => {
         if (provider.settlementTypes.length === 0) {
-          // No settlement source — report available with no observed latency
-          // rather than fabricate a probe result.
+          // No settlement source — derive liveness from the cached connectivity
+          // probe. An unobserved result (mock / not-configured / no host) keeps the
+          // ok/null placeholder rather than surface a fabricated status.
+          const c = await this.connectivity.statusFor(provider.key);
+          if (c !== null && c.observed) {
+            return {
+              key: provider.key,
+              name: provider.name,
+              note: provider.note,
+              status: c.status,
+              lastLatencyMs: c.latencyMs,
+            };
+          }
           return {
             key: provider.key,
             name: provider.name,

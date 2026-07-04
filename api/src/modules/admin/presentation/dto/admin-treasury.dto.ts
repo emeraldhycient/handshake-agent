@@ -1,7 +1,10 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
-import { TreasuryAlertAcknowledgeRequestSchema } from '@handshake-agent/contracts';
+import {
+  TreasuryAlertAcknowledgeRequestSchema,
+  TreasuryPayoutRetryRequestSchema,
+} from '@handshake-agent/contracts';
 
 /**
  * Query DTO for GET /admin/treasury/alerts. `acknowledged` filters the feed:
@@ -23,4 +26,9 @@ export class TreasuryAlertQueryDto extends createZodDto(
 /** Body DTO for POST /admin/treasury/alerts/:id/acknowledge (optional note). */
 export class TreasuryAlertAcknowledgeDto extends createZodDto(
   TreasuryAlertAcknowledgeRequestSchema,
+) {}
+
+/** Body DTO for POST /admin/treasury/payouts/:id/retry (operator reason, required). */
+export class TreasuryPayoutRetryDto extends createZodDto(
+  TreasuryPayoutRetryRequestSchema,
 ) {}

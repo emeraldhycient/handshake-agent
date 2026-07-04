@@ -298,6 +298,11 @@ describe('AdminTxnOversightService', () => {
         fxSpreadBps: '150',
         // internalMargin = (fxRate - baseRate) × cryptoAmount = 23.43 × 10.5.
         internalMargin: '246.015',
+        // Realized (buy): fee 82.5; mid = 10.5×1548 = 16254; spread = 16500 − 82.5
+        // − 16254 = 163.5; profit = fee + spread = 246.
+        realizedFee: '82.5',
+        realizedSpread: '163.5',
+        realizedProfit: '246',
       });
       // Provider refs: Flutterwave (processorTxRef) + Blockradar (metadata.providerRef).
       expect(detail.providerReferences).toEqual([

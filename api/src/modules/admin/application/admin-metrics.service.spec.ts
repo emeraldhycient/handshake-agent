@@ -4,6 +4,8 @@ import type {
   TransactionVolumeResult,
   GmvResult,
   RevenueResult,
+  MoneySeriesResult,
+  PlatformKpisResult,
   KycFunnelResult,
   ActiveUsersResult,
   ServiceHealthResult,
@@ -38,8 +40,29 @@ function makeGmv(): GmvResult {
 function makeRevenue(): RevenueResult {
   return {
     totalFeesByCurrency: [{ currency: 'NGN', amount: '150' }],
-    totalSpreadByCurrency: [],
+    totalSpreadByCurrency: [{ currency: 'NGN', amount: '90' }],
+    totalProfitByCurrency: [{ currency: 'NGN', amount: '240' }],
     txnCount: 2,
+  };
+}
+function makeMoneySeries(): MoneySeriesResult {
+  return {
+    buckets: [
+      {
+        date: '2026-06-01',
+        gmv: [{ currency: 'NGN', amount: '50000' }],
+        revenue: [{ currency: 'NGN', amount: '150' }],
+        profit: [{ currency: 'NGN', amount: '240' }],
+      },
+    ],
+    currencies: ['NGN'],
+  };
+}
+function makePlatformKpis(): PlatformKpisResult {
+  return {
+    newUsers: { current: 12, previous: 8, growthRate: 0.5 },
+    churn: { activePrevious: 10, churned: 3, churnRate: 0.3 },
+    failedJobs: 2,
   };
 }
 function makeFunnel(): KycFunnelResult {
@@ -74,6 +97,8 @@ describe('AdminMetricsService', () => {
       transactionVolume: jest.fn().mockResolvedValue(makeVolume()),
       gmv: jest.fn().mockResolvedValue(makeGmv()),
       revenue: jest.fn().mockResolvedValue(makeRevenue()),
+      moneySeries: jest.fn().mockResolvedValue(makeMoneySeries()),
+      platformKpis: jest.fn().mockResolvedValue(makePlatformKpis()),
       kycFunnel: jest.fn().mockResolvedValue(makeFunnel()),
       activeUsers: jest.fn().mockResolvedValue(makeActive()),
       serviceHealth: jest.fn().mockResolvedValue(makeHealth()),
@@ -143,6 +168,69 @@ describe('AdminMetricsService', () => {
       });
       expect(repo.gmv).toHaveBeenCalled();
       expect(result).toEqual(makeGmv());
+    });
+  });
+
+  describe('moneySeries', () => {
+    it('maps the daily money-series result to the contract shape over the resolved range', async () => {
+      const result = await service.moneySeries({
+        from: '2026-06-01',
+        to: '2026-06-30',
+      });
+      const [from, to] = repo.moneySeries.mock.calls[0];
+      expect(from.toISOString().slice(0, 10)).toBe('2026-06-01');
+      expect(to.toISOString().slice(0, 10)).toBe('2026-06-30');
+      expect(result).toEqual(makeMoneySeries());
+    });
+  });
+
+  describe('platformKpis', () => {
+    it('maps the KPI result over the resolved range', async () => {
+      const result = await service.platformKpis({
+        from: '2026-06-01',
+        to: '2026-06-30',
+      });
+      const [from, to] = repo.platformKpis.mock.calls[0];
+      expect(from.toISOString().slice(0, 10)).toBe('2026-06-01');
+      expect(to.toISOString().slice(0, 10)).toBe('2026-06-30');
+      expect(result).toEqual(makePlatformKpis());
+    });
+  });
+
+  describe('filters', () => {
+    it('threads currency/capability/tier into the repo as the filter argument', async () => {
+      await service.dashboard({
+        from: '2026-06-01',
+        to: '2026-06-30',
+        currency: 'NGN',
+        capability: 'buy',
+        tier: 'tier_2',
+      });
+      const [, , filter] = repo.transactionVolume.mock.calls[0];
+      expect(filter).toEqual({
+        currency: 'NGN',
+        capability: 'buy',
+        tier: 'tier_2',
+      });
+      // gmv/revenue/activeUsers/serviceHealth get the same filter object.
+      expect(repo.gmv.mock.calls[0][2]).toEqual(filter);
+      expect(repo.revenue.mock.calls[0][2]).toEqual(filter);
+    });
+
+    it('maps empty-string filters to undefined (treated as no selection)', async () => {
+      await service.transactions({
+        from: '2026-06-01',
+        to: '2026-06-30',
+        currency: '',
+        capability: '',
+        tier: '',
+      });
+      const [, , filter] = repo.transactionVolume.mock.calls[0];
+      expect(filter).toEqual({
+        currency: undefined,
+        capability: undefined,
+        tier: undefined,
+      });
     });
   });
 

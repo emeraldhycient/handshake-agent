@@ -8,9 +8,16 @@ import { z } from "zod";
 
 // Date-range query: both bounds are optional ISO date strings. When omitted the
 // service defaults to the last 30 days and clamps the window at 366 days.
+// Optional filters narrow the aggregations: `capability` (a Transaction type) and
+// `tier` (a KYC tier) scope every txn-based metric; `currency` (an ISO fiat code)
+// scopes the money metrics (GMV / revenue / money-series). Unknown/empty values
+// are ignored server-side (no-op), so the FE may always send the current selection.
 export const MetricsRangeQuerySchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
+  currency: z.string().optional(),
+  capability: z.string().optional(),
+  tier: z.string().optional(),
 });
 export type MetricsRangeQuery = z.infer<typeof MetricsRangeQuerySchema>;
 
@@ -77,26 +84,69 @@ export const GmvMetricsSchema = z.object({
 });
 export type GmvMetrics = z.infer<typeof GmvMetricsSchema>;
 
-// Revenue: platform fee revenue per currency (the `platform_float` fee legs) and
-// spread per currency. Spread is folded into the fx rate and NOT separately
-// ledgered, so it is reported as an empty array (see metrics-read repo comment).
-// Amounts are canonical decimal strings; txnCount is the count of COMPLETED txns.
+// Revenue: platform profit per currency, DERIVED from the authoritative Quote
+// snapshot of each completed buy/sell (safe, ledger-non-invasive — see
+// docs/go-readiness-program.md §5 and the metrics-read repo). `totalFeesByCurrency`
+// is the complete processing fee (buy AND sell), `totalSpreadByCurrency` is the
+// realized bid-ask spread margin (no longer empty), and `totalProfitByCurrency` is
+// their sum. Amounts are canonical decimal strings; txnCount = COMPLETED txns.
+const CurrencyAmountSchema = z.object({
+  currency: z.string(),
+  amount: z.string(),
+});
 export const RevenueMetricsSchema = z.object({
-  totalFeesByCurrency: z.array(
-    z.object({
-      currency: z.string(),
-      amount: z.string(),
-    }),
-  ),
-  totalSpreadByCurrency: z.array(
-    z.object({
-      currency: z.string(),
-      amount: z.string(),
-    }),
-  ),
+  totalFeesByCurrency: z.array(CurrencyAmountSchema),
+  totalSpreadByCurrency: z.array(CurrencyAmountSchema),
+  totalProfitByCurrency: z.array(CurrencyAmountSchema),
   txnCount: z.number(),
 });
 export type RevenueMetrics = z.infer<typeof RevenueMetricsSchema>;
+
+// One day of the money time-series: an ISO UTC date (YYYY-MM-DD) and the per-
+// currency GMV, revenue (processing fees) and profit (fees + realized spread)
+// realized that day. Amounts are canonical decimal STRINGS (exact scaled-integer
+// arithmetic — never floats). Only days with at least one completed money-moving
+// transaction appear; the FE zero-fills gaps at chart time.
+export const MoneySeriesBucketSchema = z.object({
+  date: z.string(),
+  gmv: z.array(CurrencyAmountSchema),
+  revenue: z.array(CurrencyAmountSchema),
+  profit: z.array(CurrencyAmountSchema),
+});
+export type MoneySeriesBucket = z.infer<typeof MoneySeriesBucketSchema>;
+
+// The daily money time-series for the range: the sorted (ascending) per-day
+// buckets plus the distinct fiat currencies present anywhere in the range (sorted)
+// so the FE can build a currency selector without re-scanning every bucket. Feeds
+// the operator "Revenue & profit trend" chart. Read-only; nothing moves money (§3.1).
+export const MoneySeriesMetricsSchema = z.object({
+  buckets: z.array(MoneySeriesBucketSchema),
+  currencies: z.array(z.string()),
+});
+export type MoneySeriesMetrics = z.infer<typeof MoneySeriesMetricsSchema>;
+
+// Platform lifecycle/ops KPIs for a range, each compared against the immediately
+// preceding equal-length window. `newUsers.growthRate` is a signed ratio
+// (0.5 = +50%, -0.2 = -20%; +1 when the previous window had none but this one has
+// some). `churn` counts users active in the PREVIOUS window with no activity in the
+// current one (`churnRate` = churned / activePrevious, 0..1). `failedJobs` is the
+// count of failed background jobs (settlement-outbox + wallet-backfill) in range.
+// Range-scoped (period-over-period) — the dashboard capability/tier/currency filters
+// do not apply (these are platform-wide lifecycle metrics). Nothing moves money (§3.1).
+export const PlatformKpisSchema = z.object({
+  newUsers: z.object({
+    current: z.number(),
+    previous: z.number(),
+    growthRate: z.number(),
+  }),
+  churn: z.object({
+    activePrevious: z.number(),
+    churned: z.number(),
+    churnRate: z.number(),
+  }),
+  failedJobs: z.number(),
+});
+export type PlatformKpis = z.infer<typeof PlatformKpisSchema>;
 
 // KYC funnel: user counts grouped by kycStatus and by kycTier (point-in-time, not
 // date-ranged — the funnel reflects the current population).

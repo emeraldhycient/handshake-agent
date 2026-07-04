@@ -25,17 +25,25 @@
 import { Injectable } from '@nestjs/common';
 
 import {
-  LedgerAccountType,
+  BackfillRunStatus,
+  KycTier,
+  QuoteType,
+  SettlementOutboxStatus,
   TransactionStatus,
   TransactionType,
 } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { computeTxProfit } from '../domain/tx-profit';
 import type {
   ActiveUsersResult,
   CurrencyAmount,
   GmvResult,
   IMetricsReadRepository,
   KycFunnelResult,
+  MetricsFilter,
+  MoneySeriesBucketRow,
+  MoneySeriesResult,
+  PlatformKpisResult,
   RevenueResult,
   ServiceHealthResult,
   ServiceHealthRow,
@@ -123,6 +131,42 @@ function dateKey(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Valid enum values, used to reject stale/unknown FE filter selections (no-op). */
+const TXN_TYPE_VALUES = new Set<string>(Object.values(TransactionType));
+const KYC_TIER_VALUES = new Set<string>(Object.values(KycTier));
+
+/** A KYC tier the FE actually selected (validated against the enum), else null. */
+function validTier(filter?: MetricsFilter): KycTier | null {
+  return filter?.tier && KYC_TIER_VALUES.has(filter.tier)
+    ? (filter.tier as KycTier)
+    : null;
+}
+
+/** A Transaction type the FE actually selected (validated), else null. */
+function validCapability(filter?: MetricsFilter): TransactionType | null {
+  return filter?.capability && TXN_TYPE_VALUES.has(filter.capability)
+    ? (filter.capability as TransactionType)
+    : null;
+}
+
+/**
+ * Shared Transaction where-fragment for the optional metrics filters: `capability`
+ * → `type`, `tier` → the owning user's `kycTier` (Prisma relation filter). Unknown
+ * enum values are ignored so a stale FE selection never throws. Currency is applied
+ * per-metric (JSON metadata vs quote field), not here.
+ */
+function txnFilterWhere(filter?: MetricsFilter): {
+  type?: TransactionType;
+  user?: { kycTier: KycTier };
+} {
+  const where: { type?: TransactionType; user?: { kycTier: KycTier } } = {};
+  const capability = validCapability(filter);
+  const tier = validTier(filter);
+  if (capability) where.type = capability;
+  if (tier) where.user = { kycTier: tier };
+  return where;
+}
+
 @Injectable()
 export class MetricsReadPrismaRepository implements IMetricsReadRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -130,11 +174,16 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
   async transactionVolume(
     from: Date,
     to: Date,
+    filter?: MetricsFilter,
   ): Promise<TransactionVolumeResult> {
+    const where = {
+      createdAt: { gte: from, lte: to },
+      ...txnFilterWhere(filter),
+    };
     // One scan: group by (type, status) for the per-type breakdown + success rate.
     const grouped = await this.prisma.transaction.groupBy({
       by: ['type', 'status'],
-      where: { createdAt: { gte: from, lte: to } },
+      where,
       _count: { _all: true },
     });
 
@@ -178,7 +227,7 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     // chart (buy/sell/send/swap/ticket per day); non-capability types (reward/
     // refund/deposit) count toward the flat total but not the stacked segments.
     const rows = await this.prisma.transaction.findMany({
-      where: { createdAt: { gte: from, lte: to } },
+      where,
       select: { createdAt: true, type: true },
     });
     const seriesMap = new Map<string, number>();
@@ -215,17 +264,19 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     };
   }
 
-  async gmv(from: Date, to: Date): Promise<GmvResult> {
+  async gmv(from: Date, to: Date, filter?: MetricsFilter): Promise<GmvResult> {
     // GMV = summed fiat notional of COMPLETED, money-moving txns in range. The
     // notional lives in Transaction.metadata as { fiatAmount, fiatCurrency } (set
     // by the execution engine at settle) — there is no first-class column. We sum
     // per currency with EXACT scaled-integer (×10^18) arithmetic; a txn without a
     // fiat notional (e.g. a pure on-chain send with no fiat leg) is skipped and
-    // does NOT count toward txnCount.
+    // does NOT count toward txnCount. A `currency` filter is applied IN-MEMORY
+    // (metadata is JSON — not a queryable column); capability/tier filter in-DB.
     const rows = await this.prisma.transaction.findMany({
       where: {
         status: TransactionStatus.completed,
         createdAt: { gte: from, lte: to },
+        ...txnFilterWhere(filter),
       },
       select: { metadata: true },
     });
@@ -238,6 +289,9 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
       const fiatAmount = meta.fiatAmount;
       const fiatCurrency = meta.fiatCurrency;
       if (typeof fiatAmount !== 'string' || typeof fiatCurrency !== 'string') {
+        continue;
+      }
+      if (filter?.currency && fiatCurrency !== filter.currency) {
         continue;
       }
       if (!sums.has(fiatCurrency)) {
@@ -261,41 +315,92 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     return { totalByCurrency, txnCount };
   }
 
-  async revenue(from: Date, to: Date): Promise<RevenueResult> {
-    // Platform-fee legs of COMPLETED txns in range, grouped by currency. We join
-    // through the transaction so only completed, in-range fees count. SUM cast to
-    // text keeps engine-precision values byte-stable strings (never a JS float);
-    // we re-sum with scaled BigInt to normalize to a canonical decimal string.
-    const feeRows = await this.prisma.ledgerEntry.findMany({
+  async revenue(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<RevenueResult> {
+    // Platform profit DERIVED from the authoritative Quote of each COMPLETED
+    // buy/sell in range (docs/go-readiness-program.md §5). Both the fee AND the
+    // realized spread are recoverable from the Quote (baseRate vs effective fxRate,
+    // cryptoAmount, fiatAmount), whereas the double-entry ledger only carries BUY
+    // fees — so this correctly counts sell fees + all spread the ledger misses,
+    // WITHOUT restructuring the settlement path. Exact BigInt (scale-18), no floats.
+    // capability/tier filter in-DB; `currency` filters the quote's fiatCurrency
+    // IN-MEMORY (keeps the enum-cast off the query — a stale code never throws).
+    // A non-buy/sell `capability` (e.g. send/swap) intentionally yields empty
+    // revenue: its `type` filter cannot co-exist with the buy/sell quote filter, so
+    // no row matches — correct, since those txns carry no fee/spread. `txnCount`
+    // below still reflects the completed txns of that type (it is the "completed"
+    // count the dashboard labels, not a "priced" count).
+    const priced = await this.prisma.transaction.findMany({
       where: {
-        accountType: LedgerAccountType.platform_float,
-        transaction: {
-          status: TransactionStatus.completed,
-          createdAt: { gte: from, lte: to },
+        status: TransactionStatus.completed,
+        createdAt: { gte: from, lte: to },
+        ...txnFilterWhere(filter),
+        proposal: { quote: { type: { in: [QuoteType.buy, QuoteType.sell] } } },
+      },
+      select: {
+        proposal: {
+          select: {
+            quote: {
+              select: {
+                type: true,
+                fiatCurrency: true,
+                fiatAmount: true,
+                cryptoAmount: true,
+                baseRate: true,
+                processingFeeAmount: true,
+              },
+            },
+          },
         },
       },
-      select: { currency: true, amount: true },
     });
 
-    const sums = new Map<string, bigint>();
+    const feeSums = new Map<string, bigint>();
+    const spreadSums = new Map<string, bigint>();
     const order: string[] = [];
-    for (const row of feeRows) {
-      const currency = row.currency;
-      if (!sums.has(currency)) {
+    for (const t of priced) {
+      const q = t.proposal?.quote;
+      if (!q) continue;
+      if (filter?.currency && q.fiatCurrency !== filter.currency) continue;
+      const { fee, spread } = computeTxProfit({
+        type: q.type === QuoteType.sell ? 'sell' : 'buy',
+        fiatAmount: (q.fiatAmount as { toString(): string }).toString(),
+        cryptoAmount: q.cryptoAmount,
+        baseRate: q.baseRate,
+        processingFeeAmount: (
+          q.processingFeeAmount as { toString(): string }
+        ).toString(),
+      });
+      const currency = q.fiatCurrency;
+      if (!feeSums.has(currency)) {
         order.push(currency);
-        sums.set(currency, 0n);
+        feeSums.set(currency, 0n);
+        spreadSums.set(currency, 0n);
       }
-      sums.set(
+      feeSums.set(currency, feeSums.get(currency)! + toScaledBigInt(fee));
+      spreadSums.set(
         currency,
-        sums.get(currency)! +
-          toScaledBigInt((row.amount as { toString(): string }).toString()),
+        spreadSums.get(currency)! + toScaledBigInt(spread),
       );
     }
 
-    const totalFeesByCurrency: CurrencyAmount[] = order
+    const project = (m: Map<string, bigint>): CurrencyAmount[] =>
+      order
+        .map((currency) => ({
+          currency,
+          amount: fromScaledBigInt(m.get(currency)!),
+        }))
+        .sort((a, b) => a.currency.localeCompare(b.currency));
+
+    const totalProfitByCurrency: CurrencyAmount[] = order
       .map((currency) => ({
         currency,
-        amount: fromScaledBigInt(sums.get(currency)!),
+        amount: fromScaledBigInt(
+          feeSums.get(currency)! + spreadSums.get(currency)!,
+        ),
       }))
       .sort((a, b) => a.currency.localeCompare(b.currency));
 
@@ -303,12 +408,142 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
       where: {
         status: TransactionStatus.completed,
         createdAt: { gte: from, lte: to },
+        ...txnFilterWhere(filter),
       },
     });
 
-    // Spread is folded into the fx rate and not separately ledgered — see the
-    // class-level comment. Report it as empty rather than guessing.
-    return { totalFeesByCurrency, totalSpreadByCurrency: [], txnCount };
+    return {
+      totalFeesByCurrency: project(feeSums),
+      totalSpreadByCurrency: project(spreadSums),
+      totalProfitByCurrency,
+      txnCount,
+    };
+  }
+
+  async moneySeries(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<MoneySeriesResult> {
+    // One scan of every COMPLETED txn in range, pulling BOTH the fiat notional
+    // (metadata → GMV, ALL money-moving types, consistent with `gmv()`) and the
+    // buy/sell Quote (→ fee + spread via `computeTxProfit`, consistent with
+    // `revenue()`). Bucket per UTC day and currency with EXACT scaled-integer math.
+    // A txn may contribute to GMV, to fee/profit, or to both; the GMV currency
+    // (metadata.fiatCurrency) and the fee currency (quote.fiatCurrency) are tracked
+    // independently. capability/tier filter in-DB; `currency` filters each leg
+    // IN-MEMORY (metadata JSON + quote code), consistent with gmv()/revenue().
+    const rows = await this.prisma.transaction.findMany({
+      where: {
+        status: TransactionStatus.completed,
+        createdAt: { gte: from, lte: to },
+        ...txnFilterWhere(filter),
+      },
+      select: {
+        createdAt: true,
+        metadata: true,
+        proposal: {
+          select: {
+            quote: {
+              select: {
+                type: true,
+                fiatCurrency: true,
+                fiatAmount: true,
+                cryptoAmount: true,
+                baseRate: true,
+                processingFeeAmount: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    interface Cell {
+      gmv: bigint;
+      fee: bigint;
+      profit: bigint;
+    }
+    // day (YYYY-MM-DD) → currency → accumulated scaled amounts.
+    const days = new Map<string, Map<string, Cell>>();
+    const currencySet = new Set<string>();
+
+    const cellFor = (day: string, currency: string): Cell => {
+      let byCurrency = days.get(day);
+      if (!byCurrency) {
+        byCurrency = new Map<string, Cell>();
+        days.set(day, byCurrency);
+      }
+      let cell = byCurrency.get(currency);
+      if (!cell) {
+        cell = { gmv: 0n, fee: 0n, profit: 0n };
+        byCurrency.set(currency, cell);
+      }
+      currencySet.add(currency);
+      return cell;
+    };
+
+    for (const row of rows) {
+      const day = dateKey(row.createdAt);
+
+      // GMV leg — fiat notional the engine stamped at settle.
+      const meta = (row.metadata ?? {}) as Record<string, unknown>;
+      const fiatAmount = meta.fiatAmount;
+      const fiatCurrency = meta.fiatCurrency;
+      if (
+        typeof fiatAmount === 'string' &&
+        typeof fiatCurrency === 'string' &&
+        (!filter?.currency || fiatCurrency === filter.currency)
+      ) {
+        cellFor(day, fiatCurrency).gmv += toScaledBigInt(fiatAmount);
+      }
+
+      // Fee + profit leg — derived from the buy/sell Quote snapshot.
+      const q = row.proposal?.quote;
+      if (
+        q &&
+        (q.type === QuoteType.buy || q.type === QuoteType.sell) &&
+        (!filter?.currency || q.fiatCurrency === filter.currency)
+      ) {
+        const { fee, spread } = computeTxProfit({
+          type: q.type === QuoteType.sell ? 'sell' : 'buy',
+          fiatAmount: (q.fiatAmount as { toString(): string }).toString(),
+          cryptoAmount: q.cryptoAmount,
+          baseRate: q.baseRate,
+          processingFeeAmount: (
+            q.processingFeeAmount as { toString(): string }
+          ).toString(),
+        });
+        const cell = cellFor(day, q.fiatCurrency);
+        const scaledFee = toScaledBigInt(fee);
+        cell.fee += scaledFee;
+        cell.profit += scaledFee + toScaledBigInt(spread);
+      }
+    }
+
+    const project = (
+      byCurrency: Map<string, Cell>,
+      pick: keyof Cell,
+    ): CurrencyAmount[] =>
+      [...byCurrency.entries()]
+        .map(([currency, cell]) => ({
+          currency,
+          amount: fromScaledBigInt(cell[pick]),
+        }))
+        .sort((a, b) => a.currency.localeCompare(b.currency));
+
+    const buckets: MoneySeriesBucketRow[] = [...days.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, byCurrency]) => ({
+        date,
+        gmv: project(byCurrency, 'gmv'),
+        revenue: project(byCurrency, 'fee'),
+        profit: project(byCurrency, 'profit'),
+      }));
+
+    const currencies = [...currencySet].sort((a, b) => a.localeCompare(b));
+
+    return { buckets, currencies };
   }
 
   async kycFunnel(): Promise<KycFunnelResult> {
@@ -335,17 +570,30 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     };
   }
 
-  async activeUsers(from: Date, to: Date): Promise<ActiveUsersResult> {
+  async activeUsers(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<ActiveUsersResult> {
+    // `active` is txn-based → full filter (capability + tier). `new`/`total` are
+    // user-population counts → only the tier filter is meaningful (capability is a
+    // txn dimension), so the baselines stay tier-scoped when a tier is selected.
+    const tier = validTier(filter);
+    const tierWhere = tier ? { kycTier: tier } : {};
     const [activeGroups, newInRange, totalUsers] = await Promise.all([
       // Distinct users with a Transaction whose createdAt is in range.
       this.prisma.transaction.groupBy({
         by: ['userId'],
-        where: { createdAt: { gte: from, lte: to } },
+        where: { createdAt: { gte: from, lte: to }, ...txnFilterWhere(filter) },
       }),
       this.prisma.user.count({
-        where: { deletedAt: null, createdAt: { gte: from, lte: to } },
+        where: {
+          deletedAt: null,
+          createdAt: { gte: from, lte: to },
+          ...tierWhere,
+        },
       }),
-      this.prisma.user.count({ where: { deletedAt: null } }),
+      this.prisma.user.count({ where: { deletedAt: null, ...tierWhere } }),
     ]);
 
     return {
@@ -355,7 +603,15 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     };
   }
 
-  async serviceHealth(from: Date, to: Date): Promise<ServiceHealthResult> {
+  async serviceHealth(
+    from: Date,
+    to: Date,
+    filter?: MetricsFilter,
+  ): Promise<ServiceHealthResult> {
+    // This card is the cross-service health OVERVIEW, so the `capability` filter is
+    // intentionally NOT applied (it would collapse the card to one service). The
+    // `tier` filter IS applied (health for a given user segment); currency is n/a.
+    const tier = validTier(filter);
     const grouped = await this.prisma.transaction.groupBy({
       by: ['type', 'status'],
       where: {
@@ -363,6 +619,7 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
         type: {
           in: SERVICE_TYPES.map((t) => t as TransactionType),
         },
+        ...(tier ? { user: { kycTier: tier } } : {}),
       },
       _count: { _all: true },
     });
@@ -393,5 +650,70 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     }
 
     return { services: [...rows.values()] };
+  }
+
+  async platformKpis(from: Date, to: Date): Promise<PlatformKpisResult> {
+    // Compare the window against the immediately preceding equal-length window.
+    const windowMs = to.getTime() - from.getTime();
+    const prevFrom = new Date(from.getTime() - windowMs);
+
+    const [
+      newCurrent,
+      newPrevious,
+      activeCurrentGroups,
+      activePreviousGroups,
+      outboxFailed,
+      backfillFailed,
+    ] = await Promise.all([
+      this.prisma.user.count({
+        where: { deletedAt: null, createdAt: { gte: from, lte: to } },
+      }),
+      this.prisma.user.count({
+        where: { deletedAt: null, createdAt: { gte: prevFrom, lt: from } },
+      }),
+      // Distinct users active this window vs the previous window (set difference
+      // gives churn). `lt: from` keeps the two windows disjoint.
+      this.prisma.transaction.groupBy({
+        by: ['userId'],
+        where: { createdAt: { gte: from, lte: to } },
+      }),
+      this.prisma.transaction.groupBy({
+        by: ['userId'],
+        where: { createdAt: { gte: prevFrom, lt: from } },
+      }),
+      this.prisma.settlementOutbox.count({
+        where: {
+          status: SettlementOutboxStatus.failed,
+          createdAt: { gte: from, lte: to },
+        },
+      }),
+      this.prisma.backfillRun.count({
+        where: {
+          status: BackfillRunStatus.failed,
+          createdAt: { gte: from, lte: to },
+        },
+      }),
+    ]);
+
+    const currentUserIds = new Set(activeCurrentGroups.map((g) => g.userId));
+    const activePrevious = activePreviousGroups.length;
+    const churned = activePreviousGroups.filter(
+      (g) => !currentUserIds.has(g.userId),
+    ).length;
+    const churnRate = activePrevious === 0 ? 0 : churned / activePrevious;
+
+    // Signed growth ratio. With no prior baseline, treat any new users as +100%.
+    const growthRate =
+      newPrevious === 0
+        ? newCurrent > 0
+          ? 1
+          : 0
+        : (newCurrent - newPrevious) / newPrevious;
+
+    return {
+      newUsers: { current: newCurrent, previous: newPrevious, growthRate },
+      churn: { activePrevious, churned, churnRate },
+      failedJobs: outboxFailed + backfillFailed,
+    };
   }
 }

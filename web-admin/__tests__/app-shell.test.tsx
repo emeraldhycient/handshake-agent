@@ -168,6 +168,15 @@ describe("AppShell nav gating", () => {
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument()
   })
 
+  it("shows the Metrics & analytics link (→ /metrics) when menu.metrics is granted", async () => {
+    mockGetMe.mockResolvedValue(adminMe({ menus: ["menu.metrics"] }))
+    renderShell()
+    const link = await screen.findByRole("link", {
+      name: "Metrics & analytics",
+    })
+    expect(link).toHaveAttribute("href", "/metrics")
+  })
+
   it("hides the menu.access items but shows Audit for an ops set with only menu.audit", async () => {
     mockGetMe.mockResolvedValue(adminMe({ menus: ["menu.audit"] }))
 
