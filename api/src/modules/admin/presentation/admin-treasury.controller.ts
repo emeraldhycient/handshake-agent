@@ -172,10 +172,11 @@ export class AdminTreasuryController {
     );
   }
 
-  // ── stuck sell-payout retry (go-readiness #2, WRITE — single-admin step-up) ───────
-  // Re-drives a STUCK settling sell payout through the engine after a server-side
-  // re-check. It re-arms the EXISTING settlement outbox row (original idempotency key)
-  // — it moves NO money here and rejects a completed payout (no double-pay, §3.1).
+  // ── stuck payout retry (go-readiness #2, WRITE — single-admin step-up) ────────────
+  // Re-drives a STUCK settling payout (sell fiat payout OR on-chain send) through the
+  // engine after a server-side re-check. It re-arms the EXISTING settlement outbox row
+  // (original idempotency key) — it moves NO money here and rejects a completed payout
+  // (no double-pay, §3.1). The txn type (sell/send) is resolved server-side from :id.
 
   @Post('payouts/:id/retry')
   @HttpCode(HttpStatus.OK)
@@ -191,7 +192,7 @@ export class AdminTreasuryController {
     @CurrentAdmin() admin: AdminContext,
   ): Promise<TreasuryPayoutRetryResponse> {
     return TreasuryPayoutRetryResponseSchema.parse(
-      await this.payoutRetry.retrySellPayout(id, dto.reason, admin.adminId),
+      await this.payoutRetry.retryPayout(id, dto.reason, admin.adminId),
     );
   }
 

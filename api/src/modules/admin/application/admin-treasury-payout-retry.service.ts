@@ -6,6 +6,7 @@ import type { TreasuryPayoutRetryResponse } from '@handshake-agent/contracts';
 
 import { AuditService } from '../../../core/audit/application/audit.service';
 import { KycGateService } from '../../identity/application/kyc-gate.service';
+import { ComplianceService } from '../../compliance/application/compliance.service';
 import {
   COMPLIANCE_EVENT_REPOSITORY,
   type IComplianceEventRepository,
@@ -27,20 +28,26 @@ import { AdminNotFoundError } from '../domain/admin-errors';
 import { TxnNotTriageableError } from '../domain/txn-triage-errors';
 import { PayoutRetryBlockedError } from '../domain/treasury-operator-errors';
 
-/** The outbox settlement type a sell payout is drained through. */
-const PROCESSOR_PAYOUT = 'processor_payout';
+/**
+ * The outbox settlement type each retryable payout type is drained through. A
+ * transaction type not in this map is not a retryable payout (buy/swap/etc.).
+ */
+const EXPECTED_OUTBOX_BY_TYPE: Readonly<Record<string, string>> = {
+  sell: 'processor_payout',
+  send: 'onchain_send',
+};
 
 /**
- * Go-readiness #2 — retry a STUCK settling sell payout, engine-brokered and
- * re-checked. FUNDS-SAFETY-CRITICAL (§3.1): it NEVER builds a ledger entry and
- * NEVER re-sends a payout. It re-arms the EXISTING settlement outbox row (the
- * original idempotency key) so the reconciler's `settleSellPayout` re-verifies the
- * payout with the provider and finalises/refunds atomically. It hard-rejects a
- * completed payout (would double-pay) and a terminal-failed one (already refunded).
- * It re-checks the owning user server-side at retry (§3.3); a since-flagged /
- * downgraded user is rejected + escalated, never pushed through. It holds no Prisma
- * import — it reaches data only through injected ports (§3.2). Every attempt is
- * immutably audited (§3.6).
+ * Go-readiness #2 — retry a STUCK settling payout (sell fiat payout OR on-chain
+ * send), engine-brokered and re-checked. FUNDS-SAFETY-CRITICAL (§3.1): it NEVER
+ * builds a ledger entry and NEVER re-sends a payout. It re-arms the EXISTING
+ * settlement outbox row (original idempotency key) so the reconciler's settle path
+ * re-verifies the outcome with the provider and finalises/refunds atomically. It
+ * hard-rejects a completed payout (would double-pay) and a terminal-failed one
+ * (already refunded). It re-checks the owning user server-side at retry (§3.3) —
+ * KYC/status/tier/cooling-off + open-compliance-block, and for a SEND additionally
+ * re-screens the destination address; a since-flagged user is rejected + escalated,
+ * never pushed through. Holds no Prisma import (§3.2); every attempt is audited.
  */
 @Injectable()
 export class AdminTreasuryPayoutRetryService {
@@ -53,16 +60,17 @@ export class AdminTreasuryPayoutRetryService {
     private readonly outbox: ISettlementOutboxRepository,
     private readonly kycGate: KycGateService,
     @Inject(COMPLIANCE_EVENT_REPOSITORY)
-    private readonly compliance: IComplianceEventRepository,
+    private readonly complianceEvents: IComplianceEventRepository,
+    private readonly complianceService: ComplianceService,
     private readonly audit: AuditService,
   ) {}
 
   /**
-   * Re-drive a stuck settling sell payout. Resolves the transaction server-side
-   * (never a client-supplied id), gates it, re-checks the user, then re-arms the
-   * existing settlement outbox row for the reconciliation worker.
+   * Re-drive a stuck settling sell or send payout. Resolves the transaction
+   * server-side (never a client-supplied id), gates it, re-checks the user, then
+   * re-arms the existing settlement outbox row for the reconciliation worker.
    */
-  async retrySellPayout(
+  async retryPayout(
     payoutId: string,
     reason: string,
     adminId: string,
@@ -74,11 +82,13 @@ export class AdminTreasuryPayoutRetryService {
     const txn = await this.transactions.findById(payout.transactionId);
     if (txn === null) throw new AdminNotFoundError('Transaction');
 
-    // 2. Hard status gate (Gap A). Reject completed (double-pay) / terminal-failed
-    //    (already refunded) / non-settling / non-sell — all fail closed (§3.6).
-    if (txn.type !== 'sell') {
+    // 2. Hard status/type gate (Gap A). Only a settling sell/send with the matching
+    //    non-terminal outbox row is retryable; reject completed (double-pay) /
+    //    terminal-failed (already refunded) / other types — all fail closed (§3.6).
+    const expectedOutbox = EXPECTED_OUTBOX_BY_TYPE[txn.type];
+    if (expectedOutbox === undefined) {
       throw new TxnNotTriageableError(
-        `Transaction ${txn.id} is a '${txn.type}', not a sell payout.`,
+        `Transaction ${txn.id} is a '${txn.type}' — not a retryable payout (sell/send only).`,
       );
     }
     if (txn.status === 'completed') {
@@ -92,25 +102,17 @@ export class AdminTreasuryPayoutRetryService {
       );
     }
     const row = await this.outbox.findByTransactionId(txn.id);
-    if (row === null || row.settlementType !== PROCESSOR_PAYOUT) {
+    if (row === null || row.settlementType !== expectedOutbox) {
       throw new TxnNotTriageableError(
-        `Transaction ${txn.id} has no payout settlement to retry.`,
+        `Transaction ${txn.id} has no ${expectedOutbox} settlement to retry.`,
       );
     }
 
     // 3. Re-check the user server-side (Gap B, §3.3) — reject + escalate on failure.
-    const { fiatAmount, fiatCurrency, asset } = this.reserveFields(txn);
-    await this.reCheckOrEscalate(
-      txn,
-      fiatAmount,
-      fiatCurrency,
-      asset,
-      reason,
-      adminId,
-    );
+    await this.reCheckOrEscalate(txn, reason, adminId);
 
     // 4. Re-drive via the engine: re-arm the EXISTING row (original idempotency
-    //    key). The reconciler's settleSellPayout verifies + finalises/refunds
+    //    key). The reconciler's settle path verifies + finalises/refunds
     //    atomically — no money moves here, no fresh payout is sent (§3.1).
     await this.outbox.resetToPending(row.id);
 
@@ -121,7 +123,12 @@ export class AdminTreasuryPayoutRetryService {
       subject: `Transaction:${txn.id}`,
       action: 'admin_override',
       before: { status: txn.status, outboxStatus: row.status },
-      after: { action: 'payout_retry_enqueued', payoutId, reason },
+      after: {
+        action: 'payout_retry_enqueued',
+        type: txn.type,
+        payoutId,
+        reason,
+      },
     });
 
     return {
@@ -133,41 +140,29 @@ export class AdminTreasuryPayoutRetryService {
   }
 
   /**
-   * netFiatAmount + fiatCurrency + asset from the sell metadata (written at
-   * executeSell). Fail closed if any is missing — corrupt metadata must never
-   * pass the re-check with a guessed amount (§3.6).
-   */
-  private reserveFields(txn: TransactionRecord): {
-    fiatAmount: string;
-    fiatCurrency: string;
-    asset: string;
-  } {
-    const meta = txn.metadata as Record<string, string | undefined>;
-    const fiatAmount = meta.netFiatAmount;
-    const fiatCurrency = meta.fiatCurrency;
-    const asset = meta.asset;
-    if (!fiatAmount || !fiatCurrency || !asset) {
-      throw new TxnNotTriageableError(
-        `Transaction ${txn.id} metadata is missing netFiatAmount/fiatCurrency/asset — cannot re-check.`,
-      );
-    }
-    return { fiatAmount, fiatCurrency, asset };
-  }
-
-  /**
-   * Re-check via the velocity-free payout gate + an open-compliance-block check.
-   * On ANY failure: open a compliance escalation + audit, then throw a single 403
-   * PayoutRetryBlockedError. Never re-arms, never moves money (the payout may be in
-   * flight — auto-refunding a flagged user would risk a double-credit, §3.1).
+   * Re-check via the velocity-free payout gate (uniform `velocityFiatAmount` — the
+   * exact fiat value that hit the money gate at execute, present on both sell + send
+   * metadata) + an open-compliance-block check, and for a SEND additionally
+   * re-screen the destination address. On ANY failure: open a compliance escalation
+   * + audit, then throw a single 403 PayoutRetryBlockedError. Never re-arms, never
+   * moves money (the payout may be in flight — auto-refunding a flagged user would
+   * risk a double-credit, §3.1).
    */
   private async reCheckOrEscalate(
     txn: TransactionRecord,
-    fiatAmount: string,
-    fiatCurrency: string,
-    asset: string,
     reason: string,
     adminId: string,
   ): Promise<void> {
+    const meta = txn.metadata as Record<string, string | undefined>;
+    const fiatAmount = meta.velocityFiatAmount;
+    const fiatCurrency = meta.velocityFiatCurrency;
+    const asset = meta.asset;
+    if (!fiatAmount || !fiatCurrency || !asset) {
+      throw new TxnNotTriageableError(
+        `Transaction ${txn.id} metadata is missing velocityFiatAmount/velocityFiatCurrency/asset — cannot re-check.`,
+      );
+    }
+
     let failure: string | null = null;
     try {
       await this.kycGate.assertCanReleasePayout({
@@ -180,8 +175,29 @@ export class AdminTreasuryPayoutRetryService {
       failure = err instanceof Error ? err.message : 'kyc re-check failed';
     }
 
+    // SEND: re-screen the on-chain destination against sanctions (the meaningful
+    // re-check for an irreversible send). Fail closed on missing address/network.
+    if (failure === null && txn.type === 'send') {
+      const toAddress = meta.toAddress;
+      const network = meta.network;
+      if (!toAddress || !network) {
+        throw new TxnNotTriageableError(
+          `Transaction ${txn.id} send metadata is missing toAddress/network — cannot re-screen.`,
+        );
+      }
+      const screening = await this.complianceService.screenSendDestination({
+        userId: txn.userId,
+        address: toAddress,
+        network,
+        transactionId: txn.id,
+      });
+      if (!screening.passed) {
+        failure = `destination address failed sanctions re-screen: ${screening.reason ?? 'flagged'}`;
+      }
+    }
+
     if (failure === null) {
-      const blocked = await this.compliance.listByStatus(
+      const blocked = await this.complianceEvents.listByStatus(
         { userId: txn.userId, status: 'blocked' },
         { limit: 1 },
       );
@@ -192,14 +208,14 @@ export class AdminTreasuryPayoutRetryService {
 
     if (failure === null) return;
 
-    await this.compliance.create({
+    await this.complianceEvents.create({
       userId: txn.userId,
       transactionId: txn.id,
       eventType: 'kyc_escalation',
       severity: 'high',
       screeningProvider: 'payout_retry_gate',
       ruleOrHit: failure,
-      details: { reason, adminId, payoutRetry: true },
+      details: { reason, adminId, payoutRetry: true, type: txn.type },
       status: 'flagged',
     });
     await this.audit.record({

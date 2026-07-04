@@ -7,6 +7,7 @@ import type { ITreasuryReadRepository } from '../../treasury/application/ports/t
 import type { ITransactionRepository } from '../../transactions/application/ports/transaction.repository.port';
 import type { ISettlementOutboxRepository } from '../../transactions/application/ports/settlement-outbox.repository.port';
 import type { IComplianceEventRepository } from '../../compliance/application/ports/compliance-event.repository.port';
+import type { ComplianceService } from '../../compliance/application/compliance.service';
 import type { KycGateService } from '../../identity/application/kyc-gate.service';
 import type { AuditService } from '../../../core/audit/application/audit.service';
 
@@ -33,7 +34,8 @@ function makePayoutItem(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeTxn(overrides: Record<string, unknown> = {}) {
+/** A settling SELL txn (processor_payout). velocityFiatAmount is the gate value. */
+function makeSellTxn(overrides: Record<string, unknown> = {}) {
   return {
     id: 'txn_1',
     proposalId: 'prop_1',
@@ -47,6 +49,8 @@ function makeTxn(overrides: Record<string, unknown> = {}) {
       asset: 'USDT',
       netFiatAmount: '10000',
       fiatCurrency: 'NGN',
+      velocityFiatAmount: '10000',
+      velocityFiatCurrency: 'NGN',
       cryptoAmount: '6.25',
       walletId: 'wallet_1',
     },
@@ -58,6 +62,24 @@ function makeTxn(overrides: Record<string, unknown> = {}) {
     executedAt: new Date(),
     completedAt: null,
     failedAt: null,
+    ...overrides,
+  };
+}
+
+/** A settling SEND txn (onchain_send). Carries toAddress/network for the re-screen. */
+function makeSendTxn(overrides: Record<string, unknown> = {}) {
+  return {
+    ...makeSellTxn(),
+    type: 'send',
+    metadata: {
+      asset: 'USDT',
+      velocityFiatAmount: '10000',
+      velocityFiatCurrency: 'NGN',
+      totalDebit: '6.30',
+      walletId: 'wallet_1',
+      toAddress: 'TSendDestAddr123456789',
+      network: 'TRON',
+    },
     ...overrides,
   };
 }
@@ -86,7 +108,7 @@ function makeTreasury() {
 
 function makeTxns() {
   return {
-    findById: jest.fn().mockResolvedValue(makeTxn()),
+    findById: jest.fn().mockResolvedValue(makeSellTxn()),
   } as unknown as jest.Mocked<ITransactionRepository>;
 }
 
@@ -103,11 +125,19 @@ function makeKycGate() {
   } as unknown as jest.Mocked<KycGateService>;
 }
 
-function makeCompliance() {
+function makeComplianceEvents() {
   return {
     listByStatus: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
     create: jest.fn().mockResolvedValue({ id: 'ce_1' }),
   } as unknown as jest.Mocked<IComplianceEventRepository>;
+}
+
+function makeComplianceService() {
+  return {
+    screenSendDestination: jest
+      .fn()
+      .mockResolvedValue({ passed: true, complianceEventId: 'ce_screen' }),
+  } as unknown as jest.Mocked<ComplianceService>;
 }
 
 function makeAudit() {
@@ -121,7 +151,8 @@ describe('AdminTreasuryPayoutRetryService', () => {
   let txns: jest.Mocked<ITransactionRepository>;
   let outbox: jest.Mocked<ISettlementOutboxRepository>;
   let kycGate: jest.Mocked<KycGateService>;
-  let compliance: jest.Mocked<IComplianceEventRepository>;
+  let complianceEvents: jest.Mocked<IComplianceEventRepository>;
+  let complianceService: jest.Mocked<ComplianceService>;
   let audit: jest.Mocked<AuditService>;
   let service: AdminTreasuryPayoutRetryService;
 
@@ -130,24 +161,24 @@ describe('AdminTreasuryPayoutRetryService', () => {
     txns = makeTxns();
     outbox = makeOutbox();
     kycGate = makeKycGate();
-    compliance = makeCompliance();
+    complianceEvents = makeComplianceEvents();
+    complianceService = makeComplianceService();
     audit = makeAudit();
     service = new AdminTreasuryPayoutRetryService(
       treasury,
       txns,
       outbox,
       kycGate,
-      compliance,
+      complianceEvents,
+      complianceService,
       audit,
     );
   });
 
-  it('happy path: re-checks, re-arms the existing outbox row, audits, returns retry_enqueued', async () => {
-    const res = await service.retrySellPayout(
-      PAYOUT_ID,
-      'stuck payout',
-      ADMIN_ID,
-    );
+  // ── SELL ─────────────────────────────────────────────────────────────────────
+
+  it('sell happy path: re-checks (no address screen), re-arms, audits, returns retry_enqueued', async () => {
+    const res = await service.retryPayout(PAYOUT_ID, 'stuck payout', ADMIN_ID);
 
     expect(kycGate.assertCanReleasePayout).toHaveBeenCalledWith({
       userId: 'user_1',
@@ -155,9 +186,10 @@ describe('AdminTreasuryPayoutRetryService', () => {
       fiatCurrency: 'NGN',
       asset: 'USDT',
     });
+    expect(complianceService.screenSendDestination).not.toHaveBeenCalled();
     expect(outbox.resetToPending).toHaveBeenCalledWith('ob_1');
     expect(audit.record).toHaveBeenCalledTimes(1);
-    expect(compliance.create).not.toHaveBeenCalled();
+    expect(complianceEvents.create).not.toHaveBeenCalled();
     expect(res).toEqual({
       payoutId: PAYOUT_ID,
       transactionId: 'txn_1',
@@ -166,42 +198,53 @@ describe('AdminTreasuryPayoutRetryService', () => {
     });
   });
 
-  it('rejects an already-completed sell (no double-pay): 409, no re-arm, no re-check', async () => {
-    txns.findById.mockResolvedValue(makeTxn({ status: 'completed' }));
+  it('rejects an already-completed txn (no double-pay): 409, no re-arm, no re-check', async () => {
+    txns.findById.mockResolvedValue(makeSellTxn({ status: 'completed' }));
     await expect(
-      service.retrySellPayout(PAYOUT_ID, 'r', ADMIN_ID),
+      service.retryPayout(PAYOUT_ID, 'r', ADMIN_ID),
     ).rejects.toBeInstanceOf(TxnNotTriageableError);
     expect(outbox.resetToPending).not.toHaveBeenCalled();
     expect(kycGate.assertCanReleasePayout).not.toHaveBeenCalled();
   });
 
-  it('rejects a terminal-failed (already-refunded) sell: 409, no re-arm', async () => {
-    txns.findById.mockResolvedValue(makeTxn({ status: 'failed' }));
+  it('rejects a terminal-failed (already-refunded) txn: 409, no re-arm', async () => {
+    txns.findById.mockResolvedValue(makeSellTxn({ status: 'failed' }));
     await expect(
-      service.retrySellPayout(PAYOUT_ID, 'r', ADMIN_ID),
+      service.retryPayout(PAYOUT_ID, 'r', ADMIN_ID),
     ).rejects.toBeInstanceOf(TxnNotTriageableError);
     expect(outbox.resetToPending).not.toHaveBeenCalled();
   });
 
-  it('rejects a non-sell transaction: 409', async () => {
-    txns.findById.mockResolvedValue(makeTxn({ type: 'send' }));
+  it('rejects a non-payout type (buy): 409', async () => {
+    txns.findById.mockResolvedValue(makeSellTxn({ type: 'buy' }));
     await expect(
-      service.retrySellPayout(PAYOUT_ID, 'r', ADMIN_ID),
+      service.retryPayout(PAYOUT_ID, 'r', ADMIN_ID),
     ).rejects.toBeInstanceOf(TxnNotTriageableError);
     expect(outbox.resetToPending).not.toHaveBeenCalled();
   });
 
-  it('rejects when there is no processor_payout outbox row: 409', async () => {
+  it('rejects when there is no outbox row: 409', async () => {
     outbox.findByTransactionId.mockResolvedValue(null);
     await expect(
-      service.retrySellPayout(PAYOUT_ID, 'r', ADMIN_ID),
+      service.retryPayout(PAYOUT_ID, 'r', ADMIN_ID),
+    ).rejects.toBeInstanceOf(TxnNotTriageableError);
+    expect(outbox.resetToPending).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the outbox settlementType does not match the txn type: 409', async () => {
+    // sell txn but an onchain_send outbox row — inconsistent, fail closed.
+    outbox.findByTransactionId.mockResolvedValue(
+      makeOutboxRow({ settlementType: 'onchain_send' }),
+    );
+    await expect(
+      service.retryPayout(PAYOUT_ID, 'r', ADMIN_ID),
     ).rejects.toBeInstanceOf(TxnNotTriageableError);
     expect(outbox.resetToPending).not.toHaveBeenCalled();
   });
 
   it('idempotent re-entrancy: two retries both re-arm the SAME row (original key reused)', async () => {
-    await service.retrySellPayout(PAYOUT_ID, 'r', ADMIN_ID);
-    await service.retrySellPayout(PAYOUT_ID, 'r', ADMIN_ID);
+    await service.retryPayout(PAYOUT_ID, 'r', ADMIN_ID);
+    await service.retryPayout(PAYOUT_ID, 'r', ADMIN_ID);
     expect(outbox.resetToPending).toHaveBeenNthCalledWith(1, 'ob_1');
     expect(outbox.resetToPending).toHaveBeenNthCalledWith(2, 'ob_1');
   });
@@ -211,9 +254,9 @@ describe('AdminTreasuryPayoutRetryService', () => {
       new KycNotVerifiedError('status'),
     );
     await expect(
-      service.retrySellPayout(PAYOUT_ID, 'r', ADMIN_ID),
+      service.retryPayout(PAYOUT_ID, 'r', ADMIN_ID),
     ).rejects.toBeInstanceOf(PayoutRetryBlockedError);
-    expect(compliance.create).toHaveBeenCalledWith(
+    expect(complianceEvents.create).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'user_1',
         transactionId: 'txn_1',
@@ -225,21 +268,74 @@ describe('AdminTreasuryPayoutRetryService', () => {
   });
 
   it('re-check failure (open compliance block): 403, escalates, no re-arm', async () => {
-    compliance.listByStatus.mockResolvedValue({
+    complianceEvents.listByStatus.mockResolvedValue({
       items: [{ id: 'ce_open' }],
       nextCursor: null,
     } as never);
     await expect(
-      service.retrySellPayout(PAYOUT_ID, 'r', ADMIN_ID),
+      service.retryPayout(PAYOUT_ID, 'r', ADMIN_ID),
     ).rejects.toBeInstanceOf(PayoutRetryBlockedError);
-    expect(compliance.create).toHaveBeenCalled();
+    expect(complianceEvents.create).toHaveBeenCalled();
     expect(outbox.resetToPending).not.toHaveBeenCalled();
   });
 
   it('unknown payout id: 404', async () => {
     treasury.findPayoutQueueItem.mockResolvedValue(null);
     await expect(
-      service.retrySellPayout('nope', 'r', ADMIN_ID),
+      service.retryPayout('nope', 'r', ADMIN_ID),
     ).rejects.toBeInstanceOf(AdminNotFoundError);
+  });
+
+  // ── SEND ─────────────────────────────────────────────────────────────────────
+
+  it('send happy path: re-checks + re-screens the destination address, re-arms, retry_enqueued', async () => {
+    txns.findById.mockResolvedValue(makeSendTxn());
+    outbox.findByTransactionId.mockResolvedValue(
+      makeOutboxRow({ settlementType: 'onchain_send' }),
+    );
+
+    const res = await service.retryPayout(PAYOUT_ID, 'stuck send', ADMIN_ID);
+
+    expect(kycGate.assertCanReleasePayout).toHaveBeenCalledWith({
+      userId: 'user_1',
+      fiatAmount: '10000',
+      fiatCurrency: 'NGN',
+      asset: 'USDT',
+    });
+    expect(complianceService.screenSendDestination).toHaveBeenCalledWith({
+      userId: 'user_1',
+      address: 'TSendDestAddr123456789',
+      network: 'TRON',
+      transactionId: 'txn_1',
+    });
+    expect(outbox.resetToPending).toHaveBeenCalledWith('ob_1');
+    expect(res.status).toBe('retry_enqueued');
+  });
+
+  it('send with a now-sanctioned destination: 403 PayoutRetryBlockedError, escalates, no re-arm', async () => {
+    txns.findById.mockResolvedValue(makeSendTxn());
+    outbox.findByTransactionId.mockResolvedValue(
+      makeOutboxRow({ settlementType: 'onchain_send' }),
+    );
+    complianceService.screenSendDestination.mockResolvedValue({
+      passed: false,
+      reason: 'OFAC match',
+      complianceEventId: 'ce_hit',
+    });
+
+    await expect(
+      service.retryPayout(PAYOUT_ID, 'r', ADMIN_ID),
+    ).rejects.toBeInstanceOf(PayoutRetryBlockedError);
+    expect(complianceEvents.create).toHaveBeenCalled();
+    expect(outbox.resetToPending).not.toHaveBeenCalled();
+  });
+
+  it('send rejects when the outbox is not an onchain_send row: 409', async () => {
+    txns.findById.mockResolvedValue(makeSendTxn());
+    // default outbox row is processor_payout — mismatched for a send.
+    await expect(
+      service.retryPayout(PAYOUT_ID, 'r', ADMIN_ID),
+    ).rejects.toBeInstanceOf(TxnNotTriageableError);
+    expect(outbox.resetToPending).not.toHaveBeenCalled();
   });
 });
