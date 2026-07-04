@@ -99,7 +99,16 @@
   --secondary-foreground: var(--foreground);
   --muted: oklch(0.965 0.008 95);
   --muted-foreground: oklch(0.52 0.018 162); /* #6a776e */
-  --muted-foreground-subtle: oklch(0.66 0.012 150); /* #9aa399 */
+  /* Third-tier "subtle" text. Darkened from oklch(0.66) to meet WCAG AA (4.5:1):
+     at 0.66 it rendered ≈2.6–3.1:1 on the cream palette (page bg / cards) and
+     failed on every light surface. On this pale palette a *lighter* subtle tier
+     and AA are mutually exclusive (anything ≥muted-foreground's lightness that
+     still clears 4.5:1 on the cream page bg lands at ~0.52), so this converges
+     with muted-foreground. The muted→subtle hierarchy is now carried by
+     typography (size / weight / uppercase / tracking at the call sites), not
+     color alone — more robust and more accessible. Clears AA on every light
+     surface: ≥4.68:1 on the cream page bg, up to 5.48:1 on white cards. */
+  --muted-foreground-subtle: oklch(0.52 0.012 150); /* #646b65 */
   --accent: oklch(0.77 0.155 70); /* #f5a623 */
   --accent-deep: oklch(0.72 0.155 65); /* #e8961a */
   --accent-foreground: oklch(0.2 0.03 70); /* #1c1205 */
@@ -156,6 +165,11 @@
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
   --muted-foreground: oklch(0.708 0 0);
+  /* Keep the pre-AA-fix value on dark surfaces (passes ≈5.8:1 on dark cards):
+     the light-mode darkening to 0.52 must not cascade here, where 0.52 would
+     drop to ≈3.3:1. The app is currently forced to light (providers.tsx), so
+     this only guards a future dark-mode enablement from a silent regression. */
+  --muted-foreground-subtle: oklch(0.66 0.012 150);
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);

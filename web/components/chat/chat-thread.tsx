@@ -36,11 +36,15 @@ export function ChatThread({
         "[scrollbar-width:none]"
       )}
     >
-      {/* Date divider */}
+      {/* Date divider. Uses the opaque `bg-muted` surface, not a translucent
+          `foreground/N%` tint: the tint darkened the underlying cream page bg to
+          ≈#e2e1d8, dropping `muted-foreground` to 3-tier-failing 4.17:1 on /app.
+          `bg-muted` is a fixed light neutral on every surface → muted text clears
+          AA (≈4.93:1) deterministically. */}
       <div
         className={cn(
           "self-center rounded-full px-3 py-[5px]",
-          "bg-foreground/[0.06] text-muted-foreground",
+          "bg-muted text-muted-foreground",
           "text-[11.5px] font-semibold",
           "mb-[2px]"
         )}
