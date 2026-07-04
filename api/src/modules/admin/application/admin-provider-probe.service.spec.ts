@@ -24,8 +24,11 @@ const LIVE_ENV: Partial<Env> = {
   FLUTTERWAVE_SECRET_KEY: 'flw-key',
   FLUTTERWAVE_BASE_URL: 'https://api.flutterwave.com/v3',
   RESEND_API_KEY: 're-key',
+  RESEND_BASE_URL: 'https://api.resend.com',
   WHATSAPP_ACCESS_TOKEN: 'wa-token',
+  WHATSAPP_GRAPH_BASE_URL: 'https://graph.facebook.com',
   ANTHROPIC_API_KEY: 'ant-key',
+  ANTHROPIC_BASE_URL: 'https://api.anthropic.com',
   WALLET_MOCK_MODE: 'false',
   PAYMENTS_MOCK_MODE: 'false',
 };
@@ -100,10 +103,17 @@ describe('AdminProviderProbeService', () => {
     expect(probe.probe).not.toHaveBeenCalled();
   });
 
-  it('treats a provider with no probe endpoint (whatsapp/anthropic) as not_configured for probe', async () => {
-    // WhatsApp/Anthropic have no configured base URL in this spec env → the probe
-    // cannot run credential-free against a known host, so it is not_configured.
+  it('now probes anthropic against its configured base URL (secret present)', async () => {
     const res = await build(LIVE_ENV).test('anthropic');
+    expect(probe.probe).toHaveBeenCalledWith('https://api.anthropic.com');
+    expect(res.result).toBe('ok');
+    expect(res.latencyMs).toBe(120);
+  });
+
+  it('is not_configured for anthropic when its secret is absent', async () => {
+    const res = await build({ ...LIVE_ENV, ANTHROPIC_API_KEY: undefined }).test(
+      'anthropic',
+    );
     expect(probe.probe).not.toHaveBeenCalled();
     expect(res.result).toBe('not_configured');
   });
