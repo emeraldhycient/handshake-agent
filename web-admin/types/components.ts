@@ -10,6 +10,26 @@ export interface CurrencyAmount {
   currency: string
   amount: string
 }
+
+/** One point on a trend chart (an x label + a numeric y value). */
+export interface TrendPoint {
+  label: string
+  value: number
+}
+
+/**
+ * TrendChart props — a self-contained SVG line/area chart (no chart lib). Renders
+ * `points` as a normalized line (optional area fill) using `currentColor`, so the
+ * caller sets the hue via a `text-*` class. Empty points → an inline "No data".
+ */
+export interface TrendChartProps {
+  points: readonly TrendPoint[]
+  /** Accessible description of the series (required — the chart is an image). */
+  ariaLabel: string
+  /** Fill the area under the line (default true). */
+  area?: boolean
+  className?: string
+}
 import type {
   AdminBeneficiary,
   AdminCustomFiatCreateRequest,

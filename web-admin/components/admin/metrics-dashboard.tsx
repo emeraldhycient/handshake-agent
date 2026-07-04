@@ -30,6 +30,7 @@ import { MetricsBar } from "@/components/admin/metrics-bar"
 import { cn } from "@/lib/utils"
 import { rangeForDays } from "@/lib/metrics-range"
 import { formatMoneyList } from "@/lib/format"
+import { TrendChart } from "@/components/admin/trend-chart"
 import { useDashboardMetrics } from "@/lib/query/hooks"
 import { ApiError } from "@/lib/api/client"
 import type { DashboardSummary } from "@handshake-agent/contracts"
@@ -249,8 +250,14 @@ function TxnVolumeCard({ data }: { data: DashboardSummary }) {
 
       {series.length > 0 ? (
         <>
+          <div className="mt-4 h-[64px]">
+            <TrendChart
+              ariaLabel={`Daily transaction-volume trend over ${series.length} days`}
+              points={series.map((b) => ({ label: b.date, value: b.count }))}
+            />
+          </div>
           <div
-            className="mt-4 flex h-[180px] items-end gap-[5px]"
+            className="mt-3 flex h-[140px] items-end gap-[5px]"
             role="img"
             aria-label={`Daily transaction volume, ${series.length} days, peak ${seriesMax.toLocaleString()}`}
           >
