@@ -183,12 +183,19 @@ baseRate/fxRate and asserting exact fee/spread/profit; unit for the pure per-tx 
 
 ## Newly reported (2026-07-04 — queued AFTER the current #5→#10 list)
 
-### 11. Platform-wide currency formatting — ⬜
+### 11. Platform-wide currency formatting — 🟡 (started: `web-admin/lib/format.ts` + dashboard tiles done; MOST pages remain)
 No consistent money formatting across the platform. Implement a single canonical
 formatter (symbol/decimals per currency, grouping, locale) used by BOTH `web/` and
 `web-admin/` (and any receipt/notification text) — no ad-hoc `₦`+`toLocaleString`.
 Ties into #9 (user display currency) and #7/#8 (per-currency metrics display).
 **Effort: M** (shared util in `contracts` or each app's `lib` + swap every call site).
+- **Done:** `web-admin/lib/format.ts` (formatFiat/formatMoneyList) + operator- & metrics-dashboard money tiles (`c95dac0`).
+- **Remaining (user-reported 2026-07-04):** MANY pages still render raw `NGN 50000`
+  (no ₦, no separators) — the **Transactions list** (fiat sub-amount), **Transaction
+  details**, **Ledger**, **Treasury**, **Users** (balances), reconciliation, and any
+  amount cell. Sweep every money call site in `web-admin` onto `formatFiat`; then
+  consolidate web+web-admin into ONE shared util (currently `web/lib/format.ts` is a
+  separate copy — the PWA session edits `web/`, so consolidate after it lands).
 
 ### 12. Dashboard figure tracking assumes NGN (multi-currency) — ⬜ (part of #7/#8)
 Admin dashboard KPI tiles (GMV, revenue, profit) render/aggregate as if every tx is
