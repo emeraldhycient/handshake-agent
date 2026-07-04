@@ -26,8 +26,15 @@
 import { useState } from "react"
 import type { AdminUser, Role } from "@handshake-agent/contracts"
 
-import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { InviteAdminDialog } from "@/components/admin/invite-admin-dialog"
 import { AdminRowActions } from "@/components/admin/admin-row-actions"
 import { AdminResetMfaAction } from "@/components/admin/admin-reset-mfa-action"
@@ -73,11 +80,6 @@ function nameInitials(name: string): string {
   const single = parts[0] ?? ""
   return (single.slice(0, 2) || "?").toUpperCase()
 }
-
-/** Shared grid template for the admin table header + every body row (design 5/6).
- * The last column hosts the wired row-actions (role select + status + reset-2FA), so
- * it is given more room than the design's original text-only actions column. */
-const ADMIN_GRID = "grid-cols-[1.4fr_1fr_0.7fr_0.8fr_2.4fr] gap-3 px-[18px]"
 
 // ─── Page ──────────────────────────────────────────────────────────────────────
 
@@ -130,79 +132,96 @@ export function AdminsPage() {
       </div>
 
       {/* ── Admin table ────────────────────────────────────────────────────── */}
+      {/* A real <table> (shared shadcn primitive) whose container is overflow-x-auto:
+          the row scrolls horizontally on a narrow viewport and every cell sizes to
+          its own content with `whitespace-nowrap` — so nothing wraps mid-word. This
+          replaces the former fixed-fraction (`1.4fr 1fr 0.7fr…`) div grid that
+          compressed and broke "Not set" / the action buttons onto two lines. */}
       <div className="mb-4 overflow-hidden rounded-[16px] border border-line bg-card">
-        {/* Header row */}
-        <div
-          className={cn(
-            "grid border-b border-line bg-card2 py-[11px] text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase",
-            ADMIN_GRID
-          )}
-        >
-          <div>Admin</div>
-          <div>Role</div>
-          <div>2FA</div>
-          <div>Status</div>
-          <div aria-hidden="true" />
-        </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Admin</TableHead>
+              <TableHead>Role</TableHead>
+              <TableHead>2FA</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-right">
+                <span className="sr-only">Actions</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {/* Loading */}
+            {adminsQuery.isLoading &&
+              [0, 1, 2, 3].map((i) => (
+                <TableRow key={i} aria-busy="true">
+                  <TableCell>
+                    <div className="flex items-center gap-[11px]">
+                      <Skeleton className="size-8 flex-none rounded-full" />
+                      <div>
+                        <Skeleton className="h-3 w-28" />
+                        <Skeleton className="mt-1.5 h-2.5 w-40" />
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-3 w-24" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-3 w-14" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-4 w-16 rounded-full" />
+                  </TableCell>
+                  <TableCell />
+                </TableRow>
+              ))}
 
-        {/* Loading */}
-        {adminsQuery.isLoading && (
-          <div className="py-2" aria-busy="true">
-            {[0, 1, 2, 3].map((i) => (
-              <div
-                key={i}
-                className={cn(
-                  "grid items-center border-b border-line2 py-[13px] last:border-b-0",
-                  ADMIN_GRID
-                )}
-              >
-                <div className="flex items-center gap-[11px]">
-                  <Skeleton className="size-8 flex-none rounded-full" />
-                  <div className="min-w-0 flex-1">
-                    <Skeleton className="h-3 w-28" />
-                    <Skeleton className="mt-1.5 h-2.5 w-40" />
+            {/* Error */}
+            {adminsQuery.isError && (
+              <TableRow>
+                <TableCell
+                  colSpan={5}
+                  className="py-[46px] text-center whitespace-normal"
+                >
+                  <div className="text-[13.5px] font-bold text-tdn">
+                    Couldn&apos;t load admins
                   </div>
-                </div>
-                <Skeleton className="h-3 w-24" />
-                <Skeleton className="h-3 w-14" />
-                <Skeleton className="h-4 w-16 rounded-full" />
-                <div />
-              </div>
-            ))}
-          </div>
-        )}
+                  <button
+                    type="button"
+                    onClick={() => void adminsQuery.refetch()}
+                    className="mt-2 text-[12.5px] font-bold text-tif transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+                  >
+                    Try again
+                  </button>
+                </TableCell>
+              </TableRow>
+            )}
 
-        {/* Error */}
-        {adminsQuery.isError && (
-          <div className="px-5 py-[46px] text-center">
-            <div className="text-[13.5px] font-bold text-tdn">
-              Couldn&apos;t load admins
-            </div>
-            <button
-              type="button"
-              onClick={() => void adminsQuery.refetch()}
-              className="mt-2 text-[12.5px] font-bold text-tif transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-            >
-              Try again
-            </button>
-          </div>
-        )}
+            {/* Empty */}
+            {adminsQuery.isSuccess && admins.length === 0 && (
+              <TableRow>
+                <TableCell
+                  colSpan={5}
+                  className="py-[46px] text-center text-ink3 whitespace-normal"
+                >
+                  <div className="text-[14px] font-bold text-ink2">
+                    No admins yet
+                  </div>
+                  <div className="mt-1 text-[12.5px]">
+                    Invite your first operator to get started.
+                  </div>
+                </TableCell>
+              </TableRow>
+            )}
 
-        {/* Empty */}
-        {adminsQuery.isSuccess && admins.length === 0 && (
-          <div className="px-5 py-[46px] text-center text-ink3">
-            <div className="text-[14px] font-bold text-ink2">No admins yet</div>
-            <div className="mt-1 text-[12.5px]">
-              Invite your first operator to get started.
-            </div>
-          </div>
-        )}
-
-        {/* Data */}
-        {adminsQuery.isSuccess &&
-          admins.map((admin) => (
-            <AdminRow key={admin.id} admin={admin} roles={roles} />
-          ))}
+            {/* Data */}
+            {adminsQuery.isSuccess &&
+              admins.map((admin) => (
+                <AdminRow key={admin.id} admin={admin} roles={roles} />
+              ))}
+          </TableBody>
+        </Table>
       </div>
 
       {/* ── Role permission matrix (shared component) ──────────────────────── */}
@@ -289,31 +308,28 @@ export function AdminsPage() {
 function AdminRow({ admin, roles }: { admin: AdminUser; roles: Role[] }) {
   const isActive = admin.status === "active"
   return (
-    <div
-      className={cn(
-        "grid items-center border-b border-line2 py-[13px] last:border-b-0",
-        ADMIN_GRID
-      )}
-    >
+    <TableRow>
       {/* Admin — striped avatar (initials from the display name) + name + email */}
-      <div className="flex min-w-0 items-center gap-[11px]">
-        <span
-          aria-hidden="true"
-          className="flex size-8 flex-none items-center justify-center rounded-full text-[11px] font-extrabold text-white"
-          style={{ background: AVATAR_STRIPE }}
-        >
-          {nameInitials(admin.displayName)}
-        </span>
-        <div className="min-w-0">
-          <div className="truncate text-[13px] font-bold text-ink">
-            {admin.displayName}
+      <TableCell>
+        <div className="flex items-center gap-[11px]">
+          <span
+            aria-hidden="true"
+            className="flex size-8 flex-none items-center justify-center rounded-full text-[11px] font-extrabold text-white"
+            style={{ background: AVATAR_STRIPE }}
+          >
+            {nameInitials(admin.displayName)}
+          </span>
+          <div>
+            <div className="text-[13px] font-bold text-ink">
+              {admin.displayName}
+            </div>
+            <div className="text-[11px] text-ink3">{admin.email}</div>
           </div>
-          <div className="truncate text-[11px] text-ink3">{admin.email}</div>
         </div>
-      </div>
+      </TableCell>
 
       {/* Role — dot + label */}
-      <div>
+      <TableCell>
         <span className="inline-flex items-center gap-1.5 text-[11.5px] font-bold text-ink">
           <span
             aria-hidden="true"
@@ -322,19 +338,19 @@ function AdminRow({ admin, roles }: { admin: AdminUser; roles: Role[] }) {
           />
           {admin.role.name}
         </span>
-      </div>
+      </TableCell>
 
       {/* 2FA — enrolment state (label carries the meaning, not just colour) */}
-      <div>
+      <TableCell>
         {admin.mfaEnabled ? (
           <span className="text-[11px] font-bold text-tok">Enrolled</span>
         ) : (
           <span className="text-[11px] font-bold text-ink3">Not set</span>
         )}
-      </div>
+      </TableCell>
 
       {/* Status pill */}
-      <div>
+      <TableCell>
         {isActive ? (
           <span className="rounded-full bg-sok px-[9px] py-[2px] text-[10.5px] font-bold text-tok">
             Active
@@ -344,14 +360,16 @@ function AdminRow({ admin, roles }: { admin: AdminUser; roles: Role[] }) {
             {admin.status}
           </span>
         )}
-      </div>
+      </TableCell>
 
       {/* Row actions — change role + suspend/reactivate/offboard + reset 2FA
           (all step-up-gated) */}
-      <div className="flex items-center justify-end gap-2">
-        <AdminResetMfaAction admin={admin} />
-        <AdminRowActions admin={admin} roles={roles} />
-      </div>
-    </div>
+      <TableCell className="text-right">
+        <div className="flex items-center justify-end gap-2">
+          <AdminResetMfaAction admin={admin} />
+          <AdminRowActions admin={admin} roles={roles} />
+        </div>
+      </TableCell>
+    </TableRow>
   )
 }

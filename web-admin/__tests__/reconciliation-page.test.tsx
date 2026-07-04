@@ -170,10 +170,10 @@ describe("ReconciliationPage (wired)", () => {
     // The over-credit break: display label, offending tx link, signed delta + asset.
     expect(await screen.findByText("Over-credit")).toBeInTheDocument()
     expect(screen.getByText("tx_9f2a41c7")).toBeInTheDocument()
-    expect(screen.getByText("+50.00 USDT")).toBeInTheDocument()
+    expect(screen.getByText("+50 USDT")).toBeInTheDocument()
     // The missing-settlement break renders its own row.
     expect(screen.getByText("Missing settlement")).toBeInTheDocument()
-    expect(screen.getByText("-185000.00 NGN")).toBeInTheDocument()
+    expect(screen.getByText("-₦185,000.00")).toBeInTheDocument()
   })
 
   it("wires the cron status bar with the open-break count from the endpoint", async () => {

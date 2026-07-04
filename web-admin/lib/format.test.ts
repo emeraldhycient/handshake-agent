@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest"
 
-import { fiatSymbolFor, formatFiat, formatMoneyList } from "./format"
+import {
+  fiatSymbolFor,
+  formatAmount,
+  formatCrypto,
+  formatCryptoAmount,
+  formatDelta,
+  formatFiat,
+  formatMoneyList,
+  isFiat,
+} from "./format"
 
 describe("fiatSymbolFor", () => {
   it("resolves known fiat symbols", () => {
@@ -24,6 +33,71 @@ describe("formatFiat", () => {
   })
   it("returns <symbol>— for a non-finite value", () => {
     expect(formatFiat("not-a-number", "NGN")).toBe("₦—")
+  })
+  it("places a negative sign BEFORE the symbol (-₦4,950.00, not ₦-4,950.00)", () => {
+    expect(formatFiat(-4950, "NGN")).toBe("-₦4,950.00")
+    expect(formatFiat("-50", "NGN")).toBe("-₦50.00")
+    expect(formatFiat(-1000, "XOF")).toBe("-XOF 1,000.00")
+  })
+})
+
+describe("isFiat", () => {
+  it("is true for a known fiat code", () => {
+    expect(isFiat("NGN")).toBe(true)
+    expect(isFiat("USD")).toBe(true)
+  })
+  it("is false for a crypto asset or unknown code", () => {
+    expect(isFiat("USDT")).toBe(false)
+    expect(isFiat("TRX")).toBe(false)
+    expect(isFiat("XOF")).toBe(false)
+  })
+})
+
+describe("formatCrypto", () => {
+  it("keeps the asset's own precision and adds thousands separators", () => {
+    expect(formatCrypto("3.048029", "USDT")).toBe("3.048029 USDT")
+    expect(formatCrypto(12000.5, "TRX")).toBe("12,000.5 TRX")
+    expect(formatCrypto("50", "TRX")).toBe("50 TRX")
+  })
+  it("carries a negative sign before the number", () => {
+    expect(formatCrypto("-3.048029", "USDT")).toBe("-3.048029 USDT")
+  })
+  it("returns '— <asset>' for a non-finite value", () => {
+    expect(formatCrypto("not-a-number", "USDT")).toBe("— USDT")
+  })
+})
+
+describe("formatCryptoAmount (number-only, for when the asset renders separately)", () => {
+  it("adds thousands separators + keeps native precision, WITHOUT an asset code", () => {
+    expect(formatCryptoAmount("3.048029")).toBe("3.048029")
+    expect(formatCryptoAmount(12000.5)).toBe("12,000.5")
+    expect(formatCryptoAmount("50")).toBe("50")
+  })
+  it("keeps a negative sign; non-finite → em dash", () => {
+    expect(formatCryptoAmount("-3.048029")).toBe("-3.048029")
+    expect(formatCryptoAmount("not-a-number")).toBe("—")
+  })
+})
+
+describe("formatDelta (signed reconciliation delta, currency-aware)", () => {
+  it("preserves a leading + and formats the magnitude by currency kind", () => {
+    expect(formatDelta("+5000", "NGN")).toBe("+₦5,000.00")
+    expect(formatDelta("+0.5", "USDT")).toBe("+0.5 USDT")
+  })
+  it("preserves a negative and formats plain values", () => {
+    expect(formatDelta("-4950", "NGN")).toBe("-₦4,950.00")
+    expect(formatDelta("50", "USDT")).toBe("50 USDT")
+  })
+})
+
+describe("formatAmount (currency-aware dispatcher for mixed ledger legs)", () => {
+  it("formats a fiat leg with formatFiat", () => {
+    expect(formatAmount("5000", "NGN")).toBe("₦5,000.00")
+    expect(formatAmount("-4950", "NGN")).toBe("-₦4,950.00")
+  })
+  it("formats a crypto leg with formatCrypto", () => {
+    expect(formatAmount("3.048029", "USDT")).toBe("3.048029 USDT")
+    expect(formatAmount("-3.048029", "USDT")).toBe("-3.048029 USDT")
   })
 })
 

@@ -200,7 +200,8 @@ describe("TransactionDetail (read-wired)", () => {
     expect(screen.getByText(`user:${USER_ID}:USDT`)).toBeInTheDocument()
     expect(screen.getByText("DEBIT")).toBeInTheDocument()
     expect(screen.getByText("CREDIT")).toBeInTheDocument()
-    expect(screen.getByText("251904.85")).toBeInTheDocument()
+    // NGN leg is currency-formatted (also appears as the economics fiat leg → 2 nodes).
+    expect(screen.getAllByText("₦251,904.85").length).toBeGreaterThan(0)
 
     // Provider references from the projection (TRON + Flutterwave + Blockradar + idem).
     expect(screen.getByText("TJ173305038490070x9")).toBeInTheDocument()
@@ -217,9 +218,10 @@ describe("TransactionDetail (read-wired)", () => {
     renderDetail()
 
     await screen.findByText(TXN_ID)
-    // Itemized economics projected from metadata (fiat amounts currency-formatted).
-    expect(screen.getByText("236.599531 USDT")).toBeInTheDocument()
-    expect(screen.getByText("₦251,904.85")).toBeInTheDocument()
+    // Itemized economics projected from metadata (fiat amounts currency-formatted,
+    // crypto thousands-separated). Each value also appears as its ledger leg → 2 nodes.
+    expect(screen.getAllByText("236.599531 USDT").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("₦251,904.85").length).toBeGreaterThan(0)
     expect(screen.getByText("1064.72")).toBeInTheDocument()
     expect(screen.getByText("150 bps")).toBeInTheDocument()
     // Operator-only internal margin (unformatted rate delta).
@@ -410,9 +412,9 @@ describe("TransactionDetail (read-wired)", () => {
       screen.getByRole("button", { name: "Run reconciliation" })
     )
 
-    // The detected break renders (kind label + signed delta).
+    // The detected break renders (kind label + signed delta, native precision).
     expect(await screen.findByText("Over-credit")).toBeInTheDocument()
-    expect(screen.getByText("+50.00 USDT")).toBeInTheDocument()
+    expect(screen.getByText("+50 USDT")).toBeInTheDocument()
   })
 
   it("Re-run recon → surfaces an error branch when the re-run fails", async () => {

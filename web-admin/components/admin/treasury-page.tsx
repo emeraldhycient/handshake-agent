@@ -37,6 +37,7 @@ import { TreasuryAlertAcknowledge } from "@/components/admin/treasury-alert-ackn
 import { BeneficiaryOverride } from "@/components/admin/beneficiary-override"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { ApiError } from "@/lib/api/client"
+import { formatAmount, formatCrypto } from "@/lib/format"
 import { pushToast } from "@/lib/store/toast-store"
 import {
   useAdminBeneficiaries,
@@ -72,7 +73,8 @@ import type {
 const HERO_GRADIENT =
   "linear-gradient(150deg, var(--brand-green) 0%, var(--brand-green-deep) 100%)"
 
-// ── Money formatting (grouped thousands; no shared formatter exists in web-admin) ──
+// ── Money formatting (fiat via the shared lib/format helpers; NGN-only tiles keep
+//    the local `formatFiat`/`NGN` grouping used by the fiat-float + FX-position cards) ──
 // Amounts arrive as byte-stable decimal strings — format for display only, never for
 // math. A non-numeric string falls back to itself so nothing is silently dropped.
 const NGN = new Intl.NumberFormat("en-NG", {
@@ -91,9 +93,10 @@ function errorMessage(error: unknown): string | null {
   return error ? String(error) : null
 }
 
+/** Crypto/asset amount → the shared thousands-separated, native-precision format
+ *  (delegates to `formatCrypto` so a 6-dp asset is never truncated to 2 dp). */
 function formatAssetAmount(amount: string, asset: string): string {
-  const n = Number(amount)
-  return Number.isFinite(n) ? `${NGN.format(n)} ${asset}` : `${amount} ${asset}`
+  return formatCrypto(amount, asset)
 }
 
 /** basis points → a whole-percent label (e.g. 1802 → "18%"). */
@@ -237,7 +240,7 @@ function resolveHeroCard(balances: readonly TreasuryBalance[]): TreasuryCard {
     id: "custodial-usdt",
     tone: "hero",
     label: `Custodial · ${primary.asset}`,
-    value: primary.totalAmount,
+    value: formatAssetAmount(primary.totalAmount, primary.asset),
     dot: "ok",
     note: `${wallets} · ${primary.network}`,
     live: true,
@@ -438,7 +441,10 @@ export function TreasuryPage() {
 
   // The sweep threshold now comes from the endpoint (mirrors sweep.threshold.trx).
   const sweepThreshold = sweepsQuery.data
-    ? `${sweepsQuery.data.sweepThreshold} ${sweepsQuery.data.thresholdAsset}`
+    ? formatAssetAmount(
+        sweepsQuery.data.sweepThreshold,
+        sweepsQuery.data.thresholdAsset
+      )
     : "—"
 
   // ── Payout / withdrawal approval queue (real read; Approve WRITE is Phase 7) ────
@@ -449,10 +455,7 @@ export function TreasuryPage() {
         to: p.beneficiaryLabel,
         ref: p.reference,
         method: p.method,
-        amt:
-          p.asset === "NGN"
-            ? formatFiat(p.amount)
-            : formatAssetAmount(p.amount, p.asset),
+        amt: formatAmount(p.amount, p.asset),
         big: p.requiresApproval,
       })),
     [payoutQuery.data]

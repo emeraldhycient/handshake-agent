@@ -42,6 +42,7 @@ import {
   useTravelRule,
 } from "@/lib/query/hooks"
 import { cn } from "@/lib/utils"
+import { formatCrypto, formatFiat } from "@/lib/format"
 import type {
   AmlRule,
   ComplianceReport,
@@ -285,10 +286,13 @@ function TravelRuleTab() {
               {item.transactionId.slice(0, 8)}…
             </TableCell>
             <TableCell className="text-right font-mono text-ink tabular-nums">
-              {item.amount} {item.asset}
+              {formatCrypto(item.amount, item.asset)}
             </TableCell>
+            {/* amountFiat carries no currency on the contract — reported in the
+                platform fiat (NGN). If TravelRuleItem gains a fiatCurrency, thread
+                it here instead of the literal. */}
             <TableCell className="text-right text-ink2 tabular-nums">
-              {item.amountFiat}
+              {formatFiat(item.amountFiat, "NGN")}
             </TableCell>
             <TableCell className="text-ink2">{item.triggeringFactor}</TableCell>
             <TableCell className="text-ink2 tabular-nums">

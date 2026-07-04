@@ -34,6 +34,7 @@ import { useRouter } from "next/navigation"
 import type { ReconBreak, ReconBreakKind } from "@handshake-agent/contracts"
 
 import { cn } from "@/lib/utils"
+import { formatAmount, formatDelta as fmtDelta } from "@/lib/format"
 import {
   useAcceptReconBreak,
   useAdminMe,
@@ -136,9 +137,10 @@ function deltaTone(kind: ReconBreakKind): string {
   return "text-ink2"
 }
 
-/** The signed delta + its asset, rendered mono/tabular (e.g. "+50.00 USDT"). */
+/** The signed delta formatted for its currency (fiat symbol/2dp or crypto native
+ *  precision), sign preserved — e.g. "+₦5,000.00", "-3.048 USDT". */
 function formatDelta(b: ReconBreak): string {
-  return `${b.delta} ${b.asset}`
+  return fmtDelta(b.delta, b.asset)
 }
 
 // Engine-action modal payload for "Resolve via engine" — an itemized effect +
@@ -155,7 +157,7 @@ function engineEffect(b: ReconBreak): EngineEffectRow[] {
 }
 
 function engineLedger(b: ReconBreak): EngineLedgerRow[] {
-  const amt = b.delta.replace(/^\+/, "")
+  const amt = formatAmount(b.delta.replace(/^\+/, ""), b.asset)
   return [
     { acct: "user:wallet:usdt", dir: "DR", amt },
     { acct: "recon:adjustment", dir: "CR", amt },

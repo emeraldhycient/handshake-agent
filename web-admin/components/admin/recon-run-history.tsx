@@ -18,6 +18,7 @@ import { useState } from "react"
 import type { PersistedReconBreak, ReconRun } from "@handshake-agent/contracts"
 
 import { cn } from "@/lib/utils"
+import { formatDelta } from "@/lib/format"
 import {
   useAcknowledgeReconRunBreak,
   useAdminMe,
@@ -270,7 +271,7 @@ function RunBreaks({ runId, onAct }: RunBreaksProps) {
               {BREAK_TYPE_LABEL[brk.breakType]}
             </span>
             <span className="font-mono text-xs text-ink3">
-              {brk.delta} {brk.currency}
+              {formatDelta(brk.delta, brk.currency)}
             </span>
           </span>
           {isActionable(brk.status) && (

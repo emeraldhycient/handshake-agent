@@ -280,12 +280,12 @@ describe("TreasuryPage (wired)", () => {
   it("shows a loading skeleton before the balances resolve", () => {
     renderPage()
     expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument()
-    expect(screen.queryByText("412908.44")).not.toBeInTheDocument()
+    expect(screen.queryByText("412,908.44 USDT")).not.toBeInTheDocument()
   })
 
   it("wires the custodial hero from real aggregated balances", async () => {
     renderPage()
-    expect(await screen.findByText("412908.44")).toBeInTheDocument()
+    expect(await screen.findByText("412,908.44 USDT")).toBeInTheDocument()
     expect(screen.getByText("Custodial · USDT")).toBeInTheDocument()
     expect(screen.getByText("12 wallets · TRON")).toBeInTheDocument()
   })
@@ -327,7 +327,7 @@ describe("TreasuryPage (wired)", () => {
       await screen.findByText("TJm4Yq8s2kPd9wR3vN7xL6bH1cF0gA5eZt")
     ).toBeInTheDocument()
     // Real gas balance + lifecycle label.
-    expect(screen.getByText("18.40 TRX")).toBeInTheDocument()
+    expect(screen.getByText("18.4 TRX")).toBeInTheDocument()
     expect(screen.getByText("Below threshold")).toBeInTheDocument()
     // Threshold footer from the endpoint.
     expect(screen.getByText("Sweep threshold")).toBeInTheDocument()
@@ -368,7 +368,7 @@ describe("TreasuryPage (wired)", () => {
   it("hides the warning banner when there are no unacknowledged alerts", async () => {
     mockAlerts.mockResolvedValue({ items: [] })
     renderPage()
-    await screen.findByText("412908.44")
+    await screen.findByText("412,908.44 USDT")
     expect(screen.queryByText(/Exposure alert ·/i)).not.toBeInTheDocument()
   })
 
@@ -480,7 +480,7 @@ describe("TreasuryPage (write wiring)", () => {
     })
     renderPage()
 
-    await screen.findByText("412908.44")
+    await screen.findByText("412,908.44 USDT")
     expect(
       screen.queryByText("Beneficiaries in cooling-off")
     ).not.toBeInTheDocument()

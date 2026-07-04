@@ -415,8 +415,9 @@ describe("UserDetail (real data)", () => {
     searchParams = new URLSearchParams("tab=tx")
     renderDetail()
 
-    // The crypto amount + the humanised NGN fiat leg (₦150,000) from metadata.
-    expect(await screen.findByText("100.00")).toBeInTheDocument()
+    // The crypto amount (thousands-separated, trailing zeros trimmed) + the
+    // humanised NGN fiat leg (₦150,000) from metadata.
+    expect(await screen.findByText("100")).toBeInTheDocument()
     expect(screen.getByText("₦150,000")).toBeInTheDocument()
   })
 })

@@ -27,6 +27,7 @@ import { useEffect, useMemo, useState, type MouseEvent } from "react"
 import { useRouter } from "next/navigation"
 
 import { cn } from "@/lib/utils"
+import { formatCrypto, formatFiat } from "@/lib/format"
 import { StatusPill } from "@/components/admin/status-pill"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useTransactions } from "@/lib/query/hooks"
@@ -151,13 +152,13 @@ function displayName(email: string | null, userId: string): string {
 function amountLines(t: AdminTxnListItem): { crypto: string; fiat: string } {
   const crypto =
     t.amount && t.asset
-      ? `${t.amount} ${t.asset}`
+      ? formatCrypto(t.amount, t.asset)
       : t.amount
         ? t.amount
         : EM_DASH
   const fiat =
     t.fiatAmount && t.fiatCurrency
-      ? `${t.fiatCurrency} ${t.fiatAmount}`
+      ? formatFiat(t.fiatAmount, t.fiatCurrency)
       : t.fiatAmount
         ? t.fiatAmount
         : ""
