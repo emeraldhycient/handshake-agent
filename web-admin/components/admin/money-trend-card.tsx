@@ -18,6 +18,7 @@ import { useState } from "react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TrendChart } from "@/components/admin/trend-chart"
 import { ExportCsvButton } from "@/components/admin/export-csv-button"
+import { FeatureCard } from "@/components/admin/feature-card"
 import {
   moneySeriesPoints,
   peakPoint,
@@ -34,15 +35,6 @@ const METRICS: readonly { key: MoneyMetric; label: string }[] = [
   { key: "profit", label: "Profit" },
 ]
 
-/** Radius-18 card shell — matches the metrics surface's FeatureCard. */
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="rounded-[18px] border border-line bg-card px-[22px] py-5">
-      {children}
-    </div>
-  )
-}
-
 export function MoneyTrendCard({
   data,
   isLoading,
@@ -53,23 +45,23 @@ export function MoneyTrendCard({
 
   if (isLoading) {
     return (
-      <Shell>
+      <FeatureCard>
         <div aria-busy="true" className="flex flex-col gap-3">
           <Skeleton className="h-4 w-40 rounded" />
           <Skeleton className="h-[120px] w-full rounded-[12px]" />
         </div>
-      </Shell>
+      </FeatureCard>
     )
   }
 
   if (isError) {
     return (
-      <Shell>
+      <FeatureCard>
         <div className="text-sm font-bold text-ink">Revenue &amp; profit</div>
         <p className="mt-3 text-[12.5px] text-tdn">
           Couldn&apos;t load the money trend. Please refresh.
         </p>
-      </Shell>
+      </FeatureCard>
     )
   }
 
@@ -78,12 +70,12 @@ export function MoneyTrendCard({
 
   if (!hasData) {
     return (
-      <Shell>
+      <FeatureCard>
         <div className="text-sm font-bold text-ink">Revenue &amp; profit</div>
         <p className="mt-3 text-[12.5px] text-ink3">
           No money movement in this range.
         </p>
-      </Shell>
+      </FeatureCard>
     )
   }
 
@@ -99,7 +91,7 @@ export function MoneyTrendCard({
   const peak = peakPoint(points)
 
   return (
-    <Shell>
+    <FeatureCard>
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-sm font-bold text-ink">Revenue &amp; profit</div>
@@ -175,6 +167,6 @@ export function MoneyTrendCard({
         <span>{points[0]?.date}</span>
         <span>{points[points.length - 1]?.date}</span>
       </div>
-    </Shell>
+    </FeatureCard>
   )
 }

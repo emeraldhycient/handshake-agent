@@ -33,6 +33,7 @@ import { formatMoneyList } from "@/lib/format"
 import { TrendChart } from "@/components/admin/trend-chart"
 import { MoneyTrendCard } from "@/components/admin/money-trend-card"
 import { ExportCsvButton } from "@/components/admin/export-csv-button"
+import { FeatureCard, CardHeading } from "@/components/admin/feature-card"
 import { useDashboardMetrics, useMoneySeries } from "@/lib/query/hooks"
 import { ApiError } from "@/lib/api/client"
 import type { DashboardSummary } from "@handshake-agent/contracts"
@@ -59,38 +60,6 @@ function formatPct(rate: number): string {
 }
 
 // ─── Shared layout primitives ───────────────────────────────────────────────────────
-
-/** Feature card — radius 18px, 1px line border, card surface, 20/22 padding (§3). */
-function FeatureCard({
-  className,
-  children,
-}: {
-  className?: string
-  children: React.ReactNode
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-[18px] border border-line bg-card px-[22px] py-5",
-        className
-      )}
-    >
-      {children}
-    </div>
-  )
-}
-
-/** Card title (14px/700) with an optional muted suffix line beneath (§3 / §5). */
-function CardHeading({ title, note }: { title: string; note?: string }) {
-  return (
-    <div>
-      <div className="text-sm font-bold text-ink">{title}</div>
-      {note && (
-        <div className="mt-0.5 text-xs text-ink2 tabular-nums">{note}</div>
-      )}
-    </div>
-  )
-}
 
 /**
  * KPI stat tile (§5). Tile 0 is the dark-green "hero" — a brand-green→deep

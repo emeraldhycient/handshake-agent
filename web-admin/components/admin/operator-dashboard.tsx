@@ -42,6 +42,7 @@ import { rangeForDays } from "@/lib/metrics-range"
 import { formatMoneyList } from "@/lib/format"
 import { KpiCard } from "@/components/admin/kpi-card"
 import { ChartBars } from "@/components/admin/chart-bars"
+import { FeatureCard } from "@/components/admin/feature-card"
 import { useOperatorAlerts, type AdminAlert } from "@/components/admin/use-operator-alerts"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -377,28 +378,6 @@ const APPROVAL_KIND_LABEL: Record<ChangeRequestKind, string> = {
 
 /** How many awaiting-me requests the dashboard teaser shows. */
 const APPROVALS_PANEL_LIMIT = 3
-
-// ─── Shared card + title primitives (design §5) ──────────────────────────────────────
-
-/** Feature card — radius 18px, 1px `--line` border, `--card` surface, 20/22 padding. */
-function FeatureCard({
-  className,
-  children,
-}: {
-  className?: string
-  children: React.ReactNode
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-[18px] border border-line bg-card px-[22px] py-5",
-        className
-      )}
-    >
-      {children}
-    </div>
-  )
-}
 
 // ─── Cards ───────────────────────────────────────────────────────────────────────────
 
