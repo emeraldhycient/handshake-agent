@@ -25,6 +25,7 @@ import { useRef, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 
 import { cn } from "@/lib/utils"
+import { formatCrypto, formatCryptoAmount } from "@/lib/format"
 import { pushToast } from "@/lib/store/toast-store"
 import { ApiError } from "@/lib/api/client"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -984,20 +985,23 @@ export function UserDetail({ userId }: UserDetailProps) {
 
   // The engine-preview + maker-checker rows for the manual-credit flow, derived from
   // the captured input (never hardcoded). Empty until the credit step is completed.
+  const creditAmount = creditInput
+    ? formatCrypto(creditInput.amount, creditInput.asset)
+    : ""
   const creditEffect: EngineEffectRow[] = creditInput
     ? [
         { k: "Credit to", v: userId },
-        { k: "Amount", v: `${creditInput.amount} ${creditInput.asset}` },
+        { k: "Amount", v: creditAmount },
         { k: "Proposal type", v: "manual_credit" },
       ]
     : []
   const creditLedger: EngineLedgerRow[] = creditInput
     ? [
-        { acct: `treasury:${creditInput.asset}`, dir: "DR", amt: creditInput.amount },
+        { acct: `treasury:${creditInput.asset}`, dir: "DR", amt: creditAmount },
         {
           acct: `${userId}:${creditInput.asset}`,
           dir: "CR",
-          amt: creditInput.amount,
+          amt: creditAmount,
         },
       ]
     : []
@@ -1006,7 +1010,7 @@ export function UserDetail({ userId }: UserDetailProps) {
         {
           field: `${creditInput.asset} available`,
           from: "—",
-          to: `+${creditInput.amount} ${creditInput.asset}`,
+          to: `+${creditAmount}`,
         },
       ]
     : []
@@ -1793,7 +1797,7 @@ export function UserDetail({ userId }: UserDetailProps) {
                     {w.label}
                   </div>
                   <div className="mt-[5px] font-mono text-[22px] font-extrabold tabular-nums">
-                    {w.avail}
+                    {formatCryptoAmount(w.avail)}
                   </div>
                   <div
                     className="mt-[3px] text-[11.5px] tabular-nums"
@@ -1803,7 +1807,9 @@ export function UserDetail({ userId }: UserDetailProps) {
                   >
                     available
                     {w.pending !== null && (
-                      <span className="ml-1.5">· {w.pending} pending</span>
+                      <span className="ml-1.5">
+                        · {formatCryptoAmount(w.pending)} pending
+                      </span>
                     )}
                   </div>
                 </div>
@@ -1979,7 +1985,7 @@ export function UserDetail({ userId }: UserDetailProps) {
                   <div className="font-mono text-[12.5px] font-bold tabular-nums">
                     {t.amount !== null ? (
                       <>
-                        {t.amount}
+                        {formatCryptoAmount(t.amount)}
                         {t.asset && (
                           <span className="ml-1 text-[10.5px] text-ink3">
                             {t.asset}

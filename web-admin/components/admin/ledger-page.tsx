@@ -28,6 +28,7 @@ import Link from "next/link"
 import { FilterSelect } from "@/components/admin/filter-select"
 import { TableFilterBar } from "@/components/admin/table-filter-bar"
 import { Skeleton } from "@/components/ui/skeleton"
+import { formatAmount } from "@/lib/format"
 import { pushToast } from "@/lib/store/toast-store"
 import { downloadFile, exportFilename } from "@/lib/download"
 import { exportLedger as exportLedgerCsv } from "@/lib/api/ledger"
@@ -69,26 +70,6 @@ const PAGE_SIZE = 25
 // `--card` surface so the control reads clearly on the cream `--card2` header strip.
 const FILTER_SELECT_CLASS =
   "h-[38px] w-full min-w-0 rounded-[11px] border-line bg-card py-0 pr-[30px] pl-3 text-[12.5px] font-semibold"
-
-// ── Formatting (mirrors the design's `ngn()` + per-currency `fmt`) ───────────
-
-/** The design's `ngn()` helper (logic.js 332): "₦" + en-NG 2-dp grouping. */
-function ngn(n: number): string {
-  return (
-    "₦" +
-    Number(n).toLocaleString("en-NG", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
-  )
-}
-
-/** Format a canonical decimal string per its OWN currency (each row is global). */
-function formatAmount(value: string, currency: string): string {
-  const n = Number(value)
-  if (currency === "NGN") return ngn(Math.abs(n))
-  return Math.abs(n).toFixed(currency === "TRX" ? 4 : 6) + " " + currency
-}
 
 /** Six-column grid (Seq · Account · Dir · Amount · Running · Source), shared by
  *  the header and every body row so the columns stay aligned. */

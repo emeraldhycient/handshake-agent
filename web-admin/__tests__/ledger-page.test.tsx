@@ -140,7 +140,7 @@ describe("LedgerPage", () => {
       screen.getByText("treasury_reserve:usdt_treasury:USDT")
     ).toBeInTheDocument()
     expect(screen.getByText("₦106,469.00")).toBeInTheDocument()
-    expect(screen.getByText("53.200000 USDT")).toBeInTheDocument()
+    expect(screen.getByText("53.2 USDT")).toBeInTheDocument()
     expect(screen.getByText("DEBIT")).toBeInTheDocument()
     expect(screen.getByText("CREDIT")).toBeInTheDocument()
     const source = screen.getByRole("link", { name: "tx_80231" })

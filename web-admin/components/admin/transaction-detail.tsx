@@ -78,7 +78,12 @@ import type {
   StatusPillStatus,
   TransactionDetailProps,
 } from "@/types/components"
-import { formatFiat } from "@/lib/format"
+import {
+  formatAmount,
+  formatCrypto,
+  formatDelta,
+  formatFiat,
+} from "@/lib/format"
 
 // ─── Presentation helpers ─────────────────────────────────────────────────────────
 
@@ -96,7 +101,7 @@ function formatWhen(iso: string): string {
  */
 function headerTitle(tx: AdminTxnDetail): string {
   const { amount, asset } = tx.economics
-  if (amount && asset) return `${tx.type} · ${amount} ${asset}`
+  if (amount && asset) return `${tx.type} · ${formatCrypto(amount, asset)}`
   if (amount) return `${tx.type} · ${amount}`
   return tx.type
 }
@@ -230,7 +235,7 @@ function flowSpecFor(kind: FlowKind, tx: AdminTxnDetail): FlowSpec | null {
   const engineLedger: EngineLedgerRow[] = tx.ledgerLegs.map((l) => ({
     acct: `${l.accountType}:${l.accountId}:${l.currency}`,
     dir: l.direction === "debit" ? "DR" : "CR",
-    amt: l.amount,
+    amt: formatAmount(l.amount, l.currency),
   }))
 
   switch (kind) {
@@ -856,7 +861,7 @@ function economicsRows(
   e: AdminTxnEconomics
 ): { label: string; value: string; warn?: boolean }[] {
   const amount =
-    e.amount && e.asset ? `${e.amount} ${e.asset}` : e.amount ?? DASH
+    e.amount && e.asset ? formatCrypto(e.amount, e.asset) : e.amount ?? DASH
   const fc = e.fiatCurrency
   const money = (v: string | null): string =>
     v !== null && fc ? formatFiat(v, fc) : v ?? DASH
@@ -869,6 +874,8 @@ function economicsRows(
     { label: "Processing fee", value: money(e.processingFee) },
     { label: "FX spread", value: spread },
     {
+      // Operator-only precise margin (a rate delta at full precision, not a 2-dp
+      // fiat figure) — left unformatted so the sub-unit precision is not rounded away.
       label: "Internal margin (operator)",
       value: e.internalMargin ?? DASH,
       warn: true,
@@ -916,7 +923,7 @@ function LedgerRowView({ leg }: { leg: AdminTxnLedgerLeg }) {
         {dir}
       </span>
       <span className="text-right font-mono text-[11.5px] font-bold tabular-nums">
-        {leg.amount}
+        {formatAmount(leg.amount, leg.currency)}
       </span>
       {/* Seq: the per-account monotonic posting order. */}
       <span className="text-right font-mono text-[11px] text-ink3 tabular-nums">
@@ -1062,7 +1069,7 @@ function ReconResultPanel({
                   {RECON_KIND_LABEL[b.kind]}
                 </span>
                 <span className="font-mono text-[12px] font-extrabold tabular-nums text-tdn">
-                  {`${b.delta} ${b.asset}`}
+                  {formatDelta(b.delta, b.asset)}
                 </span>
               </li>
             ))}

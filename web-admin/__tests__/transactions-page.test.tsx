@@ -138,7 +138,7 @@ describe("TransactionsPage (real-data wiring)", () => {
 
     // Amount cell: crypto leg + fiat leg from the enriched contract.
     expect(await screen.findByText("10.5 USDT")).toBeInTheDocument()
-    expect(screen.getByText("NGN 16500.00")).toBeInTheDocument()
+    expect(screen.getByText("₦16,500.00")).toBeInTheDocument()
     // User display name derived from the joined email local-part.
     expect(screen.getByText("Amara Okeke")).toBeInTheDocument()
     // Idempotency key rendered (copy affordance) for the buy row.
