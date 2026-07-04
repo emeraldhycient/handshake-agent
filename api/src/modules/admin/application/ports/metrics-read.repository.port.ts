@@ -123,6 +123,15 @@ export interface MoneySeriesResult {
   currencies: string[];
 }
 
+export interface PlatformKpisResult {
+  /** New users this window vs the previous equal window; growthRate = signed ratio. */
+  newUsers: { current: number; previous: number; growthRate: number };
+  /** Users active in the previous window with no activity this window. */
+  churn: { activePrevious: number; churned: number; churnRate: number };
+  /** Failed background jobs (settlement-outbox + wallet-backfill) in range. */
+  failedJobs: number;
+}
+
 export interface CountByKey {
   key: string;
   count: number;
@@ -228,4 +237,13 @@ export interface IMetricsReadRepository {
     to: Date,
     filter?: MetricsFilter,
   ): Promise<ServiceHealthResult>;
+
+  /**
+   * Platform lifecycle/ops KPIs for [from, to), each compared against the
+   * immediately preceding equal-length window: new-user growth rate, churn (users
+   * active in the previous window but not this one), and failed background jobs
+   * (settlement-outbox + wallet-backfill) in range. Period-over-period — range
+   * scoped only (the capability/tier/currency filters do NOT apply here).
+   */
+  platformKpis(from: Date, to: Date): Promise<PlatformKpisResult>;
 }

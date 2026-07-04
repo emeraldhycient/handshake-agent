@@ -7,6 +7,7 @@ import {
   RevenueMetricsSchema,
   MoneySeriesBucketSchema,
   MoneySeriesMetricsSchema,
+  PlatformKpisSchema,
   KycFunnelMetricsSchema,
   ActiveUsersMetricsSchema,
   ServiceHealthMetricsSchema,
@@ -220,6 +221,28 @@ describe("MoneySeriesMetricsSchema", () => {
     });
     expect(value.buckets).toHaveLength(1);
     expect(value.currencies).toEqual(["NGN"]);
+  });
+});
+
+describe("PlatformKpisSchema", () => {
+  it("parses growth / churn / failed-jobs KPIs", () => {
+    const value = PlatformKpisSchema.parse({
+      newUsers: { current: 12, previous: 8, growthRate: 0.5 },
+      churn: { activePrevious: 10, churned: 3, churnRate: 0.3 },
+      failedJobs: 2,
+    });
+    expect(value.newUsers.growthRate).toBeCloseTo(0.5);
+    expect(value.churn.churned).toBe(3);
+    expect(value.failedJobs).toBe(2);
+  });
+
+  it("rejects a payload missing the churn block", () => {
+    expect(
+      PlatformKpisSchema.safeParse({
+        newUsers: { current: 1, previous: 0, growthRate: 1 },
+        failedJobs: 0,
+      }).success,
+    ).toBe(false);
   });
 });
 

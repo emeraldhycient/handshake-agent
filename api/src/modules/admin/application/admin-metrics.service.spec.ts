@@ -5,6 +5,7 @@ import type {
   GmvResult,
   RevenueResult,
   MoneySeriesResult,
+  PlatformKpisResult,
   KycFunnelResult,
   ActiveUsersResult,
   ServiceHealthResult,
@@ -57,6 +58,13 @@ function makeMoneySeries(): MoneySeriesResult {
     currencies: ['NGN'],
   };
 }
+function makePlatformKpis(): PlatformKpisResult {
+  return {
+    newUsers: { current: 12, previous: 8, growthRate: 0.5 },
+    churn: { activePrevious: 10, churned: 3, churnRate: 0.3 },
+    failedJobs: 2,
+  };
+}
 function makeFunnel(): KycFunnelResult {
   return {
     byStatus: [{ key: 'verified', count: 5 }],
@@ -90,6 +98,7 @@ describe('AdminMetricsService', () => {
       gmv: jest.fn().mockResolvedValue(makeGmv()),
       revenue: jest.fn().mockResolvedValue(makeRevenue()),
       moneySeries: jest.fn().mockResolvedValue(makeMoneySeries()),
+      platformKpis: jest.fn().mockResolvedValue(makePlatformKpis()),
       kycFunnel: jest.fn().mockResolvedValue(makeFunnel()),
       activeUsers: jest.fn().mockResolvedValue(makeActive()),
       serviceHealth: jest.fn().mockResolvedValue(makeHealth()),
@@ -172,6 +181,19 @@ describe('AdminMetricsService', () => {
       expect(from.toISOString().slice(0, 10)).toBe('2026-06-01');
       expect(to.toISOString().slice(0, 10)).toBe('2026-06-30');
       expect(result).toEqual(makeMoneySeries());
+    });
+  });
+
+  describe('platformKpis', () => {
+    it('maps the KPI result over the resolved range', async () => {
+      const result = await service.platformKpis({
+        from: '2026-06-01',
+        to: '2026-06-30',
+      });
+      const [from, to] = repo.platformKpis.mock.calls[0];
+      expect(from.toISOString().slice(0, 10)).toBe('2026-06-01');
+      expect(to.toISOString().slice(0, 10)).toBe('2026-06-30');
+      expect(result).toEqual(makePlatformKpis());
     });
   });
 

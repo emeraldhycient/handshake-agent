@@ -498,6 +498,20 @@ describe('Admin metrics / dashboard — e2e (AppModule, Testcontainers Postgres)
     expect(ngn(sellDay.revenue)).toBe('50');
     expect(ngn(sellDay.profit)).toBe('65');
 
+    // 3c. GET /admin/metrics/kpis — lifecycle KPIs (route + RBAC + serialization).
+    const kpisRes = await request(app.getHttpServer())
+      .get(`/admin/metrics/kpis?from=${FROM}&to=${TO}`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .expect(200);
+    const kpis = kpisRes.body as {
+      newUsers: { current: number; previous: number; growthRate: number };
+      churn: { activePrevious: number; churned: number; churnRate: number };
+      failedJobs: number;
+    };
+    expect(typeof kpis.newUsers.growthRate).toBe('number');
+    expect(typeof kpis.churn.churnRate).toBe('number');
+    expect(kpis.failedJobs).toBeGreaterThanOrEqual(0);
+
     // 4. Invite a 'support' admin (holds Metrics:read) and read the dashboard.
     const rolesRes = await request(app.getHttpServer())
       .get('/admin/roles')

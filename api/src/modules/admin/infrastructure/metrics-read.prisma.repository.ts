@@ -25,8 +25,10 @@
 import { Injectable } from '@nestjs/common';
 
 import {
+  BackfillRunStatus,
   KycTier,
   QuoteType,
+  SettlementOutboxStatus,
   TransactionStatus,
   TransactionType,
 } from '../../../../generated/prisma/client';
@@ -41,6 +43,7 @@ import type {
   MetricsFilter,
   MoneySeriesBucketRow,
   MoneySeriesResult,
+  PlatformKpisResult,
   RevenueResult,
   ServiceHealthResult,
   ServiceHealthRow,
@@ -642,5 +645,70 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     }
 
     return { services: [...rows.values()] };
+  }
+
+  async platformKpis(from: Date, to: Date): Promise<PlatformKpisResult> {
+    // Compare the window against the immediately preceding equal-length window.
+    const windowMs = to.getTime() - from.getTime();
+    const prevFrom = new Date(from.getTime() - windowMs);
+
+    const [
+      newCurrent,
+      newPrevious,
+      activeCurrentGroups,
+      activePreviousGroups,
+      outboxFailed,
+      backfillFailed,
+    ] = await Promise.all([
+      this.prisma.user.count({
+        where: { deletedAt: null, createdAt: { gte: from, lte: to } },
+      }),
+      this.prisma.user.count({
+        where: { deletedAt: null, createdAt: { gte: prevFrom, lt: from } },
+      }),
+      // Distinct users active this window vs the previous window (set difference
+      // gives churn). `lt: from` keeps the two windows disjoint.
+      this.prisma.transaction.groupBy({
+        by: ['userId'],
+        where: { createdAt: { gte: from, lte: to } },
+      }),
+      this.prisma.transaction.groupBy({
+        by: ['userId'],
+        where: { createdAt: { gte: prevFrom, lt: from } },
+      }),
+      this.prisma.settlementOutbox.count({
+        where: {
+          status: SettlementOutboxStatus.failed,
+          createdAt: { gte: from, lte: to },
+        },
+      }),
+      this.prisma.backfillRun.count({
+        where: {
+          status: BackfillRunStatus.failed,
+          createdAt: { gte: from, lte: to },
+        },
+      }),
+    ]);
+
+    const currentUserIds = new Set(activeCurrentGroups.map((g) => g.userId));
+    const activePrevious = activePreviousGroups.length;
+    const churned = activePreviousGroups.filter(
+      (g) => !currentUserIds.has(g.userId),
+    ).length;
+    const churnRate = activePrevious === 0 ? 0 : churned / activePrevious;
+
+    // Signed growth ratio. With no prior baseline, treat any new users as +100%.
+    const growthRate =
+      newPrevious === 0
+        ? newCurrent > 0
+          ? 1
+          : 0
+        : (newCurrent - newPrevious) / newPrevious;
+
+    return {
+      newUsers: { current: newCurrent, previous: newPrevious, growthRate },
+      churn: { activePrevious, churned, churnRate },
+      failedJobs: outboxFailed + backfillFailed,
+    };
   }
 }

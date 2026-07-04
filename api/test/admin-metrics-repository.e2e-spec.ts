@@ -37,8 +37,10 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
   });
 
   beforeEach(async () => {
-    // Delete children before parents: ledger/txn → proposal → quote → user
-    // (proposals FK userId + quoteId; quotes FK userId).
+    // Delete children before parents: outbox/ledger/txn → proposal → quote → user
+    // (settlementOutbox + ledger FK transaction; proposals FK userId + quoteId).
+    await prisma.settlementOutbox.deleteMany();
+    await prisma.backfillRun.deleteMany();
     await prisma.ledgerEntry.deleteMany();
     await prisma.transaction.deleteMany();
     await prisma.proposal.deleteMany();
@@ -413,6 +415,131 @@ describe('MetricsReadPrismaRepository (integration, Testcontainers Postgres)', (
       const result = await repo.moneySeries(FROM, TO);
       expect(result.buckets).toEqual([]);
       expect(result.currencies).toEqual([]);
+    });
+  });
+
+  // ── platformKpis (growth / churn / failed-jobs) ─────────────────────────────
+
+  describe('platformKpis', () => {
+    // Current window is [FROM, TO] (~30d); the previous window is the equal-length
+    // window immediately before FROM, i.e. roughly [2026-05-02, 2026-06-01).
+    it('computes new-user growth and churn period-over-period', async () => {
+      // uPrev1: new in the PREVIOUS window, active previously, silent now → churned.
+      const uPrev1 = await seedUser({
+        createdAt: new Date('2026-05-10T00:00:00.000Z'),
+      });
+      await seedTxn({
+        userId: uPrev1,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-05-15T00:00:00.000Z'),
+      });
+      // uRet: created before both windows; active in BOTH → retained (not churned).
+      const uRet = await seedUser({
+        createdAt: new Date('2026-04-01T00:00:00.000Z'),
+      });
+      await seedTxn({
+        userId: uRet,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-05-20T00:00:00.000Z'),
+      });
+      await seedTxn({
+        userId: uRet,
+        type: 'sell',
+        status: 'completed',
+        createdAt: new Date('2026-06-20T00:00:00.000Z'),
+      });
+      // uCur1 + uCur2: new in the CURRENT window (uCur1 also active now).
+      const uCur1 = await seedUser({
+        createdAt: new Date('2026-06-05T00:00:00.000Z'),
+      });
+      await seedTxn({
+        userId: uCur1,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-06-05T00:00:00.000Z'),
+      });
+      await seedUser({ createdAt: new Date('2026-06-10T00:00:00.000Z') });
+
+      const kpis = await repo.platformKpis(FROM, TO);
+
+      // New users: current 2 (uCur1, uCur2) vs previous 1 (uPrev1) → +100%.
+      expect(kpis.newUsers.current).toBe(2);
+      expect(kpis.newUsers.previous).toBe(1);
+      expect(kpis.newUsers.growthRate).toBeCloseTo(1, 6);
+
+      // Churn: active-previous {uPrev1, uRet} = 2; churned {uPrev1} = 1 → 0.5.
+      expect(kpis.churn.activePrevious).toBe(2);
+      expect(kpis.churn.churned).toBe(1);
+      expect(kpis.churn.churnRate).toBeCloseTo(0.5, 6);
+    });
+
+    it('counts failed settlement-outbox + wallet-backfill jobs in range', async () => {
+      const u = await seedUser();
+      const txnId = await seedTxn({
+        userId: u,
+        type: 'buy',
+        status: 'completed',
+        createdAt: new Date('2026-06-05T00:00:00.000Z'),
+      });
+      // 1 failed outbox IN range (counts), 1 completed IN range (excluded),
+      // 1 failed OUT of range (excluded). Distinct settlementType keeps the
+      // [transactionId, settlementType] unique constraint satisfied on one txn.
+      await prisma.settlementOutbox.create({
+        data: {
+          transactionId: txnId,
+          settlementType: 'onchain_send' as never,
+          payload: {} as never,
+          status: 'failed' as never,
+          createdAt: new Date('2026-06-06T00:00:00.000Z'),
+        },
+      });
+      await prisma.settlementOutbox.create({
+        data: {
+          transactionId: txnId,
+          settlementType: 'processor_payout' as never,
+          payload: {} as never,
+          status: 'completed' as never,
+          createdAt: new Date('2026-06-07T00:00:00.000Z'),
+        },
+      });
+      await prisma.settlementOutbox.create({
+        data: {
+          transactionId: txnId,
+          settlementType: 'processor_collection' as never,
+          payload: {} as never,
+          status: 'failed' as never,
+          createdAt: new Date('2026-07-15T00:00:00.000Z'),
+        },
+      });
+      // 1 failed backfill IN range (counts), 1 queued IN range (excluded).
+      await prisma.backfillRun.create({
+        data: {
+          status: 'failed' as never,
+          createdAt: new Date('2026-06-10T00:00:00.000Z'),
+        },
+      });
+      await prisma.backfillRun.create({
+        data: {
+          status: 'queued' as never,
+          createdAt: new Date('2026-06-11T00:00:00.000Z'),
+        },
+      });
+
+      const kpis = await repo.platformKpis(FROM, TO);
+      // 1 failed outbox + 1 failed backfill in range.
+      expect(kpis.failedJobs).toBe(2);
+    });
+
+    it('reports +100% growth from a zero baseline and zero churn with no prior activity', async () => {
+      await seedUser({ createdAt: new Date('2026-06-05T00:00:00.000Z') });
+      const kpis = await repo.platformKpis(FROM, TO);
+      expect(kpis.newUsers.previous).toBe(0);
+      expect(kpis.newUsers.growthRate).toBe(1);
+      expect(kpis.churn.activePrevious).toBe(0);
+      expect(kpis.churn.churnRate).toBe(0);
+      expect(kpis.failedJobs).toBe(0);
     });
   });
 

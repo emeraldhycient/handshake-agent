@@ -6,6 +6,7 @@ import type {
   KycFunnelMetrics,
   MetricsRangeQuery,
   MoneySeriesMetrics,
+  PlatformKpis,
   RevenueMetrics,
   TxnVolumeMetrics,
 } from '@handshake-agent/contracts';
@@ -74,6 +75,16 @@ export class AdminMetricsService {
   async moneySeries(query: MetricsRangeQuery): Promise<MoneySeriesMetrics> {
     const { from, to } = this.resolveRange(query);
     return this.metrics.moneySeries(from, to, this.resolveFilter(query));
+  }
+
+  /**
+   * Platform lifecycle/ops KPIs (new-user growth, churn, failed jobs) for the
+   * (defaulted/clamped) range, each period-over-period. Range-scoped only — the
+   * capability/tier/currency filters do not apply to these platform-wide metrics.
+   */
+  async platformKpis(query: MetricsRangeQuery): Promise<PlatformKpis> {
+    const { from, to } = this.resolveRange(query);
+    return this.metrics.platformKpis(from, to);
   }
 
   /** Point-in-time KYC funnel (counts by status + tier). */

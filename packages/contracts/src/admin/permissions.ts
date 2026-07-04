@@ -969,6 +969,13 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
   ),
   r(
     "api_route",
+    "GET /admin/metrics/kpis",
+    "read",
+    "Metrics",
+    "Read platform lifecycle KPIs (new-user growth, churn, failed jobs)",
+  ),
+  r(
+    "api_route",
     "GET /admin/metrics/kyc-funnel",
     "read",
     "Metrics",

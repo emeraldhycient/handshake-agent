@@ -125,6 +125,29 @@ export const MoneySeriesMetricsSchema = z.object({
 });
 export type MoneySeriesMetrics = z.infer<typeof MoneySeriesMetricsSchema>;
 
+// Platform lifecycle/ops KPIs for a range, each compared against the immediately
+// preceding equal-length window. `newUsers.growthRate` is a signed ratio
+// (0.5 = +50%, -0.2 = -20%; +1 when the previous window had none but this one has
+// some). `churn` counts users active in the PREVIOUS window with no activity in the
+// current one (`churnRate` = churned / activePrevious, 0..1). `failedJobs` is the
+// count of failed background jobs (settlement-outbox + wallet-backfill) in range.
+// Range-scoped (period-over-period) — the dashboard capability/tier/currency filters
+// do not apply (these are platform-wide lifecycle metrics). Nothing moves money (§3.1).
+export const PlatformKpisSchema = z.object({
+  newUsers: z.object({
+    current: z.number(),
+    previous: z.number(),
+    growthRate: z.number(),
+  }),
+  churn: z.object({
+    activePrevious: z.number(),
+    churned: z.number(),
+    churnRate: z.number(),
+  }),
+  failedJobs: z.number(),
+});
+export type PlatformKpis = z.infer<typeof PlatformKpisSchema>;
+
 // KYC funnel: user counts grouped by kycStatus and by kycTier (point-in-time, not
 // date-ranged — the funnel reflects the current population).
 export const KycFunnelMetricsSchema = z.object({
