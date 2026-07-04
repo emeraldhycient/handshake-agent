@@ -53,7 +53,10 @@ function OnboardingContent() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background px-4 py-8">
+    <main
+      id="main-content"
+      className="flex min-h-screen items-center justify-center bg-background px-4 py-8"
+    >
       <div className="w-full max-w-md">
         <h1 className="mb-6 text-xl font-semibold text-foreground">
           Complete your verification
