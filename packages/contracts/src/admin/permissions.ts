@@ -760,6 +760,17 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Treasury",
     "Approve a queued payout via maker-checker (raises a four-eyes change request)",
   ),
+  // Treasury payout RETRY (go-readiness #2, WRITE — single-admin step-up). Re-drives a
+  // STUCK settling sell payout through the engine after a server-side re-check; it
+  // re-arms the EXISTING settlement outbox row (original idempotency key), never
+  // re-sends a payout, and rejects a completed one (no double-pay).
+  r(
+    "api_route",
+    "POST /admin/treasury/payouts/:id/retry",
+    "execute",
+    "Treasury",
+    "Retry a stuck settling sell payout via the engine (re-checks the user; re-drives the existing settlement)",
+  ),
 
   // Approvals — the maker-checker change-request subsystem (Phase 7, WRITES). A
   // sensitive mutation is captured as a pending request (create = write), then a

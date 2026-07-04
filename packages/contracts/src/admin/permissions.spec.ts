@@ -226,6 +226,13 @@ describe("PERMISSION_CATALOG", () => {
     }
   });
 
+  it("includes the treasury payout-retry api_route permission (go-readiness #2)", () => {
+    const ids = new Set(PERMISSION_CATALOG.map(permissionId));
+    expect(
+      ids.has("api_route:POST /admin/treasury/payouts/:id/retry:execute"),
+    ).toBe(true);
+  });
+
   it("registers the Comms notification-template + WhatsApp routes + nav (Phase 4 wave 1)", () => {
     const ids = new Set(PERMISSION_CATALOG.map(permissionId));
     expect(ids.has("api_route:GET /admin/notification-templates:read")).toBe(
