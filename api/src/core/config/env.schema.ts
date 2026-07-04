@@ -274,6 +274,20 @@ export const envSchema = z
           'KYC_ENCRYPTION_KEY must be non-empty when KYC_MOCK_MODE=false (real NIN/BVN must never be stored unencrypted).',
       });
     }
+
+    // 5. DIRECTIVE_SIGNING_KEY is the sole authenticator of the stateless
+    //    WhatsApp flow_token (flow-token.ts). With an empty key the HMAC is
+    //    attacker-computable, so a forged flow_token binding an arbitrary victim
+    //    userId would verify (withdrawal-destination injection via beneficiary_add).
+    //    Require it in production (mirrors the STATEMENT_SIGNING_KEY guard).
+    if (env.NODE_ENV === 'production' && env.DIRECTIVE_SIGNING_KEY === '') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['DIRECTIVE_SIGNING_KEY'],
+        message:
+          'DIRECTIVE_SIGNING_KEY must be non-empty when NODE_ENV=production (flow-token/directive signing is forgeable with an empty key).',
+      });
+    }
   });
 
 export type Env = z.infer<typeof envSchema>;

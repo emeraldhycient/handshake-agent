@@ -54,6 +54,15 @@ export function signFlowToken(
   key: string,
   ttlSeconds = DEFAULT_TTL_SECONDS,
 ): string {
+  // Fail closed on an empty key: an HMAC keyed by '' is attacker-computable, so
+  // a token minted here would be forgeable. Mirrors DirectiveService/TokenService
+  // (throw on empty secret) — the guard does not depend solely on env validation.
+  if (!key) {
+    throw new FlowTokenError(
+      'DIRECTIVE_SIGNING_KEY is not configured — cannot sign flow token.',
+    );
+  }
+
   const exp =
     payload.exp !== undefined
       ? payload.exp
@@ -78,6 +87,15 @@ export function signFlowToken(
  * @throws {FlowTokenError} when the token is malformed, signature-invalid, or expired.
  */
 export function verifyFlowToken(token: string, key: string): FlowTokenPayload {
+  // Fail closed on an empty key: with key='' the expected HMAC is attacker-
+  // computable, so a forged flow_token binding an arbitrary victim userId would
+  // verify. Reject before any comparison (mirrors DirectiveService/TokenService).
+  if (!key) {
+    throw new FlowTokenError(
+      'DIRECTIVE_SIGNING_KEY is not configured — cannot verify flow token.',
+    );
+  }
+
   const dotIdx = token.indexOf('.');
   if (dotIdx === -1) {
     throw new FlowTokenError('malformed (missing signature separator)');
