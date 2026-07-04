@@ -189,7 +189,7 @@ describe("OperatorDashboard — KPI tiles wired to metrics", () => {
     const counts = await screen.findAllByText("160")
     expect(counts.length).toBeGreaterThanOrEqual(1)
     // Revenue (fees): the primary currency + amount from the contract.
-    expect(screen.getByText("NGN 45000.00")).toBeInTheDocument()
+    expect(screen.getByText("₦45,000.00")).toBeInTheDocument()
     // New signups = activeUsers.newInRange (14).
     expect(screen.getByText("14")).toBeInTheDocument()
     // KYC pending = pending (25) + needs_info (5) = 30.
@@ -201,10 +201,10 @@ describe("OperatorDashboard — KPI tiles wired to metrics", () => {
   it("renders the GMV tile and the open-compliance count from the ops metric", async () => {
     renderDashboard()
 
-    await screen.findByText("NGN 45000.00")
+    await screen.findByText("₦45,000.00")
     // GMV is wired: the primary currency + summed fiat notional render.
     expect(screen.getByText("GMV")).toBeInTheDocument()
-    expect(screen.getByText("NGN 1250000.00")).toBeInTheDocument()
+    expect(screen.getByText("₦1,250,000.00")).toBeInTheDocument()
     // Open compliance cases is now wired to the ops payload (openCases: 7).
     expect(screen.getByText("Open compliance cases")).toBeInTheDocument()
     expect(await screen.findByText("7")).toBeInTheDocument()
@@ -212,7 +212,7 @@ describe("OperatorDashboard — KPI tiles wired to metrics", () => {
 
   it("requests a non-empty 24h window that includes now (regression: today's txns were excluded)", async () => {
     renderDashboard()
-    await screen.findByText("NGN 45000.00")
+    await screen.findByText("₦45,000.00")
 
     const range = mockDashboard.mock.calls[0][0] as { from: string; to: string }
     // The 24h preset must be a REAL window — the old bug truncated both bounds to a
@@ -233,7 +233,7 @@ describe("OperatorDashboard — KPI tiles wired to metrics", () => {
     const user = userEvent.setup()
     renderDashboard()
 
-    await screen.findByText("NGN 45000.00")
+    await screen.findByText("₦45,000.00")
     expect(mockDashboard).toHaveBeenCalledTimes(1)
     const firstRange = mockDashboard.mock.calls[0][0] as { from: string }
 
@@ -258,7 +258,7 @@ describe("OperatorDashboard — KPI tiles wired to metrics", () => {
   it("renders the volume chart from the real stacked-by-capability series", async () => {
     renderDashboard()
 
-    await screen.findByText("NGN 45000.00")
+    await screen.findByText("₦45,000.00")
     // The chart is now backed by txnVolume.stackedSeries (2 day-buckets in the
     // fixture) — its bar segments render non-zero inline heights.
     const heights = chartHeights()
@@ -290,7 +290,7 @@ describe("OperatorDashboard — KPI tiles wired to metrics", () => {
     mockDashboard.mockResolvedValueOnce(SUMMARY).mockResolvedValueOnce(wideSummary)
 
     renderDashboard()
-    await screen.findByText("NGN 45000.00")
+    await screen.findByText("₦45,000.00")
     const before = chartHeights()
 
     await user.click(screen.getByRole("button", { name: "30d" }))
@@ -347,7 +347,7 @@ describe("OperatorDashboard — System health + Live activity wired to ops", () 
 
     // The composite dashboard still renders (independent query); the ops panels
     // fall back to their unavailable notes.
-    await screen.findByText("NGN 45000.00")
+    await screen.findByText("₦45,000.00")
     expect(
       await screen.findByText("Health metrics unavailable.")
     ).toBeInTheDocument()

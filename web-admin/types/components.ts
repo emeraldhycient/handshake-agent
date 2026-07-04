@@ -4,6 +4,12 @@
  * (root §13.4). Shapes that cross the FE/BE boundary come from contracts.
  */
 import type { ComponentPropsWithoutRef, ReactNode } from "react"
+
+/** One per-currency money figure (mirrors the metrics `byCurrency` entries). */
+export interface CurrencyAmount {
+  currency: string
+  amount: string
+}
 import type {
   AdminBeneficiary,
   AdminCustomFiatCreateRequest,

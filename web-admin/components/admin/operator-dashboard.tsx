@@ -39,6 +39,7 @@ import { useRouter } from "next/navigation"
 
 import { cn } from "@/lib/utils"
 import { rangeForDays } from "@/lib/metrics-range"
+import { formatMoneyList } from "@/lib/format"
 import { KpiCard } from "@/components/admin/kpi-card"
 import { ChartBars } from "@/components/admin/chart-bars"
 import { useOperatorAlerts, type AdminAlert } from "@/components/admin/use-operator-alerts"
@@ -120,35 +121,20 @@ function deriveKpis(
   const pendingKyc = kycFunnel.byStatus
     .filter((s) => PENDING_KYC_STATUSES.has(s.status))
     .reduce((sum, s) => sum + s.count, 0)
-  const primaryFee = revenue.totalFeesByCurrency[0]
-  const revenueValue = primaryFee
-    ? `${primaryFee.currency} ${primaryFee.amount}`
-    : "—"
-  const revenueNote =
-    revenue.totalFeesByCurrency.length > 1
-      ? `+${revenue.totalFeesByCurrency.length - 1} more`
-      : "fees"
+  // Money tiles show EVERY currency (each with its own symbol via formatFiat),
+  // never the first-currency-only or a cross-currency sum (go-readiness #11/#12).
+  const revenueValue = formatMoneyList(revenue.totalFeesByCurrency)
+  const revenueNote = "fees"
   // Profit = fees + realized bid-ask spread, DERIVED per completed buy/sell from
-  // its Quote (docs §5). Primary currency shown (per-currency drill-down is #12).
-  const primaryProfit = revenue.totalProfitByCurrency[0]
-  const profitValue = primaryProfit
-    ? `${primaryProfit.currency} ${primaryProfit.amount}`
-    : "—"
-  const primarySpread = revenue.totalSpreadByCurrency[0]
-  const profitNote = primarySpread
-    ? `${primarySpread.currency} ${primarySpread.amount} spread`
-    : "fees + spread"
-
-  // GMV: the summed fiat notional of completed money-moving txns (primary
-  // currency). "—" only when no completed txn carried a fiat notional in range.
-  const primaryGmv = gmv.totalByCurrency[0]
-  const gmvValue = primaryGmv
-    ? `${primaryGmv.currency} ${primaryGmv.amount}`
-    : "—"
-  const gmvNote =
-    gmv.totalByCurrency.length > 1
-      ? `+${gmv.totalByCurrency.length - 1} more`
-      : "gross"
+  // its Quote (docs §5).
+  const profitValue = formatMoneyList(revenue.totalProfitByCurrency)
+  const profitNote =
+    revenue.totalSpreadByCurrency.length > 0
+      ? `${formatMoneyList(revenue.totalSpreadByCurrency)} spread`
+      : "fees + spread"
+  // GMV: summed fiat notional of completed money-moving txns, per currency.
+  const gmvValue = formatMoneyList(gmv.totalByCurrency)
+  const gmvNote = "gross"
 
   return [
     // Hero: the backend surfaces per-type COUNTS, not a fiat money sum — show the

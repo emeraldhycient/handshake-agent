@@ -141,7 +141,7 @@ describe("MetricsDashboard", () => {
     const rates = await screen.findAllByText("92.5%")
     expect(rates.length).toBeGreaterThanOrEqual(1)
     // The primary revenue currency + amount (NGN 45000.00) render together.
-    expect(screen.getByText("NGN 45000.00")).toBeInTheDocument()
+    expect(screen.getByText("₦45,000.00 · $120.50")).toBeInTheDocument()
     // Total transactions card (120 + 40 = 160).
     expect(screen.getByText("160")).toBeInTheDocument()
   })
@@ -185,17 +185,17 @@ describe("MetricsDashboard", () => {
     expect(screen.getByText("95.0%")).toBeInTheDocument()
   })
 
-  it("surfaces that spread is folded into FX (not fabricated) on the revenue tile", async () => {
-    // The fixture has an empty totalSpreadByCurrency; the revenue tile renders
-    // its fee figure AND the honest disclosure that spread is not tracked
-    // separately (revenue = fees only) — surfaced, never fabricated.
+  it("shows per-currency fees + a derived profit footnote (fees + spread) on the revenue tile", async () => {
+    // Revenue = complete fees per currency; profit (fees + realized spread) is
+    // now DERIVED from the Quote and shown as a footnote — no longer "not tracked".
     renderDashboard()
 
     expect(await screen.findByText("Revenue (fees)")).toBeInTheDocument()
-    expect(screen.getByText("NGN 45000.00")).toBeInTheDocument()
-    // Two fee currencies in the fixture → a "+1 more currencies" note.
-    expect(screen.getByText(/more currencies/i)).toBeInTheDocument()
-    // The spread disclosure must be present.
-    expect(screen.getByText(/spread folded into FX/i)).toBeInTheDocument()
+    // Both fee currencies render (never first-currency-only or summed).
+    expect(screen.getByText("₦45,000.00 · $120.50")).toBeInTheDocument()
+    // Profit footnote = fees + realized spread, per currency.
+    expect(
+      screen.getByText(/Profit ₦75,000.00 · \$200.50 \(fees \+ spread\)/),
+    ).toBeInTheDocument()
   })
 })

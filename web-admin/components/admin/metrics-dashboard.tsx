@@ -29,6 +29,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { MetricsBar } from "@/components/admin/metrics-bar"
 import { cn } from "@/lib/utils"
 import { rangeForDays } from "@/lib/metrics-range"
+import { formatMoneyList } from "@/lib/format"
 import { useDashboardMetrics } from "@/lib/query/hooks"
 import { ApiError } from "@/lib/api/client"
 import type { DashboardSummary } from "@handshake-agent/contracts"
@@ -177,16 +178,12 @@ function KpiTile({
 function KpiGrid({ data }: { data: DashboardSummary }) {
   const { txnVolume, activeUsers, revenue } = data
   const totalTxns = txnVolume.byType.reduce((sum, t) => sum + t.count, 0)
-  const primaryFee = revenue.totalFeesByCurrency[0]
-  const revenueValue = primaryFee
-    ? `${primaryFee.currency} ${primaryFee.amount}`
-    : "—"
+  // Per-currency (each with its own symbol), never first-currency-only (#11/#12).
+  const revenueValue = formatMoneyList(revenue.totalFeesByCurrency)
   const revenueNote =
-    revenue.totalFeesByCurrency.length > 1
-      ? `+${revenue.totalFeesByCurrency.length - 1} more currencies`
-      : revenue.totalFeesByCurrency.length === 0
-        ? "No fee revenue"
-        : "fees collected"
+    revenue.totalFeesByCurrency.length === 0 ? "No fee revenue" : "fees collected"
+  // Profit = fees + realized spread, derived per completed buy/sell (docs §5).
+  const profitFootnote = `Profit ${formatMoneyList(revenue.totalProfitByCurrency)} (fees + spread)`
 
   return (
     <div className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
@@ -213,7 +210,7 @@ function KpiGrid({ data }: { data: DashboardSummary }) {
         label="Revenue (fees)"
         value={revenueValue}
         deltaNote={revenueNote}
-        footnote="Spread folded into FX — not separately tracked."
+        footnote={profitFootnote}
         warn={revenue.totalFeesByCurrency.length === 0}
       />
     </div>
