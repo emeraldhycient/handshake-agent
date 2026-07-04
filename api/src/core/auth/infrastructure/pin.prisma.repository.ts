@@ -37,17 +37,50 @@ export class PinPrismaRepository implements IPinRepository {
     });
   }
 
-  async recordFailure(
+  async registerFailedAttempt(
     userId: string,
-    count: number,
-    lockedUntil: Date | null,
-  ): Promise<void> {
+    now: Date,
+  ): Promise<{ count: number; lockedUntil: Date | null }> {
+    // ONE atomic statement folds the expired-window reset INTO the increment.
+    // A separate resetFailures()-then-increment could interleave under a
+    // concurrent burst on a just-expired lock and let every guess reach the
+    // scrypt comparison — reintroducing the TOCTOU brute-force bypass
+    // (CLAUDE.md §3.4). Postgres serializes the row update, so concurrent
+    // callers observe strictly increasing counts. `now` comes from the service's
+    // injected clock (not the DB clock) so lockout timing stays deterministic.
+    const rows = await this.prisma.$queryRaw<
+      Array<{ pinFailureCount: number; pinLockedUntil: Date | null }>
+    >`
+      UPDATE "users"
+      SET
+        "pinFailureCount" = CASE
+          WHEN "pinLockedUntil" IS NOT NULL AND "pinLockedUntil" >  ${now} THEN "pinFailureCount"
+          WHEN "pinLockedUntil" IS NOT NULL AND "pinLockedUntil" <= ${now} THEN 1
+          ELSE "pinFailureCount" + 1
+        END,
+        "pinLockedUntil" = CASE
+          WHEN "pinLockedUntil" IS NOT NULL AND "pinLockedUntil" <= ${now} THEN NULL
+          ELSE "pinLockedUntil"
+        END
+      WHERE "id" = ${userId}::uuid
+      RETURNING "pinFailureCount", "pinLockedUntil"
+    `;
+
+    const row = rows[0];
+    // Row vanished between the caller's state read and this update (rare delete
+    // race): report a cleared counter so the caller does not lock a ghost.
+    if (!row) return { count: 0, lockedUntil: null };
+
+    return {
+      count: Number(row.pinFailureCount),
+      lockedUntil: row.pinLockedUntil ?? null,
+    };
+  }
+
+  async setLock(userId: string, lockedUntil: Date): Promise<void> {
     await this.prisma.user.update({
       where: { id: userId },
-      data: {
-        pinFailureCount: count,
-        pinLockedUntil: lockedUntil,
-      },
+      data: { pinLockedUntil: lockedUntil },
     });
   }
 
