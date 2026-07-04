@@ -400,6 +400,21 @@ export interface ReconciliationConfig {
 }
 
 /**
+ * Durable inbound-webhook queue tuning (Track A). Infra parameters, not
+ * business-tunable (root CLAUDE.md §7) — a code change + redeploy to alter.
+ */
+export interface WebhooksConfig {
+  /** BullMQ automatic-retry attempts before dead-lettering. Default 5. */
+  maxAttempts: number;
+  /** Exponential-backoff base delay (ms) between retries. Default 2000. */
+  backoffMs: number;
+  /** Sweeper: only re-enqueue rows stuck in `received` older than this. Default 60s. */
+  sweepGracePeriodSec: number;
+  /** Sweeper: max rows re-enqueued per tick. Default 50. */
+  sweepBatchSize: number;
+}
+
+/**
  * Statement / transaction-history configuration (CLAUDE.md §7).
  * All values are admin-tunable later via the DB-admin AppSetting layer.
  */
@@ -503,6 +518,7 @@ export interface AppConfig {
   catalog: CatalogConfig;
   beneficiary: BeneficiaryConfig;
   reconciliation: ReconciliationConfig;
+  webhooks: WebhooksConfig;
   statement: StatementConfig;
   media: MediaConfig;
   ticketing: TicketingConfig;
@@ -872,6 +888,16 @@ const buildConfig = (): AppConfig => ({
     gracePeriodSec: 120,
     // Process at most 20 rows per tick to bound settlement-engine load.
     batchSize: 20,
+  },
+  webhooks: {
+    // BullMQ retries a failed webhook 5 times with exponential backoff (2s base:
+    // ~2s, 4s, 8s, 16s) before dead-lettering it for an admin replay.
+    maxAttempts: 5,
+    backoffMs: 2_000,
+    // Sweeper re-enqueues rows stuck in `received` > 60s (covers a Redis-down
+    // enqueue miss at ACK time), at most 50 per tick.
+    sweepGracePeriodSec: 60,
+    sweepBatchSize: 50,
   },
   statement: {
     // 15-minute signed-link validity; ~1-year (400-day) max window with headroom so
