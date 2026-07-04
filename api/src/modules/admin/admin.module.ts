@@ -146,6 +146,7 @@ import { ReconciliationReadPrismaRepository } from './infrastructure/reconciliat
 // and the provider liveness probe (port + HttpService adapter).
 import { AdminOpsRunService } from './application/admin-ops-run.service';
 import { AdminTreasuryPayoutService } from './application/admin-treasury-payout.service';
+import { AdminTreasuryPayoutRetryService } from './application/admin-treasury-payout-retry.service';
 import { AdminProviderProbeService } from './application/admin-provider-probe.service';
 import { PROVIDER_PROBE } from './application/ports/provider-probe.port';
 import { HttpProviderProbeAdapter } from './infrastructure/http-provider-probe.adapter';
@@ -473,6 +474,11 @@ import type { Env } from '../../core/config/env.schema';
     // releases NO money here; a second admin's approval re-drives settlement via the
     // engine's atomic path (§3.1). Reaches the payout via TREASURY_READ_REPOSITORY.
     AdminTreasuryPayoutService,
+    // Go-readiness #2 (WRITE — single-admin step-up): retry a STUCK settling sell
+    // payout, engine-brokered (re-arms the existing outbox row) + server-side
+    // re-checked. Reaches data via the treasury-read/transaction/outbox/compliance
+    // ports + KycGateService + AuditService — no ExecutionService import (§3.1/§3.2).
+    AdminTreasuryPayoutRetryService,
     // Phase 6b (READ-ONLY): full asset + fiat catalog view (Config group's Asset /
     // Currency screens). AdminCatalogService reads the merged catalog via the global
     // EffectiveConfigService — no repo, no Prisma, never moves money (§3.1/§3.2).
