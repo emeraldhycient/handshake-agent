@@ -50,9 +50,22 @@ datasource db {
 // app layer via AssetRegistry / contracts SupportedAssetSchema. This supports the
 // "dynamic asset catalog" design goal (CLAUDE.md §7).
 
-/// Fiat currencies. NGN only at launch (PRD §12).
+/// Launch + near-term African/USD fiats (mirrors the config catalog's 8 fiats and
+/// web/web-admin FIAT_SYMBOLS). NGN is enabled at launch; the others are gated OFF
+/// by the config `enabled` flag until a market is switched on server-side (§3.3).
+/// Widening the enum (vs. leaving money columns NGN-only) is what lets an enabled
+/// market actually transact — a Quote/price/exposure could not be inserted in any
+/// non-NGN currency before this. Truly-arbitrary codes still use the custom_fiats
+/// TEXT overlay.
 enum FiatCurrency {
   NGN
+  GHS
+  KES
+  UGX
+  TZS
+  RWF
+  ZAR
+  USD
 
   @@map("fiat_currency")
 }
