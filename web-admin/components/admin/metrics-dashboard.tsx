@@ -28,32 +28,20 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { MetricsBar } from "@/components/admin/metrics-bar"
 import { cn } from "@/lib/utils"
-import { rangeForDays } from "@/lib/metrics-range"
+import { metricsQueryFromFilter } from "@/lib/metrics-range"
 import { formatMoneyList } from "@/lib/format"
 import { TrendChart } from "@/components/admin/trend-chart"
 import { MoneyTrendCard } from "@/components/admin/money-trend-card"
 import { ExportCsvButton } from "@/components/admin/export-csv-button"
+import { MetricsFilterBar } from "@/components/admin/metrics-filter-bar"
 import { FeatureCard, CardHeading } from "@/components/admin/feature-card"
 import { useDashboardMetrics, useMoneySeries } from "@/lib/query/hooks"
 import { ApiError } from "@/lib/api/client"
 import type { DashboardSummary } from "@handshake-agent/contracts"
-import type { MetricsDashboardProps } from "@/types/components"
-
-// ─── Range presets ────────────────────────────────────────────────────────────────
-
-interface RangePreset {
-  readonly id: string
-  readonly label: string
-  readonly days: number
-}
-
-const RANGE_PRESETS: readonly RangePreset[] = [
-  { id: "7d", label: "7d", days: 7 },
-  { id: "30d", label: "30d", days: 30 },
-  { id: "90d", label: "90d", days: 90 },
-]
-
-const DEFAULT_PRESET_ID = "30d"
+import type {
+  MetricsDashboardProps,
+  MetricsFilterState,
+} from "@/types/components"
 
 function formatPct(rate: number): string {
   return `${(rate * 100).toFixed(1)}%`
@@ -411,13 +399,18 @@ function ServiceHealthCard({ data }: { data: DashboardSummary }) {
 export function MetricsDashboard({
   gracefulOnForbidden = false,
 }: MetricsDashboardProps) {
-  const [presetId, setPresetId] = useState(DEFAULT_PRESET_ID)
-  const preset =
-    RANGE_PRESETS.find((p) => p.id === presetId) ?? RANGE_PRESETS[1]
-  const range = useMemo(() => rangeForDays(preset.days), [preset.days])
+  const [filter, setFilter] = useState<MetricsFilterState>({
+    presetId: "30d",
+    from: "",
+    to: "",
+    capability: "",
+    tier: "",
+    currency: "",
+  })
+  const rangeQuery = useMemo(() => metricsQueryFromFilter(filter), [filter])
 
-  const query = useDashboardMetrics(range)
-  const moneySeries = useMoneySeries(range)
+  const query = useDashboardMetrics(rangeQuery)
+  const moneySeries = useMoneySeries(rangeQuery)
   const isForbidden =
     query.error instanceof ApiError && query.error.status === 403
 
@@ -425,41 +418,17 @@ export function MetricsDashboard({
     <div className="flex flex-1 flex-col overflow-y-auto bg-bg">
       <div className="mx-auto w-full max-w-[1320px] px-[30px] pt-[26px] pb-[60px]">
         {/* ── Header ────────────────────────────────────────────────────────── */}
-        <div className="mb-[22px] flex flex-wrap items-end justify-between gap-5">
-          <div>
-            <h1 className="text-2xl font-extrabold tracking-tight text-ink">
-              Operations overview
-            </h1>
-            <p className="mt-1.5 text-[13.5px] text-ink2">
-              Live platform health, money movement, and what needs your
-              attention.
-            </p>
-          </div>
-          <div
-            role="group"
-            aria-label="Date range"
-            className="flex rounded-[11px] border border-line bg-card p-[3px]"
-          >
-            {RANGE_PRESETS.map((p) => {
-              const active = p.id === presetId
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => setPresetId(p.id)}
-                  className={cn(
-                    "cursor-pointer rounded-[8px] px-3.5 py-1.5 text-[12.5px] font-bold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                    active
-                      ? "bg-btn-dark text-white"
-                      : "text-ink2 hover:text-ink"
-                  )}
-                >
-                  {p.label}
-                </button>
-              )
-            })}
-          </div>
+        <div className="mb-[18px]">
+          <h1 className="text-2xl font-extrabold tracking-tight text-ink">
+            Operations overview
+          </h1>
+          <p className="mt-1.5 text-[13.5px] text-ink2">
+            Live platform health, money movement, and what needs your attention.
+          </p>
+        </div>
+        {/* ── Filter bar ────────────────────────────────────────────────────── */}
+        <div className="mb-[22px]">
+          <MetricsFilterBar value={filter} onChange={setFilter} />
         </div>
 
         {/* ── Loading ──────────────────────────────────────────────────────── */}

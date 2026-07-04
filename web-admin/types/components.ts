@@ -50,6 +50,27 @@ export interface ExportCsvButtonProps {
   onDownload?: (filename: string, csv: string) => void
 }
 
+/**
+ * Metrics filter-bar state: the selected range preset (or "custom"), the custom
+ * from/to date-only strings ('' when a preset is active), and the optional
+ * capability / tier / currency filters ('' = all). Resolved into a MetricsRangeQuery
+ * by `metricsQueryFromFilter`.
+ */
+export interface MetricsFilterState {
+  presetId: string
+  from: string
+  to: string
+  capability: string
+  tier: string
+  currency: string
+}
+
+/** MetricsFilterBar props — controlled: parent owns the state + resolves the query. */
+export interface MetricsFilterBarProps {
+  value: MetricsFilterState
+  onChange: (next: MetricsFilterState) => void
+}
+
 /** Which money metric a trend chart is plotting. */
 export type MoneyMetric = "gmv" | "revenue" | "profit"
 
