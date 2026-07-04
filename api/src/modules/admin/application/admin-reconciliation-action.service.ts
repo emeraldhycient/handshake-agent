@@ -4,6 +4,8 @@ import { Inject, Injectable } from '@nestjs/common';
 
 import type {
   ComplianceEventItem,
+  PersistedReconBreak,
+  PersistedReconBreakStatus,
   ReconActionResponse,
 } from '@handshake-agent/contracts';
 
@@ -20,7 +22,12 @@ import {
   TRANSACTION_REPOSITORY,
   type ITransactionRepository,
 } from '../../transactions/application/ports/transaction.repository.port';
+import {
+  RECONCILIATION_REPOSITORY,
+  type IReconciliationRepository,
+} from '../../transactions/application/ports/reconciliation.repository.port';
 import { AdminNotFoundError } from '../domain/admin-errors';
+import { toPersistedBreakContract } from './reconciliation-history.mapper';
 import {
   RECONCILIATION_READ_REPOSITORY,
   type IReconciliationReadRepository,
@@ -78,7 +85,64 @@ export class AdminReconciliationActionService {
     private readonly events: IComplianceEventRepository,
     @Inject(TRANSACTION_REPOSITORY)
     private readonly transactions: ITransactionRepository,
+    @Inject(RECONCILIATION_REPOSITORY)
+    private readonly runs: IReconciliationRepository,
   ) {}
+
+  // ── persisted-break lifecycle (Go-readiness #3) ──────────────────────────────────
+  //
+  // Acknowledge / resolve a DURABLE ReconBreak (distinct from the projected-break
+  // resolve/accept above). Both are ANNOTATION-ONLY dispositions — they write only
+  // the break's status + audited annotation (never the detected facts, §3.6) and
+  // move no money (§3.1). Mirrors AdminComplianceService.disposeSanctions: load
+  // before → write annotation → immutable admin_review audit → return the mapped
+  // record. An unknown break id fails closed (§3.6).
+
+  /** Triage a break: detected → acknowledged. Annotation-only + audited. */
+  acknowledgeBreak(
+    breakId: string,
+    reason: string,
+    adminId: string,
+  ): Promise<PersistedReconBreak> {
+    return this.disposeBreak(breakId, 'acknowledged', reason, adminId);
+  }
+
+  /** Close a break: → resolved. Annotation-only + audited (no engine re-drive). */
+  resolveBreak(
+    breakId: string,
+    reason: string,
+    adminId: string,
+  ): Promise<PersistedReconBreak> {
+    return this.disposeBreak(breakId, 'resolved', reason, adminId);
+  }
+
+  private async disposeBreak(
+    breakId: string,
+    status: PersistedReconBreakStatus,
+    reason: string,
+    adminId: string,
+  ): Promise<PersistedReconBreak> {
+    const before = await this.runs.findBreak(breakId);
+    if (before === null) throw new AdminNotFoundError('Reconciliation break');
+
+    const after = await this.runs.updateBreakStatus(breakId, {
+      status,
+      approvedByAdminId: adminId,
+      reason,
+      actionAt: new Date(),
+    });
+
+    await this.audit.record({
+      correlationId: randomUUID(),
+      actorAdminId: adminId,
+      subject: `ReconBreak:${breakId}`,
+      action: 'admin_review',
+      before: { status: before.status },
+      after: { status: after.status, reason },
+    });
+
+    return toPersistedBreakContract(after);
+  }
 
   /**
    * Resolve a break by re-driving its transaction's settlement through the engine.

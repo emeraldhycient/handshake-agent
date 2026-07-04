@@ -505,6 +505,63 @@ export function useReconBreaks() {
   })
 }
 
+/** Persisted reconciliation-run history, newest-first (Go-readiness #3). */
+export function useReconRuns() {
+  return useQuery({
+    queryKey: qk.reconRuns,
+    queryFn: () => reconciliation.listReconRuns(),
+    staleTime: 30_000,
+  })
+}
+
+/** A single persisted run with its detected breaks. Enabled only when opened. */
+export function useReconRun(id: string | null) {
+  return useQuery({
+    queryKey: qk.reconRun(id ?? ""),
+    queryFn: () => reconciliation.getReconRun(id as string),
+    enabled: id !== null,
+    staleTime: 30_000,
+  })
+}
+
+/**
+ * POST /admin/reconciliation/run-breaks/:id/acknowledge — triage a persisted break
+ * (annotation-only, step-up-gated). Invalidates the run list + the owning run detail
+ * so the fresh lifecycle state shows.
+ */
+export function useAcknowledgeReconRunBreak() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      reconciliation.acknowledgeReconRunBreak(id, reason),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: qk.reconRuns })
+      void queryClient.invalidateQueries({
+        queryKey: qk.reconRun(result.reconRunId),
+      })
+    },
+  })
+}
+
+/**
+ * POST /admin/reconciliation/run-breaks/:id/resolve — close a persisted break
+ * (annotation-only, no engine re-drive, step-up-gated). Invalidates the run list +
+ * the owning run detail.
+ */
+export function useResolveReconRunBreak() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      reconciliation.resolveReconRunBreak(id, reason),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: qk.reconRuns })
+      void queryClient.invalidateQueries({
+        queryKey: qk.reconRun(result.reconRunId),
+      })
+    },
+  })
+}
+
 /** Reconciliation-cron status bar (last/next run, enablement, open-break count). */
 export function useReconStatus() {
   return useQuery({

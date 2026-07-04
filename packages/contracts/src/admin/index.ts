@@ -20,6 +20,7 @@ export * from "./treasury.dto";
 export * from "./treasury-action.dto";
 export * from "./reconciliation.dto";
 export * from "./reconciliation-action.dto";
+export * from "./reconciliation-history.dto";
 export * from "./beneficiary.dto";
 export * from "./notification.dto";
 export * from "./broadcast.dto";

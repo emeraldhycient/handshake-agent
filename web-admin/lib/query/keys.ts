@@ -61,6 +61,9 @@ export const qk = {
   treasuryFxPosition: ["admin", "treasury", "fx-position"] as const,
   reconBreaks: ["admin", "reconciliation", "breaks"] as const,
   reconStatus: ["admin", "reconciliation", "status"] as const,
+  // Durable run history + a single run's detail (Go-readiness #3).
+  reconRuns: ["admin", "reconciliation", "runs"] as const,
+  reconRun: (id: string) => ["admin", "reconciliation", "runs", id] as const,
   adminBeneficiaries: (userId?: string) =>
     ["admin", "beneficiaries", userId ?? "all"] as const,
   blocked: ["admin", "blocked"] as const,

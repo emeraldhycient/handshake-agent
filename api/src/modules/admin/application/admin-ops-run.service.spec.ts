@@ -1,14 +1,14 @@
 import { AdminOpsRunService } from './admin-ops-run.service';
 import { AdminNotFoundError } from '../domain/admin-errors';
-import type { SettlementReconciliationService } from '../../transactions/application/settlement-reconciliation.service';
+import type { ReconciliationPersistenceService } from '../../transactions/application/reconciliation-persistence.service';
 import type { AuditService } from '../../../core/audit/application/audit.service';
 
 const ADMIN_ID = 'admin-uuid-1';
 
 function makeReconciler(): jest.Mocked<
-  Pick<SettlementReconciliationService, 'tick'>
+  Pick<ReconciliationPersistenceService, 'runSettlementReconciliation'>
 > {
-  return { tick: jest.fn().mockResolvedValue(undefined) };
+  return { runSettlementReconciliation: jest.fn().mockResolvedValue({}) };
 }
 
 function makeAudit(): jest.Mocked<AuditService> {
@@ -26,19 +26,19 @@ describe('AdminOpsRunService', () => {
     reconciler = makeReconciler();
     audit = makeAudit();
     service = new AdminOpsRunService(
-      reconciler as unknown as SettlementReconciliationService,
+      reconciler as unknown as ReconciliationPersistenceService,
       audit,
     );
   });
 
-  it('triggers the settlement-reconciliation job by re-driving the engine worker', async () => {
+  it('triggers the settlement-reconciliation job by re-driving the engine worker (and persisting the run)', async () => {
     const result = await service.run(
       'settlement-reconciliation',
       'Backlog cleared upstream; re-driving.',
       ADMIN_ID,
     );
 
-    expect(reconciler.tick).toHaveBeenCalledTimes(1);
+    expect(reconciler.runSettlementReconciliation).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
       jobId: 'settlement-reconciliation',
       triggered: true,
@@ -60,7 +60,7 @@ describe('AdminOpsRunService', () => {
     await expect(
       service.run('no-such-job', 'why', ADMIN_ID),
     ).rejects.toBeInstanceOf(AdminNotFoundError);
-    expect(reconciler.tick).not.toHaveBeenCalled();
+    expect(reconciler.runSettlementReconciliation).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
   });
 
@@ -69,7 +69,7 @@ describe('AdminOpsRunService', () => {
     // running it is a no-op (triggered:false) rather than a fabricated success.
     const result = await service.run('sanctions-refresh', 'why', ADMIN_ID);
 
-    expect(reconciler.tick).not.toHaveBeenCalled();
+    expect(reconciler.runSettlementReconciliation).not.toHaveBeenCalled();
     expect(result).toEqual({
       jobId: 'sanctions-refresh',
       triggered: false,

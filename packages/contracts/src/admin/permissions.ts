@@ -750,6 +750,47 @@ export const PERMISSION_CATALOG: readonly PermissionCatalogEntry[] = [
     "Treasury",
     "Escalate a reconciliation break into a compliance case (step-up-gated; opens a ComplianceEvent)",
   ),
+  // Reconciliation RUN HISTORY + persisted-break lifecycle (Go-readiness #3). The
+  // ephemeral break projection above is computed on read; these surface the DURABLE
+  // ReconRun log + the ReconBreak acknowledge/resolve lifecycle that survives a
+  // restart. Reads are read-only; the acknowledge/resolve dispositions are
+  // annotation-only (record an operator decision + immutable audit) and move no
+  // money (§3.1) — they are step-up-gated at the controller.
+  r(
+    "api_route",
+    "GET /admin/reconciliation/runs",
+    "read",
+    "Treasury",
+    "List persisted reconciliation runs (keyset-paginated history)",
+  ),
+  r(
+    "api_route",
+    "GET /admin/reconciliation/runs/:id",
+    "read",
+    "Treasury",
+    "View a reconciliation run with its detected breaks",
+  ),
+  r(
+    "api_route",
+    "GET /admin/reconciliation/run-breaks/:id",
+    "read",
+    "Treasury",
+    "View a persisted reconciliation break's detail + disposition",
+  ),
+  r(
+    "api_route",
+    "POST /admin/reconciliation/run-breaks/:id/acknowledge",
+    "write",
+    "Treasury",
+    "Acknowledge a persisted reconciliation break (triage annotation; no debit)",
+  ),
+  r(
+    "api_route",
+    "POST /admin/reconciliation/run-breaks/:id/resolve",
+    "write",
+    "Treasury",
+    "Resolve a persisted reconciliation break (annotation-only disposition; no debit)",
+  ),
   // Treasury payout / withdrawal approval (Phase 7, WRITE — maker-checker). Raising
   // an approval APPLIES NOTHING — it enters the four-eyes inbox for a SECOND admin to
   // confirm; the release is then applied through the engine's atomic path (§3.1).

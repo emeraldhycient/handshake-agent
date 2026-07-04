@@ -1,14 +1,26 @@
 import { Inject, Injectable } from '@nestjs/common';
 
 import type {
+  PersistedReconBreak,
   ReconBreak,
   ReconBreakListResponse,
   ReconBreakSeverity,
+  ReconRunDetail,
+  ReconRunListResponse,
   ReconStatus,
 } from '@handshake-agent/contracts';
 
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type { ReconciliationConfig } from '../../../core/config/configuration';
+import {
+  RECONCILIATION_REPOSITORY,
+  type IReconciliationRepository,
+} from '../../transactions/application/ports/reconciliation.repository.port';
+import { AdminNotFoundError } from '../domain/admin-errors';
+import {
+  toPersistedBreakContract,
+  toReconRunContract,
+} from './reconciliation-history.mapper';
 import {
   RECONCILIATION_READ_REPOSITORY,
   type IReconciliationReadRepository,
@@ -35,6 +47,10 @@ const RECON_CRON_ENABLED = true;
 /** Fallback stale window when the reconciliation config is absent. */
 const DEFAULT_STALE_AFTER_SEC = 120;
 
+/** Run-history page size defaults + cap (keyset-paginated). */
+const DEFAULT_RUN_PAGE_LIMIT = 20;
+const MAX_RUN_PAGE_LIMIT = 100;
+
 /** Break kind → severity: over/duplicate credits are high; the rest are medium. */
 const SEVERITY_BY_KIND: Record<ReconBreakKind, ReconBreakSeverity> = {
   over_credit: 'high',
@@ -60,7 +76,46 @@ export class AdminReconciliationService {
     @Inject(RECONCILIATION_READ_REPOSITORY)
     private readonly repo: IReconciliationReadRepository,
     private readonly config: EffectiveConfigService,
+    @Inject(RECONCILIATION_REPOSITORY)
+    private readonly runs: IReconciliationRepository,
   ) {}
+
+  // ── durable run history (Go-readiness #3) ─────────────────────────────────────
+
+  /**
+   * Persisted reconciliation-run history, newest-first, keyset-paginated. Distinct
+   * from the ephemeral break projection above: these are the DURABLE runs recorded
+   * by the reconcilers. Read-only (§3.1).
+   */
+  async listRuns(query: {
+    cursor?: string;
+    limit?: number;
+  }): Promise<ReconRunListResponse> {
+    const limit = clampLimit(query.limit);
+    const page = await this.runs.listRuns({ cursor: query.cursor, limit });
+    return {
+      items: page.items.map(toReconRunContract),
+      nextCursor: page.nextCursor,
+    };
+  }
+
+  /** A persisted run with every break it detected. Fails closed on an unknown id. */
+  async getRun(id: string): Promise<ReconRunDetail> {
+    const run = await this.runs.findRun(id);
+    if (run === null) throw new AdminNotFoundError('Reconciliation run');
+    const breaks = await this.runs.listBreaksByRun(id);
+    return {
+      run: toReconRunContract(run),
+      breaks: breaks.map(toPersistedBreakContract),
+    };
+  }
+
+  /** A single persisted break's detail. Fails closed on an unknown id. */
+  async getBreak(id: string): Promise<PersistedReconBreak> {
+    const brk = await this.runs.findBreak(id);
+    if (brk === null) throw new AdminNotFoundError('Reconciliation break');
+    return toPersistedBreakContract(brk);
+  }
 
   /** The provider-vs-ledger break list, newest-first (every break is `open`). */
   async listBreaks(): Promise<ReconBreakListResponse> {
@@ -94,6 +149,12 @@ export class AdminReconciliationService {
     );
     return recon?.gracePeriodSec ?? DEFAULT_STALE_AFTER_SEC;
   }
+}
+
+/** Clamp a requested page size into [1, MAX], defaulting when absent. */
+function clampLimit(limit: number | undefined): number {
+  if (limit === undefined) return DEFAULT_RUN_PAGE_LIMIT;
+  return Math.max(1, Math.min(MAX_RUN_PAGE_LIMIT, Math.floor(limit)));
 }
 
 // ── mapper (record → contract shape) ────────────────────────────────────────────────

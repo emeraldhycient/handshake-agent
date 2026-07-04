@@ -1,9 +1,67 @@
 import { AdminReconciliationService } from './admin-reconciliation.service';
+import { AdminNotFoundError } from '../domain/admin-errors';
 import type {
   IReconciliationReadRepository,
   ReconBreakRecord,
 } from './ports/reconciliation-read.repository.port';
+import type {
+  IReconciliationRepository,
+  ReconBreakRecord as PersistedBreakRecord,
+  ReconRunRecord,
+} from '../../transactions/application/ports/reconciliation.repository.port';
 import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
+
+function makeRunRecord(
+  overrides: Partial<ReconRunRecord> = {},
+): ReconRunRecord {
+  return {
+    id: 'run-1',
+    runType: 'settlement_outbox',
+    status: 'completed',
+    totalChecked: 3,
+    breaksDetected: 1,
+    startedAt: new Date('2026-07-04T04:00:00.000Z'),
+    completedAt: new Date('2026-07-04T04:00:03.000Z'),
+    createdAt: new Date('2026-07-04T04:00:00.000Z'),
+    ...overrides,
+  };
+}
+
+function makePersistedBreak(
+  overrides: Partial<PersistedBreakRecord> = {},
+): PersistedBreakRecord {
+  return {
+    id: 'brk-1',
+    reconRunId: 'run-1',
+    breakType: 'over_credit',
+    userId: 'user-1',
+    walletId: 'wallet-1',
+    outboxId: null,
+    currency: 'USDT',
+    delta: '-50',
+    status: 'detected',
+    approvedByAdminId: null,
+    reason: null,
+    actionAt: null,
+    createdAt: new Date('2026-07-04T04:00:00.000Z'),
+    updatedAt: new Date('2026-07-04T04:00:00.000Z'),
+    ...overrides,
+  };
+}
+
+function makeRunsRepo(): jest.Mocked<IReconciliationRepository> {
+  return {
+    createRun: jest.fn(),
+    recordBreak: jest.fn(),
+    completeRun: jest.fn(),
+    listRuns: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    findRun: jest.fn().mockResolvedValue(null),
+    listBreaksByRun: jest.fn().mockResolvedValue([]),
+    findBreak: jest.fn().mockResolvedValue(null),
+    findBreaksByUser: jest.fn(),
+    updateBreakStatus: jest.fn(),
+  };
+}
 
 function makeBreaks(): ReconBreakRecord[] {
   return [
@@ -49,6 +107,7 @@ function makeBreaks(): ReconBreakRecord[] {
 describe('AdminReconciliationService', () => {
   let repo: jest.Mocked<IReconciliationReadRepository>;
   let config: jest.Mocked<Pick<EffectiveConfigService, 'get'>>;
+  let runs: jest.Mocked<IReconciliationRepository>;
   let service: AdminReconciliationService;
 
   beforeEach(() => {
@@ -64,9 +123,11 @@ describe('AdminReconciliationService', () => {
     config = {
       get: jest.fn().mockReturnValue({ gracePeriodSec: 300, batchSize: 20 }),
     };
+    runs = makeRunsRepo();
     service = new AdminReconciliationService(
       repo,
       config as unknown as EffectiveConfigService,
+      runs,
     );
   });
 
@@ -143,6 +204,86 @@ describe('AdminReconciliationService', () => {
     it('asks the repo to project the next run at the tick cadence', async () => {
       await service.status();
       expect(repo.cronStatus).toHaveBeenCalledWith(120);
+    });
+  });
+
+  describe('listRuns (durable history)', () => {
+    it('maps run records to ISO-dated contract shapes with the page cursor', async () => {
+      runs.listRuns.mockResolvedValue({
+        items: [makeRunRecord()],
+        nextCursor: 'run-1',
+      });
+
+      const page = await service.listRuns({ limit: 10 });
+
+      expect(runs.listRuns).toHaveBeenCalledWith({
+        cursor: undefined,
+        limit: 10,
+      });
+      expect(page.nextCursor).toBe('run-1');
+      expect(page.items[0]).toEqual({
+        id: 'run-1',
+        runType: 'settlement_outbox',
+        status: 'completed',
+        totalChecked: 3,
+        breaksDetected: 1,
+        startedAt: '2026-07-04T04:00:00.000Z',
+        completedAt: '2026-07-04T04:00:03.000Z',
+        createdAt: '2026-07-04T04:00:00.000Z',
+      });
+    });
+
+    it('defaults the page size when omitted and caps an oversized request', async () => {
+      await service.listRuns({});
+      expect(runs.listRuns).toHaveBeenCalledWith({
+        cursor: undefined,
+        limit: 20,
+      });
+
+      await service.listRuns({ limit: 5000, cursor: 'abc' });
+      expect(runs.listRuns).toHaveBeenLastCalledWith({
+        cursor: 'abc',
+        limit: 100,
+      });
+    });
+  });
+
+  describe('getRun (run + breaks)', () => {
+    it('returns the run with its breaks', async () => {
+      runs.findRun.mockResolvedValue(makeRunRecord());
+      runs.listBreaksByRun.mockResolvedValue([makePersistedBreak()]);
+
+      const detail = await service.getRun('run-1');
+
+      expect(detail.run.id).toBe('run-1');
+      expect(detail.breaks).toHaveLength(1);
+      expect(detail.breaks[0].breakType).toBe('over_credit');
+      expect(detail.breaks[0].delta).toBe('-50');
+    });
+
+    it('fails closed on an unknown run id', async () => {
+      runs.findRun.mockResolvedValue(null);
+      await expect(service.getRun('nope')).rejects.toBeInstanceOf(
+        AdminNotFoundError,
+      );
+    });
+  });
+
+  describe('getBreak (break detail)', () => {
+    it('returns a single persisted break', async () => {
+      runs.findBreak.mockResolvedValue(
+        makePersistedBreak({ status: 'resolved' }),
+      );
+      const brk = await service.getBreak('brk-1');
+      expect(brk.id).toBe('brk-1');
+      expect(brk.status).toBe('resolved');
+    });
+
+    it('fails closed on an unknown break id', async () => {
+      runs.findBreak.mockResolvedValue(null);
+      await expect(service.getBreak('nope')).rejects.toBeInstanceOf(
+        AdminNotFoundError,
+      );
     });
   });
 });

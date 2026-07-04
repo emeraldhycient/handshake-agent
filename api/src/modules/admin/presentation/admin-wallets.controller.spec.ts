@@ -31,6 +31,7 @@ import {
 import { WALLET_BACKFILL_QUEUE_NAME } from '../../wallets/application/wallet-backfill-queue.constants';
 import { WalletReconciliationService } from '../../wallets/application/wallet-reconciliation.service';
 import type { AssetReconciliationResult } from '../../wallets/application/wallet-reconciliation.service';
+import { ReconciliationPersistenceService } from '../../transactions/application/reconciliation-persistence.service';
 import { EnqueueBackfillDto } from './dto/enqueue-backfill.dto';
 import { ReconcileWalletDto } from './dto/reconcile-wallet.dto';
 import type { Env } from '../../../core/config/env.schema';
@@ -82,6 +83,12 @@ function makeReconciliationServiceMock(
   };
 }
 
+function makePersistenceMock(): Partial<ReconciliationPersistenceService> {
+  return {
+    persistWalletRun: jest.fn().mockResolvedValue({ id: 'wrun-1' }),
+  };
+}
+
 /**
  * Build a TestingModule with stubs for all BQ-2 + reconcile dependencies.
  */
@@ -90,7 +97,12 @@ async function buildModule(
   runRepo: IBackfillRunRepository = makeRunRepo(),
   queue: Partial<Queue> = makeQueueMock(),
   reconciliationService: Partial<WalletReconciliationService> = makeReconciliationServiceMock(),
-): Promise<{ controller: AdminWalletsController; module: TestingModule }> {
+  reconciliationPersistence: Partial<ReconciliationPersistenceService> = makePersistenceMock(),
+): Promise<{
+  controller: AdminWalletsController;
+  module: TestingModule;
+  reconciliationPersistence: Partial<ReconciliationPersistenceService>;
+}> {
   const configStub: Partial<ConfigService<Env, true>> = {
     get: jest.fn().mockImplementation((key: string) => {
       if (key === 'ADMIN_API_TOKEN') return adminToken;
@@ -109,6 +121,10 @@ async function buildModule(
       { provide: getQueueToken(WALLET_BACKFILL_QUEUE_NAME), useValue: queue },
       { provide: ConfigService, useValue: configStub },
       { provide: WalletReconciliationService, useValue: reconciliationService },
+      {
+        provide: ReconciliationPersistenceService,
+        useValue: reconciliationPersistence,
+      },
     ],
   })
     .overrideGuard(AdminSessionGuard)
@@ -118,7 +134,7 @@ async function buildModule(
     .compile();
 
   const controller = module.get(AdminWalletsController);
-  return { controller, module };
+  return { controller, module, reconciliationPersistence };
 }
 
 // ---------------------------------------------------------------------------
@@ -284,11 +300,11 @@ describe('AdminWalletsController — POST /admin/wallets/reconcile', () => {
     receiptNumber: 'HS-2026-000001',
   };
 
-  it('calls reconcileUser with the userId and returns results', async () => {
+  it('calls reconcileUser, persists the run, and returns results', async () => {
     const reconciliationService = makeReconciliationServiceMock([
       CREDITED_RESULT,
     ]);
-    const { controller } = await buildModule(
+    const { controller, reconciliationPersistence } = await buildModule(
       'any-token',
       undefined,
       undefined,
@@ -303,6 +319,11 @@ describe('AdminWalletsController — POST /admin/wallets/reconcile', () => {
 
     expect(reconciliationService.reconcileUser).toHaveBeenCalledWith(
       '00000000-0000-7000-0000-000000000001',
+    );
+    // Go-readiness #3: the run + its breaks are recorded in the durable history.
+    expect(reconciliationPersistence.persistWalletRun).toHaveBeenCalledWith(
+      '00000000-0000-7000-0000-000000000001',
+      [CREDITED_RESULT],
     );
     expect(result.results).toHaveLength(1);
     expect(result.results[0]).toMatchObject({
