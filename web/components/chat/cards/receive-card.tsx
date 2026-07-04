@@ -108,6 +108,7 @@ export function ReceiveCard({
             "min-w-0 flex-1 font-mono leading-[1.4] break-all text-foreground",
             isMobile ? "text-[12.5px]" : "text-[12px]"
           )}
+          translate="no"
         >
           {address}
         </span>

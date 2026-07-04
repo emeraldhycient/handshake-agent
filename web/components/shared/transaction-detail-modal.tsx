@@ -250,7 +250,7 @@ export function TransactionDetailModal({
                 <DetailRow
                   label={data.direction === "in" ? "From" : "To"}
                   value={
-                    <span className="font-mono">
+                    <span className="font-mono" translate="no">
                       {shortAddress(data.counterparty)}
                     </span>
                   }
@@ -264,7 +264,9 @@ export function TransactionDetailModal({
                 <DetailRow
                   label="Tx hash"
                   value={
-                    <span className="font-mono">{shortHash(data.txHash)}</span>
+                    <span className="font-mono" translate="no">
+                      {shortHash(data.txHash)}
+                    </span>
                   }
                   copyValue={data.txHash}
                   explorerHref={
