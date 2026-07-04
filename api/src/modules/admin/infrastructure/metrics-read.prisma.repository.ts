@@ -328,6 +328,11 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     // WITHOUT restructuring the settlement path. Exact BigInt (scale-18), no floats.
     // capability/tier filter in-DB; `currency` filters the quote's fiatCurrency
     // IN-MEMORY (keeps the enum-cast off the query — a stale code never throws).
+    // A non-buy/sell `capability` (e.g. send/swap) intentionally yields empty
+    // revenue: its `type` filter cannot co-exist with the buy/sell quote filter, so
+    // no row matches — correct, since those txns carry no fee/spread. `txnCount`
+    // below still reflects the completed txns of that type (it is the "completed"
+    // count the dashboard labels, not a "priced" count).
     const priced = await this.prisma.transaction.findMany({
       where: {
         status: TransactionStatus.completed,
