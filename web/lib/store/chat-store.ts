@@ -34,6 +34,16 @@ import { mapOutcomeToMessages } from "@/lib/chat/agent-outcome"
 import { GREETING_M, GREETING_D, greetingDesktop } from "@/lib/constants"
 import { formatFiat } from "@/lib/format"
 import { ApiError, isSessionExpiredError } from "@/lib/api/client"
+import {
+  buildCompletionReceipt,
+  COMPLETION_SUCCESS_LABEL,
+} from "@/lib/chat/completion-receipt"
+import {
+  chatErrorMessage,
+  isRetryablePinError,
+  GENERIC_AGENT_ERROR,
+  SESSION_EXPIRED_NOTICE,
+} from "@/lib/chat/errors"
 import type {
   ChatAction,
   ChatMessage,
@@ -62,151 +72,6 @@ export { chipLabel, actionPrompt }
 
 /** Milliseconds before the success overlay auto-dismisses. Matches prototype (line 1352). */
 const SUCCESS_DISMISS_MS = 1150
-
-// ─── Completion-receipt helpers (shared by buy / sell / send) ─────────────────
-// C4: the store no longer runs a setInterval poller — the single settlement
-// watcher is the live card hook (PayInCardLive / SettlingCardLive), which calls
-// resolveSettlement on a terminal status. These helpers build the receipt body.
-
-const COMPLETION_SUCCESS_LABEL: Record<ChatAction, string> = {
-  buy: "Purchase complete",
-  sell: "Sale complete",
-  send: "Transfer sent",
-  swap: "Swap complete",
-  ticket: "Ticket confirmed",
-  receive: "Deposit address shown",
-  balance: "Balance loaded",
-}
-
-/**
- * Builds the kind:"receipt" body (sans id/role) for a completed transaction.
- * Buy uses the on-chain amounts the status endpoint returns; sell/send fall
- * back to the confirmed proposal amounts (`pending`) since the sell payout /
- * send total are not echoed on the status payload.
- */
-function buildCompletionReceipt(
-  action: ChatAction,
-  pending: ConfirmPayload,
-  tx: TransactionStatusResponse
-) {
-  const date = new Date(tx.createdAt).toLocaleString("en-NG")
-  const txRef = tx.receiptNumber
-    ? `REF · ${tx.receiptNumber}`
-    : `TX · ${tx.id.slice(0, 8)}`
-
-  if (action === "sell") {
-    return {
-      kind: "receipt" as const,
-      title: "Sale complete",
-      subtitle: "Funds sent to your bank account",
-      amount: pending.totalValue,
-      rows: [
-        ...pending.rows.filter((r) => r.label !== "Rate").slice(0, 2),
-        { label: "Date", value: date },
-      ],
-      txRef,
-    }
-  }
-
-  if (action === "send") {
-    return {
-      kind: "receipt" as const,
-      title: "Transfer sent",
-      subtitle: "Your crypto is on its way",
-      amount: pending.heroAmount,
-      rows: [
-        pending.toValue
-          ? { label: "To", value: pending.toValue }
-          : (pending.rows[0] ?? { label: "Sent", value: pending.heroAmount }),
-        { label: "Date", value: date },
-      ],
-      txRef,
-    }
-  }
-
-  if (action === "swap") {
-    // Finding #4: a completed swap gets a swap receipt (its amounts aren't echoed
-    // on the status payload, so they come from the confirmed proposal). Drives
-    // off the swap card's "You receive" hero rather than the buy copy.
-    return {
-      kind: "receipt" as const,
-      title: "Swap complete",
-      subtitle: "Your swapped balance is ready",
-      amount: pending.heroAmount,
-      rows: [
-        pending.rows[0] ?? { label: "Swapped", value: pending.heroAmount },
-        { label: "Date", value: date },
-      ],
-      txRef,
-    }
-  }
-
-  // buy
-  return {
-    kind: "receipt" as const,
-    title: "Purchase complete",
-    subtitle: "USDT credited to your wallet",
-    amount: tx.cryptoAmount
-      ? `+ ${tx.cryptoAmount} ${tx.asset ?? ""}`
-      : pending.heroAmount,
-    rows: [
-      {
-        label: "Paid",
-        // Drive the symbol from the transaction's fiatCurrency — never hardcode
-        // ₦. Once a non-NGN fiat is live the paid amount must render with that
-        // currency's symbol (audit #29). Default NGN when the status payload
-        // omits it (current launch fiat).
-        value: tx.fiatAmount
-          ? formatFiat(tx.fiatAmount, tx.fiatCurrency ?? "NGN")
-          : pending.totalValue,
-      },
-      { label: "Date", value: date },
-    ],
-    txRef,
-  }
-}
-
-// ─── Error classification ─────────────────────────────────────────────────────
-
-const GENERIC_AGENT_ERROR =
-  "I'm having trouble reaching the assistant right now — please try again."
-
-/** Notice shown in-thread when the session has expired (findings #1 / #2). */
-const SESSION_EXPIRED_NOTICE =
-  "Your session expired. Please log in again to continue."
-
-/**
- * Extracts the user-facing error message from a caught value.
- *
- * 4xx ApiError → surface the server's clean message (e.g. "Insufficient USDT
- * balance", "RWF isn't live yet"). These are domain exceptions the backend has
- * already formatted for the user.
- *
- * 5xx ApiError or plain Error (network failure) → return the generic fallback
- * so the user never sees a raw stack trace or opaque server error string.
- */
-function chatErrorMessage(err: unknown): string {
-  if (err instanceof ApiError && err.status !== undefined && err.status < 500) {
-    return err.message
-  }
-  return GENERIC_AGENT_ERROR
-}
-
-/**
- * Is `err` a genuine PIN / directive authorization failure that re-entering the
- * PIN can fix (PIN_INVALID, PIN_LOCKED, DIRECTIVE_EXPIRED, …)? The backend maps
- * all of these to 401. A 401 that is the interceptor's dead-session sentinel is
- * NOT one of these — it is handled separately as session-expiry (finding #1).
- *
- * A plain (statusless) Error is treated as a PIN error too, preserving the
- * existing "wrong PIN → reopen pad" behaviour for the offline/mock path and any
- * caller that rejects with a bare Error.
- */
-function isRetryablePinError(err: unknown): boolean {
-  if (isSessionExpiredError(err)) return false
-  if (err instanceof ApiError) return err.status === 401
-  return err instanceof Error
-}
 
 // ─── Scheduler type ───────────────────────────────────────────────────────────
 
