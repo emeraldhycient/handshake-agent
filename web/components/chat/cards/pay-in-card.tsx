@@ -1,24 +1,19 @@
 "use client"
 
-import { useEffect } from "react"
-
 import { cn } from "@/lib/utils"
 import { formatFiat } from "@/lib/format"
 import { StatusPill } from "@/components/shared/status-pill"
 import { DetailRows } from "@/components/shared/detail-rows"
-import { useTransactionStatus } from "@/lib/query/hooks"
-import { useChatStore } from "@/lib/store/chat-store"
+import { ChatCardShell } from "@/components/chat/cards/chat-card-shell"
+import { useSettlementWatcher } from "@/hooks/use-settlement-watcher"
 import type { PayInCardProps } from "@/types/components"
 import type { QuoteRow } from "@/lib/schemas"
 
 /**
- * PayInCard — pure presentational card for a bank transfer pay-in.
- * Rendered after executeProposal returns status:"settling" + payment object.
- *
- * Shows the bank account details the user must transfer to, the amount,
- * reference, and a live status pill driven by the `status` prop.
- *
- * No state, no polling — polling lives in PayInCardLive.
+ * PayInCard — pure presentational card for a bank-transfer pay-in. Shows the
+ * account to transfer to, amount, reference, and a live status pill from the
+ * `status` prop. No state, no polling — polling lives in PayInCardLive via the
+ * shared useSettlementWatcher hook.
  */
 export function PayInCard({
   accountNumber,
@@ -36,9 +31,7 @@ export function PayInCard({
     { label: "Account number", value: accountNumber },
     { label: "Bank", value: bankName },
     { label: "Reference", value: providerRef },
-    // Drive the symbol from the payment's currency — never hardcode ₦. The
-    // instant a non-NGN fiat is live this must show e.g. "GH₵20,000.00", not a
-    // naira amount on a real bank-transfer instruction (audit #18, CLAUDE.md §3.6).
+    // Symbol is driven by the payment's currency — never hardcode ₦ (§3.6).
     { label: "Amount", value: formatFiat(amount, currency) },
   ]
 
@@ -46,8 +39,7 @@ export function PayInCard({
   const isCompleted = status === "completed"
   const isFailed = status === "failed"
 
-  // Failure is the highest-signal state in a money app — always danger-red,
-  // never the calm info/neutral palette (scenario finding: ui-consistency-states).
+  // Failure is the highest-signal state — always danger-red, never info/neutral.
   const statusTone = isCompleted
     ? "success"
     : isFailed
@@ -63,15 +55,7 @@ export function PayInCard({
       : "Awaiting transfer"
 
   return (
-    <div
-      className={cn(
-        "overflow-hidden border border-border bg-card",
-        isMobile
-          ? "w-[88%] rounded-[20px] shadow-card"
-          : "w-[92%] rounded-[16px] shadow-[0_4px_14px_oklch(0.244_0.024_162_/_0.06)]",
-        className
-      )}
-    >
+    <ChatCardShell density={density} desktopShadow className={className}>
       {/* Header */}
       <div
         className={cn(
@@ -127,41 +111,21 @@ export function PayInCard({
       >
         <DetailRows rows={rows} className={isMobile ? "gap-[9px]" : "gap-2"} />
       </div>
-    </div>
+    </ChatCardShell>
   )
 }
 
 /**
- * PayInCardLive — the SINGLE settlement watcher (C4). Polls transaction status
- * via the TanStack Query hook (which stops on "completed"/"failed" and unsubscribes
- * on unmount), renders the live status pill, and hands terminal results to the
- * store so it appends the receipt (completed) or surfaces the failure (failed).
- *
- * There is no second poller: the store's setInterval — which polled forever on a
- * failed settlement and swallowed the failure — was removed in favour of this hook.
+ * PayInCardLive — the single settlement watcher for a pay-in. Polls via
+ * useSettlementWatcher (resolving terminal states to the store) and renders the
+ * live status pill.
  */
 export function PayInCardLive({
   transactionId,
   status: initialStatus,
   ...rest
 }: PayInCardProps) {
-  const { data } = useTransactionStatus(transactionId, {
-    enabled: initialStatus !== "completed" && initialStatus !== "failed",
-  })
-  const resolveSettlement = useChatStore((s) => s.resolveSettlement)
-
-  // Derive live status: prefer polled data, fall back to the prop from the store.
-  const liveStatus =
-    (data?.status as PayInCardProps["status"] | undefined) ?? initialStatus
-
-  // When the poll reaches a terminal status, notify the store. resolveSettlement
-  // is idempotent + guarded on the tracked tx, so repeated effect fires are safe.
-  useEffect(() => {
-    if (data && (data.status === "completed" || data.status === "failed")) {
-      resolveSettlement(data)
-    }
-  }, [data, resolveSettlement])
-
+  const liveStatus = useSettlementWatcher(transactionId, initialStatus)
   return (
     <PayInCard {...rest} transactionId={transactionId} status={liveStatus} />
   )
