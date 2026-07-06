@@ -70,33 +70,50 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
   },
 
   // ── KYC / limits / velocity / SIM-swap / sanctions → 403 ───────────────────
+  // Each cause gets a DISTINCT, actionable message so the user can tell *why* a
+  // transaction was blocked and what to do — without leaking exact limits,
+  // balances, or compliance detail (those stay server-side only). Previously all
+  // of these collapsed to one opaque "not permitted" line, which read as "the
+  // whole app is broken" when the real cause was usually a per-transaction cap.
   KYC_NOT_VERIFIED: {
     status: HttpStatus.FORBIDDEN,
-    message: 'This transaction is not permitted on your account.',
+    message:
+      'Please finish verifying your identity before making this transaction.',
   },
   TIER_LIMIT_EXCEEDED: {
     status: HttpStatus.FORBIDDEN,
-    message: 'This transaction is not permitted on your account.',
+    message:
+      'This amount is above the per-transaction limit for your account. ' +
+      'Try a smaller amount, or verify a higher tier to raise your limits.',
   },
   SEND_LIMIT_EXCEEDED: {
     status: HttpStatus.FORBIDDEN,
-    message: 'This transaction is not permitted on your account.',
+    message:
+      'This amount is above the send limit for your account. ' +
+      'Try a smaller amount, or verify a higher tier to raise your limits.',
   },
   TIER_CHANGE_COOLING_OFF: {
     status: HttpStatus.FORBIDDEN,
-    message: 'This transaction is not permitted on your account yet.',
+    message:
+      'Your account was updated recently, so transactions are briefly on hold ' +
+      'for your security. Please try again a little later.',
   },
   VELOCITY_EXCEEDED: {
     status: HttpStatus.FORBIDDEN,
-    message: 'This transaction is not permitted on your account.',
+    message:
+      "You've reached your transaction limit for now. Please try again later.",
   },
   SIM_SWAP_BLOCKED: {
     status: HttpStatus.FORBIDDEN,
-    message: 'This transaction is not permitted on your account.',
+    message:
+      'For your security, transactions are paused after a recent SIM or ' +
+      'phone-number change. Please re-verify your identity to continue.',
   },
+  // Sanctions stays deliberately vague (no tipping-off) but points to a path
+  // the user can actually take, distinct from the self-serviceable limit errors.
   SANCTIONS_BLOCKED: {
     status: HttpStatus.FORBIDDEN,
-    message: 'This transaction is not permitted.',
+    message: "This transaction can't be completed. Please contact support.",
   },
 
   // ── Validation / wrong state → 422 / 409 ───────────────────────────────────
