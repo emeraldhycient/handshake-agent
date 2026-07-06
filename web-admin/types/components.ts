@@ -537,26 +537,39 @@ export interface TreasuryAlertAcknowledgeProps {
 
 // ─── Blocked list page (§6.7) ──────────────────────────────────────────────────────
 
-/**
- * One derived row of the blocked list. The backing store is the flat
- * `compliance.sanctionsDenylist` string[], so only `value` is real data. `type`
- * is derived heuristically from the value shape (on-chain address vs identifier);
- * `reason` / `by` / `when` have no per-entry backing and are design-faithful
- * placeholders. `index` is the position in the denylist array (the remove key).
- */
-export interface BlockedEntry {
-  index: number
-  /** Derived label — "Address" or "Identifier" (heuristic, not stored). */
-  type: string
-  /** The real denylist string (on-chain address / identifier). */
-  value: string
-  /** design-faithful: no per-entry reason in the store yet. */
-  reason: string
-  /** design-faithful: no per-entry author in the store yet. */
-  by: string
-  /** design-faithful: no per-entry timestamp in the store yet. */
-  when: string
+/** One deny-list row — active entries offer Unblock; superseded ones are audit history. */
+export interface BlockedRowProps {
+  entry: import("@handshake-agent/contracts").BlockedEntry
+  onUnblock: () => void
 }
+
+/** The deny-list table card — loading / error / empty / data over `BlockedRow`. */
+export interface BlockedTableProps {
+  entries: import("@handshake-agent/contracts").BlockedEntry[]
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  onRetry: () => void
+  onUnblock: (entry: import("@handshake-agent/contracts").BlockedEntry) => void
+}
+
+/** The active supersede (unblock) flow: reason (audited) → step-up (client TOTP) → POST. */
+export interface SupersedeFlow {
+  id: string
+  value: string
+  reason: string
+  step: "reason" | "stepup"
+}
+
+/** A pending add awaiting its audited reason (the dialog already collected the value). */
+export interface PendingAdd {
+  value: string
+}
+
+/** An action awaiting a server step-up replay (so the post-re-auth toast reads right). */
+export type PendingReplay =
+  | { kind: "add"; value: string }
+  | { kind: "supersede"; value: string }
 
 export interface AddBlockedDialogProps {
   open: boolean
