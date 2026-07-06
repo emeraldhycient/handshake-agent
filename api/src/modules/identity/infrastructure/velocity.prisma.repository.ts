@@ -23,14 +23,17 @@ import type {
 /**
  * Prisma adapter for the velocity repository port.
  *
- * Reads VelocityCounter rows to produce the rolling 24-h usage aggregation.
- * The model has one row per (userId, counterType); we read the `amount_24h` row
- * for fiat total and the `count_24h` row for transaction count, filtering by
- * whether the row's window overlaps the 24-h period ending at `asOf`.
+ * Reads VelocityCounter rows to produce the current fixed-window usage.
+ * The model has one row per (userId, counterType, fiatCurrency); we read the
+ * `amount_24h` row for fiat total and the `count_24h` row for transaction count.
  *
- * A row is "in window" when its windowEnd > (asOf - 24h), meaning the counter
- * was updated within the last 24 hours from the caller's perspective. Rows whose
- * windowEnd is before that cutoff are stale (prior day's counter) and excluded.
+ * The write path anchors each counter to a FIXED window `[windowStart, windowEnd)`
+ * where `windowEnd = windowStart + windowMs`, and resets the counter (fresh window,
+ * value = delta) only when a new transaction arrives at/after `windowEnd`. The read
+ * must therefore treat the window as CLOSED once `asOf` reaches `windowEnd`: a row
+ * is active iff `windowStart <= asOf < windowEnd`. Reading `windowEnd > asOf - 24h`
+ * instead would keep an expired counter alive for an extra window (limits appear to
+ * reset after 48h, not 24h) and a capped user could never self-reset.
  *
  * Dependency rule: infrastructure → core (PrismaService). Application imports
  * NOTHING from here (dependency-cruiser enforces the inward-only rule).
@@ -44,7 +47,6 @@ export class VelocityPrismaRepository implements IVelocityRepository {
     asOf: Date,
     fiatCurrency: string,
   ): Promise<DailyUsage> {
-    const windowCutoff = new Date(asOf.getTime() - 24 * 60 * 60 * 1000);
     // Cast string → generated FiatCurrency enum at the infrastructure boundary
     // (port uses `string` to keep application layer free of Prisma imports — §3.2).
     const fiatCurrencyEnum = fiatCurrency as FiatCurrency;
@@ -57,9 +59,10 @@ export class VelocityPrismaRepository implements IVelocityRepository {
         counterType: {
           in: [VelocityCounterType.amount_24h, VelocityCounterType.count_24h],
         },
-        // Row's window must still be active: windowEnd > (asOf - 24h)
-        windowEnd: { gt: windowCutoff },
-        // Window must have started at or before asOf
+        // Fixed window is active only while asOf is strictly before its end.
+        // Once asOf >= windowEnd the window has closed → usage resets to zero.
+        windowEnd: { gt: asOf },
+        // Window must have started at or before asOf (guards future-dated rows).
         windowStart: { lte: asOf },
       },
       select: {
@@ -93,17 +96,17 @@ export class VelocityPrismaRepository implements IVelocityRepository {
   }
 
   /**
-   * Rolling 7-day fiat total for the weekly cap. Reads the `amount_7d` VelocityCounter
-   * whose window still overlaps `(asOf - 7d, asOf]`, scoped to `fiatCurrency`. Amount
-   * only — the weekly cap is a spend cap, there is no weekly count cap. Same exact-decimal
-   * (BigInt-scaled) round-trip as getDailyUsage so the gate compares in one scale.
+   * Current 7-day fiat total for the weekly cap. Reads the `amount_7d` VelocityCounter
+   * whose fixed window is still active (`windowStart <= asOf < windowEnd`), scoped to
+   * `fiatCurrency`. Amount only — the weekly cap is a spend cap, there is no weekly count
+   * cap. Same exact-decimal (BigInt-scaled) round-trip as getDailyUsage so the gate
+   * compares in one scale.
    */
   async getWeeklyUsage(
     userId: string,
     asOf: Date,
     fiatCurrency: string,
   ): Promise<WeeklyUsage> {
-    const windowCutoff = new Date(asOf.getTime() - 7 * 24 * 60 * 60 * 1000);
     const fiatCurrencyEnum = fiatCurrency as FiatCurrency;
 
     const rows = await this.prisma.velocityCounter.findMany({
@@ -111,7 +114,8 @@ export class VelocityPrismaRepository implements IVelocityRepository {
         userId,
         fiatCurrency: fiatCurrencyEnum,
         counterType: VelocityCounterType.amount_7d,
-        windowEnd: { gt: windowCutoff },
+        // Fixed 7-day window: active only while asOf < windowEnd (closes at windowEnd).
+        windowEnd: { gt: asOf },
         windowStart: { lte: asOf },
       },
       select: { currentValue: true },
