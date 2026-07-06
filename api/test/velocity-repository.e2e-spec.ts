@@ -57,9 +57,10 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
   it('sums fiatTotal and txCount from rows whose window overlaps the current 24-h window', async () => {
     const userId = await seedUser();
     const asOf = new Date('2024-06-01T12:00:00.000Z');
-    // windowStart 23h ago, windowEnd = asOf (inside window)
+    // Realistic active window: first tx 12h ago, windowEnd = windowStart + 24h
+    // (still 12h in the future), so asOf is inside the fixed window.
     const windowStart = new Date('2024-06-01T00:00:00.000Z'); // < asOf
-    const windowEnd = new Date('2024-06-01T12:00:00.000Z'); // = asOf (inside)
+    const windowEnd = new Date('2024-06-02T00:00:00.000Z'); // windowStart + 24h, > asOf
 
     await prisma.velocityCounter.create({
       data: {
@@ -123,6 +124,46 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
     expect(usage.txCount).toBe(0);
   });
 
+  // ── Test 3b (regression): the RESET BOUNDARY ─────────────────────────────
+  // A daily counter whose fixed 24h window has ENDED must read as zero, even
+  // when windowEnd is less than 24h in the past. The write anchors
+  // windowEnd = windowStart + 24h and resets only when a new tx arrives after
+  // windowEnd; the read must close the window at windowEnd (not windowEnd + 24h).
+  // Otherwise a capped user stays blocked for an extra day and cannot self-reset.
+  it('excludes a daily counter whose fixed 24h window has already ended (reset boundary)', async () => {
+    const userId = await seedUser();
+    const asOf = new Date('2024-06-02T12:00:00.000Z');
+    // Window started 25h ago and ended 1h before asOf (windowEnd = windowStart + 24h).
+    const windowStart = new Date('2024-06-01T11:00:00.000Z');
+    const windowEnd = new Date('2024-06-02T11:00:00.000Z'); // 1h before asOf → expired
+
+    await prisma.velocityCounter.create({
+      data: {
+        userId,
+        counterType: AMOUNT_24H,
+        fiatCurrency: 'NGN',
+        currentValue: 50000,
+        windowStart,
+        windowEnd,
+      },
+    });
+    await prisma.velocityCounter.create({
+      data: {
+        userId,
+        counterType: COUNT_24H,
+        fiatCurrency: 'NGN',
+        currentValue: 9,
+        windowStart,
+        windowEnd,
+      },
+    });
+
+    const usage = await repo.getDailyUsage(userId, asOf, 'NGN');
+    // The window closed at windowEnd — usage resets to zero immediately after.
+    expect(usage.fiatTotal).toBe('0');
+    expect(usage.txCount).toBe(0);
+  });
+
   // ── Test 4: rows for a DIFFERENT user are not included ────────────────────
   it('does not include VelocityCounter rows belonging to a different user', async () => {
     const userA = await seedUser();
@@ -161,9 +202,9 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
   it('sums only in-window rows when a user has both valid and stale VelocityCounter rows', async () => {
     const userId = await seedUser();
     const asOf = new Date('2024-06-01T12:00:00.000Z');
-    // In-window row
+    // In-window row: first tx 6h ago, windowEnd = windowStart + 24h (in the future).
     const inStart = new Date('2024-06-01T06:00:00.000Z');
-    const inEnd = asOf;
+    const inEnd = new Date('2024-06-02T06:00:00.000Z'); // inStart + 24h, > asOf
     // Stale row (windowEnd before asOf - 24h)
     const staleStart = new Date('2024-05-29T00:00:00.000Z');
     const staleEnd = new Date('2024-05-29T12:00:00.000Z');
@@ -267,7 +308,7 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
         fiatCurrency: 'NGN',
         currentValue: 750000,
         windowStart: new Date('2024-06-05T00:00:00.000Z'),
-        windowEnd: WEEK_ASOF, // inside the 7-day window
+        windowEnd: new Date('2024-06-12T00:00:00.000Z'), // windowStart + 7d, > asOf (active)
       },
     });
     const usage = await repo.getWeeklyUsage(userId, WEEK_ASOF, 'NGN');
@@ -286,6 +327,25 @@ describe('VelocityPrismaRepository (integration, Testcontainers Postgres)', () =
         currentValue: 500000,
         windowStart: new Date('2024-06-08T00:00:00.000Z'),
         windowEnd: new Date('2024-06-09T12:00:00.000Z'),
+      },
+    });
+    const usage = await repo.getWeeklyUsage(userId, WEEK_ASOF, 'NGN');
+    expect(usage.fiatTotal).toBe('0');
+  });
+
+  // Regression (reset boundary): a 7d counter whose window has ENDED must read
+  // as zero even when windowEnd is LESS than 7 days in the past. The buggy
+  // "windowEnd > asOf - 7d" filter would wrongly keep it alive for another week.
+  it('getWeeklyUsage excludes a 7d counter whose window has ended but is <7d in the past (reset boundary)', async () => {
+    const userId = await seedUser();
+    await prisma.velocityCounter.create({
+      data: {
+        userId,
+        counterType: AMOUNT_7D,
+        fiatCurrency: 'NGN',
+        currentValue: 800000,
+        windowStart: new Date('2024-05-31T12:00:00.000Z'), // windowStart + 7d = windowEnd
+        windowEnd: new Date('2024-06-07T12:00:00.000Z'), // 1 day before WEEK_ASOF → expired
       },
     });
     const usage = await repo.getWeeklyUsage(userId, WEEK_ASOF, 'NGN');
