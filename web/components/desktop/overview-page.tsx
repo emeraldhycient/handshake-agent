@@ -171,46 +171,70 @@ export function OverviewPage({
       {/* Finding #7: the Price and 24h columns had no backend source and were
           permanently "—", reading as real-but-empty data. They're dropped until
           a price-history endpoint exists; only columns we can fill are shown. */}
-      <div className="overflow-hidden rounded-[18px] border border-border bg-card">
-        {/* Table header */}
-        <div className="flex items-center border-b border-border px-[22px] py-3.5 text-xs font-bold tracking-widest text-muted-foreground uppercase">
-          <div className="flex-[2]">Asset</div>
-          <div className="flex-[1.4] text-right">Holdings</div>
-          <div className="flex-[1.4] text-right">Value</div>
-        </div>
-        {/* Table rows */}
-        {assetData.map((a, idx) => (
-          <div
-            key={a.sym + a.name}
-            className={cn(
-              "flex items-center px-[22px] py-[15px]",
-              idx < assetData.length - 1 && "border-b border-border"
-            )}
-          >
-            <div className="flex flex-[2] items-center gap-3">
-              <AssetIcon
-                sym={a.sym}
-                tint={a.tint}
-                logoUrl={a.logoUrl}
-                size="sm"
-              />
-              <div>
-                <p className="text-[14.5px] font-bold text-foreground">
-                  {a.name}
-                </p>
-                <p className="text-xs text-muted-foreground">{a.sub}</p>
-              </div>
-            </div>
-            <Money
-              value={a.amount.split(" ")[0]}
-              className="flex-[1.4] text-right text-sm text-foreground"
-            />
-            <Money
-              value={a.value}
-              className="flex-[1.4] text-right text-[14.5px] font-bold text-foreground"
-            />
-          </div>
-        ))}
+      <div className="rounded-[18px] border border-border bg-card">
+        <table className="w-full table-fixed border-collapse">
+          <thead>
+            <tr className="border-b border-border text-xs font-bold tracking-widest text-muted-foreground uppercase">
+              <th
+                scope="col"
+                className="w-[42%] px-[22px] py-3.5 text-left font-bold"
+              >
+                Asset
+              </th>
+              <th
+                scope="col"
+                className="w-[29%] px-[22px] py-3.5 text-right font-bold"
+              >
+                Holdings
+              </th>
+              <th
+                scope="col"
+                className="w-[29%] px-[22px] py-3.5 text-right font-bold"
+              >
+                Value
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {assetData.map((a, idx) => (
+              <tr
+                key={a.sym + a.name}
+                className={cn(
+                  idx < assetData.length - 1 && "border-b border-border"
+                )}
+              >
+                <td className="px-[22px] py-[15px]">
+                  <div className="flex items-center gap-3">
+                    <AssetIcon
+                      sym={a.sym}
+                      tint={a.tint}
+                      logoUrl={a.logoUrl}
+                      size="sm"
+                    />
+                    <div>
+                      <p className="text-[14.5px] font-bold text-foreground">
+                        {a.name}
+                      </p>
+                      <p className="text-xs text-muted-foreground">{a.sub}</p>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-[22px] py-[15px] text-right">
+                  <Money
+                    value={a.amount.split(" ")[0]}
+                    className="text-sm text-foreground"
+                  />
+                </td>
+                <td className="px-[22px] py-[15px] text-right">
+                  <Money
+                    value={a.value}
+                    className="text-[14.5px] font-bold text-foreground"
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       {/* ── Recent activity ─────────────────────────────────────────────────── */}
@@ -218,7 +242,7 @@ export function OverviewPage({
           `overflow-y-auto` scroll reveals every row — matches the Activity page's
           list cards. A `flex-1` card here would clip overflowing rows because of
           `overflow-hidden`, with no way to scroll them. */}
-      <div className="overflow-hidden rounded-[18px] border border-border bg-card">
+      <div className="rounded-[18px] border border-border bg-card">
         <p className="border-b border-border px-[22px] pt-[15px] pb-[11px] text-xs font-bold tracking-widest text-muted-foreground uppercase">
           Recent activity
         </p>

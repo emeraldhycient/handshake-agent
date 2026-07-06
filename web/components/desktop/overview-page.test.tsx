@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi, afterEach } from "vitest"
 import { OverviewPage } from "./overview-page"
@@ -83,6 +83,24 @@ describe("OverviewPage", () => {
     })
     expect(screen.getByText("Holdings")).toBeInTheDocument()
     expect(screen.getByText("Value")).toBeInTheDocument()
+  })
+
+  // ── Semantic table: holdings render in a real <table> with column headers ──
+  // Screen readers announce a data grid (row/column headers) instead of a flat
+  // stack of divs, and the header/body relationship is machine-readable (a11y
+  // is a blocker — root §13.8).
+  it("renders the holdings as a semantic table with real column headers", async () => {
+    render(<OverviewPage onQuickAction={() => {}} />, { wrapper })
+    await waitFor(() => {
+      expect(screen.getByText(/Tether USD/i)).toBeInTheDocument()
+    })
+    const table = screen.getByRole("table")
+    const headers = within(table)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent)
+    expect(headers).toEqual(["Asset", "Holdings", "Value"])
+    // Header row + one body row per fixture asset (3 assets).
+    expect(within(table).getAllByRole("row").length).toBe(4)
   })
 
   // ── Finding #5: shared error state with a retry affordance ─────────────────
