@@ -8,7 +8,11 @@ import type { FormFieldProps } from "@/types/forms"
  * `register(name)` onto it — its `ref` forwards through to the input.
  */
 export const FormField = React.forwardRef<HTMLInputElement, FormFieldProps>(
-  function FormField({ id, label, error, className, ...inputProps }, ref) {
+  function FormField(
+    { id, label, error, hint, className, ...inputProps },
+    ref
+  ) {
+    const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : undefined
     return (
       <div className={`flex flex-col gap-1.5 ${className ?? ""}`}>
         <label htmlFor={id} className="text-sm font-medium text-foreground">
@@ -18,10 +22,10 @@ export const FormField = React.forwardRef<HTMLInputElement, FormFieldProps>(
           id={id}
           ref={ref}
           aria-invalid={!!error}
-          aria-describedby={error ? `${id}-error` : undefined}
+          aria-describedby={describedBy}
           {...inputProps}
         />
-        {error && (
+        {error ? (
           <p
             id={`${id}-error`}
             role="alert"
@@ -29,6 +33,12 @@ export const FormField = React.forwardRef<HTMLInputElement, FormFieldProps>(
           >
             {error}
           </p>
+        ) : (
+          hint && (
+            <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+              {hint}
+            </p>
+          )
         )}
       </div>
     )

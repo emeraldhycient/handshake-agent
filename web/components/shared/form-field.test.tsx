@@ -25,6 +25,27 @@ describe("FormField", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument()
   })
 
+  it("shows the hint (linked via aria-describedby) when there is no error", () => {
+    render(<FormField id="pin" label="PIN" hint="4–6 digits" />)
+    expect(screen.getByText("4–6 digits")).toBeInTheDocument()
+    expect(screen.getByRole("textbox")).toHaveAttribute(
+      "aria-describedby",
+      "pin-hint"
+    )
+  })
+
+  it("prefers the error over the hint when both are set", () => {
+    render(
+      <FormField id="pin" label="PIN" hint="4–6 digits" error="Too short" />
+    )
+    expect(screen.getByRole("alert")).toHaveTextContent("Too short")
+    expect(screen.queryByText("4–6 digits")).not.toBeInTheDocument()
+    expect(screen.getByRole("textbox")).toHaveAttribute(
+      "aria-describedby",
+      "pin-error"
+    )
+  })
+
   it("forwards the ref to the underlying input (register-spread compatible)", () => {
     const ref = createRef<HTMLInputElement>()
     render(<FormField id="email" label="Email" ref={ref} />)

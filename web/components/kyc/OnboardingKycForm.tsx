@@ -1,63 +1,32 @@
 "use client"
 
 /**
- * OnboardingKycForm — session-authenticated KYC onboarding form.
+ * OnboardingKycForm — session-authenticated KYC onboarding orchestrator.
  *
- * Used on the /onboarding route by logged-in but unverified users.
- * Collects KYC details + PIN (with confirmation) and calls POST /kyc/submit
- * (bearer auth handled by the Axios interceptor — no token field in this form).
+ * Used on /onboarding by logged-in but unverified users. Collects the shared KYC
+ * fields + a Confirm-PIN, and calls POST /kyc/submit (bearer auth via the Axios
+ * interceptor). `confirmPin` is client-only and stripped before the mutation.
  *
- * Form schema is a superset of KycSubmitRequestSchema: adds `confirmPin` for
- * client-side match validation. `confirmPin` is stripped before the mutation.
- *
- * Strict layering: pure UI — no fetch, no axios import, no business logic.
- *
- * a11y: visible labels, error text linked via aria-describedby, focus states
- * via Tailwind tokens, keyboard-navigable (no tabIndex tricks).
+ * The fields + success state are shared with KycForm (root §16, §13.2).
  */
 import { useRouter } from "next/navigation"
-import { useForm } from "react-hook-form"
+import { useForm, FormProvider } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
-import {
-  BvnSchema,
-  NinSchema,
-  TransactionPinSchema,
-} from "@handshake-agent/contracts/dto"
-import { Input } from "@/components/ui/input"
+import { FormAlert } from "@/components/shared/form-alert"
 import { Button } from "@/components/ui/button"
+import { KycFields } from "@/components/kyc/kyc-fields"
+import { KycSubmitSuccess } from "@/components/kyc/kyc-submit-success"
 import { useKycSubmit } from "@/lib/query/kyc"
-
-// ─── Form schema — built from the contract's canonical field schemas ──────────
-//
-// PIN strength (TransactionPinSchema) and the 11-digit NIN/BVN format
-// (NinSchema/BvnSchema) come straight from @handshake-agent/contracts so the FE
-// (UX) gate and the server (security boundary, §3.3) validate identically — one
-// canonical primitive per concept (§13). `KycSubmitRequestSchema` is a refined
-// schema (ZodEffects) so it can't be `.extend`ed; we compose the same field
-// schemas here and add the client-only `confirmPin`. Empty identifier strings
-// are coerced to `undefined` so a blank field doesn't trip the 11-digit format.
-
-const optionalIdentifier = (schema: z.ZodString) =>
-  z
-    .union([z.literal(""), schema])
-    .optional()
-    .transform((v) => (v === "" ? undefined : v))
+import { kycBaseFields, hasNinOrBvn } from "@/lib/kyc/schema"
+import { toErrorMessage } from "@/lib/error-message"
 
 const OnboardingSchema = z
   .object({
-    nin: optionalIdentifier(NinSchema),
-    bvn: optionalIdentifier(BvnSchema),
-    firstName: z.string().min(1, "First name is required"),
-    lastName: z.string().min(1, "Last name is required"),
-    dateOfBirth: z.string().optional(),
-    pin: TransactionPinSchema,
+    ...kycBaseFields,
     confirmPin: z.string().min(1, "Please confirm your PIN"),
   })
-  .refine((data) => Boolean(data.nin) || Boolean(data.bvn), {
-    message: "Provide your NIN or BVN",
-    path: ["nin"],
-  })
+  .refine(hasNinOrBvn, { message: "Provide your NIN or BVN", path: ["nin"] })
   .refine((data) => data.pin === data.confirmPin, {
     message: "PINs do not match",
     path: ["confirmPin"],
@@ -65,336 +34,57 @@ const OnboardingSchema = z
 
 type OnboardingForm = z.infer<typeof OnboardingSchema>
 
-// ─── Component ────────────────────────────────────────────────────────────────
-
 export function OnboardingKycForm() {
   const router = useRouter()
-
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<OnboardingForm>({
+  const methods = useForm<OnboardingForm>({
     resolver: zodResolver(OnboardingSchema),
   })
-
   const { mutateAsync, isPending, isSuccess, error } = useKycSubmit()
-
-  const loading = isSubmitting || isPending
+  const loading = methods.formState.isSubmitting || isPending
 
   async function onSubmit(values: OnboardingForm) {
-    // Strip confirmPin before sending — it is client-side only. Blank NIN/BVN
-    // are already coerced to `undefined` by the schema transform above.
+    // Strip confirmPin before sending — it is client-side only.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { confirmPin, ...body } = values
     try {
       await mutateAsync(body)
       router.push("/")
     } catch {
-      // Intentionally swallowing here: the error surfaces via mutation.error
-      // which is rendered as the server-error alert. Never silently drop
-      // the display — that's handled in the JSX below.
+      // Error surfaces via mutation.error — rendered as the FormAlert below.
     }
   }
 
-  // ─── Success state ──────────────────────────────────────────────────────────
+  if (isSuccess) return <KycSubmitSuccess />
 
-  if (isSuccess) {
-    return (
-      <div
-        role="status"
-        aria-live="polite"
-        className="flex flex-col items-center gap-4 rounded-xl border border-success bg-success-muted px-6 py-10 text-center"
-      >
-        <span className="text-4xl" aria-hidden="true">
-          ✓
-        </span>
-        <h2 className="text-lg font-semibold text-success-foreground">
-          Verification submitted
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Your identity has been submitted for review. You will be notified once
-          verification is complete.
-        </p>
-      </div>
-    )
-  }
-
-  // ─── Form state (loading / error / data) ───────────────────────────────────
-
-  const serverError =
-    error instanceof Error ? error.message : error ? String(error) : null
+  const serverError = toErrorMessage(error)
 
   return (
-    <form
-      onSubmit={handleSubmit(onSubmit)}
-      noValidate
-      aria-label="Identity verification form"
-      className="flex flex-col gap-5"
-    >
-      {/* Server error — surfaced, never swallowed */}
-      {serverError && (
-        <div
-          role="alert"
-          aria-live="assertive"
-          className="rounded-lg border border-destructive bg-destructive/10 px-4 py-3 text-sm text-destructive"
-        >
-          {serverError}
-        </div>
-      )}
-
-      {/* First name */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="onb-firstName"
-          className="text-sm font-medium text-foreground"
-        >
-          First name
-        </label>
-        <Input
-          id="onb-firstName"
-          type="text"
-          autoComplete="given-name"
-          aria-required="true"
-          aria-invalid={!!errors.firstName}
-          aria-describedby={
-            errors.firstName ? "onb-firstName-error" : undefined
-          }
-          placeholder="e.g. Amara"
-          disabled={loading}
-          {...register("firstName")}
-        />
-        {errors.firstName && (
-          <p
-            id="onb-firstName-error"
-            role="alert"
-            className="text-xs text-destructive"
-          >
-            {errors.firstName.message ?? "First name is required"}
-          </p>
-        )}
-      </div>
-
-      {/* Last name */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="onb-lastName"
-          className="text-sm font-medium text-foreground"
-        >
-          Last name
-        </label>
-        <Input
-          id="onb-lastName"
-          type="text"
-          autoComplete="family-name"
-          aria-required="true"
-          aria-invalid={!!errors.lastName}
-          aria-describedby={errors.lastName ? "onb-lastName-error" : undefined}
-          placeholder="e.g. Okafor"
-          disabled={loading}
-          {...register("lastName")}
-        />
-        {errors.lastName && (
-          <p
-            id="onb-lastName-error"
-            role="alert"
-            className="text-xs text-destructive"
-          >
-            {errors.lastName.message ?? "Last name is required"}
-          </p>
-        )}
-      </div>
-
-      {/* Date of birth */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="onb-dateOfBirth"
-          className="text-sm font-medium text-foreground"
-        >
-          Date of birth{" "}
-          <span className="font-normal text-muted-foreground">(optional)</span>
-        </label>
-        <Input
-          id="onb-dateOfBirth"
-          type="date"
-          autoComplete="bday"
-          aria-invalid={!!errors.dateOfBirth}
-          aria-describedby={
-            errors.dateOfBirth ? "onb-dateOfBirth-error" : undefined
-          }
-          disabled={loading}
-          {...register("dateOfBirth")}
-        />
-        {errors.dateOfBirth && (
-          <p
-            id="onb-dateOfBirth-error"
-            role="alert"
-            className="text-xs text-destructive"
-          >
-            {errors.dateOfBirth.message}
-          </p>
-        )}
-      </div>
-
-      {/* Identity — at least one of NIN or BVN is required by the provider. */}
-      <fieldset className="flex flex-col gap-3 border-0 p-0">
-        <legend className="text-sm font-medium text-foreground">
-          NIN or BVN{" "}
-          <span className="font-normal text-muted-foreground">
-            (at least one required)
-          </span>
-        </legend>
-        <p className="text-xs text-muted-foreground">
-          Enter your 11-digit National Identification Number (NIN) or Bank
-          Verification Number (BVN). You only need to provide one.
-        </p>
-
-        {/* NIN */}
-        <div className="flex flex-col gap-1.5">
-          <label
-            htmlFor="onb-nin"
-            className="text-sm font-medium text-foreground"
-          >
-            NIN (National Identification Number)
-          </label>
-          <Input
-            id="onb-nin"
-            type="text"
-            inputMode="numeric"
-            pattern="\d{11}"
-            maxLength={11}
-            aria-invalid={!!errors.nin}
-            aria-describedby={errors.nin ? "onb-nin-error" : undefined}
-            placeholder="11-digit NIN"
-            disabled={loading}
-            {...register("nin")}
-          />
-          {errors.nin && (
-            <p
-              id="onb-nin-error"
-              role="alert"
-              className="text-xs text-destructive"
-            >
-              {errors.nin.message}
-            </p>
-          )}
-        </div>
-
-        {/* BVN */}
-        <div className="flex flex-col gap-1.5">
-          <label
-            htmlFor="onb-bvn"
-            className="text-sm font-medium text-foreground"
-          >
-            BVN (Bank Verification Number)
-          </label>
-          <Input
-            id="onb-bvn"
-            type="text"
-            inputMode="numeric"
-            pattern="\d{11}"
-            maxLength={11}
-            aria-invalid={!!errors.bvn}
-            aria-describedby={errors.bvn ? "onb-bvn-error" : undefined}
-            placeholder="11-digit BVN"
-            disabled={loading}
-            {...register("bvn")}
-          />
-          {errors.bvn && (
-            <p
-              id="onb-bvn-error"
-              role="alert"
-              className="text-xs text-destructive"
-            >
-              {errors.bvn.message}
-            </p>
-          )}
-        </div>
-      </fieldset>
-
-      {/* PIN — type password so it is never visible / logged */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="onb-pin"
-          className="text-sm font-medium text-foreground"
-        >
-          Transaction PIN
-        </label>
-        <Input
-          id="onb-pin"
-          type="password"
-          inputMode="numeric"
-          pattern="\d{4,6}"
-          autoComplete="new-password"
-          aria-required="true"
-          aria-invalid={!!errors.pin}
-          aria-describedby={errors.pin ? "onb-pin-error" : "onb-pin-hint"}
-          placeholder="Set a 4–6 digit PIN"
-          minLength={4}
-          maxLength={6}
-          disabled={loading}
-          {...register("pin")}
-        />
-        {errors.pin ? (
-          <p
-            id="onb-pin-error"
-            role="alert"
-            className="text-xs text-destructive"
-          >
-            {errors.pin.message ?? "PIN is required"}
-          </p>
-        ) : (
-          <p id="onb-pin-hint" className="text-xs text-muted-foreground">
-            4–6 digits. Avoid repeated digits (1111) or sequences (1234).
-          </p>
-        )}
-      </div>
-
-      {/* Confirm PIN */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="onb-confirmPin"
-          className="text-sm font-medium text-foreground"
-        >
-          Confirm PIN
-        </label>
-        <Input
-          id="onb-confirmPin"
-          type="password"
-          inputMode="numeric"
-          pattern="\d{4,6}"
-          autoComplete="new-password"
-          aria-required="true"
-          aria-invalid={!!errors.confirmPin}
-          aria-describedby={
-            errors.confirmPin ? "onb-confirmPin-error" : undefined
-          }
-          placeholder="Re-enter your PIN"
-          minLength={4}
-          maxLength={6}
-          disabled={loading}
-          {...register("confirmPin")}
-        />
-        {errors.confirmPin && (
-          <p
-            id="onb-confirmPin-error"
-            role="alert"
-            className="text-xs text-destructive"
-          >
-            {errors.confirmPin.message ?? "Please confirm your PIN"}
-          </p>
-        )}
-      </div>
-
-      <Button
-        type="submit"
-        size="lg"
-        disabled={loading}
-        aria-busy={loading}
-        className="mt-2 w-full"
+    <FormProvider {...methods}>
+      <form
+        onSubmit={methods.handleSubmit(onSubmit)}
+        noValidate
+        aria-label="Identity verification form"
+        className="flex flex-col gap-5"
       >
-        {loading ? "Submitting…" : "Submit verification"}
-      </Button>
-    </form>
+        {serverError && <FormAlert>{serverError}</FormAlert>}
+
+        <KycFields
+          idPrefix="onb"
+          showConfirmPin
+          dateOfBirthType="date"
+          loading={loading}
+        />
+
+        <Button
+          type="submit"
+          size="lg"
+          disabled={loading}
+          aria-busy={loading}
+          className="mt-2 w-full"
+        >
+          {loading ? "Submitting…" : "Submit verification"}
+        </Button>
+      </form>
+    </FormProvider>
   )
 }
