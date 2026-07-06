@@ -9,6 +9,7 @@ import {
   QueryEmptyState,
 } from "@/components/shared/query-states"
 import { Skeleton } from "@/components/ui/skeleton"
+import { LoadMoreButton } from "@/components/shared/load-more-button"
 import { TransactionDetailModal } from "@/components/shared/transaction-detail-modal"
 import { useActivityFeed } from "@/lib/query/hooks"
 import { qk } from "@/lib/query/keys"
@@ -105,18 +106,12 @@ export function ActivityPage({ className }: { className?: string }) {
       <ActivityGroupList groups={filteredGroups} onSelect={setSelectedId} />
 
       {activity.hasNextPage && (
-        <button
-          type="button"
+        <LoadMoreButton
           onClick={() => void activity.fetchNextPage()}
-          disabled={activity.isFetchingNextPage}
-          className={cn(
-            "mx-auto rounded-full border border-border px-5 py-2 text-[13px] font-semibold text-foreground",
-            "transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none",
-            "disabled:cursor-not-allowed disabled:opacity-60"
-          )}
-        >
-          {activity.isFetchingNextPage ? "Loading…" : "Load more"}
-        </button>
+          isPending={activity.isFetchingNextPage}
+          label="Load more"
+          className="mx-auto rounded-full px-5 py-2"
+        />
       )}
 
       <TransactionDetailModal

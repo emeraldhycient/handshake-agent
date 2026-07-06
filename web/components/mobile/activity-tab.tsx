@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { StatusPill } from "@/components/shared/status-pill"
+import { LoadMoreButton } from "@/components/shared/load-more-button"
 import {
   QueryErrorState,
   QueryEmptyState,
@@ -161,18 +162,12 @@ export function ActivityTab({ className }: ActivityTabProps) {
         ))}
 
         {hasNextPage && (
-          <button
-            type="button"
+          <LoadMoreButton
             onClick={() => void fetchNextPage()}
-            disabled={isFetchingNextPage}
-            className={cn(
-              "mx-auto rounded-full border border-border px-5 py-2.5 text-[13px] font-semibold text-foreground",
-              "transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none",
-              "disabled:cursor-not-allowed disabled:opacity-60"
-            )}
-          >
-            {isFetchingNextPage ? "Loading…" : "Load more"}
-          </button>
+            isPending={isFetchingNextPage}
+            label="Load more"
+            className="mx-auto rounded-full px-5 py-2.5"
+          />
         )}
       </div>
 
