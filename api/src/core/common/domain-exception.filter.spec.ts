@@ -153,6 +153,39 @@ describe('DomainExceptionFilter', () => {
     expect(statusCode).toBe(expected);
   });
 
+  // Every gate cause must produce a DISTINCT, actionable message — previously they
+  // all collapsed to one opaque "not permitted on your account" line, so a user
+  // hitting a per-transaction cap couldn't tell it apart from a KYC/SIM/sanctions
+  // block. The filter maps purely by `code`, so minimal `{ code }` fakes suffice.
+  describe('gate causes get distinct, actionable, non-leaking messages', () => {
+    const gate: Array<[string, RegExp]> = [
+      ['KYC_NOT_VERIFIED', /verif/i],
+      ['TIER_LIMIT_EXCEEDED', /per-transaction limit/i],
+      ['SEND_LIMIT_EXCEEDED', /send limit/i],
+      ['TIER_CHANGE_COOLING_OFF', /on hold|try again a little later/i],
+      ['VELOCITY_EXCEEDED', /limit for now|try again later/i],
+      ['SIM_SWAP_BLOCKED', /SIM|phone-number|re-verify/i],
+      ['SANCTIONS_BLOCKED', /can't be completed|contact support/i],
+    ];
+
+    it.each(gate)(
+      '%s -> 403 with a specific message, no numbers leaked',
+      (code, re) => {
+        const { statusCode, body } = run(filter, { code });
+        expect(statusCode).toBe(403);
+        expect(body.code).toBe(code);
+        expect(body.message).toMatch(re);
+        // No exact limits/balances/counts leak to the client (no multi-digit runs).
+        expect(body.message).not.toMatch(/\d{2,}/);
+      },
+    );
+
+    it('no two gate causes share the same message', () => {
+      const messages = gate.map(([code]) => run(filter, { code }).body.message);
+      expect(new Set(messages).size).toBe(messages.length);
+    });
+  });
+
   it.each([
     [new AdminInvalidCredentialsError(), 401],
     [new AdminMfaRequiredError(), 401],
