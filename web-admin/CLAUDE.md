@@ -25,3 +25,12 @@ pnpm --filter @handshake-agent/web-admin lint         # flat-config ESLint
 pnpm --filter @handshake-agent/web-admin typecheck    # tsc --noEmit
 pnpm --filter @handshake-agent/web-admin test         # vitest run
 ```
+
+## Componentisation (root §16)
+
+Same rails as `web` (see root §16). Route files compose `<AppShell>` + a **route orchestrator** (`components/admin/<x>-page.tsx`) that holds data hooks, the four async branches, and composition — sections extract into `components/admin/<feature>/`.
+
+- **Lists/tables** render through the `Table` primitive (`components/ui/table.tsx`) via a **`shared/DataTable`** — column-config driven, one `ariaLabel` per table. Retire the remaining raw `<table>` sites.
+- **Hooks** → `hooks/` (promote `lib/hooks/*` here in the admin componentisation wave). **Constants** → `constants/<feature>.ts`. **Types** → per-feature `types/<feature>.ts` + a `types/index.ts` barrel (the historical `types/components.ts` is 1,483 lines and gets split); import from `@/types`.
+- Size caps (root §13.3): component ≤150, file ≤300, function ≤40. The largest files (`user-detail.tsx`, `transaction-detail.tsx`, `operator-dashboard.tsx`, `lib/query/hooks.ts`) are the primary decomposition targets.
+- Every admin PR is verified visually (log in via the admin app's auth flow before/after the change).

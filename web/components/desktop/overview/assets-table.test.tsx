@@ -12,7 +12,6 @@ const assets: WalletAsset[] = [
     value: "₦80,000",
     change: "+0.01%",
     tint: "#26A17B",
-    logoUrl: null,
   } as WalletAsset,
 ]
 
