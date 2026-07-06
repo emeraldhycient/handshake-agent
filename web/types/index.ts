@@ -3,3 +3,4 @@
 export * from "./components"
 export * from "./data-table"
 export * from "./overview"
+export * from "./wallet"
