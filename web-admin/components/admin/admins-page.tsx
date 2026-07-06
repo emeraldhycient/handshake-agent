@@ -41,6 +41,7 @@ import { RoleEditorDialog } from "@/components/admin/role-editor-dialog"
 import { RolePermissionMatrix } from "@/components/admin/role-permission-matrix"
 import { useAdmins, usePermissions, useRoles } from "@/lib/query/hooks"
 import { initialsOf } from "@/lib/avatar"
+import { PageHeader } from "@/components/admin/page-header"
 
 // ─── Brand + status constants (mapped to design tokens; §1.3 / stMeta) ─────────
 
@@ -122,23 +123,19 @@ export function AdminsPage() {
   return (
     <div className="mx-auto w-full max-w-[1300px] px-[30px] pt-[26px] pb-[60px]">
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="mb-4 flex items-end justify-between gap-4">
-        <div>
-          <h1 className="m-0 text-[24px] font-extrabold tracking-[-0.02em] text-ink">
-            Admins &amp; roles
-          </h1>
-          <p className="mt-[5px] text-[13.5px] text-ink2">
-            Admin users, the role permission matrix, and session policy.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setInviteOpen(true)}
-          className="flex h-[38px] items-center gap-[7px] rounded-[11px] bg-btn-dark px-[15px] text-[12.5px] font-bold text-white transition-colors hover:bg-btn-dark/90 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          + Invite admin
-        </button>
-      </div>
+      <PageHeader
+        title="Admins & roles"
+        subtitle="Admin users, the role permission matrix, and session policy."
+        actions={
+          <button
+            type="button"
+            onClick={() => setInviteOpen(true)}
+            className="flex h-[38px] items-center gap-[7px] rounded-[11px] bg-btn-dark px-[15px] text-[12.5px] font-bold text-white transition-colors hover:bg-btn-dark/90 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            + Invite admin
+          </button>
+        }
+      />
 
       {/* ── Admin table ────────────────────────────────────────────────────── */}
       {/* A real <table> (shared shadcn primitive) whose container is overflow-x-auto:
