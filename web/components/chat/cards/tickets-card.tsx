@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils"
 import { Money } from "@/components/shared/money"
+import { ChatCardShell } from "@/components/chat/cards/chat-card-shell"
 import type { TicketsCardProps } from "@/types/components"
 import type { TicketOption } from "@/lib/schemas"
 
@@ -21,15 +22,7 @@ export function TicketsCard({
   const isMobile = density === "mobile"
 
   return (
-    <div
-      className={cn(
-        "overflow-hidden border border-border bg-card",
-        isMobile
-          ? "w-[88%] rounded-[20px] shadow-card"
-          : "w-[92%] rounded-[16px]",
-        className
-      )}
-    >
+    <ChatCardShell density={density} className={className}>
       {/* Event banner */}
       <div
         className={cn(
@@ -126,6 +119,6 @@ export function TicketsCard({
           </button>
         ))}
       </div>
-    </div>
+    </ChatCardShell>
   )
 }

@@ -4,6 +4,7 @@ import { useState } from "react"
 import { QRCodeSVG } from "qrcode.react"
 import { cn } from "@/lib/utils"
 import { DepositNetworkWarning } from "@/components/shared/deposit-network-warning"
+import { ChatCardShell } from "@/components/chat/cards/chat-card-shell"
 import type { ReceiveCardProps } from "@/types/components"
 
 /**
@@ -41,15 +42,7 @@ export function ReceiveCard({
   }
 
   return (
-    <div
-      className={cn(
-        "overflow-hidden border border-border bg-card",
-        isMobile
-          ? "w-[88%] rounded-[20px] shadow-card"
-          : "w-[92%] rounded-[16px]",
-        className
-      )}
-    >
+    <ChatCardShell density={density} className={className}>
       {/* Header */}
       {isMobile ? (
         <>
@@ -148,6 +141,6 @@ export function ReceiveCard({
           </div>
         </div>
       )}
-    </div>
+    </ChatCardShell>
   )
 }
