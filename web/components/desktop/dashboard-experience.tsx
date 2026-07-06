@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useOptionalRouter } from "@/hooks/use-optional-router"
 import { DashboardSidebar } from "@/components/desktop/dashboard-sidebar"
 import { DashboardTopbar } from "@/components/desktop/dashboard-topbar"
 import { ChatRail } from "@/components/desktop/chat-rail"
@@ -15,22 +15,6 @@ import { useAuthStore } from "@/lib/store/auth-store"
 import { chipLabel, actionPrompt } from "@/lib/chat/flow"
 import type { DashboardPage } from "@/lib/schemas"
 import type { ChatAction, SearchResult } from "@/lib/schemas"
-
-/**
- * `useRouter` outside an app-router provider throws an invariant. In the real
- * app this component always renders inside the router tree, but isolated tests
- * (e.g. AdaptiveExperience) mount it without one. `useRouter` calls `useContext`
- * before the throw, so wrapping the call keeps hook order stable; on failure we
- * return null and the session-expired redirect becomes a no-op (the Axios
- * interceptor still clears the session, so RequireAuth redirects on next render).
- */
-function useOptionalRouter(): ReturnType<typeof useRouter> | null {
-  try {
-    return useRouter()
-  } catch {
-    return null
-  }
-}
 
 /**
  * Full-width desktop layout — extracted from the /dashboard route so it can

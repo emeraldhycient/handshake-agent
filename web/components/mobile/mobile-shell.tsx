@@ -1,11 +1,11 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
 import { useStore } from "zustand"
 import { defaultChatStore } from "@/lib/store/chat-store"
 import { useAuthStore } from "@/lib/store/auth-store"
 import { useChatHistory } from "@/hooks/use-chat-history"
+import { useOptionalRouter } from "@/hooks/use-optional-router"
 import {
   buildConfirmFromQuote,
   buildConfirmFromSwap,
@@ -27,22 +27,6 @@ import { FocusTrap } from "@/components/shared/focus-trap"
 import { useVoiceRecorder } from "@/hooks/use-voice-recorder"
 import type { MobileShellProps, MobileTabId } from "@/types/components"
 import type { ChatMessage, TicketOption, ChatAction } from "@/lib/schemas"
-
-/**
- * `useRouter` outside an app-router provider throws an invariant. In the real
- * app MobileShell always renders inside the router tree, but isolated tests
- * (e.g. AdaptiveExperience) mount it without one. `useRouter` calls `useContext`
- * before the throw, so wrapping the call keeps hook order stable; on failure we
- * return null and the session-expired redirect becomes a no-op (the Axios
- * interceptor still clears the session, so RequireAuth redirects on next render).
- */
-function useOptionalRouter(): ReturnType<typeof useRouter> | null {
-  try {
-    return useRouter()
-  } catch {
-    return null
-  }
-}
 
 export function MobileShell({ store: injectedStore }: MobileShellProps) {
   const store = injectedStore ?? defaultChatStore
