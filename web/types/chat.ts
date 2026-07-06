@@ -1,5 +1,29 @@
 import type { ReactNode } from "react"
-import type { Density, ConfirmSheetProps, PinPadProps } from "./components"
+import type {
+  Density,
+  ConfirmSheetProps,
+  PinPadProps,
+  NeedsBeneficiaryCardProps,
+} from "./components"
+
+/** Beneficiary kind ("bank_account" | "crypto_address"). */
+export type BeneficiaryKind = NeedsBeneficiaryCardProps["beneficiaryType"]
+
+export interface SavedBeneficiaryListProps {
+  beneficiaryType: BeneficiaryKind
+  isBank: boolean
+  onSelect: (id: string) => void
+}
+
+export interface BeneficiaryFormProps {
+  onResolve: (id: string) => void
+}
+
+export interface BeneficiaryFieldProps {
+  label: string
+  error?: string
+  children: ReactNode
+}
 
 /** The non-null confirm payload shared by the confirm overlay's sub-parts. */
 export type ConfirmPayload = NonNullable<ConfirmSheetProps["payload"]>
