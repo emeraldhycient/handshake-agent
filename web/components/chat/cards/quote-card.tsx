@@ -1,24 +1,19 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
 import { cn } from "@/lib/utils"
 import { Money } from "@/components/shared/money"
 import { DetailRows } from "@/components/shared/detail-rows"
-import { StatusPill } from "@/components/shared/status-pill"
+import { ChatCardShell } from "@/components/chat/cards/chat-card-shell"
+import { QuoteExpiryPill } from "@/components/chat/cards/quote-expiry-pill"
+import { ExpiringCardCTA } from "@/components/chat/cards/expiring-card-cta"
+import { useQuoteCountdown } from "@/hooks/use-quote-countdown"
 import { formatCountdown } from "@/lib/format"
 import type { QuoteCardProps } from "@/types/components"
 
 /**
- * QuoteCard — chat message card for a crypto buy/send/swap quote.
- * Mobile prototype: lines 164–197. Desktop prototype: lines 823–838.
- * density prop controls sizing/padding/radii only — both variants render the same data.
- *
- * Live countdown: driven from `expiresAt` (ISO string from the server) when
- * present, falling back to `lockSeconds` for the mock/offline flow.
- * Ticks every 1 second via setInterval (cleaned up on unmount).
- * At 0 seconds: badge shows "Expired" and the CTA is disabled.
- *
- * No hex literals. No data fetching. Pure presentational.
+ * QuoteCard — chat message card for a crypto buy/send/swap quote. Orchestrator:
+ * runs the live countdown and composes the shell, the expiry pill, the quoted
+ * amounts, and the expiring CTA (root §16). density controls sizing only.
  */
 export function QuoteCard({
   receiveAmt,
@@ -33,56 +28,10 @@ export function QuoteCard({
   className,
 }: QuoteCardProps) {
   const isMobile = density === "mobile"
-
-  // ── Live countdown state ────────────────────────────────────────────────────
-  // Compute the initial remaining seconds from expiresAt when available,
-  // otherwise fall back to lockSeconds (mock flow).
-  function computeRemaining(): number {
-    if (expiresAt) {
-      return Math.max(
-        0,
-        Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000)
-      )
-    }
-    return Math.max(0, lockSeconds)
-  }
-
-  const [remaining, setRemaining] = useState<number>(computeRemaining)
-  // Track whether the timer has been cleared so cleanup is idempotent
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  useEffect(() => {
-    // No countdown needed if there's no expiry source or already at 0
-    if (!expiresAt && lockSeconds <= 0) return
-
-    intervalRef.current = setInterval(() => {
-      setRemaining(computeRemaining())
-    }, 1000)
-
-    return () => {
-      if (intervalRef.current !== null) {
-        clearInterval(intervalRef.current)
-        intervalRef.current = null
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expiresAt, lockSeconds])
-
-  const isExpired = remaining <= 0
-  const countdownLabel = isExpired
-    ? "Expired"
-    : `Locked ${formatCountdown(remaining)}`
+  const { remaining, isExpired } = useQuoteCountdown(expiresAt, lockSeconds)
 
   return (
-    <div
-      className={cn(
-        "overflow-hidden border border-border bg-card",
-        isMobile
-          ? "w-[88%] rounded-[20px] shadow-card"
-          : "w-[92%] rounded-[16px] shadow-[0_4px_14px_oklch(0.244_0.024_162_/_0.06)]",
-        className
-      )}
-    >
+    <ChatCardShell density={density} desktopShadow className={className}>
       {/* Header: eyebrow + lock badge */}
       <div
         className={cn(
@@ -98,17 +47,11 @@ export function QuoteCard({
         >
           Quote
         </span>
-        <StatusPill
-          tone={isExpired ? "neutral" : "warn"}
-          className={cn(
-            "font-semibold",
-            isMobile
-              ? "px-[9px] py-[3px] text-[11.5px]"
-              : "px-2 py-[2px] text-[11px]"
-          )}
-        >
-          {countdownLabel}
-        </StatusPill>
+        <QuoteExpiryPill
+          remaining={remaining}
+          isExpired={isExpired}
+          density={density}
+        />
       </div>
 
       {/* Receive amount */}
@@ -135,7 +78,6 @@ export function QuoteCard({
         </p>
       </div>
 
-      {/* Divider */}
       <div className={cn("h-px bg-border", isMobile ? "mx-4" : "mx-[15px]")} />
 
       {/* Detail rows */}
@@ -147,7 +89,6 @@ export function QuoteCard({
         <DetailRows rows={rows} className={isMobile ? "gap-[9px]" : "gap-2"} />
       </div>
 
-      {/* Divider */}
       <div
         className={cn(
           "h-px bg-border",
@@ -179,41 +120,15 @@ export function QuoteCard({
         />
       </div>
 
-      {/* CTA — disabled when expired */}
-      <div className={cn(isMobile ? "px-4 pb-4" : "px-[15px] pb-[15px]")}>
-        <button
-          type="button"
-          onClick={onConfirm}
-          disabled={isExpired}
-          aria-disabled={isExpired}
-          className={cn(
-            "w-full cursor-pointer border-none font-bold",
-            "shadow-cta",
-            isMobile
-              ? "rounded-[14px] py-3.5 text-[15px]"
-              : "rounded-[12px] py-3 text-[14px]",
-            isExpired
-              ? "cursor-not-allowed bg-muted text-muted-foreground"
-              : "bg-accent text-accent-foreground"
-          )}
-        >
-          {isExpired ? "Quote expired" : "Review & confirm"}
-        </button>
-        {/* Reassurance / expiry-recovery hint — shown on BOTH densities so a
-            desktop user whose quote expired still gets "Request a new quote to
-            continue" and an active quote keeps the "No hidden fees" reassurance
-            (scenario finding: ui-consistency-states). */}
-        <p
-          className={cn(
-            "text-center text-muted-foreground-subtle",
-            isMobile ? "mt-[9px] text-[11.5px]" : "mt-2 text-[11px]"
-          )}
-        >
-          {isExpired
-            ? "Request a new quote to continue"
-            : `Rate locked ${formatCountdown(remaining)} · No hidden fees`}
-        </p>
-      </div>
-    </div>
+      <ExpiringCardCTA
+        isExpired={isExpired}
+        onConfirm={onConfirm}
+        activeLabel="Review & confirm"
+        expiredLabel="Quote expired"
+        activeHint={`Rate locked ${formatCountdown(remaining)} · No hidden fees`}
+        expiredHint="Request a new quote to continue"
+        density={density}
+      />
+    </ChatCardShell>
   )
 }

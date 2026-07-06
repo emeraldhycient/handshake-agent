@@ -11,3 +11,19 @@ export interface ChatCardShellProps {
   className?: string
   children: ReactNode
 }
+
+export interface QuoteExpiryPillProps {
+  remaining: number
+  isExpired: boolean
+  density: Density
+}
+
+export interface ExpiringCardCtaProps {
+  isExpired: boolean
+  onConfirm: () => void
+  activeLabel: string
+  expiredLabel: string
+  activeHint: string
+  expiredHint: string
+  density: Density
+}
