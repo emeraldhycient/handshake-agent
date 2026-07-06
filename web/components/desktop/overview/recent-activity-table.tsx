@@ -6,27 +6,37 @@ import type { DataTableColumn } from "@/types/data-table"
 import type { RecentActivityTableProps } from "@/types/overview"
 import type { ActivityItem } from "@/lib/schemas"
 
-const COLUMNS: DataTableColumn<ActivityItem>[] = [
+/**
+ * A flattened row keeps its group's date label — the overview shows one flat
+ * list (no per-date group headers like the Activity page), so each row states
+ * its own date before the time.
+ */
+interface Row {
+  item: ActivityItem
+  date: string
+}
+
+const COLUMNS: DataTableColumn<Row>[] = [
   {
-    key: "icon",
+    // Icon + title/sub grouped in one cell so they read tightly together (like
+    // the Activity page rows) — a cell-per-element table would space them apart.
+    key: "tx",
     header: "",
-    widthClassName: "w-[47px]",
-    render: (item) => (
-      <div
-        className="flex h-[34px] w-[34px] flex-none items-center justify-center rounded-[10px] text-base font-bold"
-        style={{ backgroundColor: item.tint, color: item.col }}
-      >
-        {item.icon}
-      </div>
-    ),
-  },
-  {
-    key: "body",
-    header: "",
-    render: (item) => (
-      <div>
-        <p className="text-sm font-bold text-foreground">{item.title}</p>
-        <p className="text-xs text-muted-foreground tabular-nums">{item.sub}</p>
+    widthClassName: "w-full",
+    render: ({ item, date }) => (
+      <div className="flex items-center gap-[13px]">
+        <div
+          className="flex h-[34px] w-[34px] flex-none items-center justify-center rounded-[10px] text-base font-bold"
+          style={{ backgroundColor: item.tint, color: item.col }}
+        >
+          {item.icon}
+        </div>
+        <div>
+          <p className="text-sm font-bold text-foreground">{item.title}</p>
+          <p className="text-xs text-muted-foreground tabular-nums">
+            {date} · {item.sub}
+          </p>
+        </div>
       </div>
     ),
   },
@@ -34,7 +44,7 @@ const COLUMNS: DataTableColumn<ActivityItem>[] = [
     key: "amount",
     header: "",
     align: "right",
-    render: (item) => (
+    render: ({ item }) => (
       <div className="text-right">
         <Money
           value={item.amount}
@@ -55,7 +65,9 @@ const COLUMNS: DataTableColumn<ActivityItem>[] = [
  * overflow-y-auto scroll would clip overflowing rows (regression guard).
  */
 export function RecentActivityTable({ groups }: RecentActivityTableProps) {
-  const items = groups.flatMap((g) => g.items)
+  const rows: Row[] = groups.flatMap((g) =>
+    g.items.map((item) => ({ item, date: g.group }))
+  )
   return (
     <div className="rounded-[18px] border border-border bg-card">
       <p className="border-b border-border px-[22px] pt-[15px] pb-[11px] text-xs font-bold tracking-widest text-muted-foreground uppercase">
@@ -64,8 +76,8 @@ export function RecentActivityTable({ groups }: RecentActivityTableProps) {
       <DataTable
         ariaLabel="Recent activity"
         columns={COLUMNS}
-        rows={items}
-        getRowKey={(item) => item.id}
+        rows={rows}
+        getRowKey={({ item }) => item.id}
         hideHeader
         empty={
           <QueryEmptyState
