@@ -1500,6 +1500,70 @@ export interface KpiCardProps {
   tone?: KpiDeltaTone
 }
 
+// ─── Operator dashboard ──────────────────────────────────────────────────────────
+
+/** The KPI-range switcher presets (design `kpiRanges`). */
+export type DashboardRangeId = "24h" | "7d" | "30d"
+
+/** One derived KPI tile (feeds `KpiCard`). */
+export interface DashboardKpi {
+  label: string
+  value: string
+  delta: string
+  deltaNote: string
+  hero?: boolean
+  tone?: KpiDeltaTone
+}
+
+/** One System-health provider row (dot + halo + right-aligned status colour). */
+export interface DashboardHealthRow {
+  name: string
+  note: string
+  /** Right-aligned status label — observed latency ("120ms") or "—". */
+  status: string
+  dot: string
+  halo: string
+  /** Right-aligned status colour token. */
+  fg: string
+}
+
+/** One Live-activity feed row (icon + tint + text/meta/time). */
+export interface DashboardActivityItem {
+  text: string
+  meta: string
+  time: string
+  /** Inline SVG path (design `a.icon`). */
+  icon: string
+  iconBg: string
+  iconFg: string
+}
+
+/** Dashboard header — the title + the 24h/7d/30d range switcher. */
+export interface DashboardHeaderProps {
+  range: DashboardRangeId
+  onRangeChange: (range: DashboardRangeId) => void
+}
+
+/** The 4×2 KPI-tile grid, rendered from the real composite summary. */
+export interface KpiGridProps {
+  data: import("@handshake-agent/contracts").DashboardSummary
+  /** Open compliance count from the ops endpoint (undefined while loading/forbidden). */
+  openComplianceCases: number | undefined
+}
+
+/** The Transaction-volume chart card — real stacked-by-capability series. */
+export interface VolumeChartCardProps {
+  data: import("@handshake-agent/contracts").DashboardSummary | undefined
+  isLoading: boolean
+}
+
+/** Shared props for the ops-endpoint cards (System health + Live activity). */
+export interface DashboardOpsCardProps {
+  ops: import("@handshake-agent/contracts").MetricsOps | undefined
+  isLoading: boolean
+  isError: boolean
+}
+
 export interface FilterSelectProps extends Omit<
   ComponentPropsWithoutRef<"select">,
   "children"
