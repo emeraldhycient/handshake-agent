@@ -35,10 +35,25 @@ import { CoordinateBackfillProcessor } from './modules/wallets/infrastructure/co
 import { ProvisionUserProcessor } from './modules/wallets/infrastructure/provision-user.processor';
 import { WALLET_BACKFILL_QUEUE_NAME } from './modules/wallets/application/wallet-backfill-queue.constants';
 import { WebhookWorkerModule } from './modules/webhooks/webhook-worker.module';
+import { IdentityModule } from './modules/identity/identity.module';
+import { WalletsModule } from './modules/wallets/wallets.module';
+import { CatalogModule } from './core/catalog/catalog.module';
 
 @Module({
   imports: [
     AppModule,
+    // The @Processor classes below are declared here (not in WalletsModule) so the
+    // API process never opens a Redis Worker connection. But a provider declared in
+    // this module can only inject tokens EXPORTED by a module THIS module imports —
+    // AppModule does not re-export its children's providers. So import the modules
+    // that export the processors' dependencies directly:
+    //   IdentityModule → USER_LISTER
+    //   WalletsModule  → WalletService, WALLET_REPOSITORY, BACKFILL_RUN_REPOSITORY
+    //   CatalogModule  → AssetRegistry
+    // (Module instances are deduped with AppModule's graph; no double instantiation.)
+    IdentityModule,
+    WalletsModule,
+    CatalogModule,
     // BQ-2: rate-limit the wallet-backfill queue for Blockradar — max 5 jobs/sec.
     // This is the consumer-side configuration; the producer-side queue registration
     // is in JobsModule (no limiter needed on the producer).
