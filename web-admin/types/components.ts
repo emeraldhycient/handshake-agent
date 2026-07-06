@@ -39,6 +39,10 @@ export interface CursorPaginatorProps {
   canNext: boolean
   onPrev: () => void
   onNext: () => void
+  /** Left-aligned status text; defaults to `Page {pageIndex}`. */
+  leftLabel?: ReactNode
+  /** When true, both buttons are disabled (e.g. a page fetch is in flight). */
+  busy?: boolean
 }
 
 /** The 7-column ledger table with its own loading / error / empty / data branches. */
@@ -163,6 +167,7 @@ import type {
   AmlRule,
   ComplianceReport,
   EffectiveSetting,
+  KycTier,
   KycSubmissionDetail,
   NotificationTemplate,
   Role,
@@ -315,32 +320,84 @@ export interface UserRiskChip {
 /** A user's KYC bucket → the design's `kycMeta` pill mapping (logic.js line 496). */
 export type UserKycStatus = "verified" | "pending" | "needs_info" | "rejected"
 
-/** A user's tier band. */
-export type UserTier = "tier_1" | "tier_2" | "tier_3"
-
 /**
- * One row in the Users-page mock dataset (the design's `seed()` user record, the
- * fields the Users table renders). Module-level sample content — no fetching (this
- * is a design reproduction; real-data reintegration is a separate later step).
+ * A presentation row derived from an `AdminEndUserListItem` (via `toRow`). The
+ * live shape the Users table renders — avatar hue + initials are derived (no
+ * colour field in the list contract); `balance` / `lastActive` are pre-formatted.
  */
-export interface UserTableRow {
+export interface UsersRow {
   id: string
   name: string
   email: string
-  /** 2-letter avatar initials (design `ini()`). */
+  /** 2-letter avatar initials (`lib/avatar` `initialsOf`). */
   initials: string
-  /** Avatar background hex from the design's `AVA` palette. */
+  /** Avatar background hex, derived deterministically from the id. */
   avatar: string
   kyc: UserKycStatus
-  tier: UserTier
-  /** ISO-3166 alpha-2 (design uses NG / RW). */
-  country: string
-  /** Balance in NGN (rendered via the design's `ngn()` formatter). */
-  ngn: number
-  /** Risk flags surfaced as danger/warn badges (design `flagMeta`). */
-  flags: UserRiskFlag[]
-  /** Relative "last active" label (design `lastActive`). */
+  tier: KycTier
+  simSwapFlagged: boolean
+  sanctionsFlagged: boolean
+  /** Pre-formatted per-asset balance summary (or em dash). */
+  balance: string
+  /** Relative "last active" label (or em dash when never active). */
   lastActive: string
+}
+
+/** One Users-directory row — selectable checkbox + opens the detail route. */
+export interface UserRowProps {
+  user: UsersRow
+  selected: boolean
+  onToggleSelect: (id: string) => void
+  onOpen: (id: string) => void
+}
+
+/** Users-directory header — count/total + the CSV export affordance. */
+export interface UsersHeaderProps {
+  shown: number
+  total?: number
+  /** Shown when there is no server `total` but a next page exists. */
+  moreAvailable: boolean
+  exporting: boolean
+  onExport: () => void
+}
+
+/** The Users-directory filter row: search + KYC/tier/country selects + risk chips. */
+export interface UsersFilterBarProps {
+  search: string
+  onSearchChange: (value: string) => void
+  kyc: string
+  onKycChange: (value: string) => void
+  tier: string
+  onTierChange: (value: string) => void
+  country: string
+  onCountryChange: (value: string) => void
+  risk: UserRiskFlag | ""
+  onToggleRisk: (value: UserRiskFlag) => void
+}
+
+/** The contextual bulk-actions bar shown when rows are selected. */
+export interface UsersBulkBarProps {
+  count: number
+  exporting: boolean
+  onExport: () => void
+  selectedIds: readonly string[]
+  /** Clears the selection after a successful tag/message op. */
+  onActionDone: () => void
+  onClear: () => void
+}
+
+/** The 7-column directory table with its own loading / error / empty / data branches. */
+export interface UsersTableProps {
+  rows: UsersRow[]
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  allSelected: boolean
+  selectedIds: readonly string[]
+  onToggleSelectAll: () => void
+  onToggleSelect: (id: string) => void
+  onRetry: () => void
+  onOpen: (id: string) => void
 }
 
 export interface UserStatusBadgeProps {
