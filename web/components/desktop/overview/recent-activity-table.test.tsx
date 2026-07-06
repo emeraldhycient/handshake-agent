@@ -5,7 +5,7 @@ import type { ActivityGroup } from "@/lib/schemas"
 
 const groups: ActivityGroup[] = [
   {
-    group: "Today",
+    group: "3 Jul",
     items: [
       {
         id: "t1",
@@ -14,7 +14,7 @@ const groups: ActivityGroup[] = [
         tint: "#e8f5e9",
         col: "#1b5e20",
         title: "Bought USDT",
-        sub: "Today · 10:00",
+        sub: "10:00am",
         amount: "+ 50 USDT",
         status: "Done",
         statusTone: "success",
@@ -29,6 +29,11 @@ describe("RecentActivityTable", () => {
     expect(screen.getByText(/Recent activity/i)).toBeInTheDocument()
     const table = screen.getByRole("table", { name: "Recent activity" })
     expect(within(table).getByText("Bought USDT")).toBeInTheDocument()
+  })
+
+  it("shows the group date before the time (the overview has no date headers)", () => {
+    render(<RecentActivityTable groups={groups} />)
+    expect(screen.getByText("3 Jul · 10:00am")).toBeInTheDocument()
   })
 
   it("is headerless (no column headers) but still a semantic table", () => {
