@@ -8,14 +8,9 @@
  * chain (reason → step-up → maker-checker) before the PATCH fires. Nothing moves money
  * (§3.1): a base rate is a pricing config leaf, not a transaction.
  *
- * The currency choices are the pairs that lack a rate (so a rate is never double-added);
- * the currency list narrows to the chosen asset. Focus-trapped, Esc-closable.
+ * Composition only: the RHF form + derived asset/currency lists live in
+ * `useAddPriceForm`. Focus-trapped, Esc-closable.
  */
-import { useEffect, useMemo } from "react"
-import { useForm, useWatch } from "react-hook-form"
-import { zodResolver } from "@hookform/resolvers/zod"
-import { z } from "zod"
-
 import {
   Dialog,
   DialogContent,
@@ -28,66 +23,25 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { NativeSelect } from "@/components/ui/native-select"
+import { useAddPriceForm } from "@/lib/hooks/use-add-price-form"
 import type { AddPriceDialogProps } from "@/types/components"
 
-const AddPriceFormSchema = z.object({
-  asset: z.string().min(1, "Select an asset"),
-  code: z.string().min(1, "Select a currency"),
-  rate: z.coerce
-    .number({ invalid_type_error: "Enter a rate" })
-    .positive("Enter a positive rate"),
-})
-type AddPriceForm = z.infer<typeof AddPriceFormSchema>
-
-const EMPTY: AddPriceForm = { asset: "", code: "", rate: 0 }
-
-export function AddPriceDialog({
-  open,
-  onOpenChange,
-  options,
-  onContinue,
-}: AddPriceDialogProps) {
+export function AddPriceDialog(props: AddPriceDialogProps) {
   const {
     register,
-    handleSubmit,
-    reset,
-    control,
     setValue,
-    formState: { errors, isSubmitting },
-  } = useForm<AddPriceForm>({
-    resolver: zodResolver(AddPriceFormSchema),
-    defaultValues: EMPTY,
-  })
-
-  useEffect(() => {
-    if (open) reset(EMPTY)
-  }, [open, reset])
-
-  // Distinct assets that still have an unpriced currency, and the currency list for the
-  // currently-chosen asset (so a rate is only offered for a pair that lacks one).
-  const assets = useMemo(
-    () => [...new Set(options.map((o) => o.asset))],
-    [options]
-  )
-  // `useWatch` (not `watch()`) so the derived currency list memoizes cleanly.
-  const chosenAsset = useWatch({ control, name: "asset" })
-  const codes = useMemo(
-    () => options.filter((o) => o.asset === chosenAsset).map((o) => o.code),
-    [options, chosenAsset]
-  )
-
-  function close() {
-    reset(EMPTY)
-    onOpenChange(false)
-  }
-
-  function onSubmit(values: AddPriceForm) {
-    onContinue({ asset: values.asset, code: values.code, rate: values.rate })
-    close()
-  }
+    errors,
+    isSubmitting,
+    assets,
+    codes,
+    chosenAsset,
+    close,
+    onFormSubmit,
+    onDialogOpenChange,
+  } = useAddPriceForm(props)
 
   return (
-    <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : close())}>
+    <Dialog open={props.open} onOpenChange={onDialogOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Add a price</DialogTitle>
@@ -97,11 +51,7 @@ export function AddPriceDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form
-          onSubmit={handleSubmit(onSubmit)}
-          noValidate
-          className="flex flex-col gap-4"
-        >
+        <form onSubmit={onFormSubmit} noValidate className="flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="price-asset">Asset</Label>
