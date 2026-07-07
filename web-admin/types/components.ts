@@ -523,6 +523,52 @@ export interface UsersBulkActionsProps {
   onDone: () => void
 }
 
+/** The bulk TAG dialog's form state + submit (from `useUsersBulkActions`). */
+export interface BulkTagState {
+  open: boolean
+  setOpen: (open: boolean) => void
+  value: string
+  setValue: (value: string) => void
+  reason: string
+  setReason: (value: string) => void
+  submit: () => void
+  applying: boolean
+}
+
+/** The bulk MESSAGE dialog's form state + submit (from `useUsersBulkActions`). */
+export interface BulkMessageState {
+  open: boolean
+  setOpen: (open: boolean) => void
+  eventType: import("@handshake-agent/contracts").BulkMessageEventType
+  setEventType: (
+    value: import("@handshake-agent/contracts").BulkMessageEventType
+  ) => void
+  templateKey: string
+  setTemplateKey: (value: string) => void
+  reason: string
+  setReason: (value: string) => void
+  confirmLargeSet: boolean
+  setConfirmLargeSet: (value: boolean) => void
+  submit: () => void
+  queueing: boolean
+}
+
+/** The bulk TAG dialog — an operator tag annotation over the selection (step-up-gated). */
+export interface BulkTagDialogProps {
+  tag: BulkTagState
+  ids: readonly string[]
+  error: string | null
+  busy: boolean
+}
+
+/** The bulk MESSAGE dialog — a templated broadcast queued over the selection. */
+export interface BulkMessageDialogProps {
+  message: BulkMessageState
+  ids: readonly string[]
+  error: string | null
+  busy: boolean
+}
+
 // ─── KYC review page ─────────────────────────────────────────────────────────────
 
 /**
