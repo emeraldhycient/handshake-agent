@@ -1120,6 +1120,30 @@ export interface AssetCatalogRow {
   live: boolean
 }
 
+/** The "Newly discovered on-chain assets" card (read-only Blockradar discovery review). */
+export interface DiscoveredCardProps {
+  items: readonly import("@handshake-agent/contracts").AdminDiscoveredAsset[]
+  loading: boolean
+}
+
+/** One asset catalog row — copyable contract + the Live toggle-pill (→ maker-checker). */
+export interface AssetRowProps {
+  asset: AssetCatalogRow
+  onCopy: (asset: AssetCatalogRow) => void
+  onToggle: (asset: AssetCatalogRow) => void
+}
+
+/** The asset-catalog table — 6-column header + loading / error / empty / data. */
+export interface AssetsTableProps {
+  assets: AssetCatalogRow[]
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  onRetry: () => void
+  onCopy: (asset: AssetCatalogRow) => void
+  onToggle: (asset: AssetCatalogRow) => void
+}
+
 /**
  * TableFilterBar props — the filter/search strip rendered inside a table card's
  * header. `children` are the page-specific controls; `className` tweaks the strip.
