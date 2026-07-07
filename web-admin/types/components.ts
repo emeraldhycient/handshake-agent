@@ -201,7 +201,6 @@ export interface MoneySeriesPoint {
 import type {
   AdminBeneficiary,
   AdminCustomFiatCreateRequest,
-  AdminEndUserDetail,
   AdminEndUserDevice,
   AdminEndUserListItem,
   AdminPermissionRecord,
@@ -525,11 +524,6 @@ export interface UserDetailProps {
 export interface UserDeviceListProps {
   userId: string
   devices: AdminEndUserDevice[]
-}
-
-export interface UserActionsProps {
-  /** The loaded aggregate — drives which transitions are offered. */
-  user: AdminEndUserDetail
 }
 
 /**
