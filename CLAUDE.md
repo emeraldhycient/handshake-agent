@@ -297,3 +297,19 @@ Before marking any task complete:
 - **Architecture decisions:** [`docs/adr/`](docs/adr/) — record significant decisions as numbered ADRs.
 - **Monorepo guide:** [`docs/monorepo.md`](docs/monorepo.md) — workspace model, per-package installs, shared-contracts linking, worked example.
 - **Package guides:** [`api/CLAUDE.md`](api/CLAUDE.md) · [`web/CLAUDE.md`](web/CLAUDE.md) · [`packages/contracts/CLAUDE.md`](packages/contracts/CLAUDE.md)
+
+---
+
+## 16. Componentisation & modularisation (FE — web + web-admin)
+
+The rails that keep pages small and reusable. Applies to `web` and `web-admin`. Sits on top of §4.2 (layering) and §13 (code quality). A violation is drift — surface it (§13 "Surfacing drift"), don't add to it.
+
+1. **Pages / route files are orchestrators only.** A `page.tsx` (or a top-level view) holds data hooks, the four async branches (loading/error/empty/data), event handlers, and composition of section components — **no large inline section markup**. Extract each section (hero, table, list, toolbar, dialog) into its own component in `components/<feature>/`.
+2. **No component may masquerade as a page.** A page lives in `app/`. A reusable view/section lives in `components/<feature>/`. Do not create `*-page.tsx` components that are really views — name them for what they are.
+3. **Tabular data renders through the `Table` primitive via `shared/DataTable`.** No raw `<table>`, no div-grid "tables". `DataTable` is column-config driven (`columns`, `rows`, `getRowKey`, `ariaLabel`, optional `hideHeader` / `empty`); every table has an `ariaLabel`. Column configs that contain JSX renderers live in the section file (see rule 5).
+4. **Hooks live in `hooks/`.** Never a `useXxx` defined inside a component file.
+5. **Constants live in `constants/`** (per-feature files, named exports). No magic array / label-map / enum-of-labels inline in a component. A column _config_ that imports components stays in the section file so `constants/` never imports from `components/`.
+6. **Types live in `types/`** — per-feature files (`types/<feature>.ts`) plus a `types/index.ts` barrel (import from `@/types`). Prop types are `XxxProps` (§13.4); shared/domain shapes come from `@handshake-agent/contracts`. No inline interfaces beyond trivial locals.
+7. **Size caps (from §13.3):** component ≤150 lines, file ≤300, function ≤40. Extract at the section boundary, not every element — a cohesive block stays one file.
+
+Enforcement: `dependency-cruiser` keeps the layering (`app → components → lib → types`; `hooks`/`constants` sit alongside `lib`, never importing from `components`/`app`). Every FE wave ends on `pnpm lint && pnpm typecheck && pnpm test` green and `pnpm depcruise` clean, plus a visual check of any affected surface (see `web/CLAUDE.md` → Visual verification runbook). Program spec: [`docs/superpowers/specs/2026-07-06-componentisation-modularisation-design.md`](docs/superpowers/specs/2026-07-06-componentisation-modularisation-design.md).
