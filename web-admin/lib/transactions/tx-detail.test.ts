@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest"
-import type { AdminTxnDetail } from "@handshake-agent/contracts"
+import type {
+  AdminTxnDetail,
+  AdminTxnEconomics,
+} from "@handshake-agent/contracts"
 
 import { ApiError } from "@/lib/api/client"
 import {
+  economicsRows,
   flowSpecFor,
   formatWhen,
   headerTitle,
@@ -149,5 +153,68 @@ describe("txActionError", () => {
     expect(txActionError(new ApiError("nope", 500, "X"))).toBe("nope")
     expect(txActionError(new Error("boom"))).toBe("boom")
     expect(txActionError(null)).toBe("The action could not be completed.")
+  })
+})
+
+describe("economicsRows", () => {
+  const ECON = {
+    amount: "50",
+    asset: "USDT",
+    fiatCurrency: "NGN",
+    fiatAmount: "75000",
+    fxSpreadBps: 120,
+    rate: "1500",
+    processingFee: "150",
+    internalMargin: "0.0031",
+    realizedProfit: null,
+    realizedFee: null,
+    realizedSpread: null,
+  } as unknown as AdminTxnEconomics
+
+  it("renders the six base rows, with the internal-margin row operator-only (warn)", () => {
+    const rows = economicsRows(ECON)
+    expect(rows.map((r) => r.label)).toEqual([
+      "Amount",
+      "Fiat leg",
+      "Rate (spread-folded)",
+      "Processing fee",
+      "FX spread",
+      "Internal margin (operator)",
+    ])
+    // Internal margin is left unformatted (sub-unit precision) + warn-toned.
+    expect(rows.find((r) => r.label === "Internal margin (operator)")).toEqual({
+      label: "Internal margin (operator)",
+      value: "0.0031",
+      warn: true,
+    })
+  })
+
+  it("renders '—' for null fields and never fabricates", () => {
+    const rows = economicsRows({
+      ...ECON,
+      rate: null,
+      processingFee: null,
+      internalMargin: null,
+      fxSpreadBps: null,
+    } as AdminTxnEconomics)
+    expect(rows.find((r) => r.label === "Rate (spread-folded)")?.value).toBe("—")
+    expect(rows.find((r) => r.label === "Processing fee")?.value).toBe("—")
+    expect(rows.find((r) => r.label === "FX spread")?.value).toBe("—")
+  })
+
+  it("appends the three operator-only realized rows once realizedProfit is set", () => {
+    const rows = economicsRows({
+      ...ECON,
+      realizedProfit: "900",
+      realizedFee: "150",
+      realizedSpread: "750",
+    } as AdminTxnEconomics)
+    const realized = rows.filter((r) => r.label.startsWith("Realized"))
+    expect(realized.map((r) => r.label)).toEqual([
+      "Realized fee (operator)",
+      "Realized spread (operator)",
+      "Realized profit (operator)",
+    ])
+    expect(realized.every((r) => r.warn)).toBe(true)
   })
 })
