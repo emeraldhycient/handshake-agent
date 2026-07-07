@@ -1,249 +1,21 @@
 "use client"
 
 /**
- * CurrenciesPage — the Configuration group's currency-catalog screen
- * (operator-console design system §6.24, `docs/design-ref/screens/Currencies.html`).
- *
- * WIRED (Phase 6b) to the real `GET /admin/config/catalog` read
- * (`useAdminCatalog`) — the FULL fiat catalog including *disabled* (Off)
- * currencies and each entry's effective live status, which the enabled-only
- * public `GET /config` cannot provide. Each `AdminCatalogFiat` (code / symbol /
- * displayName / decimals / live) maps onto a `CurrencyCatalogRow`; `decimals`
- * drives the Rounding column. The design's Name-enquiry column has NO backing
- * field in the catalog (it is not modeled server-side), so it renders the
- * design-faithful "Unavailable" until a name-enquiry read is added.
- *
- * Structure (from the exact markup): a header + a single bordered card holding a
- * 5-column grid table — Currency (34px symbol chip + code over name) · Symbol
- * (mono) · Rounding (dp, mono/tabular) · Name-enquiry (colored label) · Live
- * (clickable status pill). The design's Live pill carries an `onToggle` handler:
- * enabling / disabling a currency is a dual-control config change, so clicking it
- * opens the shared MakerCheckerModal. WIRED (Phase 9 — WRITE): approving fires the real
- * step-up-guarded PATCH /admin/settings/:key (`useSetSetting`) on
- * `catalog.fiats.<code>.enabled`, which the server re-validates (multi-currency
- * invariant) + hot-reloads + audits; the catalog query then invalidates so the row
- * re-resolves. A 403 opens the StepUpDialog and the PATCH replays after re-auth
- * (`useStepUpRetry`). Nothing moves money (§3.1).
+ * CurrenciesPage — the Configuration group's currency-catalog screen (design §6.24).
+ * Composition only: `useCurrencyCatalog` owns the real catalog read + the two
+ * dual-control writes (the Live-pill toggle and the add-currency dialog); the table +
+ * rows live in `components/admin/currencies/*`. Toggling a currency is a maker-checker
+ * config change → the shared MakerCheckerModal → a step-up-guarded PATCH, replayed via
+ * the StepUpDialog on a 403. Nothing here moves money (§3.1).
  */
-import { useMemo, useState } from "react"
-
 import { AddCurrencyDialog } from "@/components/admin/add-currency-dialog"
 import { MakerCheckerModal } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
-import { Skeleton } from "@/components/ui/skeleton"
-import { ApiError } from "@/lib/api/client"
-import {
-  useAdminCatalog,
-  useAdminMe,
-  useAddCurrency,
-  useSetSetting,
-  useUpdateCurrency,
-} from "@/lib/query/hooks"
-import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
-import { pushToast } from "@/lib/store/toast-store"
-import { cn } from "@/lib/utils"
-import type { AdminCustomFiatCreateRequest } from "@handshake-agent/contracts"
-import type {
-  CurrencyCatalogRow,
-  MakerCheckerDiffRow,
-} from "@/types/components"
-
-// Design §6.24 table grid — Currency / Symbol / Rounding / Name-enquiry / Live
-// (verbatim from the markup: grid-template-columns:1.4fr 0.8fr 0.8fr 1fr 0.9fr).
-const CURRENCY_GRID = "grid-cols-[1.4fr_0.8fr_0.8fr_1fr_0.9fr]"
-
-/** One catalog row — matches the design markup exactly (grid, chip, mono, pills). */
-function CurrencyRow({
-  row,
-  onToggle,
-}: {
-  row: CurrencyCatalogRow
-  onToggle: (row: CurrencyCatalogRow) => void
-}) {
-  return (
-    <div
-      className={cn(
-        "grid items-center gap-3 border-b border-line2 px-[18px] py-[14px]",
-        CURRENCY_GRID
-      )}
-    >
-      {/* ── Currency: 34px symbol chip + code over name ─────────────────────── */}
-      <div className="flex items-center gap-[11px]">
-        <span
-          aria-hidden="true"
-          className="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-card2 text-sm font-extrabold text-ink"
-        >
-          {row.symbol}
-        </span>
-        <div>
-          <div className="flex items-center gap-[6px]">
-            <span className="text-[13px] font-bold text-ink">{row.code}</span>
-            {row.custom && (
-              <span className="rounded-full bg-card2 px-[6px] py-px text-[9px] font-bold tracking-[0.04em] text-ink3 uppercase">
-                Custom
-              </span>
-            )}
-          </div>
-          <div className="text-[11px] text-ink3">{row.name}</div>
-        </div>
-      </div>
-
-      {/* ── Symbol (mono) ────────────────────────────────────────────────────── */}
-      <div className="font-mono text-[13px] text-ink">{row.symbol}</div>
-
-      {/* ── Rounding (dp) — mono / tabular ───────────────────────────────────── */}
-      <div className="font-mono text-[12px] text-ink2 tabular-nums">
-        {row.rounding} dp
-      </div>
-
-      {/* ── Name-enquiry (color-coded, with a text label — colour is never the
-           sole signal, root §13.8). Not surfaced by the catalog read, so this
-           shows the design-faithful "Unavailable" for every row. ───────────── */}
-      <div>
-        <span
-          className={cn(
-            "text-[11px] font-bold",
-            row.nameEnquiry ? "text-tok" : "text-ink3"
-          )}
-        >
-          {row.nameEnquiry ? "Available" : "Unavailable"}
-        </span>
-      </div>
-
-      {/* ── Live — clickable status pill (design `onToggle`); toggling a currency
-           is a maker-checker config change → opens the MakerCheckerModal ─────── */}
-      <div>
-        <button
-          type="button"
-          onClick={() => onToggle(row)}
-          aria-label={`${row.live ? "Disable" : "Enable"} ${row.code}`}
-          className="cursor-pointer focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          <span
-            className={cn(
-              "rounded-full px-[10px] py-[3px] text-[10.5px] font-bold",
-              row.live ? "bg-sok text-tok" : "bg-card2 text-ink3"
-            )}
-          >
-            {row.live ? "Live" : "Off"}
-          </span>
-        </button>
-      </div>
-    </div>
-  )
-}
-
-/** Normalizes a mutation/step-up failure into a user-facing message. */
-function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) return error.message
-  if (error instanceof Error) return error.message
-  return "Something went wrong."
-}
+import { CurrencyTable } from "@/components/admin/currencies/currency-table"
+import { useCurrencyCatalog } from "@/lib/hooks/use-currency-catalog"
 
 export function CurrenciesPage() {
-  // Real fiat catalog (full — incl. disabled/off), fetched from
-  // GET /admin/config/catalog. Name-enquiry availability is not surfaced by the
-  // read, so it renders the design-faithful "Unavailable" for every row.
-  const { data, isLoading, isError, isSuccess, refetch } = useAdminCatalog()
-  const me = useAdminMe()
-  const setSetting = useSetSetting()
-  const addCurrency = useAddCurrency()
-  const updateCurrency = useUpdateCurrency()
-  const stepUp = useStepUpRetry()
-
-  // Whether the "Add currency" dialog is open.
-  const [addOpen, setAddOpen] = useState(false)
-
-  const rows = useMemo<CurrencyCatalogRow[]>(
-    () =>
-      (data?.fiats ?? []).map((f) => ({
-        id: f.code.toLowerCase(),
-        code: f.code,
-        symbol: f.symbol,
-        name: f.displayName,
-        rounding: f.decimals,
-        live: f.live,
-        nameEnquiry: false,
-        custom: f.custom,
-      })),
-    [data]
-  )
-
-  // Which currency's Live toggle is pending dual-control approval (drives the modal).
-  const [pending, setPending] = useState<CurrencyCatalogRow | null>(null)
-
-  const diff: MakerCheckerDiffRow[] = pending
-    ? [
-        {
-          field: `${pending.code} · live`,
-          from: pending.live ? "Live" : "Off",
-          to: pending.live ? "Off" : "Live",
-        },
-      ]
-    : []
-
-  // Dual-control approved. Persists the new live status via the real step-up-guarded
-  // PATCH /admin/settings/:key (`useSetSetting`) on `catalog.fiats.<code>.enabled` — the
-  // server re-validates the multi-currency invariant + hot-reloads + audits. A 403 opens
-  // the StepUpDialog and the PATCH replays after re-auth. Nothing moves money (§3.1).
-  const applyToggle = () => {
-    if (!pending) return
-    const fiat = pending
-    const enabling = !fiat.live
-    setPending(null)
-    void (async () => {
-      try {
-        // A CUSTOM fiat toggles via the currency endpoint (PATCH /admin/config/
-        // currencies/:code — enabling is fail-closed on pricing server-side); a
-        // BUILT-IN toggles the settings key. Both are step-up-gated + audited.
-        const ok = await stepUp.run(() =>
-          (fiat.custom
-            ? updateCurrency.mutateAsync({
-                code: fiat.code,
-                patch: { enabled: enabling },
-              })
-            : setSetting.mutateAsync({
-                key: `catalog.fiats.${fiat.code}.enabled`,
-                input: { value: enabling, scope: "global", scopeValue: null },
-              })
-          ).then(() => undefined)
-        )
-        if (ok) {
-          // useSetSetting invalidates the settings prefix, not the admin catalog this
-          // page reads from — refetch it so the Live/Off pill re-resolves.
-          void refetch()
-          pushToast(
-            `${fiat.code} ${enabling ? "enabled" : "disabled"}`,
-            enabling ? "ok" : "warn"
-          )
-        }
-      } catch (error) {
-        pushToast(errorMessage(error), "warn")
-      }
-    })()
-  }
-
-  // Every code already in the catalog (built-in + custom), for the dialog's fast
-  // local duplicate check ahead of the server's 409.
-  const existingCodes = useMemo(
-    () => (data?.fiats ?? []).map((f) => f.code),
-    [data]
-  )
-
-  // Add-currency submit. The new fiat is created DISABLED (the enabled-needs-pricing
-  // invariant is fail-closed server-side); the write is step-up-gated + audited. On a
-  // step-up challenge the add dialog resolves + closes and the StepUpDialog takes over
-  // (its onSuccess replays the add). A collision/validation error rejects so the dialog
-  // shows it inline. Nothing moves money (§3.1).
-  async function saveNewCurrency(input: AdminCustomFiatCreateRequest) {
-    const ok = await stepUp.run(() =>
-      addCurrency.mutateAsync(input).then(() => undefined)
-    )
-    if (ok) {
-      void refetch()
-      pushToast(`${input.code} added — enable it once pricing is set`, "ok")
-    }
-  }
+  const c = useCurrencyCatalog()
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
@@ -261,130 +33,53 @@ export function CurrenciesPage() {
           </div>
           <button
             type="button"
-            onClick={() => setAddOpen(true)}
+            onClick={() => c.setAddOpen(true)}
             className="shrink-0 rounded-[10px] bg-btn-dark px-3.5 py-2 text-[12.5px] font-extrabold text-white transition-colors hover:bg-btn-dark/90 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
           >
             New currency
           </button>
         </div>
 
-        {/* ── Table card ────────────────────────────────────────────────────── */}
-        <div className="overflow-hidden rounded-[16px] border border-line bg-card">
-          {/* Column header row (design grid) */}
-          <div
-            className={cn(
-              "grid gap-3 border-b border-line bg-card2 px-[18px] py-[11px] text-[11px] font-bold tracking-[0.04em] text-ink3 uppercase",
-              CURRENCY_GRID
-            )}
-          >
-            <div>Currency</div>
-            <div>Symbol</div>
-            <div>Rounding</div>
-            <div>Name-enquiry</div>
-            <div>Live</div>
-          </div>
-
-          {/* Loading */}
-          {isLoading &&
-            Array.from({ length: 3 }).map((_, i) => (
-              <div
-                key={i}
-                className={cn(
-                  "grid items-center gap-3 border-b border-line2 px-[18px] py-[14px]",
-                  CURRENCY_GRID
-                )}
-                aria-busy="true"
-              >
-                <div className="flex items-center gap-[11px]">
-                  <Skeleton className="size-[34px] flex-none rounded-[9px]" />
-                  <div className="flex flex-col gap-1.5">
-                    <Skeleton className="h-3 w-10" />
-                    <Skeleton className="h-2.5 w-24" />
-                  </div>
-                </div>
-                <Skeleton className="h-3 w-8" />
-                <Skeleton className="h-3 w-10" />
-                <Skeleton className="h-3 w-16" />
-                <Skeleton className="h-4 w-10 rounded-full" />
-              </div>
-            ))}
-
-          {/* Error */}
-          {isError && (
-            <div className="px-5 py-[52px] text-center">
-              <div className="text-[14px] font-bold text-tdn">
-                Couldn&apos;t load the currency catalog
-              </div>
-              <div className="mt-1 text-[12.5px] text-ink2">
-                The catalog failed to load. Check your connection and try again.
-              </div>
-              <button
-                type="button"
-                onClick={() => refetch()}
-                className="mt-3 inline-flex h-[34px] items-center rounded-[10px] border border-line bg-card px-[14px] text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-              >
-                Retry
-              </button>
-            </div>
-          )}
-
-          {/* Empty */}
-          {isSuccess && rows.length === 0 && (
-            <div className="px-5 py-[60px] text-center text-ink3">
-              <div className="text-[14px] font-bold text-ink2">
-                No currencies in the catalog
-              </div>
-              <div className="mt-1 text-[12.5px]">
-                Currencies are added through the layered config.
-              </div>
-            </div>
-          )}
-
-          {/* Rows */}
-          {isSuccess &&
-            rows.map((row) => (
-              <CurrencyRow key={row.id} row={row} onToggle={setPending} />
-            ))}
-        </div>
+        <CurrencyTable
+          isLoading={c.isLoading}
+          isError={c.isError}
+          isSuccess={c.isSuccess}
+          rows={c.rows}
+          onToggle={c.setPending}
+          onRetry={() => c.refetch()}
+        />
       </div>
 
       {/* ── Add-currency dialog (runtime custom fiat, created disabled) ─────── */}
       <AddCurrencyDialog
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        existingCodes={existingCodes}
-        onSave={saveNewCurrency}
+        open={c.addOpen}
+        onOpenChange={c.setAddOpen}
+        existingCodes={c.existingCodes}
+        onSave={c.saveNewCurrency}
       />
 
       {/* ── Maker-checker flow (design's Live-toggle destination) ───────────── */}
       <MakerCheckerModal
-        open={pending !== null}
+        open={c.pending !== null}
         onOpenChange={(open) => {
-          if (!open) setPending(null)
+          if (!open) c.setPending(null)
         }}
         title={
-          pending
-            ? `${pending.live ? "Disable" : "Enable"} ${pending.code}`
+          c.pending
+            ? `${c.pending.live ? "Disable" : "Enable"} ${c.pending.code}`
             : "Currency change"
         }
-        diff={diff}
-        onSubmit={applyToggle}
+        diff={c.diff}
+        onSubmit={c.applyToggle}
       />
 
       {/* Server-side step-up re-auth: a 403 on the enabled PATCH opens this; the
           PATCH replays after re-authentication (the catalog then invalidates). */}
       <StepUpDialog
-        open={stepUp.open}
-        mfaEnabled={me.data?.mfaEnabled ?? false}
-        onOpenChange={stepUp.setOpen}
-        onSuccess={() => {
-          void stepUp
-            .retry()
-            .then((done) => {
-              if (done) void refetch()
-            })
-            .catch((error) => pushToast(errorMessage(error), "warn"))
-        }}
+        open={c.stepUp.open}
+        mfaEnabled={c.me.data?.mfaEnabled ?? false}
+        onOpenChange={c.stepUp.setOpen}
+        onSuccess={c.onStepUpSuccess}
       />
     </div>
   )
