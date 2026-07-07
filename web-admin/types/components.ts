@@ -942,6 +942,28 @@ export interface TemplateEditorDialogProps {
   template: NotificationTemplate | null
 }
 
+/** The variables editor — name / type / description rows with add + remove. */
+export interface VariablesEditorProps {
+  variables: import("@handshake-agent/contracts").TemplateVariable[]
+  onChange: (
+    next: import("@handshake-agent/contracts").TemplateVariable[]
+  ) => void
+  disabled: boolean
+}
+
+/** The live-preview panel — sample-vars JSON input + Preview + rendered output. */
+export interface PreviewPanelProps {
+  contentText: string
+  subject: string
+  disabled: boolean
+}
+
+/** The template create/edit form body — mounted only while the dialog is open. */
+export interface TemplateFormProps {
+  template: NotificationTemplate | null
+  onClose: () => void
+}
+
 // ─── Agent page (Phase 4) ──────────────────────────────────────────────────────────
 
 export interface ConversationLogDetailProps {
