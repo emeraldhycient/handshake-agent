@@ -358,6 +358,25 @@ export interface RolePermissionMatrixProps {
 
 // ─── Roles page ──────────────────────────────────────────────────────────────────
 
+/** Access level a role holds over a permission category (full > read > none). */
+export type AccessLevel = "full" | "read" | "none"
+
+/** The 24px access glyph tile — full (check) / read (eye) / none (x). */
+export interface AccessTileProps {
+  level: AccessLevel
+}
+
+/** The roles table — one row per role (name · description · count · View/Edit). */
+export interface RolesTableProps {
+  roles: Role[]
+  onEdit: (role: Role) => void
+}
+
+/** The read-only role permission matrix — categories × role columns of access tiles. */
+export interface RoleAccessMatrixProps {
+  roles: Role[]
+}
+
 export interface RoleEditorDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
