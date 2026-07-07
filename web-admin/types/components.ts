@@ -1267,6 +1267,42 @@ export interface ReconBreakFlowsProps {
   ) => void
 }
 
+// ─── Reconciliation run-history panel (Go-readiness #3) ──────────────────────────────
+
+/** A durable-run break disposition — triage (acknowledge) or close (resolve). */
+export type ReconActionKind = "acknowledge" | "resolve"
+
+/** The break awaiting an audited reason before its step-up-gated disposition. */
+export interface ReconPendingAction {
+  breakId: string
+  kind: ReconActionKind
+}
+
+/** The detected breaks for one expanded run (lazily fetched on expand). */
+export interface RunBreaksProps {
+  runId: string
+  onAct: (breakId: string, kind: ReconActionKind) => void
+}
+
+/** One expandable run row — status/type/counts header + the lazily-loaded breaks. */
+export interface ReconRunRowProps {
+  run: import("@handshake-agent/contracts").ReconRun
+  expanded: boolean
+  onToggle: () => void
+  onAct: (breakId: string, kind: ReconActionKind) => void
+}
+
+/** The run-history list — the four async branches over the durable runs read. */
+export interface ReconRunListProps {
+  isPending: boolean
+  isError: boolean
+  isSuccess: boolean
+  runs: readonly import("@handshake-agent/contracts").ReconRun[]
+  expandedId: string | null
+  onToggle: (runId: string) => void
+  onAct: (breakId: string, kind: ReconActionKind) => void
+}
+
 // ─── Treasury page (design §6.13) ─────────────────────────────────────────────────
 // The 4-up balance-card row is a mix of a real aggregated-custodial hero (from
 // `useTreasuryBalances`) and design-faithful fiat-float / FX-position tiles (no
