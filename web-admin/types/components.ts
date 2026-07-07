@@ -247,6 +247,16 @@ export interface CommandPaletteProps {
   destinations: readonly NavDestination[]
 }
 
+/** One command-palette result option — label + group subtitle + the enter glyph. */
+export interface CommandResultProps {
+  dest: NavDestination
+  isActive: boolean
+  /** Highlight this option (on mouse move). */
+  onActivate: () => void
+  /** Navigate to this option (on click). */
+  onSelect: () => void
+}
+
 /** The four alert-pip badges the sidebar can show on a nav item. */
 export type NavBadgeKey = "kyc" | "stuck" | "recon" | "approvals"
 
