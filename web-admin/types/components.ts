@@ -496,6 +496,26 @@ export interface KycQueueRowProps {
   onOpen: (userId: string) => void
 }
 
+/** The four review-queue buckets (each maps onto a real KYC-status filter). */
+export type KycTabId = "pending" | "needs_info" | "approved" | "rejected"
+
+/** The status pill-tabs — active bucket + each bucket's live count badge. */
+export interface KycStatusTabsProps {
+  active: KycTabId
+  counts: Record<KycTabId, number | null>
+  onSelect: (id: KycTabId) => void
+}
+
+/** The queue table card — header grid + the four async branches. */
+export interface KycQueueTableProps {
+  isLoading: boolean
+  isError: boolean
+  isEmpty: boolean
+  pageRows: readonly KycQueueRow[]
+  onOpen: (userId: string) => void
+  onRetry: () => void
+}
+
 export interface KycSubmissionProps {
   /** The selected submission's userId, or null when the drawer is closed. */
   userId: string | null
