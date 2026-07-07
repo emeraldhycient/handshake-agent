@@ -39,6 +39,7 @@ vi.mock("@/lib/api/approvals", () => ({
 // `useAdminMe` only drives the StepUpDialog's mfa mode (no step-up in these tests).
 vi.mock("@/lib/api/admin", () => ({
   getMe: vi.fn(),
+  stepUp: vi.fn(),
 }))
 
 import {
@@ -48,7 +49,7 @@ import {
   rerunReconciliation,
 } from "@/lib/api/transactions"
 import { createChange } from "@/lib/api/approvals"
-import { getMe } from "@/lib/api/admin"
+import { getMe, stepUp } from "@/lib/api/admin"
 
 const mockGet = vi.mocked(getTransaction)
 const mockRetry = vi.mocked(retryTransaction)
@@ -56,6 +57,7 @@ const mockMarkFailed = vi.mocked(markTransactionFailed)
 const mockCreateChange = vi.mocked(createChange)
 const mockRerunRecon = vi.mocked(rerunReconciliation)
 const mockGetMe = vi.mocked(getMe)
+const mockStepUp = vi.mocked(stepUp)
 
 // ─── Fixture ────────────────────────────────────────────────────────────────────
 
@@ -463,6 +465,55 @@ describe("TransactionDetail (read-wired)", () => {
     // The re-auth dialog appears (TOTP mode, since mfaEnabled).
     expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
     expect(mockRerunRecon).toHaveBeenCalledTimes(1)
+  })
+
+  it("Retry → 403 opens step-up → REPLAYS the engine retry after re-auth (money path)", async () => {
+    const user = userEvent.setup()
+    mockGetMe.mockResolvedValue({
+      id: "00000000-0000-0000-0000-000000000001",
+      email: "ops@example.com",
+      role: { id: "00000000-0000-0000-0000-0000000000aa", name: "ops" },
+      status: "active",
+      displayName: "Test Admin",
+      mfaEnabled: true,
+      permissions: [],
+      menus: [],
+      pages: [],
+    })
+    mockStepUp.mockResolvedValue(undefined as never)
+    const { ApiError } = await import("@/lib/api/client")
+    // First execute 403s (step-up demanded); the replay after re-auth succeeds.
+    mockRetry
+      .mockRejectedValueOnce(
+        new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce(undefined as never)
+    renderDetail()
+    await screen.findByText(TXN_ID)
+
+    await user.click(screen.getByRole("button", { name: "Retry settlement" }))
+    await user.click(
+      screen.getByRole("button", { name: "Execute retry via engine" })
+    )
+
+    // The 403 opens re-auth and KEEPS the flow open (submitFlow completed===false).
+    expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
+    await waitFor(() => expect(mockRetry).toHaveBeenCalledTimes(1))
+
+    // Completing re-auth → onStepUpSuccess → stepUp.retry() replays the SAME
+    // engine-brokered retry, then closes the flow (§3.1: step-up-gated money action).
+    await user.type(screen.getByLabelText(/Authenticator code/), "123456")
+    await user.click(screen.getByRole("button", { name: "Confirm" }))
+
+    await waitFor(() => expect(mockStepUp).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockRetry).toHaveBeenCalledTimes(2))
+    expect(mockRetry).toHaveBeenLastCalledWith(TXN_ID)
+    await waitFor(() =>
+      expect(screen.queryByText("Confirm it's you")).not.toBeInTheDocument()
+    )
+    // A retry moves no money itself — the replay never triggers mark-failed/refund.
+    expect(mockMarkFailed).not.toHaveBeenCalled()
+    expect(mockCreateChange).not.toHaveBeenCalled()
   })
 
   it("Resend receipt is a local confirmation — it fires no mutation", async () => {
