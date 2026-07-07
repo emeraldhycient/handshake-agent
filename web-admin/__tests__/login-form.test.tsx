@@ -80,6 +80,43 @@ describe("LoginForm", () => {
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/"))
   })
 
+  it("includes the TOTP once the MFA fields are revealed", async () => {
+    mockLogin.mockResolvedValue({
+      accessToken: "tok",
+      expiresAt: new Date().toISOString(),
+      admin: {
+        id: "00000000-0000-0000-0000-000000000001",
+        email: "admin@example.com",
+        role: { id: "00000000-0000-0000-0000-0000000000aa", name: "ops" },
+        status: "active",
+        displayName: "Test Admin",
+        mfaEnabled: true,
+        permissions: [],
+        menus: [],
+        pages: [],
+      },
+    })
+
+    const user = userEvent.setup()
+    renderForm()
+
+    await user.type(screen.getByLabelText(/email address/i), "admin@example.com")
+    await user.type(screen.getByLabelText(/^password$/i), "supersecret")
+    await user.click(screen.getByRole("button", { name: /use a multi-factor code/i }))
+    await user.type(screen.getByLabelText(/authenticator code/i), "123456")
+    await user.click(screen.getByRole("button", { name: /sign in/i }))
+
+    await waitFor(() =>
+      expect(mockLogin).toHaveBeenCalledWith({
+        email: "admin@example.com",
+        password: "supersecret",
+        totp: "123456",
+      })
+    )
+    // The empty recovery code must be stripped, not sent as "".
+    expect(mockLogin.mock.calls[0][0]).not.toHaveProperty("recoveryCode")
+  })
+
   it("renders the error branch on a failed login", async () => {
     mockLogin.mockRejectedValue(
       new ApiError("Invalid credentials.", 401, "ADMIN_INVALID_CREDENTIALS")
