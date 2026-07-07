@@ -1,109 +1,30 @@
 "use client"
 
 /**
- * RolePermissionMatrix — the "Role permission matrix" card from the Operator
- * Console design (`docs/design-ref/screens/Admins.html`, spec §6.15). A
- * horizontally-scrollable grid: one row per permission category, one column per
- * role, each cell an access-level icon tile (full-access / read-only / no-access)
- * with a legend below.
- *
- * DATA is REAL and derived: the columns come from `useRoles()` (built-in +
- * custom) and each cell's level is computed from the role's granted
- * `permissionIds` against the `usePermissions()` catalog — a category is
- * "full" when the role holds any write/execute/delete action there, "read" when
- * it holds only reads, "none" otherwise. The access level (not colour alone) is
- * the signal: each level carries a distinct icon + hover title.
+ * RolePermissionMatrix — the "Role permission matrix" card (design §6.15). Composition
+ * only: the columns come from the roles + the per-cell access level is derived from each
+ * role's granted `permissionIds` against the permissions catalog (`buildMatrixRows` /
+ * `levelFor` in `lib/roles/permission-matrix`). A horizontally-scrollable grid: one row
+ * per permission category, one column per role, each cell an access-level icon tile
+ * (full / read / none) with a legend below — the level (not colour alone) is the signal.
  */
 import { useMemo } from "react"
-import {
-  ADMIN_PERMISSION_CATEGORIES,
-  permissionId,
-  type AdminPermissionRecord,
-  type Role,
-} from "@handshake-agent/contracts"
 
-import type {
-  PermissionMatrixLevel,
-  PermissionMatrixRow,
-  RolePermissionMatrixProps,
-} from "@/types/components"
-
-// The actions that count as "elevated" (beyond read) for the full/read split.
-const ELEVATED_ACTIONS: ReadonlySet<AdminPermissionRecord["action"]> = new Set([
-  "write",
-  "execute",
-  "delete",
-])
-
-// Access-level → the icon-tile presentation (design line 12 + legend line 14).
-// SVG path `d` per level; tokens map to the same s*/t* pairs as the pills.
-const LEVEL_META: Record<
-  PermissionMatrixLevel,
-  { title: string; tile: string; icon: string }
-> = {
-  full: {
-    title: "Full access",
-    tile: "bg-sok text-tok",
-    icon: "m5 12 5 5L20 7",
-  },
-  read: {
-    title: "Read-only",
-    tile: "bg-sif text-tif",
-    icon: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z",
-  },
-  none: {
-    title: "No access",
-    tile: "bg-card2 text-ink3",
-    icon: "M6 6l12 12M18 6L6 18",
-  },
-}
-
-/** The access level a role has for one permission category. */
-function levelFor(
-  role: Role,
-  category: string,
-  permissions: AdminPermissionRecord[]
-): PermissionMatrixLevel {
-  // role.permissionIds are CANONICAL ids (`${resourceType}:${resourceId}:${action}`),
-  // NOT the permission row's UUID — resolve the same canonical id per catalog entry.
-  const granted = new Set(role.permissionIds)
-  let hasRead = false
-  for (const perm of permissions) {
-    if (perm.category !== category) continue
-    if (!granted.has(permissionId(perm))) continue
-    if (ELEVATED_ACTIONS.has(perm.action)) return "full"
-    hasRead = true
-  }
-  return hasRead ? "read" : "none"
-}
-
-/** Format a role name for a column header (snake_case → Title Case). */
-function roleLabel(name: string): string {
-  return name
-    .split(/[\s_-]+/)
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ")
-}
+import { buildMatrixRows, roleLabel } from "@/lib/roles/permission-matrix"
+import { LEVEL_META } from "@/constants/role-matrix"
+import type { RolePermissionMatrixProps } from "@/types/components"
 
 export function RolePermissionMatrix({
   roles,
   permissions,
 }: RolePermissionMatrixProps) {
-  // Only categories that appear in the catalog get a row (keeps the matrix in
-  // step with whatever surfaces are registered this deploy).
-  const rows = useMemo<PermissionMatrixRow[]>(() => {
-    const present = new Set(permissions.map((p) => p.category))
-    return ADMIN_PERMISSION_CATEGORIES.filter((c) => present.has(c)).map(
-      (category) => ({
-        label: category,
-        cells: roles.map((role) => levelFor(role, category, permissions)),
-      })
-    )
-  }, [roles, permissions])
+  const rows = useMemo(
+    () => buildMatrixRows(roles, permissions),
+    [roles, permissions]
+  )
 
-  // The header + every row share this grid: a category label column + one 1fr
-  // column per role (design line 11: `1.4fr repeat(6,1fr)`, generalised to N).
+  // The header + every row share this grid: a category label column + one 1fr column per
+  // role (design line 11: `1.4fr repeat(6,1fr)`, generalised to N).
   const gridTemplate = {
     gridTemplateColumns: `1.4fr repeat(${roles.length}, minmax(0, 1fr))`,
   }
