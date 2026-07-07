@@ -308,6 +308,13 @@ export interface InviteAdminDialogProps {
   roles: Role[]
 }
 
+/** The post-invite success view: the one-time invitation token shown once. */
+export interface InviteSuccessProps {
+  email: string
+  token: string
+  onDone: () => void
+}
+
 export interface AdminRowActionsProps {
   admin: AdminUser
   roles: Role[]
