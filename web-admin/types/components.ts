@@ -1312,15 +1312,13 @@ export interface AssetLogoProps {
 // shape gap for a later backend-enrichment pass).
 
 // ─── Currency catalog page (design §6.24) ───────────────────────────────────────────
-// Design-reproduction: the table renders the design's OWN mock currency seed
-// (`docs/design-ref/logic.js` `currencies`, lines 126-130) so the screen looks
-// exactly like `docs/design-ref/screens/Currencies.html`. Real-data reintegration is
-// a separate later step. Each row's Live pill is a maker-checker toggle (enabling /
-// disabling a currency is a dual-control config change) — clicking it opens the
-// shared MakerCheckerModal, matching the design's `onToggle` destination. Nothing
-// here moves money (§3.1).
+// WIRED to the real admin fiat catalog (`GET /admin/config/catalog`, incl. disabled/off
+// entries). Each row's Live pill is a maker-checker toggle (enabling / disabling a
+// currency is a dual-control config change) — clicking it opens the shared
+// MakerCheckerModal, whose approval fires the step-up-guarded PATCH. Nothing here
+// moves money (§3.1).
 
-/** A currency-catalog row for the design §6.24 table (mirrors the design seed). */
+/** A currency-catalog row for the design §6.24 table (mirrors a catalog fiat). */
 export interface CurrencyCatalogRow {
   /** Stable row id (from the design seed, e.g. "ngn") — used as the React key. */
   id: string
@@ -1342,6 +1340,22 @@ export interface CurrencyCatalogRow {
    * the "custom" chip + which mutation the Live toggle calls.
    */
   custom: boolean
+}
+
+/** One catalog row — grid, symbol chip, mono columns, and the clickable Live pill. */
+export interface CurrencyRowProps {
+  row: CurrencyCatalogRow
+  onToggle: (row: CurrencyCatalogRow) => void
+}
+
+/** The catalog table card — header row + the four async branches. */
+export interface CurrencyTableProps {
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  rows: readonly CurrencyCatalogRow[]
+  onToggle: (row: CurrencyCatalogRow) => void
+  onRetry: () => void
 }
 
 // ─── Ticketing page (design §6.21) ──────────────────────────────────────────────────
