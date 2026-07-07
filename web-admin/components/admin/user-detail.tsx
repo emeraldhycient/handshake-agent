@@ -65,8 +65,6 @@ import {
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { SupportedAssetSchema } from "@handshake-agent/contracts"
 import type {
-  AdminEndUserDetail,
-  AdminEndUserTierRequest,
   AdminEndUserLimitsResponse,
   SupportedAsset,
 } from "@handshake-agent/contracts"
@@ -74,140 +72,28 @@ import type {
   EngineEffectRow,
   EngineLedgerRow,
   MakerCheckerDiffRow,
+  UdTab,
   UserDetailProps,
 } from "@/types/components"
 import {
+  actionDot,
+  actionLabel,
   approveTargetTier,
   beneVerificationMeta,
   displayName,
   initialsOf,
+  statusMeta,
 } from "@/lib/users/user-detail"
-import { BANK_ICON, CRYPTO_ICON, NOT_PROVIDED } from "@/constants/user-detail"
-
-// ─── Real-data field mapping helpers ────────────────────────────────────────────────
-
-/** KYC status → design pill { label, bg-token, fg-token } (vUserDetail kycMeta). */
-const KYC_STATUS_META: Record<
-  AdminEndUserDetail["kycStatus"],
-  { label: string; bg: string; fg: string }
-> = {
-  not_started: { label: "Not started", bg: "var(--card2)", fg: "var(--ink2)" },
-  pending: { label: "Pending", bg: "var(--swn)", fg: "var(--twn)" },
-  pending_review: { label: "In review", bg: "var(--swn)", fg: "var(--twn)" },
-  verified: { label: "Verified", bg: "var(--sok)", fg: "var(--tok)" },
-  rejected: { label: "Rejected", bg: "var(--sdn)", fg: "var(--tdn)" },
-  expired: { label: "Expired", bg: "var(--sdn)", fg: "var(--tdn)" },
-}
-
-/**
- * The target tier a manual override moves to. The design has no tier-picker, so an
- * override is a one-step de-escalation (the risk-mitigation action): tier_3→tier_2,
- * tier_2→tier_1, and tier_1/unverified wrap up to tier_3 so the override always
- * produces a real from→to change for the maker-checker diff. The chosen tier is sent
- * as-is to the engine, which re-validates limits/velocity server-side (§3.3).
- */
-const TIER_OVERRIDE_TARGET: Record<
-  AdminEndUserDetail["kycTier"],
-  AdminEndUserTierRequest["tier"]
-> = {
-  tier_3: "tier_2",
-  tier_2: "tier_1",
-  tier_1: "tier_3",
-  unverified: "tier_3",
-}
-
-type Tab =
-  | "profile"
-  | "kyc"
-  | "devices"
-  | "security"
-  | "wallets"
-  | "bene"
-  | "tx"
-  | "chat"
-  | "limits"
-
-const TABS: readonly { id: Tab; label: string }[] = [
-  { id: "profile", label: "Profile" },
-  { id: "kyc", label: "KYC" },
-  { id: "devices", label: "Devices" },
-  { id: "security", label: "Security" },
-  { id: "wallets", label: "Wallets & balances" },
-  { id: "bene", label: "Beneficiaries" },
-  { id: "tx", label: "Transactions" },
-  { id: "chat", label: "Chat history" },
-  { id: "limits", label: "Limits" },
-]
-
-/** Header-action keys — the render dispatches on the key so the freeze label can
- * toggle (Freeze ↔ Unfreeze) without changing the dispatch target. */
-type UActionKey = "freeze" | "note" | "resend"
-
-/** Header action buttons (vUserDetail uActions, line 584). The freeze label is set
- * at render time from the user's status; the rest are static. (There is no
- * "View as" impersonation action — the console never re-scopes to a user, §3.4.) */
-const U_ACTIONS: readonly {
-  key: UActionKey
-  label: string
-  icon: string
-  danger?: boolean
-}[] = [
-  {
-    key: "freeze",
-    label: "Freeze",
-    icon: "M6 10V8a6 6 0 0 1 12 0v2M5 10h14v10H5z",
-    danger: true,
-  },
-  { key: "note", label: "Add note", icon: "M12 5v14M5 12h14" },
-  { key: "resend", label: "Resend", icon: "M4 4h16v12H8l-4 4z" },
-]
-
-// The Profile admin-action timeline, Security auth-sessions, and Limits/velocity
-// are now backed by real read endpoints (useEndUserTimeline / useEndUserSessions /
-// useEndUserLimits) — the former design-mock consts were removed.
-
-// A human action label from the audit-log action key (e.g. "kyc_state_change").
-function actionLabel(action: string): string {
-  return action.replace(/_/g, " ")
-}
-
-// Timeline dot tint by action family — deterministic, no color-only signalling.
-function actionDot(action: string): string {
-  if (action.includes("reject") || action.includes("block")) return "#c0563f"
-  if (action.includes("override") || action.includes("reset")) return "#f5a623"
-  return "#8b948a"
-}
-
-// ── Transactions — icon + status pill maps (rows come from the real aggregate) ────────
-
-const TYPE_ICON: Record<string, string> = {
-  buy: "M4 8h13l-3-3",
-  sell: "M20 16H7l3 3",
-  send: "M4 12h13l-4-4M4 12l9 5",
-  swap: "M4 8h13l-3-3M20 16H7l3 3",
-  receive: "M12 4v13l-4-4M12 17l4-4",
-  ticket: "M4 9h16v6H4z",
-}
-
-const ST_META: Record<string, { l: string; bg: string; fg: string }> = {
-  settled: { l: "Settled", bg: "var(--sok)", fg: "var(--tok)" },
-  completed: { l: "Settled", bg: "var(--sok)", fg: "var(--tok)" },
-  pending_settlement: { l: "Pending", bg: "var(--swn)", fg: "var(--twn)" },
-  pending: { l: "Pending", bg: "var(--swn)", fg: "var(--twn)" },
-  failed: { l: "Failed", bg: "var(--sdn)", fg: "var(--tdn)" },
-  refunded: { l: "Refunded", bg: "var(--sif)", fg: "var(--tif)" },
-}
-
-/** Status → pill meta, tolerant of unknown engine statuses (design has no fallback). */
-function statusMeta(status: string): { l: string; bg: string; fg: string } {
-  return (
-    ST_META[status] ?? {
-      l: status.replace(/_/g, " "),
-      bg: "var(--card2)",
-      fg: "var(--ink2)",
-    }
-  )
-}
+import {
+  BANK_ICON,
+  CRYPTO_ICON,
+  KYC_STATUS_META,
+  NOT_PROVIDED,
+  TABS,
+  TIER_OVERRIDE_TARGET,
+  TYPE_ICON,
+  U_ACTIONS,
+} from "@/constants/user-detail"
 
 // ── Chat (lines 618-623) ──────────────────────────────────────────────────────────────
 
@@ -566,9 +452,9 @@ export function UserDetail({ userId }: UserDetailProps) {
   const stepUp = useStepUpRetry()
 
   // Deep-link tab: seed from ?tab= when it names a valid tab (KYC-queue links land on KYC).
-  const [tab, setTab] = useState<Tab>(() => {
+  const [tab, setTab] = useState<UdTab>(() => {
     const q = searchParams.get("tab")
-    return TABS.some((t) => t.id === q) ? (q as Tab) : "profile"
+    return TABS.some((t) => t.id === q) ? (q as UdTab) : "profile"
   })
 
   // Sequential flow-modal machine: the active step index walks the config's steps.
