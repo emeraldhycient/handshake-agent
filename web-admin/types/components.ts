@@ -536,6 +536,55 @@ export interface ReportsCardProps {
   onSubmit: (report: ComplianceReport) => void
 }
 
+// ─── Compliance console (Phase 3) ────────────────────────────────────────────────
+
+/**
+ * The `Badge` component's `variant` union, mirrored here so `constants/` + tab
+ * components can type their variant maps without importing the component (layering-safe).
+ */
+export type BadgeVariant =
+  | "default"
+  | "secondary"
+  | "destructive"
+  | "success"
+  | "warn"
+  | "danger"
+  | "info"
+  | "neutral"
+
+/** The five compliance-console tabs. */
+export type ComplianceTab =
+  | "Events"
+  | "AML Rules"
+  | "Travel Rule"
+  | "Reports"
+  | "Sanctions"
+
+/** Inline tokened error panel (a data-tab's error branch). */
+export interface ErrorPanelProps {
+  what: string
+}
+
+/** Events tab — the flagged-event queue; a row opens the disposition drawer. */
+export interface EventsTabProps {
+  onOpen: (id: string) => void
+}
+
+/** AML Rules tab — the engine rules list; the pencil opens the edit dialog. */
+export interface AmlRulesTabProps {
+  onEdit: (rule: AmlRule) => void
+}
+
+/** Reports tab — SAR/STR filings; a draft row exposes a Submit. */
+export interface ReportsTabProps {
+  onSubmit: (report: ComplianceReport) => void
+}
+
+/** One screening-run match card (red danger mark on a hit). */
+export interface SanctionsCardProps {
+  record: import("@handshake-agent/contracts").SanctionsRecordItem
+}
+
 // ─── Webhooks console (Track A) ───────────────────────────────────────────────────
 
 /** The webhook-queue filter held in local state; empty strings mean "no filter" (All). */
