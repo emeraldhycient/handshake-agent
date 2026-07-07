@@ -849,6 +849,34 @@ export interface MetricsDashboardProps {
   gracefulOnForbidden?: boolean
 }
 
+/**
+ * One KPI stat tile. Tile 0 is the dark-green `hero` (gradient + white ink + amber
+ * delta chip); others use the card surface with a success/`warn` muted delta chip.
+ */
+export interface KpiTileProps {
+  label: string
+  value: string
+  delta?: string
+  deltaNote?: string
+  footnote?: string
+  hero?: boolean
+  warn?: boolean
+}
+
+/** A metrics section card driven by the composite dashboard summary (read-only). */
+export interface MetricsCardProps {
+  data: import("@handshake-agent/contracts").DashboardSummary
+}
+
+/**
+ * The metrics error branch: a real failure, or — when `gracefulOnForbidden` and the
+ * failure is a 403 (`isForbidden`) — a friendly "no metrics access" note (§3.3 UX).
+ */
+export interface MetricsErrorProps {
+  gracefulOnForbidden: boolean
+  isForbidden: boolean
+}
+
 // ─── Operator dashboard (design revamp — Dash screen) ─────────────────────────────────
 
 export interface OperatorDashboardProps {
