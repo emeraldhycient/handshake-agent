@@ -733,6 +733,44 @@ export interface TransactionDetailProps {
   transactionId: string
 }
 
+/** The engine-state stepper tone for one timeline node. */
+export type TxTimelineTone = "done" | "pending" | "fail"
+
+/** A triage action the operator can open on a transaction. `receipt` is a toast no-op. */
+export type TxFlowKind = "retry" | "refund" | "markFailed" | "recon" | "receipt"
+
+/** One header triage-action button (label + the flow it opens + icon + danger tint). */
+export interface TxActionButton {
+  label: string
+  kind: TxFlowKind
+  icon: string
+  danger?: boolean
+}
+
+/** The steps a triage flow moves through before its terminal (engine/maker) write. */
+export type TxFlowStep = "reason" | "engine" | "maker"
+
+/** The active flow phase, or null when no triage flow is open. */
+export type TxActivePhase = TxFlowStep | null
+
+/** The resolved spec for a triage action — its steps, copy, itemized effect + ledger. */
+export interface TxFlowSpec {
+  steps: TxFlowStep[]
+  title: string
+  cta: string
+  effect: { k: string; v: string }[]
+  ledger: EngineLedgerRow[]
+  diff?: MakerCheckerDiffRow[]
+}
+
+/** One provider-reference row (label + value + optional external explorer link). */
+export interface TxRefRow {
+  label: string
+  value: string
+  link?: string
+  href?: string
+}
+
 // ─── Compliance page ─────────────────────────────────────────────────────────────
 
 export interface ComplianceEventDetailProps {

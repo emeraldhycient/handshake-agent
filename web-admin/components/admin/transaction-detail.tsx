@@ -57,26 +57,22 @@ import {
   useTransactionDetail,
 } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
-import { ApiError } from "@/lib/api/client"
 import {
   EngineActionModal,
   MakerCheckerModal,
   ReasonModal,
 } from "@/components/admin/flows"
 import type {
-  AdminTxnDetail,
   AdminTxnEconomics,
   AdminTxnLedgerLeg,
-  AdminTxnStatus,
   AdminTxnTimelineEntry,
   CreateChangeRequest,
   ReconBreak,
 } from "@handshake-agent/contracts"
 import type {
-  EngineLedgerRow,
-  MakerCheckerDiffRow,
-  StatusPillStatus,
   TransactionDetailProps,
+  TxActivePhase,
+  TxFlowKind,
 } from "@/types/components"
 import {
   formatAmount,
@@ -84,222 +80,23 @@ import {
   formatDelta,
   formatFiat,
 } from "@/lib/format"
-
-// ─── Presentation helpers ─────────────────────────────────────────────────────────
-
-/** Subtle placeholder for a design field the contract does not yet provide. */
-const DASH = "—"
-
-/** Format an ISO timestamp for the timeline / created displays. */
-function formatWhen(iso: string): string {
-  return new Date(iso).toLocaleString()
-}
-
-/**
- * The header title: "{type} · {amount} {asset}" when the economics carry an
- * amount (design's `{type} · {amount} USDT`), else just the capitalized type.
- */
-function headerTitle(tx: AdminTxnDetail): string {
-  const { amount, asset } = tx.economics
-  if (amount && asset) return `${tx.type} · ${formatCrypto(amount, asset)}`
-  if (amount) return `${tx.type} · ${amount}`
-  return tx.type
-}
-
-/**
- * Fold the engine's `TransactionStatus` onto the canonical StatusPill status.
- * The pill map has no `settling`/`confirmed`/etc. keys, so terminal-good folds to
- * `settled`, in-flight to `pending_settlement`, failures to `failed`, reversals
- * to `refunded`, and the early lifecycle to `initiated`.
- */
-const STATUS_TO_PILL: Record<AdminTxnStatus, StatusPillStatus> = {
-  pending: "initiated",
-  validating: "quoted",
-  confirmed: "quoted",
-  settling: "pending_settlement",
-  completed: "settled",
-  failed: "failed",
-  rolled_back: "refunded",
-  cancelled: "failed",
-}
-
-/** A concise human label per engine status for the pill (design-consistent). */
-const STATUS_LABEL: Record<AdminTxnStatus, string> = {
-  pending: "Pending",
-  validating: "Validating",
-  confirmed: "Confirmed",
-  settling: "Pending settlement",
-  completed: "Settled",
-  failed: "Failed",
-  rolled_back: "Rolled back",
-  cancelled: "Cancelled",
-}
-
-// Human labels for the re-run-recon break kinds (mirrors the recon page's KIND_META,
-// label-only — this surface renders a compact result row, not the full break card).
-const RECON_KIND_LABEL: Record<ReconBreak["kind"], string> = {
-  over_credit: "Over-credit",
-  missing_settlement: "Missing settlement",
-  amount_mismatch: "Amount mismatch",
-  duplicate_credit: "Duplicate credit",
-}
-
-// ── Engine state timeline ────────────────────────────────────────────────────────
-type TimelineTone = "done" | "pending" | "fail"
-
-// tone → { dot bg/fg, label fg, icon path } (logic.js done/pend/fail, lines 710-712).
-const TIMELINE_TONE: Record<
-  TimelineTone,
-  { dotBg: string; dotFg: string; fg: string; icon: string }
-> = {
-  done: {
-    dotBg: "bg-[#1f8a5b]",
-    dotFg: "text-white",
-    fg: "text-ink",
-    icon: "m5 12 5 5L20 7",
-  },
-  pending: {
-    dotBg: "bg-swn",
-    dotFg: "text-twn",
-    fg: "text-twn",
-    icon: "M12 7v5l3 2",
-  },
-  fail: {
-    dotBg: "bg-sdn",
-    dotFg: "text-tdn",
-    fg: "text-tdn",
-    icon: "M6 6l12 12M18 6L6 18",
-  },
-}
-
-/** Map an engine timeline entry's status onto a stepper tone. */
-function timelineTone(status: string): TimelineTone {
-  if (status === "failed" || status === "cancelled" || status === "rolled_back")
-    return "fail"
-  if (status === "completed" || status === "confirmed") return "done"
-  return "pending"
-}
-
-// ── Header action buttons (txActions, logic.js lines 736-741) ────────────────────
-type FlowKind = "retry" | "refund" | "markFailed" | "recon" | "receipt"
-interface ActionButton {
-  label: string
-  /** the flow this action opens; `receipt` is a no-op toast in the design. */
-  kind: FlowKind
-  icon: string
-  danger?: boolean
-}
-// The engine-brokered triage actions (Phase 7 owns their writes — propose-only here).
-const TX_ACTIONS: ActionButton[] = [
-  {
-    label: "Retry settlement",
-    kind: "retry",
-    icon: "M4 12a8 8 0 1 1 2.3 5.6M4 20v-4h4",
-  },
-  {
-    label: "Refund",
-    kind: "refund",
-    icon: "M4 12a8 8 0 1 1 2.3 5.6M4 20v-4h4",
-  },
-  {
-    label: "Mark failed",
-    kind: "markFailed",
-    icon: "M6 6l12 12M18 6L6 18",
-    danger: true,
-  },
-  { label: "Re-run recon", kind: "recon", icon: "M12 4v16M4 20h16" },
-  { label: "Resend receipt", kind: "receipt", icon: "M4 4h16v12H8l-4 4z" },
-]
-
-// ── Flow-step context per action (mirrors runFlow ctx, logic.js 668-681) ─────────
-// The presentation-only step-up box is dropped in favour of the REAL StepUpDialog
-// (which verifies the code server-side and replays the mutation on 403). So the
-// chains are: retry → engine; mark-failed → reason → engine; refund → reason →
-// maker (the four-eyes change-request). The engine/maker submit fires the write.
-type FlowStep = "reason" | "engine" | "maker"
-interface FlowSpec {
-  steps: FlowStep[]
-  title: string
-  cta: string
-  effect: { k: string; v: string }[]
-  ledger: EngineLedgerRow[]
-  diff?: MakerCheckerDiffRow[]
-}
-
-/**
- * Build the flow spec for a triage action from the REAL transaction detail. Each
- * chain's terminal step is the one wired to the mutation: `engine` for the
- * engine-brokered retry/mark-failed, `maker` for the four-eyes refund request.
- */
-function flowSpecFor(kind: FlowKind, tx: AdminTxnDetail): FlowSpec | null {
-  const engineLedger: EngineLedgerRow[] = tx.ledgerLegs.map((l) => ({
-    acct: `${l.accountType}:${l.accountId}:${l.currency}`,
-    dir: l.direction === "debit" ? "DR" : "CR",
-    amt: formatAmount(l.amount, l.currency),
-  }))
-
-  switch (kind) {
-    case "retry":
-      return {
-        steps: ["engine"],
-        title: "Retry settlement",
-        cta: "Execute retry via engine",
-        effect: [
-          { k: "Transaction", v: tx.id },
-          { k: "Directive", v: "settlement.retry" },
-          { k: "Type", v: tx.type },
-        ],
-        // Retry re-enqueues settlement — it writes no ledger legs itself (§3.1).
-        ledger: [],
-      }
-    case "refund":
-      return {
-        steps: ["reason", "maker"],
-        title: "Refund",
-        cta: "Submit for approval",
-        diff: [
-          {
-            field: `Refund · ${tx.id}`,
-            from: "Settling",
-            to: "Failed + refunded",
-          },
-        ],
-        effect: [
-          { k: "Original tx", v: tx.id },
-          { k: "User", v: tx.userId },
-        ],
-        ledger: engineLedger,
-      }
-    case "markFailed":
-      return {
-        steps: ["reason", "engine"],
-        title: "Mark failed",
-        cta: "Mark failed via engine",
-        effect: [
-          { k: "Transaction", v: tx.id },
-          { k: "Directive", v: "mark_failed" },
-        ],
-        ledger: engineLedger,
-      }
-    case "recon":
-      // Read-only provider-vs-ledger detection (not a settlement re-drive). No reason
-      // step: it moves no money, so it goes straight to a confirm → step-up → run.
-      return {
-        steps: ["engine"],
-        title: "Re-run reconciliation",
-        cta: "Run reconciliation",
-        effect: [
-          { k: "Transaction", v: tx.id },
-          { k: "Check", v: "Provider-vs-ledger reconciliation" },
-          { k: "Effect", v: "Read-only — detects breaks, moves no money" },
-        ],
-        // A detection pass posts no ledger legs (§3.1).
-        ledger: [],
-      }
-    case "receipt":
-      return null // design: no flow — just a toast
-  }
-}
+import {
+  DASH,
+  LEDGER_GRID,
+  RECON_KIND_LABEL,
+  STATUS_LABEL,
+  STATUS_TO_PILL,
+  TIMELINE_TONE,
+  TX_ACTIONS,
+} from "@/constants/transaction-detail"
+import {
+  flowSpecFor,
+  formatWhen,
+  headerTitle,
+  providerRefs,
+  timelineTone,
+  txActionError,
+} from "@/lib/transactions/tx-detail"
 
 // ─── Card primitives (design §5: white/--card, 1px --line, radius 16, pad 18/20) ──
 
@@ -328,19 +125,6 @@ function PanelTitle({
 
 // ─── Screen ─────────────────────────────────────────────────────────────────────
 
-const LEDGER_GRID = "grid grid-cols-[1.6fr_0.7fr_1fr_0.7fr] gap-2"
-
-// The flow phases a triage action can move through (design runFlow, minus the
-// presentation-only step-up — the real StepUpDialog handles re-auth).
-type ActivePhase = FlowStep | null
-
-/** Narrow an unknown error to its operator-facing message. */
-function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) return error.message
-  if (error instanceof Error) return error.message
-  return "The action could not be completed."
-}
-
 export function TransactionDetail({ transactionId }: TransactionDetailProps) {
   const query = useTransactionDetail(transactionId)
   const tx = query.data
@@ -354,8 +138,8 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
 
   const [copied, setCopied] = useState<string | null>(null)
   // The in-flight action + how far through its step list we are.
-  const [activeKind, setActiveKind] = useState<FlowKind | null>(null)
-  const [phase, setPhase] = useState<ActivePhase>(null)
+  const [activeKind, setActiveKind] = useState<TxFlowKind | null>(null)
+  const [phase, setPhase] = useState<TxActivePhase>(null)
   // The reason captured in the ReasonModal — threaded into the audited mutation.
   const [reason, setReason] = useState("")
   // The last re-run-reconciliation outcome (breaks it detected) — shown inline once a
@@ -379,7 +163,7 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
   const reconLoading = rerunRecon.isPending
   const reconError =
     rerunRecon.isError && activeKind === "recon" && !stepUp.open
-      ? errorMessage(rerunRecon.error)
+      ? txActionError(rerunRecon.error)
       : null
 
   function copy(value: string) {
@@ -388,7 +172,7 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
     setTimeout(() => setCopied((c) => (c === value ? null : c)), 1600)
   }
 
-  function startAction(kind: FlowKind) {
+  function startAction(kind: TxFlowKind) {
     if (kind === "receipt") {
       // Design: no engine flow — just re-send the receipt and confirm via toast.
       pushToast("Receipt re-sent to the customer", "info")
@@ -458,7 +242,7 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
       const completed = await stepUp
         .run(runMutation)
         .catch((error) => {
-          pushToast(errorMessage(error), "warn")
+          pushToast(txActionError(error), "warn")
           return false
         })
       // `completed` is false when a step-up challenge opened (retry pending) — keep
@@ -841,7 +625,7 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
                   }
                   closeFlow()
                 })
-                .catch((error) => pushToast(errorMessage(error), "warn"))
+                .catch((error) => pushToast(txActionError(error), "warn"))
             }}
           />
         </>
@@ -980,51 +764,6 @@ function TimelineStepView({
       </div>
     </div>
   )
-}
-
-interface RefRow {
-  label: string
-  value: string
-  link?: string
-  href?: string
-}
-
-/** Per-provider display label + (for TRON) an external explorer link builder. */
-const PROVIDER_META: Record<
-  string,
-  { label: string; explorer?: (ref: string) => { link: string; href: string } }
-> = {
-  tron: {
-    label: "TRON",
-    explorer: (ref) => ({
-      link: "Tronscan",
-      href: `https://tronscan.org/#/transaction/${ref}`,
-    }),
-  },
-  flutterwave: { label: "Flutterwave" },
-  blockradar: { label: "Blockradar" },
-  swap: { label: "Swap" },
-}
-
-/**
- * Provider references from the backend projection (TRON hash + Tronscan link,
- * Flutterwave payout ref, Blockradar withdrawal id, swap id) plus the always-
- * present idempotency key. Unknown providers fall back to a title-cased label.
- */
-function providerRefs(tx: AdminTxnDetail): RefRow[] {
-  const refs: RefRow[] = tx.providerReferences.map((r) => {
-    const meta = PROVIDER_META[r.provider]
-    const label =
-      meta?.label ?? r.provider[0].toUpperCase() + r.provider.slice(1)
-    const explorer = meta?.explorer?.(r.reference)
-    return {
-      label,
-      value: r.reference,
-      ...(explorer ? { link: explorer.link, href: explorer.href } : {}),
-    }
-  })
-  refs.push({ label: "Idempotency", value: tx.idempotencyKey })
-  return refs
 }
 
 /**
