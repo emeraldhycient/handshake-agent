@@ -384,6 +384,15 @@ export interface RoleEditorDialogProps {
   role: Role | null
 }
 
+/** The editable permission matrix — category fieldsets of permission checkboxes. */
+export interface PermissionMatrixEditorProps {
+  /** The set of granted permission ids (canonical `permissionId(entry)`). */
+  selected: Set<string>
+  onToggle: (id: string) => void
+  /** Built-in / in-flight → every checkbox is disabled. */
+  disabled: boolean
+}
+
 // ─── Users page ──────────────────────────────────────────────────────────────────
 
 /** A resolved KYC-status → design token-pair descriptor for the users table. */
