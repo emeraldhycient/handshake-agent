@@ -944,17 +944,9 @@ export type DeliveryStatus =
   | "Bounced"
   | "Failed"
 
-/** One row in the read-only delivery log (channel chip + name + meta + status pill). */
-export interface DeliveryLogRow {
-  id: string
-  channel: DeliveryChannel
-  /** The broadcast / template name (bold ink). */
-  name: string
-  /** The targeted cohort label (e.g. "tier_1 users"). */
-  audience: string
-  /** Relative or absolute send time. */
-  time: string
-  status: DeliveryStatus
+/** One row in the read-only delivery log (channel chip + name + event·time + status pill). */
+export interface DeliveryRowProps {
+  entry: import("@handshake-agent/contracts").DeliveryLogEntry
 }
 
 // ─── Asset catalog page (design §6.23) ──────────────────────────────────────────────
