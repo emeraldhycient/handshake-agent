@@ -1805,14 +1805,13 @@ export interface SettingValueFormProps {
 }
 
 // ─── WhatsApp page (design §6.20) ────────────────────────────────────────────────────
-// PIXEL reproduction of `docs/design-ref/screens/Whatsapp.html`: this screen is a
-// pure design reproduction (no `useWhatsAppConfig` / TanStack Query). Its content is
-// the design's own representative sample data — `waHealth` (key/val + per-row colour),
-// `waFlows` (lock rows + Live pills) and `waConvo` (redacted chat bubbles) — embedded
-// as module-level constants. The secret VALUES never cross the boundary (root
-// CLAUDE.md §3.5): the health rows carry presence/status, never a plaintext secret.
+// The "Number & webhook health" card is WIRED to `useWhatsAppConfig` (GET
+// /admin/whatsapp/config): the non-secret Cloud-API / Flows wiring + boolean
+// secret-PRESENCE flags. Secret VALUES never cross the boundary (root CLAUDE.md §3.5):
+// the presence rows render "Set" / "Not set", never a plaintext secret. The Flows
+// registry + conversation monitor have no read endpoint yet (honest shape-gap notes).
 
-/** One "Number & webhook health" key/value row (design `waHealth` `{k, v, fg}`). */
+/** One "Number & webhook health" key/value row (label + tinted mono value). */
 export interface WhatsAppHealthRow {
   /** The row label (e.g. "Graph version", "App secret"). */
   label: string
@@ -1824,6 +1823,17 @@ export interface WhatsAppHealthRow {
    * (`text-twn`), `neutral` = a plain wiring value (`text-ink`).
    */
   tone: "ok" | "warn" | "neutral"
+}
+
+/** One key/value health row — label + tinted mono value. */
+export interface WhatsAppHealthRowProps {
+  row: WhatsAppHealthRow
+}
+
+/** An honest shape-gap note for a panel whose backing read endpoint does not exist yet. */
+export interface ShapeGapNoteProps {
+  title: string
+  children: string
 }
 
 // ─── Limits & velocity page (design §6.26) ─────────────────────────────────────────
