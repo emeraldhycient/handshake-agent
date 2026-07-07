@@ -15,29 +15,35 @@ export function CursorPaginator({
   canNext,
   onPrev,
   onNext,
+  leftLabel,
+  busy = false,
 }: CursorPaginatorProps) {
+  const prevDisabled = !canPrev || busy
+  const nextDisabled = !canNext || busy
   return (
     <nav
       aria-label="Pagination"
       className="mx-auto mt-2 flex items-center justify-between gap-3 border-t border-line2 px-1 pt-3"
     >
-      <span className="text-xs text-ink3 tabular-nums">Page {pageIndex}</span>
+      <span className="text-xs text-ink3 tabular-nums">
+        {leftLabel ?? `Page ${pageIndex}`}
+      </span>
       <div className="flex items-center gap-1.5">
         <button
           type="button"
           onClick={onPrev}
-          disabled={!canPrev}
+          disabled={prevDisabled}
           aria-label="Previous page"
-          className={cn(BTN, !canPrev && "pointer-events-none opacity-45")}
+          className={cn(BTN, prevDisabled && "pointer-events-none opacity-45")}
         >
           Prev
         </button>
         <button
           type="button"
           onClick={onNext}
-          disabled={!canNext}
+          disabled={nextDisabled}
           aria-label="Next page"
-          className={cn(BTN, !canNext && "pointer-events-none opacity-45")}
+          className={cn(BTN, nextDisabled && "pointer-events-none opacity-45")}
         >
           Next
         </button>
