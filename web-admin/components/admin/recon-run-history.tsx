@@ -27,7 +27,7 @@ import {
   useResolveReconRunBreak,
 } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
-import { ApiError } from "@/lib/api/client"
+import { toErrorMessage } from "@/lib/error-message"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -76,12 +76,6 @@ function isActionable(status: PersistedReconBreak["status"]): boolean {
   return status === "detected" || status === "acknowledged"
 }
 
-function errorMessage(error: unknown): string | null {
-  if (error instanceof ApiError) return error.message
-  if (error instanceof Error) return error.message
-  return error ? String(error) : null
-}
-
 function formatDate(iso: string): string {
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
@@ -118,7 +112,7 @@ export function ReconRunHistoryPanel() {
             .then(() => undefined)
         )
       } catch (error) {
-        setLocalError(errorMessage(error))
+        setLocalError(toErrorMessage(error))
       }
     })()
   }
@@ -216,7 +210,7 @@ export function ReconRunHistoryPanel() {
         onSuccess={() => {
           void stepUp
             .retry()
-            .catch((error) => setLocalError(errorMessage(error)))
+            .catch((error) => setLocalError(toErrorMessage(error)))
         }}
       />
 

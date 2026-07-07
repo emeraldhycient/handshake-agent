@@ -40,6 +40,7 @@ import { AdminRowActions } from "@/components/admin/admin-row-actions"
 import { RoleEditorDialog } from "@/components/admin/role-editor-dialog"
 import { RolePermissionMatrix } from "@/components/admin/role-permission-matrix"
 import { useAdmins, usePermissions, useRoles } from "@/lib/query/hooks"
+import { initialsOf } from "@/lib/avatar"
 
 // ─── Brand + status constants (mapped to design tokens; §1.3 / stMeta) ─────────
 
@@ -69,15 +70,6 @@ function roleDot(name: string): string {
     hash = (hash * 31 + name.charCodeAt(i)) >>> 0
   }
   return ROLE_DOT_PALETTE[hash % ROLE_DOT_PALETTE.length]
-}
-
-/** Two-letter initials from an admin's display name (first + last word, or first two
- *  chars of a single word). Falls back to "?" for an empty name. */
-function nameInitials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean)
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
-  const single = parts[0] ?? ""
-  return (single.slice(0, 2) || "?").toUpperCase()
 }
 
 /** Compact last-login stamp ("Jul 3, 2026 · 16:23"); "Never" when the admin has
@@ -224,7 +216,7 @@ export function AdminsPage() {
               <TableRow>
                 <TableCell
                   colSpan={6}
-                  className="py-[46px] text-center text-ink3 whitespace-normal"
+                  className="py-[46px] text-center whitespace-normal text-ink3"
                 >
                   <div className="text-[14px] font-bold text-ink2">
                     No admins yet
@@ -338,7 +330,7 @@ function AdminRow({ admin, roles }: { admin: AdminUser; roles: Role[] }) {
             className="flex size-8 flex-none items-center justify-center rounded-full text-[11px] font-extrabold text-white"
             style={{ background: AVATAR_STRIPE }}
           >
-            {nameInitials(admin.displayName)}
+            {initialsOf(admin.displayName)}
           </span>
           <div>
             <div className="text-[13px] font-bold text-ink">
