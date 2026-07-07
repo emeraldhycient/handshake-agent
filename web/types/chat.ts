@@ -1,5 +1,33 @@
 import type { ReactNode } from "react"
-import type { Density } from "./components"
+import type { Density, ConfirmSheetProps, PinPadProps } from "./components"
+
+/** The non-null confirm payload shared by the confirm overlay's sub-parts. */
+export type ConfirmPayload = NonNullable<ConfirmSheetProps["payload"]>
+
+export interface ConfirmBodyProps {
+  payload: ConfirmPayload
+  error?: string | null
+  onConfirm: () => void | Promise<void>
+  onCancel: () => void
+}
+
+export interface ConfirmActionsProps {
+  isExpired: boolean
+  loading: boolean
+  cta: string
+  onConfirm: () => void
+  onCancel: () => void
+}
+
+/** PinPad inner layout props (everything except the `open` gate). */
+export type PinPadInnerProps = Omit<PinPadProps, "open">
+
+export interface PinPadKeysProps {
+  density: Density
+  onDigit: (d: string) => void
+  onBack: () => void
+  onFaceId: () => void
+}
 
 export interface ChatCardShellProps {
   density: Density
