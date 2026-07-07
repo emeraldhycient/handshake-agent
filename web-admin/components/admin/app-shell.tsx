@@ -37,50 +37,22 @@ import { useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
-  ArrowLeftRight,
-  Ban,
-  Banknote,
-  Bell,
-  BookText,
-  Cable,
-  CircleCheckBig,
-  Coins,
-  Flag,
-  Gauge,
-  LayoutGrid,
-  LineChart,
-  List,
   LogOut,
-  Mail,
-  MessageSquare,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
-  Plug,
-  Scale,
-  ScanSearch,
   Search as SearchIcon,
-  Server,
-  Settings,
   ShieldCheck,
-  ShieldUser,
-  SlidersHorizontal,
-  Sparkles,
   Sun,
-  Tag,
-  Ticket,
-  TriangleAlert,
-  Users,
-  Vault,
-  Webhook,
 } from "lucide-react"
-import type { LucideIcon } from "lucide-react"
 
 import { useAdminMe, useNavBadges } from "@/lib/query/hooks"
 import { useRequireAuth } from "@/lib/hooks/use-require-auth"
 import { useAdminAuthStore } from "@/lib/store/admin-auth-store"
 import { useThemeStore } from "@/lib/store/theme-store"
 import { cn } from "@/lib/utils"
+import { RAIL_BG } from "@/constants/admin-nav"
+import { buildVisibleGroups, flattenNav, isActive } from "@/lib/nav/admin-nav"
 import { AccountMenu } from "@/components/admin/account-menu"
 import { CommandPalette } from "@/components/admin/command-palette"
 import { EnvIndicator } from "@/components/admin/env-indicator"
@@ -88,268 +60,7 @@ import { MfaEnrollDialog } from "@/components/admin/mfa-enroll-dialog"
 import { NotificationsMenu } from "@/components/admin/notifications-menu"
 import { RouteGuard } from "@/components/admin/route-guard"
 import { Toaster } from "@/components/shared/toaster"
-import type { AppShellProps, NavDestination } from "@/types/components"
-
-interface NavItem {
-  href: string
-  label: string
-  icon: LucideIcon
-  /**
-   * The `menu_item` resourceId(s) that gate this item. `null` → always shown
-   * (Dashboard + Admin settings degrade gracefully). When an array, the item
-   * shows if ANY listed menu is granted.
-   */
-  menu: string | string[] | null
-  /** Optional count badge key resolved in the component (design §4.1). */
-  badge?: "kyc" | "stuck" | "recon" | "approvals"
-}
-
-interface NavGroup {
-  label: string
-  items: readonly NavItem[]
-}
-
-/**
- * Design nav groups (§4.1) mapped onto the web-admin routes + the live `menu.*`
- * RBAC resourceIds. Every destination in the design is present; per-item gating
- * reuses the existing menu resourceIds (no new perms minted).
- */
-const NAV_GROUPS: readonly NavGroup[] = [
-  {
-    label: "Overview",
-    items: [
-      { href: "/", label: "Dashboard", icon: LayoutGrid, menu: null },
-      {
-        href: "/metrics",
-        label: "Metrics & analytics",
-        icon: LineChart,
-        menu: "menu.metrics",
-      },
-    ],
-  },
-  {
-    label: "Customers",
-    items: [
-      { href: "/users", label: "Users", icon: Users, menu: "menu.users" },
-    ],
-  },
-  {
-    label: "Compliance",
-    items: [
-      {
-        href: "/kyc",
-        label: "KYC review",
-        icon: ShieldCheck,
-        menu: ["menu.kyc", "menu.compliance"],
-        badge: "kyc",
-      },
-      {
-        href: "/sanctions",
-        label: "Sanctions & screening",
-        icon: ScanSearch,
-        menu: ["menu.kyc", "menu.compliance"],
-      },
-      {
-        href: "/aml",
-        label: "AML / risk",
-        icon: TriangleAlert,
-        menu: ["menu.kyc", "menu.compliance"],
-      },
-      {
-        href: "/blocked",
-        label: "Blocked list",
-        icon: Ban,
-        menu: ["menu.kyc", "menu.compliance"],
-      },
-    ],
-  },
-  {
-    label: "Money",
-    items: [
-      {
-        href: "/transactions",
-        label: "Transactions",
-        icon: ArrowLeftRight,
-        menu: "menu.transactions",
-        badge: "stuck",
-      },
-      { href: "/ledger", label: "Ledger", icon: BookText, menu: "menu.ledger" },
-      {
-        href: "/reconciliation",
-        label: "Reconciliation",
-        icon: Scale,
-        menu: "menu.transactions",
-        badge: "recon",
-      },
-      {
-        href: "/treasury",
-        label: "Treasury",
-        icon: Vault,
-        menu: "menu.treasury",
-      },
-    ],
-  },
-  {
-    label: "Configuration",
-    items: [
-      {
-        href: "/settings",
-        label: "Settings",
-        icon: SlidersHorizontal,
-        menu: "menu.config",
-      },
-      { href: "/pricing", label: "Pricing", icon: Tag, menu: "menu.config" },
-      {
-        href: "/limits",
-        label: "Limits & velocity",
-        icon: Gauge,
-        menu: "menu.config",
-      },
-      {
-        href: "/capabilities",
-        label: "Capabilities",
-        icon: Plug,
-        menu: "menu.config",
-      },
-      {
-        href: "/assets",
-        label: "Asset catalog",
-        icon: Coins,
-        menu: "menu.config",
-      },
-      {
-        href: "/currencies",
-        label: "Currency catalog",
-        icon: Banknote,
-        menu: "menu.config",
-      },
-      {
-        href: "/providers",
-        label: "Providers",
-        icon: Cable,
-        menu: "menu.config",
-      },
-      {
-        href: "/templates",
-        label: "Templates",
-        icon: Mail,
-        menu: "menu.notifications",
-      },
-      {
-        href: "/flags",
-        label: "Feature flags",
-        icon: Flag,
-        menu: "menu.config",
-      },
-    ],
-  },
-  {
-    label: "Channels",
-    items: [
-      {
-        href: "/whatsapp",
-        label: "WhatsApp",
-        icon: MessageSquare,
-        menu: "menu.whatsapp",
-      },
-      {
-        href: "/notifications",
-        label: "Notifications",
-        icon: Bell,
-        menu: "menu.notifications",
-      },
-    ],
-  },
-  {
-    label: "Commerce",
-    items: [
-      {
-        href: "/tickets",
-        label: "Ticketing",
-        icon: Ticket,
-        menu: "menu.tickets",
-      },
-    ],
-  },
-  {
-    label: "Agent",
-    items: [
-      {
-        href: "/agent",
-        label: "Agent config",
-        icon: Sparkles,
-        menu: "menu.agent",
-      },
-    ],
-  },
-  {
-    label: "Platform",
-    items: [
-      {
-        href: "/admins",
-        label: "Admins & roles",
-        icon: ShieldUser,
-        menu: "menu.access",
-      },
-      { href: "/audit", label: "Audit log", icon: List, menu: "menu.audit" },
-      {
-        href: "/approvals",
-        label: "Approvals",
-        icon: CircleCheckBig,
-        menu: "menu.access",
-        badge: "approvals",
-      },
-      { href: "/ops", label: "System / ops", icon: Server, menu: "menu.audit" },
-      {
-        href: "/webhooks",
-        label: "Webhooks",
-        icon: Webhook,
-        menu: "menu.webhooks",
-      },
-      {
-        href: "/admin-settings",
-        label: "Admin settings",
-        icon: Settings,
-        menu: null,
-      },
-    ],
-  },
-]
-
-/**
- * The sidebar's fixed dark-green brand gradient (§4.1) — identical in both
- * themes via the brand-green tokens, never `bg-card`.
- */
-const RAIL_BG =
-  "linear-gradient(168deg, var(--brand-green) 0%, var(--brand-green-deep) 100%)"
-
-/** True iff the item's menu gate is satisfied by the granted `menus`. */
-function itemVisible(menu: NavItem["menu"], menus: string[]): boolean {
-  if (menu === null) return true
-  if (Array.isArray(menu)) return menu.some((m) => menus.includes(m))
-  return menus.includes(menu)
-}
-
-function isActive(pathname: string, href: string): boolean {
-  return href === "/" ? pathname === "/" : pathname.startsWith(href)
-}
-
-/**
- * Flatten grant-visible nav groups into the command palette's search corpus —
- * every reachable screen, tagged with its group for context. Sourced from the
- * same `visibleGroups` the sidebar renders so the palette can never drift.
- */
-function flattenNav(
-  groups: { label: string; items: readonly NavItem[] }[]
-): NavDestination[] {
-  return groups.flatMap((group) =>
-    group.items.map((item) => ({
-      href: item.href,
-      label: item.label,
-      group: group.label,
-    }))
-  )
-}
+import type { AppShellProps } from "@/types/components"
 
 /**
  * The centralized admin guard: authentication runs here (before ANY chrome or data
@@ -375,14 +86,9 @@ function AppShellInner({ children }: AppShellProps) {
   const [mfaOpen, setMfaOpen] = useState(false)
   const [cmdkOpen, setCmdkOpen] = useState(false)
 
-  const menus = me.data?.menus ?? []
-  // A group renders only when at least one of its items is grant-visible.
-  const visibleGroups = NAV_GROUPS.map((group) => ({
-    label: group.label,
-    items: group.items.filter((it) => itemVisible(it.menu, menus)),
-  })).filter((group) => group.items.length > 0)
-
-  // The command palette searches the same grant-visible screens the sidebar shows.
+  // A group renders only when ≥1 of its items is grant-visible; the command palette
+  // searches the same grant-visible screens the sidebar shows (so it can't drift).
+  const visibleGroups = buildVisibleGroups(me.data?.menus ?? [])
   const destinations = flattenNav(visibleGroups)
 
   // Live nav-badge counts (§4.1) — KYC review-queue depth / stuck txns / open
