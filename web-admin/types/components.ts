@@ -1118,6 +1118,18 @@ export interface UdVelocityBarProps {
   pct: string
 }
 
+/** The Beneficiaries tab — the user's saved beneficiaries + a per-row remove flow. */
+export interface UdBeneficiariesTabProps {
+  beneficiaries: import("@handshake-agent/contracts").AdminEndUserDetail["beneficiaries"]
+  onRemove: (id: string) => void
+}
+
+/** The Transactions tab — the user's recent transactions (rows navigate to tx detail). */
+export interface UdTransactionsTabProps {
+  transactions: import("@handshake-agent/contracts").AdminEndUserDetail["recentTransactions"]
+  onOpenTx: (id: string) => void
+}
+
 /** The steps a user-detail action flow walks (design runFlow: credit → reason → step-up → engine/maker). */
 export type UdFlowStep = "credit" | "reason" | "stepup" | "engine" | "maker"
 
