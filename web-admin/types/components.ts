@@ -1321,6 +1321,43 @@ export interface OpsJobRow {
   health: OpsHealth
 }
 
+/** The stage the active "Run now" flow is showing. */
+export type OpsRunStage = "reason" | "engine"
+
+/** A wallet-backfill run's lifecycle status. */
+export type BackfillStatus = "queued" | "running" | "completed" | "failed"
+
+/** The 5-up provider status tiles (contract-sourced). */
+export interface ProviderTilesProps {
+  providers: import("@handshake-agent/contracts").OpsProviderStatus[]
+}
+
+/** The webhook-queues panel (contract-sourced rows). */
+export interface WebhookQueuesCardProps {
+  queues: import("@handshake-agent/contracts").OpsWebhookQueue[]
+}
+
+/** The background-jobs panel — each job carries a step-up-gated "Run now". */
+export interface BackgroundJobsCardProps {
+  jobs: OpsJobRow[]
+  onRun: (job: OpsJobRow) => void
+}
+
+/** One service-health row (success/error rate + status word). */
+export interface ServiceHealthRowProps {
+  service: import("@handshake-agent/contracts").ServiceHealthMetrics["services"][number]
+}
+
+/** The shared "Run now" flow modals (reason → engine-action) for the active job. */
+export interface OpsRunFlowProps {
+  job: OpsJobRow
+  stage: OpsRunStage
+  onClose: () => void
+  /** Reason (audit) captured → advance to the engine-action leg. */
+  onContinue: (reason: string) => void
+  onExecute: () => void
+}
+
 // ─── Providers page (design §6.27) ──────────────────────────────────────────────────
 // Provider adapter cards + a mock→live readiness checklist, WIRED to the real
 // provider-registry read endpoint (GET /admin/providers, Phase 6b). The card/
