@@ -67,9 +67,7 @@ import { SupportedAssetSchema } from "@handshake-agent/contracts"
 import type {
   AdminEndUserDetail,
   AdminEndUserTierRequest,
-  KycApproveRequest,
   AdminEndUserLimitsResponse,
-  KycSubmissionDetail,
   SupportedAsset,
 } from "@handshake-agent/contracts"
 import type {
@@ -78,28 +76,15 @@ import type {
   MakerCheckerDiffRow,
   UserDetailProps,
 } from "@/types/components"
+import {
+  approveTargetTier,
+  beneVerificationMeta,
+  displayName,
+  initialsOf,
+} from "@/lib/users/user-detail"
+import { BANK_ICON, CRYPTO_ICON, NOT_PROVIDED } from "@/constants/user-detail"
 
 // ─── Real-data field mapping helpers ────────────────────────────────────────────────
-
-const NOT_PROVIDED = "—"
-
-/** Display name from KYC identity, falling back to the email local-part, then id. */
-function displayName(
-  kyc: KycSubmissionDetail | undefined,
-  detail: AdminEndUserDetail
-): string {
-  const full = [kyc?.firstName, kyc?.lastName].filter(Boolean).join(" ").trim()
-  if (full) return full
-  if (detail.email) return detail.email.split("@")[0]
-  return detail.id
-}
-
-/** Two-letter avatar initials from the display name (design shows a monogram). */
-function initialsOf(name: string): string {
-  const parts = name.split(/\s+/).filter(Boolean)
-  const letters = (parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? parts[0]?.[1] ?? "")
-  return letters.toUpperCase() || "?"
-}
 
 /** KYC status → design pill { label, bg-token, fg-token } (vUserDetail kycMeta). */
 const KYC_STATUS_META: Record<
@@ -112,18 +97,6 @@ const KYC_STATUS_META: Record<
   verified: { label: "Verified", bg: "var(--sok)", fg: "var(--tok)" },
   rejected: { label: "Rejected", bg: "var(--sdn)", fg: "var(--tdn)" },
   expired: { label: "Expired", bg: "var(--sdn)", fg: "var(--tdn)" },
-}
-
-/**
- * The tier a KYC approval promotes to. Approval never lands on 'unverified'
- * (mirrors KycApproveRequest, which only accepts tier_1/2/3): we take the
- * submission's requested tier when it is a verified tier, else default to tier_1.
- */
-function approveTargetTier(
-  kyc: KycSubmissionDetail | undefined
-): KycApproveRequest["tier"] {
-  const requested = kyc?.tier
-  return requested && requested !== "unverified" ? requested : "tier_1"
 }
 
 /**
@@ -142,23 +115,6 @@ const TIER_OVERRIDE_TARGET: Record<
   tier_1: "tier_3",
   unverified: "tier_3",
 }
-
-/** Beneficiary verification status → the design's name-enquiry pill tokens. */
-function beneVerificationMeta(status: string): {
-  label: string
-  bg: string
-  fg: string
-} {
-  const s = status.toLowerCase()
-  if (s.includes("verif") || s.includes("match"))
-    return { label: "Name match", bg: "var(--sok)", fg: "var(--tok)" }
-  if (s.includes("reject") || s.includes("fail"))
-    return { label: "Mismatch", bg: "var(--sdn)", fg: "var(--tdn)" }
-  return { label: "Unverified", bg: "var(--swn)", fg: "var(--twn)" }
-}
-
-const BANK_ICON = "M4 9h16M6 9v9M18 9v9M3 21h18M12 3l8 6H4z"
-const CRYPTO_ICON = "M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM9 12h6"
 
 type Tab =
   | "profile"
