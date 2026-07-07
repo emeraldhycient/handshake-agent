@@ -64,10 +64,7 @@ import {
 } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { SupportedAssetSchema } from "@handshake-agent/contracts"
-import type {
-  AdminEndUserLimitsResponse,
-  SupportedAsset,
-} from "@handshake-agent/contracts"
+import type { SupportedAsset } from "@handshake-agent/contracts"
 import type {
   EngineEffectRow,
   EngineLedgerRow,
@@ -81,6 +78,7 @@ import {
   approveTargetTier,
   beneVerificationMeta,
   displayName,
+  fmtFiat,
   initialsOf,
   statusMeta,
 } from "@/lib/users/user-detail"
@@ -94,6 +92,12 @@ import {
   TYPE_ICON,
   U_ACTIONS,
 } from "@/constants/user-detail"
+import { Panel } from "@/components/admin/user-detail/panel"
+import {
+  UserDetailError,
+  UserDetailSkeleton,
+} from "@/components/admin/user-detail/shells"
+import { LimitsTab } from "@/components/admin/user-detail/limits-tab"
 
 // ── Chat (lines 618-623) ──────────────────────────────────────────────────────────────
 
@@ -128,43 +132,6 @@ const CHAT: readonly {
   },
 ]
 
-// ── Limits & velocity money formatting (rows come from useEndUserLimits) ─────────────
-
-/** Formats a decimal-string fiat amount with grouping + the currency symbol. */
-function fmtFiat(amount: string | null, currency: string | null): string {
-  if (amount === null) return NOT_PROVIDED
-  const n = Number(amount)
-  if (!Number.isFinite(n)) return amount
-  const symbol = currency === "NGN" ? "₦" : currency ? `${currency} ` : ""
-  return symbol + n.toLocaleString("en-NG", { maximumFractionDigits: 2 })
-}
-
-/** Used/cap → a clamped 0–100% width string for the velocity bar. */
-function usagePct(used: string, cap: string): string {
-  const u = Number(used)
-  const c = Number(cap)
-  if (!Number.isFinite(u) || !Number.isFinite(c) || c <= 0) return "0%"
-  return Math.min(100, Math.max(0, Math.round((u / c) * 100))) + "%"
-}
-
-/** Bar tint by usage band — amber past 75%, red past 90% (never color-only). */
-function usageBar(pct: string): string {
-  const v = parseInt(pct, 10)
-  if (v >= 90) return "#c0563f"
-  if (v >= 75) return "#f5a623"
-  return "#1a4536"
-}
-
-// ─── Small presentational helper: the design card/panel ─────────────────────────────
-
-function Panel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="rounded-2xl border border-line bg-card p-[18px_20px]">
-      {children}
-    </div>
-  )
-}
-
 // ─── Flow-modal orchestration (design runFlow: reason → step-up → engine / maker) ────
 
 type FlowStep = "credit" | "reason" | "stepup" | "engine" | "maker"
@@ -180,234 +147,6 @@ interface FlowConfig {
    * Receives the reason text captured by the ReasonModal step, if any.
    */
   onComplete?: (reason: string) => void
-}
-
-// ─── Loading / error shells (four-branch async, matching the design frame) ───────────
-
-function UserDetailShell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mx-auto w-full max-w-[1200px] overflow-y-auto px-[30px] pt-[22px] pb-[60px]">
-      {children}
-    </div>
-  )
-}
-
-function UserDetailSkeleton() {
-  return (
-    <UserDetailShell>
-      <Skeleton className="mb-3.5 h-4 w-24" />
-      <div className="mb-3.5 rounded-[18px] border border-line bg-card p-[20px_22px]">
-        <div className="flex items-center gap-4">
-          <Skeleton className="size-14 rounded-full" />
-          <div className="flex-1 space-y-2">
-            <Skeleton className="h-6 w-48" />
-            <Skeleton className="h-3.5 w-28" />
-          </div>
-        </div>
-      </div>
-      <div className="mb-4 flex gap-3">
-        <Skeleton className="h-8 w-64" />
-      </div>
-      <div className="grid grid-cols-2 gap-3.5">
-        <Skeleton className="h-56 rounded-2xl" />
-        <Skeleton className="h-56 rounded-2xl" />
-      </div>
-    </UserDetailShell>
-  )
-}
-
-function UserDetailError({
-  onBack,
-  onRetry,
-}: {
-  onBack: () => void
-  onRetry: () => void
-}) {
-  return (
-    <UserDetailShell>
-      <button
-        type="button"
-        onClick={onBack}
-        className="mb-3.5 inline-flex cursor-pointer items-center gap-[7px] text-[12.5px] font-bold text-ink2 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-      >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
-          <path
-            d="M14 6l-6 6 6 6"
-            stroke="currentColor"
-            strokeWidth="1.9"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-        All users
-      </button>
-      <div className="rounded-[18px] border border-sdn bg-sdn/40 p-6 text-center">
-        <p className="text-sm font-bold text-tdn">Failed to load user</p>
-        <p className="mt-1 text-[12.5px] text-ink2">
-          The user aggregate could not be fetched.
-        </p>
-        <button
-          type="button"
-          onClick={onRetry}
-          className="mt-3.5 cursor-pointer rounded-[10px] border border-line bg-card px-[15px] py-2 text-[12.5px] font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          Retry
-        </button>
-      </div>
-    </UserDetailShell>
-  )
-}
-
-// ─── Limits tab: effective caps + live velocity usage (useEndUserLimits) ─────────────
-
-/** The subset of the useEndUserLimits query result the Limits tab reads. */
-interface LimitsQueryLike {
-  isLoading: boolean
-  isError: boolean
-  data: AdminEndUserLimitsResponse | undefined
-}
-
-function LimitsTab({
-  tier,
-  query,
-  onRetry,
-}: {
-  tier: string
-  query: LimitsQueryLike
-  onRetry: () => void
-}) {
-  if (query.isLoading) {
-    return (
-      <div className="grid grid-cols-2 gap-3.5" aria-busy="true">
-        <Skeleton className="h-56 rounded-2xl" />
-        <Skeleton className="h-56 rounded-2xl" />
-      </div>
-    )
-  }
-  if (query.isError || !query.data) {
-    return (
-      <div className="flex items-center justify-between gap-3 rounded-2xl border border-sdn bg-sdn/40 p-5">
-        <span className="text-[12.5px] font-bold text-tdn">
-          Failed to load limits & velocity.
-        </span>
-        <button
-          type="button"
-          onClick={onRetry}
-          className="cursor-pointer rounded-[9px] border border-line bg-card px-[13px] py-2 text-xs font-bold text-ink transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          Retry
-        </button>
-      </div>
-    )
-  }
-
-  const { effectiveLimits, velocity } = query.data
-  const fiat = effectiveLimits?.fiatCurrency ?? null
-
-  // Effective-cap rows — null when the user is unverified (no tier caps apply).
-  const limitRows = effectiveLimits
-    ? [
-        {
-          k: "Per-transaction cap",
-          v: fmtFiat(effectiveLimits.perTxFiatMax, fiat),
-        },
-        { k: "Daily cap", v: fmtFiat(effectiveLimits.dailyFiatMax, fiat) },
-        {
-          k: "Tx count / day",
-          v: String(effectiveLimits.dailyTxCountMax),
-        },
-      ]
-    : []
-
-  // Velocity rows — fiat used vs daily cap, and tx count vs daily count cap.
-  const fiatPct = effectiveLimits
-    ? usagePct(velocity.dailyFiatUsed, effectiveLimits.dailyFiatMax)
-    : "0%"
-  const countPct = effectiveLimits
-    ? usagePct(
-        String(velocity.dailyTxCount),
-        String(effectiveLimits.dailyTxCountMax)
-      )
-    : "0%"
-
-  return (
-    <div className="grid grid-cols-2 items-start gap-3.5">
-      <Panel>
-        <div className="mb-1 text-[13px] font-extrabold">
-          Effective limits · {tier}
-        </div>
-        <div className="mb-3.5 text-[11.5px] text-ink3">
-          Per-tier caps resolved from the layered config.
-        </div>
-        {limitRows.length === 0 ? (
-          <div className="py-4 text-center text-[12px] text-ink3">
-            No tier caps apply — this user is unverified.
-          </div>
-        ) : (
-          limitRows.map((l) => (
-            <div
-              key={l.k}
-              className="flex justify-between gap-3 border-b border-line2 py-[9px]"
-            >
-              <span className="text-[12.5px] text-ink2">{l.k}</span>
-              <span className="font-mono text-[12.5px] font-bold tabular-nums">
-                {l.v}
-              </span>
-            </div>
-          ))
-        )}
-      </Panel>
-      <Panel>
-        <div className="mb-3.5 text-[13px] font-extrabold">
-          Current velocity usage
-        </div>
-        <VelocityBar
-          label="Daily fiat used"
-          used={fmtFiat(velocity.dailyFiatUsed, fiat)}
-          cap={
-            effectiveLimits ? fmtFiat(effectiveLimits.dailyFiatMax, fiat) : "—"
-          }
-          pct={fiatPct}
-        />
-        <VelocityBar
-          label="Tx count (24h)"
-          used={String(velocity.dailyTxCount)}
-          cap={effectiveLimits ? String(effectiveLimits.dailyTxCountMax) : "—"}
-          pct={countPct}
-        />
-      </Panel>
-    </div>
-  )
-}
-
-/** One labelled velocity bar (used / cap + a clamped progress track). */
-function VelocityBar({
-  label,
-  used,
-  cap,
-  pct,
-}: {
-  label: string
-  used: string
-  cap: string
-  pct: string
-}) {
-  return (
-    <div className="mb-[15px]">
-      <div className="mb-1.5 flex justify-between">
-        <span className="text-xs font-semibold text-ink2">{label}</span>
-        <span className="font-mono text-[11.5px] font-bold text-ink2 tabular-nums">
-          {used} / {cap}
-        </span>
-      </div>
-      <div className="h-2 overflow-hidden rounded-md bg-card2">
-        <div
-          className="h-full rounded-md"
-          style={{ width: pct, background: usageBar(pct) }}
-        />
-      </div>
-    </div>
-  )
 }
 
 export function UserDetail({ userId }: UserDetailProps) {

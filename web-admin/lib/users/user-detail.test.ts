@@ -10,8 +10,11 @@ import {
   approveTargetTier,
   beneVerificationMeta,
   displayName,
+  fmtFiat,
   initialsOf,
   statusMeta,
+  usageBar,
+  usagePct,
 } from "./user-detail"
 
 const DETAIL = {
@@ -94,5 +97,33 @@ describe("statusMeta", () => {
       bg: "var(--card2)",
       fg: "var(--ink2)",
     })
+  })
+})
+
+describe("fmtFiat", () => {
+  it("groups + prefixes ₦ for NGN, a code for other currencies, and — for null", () => {
+    expect(fmtFiat("1500000", "NGN")).toBe("₦1,500,000")
+    expect(fmtFiat("1500", "USD")).toBe("USD 1,500")
+    expect(fmtFiat(null, "NGN")).toBe("—")
+  })
+  it("returns the raw string for a non-numeric amount", () => {
+    expect(fmtFiat("n/a", "NGN")).toBe("n/a")
+  })
+})
+
+describe("usagePct", () => {
+  it("clamps used/cap to 0–100%", () => {
+    expect(usagePct("50", "200")).toBe("25%")
+    expect(usagePct("300", "200")).toBe("100%")
+    expect(usagePct("5", "0")).toBe("0%")
+    expect(usagePct("x", "200")).toBe("0%")
+  })
+})
+
+describe("usageBar", () => {
+  it("tints red ≥90%, amber ≥75%, else green", () => {
+    expect(usageBar("95%")).toBe("#c0563f")
+    expect(usageBar("80%")).toBe("#f5a623")
+    expect(usageBar("40%")).toBe("#1a4536")
   })
 })
