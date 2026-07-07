@@ -27,14 +27,16 @@ vi.mock("@/lib/api/users", () => ({
 
 vi.mock("@/lib/api/admin", () => ({
   getMe: vi.fn(),
+  stepUp: vi.fn(),
 }))
 
 import { applyUserTags, sendBulkMessage } from "@/lib/api/users"
-import { getMe } from "@/lib/api/admin"
+import { getMe, stepUp } from "@/lib/api/admin"
 
 const mockApplyTags = vi.mocked(applyUserTags)
 const mockSendMessage = vi.mocked(sendBulkMessage)
 const mockGetMe = vi.mocked(getMe)
+const mockStepUp = vi.mocked(stepUp)
 
 const IDS = [
   "11111111-1111-1111-1111-111111111111",
@@ -59,6 +61,7 @@ beforeEach(() => {
   mockApplyTags.mockReset()
   mockSendMessage.mockReset()
   mockGetMe.mockReset()
+  mockStepUp.mockReset().mockResolvedValue(undefined as never)
   mockGetMe.mockResolvedValue({
     id: "99999999-9999-9999-9999-999999999999",
     email: "ops@handshake.ng",
@@ -89,6 +92,43 @@ describe("UsersBulkActions — Tag", () => {
       tag: "vip",
       reason: "review cohort",
     })
+    await waitFor(() => expect(onDone).toHaveBeenCalled())
+  })
+
+  it("opens step-up on a 403 and replays the tag apply after re-auth", async () => {
+    // mfaEnabled → the StepUpDialog surfaces the authenticator (TOTP) path.
+    mockGetMe.mockResolvedValue({
+      id: "99999999-9999-9999-9999-999999999999",
+      email: "ops@handshake.ng",
+      role: { id: "00000000-0000-0000-0000-000000000001", name: "Super Admin" },
+      status: "active",
+      displayName: "Test Admin",
+      mfaEnabled: true,
+      permissions: [],
+      menus: [],
+      pages: [],
+    } as never)
+    // First apply 403s (ADMIN_STEP_UP_REQUIRED); the replay after re-auth succeeds.
+    mockApplyTags
+      .mockRejectedValueOnce(
+        new ApiError("step up", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce({ tag: "vip", requested: 2, applied: 2 })
+    const { onDone } = renderActions()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole("button", { name: "Tag" }))
+    await user.type(screen.getByLabelText("Tag"), "vip")
+    await user.type(screen.getByLabelText("Reason"), "cohort")
+    await user.click(screen.getByRole("button", { name: "Apply tag" }))
+
+    // The step-up dialog opens after the 403; re-auth replays the tag apply.
+    const totp = await screen.findByLabelText(/Authenticator code/)
+    await user.type(totp, "123456")
+    await user.click(screen.getByRole("button", { name: "Confirm" }))
+
+    await waitFor(() => expect(mockStepUp).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockApplyTags).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(onDone).toHaveBeenCalled())
   })
 })
