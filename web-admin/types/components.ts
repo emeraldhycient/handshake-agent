@@ -850,6 +850,19 @@ export interface BeneficiaryOverrideProps {
   beneficiary: AdminBeneficiary
 }
 
+/** One beneficiary row — icon tile · label + type · verification pill · cooling-off · override. */
+export interface BeneficiaryRowProps {
+  beneficiary: AdminBeneficiary
+}
+
+/** The beneficiaries list card — the four async branches over the list read. */
+export interface BeneficiariesListProps {
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  items: readonly AdminBeneficiary[]
+}
+
 // ─── Treasury writes (§6.13) ────────────────────────────────────────────────────────
 
 export interface TreasuryAlertAcknowledgeProps {
