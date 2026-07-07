@@ -688,27 +688,63 @@ export type ReconBreakSeverity = "high" | "medium" | "low"
 /** What the operator did to close a break (drives the confirmed-outcome footer). */
 export type ReconBreakResolution = "resolved" | "accepted" | "escalated"
 
-export interface ReconBreak {
-  id: string
-  /** The break kind — selects the icon tile and describes the drift class. */
-  kind:
-    | "Over-credit"
-    | "Missing settlement"
-    | "Amount mismatch"
-    | "Duplicate credit"
-  severity: ReconBreakSeverity
-  /** The offending transaction id (link-blue mono). */
-  tx: string
-  /** Human-readable drift explanation. */
-  detail: string
-  /** Signed delta, provider-minus-ledger (rendered mono / tabular). */
-  delta: string
-  /** Tint for the delta value — danger for over-credits, warn/muted otherwise. */
-  deltaTone: "danger" | "warn" | "muted"
-  /** `open` shows the action row; anything else shows the outcome footer. */
-  status: "open" | "closed"
-  /** Present once the break has left the open queue. */
-  resolution?: ReconBreakResolution
+/** A live `ReconBreak` (contract) with a locally-applied disposition overlaid. */
+export type ReconBreakView = import("@handshake-agent/contracts").ReconBreak & {
+  localResolution?: ReconBreakResolution
+}
+
+/** The three action flows a break card can open (each with its stage). */
+export type ReconFlowStep =
+  | { kind: "resolve"; stage: "reason" | "engine" }
+  | { kind: "accept"; stage: "reason" | "confirm" }
+  | { kind: "escalate" }
+
+/** The cron status bar over the break board — last/next run + open-breaks + Run now. */
+export interface ReconStatusBarProps {
+  status: import("@handshake-agent/contracts").ReconStatus | undefined
+  isLoading: boolean
+  isError: boolean
+  openCount: number
+  onRunNow: () => void
+}
+
+/** One reconciliation break card — open shows the action row, closed the outcome footer. */
+export interface ReconBreakCardProps {
+  item: ReconBreakView
+  onOpenTx: (transactionId: string) => void
+  onEscalate: (id: string) => void
+  onAccept: (id: string) => void
+  onResolve: (id: string) => void
+}
+
+/** The break board — loading / error / empty / data over `ReconBreakCard`. */
+export interface ReconBreakListProps {
+  breaks: ReconBreakView[]
+  isLoading: boolean
+  isError: boolean
+  onRetry: () => void
+  onOpenTx: (transactionId: string) => void
+  onEscalate: (id: string) => void
+  onAccept: (id: string) => void
+  onResolve: (id: string) => void
+}
+
+/** The shared step-up-gated flow modals for the currently-active break. */
+export interface ReconBreakFlowsProps {
+  activeBreak: ReconBreakView
+  flow: ReconFlowStep
+  reason: string
+  onClose: () => void
+  /** Advance to the next stage (accept→confirm, resolve→engine). */
+  onAdvance: (flow: ReconFlowStep) => void
+  /** Capture the audited reason before the confirm/engine leg. */
+  onCaptureReason: (reason: string) => void
+  /** Fire the real disposition mutation (step-up-gated). */
+  onDisposition: (
+    id: string,
+    resolution: ReconBreakResolution,
+    reason: string
+  ) => void
 }
 
 // ─── Treasury page (design §6.13) ─────────────────────────────────────────────────
