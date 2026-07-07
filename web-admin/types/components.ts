@@ -1090,6 +1090,34 @@ export type UdTab =
 /** Header-action keys — dispatch is by key so the freeze label can toggle Freeze↔Unfreeze. */
 export type UdActionKey = "freeze" | "note" | "resend"
 
+/** The user-detail error shell (back-link + retry). */
+export interface UdErrorProps {
+  onBack: () => void
+  onRetry: () => void
+}
+
+/** The subset of the useEndUserLimits query the Limits tab reads. */
+export interface UdLimitsQuery {
+  isLoading: boolean
+  isError: boolean
+  data: import("@handshake-agent/contracts").AdminEndUserLimitsResponse | undefined
+}
+
+/** The Limits tab: effective caps + live velocity usage for a tier. */
+export interface UdLimitsTabProps {
+  tier: string
+  query: UdLimitsQuery
+  onRetry: () => void
+}
+
+/** One labelled velocity bar (used / cap + a clamped progress track). */
+export interface UdVelocityBarProps {
+  label: string
+  used: string
+  cap: string
+  pct: string
+}
+
 /** The report types a SAR/STR draft can carry — sourced from the contract enum. */
 export type ComplianceReportType =
   import("@handshake-agent/contracts").ComplianceReportDraftRequest["reportType"]

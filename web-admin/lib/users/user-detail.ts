@@ -4,7 +4,7 @@ import type {
   KycSubmissionDetail,
 } from "@handshake-agent/contracts"
 
-import { ST_META } from "@/constants/user-detail"
+import { NOT_PROVIDED, ST_META } from "@/constants/user-detail"
 import type { PillMeta } from "@/types/components"
 
 /** Display name from KYC identity, falling back to the email local-part, then id. */
@@ -68,4 +68,32 @@ export function statusMeta(status: string): { l: string; bg: string; fg: string 
       fg: "var(--ink2)",
     }
   )
+}
+
+/** Formats a decimal-string fiat amount with grouping + the currency symbol. */
+export function fmtFiat(
+  amount: string | null,
+  currency: string | null
+): string {
+  if (amount === null) return NOT_PROVIDED
+  const n = Number(amount)
+  if (!Number.isFinite(n)) return amount
+  const symbol = currency === "NGN" ? "₦" : currency ? `${currency} ` : ""
+  return symbol + n.toLocaleString("en-NG", { maximumFractionDigits: 2 })
+}
+
+/** Used/cap → a clamped 0–100% width string for the velocity bar. */
+export function usagePct(used: string, cap: string): string {
+  const u = Number(used)
+  const c = Number(cap)
+  if (!Number.isFinite(u) || !Number.isFinite(c) || c <= 0) return "0%"
+  return Math.min(100, Math.max(0, Math.round((u / c) * 100))) + "%"
+}
+
+/** Bar tint by usage band — amber past 75%, red past 90% (never colour-only). */
+export function usageBar(pct: string): string {
+  const v = parseInt(pct, 10)
+  if (v >= 90) return "#c0563f"
+  if (v >= 75) return "#f5a623"
+  return "#1a4536"
 }
