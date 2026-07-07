@@ -925,6 +925,22 @@ export interface ComplianceReportDraftDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
+/** The report types a SAR/STR draft can carry — sourced from the contract enum. */
+export type ComplianceReportType =
+  import("@handshake-agent/contracts").ComplianceReportDraftRequest["reportType"]
+
+/** Inputs of the "Draft compliance report" dialog (report type, event ids, JSON content). */
+export interface DraftFormFieldsProps {
+  reportType: ComplianceReportType
+  onReportTypeChange: (value: ComplianceReportType) => void
+  eventsText: string
+  onEventsTextChange: (value: string) => void
+  content: string
+  onContentChange: (value: string) => void
+  busy: boolean
+  error: string | null
+}
+
 export interface ComplianceReportSubmitDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
