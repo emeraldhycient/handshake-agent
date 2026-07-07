@@ -536,6 +536,65 @@ export interface ReportsCardProps {
   onSubmit: (report: ComplianceReport) => void
 }
 
+// ─── Sanctions & screening page (§6.5) ───────────────────────────────────────────────
+
+/** A dispositioned match's terminal state (the contract disposition union verbatim). */
+export type SanctionsMatchDone =
+  import("@handshake-agent/contracts").SanctionsDisposition
+
+/** One ongoing-monitoring toggle row, seeded from the config view. */
+export interface SanctionsMonitorRow {
+  key: keyof import("@handshake-agent/contracts").SanctionsMonitoringView
+  label: string
+  on: boolean
+}
+
+/** The active disposition flow (mirrors the design's `runFlow` step chain). */
+export type SanctionsActiveFlow =
+  | { kind: "clear"; matchId: string }
+  | { kind: "escalate"; matchId: string }
+  | { kind: "block"; matchId: string; step: "reason" | "stepup" }
+  | null
+
+/** One screening-match card — open matches offer Clear / Escalate / Block. */
+export interface SanctionsMatchCardProps {
+  record: import("@handshake-agent/contracts").SanctionsRecordItem
+  done: SanctionsMatchDone | null
+  onClear: () => void
+  onEscalate: () => void
+  onBlock: () => void
+}
+
+/** The screening-match list — loading / error / empty / data over the cards. */
+export interface SanctionsMatchListProps {
+  records: import("@handshake-agent/contracts").SanctionsRecordItem[]
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  onRetry: () => void
+  doneOf: (
+    record: import("@handshake-agent/contracts").SanctionsRecordItem
+  ) => SanctionsMatchDone | null
+  onClear: (id: string) => void
+  onEscalate: (id: string) => void
+  onBlock: (id: string) => void
+}
+
+/** The shared disposition flow modals (Clear / Escalate / Block → step-up). */
+export interface SanctionsFlowModalsProps {
+  flow: SanctionsActiveFlow
+  labelOf: (matchId: string) => string
+  onClose: () => void
+  /** Fire the disposition mutation (step-up-gated). */
+  onDisposition: (matchId: string, done: SanctionsMatchDone) => void
+  /** Advance the Block flow reason → step-up. */
+  onAdvanceBlock: (matchId: string) => void
+  mfaEnabled: boolean
+  stepUpOpen: boolean
+  onStepUpOpenChange: (open: boolean) => void
+  onStepUpSuccess: () => void
+}
+
 export interface ComplianceReportDraftDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
