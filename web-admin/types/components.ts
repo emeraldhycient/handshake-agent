@@ -1995,6 +1995,16 @@ export interface ProviderCardViewProps {
   provider: import("@handshake-agent/contracts").ProviderCardView
 }
 
+/** The readiness-row glyph — a check when done, a dash while pending. */
+export interface ReadinessIconProps {
+  done: boolean
+}
+
+/** The mock→live readiness checklist card — one check-icon row per gate. */
+export interface ReadinessCardProps {
+  items: readonly import("@handshake-agent/contracts").ProviderReadinessItem[]
+}
+
 /** Props for the ProviderTestButton (the Phase-7 "Test connection" liveness probe). */
 export interface ProviderTestButtonProps {
   /** The stable provider key to probe (e.g. "blockradar"). */
