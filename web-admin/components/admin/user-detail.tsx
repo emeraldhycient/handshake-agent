@@ -16,18 +16,18 @@
  * PII is last-4 only — the console never reveals a full NIN/BVN (§3.4).
  *
  * Four async branches (loading skeletons / error+retry / empty / data) wrap the
- * aggregate. Write actions (Freeze / Approve-Reject / tier / device revoke /
- * add-note / manual-credit …) still drive the shared flow modals unchanged —
- * wiring them to real mutations is Phase 7. Read-only (§3.1): nothing here moves
- * money; table rows navigate to the transaction-detail route.
+ * aggregate. Composition only: the tab state, the per-tab read queries, and the
+ * flow-modal state machine + every write action (Freeze / Approve-Reject / tier /
+ * device + session + beneficiary revoke / PIN reset / SIM-swap / force-re-KYC /
+ * add-note / manual-credit) live in `useUserDetailScreen`. The model only proposes
+ * (§3.1): each sensitive mutation is step-up-gated (403 → StepUpDialog → replay) and
+ * a tier-override / manual-credit is a four-eyes maker-checker request a SECOND admin
+ * approves — nothing here writes a ledger entry or moves money. Table rows navigate
+ * to the transaction-detail route.
  */
-import { useRef, useState } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
-
 import { cn } from "@/lib/utils"
 import { formatCrypto, formatCryptoAmount } from "@/lib/format"
 import { pushToast } from "@/lib/store/toast-store"
-import { ApiError } from "@/lib/api/client"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   EngineActionModal,
@@ -37,45 +37,17 @@ import {
   StepUpModal,
 } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
-import {
-  useAdjustTier,
-  useAdminMe,
-  useApproveKyc,
-  useCreateUserNote,
-  useEndUserDetail,
-  useEndUserDevices,
-  useEndUserLimits,
-  useEndUserSessions,
-  useEndUserTimeline,
-  useForcePinReset,
-  useForceReKyc,
-  useKycSubmission,
-  useRejectKyc,
-  useRemoveBeneficiary,
-  useRequestKycInfo,
-  useRequestManualCredit,
-  useResendVerification,
-  useRevokeAllUserSessions,
-  useRevokeDevice,
-  useRevokeUserSession,
-  useSetUserStatus,
-  useSimSwapReverify,
-  useUserNotes,
-} from "@/lib/query/hooks"
-import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { SupportedAssetSchema } from "@handshake-agent/contracts"
 import type { SupportedAsset } from "@handshake-agent/contracts"
 import type {
   EngineEffectRow,
   EngineLedgerRow,
   MakerCheckerDiffRow,
-  UdTab,
   UserDetailProps,
 } from "@/types/components"
 import {
   actionDot,
   actionLabel,
-  approveTargetTier,
   beneVerificationMeta,
   displayName,
   fmtFiat,
@@ -88,10 +60,10 @@ import {
   KYC_STATUS_META,
   NOT_PROVIDED,
   TABS,
-  TIER_OVERRIDE_TARGET,
   TYPE_ICON,
   U_ACTIONS,
 } from "@/constants/user-detail"
+import { useUserDetailScreen } from "@/lib/hooks/use-user-detail"
 import { Panel } from "@/components/admin/user-detail/panel"
 import {
   UserDetailError,
@@ -132,388 +104,46 @@ const CHAT: readonly {
   },
 ]
 
-// ─── Flow-modal orchestration (design runFlow: reason → step-up → engine / maker) ────
-
-type FlowStep = "credit" | "reason" | "stepup" | "engine" | "maker"
-
-interface FlowConfig {
-  title: string
-  steps: FlowStep[]
-  effect?: EngineEffectRow[]
-  ledger?: EngineLedgerRow[]
-  diff?: MakerCheckerDiffRow[]
-  /**
-   * Side-effect to run once the flow's final step is confirmed (mutations, toasts).
-   * Receives the reason text captured by the ReasonModal step, if any.
-   */
-  onComplete?: (reason: string) => void
-}
-
 export function UserDetail({ userId }: UserDetailProps) {
-  const router = useRouter()
-  const searchParams = useSearchParams()
-
-  // Real-data reads: the aggregate gates the shell; KYC + devices back their tabs.
-  const detailQuery = useEndUserDetail(userId)
-  const kycQuery = useKycSubmission(userId)
-  const devicesQuery = useEndUserDevices(userId)
-  // Per-tab reads (Phase 6b): sessions (Security), limits+velocity (Limits),
-  // admin-action timeline (Profile). Each has its own async branches below.
-  const sessionsQuery = useEndUserSessions(userId)
-  const limitsQuery = useEndUserLimits(userId)
-  const timelineQuery = useEndUserTimeline(userId)
-  // The user's immutable case notes back the Profile "Notes" list (Phase 9 read).
-  const notesQuery = useUserNotes(userId)
-
-  // Sensitive mutations (Phase 7 WRITE) — KYC decisions + account actions (tier /
-  // status / pin-reset / device-revoke / sim-swap). Each is step-up-gated: a 403 with
-  // code ADMIN_STEP_UP_REQUIRED opens the real StepUpDialog (server re-auth), then the
-  // stashed action replays via `stepUp.retry`. The hooks invalidate the KYC queue +
-  // the `["admin","users"]` prefix, so this header and the affected tabs re-resolve.
-  const me = useAdminMe()
-  const approveKyc = useApproveKyc()
-  const rejectKyc = useRejectKyc()
-  const adjustTier = useAdjustTier()
-  const setUserStatus = useSetUserStatus()
-  const forcePinReset = useForcePinReset()
-  const revokeDevice = useRevokeDevice()
-  const simSwapReverify = useSimSwapReverify()
-  const requestManualCredit = useRequestManualCredit()
-  // Phase 9 WRITE hooks — KYC needs-info / force-re-KYC, end-user session revocation,
-  // case notes, beneficiary removal, and the low-risk verification resend.
-  const requestKycInfo = useRequestKycInfo()
-  const forceReKyc = useForceReKyc()
-  const revokeAllUserSessions = useRevokeAllUserSessions()
-  const revokeUserSession = useRevokeUserSession()
-  const createUserNote = useCreateUserNote()
-  const removeBeneficiary = useRemoveBeneficiary()
-  const resendVerification = useResendVerification()
-  const stepUp = useStepUpRetry()
-
-  // Deep-link tab: seed from ?tab= when it names a valid tab (KYC-queue links land on KYC).
-  const [tab, setTab] = useState<UdTab>(() => {
-    const q = searchParams.get("tab")
-    return TABS.some((t) => t.id === q) ? (q as UdTab) : "profile"
-  })
-
-  // Sequential flow-modal machine: the active step index walks the config's steps.
-  const [flow, setFlow] = useState<FlowConfig | null>(null)
-  const [flowStep, setFlowStep] = useState(0)
-  // The manual-credit input captured by the ManualCreditModal (the "credit" step).
-  // Mirrored in a ref so the flow's onComplete (a closure fixed at runFlow time)
-  // reads the LATEST captured value, not the stale null from when the flow started.
-  const [creditInput, setCreditInput] = useState<{
-    asset: SupportedAsset
-    amount: string
-  } | null>(null)
-  const creditInputRef = useRef<{
-    asset: SupportedAsset
-    amount: string
-  } | null>(null)
-
-  // The reason captured at the ReasonModal step, retained across the remaining steps
-  // so onComplete (fired at the final step) can record the maker's justification —
-  // the ReasonModal is rarely the last step, so the reason must persist in state.
-  const [flowReason, setFlowReason] = useState("")
-
-  function runFlow(config: FlowConfig) {
-    setFlow(config)
-    setFlowStep(0)
-    setFlowReason("")
-  }
-  // `reason`, when supplied by the ReasonModal step, is retained; onComplete is
-  // called with the retained reason (or the just-supplied one on a reason-only flow).
-  function advance(reason?: string) {
-    if (!flow) return
-    const nextReason = reason !== undefined ? reason : flowReason
-    if (reason !== undefined) setFlowReason(reason)
-    if (flowStep + 1 >= flow.steps.length) {
-      // Completed the last step.
-      flow.onComplete?.(nextReason)
-      setFlow(null)
-      setFlowStep(0)
-      return
-    }
-    setFlowStep(flowStep + 1)
-  }
-  function cancelFlow() {
-    setFlow(null)
-    setFlowStep(0)
-  }
-
-  const current: FlowStep | null = flow ? flow.steps[flowStep] : null
-
-  function openTx(id: string) {
-    router.push(`/transactions/${id}`)
-  }
-
-  // ── Write flows (Phase 7) — still drive the shared modals with design copy. ──────────
-  // These read/write no real data yet; wiring them to real mutations is a later step.
-  // Freeze / Unfreeze — reason → step-up, then PATCH /admin/users/:id/status.
-  // Suspends an active account (freeze) or reactivates a suspended one (unfreeze).
-  const isSuspended = detailQuery.data?.status === "suspended"
-  const freezeUser = () => {
-    const target = isSuspended ? "active" : "suspended"
-    runFlow({
-      title: isSuspended ? "Unfreeze account" : "Freeze account",
-      steps: ["reason", "stepup"],
-      onComplete: () =>
-        runStepUpMutation(
-          () =>
-            setUserStatus
-              .mutateAsync({ id: userId, input: { status: target } })
-              .then(() => undefined),
-          isSuspended ? "Account reactivated" : "Account frozen"
-        ),
-    })
-  }
-  // Fire a sensitive mutation through the step-up-retry wrapper: run it; a 403
-  // ADMIN_STEP_UP_REQUIRED opens the real StepUpDialog and stashes the action for
-  // replay. Any other failure surfaces a toast (the flow is already audited server-side).
-  // No UI code moves money here (§3.1) — these mutate identity/KYC/device state only.
-  function runStepUpMutation(action: () => Promise<void>, done: string) {
-    void stepUp
-      .run(action)
-      .then((ok) => {
-        if (ok) pushToast(done, "ok")
-      })
-      .catch((error) =>
-        pushToast(
-          error instanceof ApiError ? error.message : "Action failed",
-          "warn"
-        )
-      )
-  }
-
-  // Approve — reason → step-up → maker-checker (tier 2/3 dual control), then POST
-  // /admin/kyc/:id/approve promoting to the submission's requested (verified) tier.
-  const approveTier = approveTargetTier(kycQuery.data)
-  const kycApprove = () =>
-    runFlow({
-      title: "Approve KYC",
-      steps: ["reason", "stepup", "maker"],
-      diff: [
-        { field: "KYC status", from: detailQuery.data?.kycStatus ?? "—", to: "verified" },
-        { field: "KYC tier", from: detailQuery.data?.kycTier ?? "—", to: approveTier },
-      ],
-      onComplete: () =>
-        runStepUpMutation(
-          () =>
-            approveKyc
-              .mutateAsync({ userId, input: { tier: approveTier } })
-              .then(() => undefined),
-          "KYC approved"
-        ),
-    })
-  // Request more info — reason → step-up, then POST /admin/kyc/:id/request-info,
-  // bouncing the review back to the user with the audited reason (§3.3). Sensitive
-  // (may 403 with ADMIN_STEP_UP_REQUIRED — replayed through the step-up dialog).
-  const kycInfo = () =>
-    runFlow({
-      title: "Request more info",
-      steps: ["reason", "stepup"],
-      onComplete: (reason) =>
-        runStepUpMutation(
-          () =>
-            requestKycInfo.mutateAsync({ userId, reason }).then(() => undefined),
-          "Information requested from user"
-        ),
-    })
-  // Reject — reason (required), then POST /admin/kyc/:id/reject with that reason.
-  const kycReject = () =>
-    runFlow({
-      title: "Reject KYC",
-      steps: ["reason"],
-      onComplete: (reason) =>
-        runStepUpMutation(
-          () =>
-            rejectKyc
-              .mutateAsync({ userId, input: { reason } })
-              .then(() => undefined),
-          "KYC rejected"
-        ),
-    })
-  // Override tier — reason → step-up → maker-checker (dual control), then
-  // PATCH /admin/users/:id/tier. The target is a one-step de-escalation of the
-  // current tier; the engine re-validates the new tier's limits server-side (§3.3).
-  const overrideTargetTier = TIER_OVERRIDE_TARGET[detailQuery.data?.kycTier ?? "unverified"]
-  const overrideTier = () =>
-    runFlow({
-      title: "Override tier · maker-checker",
-      steps: ["reason", "stepup", "maker"],
-      diff: [
-        {
-          field: "KYC tier",
-          from: detailQuery.data?.kycTier ?? "—",
-          to: overrideTargetTier,
-        },
-      ],
-      onComplete: () =>
-        runStepUpMutation(
-          () =>
-            adjustTier
-              .mutateAsync({ id: userId, input: { tier: overrideTargetTier } })
-              .then(() => undefined),
-          "Tier override submitted"
-        ),
-    })
-  // Force re-KYC — reason → step-up, then POST /admin/users/:id/force-rekyc, sending
-  // the user back through verification (§3.4). Sensitive (may 403 with step-up).
-  const forceReKycFlow = () =>
-    runFlow({
-      title: "Force re-KYC",
-      steps: ["reason", "stepup"],
-      onComplete: (reason) =>
-        runStepUpMutation(
-          () =>
-            forceReKyc.mutateAsync({ id: userId, reason }).then(() => undefined),
-          "Re-KYC required from user"
-        ),
-    })
-  // Reset PIN directive — reason → step-up, then POST /admin/users/:id/pin-reset.
-  const resetPin = () =>
-    runFlow({
-      title: "Reset PIN directive",
-      steps: ["reason", "stepup"],
-      onComplete: () =>
-        runStepUpMutation(
-          () => forcePinReset.mutateAsync(userId).then(() => undefined),
-          "PIN reset directive issued"
-        ),
-    })
-  // Revoke-all — reason → step-up, then DELETE /admin/users/:id/sessions (force
-  // sign-out of every session). Sensitive (may 403 with step-up). The reason is the
-  // audited justification the backend route requires.
-  const revokeAll = () =>
-    runFlow({
-      title: "Revoke all sessions",
-      steps: ["reason", "stepup"],
-      onComplete: (reason) =>
-        runStepUpMutation(
-          () =>
-            revokeAllUserSessions
-              .mutateAsync({ id: userId, reason })
-              .then(() => undefined),
-          "All sessions revoked"
-        ),
-    })
-  // Unbind a single device — reason → step-up, then DELETE the device (per-row id).
-  const unbindDevice = (deviceId: string) =>
-    runFlow({
-      title: "Unbind device",
-      steps: ["reason", "stepup"],
-      onComplete: () =>
-        runStepUpMutation(
-          () =>
-            revokeDevice
-              .mutateAsync({ id: userId, deviceId })
-              .then(() => undefined),
-          "Device unbound"
-        ),
-    })
-  // SIM-swap re-verify — reason → step-up, then POST /admin/users/:id/sim-swap-reverify
-  // (§3.4: a SIM/number change forces re-verification + step-up before trust is restored).
-  const simSwapReverifyUser = () =>
-    runFlow({
-      title: "SIM-swap re-verify",
-      steps: ["reason", "stepup"],
-      onComplete: () =>
-        runStepUpMutation(
-          () => simSwapReverify.mutateAsync(userId).then(() => undefined),
-          "SIM-swap re-verification triggered"
-        ),
-    })
-  // Manual credit (Phase 7 WRITE, engine-brokered) — MAKER action: raises a pending
-  // `manual_credit` request a SECOND admin approves (four-eyes, §3.1). The flow first
-  // collects asset + amount (the `credit` step), then reason → step-up → engine
-  // preview → maker-checker; onComplete POSTs /admin/users/:id/credit (moves no money
-  // from this surface — the engine credits only on approval). The engine preview +
-  // change diff are derived from the captured input, not hardcoded.
-  const manualCredit = () => {
-    setCreditInput(null)
-    creditInputRef.current = null
-    runFlow({
-      title: "Manual credit",
-      steps: ["credit", "reason", "stepup", "engine", "maker"],
-      onComplete: (reason) => {
-        const captured = creditInputRef.current
-        if (!captured) return
-        const { asset, amount } = captured
-        runStepUpMutation(
-          () =>
-            requestManualCredit
-              .mutateAsync({ id: userId, input: { asset, amount, reason } })
-              .then(() => undefined),
-          `Manual credit of ${amount} ${asset} submitted for approval`
-        )
-      },
-    })
-  }
-
-  // Add note — the reason modal's free text IS the note body; onContinue POSTs
-  // /admin/users/:id/notes (an immutable case note). Low-risk (no step-up), but the
-  // wrapper still surfaces a 403 as the step-up dialog if the server ever gates it.
-  // On success the notes list + timeline invalidate (see the hook) so both re-resolve.
-  const addNote = () =>
-    runFlow({
-      title: "Add note",
-      steps: ["reason"],
-      onComplete: (body) =>
-        runStepUpMutation(
-          () =>
-            createUserNote
-              .mutateAsync({ id: userId, input: { body } })
-              .then(() => undefined),
-          "Note added"
-        ),
-    })
-
-  // Revoke a single END-USER session — reason → step-up, then
-  // DELETE /admin/users/:id/sessions/:sessionId (per-row id). Sensitive (may 403 with
-  // step-up). The reason is the audited justification the backend route requires.
-  const revokeSession = (sessionId: string) =>
-    runFlow({
-      title: "Revoke session",
-      steps: ["reason", "stepup"],
-      onComplete: (reason) =>
-        runStepUpMutation(
-          () =>
-            revokeUserSession
-              .mutateAsync({ id: userId, sessionId, reason })
-              .then(() => undefined),
-          "Session revoked"
-        ),
-    })
-
-  // Remove a single beneficiary — reason → step-up, then DELETE
-  // /admin/beneficiaries/:id (per-row id). Sensitive (may 403 with step-up); moves no
-  // money (§3.1). The reason is the audited justification the backend route requires.
-  const removeBeneficiaryFlow = (beneficiaryId: string) =>
-    runFlow({
-      title: "Remove beneficiary",
-      steps: ["reason", "stepup"],
-      onComplete: (reason) =>
-        runStepUpMutation(
-          () =>
-            removeBeneficiary
-              .mutateAsync({ id: beneficiaryId, reason })
-              .then(() => undefined),
-          "Beneficiary removed"
-        ),
-    })
-
-  // Resend verification — a low-risk courtesy action: no reason, no step-up. Fires
-  // POST /admin/users/:id/resend-verification directly. Still routed through the
-  // step-up wrapper so an unexpected 403 surfaces the re-auth dialog rather than a
-  // dead-end error.
-  const resendUser = () =>
-    runStepUpMutation(
-      () =>
-        resendVerification
-          .mutateAsync({ id: userId })
-          .then(() => undefined),
-      "Verification link re-sent"
-    )
+  const {
+    router,
+    detailQuery,
+    kycQuery,
+    devicesQuery,
+    sessionsQuery,
+    limitsQuery,
+    timelineQuery,
+    notesQuery,
+    mfaEnabled,
+    stepUp,
+    tab,
+    setTab,
+    flow,
+    current,
+    creditInput,
+    setCreditInput,
+    creditInputRef,
+    advance,
+    cancelFlow,
+    openTx,
+    onStepUpSuccess,
+    freezeUser,
+    kycApprove,
+    kycInfo,
+    kycReject,
+    overrideTier,
+    forceReKycFlow,
+    resetPin,
+    revokeAll,
+    unbindDevice,
+    simSwapReverifyUser,
+    manualCredit,
+    addNote,
+    revokeSession,
+    removeBeneficiaryFlow,
+    resendUser,
+    approveTier,
+  } = useUserDetailScreen(userId)
 
   // ── Async branches for the aggregate that gates the whole screen. ────────────────────
   if (detailQuery.isLoading) {
@@ -1727,21 +1357,9 @@ export function UserDetail({ userId }: UserDetailProps) {
           mutation replays. Shared by every KYC + account action on this screen. */}
       <StepUpDialog
         open={stepUp.open}
-        mfaEnabled={me.data?.mfaEnabled ?? false}
+        mfaEnabled={mfaEnabled}
         onOpenChange={stepUp.setOpen}
-        onSuccess={() => {
-          void stepUp
-            .retry()
-            .then((ok) => {
-              if (ok) pushToast("Action recorded", "ok")
-            })
-            .catch((error) =>
-              pushToast(
-                error instanceof ApiError ? error.message : "Action failed",
-                "warn"
-              )
-            )
-        }}
+        onSuccess={onStepUpSuccess}
       />
     </div>
   )
