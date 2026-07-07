@@ -820,6 +820,49 @@ export interface TreasuryPayoutRow {
   big: boolean
 }
 
+/** One balance tile — the hero variant carries the dark-green gradient. */
+export interface BalanceCardProps {
+  card: TreasuryCard
+}
+
+/** The 4-up balance-card row — error / loading / data over `BalanceCard`. */
+export interface BalanceCardsRowProps {
+  cards: TreasuryCard[]
+  isLoading: boolean
+  isError: boolean
+  onRetry: () => void
+}
+
+/** The threshold-breach warning banner (composes the shared acknowledge control). */
+export interface TreasuryAlertBannerProps {
+  alert: import("@handshake-agent/contracts").TreasuryAlert
+}
+
+/** The payout / withdrawal approval queue — loading / error / empty / data. */
+export interface PayoutQueuePanelProps {
+  payouts: TreasuryPayoutRow[]
+  isLoading: boolean
+  isError: boolean
+  /** Which rows have already been approved this session (shows "Requested"). */
+  approved: Record<string, boolean>
+  onRetry: () => void
+  onApprove: (row: TreasuryPayoutRow) => void
+}
+
+/** The child-address sweeps panel — loading / error / empty / data + threshold footer. */
+export interface SweepsPanelProps {
+  sweeps: TreasurySweepRow[]
+  threshold: string
+  isLoading: boolean
+  isError: boolean
+  onRetry: () => void
+}
+
+/** The beneficiaries-in-cooling-off panel (composes the shared step-up override). */
+export interface CoolingOffPanelProps {
+  beneficiaries: import("@handshake-agent/contracts").AdminBeneficiary[]
+}
+
 // ─── Agent config page (design §6.17 Agent config) ──────────────────────────────
 
 /** One "Model & guardrails" key/value row (design §6.17). */
