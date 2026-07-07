@@ -16,6 +16,7 @@ export const KYC_STATUS_META: Record<
   not_started: { label: "Not started", bg: "var(--card2)", fg: "var(--ink2)" },
   pending: { label: "Pending", bg: "var(--swn)", fg: "var(--twn)" },
   pending_review: { label: "In review", bg: "var(--swn)", fg: "var(--twn)" },
+  needs_info: { label: "Needs info", bg: "var(--swn)", fg: "var(--twn)" },
   verified: { label: "Verified", bg: "var(--sok)", fg: "var(--tok)" },
   rejected: { label: "Rejected", bg: "var(--sdn)", fg: "var(--tdn)" },
   expired: { label: "Expired", bg: "var(--sdn)", fg: "var(--tdn)" },

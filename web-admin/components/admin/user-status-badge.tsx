@@ -26,6 +26,7 @@ const KYC_VARIANT: Record<KycStatusBadgeProps["status"], Variant> = {
   not_started: "outline",
   pending: "secondary",
   pending_review: "secondary",
+  needs_info: "secondary",
   verified: "default",
   rejected: "destructive",
   expired: "outline",

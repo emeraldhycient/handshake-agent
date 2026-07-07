@@ -31,6 +31,7 @@ export const KYC_STATUS_TO_BUCKET: Record<
   not_started: "pending",
   pending: "pending",
   pending_review: "needs_info",
+  needs_info: "needs_info",
   verified: "verified",
   rejected: "rejected",
   expired: "rejected",

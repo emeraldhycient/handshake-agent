@@ -27,6 +27,9 @@ export const KycStatusSchema = z.enum([
   "not_started",
   "pending",
   "pending_review",
+  // An operator asked the user for more information (Phase 9 "Request info"); the
+  // engine mirrors this onto User.kycStatus, so the read DTOs must accept it too.
+  "needs_info",
   "verified",
   "rejected",
   "expired",
