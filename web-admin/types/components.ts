@@ -1174,50 +1174,20 @@ export interface CoolingOffPanelProps {
 }
 
 // ─── Agent config page (design §6.17 Agent config) ──────────────────────────────
+// READ-ONLY oversight (§3.1): four cards, each self-contained (own query + four async
+// branches) around a shared shell. The card data comes from `AgentConfigView` /
+// `AgentInsightsView` in contracts — these are the component prop shapes only.
 
-/** One "Model & guardrails" key/value row (design §6.17). */
-export interface AgentGuardrailRow {
-  label: string
-  value: string
+/** A card shell whose title is stable across every async branch. */
+export interface AgentCardShellProps {
+  title: string
+  suffix?: string
+  aside?: ReactNode
+  children: ReactNode
 }
 
-/**
- * One "System-prompt versions" row (design §6.17). No prompt-version endpoint
- * exists — the contract surfaces only a single read-only preview string — so
- * these rows are design-faithful representative content shaped exactly like the
- * design markup (dot + version + tag + meta + a maker-checker action link).
- */
-export interface AgentPromptVersion {
-  /** Semantic version label (mono). */
-  version: string
-  /** The lifecycle tag rendered beside the version ("live" / "staged" / …). */
-  tag: string
-  /** Author + timestamp metadata line. */
-  meta: string
-  /** The status-dot tone — drives the design's coloured dot. */
-  tone: "success" | "warn" | "muted"
-  /** The right-aligned action label ("View diff" / "Promote" / "Rollback"). */
-  action: string
-}
-
-/** A tool-registry capability's access class — read-only tools vs proposal tools. */
-export type AgentToolKind = "read" | "write"
-
-/**
- * One "Tool registry" row (design §6.17). The live tool set is not exposed by an
- * admin endpoint, so these rows are design-faithful and mirror the agent's actual
- * typed tool surface (read-only tools return data; "write" tools only PROPOSE,
- * they never execute — §3.1).
- */
-export interface AgentToolRow {
-  /** Fully-qualified tool name (mono). */
-  name: string
-  /** read = read-only data tool · write = proposal-only tool (never executes). */
-  kind: AgentToolKind
-}
-
-/** One "Cost & usage (24h)" key/value row (design §6.17). */
-export interface AgentUsageStat {
+/** One key/value row (Model & guardrails · Cost & usage) — a label + a mono value. */
+export interface AgentKeyValueRowProps {
   label: string
   value: string
 }
