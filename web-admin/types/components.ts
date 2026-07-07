@@ -980,14 +980,13 @@ export interface OperatorDashboardProps {
 }
 
 // ─── Feature flags page (design §6.28) ─────────────────────────────────────────────
-// PIXEL-FOR-PIXEL design reproduction. The rows render the design's OWN mock flag
-// seed (`docs/design-ref/screens/Flags.html`): a mono key, a description, a
-// per-cohort / percentage `rollout` chip, the `eval → on/off` effective-evaluation
-// preview, and a 52px soft toggle. Real-data reintegration (the effective-config
-// registry) is a separate later step — there is no data-fetch on this screen.
+// WIRED to the effective-config registry (`GET /admin/settings`): a registry-backed
+// flag (one with a `settingKey`) resolves a REAL effective `on`; unbacked design flags
+// keep their default. Flipping a backed flag is a maker-checker → step-up config write.
+// The `rollout` chip stays design-faithful (no cohort/percentage rollout engine).
 
 /**
- * One design-mock feature-flag row (design §6.28). `on` drives the toggle track +
+ * One feature-flag row (design §6.28). `on` drives the toggle track +
  * `eval → on/off` preview; `rollout` is the per-cohort / percentage chip label.
  */
 export interface FeatureFlagRow {
@@ -999,6 +998,42 @@ export interface FeatureFlagRow {
   rollout: string
   /** Whether the flag is currently enabled (drives the toggle + eval preview). */
   on: boolean
+}
+
+/**
+ * A flag definition. `settingKey` bridges the FE flag key → the registry dot-path
+ * that backs it; when present, the row's `on` is the real effective value. Rows
+ * without a `settingKey` are not registry-backed (they keep their design default).
+ */
+export interface FlagDefinition extends FeatureFlagRow {
+  settingKey?: string
+}
+
+/**
+ * A resolved flag row plus the registry key (if any) that backs it — carried so the
+ * write path knows whether it can persist a flip via the settings PATCH. The scope
+ * mirrors the backing setting so the override targets the same leaf the read resolved.
+ */
+export interface ResolvedFlag extends FeatureFlagRow {
+  settingKey?: string
+  scope: import("@handshake-agent/contracts").EffectiveSetting["scope"]
+  scopeValue: string | null
+}
+
+/** One flag row — mono key, desc, rollout chip + eval preview, and a 52×30 soft toggle. */
+export interface FlagRowProps {
+  flag: ResolvedFlag
+  onToggle: (flag: ResolvedFlag) => void
+}
+
+/** The flag list region — loading skeletons / error+retry / the resolved flag rows. */
+export interface FlagsListProps {
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  rows: readonly ResolvedFlag[]
+  onToggle: (flag: ResolvedFlag) => void
+  onRetry: () => void
 }
 
 // ─── Admin settings page (design §6.16) ────────────────────────────────────────────
