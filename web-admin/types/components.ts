@@ -1068,6 +1068,13 @@ export interface ComplianceReportDraftDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
+/** A design status-pill's tokens: its label + background + foreground CSS vars. */
+export interface PillMeta {
+  label: string
+  bg: string
+  fg: string
+}
+
 /** The report types a SAR/STR draft can carry — sourced from the contract enum. */
 export type ComplianceReportType =
   import("@handshake-agent/contracts").ComplianceReportDraftRequest["reportType"]
