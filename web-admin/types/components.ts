@@ -1193,6 +1193,79 @@ export interface AddPriceDialogProps {
   onContinue: (choice: { asset: string; code: string; rate: number }) => void
 }
 
+/** The two priced, fiat-denominated capabilities that carry per-row MIN/MAX bounds. */
+export type PricingCap = "buy" | "sell"
+
+/** The generalized pricing edit chain: value → reason → step-up → maker-checker → PATCH. */
+export type PricingFlowStep = "value" | "reason" | "stepup" | "maker"
+
+/** One resolved spread row (buy or sell) of the design's pricing grid. */
+export interface SpreadRow {
+  id: string
+  cap: string
+  pair: string
+  spread: string
+  fee: string
+  userRate: string
+  margin: string
+  spreadKey: string
+  spreadBps: number | null
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
+  /** Per-(capability × asset × currency) fiat MIN/MAX (the pricing MIN/MAX column). */
+  dir: PricingCap
+  asset: string
+  currency: string
+  minKey: string
+  maxKey: string
+  minValue: number | null
+  maxValue: number | null
+}
+
+/**
+ * A single numeric-pricing edit in flight — the generalized target the audit chain
+ * patches. `format` renders the value for the diff/toast; `integer` restricts the
+ * captured value (bps are whole; a base rate may be a decimal).
+ */
+export interface EditTarget {
+  key: string
+  title: string
+  fieldLabel: string
+  currentLabel: string
+  seed: string
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
+  diffField: string
+  toastLabel: string
+  format: (n: number) => string
+  integer: boolean
+}
+
+/** One body row of the spread grid — including the inline Edit + min/max controls. */
+export interface SpreadTableRowProps {
+  row: SpreadRow
+  onEdit: (row: SpreadRow) => void
+  onEditMin: (row: SpreadRow) => void
+  onEditMax: (row: SpreadRow) => void
+}
+
+/** The spread card — preview-currency + fee header strip, then the 7-column grid. */
+export interface SpreadCardProps {
+  rows: SpreadRow[]
+  currencies: string[]
+  previewCurrency: string
+  feeLabel: string
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  onCurrencyChange: (currency: string) => void
+  onRetry: () => void
+  onEditFee: () => void
+  onEdit: (row: SpreadRow) => void
+  onEditMin: (row: SpreadRow) => void
+  onEditMax: (row: SpreadRow) => void
+}
+
 // ─── Capabilities / service registry page (design §6.25) ─────────────────────────
 // PIXEL reproduction of `docs/design-ref/screens/Capabilities.html`: the master
 // switchboard. Each transactable capability is bound to a provider port and rendered
