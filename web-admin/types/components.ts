@@ -1845,18 +1845,8 @@ export interface ProviderTestButtonProps {
 
 // ─── Approvals page (design §6 Approvals, `screens/Approvals.html`) ──────────────
 
-/**
- * The change class of a dual-control request — drives the kind pill's tint
- * (info / warn / success) and reads alongside its label so colour is never the
- * sole signal.
- */
-export type ApprovalKind =
-  | "Pricing change"
-  | "Capability"
-  | "Refund"
-  | "Tier override"
-  | "KYC decision"
-  | "Manual credit"
+/** The two inbox buckets: changes awaiting my approval vs. changes I raised. */
+export type AprTab = "awaiting" | "mine"
 
 /**
  * One from→to field change inside a maker-checker request. The `from` is struck
@@ -1871,31 +1861,46 @@ export interface ApprovalDiffRow {
   to: string
 }
 
-/**
- * A pending dual-control request in the approval inbox. This is design-faithful
- * representative content — there is no approvals endpoint yet — so the requester
- * is identified by their originating role (`byRole`), which the design uses to
- * derive "your own request" (a request raised by your own role needs a different
- * admin), while the target / reason / diff mirror the design's seed items.
- */
-export interface ApprovalRequest {
-  /** Stable id + a11y anchor (design's `apr_5001` mono id). */
-  id: string
-  kind: ApprovalKind
-  /** One-line summary of the change. */
-  title: string
-  /** Requester's display name. */
-  by: string
-  /** The role that raised the request — drives the "your own request" guard. */
-  byRole: string
-  /** Relative timestamp ("34m ago"). */
-  ago: string
-  /** The console area the change targets ("Pricing", "Capabilities", …). */
-  resource: string
-  /** The maker's stated justification (shown in the reason box). */
-  reason: string
-  /** The itemized from→to changes this request would apply. */
-  diff: ApprovalDiffRow[]
+/** One itemized diff line inside a request card. */
+export interface DiffLineProps {
+  diff: ApprovalDiffRow
+}
+
+/** A single change-request card — kind pill, meta, reason, diff, disposition footer. */
+export interface RequestCardProps {
+  request: import("@handshake-agent/contracts").ChangeRequest
+  /** My own request → dual control shows a guard, never live actions. */
+  mine: boolean
+  /** A disposition is in flight; both actions disable. */
+  busy: boolean
+  onApprove: () => void
+  onReject: () => void
+}
+
+/** The bucket tab row (Awaiting me · My requests) with count badges. */
+export interface ApprovalTabsProps {
+  tab: AprTab
+  awaitingCount: number
+  myCount: number
+  onSelect: (tab: AprTab) => void
+}
+
+/** The four-branch inbox region (loading / error / inbox-zero / request cards). */
+export interface ApprovalInboxProps {
+  isLoading: boolean
+  isError: boolean
+  onRetry: () => void
+  visible: readonly import("@handshake-agent/contracts").ChangeRequest[]
+  tab: AprTab
+  /** My admin id — an own-request row still shows the guard even off the "mine" tab. */
+  myAdminId: string | undefined
+  busy: boolean
+  onApprove: (
+    request: import("@handshake-agent/contracts").ChangeRequest
+  ) => void
+  onReject: (
+    request: import("@handshake-agent/contracts").ChangeRequest
+  ) => void
 }
 
 // ─── Shared flow modals (design template §5 "Flow modals", lines 1161-1259) ─────────
