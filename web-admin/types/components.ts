@@ -1097,6 +1097,20 @@ export interface SessionRowProps {
   session: import("@handshake-agent/contracts").AdminSessionView
 }
 
+// ─── My account page (self-service profile, /account) ───────────────────────────────
+
+/** The self-service profile form — edits the operator's own display name (PATCH /admin/me). */
+export interface AccountFormProps {
+  me: import("@handshake-agent/contracts").AdminMe
+}
+
+/** One read-only identity row (email / role / status / 2FA — managed by an admin). */
+export interface ReadOnlyRowProps {
+  label: string
+  value: string
+  capitalize?: boolean
+}
+
 // ─── Reconciliation page (design §6.12) ────────────────────────────────────────────
 // No reconciliation endpoint exists yet, so the Recon screen is design-faithful:
 // these shapes describe the component's local sample content, not a contracts DTO.
