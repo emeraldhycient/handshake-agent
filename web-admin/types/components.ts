@@ -1118,6 +1118,20 @@ export interface UdVelocityBarProps {
   pct: string
 }
 
+/** The steps a user-detail action flow walks (design runFlow: credit → reason → step-up → engine/maker). */
+export type UdFlowStep = "credit" | "reason" | "stepup" | "engine" | "maker"
+
+/** A user-detail action flow's config: title, step sequence, modal payloads, and the completion side-effect. */
+export interface UdFlowConfig {
+  title: string
+  steps: UdFlowStep[]
+  effect?: EngineEffectRow[]
+  ledger?: EngineLedgerRow[]
+  diff?: MakerCheckerDiffRow[]
+  /** Side-effect run once the final step is confirmed (mutations, toasts); gets the captured reason. */
+  onComplete?: (reason: string) => void
+}
+
 /** The report types a SAR/STR draft can carry — sourced from the contract enum. */
 export type ComplianceReportType =
   import("@handshake-agent/contracts").ComplianceReportDraftRequest["reportType"]
