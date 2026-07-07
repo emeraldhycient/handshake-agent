@@ -1195,6 +1195,31 @@ export interface CapabilityRowProps {
   onToggle: (row: CapabilityRow) => void
 }
 
+/**
+ * Per-capability display metadata the config contract does NOT provide — the human
+ * label, description, bound provider port, icon path, and tint. Keyed by the crypto
+ * capability leaf; `on` is NOT here (it comes from the live setting value).
+ */
+export interface CapabilityPresentation {
+  /** The `catalog.capabilities.crypto.<x>` registry key backing this row. */
+  settingKey: string
+  label: string
+  desc: string
+  provider: string
+  tone: CapabilityTone
+  icon: string
+}
+
+/**
+ * A resolved capability row plus the registry key + scope that back it — carried so
+ * the write path targets the same leaf the read resolved.
+ */
+export interface ResolvedCapability extends CapabilityRow {
+  settingKey: string
+  scope: import("@handshake-agent/contracts").EffectiveSetting["scope"]
+  scopeValue: string | null
+}
+
 // ─── WhatsApp page (design §6.20) ────────────────────────────────────────────────────
 // PIXEL reproduction of `docs/design-ref/screens/Whatsapp.html`: this screen is a
 // pure design reproduction (no `useWhatsAppConfig` / TanStack Query). Its content is
