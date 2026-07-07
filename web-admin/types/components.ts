@@ -655,6 +655,12 @@ export interface AmlRuleDialogProps {
   rule: AmlRule | null
 }
 
+/** The AML rule create/edit form body — mounted only while the dialog is open. */
+export interface AmlRuleFormProps {
+  rule: AmlRule | null
+  onClose: () => void
+}
+
 // ─── AML / risk page (§6.6) ─────────────────────────────────────────────────────────
 
 export interface AmlRiskRuleRowProps {
