@@ -240,6 +240,35 @@ export interface RouteGuardProps {
   children: ReactNode
 }
 
+/** The RBAC-scoped sidebar nav list (loading / error / empty / data branches). */
+export interface SidebarNavListProps {
+  loading: boolean
+  error: boolean
+  collapsed: boolean
+  groups: NavGroup[]
+  pathname: string
+  badges: NavBadgeCounts
+}
+
+/** The sidebar rail: brand + nav list + footer (collapse / MFA setup / sign out). */
+export interface SidebarRailProps extends SidebarNavListProps {
+  onToggleCollapse: () => void
+  /** The operator has loaded but hasn't enrolled MFA → show the setup button. */
+  showMfaSetup: boolean
+  onOpenMfa: () => void
+  onSignOut: () => void
+}
+
+/** The top bar: command-palette pill + env chip + theme toggle + alerts + account. */
+export interface TopBarProps {
+  onOpenCmdk: () => void
+  theme: "light" | "dark"
+  onToggleTheme: () => void
+  email: string
+  roleLabel: string
+  onSignOut: () => void
+}
+
 // ─── Topbar controls (command palette / notifications / account) ────────────────
 
 /** One sidebar nav item — its route, label, icon, RBAC menu gate, and optional badge. */
