@@ -4,6 +4,7 @@ import type {
   KycSubmissionDetail,
 } from "@handshake-agent/contracts"
 
+import { ST_META } from "@/constants/user-detail"
 import type { PillMeta } from "@/types/components"
 
 /** Display name from KYC identity, falling back to the email local-part, then id. */
@@ -44,4 +45,27 @@ export function beneVerificationMeta(status: string): PillMeta {
   if (s.includes("reject") || s.includes("fail"))
     return { label: "Mismatch", bg: "var(--sdn)", fg: "var(--tdn)" }
   return { label: "Unverified", bg: "var(--swn)", fg: "var(--twn)" }
+}
+
+/** A human action label from an audit-log action key (e.g. "kyc_state_change"). */
+export function actionLabel(action: string): string {
+  return action.replace(/_/g, " ")
+}
+
+/** Timeline dot tint by action family — deterministic, no colour-only signalling. */
+export function actionDot(action: string): string {
+  if (action.includes("reject") || action.includes("block")) return "#c0563f"
+  if (action.includes("override") || action.includes("reset")) return "#f5a623"
+  return "#8b948a"
+}
+
+/** Tx status → compact pill meta, tolerant of unknown engine statuses (no design fallback). */
+export function statusMeta(status: string): { l: string; bg: string; fg: string } {
+  return (
+    ST_META[status] ?? {
+      l: status.replace(/_/g, " "),
+      bg: "var(--card2)",
+      fg: "var(--ink2)",
+    }
+  )
 }

@@ -5,10 +5,13 @@ import type {
 } from "@handshake-agent/contracts"
 
 import {
+  actionDot,
+  actionLabel,
   approveTargetTier,
   beneVerificationMeta,
   displayName,
   initialsOf,
+  statusMeta,
 } from "./user-detail"
 
 const DETAIL = {
@@ -66,5 +69,30 @@ describe("beneVerificationMeta", () => {
     expect(beneVerificationMeta("rejected").label).toBe("Mismatch")
     expect(beneVerificationMeta("failed").label).toBe("Mismatch")
     expect(beneVerificationMeta("pending").label).toBe("Unverified")
+  })
+})
+
+describe("actionLabel / actionDot", () => {
+  it("humanizes an action key by unslugging underscores", () => {
+    expect(actionLabel("kyc_state_change")).toBe("kyc state change")
+  })
+  it("tints reject/block danger, override/reset amber, else neutral", () => {
+    expect(actionDot("kyc_reject")).toBe("#c0563f")
+    expect(actionDot("device_block")).toBe("#c0563f")
+    expect(actionDot("tier_override")).toBe("#f5a623")
+    expect(actionDot("pin_reset")).toBe("#f5a623")
+    expect(actionDot("note_added")).toBe("#8b948a")
+  })
+})
+
+describe("statusMeta", () => {
+  it("maps known statuses and falls back for unknown ones (unslugged, neutral)", () => {
+    expect(statusMeta("completed").l).toBe("Settled")
+    expect(statusMeta("refunded").l).toBe("Refunded")
+    expect(statusMeta("weird_state")).toEqual({
+      l: "weird state",
+      bg: "var(--card2)",
+      fg: "var(--ink2)",
+    })
   })
 })

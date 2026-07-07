@@ -1075,6 +1075,21 @@ export interface PillMeta {
   fg: string
 }
 
+/** The user-detail tab ids (design vUserDetail tab strip). */
+export type UdTab =
+  | "profile"
+  | "kyc"
+  | "devices"
+  | "security"
+  | "wallets"
+  | "bene"
+  | "tx"
+  | "chat"
+  | "limits"
+
+/** Header-action keys — dispatch is by key so the freeze label can toggle Freeze↔Unfreeze. */
+export type UdActionKey = "freeze" | "note" | "resend"
+
 /** The report types a SAR/STR draft can carry — sourced from the contract enum. */
 export type ComplianceReportType =
   import("@handshake-agent/contracts").ComplianceReportDraftRequest["reportType"]
