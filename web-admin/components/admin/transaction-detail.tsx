@@ -63,9 +63,6 @@ import {
   ReasonModal,
 } from "@/components/admin/flows"
 import type {
-  AdminTxnEconomics,
-  AdminTxnLedgerLeg,
-  AdminTxnTimelineEntry,
   CreateChangeRequest,
   ReconBreak,
 } from "@handshake-agent/contracts"
@@ -75,53 +72,22 @@ import type {
   TxFlowKind,
 } from "@/types/components"
 import {
-  formatAmount,
-  formatCrypto,
-  formatDelta,
-  formatFiat,
-} from "@/lib/format"
-import {
-  DASH,
   LEDGER_GRID,
-  RECON_KIND_LABEL,
   STATUS_LABEL,
   STATUS_TO_PILL,
-  TIMELINE_TONE,
   TX_ACTIONS,
 } from "@/constants/transaction-detail"
 import {
+  economicsRows,
   flowSpecFor,
-  formatWhen,
   headerTitle,
   providerRefs,
-  timelineTone,
   txActionError,
 } from "@/lib/transactions/tx-detail"
-
-// ─── Card primitives (design §5: white/--card, 1px --line, radius 16, pad 18/20) ──
-
-function Panel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="rounded-[16px] border border-line bg-card p-[18px_20px]">
-      {children}
-    </div>
-  )
-}
-
-function PanelTitle({
-  children,
-  note,
-}: {
-  children: React.ReactNode
-  note?: string
-}) {
-  return (
-    <div className="mb-3 text-[13px] font-extrabold text-ink">
-      {children}
-      {note && <span className="font-semibold text-ink3"> · {note}</span>}
-    </div>
-  )
-}
+import { Panel, PanelTitle } from "@/components/admin/transaction-detail/panel"
+import { LedgerRow } from "@/components/admin/transaction-detail/ledger-row"
+import { TimelineStep } from "@/components/admin/transaction-detail/timeline-step"
+import { ReconResultPanel } from "@/components/admin/transaction-detail/recon-result-panel"
 
 // ─── Screen ─────────────────────────────────────────────────────────────────────
 
@@ -487,7 +453,7 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
                   </div>
                 ) : (
                   tx.ledgerLegs.map((l, i) => (
-                    <LedgerRowView key={`${l.accountId}-${i}`} leg={l} />
+                    <LedgerRow key={`${l.accountId}-${i}`} leg={l} />
                   ))
                 )}
               </Panel>
@@ -506,7 +472,7 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
                   </div>
                 ) : (
                   tx.timeline.map((s, i) => (
-                    <TimelineStepView
+                    <TimelineStep
                       key={`${s.status}-${i}`}
                       entry={s}
                       hasNext={i < tx.timeline.length - 1}
@@ -630,204 +596,6 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
           />
         </>
       )}
-    </div>
-  )
-}
-
-// ─── Data-branch sub-renderers ────────────────────────────────────────────────────
-
-/**
- * The itemized-parameter rows the design shows, each reading one field off the
- * real `AdminTxnEconomics` block. A null field renders as "—" (never fabricated).
- * The internal-margin row is operator-only (warn-toned) — never shown to users.
- */
-function economicsRows(
-  e: AdminTxnEconomics
-): { label: string; value: string; warn?: boolean }[] {
-  const amount =
-    e.amount && e.asset ? formatCrypto(e.amount, e.asset) : e.amount ?? DASH
-  const fc = e.fiatCurrency
-  const money = (v: string | null): string =>
-    v !== null && fc ? formatFiat(v, fc) : v ?? DASH
-  const fiat = e.fiatAmount ? money(e.fiatAmount) : DASH
-  const spread = e.fxSpreadBps ? `${e.fxSpreadBps} bps` : DASH
-  const rows: { label: string; value: string; warn?: boolean }[] = [
-    { label: "Amount", value: amount },
-    { label: "Fiat leg", value: fiat },
-    { label: "Rate (spread-folded)", value: e.rate ?? DASH },
-    { label: "Processing fee", value: money(e.processingFee) },
-    { label: "FX spread", value: spread },
-    {
-      // Operator-only precise margin (a rate delta at full precision, not a 2-dp
-      // fiat figure) — left unformatted so the sub-unit precision is not rounded away.
-      label: "Internal margin (operator)",
-      value: e.internalMargin ?? DASH,
-      warn: true,
-    },
-  ]
-  // Realized economics (operator-only) — only for priced buy/sell (realizedProfit
-  // non-null); derived from the settle-stamped metadata via computeTxProfit.
-  if (e.realizedProfit !== null) {
-    rows.push(
-      { label: "Realized fee (operator)", value: money(e.realizedFee), warn: true },
-      {
-        label: "Realized spread (operator)",
-        value: money(e.realizedSpread),
-        warn: true,
-      },
-      {
-        label: "Realized profit (operator)",
-        value: money(e.realizedProfit),
-        warn: true,
-      },
-    )
-  }
-  return rows
-}
-
-/** One double-entry ledger leg → the design's Account/Dir/Amount/Seq row. */
-function LedgerRowView({ leg }: { leg: AdminTxnLedgerLeg }) {
-  const dir = leg.direction === "debit" ? "DEBIT" : "CREDIT"
-  return (
-    <div
-      className={cn(
-        LEDGER_GRID,
-        "items-center border-t border-line2 px-0.5 py-[9px]"
-      )}
-    >
-      <span className="truncate font-mono text-[11.5px] text-ink2">
-        {`${leg.accountType}:${leg.accountId}:${leg.currency}`}
-      </span>
-      <span
-        className={cn(
-          "text-[11px] font-extrabold",
-          dir === "DEBIT" ? "text-tdn" : "text-tok"
-        )}
-      >
-        {dir}
-      </span>
-      <span className="text-right font-mono text-[11.5px] font-bold tabular-nums">
-        {formatAmount(leg.amount, leg.currency)}
-      </span>
-      {/* Seq: the per-account monotonic posting order. */}
-      <span className="text-right font-mono text-[11px] text-ink3 tabular-nums">
-        {leg.sequence}
-      </span>
-    </div>
-  )
-}
-
-/** One derived lifecycle event → the design's vertical stepper node. */
-function TimelineStepView({
-  entry,
-  hasNext,
-}: {
-  entry: AdminTxnTimelineEntry
-  hasNext: boolean
-}) {
-  const tone = TIMELINE_TONE[timelineTone(entry.status)]
-  return (
-    <div className="flex gap-3">
-      <div className="flex flex-col items-center">
-        <span
-          className={cn(
-            "flex size-[22px] flex-none items-center justify-center rounded-full",
-            tone.dotBg,
-            tone.dotFg
-          )}
-        >
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            aria-hidden
-          >
-            <path
-              d={tone.icon}
-              stroke="currentColor"
-              strokeWidth="2.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </span>
-        {hasNext && <span className="min-h-4 w-0.5 flex-1 bg-line2" />}
-      </div>
-      <div className="flex-1 pb-3.5">
-        <div className={cn("text-[12.5px] font-bold capitalize", tone.fg)}>
-          {entry.status}
-        </div>
-        <div className="font-mono text-[10.5px] text-ink3 tabular-nums">
-          {formatWhen(entry.at)}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/**
- * The inline result of a "Re-run recon" pass (four branches): loading while the
- * detection runs, an error if it rejected, the reconciled (no-break) note when the
- * list is empty, or the detected breaks. Read-only — this panel only surfaces the
- * provider-vs-ledger discrepancy; remediation lives on the Reconciliation surface.
- */
-function ReconResultPanel({
-  loading,
-  error,
-  breaks,
-}: {
-  loading: boolean
-  error: string | null
-  breaks: ReconBreak[] | null
-}) {
-  return (
-    <div className="mt-3.5">
-      <Panel>
-        <PanelTitle>Reconciliation re-run</PanelTitle>
-        {loading ? (
-          <div className="flex flex-col gap-2" aria-busy="true">
-            <Skeleton className="h-5 w-full rounded" />
-            <Skeleton className="h-5 w-2/3 rounded" />
-          </div>
-        ) : error ? (
-          <div className="rounded-[10px] border border-sdn bg-sdn/40 px-3 py-2.5">
-            <p className="text-[12.5px] font-bold text-tdn">
-              Reconciliation re-run failed
-            </p>
-            <p className="mt-0.5 text-[11.5px] text-ink2">{error}</p>
-          </div>
-        ) : breaks && breaks.length > 0 ? (
-          <ul className="flex flex-col gap-2">
-            {breaks.map((b) => (
-              <li
-                key={b.id}
-                className="flex items-center justify-between gap-3 rounded-[10px] border border-sdn bg-card px-3 py-2.5"
-              >
-                <span className="text-[12.5px] font-bold text-ink">
-                  {RECON_KIND_LABEL[b.kind]}
-                </span>
-                <span className="font-mono text-[12px] font-extrabold tabular-nums text-tdn">
-                  {formatDelta(b.delta, b.asset)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <div className="flex items-center gap-[7px] text-[12.5px] font-bold text-tok">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
-              <path
-                d="m5 12 5 5L20 7"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            Provider and ledger reconcile — no breaks detected.
-          </div>
-        )}
-      </Panel>
     </div>
   )
 }

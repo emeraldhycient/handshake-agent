@@ -771,6 +771,37 @@ export interface TxRefRow {
   href?: string
 }
 
+/** One itemized-economics row (label + value + operator-only warn tint). */
+export interface TxEconomicsRow {
+  label: string
+  value: string
+  warn?: boolean
+}
+
+/** The tx-detail card-title primitive (bold label + optional muted note). */
+export interface TxPanelTitleProps {
+  children: ReactNode
+  note?: string
+}
+
+/** One double-entry ledger leg row (Account / Dir / Amount / Seq). */
+export interface TxLedgerRowProps {
+  leg: import("@handshake-agent/contracts").AdminTxnLedgerLeg
+}
+
+/** One engine-state timeline stepper node (+ whether a connector to the next follows). */
+export interface TxTimelineStepProps {
+  entry: import("@handshake-agent/contracts").AdminTxnTimelineEntry
+  hasNext: boolean
+}
+
+/** The inline "Re-run recon" result panel (loading / error / breaks / reconciled). */
+export interface TxReconResultProps {
+  loading: boolean
+  error: string | null
+  breaks: import("@handshake-agent/contracts").ReconBreak[] | null
+}
+
 // ─── Compliance page ─────────────────────────────────────────────────────────────
 
 export interface ComplianceEventDetailProps {

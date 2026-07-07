@@ -1,10 +1,14 @@
-import type { AdminTxnDetail } from "@handshake-agent/contracts"
+import type {
+  AdminTxnDetail,
+  AdminTxnEconomics,
+} from "@handshake-agent/contracts"
 
 import { ApiError } from "@/lib/api/client"
-import { formatAmount, formatCrypto } from "@/lib/format"
-import { PROVIDER_META } from "@/constants/transaction-detail"
+import { formatAmount, formatCrypto, formatFiat } from "@/lib/format"
+import { DASH, PROVIDER_META } from "@/constants/transaction-detail"
 import type {
   EngineLedgerRow,
+  TxEconomicsRow,
   TxFlowKind,
   TxFlowSpec,
   TxRefRow,
@@ -140,4 +144,50 @@ export function txActionError(error: unknown): string {
   if (error instanceof ApiError) return error.message
   if (error instanceof Error) return error.message
   return "The action could not be completed."
+}
+
+/**
+ * The itemized-parameter rows the design shows, each reading one field off the real
+ * `AdminTxnEconomics` block. A null field renders as "—" (never fabricated). The
+ * internal-margin + realized rows are operator-only (warn-toned) — never shown to
+ * users. Realized economics appear only for a priced buy/sell (realizedProfit set).
+ */
+export function economicsRows(e: AdminTxnEconomics): TxEconomicsRow[] {
+  const amount =
+    e.amount && e.asset ? formatCrypto(e.amount, e.asset) : e.amount ?? DASH
+  const fc = e.fiatCurrency
+  const money = (v: string | null): string =>
+    v !== null && fc ? formatFiat(v, fc) : v ?? DASH
+  const fiat = e.fiatAmount ? money(e.fiatAmount) : DASH
+  const spread = e.fxSpreadBps ? `${e.fxSpreadBps} bps` : DASH
+  const rows: TxEconomicsRow[] = [
+    { label: "Amount", value: amount },
+    { label: "Fiat leg", value: fiat },
+    { label: "Rate (spread-folded)", value: e.rate ?? DASH },
+    { label: "Processing fee", value: money(e.processingFee) },
+    { label: "FX spread", value: spread },
+    {
+      // Operator-only precise margin (a rate delta at full precision, not a 2-dp
+      // fiat figure) — left unformatted so the sub-unit precision is not rounded away.
+      label: "Internal margin (operator)",
+      value: e.internalMargin ?? DASH,
+      warn: true,
+    },
+  ]
+  if (e.realizedProfit !== null) {
+    rows.push(
+      { label: "Realized fee (operator)", value: money(e.realizedFee), warn: true },
+      {
+        label: "Realized spread (operator)",
+        value: money(e.realizedSpread),
+        warn: true,
+      },
+      {
+        label: "Realized profit (operator)",
+        value: money(e.realizedProfit),
+        warn: true,
+      },
+    )
+  }
+  return rows
 }
