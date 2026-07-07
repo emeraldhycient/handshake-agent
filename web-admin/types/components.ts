@@ -242,6 +242,27 @@ export interface RouteGuardProps {
 
 // ─── Topbar controls (command palette / notifications / account) ────────────────
 
+/** One sidebar nav item — its route, label, icon, RBAC menu gate, and optional badge. */
+export interface NavItem {
+  href: string
+  label: string
+  icon: import("lucide-react").LucideIcon
+  /**
+   * The `menu_item` resourceId(s) that gate this item. `null` → always shown
+   * (Dashboard + Admin settings degrade gracefully). When an array, the item
+   * shows if ANY listed menu is granted.
+   */
+  menu: string | string[] | null
+  /** Optional count badge key resolved by the shell (design §4.1). */
+  badge?: "kyc" | "stuck" | "recon" | "approvals"
+}
+
+/** One labelled sidebar nav group — renders only when it has ≥1 visible item. */
+export interface NavGroup {
+  label: string
+  items: readonly NavItem[]
+}
+
 /**
  * A flattened, navigable destination sourced from the shell's nav groups —
  * the command palette's search corpus (every reachable screen).
