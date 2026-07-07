@@ -1421,9 +1421,28 @@ export interface AssetLogoProps {
 // ─── Templates page (design §6.19) ──────────────────────────────────────────────────
 // The Templates screen is WIRED to the real GET /admin/notification-templates
 // endpoint (Phase 6a) and maps the contract's `NotificationTemplate` directly onto
-// each card, so it no longer needs local design-faithful card types here. The
-// design's approval pill has no backing contract field and is omitted (recorded as a
-// shape gap for a later backend-enrichment pass).
+// each card. The design's approval pill has no backing contract field and is omitted
+// (recorded as a shape gap). Create/edit is the shared step-up-gated TemplateEditorDialog.
+
+/** One template preview card — channel chip · mono name · Edit · locale/vars · body. */
+export interface TemplateCardProps {
+  template: import("@handshake-agent/contracts").NotificationTemplate
+  onEdit: (
+    template: import("@handshake-agent/contracts").NotificationTemplate
+  ) => void
+}
+
+/** The template preview grid — the four async branches over the templates read. */
+export interface TemplatesGridProps {
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  templates: readonly import("@handshake-agent/contracts").NotificationTemplate[]
+  onEdit: (
+    template: import("@handshake-agent/contracts").NotificationTemplate
+  ) => void
+  onRetry: () => void
+}
 
 // ─── Currency catalog page (design §6.24) ───────────────────────────────────────────
 // WIRED to the real admin fiat catalog (`GET /admin/config/catalog`, incl. disabled/off
