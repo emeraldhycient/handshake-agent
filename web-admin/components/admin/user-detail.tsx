@@ -48,19 +48,13 @@ import type {
 import {
   actionDot,
   actionLabel,
-  beneVerificationMeta,
   displayName,
-  fmtFiat,
   initialsOf,
-  statusMeta,
 } from "@/lib/users/user-detail"
 import {
-  BANK_ICON,
-  CRYPTO_ICON,
   KYC_STATUS_META,
   NOT_PROVIDED,
   TABS,
-  TYPE_ICON,
   U_ACTIONS,
 } from "@/constants/user-detail"
 import { useUserDetailScreen } from "@/lib/hooks/use-user-detail"
@@ -70,39 +64,9 @@ import {
   UserDetailSkeleton,
 } from "@/components/admin/user-detail/shells"
 import { LimitsTab } from "@/components/admin/user-detail/limits-tab"
-
-// ── Chat (lines 618-623) ──────────────────────────────────────────────────────────────
-
-const CHAT: readonly {
-  text: string
-  justify: "flex-start" | "flex-end"
-  bg: string
-  fg: string
-  intent?: string
-  proposal?: string
-}[] = [
-  {
-    text: "I want to buy 100 USDT",
-    justify: "flex-end",
-    bg: "#1a4536",
-    fg: "#fff",
-  },
-  {
-    text: "Sure — 100 USDT at ₦1,064.69 = ₦106,469. Fee ₦1,178. Confirm with your PIN?",
-    justify: "flex-start",
-    bg: "var(--card2)",
-    fg: "var(--ink)",
-    intent: "crypto.buy",
-    proposal: "proposal #p_8841",
-  },
-  { text: "Confirmed ✅", justify: "flex-end", bg: "#1a4536", fg: "#fff" },
-  {
-    text: "Done! 100 USDT is in your wallet. [receipt link redacted]",
-    justify: "flex-start",
-    bg: "var(--card2)",
-    fg: "var(--ink)",
-  },
-]
+import { ChatTab } from "@/components/admin/user-detail/chat-tab"
+import { BeneficiariesTab } from "@/components/admin/user-detail/beneficiaries-tab"
+import { TransactionsTab } from "@/components/admin/user-detail/transactions-tab"
 
 export function UserDetail({ userId }: UserDetailProps) {
   const {
@@ -1092,207 +1056,22 @@ export function UserDetail({ userId }: UserDetailProps) {
 
       {/* ===== BENEFICIARIES ===== */}
       {tab === "bene" && (
-        <div className="rounded-2xl border border-line bg-card p-[6px_20px]">
-          {detail.beneficiaries.length === 0 ? (
-            <div className="py-8 text-center text-[12.5px] text-ink3">
-              No saved beneficiaries.
-            </div>
-          ) : (
-            detail.beneficiaries.map((b) => {
-              const ne = beneVerificationMeta(b.verificationStatus)
-              return (
-                <div
-                  key={b.id}
-                  className="flex items-center gap-[13px] border-b border-line2 py-[15px]"
-                >
-                  <span className="flex size-[38px] flex-none items-center justify-center rounded-[10px] bg-card2 text-ink2">
-                    <svg
-                      width="17"
-                      height="17"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      aria-hidden
-                    >
-                      <path
-                        d={b.type === "bank_account" ? BANK_ICON : CRYPTO_ICON}
-                        stroke="currentColor"
-                        strokeWidth="1.6"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[13px] font-bold">{b.label}</div>
-                    <div className="font-mono text-[11.5px] text-ink3 capitalize">
-                      {b.type.replace(/_/g, " ")}
-                    </div>
-                  </div>
-                  <span
-                    className="rounded-full px-2.5 py-1 text-[10.5px] font-bold"
-                    style={{ background: ne.bg, color: ne.fg }}
-                  >
-                    {ne.label}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => removeBeneficiaryFlow(b.id)}
-                    className="cursor-pointer text-[11.5px] font-bold text-ink3 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-                  >
-                    Remove
-                  </button>
-                </div>
-              )
-            })
-          )}
-        </div>
+        <BeneficiariesTab
+          beneficiaries={detail.beneficiaries}
+          onRemove={removeBeneficiaryFlow}
+        />
       )}
 
       {/* ===== TRANSACTIONS ===== */}
       {tab === "tx" && (
-        <div className="overflow-hidden rounded-2xl border border-line bg-card">
-          {detail.recentTransactions.length === 0 ? (
-            <div className="py-8 text-center text-[12.5px] text-ink3">
-              No transactions for this user.
-            </div>
-          ) : (
-            detail.recentTransactions.map((t) => {
-              const sm = statusMeta(t.status)
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => openTx(t.id)}
-                  className="grid w-full cursor-pointer grid-cols-[1.2fr_1fr_1fr_1fr] items-center gap-3 border-b border-line2 p-[13px_18px] text-left transition-colors hover:bg-hov focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-                >
-                  <div className="flex items-center gap-[9px]">
-                    <span className="flex size-[30px] flex-none items-center justify-center rounded-lg bg-card2 text-ink2">
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        aria-hidden
-                      >
-                        <path
-                          d={TYPE_ICON[t.type] ?? TYPE_ICON.buy}
-                          stroke="currentColor"
-                          strokeWidth="1.9"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </span>
-                    <div>
-                      <div className="text-[12.5px] font-bold capitalize">
-                        {t.type}
-                      </div>
-                      <div className="font-mono text-[10.5px] text-ink3">
-                        {t.id}
-                      </div>
-                    </div>
-                  </div>
-                  {/* Amount (crypto leg) + NGN fiat leg projected from metadata. */}
-                  <div className="font-mono text-[12.5px] font-bold tabular-nums">
-                    {t.amount !== null ? (
-                      <>
-                        {formatCryptoAmount(t.amount)}
-                        {t.asset && (
-                          <span className="ml-1 text-[10.5px] text-ink3">
-                            {t.asset}
-                          </span>
-                        )}
-                        <div className="text-[10.5px] font-semibold text-ink3">
-                          {fmtFiat(t.fiatAmount, t.fiatCurrency)}
-                        </div>
-                      </>
-                    ) : (
-                      <span className="text-ink3">{NOT_PROVIDED}</span>
-                    )}
-                  </div>
-                  <div className="text-xs text-ink2 tabular-nums">
-                    {t.createdAt}
-                  </div>
-                  <div>
-                    <span
-                      className="rounded-full px-[9px] py-[3px] text-[10.5px] font-bold capitalize"
-                      style={{ background: sm.bg, color: sm.fg }}
-                    >
-                      {sm.l}
-                    </span>
-                  </div>
-                </button>
-              )
-            })
-          )}
-        </div>
+        <TransactionsTab
+          transactions={detail.recentTransactions}
+          onOpenTx={openTx}
+        />
       )}
 
       {/* ===== CHAT ===== */}
-      {tab === "chat" && (
-        <div className="max-w-[720px] rounded-2xl border border-line bg-card p-5">
-          <div className="mb-4 flex items-center gap-[9px] text-xs text-ink3">
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              aria-hidden
-            >
-              <path
-                d="M7 11V8a5 5 0 0 1 10 0v3"
-                stroke="currentColor"
-                strokeWidth="1.6"
-              />
-              <rect
-                x="5"
-                y="11"
-                width="14"
-                height="9"
-                rx="2"
-                stroke="currentColor"
-                strokeWidth="1.6"
-              />
-            </svg>
-            Read-only transcript · secrets redacted · WhatsApp + web
-          </div>
-          {CHAT.map((m, i) => (
-            <div
-              key={i}
-              className="mb-3 flex"
-              style={{ justifyContent: m.justify }}
-            >
-              <div className="max-w-[75%]">
-                <div
-                  className="rounded-[14px] p-[10px_13px] text-[13px] leading-[1.45]"
-                  style={{ background: m.bg, color: m.fg }}
-                >
-                  {m.text}
-                </div>
-                {m.intent && (
-                  <div className="mt-[5px] inline-flex items-center gap-1.5 rounded-full bg-sif px-[9px] py-[3px] text-[10.5px] font-bold text-tif">
-                    <svg
-                      width="11"
-                      height="11"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      aria-hidden
-                    >
-                      <path
-                        d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                    intent: {m.intent} → {m.proposal}
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      {tab === "chat" && <ChatTab />}
 
       {/* ===== LIMITS ===== */}
       {tab === "limits" && (
