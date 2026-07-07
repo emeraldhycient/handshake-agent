@@ -1708,6 +1708,24 @@ export interface LimitTier {
   velocity: readonly LimitVelocityRow[]
 }
 
+/** One key/value limit row — the edit pencil shows only for an enforced, editable leaf. */
+export interface LimitLeafRowProps {
+  row: LimitAmountRow | LimitVelocityRow
+  onEdit: (row: LimitAmountRow | LimitVelocityRow) => void
+}
+
+/** The limits data board — tier tabs + currency selector + the amount/velocity cards. */
+export interface LimitsBoardProps {
+  tiers: readonly LimitTier[]
+  tierId: LimitTierId
+  onTierChange: (id: LimitTierId) => void
+  currencies: readonly string[]
+  activeCurrency: string
+  onCurrencyChange: (currency: string) => void
+  tier: LimitTier
+  onEdit: (row: LimitAmountRow | LimitVelocityRow) => void
+}
+
 // ─── System / ops page (design §6.29) ────────────────────────────────────────
 // Three sections: a 5-up provider status tile grid, a "Webhook queues" list, and a
 // "Background jobs & cron" list. There is NO operational-status endpoint yet, so the
