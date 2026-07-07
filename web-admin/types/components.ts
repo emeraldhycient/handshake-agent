@@ -12,6 +12,47 @@ export interface PageHeaderProps {
   actions?: ReactNode
 }
 
+/**
+ * The four master-ledger view tabs (design §6.8 `txViews`). `all` is unfiltered;
+ * `stuck` narrows to in-flight transactions, `failed` to failures, `refunds` to
+ * the refund type. The active tab drives the keyed `useTransactions` query.
+ */
+export type TransactionsView = "all" | "stuck" | "failed" | "refunds"
+
+export interface TxnRowProps {
+  txn: import("@handshake-agent/contracts").AdminTxnListItem
+  onOpen: () => void
+}
+
+export interface TransactionViewTabsProps {
+  view: TransactionsView
+  counts?: import("@handshake-agent/contracts").AdminTxnViewCounts
+  search: string
+  onSelectView: (view: TransactionsView) => void
+  onSearch: (value: string) => void
+}
+
+/** Keyset cursor pager (Prev / Next + page number). */
+export interface CursorPaginatorProps {
+  pageIndex: number
+  canPrev: boolean
+  canNext: boolean
+  onPrev: () => void
+  onNext: () => void
+}
+
+/** The 7-column ledger table with its own loading / error / empty / data branches. */
+export interface TxnLedgerProps {
+  rows: import("@handshake-agent/contracts").AdminTxnListItem[]
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  /** Drives the "no match" empty copy (search vs. plain view). */
+  search: string
+  onRetry: () => void
+  onOpen: (id: string) => void
+}
+
 /** One per-currency money figure (mirrors the metrics `byCurrency` entries). */
 export interface CurrencyAmount {
   currency: string
@@ -385,20 +426,6 @@ export interface KycReviewActionsProps {
 export interface TransactionDetailProps {
   /** The transaction id resolved from the `[id]` route segment. */
   transactionId: string
-}
-
-/**
- * The four master-ledger view tabs (design §6.8 `txViews`). `all` is unfiltered;
- * `stuck` narrows to in-flight transactions, `failed` to failures, `refunds` to
- * the refund type. The active tab drives the keyed `useTransactions` query.
- */
-export type TransactionsViewId = "all" | "stuck" | "failed" | "refunds"
-
-export interface TransactionsViewTab {
-  id: TransactionsViewId
-  label: string
-  /** Count pill next to the label; `null` hides it (the `all` tab, per design). */
-  count: number | null
 }
 
 // ─── Compliance page ─────────────────────────────────────────────────────────────
