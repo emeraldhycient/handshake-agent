@@ -334,6 +334,15 @@ export interface AdminRowActionsProps {
   roles: Role[]
 }
 
+/** The admin statuses an operator can transition another admin into. */
+export type AdminSettableStatus = "active" | "suspended" | "offboarded"
+
+/** One offered status transition (button label + the status it sets). */
+export interface AdminStatusTransition {
+  label: string
+  status: AdminSettableStatus
+}
+
 /** One admin table row — striped avatar + identity, role dot, 2FA, status, actions. */
 export interface AdminRowProps {
   admin: AdminUser
