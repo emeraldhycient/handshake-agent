@@ -648,6 +648,24 @@ export interface ComplianceEventDetailProps {
   onOpenChange: (open: boolean) => void
 }
 
+/** The event metadata section — severity/status/user/tx/provider/rule + any disposition. */
+export interface ComplianceEventSummaryProps {
+  event: import("@handshake-agent/contracts").ComplianceEventDetail
+}
+
+/** The disposition form — status select + audited comment + the step-up-gated apply. */
+export interface ComplianceDispositionFormProps {
+  status: import("@handshake-agent/contracts").ComplianceDispositionRequest["status"]
+  onStatusChange: (
+    status: import("@handshake-agent/contracts").ComplianceDispositionRequest["status"]
+  ) => void
+  comment: string
+  onCommentChange: (comment: string) => void
+  busy: boolean
+  onApply: () => void
+  localError: string | null
+}
+
 export interface AmlRuleDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
