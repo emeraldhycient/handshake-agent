@@ -5,6 +5,13 @@
  */
 import type { ComponentPropsWithoutRef, ReactNode } from "react"
 
+/** Shared admin page header — title + optional subtitle + right-aligned actions. */
+export interface PageHeaderProps {
+  title: string
+  subtitle?: ReactNode
+  actions?: ReactNode
+}
+
 /** One per-currency money figure (mirrors the metrics `byCurrency` entries). */
 export interface CurrencyAmount {
   currency: string
