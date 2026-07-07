@@ -188,6 +188,20 @@ export interface MoneyTrendCardProps {
   isError: boolean
 }
 
+/** The money-trend card header: title + peak caption, CSV export, currency + metric pickers. */
+export interface MoneyTrendToolbarProps {
+  /** The resolved (non-empty) series — used for the lazy CSV export. */
+  data: import("@handshake-agent/contracts").MoneySeriesMetrics
+  metric: MoneyMetric
+  onMetricChange: (metric: MoneyMetric) => void
+  metricLabel: string
+  currency: string
+  currencies: string[]
+  onCurrencyChange: (currency: string) => void
+  /** The peak day's exact-decimal amount for the caption, or null when the series is empty. */
+  peakAmount: string | null
+}
+
 /**
  * One day of a money time-series, resolved for a single currency: the exact
  * decimal `amount` (for display via `formatFiat`) and its `value` (a JS number
