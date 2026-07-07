@@ -4,6 +4,7 @@ import type { AdminTxnDetail } from "@handshake-agent/contracts"
 import { ApiError } from "@/lib/api/client"
 import {
   flowSpecFor,
+  formatWhen,
   headerTitle,
   providerRefs,
   timelineTone,
@@ -25,6 +26,14 @@ const TX = {
       amount: "50",
       sequence: 1,
     },
+    {
+      accountType: "clearing",
+      accountId: "acc-2",
+      currency: "USDT",
+      direction: "credit",
+      amount: "50",
+      sequence: 2,
+    },
   ],
   providerReferences: [
     { provider: "tron", reference: "0xhash" },
@@ -36,12 +45,16 @@ describe("headerTitle", () => {
   it("uses type · amount asset when economics carry an amount + asset", () => {
     expect(headerTitle(TX)).toBe("buy · 50 USDT")
   })
-  it("falls back to type · amount, then just type", () => {
+  it("falls back to type · amount, then just type (incl. asset-only)", () => {
     expect(
       headerTitle({ ...TX, economics: { amount: "50", asset: "" } } as AdminTxnDetail)
     ).toBe("buy · 50")
     expect(
       headerTitle({ ...TX, economics: { amount: "", asset: "" } } as AdminTxnDetail)
+    ).toBe("buy")
+    // asset present but no amount → neither guard fires → just the type.
+    expect(
+      headerTitle({ ...TX, economics: { amount: "", asset: "USDT" } } as AdminTxnDetail)
     ).toBe("buy")
   })
 })
@@ -57,20 +70,30 @@ describe("timelineTone", () => {
 })
 
 describe("flowSpecFor", () => {
-  it("retry: engine-only, no ledger legs written", () => {
+  it("retry: engine-only, no ledger legs written, settlement.retry directive", () => {
     const spec = flowSpecFor("retry", TX)
     expect(spec?.steps).toEqual(["engine"])
     expect(spec?.ledger).toEqual([])
+    expect(spec?.effect).toContainEqual({ k: "Directive", v: "settlement.retry" })
   })
-  it("refund: reason → maker (four-eyes), with a from→to diff + the tx ledger", () => {
+  it("refund: reason → maker (four-eyes), diff + the exact itemized tx ledger", () => {
     const spec = flowSpecFor("refund", TX)
     expect(spec?.steps).toEqual(["reason", "maker"])
     expect(spec?.diff?.[0].to).toBe("Failed + refunded")
-    expect(spec?.ledger).toHaveLength(1)
-    expect(spec?.ledger[0].dir).toBe("DR")
+    // Both directions + the money-bearing acct/amt (catches a formatAmount arg-swap).
+    expect(spec?.ledger).toEqual([
+      { acct: "user_wallet:acc-1:USDT", dir: "DR", amt: "50 USDT" },
+      { acct: "clearing:acc-2:USDT", dir: "CR", amt: "50 USDT" },
+    ])
   })
-  it("markFailed: reason → engine", () => {
-    expect(flowSpecFor("markFailed", TX)?.steps).toEqual(["reason", "engine"])
+  it("markFailed: reason → engine, carrying the same itemized tx ledger", () => {
+    const spec = flowSpecFor("markFailed", TX)
+    expect(spec?.steps).toEqual(["reason", "engine"])
+    // markFailed itemizes the money legs it will reverse — not empty.
+    expect(spec?.ledger).toHaveLength(2)
+    expect(spec?.ledger.map((l) => l.dir)).toEqual(["DR", "CR"])
+    // The engine directive the approver reads must be mark_failed, not the retry one.
+    expect(spec?.effect).toContainEqual({ k: "Directive", v: "mark_failed" })
   })
   it("recon: engine-only, read-only (no ledger legs)", () => {
     const spec = flowSpecFor("recon", TX)
@@ -96,6 +119,28 @@ describe("providerRefs", () => {
       label: "Idempotency",
       value: "idem-1",
     })
+  })
+
+  it("labels a configured no-explorer provider (Flutterwave) without a link", () => {
+    const refs = providerRefs({
+      ...TX,
+      providerReferences: [{ provider: "flutterwave", reference: "flw-1" }],
+    } as AdminTxnDetail)
+    expect(refs[0]).toEqual({ label: "Flutterwave", value: "flw-1" })
+  })
+
+  it("still surfaces the idempotency row when there are no provider references", () => {
+    const refs = providerRefs({
+      ...TX,
+      providerReferences: [],
+    } as AdminTxnDetail)
+    expect(refs).toEqual([{ label: "Idempotency", value: "idem-1" }])
+  })
+})
+
+describe("formatWhen", () => {
+  it("renders a non-empty string for an ISO timestamp (no throw)", () => {
+    expect(formatWhen("2026-07-04T00:00:00.000Z")).not.toBe("")
   })
 })
 
