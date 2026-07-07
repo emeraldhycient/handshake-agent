@@ -262,6 +262,34 @@ export interface AdminRowActionsProps {
   roles: Role[]
 }
 
+/** One admin table row — striped avatar + identity, role dot, 2FA, status, actions. */
+export interface AdminRowProps {
+  admin: AdminUser
+  roles: Role[]
+}
+
+/** The admin table card — header + the four async branches. */
+export interface AdminsTableProps {
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  admins: readonly AdminUser[]
+  roles: Role[]
+  onRetry: () => void
+}
+
+/** The role permission matrix section — the "New role" CTA + its four branches. */
+export interface RoleMatrixSectionProps {
+  loading: boolean
+  error: boolean
+  ready: boolean
+  empty: boolean
+  roles: Role[]
+  permissions: AdminPermissionRecord[]
+  onCreateRole: () => void
+  onRetry: () => void
+}
+
 /**
  * One cell of the role permission matrix (design §6.15): the access level a role
  * has for a permission category, derived from the role's granted permission ids.
