@@ -1492,35 +1492,20 @@ export interface CurrencyTableProps {
 }
 
 // ─── Ticketing page (design §6.21) ──────────────────────────────────────────────────
-// Left panel = Vendor ports; right panel = Recent orders. This is a DESIGN
-// REPRODUCTION (docs/design-ref/screens/Ticketing.html) — no data is fetched. Both
-// panels render the design's own representative sample content (module-level consts,
-// matching the seed() dataset shapes + operator/vendor names). Real-data reintegration
-// is a separate later step. Nothing here moves money (§3.1).
+// Left panel = Vendor ports (honest shape-gap — no registry endpoint yet); right panel
+// = Recent orders, WIRED to `useTicketOrders` (the real engine feed). Read-only display;
+// nothing here moves money (§3.1).
 
-/** A recent-order row's payment status → the canonical status pill (§5 map). */
+/** A recent-order row's settlement status → the canonical status pill (§5 map). */
 export type TicketOrderStatus =
   | "settled"
   | "pending_settlement"
   | "refunded"
   | "failed"
 
-/**
- * One "Recent orders" row (design §6.21). Design-reproduction sample content shaped
- * exactly like the design markup (event name + mono order id · user · amount · status
- * pill). The row navigates to the transaction detail route, matching the design's
- * clickable-record affordance.
- */
-export interface TicketOrderRow {
-  /** The event/ticket title (bold ink, 12.5px). */
-  event: string
-  /** The mono order / transaction id (also the navigation target). */
-  id: string
-  /** The buyer's display name (design seed, e.g. "Amara Okeke"). */
-  user: string
-  /** The order amount, pre-formatted (mono / tabular). */
-  amt: string
-  status: TicketOrderStatus
+/** One "Recent orders" row — ticket type + mono id · user · amount · status pill. */
+export interface OrderRowProps {
+  order: import("@handshake-agent/contracts").TicketOrderItem
 }
 
 // ─── Pricing page (design §6.22) ────────────────────────────────────────────────────
