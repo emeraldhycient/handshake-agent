@@ -41,6 +41,17 @@ describe('TokenService', () => {
     expect(() => b.verifyAccessToken(token)).toThrow();
   });
 
+  it('rejects a token signed with a different algorithm (HS512, same secret)', () => {
+    // Algorithm pinning: verify accepts HS256 ONLY. Without the pin, jsonwebtoken
+    // accepts any HMAC alg for a string secret, widening the forgery surface.
+    const svc = make('test-secret');
+    const hs512 = new JwtService({}).sign(
+      { sub: 'user-1' },
+      { secret: 'test-secret', algorithm: 'HS512', expiresIn: 3600 },
+    );
+    expect(() => svc.verifyAccessToken(hs512)).toThrow();
+  });
+
   it('hash is deterministic 64-hex; opaque token is 64-hex and unique', () => {
     const svc = make('s');
     expect(svc.hash('abc')).toBe(svc.hash('abc'));

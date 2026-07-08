@@ -8,6 +8,7 @@
 import { Logger } from '@nestjs/common';
 import type { Request } from 'express';
 
+import { sha256Hex } from '../../../core/crypto/hmac';
 import type { IPaymentProvider } from '../application/ports/payment-provider.port';
 import type { WebhookIngestionService } from '../../webhooks/application/webhook-ingestion.service';
 import { FlutterwaveWebhookController } from './flutterwave-webhook.controller';
@@ -57,7 +58,22 @@ describe('FlutterwaveWebhookController (thin)', () => {
       expect.objectContaining({
         provider: 'flutterwave',
         parsedBody: body,
-        signature: VALID_HASH,
+        signature: `sha256:${sha256Hex(VALID_HASH)}`,
+      }),
+    );
+  });
+
+  it('never passes the raw verif-hash (the static secret) as the signature', async () => {
+    const { controller, ingestion } = makeController();
+    await controller.handleWebhook(body, makeReq(VALID_HASH));
+    expect(ingestion.ingest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signature: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) as string,
+      }),
+    );
+    expect(ingestion.ingest).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        signature: expect.stringContaining(VALID_HASH) as string,
       }),
     );
   });

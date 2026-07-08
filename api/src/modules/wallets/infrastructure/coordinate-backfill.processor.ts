@@ -28,13 +28,10 @@ import {
 import {
   WALLET_BACKFILL_QUEUE_NAME,
   WALLET_BACKFILL_JOB,
+  type CoordinateBackfillPayload,
 } from '../application/wallet-backfill-queue.constants';
 
-export interface CoordinateBackfillPayload {
-  runId: string;
-  dryRun: boolean;
-  batchSize: number;
-}
+export type { CoordinateBackfillPayload };
 
 export interface ProvisionUserPayload {
   runId: string;

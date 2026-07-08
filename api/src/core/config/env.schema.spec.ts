@@ -255,6 +255,7 @@ describe('env.schema boot guards', () => {
       // satisfy the other prod-only guards so this test isolates the OTP one
       STATEMENT_SIGNING_KEY: 'stmt-key',
       DIRECTIVE_SIGNING_KEY: 'directive-key',
+      RESEND_API_KEY: 're_test_key',
     });
     expect(env.AUTH_DEV_EXPOSE_OTP).toBe('false');
   });
@@ -308,8 +309,9 @@ describe('env.schema boot guards', () => {
       NODE_ENV: 'production',
       AUTH_DEV_EXPOSE_OTP: 'false',
       STATEMENT_SIGNING_KEY: 'stmt-key',
-      // satisfy the DIRECTIVE_SIGNING_KEY prod guard so this test isolates the statement one
+      // satisfy the other prod-only guards so this test isolates the statement one
       DIRECTIVE_SIGNING_KEY: 'directive-key',
+      RESEND_API_KEY: 're_test_key',
     });
     expect(env.STATEMENT_SIGNING_KEY).toBe('stmt-key');
   });
@@ -352,6 +354,7 @@ describe('env.schema boot guards', () => {
       AUTH_DEV_EXPOSE_OTP: 'false',
       STATEMENT_SIGNING_KEY: 'stmt-key',
       DIRECTIVE_SIGNING_KEY: 'directive-key',
+      RESEND_API_KEY: 're_test_key',
     });
     expect(env.DIRECTIVE_SIGNING_KEY).toBe('directive-key');
   });
@@ -359,6 +362,85 @@ describe('env.schema boot guards', () => {
   it('tolerates an empty DIRECTIVE_SIGNING_KEY outside production', () => {
     const env = validateEnv({ ...validRaw, NODE_ENV: 'development' });
     expect(env.DIRECTIVE_SIGNING_KEY).toBe('');
+  });
+
+  // 6. RESEND_API_KEY must be present in production — without it the
+  //    MockEmailProvider is selected, which LOGS login OTPs instead of
+  //    delivering them (an account-takeover oracle for anyone with log access).
+  it('rejects a missing RESEND_API_KEY when NODE_ENV=production', () => {
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        NODE_ENV: 'production',
+        STATEMENT_SIGNING_KEY: 'stmt-key',
+        DIRECTIVE_SIGNING_KEY: 'directive-key',
+      }),
+    ).toThrow(/RESEND_API_KEY/);
+  });
+
+  it('rejects an empty RESEND_API_KEY when NODE_ENV=production', () => {
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        NODE_ENV: 'production',
+        STATEMENT_SIGNING_KEY: 'stmt-key',
+        DIRECTIVE_SIGNING_KEY: 'directive-key',
+        RESEND_API_KEY: '',
+      }),
+    ).toThrow(/RESEND_API_KEY/);
+  });
+
+  it('accepts a present RESEND_API_KEY in production', () => {
+    const env = validateEnv({
+      ...validRaw,
+      NODE_ENV: 'production',
+      STATEMENT_SIGNING_KEY: 'stmt-key',
+      DIRECTIVE_SIGNING_KEY: 'directive-key',
+      RESEND_API_KEY: 're_test_key',
+    });
+    expect(env.RESEND_API_KEY).toBe('re_test_key');
+  });
+
+  it('tolerates a missing RESEND_API_KEY outside production (mock email ok in dev)', () => {
+    const env = validateEnv({ ...validRaw, NODE_ENV: 'development' });
+    expect(env.RESEND_API_KEY).toBeUndefined();
+  });
+
+  // 7. FLUTTERWAVE_SCENARIO_KEY is a SANDBOX-ONLY simulation header (X-Scenario-Key).
+  //    Leaking it into production would silently simulate pay-ins instead of
+  //    collecting real money — it must be empty when NODE_ENV=production.
+  it('rejects a non-empty FLUTTERWAVE_SCENARIO_KEY when NODE_ENV=production', () => {
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        NODE_ENV: 'production',
+        STATEMENT_SIGNING_KEY: 'stmt-key',
+        DIRECTIVE_SIGNING_KEY: 'directive-key',
+        RESEND_API_KEY: 're_test_key',
+        FLUTTERWAVE_SCENARIO_KEY: 'scenario:successful',
+      }),
+    ).toThrow(/FLUTTERWAVE_SCENARIO_KEY/);
+  });
+
+  it('accepts an empty FLUTTERWAVE_SCENARIO_KEY in production', () => {
+    const env = validateEnv({
+      ...validRaw,
+      NODE_ENV: 'production',
+      STATEMENT_SIGNING_KEY: 'stmt-key',
+      DIRECTIVE_SIGNING_KEY: 'directive-key',
+      RESEND_API_KEY: 're_test_key',
+      FLUTTERWAVE_SCENARIO_KEY: '',
+    });
+    expect(env.FLUTTERWAVE_SCENARIO_KEY).toBe('');
+  });
+
+  it('accepts a non-empty FLUTTERWAVE_SCENARIO_KEY outside production (sandbox)', () => {
+    const env = validateEnv({
+      ...validRaw,
+      NODE_ENV: 'development',
+      FLUTTERWAVE_SCENARIO_KEY: 'scenario:successful',
+    });
+    expect(env.FLUTTERWAVE_SCENARIO_KEY).toBe('scenario:successful');
   });
 });
 

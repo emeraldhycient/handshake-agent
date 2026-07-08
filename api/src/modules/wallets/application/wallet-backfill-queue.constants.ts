@@ -14,3 +14,13 @@ export const WALLET_BACKFILL_JOB = {
 
 export type WalletBackfillJobName =
   (typeof WALLET_BACKFILL_JOB)[keyof typeof WALLET_BACKFILL_JOB];
+
+/**
+ * Payload of the `coordinate` job. Lives in the application layer so queue
+ * producers (admin controller, CLI) never import the infrastructure processor.
+ */
+export interface CoordinateBackfillPayload {
+  runId: string;
+  dryRun: boolean;
+  batchSize: number;
+}

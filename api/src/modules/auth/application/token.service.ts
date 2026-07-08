@@ -37,6 +37,9 @@ export class TokenService {
   verifyAccessToken(token: string): { sub: string } {
     const payload = this.jwt.verify<{ sub: string }>(token, {
       secret: this.secret(),
+      // Pin the algorithm: sign() uses HS256 (jsonwebtoken default), so verify
+      // must accept HS256 ONLY — an unpinned verify accepts any HMAC alg.
+      algorithms: ['HS256'],
     });
     return { sub: payload.sub };
   }

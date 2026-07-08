@@ -5,8 +5,11 @@
  * Flow (CLAUDE.md §3.1 preserved — model proposes, engine disposes):
  *   1. Verify authenticity: PAYMENT_PROVIDER.verifyWebhookSignature(verif-hash),
  *      constant-time. Invalid → 401. No persistence.
- *   2. Persist raw payload + headers + signature (WebhookEvent, dedup on the
- *      Flutterwave event id) and enqueue processing (WebhookIngestionService).
+ *   2. Persist raw payload + headers (WebhookEvent, dedup on the Flutterwave
+ *      event id) and enqueue processing (WebhookIngestionService). The
+ *      `verif-hash` value IS the static FLUTTERWAVE_WEBHOOK_SECRET (v3 spec —
+ *      equality, not per-request HMAC), so only a non-reversible sha256 digest
+ *      of it is stored as the signature; ingestion redacts it from the headers.
  *   3. ACK 200 fast. Settlement runs asynchronously in FlutterwaveWebhookHandler
  *      (the worker) — idempotent, retry + dead-letter. A PERSISTENCE failure
  *      propagates (5xx) so Flutterwave redelivers.
@@ -31,6 +34,7 @@ import {
   type IPaymentProvider,
 } from '../application/ports/payment-provider.port';
 import { WebhookIngestionService } from '../../webhooks/application/webhook-ingestion.service';
+import { toStoredSignatureDigest } from '../../webhooks/application/sanitize-webhook-headers';
 
 type AckResponse = { status: 'ok' };
 
@@ -71,7 +75,9 @@ export class FlutterwaveWebhookController {
     // ── Step 2: Persist + enqueue ────────────────────────────────────────────
     const rawBody: Buffer | string =
       (req as Request & { rawBody?: Buffer }).rawBody ?? JSON.stringify(body);
-    const signature = typeof verifHash === 'string' ? verifHash : null;
+    // Never persist the raw verif-hash — it IS the static webhook secret.
+    const signature =
+      typeof verifHash === 'string' ? toStoredSignatureDigest(verifHash) : null;
     await this.ingestion.ingest({
       provider: 'flutterwave',
       parsedBody: body,

@@ -55,6 +55,21 @@ describe('AdminTokenService', () => {
     expect(() => b.verify(token)).toThrow(AdminInvalidCredentialsError);
   });
 
+  it('rejects a token signed with a different algorithm (HS512, same secret)', () => {
+    // Algorithm pinning: verify accepts HS256 ONLY. Without the pin, jsonwebtoken
+    // accepts any HMAC alg for a string secret, widening the forgery surface.
+    const svc = build();
+    const hs512 = new JwtService({}).sign(
+      { sub: 'sess-1' },
+      {
+        secret: 'super-secret-admin-key',
+        algorithm: 'HS512',
+        expiresIn: 3600,
+      },
+    );
+    expect(() => svc.verify(hs512)).toThrow(AdminInvalidCredentialsError);
+  });
+
   it('rejects an expired token with AdminInvalidCredentialsError', () => {
     const svc = build({ ADMIN_SESSION_TTL_SECONDS: -10 });
     const { token } = svc.sign('sess-1');
