@@ -4,72 +4,33 @@
  * LoginForm — the admin /login form.
  *
  * Fields: email + password (required) and optional TOTP / recovery code (shown
- * behind a "use a multi-factor code" toggle). react-hook-form +
- * zodResolver(AdminLoginRequestSchema). On success the useAdminLogin hook writes
- * the session to the store; we then router.push('/'). On failure the error
- * branch renders the server message (e.g. "A multi-factor code is required").
+ * behind a "use a multi-factor code" toggle). Composition only: the RHF form +
+ * submit/navigate flow live in `useAdminLoginForm`. On success it navigates to
+ * '/'; on failure the error branch renders the server message (e.g. "A
+ * multi-factor code is required").
  *
  * Strict layering: pure UI — no fetch, no axios, no localStorage.
  */
-import { useState } from "react"
-import { useForm } from "react-hook-form"
-import { zodResolver } from "@hookform/resolvers/zod"
-import { useRouter } from "next/navigation"
-import {
-  AdminLoginRequestSchema,
-  type AdminLoginRequest,
-} from "@handshake-agent/contracts"
-
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
-import { useAdminLogin } from "@/lib/query/auth"
-import { ApiError } from "@/lib/api/client"
+import { useAdminLoginForm } from "@/lib/hooks/use-admin-login-form"
 import type { LoginFormProps } from "@/types/components"
 
-function errorMessage(error: unknown): string | null {
-  if (error instanceof ApiError) return error.message
-  if (error instanceof Error) return error.message
-  return error ? String(error) : null
-}
-
 export function LoginForm({ className }: LoginFormProps) {
-  const router = useRouter()
-  const [showMfa, setShowMfa] = useState(false)
-
   const {
     register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<AdminLoginRequest>({
-    resolver: zodResolver(AdminLoginRequestSchema),
-    defaultValues: { email: "", password: "" },
-  })
-
-  const loginMutation = useAdminLogin()
-
-  async function onSubmit(values: AdminLoginRequest) {
-    // Strip empty optional fields so the server doesn't see "" for unused MFA.
-    const payload: AdminLoginRequest = {
-      email: values.email,
-      password: values.password,
-      ...(values.totp ? { totp: values.totp } : {}),
-      ...(values.recoveryCode ? { recoveryCode: values.recoveryCode } : {}),
-    }
-    try {
-      await loginMutation.mutateAsync(payload)
-      router.push("/")
-    } catch {
-      // Error surfaces via loginMutation.error — rendered below.
-    }
-  }
-
-  const loading = isSubmitting || loginMutation.isPending
-  const serverError = errorMessage(loginMutation.error)
+    errors,
+    showMfa,
+    setShowMfa,
+    loading,
+    serverError,
+    onFormSubmit,
+  } = useAdminLoginForm()
 
   return (
     <form
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={onFormSubmit}
       noValidate
       aria-label="Admin log in form"
       className={`flex flex-col gap-5 ${className ?? ""}`}
@@ -116,9 +77,7 @@ export function LoginForm({ className }: LoginFormProps) {
           autoComplete="current-password"
           aria-required="true"
           aria-invalid={!!errors.password}
-          aria-describedby={
-            errors.password ? "admin-password-error" : undefined
-          }
+          aria-describedby={errors.password ? "admin-password-error" : undefined}
           placeholder="Your password"
           disabled={loading}
           {...register("password")}

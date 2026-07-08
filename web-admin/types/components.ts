@@ -5,6 +5,100 @@
  */
 import type { ComponentPropsWithoutRef, ReactNode } from "react"
 
+/** Shared admin page header — title + optional subtitle + right-aligned actions. */
+export interface PageHeaderProps {
+  title: string
+  subtitle?: ReactNode
+  actions?: ReactNode
+}
+
+/**
+ * The four master-ledger view tabs (design §6.8 `txViews`). `all` is unfiltered;
+ * `stuck` narrows to in-flight transactions, `failed` to failures, `refunds` to
+ * the refund type. The active tab drives the keyed `useTransactions` query.
+ */
+export type TransactionsView = "all" | "stuck" | "failed" | "refunds"
+
+export interface TxnRowProps {
+  txn: import("@handshake-agent/contracts").AdminTxnListItem
+  onOpen: () => void
+}
+
+export interface TransactionViewTabsProps {
+  view: TransactionsView
+  counts?: import("@handshake-agent/contracts").AdminTxnViewCounts
+  search: string
+  onSelectView: (view: TransactionsView) => void
+  onSearch: (value: string) => void
+}
+
+/** Keyset cursor pager (Prev / Next + page number). */
+export interface CursorPaginatorProps {
+  pageIndex: number
+  canPrev: boolean
+  canNext: boolean
+  onPrev: () => void
+  onNext: () => void
+  /** Left-aligned status text; defaults to `Page {pageIndex}`. */
+  leftLabel?: ReactNode
+  /** When true, both buttons are disabled (e.g. a page fetch is in flight). */
+  busy?: boolean
+}
+
+// ─── Ledger viewer page (design §6.11) ──────────────────────────────────────────────
+// READ-ONLY (§3.1): the global double-entry ledger browsed by account-type + currency.
+
+/** One display-ready row projected from a real `AdminLedgerEntry`. */
+export interface LedgerRow {
+  key: string
+  seq: string
+  acct: string
+  dir: string
+  dirDanger: boolean
+  amt: string
+  run: string
+  src: string
+  /** The tx-detail route, or null when the source is not a transaction. */
+  href: string | null
+}
+
+/** The header's live sequence-integrity pill (broken → danger tint + gap label). */
+export interface LedgerIntegrityPillProps {
+  broken: boolean
+  label: string
+}
+
+/** One ledger body row (Seq · Account · Dir · Amount · Running · Source). */
+export interface LedgerRowLineProps {
+  row: LedgerRow
+}
+
+/** The ledger table card — filter strip (type · currency · export) + four branches. */
+export interface LedgerTableProps {
+  account: string
+  currency: string
+  onAccount: (value: string) => void
+  onCurrency: (value: string) => void
+  exporting: boolean
+  onExport: () => void
+  isLoading: boolean
+  isError: boolean
+  rows: readonly LedgerRow[]
+  onRetry: () => void
+}
+
+/** The 7-column ledger table with its own loading / error / empty / data branches. */
+export interface TxnLedgerProps {
+  rows: import("@handshake-agent/contracts").AdminTxnListItem[]
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  /** Drives the "no match" empty copy (search vs. plain view). */
+  search: string
+  onRetry: () => void
+  onOpen: (id: string) => void
+}
+
 /** One per-currency money figure (mirrors the metrics `byCurrency` entries). */
 export interface CurrencyAmount {
   currency: string
@@ -94,6 +188,20 @@ export interface MoneyTrendCardProps {
   isError: boolean
 }
 
+/** The money-trend card header: title + peak caption, CSV export, currency + metric pickers. */
+export interface MoneyTrendToolbarProps {
+  /** The resolved (non-empty) series — used for the lazy CSV export. */
+  data: import("@handshake-agent/contracts").MoneySeriesMetrics
+  metric: MoneyMetric
+  onMetricChange: (metric: MoneyMetric) => void
+  metricLabel: string
+  currency: string
+  currencies: string[]
+  onCurrencyChange: (currency: string) => void
+  /** The peak day's exact-decimal amount for the caption, or null when the series is empty. */
+  peakAmount: string | null
+}
+
 /**
  * One day of a money time-series, resolved for a single currency: the exact
  * decimal `amount` (for display via `formatFiat`) and its `value` (a JS number
@@ -107,7 +215,6 @@ export interface MoneySeriesPoint {
 import type {
   AdminBeneficiary,
   AdminCustomFiatCreateRequest,
-  AdminEndUserDetail,
   AdminEndUserDevice,
   AdminEndUserListItem,
   AdminPermissionRecord,
@@ -115,6 +222,7 @@ import type {
   AmlRule,
   ComplianceReport,
   EffectiveSetting,
+  KycTier,
   KycSubmissionDetail,
   NotificationTemplate,
   Role,
@@ -132,7 +240,57 @@ export interface RouteGuardProps {
   children: ReactNode
 }
 
+/** The RBAC-scoped sidebar nav list (loading / error / empty / data branches). */
+export interface SidebarNavListProps {
+  loading: boolean
+  error: boolean
+  collapsed: boolean
+  groups: NavGroup[]
+  pathname: string
+  badges: NavBadgeCounts
+}
+
+/** The sidebar rail: brand + nav list + footer (collapse / MFA setup / sign out). */
+export interface SidebarRailProps extends SidebarNavListProps {
+  onToggleCollapse: () => void
+  /** The operator has loaded but hasn't enrolled MFA → show the setup button. */
+  showMfaSetup: boolean
+  onOpenMfa: () => void
+  onSignOut: () => void
+}
+
+/** The top bar: command-palette pill + env chip + theme toggle + alerts + account. */
+export interface TopBarProps {
+  onOpenCmdk: () => void
+  theme: "light" | "dark"
+  onToggleTheme: () => void
+  email: string
+  roleLabel: string
+  onSignOut: () => void
+}
+
 // ─── Topbar controls (command palette / notifications / account) ────────────────
+
+/** One sidebar nav item — its route, label, icon, RBAC menu gate, and optional badge. */
+export interface NavItem {
+  href: string
+  label: string
+  icon: import("lucide-react").LucideIcon
+  /**
+   * The `menu_item` resourceId(s) that gate this item. `null` → always shown
+   * (Dashboard + Admin settings degrade gracefully). When an array, the item
+   * shows if ANY listed menu is granted.
+   */
+  menu: string | string[] | null
+  /** Optional count badge key resolved by the shell (design §4.1). */
+  badge?: "kyc" | "stuck" | "recon" | "approvals"
+}
+
+/** One labelled sidebar nav group — renders only when it has ≥1 visible item. */
+export interface NavGroup {
+  label: string
+  items: readonly NavItem[]
+}
 
 /**
  * A flattened, navigable destination sourced from the shell's nav groups —
@@ -150,6 +308,16 @@ export interface CommandPaletteProps {
   onOpenChange: (open: boolean) => void
   /** The navigable destinations to search (the shell's flattened nav). */
   destinations: readonly NavDestination[]
+}
+
+/** One command-palette result option — label + group subtitle + the enter glyph. */
+export interface CommandResultProps {
+  dest: NavDestination
+  isActive: boolean
+  /** Highlight this option (on mouse move). */
+  onActivate: () => void
+  /** Navigate to this option (on click). */
+  onSelect: () => void
 }
 
 /** The four alert-pip badges the sidebar can show on a nav item. */
@@ -204,9 +372,53 @@ export interface InviteAdminDialogProps {
   roles: Role[]
 }
 
+/** The post-invite success view: the one-time invitation token shown once. */
+export interface InviteSuccessProps {
+  email: string
+  token: string
+  onDone: () => void
+}
+
 export interface AdminRowActionsProps {
   admin: AdminUser
   roles: Role[]
+}
+
+/** The admin statuses an operator can transition another admin into. */
+export type AdminSettableStatus = "active" | "suspended" | "offboarded"
+
+/** One offered status transition (button label + the status it sets). */
+export interface AdminStatusTransition {
+  label: string
+  status: AdminSettableStatus
+}
+
+/** One admin table row — striped avatar + identity, role dot, 2FA, status, actions. */
+export interface AdminRowProps {
+  admin: AdminUser
+  roles: Role[]
+}
+
+/** The admin table card — header + the four async branches. */
+export interface AdminsTableProps {
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  admins: readonly AdminUser[]
+  roles: Role[]
+  onRetry: () => void
+}
+
+/** The role permission matrix section — the "New role" CTA + its four branches. */
+export interface RoleMatrixSectionProps {
+  loading: boolean
+  error: boolean
+  ready: boolean
+  empty: boolean
+  roles: Role[]
+  permissions: AdminPermissionRecord[]
+  onCreateRole: () => void
+  onRetry: () => void
 }
 
 /**
@@ -235,11 +447,39 @@ export interface RolePermissionMatrixProps {
 
 // ─── Roles page ──────────────────────────────────────────────────────────────────
 
+/** Access level a role holds over a permission category (full > read > none). */
+export type AccessLevel = "full" | "read" | "none"
+
+/** The 24px access glyph tile — full (check) / read (eye) / none (x). */
+export interface AccessTileProps {
+  level: AccessLevel
+}
+
+/** The roles table — one row per role (name · description · count · View/Edit). */
+export interface RolesTableProps {
+  roles: Role[]
+  onEdit: (role: Role) => void
+}
+
+/** The read-only role permission matrix — categories × role columns of access tiles. */
+export interface RoleAccessMatrixProps {
+  roles: Role[]
+}
+
 export interface RoleEditorDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** Editing an existing role, or null to create a new one. */
   role: Role | null
+}
+
+/** The editable permission matrix — category fieldsets of permission checkboxes. */
+export interface PermissionMatrixEditorProps {
+  /** The set of granted permission ids (canonical `permissionId(entry)`). */
+  selected: Set<string>
+  onToggle: (id: string) => void
+  /** Built-in / in-flight → every checkbox is disabled. */
+  disabled: boolean
 }
 
 // ─── Users page ──────────────────────────────────────────────────────────────────
@@ -267,32 +507,84 @@ export interface UserRiskChip {
 /** A user's KYC bucket → the design's `kycMeta` pill mapping (logic.js line 496). */
 export type UserKycStatus = "verified" | "pending" | "needs_info" | "rejected"
 
-/** A user's tier band. */
-export type UserTier = "tier_1" | "tier_2" | "tier_3"
-
 /**
- * One row in the Users-page mock dataset (the design's `seed()` user record, the
- * fields the Users table renders). Module-level sample content — no fetching (this
- * is a design reproduction; real-data reintegration is a separate later step).
+ * A presentation row derived from an `AdminEndUserListItem` (via `toRow`). The
+ * live shape the Users table renders — avatar hue + initials are derived (no
+ * colour field in the list contract); `balance` / `lastActive` are pre-formatted.
  */
-export interface UserTableRow {
+export interface UsersRow {
   id: string
   name: string
   email: string
-  /** 2-letter avatar initials (design `ini()`). */
+  /** 2-letter avatar initials (`lib/avatar` `initialsOf`). */
   initials: string
-  /** Avatar background hex from the design's `AVA` palette. */
+  /** Avatar background hex, derived deterministically from the id. */
   avatar: string
   kyc: UserKycStatus
-  tier: UserTier
-  /** ISO-3166 alpha-2 (design uses NG / RW). */
-  country: string
-  /** Balance in NGN (rendered via the design's `ngn()` formatter). */
-  ngn: number
-  /** Risk flags surfaced as danger/warn badges (design `flagMeta`). */
-  flags: UserRiskFlag[]
-  /** Relative "last active" label (design `lastActive`). */
+  tier: KycTier
+  simSwapFlagged: boolean
+  sanctionsFlagged: boolean
+  /** Pre-formatted per-asset balance summary (or em dash). */
+  balance: string
+  /** Relative "last active" label (or em dash when never active). */
   lastActive: string
+}
+
+/** One Users-directory row — selectable checkbox + opens the detail route. */
+export interface UserRowProps {
+  user: UsersRow
+  selected: boolean
+  onToggleSelect: (id: string) => void
+  onOpen: (id: string) => void
+}
+
+/** Users-directory header — count/total + the CSV export affordance. */
+export interface UsersHeaderProps {
+  shown: number
+  total?: number
+  /** Shown when there is no server `total` but a next page exists. */
+  moreAvailable: boolean
+  exporting: boolean
+  onExport: () => void
+}
+
+/** The Users-directory filter row: search + KYC/tier/country selects + risk chips. */
+export interface UsersFilterBarProps {
+  search: string
+  onSearchChange: (value: string) => void
+  kyc: string
+  onKycChange: (value: string) => void
+  tier: string
+  onTierChange: (value: string) => void
+  country: string
+  onCountryChange: (value: string) => void
+  risk: UserRiskFlag | ""
+  onToggleRisk: (value: UserRiskFlag) => void
+}
+
+/** The contextual bulk-actions bar shown when rows are selected. */
+export interface UsersBulkBarProps {
+  count: number
+  exporting: boolean
+  onExport: () => void
+  selectedIds: readonly string[]
+  /** Clears the selection after a successful tag/message op. */
+  onActionDone: () => void
+  onClear: () => void
+}
+
+/** The 7-column directory table with its own loading / error / empty / data branches. */
+export interface UsersTableProps {
+  rows: UsersRow[]
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  allSelected: boolean
+  selectedIds: readonly string[]
+  onToggleSelectAll: () => void
+  onToggleSelect: (id: string) => void
+  onRetry: () => void
+  onOpen: (id: string) => void
 }
 
 export interface UserStatusBadgeProps {
@@ -314,11 +606,6 @@ export interface UserDeviceListProps {
   devices: AdminEndUserDevice[]
 }
 
-export interface UserActionsProps {
-  /** The loaded aggregate — drives which transitions are offered. */
-  user: AdminEndUserDetail
-}
-
 /**
  * The Users-directory bulk-bar actions (tag + message) over the current selection.
  * `selectedIds` is the explicit set the two operations target; `onDone` is called
@@ -327,6 +614,52 @@ export interface UserActionsProps {
 export interface UsersBulkActionsProps {
   selectedIds: readonly string[]
   onDone: () => void
+}
+
+/** The bulk TAG dialog's form state + submit (from `useUsersBulkActions`). */
+export interface BulkTagState {
+  open: boolean
+  setOpen: (open: boolean) => void
+  value: string
+  setValue: (value: string) => void
+  reason: string
+  setReason: (value: string) => void
+  submit: () => void
+  applying: boolean
+}
+
+/** The bulk MESSAGE dialog's form state + submit (from `useUsersBulkActions`). */
+export interface BulkMessageState {
+  open: boolean
+  setOpen: (open: boolean) => void
+  eventType: import("@handshake-agent/contracts").BulkMessageEventType
+  setEventType: (
+    value: import("@handshake-agent/contracts").BulkMessageEventType
+  ) => void
+  templateKey: string
+  setTemplateKey: (value: string) => void
+  reason: string
+  setReason: (value: string) => void
+  confirmLargeSet: boolean
+  setConfirmLargeSet: (value: boolean) => void
+  submit: () => void
+  queueing: boolean
+}
+
+/** The bulk TAG dialog — an operator tag annotation over the selection (step-up-gated). */
+export interface BulkTagDialogProps {
+  tag: BulkTagState
+  ids: readonly string[]
+  error: string | null
+  busy: boolean
+}
+
+/** The bulk MESSAGE dialog — a templated broadcast queued over the selection. */
+export interface BulkMessageDialogProps {
+  message: BulkMessageState
+  ids: readonly string[]
+  error: string | null
+  busy: boolean
 }
 
 // ─── KYC review page ─────────────────────────────────────────────────────────────
@@ -363,6 +696,26 @@ export interface KycQueueRowProps {
   onOpen: (userId: string) => void
 }
 
+/** The four review-queue buckets (each maps onto a real KYC-status filter). */
+export type KycTabId = "pending" | "needs_info" | "approved" | "rejected"
+
+/** The status pill-tabs — active bucket + each bucket's live count badge. */
+export interface KycStatusTabsProps {
+  active: KycTabId
+  counts: Record<KycTabId, number | null>
+  onSelect: (id: KycTabId) => void
+}
+
+/** The queue table card — header grid + the four async branches. */
+export interface KycQueueTableProps {
+  isLoading: boolean
+  isError: boolean
+  isEmpty: boolean
+  pageRows: readonly KycQueueRow[]
+  onOpen: (userId: string) => void
+  onRetry: () => void
+}
+
 export interface KycSubmissionProps {
   /** The selected submission's userId, or null when the drawer is closed. */
   userId: string | null
@@ -380,18 +733,73 @@ export interface TransactionDetailProps {
   transactionId: string
 }
 
-/**
- * The four master-ledger view tabs (design §6.8 `txViews`). `all` is unfiltered;
- * `stuck` narrows to in-flight transactions, `failed` to failures, `refunds` to
- * the refund type. The active tab drives the keyed `useTransactions` query.
- */
-export type TransactionsViewId = "all" | "stuck" | "failed" | "refunds"
+/** The engine-state stepper tone for one timeline node. */
+export type TxTimelineTone = "done" | "pending" | "fail"
 
-export interface TransactionsViewTab {
-  id: TransactionsViewId
+/** A triage action the operator can open on a transaction. `receipt` is a toast no-op. */
+export type TxFlowKind = "retry" | "refund" | "markFailed" | "recon" | "receipt"
+
+/** One header triage-action button (label + the flow it opens + icon + danger tint). */
+export interface TxActionButton {
   label: string
-  /** Count pill next to the label; `null` hides it (the `all` tab, per design). */
-  count: number | null
+  kind: TxFlowKind
+  icon: string
+  danger?: boolean
+}
+
+/** The steps a triage flow moves through before its terminal (engine/maker) write. */
+export type TxFlowStep = "reason" | "engine" | "maker"
+
+/** The active flow phase, or null when no triage flow is open. */
+export type TxActivePhase = TxFlowStep | null
+
+/** The resolved spec for a triage action — its steps, copy, itemized effect + ledger. */
+export interface TxFlowSpec {
+  steps: TxFlowStep[]
+  title: string
+  cta: string
+  effect: { k: string; v: string }[]
+  ledger: EngineLedgerRow[]
+  diff?: MakerCheckerDiffRow[]
+}
+
+/** One provider-reference row (label + value + optional external explorer link). */
+export interface TxRefRow {
+  label: string
+  value: string
+  link?: string
+  href?: string
+}
+
+/** One itemized-economics row (label + value + operator-only warn tint). */
+export interface TxEconomicsRow {
+  label: string
+  value: string
+  warn?: boolean
+}
+
+/** The tx-detail card-title primitive (bold label + optional muted note). */
+export interface TxPanelTitleProps {
+  children: ReactNode
+  note?: string
+}
+
+/** One double-entry ledger leg row (Account / Dir / Amount / Seq). */
+export interface TxLedgerRowProps {
+  leg: import("@handshake-agent/contracts").AdminTxnLedgerLeg
+}
+
+/** One engine-state timeline stepper node (+ whether a connector to the next follows). */
+export interface TxTimelineStepProps {
+  entry: import("@handshake-agent/contracts").AdminTxnTimelineEntry
+  hasNext: boolean
+}
+
+/** The inline "Re-run recon" result panel (loading / error / breaks / reconciled). */
+export interface TxReconResultProps {
+  loading: boolean
+  error: string | null
+  breaks: import("@handshake-agent/contracts").ReconBreak[] | null
 }
 
 // ─── Compliance page ─────────────────────────────────────────────────────────────
@@ -402,11 +810,35 @@ export interface ComplianceEventDetailProps {
   onOpenChange: (open: boolean) => void
 }
 
+/** The event metadata section — severity/status/user/tx/provider/rule + any disposition. */
+export interface ComplianceEventSummaryProps {
+  event: import("@handshake-agent/contracts").ComplianceEventDetail
+}
+
+/** The disposition form — status select + audited comment + the step-up-gated apply. */
+export interface ComplianceDispositionFormProps {
+  status: import("@handshake-agent/contracts").ComplianceDispositionRequest["status"]
+  onStatusChange: (
+    status: import("@handshake-agent/contracts").ComplianceDispositionRequest["status"]
+  ) => void
+  comment: string
+  onCommentChange: (comment: string) => void
+  busy: boolean
+  onApply: () => void
+  localError: string | null
+}
+
 export interface AmlRuleDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** Editing an existing rule, or null to create a new one. */
   rule: AmlRule | null
+}
+
+/** The AML rule create/edit form body — mounted only while the dialog is open. */
+export interface AmlRuleFormProps {
+  rule: AmlRule | null
+  onClose: () => void
 }
 
 // ─── AML / risk page (§6.6) ─────────────────────────────────────────────────────────
@@ -418,9 +850,403 @@ export interface AmlRiskRuleRowProps {
   onEdit: (rule: AmlRule) => void
 }
 
+/** The design's white rounded-16 card shell. */
+export interface CardShellProps {
+  children: ReactNode
+}
+
+/** An inline, tokened error row with a retry affordance (the § four-branch error). */
+export interface InlineErrorProps {
+  label: string
+  onRetry: () => void
+}
+
+/** Risk-rules card — read-wired; the pencil opens the maker-checker edit dialog. */
+export interface RiskRulesCardProps {
+  onEdit: (rule: AmlRule) => void
+}
+
+/** Open-cases card — the flagged/under-review queue; rows open the case drawer. */
+export interface OpenCasesCardProps {
+  onDraftSar: () => void
+  onOpenCase: (id: string) => void
+}
+
+/** Compliance-reports card — a draft row exposes a step-up-gated Submit. */
+export interface ReportsCardProps {
+  onSubmit: (report: ComplianceReport) => void
+}
+
+// ─── Compliance console (Phase 3) ────────────────────────────────────────────────
+
+/**
+ * The `Badge` component's `variant` union, mirrored here so `constants/` + tab
+ * components can type their variant maps without importing the component (layering-safe).
+ */
+export type BadgeVariant =
+  | "default"
+  | "secondary"
+  | "destructive"
+  | "success"
+  | "warn"
+  | "danger"
+  | "info"
+  | "neutral"
+
+/** The five compliance-console tabs. */
+export type ComplianceTab =
+  | "Events"
+  | "AML Rules"
+  | "Travel Rule"
+  | "Reports"
+  | "Sanctions"
+
+/** Inline tokened error panel (a data-tab's error branch). */
+export interface ErrorPanelProps {
+  what: string
+}
+
+/** Events tab — the flagged-event queue; a row opens the disposition drawer. */
+export interface EventsTabProps {
+  onOpen: (id: string) => void
+}
+
+/** AML Rules tab — the engine rules list; the pencil opens the edit dialog. */
+export interface AmlRulesTabProps {
+  onEdit: (rule: AmlRule) => void
+}
+
+/** Reports tab — SAR/STR filings; a draft row exposes a Submit. */
+export interface ReportsTabProps {
+  onSubmit: (report: ComplianceReport) => void
+}
+
+/** One screening-run match card (red danger mark on a hit). */
+export interface SanctionsCardProps {
+  record: import("@handshake-agent/contracts").SanctionsRecordItem
+}
+
+// ─── Webhooks console (Track A) ───────────────────────────────────────────────────
+
+/** The webhook-queue filter held in local state; empty strings mean "no filter" (All). */
+export interface WebhookFilterState {
+  provider: string
+  status: string
+  from: string
+  to: string
+}
+
+/** The webhook-queue filter bar (provider / status / from-to). */
+export interface WebhookFilterBarProps {
+  filter: WebhookFilterState
+  onChange: (next: WebhookFilterState) => void
+}
+
+/** The webhook queue — loading / error / empty / data over the table. */
+export interface WebhookQueueProps {
+  items: readonly import("@handshake-agent/contracts").WebhookListItem[]
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  onRetry: () => void
+  onView: (id: string) => void
+}
+
+/** The right-side webhook detail drawer (verbatim payload + headers + Retry). */
+export interface WebhookDetailDrawerProps {
+  webhookId: string | null
+  onOpenChange: (open: boolean) => void
+  onRetry: (id: string) => void
+  retrying: boolean
+}
+
+// ─── Audit log page (§6.10) ───────────────────────────────────────────────────────
+
+/** One rendered audit row. */
+export interface AuditRowProps {
+  entry: import("@handshake-agent/contracts").AuditLogEntry
+}
+
+/**
+ * What `ChainPill` reads from the on-mount verify mutation — a structural subset so
+ * `types/` need not import the query hook's return type (layering-safe).
+ */
+export interface AuditChainVerifyState {
+  isPending: boolean
+  isIdle: boolean
+  isError: boolean
+  data?: { ok: boolean; brokenAt?: string | null }
+}
+
+/** The header hash-chain integrity pill. */
+export interface ChainPillProps {
+  verify: AuditChainVerifyState
+}
+
+/** The audit-log filter row (search + action + from/to date range). */
+export interface AuditFilterBarProps {
+  search: string
+  onSearchChange: (value: string) => void
+  action: string
+  onActionChange: (value: string) => void
+  from: string
+  onFromChange: (value: string) => void
+  to: string
+  onToChange: (value: string) => void
+}
+
+/** The audit-log table — header + loading / error / empty / data. */
+export interface AuditTableProps {
+  items: import("@handshake-agent/contracts").AuditLogEntry[]
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  onRetry: () => void
+}
+
+// ─── Sanctions & screening page (§6.5) ───────────────────────────────────────────────
+
+/** A dispositioned match's terminal state (the contract disposition union verbatim). */
+export type SanctionsMatchDone =
+  import("@handshake-agent/contracts").SanctionsDisposition
+
+/** One ongoing-monitoring toggle row, seeded from the config view. */
+export interface SanctionsMonitorRow {
+  key: keyof import("@handshake-agent/contracts").SanctionsMonitoringView
+  label: string
+  on: boolean
+}
+
+/** The active disposition flow (mirrors the design's `runFlow` step chain). */
+export type SanctionsActiveFlow =
+  | { kind: "clear"; matchId: string }
+  | { kind: "escalate"; matchId: string }
+  | { kind: "block"; matchId: string; step: "reason" | "stepup" }
+  | null
+
+/** One screening-match card — open matches offer Clear / Escalate / Block. */
+export interface SanctionsMatchCardProps {
+  record: import("@handshake-agent/contracts").SanctionsRecordItem
+  done: SanctionsMatchDone | null
+  onClear: () => void
+  onEscalate: () => void
+  onBlock: () => void
+}
+
+/** The screening-match list — loading / error / empty / data over the cards. */
+export interface SanctionsMatchListProps {
+  records: import("@handshake-agent/contracts").SanctionsRecordItem[]
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  onRetry: () => void
+  doneOf: (
+    record: import("@handshake-agent/contracts").SanctionsRecordItem
+  ) => SanctionsMatchDone | null
+  onClear: (id: string) => void
+  onEscalate: (id: string) => void
+  onBlock: (id: string) => void
+}
+
+/** The shared disposition flow modals (Clear / Escalate / Block → step-up). */
+export interface SanctionsFlowModalsProps {
+  flow: SanctionsActiveFlow
+  labelOf: (matchId: string) => string
+  onClose: () => void
+  /** Fire the disposition mutation (step-up-gated). */
+  onDisposition: (matchId: string, done: SanctionsMatchDone) => void
+  /** Advance the Block flow reason → step-up. */
+  onAdvanceBlock: (matchId: string) => void
+  mfaEnabled: boolean
+  stepUpOpen: boolean
+  onStepUpOpenChange: (open: boolean) => void
+  onStepUpSuccess: () => void
+}
+
 export interface ComplianceReportDraftDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+}
+
+/** A design status-pill's tokens: its label + background + foreground CSS vars. */
+export interface PillMeta {
+  label: string
+  bg: string
+  fg: string
+}
+
+/** The user-detail tab ids (design vUserDetail tab strip). */
+export type UdTab =
+  | "profile"
+  | "kyc"
+  | "devices"
+  | "security"
+  | "wallets"
+  | "bene"
+  | "tx"
+  | "chat"
+  | "limits"
+
+/** Header-action keys — dispatch is by key so the freeze label can toggle Freeze↔Unfreeze. */
+export type UdActionKey = "freeze" | "note" | "resend"
+
+/** The user-detail error shell (back-link + retry). */
+export interface UdErrorProps {
+  onBack: () => void
+  onRetry: () => void
+}
+
+/** The subset of the useEndUserLimits query the Limits tab reads. */
+export interface UdLimitsQuery {
+  isLoading: boolean
+  isError: boolean
+  data:
+    | import("@handshake-agent/contracts").AdminEndUserLimitsResponse
+    | undefined
+}
+
+/** The Limits tab: effective caps + live velocity usage for a tier. */
+export interface UdLimitsTabProps {
+  tier: string
+  query: UdLimitsQuery
+  onRetry: () => void
+}
+
+/** One labelled velocity bar (used / cap + a clamped progress track). */
+export interface UdVelocityBarProps {
+  label: string
+  used: string
+  cap: string
+  pct: string
+}
+
+/** The Beneficiaries tab — the user's saved beneficiaries + a per-row remove flow. */
+export interface UdBeneficiariesTabProps {
+  beneficiaries: import("@handshake-agent/contracts").AdminEndUserDetail["beneficiaries"]
+  onRemove: (id: string) => void
+}
+
+/** The Transactions tab — the user's recent transactions (rows navigate to tx detail). */
+export interface UdTransactionsTabProps {
+  transactions: import("@handshake-agent/contracts").AdminEndUserDetail["recentTransactions"]
+  onOpenTx: (id: string) => void
+}
+
+/**
+ * A minimal structural view of a TanStack read query (the four async branches) —
+ * so a detail-tab prop can carry the query state without `types/` importing the
+ * hook's `UseQueryResult` (layering-safe, like `UdLimitsQuery`). Modelled as a
+ * discriminated union on `isSuccess` so `isSuccess && data.x` narrows `data` to a
+ * defined value exactly as the real query result does (keeps the tab JSX verbatim).
+ */
+export type UdQueryState<T> =
+  | {
+      isLoading: boolean
+      isError: boolean
+      isSuccess: false
+      data: T | undefined
+    }
+  | { isLoading: boolean; isError: boolean; isSuccess: true; data: T }
+
+/** The Profile tab — contact & locale + the admin-action timeline and case notes. */
+export interface UdProfileTabProps {
+  detail: import("@handshake-agent/contracts").AdminEndUserDetail
+  timeline: UdQueryState<
+    import("@handshake-agent/contracts").AdminEndUserTimelineEntry[]
+  >
+  notes: UdQueryState<
+    import("@handshake-agent/contracts").AdminUserNoteListResponse
+  >
+  onAddNote: () => void
+  onRetryTimeline: () => void
+  onRetryNotes: () => void
+}
+
+/** The KYC tab — last-4 identity docs + liveness + the review-decision / tier controls. */
+export interface UdKycTabProps {
+  /** The KYC submission (last-4 PII only); undefined until the query settles (§3.4). */
+  kyc: import("@handshake-agent/contracts").KycSubmissionDetail | undefined
+  /** The tier an Approve promotes to (derived from the submission's requested tier). */
+  approveTier: string
+  onApprove: () => void
+  onRequestInfo: () => void
+  onReject: () => void
+  onOverrideTier: () => void
+  onForceReKyc: () => void
+}
+
+/** The KYC tab's left column — identity documents (last-4 only, §3.4) + liveness. */
+export interface UdKycIdentityPanelProps {
+  kyc: import("@handshake-agent/contracts").KycSubmissionDetail | undefined
+}
+
+/** The KYC tab's right column — the review-decision buttons + tier controls. */
+export interface UdKycReviewPanelProps {
+  approveTier: string
+  onApprove: () => void
+  onRequestInfo: () => void
+  onReject: () => void
+  onOverrideTier: () => void
+  onForceReKyc: () => void
+}
+
+/** The Devices tab — bound/revoked devices with per-row unbind + SIM-swap re-verify. */
+export interface UdDevicesTabProps {
+  devices: UdQueryState<
+    import("@handshake-agent/contracts").AdminEndUserDevice[]
+  >
+  simSwapFlagged: boolean
+  onReverify: () => void
+  onUnbind: (deviceId: string) => void
+  onRetry: () => void
+}
+
+/** The Security tab — PIN/auth reset + active sessions (per-row + revoke-all). */
+export interface UdSecurityTabProps {
+  sessions: UdQueryState<
+    import("@handshake-agent/contracts").AdminEndUserSession[]
+  >
+  onResetPin: () => void
+  onRevokeAll: () => void
+  onRevokeSession: (sessionId: string) => void
+  onRetry: () => void
+}
+
+/** The Wallets tab — balance cards + on-chain deposit addresses + manual-credit entry. */
+export interface UdWalletsTabProps {
+  balances: import("@handshake-agent/contracts").AdminEndUserDetail["balances"]
+  depositAddresses: import("@handshake-agent/contracts").AdminEndUserDetail["depositAddresses"]
+  onManualCredit: () => void
+}
+
+/** The steps a user-detail action flow walks (design runFlow: credit → reason → step-up → engine/maker). */
+export type UdFlowStep = "credit" | "reason" | "stepup" | "engine" | "maker"
+
+/** A user-detail action flow's config: title, step sequence, modal payloads, and the completion side-effect. */
+export interface UdFlowConfig {
+  title: string
+  steps: UdFlowStep[]
+  effect?: EngineEffectRow[]
+  ledger?: EngineLedgerRow[]
+  diff?: MakerCheckerDiffRow[]
+  /** Side-effect run once the final step is confirmed (mutations, toasts); gets the captured reason. */
+  onComplete?: (reason: string) => void
+}
+
+/** The report types a SAR/STR draft can carry — sourced from the contract enum. */
+export type ComplianceReportType =
+  import("@handshake-agent/contracts").ComplianceReportDraftRequest["reportType"]
+
+/** Inputs of the "Draft compliance report" dialog (report type, event ids, JSON content). */
+export interface DraftFormFieldsProps {
+  reportType: ComplianceReportType
+  onReportTypeChange: (value: ComplianceReportType) => void
+  eventsText: string
+  onEventsTextChange: (value: string) => void
+  content: string
+  onContentChange: (value: string) => void
+  busy: boolean
+  error: string | null
 }
 
 export interface ComplianceReportSubmitDialogProps {
@@ -437,6 +1263,19 @@ export interface BeneficiaryOverrideProps {
   beneficiary: AdminBeneficiary
 }
 
+/** One beneficiary row — icon tile · label + type · verification pill · cooling-off · override. */
+export interface BeneficiaryRowProps {
+  beneficiary: AdminBeneficiary
+}
+
+/** The beneficiaries list card — the four async branches over the list read. */
+export interface BeneficiariesListProps {
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  items: readonly AdminBeneficiary[]
+}
+
 // ─── Treasury writes (§6.13) ────────────────────────────────────────────────────────
 
 export interface TreasuryAlertAcknowledgeProps {
@@ -446,26 +1285,39 @@ export interface TreasuryAlertAcknowledgeProps {
 
 // ─── Blocked list page (§6.7) ──────────────────────────────────────────────────────
 
-/**
- * One derived row of the blocked list. The backing store is the flat
- * `compliance.sanctionsDenylist` string[], so only `value` is real data. `type`
- * is derived heuristically from the value shape (on-chain address vs identifier);
- * `reason` / `by` / `when` have no per-entry backing and are design-faithful
- * placeholders. `index` is the position in the denylist array (the remove key).
- */
-export interface BlockedEntry {
-  index: number
-  /** Derived label — "Address" or "Identifier" (heuristic, not stored). */
-  type: string
-  /** The real denylist string (on-chain address / identifier). */
-  value: string
-  /** design-faithful: no per-entry reason in the store yet. */
-  reason: string
-  /** design-faithful: no per-entry author in the store yet. */
-  by: string
-  /** design-faithful: no per-entry timestamp in the store yet. */
-  when: string
+/** One deny-list row — active entries offer Unblock; superseded ones are audit history. */
+export interface BlockedRowProps {
+  entry: import("@handshake-agent/contracts").BlockedEntry
+  onUnblock: () => void
 }
+
+/** The deny-list table card — loading / error / empty / data over `BlockedRow`. */
+export interface BlockedTableProps {
+  entries: import("@handshake-agent/contracts").BlockedEntry[]
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  onRetry: () => void
+  onUnblock: (entry: import("@handshake-agent/contracts").BlockedEntry) => void
+}
+
+/** The active supersede (unblock) flow: reason (audited) → step-up (client TOTP) → POST. */
+export interface SupersedeFlow {
+  id: string
+  value: string
+  reason: string
+  step: "reason" | "stepup"
+}
+
+/** A pending add awaiting its audited reason (the dialog already collected the value). */
+export interface PendingAdd {
+  value: string
+}
+
+/** An action awaiting a server step-up replay (so the post-re-auth toast reads right). */
+export type PendingReplay =
+  | { kind: "add"; value: string }
+  | { kind: "supersede"; value: string }
 
 export interface AddBlockedDialogProps {
   open: boolean
@@ -503,6 +1355,28 @@ export interface TemplateEditorDialogProps {
   template: NotificationTemplate | null
 }
 
+/** The variables editor — name / type / description rows with add + remove. */
+export interface VariablesEditorProps {
+  variables: import("@handshake-agent/contracts").TemplateVariable[]
+  onChange: (
+    next: import("@handshake-agent/contracts").TemplateVariable[]
+  ) => void
+  disabled: boolean
+}
+
+/** The live-preview panel — sample-vars JSON input + Preview + rendered output. */
+export interface PreviewPanelProps {
+  contentText: string
+  subject: string
+  disabled: boolean
+}
+
+/** The template create/edit form body — mounted only while the dialog is open. */
+export interface TemplateFormProps {
+  template: NotificationTemplate | null
+  onClose: () => void
+}
+
 // ─── Agent page (Phase 4) ──────────────────────────────────────────────────────────
 
 export interface ConversationLogDetailProps {
@@ -532,6 +1406,34 @@ export interface MetricsDashboardProps {
   gracefulOnForbidden?: boolean
 }
 
+/**
+ * One KPI stat tile. Tile 0 is the dark-green `hero` (gradient + white ink + amber
+ * delta chip); others use the card surface with a success/`warn` muted delta chip.
+ */
+export interface KpiTileProps {
+  label: string
+  value: string
+  delta?: string
+  deltaNote?: string
+  footnote?: string
+  hero?: boolean
+  warn?: boolean
+}
+
+/** A metrics section card driven by the composite dashboard summary (read-only). */
+export interface MetricsCardProps {
+  data: import("@handshake-agent/contracts").DashboardSummary
+}
+
+/**
+ * The metrics error branch: a real failure, or — when `gracefulOnForbidden` and the
+ * failure is a 403 (`isForbidden`) — a friendly "no metrics access" note (§3.3 UX).
+ */
+export interface MetricsErrorProps {
+  gracefulOnForbidden: boolean
+  isForbidden: boolean
+}
+
 // ─── Operator dashboard (design revamp — Dash screen) ─────────────────────────────────
 
 export interface OperatorDashboardProps {
@@ -545,14 +1447,13 @@ export interface OperatorDashboardProps {
 }
 
 // ─── Feature flags page (design §6.28) ─────────────────────────────────────────────
-// PIXEL-FOR-PIXEL design reproduction. The rows render the design's OWN mock flag
-// seed (`docs/design-ref/screens/Flags.html`): a mono key, a description, a
-// per-cohort / percentage `rollout` chip, the `eval → on/off` effective-evaluation
-// preview, and a 52px soft toggle. Real-data reintegration (the effective-config
-// registry) is a separate later step — there is no data-fetch on this screen.
+// WIRED to the effective-config registry (`GET /admin/settings`): a registry-backed
+// flag (one with a `settingKey`) resolves a REAL effective `on`; unbacked design flags
+// keep their default. Flipping a backed flag is a maker-checker → step-up config write.
+// The `rollout` chip stays design-faithful (no cohort/percentage rollout engine).
 
 /**
- * One design-mock feature-flag row (design §6.28). `on` drives the toggle track +
+ * One feature-flag row (design §6.28). `on` drives the toggle track +
  * `eval → on/off` preview; `rollout` is the per-cohort / percentage chip label.
  */
 export interface FeatureFlagRow {
@@ -566,25 +1467,96 @@ export interface FeatureFlagRow {
   on: boolean
 }
 
+/**
+ * A flag definition. `settingKey` bridges the FE flag key → the registry dot-path
+ * that backs it; when present, the row's `on` is the real effective value. Rows
+ * without a `settingKey` are not registry-backed (they keep their design default).
+ */
+export interface FlagDefinition extends FeatureFlagRow {
+  settingKey?: string
+}
+
+/**
+ * A resolved flag row plus the registry key (if any) that backs it — carried so the
+ * write path knows whether it can persist a flip via the settings PATCH. The scope
+ * mirrors the backing setting so the override targets the same leaf the read resolved.
+ */
+export interface ResolvedFlag extends FeatureFlagRow {
+  settingKey?: string
+  scope: import("@handshake-agent/contracts").EffectiveSetting["scope"]
+  scopeValue: string | null
+}
+
+/** One flag row — mono key, desc, rollout chip + eval preview, and a 52×30 soft toggle. */
+export interface FlagRowProps {
+  flag: ResolvedFlag
+  onToggle: (flag: ResolvedFlag) => void
+}
+
+/** The flag list region — loading skeletons / error+retry / the resolved flag rows. */
+export interface FlagsListProps {
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  rows: readonly ResolvedFlag[]
+  onToggle: (flag: ResolvedFlag) => void
+  onRetry: () => void
+}
+
 // ─── Admin settings page (design §6.16) ────────────────────────────────────────────
 // The signed-in operator's OWN profile + preferences. Profile + 2FA come from
-// `useAdminMe`; the Theme row is wired to the theme store. Notification
-// preference toggles have no endpoint yet, so they are design-faithful local
-// state — this descriptor shapes the component's own sample rows, not a DTO.
+// `useAdminMe`; the Theme row is wired to the theme store; the notification
+// toggles read/write `useAdminPreferences` / `useUpdateAdminPreferences` (a
+// full-state PATCH). This key is the shared boolean field on the `AdminPreferences` DTO.
 
-/** A notification-preference toggle key (design-faithful — no API yet). */
+/** A notification-preference toggle key — a boolean field on `AdminPreferences`. */
 export type AdminPreferenceKey =
   | "emailAlerts"
   | "approvalMentions"
   | "weeklyDigest"
 
-/** One rendered preference-toggle row (label + description + current value). */
+/** One rendered preference-toggle row (label + description; value is derived). */
 export interface AdminPreferenceRow {
   key: AdminPreferenceKey
   /** The row title (e.g. "Email alerts"). */
   label: string
   /** The one-line explanation under the title. */
   desc: string
+}
+
+/** The profile card — striped avatar, identity, and the 2FA posture + enroll CTA. */
+export interface ProfileCardProps {
+  displayName: string
+  email: string
+  roleLabel: string
+  mfaEnabled: boolean
+  onEnroll: () => void
+}
+
+/** One notification-preference toggle row (derived `checked`; flip → full-set PATCH). */
+export interface PreferenceRowProps {
+  row: AdminPreferenceRow
+  checked: boolean
+  onToggle: (next: boolean) => void
+}
+
+/** One active-session row — device (UA), IP, expiry, and the stepped-up pill. */
+export interface SessionRowProps {
+  session: import("@handshake-agent/contracts").AdminSessionView
+}
+
+// ─── My account page (self-service profile, /account) ───────────────────────────────
+
+/** The self-service profile form — edits the operator's own display name (PATCH /admin/me). */
+export interface AccountFormProps {
+  me: import("@handshake-agent/contracts").AdminMe
+}
+
+/** One read-only identity row (email / role / status / 2FA — managed by an admin). */
+export interface ReadOnlyRowProps {
+  label: string
+  value: string
+  capitalize?: boolean
 }
 
 // ─── Reconciliation page (design §6.12) ────────────────────────────────────────────
@@ -597,27 +1569,99 @@ export type ReconBreakSeverity = "high" | "medium" | "low"
 /** What the operator did to close a break (drives the confirmed-outcome footer). */
 export type ReconBreakResolution = "resolved" | "accepted" | "escalated"
 
-export interface ReconBreak {
-  id: string
-  /** The break kind — selects the icon tile and describes the drift class. */
-  kind:
-    | "Over-credit"
-    | "Missing settlement"
-    | "Amount mismatch"
-    | "Duplicate credit"
-  severity: ReconBreakSeverity
-  /** The offending transaction id (link-blue mono). */
-  tx: string
-  /** Human-readable drift explanation. */
-  detail: string
-  /** Signed delta, provider-minus-ledger (rendered mono / tabular). */
-  delta: string
-  /** Tint for the delta value — danger for over-credits, warn/muted otherwise. */
-  deltaTone: "danger" | "warn" | "muted"
-  /** `open` shows the action row; anything else shows the outcome footer. */
-  status: "open" | "closed"
-  /** Present once the break has left the open queue. */
-  resolution?: ReconBreakResolution
+/** A live `ReconBreak` (contract) with a locally-applied disposition overlaid. */
+export type ReconBreakView = import("@handshake-agent/contracts").ReconBreak & {
+  localResolution?: ReconBreakResolution
+}
+
+/** The three action flows a break card can open (each with its stage). */
+export type ReconFlowStep =
+  | { kind: "resolve"; stage: "reason" | "engine" }
+  | { kind: "accept"; stage: "reason" | "confirm" }
+  | { kind: "escalate" }
+
+/** The cron status bar over the break board — last/next run + open-breaks + Run now. */
+export interface ReconStatusBarProps {
+  status: import("@handshake-agent/contracts").ReconStatus | undefined
+  isLoading: boolean
+  isError: boolean
+  openCount: number
+  onRunNow: () => void
+}
+
+/** One reconciliation break card — open shows the action row, closed the outcome footer. */
+export interface ReconBreakCardProps {
+  item: ReconBreakView
+  onOpenTx: (transactionId: string) => void
+  onEscalate: (id: string) => void
+  onAccept: (id: string) => void
+  onResolve: (id: string) => void
+}
+
+/** The break board — loading / error / empty / data over `ReconBreakCard`. */
+export interface ReconBreakListProps {
+  breaks: ReconBreakView[]
+  isLoading: boolean
+  isError: boolean
+  onRetry: () => void
+  onOpenTx: (transactionId: string) => void
+  onEscalate: (id: string) => void
+  onAccept: (id: string) => void
+  onResolve: (id: string) => void
+}
+
+/** The shared step-up-gated flow modals for the currently-active break. */
+export interface ReconBreakFlowsProps {
+  activeBreak: ReconBreakView
+  flow: ReconFlowStep
+  reason: string
+  onClose: () => void
+  /** Advance to the next stage (accept→confirm, resolve→engine). */
+  onAdvance: (flow: ReconFlowStep) => void
+  /** Capture the audited reason before the confirm/engine leg. */
+  onCaptureReason: (reason: string) => void
+  /** Fire the real disposition mutation (step-up-gated). */
+  onDisposition: (
+    id: string,
+    resolution: ReconBreakResolution,
+    reason: string
+  ) => void
+}
+
+// ─── Reconciliation run-history panel (Go-readiness #3) ──────────────────────────────
+
+/** A durable-run break disposition — triage (acknowledge) or close (resolve). */
+export type ReconActionKind = "acknowledge" | "resolve"
+
+/** The break awaiting an audited reason before its step-up-gated disposition. */
+export interface ReconPendingAction {
+  breakId: string
+  kind: ReconActionKind
+}
+
+/** The detected breaks for one expanded run (lazily fetched on expand). */
+export interface RunBreaksProps {
+  runId: string
+  onAct: (breakId: string, kind: ReconActionKind) => void
+}
+
+/** One expandable run row — status/type/counts header + the lazily-loaded breaks. */
+export interface ReconRunRowProps {
+  run: import("@handshake-agent/contracts").ReconRun
+  expanded: boolean
+  onToggle: () => void
+  onAct: (breakId: string, kind: ReconActionKind) => void
+}
+
+/** The run-history list — the four async branches over the durable runs read. */
+export interface ReconRunListProps {
+  isPending: boolean
+  isError: boolean
+  isSuccess: boolean
+  runs: readonly import("@handshake-agent/contracts").ReconRun[]
+  expandedId: string | null
+  onToggle: (runId: string) => void
+  onAct: (breakId: string, kind: ReconActionKind) => void
 }
 
 // ─── Treasury page (design §6.13) ─────────────────────────────────────────────────
@@ -680,51 +1724,64 @@ export interface TreasuryPayoutRow {
   big: boolean
 }
 
+/** One balance tile — the hero variant carries the dark-green gradient. */
+export interface BalanceCardProps {
+  card: TreasuryCard
+}
+
+/** The 4-up balance-card row — error / loading / data over `BalanceCard`. */
+export interface BalanceCardsRowProps {
+  cards: TreasuryCard[]
+  isLoading: boolean
+  isError: boolean
+  onRetry: () => void
+}
+
+/** The threshold-breach warning banner (composes the shared acknowledge control). */
+export interface TreasuryAlertBannerProps {
+  alert: import("@handshake-agent/contracts").TreasuryAlert
+}
+
+/** The payout / withdrawal approval queue — loading / error / empty / data. */
+export interface PayoutQueuePanelProps {
+  payouts: TreasuryPayoutRow[]
+  isLoading: boolean
+  isError: boolean
+  /** Which rows have already been approved this session (shows "Requested"). */
+  approved: Record<string, boolean>
+  onRetry: () => void
+  onApprove: (row: TreasuryPayoutRow) => void
+}
+
+/** The child-address sweeps panel — loading / error / empty / data + threshold footer. */
+export interface SweepsPanelProps {
+  sweeps: TreasurySweepRow[]
+  threshold: string
+  isLoading: boolean
+  isError: boolean
+  onRetry: () => void
+}
+
+/** The beneficiaries-in-cooling-off panel (composes the shared step-up override). */
+export interface CoolingOffPanelProps {
+  beneficiaries: import("@handshake-agent/contracts").AdminBeneficiary[]
+}
+
 // ─── Agent config page (design §6.17 Agent config) ──────────────────────────────
+// READ-ONLY oversight (§3.1): four cards, each self-contained (own query + four async
+// branches) around a shared shell. The card data comes from `AgentConfigView` /
+// `AgentInsightsView` in contracts — these are the component prop shapes only.
 
-/** One "Model & guardrails" key/value row (design §6.17). */
-export interface AgentGuardrailRow {
-  label: string
-  value: string
+/** A card shell whose title is stable across every async branch. */
+export interface AgentCardShellProps {
+  title: string
+  suffix?: string
+  aside?: ReactNode
+  children: ReactNode
 }
 
-/**
- * One "System-prompt versions" row (design §6.17). No prompt-version endpoint
- * exists — the contract surfaces only a single read-only preview string — so
- * these rows are design-faithful representative content shaped exactly like the
- * design markup (dot + version + tag + meta + a maker-checker action link).
- */
-export interface AgentPromptVersion {
-  /** Semantic version label (mono). */
-  version: string
-  /** The lifecycle tag rendered beside the version ("live" / "staged" / …). */
-  tag: string
-  /** Author + timestamp metadata line. */
-  meta: string
-  /** The status-dot tone — drives the design's coloured dot. */
-  tone: "success" | "warn" | "muted"
-  /** The right-aligned action label ("View diff" / "Promote" / "Rollback"). */
-  action: string
-}
-
-/** A tool-registry capability's access class — read-only tools vs proposal tools. */
-export type AgentToolKind = "read" | "write"
-
-/**
- * One "Tool registry" row (design §6.17). The live tool set is not exposed by an
- * admin endpoint, so these rows are design-faithful and mirror the agent's actual
- * typed tool surface (read-only tools return data; "write" tools only PROPOSE,
- * they never execute — §3.1).
- */
-export interface AgentToolRow {
-  /** Fully-qualified tool name (mono). */
-  name: string
-  /** read = read-only data tool · write = proposal-only tool (never executes). */
-  kind: AgentToolKind
-}
-
-/** One "Cost & usage (24h)" key/value row (design §6.17). */
-export interface AgentUsageStat {
+/** One key/value row (Model & guardrails · Cost & usage) — a label + a mono value. */
+export interface AgentKeyValueRowProps {
   label: string
   value: string
 }
@@ -761,17 +1818,9 @@ export type DeliveryStatus =
   | "Bounced"
   | "Failed"
 
-/** One row in the read-only delivery log (channel chip + name + meta + status pill). */
-export interface DeliveryLogRow {
-  id: string
-  channel: DeliveryChannel
-  /** The broadcast / template name (bold ink). */
-  name: string
-  /** The targeted cohort label (e.g. "tier_1 users"). */
-  audience: string
-  /** Relative or absolute send time. */
-  time: string
-  status: DeliveryStatus
+/** One row in the read-only delivery log (channel chip + name + event·time + status pill). */
+export interface DeliveryRowProps {
+  entry: import("@handshake-agent/contracts").DeliveryLogEntry
 }
 
 // ─── Asset catalog page (design §6.23) ──────────────────────────────────────────────
@@ -815,6 +1864,30 @@ export interface AssetCatalogRow {
   live: boolean
 }
 
+/** The "Newly discovered on-chain assets" card (read-only Blockradar discovery review). */
+export interface DiscoveredCardProps {
+  items: readonly import("@handshake-agent/contracts").AdminDiscoveredAsset[]
+  loading: boolean
+}
+
+/** One asset catalog row — copyable contract + the Live toggle-pill (→ maker-checker). */
+export interface AssetRowProps {
+  asset: AssetCatalogRow
+  onCopy: (asset: AssetCatalogRow) => void
+  onToggle: (asset: AssetCatalogRow) => void
+}
+
+/** The asset-catalog table — 6-column header + loading / error / empty / data. */
+export interface AssetsTableProps {
+  assets: AssetCatalogRow[]
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  onRetry: () => void
+  onCopy: (asset: AssetCatalogRow) => void
+  onToggle: (asset: AssetCatalogRow) => void
+}
+
 /**
  * TableFilterBar props — the filter/search strip rendered inside a table card's
  * header. `children` are the page-specific controls; `className` tweaks the strip.
@@ -846,20 +1919,37 @@ export interface AssetLogoProps {
 // ─── Templates page (design §6.19) ──────────────────────────────────────────────────
 // The Templates screen is WIRED to the real GET /admin/notification-templates
 // endpoint (Phase 6a) and maps the contract's `NotificationTemplate` directly onto
-// each card, so it no longer needs local design-faithful card types here. The
-// design's approval pill has no backing contract field and is omitted (recorded as a
-// shape gap for a later backend-enrichment pass).
+// each card. The design's approval pill has no backing contract field and is omitted
+// (recorded as a shape gap). Create/edit is the shared step-up-gated TemplateEditorDialog.
+
+/** One template preview card — channel chip · mono name · Edit · locale/vars · body. */
+export interface TemplateCardProps {
+  template: import("@handshake-agent/contracts").NotificationTemplate
+  onEdit: (
+    template: import("@handshake-agent/contracts").NotificationTemplate
+  ) => void
+}
+
+/** The template preview grid — the four async branches over the templates read. */
+export interface TemplatesGridProps {
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  templates: readonly import("@handshake-agent/contracts").NotificationTemplate[]
+  onEdit: (
+    template: import("@handshake-agent/contracts").NotificationTemplate
+  ) => void
+  onRetry: () => void
+}
 
 // ─── Currency catalog page (design §6.24) ───────────────────────────────────────────
-// Design-reproduction: the table renders the design's OWN mock currency seed
-// (`docs/design-ref/logic.js` `currencies`, lines 126-130) so the screen looks
-// exactly like `docs/design-ref/screens/Currencies.html`. Real-data reintegration is
-// a separate later step. Each row's Live pill is a maker-checker toggle (enabling /
-// disabling a currency is a dual-control config change) — clicking it opens the
-// shared MakerCheckerModal, matching the design's `onToggle` destination. Nothing
-// here moves money (§3.1).
+// WIRED to the real admin fiat catalog (`GET /admin/config/catalog`, incl. disabled/off
+// entries). Each row's Live pill is a maker-checker toggle (enabling / disabling a
+// currency is a dual-control config change) — clicking it opens the shared
+// MakerCheckerModal, whose approval fires the step-up-guarded PATCH. Nothing here
+// moves money (§3.1).
 
-/** A currency-catalog row for the design §6.24 table (mirrors the design seed). */
+/** A currency-catalog row for the design §6.24 table (mirrors a catalog fiat). */
 export interface CurrencyCatalogRow {
   /** Stable row id (from the design seed, e.g. "ngn") — used as the React key. */
   id: string
@@ -883,36 +1973,37 @@ export interface CurrencyCatalogRow {
   custom: boolean
 }
 
-// ─── Ticketing page (design §6.21) ──────────────────────────────────────────────────
-// Left panel = Vendor ports; right panel = Recent orders. This is a DESIGN
-// REPRODUCTION (docs/design-ref/screens/Ticketing.html) — no data is fetched. Both
-// panels render the design's own representative sample content (module-level consts,
-// matching the seed() dataset shapes + operator/vendor names). Real-data reintegration
-// is a separate later step. Nothing here moves money (§3.1).
+/** One catalog row — grid, symbol chip, mono columns, and the clickable Live pill. */
+export interface CurrencyRowProps {
+  row: CurrencyCatalogRow
+  onToggle: (row: CurrencyCatalogRow) => void
+}
 
-/** A recent-order row's payment status → the canonical status pill (§5 map). */
+/** The catalog table card — header row + the four async branches. */
+export interface CurrencyTableProps {
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  rows: readonly CurrencyCatalogRow[]
+  onToggle: (row: CurrencyCatalogRow) => void
+  onRetry: () => void
+}
+
+// ─── Ticketing page (design §6.21) ──────────────────────────────────────────────────
+// Left panel = Vendor ports (honest shape-gap — no registry endpoint yet); right panel
+// = Recent orders, WIRED to `useTicketOrders` (the real engine feed). Read-only display;
+// nothing here moves money (§3.1).
+
+/** A recent-order row's settlement status → the canonical status pill (§5 map). */
 export type TicketOrderStatus =
   | "settled"
   | "pending_settlement"
   | "refunded"
   | "failed"
 
-/**
- * One "Recent orders" row (design §6.21). Design-reproduction sample content shaped
- * exactly like the design markup (event name + mono order id · user · amount · status
- * pill). The row navigates to the transaction detail route, matching the design's
- * clickable-record affordance.
- */
-export interface TicketOrderRow {
-  /** The event/ticket title (bold ink, 12.5px). */
-  event: string
-  /** The mono order / transaction id (also the navigation target). */
-  id: string
-  /** The buyer's display name (design seed, e.g. "Amara Okeke"). */
-  user: string
-  /** The order amount, pre-formatted (mono / tabular). */
-  amt: string
-  status: TicketOrderStatus
+/** One "Recent orders" row — ticket type + mono id · user · amount · status pill. */
+export interface OrderRowProps {
+  order: import("@handshake-agent/contracts").TicketOrderItem
 }
 
 // ─── Pricing page (design §6.22) ────────────────────────────────────────────────────
@@ -1010,6 +2101,79 @@ export interface AddPriceDialogProps {
   onContinue: (choice: { asset: string; code: string; rate: number }) => void
 }
 
+/** The two priced, fiat-denominated capabilities that carry per-row MIN/MAX bounds. */
+export type PricingCap = "buy" | "sell"
+
+/** The generalized pricing edit chain: value → reason → step-up → maker-checker → PATCH. */
+export type PricingFlowStep = "value" | "reason" | "stepup" | "maker"
+
+/** One resolved spread row (buy or sell) of the design's pricing grid. */
+export interface SpreadRow {
+  id: string
+  cap: string
+  pair: string
+  spread: string
+  fee: string
+  userRate: string
+  margin: string
+  spreadKey: string
+  spreadBps: number | null
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
+  /** Per-(capability × asset × currency) fiat MIN/MAX (the pricing MIN/MAX column). */
+  dir: PricingCap
+  asset: string
+  currency: string
+  minKey: string
+  maxKey: string
+  minValue: number | null
+  maxValue: number | null
+}
+
+/**
+ * A single numeric-pricing edit in flight — the generalized target the audit chain
+ * patches. `format` renders the value for the diff/toast; `integer` restricts the
+ * captured value (bps are whole; a base rate may be a decimal).
+ */
+export interface EditTarget {
+  key: string
+  title: string
+  fieldLabel: string
+  currentLabel: string
+  seed: string
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
+  diffField: string
+  toastLabel: string
+  format: (n: number) => string
+  integer: boolean
+}
+
+/** One body row of the spread grid — including the inline Edit + min/max controls. */
+export interface SpreadTableRowProps {
+  row: SpreadRow
+  onEdit: (row: SpreadRow) => void
+  onEditMin: (row: SpreadRow) => void
+  onEditMax: (row: SpreadRow) => void
+}
+
+/** The spread card — preview-currency + fee header strip, then the 7-column grid. */
+export interface SpreadCardProps {
+  rows: SpreadRow[]
+  currencies: string[]
+  previewCurrency: string
+  feeLabel: string
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  onCurrencyChange: (currency: string) => void
+  onRetry: () => void
+  onEditFee: () => void
+  onEdit: (row: SpreadRow) => void
+  onEditMin: (row: SpreadRow) => void
+  onEditMax: (row: SpreadRow) => void
+}
+
 // ─── Capabilities / service registry page (design §6.25) ─────────────────────────
 // PIXEL reproduction of `docs/design-ref/screens/Capabilities.html`: the master
 // switchboard. Each transactable capability is bound to a provider port and rendered
@@ -1055,15 +2219,101 @@ export interface CapabilityRowProps {
   onToggle: (row: CapabilityRow) => void
 }
 
-// ─── WhatsApp page (design §6.20) ────────────────────────────────────────────────────
-// PIXEL reproduction of `docs/design-ref/screens/Whatsapp.html`: this screen is a
-// pure design reproduction (no `useWhatsAppConfig` / TanStack Query). Its content is
-// the design's own representative sample data — `waHealth` (key/val + per-row colour),
-// `waFlows` (lock rows + Live pills) and `waConvo` (redacted chat bubbles) — embedded
-// as module-level constants. The secret VALUES never cross the boundary (root
-// CLAUDE.md §3.5): the health rows carry presence/status, never a plaintext secret.
+/**
+ * Per-capability display metadata the config contract does NOT provide — the human
+ * label, description, bound provider port, icon path, and tint. Keyed by the crypto
+ * capability leaf; `on` is NOT here (it comes from the live setting value).
+ */
+export interface CapabilityPresentation {
+  /** The `catalog.capabilities.crypto.<x>` registry key backing this row. */
+  settingKey: string
+  label: string
+  desc: string
+  provider: string
+  tone: CapabilityTone
+  icon: string
+}
 
-/** One "Number & webhook health" key/value row (design `waHealth` `{k, v, fg}`). */
+/**
+ * A resolved capability row plus the registry key + scope that back it — carried so
+ * the write path targets the same leaf the read resolved.
+ */
+export interface ResolvedCapability extends CapabilityRow {
+  settingKey: string
+  scope: import("@handshake-agent/contracts").EffectiveSetting["scope"]
+  scopeValue: string | null
+}
+
+// ─── Settings page (layered-config console, design §6.30) ────────────────────────────
+
+/** The config layer a key resolved from — `db` (an admin override) vs env/JSON baseline. */
+export type SettingSource = "DB" | "Baseline"
+
+/** The settings edit chain: value → reason → step-up → maker-checker → PATCH. */
+export type SettingsFlowStep = "value" | "reason" | "stepup" | "maker" | null
+
+/** One design-reproduction settings row, mapped from a real `EffectiveSetting`. */
+export interface SettingRow {
+  key: string
+  /** The resolved effective value, formatted (mono / tabular). */
+  val: string
+  /** The winning config layer — 'DB' for an override, else 'Baseline' (env/JSON). */
+  src: SettingSource
+  /** The value's type — shown in the key meta line (`valueType`). */
+  type: string
+  /** The registry `valueType` — drives the value-entry control + coercion. */
+  valueType: EffectiveSetting["valueType"]
+  desc: string
+  /** A human resolution line for the source chip tooltip. */
+  chain: readonly string[]
+  /** Whether the row is editable from the console (DB-layer keys only). */
+  editable: boolean
+  /** The raw effective value, used to seed the value-entry control. */
+  rawValue: unknown
+  scope: EffectiveSetting["scope"]
+  scopeValue: string | null
+}
+
+/** One body row of the settings grid. */
+export interface SettingsTableRowProps {
+  row: SettingRow
+  onEdit: (row: SettingRow) => void
+}
+
+/** The settings table card — header + loading / error / empty / data. */
+export interface SettingsTableProps {
+  rows: SettingRow[]
+  totalCount: number
+  isLoading: boolean
+  isError: boolean
+  isSuccess: boolean
+  search: string
+  onRetry: () => void
+  onEdit: (row: SettingRow) => void
+}
+
+/** The value-entry modal (step 0 of the edit chain). */
+export interface SettingValueModalProps {
+  open: boolean
+  row: SettingRow | null
+  onOpenChange: (open: boolean) => void
+  onContinue: (value: unknown, display: string) => void
+}
+
+/** The value-entry form body — mounted only while open so it seeds from `row`. */
+export interface SettingValueFormProps {
+  row: SettingRow
+  onContinue: (value: unknown, display: string) => void
+}
+
+// ─── WhatsApp page (design §6.20) ────────────────────────────────────────────────────
+// The "Number & webhook health" card is WIRED to `useWhatsAppConfig` (GET
+// /admin/whatsapp/config): the non-secret Cloud-API / Flows wiring + boolean
+// secret-PRESENCE flags. Secret VALUES never cross the boundary (root CLAUDE.md §3.5):
+// the presence rows render "Set" / "Not set", never a plaintext secret. The Flows
+// registry + conversation monitor have no read endpoint yet (honest shape-gap notes).
+
+/** One "Number & webhook health" key/value row (label + tinted mono value). */
 export interface WhatsAppHealthRow {
   /** The row label (e.g. "Graph version", "App secret"). */
   label: string
@@ -1075,6 +2325,17 @@ export interface WhatsAppHealthRow {
    * (`text-twn`), `neutral` = a plain wiring value (`text-ink`).
    */
   tone: "ok" | "warn" | "neutral"
+}
+
+/** One key/value health row — label + tinted mono value. */
+export interface WhatsAppHealthRowProps {
+  row: WhatsAppHealthRow
+}
+
+/** An honest shape-gap note for a panel whose backing read endpoint does not exist yet. */
+export interface ShapeGapNoteProps {
+  title: string
+  children: string
 }
 
 // ─── Limits & velocity page (design §6.26) ─────────────────────────────────────────
@@ -1136,6 +2397,24 @@ export interface LimitTier {
   velocity: readonly LimitVelocityRow[]
 }
 
+/** One key/value limit row — the edit pencil shows only for an enforced, editable leaf. */
+export interface LimitLeafRowProps {
+  row: LimitAmountRow | LimitVelocityRow
+  onEdit: (row: LimitAmountRow | LimitVelocityRow) => void
+}
+
+/** The limits data board — tier tabs + currency selector + the amount/velocity cards. */
+export interface LimitsBoardProps {
+  tiers: readonly LimitTier[]
+  tierId: LimitTierId
+  onTierChange: (id: LimitTierId) => void
+  currencies: readonly string[]
+  activeCurrency: string
+  onCurrencyChange: (currency: string) => void
+  tier: LimitTier
+  onEdit: (row: LimitAmountRow | LimitVelocityRow) => void
+}
+
 // ─── System / ops page (design §6.29) ────────────────────────────────────────
 // Three sections: a 5-up provider status tile grid, a "Webhook queues" list, and a
 // "Background jobs & cron" list. There is NO operational-status endpoint yet, so the
@@ -1194,6 +2473,43 @@ export interface OpsJobRow {
   health: OpsHealth
 }
 
+/** The stage the active "Run now" flow is showing. */
+export type OpsRunStage = "reason" | "engine"
+
+/** A wallet-backfill run's lifecycle status. */
+export type BackfillStatus = "queued" | "running" | "completed" | "failed"
+
+/** The 5-up provider status tiles (contract-sourced). */
+export interface ProviderTilesProps {
+  providers: import("@handshake-agent/contracts").OpsProviderStatus[]
+}
+
+/** The webhook-queues panel (contract-sourced rows). */
+export interface WebhookQueuesCardProps {
+  queues: import("@handshake-agent/contracts").OpsWebhookQueue[]
+}
+
+/** The background-jobs panel — each job carries a step-up-gated "Run now". */
+export interface BackgroundJobsCardProps {
+  jobs: OpsJobRow[]
+  onRun: (job: OpsJobRow) => void
+}
+
+/** One service-health row (success/error rate + status word). */
+export interface ServiceHealthRowProps {
+  service: import("@handshake-agent/contracts").ServiceHealthMetrics["services"][number]
+}
+
+/** The shared "Run now" flow modals (reason → engine-action) for the active job. */
+export interface OpsRunFlowProps {
+  job: OpsJobRow
+  stage: OpsRunStage
+  onClose: () => void
+  /** Reason (audit) captured → advance to the engine-action leg. */
+  onContinue: (reason: string) => void
+  onExecute: () => void
+}
+
 // ─── Providers page (design §6.27) ──────────────────────────────────────────────────
 // Provider adapter cards + a mock→live readiness checklist, WIRED to the real
 // provider-registry read endpoint (GET /admin/providers, Phase 6b). The card/
@@ -1210,6 +2526,16 @@ export interface ProviderCardViewProps {
   provider: import("@handshake-agent/contracts").ProviderCardView
 }
 
+/** The readiness-row glyph — a check when done, a dash while pending. */
+export interface ReadinessIconProps {
+  done: boolean
+}
+
+/** The mock→live readiness checklist card — one check-icon row per gate. */
+export interface ReadinessCardProps {
+  items: readonly import("@handshake-agent/contracts").ProviderReadinessItem[]
+}
+
 /** Props for the ProviderTestButton (the Phase-7 "Test connection" liveness probe). */
 export interface ProviderTestButtonProps {
   /** The stable provider key to probe (e.g. "blockradar"). */
@@ -1218,18 +2544,8 @@ export interface ProviderTestButtonProps {
 
 // ─── Approvals page (design §6 Approvals, `screens/Approvals.html`) ──────────────
 
-/**
- * The change class of a dual-control request — drives the kind pill's tint
- * (info / warn / success) and reads alongside its label so colour is never the
- * sole signal.
- */
-export type ApprovalKind =
-  | "Pricing change"
-  | "Capability"
-  | "Refund"
-  | "Tier override"
-  | "KYC decision"
-  | "Manual credit"
+/** The two inbox buckets: changes awaiting my approval vs. changes I raised. */
+export type AprTab = "awaiting" | "mine"
 
 /**
  * One from→to field change inside a maker-checker request. The `from` is struck
@@ -1244,31 +2560,46 @@ export interface ApprovalDiffRow {
   to: string
 }
 
-/**
- * A pending dual-control request in the approval inbox. This is design-faithful
- * representative content — there is no approvals endpoint yet — so the requester
- * is identified by their originating role (`byRole`), which the design uses to
- * derive "your own request" (a request raised by your own role needs a different
- * admin), while the target / reason / diff mirror the design's seed items.
- */
-export interface ApprovalRequest {
-  /** Stable id + a11y anchor (design's `apr_5001` mono id). */
-  id: string
-  kind: ApprovalKind
-  /** One-line summary of the change. */
-  title: string
-  /** Requester's display name. */
-  by: string
-  /** The role that raised the request — drives the "your own request" guard. */
-  byRole: string
-  /** Relative timestamp ("34m ago"). */
-  ago: string
-  /** The console area the change targets ("Pricing", "Capabilities", …). */
-  resource: string
-  /** The maker's stated justification (shown in the reason box). */
-  reason: string
-  /** The itemized from→to changes this request would apply. */
-  diff: ApprovalDiffRow[]
+/** One itemized diff line inside a request card. */
+export interface DiffLineProps {
+  diff: ApprovalDiffRow
+}
+
+/** A single change-request card — kind pill, meta, reason, diff, disposition footer. */
+export interface RequestCardProps {
+  request: import("@handshake-agent/contracts").ChangeRequest
+  /** My own request → dual control shows a guard, never live actions. */
+  mine: boolean
+  /** A disposition is in flight; both actions disable. */
+  busy: boolean
+  onApprove: () => void
+  onReject: () => void
+}
+
+/** The bucket tab row (Awaiting me · My requests) with count badges. */
+export interface ApprovalTabsProps {
+  tab: AprTab
+  awaitingCount: number
+  myCount: number
+  onSelect: (tab: AprTab) => void
+}
+
+/** The four-branch inbox region (loading / error / inbox-zero / request cards). */
+export interface ApprovalInboxProps {
+  isLoading: boolean
+  isError: boolean
+  onRetry: () => void
+  visible: readonly import("@handshake-agent/contracts").ChangeRequest[]
+  tab: AprTab
+  /** My admin id — an own-request row still shows the guard even off the "mine" tab. */
+  myAdminId: string | undefined
+  busy: boolean
+  onApprove: (
+    request: import("@handshake-agent/contracts").ChangeRequest
+  ) => void
+  onReject: (
+    request: import("@handshake-agent/contracts").ChangeRequest
+  ) => void
 }
 
 // ─── Shared flow modals (design template §5 "Flow modals", lines 1161-1259) ─────────
@@ -1407,6 +2738,70 @@ export interface KpiCardProps {
   hero?: boolean
   /** Non-hero tiles: use the warn (amber) delta pair instead of success. */
   tone?: KpiDeltaTone
+}
+
+// ─── Operator dashboard ──────────────────────────────────────────────────────────
+
+/** The KPI-range switcher presets (design `kpiRanges`). */
+export type DashboardRangeId = "24h" | "7d" | "30d"
+
+/** One derived KPI tile (feeds `KpiCard`). */
+export interface DashboardKpi {
+  label: string
+  value: string
+  delta: string
+  deltaNote: string
+  hero?: boolean
+  tone?: KpiDeltaTone
+}
+
+/** One System-health provider row (dot + halo + right-aligned status colour). */
+export interface DashboardHealthRow {
+  name: string
+  note: string
+  /** Right-aligned status label — observed latency ("120ms") or "—". */
+  status: string
+  dot: string
+  halo: string
+  /** Right-aligned status colour token. */
+  fg: string
+}
+
+/** One Live-activity feed row (icon + tint + text/meta/time). */
+export interface DashboardActivityItem {
+  text: string
+  meta: string
+  time: string
+  /** Inline SVG path (design `a.icon`). */
+  icon: string
+  iconBg: string
+  iconFg: string
+}
+
+/** Dashboard header — the title + the 24h/7d/30d range switcher. */
+export interface DashboardHeaderProps {
+  range: DashboardRangeId
+  onRangeChange: (range: DashboardRangeId) => void
+}
+
+/** The 4×2 KPI-tile grid, rendered from the real composite summary. */
+export interface KpiGridProps {
+  data: import("@handshake-agent/contracts").DashboardSummary
+  /** Open compliance count from the ops endpoint (undefined while loading/forbidden). */
+  openComplianceCases: number | undefined
+}
+
+/** The Transaction-volume chart card — real stacked-by-capability series. */
+export interface VolumeChartCardProps {
+  data: import("@handshake-agent/contracts").DashboardSummary | undefined
+  isLoading: boolean
+}
+
+/** Shared props for the ops-endpoint cards (System health + Live activity). */
+export interface DashboardOpsCardProps {
+  ops: import("@handshake-agent/contracts").MetricsOps | undefined
+  isLoading: boolean
+  isError: boolean
 }
 
 export interface FilterSelectProps extends Omit<

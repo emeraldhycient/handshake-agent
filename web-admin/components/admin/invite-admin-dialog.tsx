@@ -1,18 +1,11 @@
 "use client"
 
 /**
- * InviteAdminDialog — invite a new admin (email + role). react-hook-form +
- * zodResolver(AdminInvitationCreateRequestSchema). On success the API returns a
- * one-time invitation token (shown once so the inviter can hand it to the
- * invitee — it is never persisted in plaintext). Focus-trapped, Esc-closable.
+ * InviteAdminDialog — invite a new admin (email + role). Composition only: the RHF
+ * form + create-invitation mutation live in `useInviteAdminForm`; on success the
+ * one-time token is shown once via `InviteSuccess` (never persisted in plaintext).
+ * Focus-trapped, Esc-closable.
  */
-import { useForm } from "react-hook-form"
-import { zodResolver } from "@hookform/resolvers/zod"
-import {
-  AdminInvitationCreateRequestSchema,
-  type AdminInvitationCreateRequest,
-} from "@handshake-agent/contracts"
-
 import {
   Dialog,
   DialogContent,
@@ -25,55 +18,25 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { NativeSelect } from "@/components/ui/native-select"
-import { useCreateInvitation } from "@/lib/query/hooks"
-import { ApiError } from "@/lib/api/client"
+import { InviteSuccess } from "@/components/admin/invite-admin/invite-success"
+import { useInviteAdminForm } from "@/lib/hooks/use-invite-admin-form"
 import type { InviteAdminDialogProps } from "@/types/components"
 
-function errorMessage(error: unknown): string | null {
-  if (error instanceof ApiError) return error.message
-  if (error instanceof Error) return error.message
-  return error ? String(error) : null
-}
-
-export function InviteAdminDialog({
-  open,
-  onOpenChange,
-  roles,
-}: InviteAdminDialogProps) {
+export function InviteAdminDialog(props: InviteAdminDialogProps) {
   const {
+    open,
     register,
-    handleSubmit,
-    reset,
-    formState: { errors, isSubmitting },
-  } = useForm<AdminInvitationCreateRequest>({
-    resolver: zodResolver(AdminInvitationCreateRequestSchema),
-    defaultValues: { email: "", roleId: roles[0]?.id ?? "" },
-  })
-
-  const invite = useCreateInvitation()
-
-  async function onSubmit(values: AdminInvitationCreateRequest) {
-    try {
-      await invite.mutateAsync(values)
-    } catch {
-      // Surfaces via invite.error below.
-    }
-  }
-
-  function close() {
-    reset()
-    invite.reset()
-    onOpenChange(false)
-  }
-
-  const loading = isSubmitting || invite.isPending
-  const serverError = errorMessage(invite.error)
+    errors,
+    loading,
+    serverError,
+    result,
+    onFormSubmit,
+    close,
+    onDialogOpenChange,
+  } = useInviteAdminForm(props)
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => (next ? onOpenChange(true) : close())}
-    >
+    <Dialog open={open} onOpenChange={onDialogOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Invite an admin</DialogTitle>
@@ -83,28 +46,14 @@ export function InviteAdminDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {/* ── Success: show the one-time token ─────────────────────────────── */}
-        {invite.isSuccess ? (
-          <div className="flex flex-col gap-3">
-            <p className="text-[13px] text-ink2">
-              Invitation created for{" "}
-              <span className="font-bold text-ink">{invite.data.email}</span>.
-              Share this one-time token with them — it won&apos;t be shown
-              again:
-            </p>
-            <code className="rounded-[10px] border border-line bg-field px-3 py-2 font-mono text-xs break-all text-ink">
-              {invite.data.invitationToken}
-            </code>
-            <DialogFooter>
-              <Button onClick={close}>Done</Button>
-            </DialogFooter>
-          </div>
+        {result ? (
+          <InviteSuccess
+            email={result.email}
+            token={result.invitationToken}
+            onDone={close}
+          />
         ) : (
-          <form
-            onSubmit={handleSubmit(onSubmit)}
-            noValidate
-            className="flex flex-col gap-4"
-          >
+          <form onSubmit={onFormSubmit} noValidate className="flex flex-col gap-4">
             {serverError && (
               <div
                 role="alert"
@@ -125,10 +74,7 @@ export function InviteAdminDialog({
                 {...register("email")}
               />
               {errors.email && (
-                <p
-                  role="alert"
-                  className="text-[11.5px] font-semibold text-tdn"
-                >
+                <p role="alert" className="text-[11.5px] font-semibold text-tdn">
                   {errors.email.message ?? "Enter a valid email address"}
                 </p>
               )}
@@ -142,17 +88,14 @@ export function InviteAdminDialog({
                 disabled={loading}
                 {...register("roleId")}
               >
-                {roles.map((role) => (
+                {props.roles.map((role) => (
                   <option key={role.id} value={role.id}>
                     {role.name}
                   </option>
                 ))}
               </NativeSelect>
               {errors.roleId && (
-                <p
-                  role="alert"
-                  className="text-[11.5px] font-semibold text-tdn"
-                >
+                <p role="alert" className="text-[11.5px] font-semibold text-tdn">
                   {errors.roleId.message ?? "Select a role"}
                 </p>
               )}

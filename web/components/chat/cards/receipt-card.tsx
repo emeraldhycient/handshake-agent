@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils"
 import { Money } from "@/components/shared/money"
 import { DetailRows } from "@/components/shared/detail-rows"
+import { ChatCardShell } from "@/components/chat/cards/chat-card-shell"
 import type { ReceiptCardProps } from "@/types/components"
 
 /**
@@ -23,15 +24,7 @@ export function ReceiptCard({
   const isMobile = density === "mobile"
 
   return (
-    <div
-      className={cn(
-        "overflow-hidden border border-border bg-card",
-        isMobile
-          ? "w-[88%] rounded-[20px] shadow-card"
-          : "w-[92%] rounded-[16px]",
-        className
-      )}
-    >
+    <ChatCardShell density={density} className={className}>
       {/* Success header */}
       <div
         className={cn(
@@ -131,6 +124,6 @@ export function ReceiptCard({
           </button>
         )}
       </div>
-    </div>
+    </ChatCardShell>
   )
 }

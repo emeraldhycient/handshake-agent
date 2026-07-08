@@ -58,3 +58,22 @@ cd web && pnpm next typegen                                 # regenerate typed-r
 ## Testing (strict TDD, root §9)
 
 Vitest + React Testing Library + `@testing-library/user-event`; Playwright for E2E. **Add a `test` script to `package.json`** (Vitest) so the `turbo test` gate covers the frontend (it currently has none). Run `pnpm exec playwright install` once after adding `@playwright/test`.
+
+Run one file fast: `cd web && pnpm exec vitest run <path>` (the package `test` script does not narrow via a positional arg).
+
+## Componentisation (root §16)
+
+Pages/views are **orchestrators** — hooks + the four async branches + composition of section components. Extracted sections live beside their page in `components/<feature>/`.
+
+- **Tables** render through the `Table` primitive (`components/ui/table.tsx`) via **`shared/DataTable`** (`components/shared/data-table.tsx`) — column-config driven, one `ariaLabel` per table, `hideHeader` for headerless semantic tables, `empty` for the empty branch. No raw `<table>` or div-grid tables.
+- **Hooks** → `hooks/`. **Constants** → `constants/<feature>.ts` (JSX-bearing column configs stay in the section file). **Types** → `types/<feature>.ts` + the `types/index.ts` barrel; import from `@/types` (the legacy `@/types/components` path still resolves during the migration).
+- Worked reference: the overview page (`components/desktop/overview-page.tsx` orchestrator + `overview/balance-hero.tsx` + `overview/assets-table.tsx` + `overview/recent-activity-table.tsx`).
+
+### Visual verification runbook (every FE PR)
+
+Docker is already up: `handshake-agent-db` (Postgres, host **:5544**), `handshake-agent-redis` (:6379). `api/.env` has real keys + `AUTH_DEV_EXPOSE_OTP=true`; `web/.env.local` points at the API on `:3001` with `NEXT_PUBLIC_USE_MOCK=false`.
+
+1. Start API on **:3001** in the background: `cd api && PORT=3001 pnpm dev` (ts-node, no watch — `api/.env` sets `PORT=3000`, so override). Wait for "Nest application successfully started".
+2. Start web with the preview tool (`launch.json` config **`web`**, :3000).
+3. Log in as a Docker test user — **`qa.fulltest@example.com`** (active, verified, tier_1). Email-OTP: submit the email, read the dev-exposed OTP from the API response/stdout, submit it. (web persists only `ha.refreshToken`; a real UI login is the faithful path.)
+4. Exercise the affected surface; capture a screenshot; confirm `console` errors and failed network requests are clean. Compare against a baseline captured before the change.

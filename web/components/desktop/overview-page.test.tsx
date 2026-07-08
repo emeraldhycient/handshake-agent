@@ -94,13 +94,22 @@ describe("OverviewPage", () => {
     await waitFor(() => {
       expect(screen.getByText(/Tether USD/i)).toBeInTheDocument()
     })
-    const table = screen.getByRole("table")
+    // The overview now has two tables (Assets + Recent activity); scope by name.
+    const table = screen.getByRole("table", { name: "Assets" })
     const headers = within(table)
       .getAllByRole("columnheader")
       .map((h) => h.textContent)
     expect(headers).toEqual(["Asset", "Holdings", "Value"])
     // Header row + one body row per fixture asset (3 assets).
     expect(within(table).getAllByRole("row").length).toBe(4)
+  })
+
+  it("renders recent activity as its own semantic table", async () => {
+    render(<OverviewPage onQuickAction={() => {}} />, { wrapper })
+    await screen.findByText(/Recent activity/i)
+    expect(
+      screen.getByRole("table", { name: "Recent activity" })
+    ).toBeInTheDocument()
   })
 
   // ── Finding #5: shared error state with a retry affordance ─────────────────

@@ -590,4 +590,43 @@ describe("UserDetail account actions (Phase 7 writes)", () => {
     expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled()
     expect(mockRequestManualCredit).not.toHaveBeenCalled()
   })
+
+  it("Manual credit resets on restart — an abandoned amount never leaks into a new four-eyes proposal", async () => {
+    searchParams = new URLSearchParams("tab=wallets")
+    const user = userEvent.setup()
+    renderDetail()
+
+    // First attempt: capture a large amount at the credit step, then ABANDON it.
+    await user.click(
+      await screen.findByRole("button", { name: "Manual credit" })
+    )
+    await user.type(await screen.findByLabelText("Credit amount"), "999")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    // Now at the reason step — cancel the whole flow (leaves creditInput stale).
+    await user.click(screen.getByRole("button", { name: "Cancel" }))
+
+    // Second attempt: the credit step must start clean (the ref + state were reset).
+    await user.click(
+      await screen.findByRole("button", { name: "Manual credit" })
+    )
+    await user.type(await screen.findByLabelText("Credit amount"), "25.5")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await completeReasonAndStepUp(user, "Goodwill credit")
+    await user.click(
+      await screen.findByRole("button", { name: "Execute via engine" })
+    )
+    await user.click(
+      await screen.findByRole("button", { name: "Submit for approval" })
+    )
+
+    // The proposal carries the NEW amount, never the abandoned 999.
+    await waitFor(() =>
+      expect(mockRequestManualCredit).toHaveBeenCalledWith(USER_ID, {
+        asset: "USDT",
+        amount: "25.5",
+        reason: "Goodwill credit",
+      })
+    )
+    expect(mockRequestManualCredit).toHaveBeenCalledTimes(1)
+  })
 })

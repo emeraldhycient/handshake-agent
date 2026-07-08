@@ -31,6 +31,19 @@ import type { Language } from "@/lib/i18n/languages"
 /** Drives sizing/padding/radii variants across all chat message cards. */
 export type Density = "mobile" | "desktop"
 
+/** Shared "Load more" / "Show more" paginator button. */
+export interface LoadMoreButtonProps {
+  onClick: () => void
+  isPending: boolean
+  /** Active label, e.g. "Load more" or "Show more (10 of 12)". */
+  label: string
+  /** Shown (and disables the button) while pending. Default "Loading…". */
+  pendingLabel?: string
+  ariaLabel?: string
+  /** Per-site shape (rounded-full pill vs full-width block). */
+  className?: string
+}
+
 // ─── ActionButton (shared quick-action primitive) ────────────────────────────
 
 /**

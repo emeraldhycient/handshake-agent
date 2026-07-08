@@ -22,14 +22,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useStepUp } from "@/lib/query/auth"
-import { ApiError } from "@/lib/api/client"
+import { toErrorMessage } from "@/lib/error-message"
 import type { StepUpDialogProps } from "@/types/components"
-
-function errorMessage(error: unknown): string | null {
-  if (error instanceof ApiError) return error.message
-  if (error instanceof Error) return error.message
-  return error ? String(error) : null
-}
 
 export function StepUpDialog({
   open,
@@ -55,7 +49,7 @@ export function StepUpDialog({
   }
 
   const loading = stepUp.isPending
-  const serverError = errorMessage(stepUp.error)
+  const serverError = toErrorMessage(stepUp.error)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

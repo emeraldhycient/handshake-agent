@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { cn } from "@/lib/utils"
 import { useLoadMoreTransactions } from "@/lib/query/hooks"
+import { LoadMoreButton } from "@/components/shared/load-more-button"
 import { TransactionDetailModal } from "@/components/shared/transaction-detail-modal"
 import type { TransactionRow } from "@/lib/schemas"
 import type { TransactionsCardProps } from "@/types/components"
@@ -116,21 +117,13 @@ export function TransactionsCard({
 
       {more && (
         <div className="px-4 pb-1">
-          <button
-            type="button"
+          <LoadMoreButton
             onClick={onShowMore}
-            disabled={loadMore.isPending}
-            aria-label="Show more transactions"
-            className={cn(
-              "w-full rounded-[10px] border border-border py-2 text-[13px] font-semibold text-foreground",
-              "transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none",
-              "disabled:cursor-not-allowed disabled:opacity-60"
-            )}
-          >
-            {loadMore.isPending
-              ? "Loading…"
-              : `Show more (${allRows.length} of ${totalCount})`}
-          </button>
+            isPending={loadMore.isPending}
+            label={`Show more (${allRows.length} of ${totalCount})`}
+            ariaLabel="Show more transactions"
+            className="w-full rounded-[10px] py-2"
+          />
         </div>
       )}
 

@@ -22,22 +22,24 @@ vi.mock("@/lib/api/reconciliation", () => ({
   resolveReconRunBreak: vi.fn(),
 }))
 
-vi.mock("@/lib/api/admin", () => ({
-  getMe: vi.fn().mockResolvedValue({ mfaEnabled: true, permissions: [] }),
-}))
+vi.mock("@/lib/api/admin", () => ({ getMe: vi.fn(), stepUp: vi.fn() }))
 
 import { ReconRunHistoryPanel } from "@/components/admin/recon-run-history"
+import { ApiError } from "@/lib/api/client"
 import {
   listReconRuns,
   getReconRun,
   acknowledgeReconRunBreak,
   resolveReconRunBreak,
 } from "@/lib/api/reconciliation"
+import { getMe, stepUp } from "@/lib/api/admin"
 
 const mockListRuns = vi.mocked(listReconRuns)
 const mockGetRun = vi.mocked(getReconRun)
 const mockAck = vi.mocked(acknowledgeReconRunBreak)
 const mockResolve = vi.mocked(resolveReconRunBreak)
+const mockGetMe = vi.mocked(getMe)
+const mockStepUp = vi.mocked(stepUp)
 
 const DETECTED_BREAK: PersistedReconBreak = {
   id: "brk-1",
@@ -97,6 +99,10 @@ beforeEach(() => {
   mockResolve
     .mockReset()
     .mockResolvedValue({ ...DETECTED_BREAK, status: "resolved" })
+  mockGetMe
+    .mockReset()
+    .mockResolvedValue({ mfaEnabled: true, permissions: [] } as never)
+  mockStepUp.mockReset().mockResolvedValue(undefined as never)
 })
 
 describe("ReconRunHistoryPanel", () => {
@@ -175,5 +181,47 @@ describe("ReconRunHistoryPanel", () => {
       expect(mockAck).toHaveBeenCalledWith("brk-1", "Investigating")
     )
     expect(mockResolve).not.toHaveBeenCalled()
+  })
+
+  it("opens step-up on a 403 and replays the disposition after re-auth", async () => {
+    // First resolve 403s (ADMIN_STEP_UP_REQUIRED); the replay after re-auth succeeds.
+    mockResolve
+      .mockRejectedValueOnce(
+        new ApiError("step up", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce({ ...DETECTED_BREAK, status: "resolved" })
+    const user = userEvent.setup()
+    renderPanel()
+    await user.click(
+      await screen.findByRole("button", { name: /Wallet deposit/ })
+    )
+    await user.click(await screen.findByRole("button", { name: "Resolve" }))
+    await user.type(await screen.findByLabelText("Reason"), "Confirmed")
+    await user.click(screen.getByRole("button", { name: /Continue/ }))
+
+    // The step-up dialog opens after the 403; re-auth replays the resolve.
+    const totp = await screen.findByLabelText(/Authenticator code/)
+    await user.type(totp, "123456")
+    await user.click(screen.getByRole("button", { name: "Confirm" }))
+
+    await waitFor(() => expect(mockStepUp).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockResolve).toHaveBeenCalledTimes(2))
+  })
+
+  it("hides the disposition actions on a terminal (already-resolved) break", async () => {
+    mockGetRun.mockResolvedValue({
+      run: RUNS.items[0],
+      breaks: [{ ...DETECTED_BREAK, status: "resolved" }],
+    })
+    const user = userEvent.setup()
+    renderPanel()
+    await user.click(
+      await screen.findByRole("button", { name: /Wallet deposit/ })
+    )
+    await screen.findByText("Over-credit")
+
+    // isActionable is false for a resolved break → no Acknowledge/Resolve buttons.
+    expect(screen.queryByRole("button", { name: "Resolve" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Acknowledge" })).toBeNull()
   })
 })
