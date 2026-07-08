@@ -1100,7 +1100,9 @@ export interface UdErrorProps {
 export interface UdLimitsQuery {
   isLoading: boolean
   isError: boolean
-  data: import("@handshake-agent/contracts").AdminEndUserLimitsResponse | undefined
+  data:
+    | import("@handshake-agent/contracts").AdminEndUserLimitsResponse
+    | undefined
 }
 
 /** The Limits tab: effective caps + live velocity usage for a tier. */
@@ -1128,6 +1130,93 @@ export interface UdBeneficiariesTabProps {
 export interface UdTransactionsTabProps {
   transactions: import("@handshake-agent/contracts").AdminEndUserDetail["recentTransactions"]
   onOpenTx: (id: string) => void
+}
+
+/**
+ * A minimal structural view of a TanStack read query (the four async branches) —
+ * so a detail-tab prop can carry the query state without `types/` importing the
+ * hook's `UseQueryResult` (layering-safe, like `UdLimitsQuery`). Modelled as a
+ * discriminated union on `isSuccess` so `isSuccess && data.x` narrows `data` to a
+ * defined value exactly as the real query result does (keeps the tab JSX verbatim).
+ */
+export type UdQueryState<T> =
+  | {
+      isLoading: boolean
+      isError: boolean
+      isSuccess: false
+      data: T | undefined
+    }
+  | { isLoading: boolean; isError: boolean; isSuccess: true; data: T }
+
+/** The Profile tab — contact & locale + the admin-action timeline and case notes. */
+export interface UdProfileTabProps {
+  detail: import("@handshake-agent/contracts").AdminEndUserDetail
+  timeline: UdQueryState<
+    import("@handshake-agent/contracts").AdminEndUserTimelineEntry[]
+  >
+  notes: UdQueryState<
+    import("@handshake-agent/contracts").AdminUserNoteListResponse
+  >
+  onAddNote: () => void
+  onRetryTimeline: () => void
+  onRetryNotes: () => void
+}
+
+/** The KYC tab — last-4 identity docs + liveness + the review-decision / tier controls. */
+export interface UdKycTabProps {
+  /** The KYC submission (last-4 PII only); undefined until the query settles (§3.4). */
+  kyc: import("@handshake-agent/contracts").KycSubmissionDetail | undefined
+  /** The tier an Approve promotes to (derived from the submission's requested tier). */
+  approveTier: string
+  onApprove: () => void
+  onRequestInfo: () => void
+  onReject: () => void
+  onOverrideTier: () => void
+  onForceReKyc: () => void
+}
+
+/** The KYC tab's left column — identity documents (last-4 only, §3.4) + liveness. */
+export interface UdKycIdentityPanelProps {
+  kyc: import("@handshake-agent/contracts").KycSubmissionDetail | undefined
+}
+
+/** The KYC tab's right column — the review-decision buttons + tier controls. */
+export interface UdKycReviewPanelProps {
+  approveTier: string
+  onApprove: () => void
+  onRequestInfo: () => void
+  onReject: () => void
+  onOverrideTier: () => void
+  onForceReKyc: () => void
+}
+
+/** The Devices tab — bound/revoked devices with per-row unbind + SIM-swap re-verify. */
+export interface UdDevicesTabProps {
+  devices: UdQueryState<
+    import("@handshake-agent/contracts").AdminEndUserDevice[]
+  >
+  simSwapFlagged: boolean
+  onReverify: () => void
+  onUnbind: (deviceId: string) => void
+  onRetry: () => void
+}
+
+/** The Security tab — PIN/auth reset + active sessions (per-row + revoke-all). */
+export interface UdSecurityTabProps {
+  sessions: UdQueryState<
+    import("@handshake-agent/contracts").AdminEndUserSession[]
+  >
+  onResetPin: () => void
+  onRevokeAll: () => void
+  onRevokeSession: (sessionId: string) => void
+  onRetry: () => void
+}
+
+/** The Wallets tab — balance cards + on-chain deposit addresses + manual-credit entry. */
+export interface UdWalletsTabProps {
+  balances: import("@handshake-agent/contracts").AdminEndUserDetail["balances"]
+  depositAddresses: import("@handshake-agent/contracts").AdminEndUserDetail["depositAddresses"]
+  onManualCredit: () => void
 }
 
 /** The steps a user-detail action flow walks (design runFlow: credit → reason → step-up → engine/maker). */
