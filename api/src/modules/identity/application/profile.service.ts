@@ -30,22 +30,30 @@ export class ProfileService {
 
   async getProfile(userId: string): Promise<ProfileResponse> {
     const me = await this.auth.me(userId);
-    const [kyc, phone] = await Promise.all([
+    const [kyc, whatsappPhone, settings] = await Promise.all([
       this.identity.findKycProfile(userId),
       this.identity.findWhatsAppAddressByUserId(userId),
+      this.identity.findProfileSettings(userId),
     ]);
 
     const fullName = kyc
       ? [kyc.firstName, kyc.lastName].filter(Boolean).join(' ') || null
       : null;
 
-    const fiatCurrency = this.registry.defaultFiat();
+    // Wave C settings: the user-set contact phone wins over the WhatsApp
+    // routing number; the preferred fiat wins only while it is still LIVE in
+    // the catalog (an admin disable fails safe back to the default fiat).
+    const preferred = settings?.preferredFiatCurrency ?? null;
+    const fiatCurrency =
+      preferred !== null && this.registry.isCurrencyLive(preferred)
+        ? preferred
+        : this.registry.defaultFiat();
     const limits = this.resolveLimits(me.kycTier, fiatCurrency);
 
     return {
       email: me.email,
       fullName,
-      phone: phone ?? null,
+      phone: settings?.profilePhone ?? whatsappPhone ?? null,
       kycStatus: me.kycStatus,
       kycTier: me.kycTier,
       fiatCurrency: fiatCurrency,

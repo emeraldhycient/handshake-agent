@@ -24,10 +24,13 @@ import { defaultAuthStore } from "@/lib/store/auth-store"
 
 export class ApiError extends Error {
   status?: number
-  constructor(message: string, status?: number) {
+  /** Stable server error code (e.g. PIN_LOCKED) when the body carried one. */
+  code?: string
+  constructor(message: string, status?: number, code?: string) {
     super(message)
     this.name = "ApiError"
     this.status = status
+    this.code = code
   }
 }
 
@@ -88,7 +91,7 @@ type RetryableConfig = AxiosRequestConfig & { _retry?: boolean }
 
 api.interceptors.response.use(
   (response) => response,
-  async (error: AxiosError<{ message?: string }>) => {
+  async (error: AxiosError<{ message?: string; code?: string }>) => {
     const config = error.config as RetryableConfig | undefined
     const isAuthEndpoint = config?.url?.includes("/auth/")
     const alreadyRetried = config?._retry === true
@@ -125,6 +128,8 @@ api.interceptors.response.use(
     // Normalise all other errors (including 401s where retry was skipped) to ApiError.
     const message =
       error.response?.data?.message ?? error.message ?? "Unknown error"
-    return Promise.reject(new ApiError(message, error.response?.status))
+    return Promise.reject(
+      new ApiError(message, error.response?.status, error.response?.data?.code)
+    )
   }
 )

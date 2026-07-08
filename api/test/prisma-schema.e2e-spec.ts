@@ -70,8 +70,9 @@ describe('Prisma schema (integration, Testcontainers Postgres)', () => {
     // = the union of the platform-hardening migrations and main's webhook_events
     // (Track A durable-webhook queue). The fiat_currency enum-widen (go-readiness #8)
     // adds VALUES, not a table, so it does not affect this count. +2 for recon_runs
-    // + recon_breaks (go-readiness #3 durable recon log).
-    expect(Number(tables)).toBe(62);
+    // + recon_breaks (go-readiness #3 durable recon log). +1 for
+    // personal_access_tokens (go-live Wave C — PAT/MCP surface).
+    expect(Number(tables)).toBe(63);
 
     const [{ enums }] = await prisma.$queryRawUnsafe<{ enums: bigint }[]>(
       `SELECT count(DISTINCT t.typname)::bigint AS enums
@@ -82,7 +83,8 @@ describe('Prisma schema (integration, Testcontainers Postgres)', () => {
     // + webhook_event_status (Track A). The fiat_currency widen adds VALUES to an
     // existing TYPE, so this DISTINCT-type count is unaffected. +4 for
     // recon_run_type/recon_run_status/recon_break_type/recon_break_status
-    // (go-readiness #3 durable recon log).
+    // (go-readiness #3 durable recon log). personal_access_tokens (Wave C)
+    // stores scopes as TEXT[] — no new enum TYPE.
     expect(Number(enums)).toBe(82);
   });
 

@@ -188,6 +188,7 @@ function makeProposalRepo(
     findById: jest.fn().mockResolvedValue(proposal),
     updateStatus: jest.fn().mockResolvedValue(undefined),
     getType: jest.fn().mockResolvedValue(proposal?.type ?? null),
+    listPendingForUser: jest.fn().mockResolvedValue([]),
   };
 }
 

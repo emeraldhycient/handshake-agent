@@ -101,5 +101,8 @@ import {
     { provide: INTENT_REPOSITORY, useClass: IntentPrismaRepository },
     { provide: REPLY_REPOSITORY, useClass: ReplyPrismaRepository },
   ],
+  // WebChatService is exported for the MCP module's send_chat_message tool
+  // (Wave C): the SAME propose-only turn pipeline, reached in-process (§3.1).
+  exports: [WebChatService],
 })
 export class ChatModule {}

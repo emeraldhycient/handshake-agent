@@ -483,9 +483,4 @@ export interface LanguageSelectorProps {
   className?: string
 }
 
-// ─── Shared SettingsPanel (Task 7) ────────────────────────────────────────────
-
-export interface SettingsPanelProps {
-  density?: "desktop" | "mobile"
-  className?: string
-}
+// SettingsPanelProps moved to types/settings.ts (per-feature split, root §16.6).

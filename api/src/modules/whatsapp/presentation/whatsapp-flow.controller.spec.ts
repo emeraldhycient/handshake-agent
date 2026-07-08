@@ -95,6 +95,7 @@ describe('WhatsAppFlowController', () => {
 
   let mockProposalRepository: {
     getType: jest.Mock;
+    listPendingForUser: jest.Mock;
     findById: jest.Mock;
     create: jest.Mock;
     updateStatus: jest.Mock;
@@ -129,6 +130,7 @@ describe('WhatsAppFlowController', () => {
 
     mockProposalRepository = {
       getType: jest.fn().mockResolvedValue('buy'),
+      listPendingForUser: jest.fn().mockResolvedValue([]),
       findById: jest.fn(),
       create: jest.fn(),
       updateStatus: jest.fn(),

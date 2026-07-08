@@ -24,6 +24,7 @@ import type {
   KycQueueFilters,
   KycQueueListResult,
   KycQueueRecord,
+  ProfileSettingsRecord,
   UserAdminDetailRecord,
   OriginatorIdentityRecord,
   UserRecord,
@@ -209,6 +210,37 @@ export class IdentityPrismaRepository implements IIdentityRepository {
       simSwapDetectedAt: row.simSwapDetectedAt,
       tierChangedAt: row.tierChangedAt,
     };
+  }
+
+  async findProfileSettings(
+    userId: string,
+  ): Promise<ProfileSettingsRecord | null> {
+    const row = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { profilePhone: true, preferredFiatCurrency: true },
+    });
+    if (row === null) return null;
+    return {
+      profilePhone: row.profilePhone,
+      preferredFiatCurrency: row.preferredFiatCurrency,
+    };
+  }
+
+  async updateProfileSettings(
+    userId: string,
+    patch: { profilePhone?: string; preferredFiatCurrency?: string },
+  ): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(patch.profilePhone !== undefined
+          ? { profilePhone: patch.profilePhone }
+          : {}),
+        ...(patch.preferredFiatCurrency !== undefined
+          ? { preferredFiatCurrency: patch.preferredFiatCurrency }
+          : {}),
+      },
+    });
   }
 
   async findKycProfile(userId: string): Promise<KycProfileRecord | null> {

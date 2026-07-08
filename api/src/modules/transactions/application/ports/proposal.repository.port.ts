@@ -77,4 +77,12 @@ export interface IProposalRepository {
    * execution method without loading the full record (W1).
    */
   getType(proposalId: string): Promise<string | null>;
+
+  /**
+   * Lists the user's still-actionable proposals (status pending/confirmed AND
+   * unexpired as of `asOf`), newest first, bounded. STRICTLY read-only — backs
+   * the MCP `list_pending_proposals` tool (Wave C); it never mutates status
+   * and never executes (§3.1).
+   */
+  listPendingForUser(userId: string, asOf: Date): Promise<ProposalRecord[]>;
 }

@@ -29,6 +29,7 @@ import { PublicConfigModule } from './modules/config/config.module';
 import { JobsModule } from './core/jobs/jobs.module';
 import { WebAuthModule } from './modules/auth/auth.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { McpModule } from './modules/mcp/mcp.module';
 import { DomainExceptionFilter } from './core/common/domain-exception.filter';
 import { EnvAwareThrottlerGuard } from './core/common/env-aware-throttler.guard';
 import { NotificationsModule } from './modules/notifications/notifications.module';
@@ -89,6 +90,8 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     AdminModule,
     PublicConfigModule,
     ChatModule,
+    // MCP surface (Wave C): PAT-authenticated read+propose tools at POST /mcp.
+    McpModule,
     NotificationsModule,
   ],
   providers: [
