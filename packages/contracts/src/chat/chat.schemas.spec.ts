@@ -100,6 +100,105 @@ describe('AgentTurnOutcomeSchema', () => {
     }
   })
 
+  it('accepts a needs_beneficiary outcome with a targeted note (nickname miss)', () => {
+    const result = AgentTurnOutcomeSchema.parse({
+      kind: 'needs_beneficiary',
+      beneficiaryType: 'crypto_address',
+      note: "No saved beneficiary called 'mum'.",
+    })
+    if (result.kind === 'needs_beneficiary') {
+      expect(result.note).toBe("No saved beneficiary called 'mum'.")
+    }
+  })
+
+  // ── choose_beneficiary — nickname resolved to MULTIPLE saved candidates ────
+  // SECURITY: `detail` is a HUMAN-SAFE masked string (bank '<name> ••1234',
+  // crypto address head/tail ellipsis) — never a full account number/address.
+  // `id` is the server-resolved beneficiaryId the client posts back; the
+  // engine re-validates ownership/type/cooling-off/sanctions (§3.1).
+
+  const bankCandidate = {
+    id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+    label: 'Mum',
+    detail: 'Guaranty Trust Bank (GTBank) ••6789',
+  }
+  const cryptoCandidate = {
+    id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    label: 'Mum',
+    detail: 'TQn9Y2...BP2p',
+  }
+
+  it('accepts a choose_beneficiary outcome with bank candidates', () => {
+    const result = AgentTurnOutcomeSchema.parse({
+      kind: 'choose_beneficiary',
+      beneficiaryType: 'bank_account',
+      nickname: 'mum',
+      candidates: [bankCandidate, { ...bankCandidate, id: cryptoCandidate.id }],
+    })
+    expect(result.kind).toBe('choose_beneficiary')
+    if (result.kind === 'choose_beneficiary') {
+      expect(result.nickname).toBe('mum')
+      expect(result.candidates).toHaveLength(2)
+      expect(result.candidates[0]).toEqual(bankCandidate)
+    }
+  })
+
+  it('accepts a choose_beneficiary outcome with masked crypto-address candidates', () => {
+    const result = AgentTurnOutcomeSchema.parse({
+      kind: 'choose_beneficiary',
+      beneficiaryType: 'crypto_address',
+      nickname: 'mum',
+      candidates: [cryptoCandidate],
+    })
+    if (result.kind === 'choose_beneficiary') {
+      expect(result.beneficiaryType).toBe('crypto_address')
+      expect(result.candidates[0].detail).toBe('TQn9Y2...BP2p')
+    }
+  })
+
+  it('rejects a choose_beneficiary outcome with no candidates', () => {
+    expect(() =>
+      AgentTurnOutcomeSchema.parse({
+        kind: 'choose_beneficiary',
+        beneficiaryType: 'bank_account',
+        nickname: 'mum',
+        candidates: [],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects a choose_beneficiary outcome missing the nickname', () => {
+    expect(() =>
+      AgentTurnOutcomeSchema.parse({
+        kind: 'choose_beneficiary',
+        beneficiaryType: 'bank_account',
+        candidates: [bankCandidate],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects a candidate missing its masked detail', () => {
+    expect(() =>
+      AgentTurnOutcomeSchema.parse({
+        kind: 'choose_beneficiary',
+        beneficiaryType: 'bank_account',
+        nickname: 'mum',
+        candidates: [{ id: bankCandidate.id, label: 'Mum' }],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects a candidate with a non-UUID id', () => {
+    expect(() =>
+      AgentTurnOutcomeSchema.parse({
+        kind: 'choose_beneficiary',
+        beneficiaryType: 'bank_account',
+        nickname: 'mum',
+        candidates: [{ ...bankCandidate, id: 'not-a-uuid' }],
+      }),
+    ).toThrow()
+  })
+
   it('accepts a receive outcome with minimal deposit fields', () => {
     const result = AgentTurnOutcomeSchema.parse({
       kind: 'receive',

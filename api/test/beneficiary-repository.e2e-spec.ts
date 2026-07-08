@@ -221,4 +221,140 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
     const result = await repo.getDefault(user.id, 'bank_account');
     expect(result).toBeNull();
   });
+
+  // ── Test 8+: findByLabel (Wave B — beneficiary nickname resolution) ────────
+
+  it('findByLabel matches the label case-insensitively (exact match, not substring)', async () => {
+    const user = await seedUser();
+
+    const mum = await repo.addBankAccount({
+      userId: user.id,
+      accountNumber: '7777777777',
+      bankCode: '058',
+      accountName: 'MOTHER DOE',
+      label: 'Mum',
+      verifiedAt: new Date(),
+    });
+    await repo.addBankAccount({
+      userId: user.id,
+      accountNumber: '8888888888',
+      bankCode: '044',
+      accountName: 'FRIEND OF MUM',
+      label: "Mum's friend",
+      verifiedAt: new Date(),
+    });
+
+    // Different casing still matches ("mum" ↔ "Mum") …
+    const matches = await repo.findByLabel(user.id, 'mUm', 'bank_account');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].id).toBe(mum.id);
+
+    // … but a substring never does ("Mum" must not match "Mum's friend").
+    const substring = await repo.findByLabel(user.id, 'Mum', 'bank_account');
+    expect(substring.map((m) => m.id)).toEqual([mum.id]);
+  });
+
+  it('findByLabel excludes soft-deleted rows', async () => {
+    const user = await seedUser();
+
+    const ben = await repo.addBankAccount({
+      userId: user.id,
+      accountNumber: '9999999990',
+      bankCode: '058',
+      accountName: 'GONE',
+      label: 'Old account',
+      verifiedAt: new Date(),
+    });
+    await prisma.beneficiary.update({
+      where: { id: ben.id },
+      data: { deletedAt: new Date() },
+    });
+
+    const matches = await repo.findByLabel(user.id, 'Old account');
+    expect(matches).toHaveLength(0);
+  });
+
+  it('findByLabel returns ALL matches ordered isDefault desc then createdAt asc', async () => {
+    const user = await seedUser();
+
+    // First insert becomes the default; give the same label to three rows.
+    const defaultBen = await repo.addBankAccount({
+      userId: user.id,
+      accountNumber: '1010101010',
+      bankCode: '058',
+      accountName: 'ONE',
+      label: 'Savings',
+      verifiedAt: new Date(),
+    });
+    const second = await repo.addBankAccount({
+      userId: user.id,
+      accountNumber: '2020202020',
+      bankCode: '044',
+      accountName: 'TWO',
+      label: 'savings',
+      verifiedAt: new Date(),
+    });
+    const third = await repo.addBankAccount({
+      userId: user.id,
+      accountNumber: '3030303030',
+      bankCode: '033',
+      accountName: 'THREE',
+      label: 'SAVINGS',
+      verifiedAt: new Date(),
+    });
+
+    const matches = await repo.findByLabel(user.id, 'savings', 'bank_account');
+    expect(matches.map((m) => m.id)).toEqual([
+      defaultBen.id, // isDefault first
+      second.id, // then createdAt asc
+      third.id,
+    ]);
+  });
+
+  it('findByLabel filters by type when given and spans types when omitted', async () => {
+    const user = await seedUser();
+
+    const bank = await repo.addBankAccount({
+      userId: user.id,
+      accountNumber: '4040404040',
+      bankCode: '058',
+      accountName: 'BANK MUM',
+      label: 'Mum',
+      verifiedAt: new Date(),
+    });
+    const crypto = await repo.addCryptoAddress({
+      userId: user.id,
+      address: 'TRXaddr_findByLabel_type_0000000001',
+      network: 'TRON',
+      asset: 'USDT',
+      label: 'Mum',
+      firstUseLockedUntil: new Date(Date.now() + 86400_000),
+    });
+
+    const bankOnly = await repo.findByLabel(user.id, 'mum', 'bank_account');
+    expect(bankOnly.map((m) => m.id)).toEqual([bank.id]);
+
+    const cryptoOnly = await repo.findByLabel(user.id, 'mum', 'crypto_address');
+    expect(cryptoOnly.map((m) => m.id)).toEqual([crypto.id]);
+
+    const all = await repo.findByLabel(user.id, 'mum');
+    expect(all.map((m) => m.id).sort()).toEqual([bank.id, crypto.id].sort());
+  });
+
+  it('findByLabel never returns another user_s beneficiaries', async () => {
+    const user1 = await seedUser();
+    const user2 = await seedUser();
+
+    await repo.addBankAccount({
+      userId: user1.id,
+      accountNumber: '5050505050',
+      bankCode: '058',
+      accountName: 'USER ONE MUM',
+      label: 'Mum',
+      verifiedAt: new Date(),
+    });
+
+    const matches = await repo.findByLabel(user2.id, 'Mum');
+    expect(matches).toHaveLength(0);
+  });
 });

@@ -7,6 +7,7 @@ import { ReceiptCard } from "@/components/chat/cards/receipt-card"
 import { PayInCardLive } from "@/components/chat/cards/pay-in-card"
 import { SettlingCardLive } from "@/components/chat/cards/settling-card"
 import { NeedsBeneficiaryCard } from "@/components/chat/cards/needs-beneficiary-card"
+import { ChooseBeneficiaryCard } from "@/components/chat/cards/choose-beneficiary-card"
 import { TransactionsCard } from "@/components/chat/cards/transactions-card"
 import { SwapCard } from "@/components/chat/cards/swap-card"
 import type { ChatMessageViewProps } from "@/types/components"
@@ -99,6 +100,18 @@ export function ChatMessageView({
                 onResolve={onResolveBeneficiary}
               />
             )
+          case "choose_beneficiary":
+            return (
+              <ChooseBeneficiaryCard
+                {...message}
+                density={density}
+                // Same per-card binding as needs_beneficiary: the store replays
+                // the exact intent that produced this picker.
+                messageId={message.id}
+                onResolve={onResolveBeneficiary}
+              />
+            )
+
           case "transactions":
             return <TransactionsCard {...message} density={density} />
 

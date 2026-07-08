@@ -1232,6 +1232,113 @@ describe("sendToAgent", () => {
     })
   })
 
+  // ─── choose_beneficiary (nickname disambiguation) ────────────────────────────
+
+  it("choose_beneficiary outcome → picker card appended + typing cleared", async () => {
+    mockApi.mockResolvedValue(
+      makeResponse({
+        kind: "choose_beneficiary",
+        beneficiaryType: "crypto_address",
+        nickname: "mum",
+        candidates: [
+          {
+            id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            label: "Mum",
+            detail: "TQn9Y2...nH4d",
+          },
+          {
+            id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            label: "Mum wallet",
+            detail: "TXabcd...9z8y",
+          },
+        ],
+      })
+    )
+    await store.getState().sendToAgent("m", "send 5 usdt to mum")
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("choose_beneficiary")
+    if (last.kind === "choose_beneficiary") {
+      expect(last.nickname).toBe("mum")
+      expect(last.candidates).toHaveLength(2)
+    }
+    expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("resolving a choose_beneficiary card re-sends ITS bound intent with the chosen beneficiaryId", async () => {
+    // Turn 1: "send 5 usdt to mum" → choose_beneficiary (card bound to THIS text).
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "choose_beneficiary",
+        beneficiaryType: "crypto_address",
+        nickname: "mum",
+        candidates: [
+          {
+            id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            label: "Mum",
+            detail: "TQn9Y2...nH4d",
+          },
+          {
+            id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            label: "Mum wallet",
+            detail: "TXabcd...9z8y",
+          },
+        ],
+      })
+    )
+    await store.getState().sendToAgent("m", "send 5 usdt to mum")
+    const card = store
+      .getState()
+      .threads.m.find((m) => m.kind === "choose_beneficiary")!
+    expect(card.kind).toBe("choose_beneficiary")
+
+    // Turn 2: the user types something unrelated, overwriting _lastIntentText —
+    // the picker must still resume the intent IT was created for.
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "balance",
+        fiatCurrency: "NGN",
+        totalFiatValue: "100.00",
+        balances: [],
+      })
+    )
+    await store.getState().sendToAgent("m", "what's my balance")
+
+    // Resolve the picker with a chosen candidate id.
+    const proposalId = "55555555-5555-5555-5555-555555555555"
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "proposal",
+        txType: "send",
+        proposalId,
+        confirmation: {
+          proposalId,
+          asset: "USDT",
+          cryptoAmount: "5",
+          network: "TRON",
+          networkFeeCrypto: "1",
+          totalDebit: "6",
+          toAddressMasked: "TQn9Y2...nH4d",
+          beneficiaryLabel: "Mum",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        },
+      })
+    )
+    await store
+      .getState()
+      .resolveBeneficiary("m", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", card.id)
+
+    // The re-send used the intent text bound to the picker card + the chosen id
+    // — the id is a LOOKUP result; the server re-validates ownership/type before
+    // any proposal is created (§3.1).
+    expect(mockApi).toHaveBeenLastCalledWith({
+      text: "send 5 usdt to mum",
+      beneficiaryId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    })
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("quote")
+    expect(store.getState().pendingProposalId).toBe(proposalId)
+  })
+
   it("not_supported outcome → 'not supported' text message", async () => {
     mockApi.mockResolvedValue(
       makeResponse({ kind: "not_supported", action: "swap" })

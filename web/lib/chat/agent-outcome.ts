@@ -191,11 +191,31 @@ export function mapOutcomeToMessages(
   } else if (outcome.kind === "needs_beneficiary") {
     // Inline add/select-beneficiary card; on resolve the store re-asks the
     // agent with the chosen beneficiaryId so the proposal can be created.
+    // `note` carries the server's targeted copy when a recipient nickname
+    // matched nothing (e.g. "No saved beneficiary called 'mum'…").
     messages.push({
       id: makeId(),
       role: "assistant",
       kind: "needs_beneficiary",
       beneficiaryType: outcome.beneficiaryType,
+      note: outcome.note,
+    })
+  } else if (outcome.kind === "choose_beneficiary") {
+    // Nickname matched MORE THAN ONE saved beneficiary — render the pick-one
+    // card. Candidates are passed through verbatim: `id` is a server-resolved
+    // lookup key and `detail` is already masked server-side (§3.1) — the mapper
+    // must never synthesize or unmask a destination.
+    messages.push({
+      id: makeId(),
+      role: "assistant",
+      kind: "choose_beneficiary",
+      beneficiaryType: outcome.beneficiaryType,
+      nickname: outcome.nickname,
+      candidates: outcome.candidates.map((c) => ({
+        id: c.id,
+        label: c.label,
+        detail: c.detail,
+      })),
     })
   } else if (outcome.kind === "balance") {
     // Use the outcome's fiatCurrency rather than hardcoding NGN, so the card

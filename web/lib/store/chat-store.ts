@@ -145,9 +145,10 @@ interface ChatState {
   // fallback when a needs_beneficiary card does not pass its own message id.
   _lastIntentText: string | null
 
-  // Finding #3: each needs_beneficiary card is bound to the EXACT intent text
-  // that produced it (keyed by the card's message id), so resolving a stale card
-  // re-sends that intent — not whatever the user typed most recently.
+  // Finding #3: each needs_beneficiary / choose_beneficiary card is bound to
+  // the EXACT intent text that produced it (keyed by the card's message id), so
+  // resolving a stale card re-sends that intent — not whatever the user typed
+  // most recently.
   _beneficiaryIntents: Record<string, string>
 
   // Actions
@@ -165,10 +166,10 @@ interface ChatState {
    */
   hydrateHistory(surface: ChatSurface, items: ChatHistoryItem[]): void
   /**
-   * Re-sends the money request a specific needs_beneficiary card was created
-   * for, with a newly added/selected beneficiaryId so the sell/send proposal can
-   * be created. Called from the needs_beneficiary card once the user adds or
-   * picks a payout destination.
+   * Re-sends the money request a specific needs_beneficiary or
+   * choose_beneficiary card was created for, with a newly added/selected
+   * beneficiaryId so the sell/send proposal can be created. Called from those
+   * cards once the user adds or picks a payout destination.
    *
    * Finding #3: pass the card's `messageId` so the re-send uses the intent text
    * THAT card was bound to — not the mutable `_lastIntentText`, which a later
@@ -445,11 +446,13 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           const { messages, proposalId } = mapOutcomeToMessages(outcome, nextId)
           const pendingProposalId = proposalId ?? undefined
 
-          // Finding #3: bind any needs_beneficiary card to the EXACT intent text
-          // that produced it, keyed by the card's message id, so resolving a stale
-          // card later re-sends that intent and not a more recent unrelated one.
+          // Finding #3: bind any needs_beneficiary / choose_beneficiary card to
+          // the EXACT intent text that produced it, keyed by the card's message
+          // id, so resolving a stale card later re-sends that intent and not a
+          // more recent unrelated one.
           const beneficiaryCard = messages.find(
-            (m) => m.kind === "needs_beneficiary"
+            (m) =>
+              m.kind === "needs_beneficiary" || m.kind === "choose_beneficiary"
           )
 
           set((s) => ({

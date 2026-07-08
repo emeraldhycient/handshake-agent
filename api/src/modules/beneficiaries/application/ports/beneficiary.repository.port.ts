@@ -121,6 +121,22 @@ export interface IBeneficiaryRepository {
     type: 'bank_account' | 'crypto_address',
   ): Promise<BeneficiaryRecord | null>;
 
+  /**
+   * Finds the user's active (not soft-deleted) beneficiaries whose label
+   * matches `label` case-insensitively (EXACT match, not substring), optionally
+   * filtered by type. Returns ALL matches ordered isDefault desc, createdAt asc
+   * so callers can distinguish one hit (use it) from many (ask the user).
+   *
+   * SECURITY (CLAUDE.md §3.1): this is the nickname-resolution lookup — the
+   * label is a lookup key scoped to the user's own saved beneficiaries; it
+   * never resolves an address/account number from free text.
+   */
+  findByLabel(
+    userId: string,
+    label: string,
+    type?: 'bank_account' | 'crypto_address',
+  ): Promise<BeneficiaryRecord[]>;
+
   // ── Admin oversight (Phase 3, sub-area D) ───────────────────────────────────
 
   /**

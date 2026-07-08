@@ -169,8 +169,43 @@ export type PayInView = z.infer<typeof PayInViewSchema>
 export const NeedsBeneficiaryViewSchema = z.object({
   kind: z.literal("needs_beneficiary"),
   beneficiaryType: z.enum(["bank_account", "crypto_address"]),
+  /**
+   * Optional targeted copy from the server, e.g. "No saved beneficiary called
+   * 'mum'…" when a recipientNickname resolved to zero saved beneficiaries.
+   * Rendered in place of the card's generic intro line when present.
+   */
+  note: z.string().optional(),
 })
 export type NeedsBeneficiaryView = z.infer<typeof NeedsBeneficiaryViewSchema>
+
+// choose_beneficiary — pick-one list shown when a recipient nickname matched
+// MORE THAN ONE of the user's saved beneficiaries. Selecting a candidate
+// re-sends the originating intent with the chosen beneficiaryId (the same
+// resolve loop needs_beneficiary uses).
+//
+// SECURITY (CLAUDE.md §3.1): `detail` is a HUMAN-SAFE masked destination
+// summary produced server-side (bank "•• last-4" / crypto head…tail) — never a
+// full account number or address. `id` is only a lookup key; the proposal +
+// engine re-validate ownership, type, cooling-off and sanctions before any
+// money moves.
+export const ChooseBeneficiaryCandidateSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  /** Human-safe masked destination summary (never the full value). */
+  detail: z.string(),
+})
+export type ChooseBeneficiaryCandidate = z.infer<
+  typeof ChooseBeneficiaryCandidateSchema
+>
+
+export const ChooseBeneficiaryViewSchema = z.object({
+  kind: z.literal("choose_beneficiary"),
+  beneficiaryType: z.enum(["bank_account", "crypto_address"]),
+  /** The nickname the user said, echoed back for the picker copy. */
+  nickname: z.string(),
+  candidates: z.array(ChooseBeneficiaryCandidateSchema).min(1),
+})
+export type ChooseBeneficiaryView = z.infer<typeof ChooseBeneficiaryViewSchema>
 
 // settling — outbound-settlement card shown while a sell payout or send
 // withdrawal is in flight (the sell/send analogue of pay_in, which is inbound).
@@ -269,6 +304,7 @@ export const ChatMessageSchema = z.discriminatedUnion("kind", [
   MessageBaseSchema.merge(TicketsViewSchema),
   MessageBaseSchema.merge(PayInViewSchema),
   MessageBaseSchema.merge(NeedsBeneficiaryViewSchema),
+  MessageBaseSchema.merge(ChooseBeneficiaryViewSchema),
   MessageBaseSchema.merge(SettlingViewSchema),
   MessageBaseSchema.merge(TransactionsViewSchema),
   MessageBaseSchema.merge(SwapViewSchema),

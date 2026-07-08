@@ -245,6 +245,68 @@ describe("mapOutcomeToMessages", () => {
     }
   })
 
+  it("passes the needs_beneficiary note through for targeted nickname-miss copy", () => {
+    // When a recipientNickname resolves to ZERO saved beneficiaries the server
+    // sends a targeted note — the card must receive it (not the generic copy).
+    const note =
+      "No saved beneficiary called 'mum'. Add one first, or pick from your saved list."
+    const { messages } = mapOutcomeToMessages(
+      { kind: "needs_beneficiary", beneficiaryType: "bank_account", note },
+      makeIder()
+    )
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      kind: "needs_beneficiary",
+      beneficiaryType: "bank_account",
+      note,
+    })
+  })
+
+  it("maps choose_beneficiary to a picker card carrying nickname + candidates", () => {
+    // SECURITY (§3.1): candidates carry only server-resolved beneficiary ids and
+    // human-safe masked details — the mapper must pass them through verbatim and
+    // never synthesize or expose a full destination.
+    const outcome: AgentTurnOutcome = {
+      kind: "choose_beneficiary",
+      beneficiaryType: "bank_account",
+      nickname: "mum",
+      candidates: [
+        {
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          label: "Mum",
+          detail: "Guaranty Trust Bank (GTBank) ••6789",
+        },
+        {
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          label: "Mum",
+          detail: "Access Bank ••4321",
+        },
+      ],
+    }
+    const { messages, proposalId } = mapOutcomeToMessages(outcome, makeIder())
+    expect(proposalId).toBeNull()
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      kind: "choose_beneficiary",
+      beneficiaryType: "bank_account",
+      nickname: "mum",
+      candidates: [
+        {
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          label: "Mum",
+          detail: "Guaranty Trust Bank (GTBank) ••6789",
+        },
+        {
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          label: "Mum",
+          detail: "Access Bank ••4321",
+        },
+      ],
+    })
+  })
+
   it("maps not_supported to a not-supported text", () => {
     const { messages } = mapOutcomeToMessages(
       { kind: "not_supported", action: "swap" },

@@ -23,6 +23,10 @@
  *   - (W1) sell_crypto with NO beneficiary → sendBeneficiaryFlow(bank) + retry message, NO proposal
  *   - (W1) send_crypto with crypto beneficiary → createSendProposal + sendFlow (request_step_up)
  *   - (W1) send_crypto with NO beneficiary → sendBeneficiaryFlow(crypto), NO proposal
+ *   - (Wave B) sell/send recipientNickname: one match beats the default; multiple
+ *     matches seed the beneficiary Flow with {id,label} candidates (text fallback
+ *     lists labels + masked details); no match acknowledges the nickname and never
+ *     silently uses the default; absent nickname keeps the default path
  */
 
 import { Logger } from '@nestjs/common';
@@ -367,10 +371,15 @@ function makeProposalService(
 
 function makeBeneficiaryService(
   defaultBeneficiary: BeneficiaryRecord | null = null,
+  nicknameMatches: BeneficiaryRecord[] = [],
 ): jest.Mocked<
   Pick<
     BeneficiaryService,
-    'getDefault' | 'listForUser' | 'addCryptoAddress' | 'addBankAccount'
+    | 'getDefault'
+    | 'listForUser'
+    | 'addCryptoAddress'
+    | 'addBankAccount'
+    | 'resolveByNickname'
   >
 > {
   return {
@@ -380,6 +389,7 @@ function makeBeneficiaryService(
       .mockResolvedValue(defaultBeneficiary ? [defaultBeneficiary] : []),
     addCryptoAddress: jest.fn().mockResolvedValue({ id: 'ben-crypto-new-1' }),
     addBankAccount: jest.fn().mockResolvedValue({ id: 'ben-bank-new-1' }),
+    resolveByNickname: jest.fn().mockResolvedValue(nicknameMatches),
   };
 }
 
@@ -599,7 +609,11 @@ function buildService(
     beneficiaryService?: jest.Mocked<
       Pick<
         BeneficiaryService,
-        'getDefault' | 'listForUser' | 'addCryptoAddress' | 'addBankAccount'
+        | 'getDefault'
+        | 'listForUser'
+        | 'addCryptoAddress'
+        | 'addBankAccount'
+        | 'resolveByNickname'
       >
     >;
     historyService?: jest.Mocked<Pick<TransactionHistoryService, 'query'>>;
@@ -2001,6 +2015,282 @@ describe('ConversationService.handleInbound', () => {
     // Text fallback sent
     const sentText = captureFirstSentText(sender);
     expect(sentText).toMatch(/address|wallet|send/i);
+  });
+
+  // ── Wave B: sell/send recipient nicknames (WhatsApp parity) ───────────────
+  // SECURITY (§3.1): a nickname is a server-resolved LOOKUP KEY against the
+  // user's OWN beneficiaries. Resolution yields only a beneficiaryId; the
+  // proposal service + engine re-validate ownership/type/cooling-off/sanctions.
+
+  describe('(Wave B) recipientNickname resolution (sell + send)', () => {
+    const sellIntentWithNickname = {
+      action: 'sell_crypto',
+      asset: 'USDT',
+      cryptoAmount: '3.0625',
+      fiatCurrency: 'NGN',
+      recipientNickname: 'mum',
+    };
+    const sendIntentWithNickname = {
+      action: 'send_crypto',
+      asset: 'USDT',
+      cryptoAmount: '5.0',
+      network: 'TRON',
+      recipientNickname: 'mum',
+    };
+
+    it('sell: ONE nickname match → proposal uses the NAMED beneficiary; default never consulted', async () => {
+      const named: BeneficiaryRecord = {
+        ...stubBankBeneficiary(),
+        id: 'ben-bank-mum-1',
+        label: 'Mum',
+        isDefault: false,
+      };
+      const beneficiaryService = makeBeneficiaryService(
+        stubBankBeneficiary(), // default exists but must NOT be used
+        [named],
+      );
+      const { svc, sender, proposalService } = buildService({
+        agentPort: makeAgentPort(sellIntentWithNickname),
+        beneficiaryService,
+        configService: makeConfigService({
+          flowId: FIXED_FLOW_ID,
+          signingKey: FIXED_SIGNING_KEY,
+        }),
+      });
+
+      await svc.handleInbound(baseMsg());
+
+      expect(beneficiaryService.resolveByNickname).toHaveBeenCalledWith(
+        'user-id-1',
+        'bank_account',
+        'mum',
+      );
+      expect(proposalService.createSellProposal).toHaveBeenCalledWith(
+        expect.objectContaining({ beneficiaryId: 'ben-bank-mum-1' }),
+      );
+      // The nickname beats the silent default: getDefault is never consulted.
+      expect(beneficiaryService.getDefault).not.toHaveBeenCalled();
+      expect(sender.sendBeneficiaryFlow).not.toHaveBeenCalled();
+    });
+
+    it('send: ONE nickname match → proposal uses the NAMED beneficiary; default never consulted', async () => {
+      const named: BeneficiaryRecord = {
+        ...stubCryptoBeneficiary(),
+        id: 'ben-crypto-mum-1',
+        label: 'Mum',
+        isDefault: false,
+      };
+      const beneficiaryService = makeBeneficiaryService(
+        stubCryptoBeneficiary(),
+        [named],
+      );
+      const { svc, sender, proposalService } = buildService({
+        agentPort: makeAgentPort(sendIntentWithNickname),
+        beneficiaryService,
+        configService: makeConfigService({
+          flowId: FIXED_FLOW_ID,
+          signingKey: FIXED_SIGNING_KEY,
+        }),
+      });
+
+      await svc.handleInbound(baseMsg());
+
+      expect(beneficiaryService.resolveByNickname).toHaveBeenCalledWith(
+        'user-id-1',
+        'crypto_address',
+        'mum',
+      );
+      expect(proposalService.createSendProposal).toHaveBeenCalledWith(
+        expect.objectContaining({ beneficiaryId: 'ben-crypto-mum-1' }),
+      );
+      expect(beneficiaryService.getDefault).not.toHaveBeenCalled();
+      expect(sender.sendBeneficiaryFlow).not.toHaveBeenCalled();
+    });
+
+    it('sell: MULTIPLE nickname matches (FLOW_ID set) → beneficiary Flow SEEDED with the candidates, NO proposal', async () => {
+      const matchA: BeneficiaryRecord = {
+        ...stubBankBeneficiary(),
+        id: 'ben-bank-mum-1',
+        label: 'Mum',
+      };
+      const matchB: BeneficiaryRecord = {
+        ...stubBankBeneficiary(),
+        id: 'ben-bank-mum-2',
+        label: 'mum',
+        isDefault: false,
+      };
+      const beneficiaryService = makeBeneficiaryService(stubBankBeneficiary(), [
+        matchA,
+        matchB,
+      ]);
+      const { svc, sender, proposalService } = buildService({
+        agentPort: makeAgentPort(sellIntentWithNickname),
+        beneficiaryService,
+        configService: makeConfigService({
+          flowId: FIXED_FLOW_ID,
+          signingKey: FIXED_SIGNING_KEY,
+        }),
+      });
+
+      await svc.handleInbound(baseMsg());
+
+      // No proposal for an ambiguous nickname; default never consulted.
+      expect(proposalService.createSellProposal).not.toHaveBeenCalled();
+      expect(beneficiaryService.getDefault).not.toHaveBeenCalled();
+
+      // The beneficiary Flow is seeded with the candidate {id, label} list.
+      expect(sender.sendBeneficiaryFlow).toHaveBeenCalledTimes(1);
+      const benFlowArg = (
+        sender.sendBeneficiaryFlow as jest.Mock<
+          ReturnType<typeof sender.sendBeneficiaryFlow>,
+          [Parameters<typeof sender.sendBeneficiaryFlow>[0]]
+        >
+      ).mock.calls[0][0];
+      expect(benFlowArg.type).toBe('bank_account');
+      expect(benFlowArg.beneficiaries).toEqual([
+        { id: 'ben-bank-mum-1', label: 'Mum' },
+        { id: 'ben-bank-mum-2', label: 'mum' },
+      ]);
+
+      // Accompanying text asks which recipient was meant.
+      const sentText = captureFirstSentText(sender);
+      expect(sentText).toContain("'mum'");
+      expect(sentText).toMatch(/which one/i);
+    });
+
+    it('send: MULTIPLE nickname matches with NO FLOW_ID → text fallback LISTS the candidate labels, NO proposal', async () => {
+      const matchA: BeneficiaryRecord = {
+        ...stubCryptoBeneficiary(),
+        id: 'ben-crypto-mum-1',
+        label: 'Mum main',
+      };
+      const matchB: BeneficiaryRecord = {
+        ...stubCryptoBeneficiary(),
+        id: 'ben-crypto-mum-2',
+        label: 'Mum backup',
+        isDefault: false,
+      };
+      const beneficiaryService = makeBeneficiaryService(
+        stubCryptoBeneficiary(),
+        [matchA, matchB],
+      );
+      const { svc, sender, proposalService } = buildService({
+        agentPort: makeAgentPort(sendIntentWithNickname),
+        beneficiaryService,
+        configService: makeConfigService({ flowId: '', signingKey: '' }),
+      });
+
+      await svc.handleInbound(baseMsg());
+
+      expect(proposalService.createSendProposal).not.toHaveBeenCalled();
+      expect(sender.sendBeneficiaryFlow).not.toHaveBeenCalled();
+      expect(beneficiaryService.getDefault).not.toHaveBeenCalled();
+
+      const sentText = captureFirstSentText(sender);
+      // Lists every candidate label with the HUMAN-SAFE masked destination
+      // (maskBeneficiaryDetail parity: first 6 + '...' + last 4) — never the
+      // full address.
+      expect(sentText).toContain('Mum main');
+      expect(sentText).toContain('Mum backup');
+      expect(sentText).toContain('TXxyzF...ef12');
+      expect(sentText).not.toContain('TXxyzFakeAddress1234567890abcdef12');
+      expect(sentText).toMatch(/which one/i);
+    });
+
+    it('sell: NO nickname match → beneficiary Flow + reply acknowledging the nickname; default NOT silently used', async () => {
+      // Default exists — but a missed nickname must NOT quietly route money
+      // to the default recipient.
+      const beneficiaryService = makeBeneficiaryService(
+        stubBankBeneficiary(),
+        [],
+      );
+      const { svc, sender, proposalService } = buildService({
+        agentPort: makeAgentPort({
+          ...sellIntentWithNickname,
+          recipientNickname: 'aunty',
+        }),
+        beneficiaryService,
+        configService: makeConfigService({
+          flowId: FIXED_FLOW_ID,
+          signingKey: FIXED_SIGNING_KEY,
+        }),
+      });
+
+      await svc.handleInbound(baseMsg());
+
+      expect(proposalService.createSellProposal).not.toHaveBeenCalled();
+      expect(beneficiaryService.getDefault).not.toHaveBeenCalled();
+
+      // Existing beneficiary-Flow path (add-new form) still fires.
+      expect(sender.sendBeneficiaryFlow).toHaveBeenCalledTimes(1);
+      const benFlowArg = (
+        sender.sendBeneficiaryFlow as jest.Mock<
+          ReturnType<typeof sender.sendBeneficiaryFlow>,
+          [Parameters<typeof sender.sendBeneficiaryFlow>[0]]
+        >
+      ).mock.calls[0][0];
+      expect(benFlowArg.type).toBe('bank_account');
+      expect(benFlowArg.beneficiaries).toEqual([]);
+
+      // The reply acknowledges the unmatched nickname.
+      const sentText = captureFirstSentText(sender);
+      expect(sentText).toContain("'aunty'");
+      expect(sentText).toMatch(/no saved/i);
+    });
+
+    it('send: NO nickname match, no FLOW_ID → text fallback acknowledges the nickname, NO proposal', async () => {
+      const beneficiaryService = makeBeneficiaryService(
+        stubCryptoBeneficiary(),
+        [],
+      );
+      const { svc, sender, proposalService } = buildService({
+        agentPort: makeAgentPort({
+          ...sendIntentWithNickname,
+          recipientNickname: 'aunty',
+        }),
+        beneficiaryService,
+        configService: makeConfigService({ flowId: '', signingKey: '' }),
+      });
+
+      await svc.handleInbound(baseMsg());
+
+      expect(proposalService.createSendProposal).not.toHaveBeenCalled();
+      expect(sender.sendBeneficiaryFlow).not.toHaveBeenCalled();
+      expect(beneficiaryService.getDefault).not.toHaveBeenCalled();
+
+      const sentText = captureFirstSentText(sender);
+      expect(sentText).toContain("'aunty'");
+      expect(sentText).toMatch(/no saved/i);
+    });
+
+    it('send: ABSENT nickname preserves the default-beneficiary path (no nickname lookup)', async () => {
+      const cryptoBen = stubCryptoBeneficiary();
+      const beneficiaryService = makeBeneficiaryService(cryptoBen);
+      const { svc, proposalService } = buildService({
+        agentPort: makeAgentPort({
+          action: 'send_crypto',
+          asset: 'USDT',
+          cryptoAmount: '5.0',
+          network: 'TRON',
+        }),
+        beneficiaryService,
+        configService: makeConfigService({
+          flowId: FIXED_FLOW_ID,
+          signingKey: FIXED_SIGNING_KEY,
+        }),
+      });
+
+      await svc.handleInbound(baseMsg());
+
+      expect(beneficiaryService.resolveByNickname).not.toHaveBeenCalled();
+      expect(beneficiaryService.getDefault).toHaveBeenCalledWith(
+        'user-id-1',
+        'crypto_address',
+      );
+      expect(proposalService.createSendProposal).toHaveBeenCalledWith(
+        expect.objectContaining({ beneficiaryId: cryptoBen.id }),
+      );
+    });
   });
 
   // ── sell/send proposal-error parity → clarification text, NOT a safe-fallback ──

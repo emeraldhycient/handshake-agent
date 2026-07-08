@@ -34,6 +34,8 @@ import type { DirectiveService } from '../../transactions/application/directive.
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { HandoffTokenService } from '../../identity/application/handoff-token.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import { maskBeneficiaryDetail } from '../../beneficiaries/application/beneficiary-display';
+import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
 import type { BalanceService } from '../../balances/application/balance.service';
 import type { BalanceSnapshot } from '@handshake-agent/contracts';
 import { signFlowToken } from '../../whatsapp/application/flow-token';
@@ -690,8 +692,9 @@ export class ConversationService implements IInboundHandler {
   /**
    * Handles a `sell_crypto` intent:
    *   1. Guard: requires active user (KYC + reverification check).
-   *   2. Resolve default bank beneficiary.
-   *      - If none → send beneficiary Flow (FLOW_ID set) or text fallback, no proposal.
+   *   2. Resolve the bank beneficiary (nickname lookup → default, Wave B —
+   *      see resolvePayoutBeneficiary).
+   *      - If unresolved → beneficiary Flow (FLOW_ID set) or text fallback, no proposal.
    *   3. Create sell proposal → send confirmation Flow (request_pin directive).
    *      - If FLOW_ID unset → text confirmation fallback.
    *
@@ -731,22 +734,20 @@ export class ConversationService implements IInboundHandler {
       };
     }
 
-    // Resolve default bank beneficiary — must exist before creating the proposal.
-    const beneficiary = await this.beneficiaryService.getDefault(
-      user.id,
-      'bank_account',
-    );
-
-    if (beneficiary === null) {
-      // No bank account saved → send the beneficiary Flow so the user can add/select one.
-      // TODO(W2): full single-Flow chaining (beneficiary-select → sell proposal) in one round-trip.
-      return this.sendBeneficiaryFlowOrFallback({
-        userId: user.id,
-        to: msg.fromAddress,
-        type: 'bank_account',
-        retryText:
-          'Please add a bank account to sell crypto. Once added, send your sell request again.',
-      });
+    // Resolve WHICH bank beneficiary the payout routes to (Wave B — nicknames):
+    // spoken nickname (server-resolved lookup key, §3.1) beats the silent default.
+    // TODO(W2): full single-Flow chaining (beneficiary-select → sell proposal) in one round-trip.
+    const sellResolution = await this.resolvePayoutBeneficiary({
+      userId: user.id,
+      to: msg.fromAddress,
+      type: 'bank_account',
+      recipientNickname: (intent as { recipientNickname?: string })
+        .recipientNickname,
+      noBeneficiaryRetryText:
+        'Please add a bank account to sell crypto. Once added, send your sell request again.',
+    });
+    if (!sellResolution.resolved) {
+      return sellResolution.reply;
     }
 
     // Happy path: create the sell proposal. Stable-coded proposal rejections
@@ -764,7 +765,7 @@ export class ConversationService implements IInboundHandler {
         intent: intent as Parameters<
           ProposalService['createSellProposal']
         >[0]['intent'],
-        beneficiaryId: beneficiary.id,
+        beneficiaryId: sellResolution.beneficiaryId,
       });
       proposalId = out.proposalId;
       confirmation = out.confirmation;
@@ -801,8 +802,9 @@ export class ConversationService implements IInboundHandler {
   /**
    * Handles a `send_crypto` intent:
    *   1. Guard: requires active user.
-   *   2. Resolve default crypto_address beneficiary.
-   *      - If none → send beneficiary Flow (crypto_address) or text fallback.
+   *   2. Resolve the crypto_address beneficiary (nickname lookup → default,
+   *      Wave B — see resolvePayoutBeneficiary).
+   *      - If unresolved → beneficiary Flow (crypto_address) or text fallback.
    *   3. Create send proposal → send confirmation Flow (request_step_up directive).
    *      - If FLOW_ID unset → text confirmation fallback.
    *
@@ -830,21 +832,19 @@ export class ConversationService implements IInboundHandler {
 
     const { user } = guard;
 
-    // Resolve default crypto_address beneficiary — must exist before creating the proposal.
-    const beneficiary = await this.beneficiaryService.getDefault(
-      user.id,
-      'crypto_address',
-    );
-
-    if (beneficiary === null) {
-      // No crypto address saved → send the beneficiary Flow so the user can add/select one.
-      return this.sendBeneficiaryFlowOrFallback({
-        userId: user.id,
-        to: msg.fromAddress,
-        type: 'crypto_address',
-        retryText:
-          'Please add a crypto wallet address first. Once added, send your send request again.',
-      });
+    // Resolve WHICH crypto beneficiary the send routes to (Wave B — nicknames):
+    // spoken nickname (server-resolved lookup key, §3.1) beats the silent default.
+    const sendResolution = await this.resolvePayoutBeneficiary({
+      userId: user.id,
+      to: msg.fromAddress,
+      type: 'crypto_address',
+      recipientNickname: (intent as { recipientNickname?: string })
+        .recipientNickname,
+      noBeneficiaryRetryText:
+        'Please add a crypto wallet address first. Once added, send your send request again.',
+    });
+    if (!sendResolution.resolved) {
+      return sendResolution.reply;
     }
 
     // Happy path: create the send proposal. Same parity as sell: convert the
@@ -861,7 +861,7 @@ export class ConversationService implements IInboundHandler {
         intent: intent as Parameters<
           ProposalService['createSendProposal']
         >[0]['intent'],
-        beneficiaryId: beneficiary.id,
+        beneficiaryId: sendResolution.beneficiaryId,
       });
       proposalId = out.proposalId;
       confirmation = out.confirmation;
@@ -1047,6 +1047,105 @@ export class ConversationService implements IInboundHandler {
   }
 
   // ---------------------------------------------------------------------------
+  // Private: payout beneficiary resolution (Wave B — nicknames)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Resolves WHICH saved beneficiary a sell/send routes to (Wave B — nicknames,
+   * WhatsApp parity with WebChatService.resolvePayoutBeneficiary).
+   *
+   * Precedence:
+   *   1. `recipientNickname` from the intent — a server-resolved LOOKUP KEY
+   *      against the user's OWN saved beneficiaries (§3.1: never an address).
+   *      Exactly one match → use it; several → beneficiary Flow SEEDED with the
+   *      candidate {id, label} list (text fallback lists labels + HUMAN-SAFE
+   *      masked details); none → beneficiary Flow with a reply acknowledging
+   *      the unmatched nickname. A spoken nickname always beats the silent
+   *      default — a miss must NOT quietly route money to the default recipient.
+   *   2. No nickname: the default beneficiary, else beneficiary Flow with the
+   *      legacy retry guidance.
+   *
+   * Resolution yields only a beneficiaryId; the proposal service and engine
+   * re-validate ownership, type, cooling-off, and sanctions before any money
+   * moves (§3.1/§3.3).
+   */
+  private async resolvePayoutBeneficiary(params: {
+    userId: string;
+    to: string;
+    type: 'bank_account' | 'crypto_address';
+    recipientNickname: string | undefined;
+    /** Legacy retry guidance for the no-nickname, no-default path. */
+    noBeneficiaryRetryText: string;
+  }): Promise<
+    | { resolved: true; beneficiaryId: string }
+    | { resolved: false; reply: { replyText: string; flowSent: boolean } }
+  > {
+    const { userId, to, type, recipientNickname, noBeneficiaryRetryText } =
+      params;
+
+    if (recipientNickname) {
+      const matches = await this.beneficiaryService.resolveByNickname(
+        userId,
+        type,
+        recipientNickname,
+      );
+      if (matches.length === 1) {
+        return { resolved: true, beneficiaryId: matches[0].id };
+      }
+      if (matches.length > 1) {
+        const question = `You have ${matches.length} saved recipients called '${recipientNickname}'. Which one did you mean?`;
+        const reply = await this.sendBeneficiaryFlowOrFallback({
+          userId,
+          to,
+          type,
+          retryText: question,
+          // No Flow published → list the candidates inline so the user can
+          // tell them apart (labels + masked details only — never a full
+          // account number or address in plaintext chat, §3.5).
+          fallbackText: `${question}\n${this.buildCandidateLines(matches)}`,
+          beneficiaries: matches.map((match) => ({
+            id: match.id,
+            label: match.label,
+          })),
+        });
+        return { resolved: false, reply };
+      }
+      // 0 matches: acknowledge the miss — getDefault is deliberately NOT
+      // consulted here (the nickname beats the silent default).
+      const reply = await this.sendBeneficiaryFlowOrFallback({
+        userId,
+        to,
+        type,
+        retryText: `No saved beneficiary called '${recipientNickname}'. Add one first, or pick from your saved list.`,
+      });
+      return { resolved: false, reply };
+    }
+
+    const fallback = await this.beneficiaryService.getDefault(userId, type);
+    if (fallback) {
+      return { resolved: true, beneficiaryId: fallback.id };
+    }
+    const reply = await this.sendBeneficiaryFlowOrFallback({
+      userId,
+      to,
+      type,
+      retryText: noBeneficiaryRetryText,
+    });
+    return { resolved: false, reply };
+  }
+
+  /**
+   * Renders ambiguous nickname candidates as text lines: label + the
+   * HUMAN-SAFE masked destination (shared maskBeneficiaryDetail — bank
+   * "<name> ••1234", crypto head/tail ellipsis). NEVER the full destination.
+   */
+  private buildCandidateLines(matches: BeneficiaryRecord[]): string {
+    return matches
+      .map((match) => `- ${match.label} — ${maskBeneficiaryDetail(match)}`)
+      .join('\n');
+  }
+
+  // ---------------------------------------------------------------------------
   // Private: send beneficiary Flow or text fallback (W1)
   // ---------------------------------------------------------------------------
 
@@ -1054,14 +1153,22 @@ export class ConversationService implements IInboundHandler {
    * Sends the beneficiary add/select Flow (FLOW_ID set) or a plain-text retry
    * message when WHATSAPP_FLOW_ID is not configured.
    *
-   * Returns { replyText, flowSent: true } when the Flow was dispatched,
-   * { replyText, flowSent: false } for the text-fallback path.
+   * The SELECT screen is seeded with `beneficiaries` when provided (Wave B —
+   * ambiguous-nickname candidates); empty means the "add new" form (S3).
+   *
+   * Returns { replyText, flowSent: false } in both branches — the beneficiary
+   * Flow is a collection form, not the confirmation Flow, so the guidance text
+   * must still reach the user via sendText.
    */
   private async sendBeneficiaryFlowOrFallback(params: {
     userId: string;
     to: string;
     type: 'bank_account' | 'crypto_address';
     retryText: string;
+    /** Distinct guidance for the no-Flow text fallback (defaults to retryText). */
+    fallbackText?: string;
+    /** Candidates seeded into the Flow SELECT screen ({id, label} only). */
+    beneficiaries?: Array<{ id: string; label: string }>;
   }): Promise<{ replyText: string; flowSent: boolean }> {
     const { userId, to, type, retryText } = params;
     const flowId = this.configService.get<string>('WHATSAPP_FLOW_ID') ?? '';
@@ -1084,7 +1191,7 @@ export class ConversationService implements IInboundHandler {
         flowId,
         flowToken,
         type,
-        beneficiaries: [], // S3: empty for "add new" flow; listing saved benefs is a follow-up
+        beneficiaries: params.beneficiaries ?? [],
       });
 
       // flowSent: false — the beneficiary Flow is a collection form, not the
@@ -1094,7 +1201,7 @@ export class ConversationService implements IInboundHandler {
     }
 
     // Fallback: no Flow published yet — plain-text guidance.
-    return { replyText: retryText, flowSent: false };
+    return { replyText: params.fallbackText ?? retryText, flowSent: false };
   }
 
   // ---------------------------------------------------------------------------

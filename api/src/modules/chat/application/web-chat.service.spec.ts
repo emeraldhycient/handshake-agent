@@ -52,7 +52,10 @@ const fakeProposalService = {
   createSwapProposal: jest.fn(),
 };
 const fakeWalletService = { getOrProvisionNetworkWallet: jest.fn() };
-const fakeBeneficiaryService = { getDefault: jest.fn() };
+const fakeBeneficiaryService = {
+  getDefault: jest.fn(),
+  resolveByNickname: jest.fn(),
+};
 const fakeHistoryService = { query: jest.fn() };
 const fakeBalanceService = { getBalances: jest.fn() };
 const fakeIdentityRepo = { loadUser: jest.fn() };
@@ -1162,6 +1165,330 @@ describe('WebChatService', () => {
     });
   });
 
+  // ── recipientNickname resolution (Wave B — beneficiary nicknames) ──────────
+  // SECURITY: a nickname is a server-resolved LOOKUP KEY. Resolution yields
+  // only a beneficiaryId that flows into the EXISTING proposal/engine
+  // re-validation (ownership, type, cooling-off, sanctions, PIN).
+
+  describe('recipientNickname resolution (sell + send)', () => {
+    // Full-record shapes: the candidates mapping masks bank/crypto details.
+    const MUM_BANK = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      label: 'Mum',
+      type: 'bank_account' as const,
+      bankCode: '058',
+      accountNumber: '0123456789',
+      cryptoAddress: null,
+      isDefault: false,
+    };
+    const MUM_BANK_2 = {
+      id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      label: 'Mum',
+      type: 'bank_account' as const,
+      bankCode: '044',
+      accountNumber: '9876543210',
+      cryptoAddress: null,
+      isDefault: false,
+    };
+    const MUM_WALLET = {
+      id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      label: 'Mum',
+      type: 'crypto_address' as const,
+      bankCode: null,
+      accountNumber: null,
+      cryptoAddress: 'TQn9Y2khDD3VHKZ2GRdmKXD8bNkRuaBP2p',
+      isDefault: false,
+    };
+    const MUM_WALLET_2 = {
+      id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      label: 'Mum',
+      type: 'crypto_address' as const,
+      bankCode: null,
+      accountNumber: null,
+      cryptoAddress: 'TXk4mzhDD3VHKZ2GRdmKXD8bNkRuaZZ9q',
+      isDefault: false,
+    };
+
+    const sellIntentWithNickname = {
+      action: 'sell_crypto' as const,
+      asset: 'USDT',
+      cryptoAmount: '5',
+      fiatCurrency: 'NGN',
+      recipientNickname: 'mum',
+    };
+    const sendIntentWithNickname = {
+      action: 'send_crypto' as const,
+      asset: 'USDT',
+      cryptoAmount: '2',
+      network: 'TRON',
+      recipientNickname: 'mum',
+    };
+
+    const sellConfirmation = {
+      proposalId: 'p-sell',
+      asset: 'USDT',
+      cryptoAmount: '5',
+      fiatCurrency: 'NGN',
+      netFiatAmount: '4800',
+      fxRate: '1000',
+      processingFeeAmount: '50.00',
+      expiresAt: new Date().toISOString(),
+    };
+
+    it('sell: ONE nickname match routes to the NAMED beneficiary — beats the silent default', async () => {
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([MUM_BANK]);
+      fakeProposalService.createSellProposal.mockResolvedValue({
+        proposalId: 'p-sell',
+        quoteId: 'q-2',
+        confirmation: sellConfirmation,
+      });
+      fakeAgentPort.run.mockResolvedValue(sellIntentWithNickname);
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'sell 5 USDT to mum',
+      });
+
+      expect(fakeBeneficiaryService.resolveByNickname).toHaveBeenCalledWith(
+        'user-1',
+        'bank_account',
+        'mum',
+      );
+      // The nickname must beat the default: getDefault is never consulted.
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+      expect(fakeProposalService.createSellProposal).toHaveBeenCalledWith(
+        expect.objectContaining({ beneficiaryId: MUM_BANK.id }),
+      );
+      expect(result.outcome).toMatchObject({
+        kind: 'proposal',
+        txType: 'sell',
+      });
+    });
+
+    it('send: ONE nickname match routes to the NAMED beneficiary — beats the silent default', async () => {
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([MUM_WALLET]);
+      fakeProposalService.createSendProposal.mockResolvedValue({
+        proposalId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+        confirmation: {
+          proposalId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          asset: 'USDT',
+          cryptoAmount: '2',
+          network: 'TRON',
+          networkFeeCrypto: '1.0',
+          totalDebit: '3.0',
+          toAddressMasked: 'TQn9Y2...BP2p',
+          beneficiaryLabel: 'Mum',
+          expiresAt: new Date().toISOString(),
+        },
+      });
+      fakeAgentPort.run.mockResolvedValue(sendIntentWithNickname);
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'send 2 USDT to mum',
+      });
+
+      expect(fakeBeneficiaryService.resolveByNickname).toHaveBeenCalledWith(
+        'user-1',
+        'crypto_address',
+        'mum',
+      );
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+      expect(fakeProposalService.createSendProposal).toHaveBeenCalledWith(
+        expect.objectContaining({ beneficiaryId: MUM_WALLET.id }),
+      );
+      expect(result.outcome).toMatchObject({
+        kind: 'proposal',
+        txType: 'send',
+      });
+    });
+
+    it('sell: MULTIPLE matches → choose_beneficiary with masked bank candidates, no proposal', async () => {
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([
+        MUM_BANK,
+        MUM_BANK_2,
+      ]);
+      fakeAgentPort.run.mockResolvedValue(sellIntentWithNickname);
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'sell 5 USDT to mum',
+      });
+
+      expect(result.outcome).toEqual({
+        kind: 'choose_beneficiary',
+        beneficiaryType: 'bank_account',
+        nickname: 'mum',
+        candidates: [
+          {
+            id: MUM_BANK.id,
+            label: 'Mum',
+            // Bank details are masked: bank display name + last 4 digits only.
+            detail: 'Guaranty Trust Bank (GTBank) ••6789',
+          },
+          {
+            id: MUM_BANK_2.id,
+            label: 'Mum',
+            detail: 'Access Bank ••3210',
+          },
+        ],
+      });
+      expect(fakeProposalService.createSellProposal).not.toHaveBeenCalled();
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+      // The full account number must never surface anywhere in the outcome.
+      expect(JSON.stringify(result.outcome)).not.toContain('0123456789');
+    });
+
+    it('send: MULTIPLE matches → choose_beneficiary with masked address candidates, no proposal', async () => {
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([
+        MUM_WALLET,
+        MUM_WALLET_2,
+      ]);
+      fakeAgentPort.run.mockResolvedValue(sendIntentWithNickname);
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'send 2 USDT to mum',
+      });
+
+      expect(result.outcome).toEqual({
+        kind: 'choose_beneficiary',
+        beneficiaryType: 'crypto_address',
+        nickname: 'mum',
+        candidates: [
+          {
+            id: MUM_WALLET.id,
+            label: 'Mum',
+            // Head/tail ellipsis — same masking as the proposal confirmation.
+            detail: 'TQn9Y2...BP2p',
+          },
+          {
+            id: MUM_WALLET_2.id,
+            label: 'Mum',
+            detail: 'TXk4mz...ZZ9q',
+          },
+        ],
+      });
+      expect(fakeProposalService.createSendProposal).not.toHaveBeenCalled();
+      // The full address must never surface in the outcome.
+      expect(JSON.stringify(result.outcome)).not.toContain(
+        MUM_WALLET.cryptoAddress,
+      );
+    });
+
+    it('sell: ZERO matches → needs_beneficiary with a targeted note — never the silent default', async () => {
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([]);
+      // Even with a default saved, a missed nickname must NOT silently route
+      // to it — the user named someone specific.
+      fakeBeneficiaryService.getDefault.mockResolvedValue({ id: 'bene-1' });
+      fakeAgentPort.run.mockResolvedValue(sellIntentWithNickname);
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'sell 5 USDT to mum',
+      });
+
+      expect(result.outcome).toMatchObject({
+        kind: 'needs_beneficiary',
+        beneficiaryType: 'bank_account',
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest expect.stringContaining is typed `any`
+        note: expect.stringContaining("'mum'"),
+      });
+      expect(fakeProposalService.createSellProposal).not.toHaveBeenCalled();
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('send: ZERO matches → needs_beneficiary with a targeted note — never the silent default', async () => {
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([]);
+      fakeBeneficiaryService.getDefault.mockResolvedValue({
+        id: 'bene-crypto-1',
+      });
+      fakeAgentPort.run.mockResolvedValue(sendIntentWithNickname);
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'send 2 USDT to mum',
+      });
+
+      expect(result.outcome).toMatchObject({
+        kind: 'needs_beneficiary',
+        beneficiaryType: 'crypto_address',
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest expect.stringContaining is typed `any`
+        note: expect.stringContaining("'mum'"),
+      });
+      expect(fakeProposalService.createSendProposal).not.toHaveBeenCalled();
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('explicit input.beneficiaryId (resolve-loop pick) still wins over the nickname', async () => {
+      fakeProposalService.createSellProposal.mockResolvedValue({
+        proposalId: 'p-sell',
+        quoteId: 'q-2',
+        confirmation: sellConfirmation,
+      });
+      fakeAgentPort.run.mockResolvedValue(sellIntentWithNickname);
+
+      await service.handleMessage({
+        userId: 'user-1',
+        text: 'sell 5 USDT to mum',
+        beneficiaryId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      });
+
+      expect(fakeBeneficiaryService.resolveByNickname).not.toHaveBeenCalled();
+      expect(fakeProposalService.createSellProposal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          beneficiaryId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        }),
+      );
+    });
+
+    it('absent nickname preserves the default-beneficiary path (no nickname lookup)', async () => {
+      fakeBeneficiaryService.getDefault.mockResolvedValue({ id: 'bene-1' });
+      fakeProposalService.createSellProposal.mockResolvedValue({
+        proposalId: 'p-sell',
+        quoteId: 'q-2',
+        confirmation: sellConfirmation,
+      });
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'sell_crypto',
+        asset: 'USDT',
+        cryptoAmount: '5',
+        fiatCurrency: 'NGN',
+      });
+
+      await service.handleMessage({ userId: 'user-1', text: 'sell 5 USDT' });
+
+      expect(fakeBeneficiaryService.resolveByNickname).not.toHaveBeenCalled();
+      expect(fakeBeneficiaryService.getDefault).toHaveBeenCalledWith(
+        'user-1',
+        'bank_account',
+      );
+      expect(fakeProposalService.createSellProposal).toHaveBeenCalledWith(
+        expect.objectContaining({ beneficiaryId: 'bene-1' }),
+      );
+    });
+
+    it('persists the choose_beneficiary outcome on the reply (history round-trip)', async () => {
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([
+        MUM_BANK,
+        MUM_BANK_2,
+      ]);
+      fakeAgentPort.run.mockResolvedValue(sellIntentWithNickname);
+
+      await service.handleMessage({
+        userId: 'user-1',
+        text: 'sell 5 USDT to mum',
+      });
+
+      expect(fakeReplyRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest expect.objectContaining is typed `any`
+          outcome: expect.objectContaining({ kind: 'choose_beneficiary' }),
+        }),
+      );
+    });
+  });
+
   // ── Conversation upsert — no existing conversation → creates new ────────────
 
   it('no existing conversation → creates a new one', async () => {
@@ -1337,6 +1664,36 @@ describe('WebChatService', () => {
         'reply without outcome',
         'no reply yet',
       ]);
+    });
+
+    it('round-trips a stored choose_beneficiary outcome (Wave B) intact', async () => {
+      // The reply repo persists the outcome JSON verbatim; the history read
+      // re-validates it through AgentTurnOutcomeSchema — the new kind must
+      // survive the round-trip, not degrade to a null outcome.
+      const storedOutcome = {
+        kind: 'choose_beneficiary',
+        beneficiaryType: 'bank_account',
+        nickname: 'mum',
+        candidates: [
+          {
+            id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            label: 'Mum',
+            detail: 'Guaranty Trust Bank (GTBank) ••6789',
+          },
+        ],
+      };
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm1',
+          userText: 'sell 5 USDT to mum',
+          createdAt: new Date('2026-07-08T10:00:00.000Z'),
+          reply: { text: 'Which one did you mean?', outcome: storedOutcome },
+        },
+      ]);
+
+      const result = await service.getHistory({ userId: 'user-1', limit: 30 });
+
+      expect(result.messages[0].outcome).toEqual(storedOutcome);
     });
 
     // ── transactions outcome: stale signed download URL is re-issued ───────────
