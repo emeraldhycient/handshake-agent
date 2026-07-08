@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file is the canonical guidance for Claude Code (and any AI agent) working anywhere in this repository. It is the constitution. Per-package `CLAUDE.md` files (`api/`, `web/`, `packages/contracts/`) add package-specific detail and never contradict this file.
+This file is the canonical guidance for Claude Code (and any AI agent) working anywhere in this repository. It is the constitution. Per-package `CLAUDE.md` files (`api/`, `web/`, `web-admin/`, `packages/contracts/`) add package-specific detail and never contradict this file.
 
 > Read order for a new task: this file → the package `CLAUDE.md` for the area you're touching → [`docs/PRD.md`](docs/PRD.md) (§4 the agent architecture is mandatory before touching agent/transaction code) → [`docs/BRD.md`](docs/BRD.md).
 
@@ -58,7 +58,7 @@ No LLM output moves money. The system is three layers (see §6):
 
 ### 3.2 The agent never touches the database
 
-The agent code (NLU + tool definitions) holds **no database credentials and no Prisma import**. It reaches data and capabilities only through injected ports (`LlmProvider`, `ToolGateway`). `@prisma/client` lives only in `infrastructure`-layer repositories. This is enforced by `dependency-cruiser` (`.dependency-cruiser.cjs`), not just convention.
+The agent code (NLU + tool definitions) holds **no database credentials and no Prisma import**. It reaches data and capabilities only through injected ports (`LlmProvider`, `ToolGateway`). The generated Prisma client (`api/generated/prisma`) and the `PrismaService` wrapper (`api/src/core/prisma`) live only in `infrastructure`-layer repositories. This is enforced by `dependency-cruiser` (`.dependency-cruiser.cjs` forbids `@prisma/client`, the generated client, **and** `api/src/core/prisma` from `agent`/`application`/`domain`; the generated tree stays visible as a rule target via `doNotFollow`, never `exclude`), not just convention.
 
 ### 3.3 KYC gating is server-side first
 
@@ -96,7 +96,29 @@ api/src/
 
 Dependency rule: `presentation → application → domain`. `infrastructure` implements `application` ports and may import `domain`. **`application` must never import `infrastructure` or `@prisma/client`.** Services inject port interfaces (e.g. `IWalletRepository`, `ITurnkeyClient`), never concrete repositories or the DB client.
 
-Planned feature modules: `identity` (users/KYC/devices), `wallets`, `quotes`, `transactions` (the execution engine), `beneficiaries`, `tickets`, `compliance` (KYC/sanctions/AML/Travel Rule), `treasury`, `notifications`, `whatsapp`, `admin` (config console), `agent`.
+The 19 feature modules that exist today (`ls api/src/modules`):
+
+- `admin` — operator-console backend: RBAC, immutable audit, maker-checker change requests, settings/config console, KYC review, transaction oversight, treasury ops, metrics
+- `agent` — the embedded LangGraph agent (framework-agnostic core + ports + thin Nest adapter, §6)
+- `auth` — email-OTP web sessions + JWTs, and personal access tokens (PATs) for the MCP surface
+- `balances` — read-only portfolio snapshots for the agent surfaces
+- `beneficiaries` — saved recipients (bank + crypto), name-enquiry, nickname resolution
+- `chat` — web chat endpoints driving the agent (text + voice)
+- `compliance` — sanctions/AML screening
+- `config` — public `GET /config`: effective non-secret capability flags + catalog for the frontends
+- `conversations` — conversation/message persistence (chat history)
+- `identity` — users, KYC, devices
+- `mcp` — PAT-authenticated stateless MCP endpoint; read + propose tools only (§6)
+- `media` — speech-to-text transcription + document-extraction ports
+- `notifications` — outbound email (Resend) + notification templates
+- `quotes` — pricing/quoting (rates, spreads, fees)
+- `transactions` — **the deterministic execution engine** (proposals → validation → PIN/step-up → settlement)
+- `treasury` — fiat rails (Flutterwave): virtual accounts, payouts, float, large-payout approval
+- `wallets` — custodial crypto via Blockradar: addresses, deposits, withdrawals, swaps
+- `webhooks` — durable persist-first webhook queue (Blockradar / Flutterwave / WhatsApp)
+- `whatsapp` — WhatsApp Cloud API surface: inbound, Flows, templates (§3.5)
+
+`tickets` is still **future**: the ticketing capability exists only as a registry flag (`ticketing` in the layered config, surfaced read-side in the admin console) — no tickets module ships yet.
 
 ### 4.2 Frontend (`web/`, Next.js) — strict downward layering
 
@@ -140,19 +162,25 @@ The agent lives in `api/src/modules/agent/` today (one deployable) but is built 
 
 LangGraph.js is **v1** (`@langchain/langgraph@1.4.4`, `@langchain/core@1.2.0`, `@langchain/anthropic@1.5.0`). v0 tutorials are stale. The packages are ESM-first; under Nest's CommonJS + ts-jest, always use `import` statements (tsc downlevels them) — never hand-write `require()` for them. Pin `zod` to `^3.25.32` (LangGraph's floor) directly in `api`, `web`, and `contracts` so our code resolves one instance — two copies across the boundary cause silent `ZodType` identity bugs. The `zod@4` that tooling (`eslint-plugin-react-hooks`, the `shadcn` CLI) pulls in is isolated under those packages and is fine; do **not** add a global `pnpm.overrides` for zod.
 
+### The MCP surface — read + propose only
+
+External AI clients (Claude Desktop, IDEs, other agents) connect via **`POST /mcp`** — a **stateless Streamable-HTTP** MCP endpoint (`api/src/modules/mcp/`). Authentication is by **personal access token only**: tokens are minted PIN-gated at `POST /profile/tokens`, prefixed `hsk_pat_`, stored **only as a SHA-256 hash** (raw value shown once), and carry scopes **`read`** and/or **`chat:propose`**. Session JWTs are rejected on `/mcp`, and PATs are rejected on the session surfaces — the two credential kinds never cross.
+
+The §3.1 invariant applies unreduced: **MCP tools read data and create proposals only. No execute, authorize, or PIN surface exists over MCP** — there is deliberately no `chat:execute` scope, so a leaked PAT can never move money. Execution stays behind the signed directive + PIN + step-up flow on the web app and WhatsApp. Beneficiary **nicknames** follow the same rule everywhere the model runs: a nickname is a **server-resolved lookup key** against the user's own saved recipients — the model never extracts a wallet address, account number, or bank code as a destination.
+
 ---
 
-## 7. Configuration — layered: DB-admin › env › JSON
+## 7. Configuration — layered: DB-admin › env › code defaults
 
-Three sources, merged with that precedence by a backend `ConfigService`. **Nothing that should be tunable is hardcoded.**
+Three sources, merged with that precedence by a backend `ConfigService` (the DB-admin overlay resolves through `EffectiveConfigService`). **Nothing that should be tunable is hardcoded.**
 
-1. **JSON defaults** (`api/config/defaults/*.json`, committed) — static baseline values and seed.
+1. **Code defaults** ([`api/src/core/config/configuration.ts`](api/src/core/config/configuration.ts), committed) — static baseline values and seed.
 2. **Environment** (`.env`, validated by a Zod schema at boot — invalid env fails startup) — secrets and infrastructure (`DATABASE_URL`, `ANTHROPIC_API_KEY`, processor/WaaS keys, WhatsApp tokens). See [`api/.env.example`](api/.env.example).
 3. **DB-admin settings** (`AppSetting` table, editable from the admin console, hot-reloaded with cache invalidation) — business-tunable values: FX spread, processing fees, ticketing commission, KYC-tier limits, velocity caps, message templates, and **service enablement flags**.
 
 **Service / capability registry.** Each transactable capability (`crypto.buy`, `crypto.sell`, `send`, `swap`, `ticketing.<vendor>`) is registered behind a provider **port** and gated by an admin flag resolved from the layered config. Enabling a service = flip a flag. Adding a ticket vendor = implement the `TicketProvider` port and register it — no changes to callers. The frontend reads effective, non-secret flags from a `/config` endpoint (cached via TanStack Query) to show/hide services. This is how the product stays "extendable, easy to decide what to enable."
 
-**Decision rule when adding a value:** secret or infra → env. Static default a developer sets → JSON. Anything ops/admin should change without a deploy → DB-admin setting.
+**Decision rule when adding a value:** secret or infra → env. Static default a developer sets → `configuration.ts`. Anything ops/admin should change without a deploy → DB-admin setting.
 
 ---
 
@@ -169,10 +197,16 @@ It is a **source-only** package (no build step): `exports` point at `src/*.ts`; 
 TDD is **mandatory**, not aspirational. Red → Green → Refactor: write a failing test first, make it pass, then clean up.
 
 - **~100% coverage on business logic** — domain, application services, the deterministic execution engine, quoting/limits/sanctions. The money path is non-negotiable.
-- **Backend**: Jest + `@nestjs/testing` (unit config is the inline `jest` block in `api/package.json`; e2e is `api/test/jest-e2e.json` via `supertest`). Integration tests run against **real Postgres via `@testcontainers/postgresql`**, not mocks.
-- **Frontend**: Vitest + React Testing Library + `@testing-library/user-event`; Playwright for E2E. (To be installed — see §11.)
-- **Contracts**: schemas are tested by parsing valid/invalid fixtures.
-- CI enforces coverage gates per package. A change is not done until tests are green and coverage holds.
+- **Backend**: Jest + `@nestjs/testing` (unit config is the inline `jest` block in `api/package.json`; e2e is `api/test/jest-e2e.json` via `supertest`). Integration/e2e tests run against **real Postgres via `@testcontainers/postgresql`**, not mocks.
+- **Frontend**: Vitest + React Testing Library + `@testing-library/user-event` (`test` / `test:watch`); Playwright for E2E (`test:e2e`). All installed and wired in both `web` and `web-admin`.
+- **Contracts**: schemas are tested by parsing valid/invalid fixtures (Vitest).
+- **What CI actually enforces:** lint, typecheck, `depcruise`, the **unit** suites (`turbo run test`), and build. Coverage is **reviewed** (`test:cov`), not threshold-gated — no `coverageThreshold` exists; the ~100%-on-money-path bar is held in review, not by a machine. **The api e2e/testcontainers lane (`pnpm --filter @handshake-agent/api test:e2e`, ~80 suites including the funds-safety verticals) runs locally only — it is NOT in CI.** Run it yourself before merging anything on the money path; a change is not done until unit + relevant e2e suites are green.
+
+**Known flakes / known-red (don't rediscover these):**
+
+- `web-admin` `admins-page.test.tsx` flakes under parallel `turbo` runs — rerun it in isolation before concluding a change broke it.
+- The api Jest teardown warning ("worker process has failed to exit gracefully") is benign.
+- Two e2e suites are known-red on `main` itself: send-vertical (velocity 6>5) and admin-end-users (tier) — pre-existing, not caused by your change.
 
 ---
 
@@ -202,38 +236,18 @@ Quality gates are wired through Git hooks (Husky v9): **pre-commit** runs `lint-
 
 ---
 
-## 11. Bootstrapping (one-time activation)
+## 11. Getting started
 
-The repo was restructured into a monorepo; the workflow files are committed but dependencies are **not yet installed**. Run these once to activate. Commands use the scoped package names — adjust if names differ.
+Dependencies **are installed** and the workspace is fully wired: the lockfile is committed, `@handshake-agent/contracts` is linked `workspace:*` into all three apps, and the transpile/alias/Jest-mapper plumbing is in place. Do **not** re-run any bootstrap (`prisma init`, `pnpm add` of the base stack) — for a fresh clone or worktree this is the whole setup:
 
 ```bash
-# 0. from the repo root
-corepack use pnpm@10.25.0      # match the pinned package manager
-pnpm install                   # installs root devDeps + links workspaces; runs husky via "prepare"
-# Commit the generated pnpm-lock.yaml — CI's `pnpm install --frozen-lockfile` depends on it.
-
-# 1. backend libraries (api) — zod pinned to the LangGraph floor / single workspace line
-pnpm --filter @handshake-agent/api add @prisma/client @nestjs/config nestjs-zod zod@^3.25.32 \
-  nestjs-pino pino pino-http @nestjs/axios axios @nestjs/throttler helmet \
-  @langchain/langgraph@1.4.4 @langchain/core@1.2.0 @langchain/anthropic@1.5.0
-pnpm --filter @handshake-agent/api add -D prisma pino-pretty @testcontainers/postgresql
-pnpm --filter @handshake-agent/api exec prisma init --datasource-provider postgresql   # schema → api/prisma/
-
-# 2. frontend libraries (web)
-pnpm --filter @handshake-agent/web add @tanstack/react-query zustand axios zod@^3.25.32 react-hook-form @hookform/resolvers
-pnpm --filter @handshake-agent/web add -D vitest @testing-library/react @testing-library/jest-dom \
-  @testing-library/user-event jsdom @vitejs/plugin-react @playwright/test
-
-# 3. link the shared contracts package into both apps
-pnpm --filter @handshake-agent/api add @handshake-agent/contracts@workspace:*
-pnpm --filter @handshake-agent/web add @handshake-agent/contracts@workspace:*
+corepack use pnpm@10.25.0                                  # match the pinned package manager
+pnpm install                                               # install + link the workspace (runs husky via "prepare")
+pnpm --filter @handshake-agent/api exec prisma generate    # generated client (api/generated/prisma) is gitignored
+cp api/.env.example api/.env                               # then fill in keys — Zod-validated at boot
 ```
 
-The shared-contracts wiring is **already applied** in this repo: `web/next.config.ts` (`transpilePackages`), the `@handshake-agent/contracts` path alias in both `api/tsconfig.json` and `web/tsconfig.json`, and the api Jest `moduleNameMapper`. Remaining manual steps after install:
-
-- Commit `pnpm-lock.yaml` (CI depends on it).
-- Add a `test` script to `web/package.json` (Vitest) so the `turbo test` gate covers the frontend — `api` already has `test` + `typecheck`.
-- Optional: set `outputFileTracingRoot` in `web/next.config.ts` to silence the monorepo multi-lockfile warning.
+Local infra matches the visual-verification runbook (`web/CLAUDE.md`): Docker Postgres `handshake-agent-db` on host **:5544** and Redis `handshake-agent-redis` on **:6379** — point `DATABASE_URL` at your Postgres (the `.env.example` default says `:5432`; the standing dev containers use `:5544`), then apply migrations with `pnpm --filter @handshake-agent/api exec prisma migrate dev`. Worktrees need their **own** `pnpm install` + copied `api/.env`, and a re-run of `prisma generate` after rebasing any schema change.
 
 ---
 
@@ -296,7 +310,11 @@ Before marking any task complete:
 - **Investor memo:** [`docs/Investor-Memo.md`](docs/Investor-Memo.md)
 - **Architecture decisions:** [`docs/adr/`](docs/adr/) — record significant decisions as numbered ADRs.
 - **Monorepo guide:** [`docs/monorepo.md`](docs/monorepo.md) — workspace model, per-package installs, shared-contracts linking, worked example.
-- **Package guides:** [`api/CLAUDE.md`](api/CLAUDE.md) · [`web/CLAUDE.md`](web/CLAUDE.md) · [`packages/contracts/CLAUDE.md`](packages/contracts/CLAUDE.md)
+- **Deployment:** [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) (three apps + the worker process, env reference, go-live checklist) · [`docs/RAILWAY.md`](docs/RAILWAY.md)
+- **Operational runbooks:** [`docs/runbooks/`](docs/runbooks/) — adding assets/networks, WhatsApp staging flows.
+- **Security audit:** [`docs/security-audit-2026-07-04.md`](docs/security-audit-2026-07-04.md)
+- **Program specs:** [`docs/superpowers/specs/`](docs/superpowers/specs/) — e.g. the go-live program ([`2026-07-08-go-live-program-design.md`](docs/superpowers/specs/2026-07-08-go-live-program-design.md)).
+- **Package guides:** [`api/CLAUDE.md`](api/CLAUDE.md) · [`web/CLAUDE.md`](web/CLAUDE.md) · [`web-admin/CLAUDE.md`](web-admin/CLAUDE.md) · [`packages/contracts/CLAUDE.md`](packages/contracts/CLAUDE.md)
 
 ---
 
@@ -312,4 +330,4 @@ The rails that keep pages small and reusable. Applies to `web` and `web-admin`. 
 6. **Types live in `types/`** — per-feature files (`types/<feature>.ts`) plus a `types/index.ts` barrel (import from `@/types`). Prop types are `XxxProps` (§13.4); shared/domain shapes come from `@handshake-agent/contracts`. No inline interfaces beyond trivial locals.
 7. **Size caps (from §13.3):** component ≤150 lines, file ≤300, function ≤40. Extract at the section boundary, not every element — a cohesive block stays one file.
 
-Enforcement: `dependency-cruiser` keeps the layering (`app → components → lib → types`; `hooks`/`constants` sit alongside `lib`, never importing from `components`/`app`). Every FE wave ends on `pnpm lint && pnpm typecheck && pnpm test` green and `pnpm depcruise` clean, plus a visual check of any affected surface (see `web/CLAUDE.md` → Visual verification runbook). Program spec: [`docs/superpowers/specs/2026-07-06-componentisation-modularisation-design.md`](docs/superpowers/specs/2026-07-06-componentisation-modularisation-design.md).
+Enforcement: `.dependency-cruiser.cjs` carries explicit rules for both apps — `components ↛ app`, `lib ↛ components`, and `hooks`/`constants`/`types` ↛ `components`/`app` — plus cross-app isolation (`web`, `web-admin`, and `api` never import each other; shared shapes live in `packages/contracts`). Every FE wave ends on `pnpm lint && pnpm typecheck && pnpm test` green and `pnpm depcruise` clean, plus a visual check of any affected surface (see `web/CLAUDE.md` → Visual verification runbook). Program spec: [`docs/superpowers/specs/2026-07-06-componentisation-modularisation-design.md`](docs/superpowers/specs/2026-07-06-componentisation-modularisation-design.md).

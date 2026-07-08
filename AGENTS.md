@@ -6,6 +6,7 @@ Per-package guidance:
 
 - Backend (NestJS): [`api/CLAUDE.md`](api/CLAUDE.md)
 - Frontend (Next.js): [`web/CLAUDE.md`](web/CLAUDE.md) — also see [`web/AGENTS.md`](web/AGENTS.md) for the Next.js 16 caveat
+- Admin console (Next.js): [`web-admin/CLAUDE.md`](web-admin/CLAUDE.md) — also see [`web-admin/AGENTS.md`](web-admin/AGENTS.md)
 - Shared contracts: [`packages/contracts/CLAUDE.md`](packages/contracts/CLAUDE.md)
 
 The non-negotiable invariants (model never moves money, agent never touches the DB, server-side KYC gating) are in `CLAUDE.md` §3. Do not write code that touches the transaction path without reading [`docs/PRD.md`](docs/PRD.md) §4.

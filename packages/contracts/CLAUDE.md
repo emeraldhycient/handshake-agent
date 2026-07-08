@@ -12,8 +12,17 @@ src/
 ├── intents/           # structured-intent objects the NLU layer emits
 ├── tools/             # tool input/output contracts the agent + engine share
 ├── dto/               # request/response DTOs for the web app's endpoints
-└── index.ts           # barrel; subpath exports: /intents, /tools, /dto
+├── admin/             # admin-console DTOs (RBAC, settings, KYC review, tx oversight, …)
+├── auth/              # auth DTOs (email-OTP/sessions) + PAT schemas (PatScope, mint/list/revoke)
+├── beneficiaries/     # saved-recipient (bank + crypto) shapes
+├── chat/              # web chat request/response + agent outcome cards
+├── media/             # voice/document media contracts
+├── transactions/      # transaction history/detail shapes
+├── whatsapp/          # WhatsApp inbound payload schemas
+└── index.ts           # barrel re-exporting all of the above
 ```
+
+`package.json` `exports` expose the root (`.`) plus subpaths `./intents`, `./tools`, `./dto`, `./beneficiaries`, `./media`, `./admin`. The `auth/`, `chat/`, `transactions/`, and `whatsapp/` schemas are currently reachable through the root barrel only. **A new top-level schema directory must be added to both the `index.ts` barrel and the `exports` map** — a bare `@handshake-agent/contracts/<new>` import fails resolution otherwise.
 
 ## Source-only package — no build step
 
@@ -35,7 +44,7 @@ Only switch to a `tsup` build (dual ESM+CJS + `.d.ts`) if this package is ever p
 
 ## Rules
 
-- **One `zod` instance for our code.** `zod` is a `peerDependency` here, pinned `^3.25.32` (the LangGraph floor). Declare the same `zod ^3.25.32` directly in `api` and `web` so our runtime/test code resolves a single zod — two copies across the boundary cause silent `instanceof ZodType` failures (`zodResolver`/`createZodDto` break). Note: tooling deps (`eslint-plugin-react-hooks`, the `shadcn` CLI's MCP SDK) carry their own nested `zod@4` — that is isolated under their own trees and does not affect our schemas. **Do not add a global `pnpm.overrides` for zod** — it would clobber those tools' required version.
+- **One `zod` instance for our code.** `zod` is a `peerDependency` here with floor `^3.25.32` (the LangGraph floor); the consuming apps (`api`, `web`, `web-admin`) currently declare `^3.25.76` — same major line, satisfies the peer range. Do **not** "correct" a consumer down to `^3.25.32`; what matters is that every workspace package resolves a **single** zod — two copies across the boundary cause silent `instanceof ZodType` failures (`zodResolver`/`createZodDto` break). Note: tooling deps (`eslint-plugin-react-hooks`, the `shadcn` CLI's MCP SDK) carry their own nested `zod@4` — that is isolated under their own trees and does not affect our schemas. **Do not add a global `pnpm.overrides` for zod** — it would clobber those tools' required version.
 - **Decorator-free.** No `class-validator`/Nest decorators here — `web`'s bundler does not enable `experimentalDecorators`. Pure Zod only. `api` wraps schemas with `nestjs-zod`'s `createZodDto` on its side.
 - **Types are erased at runtime.** Only schemas exist at runtime — always `.parse()`/`.safeParse()` at trust boundaries; the inferred type alone guarantees nothing over the wire.
 - **Prefer subpath imports in `web`** (`@handshake-agent/contracts/dto`) so Next can tree-shake.
@@ -65,4 +74,4 @@ const res = await api.post(
 return CreateBuyOrderResponseSchema.parse(res.data);
 ```
 
-The current files (`buy-crypto.intent`, `quote-buy.tool`, `buy-order.dto`) are illustrative scaffolds modeling the buy-crypto flow — extend the same pattern for sell / send / swap / ticketing.
+This package carries the full production contract surface (intents, tools, DTOs across all verticals plus the admin console). `buy-crypto.intent` / `quote-buy.tool` / `buy-order.dto` are the **reference pattern** — mirror their structure (schema + `z.infer` type + parse fixtures test) when adding a new capability.
