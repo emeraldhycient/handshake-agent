@@ -152,6 +152,38 @@ describe("KycReviewPage", () => {
     expect(screen.getByRole("tab", { name: /Rejected/ })).toHaveTextContent("0")
   })
 
+  it("queries the needs_info bucket (not pending) for the Needs-info tab", async () => {
+    const NEEDS_INFO: KycQueueResponse = {
+      items: [
+        {
+          ...PENDING.items[0],
+          userId: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+          displayName: "Ngozi Balogun",
+          status: "needs_info",
+        },
+      ],
+      nextCursor: null,
+    }
+    routeByStatus({ pending_review: PENDING, needs_info: NEEDS_INFO })
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByText("Amara Okeke")
+
+    // The bucket is queried with the REAL needs_info status (the server bucket
+    // bounced applicants land in) — never the unrelated `pending` bucket.
+    await waitFor(() =>
+      expect(mockQueue).toHaveBeenCalledWith({ status: "needs_info" })
+    )
+    expect(mockQueue).not.toHaveBeenCalledWith({ status: "pending" })
+
+    // Its count badge + rows come from that bucket.
+    const needsInfoTab = screen.getByRole("tab", { name: /Needs info/ })
+    expect(needsInfoTab).toHaveTextContent("1")
+    await user.click(needsInfoTab)
+    expect(await screen.findByText("Ngozi Balogun")).toBeInTheDocument()
+  })
+
   it("switches to the Approved bucket's own rows on tab select", async () => {
     routeByStatus({ pending_review: PENDING, verified: APPROVED })
     const user = userEvent.setup()

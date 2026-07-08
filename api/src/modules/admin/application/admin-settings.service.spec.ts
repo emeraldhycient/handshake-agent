@@ -17,6 +17,8 @@ import type {
   AuditService,
   RecordAuditInput,
 } from '../../../core/audit/application/audit.service';
+import type { AssetRegistry } from '../../../core/catalog/asset-registry';
+import type { ICustomFiatRepository } from './ports/custom-fiat.repository.port';
 
 // ── Test doubles ─────────────────────────────────────────────────────────────
 
@@ -113,6 +115,50 @@ function makeAudit(): { audit: AuditService; calls: RecordAuditInput[] } {
   return { audit, calls };
 }
 
+/**
+ * CustomFiat store stand-in: `codes` are the runtime admin-added currencies the
+ * dynamic-key resolution may accept (the store is the source of truth, not the
+ * static KNOWN_FIAT_CURRENCIES enum).
+ */
+function makeCustomFiatStore(codes: string[] = []): ICustomFiatRepository {
+  return {
+    listAll: () => Promise.resolve([]),
+    findByCode: (code: string) =>
+      Promise.resolve(
+        codes.includes(code)
+          ? {
+              code,
+              displayName: code,
+              symbol: code,
+              decimals: 2,
+              enabled: false,
+              createdAt: new Date(0),
+            }
+          : null,
+      ),
+    create: () => Promise.reject(new Error('not used in this spec')),
+    update: () => Promise.reject(new Error('not used in this spec')),
+  };
+}
+
+/** AssetRegistry stand-in exposing only the provider-DISCOVERED symbol set. */
+function makeRegistry(discovered: string[] = []): AssetRegistry {
+  return {
+    listDiscoveredAssets: () =>
+      discovered.map((symbol) => ({
+        symbol,
+        displayName: symbol,
+        decimals: 6,
+        networks: ['TRON'],
+        contractAddress: null,
+        blockradarAssetId: null,
+        logoUrl: null,
+        enabled: true,
+        inStaticCatalog: false,
+      })),
+  } as unknown as AssetRegistry;
+}
+
 function row(
   overrides: Partial<AppSettingRow> & { key: string },
 ): AppSettingRow {
@@ -159,7 +205,14 @@ describe('AdminSettingsService', () => {
       });
       const { publisher } = makePublisher();
       const { audit } = makeAudit();
-      const svc = new AdminSettingsService(repo, effective, audit, publisher);
+      const svc = new AdminSettingsService(
+        repo,
+        effective,
+        audit,
+        publisher,
+        makeCustomFiatStore(),
+        makeRegistry(),
+      );
 
       const list = await svc.listEffective();
 
@@ -180,7 +233,14 @@ describe('AdminSettingsService', () => {
       const { effective } = makeEffectiveConfig({});
       const { publisher } = makePublisher();
       const { audit } = makeAudit();
-      const svc = new AdminSettingsService(repo, effective, audit, publisher);
+      const svc = new AdminSettingsService(
+        repo,
+        effective,
+        audit,
+        publisher,
+        makeCustomFiatStore(),
+        makeRegistry(),
+      );
 
       const list = await svc.listEffective();
       const secretKeys = SETTING_REGISTRY.filter((e) => e.secret).map(
@@ -200,7 +260,14 @@ describe('AdminSettingsService', () => {
       const { effective } = makeEffectiveConfig({});
       const { publisher } = makePublisher();
       const { audit } = makeAudit();
-      const svc = new AdminSettingsService(repo, effective, audit, publisher);
+      const svc = new AdminSettingsService(
+        repo,
+        effective,
+        audit,
+        publisher,
+        makeCustomFiatStore(),
+        makeRegistry(),
+      );
 
       const list = await svc.listEffective('Pricing');
       expect(list.length).toBeGreaterThan(0);
@@ -216,7 +283,14 @@ describe('AdminSettingsService', () => {
       });
       const { publisher } = makePublisher();
       const { audit } = makeAudit();
-      const svc = new AdminSettingsService(repo, effective, audit, publisher);
+      const svc = new AdminSettingsService(
+        repo,
+        effective,
+        audit,
+        publisher,
+        makeCustomFiatStore(),
+        makeRegistry(),
+      );
 
       const got = await svc.get('pricing.processingFeeBps');
       expect(got.key).toBe('pricing.processingFeeBps');
@@ -228,7 +302,14 @@ describe('AdminSettingsService', () => {
       const { effective } = makeEffectiveConfig({});
       const { publisher } = makePublisher();
       const { audit } = makeAudit();
-      const svc = new AdminSettingsService(repo, effective, audit, publisher);
+      const svc = new AdminSettingsService(
+        repo,
+        effective,
+        audit,
+        publisher,
+        makeCustomFiatStore(),
+        makeRegistry(),
+      );
 
       await expect(svc.get('not.a.real.key')).rejects.toBeInstanceOf(
         SettingValidationError,
@@ -252,6 +333,8 @@ describe('AdminSettingsService', () => {
         ec.effective,
         audit,
         publisher,
+        makeCustomFiatStore(),
+        makeRegistry(),
       );
 
       const result = await svc.update(
@@ -294,6 +377,8 @@ describe('AdminSettingsService', () => {
         ec.effective,
         audit,
         publisher,
+        makeCustomFiatStore(),
+        makeRegistry(),
       );
 
       await expect(
@@ -313,6 +398,8 @@ describe('AdminSettingsService', () => {
         ec.effective,
         audit,
         publisher,
+        makeCustomFiatStore(),
+        makeRegistry(),
       );
 
       // processingFeeBps is bounded 0..10000; 99999 is out of range.
@@ -343,6 +430,8 @@ describe('AdminSettingsService', () => {
         ec.effective,
         audit,
         publisher,
+        makeCustomFiatStore(),
+        makeRegistry(),
       );
 
       const findEntry = jest
@@ -389,6 +478,8 @@ describe('AdminSettingsService', () => {
         ec.effective,
         audit,
         publisher,
+        makeCustomFiatStore(),
+        makeRegistry(),
       );
       jest
         .spyOn(
@@ -435,6 +526,8 @@ describe('AdminSettingsService', () => {
         ec.effective,
         audit,
         publisher,
+        makeCustomFiatStore(),
+        makeRegistry(),
       );
 
       // Toggling a capability flag doesn't disturb the NGN limits/rate invariant.
@@ -446,6 +539,181 @@ describe('AdminSettingsService', () => {
         'admin-1',
       );
       expect(state.upserts).toHaveLength(1);
+    });
+  });
+
+  // ── Dynamic per-currency keys for RUNTIME custom fiats (Wave D) ─────────────
+  // A custom currency's code is by construction OUTSIDE KNOWN_FIAT_CURRENCIES
+  // (AdminCurrencyService.add rejects collisions), so its pricing/limits keys are
+  // not in the static SETTING_REGISTRY. The service must accept them by consulting
+  // the CustomFiat store and validating with the SAME template validator the
+  // registered per-currency keys use — never loosened.
+  describe('update — dynamic custom-fiat keys', () => {
+    function makeSvc(customCodes: string[]) {
+      const { repo, state } = makeRepo();
+      const ec = makeEffectiveConfig({}, state);
+      const { publisher } = makePublisher();
+      const { audit, calls } = makeAudit();
+      const svc = new AdminSettingsService(
+        repo,
+        ec.effective,
+        audit,
+        publisher,
+        makeCustomFiatStore(customCodes),
+        makeRegistry(),
+      );
+      return { svc, state, calls, ec };
+    }
+
+    it('accepts a base-rate key for a store-backed custom fiat (priced → enableable)', async () => {
+      const { svc, state, calls, ec } = makeSvc(['XOF']);
+
+      const result = await svc.update(
+        'pricing.assets.USDT.baseRates.XOF',
+        580,
+        'global',
+        null,
+        'admin-1',
+      );
+
+      expect(state.upserts).toHaveLength(1);
+      expect(state.upserts[0].key).toBe('pricing.assets.USDT.baseRates.XOF');
+      expect(state.upserts[0].value).toBe(580);
+      // Audit + hot-reload behave exactly like a registered key.
+      expect(ec.refreshes).toBe(1);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].subject).toBe(
+        'AppSetting:pricing.assets.USDT.baseRates.XOF',
+      );
+      expect(result.key).toBe('pricing.assets.USDT.baseRates.XOF');
+      expect(result.source).toBe('db');
+    });
+
+    it('accepts a tier-limit key for a store-backed custom fiat', async () => {
+      const { svc, state } = makeSvc(['XOF']);
+      await svc.update(
+        'limits.XOF.tier_1.perTxFiatMax',
+        30_000,
+        'global',
+        null,
+        'admin-1',
+      );
+      expect(state.upserts).toHaveLength(1);
+      expect(state.upserts[0].key).toBe('limits.XOF.tier_1.perTxFiatMax');
+    });
+
+    it('applies the SAME template validation to a dynamic key (negative rate rejected, no write)', async () => {
+      const { svc, state } = makeSvc(['XOF']);
+      await expect(
+        svc.update(
+          'pricing.assets.USDT.baseRates.XOF',
+          -1,
+          'global',
+          null,
+          'admin-1',
+        ),
+      ).rejects.toBeInstanceOf(SettingValidationError);
+      expect(state.upserts).toHaveLength(0);
+    });
+
+    it('rejects a per-currency key whose code is NOT in the custom-fiat store (fail-closed)', async () => {
+      const { svc, state } = makeSvc([]);
+      await expect(
+        svc.update(
+          'pricing.assets.USDT.baseRates.XOF',
+          580,
+          'global',
+          null,
+          'admin-1',
+        ),
+      ).rejects.toBeInstanceOf(SettingValidationError);
+      expect(state.upserts).toHaveLength(0);
+    });
+
+    it('never accepts a catalog live-flag for a custom fiat (liveness is owned by the currency console)', async () => {
+      const { svc, state } = makeSvc(['XOF']);
+      await expect(
+        svc.update(
+          'catalog.fiats.XOF.enabled',
+          true,
+          'global',
+          null,
+          'admin-1',
+        ),
+      ).rejects.toBeInstanceOf(SettingValidationError);
+      expect(state.upserts).toHaveLength(0);
+    });
+  });
+
+  // ── Dynamic kill-switch keys for provider-DISCOVERED assets (Wave D) ────────
+  describe('update — discovered-asset enabled toggles', () => {
+    function makeSvc(discovered: string[]) {
+      const { repo, state } = makeRepo();
+      const base = consistentCatalogValues();
+      const ec = makeEffectiveConfig(
+        {
+          catalog: base.catalog,
+          limits: base.limits,
+          pricing: base.pricing,
+        },
+        state,
+      );
+      const { publisher } = makePublisher();
+      const { audit, calls } = makeAudit();
+      const svc = new AdminSettingsService(
+        repo,
+        ec.effective,
+        audit,
+        publisher,
+        makeCustomFiatStore(),
+        makeRegistry(discovered),
+      );
+      return { svc, state, calls };
+    }
+
+    it('persists catalog.assets.<sym>.enabled for a provider-discovered symbol (no 422)', async () => {
+      const { svc, state, calls } = makeSvc(['USDC']);
+      await svc.update(
+        'catalog.assets.USDC.enabled',
+        false,
+        'global',
+        null,
+        'admin-1',
+      );
+      expect(state.upserts).toHaveLength(1);
+      expect(state.upserts[0]).toMatchObject({
+        key: 'catalog.assets.USDC.enabled',
+        value: false,
+      });
+      expect(calls[0].subject).toBe('AppSetting:catalog.assets.USDC.enabled');
+    });
+
+    it('applies the boolean template validation (string value rejected, no write)', async () => {
+      const { svc, state } = makeSvc(['USDC']);
+      await expect(
+        svc.update(
+          'catalog.assets.USDC.enabled',
+          'yes',
+          'global',
+          null,
+          'admin-1',
+        ),
+      ).rejects.toBeInstanceOf(SettingValidationError);
+      expect(state.upserts).toHaveLength(0);
+    });
+
+    it('rejects an enabled toggle for a symbol that was never discovered (fail-closed)', async () => {
+      const { svc, state } = makeSvc([]);
+      await expect(
+        svc.update(
+          'catalog.assets.USDC.enabled',
+          false,
+          'global',
+          null,
+          'admin-1',
+        ),
+      ).rejects.toBeInstanceOf(SettingValidationError);
+      expect(state.upserts).toHaveLength(0);
     });
   });
 });

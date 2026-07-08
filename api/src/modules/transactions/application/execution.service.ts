@@ -1532,6 +1532,10 @@ export class ExecutionService {
               asset,
               cryptoAmount,
               ngnEquivalent: String(ngnEquivalent),
+              // Snapshot the fiat the equivalent was valued in (the registry
+              // default/base fiat used for the KYC + Travel-Rule gates above) —
+              // the compliance record must state its own valuation currency.
+              fiatCurrency: baseFiat,
             }
           : null,
       });

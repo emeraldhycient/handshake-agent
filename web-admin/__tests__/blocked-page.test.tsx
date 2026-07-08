@@ -192,14 +192,15 @@ describe("BlockedPage (wired)", () => {
     expect(mockAdd).not.toHaveBeenCalled()
   })
 
-  it("supersedes (unblocks) a row via the reason → step-up flow and toasts", async () => {
+  it("supersedes (unblocks) a row via the audited reason flow and toasts", async () => {
     const user = userEvent.setup()
     renderPage()
 
     const target = "TQmByr1s6dLPU9Xz8y7Gk2f4Nc3Vw5Hj8"
     await screen.findByText(target)
 
-    // Open the Remove flow → ReasonModal.
+    // Open the Remove flow → ReasonModal. Its Continue fires the POST directly —
+    // the REAL step-up is server-driven (403 → StepUpDialog → replay).
     await user.click(
       screen.getByRole("button", {
         name: `Unblock ${target}`,
@@ -210,11 +211,6 @@ describe("BlockedPage (wired)", () => {
       "False positive on review"
     )
     await user.click(screen.getByRole("button", { name: "Continue" }))
-
-    // StepUpModal — enter the 6-digit code via the keypad.
-    for (const digit of ["1", "2", "3", "4", "5", "6"]) {
-      await user.click(await screen.findByRole("button", { name: digit }))
-    }
 
     await waitFor(() => expect(mockSupersede).toHaveBeenCalledTimes(1))
     expect(mockSupersede).toHaveBeenCalledWith(
@@ -246,9 +242,6 @@ describe("BlockedPage (wired)", () => {
       "False positive on review"
     )
     await user.click(screen.getByRole("button", { name: "Continue" }))
-    for (const digit of ["1", "2", "3", "4", "5", "6"]) {
-      await user.click(await screen.findByRole("button", { name: digit }))
-    }
 
     // The re-auth dialog appears (TOTP mode, since mfaEnabled).
     expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()

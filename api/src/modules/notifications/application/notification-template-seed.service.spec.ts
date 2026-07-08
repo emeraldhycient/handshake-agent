@@ -7,6 +7,7 @@ describe('NotificationTemplateSeedService', () => {
     return {
       list: jest.fn(),
       find: jest.fn(),
+      existsByKey: jest.fn(),
       upsert: jest.fn(),
       seedDefaults: jest.fn().mockResolvedValue(0),
     };

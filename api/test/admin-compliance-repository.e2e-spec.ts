@@ -255,6 +255,7 @@ describe('Admin compliance console repositories (integration, Testcontainers Pos
           asset: 'USDT',
           amount: '1500',
           amountFiat: '2400000.00',
+          fiatCurrency: 'NGN',
           triggeringFactor: 'amount_threshold',
         },
       });
@@ -265,6 +266,7 @@ describe('Admin compliance console repositories (integration, Testcontainers Pos
       expect(found?.asset).toBe('USDT');
       expect(typeof found?.amountFiat).toBe('string');
       expect(found?.amountFiat).toBe('2400000');
+      expect(found?.fiatCurrency).toBe('NGN');
       expect(found?.reportedAt).toBeNull();
     });
   });

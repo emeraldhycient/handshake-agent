@@ -18,13 +18,9 @@ export const ACCOUNT_OPTIONS = [
   { value: "compensation", label: "Compensation" },
 ] as const
 
-/** Currency axis — "All" (empty) omits the filter; else the launch currencies. */
-export const CURRENCY_OPTIONS = [
-  { value: "", label: "All currencies" },
-  { value: "NGN", label: "NGN" },
-  { value: "USDT", label: "USDT" },
-  { value: "TRX", label: "TRX" },
-] as const
+// The currency axis is NOT a constant — options derive from the live catalog
+// read (fiats + assets) via `useCurrencyFilterOptions` so runtime-added
+// currencies appear without a code change.
 
 /** Server page size for each "Load more" fetch. */
 export const PAGE_SIZE = 25

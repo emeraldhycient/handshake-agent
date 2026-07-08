@@ -18,8 +18,8 @@ function toastError(error: unknown): string {
 
 /**
  * The layered-config editor state machine: the live effective settings, the client-side
- * key filter, and the DB-override edit chain (value → reason → step-up → maker-checker →
- * the real step-up-guarded PATCH). The server re-validates + hot-reloads + audits
+ * key filter, and the DB-override edit chain (value → reason → confirm → the real
+ * step-up-guarded PATCH). The server re-validates + hot-reloads + audits
  * `config_change` — it never moves money (§3.1/§3.2). A 403 opens the StepUpDialog and
  * the PATCH replays after re-auth. Extracted from the page so the orchestrator is pure
  * composition.
@@ -77,11 +77,9 @@ export function useSettingsEditor() {
     setStep("reason")
   }
 
-  // The two intermediate flow transitions (reason → step-up → maker-checker).
+  // The intermediate flow transition (reason → confirm). The REAL step-up is
+  // server-driven: the PATCH 403s and the StepUpDialog replays it.
   function onReasonContinue() {
-    setStep("stepup")
-  }
-  function onStepUpComplete() {
     setStep("maker")
   }
 
@@ -140,7 +138,6 @@ export function useSettingsEditor() {
     closeFlow,
     onValueContinue,
     onReasonContinue,
-    onStepUpComplete,
     applyOverride,
     onStepUpSuccess,
     flowTitle: editing ? `Edit ${editing.key}` : "Edit setting",

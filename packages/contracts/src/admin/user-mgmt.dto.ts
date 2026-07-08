@@ -257,6 +257,9 @@ export const AdminEndUserVelocityUsageSchema = z.object({
   dailyFiatUsed: z.string(),
   // Rolling-24h transaction count.
   dailyTxCount: z.number().int().nonnegative(),
+  // Fiat the usage window is scoped to (velocity counters are per-currency).
+  // Always present — even when effectiveLimits is null (unverified user).
+  fiatCurrency: z.string(),
   // Window the usage was measured over (ISO timestamps).
   windowStart: z.string(),
   windowEnd: z.string(),
@@ -272,6 +275,21 @@ export const AdminEndUserLimitsResponseSchema = z.object({
 });
 export type AdminEndUserLimitsResponse = z.infer<
   typeof AdminEndUserLimitsResponseSchema
+>;
+
+// Query for GET /admin/users/:id/limits — an optional fiat code to view the
+// user's caps + usage in a specific currency. Omitted → the registry default
+// fiat. The SERVER re-validates the code against the live catalog (built-in +
+// runtime custom fiats); an unrecognised code is rejected fail-closed (§3.3).
+export const AdminEndUserLimitsQuerySchema = z.object({
+  currency: z
+    .string()
+    .trim()
+    .regex(/^[A-Z]{3}$/, "must be a 3-letter uppercase currency code")
+    .optional(),
+});
+export type AdminEndUserLimitsQuery = z.infer<
+  typeof AdminEndUserLimitsQuerySchema
 >;
 
 // ── Timeline: admin-action history (GET /admin/users/:id/timeline) ────────────

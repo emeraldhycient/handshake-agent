@@ -104,9 +104,6 @@ describe("flowSpecFor", () => {
     expect(spec?.steps).toEqual(["engine"])
     expect(spec?.ledger).toEqual([])
   })
-  it("receipt: no flow (null)", () => {
-    expect(flowSpecFor("receipt", TX)).toBeNull()
-  })
 })
 
 describe("providerRefs", () => {

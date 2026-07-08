@@ -54,6 +54,7 @@ import { CurrentAdmin, type AdminContext } from './current-admin.decorator';
 import { RequirePermission } from './require-permission.decorator';
 import { sendCsvExport } from './csv-response';
 import {
+  AdminEndUserLimitsQueryDto,
   AdminEndUserSearchQueryDto,
   AdminEndUserStatusDto,
   AdminEndUserTierDto,
@@ -277,9 +278,10 @@ export class AdminEndUsersController {
   @RequirePermission('api_route', 'GET /admin/users/:id/limits', 'read')
   async getLimits(
     @Param('id') id: string,
+    @Query() query: AdminEndUserLimitsQueryDto,
   ): Promise<AdminEndUserLimitsResponse> {
     return AdminEndUserLimitsResponseSchema.parse(
-      await this.security.getLimits(id),
+      await this.security.getLimits(id, query.currency),
     );
   }
 

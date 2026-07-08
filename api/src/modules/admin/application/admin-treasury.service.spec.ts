@@ -4,6 +4,7 @@ import type {
   AuditService,
   RecordAuditInput,
 } from '../../../core/audit/application/audit.service';
+import type { AssetRegistry } from '../../../core/catalog/asset-registry';
 import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type {
   ITreasuryReadRepository,
@@ -113,7 +114,7 @@ function makePayout(
     asset: 'NGN',
     amount: '4820000.00',
     fiatAmount: null,
-    requiresApproval: true,
+    fiatCurrency: 'NGN',
     submittedAt: new Date('2026-06-30T00:00:00.000Z'),
     ...over,
   };
@@ -145,6 +146,7 @@ describe('AdminTreasuryService', () => {
   let audit: jest.Mocked<Pick<AuditService, 'record'>>;
   let config: { get: jest.Mock };
   let configValues: Record<string, unknown>;
+  let registry: { defaultFiat: jest.Mock };
   let auditCalls: RecordAuditInput[];
   let service: AdminTreasuryService;
 
@@ -168,18 +170,22 @@ describe('AdminTreasuryService', () => {
         return Promise.resolve();
       }),
     };
-    // Config defaults: NGN target float 234,000,000; low-float floor 2500 bps.
+    // Config defaults: NGN target float 234,000,000; low-float floor 2500 bps;
+    // large-payout approval thresholds per currency (NGN 1M, GHS 15k).
     configValues = {
       'treasury.fiatFloatTargets': { NGN: 234000000 },
       'treasury.lowFloatThresholdBps': 2500,
+      'treasury.largePayoutThresholds': { NGN: 1_000_000, GHS: 15_000 },
     };
     config = {
       get: jest.fn((key: string) => configValues[key]),
     };
+    registry = { defaultFiat: jest.fn(() => 'NGN') };
     service = new AdminTreasuryService(
       repo,
       audit as unknown as AuditService,
       config as unknown as EffectiveConfigService,
+      registry as unknown as AssetRegistry,
     );
   });
 
@@ -334,7 +340,8 @@ describe('AdminTreasuryService', () => {
   });
 
   describe('listPayoutQueue', () => {
-    it('maps pending payouts into { items }, ISO-serializing submittedAt', async () => {
+    it('maps pending payouts into { items }, ISO-serializing submittedAt, flagging a large payout against its own currency threshold', async () => {
+      // NGN payout of 4.82M ≥ the configured NGN threshold (1M) → approval.
       repo.listPayoutQueue.mockResolvedValue([makePayout()]);
       const res = await service.listPayoutQueue();
       expect(res.items[0]).toEqual({
@@ -346,9 +353,65 @@ describe('AdminTreasuryService', () => {
         asset: 'NGN',
         amount: '4820000.00',
         fiatAmount: null,
+        fiatCurrency: 'NGN',
         requiresApproval: true,
         submittedAt: '2026-06-30T00:00:00.000Z',
       });
+    });
+
+    it('compares in the payout OWN currency, never the NGN threshold (GHS uses the GHS threshold)', async () => {
+      // GHS threshold is 15,000: a GH₵20,000 leg requires approval even though
+      // it is far below the NGN 1,000,000 figure; GH₵10,000 does not.
+      repo.listPayoutQueue.mockResolvedValue([
+        makePayout({
+          asset: 'USDT',
+          amount: '12.5',
+          fiatAmount: '20000.00',
+          fiatCurrency: 'GHS',
+        }),
+        makePayout({
+          asset: 'USDT',
+          amount: '6.25',
+          fiatAmount: '10000.00',
+          fiatCurrency: 'GHS',
+        }),
+      ]);
+      const res = await service.listPayoutQueue();
+      expect(res.items[0].fiatCurrency).toBe('GHS');
+      expect(res.items[0].requiresApproval).toBe(true);
+      expect(res.items[1].requiresApproval).toBe(false);
+    });
+
+    it('fails CLOSED for a currency with no configured threshold (every payout requires approval)', async () => {
+      repo.listPayoutQueue.mockResolvedValue([
+        makePayout({
+          asset: 'USDT',
+          amount: '0.5',
+          fiatAmount: '1.00',
+          fiatCurrency: 'KES',
+        }),
+      ]);
+      const res = await service.listPayoutQueue();
+      expect(res.items[0].requiresApproval).toBe(true);
+    });
+
+    it('fails CLOSED when the threshold map is entirely unset', async () => {
+      delete configValues['treasury.largePayoutThresholds'];
+      repo.listPayoutQueue.mockResolvedValue([makePayout()]);
+      const res = await service.listPayoutQueue();
+      expect(res.items[0].requiresApproval).toBe(true);
+    });
+
+    it('falls back to the registry default fiat when the record predates currency capture', async () => {
+      // fiatCurrency null (legacy metadata) → resolved to defaultFiat() = NGN,
+      // and the NGN threshold applies (small amount → no approval).
+      repo.listPayoutQueue.mockResolvedValue([
+        makePayout({ amount: '5000.00', fiatCurrency: null }),
+      ]);
+      const res = await service.listPayoutQueue();
+      expect(registry.defaultFiat).toHaveBeenCalled();
+      expect(res.items[0].fiatCurrency).toBe('NGN');
+      expect(res.items[0].requiresApproval).toBe(false);
     });
   });
 

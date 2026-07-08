@@ -15,8 +15,8 @@ import {
 } from "@/lib/limits/rows"
 import type { LimitEditLeaf, LimitTier, LimitTierId } from "@/types/components"
 
-/** The maker-checker flow steps (design order): value → reason → step-up → maker. */
-type LimitFlowStep = "value" | "reason" | "stepup" | "maker"
+/** The edit flow steps: value → reason → confirm (the PATCH is step-up-guarded server-side). */
+type LimitFlowStep = "value" | "reason" | "maker"
 
 type EditableRow = LimitTier["amountCaps"][number]
 

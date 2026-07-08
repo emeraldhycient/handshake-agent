@@ -261,6 +261,9 @@ export class WebChatService {
           outcome = {
             kind: 'currency_not_live',
             currency: intent.fiatCurrency,
+            // Catalog-driven live set so the client copy names what CAN settle
+            // today instead of hardcoding a launch currency.
+            liveCurrencies: this.assetRegistry.enabledFiats(),
           };
           summaryText = `${intent.fiatCurrency} isn't available for settlement yet.`;
           break;
@@ -285,6 +288,7 @@ export class WebChatService {
           outcome = {
             kind: 'currency_not_live',
             currency: intent.fiatCurrency,
+            liveCurrencies: this.assetRegistry.enabledFiats(),
           };
           summaryText = `${intent.fiatCurrency} isn't available for settlement yet.`;
           break;

@@ -3,13 +3,12 @@
 /**
  * LimitsPage — the per-tier caps / velocity / cooling-off editor (design §6). Orchestrator:
  * pulls the editor state machine from `useLimitsEditor` and composes the loading/error
- * branches, the tier/currency board, and the shared dual-control edit chain (value → reason
- * → step-up → maker-checker → the real PATCH). A "—" placeholder never exposes an editor
+ * branches, the tier/currency board, and the shared edit chain (value → reason →
+ * confirm → the real step-up-guarded PATCH). A "—" placeholder never exposes an editor
  * (§3.6); the PATCH re-validates + hot-reloads + audits server-side; nothing moves money (§3.1).
  */
 import { Skeleton } from "@/components/ui/skeleton"
 import { ReasonModal } from "@/components/admin/flows/reason-modal"
-import { StepUpModal } from "@/components/admin/flows/step-up-modal"
 import { MakerCheckerModal } from "@/components/admin/flows/maker-checker-modal"
 import { SettingValueModal } from "@/components/admin/flows/setting-value-modal"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
@@ -27,7 +26,7 @@ export function LimitsPage() {
         </h1>
         <p className="mt-[5px] text-[13.5px] text-ink2">
           Per-tier caps, count caps, cooling-off and velocity windows. Changes
-          are maker-checker.
+          apply after step-up and are audited.
         </p>
       </div>
 
@@ -74,7 +73,8 @@ export function LimitsPage() {
         />
       )}
 
-      {/* Edit flow: new value → reason → step-up → maker-checker */}
+      {/* Edit flow: new value → reason → confirm. The REAL step-up is
+          server-driven — the PATCH 403s and the StepUpDialog below replays it. */}
       <SettingValueModal
         open={l.flow === "value"}
         onOpenChange={(open) => (open ? l.setFlow("value") : l.closeFlow())}
@@ -90,13 +90,7 @@ export function LimitsPage() {
         open={l.flow === "reason"}
         onOpenChange={(open) => (open ? l.setFlow("reason") : l.closeFlow())}
         title={l.flowTitle}
-        onContinue={() => l.setFlow("stepup")}
-      />
-      <StepUpModal
-        open={l.flow === "stepup"}
-        onOpenChange={(open) => (open ? l.setFlow("stepup") : l.closeFlow())}
-        title={l.flowTitle}
-        onComplete={() => l.setFlow("maker")}
+        onContinue={() => l.setFlow("maker")}
       />
       <MakerCheckerModal
         open={l.flow === "maker"}

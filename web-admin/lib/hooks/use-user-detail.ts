@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import type { SupportedAsset } from "@handshake-agent/contracts"
 
@@ -8,6 +8,7 @@ import { pushToast } from "@/lib/store/toast-store"
 import { ApiError } from "@/lib/api/client"
 import {
   useAdjustTier,
+  useAdminCatalog,
   useAdminMe,
   useApproveKyc,
   useCreateUserNote,
@@ -57,7 +58,17 @@ export function useUserDetailScreen(userId: string) {
   const kycQuery = useKycSubmission(userId)
   const devicesQuery = useEndUserDevices(userId)
   const sessionsQuery = useEndUserSessions(userId)
-  const limitsQuery = useEndUserLimits(userId)
+  // Limits-tab currency scope: null → the server's registry-default fiat; a
+  // chip selection re-reads the endpoint with `?currency=<CODE>` (validated
+  // server-side against the live catalog, §3.3). Options come from the same
+  // catalog read that drives every currency filter.
+  const [limitsCurrency, setLimitsCurrency] = useState<string | null>(null)
+  const limitsQuery = useEndUserLimits(userId, limitsCurrency)
+  const catalogQuery = useAdminCatalog()
+  const limitsCurrencyOptions = useMemo(
+    () => catalogQuery.data?.fiats.map((f) => f.code) ?? [],
+    [catalogQuery.data]
+  )
   const timelineQuery = useEndUserTimeline(userId)
   const notesQuery = useUserNotes(userId)
 
@@ -157,13 +168,13 @@ export function useUserDetailScreen(userId: string) {
       )
   }
 
-  // Freeze / Unfreeze — reason → step-up, then PATCH /admin/users/:id/status.
+  // Freeze / Unfreeze — reason, then the step-up-guarded PATCH /admin/users/:id/status.
   const isSuspended = detailQuery.data?.status === "suspended"
   const freezeUser = () => {
     const target = isSuspended ? "active" : "suspended"
     runFlow({
       title: isSuspended ? "Unfreeze account" : "Freeze account",
-      steps: ["reason", "stepup"],
+      steps: ["reason"],
       onComplete: () =>
         runStepUpMutation(
           () =>
@@ -175,13 +186,13 @@ export function useUserDetailScreen(userId: string) {
     })
   }
 
-  // Approve — reason → step-up → maker-checker (tier 2/3 dual control), then POST
+  // Approve — reason → confirm (applies immediately after server step-up), then POST
   // /admin/kyc/:id/approve promoting to the submission's requested (verified) tier.
   const approveTier = approveTargetTier(kycQuery.data)
   const kycApprove = () =>
     runFlow({
       title: "Approve KYC",
-      steps: ["reason", "stepup", "maker"],
+      steps: ["reason", "maker"],
       diff: [
         { field: "KYC status", from: detailQuery.data?.kycStatus ?? "—", to: "verified" },
         { field: "KYC tier", from: detailQuery.data?.kycTier ?? "—", to: approveTier },
@@ -195,11 +206,11 @@ export function useUserDetailScreen(userId: string) {
           "KYC approved"
         ),
     })
-  // Request more info — reason → step-up, then POST /admin/kyc/:id/request-info.
+  // Request more info — reason, then the step-up-guarded POST /admin/kyc/:id/request-info.
   const kycInfo = () =>
     runFlow({
       title: "Request more info",
-      steps: ["reason", "stepup"],
+      steps: ["reason"],
       onComplete: (reason) =>
         runStepUpMutation(
           () =>
@@ -221,13 +232,13 @@ export function useUserDetailScreen(userId: string) {
           "KYC rejected"
         ),
     })
-  // Override tier — reason → step-up → maker-checker (dual control), then
+  // Override tier — reason → confirm (applies immediately after server step-up), then
   // PATCH /admin/users/:id/tier (a one-step de-escalation; engine re-validates §3.3).
   const overrideTargetTier = TIER_OVERRIDE_TARGET[detailQuery.data?.kycTier ?? "unverified"]
   const overrideTier = () =>
     runFlow({
-      title: "Override tier · maker-checker",
-      steps: ["reason", "stepup", "maker"],
+      title: "Override tier",
+      steps: ["reason", "maker"],
       diff: [
         {
           field: "KYC tier",
@@ -241,14 +252,14 @@ export function useUserDetailScreen(userId: string) {
             adjustTier
               .mutateAsync({ id: userId, input: { tier: overrideTargetTier } })
               .then(() => undefined),
-          "Tier override submitted"
+          "Tier override applied"
         ),
     })
-  // Force re-KYC — reason → step-up, then POST /admin/users/:id/force-rekyc (§3.4).
+  // Force re-KYC — reason, then the step-up-guarded POST /admin/users/:id/force-rekyc (§3.4).
   const forceReKycFlow = () =>
     runFlow({
       title: "Force re-KYC",
-      steps: ["reason", "stepup"],
+      steps: ["reason"],
       onComplete: (reason) =>
         runStepUpMutation(
           () =>
@@ -256,22 +267,22 @@ export function useUserDetailScreen(userId: string) {
           "Re-KYC required from user"
         ),
     })
-  // Reset PIN directive — reason → step-up, then POST /admin/users/:id/pin-reset.
+  // Reset PIN directive — reason, then the step-up-guarded POST /admin/users/:id/pin-reset.
   const resetPin = () =>
     runFlow({
       title: "Reset PIN directive",
-      steps: ["reason", "stepup"],
+      steps: ["reason"],
       onComplete: () =>
         runStepUpMutation(
           () => forcePinReset.mutateAsync(userId).then(() => undefined),
           "PIN reset directive issued"
         ),
     })
-  // Revoke-all — reason → step-up, then DELETE /admin/users/:id/sessions.
+  // Revoke-all — reason, then the step-up-guarded DELETE /admin/users/:id/sessions.
   const revokeAll = () =>
     runFlow({
       title: "Revoke all sessions",
-      steps: ["reason", "stepup"],
+      steps: ["reason"],
       onComplete: (reason) =>
         runStepUpMutation(
           () =>
@@ -281,11 +292,11 @@ export function useUserDetailScreen(userId: string) {
           "All sessions revoked"
         ),
     })
-  // Unbind a single device — reason → step-up, then DELETE the device (per-row id).
+  // Unbind a single device — reason, then the step-up-guarded DELETE (per-row id).
   const unbindDevice = (deviceId: string) =>
     runFlow({
       title: "Unbind device",
-      steps: ["reason", "stepup"],
+      steps: ["reason"],
       onComplete: () =>
         runStepUpMutation(
           () =>
@@ -295,11 +306,11 @@ export function useUserDetailScreen(userId: string) {
           "Device unbound"
         ),
     })
-  // SIM-swap re-verify — reason → step-up, then POST /admin/users/:id/sim-swap-reverify (§3.4).
+  // SIM-swap re-verify — reason, then the step-up-guarded POST /admin/users/:id/sim-swap-reverify (§3.4).
   const simSwapReverifyUser = () =>
     runFlow({
       title: "SIM-swap re-verify",
-      steps: ["reason", "stepup"],
+      steps: ["reason"],
       onComplete: () =>
         runStepUpMutation(
           () => simSwapReverify.mutateAsync(userId).then(() => undefined),
@@ -308,13 +319,13 @@ export function useUserDetailScreen(userId: string) {
     })
   // Manual credit (Phase 7 WRITE, engine-brokered) — MAKER action: raises a pending
   // `manual_credit` request a SECOND admin approves (four-eyes, §3.1). Collects
-  // asset + amount (credit step), then reason → step-up → engine preview → maker.
+  // asset + amount (credit step), then reason → engine preview → maker (four-eyes).
   const manualCredit = () => {
     setCreditInput(null)
     creditInputRef.current = null
     runFlow({
       title: "Manual credit",
-      steps: ["credit", "reason", "stepup", "engine", "maker"],
+      steps: ["credit", "reason", "engine", "maker"],
       onComplete: (reason) => {
         const captured = creditInputRef.current
         if (!captured) return
@@ -346,11 +357,11 @@ export function useUserDetailScreen(userId: string) {
         ),
     })
 
-  // Revoke a single END-USER session — reason → step-up, then DELETE the session.
+  // Revoke a single END-USER session — reason, then the step-up-guarded DELETE.
   const revokeSession = (sessionId: string) =>
     runFlow({
       title: "Revoke session",
-      steps: ["reason", "stepup"],
+      steps: ["reason"],
       onComplete: (reason) =>
         runStepUpMutation(
           () =>
@@ -361,11 +372,11 @@ export function useUserDetailScreen(userId: string) {
         ),
     })
 
-  // Remove a single beneficiary — reason → step-up, then DELETE the beneficiary.
+  // Remove a single beneficiary — reason, then the step-up-guarded DELETE.
   const removeBeneficiaryFlow = (beneficiaryId: string) =>
     runFlow({
       title: "Remove beneficiary",
-      steps: ["reason", "stepup"],
+      steps: ["reason"],
       onComplete: (reason) =>
         runStepUpMutation(
           () =>
@@ -405,6 +416,9 @@ export function useUserDetailScreen(userId: string) {
     devicesQuery,
     sessionsQuery,
     limitsQuery,
+    limitsCurrency,
+    setLimitsCurrency,
+    limitsCurrencyOptions,
     timelineQuery,
     notesQuery,
     mfaEnabled: me.data?.mfaEnabled ?? false,

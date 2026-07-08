@@ -79,7 +79,8 @@ function renderPage() {
   )
 }
 
-/** Drive the shared flow chain: reason → step-up (6 digits) → maker-checker submit. */
+/** Drive the shared flow chain: value → reason → confirm submit. The REAL step-up
+ *  is server-driven (403 → StepUpDialog) — no decorative TOTP step remains. */
 async function advanceToApproval(
   user: ReturnType<typeof userEvent.setup>,
   newSpread: string
@@ -94,22 +95,15 @@ async function advanceToApproval(
     "Repricing"
   )
   await user.click(screen.getByRole("button", { name: "Continue" }))
-  // step-up leg (presentational TOTP keypad)
-  for (const d of "123456") {
-    await user.click(screen.getByRole("button", { name: d }))
-  }
-  // maker-checker submit
-  await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+  // confirm submit (honest immediate copy)
+  await user.click(screen.getByRole("button", { name: "Confirm change" }))
 }
 
-/** Drive only the audit chain (reason → step-up → maker-checker), value already captured. */
+/** Drive only the audit chain (reason → confirm), value already captured. */
 async function finishAuditChain(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByRole("textbox", { name: "Reason" }), "Repricing")
   await user.click(screen.getByRole("button", { name: "Continue" }))
-  for (const d of "123456") {
-    await user.click(screen.getByRole("button", { name: d }))
-  }
-  await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+  await user.click(screen.getByRole("button", { name: "Confirm change" }))
 }
 
 beforeEach(() => {
@@ -233,8 +227,8 @@ describe("PricingPage (wired to pricing settings)", () => {
     renderPage()
 
     // The buy row shows its configured fiat bounds…
-    expect(await screen.findByText("min ₦100")).toBeInTheDocument()
-    expect(screen.getByText("max ₦5,000,000")).toBeInTheDocument()
+    expect(await screen.findByText("min ₦100.00")).toBeInTheDocument()
+    expect(screen.getByText("max ₦5,000,000.00")).toBeInTheDocument()
     // …and the (unconfigured) sell row still exposes editable add affordances.
     expect(
       screen.getByRole("button", {
@@ -406,9 +400,10 @@ describe("PricingPage (wired to pricing settings)", () => {
       "GHS"
     )
 
-    // The pair + derived rate now show GHS. Buy: 19 × (1 + 0.01) = 19.19 → "19.19 GHS".
+    // The pair + derived rate now show GHS in ITS OWN symbol.
+    // Buy: 19 × (1 + 0.01) = 19.19 → "GH₵19.19".
     expect(await screen.findAllByText("USDT / GHS")).toHaveLength(2)
-    expect(screen.getByText("19.19 GHS")).toBeInTheDocument()
+    expect(screen.getByText("GH₵19.19")).toBeInTheDocument()
   })
 
   it("adds a base rate for an unpriced currency through the Add-price dialog", async () => {

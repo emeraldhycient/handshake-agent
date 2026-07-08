@@ -20,7 +20,7 @@ export function useKycReviewQueue() {
   const [page, setPage] = useState(1)
 
   const pendingQuery = useKycQueue("pending_review")
-  const needsInfoQuery = useKycQueue("pending")
+  const needsInfoQuery = useKycQueue("needs_info")
   const approvedQuery = useKycQueue("verified")
   const rejectedQuery = useKycQueue("rejected")
 

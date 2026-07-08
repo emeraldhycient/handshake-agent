@@ -17,6 +17,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type {
   AgentConfigView,
@@ -187,9 +188,8 @@ describe("AgentPage", () => {
     renderPage()
 
     // The measurable counts render (conversations / inbound / outbound).
-    expect(await screen.findByText("Conversations")).toBeInTheDocument()
+    expect(await screen.findByText("Inbound messages")).toBeInTheDocument()
     expect(screen.getByText("12")).toBeInTheDocument()
-    expect(screen.getByText("Inbound messages")).toBeInTheDocument()
     expect(screen.getByText("44")).toBeInTheDocument()
     expect(screen.getByText("Outbound replies")).toBeInTheDocument()
     expect(screen.getByText("41")).toBeInTheDocument()
@@ -244,6 +244,37 @@ describe("AgentPage", () => {
 
     expect(await screen.findByText("Agent enabled")).toBeInTheDocument()
     expect(screen.getByText("no")).toBeInTheDocument()
+  })
+
+  it("lists the real conversations and opens the drawer from a row's View action", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    // The Conversations section renders from the REAL list read.
+    expect(
+      await screen.findByText("· intent log (read-only)")
+    ).toBeInTheDocument()
+    await waitFor(() => expect(mockList).toHaveBeenCalledTimes(1))
+    const table = screen.getByRole("table", { name: "Agent conversations" })
+    expect(table).toBeInTheDocument()
+    expect(screen.getByText("active")).toBeInTheDocument()
+
+    // Opening a row fetches + renders the conversation log in the drawer.
+    await user.click(screen.getByRole("button", { name: /view conversation/i }))
+    await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(1))
+    expect(mockGet).toHaveBeenCalledWith(CONVERSATIONS.items[0].id)
+    expect(await screen.findByText("Buy 50 USDT")).toBeInTheDocument()
+    expect(screen.getByText(/intent: crypto\.buy/i)).toBeInTheDocument()
+  })
+
+  it("renders an honest empty state when there are no conversations", async () => {
+    mockList.mockResolvedValue({ items: [], nextCursor: null })
+    renderPage()
+
+    expect(await screen.findByText(/no conversations yet/i)).toBeInTheDocument()
+    expect(
+      screen.queryByRole("table", { name: "Agent conversations" })
+    ).not.toBeInTheDocument()
   })
 
   it("renders a conversation's messages with their NLU intents", async () => {

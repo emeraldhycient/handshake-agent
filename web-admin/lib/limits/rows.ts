@@ -1,5 +1,6 @@
 import type { EffectiveSetting } from "@handshake-agent/contracts"
 
+import { formatFiat } from "@/lib/format"
 import { NO_KEY, TIER_META } from "@/constants/limits"
 import type {
   LimitAmountRow,
@@ -17,20 +18,13 @@ export function humanizeSeconds(s: number): string {
   return `${s}s`
 }
 
-/** A fiat amount shown in `currency` — ₦ for Naira, ISO-code suffix otherwise. */
-export function formatAmount(currency: string, n: number): string {
-  return currency === "NGN"
-    ? `₦${n.toLocaleString()}`
-    : `${n.toLocaleString()} ${currency}`
-}
-
 /** Format a numeric leaf value by its kind (fiat amount / plain count / duration). */
 export function formatLeaf(
   kind: LimitLeafKind,
   n: number,
   currency: string
 ): string {
-  if (kind === "amount") return formatAmount(currency, n)
+  if (kind === "amount") return formatFiat(n, currency)
   if (kind === "count") return n.toLocaleString()
   return humanizeSeconds(n)
 }

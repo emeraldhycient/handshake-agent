@@ -296,7 +296,7 @@ describe("AdminsPage (write wiring)", () => {
     )
   })
 
-  it("resets an admin's 2FA through the reason → step-up chain", async () => {
+  it("resets an admin's 2FA through the audited reason flow", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -307,16 +307,16 @@ describe("AdminsPage (write wiring)", () => {
     })
     await user.click(reset)
 
-    // Step 1 — the reason modal (audited). Type a reason and continue.
+    // The reason modal (audited). Type a reason and continue — the POST fires
+    // directly; the REAL step-up is server-driven (403 → StepUpDialog → replay).
     const reason = await screen.findByLabelText("Reason")
     await user.type(reason, "Lost authenticator device")
     await user.click(screen.getByRole("button", { name: "Continue" }))
 
-    // Step 2 — the step-up modal. Enter the 6-digit TOTP via the on-screen keypad.
-    await screen.findByText("Step-up authentication")
-    for (const digit of ["1", "2", "3", "4", "5", "6"]) {
-      await user.click(screen.getByRole("button", { name: digit }))
-    }
+    // No decorative TOTP keypad remains in the flow.
+    expect(
+      screen.queryByText("Step-up authentication")
+    ).not.toBeInTheDocument()
 
     // The reset client fires with the target admin id + the entered reason.
     await waitFor(() =>

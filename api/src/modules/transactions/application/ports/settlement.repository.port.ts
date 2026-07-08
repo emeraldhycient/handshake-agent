@@ -225,8 +225,15 @@ export interface TravelRuleOriginatorFields {
   asset: string;
   /** Crypto amount being sent (decimal string). */
   cryptoAmount: string;
-  /** NGN-equivalent amount used for threshold evaluation. */
+  /** Fiat-equivalent amount used for threshold evaluation (decimal string). */
   ngnEquivalent: string;
+  /**
+   * The fiat currency `ngnEquivalent` was valued in at capture time — the
+   * quote/default fiat the threshold gate used (config-driven, NOT always NGN
+   * despite the legacy field name). Persisted on TravelRuleData.fiatCurrency so
+   * the compliance record states its own valuation currency.
+   */
+  fiatCurrency: string;
 }
 
 export interface CreateSendSettlingWithReserveInput {

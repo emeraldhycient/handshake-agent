@@ -329,6 +329,31 @@ describe('AgentTurnOutcomeSchema', () => {
     ).toEqual({ kind: 'currency_not_live', currency: 'EUR' })
   })
 
+  it('accepts currency_not_live carrying the live settlement set (liveCurrencies)', () => {
+    // The server knows which fiats can settle today (AssetRegistry enabled set)
+    // and passes them so the FE copy never hardcodes the live currency.
+    const result = AgentTurnOutcomeSchema.parse({
+      kind: 'currency_not_live',
+      currency: 'RWF',
+      liveCurrencies: ['NGN', 'GHS'],
+    })
+    expect(result).toEqual({
+      kind: 'currency_not_live',
+      currency: 'RWF',
+      liveCurrencies: ['NGN', 'GHS'],
+    })
+  })
+
+  it('rejects currency_not_live when liveCurrencies contains a malformed code', () => {
+    expect(() =>
+      AgentTurnOutcomeSchema.parse({
+        kind: 'currency_not_live',
+        currency: 'RWF',
+        liveCurrencies: ['NGN', 'ghs'],
+      }),
+    ).toThrow()
+  })
+
   it('rejects currency_not_live with a malformed currency code', () => {
     expect(() =>
       AgentTurnOutcomeSchema.parse({ kind: 'currency_not_live', currency: 'eur' }),

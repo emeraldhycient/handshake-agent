@@ -289,6 +289,11 @@ model TravelRuleData {
   /// Snapshot amounts: asset amount byte-stable as string; fiat equivalent as Decimal.
   amount                   String
   amountFiat               Decimal             @db.Decimal(38, 2)
+  /// The fiat currency `amountFiat` was valued in at capture time (the quote/default
+  /// fiat used for the threshold gate) — snapshot, never assumed NGN downstream.
+  /// Pre-Wave-D rows were backfilled to 'NGN' (the only live fiat at the time) by
+  /// migration `add_travel_rule_fiat_currency`.
+  fiatCurrency             String
   triggeringFactor         TravelRuleTrigger
   capturedAt               DateTime            @default(now()) @db.Timestamptz
   reportedAt               DateTime?           @db.Timestamptz

@@ -3,7 +3,6 @@ import { TableFilterBar } from "@/components/admin/table-filter-bar"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   ACCOUNT_OPTIONS,
-  CURRENCY_OPTIONS,
   FILTER_SELECT_CLASS,
   LEDGER_GRID,
 } from "@/constants/ledger"
@@ -20,6 +19,7 @@ export function LedgerTable({
   currency,
   onAccount,
   onCurrency,
+  currencyOptions,
   exporting,
   onExport,
   isLoading,
@@ -41,7 +41,7 @@ export function LedgerTable({
           label="Filter by currency"
           value={currency}
           onChange={(e) => onCurrency(e.target.value)}
-          options={CURRENCY_OPTIONS}
+          options={currencyOptions}
           className={FILTER_SELECT_CLASS}
         />
         <button

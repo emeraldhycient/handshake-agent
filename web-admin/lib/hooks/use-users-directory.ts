@@ -28,7 +28,6 @@ export function useUsersDirectory() {
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [kyc, setKyc] = useState("all")
   const [tier, setTier] = useState("all")
-  const [country, setCountry] = useState("all")
   const [risk, setRisk] = useState<UserRiskFlag | "">("")
   const [selected, setSelected] = useState<readonly string[]>([])
   const [exporting, setExporting] = useState(false)
@@ -67,16 +66,16 @@ export function useUsersDirectory() {
     useEndUsers(queryArg)
 
   // Search / KYC-status / tier filter SERVER-side; the risk chips (simSwap +
-  // sanctions on the row) and country (not in the contract) narrow client-side.
+  // sanctions on the row) narrow client-side. Country / velocity are not on the
+  // list contract, so those controls were removed rather than kept as dead
+  // filters that empty the table.
   const rows = useMemo(() => {
     return (data?.items ?? []).map(toRow).filter((u) => {
-      if (country !== "all") return false // country is a shape gap — matches nothing
       if (risk === "simSwap" && !u.simSwapFlagged) return false
       if (risk === "sanctions" && !u.sanctionsFlagged) return false
-      if (risk === "velocity") return false // not modeled on the list item
       return true
     })
-  }, [data, country, risk])
+  }, [data, risk])
 
   const canPrev = cursorStack.length > 1
   const canNext = Boolean(data?.nextCursor)
@@ -154,12 +153,10 @@ export function useUsersDirectory() {
     search,
     kyc,
     tier,
-    country,
     risk,
     onSearchChange: onFilterChange(setSearch),
     onKycChange: onFilterChange(setKyc),
     onTierChange: onFilterChange(setTier),
-    onCountryChange: onFilterChange(setCountry),
     toggleRisk,
     // selection
     selected,

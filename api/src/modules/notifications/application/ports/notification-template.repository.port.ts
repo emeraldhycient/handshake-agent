@@ -55,6 +55,12 @@ export interface INotificationTemplateRepository {
     language: string,
     channel: string,
   ): Promise<NotificationTemplateRecord | null>;
+  /**
+   * True when at least one template row exists for the key (ANY language /
+   * channel). The broadcast fail-closed gate: an unknown key must be rejected
+   * before anything is enqueued or queued for approval (§3.6).
+   */
+  existsByKey(templateKey: string): Promise<boolean>;
   upsert(
     input: UpsertNotificationTemplateInput,
   ): Promise<NotificationTemplateRecord>;

@@ -1,6 +1,7 @@
 import type { EffectiveSetting } from "@handshake-agent/contracts"
 
-import { bpsToPct, formatBound, formatRate } from "@/lib/pricing/rows"
+import { formatFiat } from "@/lib/format"
+import { bpsToPct, formatRate } from "@/lib/pricing/rows"
 import type {
   EditTarget,
   PricingBaseRateRow,
@@ -36,13 +37,13 @@ export function boundTarget(row: SpreadRow, kind: "min" | "max"): EditTarget {
     key: isMin ? row.minKey : row.maxKey,
     title: `Edit ${row.cap} ${kind} · ${row.pair}`,
     fieldLabel: `New ${isMin ? "minimum" : "maximum"} (${row.currency})`,
-    currentLabel: value !== null ? formatBound(row.currency, value) : "—",
+    currentLabel: value !== null ? formatFiat(value, row.currency) : "—",
     seed: value === null ? "" : String(value),
     scope: "global",
     scopeValue: null,
     diffField: `${row.cap} · ${row.pair} ${kind}`,
     toastLabel: `${row.cap} · ${row.pair} ${kind}`,
-    format: (n) => formatBound(row.currency, n),
+    format: (n) => formatFiat(n, row.currency),
     integer: false,
   }
 }

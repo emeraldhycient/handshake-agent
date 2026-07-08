@@ -48,10 +48,10 @@ export function TravelRuleTab() {
             <TableCell className="text-right font-mono text-ink tabular-nums">
               {formatCrypto(item.amount, item.asset)}
             </TableCell>
-            {/* amountFiat carries no currency on the contract — reported in the platform
-                fiat (NGN). If TravelRuleItem gains a fiatCurrency, thread it here. */}
+            {/* The fiat-equivalent snapshot in the currency it was valued in at
+                capture time (item.fiatCurrency) — never an assumed NGN. */}
             <TableCell className="text-right text-ink2 tabular-nums">
-              {formatFiat(item.amountFiat, "NGN")}
+              {formatFiat(item.amountFiat, item.fiatCurrency)}
             </TableCell>
             <TableCell className="text-ink2">{item.triggeringFactor}</TableCell>
             <TableCell className="text-ink2 tabular-nums">

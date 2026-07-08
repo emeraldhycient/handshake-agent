@@ -15,7 +15,7 @@
  * holder so a single module mock serves both the default and deep-link cases.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type {
@@ -56,6 +56,32 @@ vi.mock("@/lib/api/users", () => ({
 
 vi.mock("@/lib/api/kyc", () => ({
   getKycSubmission: vi.fn(),
+}))
+
+// The Limits tab's currency chips derive from the admin catalog read (two
+// fiats → the chip row renders and can re-scope the limits query).
+vi.mock("@/lib/api/catalog", () => ({
+  getAdminCatalog: vi.fn().mockResolvedValue({
+    assets: [],
+    fiats: [
+      {
+        code: "NGN",
+        symbol: "₦",
+        displayName: "Nigerian Naira",
+        decimals: 2,
+        live: true,
+        custom: false,
+      },
+      {
+        code: "GHS",
+        symbol: "GH₵",
+        displayName: "Ghanaian Cedi",
+        decimals: 2,
+        live: true,
+        custom: false,
+      },
+    ],
+  }),
 }))
 
 // The signed-in admin (`useAdminMe`) + step-up POST (`useStepUp`) back the flow's
@@ -171,6 +197,7 @@ const LIMITS: AdminEndUserLimitsResponse = {
   velocity: {
     dailyFiatUsed: "252551.70",
     dailyTxCount: 6,
+    fiatCurrency: "NGN",
     windowStart: "2024-02-09T00:00:00.000Z",
     windowEnd: "2024-02-10T00:00:00.000Z",
   },
@@ -256,18 +283,15 @@ beforeEach(() => {
   mockStepUp.mockResolvedValue(undefined)
 })
 
-// Walks the design flow to completion: the ReasonModal (a reason is required to
-// Continue) then the StepUpModal's six-box keypad (each digit fills a box; the sixth
-// completes the step and fires the wired mutation). The server-side AdminStepUpGuard is
-// the real gate — a 403 would open the StepUpDialog; here the mocked mutation resolves.
-async function completeReasonAndStepUp(
+// Walks the audited ReasonModal (a reason is required to Continue). The server-side
+// AdminStepUpGuard is the real step-up gate — a 403 would open the StepUpDialog and
+// replay; here the mocked mutation resolves. No decorative TOTP step remains.
+async function completeReason(
   user: ReturnType<typeof userEvent.setup>,
   reason: string
 ) {
   await user.type(await screen.findByLabelText("Reason"), reason)
   await user.click(screen.getByRole("button", { name: "Continue" }))
-  await screen.findByText("Step-up authentication")
-  await user.keyboard("123456")
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -368,6 +392,24 @@ describe("UserDetail (real data)", () => {
     expect(mockListDevices).toHaveBeenCalledWith(USER_ID)
   })
 
+  it("renders an honest empty state on the Chat tab (no fabricated transcript)", async () => {
+    searchParams = new URLSearchParams("tab=chat")
+    renderDetail()
+    await screen.findByRole("heading", { name: "Ada Lovelace" })
+
+    // The old hardcoded design transcript never renders as if it were real data.
+    expect(screen.queryByText("I want to buy 100 USDT")).not.toBeInTheDocument()
+    expect(screen.queryByText(/proposal #p_8841/)).not.toBeInTheDocument()
+
+    // Instead: an honest note + a link to the real transcript surface.
+    expect(
+      screen.getByText(/no per-user conversation read/i)
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("link", { name: /agent config → conversations/i })
+    ).toHaveAttribute("href", "/agent")
+  })
+
   it("surfaces the routing phone on the Profile tab", async () => {
     renderDetail()
     expect(await screen.findByText("+2348012345678")).toBeInTheDocument()
@@ -397,10 +439,28 @@ describe("UserDetail (real data)", () => {
     renderDetail()
 
     // Per-tx cap formatted with the ₦ symbol + grouping from the effective caps.
-    expect(await screen.findByText("₦5,000,000")).toBeInTheDocument()
+    expect(await screen.findByText("₦5,000,000.00")).toBeInTheDocument()
     // Velocity used shows the live 24h fiat total.
     expect(screen.getByText("Daily fiat used")).toBeInTheDocument()
-    expect(mockGetLimits).toHaveBeenCalledWith(USER_ID)
+    // No chip selected → the server-default currency (no ?currency= param).
+    expect(mockGetLimits).toHaveBeenCalledWith(USER_ID, undefined)
+  })
+
+  it("re-reads the Limits tab scoped to the chip-selected currency", async () => {
+    searchParams = new URLSearchParams("tab=limits")
+    const user = userEvent.setup()
+    renderDetail()
+
+    await screen.findByText("₦5,000,000.00")
+
+    // The catalog-driven chip row renders; picking GHS refires the read with
+    // ?currency=GHS (the server re-validates against the live catalog, §3.3).
+    const chips = await screen.findByRole("group", { name: "Limits currency" })
+    await user.click(within(chips).getByRole("button", { name: "GHS" }))
+
+    await waitFor(() =>
+      expect(mockGetLimits).toHaveBeenCalledWith(USER_ID, "GHS")
+    )
   })
 
   it("renders the real deposit addresses + transaction economics", async () => {
@@ -416,9 +476,9 @@ describe("UserDetail (real data)", () => {
     renderDetail()
 
     // The crypto amount (thousands-separated, trailing zeros trimmed) + the
-    // humanised NGN fiat leg (₦150,000) from metadata.
+    // humanised NGN fiat leg (₦150,000.00) from metadata.
     expect(await screen.findByText("100")).toBeInTheDocument()
-    expect(screen.getByText("₦150,000")).toBeInTheDocument()
+    expect(screen.getByText("₦150,000.00")).toBeInTheDocument()
   })
 })
 
@@ -429,7 +489,7 @@ describe("UserDetail (real data)", () => {
 // user's queries re-resolve on success. No UI code moves money (§3.1).
 
 describe("UserDetail account actions (Phase 7 writes)", () => {
-  it("Freeze → reason → step-up fires setEndUserStatus(suspended)", async () => {
+  it("Freeze → reason fires the step-up-guarded setEndUserStatus(suspended)", async () => {
     const user = userEvent.setup()
     renderDetail()
     await screen.findByRole("heading", { name: "Ada Lovelace" })
@@ -438,7 +498,7 @@ describe("UserDetail account actions (Phase 7 writes)", () => {
 
     // The mutation must NOT fire before the reason + step-up steps complete.
     expect(mockSetStatus).not.toHaveBeenCalled()
-    await completeReasonAndStepUp(user, "Fraud review")
+    await completeReason(user, "Fraud review")
 
     await waitFor(() =>
       expect(mockSetStatus).toHaveBeenCalledWith(USER_ID, {
@@ -454,14 +514,14 @@ describe("UserDetail account actions (Phase 7 writes)", () => {
     await screen.findByRole("heading", { name: "Ada Lovelace" })
 
     await user.click(screen.getByRole("button", { name: "Unfreeze" }))
-    await completeReasonAndStepUp(user, "Cleared")
+    await completeReason(user, "Cleared")
 
     await waitFor(() =>
       expect(mockSetStatus).toHaveBeenCalledWith(USER_ID, { status: "active" })
     )
   })
 
-  it("Reset PIN → reason → step-up fires forcePinReset", async () => {
+  it("Reset PIN → reason fires the step-up-guarded forcePinReset", async () => {
     searchParams = new URLSearchParams("tab=security")
     const user = userEvent.setup()
     renderDetail()
@@ -469,12 +529,12 @@ describe("UserDetail account actions (Phase 7 writes)", () => {
     await user.click(
       await screen.findByRole("button", { name: /Reset PIN directive/ })
     )
-    await completeReasonAndStepUp(user, "User lockout")
+    await completeReason(user, "User lockout")
 
     await waitFor(() => expect(mockForcePinReset).toHaveBeenCalledWith(USER_ID))
   })
 
-  it("Override tier → reason → step-up → maker-checker fires adjustTier (de-escalated tier)", async () => {
+  it("Override tier → reason → confirm fires adjustTier (de-escalated tier)", async () => {
     searchParams = new URLSearchParams("tab=kyc")
     const user = userEvent.setup()
     renderDetail()
@@ -482,12 +542,14 @@ describe("UserDetail account actions (Phase 7 writes)", () => {
     await user.click(
       await screen.findByRole("button", { name: /Override tier/ })
     )
-    await completeReasonAndStepUp(user, "Downgrade risk")
+    await completeReason(user, "Downgrade risk")
 
-    // Maker-checker is the final step — the mutation fires only on submit-for-approval.
+    // The confirm step is final — the mutation fires only on confirm. The PATCH
+    // applies immediately (no ChangeRequest), so the copy is the honest immediate one.
     expect(mockAdjustTier).not.toHaveBeenCalled()
+    expect(screen.getByText(/applies immediately/i)).toBeInTheDocument()
     await user.click(
-      await screen.findByRole("button", { name: "Submit for approval" })
+      await screen.findByRole("button", { name: "Confirm change" })
     )
     // The DETAIL fixture is tier_2 → override de-escalates to tier_1.
     await waitFor(() =>
@@ -495,20 +557,20 @@ describe("UserDetail account actions (Phase 7 writes)", () => {
     )
   })
 
-  it("Revoke device → reason → step-up fires revokeDevice with the row's device id", async () => {
+  it("Revoke device → reason fires revokeDevice with the row's device id", async () => {
     searchParams = new URLSearchParams("tab=devices")
     const user = userEvent.setup()
     renderDetail()
 
     await user.click(await screen.findByRole("button", { name: "Unbind" }))
-    await completeReasonAndStepUp(user, "Lost device")
+    await completeReason(user, "Lost device")
 
     await waitFor(() =>
       expect(mockRevokeDevice).toHaveBeenCalledWith(USER_ID, DEVICES[0].id)
     )
   })
 
-  it("SIM-swap re-verify (flagged) → reason → step-up fires simSwapReverify", async () => {
+  it("SIM-swap re-verify (flagged) → reason fires simSwapReverify", async () => {
     mockGetEndUser.mockResolvedValue({
       ...DETAIL,
       simSwapDetectedAt: "2024-02-01T00:00:00.000Z",
@@ -520,7 +582,7 @@ describe("UserDetail account actions (Phase 7 writes)", () => {
     await user.click(
       await screen.findByRole("button", { name: /SIM-swap re-verify/ })
     )
-    await completeReasonAndStepUp(user, "SIM change confirmed")
+    await completeReason(user, "SIM change confirmed")
 
     await waitFor(() =>
       expect(mockSimSwapReverify).toHaveBeenCalledWith(USER_ID)
@@ -541,7 +603,7 @@ describe("UserDetail account actions (Phase 7 writes)", () => {
   // Manual credit is the maker step of the engine-brokered credit: amount + asset →
   // reason → step-up → engine preview → maker-checker → POST /admin/users/:id/credit
   // (which RAISES a request; a SECOND admin's approval settles it via the engine, §3.1).
-  it("Manual credit → collect amount → reason → step-up → engine → maker fires requestManualCredit", async () => {
+  it("Manual credit → collect amount → reason → engine → maker fires requestManualCredit", async () => {
     searchParams = new URLSearchParams("tab=wallets")
     const user = userEvent.setup()
     renderDetail()
@@ -555,8 +617,8 @@ describe("UserDetail account actions (Phase 7 writes)", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }))
     expect(mockRequestManualCredit).not.toHaveBeenCalled()
 
-    // reason → step-up.
-    await completeReasonAndStepUp(user, "Goodwill credit")
+    // reason (audited).
+    await completeReason(user, "Goodwill credit")
 
     // Engine preview then maker-checker — the request fires ONLY on submit-for-approval.
     await user.click(
@@ -611,7 +673,7 @@ describe("UserDetail account actions (Phase 7 writes)", () => {
     )
     await user.type(await screen.findByLabelText("Credit amount"), "25.5")
     await user.click(screen.getByRole("button", { name: "Continue" }))
-    await completeReasonAndStepUp(user, "Goodwill credit")
+    await completeReason(user, "Goodwill credit")
     await user.click(
       await screen.findByRole("button", { name: "Execute via engine" })
     )

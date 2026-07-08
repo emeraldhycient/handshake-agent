@@ -79,6 +79,9 @@ export function TreasuryPage() {
         title={t.active ? `Approve payout ${t.active.ref}` : "Approve payout"}
         diff={t.makerDiff}
         onSubmit={t.submitApprove}
+        // Approving raises a REAL four-eyes payout_release ChangeRequest a
+        // second admin confirms (§3.1) — the dual-control copy is honest here.
+        mode="dual-control"
       />
 
       {/* Real step-up: opened when the approve mutation 403s; replays on re-auth. */}

@@ -36,10 +36,11 @@ export function useFeatureFlags() {
   const diff = toggleDiff(pending)
 
   /**
-   * Dual-control approved. A REGISTRY-BACKED flag persists the flip via the real
-   * step-up-guarded PATCH; the settings query then invalidates so the row re-resolves.
-   * A 403 opens the StepUpDialog and the PATCH replays after re-auth. An UNBACKED flag
-   * has no key to persist — it stays an acknowledged design intent. Nothing moves money.
+   * Confirmed. A REGISTRY-BACKED flag persists the flip via the real step-up-guarded
+   * PATCH; the settings query then invalidates so the row re-resolves. A 403 opens
+   * the StepUpDialog and the PATCH replays after re-auth. An UNBACKED flag has no
+   * key to persist — it renders read-only and can never reach this path (guarded
+   * fail-closed; no fake-success toast). Nothing moves money.
    */
   const applyToggle = () => {
     if (!pending) return
@@ -47,10 +48,7 @@ export function useFeatureFlags() {
     const nextOn = !flag.on
     setPending(null)
 
-    if (!flag.settingKey) {
-      pushToast(`${flag.key} · eval → ${nextOn ? "on" : "off"}`, "ok")
-      return
-    }
+    if (!flag.settingKey) return
 
     const key = flag.settingKey
     void (async () => {

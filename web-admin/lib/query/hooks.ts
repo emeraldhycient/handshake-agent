@@ -86,6 +86,7 @@ import type { ComplianceEventQuery } from "@/lib/api/compliance"
 import type { LedgerHistoryQuery } from "@/lib/api/ledger"
 import type { TemplateRef } from "@/lib/api/notifications"
 import type { WebhookQuery } from "@/lib/api/webhooks"
+import { hydrateFiatDisplay } from "@/lib/format"
 import type { NavBadgeCounts } from "@/types/components"
 import { qk } from "./keys"
 
@@ -168,11 +169,19 @@ export function usePublicConfig() {
  * screens — unlike `usePublicConfig` (enabled-only, secret-stripped), this admin
  * view shows the paused/off rows too. 5 min stale — the catalog changes only via
  * admin config edits.
+ *
+ * Side-hydrates the module-level fiat display registry (`hydrateFiatDisplay`)
+ * so `formatFiat`/`isFiat`/currency filters pick up runtime-added fiats and the
+ * operator-configured symbols/decimals (FIAT_SYMBOLS stays the offline fallback).
  */
 export function useAdminCatalog() {
   return useQuery({
     queryKey: qk.adminCatalog,
-    queryFn: () => catalog.getAdminCatalog(),
+    queryFn: async () => {
+      const view = await catalog.getAdminCatalog()
+      hydrateFiatDisplay(view.fiats)
+      return view
+    },
     staleTime: 5 * 60_000,
   })
 }
@@ -241,11 +250,15 @@ export function useEndUserSessions(id: string | null) {
   })
 }
 
-/** The end user's effective limits + live velocity usage (detail Limits tab). */
-export function useEndUserLimits(id: string | null) {
+/**
+ * The end user's effective limits + live velocity usage (detail Limits tab).
+ * `currency` scopes the read to a specific catalog fiat (`?currency=` on the
+ * endpoint); null → the server's registry-default fiat.
+ */
+export function useEndUserLimits(id: string | null, currency: string | null) {
   return useQuery({
-    queryKey: qk.endUserLimits(id ?? ""),
-    queryFn: () => users.getEndUserLimits(id as string),
+    queryKey: qk.endUserLimits(id ?? "", currency ?? ""),
+    queryFn: () => users.getEndUserLimits(id as string, currency ?? undefined),
     enabled: id !== null,
     staleTime: 15_000,
   })
@@ -477,7 +490,7 @@ export function useTreasuryPayoutQueue() {
   })
 }
 
-/** NGN fiat float vs the configured target. */
+/** Per-currency fiat float vs the configured target (one row per currency). */
 export function useTreasuryFiatFloat() {
   return useQuery({
     queryKey: qk.treasuryFiatFloat,

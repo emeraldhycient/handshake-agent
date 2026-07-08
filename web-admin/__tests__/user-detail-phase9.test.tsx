@@ -190,6 +190,7 @@ beforeEach(() => {
     velocity: {
       dailyFiatUsed: "0",
       dailyTxCount: 0,
+      fiatCurrency: "NGN",
       windowStart: "2024-02-09T00:00:00.000Z",
       windowEnd: "2024-02-10T00:00:00.000Z",
     },
@@ -209,14 +210,12 @@ beforeEach(() => {
 })
 
 // Walks the reason modal (a reason/body is required) then the step-up keypad.
-async function completeReasonAndStepUp(
+async function completeReason(
   user: ReturnType<typeof userEvent.setup>,
   reason: string
 ) {
   await user.type(await screen.findByLabelText("Reason"), reason)
   await user.click(screen.getByRole("button", { name: "Continue" }))
-  await screen.findByText("Step-up authentication")
-  await user.keyboard("123456")
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -230,7 +229,7 @@ describe("UserDetail — Phase 9 wired actions", () => {
     await user.click(await screen.findByRole("button", { name: "Request info" }))
     expect(mockRequestKycInfo).not.toHaveBeenCalled()
 
-    await completeReasonAndStepUp(user, "Need a clearer ID photo")
+    await completeReason(user, "Need a clearer ID photo")
 
     await waitFor(() =>
       expect(mockRequestKycInfo).toHaveBeenCalledWith(
@@ -248,7 +247,7 @@ describe("UserDetail — Phase 9 wired actions", () => {
     await user.click(await screen.findByRole("button", { name: "Force re-KYC" }))
     expect(mockForceReKyc).not.toHaveBeenCalled()
 
-    await completeReasonAndStepUp(user, "SIM-swap concern")
+    await completeReason(user, "SIM-swap concern")
 
     await waitFor(() =>
       expect(mockForceReKyc).toHaveBeenCalledWith(USER_ID, "SIM-swap concern")
@@ -263,7 +262,7 @@ describe("UserDetail — Phase 9 wired actions", () => {
     await user.click(await screen.findByRole("button", { name: "Revoke all" }))
     expect(mockRevokeAll).not.toHaveBeenCalled()
 
-    await completeReasonAndStepUp(user, "Account takeover")
+    await completeReason(user, "Account takeover")
 
     await waitFor(() =>
       expect(mockRevokeAll).toHaveBeenCalledWith(USER_ID, "Account takeover")
@@ -279,7 +278,7 @@ describe("UserDetail — Phase 9 wired actions", () => {
     await user.click(screen.getByRole("button", { name: "Revoke" }))
     expect(mockRevokeSession).not.toHaveBeenCalled()
 
-    await completeReasonAndStepUp(user, "Suspicious login")
+    await completeReason(user, "Suspicious login")
 
     await waitFor(() =>
       expect(mockRevokeSession).toHaveBeenCalledWith(
@@ -329,7 +328,7 @@ describe("UserDetail — Phase 9 wired actions", () => {
     await user.click(await screen.findByRole("button", { name: "Remove" }))
     expect(mockRemoveBeneficiary).not.toHaveBeenCalled()
 
-    await completeReasonAndStepUp(user, "Closed bank account")
+    await completeReason(user, "Closed bank account")
 
     await waitFor(() =>
       expect(mockRemoveBeneficiary).toHaveBeenCalledWith(
@@ -362,7 +361,7 @@ describe("UserDetail — Phase 9 wired actions", () => {
     renderDetail()
 
     await user.click(await screen.findByRole("button", { name: "Force re-KYC" }))
-    await completeReasonAndStepUp(user, "Identity concern")
+    await completeReason(user, "Identity concern")
 
     // The 403 opens the server re-auth dialog (distinct from the flow keypad).
     const confirm = await screen.findByRole("button", { name: "Confirm" })

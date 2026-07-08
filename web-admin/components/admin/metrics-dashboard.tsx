@@ -22,6 +22,7 @@ import {
   MetricsSkeleton,
 } from "@/components/admin/metrics/metrics-states"
 import { useMetricsDashboard } from "@/lib/hooks/use-metrics-dashboard"
+import { useCurrencyFilterOptions } from "@/lib/hooks/use-currency-filter-options"
 import type { MetricsDashboardProps } from "@/types/components"
 
 export function MetricsDashboard({
@@ -29,6 +30,7 @@ export function MetricsDashboard({
 }: MetricsDashboardProps) {
   const { filter, setFilter, query, moneySeries, platformKpis, isForbidden } =
     useMetricsDashboard()
+  const currencyOptions = useCurrencyFilterOptions()
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto bg-bg">
@@ -44,7 +46,11 @@ export function MetricsDashboard({
         </div>
         {/* ── Filter bar ────────────────────────────────────────────────────── */}
         <div className="mb-[22px]">
-          <MetricsFilterBar value={filter} onChange={setFilter} />
+          <MetricsFilterBar
+            value={filter}
+            onChange={setFilter}
+            currencyOptions={currencyOptions}
+          />
         </div>
 
         {query.isLoading && <MetricsSkeleton />}

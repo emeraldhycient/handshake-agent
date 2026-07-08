@@ -7,8 +7,8 @@ import { toErrorMessage } from "@/lib/error-message"
 import { pushToast } from "@/lib/store/toast-store"
 import {
   resolveExposureCard,
-  resolveFiatFloatCard,
-  resolveFxPositionCard,
+  resolveFiatFloatCards,
+  resolveFxPositionCards,
   resolveHeroCard,
   toPayoutRow,
   toSweepRow,
@@ -59,13 +59,14 @@ export function useTreasury() {
     [beneficiariesQuery.data]
   )
 
-  // ── Balance cards ──
+  // ── Balance cards — currency-keyed: hero + one float card per currency +
+  // one FX card per (asset, fiat) position + the exposure-headroom tile. ──
   const cards: TreasuryCard[] = useMemo(() => {
     const fx = fxQuery.data?.items ?? []
     return [
       resolveHeroCard(balancesQuery.data?.balances ?? []),
-      resolveFiatFloatCard(fiatFloatQuery.data?.items ?? []),
-      resolveFxPositionCard(fx),
+      ...resolveFiatFloatCards(fiatFloatQuery.data?.items ?? []),
+      ...resolveFxPositionCards(fx),
       resolveExposureCard(exposureQuery.data?.items ?? [], fx),
     ]
   }, [
@@ -132,6 +133,10 @@ export function useTreasury() {
   const stepUp = useStepUpRetry()
   const [flow, setFlow] = useState<null | "reason" | "maker">(null)
   const [activeId, setActiveId] = useState<string | null>(null)
+  // The row awaiting a server step-up replay — stashed SEPARATELY from
+  // `activeId` (which `closeFlow` nulls when the modals close) so
+  // `onStepUpSuccess` can still mark the right row Requested after re-auth.
+  const [pendingId, setPendingId] = useState<string | null>(null)
   const [approved, setApproved] = useState<Record<string, boolean>>({})
   const [reason, setReason] = useState("")
   const [localError, setLocalError] = useState<string | null>(null)
@@ -155,10 +160,12 @@ export function useTreasury() {
   }
 
   // The maker-checker CTA fires the REAL approve mutation via step-up-retry. On success
-  // the row shows "Requested" (the release awaits a second admin, §3.1).
+  // the row shows "Requested" (the release awaits a second admin, §3.1). A 403
+  // challenge leaves `pendingId` stashed for the step-up replay.
   function submitApprove() {
     const id = activeId
     if (id === null) return
+    setPendingId(id)
     closeFlow()
     void (async () => {
       try {
@@ -173,9 +180,12 @@ export function useTreasury() {
         if (completed) {
           setApproved((prev) => ({ ...prev, [id]: true }))
           setReason("")
+          setPendingId(null)
         }
       } catch (error) {
         setLocalError(toErrorMessage(error))
+        setReason("")
+        setPendingId(null)
       }
     })()
   }
@@ -191,16 +201,23 @@ export function useTreasury() {
       ]
     : []
 
+  // Replay after re-auth: the stashed `pendingId` (NOT `activeId`, already
+  // nulled by closeFlow) marks the row Requested; reason clears on both paths.
   function onStepUpSuccess() {
     void stepUp
       .retry()
       .then((done) => {
-        if (done && activeId) {
-          setApproved((prev) => ({ ...prev, [activeId]: true }))
-          setReason("")
+        if (done && pendingId) {
+          setApproved((prev) => ({ ...prev, [pendingId]: true }))
         }
+        setReason("")
+        setPendingId(null)
       })
-      .catch((error) => setLocalError(toErrorMessage(error)))
+      .catch((error) => {
+        setLocalError(toErrorMessage(error))
+        setReason("")
+        setPendingId(null)
+      })
   }
 
   return {

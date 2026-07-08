@@ -256,6 +256,7 @@ export class AdminComplianceService {
         asset: r.asset,
         amount: r.amount,
         amountFiat: r.amountFiat,
+        fiatCurrency: r.fiatCurrency,
         triggeringFactor: r.triggeringFactor,
         capturedAt: r.capturedAt.toISOString(),
         reportedAt: r.reportedAt !== null ? r.reportedAt.toISOString() : null,

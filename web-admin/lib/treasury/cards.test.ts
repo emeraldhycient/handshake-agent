@@ -10,20 +10,15 @@ import type {
 
 import {
   bpsToPct,
-  formatFiat,
   resolveExposureCard,
-  resolveFiatFloatCard,
-  resolveFxPositionCard,
+  resolveFiatFloatCards,
+  resolveFxPositionCards,
   resolveHeroCard,
   toPayoutRow,
   toSweepRow,
 } from "./cards"
 
-describe("formatFiat + bpsToPct", () => {
-  it("groups NGN and falls back to the raw string", () => {
-    expect(formatFiat("42180500")).toBe("₦42,180,500.00")
-    expect(formatFiat("n/a")).toBe("n/a")
-  })
+describe("bpsToPct", () => {
   it("rounds bps to a whole percent", () => {
     expect(bpsToPct(1802)).toBe("18%")
     expect(bpsToPct(7200)).toBe("72%")
@@ -53,27 +48,48 @@ describe("resolveHeroCard", () => {
   })
 })
 
-describe("resolveFiatFloatCard", () => {
-  it("shows NGN balance + utilization + low status dot", () => {
-    const float: TreasuryFiatFloat = {
-      currency: "NGN",
-      balance: "42180500",
-      targetFloat: "50000000",
-      utilizationBps: 1802,
-      status: "low",
-      lowFloatThresholdBps: 2000,
-    }
-    const card = resolveFiatFloatCard([float])
-    expect(card.value).toBe("₦42,180,500.00")
-    expect(card.note).toBe("18% of target · low")
-    expect(card.dot).toBe("warn")
+describe("resolveFiatFloatCards (one card per currency)", () => {
+  const float = (over: Partial<TreasuryFiatFloat>): TreasuryFiatFloat => ({
+    currency: "NGN",
+    balance: "42180500",
+    targetFloat: "50000000",
+    utilizationBps: 1802,
+    status: "low",
+    lowFloatThresholdBps: 2000,
+    ...over,
   })
-  it("falls back when there is no float row", () => {
-    expect(resolveFiatFloatCard([]).value).toBe("—")
+
+  it("renders one card per currency, each in its OWN currency's format", () => {
+    const cards = resolveFiatFloatCards([
+      float({}),
+      float({
+        currency: "GHS",
+        balance: "125000",
+        utilizationBps: 8000,
+        status: "healthy",
+      }),
+    ])
+    expect(cards).toHaveLength(2)
+    expect(cards[0].id).toBe("fiat-float-ngn")
+    expect(cards[0].label).toBe("NGN fiat float")
+    expect(cards[0].value).toBe("₦42,180,500.00")
+    expect(cards[0].note).toBe("18% of target · low")
+    expect(cards[0].dot).toBe("warn")
+    expect(cards[1].id).toBe("fiat-float-ghs")
+    expect(cards[1].label).toBe("GHS fiat float")
+    expect(cards[1].value).toBe("GH₵125,000.00")
+    expect(cards[1].dot).toBe("ok")
+  })
+
+  it("falls back to a single em-dash card when there are no float rows", () => {
+    const cards = resolveFiatFloatCards([])
+    expect(cards).toHaveLength(1)
+    expect(cards[0].value).toBe("—")
+    expect(cards[0].note).toBe("No fiat-float rows")
   })
 })
 
-describe("resolveFxPositionCard", () => {
+describe("resolveFxPositionCards (each position in its own fiat)", () => {
   const long: TreasuryFxPosition = {
     asset: "USDT",
     fiatCurrency: "NGN",
@@ -82,13 +98,37 @@ describe("resolveFxPositionCard", () => {
     headroomBps: 7200,
     exposureStatus: "safe",
   }
-  it("labels a long position", () => {
-    const card = resolveFxPositionCard([long])
-    expect(card.value).toBe("₦8,240.00")
-    expect(card.note).toBe("Net long USDT vs NGN")
+  it("labels a single long position with the plain design label", () => {
+    const cards = resolveFxPositionCards([long])
+    expect(cards).toHaveLength(1)
+    expect(cards[0].id).toBe("fx-position-usdt-ngn")
+    expect(cards[0].label).toBe("FX position")
+    expect(cards[0].value).toBe("₦8,240.00")
+    expect(cards[0].note).toBe("Net long USDT vs NGN")
   })
-  it("falls back when there is no position row", () => {
-    expect(resolveFxPositionCard([]).value).toBe("—")
+  it("disambiguates multiple positions and formats each in its own fiat", () => {
+    const cards = resolveFxPositionCards([
+      long,
+      {
+        asset: "USDT",
+        fiatCurrency: "GHS",
+        netPositionFiat: "-320.5",
+        direction: "short",
+        headroomBps: 400,
+        exposureStatus: "critical",
+      },
+    ])
+    expect(cards).toHaveLength(2)
+    expect(cards[0].label).toBe("FX position · USDT/NGN")
+    expect(cards[1].label).toBe("FX position · USDT/GHS")
+    expect(cards[1].value).toBe("-GH₵320.50")
+    expect(cards[1].note).toBe("Net short USDT vs GHS")
+    expect(cards[1].dot).toBe("danger")
+  })
+  it("falls back to a single em-dash card when there is no position row", () => {
+    const cards = resolveFxPositionCards([])
+    expect(cards).toHaveLength(1)
+    expect(cards[0].value).toBe("—")
   })
 })
 
@@ -140,22 +180,45 @@ describe("toSweepRow + toPayoutRow", () => {
     expect(row.bal).toBe("18.4 TRX")
     expect(row.status).toBe("Below threshold")
   })
-  it("maps a payout with its approval flag", () => {
-    const item: TreasuryPayoutQueueItem = {
-      id: "p1",
-      transactionId: "00000000-0000-4000-8000-000000000001",
-      beneficiaryLabel: "Kelechi Chukwu · GTBank",
-      reference: "WD-8821",
-      method: "Bank transfer",
-      asset: "NGN",
-      amount: "4820000",
-      fiatAmount: null,
-      requiresApproval: true,
-      submittedAt: "2026-07-01T00:00:00.000Z",
-    }
-    const row = toPayoutRow(item)
+
+  const payout = (
+    over: Partial<TreasuryPayoutQueueItem>
+  ): TreasuryPayoutQueueItem => ({
+    id: "p1",
+    transactionId: "00000000-0000-4000-8000-000000000001",
+    beneficiaryLabel: "Kelechi Chukwu · GTBank",
+    reference: "WD-8821",
+    method: "Bank transfer",
+    asset: "NGN",
+    amount: "4820000",
+    fiatAmount: null,
+    fiatCurrency: "NGN",
+    requiresApproval: true,
+    submittedAt: "2026-07-01T00:00:00.000Z",
+    ...over,
+  })
+
+  it("maps a fiat payout in its own currency with the approval flag", () => {
+    const row = toPayoutRow(payout({}))
     expect(row.to).toBe("Kelechi Chukwu · GTBank")
     expect(row.ref).toBe("WD-8821")
+    expect(row.amt).toBe("₦4,820,000.00")
+    expect(row.fiat).toBeNull()
     expect(row.big).toBe(true)
+  })
+
+  it("carries the fiat leg (in ITS fiatCurrency) for a crypto payout", () => {
+    const row = toPayoutRow(
+      payout({
+        asset: "USDT",
+        amount: "1250",
+        fiatAmount: "19125.50",
+        fiatCurrency: "GHS",
+        requiresApproval: false,
+      })
+    )
+    expect(row.amt).toBe("1,250 USDT")
+    expect(row.fiat).toBe("≈ GH₵19,125.50")
+    expect(row.big).toBe(false)
   })
 })

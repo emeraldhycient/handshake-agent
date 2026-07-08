@@ -545,6 +545,59 @@ describe("buy execute flow (authenticated path)", () => {
     expect(store.getState().pinOpen).toBe(false)
   })
 
+  it("pinComplete (completed) builds the receipt from the CONFIRMED payload, never the demo fixture", async () => {
+    // Latent fake-receipt path: the immediate-completion branch used to append
+    // buildReceipt() — a demo fixture with hardcoded ₦50,000 rows and a fake
+    // "REF · HS-9F4C-22A1". The receipt must carry the confirmed proposal's own
+    // amounts (here a GHS buy) and reference the real transaction id.
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.resolve({
+        transactionId: "9a8b7c6d-0000-0000-0000-000000000000",
+        status: "completed" as const,
+      })
+    )
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+    })
+    store.getState().openConfirm("m", {
+      title: "Confirm purchase",
+      subtitle: "Check every detail — this can't be undone.",
+      heroLabel: "You receive",
+      heroAmount: "31.25 USDT",
+      heroSub: "",
+      rows: [
+        { label: "You pay", value: "GH₵50,000.00" },
+        { label: "Rate", value: "1 USDT = GH₵1,600.00" },
+        { label: "Fee", value: "GH₵250.00" },
+      ],
+      totalLabel: "Total charged",
+      totalValue: "GH₵50,250.00",
+      cta: "Confirm with PIN",
+      action: "buy",
+    })
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    const receipt = store.getState().threads.m.find((m) => m.kind === "receipt")
+    expect(receipt).toBeDefined()
+    if (receipt?.kind === "receipt") {
+      // Confirmed amounts, not the demo fixture's "+ 29.97 USDT" / ₦50,000 rows.
+      expect(receipt.amount).toBe("31.25 USDT")
+      expect(receipt.rows).toContainEqual({
+        label: "Paid",
+        value: "GH₵50,250.00",
+      })
+      // Real transaction reference — never the fixture "REF · HS-9F4C-22A1".
+      expect(receipt.txRef).toBe("TX · 9a8b7c6d")
+    }
+    expect(store.getState().successOpen).toBe(true)
+  })
+
   it("pinComplete (sell settling) appends a settling card with the payout reference", async () => {
     const transactionId = "ssssssss-ssss-ssss-ssss-ssssssssssss"
     const authorizeApi = makeAuthApi()
@@ -967,6 +1020,69 @@ describe("sendVoiceToAgent", () => {
     expect(thread.some((m) => m.kind === "quote")).toBe(true)
     expect(store.getState().pendingProposalId).toBe(proposalId)
     expect(store.getState().typing.m).toBe(false)
+  })
+
+  it("binds a voice-produced needs_beneficiary card to the transcript so resolving re-sends it", async () => {
+    // Pre-fix, sendVoiceToAgent neither set _lastIntentText nor bound the card,
+    // so resolving a beneficiary card born from a voice note was a silent no-op.
+    const voiceApi = vi.fn().mockResolvedValue({
+      reply: { text: "ok" },
+      transcript: "sell 5 usdt to my bank",
+      conversationId: "11111111-1111-1111-1111-111111111111",
+      messageId: "22222222-2222-2222-2222-222222222222",
+      outcome: {
+        kind: "needs_beneficiary",
+        beneficiaryType: "bank_account",
+      },
+    })
+    const chatApi = vi
+      .fn()
+      .mockResolvedValue(makeResponse({ kind: "clarification", text: "ok" }))
+    const store = createChatStore({ schedule: (fn) => fn(), voiceApi, chatApi })
+    await store
+      .getState()
+      .sendVoiceToAgent("m", new Blob(["x"], { type: "audio/webm" }))
+
+    const card = store
+      .getState()
+      .threads.m.find((m) => m.kind === "needs_beneficiary")!
+    await store
+      .getState()
+      .resolveBeneficiary("m", "cccccccc-cccc-4ccc-8ccc-cccccccccccc", card.id)
+
+    expect(chatApi).toHaveBeenCalledWith({
+      text: "sell 5 usdt to my bank",
+      beneficiaryId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    })
+  })
+
+  it("sendVoiceToAgent sets _lastIntentText so a legacy resolve (no messageId) still works", async () => {
+    const voiceApi = vi.fn().mockResolvedValue({
+      reply: { text: "ok" },
+      transcript: "send 2 usdt to dad",
+      conversationId: "11111111-1111-1111-1111-111111111111",
+      messageId: "22222222-2222-2222-2222-222222222222",
+      outcome: {
+        kind: "needs_beneficiary",
+        beneficiaryType: "crypto_address",
+      },
+    })
+    const chatApi = vi
+      .fn()
+      .mockResolvedValue(makeResponse({ kind: "clarification", text: "ok" }))
+    const store = createChatStore({ schedule: (fn) => fn(), voiceApi, chatApi })
+    await store
+      .getState()
+      .sendVoiceToAgent("m", new Blob(["x"], { type: "audio/webm" }))
+
+    await store
+      .getState()
+      .resolveBeneficiary("m", "dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+
+    expect(chatApi).toHaveBeenCalledWith({
+      text: "send 2 usdt to dad",
+      beneficiaryId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    })
   })
 
   it("sendVoiceToAgent error path → fallback error message + typing cleared", async () => {
@@ -1639,5 +1755,71 @@ describe("hydrateHistory", () => {
       .hydrateHistory("m", [historyItem({ userText: "mobile only" })])
     expect(store.getState().threads.d).toHaveLength(1) // desktop untouched (greeting only)
     expect(store.getState().threads.m).toHaveLength(2)
+  })
+
+  it("binds a reloaded needs_beneficiary card to its intent so resolving after reload re-sends it", async () => {
+    // Pre-fix, hydrateHistory never populated _beneficiaryIntents, so resolving
+    // a reloaded card was a silent no-op (no _lastIntentText either).
+    const chatApi = vi.fn().mockResolvedValue(
+      makeResponse({ kind: "clarification", text: "ok" })
+    )
+    const boundStore = createChatStore({ schedule: immediate, chatApi })
+    boundStore.getState().hydrateHistory("m", [
+      historyItem({
+        userText: "sell 10 usdt to my gtb account",
+        outcome: {
+          kind: "needs_beneficiary",
+          beneficiaryType: "bank_account",
+        },
+      }),
+    ])
+    const card = boundStore
+      .getState()
+      .threads.m.find((m) => m.kind === "needs_beneficiary")!
+
+    await boundStore
+      .getState()
+      .resolveBeneficiary("m", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", card.id)
+
+    expect(chatApi).toHaveBeenCalledWith({
+      text: "sell 10 usdt to my gtb account",
+      beneficiaryId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    })
+  })
+
+  it("binds a reloaded choose_beneficiary card to its intent the same way", async () => {
+    const chatApi = vi.fn().mockResolvedValue(
+      makeResponse({ kind: "clarification", text: "ok" })
+    )
+    const boundStore = createChatStore({ schedule: immediate, chatApi })
+    boundStore.getState().hydrateHistory("m", [
+      historyItem({
+        userText: "send 5 usdt to mum",
+        outcome: {
+          kind: "choose_beneficiary",
+          beneficiaryType: "crypto_address",
+          nickname: "mum",
+          candidates: [
+            {
+              id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+              label: "Mum",
+              detail: "TQn9…gk7r",
+            },
+          ],
+        },
+      }),
+    ])
+    const card = boundStore
+      .getState()
+      .threads.m.find((m) => m.kind === "choose_beneficiary")!
+
+    await boundStore
+      .getState()
+      .resolveBeneficiary("m", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", card.id)
+
+    expect(chatApi).toHaveBeenCalledWith({
+      text: "send 5 usdt to mum",
+      beneficiaryId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    })
   })
 })

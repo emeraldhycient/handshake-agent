@@ -23,7 +23,9 @@ export type AdminErrorCode =
   | 'ADMIN_BULK_CONFIRMATION_REQUIRED'
   | 'ADMIN_MANUAL_CREDIT_NOT_ALLOWED'
   | 'ADMIN_PAYOUT_RETRY_BLOCKED'
-  | 'ADMIN_SELF_ACTION_FORBIDDEN';
+  | 'ADMIN_SELF_ACTION_FORBIDDEN'
+  | 'ADMIN_UNSUPPORTED_CURRENCY'
+  | 'ADMIN_BROADCAST_TEMPLATE_UNKNOWN';
 
 export abstract class AdminError extends Error {
   abstract readonly code: AdminErrorCode;
@@ -167,5 +169,30 @@ export class ManualCreditNotAllowedError extends AdminError {
   readonly code = 'ADMIN_MANUAL_CREDIT_NOT_ALLOWED' as const;
   constructor(reason: string) {
     super(`Manual credit is not allowed: ${reason}`);
+  }
+}
+
+/**
+ * A requested fiat code is not in the live catalog (built-in + runtime custom
+ * fiats). Server-side re-validation of a client-supplied `?currency=` — an
+ * unrecognised code fails closed (§3.3). Maps to HTTP 422.
+ */
+export class AdminUnsupportedCurrencyError extends AdminError {
+  readonly code = 'ADMIN_UNSUPPORTED_CURRENCY' as const;
+  constructor(code: string) {
+    super(`Currency "${code}" is not in the fiat catalog.`);
+  }
+}
+
+/**
+ * A broadcast referenced a template key that does not exist in the notification
+ * template store. Fail-closed (§3.6): nothing is enqueued or queued-for-approval
+ * with an unrenderable template — the outbox worker would dead-letter every
+ * recipient. Maps to HTTP 422.
+ */
+export class BroadcastTemplateUnknownError extends AdminError {
+  readonly code = 'ADMIN_BROADCAST_TEMPLATE_UNKNOWN' as const;
+  constructor(templateKey: string) {
+    super(`Broadcast template "${templateKey}" does not exist.`);
   }
 }

@@ -4,12 +4,13 @@
  * BlockedPage — the deny-list surface (SPEC §6.7), WIRED to `useBlockedList`.
  * Orchestrator: pulls the append-only add/supersede state machine from
  * `useBlockedMutations` and composes the header, the deny-list table, and the shared
- * funds-safety flow modals (add: dialog → reason → step-up; unblock: reason → step-up).
- * Nothing is deleted — lifting a block SUPERSEDES the row (§3.4); nothing moves money (§3.1).
+ * audited reason modals (add: dialog → reason → POST; unblock: reason → POST). The
+ * REAL step-up is server-driven (403 → StepUpDialog → replay). Nothing is deleted —
+ * lifting a block SUPERSEDES the row (§3.4); nothing moves money (§3.1).
  */
 import { useBlockedMutations } from "@/lib/hooks/use-blocked-mutations"
 import { AddBlockedDialog } from "@/components/admin/add-blocked-dialog"
-import { ReasonModal, StepUpModal } from "@/components/admin/flows"
+import { ReasonModal } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { BlockedTable } from "@/components/admin/blocked/blocked-table"
 
@@ -44,14 +45,7 @@ export function BlockedPage() {
         isError={b.list.isError}
         isSuccess={b.list.isSuccess}
         onRetry={() => void b.list.refetch()}
-        onUnblock={(entry) =>
-          b.setFlow({
-            id: entry.id,
-            value: entry.value,
-            reason: "",
-            step: "reason",
-          })
-        }
+        onUnblock={(entry) => b.setFlow({ id: entry.id, value: entry.value })}
       />
 
       {/* ── Add entry (purpose-built dialog collects the value) ────────────── */}
@@ -76,21 +70,14 @@ export function BlockedPage() {
         }
       />
 
-      {/* ── Unblock flow: reason (audited) → step-up (client TOTP) → POST ───── */}
+      {/* ── Unblock flow: reason (audited) → the step-up-guarded POST (the server
+             demands re-auth via 403 → StepUpDialog when step-up is stale) ────── */}
       <ReasonModal
-        open={b.flow?.step === "reason"}
+        open={b.flow !== null}
         onOpenChange={(next) => !next && b.setFlow(null)}
         title={b.flow ? `Unblock — ${b.flow.value}` : "Unblock"}
         onContinue={(reason) =>
-          b.flow && b.setFlow({ ...b.flow, reason, step: "stepup" })
-        }
-      />
-      <StepUpModal
-        open={b.flow?.step === "stepup"}
-        onOpenChange={(next) => !next && b.setFlow(null)}
-        title={b.flow ? `Unblock — ${b.flow.value}` : "Unblock"}
-        onComplete={() =>
-          b.flow && b.submitSupersede(b.flow.id, b.flow.value, b.flow.reason)
+          b.flow && b.submitSupersede(b.flow.id, b.flow.value, reason)
         }
       />
 

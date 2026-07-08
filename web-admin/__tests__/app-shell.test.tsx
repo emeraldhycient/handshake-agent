@@ -151,14 +151,14 @@ describe("AppShell nav gating", () => {
           id: "00000000-0000-0000-0000-0000000000ff",
           name: "super_admin",
         },
-        menus: ["menu.access", "menu.audit"],
+        menus: ["menu.access", "menu.audit", "menu.approvals"],
       })
     )
 
     renderShell()
 
-    // The menu.access items appear once me resolves (Admins & roles + Approvals
-    // are both gated on menu.access in the rebuilt grouped nav).
+    // Admins & roles (menu.access) + Approvals (menu.approvals — the checker
+    // grant, so ops/finance/compliance reach their own four-eyes inbox) show.
     expect(
       await screen.findByRole("link", { name: "Admins & roles" })
     ).toBeInTheDocument()
@@ -202,7 +202,12 @@ describe("AppShell nav gating", () => {
 
 describe("AppShell live nav badges", () => {
   // menus that make all four badge-bearing nav items visible.
-  const BADGE_MENUS = ["menu.kyc", "menu.transactions", "menu.access"]
+  const BADGE_MENUS = [
+    "menu.kyc",
+    "menu.transactions",
+    "menu.access",
+    "menu.approvals",
+  ]
 
   it("renders the live count from each badge source, not the design mock", async () => {
     mockGetMe.mockResolvedValue(

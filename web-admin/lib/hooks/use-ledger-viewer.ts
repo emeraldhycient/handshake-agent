@@ -4,6 +4,7 @@ import { useMemo, useState } from "react"
 import type { AdminLedgerListQuery } from "@handshake-agent/contracts"
 
 import { useGlobalLedger, useLedgerIntegrity } from "@/lib/query/hooks"
+import { useCurrencyFilterOptions } from "@/lib/hooks/use-currency-filter-options"
 import { exportLedger as exportLedgerCsv } from "@/lib/api/ledger"
 import { downloadFile, exportFilename } from "@/lib/download"
 import { pushToast } from "@/lib/store/toast-store"
@@ -32,6 +33,8 @@ export function useLedgerViewer() {
 
   const ledger = useGlobalLedger(filters)
   const integrity = useLedgerIntegrity()
+  // The ledger's currency axis spans fiat AND crypto legs — include assets.
+  const currencyOptions = useCurrencyFilterOptions(true)
 
   const rows = useMemo(
     () => toRows(ledger.data?.pages.flatMap((p) => p.entries) ?? []),
@@ -61,6 +64,7 @@ export function useLedgerViewer() {
     setAccount,
     currency,
     setCurrency,
+    currencyOptions,
     ledger,
     rows,
     exporting,

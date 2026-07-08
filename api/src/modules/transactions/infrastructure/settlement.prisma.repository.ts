@@ -1893,6 +1893,9 @@ export class SettlementPrismaRepository implements ISettlementRepository {
               asset: travelRule.asset,
               amount: travelRule.cryptoAmount,
               amountFiat: travelRule.ngnEquivalent as unknown as Prisma.Decimal,
+              // The fiat the equivalent was valued in at capture (snapshot from
+              // the engine's threshold gate — config-driven, never assumed NGN).
+              fiatCurrency: travelRule.fiatCurrency,
               triggeringFactor: TravelRuleTrigger.amount_threshold,
               capturedAt: now,
               // reportedAt: null — not yet submitted to counterparty/regulator.

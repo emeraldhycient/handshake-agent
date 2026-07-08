@@ -87,14 +87,12 @@ export function usePricingEditor() {
     setNewValue("")
   }
 
-  // Flow transitions (value → reason → step-up → maker-checker).
+  // Flow transitions (value → reason → confirm). The REAL step-up is server-driven:
+  // the PATCH 403s and the StepUpDialog replays it.
   function onValueContinue() {
     setStep("reason")
   }
   function onReasonContinue() {
-    setStep("stepup")
-  }
-  function onStepUpComplete() {
     setStep("maker")
   }
 
@@ -177,7 +175,6 @@ export function usePricingEditor() {
     closeFlow,
     onValueContinue,
     onReasonContinue,
-    onStepUpComplete,
     onEditSpread,
     onEditMin,
     onEditMax,

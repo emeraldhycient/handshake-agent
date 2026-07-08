@@ -15,6 +15,7 @@ import { gateway } from "@/lib/api/gateway"
 import type { TransactionHistoryPageParams } from "@/lib/api/gateway"
 import { mapTransactions } from "@/lib/api/mappers/transactions"
 import { getTransaction, getTransactionDetail } from "@/lib/api/chat"
+import { hydrateFiatDisplay } from "@/lib/format"
 import type { ChatAction, ActivityGroup } from "@/lib/schemas"
 import { qk } from "./keys"
 
@@ -28,7 +29,15 @@ import { qk } from "./keys"
 export function useConfig() {
   return useQuery({
     queryKey: qk.config,
-    queryFn: () => gateway.getConfig(),
+    queryFn: async () => {
+      const config = await gateway.getConfig()
+      // Side-hydrate the module-level fiat display registry so formatFiat
+      // (used by chat cards / receipts outside React data flow) renders the
+      // operator-configured symbols + decimals. FIAT_SYMBOLS stays the offline
+      // fallback until this resolves.
+      hydrateFiatDisplay(config.fiats)
+      return config
+    },
     staleTime: 5 * 60_000,
   })
 }

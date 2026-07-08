@@ -28,7 +28,8 @@ export const qk = {
   endUser: (id: string) => ["admin", "users", id] as const,
   endUserDevices: (id: string) => ["admin", "users", id, "devices"] as const,
   endUserSessions: (id: string) => ["admin", "users", id, "sessions"] as const,
-  endUserLimits: (id: string) => ["admin", "users", id, "limits"] as const,
+  endUserLimits: (id: string, currency: string) =>
+    ["admin", "users", id, "limits", currency] as const,
   endUserTimeline: (id: string) => ["admin", "users", id, "timeline"] as const,
   userNotes: (id: string) => ["admin", "users", id, "notes"] as const,
   kycQueue: (status?: string) =>

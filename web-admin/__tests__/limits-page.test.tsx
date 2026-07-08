@@ -81,7 +81,8 @@ function renderPage() {
   )
 }
 
-/** Drive the shared flow chain: reason → step-up (6 digits) → maker-checker. */
+/** Drive the shared flow chain: reason → confirm. The REAL step-up is
+ *  server-driven (403 → StepUpDialog) — no decorative TOTP step remains. */
 async function advanceThroughAuditChain(
   user: ReturnType<typeof userEvent.setup>
 ) {
@@ -90,9 +91,6 @@ async function advanceThroughAuditChain(
     "Ops correction"
   )
   await user.click(screen.getByRole("button", { name: "Continue" }))
-  for (const d of "123456") {
-    await user.click(screen.getByRole("button", { name: d }))
-  }
 }
 
 beforeEach(() => {
@@ -129,10 +127,10 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
       "aria-selected",
       "true"
     )
-    // The real per-transaction cap (200,000 → "₦200,000").
-    expect(screen.getByText("₦200,000")).toBeInTheDocument()
-    // The real daily cap (500,000 → "₦500,000").
-    expect(screen.getByText("₦500,000")).toBeInTheDocument()
+    // The real per-transaction cap (200,000 → "₦200,000.00").
+    expect(screen.getByText("₦200,000.00")).toBeInTheDocument()
+    // The real daily cap (500,000 → "₦500,000.00").
+    expect(screen.getByText("₦500,000.00")).toBeInTheDocument()
     // The real daily tx-count (10) is the one backed velocity row.
     expect(screen.getByText("10")).toBeInTheDocument()
   })
@@ -153,7 +151,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     await advanceThroughAuditChain(user)
 
     await user.click(
-      screen.getByRole("button", { name: "Submit for approval" })
+      screen.getByRole("button", { name: "Confirm change" })
     )
 
     // The real PATCH fires against tier_1's per-tx cap key with the numeric value.
@@ -186,7 +184,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }))
     await advanceThroughAuditChain(user)
     await user.click(
-      screen.getByRole("button", { name: "Submit for approval" })
+      screen.getByRole("button", { name: "Confirm change" })
     )
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
@@ -225,7 +223,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     await user.type(input, "8")
     await user.click(screen.getByRole("button", { name: "Continue" }))
     await advanceThroughAuditChain(user)
-    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+    await user.click(screen.getByRole("button", { name: "Confirm change" }))
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
     expect(mockSet).toHaveBeenCalledWith("limits.NGN.tier_1.sendsPer10MinMax", {
@@ -251,7 +249,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     await user.type(input, "7200")
     await user.click(screen.getByRole("button", { name: "Continue" }))
     await advanceThroughAuditChain(user)
-    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+    await user.click(screen.getByRole("button", { name: "Confirm change" }))
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
     expect(mockSet).toHaveBeenCalledWith(
@@ -274,7 +272,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     await user.type(input, "80000")
     await user.click(screen.getByRole("button", { name: "Continue" }))
     await advanceThroughAuditChain(user)
-    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+    await user.click(screen.getByRole("button", { name: "Confirm change" }))
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
     expect(mockSet).toHaveBeenCalledWith(
@@ -309,7 +307,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     await user.type(input, "5000")
     await user.click(screen.getByRole("button", { name: "Continue" }))
     await advanceThroughAuditChain(user)
-    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+    await user.click(screen.getByRole("button", { name: "Confirm change" }))
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
     expect(mockSet).toHaveBeenCalledWith("limits.GHS.tier_1.perTxFiatMax", {
@@ -323,7 +321,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     const user = userEvent.setup()
     renderPage()
 
-    // 3,000,000 → "₦3,000,000" renders, and the row is editable.
+    // 3,000,000 → "₦3,000,000.00" renders, and the row is editable.
     await user.click(
       await screen.findByRole("button", {
         name: "Edit Weekly max · rolling 7d",
@@ -334,7 +332,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     await user.type(input, "4000000")
     await user.click(screen.getByRole("button", { name: "Continue" }))
     await advanceThroughAuditChain(user)
-    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+    await user.click(screen.getByRole("button", { name: "Confirm change" }))
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
     expect(mockSet).toHaveBeenCalledWith("limits.NGN.tier_1.weeklyFiatMax", {
@@ -363,7 +361,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }))
     await advanceThroughAuditChain(user)
     await user.click(
-      screen.getByRole("button", { name: "Submit for approval" })
+      screen.getByRole("button", { name: "Confirm change" })
     )
 
     expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
@@ -390,7 +388,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     await user.type(input, "20")
     await user.click(screen.getByRole("button", { name: "Continue" }))
     await advanceThroughAuditChain(user)
-    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+    await user.click(screen.getByRole("button", { name: "Confirm change" }))
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
     expect(mockSet).toHaveBeenCalledWith("limits.NGN.tier_1.dailyTxCountMax", {
@@ -414,7 +412,7 @@ describe("LimitsPage (wired maker-checker amount-cap edit)", () => {
     await user.type(input, "172800")
     await user.click(screen.getByRole("button", { name: "Continue" }))
     await advanceThroughAuditChain(user)
-    await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+    await user.click(screen.getByRole("button", { name: "Confirm change" }))
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
     // The global leaf (no tier suffix) is patched with the raw seconds value.

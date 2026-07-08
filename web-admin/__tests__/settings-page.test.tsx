@@ -95,7 +95,8 @@ beforeEach(() => {
   })
 })
 
-/** Drive the value → reason → step-up → maker-checker chain to its final submit. */
+/** Drive the value → reason → confirm chain to its final submit. The REAL step-up
+ *  is server-driven (403 → StepUpDialog) — no decorative TOTP step remains. */
 async function runEditFlow(user: ReturnType<typeof userEvent.setup>) {
   await user.click(
     await screen.findByRole("button", { name: "Edit pricing.processingFeeBps" })
@@ -114,14 +115,9 @@ async function runEditFlow(user: ReturnType<typeof userEvent.setup>) {
   )
   await user.click(screen.getByRole("button", { name: "Continue" }))
 
-  // 3. Step-up (client ceremony) — six digits advance the chain.
-  for (const d of ["1", "2", "3", "4", "5", "6"]) {
-    await user.click(await screen.findByRole("button", { name: d }))
-  }
-
-  // 4. Maker-checker confirm — its submit fires the real PATCH.
+  // 3. Confirm (honest immediate copy) — its submit fires the real PATCH.
   await user.click(
-    await screen.findByRole("button", { name: "Submit for approval" })
+    await screen.findByRole("button", { name: "Confirm change" })
   )
 }
 

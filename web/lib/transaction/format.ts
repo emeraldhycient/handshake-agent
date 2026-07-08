@@ -1,3 +1,4 @@
+import { DISPLAY_LOCALE } from "@/lib/format"
 import type { StatusTone } from "@/lib/schemas"
 
 /** Status → pill tone. Terminal failures are danger-red (never neutral). */
@@ -38,9 +39,9 @@ export function shortAddress(addr: string): string {
   return addr.length > 14 ? `${addr.slice(0, 6)}…${addr.slice(-6)}` : addr
 }
 
-/** Format an ISO timestamp as "3 Jul 2026, 9:40 am" (en-GB). */
+/** Format an ISO timestamp as "3 Jul 2026, 9:40 am" (DISPLAY_LOCALE). */
 export function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString("en-GB", {
+  return new Date(iso).toLocaleString(DISPLAY_LOCALE, {
     day: "numeric",
     month: "short",
     year: "numeric",

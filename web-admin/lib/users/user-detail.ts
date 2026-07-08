@@ -4,6 +4,7 @@ import type {
   KycSubmissionDetail,
 } from "@handshake-agent/contracts"
 
+import { formatFiat } from "@/lib/format"
 import { NOT_PROVIDED, ST_META } from "@/constants/user-detail"
 import type { PillMeta } from "@/types/components"
 
@@ -70,7 +71,12 @@ export function statusMeta(status: string): { l: string; bg: string; fg: string 
   )
 }
 
-/** Formats a decimal-string fiat amount with grouping + the currency symbol. */
+/**
+ * Formats a decimal-string fiat amount via the canonical `formatFiat` (symbol +
+ * configured decimals for ANY catalog currency — never a pinned ₦). Null amount
+ * → the NOT_PROVIDED dash; a non-numeric string passes through untouched; a
+ * null currency renders the bare grouped number.
+ */
 export function fmtFiat(
   amount: string | null,
   currency: string | null
@@ -78,8 +84,8 @@ export function fmtFiat(
   if (amount === null) return NOT_PROVIDED
   const n = Number(amount)
   if (!Number.isFinite(n)) return amount
-  const symbol = currency === "NGN" ? "₦" : currency ? `${currency} ` : ""
-  return symbol + n.toLocaleString("en-NG", { maximumFractionDigits: 2 })
+  if (currency === null) return n.toLocaleString("en-NG")
+  return formatFiat(n, currency)
 }
 
 /** Used/cap → a clamped 0–100% width string for the velocity bar. */

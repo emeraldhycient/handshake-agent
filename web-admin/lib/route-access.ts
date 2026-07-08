@@ -24,7 +24,7 @@ export interface RouteAccess {
 /** Exact-path requirements for every static admin route. */
 const STATIC_ROUTE_ACCESS: Readonly<Record<string, RouteAccess>> = {
   "/": { menu: null },
-  "/metrics": { menu: null },
+  "/metrics": { menu: "menu.metrics" },
   "/admin-settings": { menu: null },
   // Customers
   "/users": { menu: "menu.users" },
@@ -60,7 +60,10 @@ const STATIC_ROUTE_ACCESS: Readonly<Record<string, RouteAccess>> = {
   "/admins": { menu: "menu.access" },
   "/roles": { menu: "menu.access" },
   "/sessions": { menu: "menu.access" },
-  "/approvals": { menu: "menu.access" },
+  // The maker-checker inbox is a CHECKER surface: the catalog grants
+  // menu.approvals to ops/compliance/finance/support, so gating it on
+  // menu.access (super_admin-only in practice) would break four-eyes review.
+  "/approvals": { menu: "menu.approvals" },
   "/audit": { menu: "menu.audit" },
   "/ops": { menu: "menu.audit" },
   "/webhooks": { menu: "menu.webhooks" },

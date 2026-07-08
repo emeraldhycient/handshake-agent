@@ -232,11 +232,30 @@ describe("TreasuryPayoutQueueItemSchema", () => {
       asset: "NGN",
       amount: "4820000.00",
       fiatAmount: null,
+      fiatCurrency: "NGN",
       requiresApproval: true,
       submittedAt: "2026-06-30T00:00:00.000Z",
     });
     expect(parsed.requiresApproval).toBe(true);
     expect(parsed.fiatAmount).toBeNull();
+    expect(parsed.fiatCurrency).toBe("NGN");
+  });
+
+  it("requires fiatCurrency (the approval gate compares in the payout's own currency)", () => {
+    expect(() =>
+      TreasuryPayoutQueueItemSchema.parse({
+        id: UUID,
+        transactionId: TXN_UUID,
+        beneficiaryLabel: "x",
+        reference: "wd_1",
+        method: "USDT · Blockradar",
+        asset: "USDT",
+        amount: "1250",
+        fiatAmount: "2000000.00",
+        requiresApproval: true,
+        submittedAt: "2026-06-30T00:00:00.000Z",
+      }),
+    ).toThrow();
   });
 
   it("rejects a numeric amount (must be a byte-stable string)", () => {
@@ -250,6 +269,7 @@ describe("TreasuryPayoutQueueItemSchema", () => {
         asset: "USDT",
         amount: 1250,
         fiatAmount: null,
+        fiatCurrency: "GHS",
         requiresApproval: false,
         submittedAt: "2026-06-30T00:00:00.000Z",
       }),

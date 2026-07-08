@@ -3339,6 +3339,10 @@ describe('ExecutionService.executeSend', () => {
           beneficiaryName: STUB_CRYPTO_BENEFICIARY.label,
           beneficiaryAddress: SEND_TO_ADDRESS,
           originatorUserId: USER_ID,
+          // Wave D: the fiat the equivalent was valued in is snapshot at capture
+          // (the registry default fiat used for the threshold gate) — never an
+          // assumed NGN downstream.
+          fiatCurrency: 'NGN',
         }),
       }),
     );

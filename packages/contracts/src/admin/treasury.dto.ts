@@ -148,7 +148,12 @@ export type TreasurySweepListResponse = z.infer<
 // Pending outbound settlements (processor payouts + on-chain sends) awaiting release.
 // This is a READ projection only — approving/releasing is an engine-brokered WRITE
 // deferred to Phase 7 (§3.1). `requiresApproval` flags a large payout that must clear
-// maker-checker. `fiatAmount` is the NGN leg when the asset is crypto, else null.
+// maker-checker, compared against the per-currency `treasury.largePayoutThresholds`
+// config in the payout's OWN currency (a currency with no configured threshold fails
+// closed → requiresApproval). `fiatAmount` is the fiat leg (denominated in
+// `fiatCurrency`) when the asset is crypto, else null. `fiatCurrency` is the fiat the
+// payout settles/values in — snapshot from the transaction metadata, falling back to
+// the registry default fiat when the metadata predates currency capture.
 export const TreasuryPayoutQueueItemSchema = z.object({
   id: z.string().uuid(),
   transactionId: z.string().uuid(),
@@ -158,6 +163,7 @@ export const TreasuryPayoutQueueItemSchema = z.object({
   asset: z.string(),
   amount: z.string(),
   fiatAmount: z.string().nullable(),
+  fiatCurrency: z.string(),
   requiresApproval: z.boolean(),
   submittedAt: z.string(),
 });

@@ -33,7 +33,6 @@ import {
   MakerCheckerModal,
   ManualCreditModal,
   ReasonModal,
-  StepUpModal,
 } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { SupportedAssetSchema } from "@handshake-agent/contracts"
@@ -69,6 +68,9 @@ export function UserDetail({ userId }: UserDetailProps) {
     devicesQuery,
     sessionsQuery,
     limitsQuery,
+    limitsCurrency,
+    setLimitsCurrency,
+    limitsCurrencyOptions,
     timelineQuery,
     notesQuery,
     mfaEnabled,
@@ -399,11 +401,15 @@ export function UserDetail({ userId }: UserDetailProps) {
         <LimitsTab
           tier={detail.kycTier}
           query={limitsQuery}
+          currency={limitsCurrency}
+          currencyOptions={limitsCurrencyOptions}
+          onCurrency={setLimitsCurrency}
           onRetry={() => void limitsQuery.refetch()}
         />
       )}
 
-      {/* ===== FLOW MODALS (credit → reason → step-up → engine / maker) ===== */}
+      {/* ===== FLOW MODALS (credit → reason → engine / maker; the REAL step-up
+             is server-driven — 403 → StepUpDialog → replay) ===== */}
       <ManualCreditModal
         open={current === "credit"}
         onOpenChange={(o) => !o && cancelFlow()}
@@ -428,12 +434,6 @@ export function UserDetail({ userId }: UserDetailProps) {
         title={flow?.title ?? ""}
         onContinue={(reason) => advance(reason)}
       />
-      <StepUpModal
-        open={current === "stepup"}
-        onOpenChange={(o) => !o && cancelFlow()}
-        title={flow?.title ?? ""}
-        onComplete={() => advance()}
-      />
       <EngineActionModal
         open={current === "engine"}
         onOpenChange={(o) => !o && cancelFlow()}
@@ -450,6 +450,10 @@ export function UserDetail({ userId }: UserDetailProps) {
         title={flow?.title ?? ""}
         diff={isCreditFlow ? creditDiff : (flow?.diff ?? [])}
         onSubmit={() => advance()}
+        // Only the manual credit raises a REAL four-eyes ChangeRequest; the KYC
+        // approve / tier-override PATCHes apply immediately after server step-up,
+        // so their confirm carries the honest immediate copy.
+        mode={isCreditFlow ? "dual-control" : "immediate"}
       />
 
       {/* Server-driven step-up: a sensitive mutation that 403s with

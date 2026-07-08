@@ -88,6 +88,7 @@ const fakeAssetRegistry = {
   formatCrypto: jest.fn((sym: string, amt: string) => `${amt} ${sym}`),
   formatFiat: jest.fn((_code: string, amt: string) => `₦${amt}`),
   isCurrencyLive: jest.fn().mockReturnValue(true),
+  enabledFiats: jest.fn().mockReturnValue(['NGN']),
   isCapabilityEnabled: jest.fn().mockReturnValue(true),
 };
 
@@ -930,8 +931,33 @@ describe('WebChatService', () => {
     expect(result.outcome).toEqual({
       kind: 'currency_not_live',
       currency: 'RWF',
+      // The live settlement set comes from the AssetRegistry's enabled fiats so
+      // the FE copy is catalog-driven, never a hardcoded constant.
+      liveCurrencies: ['NGN'],
     });
     expect(fakeProposalService.createBuyProposal).not.toHaveBeenCalled();
+  });
+
+  it('buy_crypto currency_not_live carries ALL live fiats when more than one is enabled', async () => {
+    fakeAssetRegistry.isCurrencyLive.mockReturnValueOnce(false);
+    fakeAssetRegistry.enabledFiats.mockReturnValueOnce(['NGN', 'GHS']);
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'buy_crypto',
+      asset: 'USDT',
+      fiatAmount: '50000',
+      fiatCurrency: 'RWF',
+    });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'buy 50000 RWF of USDT',
+    });
+
+    expect(result.outcome).toEqual({
+      kind: 'currency_not_live',
+      currency: 'RWF',
+      liveCurrencies: ['NGN', 'GHS'],
+    });
   });
 
   it('buy_crypto with live fiatCurrency (NGN) → normal proposal path', async () => {
@@ -992,6 +1018,7 @@ describe('WebChatService', () => {
     expect(result.outcome).toEqual({
       kind: 'currency_not_live',
       currency: 'RWF',
+      liveCurrencies: ['NGN'],
     });
     expect(fakeProposalService.createSellProposal).not.toHaveBeenCalled();
     expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();

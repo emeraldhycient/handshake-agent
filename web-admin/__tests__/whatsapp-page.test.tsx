@@ -131,9 +131,14 @@ describe("WhatsAppPage", () => {
     expect(screen.getByText("Live conversation monitor")).toBeInTheDocument()
     expect(screen.queryByText("I want to buy 50 USDT")).not.toBeInTheDocument()
 
-    // Each deferred panel explains WHY it is empty (no read endpoint).
+    // The Flows panel explains WHY it is empty (no read endpoint); the monitor
+    // points at the real transcript surface (Agent console → Conversations).
     expect(
       screen.getAllByText(/no .*read endpoint/i).length
-    ).toBeGreaterThanOrEqual(2)
+    ).toBeGreaterThanOrEqual(1)
+    const agentLink = screen.getByRole("link", {
+      name: /agent config → conversations/i,
+    })
+    expect(agentLink).toHaveAttribute("href", "/agent")
   })
 })

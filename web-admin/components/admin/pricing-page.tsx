@@ -5,16 +5,12 @@
  * `pricing.*` registry via `useSettings("Pricing")`. Orchestrator: pulls the pricing
  * editor state machine from `usePricingEditor` and composes the spread card, the
  * base-rates surface, the add-price dialog, and the shared funds-safety edit chain
- * (value → reason → step-up → maker-checker → the real PATCH). Every leaf DERIVES the
+ * (value → reason → confirm → the real step-up-guarded PATCH). Every leaf DERIVES the
  * user-facing rate/margin — nothing stores a line item; nothing moves money (§3.1).
  */
 import { AddPriceDialog } from "@/components/admin/add-price-dialog"
 import { PricingBaseRates } from "@/components/admin/pricing-base-rates"
-import {
-  MakerCheckerModal,
-  ReasonModal,
-  StepUpModal,
-} from "@/components/admin/flows"
+import { MakerCheckerModal, ReasonModal } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { SettingValueModal } from "@/components/admin/flows/setting-value-modal"
 import { usePricingEditor } from "@/lib/hooks/use-pricing-editor"
@@ -68,7 +64,8 @@ export function PricingPage() {
         onContinue={p.onAddContinue}
       />
 
-      {/* Funds-safety flow chain: value → reason → step-up → maker-checker */}
+      {/* Funds-safety flow chain: value → reason → confirm. The REAL step-up is
+          server-driven — the PATCH 403s and the StepUpDialog below replays it. */}
       <SettingValueModal
         open={p.step === "value"}
         onOpenChange={(next) => (next ? undefined : p.closeFlow())}
@@ -85,12 +82,6 @@ export function PricingPage() {
         onOpenChange={(next) => (next ? undefined : p.closeFlow())}
         title={p.flowTitle}
         onContinue={p.onReasonContinue}
-      />
-      <StepUpModal
-        open={p.step === "stepup"}
-        onOpenChange={(next) => (next ? undefined : p.closeFlow())}
-        title={p.flowTitle}
-        onComplete={p.onStepUpComplete}
       />
       <MakerCheckerModal
         open={p.step === "maker"}

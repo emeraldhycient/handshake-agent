@@ -27,6 +27,7 @@ export class TravelRulePrismaRepository implements ITravelRuleRepository {
         asset: true,
         amount: true,
         amountFiat: true,
+        fiatCurrency: true,
         triggeringFactor: true,
         capturedAt: true,
         reportedAt: true,
@@ -42,6 +43,7 @@ export class TravelRulePrismaRepository implements ITravelRuleRepository {
       // amountFiat is a Prisma Decimal — serialize to a canonical string (never float).
       amount: row.amount,
       amountFiat: row.amountFiat.toString(),
+      fiatCurrency: row.fiatCurrency,
       triggeringFactor: row.triggeringFactor,
       capturedAt: row.capturedAt,
       reportedAt: row.reportedAt,

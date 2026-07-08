@@ -59,9 +59,6 @@ const PENDING_OUTBOX_STATUSES: SettlementOutboxStatus[] = [
   SettlementOutboxStatus.in_progress,
 ];
 
-/** A large payout that must clear maker-checker (NGN-equivalent notional). */
-const LARGE_PAYOUT_NGN_THRESHOLD = 1_000_000;
-
 @Injectable()
 export class TreasuryReadPrismaRepository implements ITreasuryReadRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -447,13 +444,25 @@ interface PayoutOutboxRow {
  * Projects one selected settlement-outbox row into a payout-queue record. Shared by
  * `listPayoutQueue` and `findPayoutQueueItem` so the list row and the single-item
  * lookup can never disagree on the derived fields (§13.2 DRY).
+ *
+ * `fiatCurrency` is read from the SAME transaction metadata the fiat leg comes
+ * from (`meta.fiatCurrency`, written by the execution engine alongside
+ * `meta.fiatAmount`). Rows whose metadata predates currency capture project null —
+ * the service resolves the registry default fiat; NO 'NGN' literal here. The
+ * large-payout approval flag is likewise a service concern (per-currency
+ * layered-config thresholds), not derived in this projection.
  */
 function toPayoutRecord(row: PayoutOutboxRow): TreasuryPayoutQueueRecord {
   const meta = asRecord(row.transaction?.metadata);
   const asset = str(meta.asset) ?? defaultAssetFor(row.settlementType);
   const amount = str(meta.amount) ?? str(meta.fiatAmount) ?? '0';
-  const fiatAmount = str(meta.fiatAmount) ?? null;
-  const ngnNotional = Number(fiatAmount ?? (asset === 'NGN' ? amount : '0'));
+  // Sell/buy metadata carries the fiat leg as (fiatAmount, fiatCurrency); on-chain
+  // SEND metadata carries the engine's fiat-equivalent as the velocity pair
+  // (velocityFiatAmount, velocityFiatCurrency) instead — fall through so a large
+  // send has a real notional for the approval gate rather than a silent 0.
+  const fiatAmount =
+    str(meta.fiatAmount) ?? str(meta.velocityFiatAmount) ?? null;
+  const fiatCurrency = str(meta.fiatCurrency) ?? str(meta.velocityFiatCurrency);
   return {
     id: row.id,
     transactionId: row.transactionId,
@@ -463,7 +472,7 @@ function toPayoutRecord(row: PayoutOutboxRow): TreasuryPayoutQueueRecord {
     asset,
     amount,
     fiatAmount,
-    requiresApproval: ngnNotional >= LARGE_PAYOUT_NGN_THRESHOLD,
+    fiatCurrency,
     submittedAt: row.createdAt,
   };
 }

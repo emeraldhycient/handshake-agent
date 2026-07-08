@@ -4,7 +4,7 @@ import type {
   BuyProposalConfirmation,
   SwapProposalConfirmation,
 } from "@handshake-agent/contracts"
-import { mapOutcomeToMessages, LIVE_SETTLEMENT_FIAT } from "./agent-outcome"
+import { mapOutcomeToMessages } from "./agent-outcome"
 
 /** Deterministic id generator for assertions. */
 function makeIder() {
@@ -133,6 +133,35 @@ describe("mapOutcomeToMessages", () => {
       kind: "quote",
       action: "buy",
       receiveAmt: "31.25 USDT",
+      rows: [
+        { label: "You pay", value: "₦50,000.00" },
+        { label: "Rate", value: "1 USDT = ₦1,600.00" },
+        { label: "Fee", value: "₦250.00" },
+      ],
+      totalLabel: "Total charged",
+      totalValue: "₦50,250.00",
+    })
+  })
+
+  it("buy quote rows drive the symbol from the confirmation's fiatCurrency, never a hardcoded ₦", () => {
+    // §3.1 confirmation integrity: a GHS-settled buy must render GH₵ on every
+    // fiat row — the sell branch already keys off fiatCurrency; buy must too.
+    const outcome: AgentTurnOutcome = {
+      kind: "proposal",
+      txType: "buy",
+      proposalId: buyConfirmation.proposalId,
+      confirmation: { ...buyConfirmation, fiatCurrency: "GHS" },
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    expect(messages[0]).toMatchObject({
+      kind: "quote",
+      action: "buy",
+      rows: [
+        { label: "You pay", value: "GH₵50,000.00" },
+        { label: "Rate", value: "1 USDT = GH₵1,600.00" },
+        { label: "Fee", value: "GH₵250.00" },
+      ],
+      totalValue: "GH₵50,250.00",
     })
   })
 
@@ -225,24 +254,35 @@ describe("mapOutcomeToMessages", () => {
     }
   })
 
-  it("maps needs_beneficiary (bank_account) to a bank-account text", () => {
-    const { messages } = mapOutcomeToMessages(
+  it("maps needs_beneficiary (bank_account) to a needs_beneficiary card", () => {
+    // These two were legacy "text" assertions guarded by an if-branch that
+    // never ran (the mapper emits a needs_beneficiary card, not text) — they
+    // now assert the real card shape.
+    const { messages, proposalId } = mapOutcomeToMessages(
       { kind: "needs_beneficiary", beneficiaryType: "bank_account" },
       makeIder()
     )
-    if (messages[0].kind === "text") {
-      expect(messages[0].text).toContain("bank account")
-    }
+    expect(proposalId).toBeNull()
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      kind: "needs_beneficiary",
+      beneficiaryType: "bank_account",
+    })
   })
 
-  it("maps needs_beneficiary (crypto_address) to a crypto-address text", () => {
-    const { messages } = mapOutcomeToMessages(
+  it("maps needs_beneficiary (crypto_address) to a needs_beneficiary card", () => {
+    const { messages, proposalId } = mapOutcomeToMessages(
       { kind: "needs_beneficiary", beneficiaryType: "crypto_address" },
       makeIder()
     )
-    if (messages[0].kind === "text") {
-      expect(messages[0].text).toContain("crypto address")
-    }
+    expect(proposalId).toBeNull()
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      kind: "needs_beneficiary",
+      beneficiaryType: "crypto_address",
+    })
   })
 
   it("passes the needs_beneficiary note through for targeted nickname-miss copy", () => {
@@ -317,45 +357,74 @@ describe("mapOutcomeToMessages", () => {
     }
   })
 
-  it("maps currency_not_live (RWF) to a friendly assistant text mentioning the currency", () => {
+  it("builds the currency_not_live copy from the server's liveCurrencies (two live fiats)", () => {
+    const { messages, proposalId } = mapOutcomeToMessages(
+      {
+        kind: "currency_not_live",
+        currency: "RWF",
+        liveCurrencies: ["NGN", "GHS"],
+      },
+      makeIder()
+    )
+    expect(proposalId).toBeNull()
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      kind: "text",
+      text: "We currently settle in NGN and GHS — RWF isn't live yet.",
+    })
+  })
+
+  it("builds the currency_not_live copy for a single live fiat", () => {
+    const { messages } = mapOutcomeToMessages(
+      { kind: "currency_not_live", currency: "RWF", liveCurrencies: ["NGN"] },
+      makeIder()
+    )
+    expect(messages[0]).toMatchObject({
+      kind: "text",
+      text: "We currently settle in NGN — RWF isn't live yet.",
+    })
+  })
+
+  it("lists three or more live fiats with commas and a final 'and'", () => {
+    const { messages } = mapOutcomeToMessages(
+      {
+        kind: "currency_not_live",
+        currency: "RWF",
+        liveCurrencies: ["NGN", "GHS", "KES"],
+      },
+      makeIder()
+    )
+    expect(messages[0]).toMatchObject({
+      kind: "text",
+      text: "We currently settle in NGN, GHS and KES — RWF isn't live yet.",
+    })
+  })
+
+  it("falls back to the legacy NGN copy when liveCurrencies is absent (old history rows)", () => {
     const { messages, proposalId } = mapOutcomeToMessages(
       { kind: "currency_not_live", currency: "RWF" },
       makeIder()
     )
     expect(proposalId).toBeNull()
     expect(messages).toHaveLength(1)
-    expect(messages[0]).toMatchObject({ role: "assistant", kind: "text" })
-    if (messages[0].kind === "text") {
-      expect(messages[0].text).toContain("RWF")
-      expect(messages[0].text).toContain("NGN")
-    }
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      kind: "text",
+      text: "We settle in NGN for now — RWF isn't live yet. Want to continue in NGN?",
+    })
   })
 
-  it("maps currency_not_live (GHS) to a text that names GHS specifically", () => {
+  it("falls back to the legacy copy when liveCurrencies is empty", () => {
+    // An empty live set is a server misconfiguration — never render
+    // "We currently settle in  — …".
     const { messages } = mapOutcomeToMessages(
-      { kind: "currency_not_live", currency: "GHS" },
+      { kind: "currency_not_live", currency: "GHS", liveCurrencies: [] },
       makeIder()
     )
-    expect(messages).toHaveLength(1)
-    if (messages[0].kind === "text") {
-      expect(messages[0].text).toContain("GHS")
-    }
-  })
-
-  it("sources the live settlement currency from LIVE_SETTLEMENT_FIAT, not a hardcoded literal (audit #28)", () => {
-    // The live settlement fiat appears in the copy and comes from a single
-    // named constant — so it cannot drift between the two mentions.
-    expect(LIVE_SETTLEMENT_FIAT).toBe("NGN")
-    const { messages } = mapOutcomeToMessages(
-      { kind: "currency_not_live", currency: "GHS" },
-      makeIder()
-    )
-    if (messages[0].kind === "text") {
-      // Both occurrences of the live fiat in the sentence are the constant.
-      const occurrences = (
-        messages[0].text.match(new RegExp(LIVE_SETTLEMENT_FIAT, "g")) ?? []
-      ).length
-      expect(occurrences).toBe(2)
-    }
+    expect(messages[0]).toMatchObject({
+      kind: "text",
+      text: "We settle in NGN for now — GHS isn't live yet. Want to continue in NGN?",
+    })
   })
 })

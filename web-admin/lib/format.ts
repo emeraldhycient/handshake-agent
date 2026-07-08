@@ -12,7 +12,12 @@
  */
 import type { CurrencyAmount } from "@/types/components"
 
-/** Display symbols for the supported fiats (mirrors api configuration.ts catalog). */
+/**
+ * Static display symbols for the BUILT-IN fiats (mirrors api configuration.ts
+ * catalog). This is the OFFLINE FALLBACK only — the live source of truth is the
+ * admin catalog read hydrated via `hydrateFiatDisplay`, which also covers
+ * runtime admin-added currencies (a code known to neither falls back to itself).
+ */
 export const FIAT_SYMBOLS: Record<string, string> = {
   NGN: "₦",
   GHS: "GH₵",
@@ -24,25 +29,77 @@ export const FIAT_SYMBOLS: Record<string, string> = {
   USD: "$",
 }
 
-/** Resolve a fiat display symbol from its ISO code; unknown → the code itself. */
-export function fiatSymbolFor(currency: string): string {
-  return FIAT_SYMBOLS[currency] ?? currency
+/** Per-currency display metadata hydrated from the admin catalog read. */
+interface FiatDisplayMeta {
+  symbol: string
+  decimals: number
 }
 
-/** True when `currency` is a known fiat (has a symbol in the catalog), not a crypto asset. */
-export function isFiat(currency: string): boolean {
-  return currency in FIAT_SYMBOLS
+/** Default fraction digits when a currency has no configured decimals. */
+const DEFAULT_FIAT_DECIMALS = 2
+
+// Module-level registry — plain state (no React) so lib/format stays a leaf
+// module usable from row-builders, hooks, and components alike.
+let configuredFiatDisplay: Record<string, FiatDisplayMeta> = {}
+
+/**
+ * Replace the fiat display registry with the admin catalog's fiat entries
+ * (code → symbol + decimals, built-in AND runtime custom). Called by the data
+ * layer whenever the catalog read resolves — never from a component (`lib/`
+ * stays React-free). Passing an empty array clears back to the offline fallback.
+ */
+export function hydrateFiatDisplay(
+  fiats: ReadonlyArray<{ code: string; symbol: string; decimals: number }>
+): void {
+  const next: Record<string, FiatDisplayMeta> = {}
+  for (const f of fiats) {
+    next[f.code] = { symbol: f.symbol, decimals: f.decimals }
+  }
+  configuredFiatDisplay = next
 }
 
 /**
- * Format a precise fiat amount as "<symbol>X,XXX.XX". A known symbol prefixes with
- * no space ("₦20,000.00"); an unknown currency shows the code + a space
- * ("XOF 1,000.00"). A negative sign leads the whole figure ("-₦4,950.00", not
- * "₦-4,950.00"). Non-finite input → "<prefix>—".
+ * Resolve a fiat display symbol from its ISO code: hydrated registry first,
+ * then the static fallback map, then the code itself.
+ */
+export function fiatSymbolFor(currency: string): string {
+  return (
+    configuredFiatDisplay[currency]?.symbol ?? FIAT_SYMBOLS[currency] ?? currency
+  )
+}
+
+/**
+ * True when `currency` is a known fiat, not a crypto asset — the hydrated
+ * registry (which includes runtime admin-added fiats) unioned with the static
+ * fallback map, so a custom fiat is never misclassified as crypto once the
+ * catalog has loaded.
+ */
+export function isFiat(currency: string): boolean {
+  return currency in configuredFiatDisplay || currency in FIAT_SYMBOLS
+}
+
+/**
+ * The fiat codes the console currently knows: the hydrated catalog's codes
+ * (in catalog order) once loaded, else the built-in fallback set. Drives
+ * currency filter/selector option lists so runtime-added fiats appear.
+ */
+export function knownFiatCodes(): string[] {
+  const hydrated = Object.keys(configuredFiatDisplay)
+  return hydrated.length > 0 ? hydrated : Object.keys(FIAT_SYMBOLS)
+}
+
+/**
+ * Format a precise fiat amount as "<symbol>X,XXX.XX" (the currency's configured
+ * decimals — default 2). A known symbol prefixes with no space ("₦20,000.00");
+ * an unknown currency shows the code + a space ("XOF 1,000.00"). A negative
+ * sign leads the whole figure ("-₦4,950.00", not "₦-4,950.00"). Non-finite
+ * input → "<prefix>—".
  */
 export function formatFiat(value: string | number, currency: string): string {
-  const symbol = FIAT_SYMBOLS[currency]
+  const configured = configuredFiatDisplay[currency]
+  const symbol = configured?.symbol ?? FIAT_SYMBOLS[currency]
   const prefix = symbol ?? `${currency} `
+  const decimals = configured?.decimals ?? DEFAULT_FIAT_DECIMALS
   const n = typeof value === "string" ? parseFloat(value) : value
   if (!Number.isFinite(n)) return `${prefix}—`
   const sign = n < 0 ? "-" : ""
@@ -50,8 +107,8 @@ export function formatFiat(value: string | number, currency: string): string {
     sign +
     prefix +
     Math.abs(n).toLocaleString("en-NG", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
     })
   )
 }

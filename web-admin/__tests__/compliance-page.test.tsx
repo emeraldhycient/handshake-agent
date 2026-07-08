@@ -42,12 +42,14 @@ import {
   listComplianceEvents,
   getComplianceEvent,
   disposeComplianceEvent,
+  listTravelRule,
 } from "@/lib/api/compliance"
 
 const mockGetMe = vi.mocked(getMe)
 const mockListEvents = vi.mocked(listComplianceEvents)
 const mockGetEvent = vi.mocked(getComplianceEvent)
 const mockDispose = vi.mocked(disposeComplianceEvent)
+const mockListTravelRule = vi.mocked(listTravelRule)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -112,6 +114,43 @@ beforeEach(() => {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("CompliancePage", () => {
+  it("renders Travel Rule fiat equivalents in each record's OWN fiatCurrency", async () => {
+    // Two captures valued in different fiats at capture time — never assumed NGN.
+    mockListTravelRule.mockResolvedValue({
+      items: [
+        {
+          id: "aa111111-1111-4111-8111-111111111111",
+          transactionId: "bb111111-1111-4111-8111-111111111111",
+          asset: "USDT",
+          amount: "3500",
+          amountFiat: "5250000",
+          fiatCurrency: "NGN",
+          triggeringFactor: "threshold",
+          capturedAt: "2026-07-01T00:00:00.000Z",
+          reportedAt: null,
+        },
+        {
+          id: "cc111111-1111-4111-8111-111111111111",
+          transactionId: "dd111111-1111-4111-8111-111111111111",
+          asset: "USDT",
+          amount: "1200",
+          amountFiat: "18360",
+          fiatCurrency: "GHS",
+          triggeringFactor: "threshold",
+          capturedAt: "2026-07-02T00:00:00.000Z",
+          reportedAt: null,
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole("tab", { name: "Travel Rule" }))
+
+    expect(await screen.findByText("₦5,250,000.00")).toBeInTheDocument()
+    expect(screen.getByText("GH₵18,360.00")).toBeInTheDocument()
+  })
+
   it("disposes a flagged event with the chosen status", async () => {
     const user = userEvent.setup()
     renderPage()

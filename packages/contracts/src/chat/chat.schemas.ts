@@ -113,6 +113,13 @@ export const AgentTurnOutcomeSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('currency_not_live'),
     currency: FiatCurrencySchema,
+    /**
+     * The fiat codes the platform can settle TODAY (AssetRegistry enabled set),
+     * so the client copy ("we currently settle in NGN and GHS") is driven by the
+     * server's live catalog instead of a hardcoded constant. Optional for
+     * backwards compatibility with persisted history rows that pre-date it.
+     */
+    liveCurrencies: z.array(FiatCurrencySchema).optional(),
   }),
   TransactionHistoryResponseSchema.extend({ kind: z.literal('transactions') }),
 ])

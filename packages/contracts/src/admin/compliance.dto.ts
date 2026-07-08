@@ -195,12 +195,16 @@ export const AmlRuleUpdateRequestSchema = z.object({
 export type AmlRuleUpdateRequest = z.infer<typeof AmlRuleUpdateRequestSchema>;
 
 // ── Travel Rule — qualifying-transfer capture (read-only) ──────────────────────────
+// `amountFiat` is the fiat-equivalent snapshot used for the threshold evaluation;
+// `fiatCurrency` is the currency that equivalent was valued in at capture time
+// (the quote/default fiat — never assumed NGN).
 export const TravelRuleItemSchema = z.object({
   id: z.string().uuid(),
   transactionId: z.string(),
   asset: z.string(),
   amount: z.string(),
   amountFiat: z.string(),
+  fiatCurrency: z.string(),
   triggeringFactor: z.string(),
   capturedAt: z.string(),
   reportedAt: z.string().nullable(),

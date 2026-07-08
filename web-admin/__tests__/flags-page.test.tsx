@@ -111,20 +111,28 @@ describe("FlagsPage (wired to registry flags)", () => {
       name: /Disable swap\.enabled/i,
     })
 
-    // Clicking opens the maker-checker modal but does NOT flip yet (dual-control).
+    // Clicking opens the confirm modal but does NOT flip yet.
     await user.click(toggle)
     expect(toggle).toHaveAttribute("aria-checked", "true")
     const dialog = screen.getByRole("dialog")
     expect(
       within(dialog).getByText(/Disable swap\.enabled/i)
     ).toBeInTheDocument()
-    // Nothing persisted until the maker-checker submit fires.
+    // HONEST copy: this surface applies immediately after step-up — it never
+    // enters a pending-approval queue, so the modal must not claim it does.
+    expect(
+      within(dialog).getByText(/applies immediately/i)
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).queryByText(/pending approval/i)
+    ).not.toBeInTheDocument()
+    // Nothing persisted until the confirm fires.
     expect(mockSet).not.toHaveBeenCalled()
 
-    // Approving fires the real config-override PATCH against the BACKING key with the
-    // toggled boolean (swap was ON → persists false), and toasts the new state.
+    // Confirming fires the real config-override PATCH against the BACKING key with
+    // the toggled boolean (swap was ON → persists false), and toasts the new state.
     await user.click(
-      within(dialog).getByRole("button", { name: /Submit for approval/i })
+      within(dialog).getByRole("button", { name: /Confirm change/i })
     )
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
@@ -139,24 +147,23 @@ describe("FlagsPage (wired to registry flags)", () => {
     expect(toasts[0].message).toMatch(/off/)
   })
 
-  it("does not call setSetting for an UNBACKED flag (no registry key)", async () => {
-    const user = userEvent.setup()
+  it("renders UNBACKED flags as read-only 'Not yet wired' rows (no switch, no fake toggle)", async () => {
     renderPage()
 
-    // voice_notes.web has no settingKey → its flip is an acknowledged intent only.
-    const toggle = await screen.findByRole("switch", {
-      name: /Disable voice_notes\.web/i,
-    })
-    await user.click(toggle)
-    await user.click(
-      within(screen.getByRole("dialog")).getByRole("button", {
-        name: /Submit for approval/i,
-      })
-    )
+    await screen.findByRole("switch", { name: /Disable swap\.enabled/i })
 
-    expect(mockSet).not.toHaveBeenCalled()
-    // A toast still acknowledges the (non-persisted) intent.
-    expect(defaultToastStore.getState().toasts).toHaveLength(1)
+    // voice_notes.web has no registry key → no switch to flip, no modal to open,
+    // and no fabricated "eval → on" claim — an honest read-only pill instead.
+    expect(
+      screen.queryByRole("switch", { name: /voice_notes\.web/i })
+    ).not.toBeInTheDocument()
+    expect(screen.getByText("voice_notes.web")).toBeInTheDocument()
+    // Four unbacked design flags → four read-only pills.
+    expect(screen.getAllByText("Not yet wired")).toHaveLength(4)
+    // Only the two registry-backed flags expose a switch.
+    expect(screen.getAllByRole("switch")).toHaveLength(2)
+    // No fake-success toast path exists for unbacked flags.
+    expect(defaultToastStore.getState().toasts).toHaveLength(0)
   })
 
   it("leaves the row unchanged when the modal is cancelled", async () => {

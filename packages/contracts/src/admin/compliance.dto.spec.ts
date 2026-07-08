@@ -368,6 +368,7 @@ describe("TravelRuleItemSchema / ListResponse", () => {
     asset: "USDT",
     amount: "1500",
     amountFiat: "2400000.00",
+    fiatCurrency: "NGN",
     triggeringFactor: "amount_threshold",
     capturedAt: "2026-01-01T00:00:00.000Z",
     reportedAt: null,
@@ -375,6 +376,11 @@ describe("TravelRuleItemSchema / ListResponse", () => {
 
   it("accepts a well-formed item with a null reportedAt", () => {
     expect(TravelRuleItemSchema.parse(item)).toEqual(item);
+  });
+
+  it("requires fiatCurrency (compliance export must state the valuation currency)", () => {
+    const { fiatCurrency: _dropped, ...withoutCurrency } = item;
+    expect(() => TravelRuleItemSchema.parse(withoutCurrency)).toThrow();
   });
 
   it("accepts a reportedAt timestamp", () => {

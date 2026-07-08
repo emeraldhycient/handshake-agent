@@ -102,8 +102,8 @@ describe("statusMeta", () => {
 
 describe("fmtFiat", () => {
   it("groups + prefixes ₦ for NGN, a code for other currencies, and — for null", () => {
-    expect(fmtFiat("1500000", "NGN")).toBe("₦1,500,000")
-    expect(fmtFiat("1500", "USD")).toBe("USD 1,500")
+    expect(fmtFiat("1500000", "NGN")).toBe("₦1,500,000.00")
+    expect(fmtFiat("1500", "USD")).toBe("$1,500.00")
     expect(fmtFiat(null, "NGN")).toBe("—")
   })
   it("returns the raw string for a non-numeric amount", () => {

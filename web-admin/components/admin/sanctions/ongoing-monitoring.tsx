@@ -1,12 +1,11 @@
 "use client"
 
-import { useMemo, useState, type ReactNode } from "react"
+import { useMemo, type ReactNode } from "react"
 
-import { Switch } from "@/components/ui/switch"
+import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useSanctionsMonitoring } from "@/lib/query/hooks"
 import { toMonitorRows } from "@/lib/sanctions/format"
-import type { SanctionsMonitoringView } from "@handshake-agent/contracts"
 import type { SanctionsMonitorRow } from "@/types/components"
 
 /** Card chrome shared by every branch of the ongoing-monitoring section. */
@@ -23,25 +22,16 @@ function MonitoringCard({ children }: { children: ReactNode }) {
 
 /**
  * The ongoing-monitoring card (design lines 17–20). Rows are seeded from the real
- * `useSanctionsMonitoring()` view (four policy flags from layered config), then each
- * Switch is CONTROLLED off local `useState` so it flips + holds when clicked (persisting
- * a toggle is a Phase-7 write). Four async branches render.
+ * `useSanctionsMonitoring()` view (four policy flags from layered config) and render
+ * as READ-ONLY status pills: there is no write path for the monitoring policy, so a
+ * flippable switch would only mutate local state and lie to the operator. The policy
+ * is tuned through /settings (layered config). Four async branches render.
  */
 export function OngoingMonitoring() {
   const monitoring = useSanctionsMonitoring()
-  // Local optimistic soft-toggle overrides; the base value comes from the fetched view.
-  const [overrides, setOverrides] = useState<
-    Partial<Record<keyof SanctionsMonitoringView, boolean>>
-  >({})
   const rows = useMemo<SanctionsMonitorRow[]>(
-    () =>
-      monitoring.data
-        ? toMonitorRows(monitoring.data).map((r) => ({
-            ...r,
-            on: overrides[r.key] ?? r.on,
-          }))
-        : [],
-    [monitoring.data, overrides]
+    () => (monitoring.data ? toMonitorRows(monitoring.data) : []),
+    [monitoring.data]
   )
 
   if (monitoring.isLoading) {
@@ -93,13 +83,15 @@ export function OngoingMonitoring() {
             className="flex items-center justify-between gap-4 border-b border-line2 py-2.5 last:border-b-0"
           >
             <span className="text-[12.5px] text-ink2">{row.label}</span>
-            <Switch
-              checked={row.on}
-              onCheckedChange={(next) =>
-                setOverrides((prev) => ({ ...prev, [row.key]: next }))
-              }
-              aria-label={row.label}
-            />
+            {/* Read-only status pill — the text carries the state (§13.8). */}
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-0.5 text-[10.5px] font-bold",
+                row.on ? "bg-sok text-tok" : "bg-card2 text-ink3"
+              )}
+            >
+              {row.on ? "On" : "Off"}
+            </span>
           </li>
         ))}
       </ul>
