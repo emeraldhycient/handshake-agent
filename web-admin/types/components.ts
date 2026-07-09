@@ -2661,10 +2661,16 @@ export interface FlowModalBaseProps {
  * Continue. `onContinue` receives the entered reason + selected category.
  */
 export interface ReasonModalProps extends FlowModalBaseProps {
-  /** Called with the captured reason once a non-empty reason is entered. */
+  /** Called with the captured reason once a reason of `minLength`+ chars is entered. */
   onContinue: (reason: string, category: string) => void
   /** Override the reason-category chips (defaults to the design's five). */
   categories?: readonly string[]
+  /**
+   * Minimum trimmed reason length before Continue enables. Defaults to 1 (any
+   * non-empty reason). Four-eyes ChangeRequest flows pass 3 to mirror the api's
+   * `CreateChangeRequestSchema.reason` floor so a too-short reason can never raise.
+   */
+  minLength?: number
 }
 
 /** One "Itemized effect" key/value row in the engine-action modal. */

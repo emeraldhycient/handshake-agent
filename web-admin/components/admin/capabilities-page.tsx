@@ -8,10 +8,11 @@
  * kill-switch — dual-control, never a direct flip; nothing moves money (§3.1).
  */
 import { useCapabilityToggles } from "@/lib/hooks/use-capability-toggles"
-import { MakerCheckerModal } from "@/components/admin/flows"
+import { MakerCheckerModal, ReasonModal } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { Skeleton } from "@/components/ui/skeleton"
 import { CapabilityRowCard } from "@/components/admin/capabilities/capability-row-card"
+import { MIN_CHANGE_REQUEST_REASON } from "@/constants/approvals"
 
 export function CapabilitiesPage() {
   const c = useCapabilityToggles()
@@ -75,9 +76,21 @@ export function CapabilitiesPage() {
         </div>
       )}
 
-      {/* Maker-checker (kill-switch = dual control) */}
+      {/* Kill-switch flip chain: reason → dual-control. Submitting RAISES a four-eyes
+          capability_flip ChangeRequest — it does not flip the switch directly. */}
+      <ReasonModal
+        open={c.step === "reason"}
+        onOpenChange={(open) => !open && c.closeToggle()}
+        title={
+          c.pending
+            ? `${c.pending.on ? "Disable" : "Enable"} ${c.pending.label}`
+            : "Toggle capability"
+        }
+        minLength={MIN_CHANGE_REQUEST_REASON}
+        onContinue={c.onReasonContinue}
+      />
       <MakerCheckerModal
-        open={c.pending !== null}
+        open={c.step === "maker"}
         onOpenChange={(open) => !open && c.closeToggle()}
         title={
           c.pending
@@ -85,10 +98,11 @@ export function CapabilitiesPage() {
             : "Toggle capability"
         }
         diff={c.diff}
+        mode="dual-control"
         onSubmit={c.approveToggle}
       />
 
-      {/* Server-side step-up re-auth: a 403 on the capability PATCH opens this. */}
+      {/* Server-side step-up re-auth: a 403 on the capability raise opens this. */}
       <StepUpDialog
         open={c.stepUp.open}
         mfaEnabled={c.me.data?.mfaEnabled ?? false}

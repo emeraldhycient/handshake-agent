@@ -23,6 +23,13 @@ export const KIND_META: Record<
   payout_release: { label: "Payout release", variant: "warn" },
 }
 
+/**
+ * The minimum trimmed reason length before a four-eyes ChangeRequest can be raised —
+ * mirrors the api's `CreateChangeRequestSchema.reason` floor (min 3). The ReasonModal
+ * enforces it (Continue stays disabled below it); the raising hooks guard defensively.
+ */
+export const MIN_CHANGE_REQUEST_REASON = 3
+
 /** The reason box's document glyph (design line 16). */
 export const REASON_ICON =
   "M8 10h8M8 14h5M6 4h12a1 1 0 0 1 1 1v14l-4-3H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"

@@ -46,8 +46,10 @@ import type { UdFlowConfig, UdFlowStep, UdTab } from "@/types/components"
  * Funds/identity safety (§3.1/§3.3/§3.4): the model only proposes. Each sensitive
  * mutation runs through `runStepUpMutation` → `useStepUpRetry`, so a 403
  * ADMIN_STEP_UP_REQUIRED opens the real StepUpDialog and replays after re-auth.
- * A refund/manual-credit/tier-override is a four-eyes maker-checker request that a
- * SECOND admin approves — nothing here writes a raw ledger entry or moves money.
+ * Manual-credit is the one four-eyes maker-checker request here (it lands in a SECOND
+ * admin's approvals inbox); the per-user tier override applies IMMEDIATELY after step-up
+ * (PATCH /admin/users/:id/tier has no maker-checker kind — do not label it dual-control).
+ * Nothing here writes a raw ledger entry or moves money.
  */
 export function useUserDetailScreen(userId: string) {
   const router = useRouter()

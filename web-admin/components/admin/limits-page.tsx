@@ -14,6 +14,7 @@ import { SettingValueModal } from "@/components/admin/flows/setting-value-modal"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { useLimitsEditor } from "@/lib/hooks/use-limits-editor"
 import { LimitsBoard } from "@/components/admin/limits/limits-board"
+import { MIN_CHANGE_REQUEST_REASON } from "@/constants/approvals"
 
 export function LimitsPage() {
   const l = useLimitsEditor()
@@ -73,8 +74,9 @@ export function LimitsPage() {
         />
       )}
 
-      {/* Edit flow: new value → reason → confirm. The REAL step-up is
-          server-driven — the PATCH 403s and the StepUpDialog below replays it. */}
+      {/* Edit flow: new value → reason → dual-control. Submitting RAISES a four-eyes
+          tier_override ChangeRequest — it does not apply. The REAL step-up is
+          server-driven — the raise 403s and the StepUpDialog below replays it. */}
       <SettingValueModal
         open={l.flow === "value"}
         onOpenChange={(open) => (open ? l.setFlow("value") : l.closeFlow())}
@@ -90,17 +92,19 @@ export function LimitsPage() {
         open={l.flow === "reason"}
         onOpenChange={(open) => (open ? l.setFlow("reason") : l.closeFlow())}
         title={l.flowTitle}
-        onContinue={() => l.setFlow("maker")}
+        minLength={MIN_CHANGE_REQUEST_REASON}
+        onContinue={l.onReasonContinue}
       />
       <MakerCheckerModal
         open={l.flow === "maker"}
         onOpenChange={(open) => (open ? l.setFlow("maker") : l.closeFlow())}
         title="Update limit"
         diff={l.makerDiff}
+        mode="dual-control"
         onSubmit={l.applyEdit}
       />
 
-      {/* Server-side step-up re-auth: a 403 on the PATCH opens this; it replays on re-auth. */}
+      {/* Server-side step-up re-auth: a 403 on the raise opens this; it replays on re-auth. */}
       <StepUpDialog
         open={l.stepUp.open}
         mfaEnabled={l.me.data?.mfaEnabled ?? false}
