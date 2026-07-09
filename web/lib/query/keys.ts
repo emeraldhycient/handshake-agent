@@ -23,4 +23,5 @@ export const qk = {
   chatHistory: ["chatHistory"] as const,
   beneficiaries: (type: "bank_account" | "crypto_address") =>
     ["beneficiaries", type] as const,
+  banks: (country: string) => ["banks", country] as const,
 } as const

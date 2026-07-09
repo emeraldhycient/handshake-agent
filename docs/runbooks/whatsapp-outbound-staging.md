@@ -141,7 +141,7 @@ Sign the body: `x-blockradar-signature: <HMAC-SHA512(body, BLOCKRADAR_API_KEY)>`
 **What happens:**
 
 1. `sell_crypto` intent → KYC guard (same as §5) → resolve default `bank_account` beneficiary.
-2. **No beneficiary found:** ConversationService either sends the `WHATSAPP_BENEFICIARY_FLOW_ID` Form (bank-account add/select screen) or — if the var is unset — sends a plain-text message: "Please add a bank account to sell crypto. Once added, send your sell request again." The Flow endpoint handles `beneficiary_add` (bank account fields: `accountNumber`, `bankCode`, `accountName`, `label`) and `beneficiary_select` (selecting an existing one).
+2. **No beneficiary found:** ConversationService either sends the `WHATSAPP_BENEFICIARY_FLOW_ID` Form (bank-account add/select screen, seeded with the sell's `currency`) or — if the var is unset — sends a plain-text message: "Please add a bank account to sell crypto. Once added, send your sell request again." The Flow endpoint handles `beneficiary_add` (bank account fields: `accountNumber`, `bankCode`, `accountName`, `label`, `currency`, plus a `pin` collected on the E2E Flow's PIN screen — never plaintext chat, §3.5) and `beneficiary_select` (selecting an existing one).
 3. **Beneficiary found:** `ProposalService.createSellProposal` is called; a `SELL_CONFIRM` screen Flow (or itemized text fallback) is sent.
 4. User completes the Flow (confirms + enters PIN). Flow endpoint verifies the `flow_token`, resolves proposal type `'sell'`, calls `ExecutionService.executeSell` (KYC + velocity gate re-checked server-side; directive consumed; USDT debited from `WalletBalance`; Flutterwave payout initiated).
 5. Engine sends a provisional reply: "Your payout has been initiated. You will be notified once it completes."
@@ -169,9 +169,9 @@ Flutterwave calls `POST /webhooks/flutterwave` with event `transfer.completed`. 
 
 When `WHATSAPP_BENEFICIARY_FLOW_ID` is set and no default bank beneficiary exists:
 
-1. User receives the beneficiary Form (add/select screen).
-2. User fills in `accountNumber`, `bankCode` (e.g. `'058'` for GTBank), `accountName`, optional `label`.
-3. Flow endpoint `data_exchange` action `beneficiary_add` → `BeneficiaryService.addBankAccount` → `Beneficiary` row created with `verified=true` (mock auto-verifies; real path = name-enquiry API).
+1. User receives the beneficiary Form (add/select screen). The sell's payout `currency` is seeded into the Flow (default NGN); the bank **country is derived server-side** from that currency — a client-supplied country is never trusted (§3.3).
+2. User fills in `accountNumber`, `bankCode` (e.g. `'058'` for GTBank), `accountName`, optional `label`, and their transaction **PIN** on the Flow's PIN screen (E2E-encrypted; §3.5).
+3. Flow endpoint `data_exchange` action `beneficiary_add` runs the **R2 step-up chain** first — `PinService.verifyPin` (lockout-protected) + a device-bound step-up recorded against the user's pinned device (fail-closed: no device → ERROR screen, nothing persisted) — then `BeneficiaryService.addBankAccount`. For NGN the account name is resolved via name-enquiry and persisted `verified`; for a currency whose rail cannot run name-enquiry (non-NG) the account is persisted `unverified` and the reply notes the name could not be auto-verified.
 4. User re-sends the sell intent — now the beneficiary is found and the flow proceeds.
 
 ---
@@ -185,7 +185,7 @@ When `WHATSAPP_BENEFICIARY_FLOW_ID` is set and no default bank beneficiary exist
 **What happens:**
 
 1. `send_crypto` intent → KYC guard → resolve default `crypto_address` beneficiary.
-2. **No beneficiary:** same as §6 but for crypto addresses; Flow screen `beneficiary_add` accepts `address`, `network`, `asset`, `label`.
+2. **No beneficiary:** same as §6 but for crypto addresses; Flow screen `beneficiary_add` accepts `address`, `network`, `asset`, `label`, plus the `pin` collected on the E2E Flow's PIN screen (§3.5).
 3. **Beneficiary found:** `ProposalService.createSendProposal` runs 7 guards in order before creating the proposal:
    - Balance ≥ `totalDebit` (`cryptoAmount + networkFeeCrypto`).
    - KYC verified + velocity not exceeded (on NGN-equivalent value).
@@ -218,8 +218,8 @@ Blockradar calls `POST /webhooks/blockradar` with event `withdraw.success` or `w
 
 Same Flow endpoint as §6a; discriminated by field presence (`address` present → crypto_address path):
 
-1. User fills in `address` (TRC-20 address, validated against `^T[1-9A-HJ-NP-Za-km-z]{33}$`), `network` (`TRON`), `asset` (`USDT`), optional `label`.
-2. `BeneficiaryService.addCryptoAddress` → `Beneficiary` row created with `firstUseLockedUntil` set to 48 hours from now (cooling-off). For staging, update this to a past date directly in Prisma Studio to skip the wait.
+1. User fills in `address` (TRC-20 address, validated against `^T[1-9A-HJ-NP-Za-km-z]{33}$`), `network` (`TRON`), `asset` (`USDT`), optional `label`, and their transaction `pin` on the E2E PIN screen (§3.5).
+2. Flow endpoint runs the **R2 step-up chain** (PIN verify + device-bound step-up, fail-closed) then `BeneficiaryService.addCryptoAddress` → `Beneficiary` row created with `firstUseLockedUntil` set to 48 hours from now (cooling-off — additional to, not a replacement for, the step-up). For staging, update this to a past date directly in Prisma Studio to skip the wait.
 
 ---
 

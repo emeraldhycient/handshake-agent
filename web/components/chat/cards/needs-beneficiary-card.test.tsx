@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 // Mock the query hooks so the card renders without a real QueryClient/network.
 const useBeneficiaries = vi.fn()
+const useBanks = vi.fn()
+const useConfig = vi.fn()
+const useProfile = vi.fn()
 const addBankMutate = vi.fn()
 const addCryptoMutate = vi.fn()
 const deleteMutate = vi.fn()
@@ -25,9 +28,15 @@ const useDeleteBeneficiary = vi.fn(() => ({
 }))
 vi.mock("@/lib/query/beneficiaries", () => ({
   useBeneficiaries: (...a: unknown[]) => useBeneficiaries(...a),
+  useBanks: (...a: unknown[]) => useBanks(...a),
   useAddBankAccount: () => useAddBankAccount(),
   useAddCryptoAddress: () => useAddCryptoAddress(),
   useDeleteBeneficiary: () => useDeleteBeneficiary(),
+}))
+vi.mock("@/lib/query/hooks", () => ({ useConfig: () => useConfig() }))
+vi.mock("@/lib/query/auth", () => ({ useProfile: () => useProfile() }))
+vi.mock("@/lib/device", () => ({
+  getDeviceFingerprint: () => "web-test-fingerprint",
 }))
 
 import { NeedsBeneficiaryCard } from "./needs-beneficiary-card"
@@ -38,6 +47,16 @@ describe("NeedsBeneficiaryCard", () => {
     addBankMutate.mockReset()
     addCryptoMutate.mockReset()
     deleteMutate.mockReset()
+    // Add-bank form data hooks — a single NGN currency (no picker) + GTBank list.
+    useConfig.mockReturnValue({
+      data: { fiats: [{ code: "NGN", displayName: "Naira", symbol: "₦", decimals: 2 }] },
+    })
+    useProfile.mockReturnValue({ data: { fiatCurrency: "NGN" } })
+    useBanks.mockReturnValue({
+      data: { banks: [{ name: "GTBank", code: "058" }] },
+      isPending: false,
+      isError: false,
+    })
   })
 
   it("renders existing bank beneficiaries and resolves on select", async () => {
@@ -118,16 +137,23 @@ describe("NeedsBeneficiaryCard", () => {
     // Bank is now a dropdown (users don't know codes) — pick GTBank (code 058).
     await userEvent.selectOptions(screen.getByLabelText("Bank"), "058")
     await userEvent.type(screen.getByLabelText("Label"), "My GTB")
+    // Adding a payout destination is step-up gated — PIN is now required.
+    await userEvent.type(screen.getByLabelText("Transaction PIN"), "1379")
     await userEvent.click(
       screen.getByRole("button", { name: /add bank account/i })
     )
 
     await waitFor(() => expect(addBankMutate).toHaveBeenCalled())
-    expect(addBankMutate).toHaveBeenCalledWith({
-      accountNumber: "0123456789",
-      bankCode: "058",
-      label: "My GTB",
-    })
+    expect(addBankMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountNumber: "0123456789",
+        bankCode: "058",
+        label: "My GTB",
+        currency: "NGN",
+        pin: "1379",
+        deviceFingerprint: "web-test-fingerprint",
+      })
+    )
 
     // The resolved name is shown and onResolve must NOT have fired yet — the
     // user has to confirm the name belongs to them (funds-safety, prevents a

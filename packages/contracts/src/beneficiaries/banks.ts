@@ -1,23 +1,36 @@
 /**
- * Canonical Nigerian bank list (name + NIBSS/Flutterwave bank code).
+ * Bank-list contract + the canonical Nigerian offline fallback.
  *
- * Shared source of truth so the web bank-account dropdown and the WhatsApp
- * Flow bank picker present the SAME options, and the codes line up with what
- * the Flutterwave name-enquiry / payout APIs expect (account_bank = code).
+ * The `GET /beneficiaries/banks?country=` endpoint is backed by Flutterwave's
+ * real `GET /banks/{country}` API (per-country, cached server-side).
+ * `NIGERIAN_BANKS` remains ONLY as an offline fallback so the web bank-account
+ * dropdown and the WhatsApp Flow bank picker still render when the endpoint is
+ * unreachable. Codes line up with what the Flutterwave name-enquiry / payout
+ * APIs expect (account_bank = code).
  *
  * Users do not know bank codes — surfaces should show `name` and submit `code`.
- *
- * NOTE: a future enhancement can replace this static list with a `/banks`
- * endpoint backed by Flutterwave's GET /banks (admin-tunable, CLAUDE.md §7).
- * The codes here are the standard NIBSS codes Flutterwave accepts.
  */
 
-export interface Bank {
-  /** Human-readable bank name shown in the dropdown. */
-  readonly name: string;
-  /** NIBSS/Flutterwave bank code submitted as the beneficiary bankCode. */
-  readonly code: string;
-}
+import { z } from 'zod'
+
+/** A single bank option: display `name` + submittable `code`. */
+export const BankSchema = z.object({
+  name: z.string(),
+  code: z.string(),
+})
+export type Bank = z.infer<typeof BankSchema>
+
+/** Response of `GET /beneficiaries/banks?country=<ISO alpha-2>`. */
+export const BankListResponseSchema = z.object({
+  banks: z.array(BankSchema),
+})
+export type BankListResponse = z.infer<typeof BankListResponseSchema>
+
+/** Query for `GET /beneficiaries/banks` — ISO 3166-1 alpha-2 country code. */
+export const BankListQuerySchema = z.object({
+  country: z.string().trim().length(2),
+})
+export type BankListQuery = z.infer<typeof BankListQuerySchema>
 
 /** Major Nigerian banks + fintechs, sorted by name. Codes are NIBSS/Flutterwave. */
 export const NIGERIAN_BANKS: readonly Bank[] = [

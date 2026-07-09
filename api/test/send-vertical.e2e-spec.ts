@@ -162,7 +162,7 @@ function buildSendExecutionService(
   sessionService: SessionService,
 ): ExecutionService {
   const clock = { now: () => new Date() };
-  const assetRegistry = new AssetRegistry(config as never);
+  const assetRegistry = new AssetRegistry(config);
   seedRegistryAssets(assetRegistry);
   const rateProvider = new ConfigRateProvider(config as never);
   const quotesService = new QuotesService(rateProvider, clock, assetRegistry);
@@ -306,6 +306,8 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
       fakeNameEnquiry,
       assetRegistry,
       config,
+      // Wave G: bank-list port (unused in these flows) — empty stub adapter.
+      { listBanks: () => Promise.resolve([]) },
     );
     complianceService = new ComplianceService(
       sanctionsScreener,

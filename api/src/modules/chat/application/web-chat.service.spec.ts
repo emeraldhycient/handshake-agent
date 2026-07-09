@@ -55,6 +55,7 @@ const fakeWalletService = { getOrProvisionNetworkWallet: jest.fn() };
 const fakeBeneficiaryService = {
   getDefault: jest.fn(),
   resolveByNickname: jest.fn(),
+  listForUser: jest.fn(),
 };
 const fakeHistoryService = { query: jest.fn() };
 const fakeBalanceService = { getBalances: jest.fn() };
@@ -89,6 +90,8 @@ const fakeAssetRegistry = {
   formatFiat: jest.fn((_code: string, amt: string) => `₦${amt}`),
   isCurrencyLive: jest.fn().mockReturnValue(true),
   enabledFiats: jest.fn().mockReturnValue(['NGN']),
+  // Base fiat for the sell currency-match filter (legacy-null payoutCurrency → NGN).
+  defaultFiat: jest.fn().mockReturnValue('NGN'),
   isCapabilityEnabled: jest.fn().mockReturnValue(true),
 };
 
@@ -820,6 +823,75 @@ describe('WebChatService', () => {
       kind: 'needs_beneficiary',
       beneficiaryType: 'bank_account',
     });
+  });
+
+  // ── sell currency filter (Wave G): non-matching default → needs_beneficiary ─
+
+  it('sell_crypto with a currency: routes to a matching-currency default bank', async () => {
+    // Default bank pays out in NGN; sell is NGN → used directly.
+    fakeBeneficiaryService.getDefault.mockResolvedValue({
+      id: 'bank-ngn',
+      payoutCurrency: 'NGN',
+    });
+    fakeProposalService.createSellProposal.mockResolvedValue({
+      proposalId: 'p-sell',
+      quoteId: 'q-2',
+      confirmation: {
+        proposalId: 'p-sell',
+        asset: 'USDT',
+        cryptoAmount: '5',
+        fiatCurrency: 'NGN',
+        netFiatAmount: '4800',
+        fxRate: '1000',
+        processingFeeAmount: '50.00',
+        expiresAt: new Date().toISOString(),
+      },
+    });
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'sell_crypto',
+      asset: 'USDT',
+      cryptoAmount: '5',
+      fiatCurrency: 'NGN',
+    });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'sell',
+    });
+
+    expect(result.outcome).toMatchObject({ kind: 'proposal', txType: 'sell' });
+    expect(fakeBeneficiaryService.getDefault).toHaveBeenCalledWith(
+      'user-1',
+      'bank_account',
+    );
+  });
+
+  it('sell_crypto with a currency: prompts to add a matching-currency bank when only a wrong-currency default exists', async () => {
+    // Default bank pays NGN, but the sell is GHS and there is no GHS bank.
+    fakeBeneficiaryService.getDefault.mockResolvedValue({
+      id: 'bank-ngn',
+      payoutCurrency: 'NGN',
+    });
+    fakeBeneficiaryService.listForUser.mockResolvedValue([
+      { id: 'bank-ngn', payoutCurrency: 'NGN' },
+    ]);
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'sell_crypto',
+      asset: 'USDT',
+      cryptoAmount: '5',
+      fiatCurrency: 'GHS',
+    });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'sell',
+    });
+
+    expect(result.outcome).toMatchObject({
+      kind: 'needs_beneficiary',
+      beneficiaryType: 'bank_account',
+    });
+    expect(fakeProposalService.createSellProposal).not.toHaveBeenCalled();
   });
 
   // ── sell_crypto, verified, beneficiary exists → proposal ──────────────────

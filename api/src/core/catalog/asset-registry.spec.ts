@@ -57,6 +57,7 @@ const STUB_CATALOG = {
       symbol: '₦',
       decimals: 2,
       enabled: true,
+      country: 'NG',
     },
     // Supported but NOT live — matches the multi-currency foundation pattern.
     RWF: {
@@ -65,6 +66,7 @@ const STUB_CATALOG = {
       symbol: 'FRw',
       decimals: 0,
       enabled: false,
+      country: 'RW',
     },
     GHS: {
       code: 'GHS',
@@ -72,6 +74,7 @@ const STUB_CATALOG = {
       symbol: 'GH₵',
       decimals: 2,
       enabled: false,
+      country: 'GH',
     },
   },
   networks: {
@@ -768,6 +771,66 @@ describe('AssetRegistry', () => {
 
     it('returns false for a currency code not in the catalog at all', () => {
       expect(registry.isCurrencyLive('EUR')).toBe(false);
+    });
+  });
+
+  // ── countryForFiat() ──────────────────────────────────────────────────────
+
+  describe('countryForFiat()', () => {
+    it('returns the ISO alpha-2 country for a live fiat', () => {
+      expect(registry.countryForFiat('NGN')).toBe('NG');
+    });
+
+    it('returns the country for a registered-but-not-live fiat', () => {
+      expect(registry.countryForFiat('RWF')).toBe('RW');
+      expect(registry.countryForFiat('GHS')).toBe('GH');
+    });
+
+    it('throws UnsupportedFiatError for a code not in the catalog', () => {
+      expect(() => registry.countryForFiat('EUR')).toThrow(
+        UnsupportedFiatError,
+      );
+    });
+
+    it('throws UnsupportedFiatError for a fiat with no country mapping (fail-closed)', () => {
+      // A runtime custom fiat synced without a country → cannot derive a country.
+      registry.syncCustomFiats([
+        {
+          code: 'XAF',
+          displayName: 'Central African CFA',
+          symbol: 'FCFA',
+          decimals: 0,
+          enabled: false,
+        },
+      ]);
+      expect(() => registry.countryForFiat('XAF')).toThrow(
+        UnsupportedFiatError,
+      );
+    });
+  });
+
+  // ── knownCountries() ──────────────────────────────────────────────────────
+
+  describe('knownCountries()', () => {
+    it('returns the distinct set of catalog fiat countries', () => {
+      const countries = registry.knownCountries();
+      expect(countries).toContain('NG');
+      expect(countries).toContain('RW');
+      expect(countries).toContain('GH');
+    });
+
+    it('omits fiats with no country mapping', () => {
+      registry.syncCustomFiats([
+        {
+          code: 'XAF',
+          displayName: 'Central African CFA',
+          symbol: 'FCFA',
+          decimals: 0,
+          enabled: false,
+        },
+      ]);
+      // XAF has no country → not surfaced; no `undefined` leaks in.
+      expect(registry.knownCountries()).not.toContain(undefined);
     });
   });
 

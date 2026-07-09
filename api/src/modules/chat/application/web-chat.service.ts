@@ -58,6 +58,7 @@ import {
 import type { ProposalService } from '../../transactions/application/proposal.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
 import { maskBeneficiaryDetail } from '../../beneficiaries/application/beneficiary-display';
 import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
 import { StatementTokenService } from '../../transactions/application/statement-token.service';
@@ -298,6 +299,9 @@ export class WebChatService {
           'bank_account',
           input.beneficiaryId,
           intent.recipientNickname,
+          // Filter to banks that pay out in the sell currency so a non-NGN sell
+          // prompts to add a matching-currency bank instead of dead-ending.
+          intent.fiatCurrency,
         );
         if (!sellResolution.resolved) {
           outcome = sellResolution.outcome;
@@ -602,20 +606,28 @@ export class WebChatService {
     type: 'bank_account' | 'crypto_address',
     explicitBeneficiaryId: string | undefined,
     recipientNickname: string | undefined,
+    matchCurrency?: string,
   ): Promise<
     | { resolved: true; beneficiaryId: string }
     | { resolved: false; outcome: AgentTurnOutcome; summaryText: string }
   > {
+    // Explicit pick always wins — the proposal service re-validates ownership,
+    // type, cooling-off, and (for a sell) the payout-currency match (§3.1/§3.3).
     if (explicitBeneficiaryId) {
       return { resolved: true, beneficiaryId: explicitBeneficiaryId };
     }
 
     if (recipientNickname) {
-      const matches = await this.beneficiaryService.resolveByNickname(
+      const all = await this.beneficiaryService.resolveByNickname(
         userId,
         type,
         recipientNickname,
       );
+      // Restrict a currency-scoped payout to matching-currency banks so a
+      // wrong-currency nickname hit does not silently route money.
+      const matches = matchCurrency
+        ? all.filter((b) => this.beneficiaryMatchesCurrency(b, matchCurrency))
+        : all;
       if (matches.length === 1) {
         return { resolved: true, beneficiaryId: matches[0].id };
       }
@@ -635,7 +647,29 @@ export class WebChatService {
           summaryText: `You have ${matches.length} saved recipients called '${recipientNickname}'. Which one did you mean?`,
         };
       }
-      const note = `No saved beneficiary called '${recipientNickname}'. Add one first, or pick from your saved list.`;
+      const note = matchCurrency
+        ? `No ${matchCurrency} bank account called '${recipientNickname}'. Add one first, or pick from your saved list.`
+        : `No saved beneficiary called '${recipientNickname}'. Add one first, or pick from your saved list.`;
+      return {
+        resolved: false,
+        outcome: { kind: 'needs_beneficiary', beneficiaryType: type, note },
+        summaryText: note,
+      };
+    }
+
+    // No nickname: for a currency-scoped payout, prefer a matching-currency bank
+    // (default if it matches, else the single matching one) instead of routing to
+    // a wrong-currency default.
+    if (matchCurrency) {
+      const bank = await this.resolveMatchingCurrencyBank(
+        userId,
+        type,
+        matchCurrency,
+      );
+      if (bank) {
+        return { resolved: true, beneficiaryId: bank.id };
+      }
+      const note = `Please add a ${matchCurrency} bank account first.`;
       return {
         resolved: false,
         outcome: { kind: 'needs_beneficiary', beneficiaryType: type, note },
@@ -655,6 +689,42 @@ export class WebChatService {
           ? 'Please add a bank account first.'
           : 'Please add a crypto address first.',
     };
+  }
+
+  /**
+   * True when a beneficiary's payout currency equals `currency`. Legacy null
+   * payoutCurrency rows predate the currency dimension → treated as the catalog
+   * base fiat (NGN today; post-backfill no bank row is null).
+   */
+  private beneficiaryMatchesCurrency(
+    beneficiary: BeneficiaryRecord,
+    currency: string,
+  ): boolean {
+    const payoutCurrency =
+      beneficiary.payoutCurrency ?? this.assetRegistry.defaultFiat();
+    return payoutCurrency === currency;
+  }
+
+  /**
+   * Resolves the bank to use for a currency-scoped payout without a nickname:
+   * the default when it matches the currency, else the SINGLE matching-currency
+   * bank. Returns null when there is no unambiguous match (none, or several) —
+   * the caller then prompts to add/pick a matching-currency bank.
+   */
+  private async resolveMatchingCurrencyBank(
+    userId: string,
+    type: 'bank_account' | 'crypto_address',
+    currency: string,
+  ): Promise<BeneficiaryRecord | null> {
+    const fallback = await this.beneficiaryService.getDefault(userId, type);
+    if (fallback && this.beneficiaryMatchesCurrency(fallback, currency)) {
+      return fallback;
+    }
+    const all = await this.beneficiaryService.listForUser(userId, type);
+    const matching = all.filter((b) =>
+      this.beneficiaryMatchesCurrency(b, currency),
+    );
+    return matching.length === 1 ? matching[0] : null;
   }
 
   /**

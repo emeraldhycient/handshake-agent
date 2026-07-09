@@ -163,6 +163,8 @@ const stubBankBeneficiary = (): BeneficiaryRecord => ({
   accountNumber: '0123456789',
   accountHolderName: 'Alice Doe',
   bankCode: '058',
+  payoutCurrency: 'NGN',
+  bankCountry: 'NG',
   cryptoAddress: null,
   cryptoAsset: null,
   cryptoNetwork: null,
@@ -183,6 +185,8 @@ const stubCryptoBeneficiary = (): BeneficiaryRecord => ({
   accountNumber: null,
   accountHolderName: null,
   bankCode: null,
+  payoutCurrency: null,
+  bankCountry: null,
   cryptoAddress: 'TXxyzFakeAddress1234567890abcdef12',
   cryptoAsset: 'USDT',
   cryptoNetwork: 'TRON',
@@ -1842,6 +1846,9 @@ describe('ConversationService.handleInbound', () => {
       >
     ).mock.calls[0][0];
     expect(benFlowArg.type).toBe('bank_account');
+    // Wave G: the sell fiat currency is threaded into the add-bank Flow so the
+    // user adds a bank in the correct currency (country derived server-side).
+    expect(benFlowArg.currency).toBe('NGN');
 
     // sendFlow NOT called (no confirmation Flow)
     expect(sender.sendFlow).not.toHaveBeenCalled();
@@ -1849,6 +1856,38 @@ describe('ConversationService.handleInbound', () => {
     // A retry message is sent via sendText
     const sentText = captureFirstSentText(sender);
     expect(sentText).toMatch(/bank|account|retry|sell/i);
+  });
+
+  it('(Wave G) sell_crypto with NO bank beneficiary threads a non-NGN sell currency into the beneficiary Flow', async () => {
+    const agentPort = makeAgentPort({
+      action: 'sell_crypto',
+      asset: 'USDT',
+      cryptoAmount: '3.0625',
+      fiatCurrency: 'GHS',
+    });
+    // null → no default bank beneficiary, so the add-bank Flow is dispatched.
+    const beneficiaryService = makeBeneficiaryService(null);
+
+    const { svc, sender } = buildService({
+      agentPort,
+      beneficiaryService,
+      configService: makeConfigService({
+        flowId: FIXED_FLOW_ID,
+        signingKey: FIXED_SIGNING_KEY,
+      }),
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(sender.sendBeneficiaryFlow).toHaveBeenCalledTimes(1);
+    const benFlowArg = (
+      sender.sendBeneficiaryFlow as jest.Mock<
+        ReturnType<typeof sender.sendBeneficiaryFlow>,
+        [Parameters<typeof sender.sendBeneficiaryFlow>[0]]
+      >
+    ).mock.calls[0][0];
+    expect(benFlowArg.type).toBe('bank_account');
+    expect(benFlowArg.currency).toBe('GHS');
   });
 
   // ── W1: sell_crypto text fallback (no FLOW_ID) ───────────────────────────

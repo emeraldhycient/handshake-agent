@@ -252,6 +252,14 @@ model Beneficiary {
   accountNumber       String?
   accountHolderName   String?
   bankCode            String?
+  /// ISO 3166-1 alpha-2 bank country (e.g. "NG"). Nullable TEXT, app-validated
+  /// (AssetRegistry), mirroring the cryptoAsset precedent — derived server-side
+  /// from payoutCurrency, never trusted from the client. Null on crypto rows.
+  bankCountry         String?
+  /// ISO 4217 payout currency (e.g. "NGN"). Nullable TEXT, app-validated. Drives
+  /// the sell currency-match guard (a sell only routes to a matching-currency
+  /// bank). Null on crypto rows; legacy null bank rows are treated as NGN.
+  payoutCurrency      String?
   // Crypto-address fields (type = crypto_address)
   cryptoAddress       String?
   /// TEXT — validated by AssetRegistry at app layer (dynamic catalog).

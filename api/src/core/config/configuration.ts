@@ -270,6 +270,15 @@ export interface BeneficiaryConfig {
    * A real provider resolves from the bank — this field is mock-only.
    */
   nameEnquiryResolvedName: string;
+  /**
+   * ISO 3166-1 alpha-2 countries whose bank rails support account name-enquiry
+   * (Flutterwave `/accounts/resolve` is effectively NG/NUBAN-only today). When a
+   * bank beneficiary's derived country is in this set, addBankAccount runs the
+   * enquiry and persists the RESOLVED name (verified); otherwise it SKIPS the
+   * enquiry and saves the user-entered name as `unverified` (never fails closed).
+   * Registry-driven so enabling a new market's name-enquiry is a config flip (§7).
+   */
+  nameEnquiryResolvableCountries: string[];
 }
 
 /**
@@ -363,6 +372,15 @@ export interface CatalogFiat {
   symbol: string;
   decimals: number;
   enabled: boolean;
+  /**
+   * ISO 3166-1 alpha-2 country whose banking rails settle this currency
+   * (e.g. NGN → 'NG'). Used to derive a bank beneficiary's country from its
+   * payout currency (server-side; the client-supplied country is never trusted)
+   * and to back the `GET /beneficiaries/banks?country=` dropdown. Optional so a
+   * runtime-added custom fiat without a country mapping is still recognised —
+   * `AssetRegistry.countryForFiat` fails closed when it is absent.
+   */
+  country?: string;
 }
 
 /** Blockchain network entry in the catalog. */
@@ -695,6 +713,7 @@ const buildConfig = (): AppConfig => ({
         symbol: '₦',
         decimals: 2,
         enabled: true,
+        country: 'NG',
       },
       // ── Supported but NOT yet live (enabled: false) ─────────────────────
       // Flip `enabled` to true once the Flutterwave collection + disbursement
@@ -706,6 +725,7 @@ const buildConfig = (): AppConfig => ({
         symbol: 'GH₵',
         decimals: 2,
         enabled: false,
+        country: 'GH',
       },
       KES: {
         code: 'KES',
@@ -713,6 +733,7 @@ const buildConfig = (): AppConfig => ({
         symbol: 'KSh',
         decimals: 2,
         enabled: false,
+        country: 'KE',
       },
       UGX: {
         code: 'UGX',
@@ -720,6 +741,7 @@ const buildConfig = (): AppConfig => ({
         symbol: 'USh',
         decimals: 0,
         enabled: false,
+        country: 'UG',
       },
       TZS: {
         code: 'TZS',
@@ -727,6 +749,7 @@ const buildConfig = (): AppConfig => ({
         symbol: 'TSh',
         decimals: 0,
         enabled: false,
+        country: 'TZ',
       },
       RWF: {
         code: 'RWF',
@@ -734,6 +757,7 @@ const buildConfig = (): AppConfig => ({
         symbol: 'FRw',
         decimals: 0,
         enabled: false,
+        country: 'RW',
       },
       ZAR: {
         code: 'ZAR',
@@ -741,6 +765,7 @@ const buildConfig = (): AppConfig => ({
         symbol: 'R',
         decimals: 2,
         enabled: false,
+        country: 'ZA',
       },
       USD: {
         code: 'USD',
@@ -748,6 +773,7 @@ const buildConfig = (): AppConfig => ({
         symbol: '$',
         decimals: 2,
         enabled: false,
+        country: 'US',
       },
     },
     networks: {
@@ -997,6 +1023,11 @@ const buildConfig = (): AppConfig => ({
     // Default resolved name returned by MockNameEnquiry for all successful lookups.
     // A real provider resolves the actual account-holder name from the bank.
     nameEnquiryResolvedName: 'MOCK ACCOUNT HOLDER',
+    // Countries whose bank rails support account name-enquiry today. NG only
+    // (Flutterwave /accounts/resolve is NUBAN-only); other markets save the
+    // user-entered name as `unverified`. Add a market's code here (config/DB-admin,
+    // §7) once its name-enquiry rail is live — no code change required.
+    nameEnquiryResolvableCountries: ['NG'],
   },
   reconciliation: {
     // Only pick up rows older than 2 minutes so we don't race in-flight webhooks.

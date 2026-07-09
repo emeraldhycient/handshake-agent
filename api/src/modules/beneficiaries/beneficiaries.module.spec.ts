@@ -11,9 +11,14 @@
 
 import { ConfigService } from '@nestjs/config';
 
-import { selectNameEnquiryProvider } from './beneficiaries.module';
+import {
+  selectNameEnquiryProvider,
+  selectBankListProvider,
+} from './beneficiaries.module';
 import { MockNameEnquiry } from './infrastructure/mock-name-enquiry';
 import { FlutterwaveNameEnquiry } from './infrastructure/flutterwave-name-enquiry';
+import { MockBankList } from './infrastructure/mock-bank-list';
+import { FlutterwaveBankList } from './infrastructure/flutterwave-bank-list';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -28,6 +33,8 @@ function stubConfig(value: string | undefined): ConfigService {
 // Minimal stubs — we only test the selection logic, not the adapter behaviour.
 const mockAdapter = {} as unknown as MockNameEnquiry;
 const realAdapter = {} as unknown as FlutterwaveNameEnquiry;
+const mockBankList = {} as unknown as MockBankList;
+const realBankList = {} as unknown as FlutterwaveBankList;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -68,5 +75,22 @@ describe('selectNameEnquiryProvider', () => {
       stubConfig('false'),
     );
     expect(result).toBe(realAdapter);
+  });
+});
+
+describe('selectBankListProvider', () => {
+  it('returns MockBankList by default (mode true / unset), same flag as name-enquiry', () => {
+    expect(
+      selectBankListProvider(mockBankList, realBankList, stubConfig('true')),
+    ).toBe(mockBankList);
+    expect(
+      selectBankListProvider(mockBankList, realBankList, stubConfig(undefined)),
+    ).toBe(mockBankList);
+  });
+
+  it("returns FlutterwaveBankList when NAME_ENQUIRY_MOCK_MODE is exactly 'false'", () => {
+    expect(
+      selectBankListProvider(mockBankList, realBankList, stubConfig('false')),
+    ).toBe(realBankList);
   });
 });

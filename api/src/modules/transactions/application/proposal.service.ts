@@ -55,6 +55,7 @@ import {
 import {
   BeneficiaryNotFoundError,
   BeneficiaryWrongTypeError,
+  BeneficiaryCurrencyMismatchError,
   BeneficiaryCoolingOffError,
 } from '../../beneficiaries/domain/beneficiary-errors';
 import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
@@ -506,6 +507,19 @@ export class ProposalService {
     );
     if (beneficiary === null) {
       throw new BeneficiaryNotFoundError(beneficiaryId);
+    }
+    // Currency-match guard (§3.3): the bank must pay out in the SAME currency as
+    // the sell, or the fiat leg settles to the wrong rail. Legacy null
+    // payoutCurrency rows predate the currency dimension → treated as the catalog
+    // base fiat (NGN today; post-backfill no bank row is null).
+    const payoutCurrency =
+      beneficiary.payoutCurrency ?? this.assetRegistry.defaultFiat();
+    if (payoutCurrency !== intent.fiatCurrency) {
+      throw new BeneficiaryCurrencyMismatchError(
+        beneficiaryId,
+        intent.fiatCurrency,
+        payoutCurrency,
+      );
     }
     // NOTE: production gates on verifiedAt / name-enquiry (beneficiary.verifiedAt !== null).
     // This skeleton accepts any beneficiary regardless of verificationStatus.

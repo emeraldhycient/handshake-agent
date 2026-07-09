@@ -497,6 +497,45 @@ export class AssetRegistry {
   }
 
   /**
+   * Returns the ISO 3166-1 alpha-2 country whose bank rails settle the given
+   * fiat (e.g. `'NGN'` → `'NG'`). Recognises supported-but-not-live fiats too
+   * (enable-agnostic — the bank-list dropdown needs a country before a market is
+   * live). Used to derive a bank beneficiary's country from its payout currency
+   * (server-side; the client-supplied country is never trusted, §3.3).
+   *
+   * @throws {UnsupportedFiatError} when the code is not in the catalog, OR when a
+   *   recognised fiat has no `country` mapping (fail-closed — a country cannot be
+   *   invented for a runtime custom fiat that omitted it).
+   */
+  countryForFiat(code: string): string {
+    const meta = this.resolveFiatMeta(code);
+    if (!meta) {
+      throw new UnsupportedFiatError(code);
+    }
+    if (!meta.country) {
+      throw new UnsupportedFiatError(
+        code,
+        'no country mapping configured for this currency',
+      );
+    }
+    return meta.country;
+  }
+
+  /**
+   * The distinct set of ISO alpha-2 countries across all recognised fiats
+   * (built-in + runtime custom overlay). Backs the `GET /beneficiaries/banks`
+   * country validation — a country outside this set is rejected before any
+   * provider call. Fiats without a `country` mapping are omitted (no `undefined`).
+   */
+  knownCountries(): string[] {
+    const set = new Set<string>();
+    for (const f of this.allFiats()) {
+      if (f.country) set.add(f.country);
+    }
+    return [...set];
+  }
+
+  /**
    * Returns the fiat codes for all currencies that are currently LIVE
    * (i.e. registered in the catalog with `enabled: true`).
    *

@@ -35,6 +35,26 @@ vi.mock("@/lib/query/beneficiaries", () => ({
     isPending: false,
     isError: false,
   }),
+  // The add-bank form loads a per-country bank list.
+  useBanks: () => ({
+    isPending: false,
+    isError: false,
+    data: { banks: [{ name: "GTBank", code: "058" }] },
+  }),
+}))
+// The add-bank form defaults its currency/country from config + profile. Keep
+// the rest of each module real so other cards in the tree are unaffected.
+vi.mock("@/lib/query/hooks", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useConfig: () => ({
+    data: {
+      fiats: [{ code: "NGN", displayName: "Naira", symbol: "₦", decimals: 2 }],
+    },
+  }),
+}))
+vi.mock("@/lib/query/auth", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useProfile: () => ({ data: { fiatCurrency: "NGN" } }),
 }))
 
 import { ChatMessageView } from "./chat-message"

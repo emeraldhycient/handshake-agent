@@ -1,6 +1,7 @@
 import { createZodDto } from 'nestjs-zod';
 import {
   ListBeneficiariesQuerySchema,
+  BankListQuerySchema,
   AddBankAccountRequestSchema,
   AddCryptoAddressRequestSchema,
 } from '@handshake-agent/contracts';
@@ -8,6 +9,8 @@ import {
 export class ListBeneficiariesQueryDto extends createZodDto(
   ListBeneficiariesQuerySchema,
 ) {}
+
+export class BankListQueryDto extends createZodDto(BankListQuerySchema) {}
 
 export class AddBankAccountDto extends createZodDto(
   AddBankAccountRequestSchema,

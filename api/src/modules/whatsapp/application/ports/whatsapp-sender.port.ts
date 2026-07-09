@@ -80,6 +80,14 @@ export interface SendBeneficiaryFlowInput {
    * Each entry is { id, label } — just enough for the user to pick.
    */
   beneficiaries: Array<{ id: string; label: string }>;
+  /**
+   * Payout currency (ISO 4217) seeded into the bank add-form (Wave G) so the
+   * WhatsApp user adds a bank in the currency of the sell that triggered the
+   * Flow. Absent for crypto-address flows. The bank COUNTRY is derived
+   * server-side from this currency in the Flow data endpoint — the
+   * client-supplied country is never trusted (§3.3).
+   */
+  currency?: string;
 }
 
 /**

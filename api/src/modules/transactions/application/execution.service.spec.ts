@@ -2777,6 +2777,8 @@ const STUB_CRYPTO_BENEFICIARY: BeneficiaryRecord = {
   accountNumber: null,
   accountHolderName: null,
   bankCode: null,
+  payoutCurrency: null,
+  bankCountry: null,
   cryptoAddress: SEND_TO_ADDRESS,
   cryptoAsset: 'USDT',
   cryptoNetwork: 'TRON',

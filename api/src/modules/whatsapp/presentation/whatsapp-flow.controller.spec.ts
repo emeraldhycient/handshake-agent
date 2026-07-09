@@ -29,6 +29,8 @@ import { ExecutionService } from '../../transactions/application/execution.servi
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { InvalidAddressError } from '../../beneficiaries/domain/beneficiary-errors';
 import { PinInvalidError } from '../../../core/auth/domain/pin-errors';
+import { PinService } from '../../../core/auth/pin.service';
+import { SessionService } from '../../../core/auth/session.service';
 import { WhatsAppFlowController } from './whatsapp-flow.controller';
 import * as flowToken from '../application/flow-token';
 import { PROPOSAL_REPOSITORY } from '../../transactions/application/ports/proposal.repository.port';
@@ -105,6 +107,17 @@ describe('WhatsAppFlowController', () => {
     get: jest.Mock;
   };
 
+  let mockPinService: {
+    verifyPin: jest.Mock;
+  };
+
+  let mockSessionService: {
+    findDeviceIdByFingerprint: jest.Mock;
+    findPinnedDeviceId: jest.Mock;
+    startOrTouch: jest.Mock;
+    recordStepUp: jest.Mock;
+  };
+
   beforeEach(async () => {
     mockFlowCrypto = {
       decryptRequest: jest.fn(),
@@ -140,6 +153,19 @@ describe('WhatsAppFlowController', () => {
       get: jest.fn().mockReturnValue('test-signing-key'),
     };
 
+    // Step-up-on-add primitives (R2): PIN verify + device-bound step-up record.
+    // Defaults to the happy path — a valid PIN and a resolvable pinned device.
+    mockPinService = {
+      verifyPin: jest.fn().mockResolvedValue(undefined),
+    };
+
+    mockSessionService = {
+      findDeviceIdByFingerprint: jest.fn().mockResolvedValue(null),
+      findPinnedDeviceId: jest.fn().mockResolvedValue('device-wa-1'),
+      startOrTouch: jest.fn().mockResolvedValue(undefined),
+      recordStepUp: jest.fn().mockResolvedValue(undefined),
+    };
+
     // Spy on verifyFlowToken (imported function) — replaced per test.
     jest.spyOn(flowToken, 'verifyFlowToken').mockReturnValue({
       proposalId: 'prop-abc',
@@ -156,6 +182,8 @@ describe('WhatsAppFlowController', () => {
         { provide: BeneficiaryService, useValue: mockBeneficiaryService },
         { provide: PROPOSAL_REPOSITORY, useValue: mockProposalRepository },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: PinService, useValue: mockPinService },
+        { provide: SessionService, useValue: mockSessionService },
       ],
     }).compile();
 
@@ -339,7 +367,15 @@ describe('WhatsAppFlowController', () => {
   // ── beneficiary_add (bank account) ────────────────────────────────────────
 
   describe('data_exchange / beneficiary_add (bank account)', () => {
-    beforeEach(() => {
+    /**
+     * Bank beneficiary_add now runs inside the E2E Flow with a PIN (§3.5) and
+     * the payout currency seeded from the sell intent (Wave G). The controller
+     * derives the country server-side (never trusts the client) and gates the
+     * write behind PIN + device-bound step-up (R2) before persisting.
+     */
+    function makeBankAddBody(
+      extra: Record<string, unknown> = { pin: 'PIN_ADD_9191', currency: 'NGN' },
+    ) {
       mockFlowCrypto.decryptRequest.mockReturnValue({
         decrypted: {
           version: '3.0',
@@ -351,17 +387,23 @@ describe('WhatsAppFlowController', () => {
             bankCode: '058',
             accountName: 'John Doe',
             label: 'GTB Savings',
+            ...extra,
           },
         },
         aesKey: MOCK_AES_KEY,
         iv: MOCK_IV,
       });
+    }
+
+    beforeEach(() => {
+      makeBankAddBody();
     });
 
-    it('calls BeneficiaryService.addBankAccount with the correct args', async () => {
+    it('calls BeneficiaryService.addBankAccount with the currency (country derived server-side)', async () => {
       mockBeneficiaryService.addBankAccount.mockResolvedValue({
         id: 'ben-id-1',
         label: 'GTB Savings',
+        verificationStatus: 'verified',
       });
 
       await controller.handleFlow(makeEncryptedBody(), makeRes());
@@ -372,13 +414,35 @@ describe('WhatsAppFlowController', () => {
         bankCode: '058',
         accountName: 'John Doe',
         label: 'GTB Savings',
+        currency: 'NGN',
       });
     });
 
-    it('returns BENEFICIARY_ADDED screen with the new beneficiaryId', async () => {
+    it('verifies the PIN and records a device-bound step-up BEFORE persisting (R2)', async () => {
       mockBeneficiaryService.addBankAccount.mockResolvedValue({
         id: 'ben-id-1',
         label: 'GTB Savings',
+        verificationStatus: 'verified',
+      });
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      expect(mockPinService.verifyPin).toHaveBeenCalledWith(
+        'user-001',
+        'PIN_ADD_9191',
+      );
+      expect(mockSessionService.recordStepUp).toHaveBeenCalledWith(
+        'user-001',
+        'device-wa-1',
+        expect.any(Date),
+      );
+    });
+
+    it('returns BENEFICIARY_ADDED screen with the new beneficiaryId and never leaks the PIN', async () => {
+      mockBeneficiaryService.addBankAccount.mockResolvedValue({
+        id: 'ben-id-1',
+        label: 'GTB Savings',
+        verificationStatus: 'verified',
       });
 
       await controller.handleFlow(makeEncryptedBody(), makeRes());
@@ -388,12 +452,68 @@ describe('WhatsAppFlowController', () => {
         screen: 'BENEFICIARY_ADDED',
         data: { beneficiaryId: 'ben-id-1' },
       });
+      const serialised = JSON.stringify(encryptedWith);
+      expect(serialised).not.toContain('PIN_ADD_9191');
+      expect(serialised).not.toContain('"pin"');
+    });
+
+    it('surfaces the unverified state in the reply for a non-NGN (name-enquiry-unsupported) add', async () => {
+      makeBankAddBody({ pin: 'PIN_ADD_9191', currency: 'GHS' });
+      mockBeneficiaryService.addBankAccount.mockResolvedValue({
+        id: 'ben-gh-1',
+        label: 'GTB Savings',
+        verificationStatus: 'unverified',
+      });
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      expect(mockBeneficiaryService.addBankAccount).toHaveBeenCalledWith(
+        expect.objectContaining({ currency: 'GHS' }),
+      );
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({ screen: 'BENEFICIARY_ADDED' });
+      const data = encryptedWith.data as Record<string, unknown>;
+      expect(String(data.message)).toMatch(/could not|couldn't|verify/i);
+    });
+
+    it('returns ERROR and does NOT persist when the PIN is missing (§3.5 — no plaintext PIN)', async () => {
+      makeBankAddBody({ currency: 'NGN' }); // no pin
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      expect(mockBeneficiaryService.addBankAccount).not.toHaveBeenCalled();
+      expect(mockPinService.verifyPin).not.toHaveBeenCalled();
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({ screen: 'ERROR' });
+    });
+
+    it('returns ERROR and does NOT persist when the PIN is wrong (PinInvalidError)', async () => {
+      mockPinService.verifyPin.mockRejectedValue(new PinInvalidError(3));
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      expect(mockBeneficiaryService.addBankAccount).not.toHaveBeenCalled();
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({ screen: 'ERROR' });
+      expect(JSON.stringify(encryptedWith)).not.toContain('PIN_INVALID');
+    });
+
+    it('returns ERROR and does NOT persist when no device can be bound (StepUpRequiredError)', async () => {
+      mockSessionService.findPinnedDeviceId.mockResolvedValue(null);
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      expect(mockBeneficiaryService.addBankAccount).not.toHaveBeenCalled();
+      expect(mockSessionService.recordStepUp).not.toHaveBeenCalled();
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({ screen: 'ERROR' });
     });
 
     it('does NOT call executeBuy for a beneficiary_add action', async () => {
       mockBeneficiaryService.addBankAccount.mockResolvedValue({
         id: 'ben-id-1',
         label: 'GTB Savings',
+        verificationStatus: 'verified',
       });
 
       await controller.handleFlow(makeEncryptedBody(), makeRes());
@@ -417,6 +537,7 @@ describe('WhatsAppFlowController', () => {
             network: 'TRON',
             asset: 'USDT',
             label: 'Bad wallet',
+            pin: 'PIN_ADD_9191',
           },
         },
         aesKey: MOCK_AES_KEY,

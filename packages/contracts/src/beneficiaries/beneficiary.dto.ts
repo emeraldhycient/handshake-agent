@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { SupportedAssetSchema, NetworkSchema } from '../common'
+import { SupportedAssetSchema, NetworkSchema, FiatCurrencySchema } from '../common'
+import { TransactionPinSchema } from '../dto/kyc-complete.dto'
 
 /**
  * Saved payout-destination contracts (sell → bank account, send → crypto
@@ -39,6 +40,17 @@ export const BeneficiarySchema = z.object({
   accountNumber: z.string().nullable(),
   accountHolderName: z.string().nullable(),
   bankCode: z.string().nullable(),
+  /**
+   * Payout currency for a bank beneficiary (ISO 4217), null on crypto rows.
+   * Drives the sell currency-match guard: a sell only routes to a bank whose
+   * `currency` equals the sell fiat (server-re-validated, §3.3).
+   */
+  currency: FiatCurrencySchema.nullable(),
+  /**
+   * Bank country (ISO 3166-1 alpha-2, e.g. "NG"), derived server-side from the
+   * currency; null on crypto rows. Determines which name-enquiry rail applies.
+   */
+  country: z.string().length(2).nullable(),
   // Crypto-address fields
   cryptoAddress: z.string().nullable(),
   cryptoAsset: z.string().nullable(),
@@ -82,6 +94,30 @@ export const AddBankAccountRequestSchema = z.object({
   /** Bank / clearing code (e.g. "058" for GTB). */
   bankCode: z.string().min(3).max(10),
   label: z.string().min(1).max(60),
+  /**
+   * Payout currency (ISO 4217). The server derives the bank COUNTRY from this
+   * via `AssetRegistry.countryForFiat` — the client-supplied country is never
+   * trusted. Country-gated name-enquiry runs where the rail supports it (NG),
+   * otherwise the account is saved `unverified` (never fails closed).
+   */
+  currency: FiatCurrencySchema,
+  /**
+   * User-entered account-holder name. IGNORED where name-enquiry can resolve
+   * the true name (NG); persisted verbatim as an `unverified` name where the
+   * rail cannot resolve it. Optional so the NG happy-path form need not collect it.
+   */
+  accountHolderName: z.string().min(1).max(120).optional(),
+  /**
+   * Transaction PIN — required. Adding a withdrawal destination is step-up
+   * gated (audit R2): the server verifies the PIN (lockout-protected) and
+   * records a device-bound step-up BEFORE persisting.
+   */
+  pin: TransactionPinSchema,
+  /**
+   * Optional client device fingerprint. Binds the step-up to the acting
+   * device; when absent/unmatched the server falls back to the pinned device (§3.4).
+   */
+  deviceFingerprint: z.string().optional(),
 })
 export type AddBankAccountRequest = z.infer<typeof AddBankAccountRequestSchema>
 
@@ -93,6 +129,18 @@ export const AddCryptoAddressRequestSchema = z.object({
   network: NetworkSchema,
   asset: SupportedAssetSchema,
   label: z.string().min(1).max(60),
+  /**
+   * Transaction PIN — required. Adding a withdrawal destination is step-up
+   * gated (audit R2): the server verifies the PIN (lockout-protected) and
+   * records a device-bound step-up BEFORE persisting. This is ADDITIONAL to
+   * the existing first-use cooling-off, not a replacement.
+   */
+  pin: TransactionPinSchema,
+  /**
+   * Optional client device fingerprint. Binds the step-up to the acting
+   * device; when absent/unmatched the server falls back to the pinned device (§3.4).
+   */
+  deviceFingerprint: z.string().optional(),
 })
 export type AddCryptoAddressRequest = z.infer<
   typeof AddCryptoAddressRequestSchema

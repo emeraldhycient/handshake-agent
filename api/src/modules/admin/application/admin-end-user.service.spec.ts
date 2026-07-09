@@ -126,6 +126,8 @@ function makeBeneficiary(over?: Partial<BeneficiaryRecord>): BeneficiaryRecord {
     accountNumber: '0123456789',
     accountHolderName: 'Ada Lovelace',
     bankCode: '058',
+    payoutCurrency: 'NGN',
+    bankCountry: 'NG',
     cryptoAddress: null,
     cryptoAsset: null,
     cryptoNetwork: null,

@@ -13,6 +13,7 @@ import type {
 } from "@handshake-agent/contracts/beneficiaries"
 import {
   listBeneficiaries,
+  listBanks,
   addBankAccount,
   addCryptoAddress,
   deleteBeneficiary,
@@ -22,12 +23,33 @@ import { qk } from "./keys"
 /** Server state never goes stale faster than the user can add one — 30s. */
 const STALE_TIME_MS = 30_000
 
+/**
+ * Bank lists barely change and the server already caches per-country for 24h —
+ * hold the client copy just as long so switching currency back and forth never
+ * re-hits the network within a session.
+ */
+const BANKS_STALE_TIME_MS = 24 * 60 * 60_000
+
 export function useBeneficiaries(type: BeneficiaryType, enabled = true) {
   return useQuery({
     queryKey: qk.beneficiaries(type),
     queryFn: () => listBeneficiaries(type),
     staleTime: STALE_TIME_MS,
     enabled,
+  })
+}
+
+/**
+ * Bank options for the selected country. Disabled until a country is known so
+ * the query never fires with an empty code. The bank-account form keeps
+ * NIGERIAN_BANKS as an offline fallback when this errors or returns nothing.
+ */
+export function useBanks(country: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: qk.banks(country ?? ""),
+    queryFn: () => listBanks(country as string),
+    staleTime: BANKS_STALE_TIME_MS,
+    enabled: enabled && !!country,
   })
 }
 

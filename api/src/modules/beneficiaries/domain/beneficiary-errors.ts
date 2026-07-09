@@ -50,6 +50,37 @@ export class BeneficiaryWrongTypeError extends Error {
 }
 
 /**
+ * Thrown by createSellProposal when the chosen bank beneficiary's payout
+ * currency does not match the sell's fiat currency (e.g. a user sells for GHS
+ * but the beneficiary is an NGN bank). A cross-currency payout would settle to
+ * the wrong rail — block it and prompt for a matching-currency bank.
+ * Mapped to 422 like BeneficiaryWrongTypeError.
+ */
+export class BeneficiaryCurrencyMismatchError extends Error {
+  override readonly name = 'BeneficiaryCurrencyMismatchError';
+  readonly code = 'BENEFICIARY_CURRENCY_MISMATCH' as const;
+
+  constructor(beneficiaryId: string, expected: string, actual: string) {
+    super(
+      `Beneficiary "${beneficiaryId}" pays out in "${actual}", expected "${expected}".`,
+    );
+  }
+}
+
+/**
+ * Thrown by BeneficiaryService.listBanks when the requested country is not a
+ * known catalog country (no fiat maps to it). Mapped to 422.
+ */
+export class UnknownBankCountryError extends Error {
+  override readonly name = 'UnknownBankCountryError';
+  readonly code = 'BENEFICIARY_UNKNOWN_COUNTRY' as const;
+
+  constructor(country: string) {
+    super(`"${country}" is not a supported bank country.`);
+  }
+}
+
+/**
  * Thrown by createSendProposal when the beneficiary's first-use cooling-off
  * window has not yet expired (IDN-08). The send must be blocked until the
  * cooling-off period passes.

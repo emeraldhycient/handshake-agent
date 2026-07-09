@@ -55,6 +55,7 @@ import {
 import {
   BeneficiaryNotFoundError,
   BeneficiaryWrongTypeError,
+  BeneficiaryCurrencyMismatchError,
   BeneficiaryCoolingOffError,
 } from '../../beneficiaries/domain/beneficiary-errors';
 import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
@@ -178,6 +179,8 @@ const STUB_BENEFICIARY_RECORD = {
   accountNumber: '0012345678',
   accountHolderName: 'Test User',
   bankCode: '058',
+  payoutCurrency: 'NGN',
+  bankCountry: 'NG',
   cryptoAddress: null,
   cryptoAsset: null,
   cryptoNetwork: null,
@@ -918,6 +921,36 @@ describe('ProposalService.createSellProposal', () => {
       BeneficiaryNotFoundError,
     );
     expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  // ── Currency mismatch (Wave G) ────────────────────────────────────────────
+
+  it('throws BeneficiaryCurrencyMismatchError when the bank pays out in a different currency', async () => {
+    // A GHS bank chosen for an NGN sell — the fiat leg would settle to the wrong rail.
+    const beneficiaryService = makeBeneficiaryService({
+      ...STUB_BENEFICIARY_RECORD,
+      payoutCurrency: 'GHS',
+      bankCountry: 'GH',
+    });
+    const proposalRepo = makeProposalRepo(FIXED_SELL_PROPOSAL_ID);
+    const svc = makeSellSvc({ beneficiaryService, proposalRepo });
+
+    await expect(svc.createSellProposal(BASE_SELL_INPUT)).rejects.toThrow(
+      BeneficiaryCurrencyMismatchError,
+    );
+    // No proposal persisted — the guard fires before the write.
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts a bank whose payoutCurrency matches the sell currency', async () => {
+    const beneficiaryService = makeBeneficiaryService({
+      ...STUB_BENEFICIARY_RECORD,
+      payoutCurrency: 'NGN',
+    });
+    const svc = makeSellSvc({ beneficiaryService });
+
+    const result = await svc.createSellProposal(BASE_SELL_INPUT);
+    expect(result.proposalId).toBe(FIXED_SELL_PROPOSAL_ID);
   });
 
   // ── Order: balance + gate + beneficiary BEFORE persisting ─────────────────

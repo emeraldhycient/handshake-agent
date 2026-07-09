@@ -28,6 +28,8 @@ function makeBeneficiary(over?: Partial<BeneficiaryRecord>): BeneficiaryRecord {
     accountNumber: null,
     accountHolderName: null,
     bankCode: null,
+    payoutCurrency: null,
+    bankCountry: null,
     cryptoAddress: 'TXyz',
     cryptoAsset: 'USDT',
     cryptoNetwork: 'TRON',

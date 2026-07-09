@@ -21,6 +21,8 @@
 
 import { Injectable, Inject } from '@nestjs/common';
 
+import type { Bank } from '@handshake-agent/contracts';
+
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import {
@@ -33,8 +35,13 @@ import {
   type INameEnquiry,
 } from './ports/name-enquiry.port';
 import {
+  BANK_LIST_PROVIDER,
+  type IBankListProvider,
+} from './ports/bank-list.port';
+import {
   InvalidAddressError,
   BeneficiaryNotFoundError,
+  UnknownBankCountryError,
 } from '../domain/beneficiary-errors';
 
 // ---------------------------------------------------------------------------
@@ -46,13 +53,21 @@ export interface AddBankAccountInput {
   accountNumber: string;
   bankCode: string;
   /**
-   * Caller-supplied account holder name. Optional and IGNORED — the resolved
-   * name from the name-enquiry port is what gets persisted (Fix E). Kept for
-   * call sites (e.g. the WhatsApp Flow) that already pass it.
+   * Caller-supplied account holder name. IGNORED where the country's rail can
+   * resolve the true name (NG — the name-enquiry result is persisted); used as
+   * the persisted `unverified` name where the rail cannot resolve it (non-NG).
+   * Kept for call sites (e.g. the WhatsApp Flow) that already pass it.
    */
   accountName?: string;
   /** User-supplied display label. */
   label: string;
+  /**
+   * Payout currency (ISO 4217). Optional — the service defaults it to the
+   * catalog default fiat (NGN today) when a caller (e.g. the WhatsApp NGN Flow)
+   * omits it. The bank COUNTRY is derived from this via
+   * `AssetRegistry.countryForFiat`; a client-supplied country is never trusted.
+   */
+  currency?: string;
 }
 
 export interface AddCryptoAddressInput {
@@ -82,7 +97,28 @@ export class BeneficiaryService {
     private readonly nameEnquiry: INameEnquiry,
     private readonly assetRegistry: AssetRegistry,
     private readonly configService: EffectiveConfigService,
+    @Inject(BANK_LIST_PROVIDER)
+    private readonly bankListProvider: IBankListProvider,
   ) {}
+
+  // ── listBanks ──────────────────────────────────────────────────────────────
+
+  /**
+   * Lists the banks available for the given ISO 3166-1 alpha-2 country, backing
+   * the `GET /beneficiaries/banks?country=` dropdown. Validates the country is a
+   * known catalog country BEFORE any provider call (§3.3), then delegates to the
+   * bank-list port (real Flutterwave in prod; per-country cached). The provider
+   * degrades to `[]` on failure rather than throwing.
+   *
+   * @throws {UnknownBankCountryError} when no catalog fiat maps to the country.
+   */
+  async listBanks(country: string): Promise<Bank[]> {
+    const code = country.trim().toUpperCase();
+    if (!this.assetRegistry.knownCountries().includes(code)) {
+      throw new UnknownBankCountryError(code);
+    }
+    return this.bankListProvider.listBanks(code);
+  }
 
   // ── listForUser ────────────────────────────────────────────────────────────
 
@@ -130,20 +166,48 @@ export class BeneficiaryService {
       return duplicate;
     }
 
-    // Resolve the account-holder name from the bank (fails-closed on error).
-    const enquiryResult = await this.nameEnquiry.resolve({
-      bankCode: input.bankCode,
-      accountNumber: input.accountNumber,
-    });
+    // Derive the payout currency + bank country SERVER-SIDE (§3.3): the country
+    // comes from the currency's catalog entry, never from the client. Default to
+    // the catalog base fiat (NGN) when a caller (e.g. the NGN WhatsApp Flow)
+    // omits the currency.
+    const currency = input.currency ?? this.assetRegistry.defaultFiat();
+    const country = this.assetRegistry.countryForFiat(currency);
+
+    // Country-gated name-enquiry: resolve the true account name where the rail
+    // supports it (NG); otherwise SKIP the enquiry and keep the user-entered
+    // name as `unverified` — do NOT fail closed on an unsupported market.
+    if (this.isNameEnquiryResolvable(country)) {
+      const enquiryResult = await this.nameEnquiry.resolve({
+        bankCode: input.bankCode,
+        accountNumber: input.accountNumber,
+      });
+
+      return this.repo.addBankAccount({
+        userId: input.userId,
+        accountNumber: input.accountNumber,
+        bankCode: input.bankCode,
+        // Use the bank-resolved name, not the caller-supplied name (Fix E).
+        accountName: enquiryResult.accountName,
+        label: input.label,
+        payoutCurrency: currency,
+        bankCountry: country,
+        verificationStatus: 'verified',
+        verifiedAt: new Date(),
+      });
+    }
 
     return this.repo.addBankAccount({
       userId: input.userId,
       accountNumber: input.accountNumber,
       bankCode: input.bankCode,
-      // Use the bank-resolved name, not the caller-supplied name (Fix E).
-      accountName: enquiryResult.accountName,
+      // No rail to resolve the name — persist what the user entered (label is the
+      // best-available fallback when no explicit account-holder name was supplied).
+      accountName: input.accountName ?? input.label,
       label: input.label,
-      verifiedAt: new Date(),
+      payoutCurrency: currency,
+      bankCountry: country,
+      verificationStatus: 'unverified',
+      verifiedAt: null,
     });
   }
 
@@ -285,6 +349,25 @@ export class BeneficiaryService {
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────
+
+  /**
+   * True when the country's bank rail supports account name-enquiry (NG today).
+   * Config-driven (`beneficiary.nameEnquiryResolvableCountries`, §7) and read at
+   * call time so a DB-admin override takes effect without a deploy. Falls back
+   * to `['NG']` when the config value is missing/malformed (fail-safe default).
+   */
+  private isNameEnquiryResolvable(country: string): boolean {
+    const fromConfig: unknown = this.configService.get(
+      'beneficiary.nameEnquiryResolvableCountries',
+    );
+    const countries: string[] =
+      Array.isArray(fromConfig) &&
+      fromConfig.every((c) => typeof c === 'string')
+        ? fromConfig
+        : ['NG'];
+    const target = country.toUpperCase();
+    return countries.some((c) => c.toUpperCase() === target);
+  }
 
   private getCoolingOffSeconds(): number {
     // Config is read at call time (not constructor) so DB-admin AppSetting

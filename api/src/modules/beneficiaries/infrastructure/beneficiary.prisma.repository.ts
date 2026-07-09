@@ -28,6 +28,8 @@ type PrismaRow = {
   accountNumber: string | null;
   accountHolderName: string | null;
   bankCode: string | null;
+  payoutCurrency: string | null;
+  bankCountry: string | null;
   cryptoAddress: string | null;
   cryptoAsset: string | null;
   cryptoNetwork: string | null;
@@ -49,6 +51,8 @@ const SELECT = {
   accountNumber: true,
   accountHolderName: true,
   bankCode: true,
+  payoutCurrency: true,
+  bankCountry: true,
   cryptoAddress: true,
   cryptoAsset: true,
   cryptoNetwork: true,
@@ -94,12 +98,16 @@ export class BeneficiaryPrismaRepository implements IBeneficiaryRepository {
         type: 'bank_account' as never,
         label: input.label,
         accountNumber: input.accountNumber,
-        // accountName is now the bank-resolved name (Fix E: BeneficiaryService
-        // calls INameEnquiry before this method; trusting the resolved name here).
+        // accountName is the bank-RESOLVED name where name-enquiry ran (NG),
+        // else the user-entered name (non-NG, saved unverified) — the service
+        // decides which before calling this method (country-gated name-enquiry).
         accountHolderName: input.accountName,
         bankCode: input.bankCode,
-        // Persist as verified — the name-enquiry resolved successfully (Fix E).
-        verificationStatus: 'verified' as never,
+        payoutCurrency: input.payoutCurrency,
+        bankCountry: input.bankCountry,
+        // 'verified' when name-enquiry resolved the account; 'unverified' when
+        // the country's rail could not resolve it (do NOT fail closed).
+        verificationStatus: input.verificationStatus as never,
         verifiedAt: input.verifiedAt,
         isDefault,
       },
@@ -264,6 +272,8 @@ function toRecord(row: PrismaRow): BeneficiaryRecord {
     accountNumber: row.accountNumber,
     accountHolderName: row.accountHolderName,
     bankCode: row.bankCode,
+    payoutCurrency: row.payoutCurrency,
+    bankCountry: row.bankCountry,
     cryptoAddress: row.cryptoAddress,
     cryptoAsset: row.cryptoAsset,
     cryptoNetwork: row.cryptoNetwork,

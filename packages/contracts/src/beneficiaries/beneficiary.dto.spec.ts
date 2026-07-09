@@ -46,6 +46,8 @@ const validBankBeneficiary = {
   accountNumber: '0123456789',
   accountHolderName: 'ADA LOVELACE',
   bankCode: '058',
+  currency: 'NGN',
+  country: 'NG',
   cryptoAddress: null,
   cryptoAsset: null,
   cryptoNetwork: null,
@@ -62,6 +64,8 @@ const validCryptoBeneficiary = {
   accountNumber: null,
   accountHolderName: null,
   bankCode: null,
+  currency: null,
+  country: null,
   cryptoAddress: 'TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE',
   cryptoAsset: 'USDT',
   cryptoNetwork: 'TRON',
@@ -95,6 +99,18 @@ describe('BeneficiarySchema', () => {
       BeneficiarySchema.parse({ ...validBankBeneficiary, createdAt: 'nope' }),
     ).toThrow()
   })
+
+  it('rejects a country that is not 2 letters', () => {
+    expect(() =>
+      BeneficiarySchema.parse({ ...validBankBeneficiary, country: 'NGA' }),
+    ).toThrow()
+  })
+
+  it('rejects a currency that is not a 3-letter code', () => {
+    expect(() =>
+      BeneficiarySchema.parse({ ...validBankBeneficiary, currency: 'naira' }),
+    ).toThrow()
+  })
 })
 
 // ─── BeneficiaryListResponseSchema ──────────────────────────────────────────
@@ -117,42 +133,65 @@ describe('BeneficiaryListResponseSchema', () => {
 // ─── AddBankAccountRequestSchema ────────────────────────────────────────────
 
 describe('AddBankAccountRequestSchema', () => {
-  it('accepts a 10-digit NUBAN with bank code and label', () => {
-    const parsed = AddBankAccountRequestSchema.parse({
-      accountNumber: '0123456789',
-      bankCode: '058',
-      label: 'My GTB',
-    })
+  const validAddBank = {
+    accountNumber: '0123456789',
+    bankCode: '058',
+    label: 'My GTB',
+    currency: 'NGN',
+    pin: '5731',
+  }
+
+  it('accepts a 10-digit NUBAN with bank code, label, currency and PIN', () => {
+    const parsed = AddBankAccountRequestSchema.parse(validAddBank)
     expect(parsed.accountNumber).toBe('0123456789')
+    expect(parsed.currency).toBe('NGN')
+    expect(parsed.pin).toBe('5731')
+  })
+
+  it('accepts an optional accountHolderName and deviceFingerprint', () => {
+    const parsed = AddBankAccountRequestSchema.parse({
+      ...validAddBank,
+      accountHolderName: 'KOFI MENSAH',
+      deviceFingerprint: 'device-abc',
+    })
+    expect(parsed.accountHolderName).toBe('KOFI MENSAH')
+    expect(parsed.deviceFingerprint).toBe('device-abc')
   })
 
   it('rejects a non-10-digit account number', () => {
     expect(() =>
-      AddBankAccountRequestSchema.parse({
-        accountNumber: '12345',
-        bankCode: '058',
-        label: 'My GTB',
-      }),
+      AddBankAccountRequestSchema.parse({ ...validAddBank, accountNumber: '12345' }),
     ).toThrow()
   })
 
   it('rejects an empty label', () => {
     expect(() =>
-      AddBankAccountRequestSchema.parse({
-        accountNumber: '0123456789',
-        bankCode: '058',
-        label: '',
-      }),
+      AddBankAccountRequestSchema.parse({ ...validAddBank, label: '' }),
     ).toThrow()
   })
 
   it('rejects an empty bank code', () => {
     expect(() =>
-      AddBankAccountRequestSchema.parse({
-        accountNumber: '0123456789',
-        bankCode: '',
-        label: 'My GTB',
-      }),
+      AddBankAccountRequestSchema.parse({ ...validAddBank, bankCode: '' }),
+    ).toThrow()
+  })
+
+  it('rejects a missing currency', () => {
+    const { currency: _omit, ...noCurrency } = validAddBank
+    expect(() => AddBankAccountRequestSchema.parse(noCurrency)).toThrow()
+  })
+
+  it('rejects a missing PIN (step-up on add is mandatory, R2)', () => {
+    const { pin: _omit, ...noPin } = validAddBank
+    expect(() => AddBankAccountRequestSchema.parse(noPin)).toThrow()
+  })
+
+  it('rejects a weak PIN (all-same / trivial sequence)', () => {
+    expect(() =>
+      AddBankAccountRequestSchema.parse({ ...validAddBank, pin: '1111' }),
+    ).toThrow()
+    expect(() =>
+      AddBankAccountRequestSchema.parse({ ...validAddBank, pin: '1234' }),
     ).toThrow()
   })
 })
@@ -160,37 +199,44 @@ describe('AddBankAccountRequestSchema', () => {
 // ─── AddCryptoAddressRequestSchema ──────────────────────────────────────────
 
 describe('AddCryptoAddressRequestSchema', () => {
-  it('accepts a valid TRON USDT address payload', () => {
-    const parsed = AddCryptoAddressRequestSchema.parse({
-      address: 'TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE',
-      network: 'TRON',
-      asset: 'USDT',
-      label: 'Cold wallet',
-    })
+  const validAddCrypto = {
+    address: 'TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE',
+    network: 'TRON',
+    asset: 'USDT',
+    label: 'Cold wallet',
+    pin: '5731',
+  }
+
+  it('accepts a valid TRON USDT address payload with a PIN', () => {
+    const parsed = AddCryptoAddressRequestSchema.parse(validAddCrypto)
     expect(parsed.network).toBe('TRON')
     expect(parsed.asset).toBe('USDT')
+    expect(parsed.pin).toBe('5731')
+  })
+
+  it('accepts an optional deviceFingerprint', () => {
+    const parsed = AddCryptoAddressRequestSchema.parse({
+      ...validAddCrypto,
+      deviceFingerprint: 'device-xyz',
+    })
+    expect(parsed.deviceFingerprint).toBe('device-xyz')
   })
 
   it('rejects an unsupported network', () => {
     expect(() =>
-      AddCryptoAddressRequestSchema.parse({
-        address: 'TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE',
-        network: 'SOLANA',
-        asset: 'USDT',
-        label: 'Cold wallet',
-      }),
+      AddCryptoAddressRequestSchema.parse({ ...validAddCrypto, network: 'SOLANA' }),
     ).toThrow()
   })
 
   it('rejects an empty address', () => {
     expect(() =>
-      AddCryptoAddressRequestSchema.parse({
-        address: '',
-        network: 'TRON',
-        asset: 'USDT',
-        label: 'Cold wallet',
-      }),
+      AddCryptoAddressRequestSchema.parse({ ...validAddCrypto, address: '' }),
     ).toThrow()
+  })
+
+  it('rejects a missing PIN (step-up on add is mandatory, R2)', () => {
+    const { pin: _omit, ...noPin } = validAddCrypto
+    expect(() => AddCryptoAddressRequestSchema.parse(noPin)).toThrow()
   })
 })
 

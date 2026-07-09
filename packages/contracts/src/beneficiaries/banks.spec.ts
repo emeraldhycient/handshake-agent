@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { NIGERIAN_BANKS, bankNameForCode } from './banks'
+import {
+  NIGERIAN_BANKS,
+  bankNameForCode,
+  BankSchema,
+  BankListResponseSchema,
+  BankListQuerySchema,
+} from './banks'
 import { AddBankAccountRequestSchema } from './beneficiary.dto'
 
 describe('NIGERIAN_BANKS', () => {
@@ -21,6 +27,8 @@ describe('NIGERIAN_BANKS', () => {
         accountNumber: '0123456789',
         bankCode: b.code,
         label: 'Test',
+        currency: 'NGN',
+        pin: '5731',
       })
       expect(
         result.success,
@@ -54,5 +62,45 @@ describe('bankNameForCode', () => {
 
   it('returns undefined for an unknown code', () => {
     expect(bankNameForCode('000000')).toBeUndefined()
+  })
+})
+
+describe('BankSchema / BankListResponseSchema', () => {
+  it('accepts a { name, code } bank', () => {
+    expect(BankSchema.parse({ name: 'GTBank', code: '058' })).toEqual({
+      name: 'GTBank',
+      code: '058',
+    })
+  })
+
+  it('rejects a bank missing a code', () => {
+    expect(() => BankSchema.parse({ name: 'GTBank' })).toThrow()
+  })
+
+  it('accepts a bank-list response and an empty list', () => {
+    expect(
+      BankListResponseSchema.parse({ banks: [{ name: 'GTBank', code: '058' }] })
+        .banks,
+    ).toHaveLength(1)
+    expect(BankListResponseSchema.parse({ banks: [] }).banks).toEqual([])
+  })
+
+  it('every NIGERIAN_BANKS entry satisfies BankSchema', () => {
+    for (const b of NIGERIAN_BANKS) {
+      expect(BankSchema.safeParse(b).success).toBe(true)
+    }
+  })
+})
+
+describe('BankListQuerySchema', () => {
+  it('accepts a 2-letter country code and trims it', () => {
+    expect(BankListQuerySchema.parse({ country: ' NG ' })).toEqual({
+      country: 'NG',
+    })
+  })
+
+  it('rejects a country that is not exactly 2 characters', () => {
+    expect(() => BankListQuerySchema.parse({ country: 'NGA' })).toThrow()
+    expect(() => BankListQuerySchema.parse({ country: 'N' })).toThrow()
   })
 })
