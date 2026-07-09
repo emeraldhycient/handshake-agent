@@ -206,6 +206,23 @@ export const envSchema = z
     // Vision extraction reuses ANTHROPIC_API_KEY; only the model id is separate.
     MEDIA_EXTRACTION_MODEL: z.string().min(1).default('claude-opus-4-8'),
 
+    // --- Live market-rate feed (F1) ---
+    // NO mock mode: the poller always runs (gated only by the admin
+    // pricing.feed.enabled kill-switch). Base URLs are infra (kept in env for
+    // testability, mirroring FLUTTERWAVE_BASE_URL / BLOCKRADAR_BASE_URL); the
+    // CoinGecko key is OPTIONAL — the public endpoint works without it, a demo/pro
+    // key only raises rate limits.
+    COINGECKO_API_KEY: z.string().optional().default(''),
+    COINGECKO_BASE_URL: z
+      .string()
+      .url()
+      .default('https://api.coingecko.com/api/v3'),
+    QUIDAX_BASE_URL: z.string().url().default('https://www.quidax.com/api/v1'),
+    EXCHANGERATE_BASE_URL: z
+      .string()
+      .url()
+      .default('https://open.er-api.com/v6'),
+
     // --- Auth (web sessions) ---
     // JWT_SECRET is a SECRET — empty disables token issuance (fail-closed in
     // TokenService), mirroring ADMIN_API_TOKEN. TTLs live in the config JSON layer
@@ -315,6 +332,20 @@ export const envSchema = z
         path: ['FLUTTERWAVE_SCENARIO_KEY'],
         message:
           'FLUTTERWAVE_SCENARIO_KEY must be empty when NODE_ENV=production (it is a sandbox-only pay-in simulation header).',
+      });
+    }
+
+    // 8. SANCTIONS_MOCK_MODE='true' selects MockSanctionsScreener, which screens
+    //    NOTHING — every counterparty passes AML/sanctions. AML is done by
+    //    Blockradar (BlockradarAmlScreener, selected when the flag is 'false'), so
+    //    screen-nothing must be impossible in production (mirrors the RESEND_API_KEY
+    //    account-takeover-oracle guard). Fail boot rather than launch blind (F4, §3.3).
+    if (env.NODE_ENV === 'production' && env.SANCTIONS_MOCK_MODE === 'true') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['SANCTIONS_MOCK_MODE'],
+        message:
+          'SANCTIONS_MOCK_MODE must be "false" when NODE_ENV=production (the mock screener screens nothing — real AML/sanctions via Blockradar is mandatory in prod).',
       });
     }
   });

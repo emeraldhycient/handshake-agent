@@ -7,6 +7,7 @@ import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { ExpressAdapter } from '@bull-board/express';
 
 import { WalletsModule } from '../wallets/wallets.module';
+import { QuotesModule } from '../quotes/quotes.module';
 import { IdentityModule } from '../identity/identity.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { BeneficiariesModule } from '../beneficiaries/beneficiaries.module';
@@ -218,6 +219,9 @@ import type { Env } from '../../core/config/env.schema';
 @Module({
   imports: [
     WalletsModule,
+    // F1: QuotesModule exports LiveRateStore so the metrics-ops read repository
+    // can surface the pricing-feed health on the operator system-health card.
+    QuotesModule,
     IdentityModule,
     // Phase 2, Task 5 (ADM-02): the end-user detail aggregate injects
     // TRANSACTION_READ_REPOSITORY (recent transactions) and BeneficiaryService

@@ -248,6 +248,37 @@ export const SETTING_REGISTRY: readonly SettingRegistryEntry[] = [
     "Quote validity (seconds)",
     "Validity window for buy/sell quotes; the user must confirm before it expires.",
   ),
+
+  // ── Live market-rate feed (F1) ───────────────────────────────────────────────
+  // Admin-tunable leaves of pricing.feed. `enabled` is the kill-switch (off →
+  // serve the config baseRates); staleness/divergence/cadence bound how the feed
+  // is trusted on the money path. The source id/market maps + fiat list are
+  // structural (not flat leaves) and stay code/env-configured.
+  flag(
+    "pricing.feed.enabled",
+    "Live rate feed enabled",
+    "Master kill-switch for the live market-rate feed. Off → the money path uses the config baseRates (the admin floor) instead of live rates.",
+    "Pricing",
+  ),
+  positiveInt(
+    "pricing.feed.pollIntervalSec",
+    "Pricing",
+    "Rate feed poll interval (seconds)",
+    "How often the poller refreshes live rates. Applied on next restart (the scheduler reads it at boot).",
+  ),
+  positiveInt(
+    "pricing.feed.stalenessSec",
+    "Pricing",
+    "Rate freshness window (seconds)",
+    "A live rate older than this is treated as stale and the money path falls back to the config baseRate.",
+  ),
+  bps(
+    "pricing.feed.divergenceBps",
+    "Pricing",
+    "Rate divergence cap (bps)",
+    "Maximum accepted gap between a live rate and its config-floor baseRate. Beyond this the tick is rejected (kept degraded) so a bad upstream print never moves money.",
+  ),
+
   ...PRICED_ASSETS.flatMap(assetPricing),
 
   // ── KYC tier limits (per currency × tier) ───────────────────────────────────

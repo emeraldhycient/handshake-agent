@@ -10,8 +10,9 @@
  * It can be instantiated directly in tests (no Nest test bed required).
  */
 
-import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable } from '@nestjs/common';
+
+import { EffectiveConfigService } from '../config/application/effective-config.service';
 
 import {
   UnsupportedAssetError,
@@ -71,6 +72,20 @@ export type NetworkMeta = CatalogNetwork;
 /** Catalog section shape as stored in the layered config (configuration.ts). */
 export type { CatalogConfig };
 
+/**
+ * The minimal synchronous config surface the registry depends on — the subset
+ * shared by `EffectiveConfigService` and `ConfigService`. Typing the constructor
+ * to this (rather than a concrete class) lets production DI inject the
+ * HOT-RELOADED `EffectiveConfigService` — so admin catalog kill-switch toggles
+ * (`catalog.fiats.<code>.enabled`, `catalog.assets.<sym>.enabled`) take effect
+ * immediately (go-live hardening F3) — while unit tests keep passing a plain
+ * config-shaped fake. Every liveness accessor reads through it on each call, so
+ * the registry never serves a stale boot-time catalog snapshot.
+ */
+export interface CatalogConfigSource {
+  get<T>(key: string): T | undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -82,7 +97,28 @@ export type { CatalogConfig };
  */
 @Injectable()
 export class AssetRegistry {
-  private readonly catalog: CatalogConfig;
+  /**
+   * Live view of the `catalog` config section, read from the hot-reloaded
+   * EffectiveConfigService on EVERY access — deliberately NOT snapshotted at
+   * construction. An admin kill-switch toggle rebuilds the EffectiveConfig
+   * snapshot (the settings write calls `effectiveConfig.refresh()`); reading
+   * live here means the money path sees the new liveness immediately, with no
+   * restart (go-live hardening F3). All reads within a single synchronous method
+   * observe one consistent snapshot: Node is single-threaded and `refresh()`
+   * swaps the snapshot atomically between (never during) calls.
+   *
+   * @throws {Error} when the `catalog` section is absent (misconfiguration).
+   */
+  private get catalog(): CatalogConfig {
+    const catalog = this.config.get<CatalogConfig>('catalog');
+    if (!catalog) {
+      throw new Error(
+        'AssetRegistry: "catalog" config section is missing. ' +
+          'Ensure the catalog block is present in configuration.ts.',
+      );
+    }
+    return catalog;
+  }
 
   /**
    * Pre-compiled address validation RegExps per network id.
@@ -149,17 +185,18 @@ export class AssetRegistry {
    */
   private readonly customFiats: Map<string, CatalogFiat> = new Map();
 
-  constructor(private readonly config: ConfigService) {
-    const catalog = this.config.get<CatalogConfig>('catalog');
-    if (!catalog) {
-      throw new Error(
-        'AssetRegistry: "catalog" config section is missing. ' +
-          'Ensure the catalog block is present in configuration.ts.',
-      );
-    }
-    this.catalog = catalog;
+  constructor(
+    @Inject(EffectiveConfigService)
+    private readonly config: CatalogConfigSource,
+  ) {
+    // Read once for structural setup (the getter validates presence, throwing
+    // at boot on a misconfiguration). The catalog itself is NOT cached — the
+    // `catalog` getter re-reads it live on every subsequent access.
+    const catalog = this.catalog;
 
-    // Compile one RegExp per network at construction time.
+    // Compile one RegExp per network at construction time. Address patterns are
+    // structural (not admin-toggled), so caching them at boot is intentional and
+    // keeps `validateAddress` off the per-call RegExp-compilation path.
     this.addressRegExps = new Map(
       Object.entries(catalog.networks).map(([id, net]) => [
         id,

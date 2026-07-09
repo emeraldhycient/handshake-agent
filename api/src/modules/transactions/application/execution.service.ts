@@ -56,6 +56,7 @@ import type {
   SellConfig,
   SwapConfig,
   PricingConfig,
+  PricingFeedConfig,
 } from '../../../core/config/configuration';
 import {
   SWAP_PROVIDER,
@@ -106,7 +107,11 @@ import {
   SwapUnavailableError,
 } from '../domain/execution-errors';
 import { toScaled } from '../domain/ledger';
-import { resolveBaseRate } from './resolve-base-rate';
+import {
+  liveStoreWhenEnabled,
+  resolveEffectiveBaseRate,
+} from './resolve-base-rate';
+import { LiveRateStore } from '../../quotes/application/live-rate.store';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -357,6 +362,11 @@ export class ExecutionService {
     @Optional()
     @Inject(SWAP_PROVIDER)
     private readonly swapProvider?: ISwapProvider,
+    // @Optional so the existing unit suite (positional construction) resolves the
+    // config fallback; production injects the shared live-rate store so the
+    // execution re-quote uses the SAME live rate the proposal did (no drift).
+    @Optional()
+    private readonly liveRateStore?: LiveRateStore,
   ) {
     const buyConfig = this.config.get<BuyConfig>('buy');
     this.maxBuyDriftBps = buyConfig.maxDriftBps;
@@ -365,6 +375,18 @@ export class ExecutionService {
     const swapConfig = this.config.get<SwapConfig>('swap');
     this.maxSwapDriftBps = swapConfig?.maxDriftBps ?? 50;
     this.swapSpreadBps = swapConfig?.spreadBps ?? 0;
+  }
+
+  /** Live-feed staleness window (seconds) from config, defaulting when absent. */
+  private feedStalenessSec(): number {
+    const feed = this.config.get<PricingFeedConfig | undefined>('pricing.feed');
+    return typeof feed?.stalenessSec === 'number' ? feed.stalenessSec : 900;
+  }
+
+  /** The live store honouring the admin kill-switch (null the moment enabled=false). */
+  private effectiveLiveStore(): LiveRateStore | null {
+    const feed = this.config.get<PricingFeedConfig | undefined>('pricing.feed');
+    return liveStoreWhenEnabled(this.liveRateStore, feed);
   }
 
   /**
@@ -1297,7 +1319,14 @@ export class ExecutionService {
     // used by ProposalService so the money gate cannot be bypassed either way.
     const pricingConfig = this.config.get<PricingConfig>('pricing');
     const baseFiat = this.assetRegistry.defaultFiat();
-    const baseRate = resolveBaseRate(pricingConfig, asset, baseFiat);
+    const baseRate = resolveEffectiveBaseRate(
+      pricingConfig,
+      this.effectiveLiveStore(),
+      asset,
+      baseFiat,
+      this.clock.now(),
+      this.feedStalenessSec(),
+    );
     // Fix-C: compute NGN equivalent using BigInt to avoid float drift.
     // baseRate is an integer NGN-per-USDT config value (e.g. 1600).
     // toScaled(cryptoAmount) returns 10^18-scaled USDT; multiplying by an integer
@@ -1941,7 +1970,14 @@ export class ExecutionService {
     // + mark Proposal→executing — all in a SINGLE DB $transaction (C1).
     const pricingConfig = this.config.get<PricingConfig>('pricing');
     const baseFiat = this.assetRegistry.defaultFiat();
-    const baseRate = resolveBaseRate(pricingConfig, fromAsset, baseFiat);
+    const baseRate = resolveEffectiveBaseRate(
+      pricingConfig,
+      this.effectiveLiveStore(),
+      fromAsset,
+      baseFiat,
+      this.clock.now(),
+      this.feedStalenessSec(),
+    );
     const LEDGER_SCALE = 10n ** 18n;
     const scaledFromAmount = toScaled(fromAmount);
     const scaledNgn18 =

@@ -37,10 +37,47 @@ export interface AssetPricing {
   maxFiat?: Partial<Record<'buy' | 'sell', Record<string, number>>>;
 }
 
+/**
+ * Live market-rate feed configuration (F1). The feed keeps the money-path base
+ * rates current; `pricing.assets.<asset>.baseRates.<fiat>` is the admin FLOOR /
+ * fallback the feed is validated against and falls back to. `enabled` is the
+ * admin kill-switch (default true) — flip it off to serve config rates only.
+ * All values are admin-tunable via the DB-admin AppSetting layer (root §7); the
+ * source base URLs + optional API key are env/infra (see env.schema.ts).
+ */
+export interface PricingFeedConfig {
+  /** Kill-switch. false → the poller does nothing and the seam serves config rates. */
+  enabled: boolean;
+  /** Poll cadence in seconds (LiveRateService schedules its interval from this). */
+  pollIntervalSec: number;
+  /** A live rate older than this (seconds) is treated as stale → config fallback. */
+  stalenessSec: number;
+  /**
+   * Maximum accepted divergence (basis points) between a composed live rate and
+   * its config-floor baseRate. Beyond this the tick is rejected (marked degraded,
+   * keeps the config fallback) — a bad upstream print never moves money.
+   */
+  divergenceBps: number;
+  /** Fiat ISO codes the feed composes rates for. */
+  fiats: string[];
+  /** CoinGecko `/simple/price` mapping: asset symbol → CoinGecko coin id. */
+  coingecko: { ids: Record<string, string> };
+  /** Quidax public ticker market slug for the USDT/NGN local override. */
+  quidax: { market: string };
+  /** open.er-api.com base currency for the USD→fiat legs. */
+  exchangerate: { base: string };
+}
+
 export interface PricingConfig {
   processingFeeBps: number;
   expiresInSec: number;
   assets: Record<string, AssetPricing>;
+  /**
+   * Live-feed section (F1). Optional on the type so the many PricingConfig test
+   * fixtures need not construct it; the shipped default ALWAYS provides it, and
+   * the base-rate seam reads `pricing.feed?.stalenessSec` defensively.
+   */
+  feed?: PricingFeedConfig;
 }
 
 /** Per-KYC-tier transaction limits for a single fiat currency. All values are admin-tunable later. */
@@ -818,6 +855,33 @@ const buildConfig = (): AppConfig => ({
     // Buy/sell quote validity (300s / 5 min). A human needs time to read the
     // confirmation and enter a PIN; 30s was too short to complete the flow.
     expiresInSec: 300,
+    // ── Live market-rate feed (F1, CLAUDE.md §7) ─────────────────────────────
+    // NO mock mode: the poller always runs when `enabled`. In local/dev without
+    // network, source fetches fail → rates go degraded → the seam serves the
+    // baseRates below (visual-verify still works). `enabled` is the admin
+    // kill-switch; staleness / divergence / cadence are admin-tunable.
+    feed: {
+      enabled: true,
+      pollIntervalSec: 300,
+      stalenessSec: 900,
+      // 1500 bps = 15%. Generous band: an NGN parallel-market vs config-floor gap
+      // is real, but a >15% jump vs the admin floor is almost certainly a bad
+      // print / wrong quote-currency → reject and keep the config fallback.
+      divergenceBps: 1500,
+      // Fiats to compose. Only NGN is live at launch; the rest are pre-wired so
+      // enabling a market stays a flag flip (§7) — a fiat with no config baseRate
+      // simply gets no live entry and keeps failing closed until priced.
+      fiats: ['NGN', 'GHS', 'KES', 'UGX', 'TZS', 'RWF', 'ZAR', 'USD'],
+      // Asset symbol → CoinGecko coin id (batched /simple/price lookup).
+      coingecko: {
+        ids: { USDT: 'tether', BTC: 'bitcoin', TRX: 'tron' },
+      },
+      // Quidax public ticker market slug — the Nigeria-local USDT/NGN override
+      // (more representative of the on-ground rate than a USD-derived cross).
+      quidax: { market: 'usdtngn' },
+      // open.er-api.com base for the USD→fiat legs.
+      exchangerate: { base: 'USD' },
+    },
     assets: {
       // buySpreadBps=150 matches the old global spreadBps so existing BUY quotes are unchanged.
       // sellSpreadBps is independently tunable — set to 150 as the conservative default.

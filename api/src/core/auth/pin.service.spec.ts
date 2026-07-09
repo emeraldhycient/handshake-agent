@@ -13,6 +13,9 @@
  * scrypt comparison and the account ends locked.
  */
 
+import { randomBytes, scrypt } from 'node:crypto';
+import { promisify } from 'node:util';
+
 import { ConfigService } from '@nestjs/config';
 
 import type { Clock } from '../common/clock';
@@ -35,6 +38,19 @@ const LOCKOUT_MS = LOCKOUT_MINUTES * 60 * 1000;
 const SCRYPT_KEY_LEN = 64;
 
 const FIXED_NOW = new Date('2024-01-15T12:00:00.000Z');
+
+const scryptAsync = promisify(scrypt);
+
+/**
+ * Produces a legacy `<saltHex>:<hashHex>` scrypt PIN hash — the pre-argon2id
+ * format that already exists in production rows. Used to prove verifyPin still
+ * accepts legacy hashes and migrates them to argon2id in-flight (audit R4).
+ */
+async function legacyScryptHash(pin: string): Promise<string> {
+  const salt = randomBytes(16);
+  const hash = (await scryptAsync(pin, salt, SCRYPT_KEY_LEN)) as Buffer;
+  return `${salt.toString('hex')}:${hash.toString('hex')}`;
+}
 
 /** Creates a stub ConfigService that returns the test auth.pin config. */
 function makeConfigService(): ConfigService {
@@ -155,8 +171,8 @@ describe('PinService', () => {
 
     const hash = await svc.hashPin('1357');
     expect(typeof hash).toBe('string');
-    // Formatted as <saltHex>:<hashHex>
-    expect(hash).toMatch(/^[0-9a-f]+:[0-9a-f]+$/);
+    // New PINs hash with argon2id (self-describing `$argon2id$…` encoded string).
+    expect(hash).toMatch(/^\$argon2id\$/);
 
     // Set up the repo state with the produced hash
     const { repo: repoWithPin } = makeRepo({
@@ -188,6 +204,102 @@ describe('PinService', () => {
     await expect(svc2.verifyPin(USER_ID, '2468')).rejects.toBeInstanceOf(
       PinInvalidError,
     );
+  });
+
+  // ── Legacy scrypt → argon2id opportunistic migration (audit R4) ───────────
+  // Pre-existing PINs were hashed with scrypt (`<saltHex>:<hashHex>`). verifyPin
+  // must still accept them, and on a SUCCESSFUL scrypt verify transparently
+  // re-hash to argon2id and persist — migrating the stored credential in-flight,
+  // within the existing verify flow (no separate migration job).
+
+  it('hashPin (new PIN) produces an argon2id hash, never legacy scrypt', async () => {
+    const svc = new PinService(
+      makeRepo().repo,
+      makeConfigService(),
+      makeClock(),
+    );
+    const hash = await svc.hashPin('1357');
+    expect(hash).toMatch(/^\$argon2id\$/);
+    expect(hash).not.toMatch(/^[0-9a-f]+:[0-9a-f]+$/);
+  });
+
+  it('verifyPin accepts a legacy scrypt hash and re-hashes it to argon2id on success', async () => {
+    const legacyHash = await legacyScryptHash('1357');
+    // Sanity: the seed really is the legacy format, not argon2id.
+    expect(legacyHash).toMatch(/^[0-9a-f]+:[0-9a-f]+$/);
+
+    const { repo, state } = makeRepo({
+      pinHash: legacyHash,
+      pinFailureCount: 0,
+      pinLockedUntil: null,
+    });
+    const svc = new PinService(repo, makeConfigService(), makeClock());
+
+    await expect(svc.verifyPin(USER_ID, '1357')).resolves.toBeUndefined();
+
+    // Opportunistic migration: the stored hash is upgraded to argon2id in-flight.
+    expect(repo.setPinHash).toHaveBeenCalledTimes(1);
+    expect(state.current!.pinHash).toMatch(/^\$argon2id\$/);
+    expect(repo.resetFailures).toHaveBeenCalledWith(USER_ID);
+  });
+
+  it('a migrated argon2id PIN verifies again without a second re-hash', async () => {
+    const legacyHash = await legacyScryptHash('1357');
+    const { repo, state } = makeRepo({
+      pinHash: legacyHash,
+      pinFailureCount: 0,
+      pinLockedUntil: null,
+    });
+    const svc = new PinService(repo, makeConfigService(), makeClock());
+
+    await svc.verifyPin(USER_ID, '1357'); // migrates scrypt → argon2id
+    const migratedHash = state.current!.pinHash;
+    repo.setPinHash.mockClear();
+
+    await expect(svc.verifyPin(USER_ID, '1357')).resolves.toBeUndefined();
+    // Already argon2id → no further migration, stored hash unchanged.
+    expect(repo.setPinHash).not.toHaveBeenCalled();
+    expect(state.current!.pinHash).toBe(migratedHash);
+  });
+
+  it('a wrong PIN against a legacy scrypt hash fails, advances the lockout, and does NOT migrate', async () => {
+    const legacyHash = await legacyScryptHash('1357');
+    const { repo, state } = makeRepo({
+      pinHash: legacyHash,
+      pinFailureCount: 2,
+      pinLockedUntil: null,
+    });
+    const svc = new PinService(repo, makeConfigService(), makeClock());
+
+    await expect(svc.verifyPin(USER_ID, 'wrong')).rejects.toBeInstanceOf(
+      PinInvalidError,
+    );
+
+    // Counter advanced atomically to 3; a failed verify never re-hashes.
+    expect(repo.registerFailedAttempt).toHaveBeenCalledTimes(1);
+    expect(state.current!.pinFailureCount).toBe(3);
+    expect(state.current!.pinHash).toBe(legacyHash);
+    expect(repo.setPinHash).not.toHaveBeenCalled();
+  });
+
+  it('locks after maxAttempts sequential wrong-PIN attempts against a legacy scrypt hash', async () => {
+    const legacyHash = await legacyScryptHash('1357');
+    const { repo, state } = makeRepo({
+      pinHash: legacyHash,
+      pinFailureCount: 0,
+      pinLockedUntil: null,
+    });
+    const svc = new PinService(repo, makeConfigService(), makeClock());
+
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      await expect(svc.verifyPin(USER_ID, 'wrong')).rejects.toBeInstanceOf(
+        PinInvalidError,
+      );
+    }
+
+    expect(repo.setLock).toHaveBeenCalledTimes(1);
+    expect(state.current!.pinLockedUntil).not.toBeNull();
+    expect(repo.setPinHash).not.toHaveBeenCalled(); // never migrates on failure
   });
 
   // ── PinNotSetError ────────────────────────────────────────────────────────
@@ -587,10 +699,8 @@ describe('PinService', () => {
       makeConfigService(),
       makeClock(),
     );
-    await expect(svc.hashPin('1357')).resolves.toMatch(/^[0-9a-f]+:[0-9a-f]+$/);
-    await expect(svc.hashPin('135790')).resolves.toMatch(
-      /^[0-9a-f]+:[0-9a-f]+$/,
-    );
+    await expect(svc.hashPin('1357')).resolves.toMatch(/^\$argon2id\$/);
+    await expect(svc.hashPin('135790')).resolves.toMatch(/^\$argon2id\$/);
   });
 
   it('setPin rejects a weak PIN with WeakPinError and never persists', async () => {
@@ -653,8 +763,8 @@ describe('PinService', () => {
     const [calledUserId, calledHash] = repo.setPinHash.mock.calls[0];
     expect(calledUserId).toBe(USER_ID);
     expect(typeof calledHash).toBe('string');
-    // Hash format
-    expect(calledHash).toMatch(/^[0-9a-f]+:[0-9a-f]+$/);
+    // New PINs persist as argon2id hashes.
+    expect(calledHash).toMatch(/^\$argon2id\$/);
     expect(repo.resetFailures).toHaveBeenCalledWith(USER_ID);
   });
 

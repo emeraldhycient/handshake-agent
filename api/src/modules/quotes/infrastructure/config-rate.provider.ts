@@ -1,22 +1,42 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import type { FiatCurrency, SupportedAsset } from '@handshake-agent/contracts';
 
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
-import type { PricingConfig } from '../../../core/config/configuration';
+import type {
+  PricingConfig,
+  PricingFeedConfig,
+} from '../../../core/config/configuration';
+import {
+  liveStoreWhenEnabled,
+  resolveEffectiveBaseRate,
+} from '../../transactions/application/resolve-base-rate';
+import { LiveRateStore } from '../application/live-rate.store';
 import type {
   IRateProvider,
   RateQuote,
   ValuationRate,
 } from '../application/ports/rate-provider.port';
 
+/** Fallback staleness window when `pricing.feed` is absent (e.g. thin test config). */
+const DEFAULT_FEED_STALENESS_SEC = 900;
+
 /**
- * Config-driven rate source: assembles a RateQuote from the layered config.
- * Swap this binding for a live pricing-feed adapter without touching the
- * application layer — that is the point of the IRateProvider port.
+ * Config-driven rate source: assembles a RateQuote from the layered config,
+ * with the base rate sourced through the shared live-feed seam
+ * (resolveEffectiveBaseRate) — a fresh live rate when available, else the admin
+ * config `baseRates` fallback. Spreads / fees / the fiatTradeable gate stay on
+ * config exactly as before; ONLY the base-rate source changed, so the quote and
+ * the execution re-quote (which routes through the SAME seam) always agree
+ * (CLAUDE.md §3.1). An absent live store is byte-identical to reading config.
  */
 @Injectable()
 export class ConfigRateProvider implements IRateProvider {
-  constructor(private readonly config: EffectiveConfigService) {}
+  constructor(
+    private readonly config: EffectiveConfigService,
+    // @Optional so this adapter (and its existing unit suite) resolves the
+    // config fallback when no store is wired — parity with pre-feed behaviour.
+    @Optional() private readonly liveRateStore?: LiveRateStore,
+  ) {}
 
   getRate(
     asset: SupportedAsset,
@@ -24,9 +44,10 @@ export class ConfigRateProvider implements IRateProvider {
   ): Promise<RateQuote> {
     const pricing = this.config.get<PricingConfig>('pricing');
     const assetPricing = pricing?.assets[asset];
-    const baseRate = assetPricing?.baseRates?.[fiatCurrency];
+    const configBaseRate = assetPricing?.baseRates?.[fiatCurrency];
 
-    if (!pricing || !assetPricing || baseRate === undefined) {
+    // Guard order preserved: "no configured pricing" rejects first, identically.
+    if (!pricing || !assetPricing || configBaseRate === undefined) {
       return Promise.reject(
         new Error(
           `No pricing configured for asset ${asset} in ${fiatCurrency}`,
@@ -45,6 +66,17 @@ export class ConfigRateProvider implements IRateProvider {
         ),
       );
     }
+
+    // Only the base-rate SOURCE changes: live feed when fresh, else the config
+    // fallback we just confirmed exists. Spreads / fees stay on config.
+    const baseRate = resolveEffectiveBaseRate(
+      pricing,
+      this.effectiveLiveStore(),
+      asset,
+      fiatCurrency,
+      new Date(),
+      this.feedStalenessSec(),
+    );
 
     return Promise.resolve({
       baseRate,
@@ -67,9 +99,9 @@ export class ConfigRateProvider implements IRateProvider {
   ): Promise<ValuationRate> {
     const pricing = this.config.get<PricingConfig>('pricing');
     const assetPricing = pricing?.assets[asset];
-    const baseRate = assetPricing?.baseRates?.[fiatCurrency];
+    const configBaseRate = assetPricing?.baseRates?.[fiatCurrency];
 
-    if (!pricing || !assetPricing || baseRate === undefined) {
+    if (!pricing || !assetPricing || configBaseRate === undefined) {
       return Promise.reject(
         new Error(
           `No valuation rate configured for asset ${asset} in ${fiatCurrency}`,
@@ -77,6 +109,29 @@ export class ConfigRateProvider implements IRateProvider {
       );
     }
 
+    const baseRate = resolveEffectiveBaseRate(
+      pricing,
+      this.effectiveLiveStore(),
+      asset,
+      fiatCurrency,
+      new Date(),
+      this.feedStalenessSec(),
+    );
+
     return Promise.resolve({ baseRate });
+  }
+
+  /** Staleness window (seconds) from config, defaulting when `pricing.feed` is absent. */
+  private feedStalenessSec(): number {
+    const feed = this.config.get<PricingFeedConfig | undefined>('pricing.feed');
+    return typeof feed?.stalenessSec === 'number'
+      ? feed.stalenessSec
+      : DEFAULT_FEED_STALENESS_SEC;
+  }
+
+  /** The live store honouring the admin kill-switch (null the moment enabled=false). */
+  private effectiveLiveStore(): LiveRateStore | null {
+    const feed = this.config.get<PricingFeedConfig | undefined>('pricing.feed');
+    return liveStoreWhenEnabled(this.liveRateStore, feed);
   }
 }

@@ -1,25 +1,30 @@
 /**
  * Transaction-PIN service (task 4.3, CLAUDE.md §3.4 / §4.1).
  *
- * Hashes PINs with Node `crypto.scrypt` (a strong KDF) and enforces a
- * failure-counting lockout. The service is the ONLY code that touches raw
- * PINs; all callers receive resolved or rejected Promises.
+ * Hashes PINs with **argon2id** (the same KDF the admin-password path uses) and
+ * enforces a failure-counting lockout. The service is the ONLY code that
+ * touches raw PINs; all callers receive resolved or rejected Promises.
  *
- * TODO(SEC): migrate to argon2id for production (currently using Node
- * crypto.scrypt as a valid interim KDF with comparable security properties).
+ * Self-describing hash format (audit R4): a stored `pinHash` is either the
+ * argon2id encoded string (`$argon2id$…`) or a legacy scrypt `<saltHex>:<hashHex>`
+ * from before the migration. `verifyPin` detects the format and, on a successful
+ * legacy-scrypt verify, transparently re-hashes to argon2id and persists it —
+ * opportunistic migration within the existing flow, no separate migration job.
  *
  * Security invariants:
- *   - Comparison uses `crypto.timingSafeEqual` to prevent timing attacks.
- *   - Salt is random 16 bytes per hash (never reused).
+ *   - argon2id verification is constant-time; legacy scrypt comparison uses
+ *     `crypto.timingSafeEqual` to prevent timing attacks.
+ *   - argon2 embeds a fresh random salt + parameters in every hash.
  *   - PINs are never logged.
  *   - Config is read from ConfigService — nothing is hardcoded (root §7).
  */
 
-import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import * as argon2 from 'argon2';
 
 import { TransactionPinSchema } from '@handshake-agent/contracts';
 
@@ -37,7 +42,16 @@ import {
 
 const scryptAsync = promisify(scrypt);
 
-const SALT_BYTES = 16;
+/**
+ * argon2id parameters for PIN hashing. Deliberately identical to the admin
+ * password hasher (`Argon2PasswordHasher`) — `{ type: argon2.argon2id }` with
+ * argon2's vetted default cost (t=3, m=64 MiB, p=4) — so both credential paths
+ * share one KDF policy. If those defaults ever need tuning, tune them in both.
+ */
+const ARGON2_OPTIONS: argon2.Options = { type: argon2.argon2id };
+
+/** argon2 encoded hashes are self-describing and begin with this prefix. */
+const ARGON2_PREFIX = '$argon2';
 
 @Injectable()
 export class PinService {
@@ -61,8 +75,8 @@ export class PinService {
   // ---------------------------------------------------------------------------
 
   /**
-   * Hashes a raw PIN using scrypt with a fresh random salt.
-   * Returns a `<saltHex>:<hashHex>` string suitable for storing in `pinHash`.
+   * Hashes a raw PIN using argon2id with a fresh embedded salt.
+   * Returns the self-describing `$argon2id$…` encoded string for `pinHash`.
    *
    * Server-side strength gate (CLAUDE.md §3.3): the PIN must satisfy the shared
    * `TransactionPinSchema` (4–6 digits, not all-same, not a trivial sequence).
@@ -74,9 +88,7 @@ export class PinService {
     if (!TransactionPinSchema.safeParse(pin).success) {
       throw new WeakPinError();
     }
-    const salt = randomBytes(SALT_BYTES);
-    const hash = (await scryptAsync(pin, salt, this.scryptKeyLen)) as Buffer;
-    return `${salt.toString('hex')}:${hash.toString('hex')}`;
+    return argon2.hash(pin, ARGON2_OPTIONS);
   }
 
   /**
@@ -158,23 +170,25 @@ export class PinService {
       throw new PinLockedError(until);
     }
 
-    // f. Re-derive the hash with the stored salt and compare (constant-time).
-    const [saltHex, storedHashHex] = state.pinHash.split(':');
-    const salt = Buffer.from(saltHex, 'hex');
-    const storedHash = Buffer.from(storedHashHex, 'hex');
+    // f. Compare against the stored hash with the algorithm its format names:
+    //    argon2id hashes are the self-describing `$argon2id$…` string; anything
+    //    else is a legacy scrypt `<saltHex>:<hashHex>` (audit R4). Both verifies
+    //    are constant-time.
+    const isLegacyScrypt = !state.pinHash.startsWith(ARGON2_PREFIX);
+    const match = isLegacyScrypt
+      ? await this.verifyScrypt(pin, state.pinHash)
+      : await this.verifyArgon2(pin, state.pinHash);
 
-    const candidateHash = (await scryptAsync(
-      pin,
-      salt,
-      this.scryptKeyLen,
-    )) as Buffer;
-
-    const match =
-      candidateHash.length === storedHash.length &&
-      timingSafeEqual(candidateHash, storedHash);
-
-    // g. Match — clear the failure state and return.
+    // g. Match — opportunistically migrate a legacy scrypt hash to argon2id
+    //    in-flight (persist the upgraded credential), then clear the failure
+    //    state and return.
     if (match) {
+      if (isLegacyScrypt) {
+        await this.pinRepo.setPinHash(
+          userId,
+          await argon2.hash(pin, ARGON2_OPTIONS),
+        );
+      }
       await this.pinRepo.resetFailures(userId);
       return;
     }
@@ -188,5 +202,51 @@ export class PinService {
 
     const remaining = Math.max(this.maxAttempts - newCount, 0);
     throw new PinInvalidError(remaining);
+  }
+
+  // ---------------------------------------------------------------------------
+  // KDF verification (private)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Constant-time verify of a legacy scrypt `<saltHex>:<hashHex>` PIN hash.
+   * Re-derives with the stored salt at the configured key length and compares
+   * via `timingSafeEqual`. Retained only to verify (and then migrate) rows that
+   * predate the argon2id cut-over — new hashes are never written in this format.
+   */
+  private async verifyScrypt(
+    pin: string,
+    storedPinHash: string,
+  ): Promise<boolean> {
+    const [saltHex, storedHashHex] = storedPinHash.split(':');
+    const salt = Buffer.from(saltHex, 'hex');
+    const storedHash = Buffer.from(storedHashHex, 'hex');
+
+    const candidateHash = (await scryptAsync(
+      pin,
+      salt,
+      this.scryptKeyLen,
+    )) as Buffer;
+
+    return (
+      candidateHash.length === storedHash.length &&
+      timingSafeEqual(candidateHash, storedHash)
+    );
+  }
+
+  /**
+   * argon2id verify. A malformed or unrecognized encoded hash makes argon2
+   * throw; treat that as a failed verification rather than propagating the error
+   * (mirrors the admin `Argon2PasswordHasher`).
+   */
+  private async verifyArgon2(
+    pin: string,
+    storedPinHash: string,
+  ): Promise<boolean> {
+    try {
+      return await argon2.verify(storedPinHash, pin);
+    } catch {
+      return false;
+    }
   }
 }

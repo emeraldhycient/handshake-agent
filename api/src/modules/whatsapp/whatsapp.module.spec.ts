@@ -14,6 +14,7 @@
  */
 
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
 
@@ -91,6 +92,11 @@ describe('WhatsAppModule (compile)', () => {
         // ThrottlerModule is needed by KycController (part of IdentityModule,
         // which WhatsAppModule transitively depends on since K3).
         ThrottlerModule.forRoot([{ ttl: 60_000, limit: 10 }]),
+        // ScheduleModule.forRoot() is @Global in the full app (app.module.ts) —
+        // import here so the QuotesModule pricing-feed poller (LiveRateService,
+        // pulled in transitively via TransactionsModule) can resolve its
+        // SchedulerRegistry dependency. The poller itself no-ops under NODE_ENV=test.
+        ScheduleModule.forRoot(),
         WhatsAppModule,
       ],
     })

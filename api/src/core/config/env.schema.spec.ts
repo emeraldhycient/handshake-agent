@@ -256,6 +256,7 @@ describe('env.schema boot guards', () => {
       STATEMENT_SIGNING_KEY: 'stmt-key',
       DIRECTIVE_SIGNING_KEY: 'directive-key',
       RESEND_API_KEY: 're_test_key',
+      SANCTIONS_MOCK_MODE: 'false',
     });
     expect(env.AUTH_DEV_EXPOSE_OTP).toBe('false');
   });
@@ -312,6 +313,7 @@ describe('env.schema boot guards', () => {
       // satisfy the other prod-only guards so this test isolates the statement one
       DIRECTIVE_SIGNING_KEY: 'directive-key',
       RESEND_API_KEY: 're_test_key',
+      SANCTIONS_MOCK_MODE: 'false',
     });
     expect(env.STATEMENT_SIGNING_KEY).toBe('stmt-key');
   });
@@ -355,6 +357,7 @@ describe('env.schema boot guards', () => {
       STATEMENT_SIGNING_KEY: 'stmt-key',
       DIRECTIVE_SIGNING_KEY: 'directive-key',
       RESEND_API_KEY: 're_test_key',
+      SANCTIONS_MOCK_MODE: 'false',
     });
     expect(env.DIRECTIVE_SIGNING_KEY).toBe('directive-key');
   });
@@ -397,6 +400,7 @@ describe('env.schema boot guards', () => {
       STATEMENT_SIGNING_KEY: 'stmt-key',
       DIRECTIVE_SIGNING_KEY: 'directive-key',
       RESEND_API_KEY: 're_test_key',
+      SANCTIONS_MOCK_MODE: 'false',
     });
     expect(env.RESEND_API_KEY).toBe('re_test_key');
   });
@@ -430,6 +434,7 @@ describe('env.schema boot guards', () => {
       DIRECTIVE_SIGNING_KEY: 'directive-key',
       RESEND_API_KEY: 're_test_key',
       FLUTTERWAVE_SCENARIO_KEY: '',
+      SANCTIONS_MOCK_MODE: 'false',
     });
     expect(env.FLUTTERWAVE_SCENARIO_KEY).toBe('');
   });
@@ -441,6 +446,75 @@ describe('env.schema boot guards', () => {
       FLUTTERWAVE_SCENARIO_KEY: 'scenario:successful',
     });
     expect(env.FLUTTERWAVE_SCENARIO_KEY).toBe('scenario:successful');
+  });
+
+  // 8. SANCTIONS_MOCK_MODE must be 'false' in production — the mock screener
+  //    screens NOTHING (every counterparty passes AML/sanctions). Real AML via
+  //    Blockradar is mandatory in prod (F4). Screen-nothing must be impossible.
+  it('rejects SANCTIONS_MOCK_MODE=true when NODE_ENV=production', () => {
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        NODE_ENV: 'production',
+        STATEMENT_SIGNING_KEY: 'stmt-key',
+        DIRECTIVE_SIGNING_KEY: 'directive-key',
+        RESEND_API_KEY: 're_test_key',
+        SANCTIONS_MOCK_MODE: 'true',
+      }),
+    ).toThrow(/SANCTIONS_MOCK_MODE/);
+  });
+
+  it('rejects a defaulted (omitted) SANCTIONS_MOCK_MODE when NODE_ENV=production', () => {
+    // The default is 'true' — omitting it in prod must still fail closed.
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        NODE_ENV: 'production',
+        STATEMENT_SIGNING_KEY: 'stmt-key',
+        DIRECTIVE_SIGNING_KEY: 'directive-key',
+        RESEND_API_KEY: 're_test_key',
+      }),
+    ).toThrow(/SANCTIONS_MOCK_MODE/);
+  });
+
+  it('accepts SANCTIONS_MOCK_MODE=false in production', () => {
+    const env = validateEnv({
+      ...validRaw,
+      NODE_ENV: 'production',
+      STATEMENT_SIGNING_KEY: 'stmt-key',
+      DIRECTIVE_SIGNING_KEY: 'directive-key',
+      RESEND_API_KEY: 're_test_key',
+      SANCTIONS_MOCK_MODE: 'false',
+    });
+    expect(env.SANCTIONS_MOCK_MODE).toBe('false');
+  });
+
+  it('tolerates SANCTIONS_MOCK_MODE=true outside production (dev/test)', () => {
+    const env = validateEnv({ ...validRaw, NODE_ENV: 'development' });
+    expect(env.SANCTIONS_MOCK_MODE).toBe('true');
+  });
+});
+
+// --- Live market-rate feed (F1) env keys ---
+
+describe('env.schema pricing-feed keys', () => {
+  it('defaults the source base URLs and treats COINGECKO_API_KEY as optional', () => {
+    const env = validateEnv(validRaw);
+    expect(env.COINGECKO_API_KEY).toBe('');
+    expect(env.COINGECKO_BASE_URL).toBe('https://api.coingecko.com/api/v3');
+    expect(env.QUIDAX_BASE_URL).toBe('https://www.quidax.com/api/v1');
+    expect(env.EXCHANGERATE_BASE_URL).toBe('https://open.er-api.com/v6');
+  });
+
+  it('accepts an operator-supplied COINGECKO_API_KEY', () => {
+    const env = validateEnv({ ...validRaw, COINGECKO_API_KEY: 'cg-demo-123' });
+    expect(env.COINGECKO_API_KEY).toBe('cg-demo-123');
+  });
+
+  it('throws when a feed base URL is not a valid URL', () => {
+    expect(() =>
+      validateEnv({ ...validRaw, COINGECKO_BASE_URL: 'not-a-url' }),
+    ).toThrow(/COINGECKO_BASE_URL/);
   });
 });
 
