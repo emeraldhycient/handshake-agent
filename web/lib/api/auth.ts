@@ -22,9 +22,7 @@ import {
   LoginVerifyResponseSchema,
   type LoginVerifyRequest,
   type LoginVerifyResponse,
-  RefreshRequestSchema,
   RefreshResponseSchema,
-  type RefreshRequest,
   type RefreshResponse,
   MeResponseSchema,
   type MeResponse,
@@ -67,12 +65,17 @@ export async function submitLoginVerify(
   return LoginVerifyResponseSchema.parse(data)
 }
 
-export async function refreshSession(
-  refreshToken: string
-): Promise<RefreshResponse> {
-  const body: RefreshRequest = { refreshToken }
-  const validated = RefreshRequestSchema.parse(body)
-  const { data } = await api.post("/auth/refresh", validated)
+/**
+ * Refresh the session (Wave H: cookie-carried refresh).
+ *
+ * POSTs /auth/refresh with NO body — the rotating refresh token rides in the
+ * HttpOnly `ha_refresh` cookie, which the browser sends automatically because
+ * the axios instance uses `withCredentials`. The response carries a fresh access
+ * token AND the user projection, so boot rehydration completes in one round-trip
+ * (no separate GET /auth/me needed).
+ */
+export async function refreshSession(): Promise<RefreshResponse> {
+  const { data } = await api.post("/auth/refresh")
   return RefreshResponseSchema.parse(data)
 }
 

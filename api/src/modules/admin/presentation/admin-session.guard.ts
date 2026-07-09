@@ -6,6 +6,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 
+import { ADMIN_SESSION_COOKIE } from '../../../core/common/cookie-options';
 import { AdminTokenService } from '../application/admin-token.service';
 import {
   ADMIN_SESSION_REPOSITORY,
@@ -18,11 +19,15 @@ import {
 import type { AdminContext } from './current-admin.decorator';
 
 /**
- * Authenticates an admin request: validates the Bearer JWT, binds it to an
+ * Authenticates an admin request: validates the session JWT, binds it to an
  * active session row (token.sub === session.id AND hash(token) matches the
  * stored hash), confirms the admin is still active, and attaches the principal
  * as `req.admin`. Any failure is an opaque UnauthorizedException — no detail
  * leaks why (mirrors the user-side JwtAuthGuard).
+ *
+ * The token is read COOKIE-OR-HEADER (Wave H): the browser sends it in the
+ * HttpOnly `ha_admin_session` cookie (preferred), while non-browser / e2e callers
+ * may still send `Authorization: Bearer <jwt>`. The cookie wins when both exist.
  */
 @Injectable()
 export class AdminSessionGuard implements CanActivate {
@@ -37,14 +42,14 @@ export class AdminSessionGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<{
       headers: Record<string, string | undefined>;
+      cookies?: Record<string, string | undefined>;
       admin?: AdminContext;
     }>();
 
-    const header = req.headers.authorization;
-    if (!header || !header.startsWith('Bearer ')) {
+    const token = this.extractToken(req);
+    if (token === null) {
       throw new UnauthorizedException('Missing bearer token');
     }
-    const token = header.slice('Bearer '.length).trim();
 
     let sessionId: string;
     try {
@@ -73,5 +78,23 @@ export class AdminSessionGuard implements CanActivate {
       email: user.email,
     };
     return true;
+  }
+
+  /**
+   * Extracts the session JWT cookie-first, header-second. Returns null when
+   * neither carries a usable token (→ opaque 401).
+   */
+  private extractToken(req: {
+    headers: Record<string, string | undefined>;
+    cookies?: Record<string, string | undefined>;
+  }): string | null {
+    const cookieToken = req.cookies?.[ADMIN_SESSION_COOKIE];
+    if (cookieToken) return cookieToken;
+
+    const header = req.headers.authorization;
+    if (header && header.startsWith('Bearer ')) {
+      return header.slice('Bearer '.length).trim();
+    }
+    return null;
   }
 }

@@ -71,7 +71,7 @@ function AppShellInner({ children }: AppShellProps) {
         badges={shell.badges}
         showMfaSetup={shell.showMfaSetup}
         onOpenMfa={() => shell.setMfaOpen(true)}
-        onSignOut={shell.clear}
+        onSignOut={shell.signOut}
       />
 
       {/* ── Main column — scrolls independently of the sidebar (§4) ────────────── */}
@@ -82,7 +82,7 @@ function AppShellInner({ children }: AppShellProps) {
           onToggleTheme={shell.toggleTheme}
           email={shell.me.data?.email ?? ""}
           roleLabel={shell.me.data?.role.name ?? ""}
-          onSignOut={shell.clear}
+          onSignOut={shell.signOut}
         />
         <main className="min-h-0 flex-1 overflow-y-auto">
           <RouteGuard>{children}</RouteGuard>

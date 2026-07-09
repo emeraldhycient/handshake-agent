@@ -1,25 +1,24 @@
 "use client"
 
 /**
- * AuthProvider — session rehydration on mount.
+ * AuthProvider — session boot rehydration (Wave H: HttpOnly refresh cookie).
  *
- * On mount: if a refreshToken is persisted (localStorage via the store) but
- * no accessToken is in memory, attempt a silent refresh and then fetch the
- * current user. On failure, clear the session so RequireAuth redirects to /login.
+ * On mount, if no access token is held in memory, attempt a single cookie-carried
+ * refresh (POST /auth/refresh, no body — the HttpOnly `ha_refresh` cookie carries
+ * the token). The response returns a fresh access token AND the user, so the
+ * session is restored in one round-trip:
+ *   - 200 → setSession(accessToken + user) → status 'authenticated'
+ *   - failure (401 / network / 500) → clear() → status 'anonymous'
  *
- * Renders children immediately (does not block on rehydration) — RequireAuth
- * handles the redirect if auth is still missing once it mounts.
- *
- * Hydration note: the previous implementation called useState(needsRehydration)
- * which read localStorage during state initialisation. On the server localStorage
- * is unavailable so the initial value was always false; on the client it could
- * be true. This caused a server/client tree mismatch ("Hydration failed").
- * The fix: the component renders a stable, attribute-free wrapper and defers
- * all localStorage-dependent logic to a useEffect (client-only, post-hydration).
+ * Renders children immediately (does not block on the refresh). The store starts
+ * in status 'loading'; RequireAuth shows the loading branch until this resolves,
+ * then either renders the app or redirects to /login. Because the store no longer
+ * reads localStorage, its initial state is identical on server and client — so
+ * there is no SSR hydration mismatch and no attribute-based guard is needed.
  */
 import { useEffect, useRef } from "react"
 import { defaultAuthStore } from "@/lib/store/auth-store"
-import { refreshSession, fetchMe } from "@/lib/api/auth"
+import { refreshSession } from "@/lib/api/auth"
 
 interface AuthProviderProps {
   children: React.ReactNode
@@ -33,30 +32,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (didRun.current) return
     didRun.current = true
 
-    const { refreshToken, accessToken } = defaultAuthStore.getState()
+    // Already authenticated in memory (e.g. a fresh login before this provider's
+    // first effect) — nothing to rehydrate.
+    if (defaultAuthStore.getState().accessToken) return
 
-    if (!refreshToken || accessToken) {
-      // Nothing to do — already authenticated or no persisted session.
-      return
-    }
-
-    refreshSession(refreshToken)
-      .then(async (data) => {
+    refreshSession()
+      .then((data) => {
         defaultAuthStore
           .getState()
-          .setTokens(data.accessToken, data.refreshToken)
-        try {
-          const user = await fetchMe()
-          defaultAuthStore.getState().setUser(user)
-        } catch {
-          // Profile fetch failed after token refresh — clear to avoid a
-          // half-initialised session.
-          defaultAuthStore.getState().clear()
-        }
+          .setSession({ accessToken: data.accessToken, user: data.user })
       })
       .catch(() => {
-        // Refresh failed (expired, revoked, network error) — clear so
-        // RequireAuth sends the user back to /login.
+        // 401 (no/expired cookie) OR a network/server error — either way we
+        // cannot establish a session, so resolve to anonymous. This also frees
+        // the store from the 'loading' state so guards stop showing the spinner.
         defaultAuthStore.getState().clear()
       })
     // Empty dependency array is intentional — run once on mount only.

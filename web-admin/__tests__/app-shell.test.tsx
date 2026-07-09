@@ -37,6 +37,7 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/lib/api/admin", () => ({
   getMe: vi.fn(),
+  logout: vi.fn(),
 }))
 
 // The four live nav-badge sources (KYC queue depth / stuck txns / open recon
@@ -127,12 +128,12 @@ function renderShell() {
 
 beforeEach(() => {
   mockGetMe.mockReset()
-  // AppShell now embeds the auth gate (useRequireAuth) — authenticate the store so
-  // the chrome mounts (an anonymous store would redirect to /login and render null).
-  defaultAdminAuthStore.getState().setSession({
-    accessToken: "test-token",
-    admin: adminMe({}),
-  })
+  // AppShell embeds the auth gate (useRequireAuth). Boot from a clean anonymous
+  // store: the GET /admin/me probe (mocked per test via mockGetMe) rehydrates the
+  // session from the HttpOnly cookie and mounts the chrome; a rejected probe
+  // redirects to /login. Default the probe to a resolved session.
+  defaultAdminAuthStore.getState().clear()
+  mockGetMe.mockResolvedValue(adminMe({}))
   // Default the badge sources to zero so nav-gating/MFA tests stay deterministic
   // (a zero count renders no pip). Badge-specific tests override these.
   mockListKycQueue.mockResolvedValue(kycQueue(0))
@@ -345,11 +346,11 @@ describe("AppShell MFA enrollment affordance", () => {
 })
 
 describe("AppShell auth gate (centralized)", () => {
-  it("renders no chrome and redirects to /login when the store is anonymous", async () => {
+  it("renders no chrome and redirects to /login when the session probe fails (401)", async () => {
     mockReplace.mockClear()
-    mockGetMe.mockResolvedValue(adminMe({}))
-    // Override the authenticated default from beforeEach — sign the operator out.
+    // Anonymous store + a failing GET /admin/me probe = no valid cookie session.
     defaultAdminAuthStore.getState().clear()
+    mockGetMe.mockRejectedValue(new Error("unauthorized"))
 
     renderShell()
 

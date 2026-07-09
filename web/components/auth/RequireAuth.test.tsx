@@ -1,9 +1,12 @@
 /**
- * TDD tests for RequireAuth mounted-gate hydration fix.
+ * RequireAuth — route guard driven by the auth store status (Wave H).
  *
- * Ensures RequireAuth renders null before mount (matching the server render)
- * and only shows auth-dependent content after mount. This prevents the
- * hydration mismatch caused by Zustand reading localStorage during SSR.
+ * With the refresh token in an HttpOnly cookie there is no JS signal to
+ * distinguish "boot rehydration in flight" from "no session". The store status
+ * provides it: 'loading' (boot refresh pending), 'authenticated', 'anonymous'.
+ *   - loading       → show the loading branch (never redirect prematurely)
+ *   - authenticated → render children
+ *   - anonymous     → redirect to /login
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
@@ -15,27 +18,13 @@ vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({ push: mockPush })),
 }))
 
-// Auth store mock — we can configure per-test
-let mockAccessToken: string | null = null
-let mockRefreshToken: string | null = null
+let mockStatus: "loading" | "authenticated" | "anonymous" = "loading"
 
 vi.mock("@/lib/store/auth-store", () => ({
   useAuthStore: vi.fn((selector?: (s: unknown) => unknown) => {
-    const state = {
-      accessToken: mockAccessToken,
-      refreshToken: mockRefreshToken,
-    }
+    const state = { status: mockStatus, accessToken: null }
     return selector ? selector(state) : state
   }),
-  defaultAuthStore: {
-    getState: vi.fn(() => ({
-      refreshToken: null,
-      accessToken: null,
-      setTokens: vi.fn(),
-      setUser: vi.fn(),
-      clear: vi.fn(),
-    })),
-  },
 }))
 
 import { RequireAuth } from "./RequireAuth"
@@ -44,15 +33,13 @@ import { RequireAuth } from "./RequireAuth"
 
 describe("RequireAuth", () => {
   beforeEach(() => {
-    vi.resetAllMocks()
+    vi.clearAllMocks()
     mockPush.mockReset()
-    mockAccessToken = null
-    mockRefreshToken = null
+    mockStatus = "loading"
   })
 
-  it("renders children after mount when accessToken is present", async () => {
-    mockAccessToken = "valid-access-token"
-    mockRefreshToken = "valid-refresh-token"
+  it("renders children when status is 'authenticated'", () => {
+    mockStatus = "authenticated"
 
     render(
       <RequireAuth>
@@ -60,14 +47,12 @@ describe("RequireAuth", () => {
       </RequireAuth>
     )
 
-    await waitFor(() => {
-      expect(screen.getByText("protected content")).toBeInTheDocument()
-    })
+    expect(screen.getByText("protected content")).toBeInTheDocument()
+    expect(mockPush).not.toHaveBeenCalled()
   })
 
-  it("shows loading state after mount when refreshToken present but no accessToken", async () => {
-    mockAccessToken = null
-    mockRefreshToken = "refresh-token"
+  it("shows the loading branch while status is 'loading' (boot refresh in flight)", () => {
+    mockStatus = "loading"
 
     render(
       <RequireAuth>
@@ -75,15 +60,14 @@ describe("RequireAuth", () => {
       </RequireAuth>
     )
 
-    // After mount, should show loading rather than children
-    await waitFor(() => {
-      expect(screen.queryByText("protected content")).not.toBeInTheDocument()
-    })
+    expect(screen.queryByText("protected content")).not.toBeInTheDocument()
+    expect(screen.getByText(/loading/i)).toBeInTheDocument()
+    // Must NOT redirect while the boot refresh is still resolving.
+    expect(mockPush).not.toHaveBeenCalled()
   })
 
-  it("redirects to /login after mount when no session tokens", async () => {
-    mockAccessToken = null
-    mockRefreshToken = null
+  it("redirects to /login and renders nothing when status is 'anonymous'", async () => {
+    mockStatus = "anonymous"
 
     render(
       <RequireAuth>
@@ -94,7 +78,6 @@ describe("RequireAuth", () => {
     await waitFor(() => {
       expect(mockPush).toHaveBeenCalledWith("/login")
     })
-
     expect(screen.queryByText("protected content")).not.toBeInTheDocument()
   })
 })

@@ -493,6 +493,38 @@ describe('env.schema boot guards', () => {
     const env = validateEnv({ ...validRaw, NODE_ENV: 'development' });
     expect(env.SANCTIONS_MOCK_MODE).toBe('true');
   });
+
+  // 9. AUTH_COOKIE_SECURE must not be 'false' in production — the auth cookies
+  //    (ha_refresh / ha_admin_session) would ship over cleartext HTTP (R1).
+  const validProd = {
+    ...validRaw,
+    NODE_ENV: 'production',
+    STATEMENT_SIGNING_KEY: 'stmt-key',
+    DIRECTIVE_SIGNING_KEY: 'directive-key',
+    RESEND_API_KEY: 're_test_key',
+    SANCTIONS_MOCK_MODE: 'false',
+  };
+
+  it('rejects AUTH_COOKIE_SECURE=false when NODE_ENV=production', () => {
+    expect(() =>
+      validateEnv({ ...validProd, AUTH_COOKIE_SECURE: 'false' }),
+    ).toThrow(/AUTH_COOKIE_SECURE/);
+  });
+
+  it('accepts AUTH_COOKIE_SECURE=true in production', () => {
+    const env = validateEnv({ ...validProd, AUTH_COOKIE_SECURE: 'true' });
+    expect(env.AUTH_COOKIE_SECURE).toBe('true');
+  });
+
+  it('accepts an omitted AUTH_COOKIE_SECURE in production (defaults to secure)', () => {
+    const env = validateEnv(validProd);
+    expect(env.AUTH_COOKIE_SECURE).toBeUndefined();
+  });
+
+  it('tolerates AUTH_COOKIE_SECURE=false outside production (dev/test)', () => {
+    const env = validateEnv({ ...validRaw, AUTH_COOKIE_SECURE: 'false' });
+    expect(env.AUTH_COOKIE_SECURE).toBe('false');
+  });
 });
 
 // --- Live market-rate feed (F1) env keys ---
@@ -515,6 +547,71 @@ describe('env.schema pricing-feed keys', () => {
     expect(() =>
       validateEnv({ ...validRaw, COINGECKO_BASE_URL: 'not-a-url' }),
     ).toThrow(/COINGECKO_BASE_URL/);
+  });
+});
+
+// --- CORS + auth-cookie keys (Wave H) ---
+
+describe('env.schema CORS + auth-cookie keys', () => {
+  it('treats ADMIN_APP_BASE_URL + cookie keys as optional (undefined when omitted)', () => {
+    const env = validateEnv(validRaw);
+    expect(env.ADMIN_APP_BASE_URL).toBeUndefined();
+    expect(env.AUTH_COOKIE_SAMESITE).toBeUndefined();
+    expect(env.ADMIN_COOKIE_SAMESITE).toBeUndefined();
+    expect(env.AUTH_COOKIE_SECURE).toBeUndefined();
+  });
+
+  it('coerces an empty ADMIN_APP_BASE_URL to undefined (dev CORS falls back)', () => {
+    const env = validateEnv({ ...validRaw, ADMIN_APP_BASE_URL: '' });
+    expect(env.ADMIN_APP_BASE_URL).toBeUndefined();
+  });
+
+  it('accepts a valid ADMIN_APP_BASE_URL', () => {
+    const env = validateEnv({
+      ...validRaw,
+      ADMIN_APP_BASE_URL: 'https://admin.handshake.example',
+    });
+    expect(env.ADMIN_APP_BASE_URL).toBe('https://admin.handshake.example');
+  });
+
+  it('throws when ADMIN_APP_BASE_URL is not a valid URL', () => {
+    expect(() =>
+      validateEnv({ ...validRaw, ADMIN_APP_BASE_URL: 'not-a-url' }),
+    ).toThrow(/ADMIN_APP_BASE_URL/);
+  });
+
+  it('accepts the three SameSite values and rejects anything else', () => {
+    for (const v of ['lax', 'strict', 'none'] as const) {
+      expect(
+        validateEnv({ ...validRaw, AUTH_COOKIE_SAMESITE: v })
+          .AUTH_COOKIE_SAMESITE,
+      ).toBe(v);
+    }
+    expect(() =>
+      validateEnv({ ...validRaw, AUTH_COOKIE_SAMESITE: 'weak' }),
+    ).toThrow(/AUTH_COOKIE_SAMESITE/);
+  });
+
+  it('accepts the three SameSite values for the admin cookie and rejects anything else', () => {
+    for (const v of ['lax', 'strict', 'none'] as const) {
+      expect(
+        validateEnv({ ...validRaw, ADMIN_COOKIE_SAMESITE: v })
+          .ADMIN_COOKIE_SAMESITE,
+      ).toBe(v);
+    }
+    expect(() =>
+      validateEnv({ ...validRaw, ADMIN_COOKIE_SAMESITE: 'weak' }),
+    ).toThrow(/ADMIN_COOKIE_SAMESITE/);
+  });
+
+  it('accepts AUTH_COOKIE_SECURE=true|false and rejects other values', () => {
+    expect(
+      validateEnv({ ...validRaw, AUTH_COOKIE_SECURE: 'true' })
+        .AUTH_COOKIE_SECURE,
+    ).toBe('true');
+    expect(() =>
+      validateEnv({ ...validRaw, AUTH_COOKIE_SECURE: 'yes' }),
+    ).toThrow(/AUTH_COOKIE_SECURE/);
   });
 });
 

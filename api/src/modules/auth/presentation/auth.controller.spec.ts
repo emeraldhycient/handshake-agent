@@ -4,9 +4,12 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
+import type { Request, Response } from 'express';
 
 import type { MeResponse } from '@handshake-agent/contracts';
 
+import { WEB_REFRESH_COOKIE } from '../../../core/common/cookie-options';
 import { AuthService } from '../application/auth.service';
 import {
   InvalidOtpError,
@@ -31,9 +34,23 @@ const ME: MeResponse = {
   hasPin: false,
 };
 
+// Dev config: not production → cookie is HttpOnly + SameSite=Lax + NOT secure.
+const config = { get: () => undefined } as unknown as ConfigService;
+
+function makeRes(): jest.Mocked<Pick<Response, 'cookie' | 'clearCookie'>> {
+  return {
+    cookie: jest.fn(),
+    clearCookie: jest.fn(),
+  };
+}
+
+function makeReq(cookies?: Record<string, string>): Request {
+  return { cookies } as unknown as Request;
+}
+
 function makeController(me: jest.Mock) {
   const auth = { me } as unknown as AuthService;
-  return new AuthController(auth);
+  return new AuthController(auth, config);
 }
 
 describe('AuthController.me', () => {
@@ -64,7 +81,7 @@ describe('AuthController.me', () => {
 describe('AuthController.loginVerify — OTP lockout distinction', () => {
   function makeAuthController(loginVerify: jest.Mock): AuthController {
     const auth = { loginVerify } as unknown as AuthService;
-    return new AuthController(auth);
+    return new AuthController(auth, config);
   }
 
   const body = {
@@ -77,16 +94,18 @@ describe('AuthController.loginVerify — OTP lockout distinction', () => {
     const controller = makeAuthController(
       jest.fn().mockRejectedValue(new InvalidOtpError()),
     );
-    await expect(controller.loginVerify(body)).rejects.toBeInstanceOf(
-      UnauthorizedException,
-    );
+    await expect(
+      controller.loginVerify(body, makeRes() as unknown as Response),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
   it('maps an exhausted challenge (OtpLockedError) to 429 with a request-a-new-code message', async () => {
     const controller = makeAuthController(
       jest.fn().mockRejectedValue(new OtpLockedError()),
     );
-    const err = await controller.loginVerify(body).catch((e: unknown) => e);
+    const err = await controller
+      .loginVerify(body, makeRes() as unknown as Response)
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpException);
     expect((err as HttpException).getStatus()).toBe(
       HttpStatus.TOO_MANY_REQUESTS,
@@ -95,11 +114,153 @@ describe('AuthController.loginVerify — OTP lockout distinction', () => {
   });
 });
 
+describe('AuthController.loginVerify — refresh cookie', () => {
+  const body = {
+    email: 'a@b.com',
+    otp: '123456',
+    deviceFingerprint: 'fp-12345678',
+  } as never;
+
+  it('sets the HttpOnly ha_refresh cookie and still returns the body tokens', async () => {
+    const loginVerify = jest.fn().mockResolvedValue({
+      accessToken: 'access.jwt',
+      refreshToken: 'refresh.tok',
+      user: ME,
+    });
+    const controller = new AuthController(
+      { loginVerify } as unknown as AuthService,
+      config,
+    );
+    const res = makeRes();
+    const result = await controller.loginVerify(
+      body,
+      res as unknown as Response,
+    );
+    expect(res.cookie).toHaveBeenCalledWith(
+      WEB_REFRESH_COOKIE,
+      'refresh.tok',
+      expect.objectContaining({ httpOnly: true, sameSite: 'lax', path: '/' }),
+    );
+    // Non-breaking: the body still carries both tokens + user.
+    expect(result).toEqual({
+      accessToken: 'access.jwt',
+      refreshToken: 'refresh.tok',
+      user: ME,
+    });
+  });
+
+  it('does NOT set a cookie when login fails', async () => {
+    const loginVerify = jest.fn().mockRejectedValue(new InvalidOtpError());
+    const controller = new AuthController(
+      { loginVerify } as unknown as AuthService,
+      config,
+    );
+    const res = makeRes();
+    await controller
+      .loginVerify(body, res as unknown as Response)
+      .catch(() => undefined);
+    expect(res.cookie).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthController.refresh — cookie-primary', () => {
+  const rotated = {
+    accessToken: 'new.access',
+    refreshToken: 'new.refresh',
+    user: ME,
+  };
+
+  it('reads the token from the ha_refresh cookie and rotates the cookie', async () => {
+    const refresh = jest.fn().mockResolvedValue(rotated);
+    const controller = new AuthController(
+      { refresh } as unknown as AuthService,
+      config,
+    );
+    const res = makeRes();
+    const result = await controller.refresh(
+      { refreshToken: undefined },
+      makeReq({ [WEB_REFRESH_COOKIE]: 'cookie.tok' }),
+      res as unknown as Response,
+    );
+    // Cookie value wins over an absent body token.
+    expect(refresh).toHaveBeenCalledWith({ refreshToken: 'cookie.tok' });
+    expect(res.cookie).toHaveBeenCalledWith(
+      WEB_REFRESH_COOKIE,
+      'new.refresh',
+      expect.objectContaining({ httpOnly: true }),
+    );
+    expect(result).toEqual(rotated);
+  });
+
+  it('falls back to the body token when no cookie is present', async () => {
+    const refresh = jest.fn().mockResolvedValue(rotated);
+    const controller = new AuthController(
+      { refresh } as unknown as AuthService,
+      config,
+    );
+    const res = makeRes();
+    await controller.refresh(
+      { refreshToken: 'body.tok' },
+      makeReq(undefined),
+      res as unknown as Response,
+    );
+    expect(refresh).toHaveBeenCalledWith({ refreshToken: 'body.tok' });
+  });
+
+  it('prefers the cookie over a body token when both are present', async () => {
+    const refresh = jest.fn().mockResolvedValue(rotated);
+    const controller = new AuthController(
+      { refresh } as unknown as AuthService,
+      config,
+    );
+    await controller.refresh(
+      { refreshToken: 'body.tok' },
+      makeReq({ [WEB_REFRESH_COOKIE]: 'cookie.tok' }),
+      makeRes() as unknown as Response,
+    );
+    expect(refresh).toHaveBeenCalledWith({ refreshToken: 'cookie.tok' });
+  });
+
+  it('maps InvalidRefreshTokenError (neither cookie nor body) to 401 and sets no cookie', async () => {
+    const refresh = jest.fn().mockRejectedValue(new InvalidRefreshTokenError());
+    const controller = new AuthController(
+      { refresh } as unknown as AuthService,
+      config,
+    );
+    const res = makeRes();
+    await expect(
+      controller.refresh(
+        { refreshToken: undefined },
+        makeReq(undefined),
+        res as unknown as Response,
+      ),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(res.cookie).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthController.logout — clears the refresh cookie', () => {
+  it('revokes the session and clears the ha_refresh cookie', async () => {
+    const logout = jest.fn().mockResolvedValue(undefined);
+    const controller = new AuthController(
+      { logout } as unknown as AuthService,
+      config,
+    );
+    const res = makeRes();
+    await controller.logout(CURRENT_USER, res as unknown as Response);
+    expect(logout).toHaveBeenCalledWith('s1');
+    expect(res.clearCookie).toHaveBeenCalledWith(
+      WEB_REFRESH_COOKIE,
+      expect.objectContaining({ path: '/' }),
+    );
+  });
+});
+
 describe('AuthController.resendLoginOtp', () => {
   it('returns the neutral otp_sent response', async () => {
     const resendLoginOtp = jest.fn().mockResolvedValue({ status: 'otp_sent' });
     const auth = { resendLoginOtp } as unknown as AuthService;
-    const controller = new AuthController(auth);
+    const controller = new AuthController(auth, config);
     await expect(
       controller.resendLoginOtp({ email: 'a@b.com' }),
     ).resolves.toEqual({ status: 'otp_sent' });
@@ -113,7 +274,7 @@ describe('AuthController.resendVerification', () => {
       .fn()
       .mockResolvedValue({ status: 'pending_verification' });
     const auth = { resendEmailVerification } as unknown as AuthService;
-    const controller = new AuthController(auth);
+    const controller = new AuthController(auth, config);
     await expect(
       controller.resendVerification({ email: 'a@b.com' }),
     ).resolves.toEqual({ status: 'pending_verification' });

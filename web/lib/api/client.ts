@@ -55,8 +55,13 @@ export function isSessionExpiredError(err: unknown): boolean {
   )
 }
 
+// `withCredentials` sends the HttpOnly `ha_refresh` cookie on every request and
+// lets the browser store the Set-Cookie the auth endpoints return — the refresh
+// token never touches JS (Wave H). The access token still travels as a Bearer
+// header (added by the request interceptor below).
 export const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api",
+  withCredentials: true,
 })
 
 // ─── Request interceptor 1 — Idempotency-Key ─────────────────────────────────
@@ -96,7 +101,11 @@ api.interceptors.response.use(
     const isAuthEndpoint = config?.url?.includes("/auth/")
     const alreadyRetried = config?._retry === true
 
-    // Attempt silent token refresh only on a first 401 from a non-auth endpoint.
+    // Attempt silent token refresh only on a first 401 from a non-auth endpoint,
+    // and only when a session (access token) is held in memory. Gating on the
+    // access token — rather than a JS refresh token, which no longer exists —
+    // keeps an anonymous caller's business 401 (or a wrong-PIN 401) from turning
+    // into a refresh attempt: those normalise straight through.
     if (
       error.response?.status === 401 &&
       !isAuthEndpoint &&
@@ -104,16 +113,15 @@ api.interceptors.response.use(
       config
     ) {
       config._retry = true
-      const { refreshToken } = defaultAuthStore.getState()
-      if (refreshToken) {
+      const { accessToken } = defaultAuthStore.getState()
+      if (accessToken) {
         try {
-          const { data } = await api.post<{
-            accessToken: string
-            refreshToken: string
-          }>("/auth/refresh", { refreshToken })
-          defaultAuthStore
-            .getState()
-            .setTokens(data.accessToken, data.refreshToken)
+          // No body — the rotating refresh token rides in the HttpOnly cookie,
+          // sent automatically because the instance uses `withCredentials`.
+          const { data } = await api.post<{ accessToken: string }>(
+            "/auth/refresh"
+          )
+          defaultAuthStore.getState().setAccessToken(data.accessToken)
           ;(config.headers as Record<string, string>)["Authorization"] =
             `Bearer ${data.accessToken}`
           return api(config)

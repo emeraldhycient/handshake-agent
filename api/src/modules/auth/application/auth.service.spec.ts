@@ -455,8 +455,8 @@ describe('AuthService.loginVerify', () => {
 });
 
 describe('AuthService.refresh', () => {
-  it('rotates a valid refresh token and returns a new pair', async () => {
-    const { service, sessionRepo, tokenService } = makeDeps();
+  it('rotates a valid refresh token and returns a new pair PLUS the user projection', async () => {
+    const { service, sessionRepo, tokenService, userRepo } = makeDeps();
     sessionRepo.findActiveByRefreshHash.mockResolvedValueOnce({
       id: 's1',
       userId: 'u1',
@@ -476,9 +476,20 @@ describe('AuthService.refresh', () => {
         refreshTokenHash: 'hash(new.refresh)',
       }),
     );
+    // Single round-trip boot rehydration: refresh loads + returns the user.
+    expect(userRepo.loadMe).toHaveBeenCalledWith('u1');
     expect(res).toEqual({
       accessToken: 'new.access',
       refreshToken: 'new.refresh',
+      user: {
+        userId: 'u1',
+        email: 'a@b.com',
+        kycStatus: 'not_started',
+        kycTier: 'unverified',
+        hasPin: false,
+        firstName: null,
+        lastName: null,
+      },
     });
   });
 
@@ -486,6 +497,30 @@ describe('AuthService.refresh', () => {
     const { service } = makeDeps();
     await expect(
       service.refresh({ refreshToken: 'nope' }),
+    ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
+  });
+
+  it('throws InvalidRefreshTokenError when neither cookie nor body supplied a token', async () => {
+    // Cookie-primary: the controller passes {} when both the ha_refresh cookie
+    // and the body token are absent. That is a 401, not a rotation.
+    const { service, sessionRepo } = makeDeps();
+    await expect(service.refresh({})).rejects.toBeInstanceOf(
+      InvalidRefreshTokenError,
+    );
+    // Must short-circuit before any session lookup.
+    expect(sessionRepo.findActiveByRefreshHash).not.toHaveBeenCalled();
+  });
+
+  it('throws InvalidRefreshTokenError when the session is valid but its user is gone', async () => {
+    const { service, sessionRepo, userRepo } = makeDeps();
+    sessionRepo.findActiveByRefreshHash.mockResolvedValueOnce({
+      id: 's1',
+      userId: 'u1',
+      deviceId: 'd1',
+    });
+    userRepo.loadMe.mockResolvedValueOnce(null);
+    await expect(
+      service.refresh({ refreshToken: 'old.refresh' }),
     ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
   });
 });

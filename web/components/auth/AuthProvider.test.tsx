@@ -1,15 +1,15 @@
 /**
- * TDD tests for AuthProvider hydration fix.
+ * AuthProvider — boot rehydration (Wave H: HttpOnly refresh cookie).
  *
- * The previous implementation called useState(needsRehydration) which read
- * localStorage at state-initialisation time. On the server localStorage is
- * unavailable (returns null) but on the client it might return a persisted
- * refreshToken — causing a server/client tree mismatch ("Hydration failed").
+ * On mount, with no access token in memory, the provider calls POST /auth/refresh
+ * (no body — the HttpOnly `ha_refresh` cookie carries the token) exactly once and:
+ *   - 200 → setSession(accessToken + user)  → authenticated
+ *   - 401 → clear()                         → anonymous (logged out)
+ *   - error (network/500) → clear()         → anonymous (never stuck loading)
+ * If an access token is already in memory (fresh login), it does nothing.
  *
- * The fix: remove the rehydrating state entirely (it was a debug artifact
- * not consumed by any other component). All localStorage-dependent logic runs
- * inside useEffect (client-only, post-hydration), so the component renders a
- * stable tree on both server and client.
+ * The provider renders children immediately; RequireAuth drives the loading /
+ * redirect UI off the store status.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
@@ -18,15 +18,13 @@ import { render, screen, waitFor } from "@testing-library/react"
 
 vi.mock("@/lib/api/auth", () => ({
   refreshSession: vi.fn(),
-  fetchMe: vi.fn(),
 }))
 
-// defaultAuthStore.getState() is called inside the useEffect.
-// Expose a mutable object so tests can simulate different localStorage states.
+// defaultAuthStore.getState() is called inside the effect. Expose a mutable
+// object so tests can simulate the in-memory access-token state.
 const mockStoreState = {
-  refreshToken: null as string | null,
   accessToken: null as string | null,
-  setTokens: vi.fn(),
+  setSession: vi.fn(),
   setUser: vi.fn(),
   clear: vi.fn(),
 }
@@ -35,29 +33,40 @@ vi.mock("@/lib/store/auth-store", () => ({
   defaultAuthStore: {
     getState: vi.fn(() => mockStoreState),
   },
-  useAuthStore: vi.fn(() => ({
-    accessToken: mockStoreState.accessToken,
-    refreshToken: mockStoreState.refreshToken,
-  })),
+  useAuthStore: vi.fn(() => ({ accessToken: mockStoreState.accessToken })),
 }))
 
-// Import AFTER vi.mock declarations so mocks are active
+// Import AFTER vi.mock declarations so mocks are active.
 import { AuthProvider } from "./AuthProvider"
-import { refreshSession, fetchMe } from "@/lib/api/auth"
+import { refreshSession } from "@/lib/api/auth"
 
 const mockRefreshSession = vi.mocked(refreshSession)
-const mockFetchMe = vi.mocked(fetchMe)
+
+const bootUser = {
+  userId: "u1",
+  email: "a@b.com",
+  kycStatus: "verified" as const,
+  kycTier: "1",
+  hasPin: true,
+}
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe("AuthProvider", () => {
+describe("AuthProvider — boot rehydration", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockStoreState.refreshToken = null
     mockStoreState.accessToken = null
+    // Default: a benign resolved refresh so the mount effect never calls `.then`
+    // on `undefined`. Individual tests override with mock*ValueOnce.
+    mockRefreshSession.mockReset()
+    mockRefreshSession.mockResolvedValue({
+      accessToken: "boot-access",
+      refreshToken: "rotated",
+      user: bootUser,
+    })
   })
 
-  it("renders children immediately", () => {
+  it("renders children immediately (does not block on the refresh)", () => {
     render(
       <AuthProvider>
         <span>child content</span>
@@ -66,10 +75,7 @@ describe("AuthProvider", () => {
     expect(screen.getByText("child content")).toBeInTheDocument()
   })
 
-  it("does not add a data-auth-rehydrating attribute (hydration mismatch source)", () => {
-    // The data-auth-rehydrating attribute was removed because its value differed
-    // between server (always false, no localStorage) and client (could be true).
-    // This test guards against re-introducing it without suppressHydrationWarning.
+  it("does not add a data-auth-rehydrating attribute (hydration-mismatch source)", () => {
     const { container } = render(
       <AuthProvider>
         <span>child</span>
@@ -78,45 +84,12 @@ describe("AuthProvider", () => {
     expect(container.querySelector("[data-auth-rehydrating]")).toBeNull()
   })
 
-  it("does not call refreshSession when no refreshToken in store", () => {
-    mockStoreState.refreshToken = null
-    mockStoreState.accessToken = null
-
-    render(
-      <AuthProvider>
-        <span>child</span>
-      </AuthProvider>
-    )
-
-    expect(mockRefreshSession).not.toHaveBeenCalled()
-  })
-
-  it("does not call refreshSession when accessToken is already present", () => {
-    mockStoreState.refreshToken = "valid-refresh-token"
-    mockStoreState.accessToken = "valid-access-token"
-
-    render(
-      <AuthProvider>
-        <span>child</span>
-      </AuthProvider>
-    )
-
-    expect(mockRefreshSession).not.toHaveBeenCalled()
-  })
-
-  it("calls refreshSession on mount when refreshToken present but no accessToken", async () => {
-    mockStoreState.refreshToken = "valid-refresh-token"
+  it("attempts a cookie refresh (no args) on mount when no access token is held", async () => {
     mockStoreState.accessToken = null
     mockRefreshSession.mockResolvedValueOnce({
       accessToken: "new-access",
-      refreshToken: "new-refresh",
-    })
-    mockFetchMe.mockResolvedValueOnce({
-      userId: "u1",
-      email: "a@b.com",
-      kycStatus: "none",
-      kycTier: "0",
-      hasPin: false,
+      refreshToken: "rotated",
+      user: bootUser,
     })
 
     render(
@@ -125,16 +98,41 @@ describe("AuthProvider", () => {
       </AuthProvider>
     )
 
-    // refreshSession is called asynchronously in a useEffect
     await waitFor(() => {
-      expect(mockRefreshSession).toHaveBeenCalledWith("valid-refresh-token")
+      expect(mockRefreshSession).toHaveBeenCalledTimes(1)
     })
+    // Called with no arguments — the cookie carries the refresh token.
+    expect(mockRefreshSession.mock.calls[0]).toHaveLength(0)
   })
 
-  it("calls clear() when refreshSession rejects", async () => {
-    mockStoreState.refreshToken = "expired-refresh-token"
+  it("authenticated: on a 200 refresh, sets the session from accessToken + user", async () => {
     mockStoreState.accessToken = null
-    mockRefreshSession.mockRejectedValueOnce(new Error("Token expired"))
+    mockRefreshSession.mockResolvedValueOnce({
+      accessToken: "new-access",
+      refreshToken: "rotated",
+      user: bootUser,
+    })
+
+    render(
+      <AuthProvider>
+        <span>child</span>
+      </AuthProvider>
+    )
+
+    await waitFor(() => {
+      expect(mockStoreState.setSession).toHaveBeenCalledWith({
+        accessToken: "new-access",
+        user: bootUser,
+      })
+    })
+    expect(mockStoreState.clear).not.toHaveBeenCalled()
+  })
+
+  it("unauthenticated: clears the session when the refresh rejects (401)", async () => {
+    mockStoreState.accessToken = null
+    mockRefreshSession.mockRejectedValueOnce(
+      Object.assign(new Error("Unauthorized"), { status: 401 })
+    )
 
     render(
       <AuthProvider>
@@ -145,5 +143,33 @@ describe("AuthProvider", () => {
     await waitFor(() => {
       expect(mockStoreState.clear).toHaveBeenCalled()
     })
+    expect(mockStoreState.setSession).not.toHaveBeenCalled()
+  })
+
+  it("error: a network/500 failure also resolves to anonymous (never stuck loading)", async () => {
+    mockStoreState.accessToken = null
+    mockRefreshSession.mockRejectedValueOnce(new Error("Network Error"))
+
+    render(
+      <AuthProvider>
+        <span>child</span>
+      </AuthProvider>
+    )
+
+    await waitFor(() => {
+      expect(mockStoreState.clear).toHaveBeenCalled()
+    })
+  })
+
+  it("does not refresh when an access token is already in memory (fresh login)", () => {
+    mockStoreState.accessToken = "already-authenticated"
+
+    render(
+      <AuthProvider>
+        <span>child</span>
+      </AuthProvider>
+    )
+
+    expect(mockRefreshSession).not.toHaveBeenCalled()
   })
 })

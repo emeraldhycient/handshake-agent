@@ -8,11 +8,13 @@ import {
   Patch,
   Post,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
 import * as QRCode from 'qrcode';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 
 import {
   AdminLoginResponseSchema,
@@ -23,6 +25,10 @@ import {
   type AdminMfaEnrollResponse,
 } from '@handshake-agent/contracts';
 
+import {
+  ADMIN_SESSION_COOKIE,
+  adminSessionCookieOptions,
+} from '../../../core/common/cookie-options';
 import { AdminAuthService } from '../application/admin-auth.service';
 import { AdminUserService } from '../application/admin-user.service';
 import { AdminMfaService } from '../application/admin-mfa.service';
@@ -72,6 +78,7 @@ export class AdminAuthController {
     private readonly users: AdminUserService,
     @Inject(PASSWORD_HASHER)
     private readonly hasher: IPasswordHasher,
+    private readonly config: ConfigService,
   ) {}
 
   // ── Public (no session) ────────────────────────────────────────────────────
@@ -82,12 +89,22 @@ export class AdminAuthController {
   async login(
     @Body() dto: AdminLoginDto,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<AdminLoginResponse> {
     const result = await this.auth.login(dto, {
       ip: req.ip,
       userAgent: req.headers['user-agent'],
     });
-    return AdminLoginResponseSchema.parse(result);
+    const parsed = AdminLoginResponseSchema.parse(result);
+    // Persist the session JWT in an HttpOnly, SameSite=Strict cookie (Wave H).
+    // The body still returns the token (non-breaking for e2e/non-browser); the
+    // browser stops reading the body value and relies on the cookie.
+    res.cookie(
+      ADMIN_SESSION_COOKIE,
+      parsed.accessToken,
+      adminSessionCookieOptions(this.config),
+    );
+    return parsed;
   }
 
   @Post('bootstrap')
@@ -128,8 +145,16 @@ export class AdminAuthController {
   @Post('auth/logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(AdminSessionGuard)
-  async logout(@CurrentAdmin() admin: AdminContext): Promise<void> {
+  async logout(
+    @CurrentAdmin() admin: AdminContext,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
     await this.auth.logout(admin.sessionId);
+    // Clear with the SAME attributes used to set it so the browser matches + deletes.
+    res.clearCookie(
+      ADMIN_SESSION_COOKIE,
+      adminSessionCookieOptions(this.config),
+    );
   }
 
   @Get('me')
