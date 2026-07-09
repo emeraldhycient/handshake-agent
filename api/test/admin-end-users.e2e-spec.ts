@@ -429,14 +429,21 @@ describe('Admin end-user management + KYC review — e2e (AppModule, Testcontain
       where: { userId },
     });
     expect(needsInfoProfile.status).toBe('needs_info');
-    // A paused review: the earlier tier adjustment (tier_1) is preserved, not reset.
-    expect(needsInfoProfile.tier).toBe('tier_1');
+    // A paused review: request-info touches only the STATUS, never the tier. The
+    // admin tier adjustment lands on User.kycTier (the effective account tier the
+    // gate reads) — not KycProfile.tier, which records the tier the KYC
+    // submission was made at. So the profile tier stays at its seeded value
+    // (confirmed earlier via requestedTier === 'unverified'), while the
+    // User-level tier the admin set is preserved through the pause (asserted below).
+    expect(needsInfoProfile.tier).toBe('unverified');
     expect(needsInfoProfile.rejectionReason).toBeNull();
 
     const needsInfoUser = await prisma.user.findUniqueOrThrow({
       where: { id: userId },
     });
     expect(needsInfoUser.kycStatus).toBe('needs_info');
+    // The earlier admin tier adjustment (tier_1) survives the paused review.
+    expect(needsInfoUser.kycTier).toBe('tier_1');
 
     const requestInfoAudit = await prisma.auditLog.findFirst({
       where: { subject: `User:${userId}`, action: 'kyc_state_change' },

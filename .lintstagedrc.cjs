@@ -3,5 +3,5 @@
 // that package's directory (lint-staged runs the closest config to each staged file).
 /** @type {import('lint-staged').Configuration} */
 module.exports = {
-  '*.{json,md,yaml,yml}': ['prettier --write'],
-}
+  "*.{json,md,yaml,yml}": ["prettier --write"],
+};

@@ -441,6 +441,10 @@ describe('Admin transactions + ledger oversight — e2e (AppModule, Testcontaine
       processingFee: '82.50',
       fxSpreadBps: '150',
       internalMargin: '246.015',
+      // Realized economics for the settled buy (tx-profit projection).
+      realizedFee: '82.5',
+      realizedSpread: '163.5',
+      realizedProfit: '246',
     });
     expect(buyDetail.providerReferences).toEqual([
       { provider: 'flutterwave', reference: 'flw-ref-e2e' },

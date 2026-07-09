@@ -124,3 +124,37 @@ per-user tier change.
   on `domain`+`application`; web/web-admin vitest), `pnpm format:check`, and a **commitlint** step.
 - **Fix** the two known-red e2e suites (`send-vertical` velocity 6>5, `admin-end-users` tier) so the
   e2e lane is green; quarantine only with a documented reason if a fix proves out of scope.
+
+## Wave K — agent + MCP rate-quote tool (added 2026-07-09)
+
+A read-only discovery tool so an agent (web/WhatsApp) or an external MCP client can answer "what's the
+USDT→NGN rate?" and "show me every rate". No money movement — pure display.
+
+**Rate model (user decision: both directions per pair).** For each `(asset, fiat)` pair the tool returns
+**two single folded numbers** — a **buy** rate and a **sell** rate — each = the base rate ± our FX spread,
+folded into one figure (the spread is *not* itemized to the user):
+- `sellRate` (crypto→fiat, "USDT → NGN"): what the user receives per 1 unit of crypto, computed with the
+  same `sellSpreadBps` the sell quote uses.
+- `buyRate` (fiat→crypto): the price to acquire 1 unit of crypto, computed with the same `buySpreadBps`
+  the buy quote uses.
+
+**Reuse, don't reinvent.** The displayed rate MUST equal what the engine actually transacts at, so the
+tool resolves the base rate through the Wave F seam (`resolveEffectiveBaseRate` → live store when fresh,
+config floor otherwise) and applies the spread through the **existing** quote math
+(`computeBuyQuote`/`computeSellQuote` or the shared spread helper in `quotes/application`), not a
+parallel calculation. Only pairs that are (a) `fiatTradeable`, (b) have a configured/live base rate, and
+(c) whose asset **and** fiat are enabled in the **hot-reloaded** `AssetRegistry` appear.
+
+**Surface:**
+- `application` (quotes module): a `RatesService.getEffectiveRate(asset, fiat)` returning
+  `{ asset, fiat, buyRate, sellRate, source: 'live'|'config', asOf }` and `listEffectiveRates()` over all
+  enabled `asset × fiat` combinations.
+- **Agent tool** (`agent` module tool registry, read-only, alongside `check_balance`): `get_rate` and
+  `list_rates`, so the model can answer rate questions and render "all combinations".
+- **MCP** (`mcp` module, **read scope only**): `get_rate({asset, fiat})` and `list_rates()` — no execute,
+  no PIN (§3.1/§3.5 unchanged; this is read-only).
+- **Contracts:** `EffectiveRateSchema` + `RateListResponseSchema` (folded numbers only — never expose the
+  raw spread bps to the user surface, though the admin console keeps its per-bps view).
+
+Funds-safety: read-only; the tool proposes nothing and moves nothing. It shares the pricing seam so a
+degraded/kill-switched feed shows the config-floor rate (and can flag `source: 'config'`).
