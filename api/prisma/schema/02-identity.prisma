@@ -266,7 +266,14 @@ model Beneficiary {
   cryptoAsset         String?
   cryptoNetwork       Network?
   verificationStatus  VerificationStatus @default(pending)
-  /// Cooling-off expiry for first crypto send; null once verified or for bank accounts.
+  /// Payout rail for a bank beneficiary: `bank` (default) or `mobile_money`
+  /// (wallet payout in markets where that is the dominant rail). NG stays `bank`;
+  /// crypto rows carry the default. The engine (treasury) reads this to build the
+  /// correct provider payout body; the model never sets it directly (§3.1).
+  rail                BeneficiaryRail    @default(bank)
+  /// Cooling-off expiry for a first payout to a fresh/unverified destination
+  /// (crypto sends AND unverified bank adds where name-enquiry is unavailable);
+  /// null once elapsed or for a name-enquiry-verified bank account.
   firstUseLockedUntil DateTime?          @db.Timestamptz
   verifiedAt          DateTime?          @db.Timestamptz
   isDefault           Boolean            @default(false)
@@ -287,6 +294,16 @@ enum BeneficiaryType {
   crypto_address
 
   @@map("beneficiary_type")
+}
+
+/// Payout rail for a bank beneficiary. `bank` = traditional account transfer;
+/// `mobile_money` = wallet payout (e.g. MTN MoMo, M-Pesa) in markets where that
+/// is the dominant rail. NG stays `bank`.
+enum BeneficiaryRail {
+  bank
+  mobile_money
+
+  @@map("beneficiary_rail")
 }
 
 /// Verification lifecycle shared by Beneficiary and ChannelIdentity.

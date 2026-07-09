@@ -22,6 +22,7 @@ import type { EffectiveConfigService } from '../../../core/config/application/ef
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import {
   InvalidAddressError,
+  BeneficiaryInvalidAccountNumberError,
   BeneficiaryNotFoundError,
   NameEnquiryFailedError,
   UnknownBankCountryError,
@@ -462,6 +463,185 @@ describe('BeneficiaryService', () => {
           accountName: 'RESOLVED GH',
           verificationStatus: 'verified',
         }),
+      );
+    });
+
+    // ── B1: per-country account-number validation (server-side gate) ──────────
+    it('accepts a 10-digit NUBAN for NG', async () => {
+      nameEnquiry.resolve.mockResolvedValue({
+        accountName: 'RESOLVED',
+        provider: 'flutterwave',
+        reference: 'ref-ng10',
+      });
+      repo.addBankAccount.mockResolvedValue(makeRecord());
+
+      await expect(
+        service.addBankAccount({
+          userId: 'u1',
+          accountNumber: '0123456789', // 10 digits
+          bankCode: '058',
+          label: 'GTB',
+          currency: 'NGN',
+        }),
+      ).resolves.toBeDefined();
+      expect(nameEnquiry.resolve).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects a 9-digit NG account number (before dedupe / name-enquiry / repo)', async () => {
+      await expect(
+        service.addBankAccount({
+          userId: 'u1',
+          accountNumber: '012345678', // 9 digits — invalid NUBAN
+          bankCode: '058',
+          label: 'GTB',
+          currency: 'NGN',
+        }),
+      ).rejects.toThrow(BeneficiaryInvalidAccountNumberError);
+
+      expect(repo.findActiveDuplicate).not.toHaveBeenCalled();
+      expect(nameEnquiry.resolve).not.toHaveBeenCalled();
+      expect(repo.addBankAccount).not.toHaveBeenCalled();
+    });
+
+    it('accepts a 13-digit GHS account number (permissive non-NG band — the old 10-digit DTO rejected it)', async () => {
+      repo.addBankAccount.mockResolvedValue(makeRecord());
+
+      await service.addBankAccount({
+        userId: 'u1',
+        accountNumber: '1234567890123', // 13 digits
+        bankCode: '030100',
+        accountName: 'KOFI MENSAH',
+        label: 'Ghana bank',
+        currency: 'GHS',
+      });
+
+      expect(repo.addBankAccount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountNumber: '1234567890123',
+          bankCountry: 'GH',
+          verificationStatus: 'unverified',
+        }),
+      );
+    });
+
+    it('rejects a non-digit account number', async () => {
+      await expect(
+        service.addBankAccount({
+          userId: 'u1',
+          accountNumber: '01234ABCDE',
+          bankCode: '030100',
+          accountName: 'KOFI',
+          label: 'Ghana bank',
+          currency: 'GHS',
+        }),
+      ).rejects.toThrow(BeneficiaryInvalidAccountNumberError);
+      expect(repo.addBankAccount).not.toHaveBeenCalled();
+    });
+
+    // ── B3: unverified bank adds carry a first-use cooling-off ────────────────
+    it('sets a ~24h first-use cooling-off on an UNVERIFIED (non-resolvable country) bank add', async () => {
+      repo.addBankAccount.mockResolvedValue(makeRecord());
+      const before = Date.now();
+
+      await service.addBankAccount({
+        userId: 'u1',
+        accountNumber: '1234567890123',
+        bankCode: '030100',
+        accountName: 'KOFI MENSAH',
+        label: 'Ghana bank',
+        currency: 'GHS',
+      });
+      const after = Date.now();
+
+      const callArg = repo.addBankAccount.mock.calls[0][0];
+      expect(callArg.verificationStatus).toBe('unverified');
+      expect(callArg.firstUseLockedUntil).toBeInstanceOf(Date);
+      const lockTs = callArg.firstUseLockedUntil!.getTime();
+      const day = 24 * 60 * 60 * 1000; // default cooling-off (config stub → undefined)
+      expect(lockTs).toBeGreaterThanOrEqual(before + day - 5000);
+      expect(lockTs).toBeLessThanOrEqual(after + day + 5000);
+    });
+
+    it('does NOT set a cooling-off on a VERIFIED NG bank (name-enquiry resolved)', async () => {
+      nameEnquiry.resolve.mockResolvedValue({
+        accountName: 'RESOLVED',
+        provider: 'flutterwave',
+        reference: 'ref-ng-verified',
+      });
+      repo.addBankAccount.mockResolvedValue(makeRecord());
+
+      await service.addBankAccount({
+        userId: 'u1',
+        accountNumber: '0123456789',
+        bankCode: '058',
+        label: 'GTB',
+        currency: 'NGN',
+      });
+
+      const callArg = repo.addBankAccount.mock.calls[0][0];
+      expect(callArg.verificationStatus).toBe('verified');
+      expect(callArg.firstUseLockedUntil).toBeNull();
+    });
+
+    // ── A2: forceUnverified (media-extraction path) ──────────────────────────
+    it('forceUnverified SKIPS name-enquiry and persists UNVERIFIED + cooling-off even for a resolvable country (NG)', async () => {
+      repo.addBankAccount.mockResolvedValue(makeRecord());
+
+      await service.addBankAccount({
+        userId: 'u1',
+        accountNumber: '0123456789',
+        bankCode: '058',
+        accountName: 'From image',
+        label: 'From image',
+        currency: 'NGN',
+        forceUnverified: true,
+      });
+
+      // NG is normally name-enquiry-resolvable, but forceUnverified skips it so
+      // an image-extracted destination never becomes verified/immediately-usable.
+      expect(nameEnquiry.resolve).not.toHaveBeenCalled();
+      const callArg = repo.addBankAccount.mock.calls[0][0];
+      expect(callArg.verificationStatus).toBe('unverified');
+      expect(callArg.firstUseLockedUntil).toBeInstanceOf(Date);
+    });
+
+    // ── rail carried through to the repo ─────────────────────────────────────
+    it('defaults the rail to bank on a verified NG add', async () => {
+      nameEnquiry.resolve.mockResolvedValue({
+        accountName: 'RESOLVED',
+        provider: 'flutterwave',
+        reference: 'ref-rail',
+      });
+      repo.addBankAccount.mockResolvedValue(makeRecord());
+
+      await service.addBankAccount({
+        userId: 'u1',
+        accountNumber: '0123456789',
+        bankCode: '058',
+        label: 'GTB',
+        currency: 'NGN',
+      });
+
+      expect(repo.addBankAccount).toHaveBeenCalledWith(
+        expect.objectContaining({ rail: 'bank' }),
+      );
+    });
+
+    it('carries a mobile_money rail through to the repo', async () => {
+      repo.addBankAccount.mockResolvedValue(makeRecord());
+
+      await service.addBankAccount({
+        userId: 'u1',
+        accountNumber: '1234567890123',
+        bankCode: '030100',
+        accountName: 'KOFI',
+        label: 'MoMo',
+        currency: 'GHS',
+        rail: 'mobile_money',
+      });
+
+      expect(repo.addBankAccount).toHaveBeenCalledWith(
+        expect.objectContaining({ rail: 'mobile_money' }),
       );
     });
   });

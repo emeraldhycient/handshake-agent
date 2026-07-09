@@ -1255,6 +1255,12 @@ export interface UdFlowConfig {
   effect?: EngineEffectRow[]
   ledger?: EngineLedgerRow[]
   diff?: MakerCheckerDiffRow[]
+  /**
+   * When true, the flow's `maker` step renders the MakerCheckerModal in
+   * `dual-control` mode (it raises a real four-eyes ChangeRequest a second admin
+   * approves) rather than the honest immediate copy. Used by the tier-override flow.
+   */
+  dualControl?: boolean
   /** Side-effect run once the final step is confirmed (mutations, toasts); gets the captured reason. */
   onComplete?: (reason: string) => void
 }

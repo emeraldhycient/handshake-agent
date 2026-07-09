@@ -560,11 +560,9 @@ export interface TicketingConfig {
 
 /**
  * Treasury oversight configuration (Wave D, root CLAUDE.md §7). Admin-tunable via
- * the DB-admin AppSetting layer (`treasury.largePayoutThresholds.<CODE>` keys in
- * SETTING_REGISTRY). Note: the per-currency float targets
- * (`treasury.fiatFloatTargets`) and low-float floor (`treasury.lowFloatThresholdBps`)
- * remain DB-overlay-only values with in-service fallbacks — they carry no JSON
- * defaults here.
+ * the DB-admin AppSetting layer — every leaf is registered in SETTING_REGISTRY
+ * (`treasury.largePayoutThresholds.<CODE>`, `treasury.fiatFloatTargets.<CODE>`,
+ * `treasury.lowFloatThresholdBps`).
  */
 export interface TreasuryConfig {
   /**
@@ -576,6 +574,20 @@ export interface TreasuryConfig {
    * in a freshly-enabled currency).
    */
   largePayoutThresholds: Record<string, number>;
+  /**
+   * Per-currency operating float targets, keyed by fiat code in that currency's
+   * MAJOR units. The treasury float-health view reports each currency's balance
+   * against its target. OPT-IN: 0 (the shipped default for every currency) means
+   * "no target" — the currency is always reported healthy — until an operator
+   * sets a real target via the DB-admin layer (treasury.fiatFloatTargets.<CODE>).
+   */
+  fiatFloatTargets: Record<string, number>;
+  /**
+   * Low-float floor in basis points: a currency's float is flagged "low" when its
+   * balance/target utilization drops below this fraction of its configured target
+   * (e.g. 2500 = 25%). A single global knob shared by every currency's float check.
+   */
+  lowFloatThresholdBps: number;
 }
 
 /**
@@ -640,6 +652,21 @@ export interface AppConfig {
  * their config may legitimately be incomplete until they go live.
  */
 export function validateConfig(cfg: AppConfig): void {
+  // ── Pricing-feed freshness invariant (F1) ──────────────────────────────────
+  // A live rate's freshness window MUST out-live the quote validity window:
+  // stalenessSec > expiresInSec. Otherwise a live rate could go stale WITHIN a
+  // still-valid quote's window, flipping the money path live↔config mid-window
+  // (a rate that changes source under a locked quote). Fail-closed at boot.
+  const feed = cfg.pricing.feed;
+  if (feed && feed.stalenessSec <= cfg.pricing.expiresInSec) {
+    throw new Error(
+      `Config invariant violated: pricing.feed.stalenessSec ` +
+        `(${feed.stalenessSec}s) must be GREATER than pricing.expiresInSec ` +
+        `(${cfg.pricing.expiresInSec}s) — a live rate must not out-live the ` +
+        `quote window, or a rate can flip live↔config mid-window (root CLAUDE.md §7).`,
+    );
+  }
+
   const enabledFiats = Object.values(cfg.catalog.fiats)
     .filter((fiat) => fiat.enabled)
     .map((fiat) => fiat.code);
@@ -890,9 +917,10 @@ const buildConfig = (): AppConfig => ({
       enabled: true,
       pollIntervalSec: 300,
       stalenessSec: 900,
-      // 1500 bps = 15%. Generous band: an NGN parallel-market vs config-floor gap
-      // is real, but a >15% jump vs the admin floor is almost certainly a bad
-      // print / wrong quote-currency → reject and keep the config fallback.
+      // 1500 bps = 15% is the INTENDED product tolerance band (not a placeholder).
+      // Generous band: an NGN parallel-market vs config-floor gap is real, but a
+      // >15% jump vs the admin floor is almost certainly a bad print / wrong
+      // quote-currency → reject and keep the config fallback.
       divergenceBps: 1500,
       // Fiats to compose. Only NGN is live at launch; the rest are pre-wired so
       // enabling a market stays a flag flip (§7) — a fiat with no config baseRate
@@ -1088,14 +1116,29 @@ const buildConfig = (): AppConfig => ({
     commissionBps: 0,
   },
   // ── Treasury oversight (Wave D, CLAUDE.md §7) ───────────────────────────────
-  // Only the launch fiat ships a default; every other currency FAILS CLOSED
-  // (all payouts require approval) until an operator sets its threshold via the
-  // DB-admin layer (treasury.largePayoutThresholds.<CODE>).
+  // largePayoutThresholds: only the launch fiat ships a default; every other
+  // currency FAILS CLOSED (all payouts require approval) until an operator sets
+  // its threshold via the DB-admin layer (treasury.largePayoutThresholds.<CODE>).
+  // fiatFloatTargets: OPT-IN — every currency ships 0 (no target → always healthy)
+  // so NGN behaviour is unchanged; operators set real targets per currency via the
+  // DB-admin layer (treasury.fiatFloatTargets.<CODE>). lowFloatThresholdBps mirrors
+  // the treasury service's in-service default (2500 bps = 25%).
   treasury: {
     largePayoutThresholds: {
       // ₦1,000,000 — the pre-Wave-D hardcoded gate, preserved as the NGN default.
       NGN: 1_000_000,
     },
+    fiatFloatTargets: {
+      NGN: 0,
+      GHS: 0,
+      KES: 0,
+      UGX: 0,
+      TZS: 0,
+      RWF: 0,
+      ZAR: 0,
+      USD: 0,
+    },
+    lowFloatThresholdBps: 2500,
   },
   // ── Embedded agent (Phase 4 wave 2, CLAUDE.md §7) ──────────────────────────
   // enabled defaults true (current behaviour). modelId mirrors the AGENT_MODEL env

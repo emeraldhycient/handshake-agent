@@ -47,15 +47,14 @@ import {
   type AuthenticatedUser,
 } from '../../auth/presentation/jwt-auth.guard';
 import { CurrentUser } from '../../auth/presentation/current-user.decorator';
-import { PinService } from '../../../core/auth/pin.service';
-import { SessionService } from '../../../core/auth/session.service';
-import { StepUpRequiredError } from '../../../core/auth/domain/session-errors';
+import { StepUpService } from '../../../core/auth/step-up.service';
 
 import { BeneficiaryService } from '../application/beneficiary.service';
 import type { BeneficiaryRecord } from '../application/ports/beneficiary.repository.port';
 import {
   NameEnquiryFailedError,
   InvalidAddressError,
+  BeneficiaryInvalidAccountNumberError,
   BeneficiaryNotFoundError,
 } from '../domain/beneficiary-errors';
 import {
@@ -84,6 +83,7 @@ function toBeneficiaryDto(record: BeneficiaryRecord): Beneficiary {
     cryptoAsset: record.cryptoAsset,
     cryptoNetwork: record.cryptoNetwork,
     verificationStatus: record.verificationStatus,
+    rail: record.rail ?? 'bank',
     isDefault: record.isDefault,
     firstUseLockedUntil: record.firstUseLockedUntil
       ? record.firstUseLockedUntil.toISOString()
@@ -97,8 +97,7 @@ function toBeneficiaryDto(record: BeneficiaryRecord): Beneficiary {
 export class BeneficiaryController {
   constructor(
     private readonly beneficiaryService: BeneficiaryService,
-    private readonly pinService: PinService,
-    private readonly sessionService: SessionService,
+    private readonly stepUpService: StepUpService,
   ) {}
 
   @Get()
@@ -131,7 +130,11 @@ export class BeneficiaryController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<Beneficiary> {
     // R2: PIN + device-bound step-up BEFORE persisting a withdrawal destination.
-    await this.requireStepUpForAdd(user.userId, dto.pin, dto.deviceFingerprint);
+    await this.stepUpService.assertStepUpForSensitiveAction(
+      user.userId,
+      dto.pin,
+      dto.deviceFingerprint,
+    );
     try {
       const record = await this.beneficiaryService.addBankAccount({
         userId: user.userId,
@@ -139,11 +142,17 @@ export class BeneficiaryController {
         bankCode: dto.bankCode,
         label: dto.label,
         currency: dto.currency,
+        rail: dto.rail,
         // Persisted only where the rail cannot resolve the true name (non-NG).
         accountName: dto.accountHolderName,
       });
       return toBeneficiaryDto(record);
     } catch (err) {
+      if (err instanceof BeneficiaryInvalidAccountNumberError) {
+        throw new UnprocessableEntityException(
+          'That account number is not valid for the selected currency. Please check it and try again.',
+        );
+      }
       if (err instanceof NameEnquiryFailedError) {
         throw new UnprocessableEntityException(
           'Could not verify this bank account. Please check the account number and bank, then try again.',
@@ -161,7 +170,11 @@ export class BeneficiaryController {
   ): Promise<Beneficiary> {
     // R2: PIN + device-bound step-up BEFORE persisting a withdrawal destination.
     // This is ADDITIONAL to the first-use cooling-off, not a replacement.
-    await this.requireStepUpForAdd(user.userId, dto.pin, dto.deviceFingerprint);
+    await this.stepUpService.assertStepUpForSensitiveAction(
+      user.userId,
+      dto.pin,
+      dto.deviceFingerprint,
+    );
     try {
       const record = await this.beneficiaryService.addCryptoAddress({
         userId: user.userId,
@@ -177,39 +190,6 @@ export class BeneficiaryController {
       }
       throw err;
     }
-  }
-
-  /**
-   * Step-up chain for adding a withdrawal destination (audit R2) — mirrors the
-   * send money-path (executeSend): verify the PIN (lockout-protected) then record
-   * a device-bound step-up. Fail-closed: PIN errors propagate (→ 401 via the
-   * global filter); an unresolvable device throws STEP_UP_REQUIRED (→ 403) so no
-   * destination is persisted without a traceable device binding (§3.4).
-   */
-  private async requireStepUpForAdd(
-    userId: string,
-    pin: string,
-    deviceFingerprint: string | undefined,
-  ): Promise<void> {
-    // 1. Verify PIN first (its own atomic lockout). Throws Pin* domain errors.
-    await this.pinService.verifyPin(userId, pin);
-
-    // 2. Resolve the acting device: client fingerprint → else the pinned device.
-    const deviceId =
-      (await this.sessionService.findDeviceIdByFingerprint(
-        userId,
-        deviceFingerprint,
-      )) ?? (await this.sessionService.findPinnedDeviceId(userId));
-
-    // 3. No traceable device → cannot record a device-bound step-up (fail-closed).
-    if (!deviceId) {
-      throw new StepUpRequiredError('no_session');
-    }
-
-    // 4. Record the device-bound step-up (mirrors executeSend Step 7b).
-    const now = new Date();
-    await this.sessionService.startOrTouch(userId, deviceId);
-    await this.sessionService.recordStepUp(userId, deviceId, now);
   }
 
   /**

@@ -78,6 +78,7 @@ describe("beneficiaries api client", () => {
       bankCode: "058",
       label: "My GTB",
       currency: "NGN",
+      rail: "bank",
       pin: "1379",
     })
 
@@ -86,6 +87,7 @@ describe("beneficiaries api client", () => {
       bankCode: "058",
       label: "My GTB",
       currency: "NGN",
+      rail: "bank",
       pin: "1379",
     })
     expect(result.id).toBe(bankBeneficiary.id)
@@ -98,6 +100,7 @@ describe("beneficiaries api client", () => {
         bankCode: "058",
         label: "x",
         currency: "NGN",
+        rail: "bank",
         pin: "1379",
       })
     ).rejects.toThrow()

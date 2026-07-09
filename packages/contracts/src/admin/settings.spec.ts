@@ -212,6 +212,32 @@ describe("SETTING_REGISTRY", () => {
     }
   });
 
+  it("registers a per-currency float target for EVERY known fiat (treasury float health)", () => {
+    for (const code of KNOWN_FIAT_CURRENCIES) {
+      const e = entry(`treasury.fiatFloatTargets.${code}`);
+      expect(e.category).toBe("Config");
+      expect(e.valueType).toBe("number");
+      expect(e.editable).toBe(true);
+      expect(e.min).toBe(0);
+    }
+  });
+
+  it("registers the low-float threshold as a bounded bps value", () => {
+    const e = entry("treasury.lowFloatThresholdBps");
+    expect(e.category).toBe("Config");
+    expect(e.valueType).toBe("number");
+    expect(e.editable).toBe(true);
+    expect(e.min).toBe(0);
+    expect(e.max).toBe(10_000);
+  });
+
+  it("builds a bounded bps schema for the low-float threshold (rejects >100%)", () => {
+    const schema = settingSchemaFor("treasury.lowFloatThresholdBps");
+    expect(schema.parse(2500)).toBe(2500);
+    expect(() => schema.parse(-1)).toThrow();
+    expect(() => schema.parse(10_001)).toThrow();
+  });
+
   it("registers the sanctions denylist as a Compliance string[] (Phase 3C)", () => {
     const denylist = entry("compliance.sanctionsDenylist");
     expect(denylist.category).toBe("Compliance");

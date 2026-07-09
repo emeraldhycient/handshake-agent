@@ -17,6 +17,7 @@ import { BeneficiaryController } from './beneficiary.controller';
 import { BeneficiaryService } from '../application/beneficiary.service';
 import { PinService } from '../../../core/auth/pin.service';
 import { SessionService } from '../../../core/auth/session.service';
+import { StepUpService } from '../../../core/auth/step-up.service';
 import { PinInvalidError } from '../../../core/auth/domain/pin-errors';
 import { StepUpRequiredError } from '../../../core/auth/domain/session-errors';
 import { JwtAuthGuard } from '../../auth/presentation/jwt-auth.guard';
@@ -111,6 +112,10 @@ async function buildModule(): Promise<TestingModule> {
       { provide: BeneficiaryService, useValue: mockService },
       { provide: PinService, useValue: mockPinService },
       { provide: SessionService, useValue: mockSessionService },
+      // The controller now depends on the shared StepUpService (A1). Provide the
+      // REAL service wired to the mock Pin/Session so the step-up behavioural
+      // assertions below still hold unchanged.
+      StepUpService,
     ],
   })
     .overrideGuard(JwtAuthGuard)
@@ -162,6 +167,7 @@ describe('BeneficiaryController', () => {
         cryptoAsset: null,
         cryptoNetwork: null,
         verificationStatus: 'verified',
+        rail: 'bank',
         isDefault: true,
         firstUseLockedUntil: null,
         createdAt: CREATED.toISOString(),
@@ -204,6 +210,7 @@ describe('BeneficiaryController', () => {
       bankCode: '058',
       label: 'My GTB',
       currency: 'NGN',
+      rail: 'bank' as const,
       pin: VALID_PIN,
     };
 

@@ -54,6 +54,7 @@ const validBankBeneficiary = {
   verificationStatus: 'verified',
   isDefault: true,
   firstUseLockedUntil: null,
+  rail: 'bank',
   createdAt: '2026-06-29T12:00:00.000Z',
 }
 
@@ -72,6 +73,7 @@ const validCryptoBeneficiary = {
   verificationStatus: 'verified',
   isDefault: false,
   firstUseLockedUntil: '2026-06-30T12:00:00.000Z',
+  rail: 'bank',
   createdAt: '2026-06-29T12:00:00.000Z',
 }
 
@@ -109,6 +111,25 @@ describe('BeneficiarySchema', () => {
   it('rejects a currency that is not a 3-letter code', () => {
     expect(() =>
       BeneficiarySchema.parse({ ...validBankBeneficiary, currency: 'naira' }),
+    ).toThrow()
+  })
+
+  it('defaults rail to "bank" when omitted (backward-compatible)', () => {
+    const { rail: _omit, ...noRail } = validBankBeneficiary
+    expect(BeneficiarySchema.parse(noRail).rail).toBe('bank')
+  })
+
+  it('accepts a mobile_money rail', () => {
+    const parsed = BeneficiarySchema.parse({
+      ...validBankBeneficiary,
+      rail: 'mobile_money',
+    })
+    expect(parsed.rail).toBe('mobile_money')
+  })
+
+  it('rejects an unknown rail', () => {
+    expect(() =>
+      BeneficiarySchema.parse({ ...validBankBeneficiary, rail: 'paypal' }),
     ).toThrow()
   })
 })
@@ -158,10 +179,36 @@ describe('AddBankAccountRequestSchema', () => {
     expect(parsed.deviceFingerprint).toBe('device-abc')
   })
 
-  it('rejects a non-10-digit account number', () => {
+  it('rejects a too-short / non-digit account number', () => {
     expect(() =>
       AddBankAccountRequestSchema.parse({ ...validAddBank, accountNumber: '12345' }),
     ).toThrow()
+    expect(() =>
+      AddBankAccountRequestSchema.parse({ ...validAddBank, accountNumber: 'ABCD123456' }),
+    ).toThrow()
+  })
+
+  it('accepts a non-NUBAN length so per-country formats (e.g. a 13-digit GHS number) pass the wire gate', () => {
+    // B1: the DTO is permissive (digits, 8–20); the precise per-country format is
+    // enforced server-side. A 13-digit account number was rejected before.
+    const parsed = AddBankAccountRequestSchema.parse({
+      ...validAddBank,
+      accountNumber: '1234567890123',
+      currency: 'GHS',
+    })
+    expect(parsed.accountNumber).toBe('1234567890123')
+  })
+
+  it('defaults rail to "bank" when omitted', () => {
+    expect(AddBankAccountRequestSchema.parse(validAddBank).rail).toBe('bank')
+  })
+
+  it('accepts a mobile_money rail', () => {
+    const parsed = AddBankAccountRequestSchema.parse({
+      ...validAddBank,
+      rail: 'mobile_money',
+    })
+    expect(parsed.rail).toBe('mobile_money')
   })
 
   it('rejects an empty label', () => {

@@ -307,13 +307,16 @@ export class AdminEndUsersController {
 
   /**
    * Append an immutable operator note to this user's timeline. Permissioned
-   * (Users:write) + immutably audited (`admin_update` against `User:<id>`). The
-   * target user is the path :id — never trusted from the body; the author is the
-   * authenticated admin. A note is a pure annotation: it moves no money and confers
-   * no authorization (§3.1).
+   * (Users:write), step-up-guarded, + immutably audited (`admin_update` against
+   * `User:<id>`). The step-up gate closes a CSRF hole: a note is written into the
+   * audit trail against a user, so a cookie-authenticated forged request must not
+   * be able to plant one without a fresh re-auth. The target user is the path :id —
+   * never trusted from the body; the author is the authenticated admin. A note is a
+   * pure annotation: it moves no money and confers no authorization (§3.1).
    */
   @Post('users/:id/notes')
   @HttpCode(HttpStatus.CREATED)
+  @UseGuards(AdminStepUpGuard)
   @RequirePermission('api_route', 'POST /admin/users/:id/notes', 'write')
   async createNote(
     @Param('id') id: string,

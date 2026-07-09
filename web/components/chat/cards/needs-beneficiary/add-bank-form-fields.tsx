@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button"
 import { useAddBankAccount } from "@/lib/query/beneficiaries"
 import { getDeviceFingerprint } from "@/lib/device"
 import { pinErrorMessage } from "@/lib/settings/pin-error"
-import { FIAT_COUNTRY } from "@/constants/beneficiaries"
+import { DEFAULT_BANK_COUNTRY } from "@/constants/beneficiaries"
 import { BeneficiaryField } from "./beneficiary-field"
 import { BankSelectField } from "./bank-select-field"
 import { ConfirmBankName } from "./confirm-bank-name"
@@ -40,12 +40,17 @@ export function AddBankFormFields({
   defaultCurrency,
   onResolve,
 }: AddBankFormFieldsProps) {
+  // No explicit field-values generic: the schema's `rail` carries a `.default`,
+  // so its input type (rail optional — the form never collects it) diverges from
+  // its output type (rail required). Letting the transform-aware zodResolver drive
+  // inference types the form fields as the input and `handleSubmit`'s values as the
+  // parsed output (AddBankAccountRequest), which is what the mutation consumes.
   const {
     register,
     handleSubmit,
     control,
     formState: { errors },
-  } = useForm<AddBankAccountRequest>({
+  } = useForm({
     resolver: zodResolver(AddBankAccountRequestSchema),
     defaultValues: { currency: defaultCurrency },
   })
@@ -55,7 +60,13 @@ export function AddBankFormFields({
 
   // useWatch (not watch()) — the React-Compiler-safe subscription API.
   const currency = useWatch({ control, name: "currency" }) ?? defaultCurrency
-  const country = FIAT_COUNTRY[currency] ?? FIAT_COUNTRY[defaultCurrency] ?? "NG"
+  // Country comes from the resolved option (each carries its /config country),
+  // never a hardcoded currency→country map. Falls back to the default only if the
+  // selected currency somehow isn't among the offered options.
+  const country =
+    options.find((o) => o.currency === currency)?.country ??
+    options.find((o) => o.currency === defaultCurrency)?.country ??
+    DEFAULT_BANK_COUNTRY
 
   async function onSubmit(values: AddBankAccountRequest) {
     setServerError(null)

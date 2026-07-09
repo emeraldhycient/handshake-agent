@@ -1,28 +1,15 @@
 /**
  * Beneficiary bank-country data.
  *
- * The public `/config` payload exposes each enabled fiat's code/symbol/decimals
- * but NOT its country, while the bank-list endpoint is keyed by ISO 3166-1
- * alpha-2 country and the add-bank request carries the ISO 4217 currency. This
- * map bridges the two on the client (it mirrors the server's
- * `AssetRegistry.countryForFiat`). Only currencies present here have a known
- * bank rail, so the bank-account form offers exactly this set.
- *
- * NOTE (drift): the cleaner long-term home is a `country` field on the `/config`
- * fiat entries so the FE never hardcodes this — surfaced in the task notes.
+ * The public `/config` payload now carries each enabled fiat's ISO 3166-1
+ * alpha-2 `country` (mirrors the server's `AssetRegistry.countryForFiat`), so
+ * the currency→country mapping is NO LONGER duplicated on the client — the
+ * add-bank form derives country straight from the `/config` fiats. What remains
+ * here is UI copy (country display names for the selector label) plus the single
+ * synchronous fallback used before `/config` has resolved.
  */
-export const FIAT_COUNTRY: Readonly<Record<string, string>> = {
-  NGN: "NG",
-  GHS: "GH",
-  KES: "KE",
-  UGX: "UG",
-  TZS: "TZ",
-  RWF: "RW",
-  ZAR: "ZA",
-  USD: "US",
-} as const
 
-/** Display names for the bank countries above (selector label + a11y). */
+/** Human-readable country names for the bank-country selector label + a11y. */
 export const COUNTRY_NAME: Readonly<Record<string, string>> = {
   NG: "Nigeria",
   GH: "Ghana",
@@ -36,3 +23,6 @@ export const COUNTRY_NAME: Readonly<Record<string, string>> = {
 
 /** The fiat used when neither config nor profile has resolved yet. */
 export const DEFAULT_BANK_CURRENCY = "NGN"
+
+/** The country paired with {@link DEFAULT_BANK_CURRENCY} for the offline fallback. */
+export const DEFAULT_BANK_COUNTRY = "NG"

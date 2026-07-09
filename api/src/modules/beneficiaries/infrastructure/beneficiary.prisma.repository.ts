@@ -34,6 +34,7 @@ type PrismaRow = {
   cryptoAsset: string | null;
   cryptoNetwork: string | null;
   verificationStatus: string;
+  rail: string;
   firstUseLockedUntil: Date | null;
   verifiedAt: Date | null;
   isDefault: boolean;
@@ -57,6 +58,7 @@ const SELECT = {
   cryptoAsset: true,
   cryptoNetwork: true,
   verificationStatus: true,
+  rail: true,
   firstUseLockedUntil: true,
   verifiedAt: true,
   isDefault: true,
@@ -105,10 +107,15 @@ export class BeneficiaryPrismaRepository implements IBeneficiaryRepository {
         bankCode: input.bankCode,
         payoutCurrency: input.payoutCurrency,
         bankCountry: input.bankCountry,
+        // Payout rail — defaults to 'bank' (NG + unset callers); 'mobile_money'
+        // only where the caller explicitly selects it.
+        rail: (input.rail ?? 'bank') as never,
         // 'verified' when name-enquiry resolved the account; 'unverified' when
         // the country's rail could not resolve it (do NOT fail closed).
         verificationStatus: input.verificationStatus as never,
         verifiedAt: input.verifiedAt,
+        // B3: cooling-off for an unverified bank add (null for a verified one).
+        firstUseLockedUntil: input.firstUseLockedUntil ?? null,
         isDefault,
       },
       select: SELECT,
@@ -278,6 +285,7 @@ function toRecord(row: PrismaRow): BeneficiaryRecord {
     cryptoAsset: row.cryptoAsset,
     cryptoNetwork: row.cryptoNetwork,
     verificationStatus: row.verificationStatus,
+    rail: row.rail as 'bank' | 'mobile_money',
     firstUseLockedUntil: row.firstUseLockedUntil,
     verifiedAt: row.verifiedAt,
     isDefault: row.isDefault,

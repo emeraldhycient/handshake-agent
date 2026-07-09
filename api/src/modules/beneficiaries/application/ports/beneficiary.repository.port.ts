@@ -35,6 +35,12 @@ export interface BeneficiaryRecord {
   cryptoAsset: string | null;
   cryptoNetwork: string | null;
   verificationStatus: string;
+  /**
+   * Payout rail for a bank beneficiary ('bank' default | 'mobile_money').
+   * Optional on the record type so pre-existing test fixtures need not set it;
+   * the repository always populates it from the (non-null, defaulted) column.
+   */
+  rail?: 'bank' | 'mobile_money';
   firstUseLockedUntil: Date | null;
   verifiedAt: Date | null;
   isDefault: boolean;
@@ -62,6 +68,8 @@ export interface AddBankAccountInput {
   payoutCurrency: string;
   /** ISO 3166-1 alpha-2 bank country (e.g. 'NG') — derived server-side from the currency. */
   bankCountry: string;
+  /** Payout rail ('bank' default | 'mobile_money'); defaults to 'bank' when omitted. */
+  rail?: 'bank' | 'mobile_money';
   /**
    * Verification lifecycle to persist: `'verified'` when the name-enquiry
    * resolved the account, `'unverified'` when the rail could not resolve it
@@ -75,6 +83,12 @@ export interface AddBankAccountInput {
    * confirmation time.
    */
   verifiedAt: Date | null;
+  /**
+   * First-use cooling-off expiry to persist (B3). Set for an `unverified` bank
+   * add (name-enquiry unavailable for the market) so an unverified name cannot
+   * go straight onto a real transfer; `null`/omitted for a verified account.
+   */
+  firstUseLockedUntil?: Date | null;
 }
 
 export interface AddCryptoAddressInput {

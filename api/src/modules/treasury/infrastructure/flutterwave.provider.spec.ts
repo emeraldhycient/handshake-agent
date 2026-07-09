@@ -539,6 +539,135 @@ describe('FlutterwaveProvider', () => {
     });
   });
 
+  // ── createPayout — per-market / rail-aware body (B2) ──────────────────────
+
+  describe('createPayout — per-market body (B2)', () => {
+    // Minimal transfer response; these tests assert the POSTED body, not the mapping.
+    const PAYOUT_RESPONSE = {
+      status: 'success',
+      message: 'Transfer Queued Successfully',
+      data: {
+        id: 999002,
+        account_number: '0123456789',
+        bank_code: '044',
+        full_name: 'Jane Doe',
+        created_at: '2024-01-15T10:30:00.000Z',
+        currency: 'NGN',
+        debit_currency: 'NGN',
+        amount: 25000,
+        fee: 45,
+        status: 'NEW',
+        reference: 'ref',
+        narration: 'n',
+      },
+    };
+
+    function postedBody(): Record<string, unknown> {
+      const [, body] = http.post.mock.calls[0] as [
+        string,
+        Record<string, unknown>,
+      ];
+      return body;
+    }
+
+    it('NG bank payout body is BYTE-IDENTICAL to the launch shape (no beneficiary_name) — regression guard', async () => {
+      http.post.mockReturnValue(of(axiosOk(PAYOUT_RESPONSE)));
+
+      // No rail/country → defaults (country NG, rail bank): the launch corridor.
+      await provider.createPayout({
+        amount: '25000',
+        currency: 'NGN',
+        reference: 'payout-ref-001',
+        bankAccount: {
+          accountNumber: '0123456789',
+          bankCode: '044',
+          accountName: 'Jane Doe',
+        },
+      });
+
+      expect(postedBody()).toEqual({
+        account_bank: '044',
+        account_number: '0123456789',
+        amount: 25000,
+        currency: 'NGN',
+        narration: 'Sell crypto ref payout-ref-001',
+        reference: 'payout-ref-001',
+      });
+      // The NG corridor must NOT thread a beneficiary_name (would change the wire body).
+      expect(postedBody()).not.toHaveProperty('beneficiary_name');
+    });
+
+    it('an explicit country=NG + rail=bank still produces the launch NG shape (no beneficiary_name)', async () => {
+      http.post.mockReturnValue(of(axiosOk(PAYOUT_RESPONSE)));
+
+      await provider.createPayout({
+        amount: '25000',
+        currency: 'NGN',
+        reference: 'payout-ref-002',
+        country: 'NG',
+        rail: 'bank',
+        bankAccount: {
+          accountNumber: '0123456789',
+          bankCode: '044',
+          accountName: 'Jane Doe',
+        },
+      });
+
+      expect(postedBody()).not.toHaveProperty('beneficiary_name');
+    });
+
+    it('a non-NG bank corridor carries beneficiary_name + currency (Flutterwave requires the name outside NG)', async () => {
+      http.post.mockReturnValue(of(axiosOk(PAYOUT_RESPONSE)));
+
+      await provider.createPayout({
+        amount: '15000',
+        currency: 'KES',
+        reference: 'payout-ke-1',
+        country: 'KE',
+        rail: 'bank',
+        bankAccount: {
+          accountNumber: '01234567890',
+          bankCode: '68',
+          accountName: 'Wanjiru Kamau',
+        },
+      });
+
+      const body = postedBody();
+      expect(body.beneficiary_name).toBe('Wanjiru Kamau');
+      expect(body.currency).toBe('KES');
+      expect(body.account_bank).toBe('68');
+      expect(body.account_number).toBe('01234567890');
+      expect(Number(body.amount)).toBe(15000);
+    });
+
+    it('a mobile_money corridor is rail-aware: network/scheme code as account_bank, wallet/phone as account_number, with beneficiary_name + currency', async () => {
+      http.post.mockReturnValue(of(axiosOk(PAYOUT_RESPONSE)));
+
+      await provider.createPayout({
+        amount: '5000',
+        currency: 'GHS',
+        reference: 'payout-ghs-1',
+        country: 'GH',
+        rail: 'mobile_money',
+        bankAccount: {
+          // For mobile money the caller supplies the network/scheme code as bankCode
+          // and the wallet/phone as accountNumber.
+          accountNumber: '0551234567',
+          bankCode: 'MTN',
+          accountName: 'Kofi Mensah',
+        },
+      });
+
+      const body = postedBody();
+      expect(body.beneficiary_name).toBe('Kofi Mensah');
+      expect(body.currency).toBe('GHS');
+      expect(body.account_bank).toBe('MTN');
+      expect(body.account_number).toBe('0551234567');
+      expect(body.reference).toBe('payout-ghs-1');
+      expect(Number(body.amount)).toBe(5000);
+    });
+  });
+
   // ── verifyPayout ─────────────────────────────────────────────────────────
 
   describe('verifyPayout', () => {

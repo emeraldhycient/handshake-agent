@@ -1,17 +1,17 @@
 "use client"
 
-import { MakerCheckerModal, ReasonModal } from "@/components/admin/flows"
+import { ReasonModal } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import type { SanctionsFlowModalsProps } from "@/types/components"
 
 /**
- * The shared disposition flow modals (SPEC §5): Clear → ReasonModal (audited);
- * Escalate → MakerCheckerModal in its honest IMMEDIATE mode (a disposition applies
- * as soon as it is confirmed — no change request is raised); Block → ReasonModal
- * (sensitive — the server demands step-up). Each submit fires the disposition
- * mutation with the typed reason threaded as `comment`; the REAL step-up is
- * server-driven: a 403 opens the StepUpDialog and the POST replays on re-auth.
- * Presentational — the mutation lives in `useSanctionsDispositions`; the
+ * The shared disposition flow modals (SPEC §5): Clear / Escalate / Block each open a
+ * ReasonModal (a disposition applies as soon as the reason is confirmed — no change
+ * request is raised) and thread the typed reason as the audited `comment` (A7 — the
+ * Escalate flow no longer sends a comment-less disposition). Block/Escalate/Clear are
+ * sensitive — the server demands step-up. Each submit fires the disposition mutation;
+ * the REAL step-up is server-driven: a 403 opens the StepUpDialog and the POST replays
+ * on re-auth. Presentational — the mutation lives in `useSanctionsDispositions`; the
  * disposition annotates, it never moves money (§3.1).
  */
 export function SanctionsFlowModals({
@@ -43,8 +43,8 @@ export function SanctionsFlowModals({
         }
       />
 
-      {/* Escalate → honest immediate confirm (no approval queue exists here). */}
-      <MakerCheckerModal
+      {/* Escalate → ReasonModal (reason recorded as the audited disposition comment). */}
+      <ReasonModal
         open={flow?.kind === "escalate"}
         onOpenChange={close}
         title={
@@ -52,15 +52,9 @@ export function SanctionsFlowModals({
             ? `Escalate screening match — ${labelOf(flow.matchId)}`
             : "Escalate screening match"
         }
-        diff={[
-          {
-            field: "Screening disposition",
-            from: "Open match",
-            to: "Escalated for review",
-          },
-        ]}
-        onSubmit={() =>
-          flow?.kind === "escalate" && onDisposition(flow.matchId, "escalated")
+        onContinue={(reason) =>
+          flow?.kind === "escalate" &&
+          onDisposition(flow.matchId, "escalated", reason)
         }
       />
 

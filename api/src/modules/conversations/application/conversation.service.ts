@@ -1626,18 +1626,26 @@ export class ConversationService implements IInboundHandler {
 
     if (extraction.kind === 'bank_account') {
       if (extraction.bankCode) {
-        // We have enough to run name-enquiry — save the beneficiary immediately.
+        // Persist the extracted account, but as a FRESH UNVERIFIED destination
+        // with a first-use cooling-off (A2 / §3.1 / §3.4). An image message
+        // carries no PIN/step-up, so a vision-extracted account must NEVER become
+        // an immediately-usable, name-enquiry-verified payout target on session
+        // identity alone — `forceUnverified` skips name-enquiry and applies the
+        // cooling-off so the user reviews it before its first payout.
         try {
           const saved = await this.beneficiaryService.addBankAccount({
             userId: user.id,
             accountNumber: extraction.accountNumber,
             bankCode: extraction.bankCode,
-            // The BeneficiaryService overwrites this with the bank-resolved name.
             accountName: extraction.bankName ?? '',
             label: extraction.bankName ?? 'From image',
+            forceUnverified: true,
           });
           const displayName = saved.accountHolderName ?? 'your account';
-          return `Saved ${displayName} (•••${extraction.accountNumber.slice(-4)}) as a payout account.`;
+          return (
+            `Saved ${displayName} (•••${extraction.accountNumber.slice(-4)}) as a payout account. ` +
+            `For your security it's unverified with a short cooling-off — please review it before your first payout.`
+          );
         } catch {
           return (
             'I read bank details but could not verify the account. ' +

@@ -104,6 +104,7 @@ export const APPROVAL_KIND_LABEL: Record<ChangeRequestKind, string> = {
   manual_credit: "Manual credit",
   notification_broadcast: "Broadcast",
   payout_release: "Payout release",
+  user_tier_override: "User tier override",
 }
 
 /** How many awaiting-me requests the dashboard teaser shows. */

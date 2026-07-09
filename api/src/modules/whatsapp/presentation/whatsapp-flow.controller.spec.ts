@@ -31,6 +31,7 @@ import { InvalidAddressError } from '../../beneficiaries/domain/beneficiary-erro
 import { PinInvalidError } from '../../../core/auth/domain/pin-errors';
 import { PinService } from '../../../core/auth/pin.service';
 import { SessionService } from '../../../core/auth/session.service';
+import { StepUpService } from '../../../core/auth/step-up.service';
 import { WhatsAppFlowController } from './whatsapp-flow.controller';
 import * as flowToken from '../application/flow-token';
 import { PROPOSAL_REPOSITORY } from '../../transactions/application/ports/proposal.repository.port';
@@ -184,6 +185,10 @@ describe('WhatsAppFlowController', () => {
         { provide: ConfigService, useValue: mockConfigService },
         { provide: PinService, useValue: mockPinService },
         { provide: SessionService, useValue: mockSessionService },
+        // The controller now depends on the shared StepUpService (A1). Provide
+        // the REAL service wired to the mock Pin/Session so the step-up
+        // behavioural assertions below still hold unchanged.
+        StepUpService,
       ],
     }).compile();
 

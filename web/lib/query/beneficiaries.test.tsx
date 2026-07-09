@@ -84,6 +84,7 @@ describe("beneficiaries query hooks", () => {
       bankCode: "058",
       label: "x",
       currency: "NGN",
+      rail: "bank",
       pin: "1379",
     })
     expect(spy).toHaveBeenCalledWith({

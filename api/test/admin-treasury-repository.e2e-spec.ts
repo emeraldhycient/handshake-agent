@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { PrismaClient } from '../generated/prisma/client';
+import type { AssetRegistry } from '../src/core/catalog/asset-registry';
 import type { PrismaService } from '../src/core/prisma/prisma.service';
 import { TreasuryReadPrismaRepository } from '../src/modules/treasury/infrastructure/treasury-read.prisma.repository';
 import { BeneficiaryPrismaRepository } from '../src/modules/beneficiaries/infrastructure/beneficiary.prisma.repository';
@@ -36,7 +37,13 @@ describe('Admin treasury + beneficiary repositories (integration, Testcontainers
   beforeAll(async () => {
     ({ prisma, stop } = await startTestPostgres());
     const svc = prisma as unknown as PrismaService;
-    treasury = new TreasuryReadPrismaRepository(svc);
+    // The catalog default fiat is only consulted by the payout-queue projection
+    // (not exercised in this suite); a minimal stub keeps the integration wiring
+    // faithful without booting the full config-backed registry.
+    const registry = {
+      defaultFiat: () => 'NGN',
+    } as unknown as AssetRegistry;
+    treasury = new TreasuryReadPrismaRepository(svc, registry);
     beneficiaries = new BeneficiaryPrismaRepository(svc);
     userId = (await prisma.user.create({ data: {} })).id;
   });

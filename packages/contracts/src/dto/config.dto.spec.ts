@@ -55,6 +55,41 @@ describe("PublicConfigResponseSchema", () => {
     ).toThrow();
   });
 
+  it("carries the ISO alpha-2 bank-rail country on a fiat entry", () => {
+    const parsed = PublicConfigResponseSchema.parse({
+      fiats: [
+        { code: "NGN", displayName: "Naira", symbol: "₦", decimals: 2, country: "NG" },
+      ],
+      assets: [],
+      networks: [],
+      capabilities: {},
+    });
+    expect(parsed.fiats[0].country).toBe("NG");
+  });
+
+  it("treats country as optional (a fiat without a country mapping still parses)", () => {
+    const parsed = PublicConfigResponseSchema.parse({
+      fiats: [{ code: "XAF", displayName: "CFA", symbol: "FCFA", decimals: 0 }],
+      assets: [],
+      networks: [],
+      capabilities: {},
+    });
+    expect(parsed.fiats[0].country).toBeUndefined();
+  });
+
+  it("rejects a country that is not a 2-letter code", () => {
+    expect(() =>
+      PublicConfigResponseSchema.parse({
+        fiats: [
+          { code: "NGN", displayName: "Naira", symbol: "₦", decimals: 2, country: "NGA" },
+        ],
+        assets: [],
+        networks: [],
+        capabilities: {},
+      }),
+    ).toThrow();
+  });
+
   it("rejects non-boolean capability values", () => {
     expect(() =>
       PublicConfigResponseSchema.parse({

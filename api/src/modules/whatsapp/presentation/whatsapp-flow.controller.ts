@@ -51,11 +51,11 @@ import { ExecutionService } from '../../transactions/application/execution.servi
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import {
   InvalidAddressError,
+  BeneficiaryInvalidAccountNumberError,
   NameEnquiryFailedError,
 } from '../../beneficiaries/domain/beneficiary-errors';
 import { UnsupportedFiatError } from '../../../core/catalog/catalog-errors';
-import { PinService } from '../../../core/auth/pin.service';
-import { SessionService } from '../../../core/auth/session.service';
+import { StepUpService } from '../../../core/auth/step-up.service';
 import { StepUpRequiredError } from '../../../core/auth/domain/session-errors';
 import { verifyFlowToken } from '../application/flow-token';
 import {
@@ -118,8 +118,7 @@ export class WhatsAppFlowController {
     private readonly configService: ConfigService<Env, true>,
     @Inject(PROPOSAL_REPOSITORY)
     private readonly proposalRepo: IProposalRepository,
-    private readonly pinService: PinService,
-    private readonly sessionService: SessionService,
+    private readonly stepUpService: StepUpService,
   ) {}
 
   /**
@@ -504,7 +503,11 @@ export class WhatsAppFlowController {
 
     try {
       // R2: verify PIN + record a device-bound step-up BEFORE persisting.
-      await this.requireStepUpForAdd(userId, pin, deviceFingerprint);
+      await this.stepUpService.assertStepUpForSensitiveAction(
+        userId,
+        pin,
+        deviceFingerprint,
+      );
 
       return isBank
         ? await this.addBankBeneficiary(userId, data)
@@ -611,42 +614,6 @@ export class WhatsAppFlowController {
   }
 
   /**
-   * Step-up chain for adding a withdrawal destination over WhatsApp (R2) —
-   * mirrors `BeneficiaryController.requireStepUpForAdd` (the web surface) and the
-   * executeSend money-path: verify the PIN (lockout-protected) then record a
-   * device-bound step-up. Fail-closed — an unresolvable device throws
-   * StepUpRequiredError so nothing is persisted without a traceable binding (§3.4).
-   *
-   * WhatsApp has no browser fingerprint, so the device resolves to the user's
-   * pinned device; no directive is issued (an add is not a money-moving proposal).
-   */
-  private async requireStepUpForAdd(
-    userId: string,
-    pin: string,
-    deviceFingerprint: string | undefined,
-  ): Promise<void> {
-    // 1. Verify PIN first (its own atomic lockout). Throws Pin* domain errors.
-    await this.pinService.verifyPin(userId, pin);
-
-    // 2. Resolve the acting device: client fingerprint → else the pinned device.
-    const deviceId =
-      (await this.sessionService.findDeviceIdByFingerprint(
-        userId,
-        deviceFingerprint,
-      )) ?? (await this.sessionService.findPinnedDeviceId(userId));
-
-    // 3. No traceable device → cannot record a device-bound step-up (fail-closed).
-    if (!deviceId) {
-      throw new StepUpRequiredError('no_session');
-    }
-
-    // 4. Record the device-bound step-up (mirrors executeSend Step 7b).
-    const now = new Date();
-    await this.sessionService.startOrTouch(userId, deviceId);
-    await this.sessionService.recordStepUp(userId, deviceId, now);
-  }
-
-  /**
    * Maps a beneficiary-add failure to a safe, user-friendly message.
    * NEVER leaks internal error text, the PIN, or account internals (§3.5).
    */
@@ -665,6 +632,9 @@ export class WhatsAppFlowController {
     }
     if (err instanceof InvalidAddressError) {
       return 'The crypto address you entered appears to be invalid. Please check and try again.';
+    }
+    if (err instanceof BeneficiaryInvalidAccountNumberError) {
+      return 'That account number does not look valid for this country. Please check it and try again.';
     }
     if (err instanceof NameEnquiryFailedError) {
       return 'Could not verify this bank account. Please check the account number and bank, then try again.';

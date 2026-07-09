@@ -13,8 +13,11 @@
  *     name + verifiedAt. On enquiry failure no beneficiary is saved (Fix E).
  *   - Crypto adds carry first-use cooling-off (IDN-08) and address validation;
  *     name-enquiry is NOT called for crypto (unaffected, Fix E).
- *   - Step-up-on-add is a noted hardening follow-up (Flow E2E + cooling-off
- *     provide interim protection per S3 brief).
+ *   - Unverified bank adds (name-enquiry unavailable for the market) ALSO carry a
+ *     first-use cooling-off (B3) so an unverified name cannot go straight onto a
+ *     real transfer.
+ *   - Adding a withdrawal destination is step-up gated at the controller (R2):
+ *     PIN verify + device-bound step-up run BEFORE this service persists.
  *
  * CLAUDE.md §3.2: no @prisma/client here. dependency-cruiser enforces this.
  */
@@ -40,9 +43,14 @@ import {
 } from './ports/bank-list.port';
 import {
   InvalidAddressError,
+  BeneficiaryInvalidAccountNumberError,
   BeneficiaryNotFoundError,
   UnknownBankCountryError,
 } from '../domain/beneficiary-errors';
+import { isValidAccountNumberForCountry } from './account-number-formats';
+
+/** Payout rail for a bank beneficiary (mirrors the contracts BeneficiaryRail). */
+export type BeneficiaryRail = 'bank' | 'mobile_money';
 
 // ---------------------------------------------------------------------------
 // Input types (application layer — no Prisma shapes)
@@ -68,6 +76,21 @@ export interface AddBankAccountInput {
    * `AssetRegistry.countryForFiat`; a client-supplied country is never trusted.
    */
   currency?: string;
+  /**
+   * Payout rail ('bank' default | 'mobile_money'). Carried through to the record
+   * so the engine (treasury) builds the correct provider payout body. NG stays
+   * 'bank'; defaults to 'bank' when omitted.
+   */
+  rail?: BeneficiaryRail;
+  /**
+   * When true, SKIP name-enquiry and persist as `unverified` + cooling-off
+   * regardless of country (A2). Used by the media-extraction path: an
+   * image-extracted destination carries no PIN/step-up, so it must be treated as
+   * a fresh unverified destination the user reviews before its first payout —
+   * never an immediately-usable, name-enquiry-verified target on session
+   * identity alone.
+   */
+  forceUnverified?: boolean;
 }
 
 export interface AddCryptoAddressInput {
@@ -139,15 +162,21 @@ export class BeneficiaryService {
    * name via the name-enquiry port (Fix E).
    *
    * Flow:
-   *   1. Call INameEnquiry.resolve(bankCode, accountNumber) — may throw
-   *      NameEnquiryFailedError on an invalid/not-found account.
-   *   2. Persist the RESOLVED accountName (not the caller-supplied name) and
-   *      set verifiedAt to now.
-   *   3. The repository sets verificationStatus to 'verified'.
+   *   1. Derive the payout currency + bank COUNTRY server-side (§3.3).
+   *   2. Validate the account number against the country's precise format (B1) —
+   *      the wire DTO is permissive, this is the security gate.
+   *   3. Dedupe on (accountNumber, bankCode).
+   *   4. If name-enquiry is resolvable for the country AND the add is not forced
+   *      unverified: call INameEnquiry.resolve, persist the RESOLVED name +
+   *      verifiedAt, verificationStatus='verified', NO cooling-off.
+   *   5. Otherwise persist the user-entered name as 'unverified' WITH a first-use
+   *      cooling-off (B3) so an unverified name can't go straight onto a transfer.
    *
    * Sets `isDefault` automatically if the user has no existing bank accounts.
    * Crypto-address beneficiaries are unaffected — name-enquiry is not called.
    *
+   * @throws {BeneficiaryInvalidAccountNumberError} when the account number does
+   *         not match the resolved country's format (422). No beneficiary saved.
    * @throws {NameEnquiryFailedError} when the name-enquiry provider cannot
    *         resolve the account. No beneficiary is persisted in that case.
    *
@@ -157,6 +186,24 @@ export class BeneficiaryService {
    * duplicate the picker can never distinguish.
    */
   async addBankAccount(input: AddBankAccountInput): Promise<BeneficiaryRecord> {
+    // Derive the payout currency + bank country SERVER-SIDE (§3.3): the country
+    // comes from the currency's catalog entry, never from the client. Default to
+    // the catalog base fiat (NGN) when a caller (e.g. the NGN WhatsApp Flow)
+    // omits the currency.
+    const currency = input.currency ?? this.assetRegistry.defaultFiat();
+    const country = this.assetRegistry.countryForFiat(currency);
+
+    // B1: enforce the precise per-country account-number format server-side. The
+    // wire DTO is deliberately permissive (validates before the country is known)
+    // — this is the real gate (§3.3). NG = 10-digit NUBAN; other markets use a
+    // permissive length band so a valid GHS/KES/etc number is not rejected.
+    if (!isValidAccountNumberForCountry(country, input.accountNumber)) {
+      throw new BeneficiaryInvalidAccountNumberError(
+        country,
+        input.accountNumber,
+      );
+    }
+
     const duplicate = await this.repo.findActiveDuplicate(input.userId, {
       type: 'bank_account',
       accountNumber: input.accountNumber,
@@ -166,17 +213,11 @@ export class BeneficiaryService {
       return duplicate;
     }
 
-    // Derive the payout currency + bank country SERVER-SIDE (§3.3): the country
-    // comes from the currency's catalog entry, never from the client. Default to
-    // the catalog base fiat (NGN) when a caller (e.g. the NGN WhatsApp Flow)
-    // omits the currency.
-    const currency = input.currency ?? this.assetRegistry.defaultFiat();
-    const country = this.assetRegistry.countryForFiat(currency);
-
     // Country-gated name-enquiry: resolve the true account name where the rail
     // supports it (NG); otherwise SKIP the enquiry and keep the user-entered
-    // name as `unverified` — do NOT fail closed on an unsupported market.
-    if (this.isNameEnquiryResolvable(country)) {
+    // name as `unverified` — do NOT fail closed on an unsupported market. A2:
+    // `forceUnverified` also skips it (an image-extracted destination has no PIN).
+    if (!input.forceUnverified && this.isNameEnquiryResolvable(country)) {
       const enquiryResult = await this.nameEnquiry.resolve({
         bankCode: input.bankCode,
         accountNumber: input.accountNumber,
@@ -191,10 +232,18 @@ export class BeneficiaryService {
         label: input.label,
         payoutCurrency: currency,
         bankCountry: country,
+        rail: input.rail ?? 'bank',
         verificationStatus: 'verified',
         verifiedAt: new Date(),
+        // A name-enquiry-verified account is immediately usable — no cooling-off.
+        firstUseLockedUntil: null,
       });
     }
+
+    // Unverified add (name-enquiry unavailable, or forced) → carry a first-use
+    // cooling-off (B3) so an unverified name cannot go straight onto a transfer.
+    const coolingOffSeconds = this.getCoolingOffSeconds();
+    const firstUseLockedUntil = new Date(Date.now() + coolingOffSeconds * 1000);
 
     return this.repo.addBankAccount({
       userId: input.userId,
@@ -206,8 +255,10 @@ export class BeneficiaryService {
       label: input.label,
       payoutCurrency: currency,
       bankCountry: country,
+      rail: input.rail ?? 'bank',
       verificationStatus: 'unverified',
       verifiedAt: null,
+      firstUseLockedUntil,
     });
   }
 
@@ -219,9 +270,10 @@ export class BeneficiaryService {
    *
    * @throws {InvalidAddressError} when the address fails network validation.
    *
-   * NOTE: Step-up-on-add (step-up PIN challenge before persisting) is a hardening
-   * follow-up noted in the S3 brief. The Flow E2E encryption + cooling-off window
-   * provide interim protection.
+   * Step-up-on-add is enforced at the controller (R2): PIN verify + a device-bound
+   * step-up run BEFORE this service persists. The first-use cooling-off here is an
+   * ADDITIONAL layer (a fresh destination cannot receive its first transfer until
+   * the window elapses), not the sole protection.
    */
   async addCryptoAddress(
     input: AddCryptoAddressInput,

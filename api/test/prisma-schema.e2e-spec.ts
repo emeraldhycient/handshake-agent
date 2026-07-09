@@ -84,8 +84,9 @@ describe('Prisma schema (integration, Testcontainers Postgres)', () => {
     // existing TYPE, so this DISTINCT-type count is unaffected. +4 for
     // recon_run_type/recon_run_status/recon_break_type/recon_break_status
     // (go-readiness #3 durable recon log). personal_access_tokens (Wave C)
-    // stores scopes as TEXT[] — no new enum TYPE.
-    expect(Number(enums)).toBe(82);
+    // stores scopes as TEXT[] — no new enum TYPE. +1 for beneficiary_rail
+    // (bank | mobile_money payout rail).
+    expect(Number(enums)).toBe(83);
   });
 
   it('generates time-sortable uuid v7 ids on the client (the only sanctioned DB door)', async () => {

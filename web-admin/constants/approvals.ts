@@ -21,6 +21,7 @@ export const KIND_META: Record<
   manual_credit: { label: "Manual credit", variant: "warn" },
   notification_broadcast: { label: "Broadcast", variant: "warn" },
   payout_release: { label: "Payout release", variant: "warn" },
+  user_tier_override: { label: "User tier override", variant: "warn" },
 }
 
 /**

@@ -723,11 +723,16 @@ export class AssetRegistry {
   publicView(): PublicConfigResponse {
     const fiats = Object.values(this.catalog.fiats)
       .filter((f) => f.enabled)
-      .map(({ code, displayName, symbol, decimals }) => ({
+      .map(({ code, displayName, symbol, decimals, country }) => ({
         code,
         displayName,
         symbol,
         decimals,
+        // ISO alpha-2 bank-rail country (CatalogFiat.country). Non-secret and
+        // needed client-side to drive the add-bank country/bank-list lookup; the
+        // web derives it from here instead of duplicating countryForFiat. Absent
+        // for a runtime custom fiat with no mapping → the optional field is omitted.
+        country,
       }));
 
     const staticAssets = Object.values(this.catalog.assets)

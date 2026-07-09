@@ -329,6 +329,26 @@ export const SETTING_REGISTRY: readonly SettingRegistryEntry[] = [
       `${code} notional at or above which a queued payout/withdrawal requires maker-checker approval before release. Unset = every ${code} payout requires approval (fail-closed).`,
     ),
   ),
+  // Per-currency operating float target (major units), keyed by fiat code. The
+  // treasury float-health view reports each currency's balance vs its target;
+  // 0 = no target (opt-in — always "healthy"). Registered per KNOWN fiat so an
+  // operator can set a target for any currency (mirrors largePayoutThresholds).
+  ...KNOWN_FIAT_CURRENCIES.map((code) =>
+    positiveInt(
+      `treasury.fiatFloatTargets.${code}`,
+      "Config",
+      `Float target (${code})`,
+      `Desired operating ${code} float (major units). The treasury float-health view flags the currency "low" when its balance falls below this by the low-float threshold. 0 = no target (opt-in).`,
+    ),
+  ),
+  // Low-float floor (bps): a currency float below this fraction of its target is
+  // flagged "low". A single global bps knob shared by every currency's float check.
+  bps(
+    "treasury.lowFloatThresholdBps",
+    "Config",
+    "Low-float threshold (bps)",
+    "A currency's float is flagged low when its balance/target utilization drops below this many basis points of its configured target (e.g. 2500 = 25%).",
+  ),
 
   // ── Catalog capability flags (fail-closed: absent === false) ────────────────
   flag(

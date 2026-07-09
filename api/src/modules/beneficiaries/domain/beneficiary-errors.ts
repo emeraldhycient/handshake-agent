@@ -98,6 +98,25 @@ export class BeneficiaryCoolingOffError extends Error {
 }
 
 /**
+ * Thrown by BeneficiaryService.addBankAccount when the account number does not
+ * match the precise format for the beneficiary's resolved country (e.g. a
+ * 9-digit number for NG, whose NUBAN is exactly 10 digits). The wire DTO is
+ * deliberately permissive (digits, length range) because it validates BEFORE the
+ * country is derived from the currency; the country-specific check is the
+ * server-side security gate (§3.3). Mapped to 422.
+ */
+export class BeneficiaryInvalidAccountNumberError extends Error {
+  override readonly name = 'BeneficiaryInvalidAccountNumberError';
+  readonly code = 'BENEFICIARY_INVALID_ACCOUNT_NUMBER' as const;
+
+  constructor(country: string, accountNumber: string) {
+    super(
+      `Account number "${accountNumber}" is not a valid format for country "${country}".`,
+    );
+  }
+}
+
+/**
  * Thrown by BeneficiaryService.addBankAccount when the name-enquiry provider
  * cannot resolve the account (account not found, bank unreachable, invalid
  * number). No beneficiary is persisted — the caller must surface the error.

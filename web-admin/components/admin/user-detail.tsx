@@ -450,10 +450,10 @@ export function UserDetail({ userId }: UserDetailProps) {
         title={flow?.title ?? ""}
         diff={isCreditFlow ? creditDiff : (flow?.diff ?? [])}
         onSubmit={() => advance()}
-        // Only the manual credit raises a REAL four-eyes ChangeRequest; the KYC
-        // approve / tier-override PATCHes apply immediately after server step-up,
-        // so their confirm carries the honest immediate copy.
-        mode={isCreditFlow ? "dual-control" : "immediate"}
+        // The manual credit AND the per-user tier override raise a REAL four-eyes
+        // ChangeRequest (dual-control); the KYC approve applies immediately after
+        // server step-up, so its confirm carries the honest immediate copy.
+        mode={isCreditFlow || flow?.dualControl ? "dual-control" : "immediate"}
       />
 
       {/* Server-driven step-up: a sensitive mutation that 403s with

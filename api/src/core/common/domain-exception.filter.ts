@@ -194,6 +194,12 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
       "That address isn't valid for the selected network. " +
       'Please check it and try again.',
   },
+  BENEFICIARY_INVALID_ACCOUNT_NUMBER: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message:
+      "That account number isn't valid for the selected currency. " +
+      'Please check it and try again.',
+  },
   BENEFICIARY_WRONG_TYPE: {
     status: HttpStatus.UNPROCESSABLE_ENTITY,
     message: "That recipient can't be used for this transaction.",

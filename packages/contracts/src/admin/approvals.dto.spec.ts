@@ -9,15 +9,25 @@ import {
 
 describe("approvals.dto", () => {
   describe("ChangeRequestKindSchema", () => {
-    it("accepts the four maker-checker kinds", () => {
+    it("accepts every maker-checker kind", () => {
       for (const k of [
         "pricing_change",
         "capability_flip",
         "tier_override",
         "refund",
+        "manual_credit",
+        "notification_broadcast",
+        "payout_release",
+        "user_tier_override",
       ]) {
         expect(ChangeRequestKindSchema.parse(k)).toBe(k);
       }
+    });
+
+    it("accepts the per-user tier override kind (four-eyes on PATCH tier)", () => {
+      expect(ChangeRequestKindSchema.parse("user_tier_override")).toBe(
+        "user_tier_override",
+      );
     });
 
     it("rejects an unknown kind", () => {

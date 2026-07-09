@@ -1005,6 +1005,12 @@ export class ExecutionService {
       bankCode: beneficiary.bankCode,
       accountName: beneficiary.accountHolderName,
     };
+    // Per-corridor payout routing (B2): thread the beneficiary's country + rail so
+    // the provider builds a market-correct Transfers body. Captured in the narrowed
+    // scope alongside payoutBankAccount; NG values stay unchanged (country defaults
+    // to 'NG', rail to 'bank' → byte-identical NG bank body).
+    const payoutCountry = beneficiary.bankCountry ?? undefined;
+    const payoutRail = beneficiary.rail;
 
     // FUNDS-SAFETY (§3.1): the reserve (Step 9, user_wallet → clearing) is already
     // committed. If createPayout is DEFINITIVELY rejected by the provider (HTTP
@@ -1022,6 +1028,8 @@ export class ExecutionService {
           amount: storedQuote.fiatAmount,
           currency: storedQuote.fiatCurrency,
           reference: idempotencyKey,
+          country: payoutCountry,
+          rail: payoutRail,
           bankAccount: payoutBankAccount,
         }),
       );

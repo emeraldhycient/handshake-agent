@@ -2751,4 +2751,44 @@ describe('ConversationService.handleInbound', () => {
       expect.stringMatching(/0123456789|account/i),
     );
   });
+
+  it('(A2) saves an image-extracted bank account as UNVERIFIED + cooling-off (forceUnverified), never immediately usable', async () => {
+    const beneficiaryService = makeBeneficiaryService();
+    (beneficiaryService.addBankAccount as jest.Mock).mockResolvedValue({
+      id: 'ben-bank-img-1',
+      accountHolderName: null,
+      verificationStatus: 'unverified',
+    });
+
+    const { svc, sender, agentPort } = buildService({ beneficiaryService });
+
+    await svc.handleInbound(
+      makeMsg({
+        extraction: {
+          kind: 'bank_account',
+          accountNumber: '0123456789',
+          bankCode: '058',
+          bankName: 'GTBank',
+        },
+      }),
+    );
+
+    // A2: an image message carries no PIN/step-up — the extracted account must be
+    // persisted as a fresh unverified destination (forceUnverified skips
+    // name-enquiry and applies the first-use cooling-off), NOT verified/usable.
+    expect(beneficiaryService.addBankAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountNumber: '0123456789',
+        bankCode: '058',
+        forceUnverified: true,
+      }),
+    );
+    // The reply flags the review/cooling-off state so the user knows to check it.
+    expect(sender.sendText).toHaveBeenCalledWith(
+      FIXED_FROM,
+      expect.stringMatching(/unverified|review|cooling/i),
+    );
+    // Agent must NOT run for an extraction message.
+    expect(agentPort.run).not.toHaveBeenCalled();
+  });
 });

@@ -27,8 +27,17 @@ import { AddBankForm } from "./add-bank-form"
 
 const GTB = { name: "GTBank", code: "058" }
 
+// /config now carries the bank-rail country per fiat; the add-bank options are
+// derived from it (no hardcoded currency→country map).
+const FIAT_TEST_COUNTRY: Record<string, string> = { NGN: "NG", KES: "KE" }
 function fiat(code: string) {
-  return { code, displayName: code, symbol: code, decimals: 2 }
+  return {
+    code,
+    displayName: code,
+    symbol: code,
+    decimals: 2,
+    country: FIAT_TEST_COUNTRY[code],
+  }
 }
 
 beforeEach(() => {

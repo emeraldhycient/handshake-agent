@@ -16,6 +16,17 @@ import { TransactionPinSchema } from '../dto/kyc-complete.dto'
 export const BeneficiaryTypeSchema = z.enum(['bank_account', 'crypto_address'])
 export type BeneficiaryType = z.infer<typeof BeneficiaryTypeSchema>
 
+// ─── Rail ─────────────────────────────────────────────────────────────────
+
+/**
+ * Payout rail for a bank beneficiary: a traditional `bank` account transfer, or
+ * a `mobile_money` wallet (e.g. MTN MoMo, M-Pesa) in markets where that is the
+ * dominant rail. NG stays `bank`. The engine (treasury) reads this to build the
+ * correct provider payout body; the model never sets it directly (§3.1).
+ */
+export const BeneficiaryRailSchema = z.enum(['bank', 'mobile_money'])
+export type BeneficiaryRail = z.infer<typeof BeneficiaryRailSchema>
+
 // ─── List query ───────────────────────────────────────────────────────────
 
 export const ListBeneficiariesQuerySchema = z.object({
@@ -51,6 +62,12 @@ export const BeneficiarySchema = z.object({
    * currency; null on crypto rows. Determines which name-enquiry rail applies.
    */
   country: z.string().length(2).nullable(),
+  /**
+   * Payout rail for a bank beneficiary (`bank` | `mobile_money`). Defaulted to
+   * `bank` server-side; crypto rows carry `bank` too (the field is meaningful
+   * only for fiat payouts). `.default` keeps older responses backward-compatible.
+   */
+  rail: BeneficiaryRailSchema.default('bank'),
   // Crypto-address fields
   cryptoAddress: z.string().nullable(),
   cryptoAsset: z.string().nullable(),
@@ -89,8 +106,16 @@ export type DeleteBeneficiaryResponse = z.infer<
 // ─── Add bank account ───────────────────────────────────────────────────────
 
 export const AddBankAccountRequestSchema = z.object({
-  /** 10-digit NUBAN. */
-  accountNumber: z.string().regex(/^\d{10}$/, 'Enter a valid 10-digit account number'),
+  /**
+   * Bank account / mobile-money number. Permissive at the wire boundary (digits
+   * only, 8–20) because this schema validates BEFORE the server derives the
+   * country from the currency; the PRECISE per-country format (NG = 10-digit
+   * NUBAN, others = that market's length range) is enforced server-side in
+   * BeneficiaryService (§3.3). This lets valid GHS/KES/etc numbers through here.
+   */
+  accountNumber: z
+    .string()
+    .regex(/^\d{8,20}$/, 'Enter a valid account number'),
   /** Bank / clearing code (e.g. "058" for GTB). */
   bankCode: z.string().min(3).max(10),
   label: z.string().min(1).max(60),
@@ -107,6 +132,12 @@ export const AddBankAccountRequestSchema = z.object({
    * rail cannot resolve it. Optional so the NG happy-path form need not collect it.
    */
   accountHolderName: z.string().min(1).max(120).optional(),
+  /**
+   * Payout rail — optional, defaults to `bank`. `mobile_money` selects a wallet
+   * payout in markets where that is the dominant rail; NG stays `bank`. The
+   * engine (treasury) builds the correct provider payout body from this.
+   */
+  rail: BeneficiaryRailSchema.default('bank'),
   /**
    * Transaction PIN — required. Adding a withdrawal destination is step-up
    * gated (audit R2): the server verifies the PIN (lockout-protected) and

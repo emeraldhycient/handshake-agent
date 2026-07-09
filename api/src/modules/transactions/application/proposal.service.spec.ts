@@ -185,7 +185,7 @@ const STUB_BENEFICIARY_RECORD = {
   cryptoAsset: null,
   cryptoNetwork: null,
   verificationStatus: 'verified',
-  firstUseLockedUntil: null,
+  firstUseLockedUntil: null as Date | null,
   verifiedAt: new Date(FIXED_NOW.getTime() - 86400_000),
   isDefault: true,
   createdAt: FIXED_NOW,
@@ -946,6 +946,50 @@ describe('ProposalService.createSellProposal', () => {
     const beneficiaryService = makeBeneficiaryService({
       ...STUB_BENEFICIARY_RECORD,
       payoutCurrency: 'NGN',
+    });
+    const svc = makeSellSvc({ beneficiaryService });
+
+    const result = await svc.createSellProposal(BASE_SELL_INPUT);
+    expect(result.proposalId).toBe(FIXED_SELL_PROPOSAL_ID);
+  });
+
+  // ── First-use cooling-off (B3) — unverified bank blocked at proposal time ──
+
+  it('throws BeneficiaryCoolingOffError when an unverified bank is still in cooling-off', async () => {
+    // An unverified (non-NG name-enquiry) bank carries a first-use cooling-off;
+    // a sell to it must be blocked until the window elapses (parity with send).
+    const beneficiaryService = makeBeneficiaryService({
+      ...STUB_BENEFICIARY_RECORD,
+      verificationStatus: 'unverified',
+      firstUseLockedUntil: new Date(FIXED_NOW.getTime() + 60 * 60 * 1000),
+    });
+    const proposalRepo = makeProposalRepo(FIXED_SELL_PROPOSAL_ID);
+    const svc = makeSellSvc({ beneficiaryService, proposalRepo });
+
+    await expect(svc.createSellProposal(BASE_SELL_INPUT)).rejects.toThrow(
+      BeneficiaryCoolingOffError,
+    );
+    // No proposal persisted — the guard fires before the write (§3.1).
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('does NOT block a verified NG bank (firstUseLockedUntil null → no cooling-off)', async () => {
+    const beneficiaryService = makeBeneficiaryService({
+      ...STUB_BENEFICIARY_RECORD,
+      verificationStatus: 'verified',
+      firstUseLockedUntil: null,
+    });
+    const svc = makeSellSvc({ beneficiaryService });
+
+    const result = await svc.createSellProposal(BASE_SELL_INPUT);
+    expect(result.proposalId).toBe(FIXED_SELL_PROPOSAL_ID);
+  });
+
+  it('does NOT block when an unverified bank cooling-off has already elapsed', async () => {
+    const beneficiaryService = makeBeneficiaryService({
+      ...STUB_BENEFICIARY_RECORD,
+      verificationStatus: 'unverified',
+      firstUseLockedUntil: new Date(FIXED_NOW.getTime() - 60 * 60 * 1000),
     });
     const svc = makeSellSvc({ beneficiaryService });
 

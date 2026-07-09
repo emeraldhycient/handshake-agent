@@ -38,6 +38,13 @@ export const ChangeRequestKindSchema = z.enum([
   // { transactionId } (the offending payout's txn) that the triage service
   // re-validates; the actual release is settled idempotently by the engine worker.
   "payout_release",
+  // user_tier_override moves a SINGLE end user's account KYC tier behind four-eyes —
+  // the per-user tier change (formerly an immediate PATCH /admin/users/:id/tier)
+  // now enters the maker-checker queue. On approval it re-runs the end-user
+  // tier-adjust service with { userId, tier } from the payload (re-validated
+  // server-side, §3.3). It moves NO money (a tier gates limits; it is not a ledger
+  // write, §3.1).
+  "user_tier_override",
 ]);
 export type ChangeRequestKind = z.infer<typeof ChangeRequestKindSchema>;
 

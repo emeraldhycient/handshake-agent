@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 
 import {
+  AdminEndUserTierRequestSchema,
   BroadcastAudienceSchema,
   CreateManualCreditRequestSchema,
   type ChangeRequest,
@@ -31,6 +32,7 @@ import {
 import { AdminSettingsService } from './admin-settings.service';
 import { AdminTxnTriageService } from './admin-txn-triage.service';
 import { AdminManualCreditService } from './admin-manual-credit.service';
+import { AdminEndUserService } from './admin-end-user.service';
 
 /**
  * ADM Phase 7 — the maker-checker APPROVALS engine. This is a FUNDS-SAFETY-CRITICAL
@@ -62,6 +64,7 @@ export class AdminApprovalsService {
     @Inject(BROADCAST_DISPATCH_REPOSITORY)
     private readonly broadcast: IBroadcastDispatchRepository,
     private readonly manualCredit: AdminManualCreditService,
+    private readonly endUsers: AdminEndUserService,
   ) {}
 
   /**
@@ -236,6 +239,9 @@ export class AdminApprovalsService {
       case 'manual_credit':
         await this.applyManualCredit(record, decidedByAdminId);
         return;
+      case 'user_tier_override':
+        await this.applyUserTierOverride(record, decidedByAdminId);
+        return;
       case 'payout_release':
         await this.applyPayoutRelease(record, decidedByAdminId);
         return;
@@ -407,6 +413,32 @@ export class AdminApprovalsService {
       idempotencyKey: record.id,
       approvedByAdminId: decidedByAdminId,
     });
+  }
+
+  /**
+   * Apply an approved per-user tier override by RE-RUNNING the end-user tier-adjust
+   * service (the same path the direct PATCH /admin/users/:id/tier uses) — it flips
+   * User.kycTier and audits a `kyc_state_change`. This moves NO money (a tier gates
+   * limits; it is not a ledger write, §3.1). The payload must carry a `userId` +
+   * a valid `tier`; the tier is re-parsed through the contract schema (never trusted
+   * as stored) and the deciding admin (checker) is recorded as the actor. Fails closed
+   * on a malformed payload — never guesses a user or tier (§3.6).
+   */
+  private async applyUserTierOverride(
+    record: ChangeRequestRecord,
+    decidedByAdminId: string,
+  ): Promise<void> {
+    const userId = record.payload.userId;
+    const parsed = AdminEndUserTierRequestSchema.safeParse({
+      tier: record.payload.tier,
+    });
+    if (typeof userId !== 'string' || userId.length === 0 || !parsed.success) {
+      throw new ChangeRequestNotApplicableError(
+        'payload must carry a userId + a valid tier',
+      );
+    }
+
+    await this.endUsers.adjustTier(userId, parsed.data.tier, decidedByAdminId);
   }
 
   /** Narrow an untrusted scope value to AppSettingScope, defaulting to global. */

@@ -521,6 +521,20 @@ export class ProposalService {
         payoutCurrency,
       );
     }
+    // First-use cooling-off (B3) — same checkpoint the crypto send path uses
+    // (createSendProposal step 6). An unverified bank beneficiary (name-enquiry
+    // unavailable for its market) carries a cooling-off so an unverified name
+    // cannot go straight onto a real payout; a name-enquiry-verified NG bank has
+    // firstUseLockedUntil null and is unaffected.
+    if (
+      beneficiary.firstUseLockedUntil !== null &&
+      beneficiary.firstUseLockedUntil > now
+    ) {
+      throw new BeneficiaryCoolingOffError(
+        beneficiaryId,
+        beneficiary.firstUseLockedUntil,
+      );
+    }
     // NOTE: production gates on verifiedAt / name-enquiry (beneficiary.verifiedAt !== null).
     // This skeleton accepts any beneficiary regardless of verificationStatus.
 
