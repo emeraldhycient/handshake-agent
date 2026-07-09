@@ -21,6 +21,7 @@ import type {
   Intent,
   ChatHistoryResponse,
   BalanceSnapshot,
+  EffectiveRate,
 } from '@handshake-agent/contracts';
 
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
@@ -63,6 +64,7 @@ import { maskBeneficiaryDetail } from '../../beneficiaries/application/beneficia
 import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
 import { StatementTokenService } from '../../transactions/application/statement-token.service';
 import type { BalanceService } from '../../balances/application/balance.service';
+import type { RatesService } from '../../quotes/application/rates.service';
 import {
   InsufficientBalanceError,
   SwapSameAssetError,
@@ -85,6 +87,7 @@ export const WEB_CHAT_BENEFICIARY_SERVICE = Symbol(
 );
 export const WEB_CHAT_HISTORY_SERVICE = Symbol('WEB_CHAT_HISTORY_SERVICE');
 export const WEB_CHAT_BALANCE_SERVICE = Symbol('WEB_CHAT_BALANCE_SERVICE');
+export const WEB_CHAT_RATES_SERVICE = Symbol('WEB_CHAT_RATES_SERVICE');
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -145,6 +148,8 @@ export class WebChatService {
     private readonly historyService: TransactionHistoryService,
     @Inject(WEB_CHAT_BALANCE_SERVICE)
     private readonly balanceService: BalanceService,
+    @Inject(WEB_CHAT_RATES_SERVICE)
+    private readonly ratesService: RatesService,
     @Inject(IDENTITY_REPOSITORY)
     private readonly identityRepo: IIdentityRepository,
     @Inject(CONVERSATION_REPOSITORY)
@@ -411,6 +416,28 @@ export class WebChatService {
         );
         outcome = { kind: 'balance', ...snapshot };
         summaryText = this.buildBalanceSummary(snapshot);
+        break;
+      }
+
+      case 'get_rate': {
+        // Read-only rate discovery (§3.1): no proposal, no engine, no KYC gate —
+        // a market rate is public information, not user-scoped data. The folded
+        // buy+sell figure is what the engine transacts at (shared pricing seam).
+        // Rendered as an assistant text reply (the `clarification` outcome is the
+        // general text channel; no new outcome card kind is introduced).
+        const fiatCurrency =
+          intent.fiatCurrency ?? this.assetRegistry.defaultFiat();
+        const rateText = await this.buildRateReply(intent.asset, fiatCurrency);
+        outcome = { kind: 'clarification', text: rateText };
+        summaryText = rateText;
+        break;
+      }
+
+      case 'list_rates': {
+        // Read-only: every enabled, tradeable, priced pair as a text list.
+        const listText = await this.buildRatesListReply();
+        outcome = { kind: 'clarification', text: listText };
+        summaryText = listText;
         break;
       }
 
@@ -853,5 +880,55 @@ export class WebChatService {
       ? `Your ${snapshot.asset} balance:`
       : 'Your balances:';
     return `${header}\n${lines.join('\n')}`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rate discovery (Wave K — read-only, §3.1)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Text reply for a single-pair rate question. Surfaces the folded buy + sell
+   * figure the engine transacts at; when the pair is not tradeable / unpriced the
+   * rate provider throws — caught here and rendered as a graceful "no rate" line
+   * (a discovery miss is not an error, never a 5xx).
+   */
+  private async buildRateReply(
+    asset: string,
+    fiatCurrency: string,
+  ): Promise<string> {
+    try {
+      const rate = await this.ratesService.getEffectiveRate(
+        asset as EffectiveRate['asset'],
+        fiatCurrency,
+      );
+      return this.formatRateLine(rate);
+    } catch {
+      return `Sorry, I don't have a rate for ${asset}/${fiatCurrency} right now.`;
+    }
+  }
+
+  /**
+   * One human-readable rate line via registry formatters (no hardcoded symbols).
+   * Shows the folded buy and sell figures only — the FX spread is NEVER itemized
+   * (user rule / Wave K).
+   */
+  private formatRateLine(rate: EffectiveRate): string {
+    const assetMeta = this.assetRegistry.asset(rate.asset);
+    const buy = this.assetRegistry.formatFiat(rate.fiatCurrency, rate.buyRate);
+    const sell = this.assetRegistry.formatFiat(
+      rate.fiatCurrency,
+      rate.sellRate,
+    );
+    return `${assetMeta.displayName} (${rate.asset}) — buy ${buy}, sell ${sell} per 1 ${rate.asset}.`;
+  }
+
+  /** Text reply listing every enabled, tradeable, priced pair (never throws). */
+  private async buildRatesListReply(): Promise<string> {
+    const { rates } = await this.ratesService.listEffectiveRates();
+    if (rates.length === 0) {
+      return 'No rates are available right now. Please try again later.';
+    }
+    const lines = rates.map((rate) => `• ${this.formatRateLine(rate)}`);
+    return `Current rates:\n${lines.join('\n')}`;
   }
 }

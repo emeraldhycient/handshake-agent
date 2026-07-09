@@ -5,6 +5,7 @@ import { CLOCK, SystemClock } from '../../core/common/clock';
 import { LiveRateStore } from './application/live-rate.store';
 import { RATE_PROVIDER } from './application/ports/rate-provider.port';
 import { QuotesService } from './application/quotes.service';
+import { RatesService } from './application/rates.service';
 import { ConfigRateProvider } from './infrastructure/config-rate.provider';
 import { LiveRateService } from './infrastructure/live-rate.service';
 import { QuotesController } from './presentation/quotes.controller';
@@ -25,6 +26,7 @@ import { QuotesController } from './presentation/quotes.controller';
   controllers: [QuotesController],
   providers: [
     QuotesService,
+    RatesService,
     LiveRateStore,
     LiveRateService,
     { provide: RATE_PROVIDER, useClass: ConfigRateProvider },
@@ -34,6 +36,8 @@ import { QuotesController } from './presentation/quotes.controller';
   // valuation) can inject the rate source without re-binding it. LiveRateStore is
   // exported so TransactionsModule (proposal/execution engine) and WalletsModule
   // (mock-swap cross-rate) read the same live rates the quote path does.
-  exports: [QuotesService, RATE_PROVIDER, LiveRateStore],
+  // RatesService is exported so the agent + MCP modules can inject the read-only
+  // rate-discovery use-case (Wave K) — same folded rate the engine transacts at.
+  exports: [QuotesService, RatesService, RATE_PROVIDER, LiveRateStore],
 })
 export class QuotesModule {}

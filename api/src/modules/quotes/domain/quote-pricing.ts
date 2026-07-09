@@ -55,6 +55,49 @@ const roundTo = (value: number, decimals: number): number => {
   return Math.round(value * factor) / factor;
 };
 
+/**
+ * The effective (spread-inclusive) BUY rate a buyer pays per 1 unit of crypto:
+ * `baseRate` marked UP by `buySpreadBps`, quoted to 6 d.p. Extracted so the
+ * rate-discovery surface (RatesService) folds the spread with the EXACT same
+ * math the buy quote uses — the displayed rate always equals what the engine
+ * transacts at (DRY; CLAUDE.md §3.1). Fails closed if a misconfigured (negative)
+ * spread drives the rate <= 0 rather than silently emitting a bad price.
+ */
+export function buyEffectiveRate(
+  baseRate: number,
+  buySpreadBps: number,
+): number {
+  const effectiveRate = roundTo(baseRate * (1 + buySpreadBps / 10000), 6);
+  if (effectiveRate <= 0) {
+    throw new QuotePricingError(
+      `effectiveRate must be positive (buySpreadBps=${buySpreadBps} drives the rate to ${effectiveRate}); ` +
+        'this is a pricing misconfiguration',
+    );
+  }
+  return effectiveRate;
+}
+
+/**
+ * The effective (spread-reduced) SELL rate a seller receives per 1 unit of
+ * crypto: `baseRate` marked DOWN by `sellSpreadBps`, quoted to 6 d.p. Extracted
+ * alongside {@link buyEffectiveRate} so RatesService and the sell quote agree
+ * exactly (DRY). Fails closed if the spread drives the rate to <= 0 (a spread
+ * >= 100% is a pricing misconfiguration).
+ */
+export function sellEffectiveRate(
+  baseRate: number,
+  sellSpreadBps: number,
+): number {
+  const effectiveRate = roundTo(baseRate * (1 - sellSpreadBps / 10000), 6);
+  if (effectiveRate <= 0) {
+    throw new QuotePricingError(
+      `effectiveRate must be positive (sellSpreadBps=${sellSpreadBps} drives the rate to ${effectiveRate}); ` +
+        'a spread >= 100% is a pricing misconfiguration',
+    );
+  }
+  return effectiveRate;
+}
+
 const floorTo = (value: number, decimals: number): number => {
   const factor = 10 ** decimals;
   return Math.floor(value * factor) / factor;
@@ -92,17 +135,10 @@ export function computeSellQuote(params: SellQuoteParams): SellQuoteBreakdown {
     throw new QuotePricingError('baseRate must be positive');
   }
 
-  // Sell spread works against the user: they receive less per unit.
-  const effectiveRate = roundTo(baseRate * (1 - sellSpreadBps / 10000), 6);
-  // Fail closed if the spread drives the effective rate to <= 0 (sellSpreadBps
-  // >= 100%, i.e. >= 10000 bps). A 0/negative rate would otherwise silently
-  // produce a 0/negative payout instead of surfacing the misconfiguration (§3.1).
-  if (effectiveRate <= 0) {
-    throw new QuotePricingError(
-      `effectiveRate must be positive (sellSpreadBps=${sellSpreadBps} drives the rate to ${effectiveRate}); ` +
-        'a spread >= 100% is a pricing misconfiguration',
-    );
-  }
+  // Sell spread works against the user: they receive less per unit. Shared
+  // helper (fails closed on a >= 100% spread) so the rate-discovery surface
+  // folds the identical number the engine transacts at (§3.1, DRY).
+  const effectiveRate = sellEffectiveRate(baseRate, sellSpreadBps);
   const fiatBeforeFee = roundTo(cryptoAmount * effectiveRate, 2);
   const processingFeeAmount = roundTo(
     (fiatBeforeFee * processingFeeBps) / 10000,
@@ -154,18 +190,10 @@ export function computeBuyQuote(params: BuyQuoteParams): BuyQuoteBreakdown {
   const processingFee = roundTo((fiatAmount * processingFeeBps) / 10000, 2);
   const netFiat = fiatAmount - processingFee;
   // Quote the rate to a fixed precision so the result is deterministic and free
-  // of float noise (1600 * 1.015 would otherwise be 1623.9999…).
-  const effectiveRate = roundTo(baseRate * (1 + buySpreadBps / 10000), 6);
-  // Fail closed if a misconfigured (negative) spread drives the effective rate
-  // to <= 0. Dividing netFiat by a 0/negative rate would otherwise produce a
-  // 0/negative or non-finite crypto amount silently rather than surfacing the
-  // misconfiguration (§3.1).
-  if (effectiveRate <= 0) {
-    throw new QuotePricingError(
-      `effectiveRate must be positive (buySpreadBps=${buySpreadBps} drives the rate to ${effectiveRate}); ` +
-        'this is a pricing misconfiguration',
-    );
-  }
+  // of float noise (1600 * 1.015 would otherwise be 1623.9999…). Shared helper
+  // (fails closed on a negative spread) so the rate-discovery surface folds the
+  // identical number the engine transacts at (§3.1, DRY).
+  const effectiveRate = buyEffectiveRate(baseRate, buySpreadBps);
   // Floor (never round up) so the platform never credits more crypto than paid for.
   const cryptoAmount = floorTo(netFiat / effectiveRate, cryptoDecimals).toFixed(
     cryptoDecimals,

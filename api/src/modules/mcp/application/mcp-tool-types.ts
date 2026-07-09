@@ -22,6 +22,7 @@ import type { WalletService } from '../../wallets/application/wallet.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
 import type { QuotesService } from '../../quotes/application/quotes.service';
+import type { RatesService } from '../../quotes/application/rates.service';
 import type { WebChatService } from '../../chat/application/web-chat.service';
 import type { ITransactionRepository } from '../../transactions/application/ports/transaction.repository.port';
 import type { ISettlementRepository } from '../../transactions/application/ports/settlement.repository.port';
@@ -57,6 +58,7 @@ export interface McpToolDeps {
   beneficiaries: Pick<BeneficiaryService, 'listForUser'>;
   history: Pick<TransactionHistoryService, 'query' | 'queryPage'>;
   quotes: Pick<QuotesService, 'quoteBuy' | 'quoteSell'>;
+  rates: Pick<RatesService, 'getEffectiveRate' | 'listEffectiveRates'>;
   chat: Pick<WebChatService, 'handleMessage'>;
   identityRepo: Pick<IIdentityRepository, 'loadUser'>;
   transactionRepo: Pick<ITransactionRepository, 'findById'>;

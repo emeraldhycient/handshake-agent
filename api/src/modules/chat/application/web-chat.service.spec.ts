@@ -16,6 +16,7 @@ import {
   WEB_CHAT_BENEFICIARY_SERVICE,
   WEB_CHAT_HISTORY_SERVICE,
   WEB_CHAT_BALANCE_SERVICE,
+  WEB_CHAT_RATES_SERVICE,
 } from './web-chat.service';
 import { AGENT_PORT } from '../../agent/application/ports/agent.port';
 import { IDENTITY_REPOSITORY } from '../../identity/application/ports/identity.repository.port';
@@ -59,6 +60,10 @@ const fakeBeneficiaryService = {
 };
 const fakeHistoryService = { query: jest.fn() };
 const fakeBalanceService = { getBalances: jest.fn() };
+const fakeRatesService = {
+  getEffectiveRate: jest.fn(),
+  listEffectiveRates: jest.fn(),
+};
 const fakeIdentityRepo = { loadUser: jest.fn() };
 const fakeConversationRepo = {
   findByUserId: jest.fn(),
@@ -177,6 +182,7 @@ describe('WebChatService', () => {
         },
         { provide: WEB_CHAT_HISTORY_SERVICE, useValue: fakeHistoryService },
         { provide: WEB_CHAT_BALANCE_SERVICE, useValue: fakeBalanceService },
+        { provide: WEB_CHAT_RATES_SERVICE, useValue: fakeRatesService },
         { provide: IDENTITY_REPOSITORY, useValue: fakeIdentityRepo },
         { provide: CONVERSATION_REPOSITORY, useValue: fakeConversationRepo },
         { provide: MESSAGE_REPOSITORY, useValue: fakeMessageRepo },
@@ -749,6 +755,132 @@ describe('WebChatService', () => {
 
     expect(result.outcome).toEqual({ kind: 'needs_kyc' });
     expect(fakeBalanceService.getBalances).not.toHaveBeenCalled();
+  });
+
+  // ── get_rate / list_rates (Wave K — read-only rate discovery, §3.1) ─────────
+
+  it('get_rate intent → reads RatesService and replies with the folded pair rate (no proposal)', async () => {
+    fakeRatesService.getEffectiveRate.mockResolvedValue({
+      asset: 'USDT',
+      fiatCurrency: 'NGN',
+      buyRate: '1610.5',
+      sellRate: '1585.25',
+      source: 'live',
+      asOf: '2026-07-09T10:00:00.000Z',
+    });
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'get_rate',
+      asset: 'USDT',
+      fiatCurrency: 'NGN',
+    });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: "what's the USDT/NGN rate?",
+    });
+
+    expect(fakeRatesService.getEffectiveRate).toHaveBeenCalledWith(
+      'USDT',
+      'NGN',
+    );
+    // Read-only: the model proposes nothing — no proposal is ever created (§3.1).
+    expect(fakeProposalService.createBuyProposal).not.toHaveBeenCalled();
+    expect(fakeProposalService.createSellProposal).not.toHaveBeenCalled();
+    // Rendered through the general text channel (`clarification`), never a new card.
+    expect(result.outcome.kind).toBe('clarification');
+    // Both folded directions surface; the FX spread is never itemized.
+    expect(result.reply.text).toContain('1610.5');
+    expect(result.reply.text).toContain('1585.25');
+    expect(result.reply.text).toContain('USDT');
+  });
+
+  it('get_rate with no fiat defaults to the catalog base fiat', async () => {
+    fakeRatesService.getEffectiveRate.mockResolvedValue({
+      asset: 'USDT',
+      fiatCurrency: 'NGN',
+      buyRate: '1610',
+      sellRate: '1585',
+      source: 'config',
+      asOf: '2026-07-09T10:00:00.000Z',
+    });
+    fakeAgentPort.run.mockResolvedValue({ action: 'get_rate', asset: 'USDT' });
+
+    await service.handleMessage({ userId: 'user-1', text: 'usdt price' });
+
+    // fiatCurrency omitted → resolved from AssetRegistry.defaultFiat() ('NGN' here).
+    expect(fakeRatesService.getEffectiveRate).toHaveBeenCalledWith(
+      'USDT',
+      'NGN',
+    );
+  });
+
+  it('get_rate for an unpriced pair → graceful "no rate" clarification, never a 5xx', async () => {
+    fakeRatesService.getEffectiveRate.mockRejectedValue(
+      new Error('no base rate for USDT/ZAR'),
+    );
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'get_rate',
+      asset: 'USDT',
+      fiatCurrency: 'ZAR',
+    });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'usdt to rand',
+    });
+
+    expect(result.outcome.kind).toBe('clarification');
+    expect(result.reply.text).toMatch(/don't have a rate|try again/i);
+  });
+
+  it('list_rates intent → reads RatesService and lists every priced pair (no proposal)', async () => {
+    fakeRatesService.listEffectiveRates.mockResolvedValue({
+      rates: [
+        {
+          asset: 'USDT',
+          fiatCurrency: 'NGN',
+          buyRate: '1610',
+          sellRate: '1585',
+          source: 'live',
+          asOf: '2026-07-09T10:00:00.000Z',
+        },
+        {
+          asset: 'TRX',
+          fiatCurrency: 'NGN',
+          buyRate: '250',
+          sellRate: '240',
+          source: 'config',
+          asOf: '2026-07-09T10:00:00.000Z',
+        },
+      ],
+    });
+    fakeAgentPort.run.mockResolvedValue({ action: 'list_rates' });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'show me all the rates',
+    });
+
+    expect(fakeRatesService.listEffectiveRates).toHaveBeenCalledTimes(1);
+    expect(fakeProposalService.createBuyProposal).not.toHaveBeenCalled();
+    expect(result.outcome.kind).toBe('clarification');
+    expect(result.reply.text).toContain('USDT');
+    expect(result.reply.text).toContain('TRX');
+    expect(result.reply.text).toContain('1610');
+    expect(result.reply.text).toContain('250');
+  });
+
+  it('list_rates with no priced pairs → graceful empty message', async () => {
+    fakeRatesService.listEffectiveRates.mockResolvedValue({ rates: [] });
+    fakeAgentPort.run.mockResolvedValue({ action: 'list_rates' });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'rates',
+    });
+
+    expect(result.outcome.kind).toBe('clarification');
+    expect(result.reply.text).toMatch(/no rates/i);
   });
 
   // ── buy_crypto, unverified → needs_kyc ────────────────────────────────────

@@ -1,6 +1,7 @@
 /**
  * Read-scope MCP tools: profile, balances, deposit address, capabilities,
- * beneficiaries, quotes (Wave C).
+ * beneficiaries, quotes (Wave C), and rate discovery (Wave K — get_rate /
+ * list_rates, folded spread-inclusive display rates, no money movement).
  *
  * Every tool is read-only or read-mostly (§3.1): quoting never moves money;
  * deposit-address provisioning mirrors the chat `receive_crypto` branch
@@ -12,6 +13,8 @@
 import { z } from 'zod';
 
 import {
+  GetRateInputSchema,
+  ListRatesInputSchema,
   PublicConfigResponseSchema,
   QuoteBuyInputSchema,
   QuoteSellInputSchema,
@@ -139,6 +142,25 @@ export function buildReadTools(deps: McpToolDeps): McpToolDefinition[] {
       scope: 'read',
       inputSchema: QuoteSellInputSchema,
       handler: (args) => deps.quotes.quoteSell(args),
+    }),
+
+    defineTool({
+      name: 'get_rate',
+      description:
+        "The effective buy and sell rate for one asset/fiat pair — each a single spread-inclusive number (what a buyer pays / a seller receives per unit). 'source' flags live-feed vs config floor. Read-only — no funds move.",
+      scope: 'read',
+      inputSchema: GetRateInputSchema,
+      handler: (args) =>
+        deps.rates.getEffectiveRate(args.asset, args.fiatCurrency),
+    }),
+
+    defineTool({
+      name: 'list_rates',
+      description:
+        'The effective buy and sell rates for every enabled, tradeable asset/fiat pair (spread-inclusive folded numbers). Read-only — no funds move.',
+      scope: 'read',
+      inputSchema: ListRatesInputSchema,
+      handler: () => deps.rates.listEffectiveRates(),
     }),
   ];
 }

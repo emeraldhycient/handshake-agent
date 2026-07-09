@@ -138,6 +138,8 @@ Given a user message, extract their intent and return it as a structured object 
 - buy_ticket: user wants to buy an event ticket
 - check_balance: user wants to check their wallet balance. If they name a specific asset (e.g. "my USDT balance"), set "asset" to that symbol; if they ask for everything ("what's my balance", "show my assets"), omit "asset".
 - query_transactions: user wants to see their transaction history / past activity, or download a statement
+- get_rate: user asks the exchange rate / PRICE of ONE crypto asset ("what's the USDT/NGN rate?", "how much is 1 USDT in naira?", "USDT price"). Set "asset" to the crypto symbol and "fiatCurrency" to the fiat they name (omit it to use the default ${defaultFiat}). This is READ-ONLY — it only shows a price; it NEVER buys or sells. A pure price/rate question is get_rate, NOT buy_crypto/sell_crypto.
+- list_rates: user asks to see ALL rates/prices ("show me all the rates", "what are your prices?", "list rates"). No parameters. READ-ONLY.
 - none: intent is unclear — return a short clarification question in the "clarification" field
 
 Rules:

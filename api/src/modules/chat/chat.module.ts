@@ -18,6 +18,7 @@ import { WalletsModule } from '../wallets/wallets.module';
 import { BeneficiariesModule } from '../beneficiaries/beneficiaries.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { BalancesModule } from '../balances/balances.module';
+import { QuotesModule } from '../quotes/quotes.module';
 import { WebAuthModule } from '../auth/auth.module';
 import { AuthModule } from '../../core/auth/auth.module';
 import { MediaModule } from '../media/media.module';
@@ -27,6 +28,7 @@ import { WalletService } from '../wallets/application/wallet.service';
 import { BeneficiaryService } from '../beneficiaries/application/beneficiary.service';
 import { TransactionHistoryService } from '../transactions/application/transaction-history.service';
 import { BalanceService } from '../balances/application/balance.service';
+import { RatesService } from '../quotes/application/rates.service';
 
 import { CONVERSATION_REPOSITORY } from '../conversations/application/ports/conversation.repository.port';
 import { MESSAGE_REPOSITORY } from '../conversations/application/ports/message.repository.port';
@@ -44,6 +46,7 @@ import {
   WEB_CHAT_BENEFICIARY_SERVICE,
   WEB_CHAT_HISTORY_SERVICE,
   WEB_CHAT_BALANCE_SERVICE,
+  WEB_CHAT_RATES_SERVICE,
 } from './application/web-chat.service';
 import { ChatController } from './presentation/chat.controller';
 import { VoiceChatController } from './presentation/voice-chat.controller';
@@ -64,6 +67,7 @@ import {
     BeneficiariesModule, // exports BeneficiaryService
     TransactionsModule, // exports ProposalService
     BalancesModule, // exports BalanceService
+    QuotesModule, // exports RatesService (read-only rate discovery, Wave K)
     WebAuthModule, // exports JwtAuthGuard
     AuthModule, // core auth — exports SessionService (device-bound step-up, §3.4)
     MediaModule, // exports TRANSCRIPTION_PORT
@@ -89,6 +93,7 @@ import {
       useExisting: TransactionHistoryService,
     },
     { provide: WEB_CHAT_BALANCE_SERVICE, useExisting: BalanceService },
+    { provide: WEB_CHAT_RATES_SERVICE, useExisting: RatesService },
     // Conversation repository bindings — ConversationsModule does not export these
     // tokens so ChatModule provides its own instances backed by the same Prisma classes.
     // PrismaService is global (registered via PrismaModule in AppModule) so it is
