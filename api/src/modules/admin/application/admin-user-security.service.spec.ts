@@ -1,4 +1,7 @@
-import { AdminNotFoundError } from '../domain/admin-errors';
+import {
+  AdminNotFoundError,
+  AdminUnsupportedCurrencyError,
+} from '../domain/admin-errors';
 import { AdminUserSecurityService } from './admin-user-security.service';
 import type { AuditService } from '../../../core/audit/application/audit.service';
 import type { AuditListResult } from '../../../core/audit/application/ports/audit-log.repository.port';
@@ -75,7 +78,7 @@ interface Mocks {
   velocity: jest.Mocked<IVelocityRepository>;
   identity: jest.Mocked<Pick<IIdentityRepository, 'loadUser'>>;
   config: jest.Mocked<Pick<EffectiveConfigService, 'get'>>;
-  registry: jest.Mocked<Pick<AssetRegistry, 'defaultFiat'>>;
+  registry: jest.Mocked<Pick<AssetRegistry, 'defaultFiat' | 'supportedFiats'>>;
   audit: jest.Mocked<Pick<AuditService, 'list' | 'record'>>;
 }
 
@@ -100,7 +103,10 @@ function makeMocks(): { service: AdminUserSecurityService; m: Mocks } {
 
   const registry = {
     defaultFiat: jest.fn().mockReturnValue('NGN'),
-  } as unknown as jest.Mocked<Pick<AssetRegistry, 'defaultFiat'>>;
+    supportedFiats: jest.fn().mockReturnValue(['NGN', 'GHS', 'XOF']),
+  } as unknown as jest.Mocked<
+    Pick<AssetRegistry, 'defaultFiat' | 'supportedFiats'>
+  >;
 
   const audit = {
     list: jest.fn(),
@@ -210,9 +216,58 @@ describe('AdminUserSecurityService.getLimits', () => {
     expect(out.velocity).toEqual({
       dailyFiatUsed: '252551.70',
       dailyTxCount: 6,
+      fiatCurrency: 'NGN',
       windowStart: WINDOW_START.toISOString(),
       windowEnd: NOW.toISOString(),
     });
+  });
+
+  it('threads an explicit ?currency= to the velocity read and the effective caps', async () => {
+    const { service, m } = makeMocks();
+    m.identity.loadUser.mockResolvedValue(makeUser({ kycTier: 'tier_1' }));
+    m.config.get.mockReturnValue({
+      ...LIMITS,
+      GHS: {
+        tier_1: { perTxFiatMax: 800, dailyFiatMax: 4000, dailyTxCountMax: 10 },
+        tier_2: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+        tier_3: { perTxFiatMax: 1, dailyFiatMax: 1, dailyTxCountMax: 1 },
+      },
+    });
+    m.velocity.getDailyUsage.mockResolvedValue({
+      fiatTotal: '120',
+      txCount: 2,
+    });
+
+    const out = await service.getLimits(USER_ID, 'GHS');
+
+    expect(m.velocity.getDailyUsage).toHaveBeenCalledWith(USER_ID, NOW, 'GHS');
+    expect(out.effectiveLimits?.fiatCurrency).toBe('GHS');
+    expect(out.effectiveLimits?.perTxFiatMax).toBe('800');
+    expect(out.velocity.fiatCurrency).toBe('GHS');
+  });
+
+  it('rejects a currency outside the fiat catalog fail-closed (no velocity read)', async () => {
+    const { service, m } = makeMocks();
+    m.identity.loadUser.mockResolvedValue(makeUser());
+
+    await expect(service.getLimits(USER_ID, 'ZZZ')).rejects.toBeInstanceOf(
+      AdminUnsupportedCurrencyError,
+    );
+    expect(m.velocity.getDailyUsage).not.toHaveBeenCalled();
+  });
+
+  it('accepts a runtime custom fiat (the catalog check uses supportedFiats, not the built-in enum)', async () => {
+    const { service, m } = makeMocks();
+    m.identity.loadUser.mockResolvedValue(makeUser({ kycTier: 'tier_1' }));
+    m.velocity.getDailyUsage.mockResolvedValue({ fiatTotal: '0', txCount: 0 });
+
+    const out = await service.getLimits(USER_ID, 'XOF');
+
+    expect(m.velocity.getDailyUsage).toHaveBeenCalledWith(USER_ID, NOW, 'XOF');
+    // No configured limits for XOF -> effectiveLimits null, but the usage window
+    // is still reported in the requested currency.
+    expect(out.effectiveLimits).toBeNull();
+    expect(out.velocity.fiatCurrency).toBe('XOF');
   });
 
   it('returns null effectiveLimits for an unverified tier but still reports velocity', async () => {

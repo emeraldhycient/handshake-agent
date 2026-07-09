@@ -25,6 +25,7 @@ import type {
 } from "@handshake-agent/contracts"
 
 import { TreasuryPage } from "@/components/admin/treasury-page"
+import { ApiError } from "@/lib/api/client"
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────────
 
@@ -65,7 +66,7 @@ import {
   acknowledgeTreasuryAlert,
   approveTreasuryPayout,
 } from "@/lib/api/treasury"
-import { getMe } from "@/lib/api/admin"
+import { getMe, stepUp } from "@/lib/api/admin"
 import { listBeneficiaries, overrideCoolingOff } from "@/lib/api/beneficiaries"
 
 const mockBalances = vi.mocked(listTreasuryBalances)
@@ -78,6 +79,7 @@ const mockFx = vi.mocked(listTreasuryFxPosition)
 const mockAcknowledge = vi.mocked(acknowledgeTreasuryAlert)
 const mockApprovePayout = vi.mocked(approveTreasuryPayout)
 const mockGetMe = vi.mocked(getMe)
+const mockStepUp = vi.mocked(stepUp)
 const mockBeneficiaries = vi.mocked(listBeneficiaries)
 const mockOverride = vi.mocked(overrideCoolingOff)
 
@@ -147,6 +149,7 @@ const PAYOUTS: TreasuryPayoutQueueResponse = {
       asset: "NGN",
       amount: "4820000.00",
       fiatAmount: null,
+      fiatCurrency: "NGN",
       requiresApproval: true,
       submittedAt: "2026-07-01T03:00:00.000Z",
     },
@@ -158,7 +161,8 @@ const PAYOUTS: TreasuryPayoutQueueResponse = {
       method: "USDT · Blockradar",
       asset: "USDT",
       amount: "1250.00",
-      fiatAmount: null,
+      fiatAmount: "1912500.00",
+      fiatCurrency: "NGN",
       requiresApproval: false,
       submittedAt: "2026-07-01T02:00:00.000Z",
     },
@@ -173,6 +177,14 @@ const FIAT_FLOAT: TreasuryFiatFloatResponse = {
       targetFloat: "234000000",
       utilizationBps: 1803,
       status: "low",
+      lowFloatThresholdBps: 2500,
+    },
+    {
+      currency: "GHS",
+      balance: "125000.00",
+      targetFloat: "250000",
+      utilizationBps: 5000,
+      status: "healthy",
       lowFloatThresholdBps: 2500,
     },
   ],
@@ -257,6 +269,7 @@ beforeEach(() => {
     acknowledgedAt: "2026-07-01T05:00:00.000Z",
   })
   mockGetMe.mockReset().mockResolvedValue(ME)
+  mockStepUp.mockReset().mockResolvedValue(undefined)
   mockBeneficiaries.mockReset().mockResolvedValue(BENEFICIARIES)
   mockOverride.mockReset().mockResolvedValue(undefined)
   mockApprovePayout.mockReset().mockResolvedValue({
@@ -290,12 +303,16 @@ describe("TreasuryPage (wired)", () => {
     expect(screen.getByText("12 wallets · TRON")).toBeInTheDocument()
   })
 
-  it("wires the NGN fiat-float tile with utilization + status", async () => {
+  it("renders ONE fiat-float tile per currency, each in its own currency", async () => {
     renderPage()
     expect(await screen.findByText("₦42,180,500.00")).toBeInTheDocument()
     expect(screen.getByText("NGN fiat float")).toBeInTheDocument()
     // 1803 bps → 18%; status low.
     expect(screen.getByText("18% of target · low")).toBeInTheDocument()
+    // The second currency renders its OWN card with its OWN symbol — never ₦.
+    expect(screen.getByText("GHS fiat float")).toBeInTheDocument()
+    expect(screen.getByText("GH₵125,000.00")).toBeInTheDocument()
+    expect(screen.getByText("50% of target · healthy")).toBeInTheDocument()
   })
 
   it("wires the FX-position tile with the signed net position + direction", async () => {
@@ -340,6 +357,9 @@ describe("TreasuryPage (wired)", () => {
       await screen.findByText("Kelechi Chukwu · GTBank")
     ).toBeInTheDocument()
     expect(screen.getByText("₦4,820,000.00")).toBeInTheDocument()
+    // The crypto payout renders its amount + the fiat leg in its own fiatCurrency.
+    expect(screen.getByText("1,250 USDT")).toBeInTheDocument()
+    expect(screen.getByText("≈ ₦1,912,500.00")).toBeInTheDocument()
     // requiresApproval → maker-checker tag on exactly the large payout.
     expect(screen.getByText("Maker-checker")).toBeInTheDocument()
     expect(screen.getAllByRole("button", { name: "Approve" })).toHaveLength(2)
@@ -450,6 +470,44 @@ describe("TreasuryPage (write wiring)", () => {
       )
     )
     // The row now reads "Requested" — the release awaits a second admin (§3.1).
+    expect(await screen.findByText("Requested")).toBeInTheDocument()
+  })
+
+  it("marks the right row Requested after a 403 step-up replay (stashed row id)", async () => {
+    // First approve 403s with the step-up code; the post-re-auth replay succeeds.
+    mockApprovePayout
+      .mockRejectedValueOnce(
+        new ApiError("Re-auth required.", 403, "ADMIN_STEP_UP_REQUIRED")
+      )
+      .mockResolvedValueOnce({
+        payoutId: "44444444-4444-4444-4444-444444444444",
+        changeRequestId: "88888888-8888-8888-8888-888888888888",
+        status: "pending",
+        released: false,
+      })
+
+    const user = userEvent.setup()
+    renderPage()
+
+    // Approve → reason → maker-checker submit (this closes the flow modals and
+    // nulls the active row — the pending row id must survive for the replay).
+    const approveButtons = await screen.findAllByRole("button", {
+      name: "Approve",
+    })
+    await user.click(approveButtons[0])
+    await user.type(await screen.findByLabelText("Reason"), "Checked totals")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    await user.click(
+      screen.getByRole("button", { name: /Submit for approval/i })
+    )
+
+    // The step-up dialog opens (password mode — mfaEnabled=false). Re-auth.
+    await screen.findByRole("dialog")
+    await user.type(await screen.findByLabelText(/^password$/i), "supersecret")
+    await user.click(screen.getByRole("button", { name: /^confirm$/i }))
+
+    // The stashed approve replays and the ORIGINAL row flips to Requested.
+    await waitFor(() => expect(mockApprovePayout).toHaveBeenCalledTimes(2))
     expect(await screen.findByText("Requested")).toBeInTheDocument()
   })
 

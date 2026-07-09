@@ -35,8 +35,8 @@ describe("humanizeSeconds + formatLeaf + fieldLabelFor", () => {
     expect(humanizeSeconds(45)).toBe("45s")
   })
   it("formats a leaf by kind", () => {
-    expect(formatLeaf("amount", 50000, "NGN")).toBe("₦50,000")
-    expect(formatLeaf("amount", 500, "GHS")).toBe("500 GHS")
+    expect(formatLeaf("amount", 50000, "NGN")).toBe("₦50,000.00")
+    expect(formatLeaf("amount", 500, "GHS")).toBe("GH₵500.00")
     expect(formatLeaf("count", 1000, "NGN")).toBe("1,000")
     expect(formatLeaf("seconds", 3600, "NGN")).toBe("1h")
   })
@@ -70,7 +70,7 @@ describe("leafRow", () => {
       "amount",
       "NGN"
     )
-    expect(row.v).toBe("₦50,000")
+    expect(row.v).toBe("₦50,000.00")
   })
 })
 
@@ -83,7 +83,7 @@ describe("buildTiers + availableCurrencies", () => {
   it("builds 3 tiers with amount + velocity rows", () => {
     const tiers = buildTiers(settings, "NGN")
     expect(tiers.map((t) => t.id)).toEqual(["tier_1", "tier_2", "tier_3"])
-    expect(tiers[0].amountCaps[0].v).toBe("₦50,000")
+    expect(tiers[0].amountCaps[0].v).toBe("₦50,000.00")
     // The global new-beneficiary hold appears on every tier card.
     expect(tiers[0].velocity.at(-1)?.v).toBe("1d")
   })

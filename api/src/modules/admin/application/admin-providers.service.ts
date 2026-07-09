@@ -66,7 +66,7 @@ const PROVIDER_SPECS: readonly ProviderSpec[] = [
   {
     key: 'flutterwave',
     name: 'Flutterwave',
-    kind: 'Fiat NGN rails',
+    kind: 'Fiat rails (Flutterwave)',
     secretKeys: ['FLUTTERWAVE_SECRET_KEY'],
     mockModeKey: 'PAYMENTS_MOCK_MODE',
     capabilities: ['payout', 'collection'],

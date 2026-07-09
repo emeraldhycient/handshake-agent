@@ -4,7 +4,7 @@
  * The crypto capability rows' ENABLED/DISABLED state is resolved from the
  * `catalog.capabilities.crypto.*` boolean settings (GET /admin/settings, mocked).
  * The kill-switch is dual-control: clicking a switch never flips it directly — it
- * opens the shared MakerCheckerModal. Approving ("Submit for approval") toasts the
+ * opens the shared MakerCheckerModal. Approving ("Confirm change") toasts the
  * intended change (the real server-side flip + re-read is Phase 7). The api layer is
  * mocked — no server.
  */
@@ -134,7 +134,7 @@ describe("CapabilitiesPage (wired dual-control kill-switch)", () => {
 
     const dialog = screen.getByRole("dialog", { name: /Disable crypto.buy/ })
     await user.click(
-      within(dialog).getByRole("button", { name: "Submit for approval" })
+      within(dialog).getByRole("button", { name: "Confirm change" })
     )
 
     // The real config-override PATCH fires with the toggled boolean + the setting's
@@ -180,7 +180,7 @@ describe("CapabilitiesPage (wired dual-control kill-switch)", () => {
     await user.click(
       within(
         screen.getByRole("dialog", { name: /Disable crypto.buy/ })
-      ).getByRole("button", { name: "Submit for approval" })
+      ).getByRole("button", { name: "Confirm change" })
     )
 
     expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()

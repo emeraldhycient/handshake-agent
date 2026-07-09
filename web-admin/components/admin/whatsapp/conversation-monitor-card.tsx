@@ -1,9 +1,12 @@
+import Link from "next/link"
+
 import { ShapeGapNote } from "./shape-gap-note"
 
 /**
- * Live conversation monitor — there is NO WhatsApp conversation-monitor read endpoint
- * yet, so rather than fabricate redacted chat bubbles this shows an honest shape-gap
- * note (deferred).
+ * Live conversation monitor — there is no LIVE (streaming) monitor feed, but
+ * WhatsApp threads are logged to the agent conversation log, readable from the
+ * Agent console's Conversations section. Point the operator there instead of
+ * fabricating redacted chat bubbles here.
  */
 export function ConversationMonitorCard() {
   return (
@@ -14,10 +17,15 @@ export function ConversationMonitorCard() {
         </div>
         <span className="text-[11px] text-ink3">read-only · redacted</span>
       </div>
-      <ShapeGapNote title="No conversation feed yet">
-        There is no read endpoint for live WhatsApp conversations yet. A
-        read-only, redacted transcript will appear here once a monitor feed is
-        added.
+      <ShapeGapNote title="No live feed — transcripts live in the Agent console">
+        WhatsApp conversations are logged to the agent conversation log. Open{" "}
+        <Link
+          href="/agent"
+          className="font-bold text-tif underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          Agent config → Conversations
+        </Link>{" "}
+        to review read-only, intent-annotated transcripts.
       </ShapeGapNote>
     </div>
   )

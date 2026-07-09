@@ -23,7 +23,7 @@ function makePayout(
     asset: 'NGN',
     amount: '1500000.00',
     fiatAmount: null,
-    requiresApproval: true,
+    fiatCurrency: 'NGN',
     submittedAt: new Date('2026-06-30T12:00:00.000Z'),
     ...over,
   };

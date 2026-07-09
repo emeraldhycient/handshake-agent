@@ -43,8 +43,6 @@ export function UsersPage() {
           onKycChange={d.onKycChange}
           tier={d.tier}
           onTierChange={d.onTierChange}
-          country={d.country}
-          onCountryChange={d.onCountryChange}
           risk={d.risk}
           onToggleRisk={d.toggleRisk}
         />

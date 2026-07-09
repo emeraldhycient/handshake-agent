@@ -52,7 +52,9 @@ jobs:
         run: pnpm depcruise
 
       - name: Test
-        # Integration tests use @testcontainers/postgresql; the ubuntu runner has Docker available.
+        # Unit suites only (api jest + web/web-admin/contracts vitest). The api
+        # e2e/testcontainers lane (`pnpm --filter @handshake-agent/api test:e2e`)
+        # is a local lane and does NOT run in CI — see root CLAUDE.md §9.
         run: pnpm turbo run test
 
       - name: Build

@@ -180,7 +180,8 @@ describe("UsersPage (wired)", () => {
     renderPage()
 
     await screen.findByText("Amara Okeke")
-    // "Needs info" bucket → the contract's `pending_review` status.
+    // "Needs info" bucket → the contract's real `needs_info` status (the bucket
+    // bounced applicants land in — never the unrelated `pending_review`).
     await user.selectOptions(
       screen.getByLabelText("Filter by KYC status"),
       "needs_info"
@@ -188,9 +189,27 @@ describe("UsersPage (wired)", () => {
 
     await waitFor(() =>
       expect(mockListEndUsers).toHaveBeenCalledWith(
-        expect.objectContaining({ kycStatus: "pending_review" })
+        expect.objectContaining({ kycStatus: "needs_info" })
       )
     )
+  })
+
+  it("offers no Country filter and no Velocity chip (fields the list does not model)", async () => {
+    mockListEndUsers.mockResolvedValue(RESPONSE)
+    renderPage()
+
+    await screen.findByText("Amara Okeke")
+    // Both controls unconditionally emptied the table (country / velocity are
+    // not on the list contract) — removed until the fields are modeled.
+    expect(screen.queryByLabelText("Filter by country")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Velocity" })
+    ).not.toBeInTheDocument()
+    // The real, modeled risk chips stay.
+    expect(screen.getByRole("button", { name: "SIM-swap" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Sanctions" })
+    ).toBeInTheDocument()
   })
 
   it("downloads a CSV export over the shown set from the header button", async () => {

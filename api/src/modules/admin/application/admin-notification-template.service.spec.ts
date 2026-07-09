@@ -40,6 +40,8 @@ function makeRepo(rows: NotificationTemplateRecord[] = []): {
   const state: RepoState = { rows, upserts: [] };
   const repo: INotificationTemplateRepository = {
     list: () => Promise.resolve(state.rows),
+    existsByKey: (templateKey) =>
+      Promise.resolve(state.rows.some((r) => r.templateKey === templateKey)),
     find: (templateKey, language, channel) =>
       Promise.resolve(
         state.rows.find(

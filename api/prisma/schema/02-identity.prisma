@@ -30,6 +30,14 @@ model User {
   verifiedBackupPhone String?    @unique
   /// Set when a SIM/number change is detected; gates transactions until re-verified.
   simSwapDetectedAt   DateTime?  @db.Timestamptz
+  /// User-set contact phone from the settings page (display/contact preference
+  /// only — NEVER an auth anchor or a WhatsApp routing key, §3.4). Distinct from
+  /// verifiedBackupPhone (KYC out-of-band) and ChannelIdentity (routing).
+  profilePhone        String?
+  /// Preferred display/settlement fiat (TEXT — validated by AssetRegistry at the
+  /// app layer against the live catalog, like Beneficiary.cryptoAsset). Null =
+  /// fall back to the catalog default fiat.
+  preferredFiatCurrency String?
   lastTransactionAt   DateTime?  @db.Timestamptz
   createdAt           DateTime   @default(now()) @db.Timestamptz
   updatedAt           DateTime   @updatedAt @db.Timestamptz
@@ -60,6 +68,7 @@ model User {
   velocityCounters  VelocityCounter[]
   ticketOrders      TicketOrder[]
   tags              UserTag[]
+  personalAccessTokens PersonalAccessToken[]
 
   @@index([status, createdAt])
   @@index([kycStatus, kycTier])
@@ -202,6 +211,33 @@ model Session {
   @@index([userId, isActive])
   @@index([expiresAt])
   @@map("sessions")
+}
+
+/// A user-minted personal access token for the machine/MCP surface (Wave C).
+/// Mirrors the Session hashing pattern: ONLY the SHA-256 hex of the raw
+/// `hsk_pat_…` token is stored — the raw value is shown once at mint and never
+/// persisted. `scopes` values are TEXT validated at the app layer against the
+/// shared PatScopeSchema ('read' | 'chat:propose' — no execute scope exists,
+/// §3.1). Revocation is SOFT (revokedAt) so the row remains for audit.
+model PersonalAccessToken {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  userId     String    @db.Uuid
+  /// User-chosen display label ("Claude Desktop") — never used for auth.
+  label      String
+  /// SHA-256 hex of the raw bearer token — the lookup key on the auth path.
+  tokenHash  String    @unique
+  scopes     String[]
+  lastUsedAt DateTime? @db.Timestamptz
+  /// Null = non-expiring (still revocable at any time).
+  expiresAt  DateTime? @db.Timestamptz
+  revokedAt  DateTime? @db.Timestamptz
+  createdAt  DateTime  @default(now()) @db.Timestamptz
+  updatedAt  DateTime  @updatedAt @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@map("personal_access_tokens")
 }
 
 /// Unified saved counterparty: a fiat payout (bank account) OR an on-chain address.

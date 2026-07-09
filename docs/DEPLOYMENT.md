@@ -89,11 +89,14 @@ BLOCKRADAR_MASTER_WALLET_ID=…         # non-secret; per-user child addresses h
 FLUTTERWAVE_SECRET_KEY=…              # SECRET
 FLUTTERWAVE_BASE_URL=https://api.flutterwave.com/v3
 FLUTTERWAVE_WEBHOOK_SECRET=…          # SECRET — verify-hash for collection/transfer webhooks
+FLUTTERWAVE_SCENARIO_KEY=             # MUST be empty in prod — boot-enforced (non-empty fails startup; a sandbox scenario key would simulate collections instead of settling real money)
 ```
+
+> **One-time rotation on this release:** rotate `FLUTTERWAVE_WEBHOOK_SECRET` when deploying the webhook-signature digest release. Earlier releases persisted the raw verif-hash (which for Flutterwave **is** the static secret) in `webhook_events` rows; signatures are now stored only as `sha256:` digests and pre-existing rows are redacted on read — but a secret that ever sat in the DB in cleartext must be treated as exposed.
 
 **Email — Resend**
 ```
-RESEND_API_KEY=…                      # SECRET
+RESEND_API_KEY=…                      # SECRET — REQUIRED at production boot (fail-closed): an absent key selects the log-only mock provider, which logs login OTPs (an account-takeover oracle)
 EMAIL_FROM=Handshake <no-reply@example.com>
 ```
 
@@ -156,6 +159,10 @@ TRANSCRIPTION_MOCK_MODE=true   MEDIA_EXTRACTION_MOCK_MODE=true
 - **PIN + admin-login lockout** are atomic (single-statement) — DB-backed; no extra config.
 - **Log redaction** — pino redacts `Authorization`/cookie/api-key/webhook-signature headers. Keep structured JSON logging in prod (no `pino-pretty`).
 
+### 2.5 MCP endpoint (PAT-authenticated)
+
+The API exposes **`POST /mcp`** — a stateless Streamable-HTTP MCP endpoint for external AI clients (Claude Desktop, IDEs). Auth is by **personal access token only** (`Bearer hsk_pat_…`): users mint tokens PIN-gated at `POST /profile/tokens`, only the SHA-256 hash is stored, and scopes are limited to `read` / `chat:propose` — session JWTs are rejected on `/mcp` and no execute scope exists, so a leaked PAT can never move money (tools read + propose only; execution stays behind PIN + step-up on web/WhatsApp). Nothing extra to deploy: it rides the API process, stays behind the global throttler, and is stateless (no sticky routing needed).
+
 ---
 
 ## 3. Frontend — `web/`
@@ -211,6 +218,9 @@ NEXT_PUBLIC_API_BASE_URL=https://api.example.com   # same backend; admin routes 
 - [ ] All signing keys set (`DIRECTIVE_/RECEIPT_/STATEMENT_SIGNING_KEY`), `JWT_SECRET`, `ADMIN_JWT_SECRET` — non-empty (prod boot guards enforce).
 - [ ] `ADMIN_MFA_ENC_KEY` = a fresh 64-hex value (`openssl rand -hex 32`).
 - [ ] `KYC_ENCRYPTION_KEY` set (required once `KYC_MOCK_MODE=false`).
+- [ ] `RESEND_API_KEY` set — production boot fails without it (the mock email provider logs OTPs).
+- [ ] `FLUTTERWAVE_SCENARIO_KEY` **empty** — production boot fails if set (sandbox simulation header).
+- [ ] `FLUTTERWAVE_WEBHOOK_SECRET` **rotated** when first deploying the webhook-signature digest release (previously persisted in cleartext in `webhook_events`; see §2.3).
 
 **Flip every mock to real**
 - [ ] `PAYMENTS_MOCK_MODE=false` + real `FLUTTERWAVE_SECRET_KEY` + `FLUTTERWAVE_WEBHOOK_SECRET`.
@@ -227,6 +237,7 @@ NEXT_PUBLIC_API_BASE_URL=https://api.example.com   # same backend; admin routes 
 
 **Ops**
 - [ ] Migrations applied (`prisma migrate deploy`); the fiat markets you're launching are **enabled server-side** (config `catalog.fiats.<code>.enabled` — fail-closed, requires pricing/limits).
+- [ ] Large-payout thresholds configured per enabled currency (`treasury.largePayoutThresholds.<CODE>`, admin-tunable in the DB-admin settings layer). **Fail-closed:** a currency with no threshold flags **every** payout for maker-checker approval — set a threshold once operators are ready, or accept manual release on all payouts in that currency.
 - [ ] At least one **worker** process running (settlement, webhook processing, cron sweepers, reconciliation).
 - [ ] First `super_admin` bootstrapped + MFA enrolled; `ADMIN_BOOTSTRAP_TOKEN` rotated/blanked.
 - [ ] Reconciliation + webhook dead-letter dashboards watched (admin console: Reconciliation, Webhooks, System/Ops).

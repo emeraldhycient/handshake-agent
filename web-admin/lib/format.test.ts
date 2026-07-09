@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 
 import {
   fiatSymbolFor,
@@ -8,7 +8,9 @@ import {
   formatDelta,
   formatFiat,
   formatMoneyList,
+  hydrateFiatDisplay,
   isFiat,
+  knownFiatCodes,
 } from "./format"
 
 describe("fiatSymbolFor", () => {
@@ -50,6 +52,49 @@ describe("isFiat", () => {
     expect(isFiat("USDT")).toBe(false)
     expect(isFiat("TRX")).toBe(false)
     expect(isFiat("XOF")).toBe(false)
+  })
+})
+
+describe("hydrateFiatDisplay (runtime catalog registry)", () => {
+  afterEach(() => hydrateFiatDisplay([]))
+
+  it("registers a runtime-added fiat: symbol, isFiat, and formatFiat pick it up", () => {
+    hydrateFiatDisplay([{ code: "XOF", symbol: "CFA", decimals: 0 }])
+    expect(fiatSymbolFor("XOF")).toBe("CFA")
+    expect(isFiat("XOF")).toBe(true)
+    // Configured decimals (0) override the 2 dp default.
+    expect(formatFiat(1000, "XOF")).toBe("CFA1,000")
+    // formatAmount now routes the runtime fiat through formatFiat, not formatCrypto.
+    expect(formatAmount("1000", "XOF")).toBe("CFA1,000")
+  })
+
+  it("prefers the hydrated symbol/decimals over the static fallback", () => {
+    hydrateFiatDisplay([{ code: "NGN", symbol: "NGN ", decimals: 3 }])
+    expect(formatFiat(20, "NGN")).toBe("NGN 20.000")
+  })
+
+  it("keeps built-in fiats classified as fiat even when absent from the registry", () => {
+    hydrateFiatDisplay([{ code: "XOF", symbol: "CFA", decimals: 0 }])
+    expect(isFiat("NGN")).toBe(true)
+    expect(formatFiat(20000, "NGN")).toBe("₦20,000.00")
+  })
+
+  it("knownFiatCodes lists the hydrated catalog, else the offline fallback", () => {
+    expect(knownFiatCodes()).toEqual(Object.keys({
+      NGN: 1, GHS: 1, KES: 1, UGX: 1, TZS: 1, RWF: 1, ZAR: 1, USD: 1,
+    }))
+    hydrateFiatDisplay([
+      { code: "NGN", symbol: "₦", decimals: 2 },
+      { code: "XOF", symbol: "CFA", decimals: 0 },
+    ])
+    expect(knownFiatCodes()).toEqual(["NGN", "XOF"])
+  })
+
+  it("clears back to the offline fallback when hydrated with an empty list", () => {
+    hydrateFiatDisplay([{ code: "XOF", symbol: "CFA", decimals: 0 }])
+    hydrateFiatDisplay([])
+    expect(isFiat("XOF")).toBe(false)
+    expect(fiatSymbolFor("XOF")).toBe("XOF")
   })
 })
 

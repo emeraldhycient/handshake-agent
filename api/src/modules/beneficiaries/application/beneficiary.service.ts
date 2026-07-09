@@ -219,6 +219,33 @@ export class BeneficiaryService {
     return this.repo.getDefault(userId, type);
   }
 
+  // ── resolveByNickname (Wave B — beneficiary nicknames) ────────────────────
+
+  /**
+   * Resolves a spoken nickname ("mum") against the user's OWN saved
+   * beneficiaries of the given type: case-insensitive exact label match,
+   * soft-deleted rows excluded, ordered isDefault desc then createdAt asc.
+   *
+   * Returns ALL matches — the caller decides: exactly one → use it; several →
+   * ask the user to choose; none → prompt to add/select a beneficiary.
+   *
+   * SECURITY (CLAUDE.md §3.1): the nickname is a lookup key, never a
+   * destination. Resolution yields only a beneficiaryId; the proposal service
+   * and engine re-validate ownership, type, cooling-off, and sanctions before
+   * any money moves.
+   */
+  async resolveByNickname(
+    userId: string,
+    type: 'bank_account' | 'crypto_address',
+    nickname: string,
+  ): Promise<BeneficiaryRecord[]> {
+    const trimmed = nickname.trim();
+    if (trimmed === '') {
+      return [];
+    }
+    return this.repo.findByLabel(userId, trimmed, type);
+  }
+
   // ── requireById ───────────────────────────────────────────────────────────
 
   /**

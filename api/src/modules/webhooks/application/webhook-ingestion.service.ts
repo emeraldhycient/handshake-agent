@@ -4,7 +4,10 @@
  *
  * Called by the (thin) provider controllers AFTER signature verification:
  *   1. derive the dedup key (provider event id, sha256 fallback),
- *   2. persist the raw payload/headers/signature durably (source of truth),
+ *   2. persist the raw payload/headers/signature durably (source of truth) —
+ *      headers pass through sanitizeWebhookHeaders first so authentication
+ *      material (verif-hash/authorization/…) is never persisted; replay never
+ *      re-verifies (verification is done, pre-persist), so redaction is safe,
  *   3. best-effort enqueue a processing job (a Redis-down enqueue miss is
  *      recovered by the WebhookSweeper — persistence + the 2xx ACK never depend
  *      on Redis being up).
@@ -26,6 +29,7 @@ import {
   WEBHOOK_DISPATCH,
   type IWebhookDispatch,
 } from './ports/webhook-dispatch.port';
+import { sanitizeWebhookHeaders } from './sanitize-webhook-headers';
 
 export interface IngestWebhookInput {
   provider: WebhookProvider;
@@ -66,7 +70,7 @@ export class WebhookIngestionService {
       provider: input.provider,
       providerEventId,
       payload: this.toPayload(input),
-      headers: input.headers,
+      headers: sanitizeWebhookHeaders(input.headers),
       signature: input.signature ?? null,
     });
 

@@ -429,6 +429,9 @@ export function TransactionDetail({ transactionId }: TransactionDetailProps) {
                 title={spec.title}
                 diff={spec.diff ?? []}
                 onSubmit={submitFlow}
+                // The only maker step here is the refund, which REALLY raises a
+                // ChangeRequest for a second admin — dual-control copy is honest.
+                mode="dual-control"
               />
             </>
           )}

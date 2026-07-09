@@ -221,12 +221,12 @@ export const searchCatalogFixture: SearchResult[] = [
   {
     kind: "Action",
     title: "Buy USDT",
-    desc: "Convert naira to USDT",
+    desc: "Convert cash to USDT",
     icon: "+",
     tint: "#e6f3ec",
     col: "#1f8a5b",
     action: "buy",
-    label: "Buy ₦50,000 of USDT",
+    label: "Buy USDT",
   },
   {
     kind: "Action",
@@ -256,7 +256,7 @@ export const searchCatalogFixture: SearchResult[] = [
     tint: "#eef0fb",
     col: "#3b5bb5",
     action: "swap",
-    label: "Swap 10 USDT to naira",
+    label: "Swap 10 USDT to cash",
   },
   {
     kind: "Action",
@@ -304,13 +304,7 @@ export const searchCatalogFixture: SearchResult[] = [
     col: "#16261e",
     page: "settings",
   },
-  {
-    kind: "Transaction",
-    title: "Bought USDT",
-    desc: "Today · ₦50,000",
-    icon: "+",
-    tint: "#e6f3ec",
-    col: "#1f8a5b",
-    page: "activity",
-  },
+  // NOTE: no Transaction rows here — this catalog feeds the LIVE topbar search,
+  // and a fabricated "Bought USDT · ₦50,000" row would masquerade as the user's
+  // real activity. Real transactions belong to a real search endpoint.
 ]

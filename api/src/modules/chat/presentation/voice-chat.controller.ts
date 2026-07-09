@@ -22,7 +22,9 @@ import {
   TRANSCRIPTION_PORT,
   type ITranscriptionPort,
 } from '../../media/application/ports/transcription.port';
-import type { AppConfig } from '../../../core/config/configuration';
+import configuration, {
+  type AppConfig,
+} from '../../../core/config/configuration';
 
 /** Multer in-memory file shape (no disk write, no @types/multer dep). */
 interface UploadedAudio {
@@ -31,6 +33,21 @@ interface UploadedAudio {
   originalname: string;
   size: number;
 }
+
+/**
+ * Hard stream-time ceiling for the multipart voice upload, enforced by multer
+ * so an oversize body is aborted mid-stream (413) instead of being fully
+ * buffered into RAM before the size check in the handler can reject it.
+ *
+ * FileInterceptor options are fixed at class-decoration time — before DI or
+ * the layered ConfigService exist — so this pins the static JSON default
+ * (media.voice.maxUploadBytes). The per-request check in the handler remains
+ * the authoritative, admin-tunable gate: it can tighten the limit at runtime
+ * (DB-admin layer, root CLAUDE.md §7); raising it ABOVE this static ceiling
+ * requires a deploy, which is acceptable — the ceiling exists to bound memory.
+ */
+const VOICE_UPLOAD_HARD_CEILING_BYTES =
+  configuration().media.voice.maxUploadBytes;
 
 @Controller('chat')
 @UseGuards(JwtAuthGuard)
@@ -44,7 +61,14 @@ export class VoiceChatController {
 
   @Post('voice')
   @HttpCode(200)
-  @UseInterceptors(FileInterceptor('audio'))
+  // Multer's LIMIT_FILE_SIZE is mapped to a 413 PayloadTooLargeException by
+  // @nestjs/platform-express' transformException (an HttpException, so the
+  // global DomainExceptionFilter passes it through — never an opaque 500).
+  @UseInterceptors(
+    FileInterceptor('audio', {
+      limits: { fileSize: VOICE_UPLOAD_HARD_CEILING_BYTES },
+    }),
+  )
   async sendVoice(
     @UploadedFile() file: UploadedAudio | undefined,
     @CurrentUser() user: AuthenticatedUser,

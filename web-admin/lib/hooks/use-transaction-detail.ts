@@ -79,11 +79,6 @@ export function useTransactionDetailScreen(transactionId: string) {
   }
 
   function startAction(kind: TxFlowKind) {
-    if (kind === "receipt") {
-      // Design: no engine flow — just re-send the receipt and confirm via toast.
-      pushToast("Receipt re-sent to the customer", "info")
-      return
-    }
     if (!tx) return
     const next = flowSpecFor(kind, tx)
     if (!next) return

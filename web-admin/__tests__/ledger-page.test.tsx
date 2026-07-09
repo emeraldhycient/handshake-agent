@@ -15,7 +15,7 @@
  *   5. an errored query surfaces the inline error + Retry affordance;
  *   6. the Export button still fires its toast stand-in (Phase 7 write path).
  */
-import { describe, expect, it, vi, beforeEach } from "vitest"
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
@@ -35,6 +35,7 @@ vi.mock("@/lib/download", () => ({
   downloadFile: vi.fn(),
   exportFilename: (subject: string) => `${subject}-export.csv`,
 }))
+vi.mock("@/lib/api/catalog", () => ({ getAdminCatalog: vi.fn() }))
 
 import {
   listGlobalLedger,
@@ -42,8 +43,11 @@ import {
   exportLedger,
 } from "@/lib/api/ledger"
 import { downloadFile } from "@/lib/download"
+import { getAdminCatalog } from "@/lib/api/catalog"
+import { hydrateFiatDisplay } from "@/lib/format"
 
 const mockList = vi.mocked(listGlobalLedger)
+const mockCatalog = vi.mocked(getAdminCatalog)
 const mockIntegrity = vi.mocked(getLedgerIntegrity)
 const mockExport = vi.mocked(exportLedger)
 const mockDownloadFile = vi.mocked(downloadFile)
@@ -98,7 +102,44 @@ beforeEach(() => {
     accountsChecked: 12,
     brokenAccount: null,
   })
+  // The currency-axis options derive from the live catalog read (incl. a
+  // runtime-added fiat + the crypto assets).
+  mockCatalog.mockReset().mockResolvedValue({
+    assets: [
+      {
+        symbol: "USDT",
+        displayName: "Tether USD",
+        kind: "crypto",
+        decimals: 6,
+        networks: ["TRON"],
+        live: true,
+        logoUrl: null,
+      },
+    ],
+    fiats: [
+      {
+        code: "NGN",
+        symbol: "\u20a6",
+        displayName: "Nigerian Naira",
+        decimals: 2,
+        live: true,
+        custom: false,
+      },
+      {
+        code: "XOF",
+        symbol: "CFA",
+        displayName: "West African CFA franc",
+        decimals: 0,
+        live: false,
+        custom: true,
+      },
+    ],
+  })
 })
+
+// The catalog read hydrates the module-level fiat registry — clear it so other
+// tests in this file (and their expectations) see the offline fallback.
+afterEach(() => hydrateFiatDisplay([]))
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -160,6 +201,26 @@ describe("LedgerPage", () => {
     await waitFor(() => {
       const last = mockList.mock.calls.at(-1)
       expect(last?.[0]).toEqual({ accountType: "treasury_reserve", limit: 25 })
+    })
+  })
+
+  it("derives the currency filter options from the catalog (fiats + assets)", async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await waitFor(() => expect(mockList).toHaveBeenCalled())
+
+    // The runtime-added fiat appears once the catalog resolves — no hardcoded list.
+    const select = screen.getByLabelText("Filter by currency")
+    await waitFor(() =>
+      expect(
+        Array.from(select.querySelectorAll("option")).map((o) => o.getAttribute("value"))
+      ).toEqual(["", "NGN", "XOF", "USDT"])
+    )
+
+    await user.selectOptions(select, "XOF")
+    await waitFor(() => {
+      const last = mockList.mock.calls.at(-1)
+      expect(last?.[0]).toEqual({ currency: "XOF", limit: 25 })
     })
   })
 

@@ -215,6 +215,30 @@ describe("NeedsBeneficiaryCard", () => {
     expect(onResolve).toHaveBeenCalledWith("ben-1", "msg-42")
   })
 
+  it("renders the server's targeted note in place of the generic copy (nickname miss)", () => {
+    useBeneficiaries.mockReturnValue({
+      isPending: false,
+      isError: false,
+      data: { beneficiaries: [] },
+    })
+    const note =
+      "No saved beneficiary called 'mum'. Add one first, or pick from your saved list."
+    render(
+      <NeedsBeneficiaryCard
+        kind="needs_beneficiary"
+        beneficiaryType="bank_account"
+        note={note}
+        density="mobile"
+        onResolve={vi.fn()}
+      />
+    )
+    expect(screen.getByText(note)).toBeInTheDocument()
+    // The generic line is replaced, not duplicated.
+    expect(
+      screen.queryByText(/Choose where you'd like the sale paid out/i)
+    ).not.toBeInTheDocument()
+  })
+
   it("shows a loading branch while the list is pending", () => {
     useBeneficiaries.mockReturnValue({
       isPending: true,

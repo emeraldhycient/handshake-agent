@@ -58,6 +58,7 @@ import {
 import type { ProposalService } from '../../transactions/application/proposal.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import { maskBeneficiaryDetail } from '../../beneficiaries/application/beneficiary-display';
 import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
 import { StatementTokenService } from '../../transactions/application/statement-token.service';
 import type { BalanceService } from '../../balances/application/balance.service';
@@ -260,6 +261,9 @@ export class WebChatService {
           outcome = {
             kind: 'currency_not_live',
             currency: intent.fiatCurrency,
+            // Catalog-driven live set so the client copy names what CAN settle
+            // today instead of hardcoding a launch currency.
+            liveCurrencies: this.assetRegistry.enabledFiats(),
           };
           summaryText = `${intent.fiatCurrency} isn't available for settlement yet.`;
           break;
@@ -284,19 +288,20 @@ export class WebChatService {
           outcome = {
             kind: 'currency_not_live',
             currency: intent.fiatCurrency,
+            liveCurrencies: this.assetRegistry.enabledFiats(),
           };
           summaryText = `${intent.fiatCurrency} isn't available for settlement yet.`;
           break;
         }
-        const sellBeneficiary = input.beneficiaryId
-          ? { id: input.beneficiaryId }
-          : await this.beneficiaryService.getDefault(userId, 'bank_account');
-        if (!sellBeneficiary) {
-          outcome = {
-            kind: 'needs_beneficiary',
-            beneficiaryType: 'bank_account',
-          };
-          summaryText = 'Please add a bank account first.';
+        const sellResolution = await this.resolvePayoutBeneficiary(
+          userId,
+          'bank_account',
+          input.beneficiaryId,
+          intent.recipientNickname,
+        );
+        if (!sellResolution.resolved) {
+          outcome = sellResolution.outcome;
+          summaryText = sellResolution.summaryText;
           break;
         }
         try {
@@ -304,7 +309,7 @@ export class WebChatService {
             await this.proposalService.createSellProposal({
               userId,
               intent,
-              beneficiaryId: sellBeneficiary.id,
+              beneficiaryId: sellResolution.beneficiaryId,
             });
           outcome = {
             kind: 'proposal',
@@ -333,15 +338,15 @@ export class WebChatService {
           summaryText = 'KYC required';
           break;
         }
-        const sendBeneficiary = input.beneficiaryId
-          ? { id: input.beneficiaryId }
-          : await this.beneficiaryService.getDefault(userId, 'crypto_address');
-        if (!sendBeneficiary) {
-          outcome = {
-            kind: 'needs_beneficiary',
-            beneficiaryType: 'crypto_address',
-          };
-          summaryText = 'Please add a crypto address first.';
+        const sendResolution = await this.resolvePayoutBeneficiary(
+          userId,
+          'crypto_address',
+          input.beneficiaryId,
+          intent.recipientNickname,
+        );
+        if (!sendResolution.resolved) {
+          outcome = sendResolution.outcome;
+          summaryText = sendResolution.summaryText;
           break;
         }
         try {
@@ -349,7 +354,7 @@ export class WebChatService {
             await this.proposalService.createSendProposal({
               userId,
               intent,
-              beneficiaryId: sendBeneficiary.id,
+              beneficiaryId: sendResolution.beneficiaryId,
             });
           outcome = {
             kind: 'proposal',
@@ -572,6 +577,84 @@ export class WebChatService {
       );
       return [];
     }
+  }
+
+  /**
+   * Resolves WHICH saved beneficiary a sell/send routes to (Wave B — nicknames).
+   *
+   * Precedence:
+   *   1. Explicit `beneficiaryId` from the request body (the user picked one in
+   *      the resolve loop) — always wins.
+   *   2. `recipientNickname` from the intent — a server-resolved LOOKUP KEY
+   *      against the user's OWN saved beneficiaries (§3.1: never an address).
+   *      Exactly one match → use it; several → choose_beneficiary outcome with
+   *      HUMAN-SAFE masked details; none → needs_beneficiary with a targeted
+   *      note. A spoken nickname always beats the silent default — a miss must
+   *      NOT quietly route money to the default recipient.
+   *   3. No nickname: the default beneficiary, else needs_beneficiary.
+   *
+   * Resolution yields only a beneficiaryId; the proposal service and engine
+   * re-validate ownership, type, cooling-off, and sanctions before any money
+   * moves (§3.1/§3.3).
+   */
+  private async resolvePayoutBeneficiary(
+    userId: string,
+    type: 'bank_account' | 'crypto_address',
+    explicitBeneficiaryId: string | undefined,
+    recipientNickname: string | undefined,
+  ): Promise<
+    | { resolved: true; beneficiaryId: string }
+    | { resolved: false; outcome: AgentTurnOutcome; summaryText: string }
+  > {
+    if (explicitBeneficiaryId) {
+      return { resolved: true, beneficiaryId: explicitBeneficiaryId };
+    }
+
+    if (recipientNickname) {
+      const matches = await this.beneficiaryService.resolveByNickname(
+        userId,
+        type,
+        recipientNickname,
+      );
+      if (matches.length === 1) {
+        return { resolved: true, beneficiaryId: matches[0].id };
+      }
+      if (matches.length > 1) {
+        return {
+          resolved: false,
+          outcome: {
+            kind: 'choose_beneficiary',
+            beneficiaryType: type,
+            nickname: recipientNickname,
+            candidates: matches.map((match) => ({
+              id: match.id,
+              label: match.label,
+              detail: maskBeneficiaryDetail(match),
+            })),
+          },
+          summaryText: `You have ${matches.length} saved recipients called '${recipientNickname}'. Which one did you mean?`,
+        };
+      }
+      const note = `No saved beneficiary called '${recipientNickname}'. Add one first, or pick from your saved list.`;
+      return {
+        resolved: false,
+        outcome: { kind: 'needs_beneficiary', beneficiaryType: type, note },
+        summaryText: note,
+      };
+    }
+
+    const fallback = await this.beneficiaryService.getDefault(userId, type);
+    if (fallback) {
+      return { resolved: true, beneficiaryId: fallback.id };
+    }
+    return {
+      resolved: false,
+      outcome: { kind: 'needs_beneficiary', beneficiaryType: type },
+      summaryText:
+        type === 'bank_account'
+          ? 'Please add a bank account first.'
+          : 'Please add a crypto address first.',
+    };
   }
 
   /**

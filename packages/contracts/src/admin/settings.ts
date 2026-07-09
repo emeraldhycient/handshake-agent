@@ -285,6 +285,20 @@ export const SETTING_REGISTRY: readonly SettingRegistryEntry[] = [
     { min: 0, max: 0 },
   ),
 
+  // ── Treasury ────────────────────────────────────────────────────────────────
+  // Large-payout approval threshold per KNOWN fiat, in the payout's OWN currency
+  // (major units): a queued payout whose fiat notional is at/above this must clear
+  // maker-checker before release. A currency with NO configured threshold fails
+  // CLOSED — every payout in it requires approval until an operator sets one.
+  ...KNOWN_FIAT_CURRENCIES.map((code) =>
+    positiveInt(
+      `treasury.largePayoutThresholds.${code}`,
+      "Config",
+      `Large payout threshold (${code})`,
+      `${code} notional at or above which a queued payout/withdrawal requires maker-checker approval before release. Unset = every ${code} payout requires approval (fail-closed).`,
+    ),
+  ),
+
   // ── Catalog capability flags (fail-closed: absent === false) ────────────────
   flag(
     "catalog.capabilities.crypto.buy",

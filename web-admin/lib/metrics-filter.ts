@@ -1,12 +1,8 @@
-import { FIAT_SYMBOLS } from "@/lib/format"
 import { CUSTOM_PRESET_ID } from "@/lib/metrics-range"
 import type { MetricsFilterState } from "@/types/components"
 
-/** Currency options for the metrics filter: All-currencies + one per known fiat. */
-export const CURRENCY_OPTIONS = [
-  { value: "", label: "All currencies" },
-  ...Object.keys(FIAT_SYMBOLS).map((code) => ({ value: code, label: code })),
-]
+// Currency options are NOT a static list here — they derive from the live
+// catalog read via `useCurrencyFilterOptions` so runtime-added fiats appear.
 
 /**
  * Whether the metrics filter differs from its neutral default — i.e. any scoping

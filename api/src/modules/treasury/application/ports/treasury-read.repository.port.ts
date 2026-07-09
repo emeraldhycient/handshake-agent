@@ -93,8 +93,13 @@ export interface TreasurySweepFeed {
 /**
  * A pending outbound settlement awaiting release (Phase 6b, READ-ONLY): a
  * processor payout or on-chain send that has not completed. `amount` is the
- * outbound asset amount; `fiatAmount` is the NGN leg when the asset is crypto,
- * else null. Both are canonical strings; `submittedAt` is a `Date`.
+ * outbound asset amount; `fiatAmount` is the fiat leg (in `fiatCurrency`) when
+ * the asset is crypto, else null. `fiatCurrency` is the currency snapshot from
+ * the transaction metadata — null when the metadata predates currency capture
+ * (the caller falls back to the registry default fiat). The large-payout
+ * approval flag is derived by the SERVICE from the per-currency layered config
+ * (`treasury.largePayoutThresholds`) — config is a service concern, mirroring
+ * the fiat-float target/threshold split. Amounts are canonical strings.
  */
 export interface TreasuryPayoutQueueRecord {
   id: string;
@@ -105,7 +110,7 @@ export interface TreasuryPayoutQueueRecord {
   asset: string;
   amount: string;
   fiatAmount: string | null;
-  requiresApproval: boolean;
+  fiatCurrency: string | null;
   submittedAt: Date;
 }
 

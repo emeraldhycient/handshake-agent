@@ -293,6 +293,30 @@ export const envSchema = z
           'DIRECTIVE_SIGNING_KEY must be non-empty when NODE_ENV=production (flow-token/directive signing is forgeable with an empty key).',
       });
     }
+
+    // 6. An absent RESEND_API_KEY selects the MockEmailProvider, which LOGS
+    //    login OTPs instead of delivering them — an account-takeover oracle for
+    //    anyone with log access. Real email delivery is mandatory in production.
+    if (env.NODE_ENV === 'production' && env.RESEND_API_KEY === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['RESEND_API_KEY'],
+        message:
+          'RESEND_API_KEY must be non-empty when NODE_ENV=production (the mock email provider logs login OTPs — an account-takeover oracle).',
+      });
+    }
+
+    // 7. FLUTTERWAVE_SCENARIO_KEY is a SANDBOX-ONLY simulation header
+    //    (X-Scenario-Key): if it leaked into production, collections would be
+    //    simulated instead of settling real money. It must be empty in prod.
+    if (env.NODE_ENV === 'production' && env.FLUTTERWAVE_SCENARIO_KEY !== '') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['FLUTTERWAVE_SCENARIO_KEY'],
+        message:
+          'FLUTTERWAVE_SCENARIO_KEY must be empty when NODE_ENV=production (it is a sandbox-only pay-in simulation header).',
+      });
+    }
   });
 
 export type Env = z.infer<typeof envSchema>;

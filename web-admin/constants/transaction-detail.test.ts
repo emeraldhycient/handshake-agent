@@ -34,13 +34,14 @@ describe("STATUS_LABEL / RECON_KIND_LABEL", () => {
 })
 
 describe("TX_ACTIONS", () => {
-  it("lists the five triage actions with Mark failed the only danger action", () => {
+  it("lists the four real triage actions with Mark failed the only danger action", () => {
+    // "Resend receipt" was removed: no resend endpoint exists, so the button was
+    // a fake-success toast. It returns only once a real endpoint backs it.
     expect(TX_ACTIONS.map((a) => a.kind)).toEqual([
       "retry",
       "refund",
       "markFailed",
       "recon",
-      "receipt",
     ])
     expect(TX_ACTIONS.filter((a) => a.danger).map((a) => a.kind)).toEqual([
       "markFailed",

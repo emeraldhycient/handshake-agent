@@ -17,6 +17,7 @@ import type { NeedsBeneficiaryCardProps } from "@/types/components"
 
 export function NeedsBeneficiaryCard({
   beneficiaryType,
+  note,
   messageId,
   onResolve,
   density,
@@ -40,9 +41,12 @@ export function NeedsBeneficiaryCard({
             isMobile ? "text-[13px]" : "text-[12px]"
           )}
         >
-          {isBank
-            ? "Choose where you'd like the sale paid out, or add a new bank account."
-            : "Choose where to send your crypto, or add a new address."}
+          {/* The server's targeted copy (e.g. a nickname that matched nothing)
+              replaces the generic line when present. */}
+          {note ??
+            (isBank
+              ? "Choose where you'd like the sale paid out, or add a new bank account."
+              : "Choose where to send your crypto, or add a new address.")}
         </p>
       </div>
 

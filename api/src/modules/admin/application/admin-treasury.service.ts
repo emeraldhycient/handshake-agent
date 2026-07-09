@@ -17,6 +17,7 @@ import type {
 } from '@handshake-agent/contracts';
 
 import { AuditService } from '../../../core/audit/application/audit.service';
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import {
   TREASURY_READ_REPOSITORY,
@@ -25,6 +26,7 @@ import {
   type TreasuryAlertRecord,
   type TreasuryFiatFloatRecord,
   type TreasuryFxPositionRecord,
+  type TreasuryPayoutQueueRecord,
 } from '../../treasury/application/ports/treasury-read.repository.port';
 import { AdminNotFoundError } from '../domain/admin-errors';
 
@@ -32,6 +34,15 @@ import { AdminNotFoundError } from '../domain/admin-errors';
 // documented constant so the endpoint stays live before the keys are seeded.
 const FIAT_FLOAT_TARGETS_KEY = 'treasury.fiatFloatTargets';
 const LOW_FLOAT_THRESHOLD_BPS_KEY = 'treasury.lowFloatThresholdBps';
+/**
+ * Per-currency large-payout approval thresholds (major units, keyed by fiat code).
+ * A queued payout whose fiat notional — in its OWN currency — is at/above the
+ * threshold must clear maker-checker before release. FAIL-CLOSED: a currency with
+ * no configured threshold flags EVERY payout for approval until an operator sets
+ * one (registered per-currency in SETTING_REGISTRY as
+ * `treasury.largePayoutThresholds.<CODE>`; JSON defaults in configuration.ts).
+ */
+const LARGE_PAYOUT_THRESHOLDS_KEY = 'treasury.largePayoutThresholds';
 /** Default low-float floor when unset: a float under 25% of target is "low". */
 const DEFAULT_LOW_FLOAT_THRESHOLD_BPS = 2500;
 /** Basis-point scale (100% = 10 000 bps). */
@@ -54,6 +65,7 @@ export class AdminTreasuryService {
     private readonly treasury: ITreasuryReadRepository,
     private readonly audit: AuditService,
     private readonly config: EffectiveConfigService,
+    private readonly registry: AssetRegistry,
   ) {}
 
   // ── balances ─────────────────────────────────────────────────────────────────
@@ -170,23 +182,14 @@ export class AdminTreasuryService {
 
   async listPayoutQueue(): Promise<TreasuryPayoutQueueResponse> {
     const rows = await this.treasury.listPayoutQueue();
+    const thresholds = this.largePayoutThresholds();
+    const defaultFiat = this.registry.defaultFiat();
     return {
-      items: rows.map((r) => ({
-        id: r.id,
-        transactionId: r.transactionId,
-        beneficiaryLabel: r.beneficiaryLabel,
-        reference: r.reference,
-        method: r.method,
-        asset: r.asset,
-        amount: r.amount,
-        fiatAmount: r.fiatAmount,
-        requiresApproval: r.requiresApproval,
-        submittedAt: r.submittedAt.toISOString(),
-      })),
+      items: rows.map((r) => this.toPayoutItem(r, thresholds, defaultFiat)),
     };
   }
 
-  // ── NGN fiat float vs configured target (Phase 6b, READ) ─────────────────────────
+  // ── Per-currency fiat float vs configured target (Phase 6b, READ) ────────────────
 
   async listFiatFloat(): Promise<TreasuryFiatFloatResponse> {
     const rows = await this.treasury.listFiatFloat();
@@ -217,6 +220,50 @@ export class AdminTreasuryService {
         FIAT_FLOAT_TARGETS_KEY,
       ) ?? {}
     );
+  }
+
+  /** Configured per-currency large-payout thresholds (admin-tunable; absent → {}). */
+  private largePayoutThresholds(): Record<string, number> {
+    return (
+      this.config.get<Record<string, number> | undefined>(
+        LARGE_PAYOUT_THRESHOLDS_KEY,
+      ) ?? {}
+    );
+  }
+
+  /**
+   * Maps a payout record to its wire item, deriving the maker-checker flag against
+   * the threshold FOR THE PAYOUT'S OWN CURRENCY. The notional is the metadata fiat
+   * leg when present; when the payout asset IS the fiat itself, the amount is
+   * already fiat. FAIL-CLOSED (§3.6): no configured threshold for the currency →
+   * requiresApproval, whatever the size — an operator must set a threshold before
+   * any payout in that currency auto-clears the queue.
+   */
+  private toPayoutItem(
+    r: TreasuryPayoutQueueRecord,
+    thresholds: Record<string, number>,
+    defaultFiat: string,
+  ): TreasuryPayoutQueueResponse['items'][number] {
+    const fiatCurrency = r.fiatCurrency ?? defaultFiat;
+    const threshold = thresholds[fiatCurrency];
+    const fiatNotional = Number(
+      r.fiatAmount ?? (r.asset === fiatCurrency ? r.amount : '0'),
+    );
+    const requiresApproval =
+      threshold === undefined ? true : fiatNotional >= threshold;
+    return {
+      id: r.id,
+      transactionId: r.transactionId,
+      beneficiaryLabel: r.beneficiaryLabel,
+      reference: r.reference,
+      method: r.method,
+      asset: r.asset,
+      amount: r.amount,
+      fiatAmount: r.fiatAmount,
+      fiatCurrency,
+      requiresApproval,
+      submittedAt: r.submittedAt.toISOString(),
+    };
   }
 
   /** Configured low-float floor in bps (admin-tunable; absent → default). */

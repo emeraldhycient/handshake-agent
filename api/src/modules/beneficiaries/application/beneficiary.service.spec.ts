@@ -102,6 +102,7 @@ describe('BeneficiaryService', () => {
       clearCoolingOff: jest.fn(),
       findActiveDuplicate: jest.fn().mockResolvedValue(null),
       softDelete: jest.fn(),
+      findByLabel: jest.fn(),
     };
 
     nameEnquiry = {
@@ -533,6 +534,63 @@ describe('BeneficiaryService', () => {
       const result = await service.getById('user-id-1', 'ben-id-missing');
 
       expect(result).toBeNull();
+    });
+  });
+
+  // ── resolveByNickname (Wave B — beneficiary nicknames) ─────────────────────
+
+  describe('resolveByNickname', () => {
+    it('delegates to repo.findByLabel scoped by user + type and returns the matches', async () => {
+      const matches = [makeRecord(), makeRecord({ id: 'ben-id-3' })];
+      repo.findByLabel.mockResolvedValue(matches);
+
+      const result = await service.resolveByNickname(
+        'user-id-1',
+        'bank_account',
+        'GTB Savings',
+      );
+
+      expect(repo.findByLabel).toHaveBeenCalledWith(
+        'user-id-1',
+        'GTB Savings',
+        'bank_account',
+      );
+      expect(result).toBe(matches);
+    });
+
+    it('trims the nickname before the lookup', async () => {
+      repo.findByLabel.mockResolvedValue([]);
+
+      await service.resolveByNickname('user-id-1', 'crypto_address', '  mum  ');
+
+      expect(repo.findByLabel).toHaveBeenCalledWith(
+        'user-id-1',
+        'mum',
+        'crypto_address',
+      );
+    });
+
+    it('returns an empty array when nothing matches', async () => {
+      repo.findByLabel.mockResolvedValue([]);
+
+      const result = await service.resolveByNickname(
+        'user-id-1',
+        'bank_account',
+        'ghost',
+      );
+
+      expect(result).toEqual([]);
+    });
+
+    it('returns an empty array without hitting the repo for a blank nickname', async () => {
+      const result = await service.resolveByNickname(
+        'user-id-1',
+        'bank_account',
+        '   ',
+      );
+
+      expect(result).toEqual([]);
+      expect(repo.findByLabel).not.toHaveBeenCalled();
     });
   });
 

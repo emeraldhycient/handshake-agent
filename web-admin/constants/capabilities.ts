@@ -10,7 +10,7 @@ export const PRESENTATION: readonly CapabilityPresentation[] = [
   {
     settingKey: "catalog.capabilities.crypto.buy",
     label: "crypto.buy",
-    desc: "Buy USDT/TRX with NGN",
+    desc: "Buy USDT/TRX with fiat",
     provider: "Blockradar",
     tone: "success",
     // coin / currency mark
@@ -19,7 +19,7 @@ export const PRESENTATION: readonly CapabilityPresentation[] = [
   {
     settingKey: "catalog.capabilities.crypto.sell",
     label: "crypto.sell",
-    desc: "Sell crypto to NGN payout",
+    desc: "Sell crypto to fiat payout",
     provider: "Blockradar + Flutterwave",
     tone: "info",
     // bank / payout mark

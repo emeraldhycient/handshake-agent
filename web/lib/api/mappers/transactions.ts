@@ -2,6 +2,7 @@ import type {
   TransactionListResponse,
   TransactionListItem,
 } from "@handshake-agent/contracts"
+import { DISPLAY_LOCALE } from "@/lib/format"
 import { formatCryptoAmount, formatFiatAmount } from "@/lib/format/money"
 import type { ActivityGroup, ActivityItem, StatusTone } from "@/lib/schemas"
 
@@ -71,12 +72,12 @@ function groupLabel(d: Date, now: Date): string {
   const y = new Date(now)
   y.setDate(now.getDate() - 1)
   if (sameDay(d, y)) return "Yesterday"
-  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })
+  return d.toLocaleDateString(DISPLAY_LOCALE, { day: "numeric", month: "short" })
 }
 
 function timeLabel(d: Date): string {
   return d
-    .toLocaleTimeString("en-GB", {
+    .toLocaleTimeString(DISPLAY_LOCALE, {
       hour: "numeric",
       minute: "2-digit",
       hour12: true,

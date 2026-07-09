@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { MetricsFilterState } from "@/types/components"
 
-import { CURRENCY_OPTIONS, isFilterActive } from "./metrics-filter"
+import { isFilterActive } from "./metrics-filter"
 
 const BASE: MetricsFilterState = {
   presetId: "30d",
@@ -25,17 +25,5 @@ describe("isFilterActive", () => {
 
   it("is true when a custom date range is chosen (presetId = custom)", () => {
     expect(isFilterActive({ ...BASE, presetId: "custom" })).toBe(true)
-  })
-})
-
-describe("CURRENCY_OPTIONS", () => {
-  it("leads with an All-currencies option then one per known fiat", () => {
-    expect(CURRENCY_OPTIONS[0]).toEqual({ value: "", label: "All currencies" })
-    expect(CURRENCY_OPTIONS.length).toBeGreaterThan(1)
-    // Every non-empty option uses the same code for value + label.
-    for (const opt of CURRENCY_OPTIONS.slice(1)) {
-      expect(opt.value).toBe(opt.label)
-      expect(opt.value).not.toBe("")
-    }
   })
 })

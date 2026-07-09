@@ -19,6 +19,7 @@ import {
   AdminEndUserTierRequestSchema,
   AdminEndUserStatusRequestSchema,
   AdminEndUserSessionListResponseSchema,
+  AdminEndUserLimitsQuerySchema,
   AdminEndUserLimitsResponseSchema,
   AdminEndUserTimelineResponseSchema,
   ApplyUserTagsRequestSchema,
@@ -111,11 +112,20 @@ export async function listEndUserSessions(
   return AdminEndUserSessionListResponseSchema.parse(res.data).sessions
 }
 
-/** GET /admin/users/:id/limits — effective per-tier caps + live velocity usage (Limits tab). */
+/**
+ * GET /admin/users/:id/limits — effective per-tier caps + live velocity usage
+ * (Limits tab). `currency` scopes the caps + usage to a specific catalog fiat;
+ * omitted → the registry default. The query is parsed through the contract
+ * schema before the request fires (§8); the server re-validates fail-closed.
+ */
 export async function getEndUserLimits(
-  id: string
+  id: string,
+  currency?: string
 ): Promise<AdminEndUserLimitsResponse> {
-  const res = await api.get(`/admin/users/${id}/limits`)
+  const query = AdminEndUserLimitsQuerySchema.parse(
+    currency === undefined ? {} : { currency }
+  )
+  const res = await api.get(`/admin/users/${id}/limits`, { params: query })
   return AdminEndUserLimitsResponseSchema.parse(res.data)
 }
 

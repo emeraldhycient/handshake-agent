@@ -36,6 +36,7 @@ export function LedgerPage() {
         currency={l.currency}
         onAccount={l.setAccount}
         onCurrency={l.setCurrency}
+        currencyOptions={l.currencyOptions}
         exporting={l.exporting}
         onExport={() => void l.exportLedger()}
         isLoading={l.ledger.isLoading}

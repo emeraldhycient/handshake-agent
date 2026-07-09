@@ -166,6 +166,26 @@ export class BeneficiaryPrismaRepository implements IBeneficiaryRepository {
     return row ? toRecord(row) : null;
   }
 
+  async findByLabel(
+    userId: string,
+    label: string,
+    type?: 'bank_account' | 'crypto_address',
+  ): Promise<BeneficiaryRecord[]> {
+    const rows = await this.prisma.beneficiary.findMany({
+      where: {
+        userId,
+        deletedAt: null,
+        // Case-insensitive EXACT match (equals, not contains) — "mum" must not
+        // match "mum's friend".
+        label: { equals: label, mode: 'insensitive' },
+        ...(type ? { type: type as never } : {}),
+      },
+      select: SELECT,
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    });
+    return rows.map(toRecord);
+  }
+
   // ── Admin oversight (Phase 3, sub-area D) ───────────────────────────────────
 
   async listAll(page: { limit: number }): Promise<BeneficiaryRecord[]> {

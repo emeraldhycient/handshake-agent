@@ -1,5 +1,6 @@
 import { createZodDto } from 'nestjs-zod';
 import {
+  AdminEndUserLimitsQuerySchema,
   AdminEndUserSearchQuerySchema,
   AdminEndUserStatusRequestSchema,
   AdminEndUserTierRequestSchema,
@@ -14,6 +15,11 @@ import {
 /** Query DTO for GET /admin/users (search + status/tier filter + cursor). */
 export class AdminEndUserSearchQueryDto extends createZodDto(
   AdminEndUserSearchQuerySchema,
+) {}
+
+/** Query DTO for GET /admin/users/:id/limits (?currency= optional fiat code). */
+export class AdminEndUserLimitsQueryDto extends createZodDto(
+  AdminEndUserLimitsQuerySchema,
 ) {}
 
 /** Request DTO for PATCH /admin/users/:id/tier. */

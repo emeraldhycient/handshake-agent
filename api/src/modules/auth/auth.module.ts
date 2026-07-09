@@ -4,11 +4,14 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 
 import { PrismaModule } from '../../core/prisma/prisma.module';
+import { AuthModule as CoreAuthModule } from '../../core/auth/auth.module';
 import { AuthService } from './application/auth.service';
 import { TokenService } from './application/token.service';
+import { PatService } from './application/pat.service';
 import { AUTH_CHALLENGE_REPOSITORY } from './application/ports/auth-challenge.repository.port';
 import { AUTH_SESSION_REPOSITORY } from './application/ports/auth-session.repository.port';
 import { AUTH_USER_REPOSITORY } from './application/ports/auth-user.repository.port';
+import { PAT_REPOSITORY } from './application/ports/pat.repository.port';
 import {
   EMAIL_PROVIDER,
   type IEmailProvider,
@@ -16,10 +19,14 @@ import {
 import { AuthChallengePrismaRepository } from './infrastructure/auth-challenge.prisma.repository';
 import { AuthSessionPrismaRepository } from './infrastructure/auth-session.prisma.repository';
 import { AuthUserPrismaRepository } from './infrastructure/auth-user.prisma.repository';
+import { PatPrismaRepository } from './infrastructure/pat.prisma.repository';
 import { MockEmailProvider } from './infrastructure/mock-email.provider';
 import { ResendEmailProvider } from './infrastructure/resend-email.provider';
 import { AuthController } from './presentation/auth.controller';
+import { PatController } from './presentation/pat.controller';
 import { JwtAuthGuard } from './presentation/jwt-auth.guard';
+import { PatAuthGuard } from './presentation/pat-auth.guard';
+import { PatScopesGuard } from './presentation/pat-scopes.guard';
 
 /**
  * Selects the active email adapter from the layered config.
@@ -40,12 +47,17 @@ export function selectEmailProvider(
 }
 
 @Module({
-  imports: [PrismaModule, HttpModule, JwtModule.register({})],
-  controllers: [AuthController],
+  // CoreAuthModule provides the lockout-protected PinService (PAT minting is
+  // PIN-gated, Wave C).
+  imports: [PrismaModule, CoreAuthModule, HttpModule, JwtModule.register({})],
+  controllers: [AuthController, PatController],
   providers: [
     AuthService,
     TokenService,
+    PatService,
     JwtAuthGuard,
+    PatAuthGuard,
+    PatScopesGuard,
     MockEmailProvider,
     ResendEmailProvider,
     {
@@ -59,9 +71,20 @@ export function selectEmailProvider(
     },
     { provide: AUTH_USER_REPOSITORY, useClass: AuthUserPrismaRepository },
     { provide: AUTH_SESSION_REPOSITORY, useClass: AuthSessionPrismaRepository },
+    { provide: PAT_REPOSITORY, useClass: PatPrismaRepository },
   ],
   // Exported so later modules (web chat/exec) can apply JwtAuthGuard + resolve sessions.
   // AuthService is exported so the identity ProfileService can reuse its `me()` projection.
-  exports: [JwtAuthGuard, TokenService, AUTH_SESSION_REPOSITORY, AuthService],
+  // PatAuthGuard/PatScopesGuard/PAT_REPOSITORY are exported for the MCP module —
+  // the ONLY surface PATs authenticate (never wired into JwtAuthGuard, §3.5).
+  exports: [
+    JwtAuthGuard,
+    TokenService,
+    AUTH_SESSION_REPOSITORY,
+    AuthService,
+    PatAuthGuard,
+    PatScopesGuard,
+    PAT_REPOSITORY,
+  ],
 })
 export class WebAuthModule {}

@@ -16,6 +16,8 @@ export interface TravelRuleRecord {
   asset: string;
   amount: string;
   amountFiat: string;
+  /** The fiat currency `amountFiat` was valued in at capture time (snapshot). */
+  fiatCurrency: string;
   triggeringFactor: string;
   capturedAt: Date;
   reportedAt: Date | null;

@@ -13,6 +13,7 @@ import { ModelGuardrailsCard } from "@/components/admin/agent/model-guardrails-c
 import { PromptVersionsCard } from "@/components/admin/agent/prompt-versions-card"
 import { ToolRegistryCard } from "@/components/admin/agent/tool-registry-card"
 import { CostUsageCard } from "@/components/admin/agent/cost-usage-card"
+import { ConversationsCard } from "@/components/admin/agent/conversations-card"
 
 export function AgentPage() {
   return (
@@ -38,10 +39,13 @@ export function AgentPage() {
       </div>
 
       {/* Row 2 · 1.4fr 1fr */}
-      <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-[1.4fr_1fr]">
+      <div className="mb-3.5 grid grid-cols-1 gap-3.5 lg:grid-cols-[1.4fr_1fr]">
         <ToolRegistryCard />
         <CostUsageCard />
       </div>
+
+      {/* Row 3 · the conversation/intent log + read-only drawer */}
+      <ConversationsCard />
     </div>
   )
 }

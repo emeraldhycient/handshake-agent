@@ -1,5 +1,6 @@
 import type { EffectiveSetting } from "@handshake-agent/contracts"
 
+import { formatFiat } from "@/lib/format"
 import { BASE_RATE_RE, PRICED_ASSETS } from "@/constants/pricing"
 import type {
   AddPriceOption,
@@ -18,24 +19,9 @@ export function num(setting: EffectiveSetting | undefined): number | null {
   return setting && typeof setting.value === "number" ? setting.value : null
 }
 
-/** A fiat rate shown in `currency` — ₦ for Naira, ISO-code suffix otherwise. */
-export function fiatRate(currency: string, rate: number): string {
-  const n = rate.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
-  return currency === "NGN" ? `₦${n}` : `${n} ${currency}`
-}
-
 /** A base rate label — "1,375 NGN" / "19.5 GHS" (up to 6 dp, code-suffixed). */
 export function formatRate(code: string, n: number): string {
   return `${n.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${code}`
-}
-
-/** Compact fiat bound (no forced decimals) — "₦5,000,000" / "5,000,000 GHS". */
-export function formatBound(currency: string, n: number): string {
-  const v = n.toLocaleString(undefined, { maximumFractionDigits: 2 })
-  return currency === "NGN" ? `₦${v}` : `${v} ${currency}`
 }
 
 /** Parse the captured value: a finite non-negative number (whole when `integer`). */
@@ -76,7 +62,7 @@ export function buildSpreadRows(
       if (baseRate === null || spreadBps === null) return "—"
       const factor =
         dir === "buy" ? 1 + spreadBps / 10_000 : 1 - spreadBps / 10_000
-      return fiatRate(currency, baseRate * factor)
+      return formatFiat(baseRate * factor, currency)
     }
     const margin = (spreadBps: number | null) => {
       const spreadPct = spreadBps === null ? 0 : spreadBps / 100

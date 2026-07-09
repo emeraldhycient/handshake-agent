@@ -348,7 +348,9 @@ describe("TransactionDetail (read-wired)", () => {
     await user.click(screen.getByRole("button", { name: "Refund" }))
     await user.type(screen.getByLabelText("Reason"), "Duplicate charge")
     await user.click(screen.getByRole("button", { name: "Continue" }))
-    // The maker-checker modal (dual-control) is what a refund submits through.
+    // The maker-checker modal is what a refund submits through — and because a
+    // refund REALLY raises a change request, it carries the dual-control copy.
+    expect(screen.getByText(/pending approval/i)).toBeInTheDocument()
     await user.click(
       screen.getByRole("button", { name: "Submit for approval" })
     )
@@ -516,15 +518,12 @@ describe("TransactionDetail (read-wired)", () => {
     expect(mockCreateChange).not.toHaveBeenCalled()
   })
 
-  it("Resend receipt is a local confirmation — it fires no mutation", async () => {
-    const user = userEvent.setup()
+  it("offers no Resend receipt action (no resend endpoint exists — no fake success)", async () => {
     renderDetail()
     await screen.findByText(TXN_ID)
 
-    await user.click(screen.getByRole("button", { name: "Resend receipt" }))
-
-    expect(mockRetry).not.toHaveBeenCalled()
-    expect(mockMarkFailed).not.toHaveBeenCalled()
-    expect(mockCreateChange).not.toHaveBeenCalled()
+    expect(
+      screen.queryByRole("button", { name: "Resend receipt" })
+    ).not.toBeInTheDocument()
   })
 })

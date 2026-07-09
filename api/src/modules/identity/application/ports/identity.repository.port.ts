@@ -60,6 +60,17 @@ export interface OriginatorIdentityRecord {
   email: string | null;
 }
 
+/**
+ * User-editable profile settings (Wave C web settings page). Contact/display
+ * preferences only — NEVER identity or auth anchors (§3.4).
+ */
+export interface ProfileSettingsRecord {
+  /** User-set contact phone; null = fall back to the WhatsApp routing number. */
+  profilePhone: string | null;
+  /** Preferred display fiat (catalog-validated); null = catalog default. */
+  preferredFiatCurrency: string | null;
+}
+
 /** The subset of Contact fields needed for identity resolution. */
 export interface ContactRecord {
   id: string;
@@ -240,6 +251,24 @@ export interface IIdentityRepository {
   findOriginatorIdentity(
     userId: string,
   ): Promise<OriginatorIdentityRecord | null>;
+
+  /**
+   * Returns the user's editable profile settings, or null when no User row
+   * exists. Used by ProfileService to prefer the user-set phone/fiat over the
+   * derived defaults.
+   */
+  findProfileSettings(userId: string): Promise<ProfileSettingsRecord | null>;
+
+  /**
+   * Persists the provided profile settings (partial patch — only the supplied
+   * keys are written). Values are validated by the APPLICATION layer before
+   * this is called (phone shape by the contract schema; fiat against the live
+   * AssetRegistry catalog, §3.3).
+   */
+  updateProfileSettings(
+    userId: string,
+    patch: { profilePhone?: string; preferredFiatCurrency?: string },
+  ): Promise<void>;
 
   /**
    * Creates a Contact + a linked ChannelIdentity in a single transaction.

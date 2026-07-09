@@ -249,7 +249,7 @@ describe("ReconciliationPage (wired)", () => {
     await user.click(screen.getByRole("button", { name: /Continue/ }))
     // Maker-checker submit → the REAL accept mutation fires.
     await user.click(
-      screen.getByRole("button", { name: /Submit for approval/i })
+      screen.getByRole("button", { name: /Confirm change/i })
     )
 
     await waitFor(() => {

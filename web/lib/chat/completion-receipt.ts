@@ -1,4 +1,4 @@
-import { formatFiat } from "@/lib/format"
+import { DISPLAY_LOCALE, formatFiat } from "@/lib/format"
 import type { ChatAction, ConfirmPayload } from "@/lib/schemas"
 import type { TransactionStatusResponse } from "@handshake-agent/contracts"
 
@@ -24,7 +24,7 @@ export function buildCompletionReceipt(
   pending: ConfirmPayload,
   tx: TransactionStatusResponse
 ) {
-  const date = new Date(tx.createdAt).toLocaleString("en-NG")
+  const date = new Date(tx.createdAt).toLocaleString(DISPLAY_LOCALE)
   const txRef = tx.receiptNumber
     ? `REF · ${tx.receiptNumber}`
     : `TX · ${tx.id.slice(0, 8)}`

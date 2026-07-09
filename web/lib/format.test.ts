@@ -1,30 +1,22 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import {
-  formatNGN,
+  DISPLAY_LOCALE,
   formatFiat,
   fiatSymbolFor,
   formatCountdown,
   formatCrypto,
+  hydrateFiatDisplay,
 } from "./format"
 
-describe("formatNGN", () => {
-  it("formats a number with ₦ prefix, commas, and 2 decimal places", () => {
-    expect(formatNGN(50000)).toBe("₦50,000.00")
-    expect(formatNGN("30000")).toBe("₦30,000.00")
-    expect(formatNGN("1234567.89")).toBe("₦1,234,567.89")
-    expect(formatNGN(0)).toBe("₦0.00")
-  })
+// The registry is module-level state — always restore the offline fallback so
+// test order can never leak configured symbols between cases.
+afterEach(() => {
+  hydrateFiatDisplay([])
+})
 
-  it("returns ₦— for NaN / non-finite values", () => {
-    expect(formatNGN("abc")).toBe("₦—")
-    expect(formatNGN(NaN)).toBe("₦—")
-    expect(formatNGN(Infinity)).toBe("₦—")
-    expect(formatNGN(-Infinity)).toBe("₦—")
-  })
-
-  it("handles string numeric input", () => {
-    expect(formatNGN("1000")).toBe("₦1,000.00")
-    expect(formatNGN("0.5")).toBe("₦0.50")
+describe("DISPLAY_LOCALE", () => {
+  it("is the single neutral display locale (en-GB) shared by every formatter", () => {
+    expect(DISPLAY_LOCALE).toBe("en-GB")
   })
 })
 
@@ -38,6 +30,11 @@ describe("fiatSymbolFor", () => {
 
   it("falls back to the code itself for an unknown currency", () => {
     expect(fiatSymbolFor("XOF")).toBe("XOF")
+  })
+
+  it("prefers a /config-hydrated symbol over the static fallback", () => {
+    hydrateFiatDisplay([{ code: "NGN", symbol: "N₦", decimals: 2 }])
+    expect(fiatSymbolFor("NGN")).toBe("N₦")
   })
 })
 
@@ -56,6 +53,35 @@ describe("formatFiat (multi-currency precise formatter)", () => {
     expect(formatFiat("abc", "NGN")).toBe("₦—")
     expect(formatFiat(NaN, "GHS")).toBe("GH₵—")
     expect(formatFiat(Infinity, "XOF")).toBe("XOF —")
+  })
+})
+
+describe("formatFiat with a hydrated /config registry", () => {
+  it("uses the configured symbol for a code the static map does not know", () => {
+    hydrateFiatDisplay([{ code: "XOF", symbol: "CFA", decimals: 2 }])
+    expect(formatFiat("1000", "XOF")).toBe("CFA1,000.00")
+  })
+
+  it("honours the configured decimals (0-decimal currency)", () => {
+    hydrateFiatDisplay([{ code: "UGX", symbol: "USh", decimals: 0 }])
+    expect(formatFiat("50000", "UGX")).toBe("USh50,000")
+  })
+
+  it("configured entries win over the static fallback map", () => {
+    hydrateFiatDisplay([{ code: "GHS", symbol: "₵", decimals: 2 }])
+    expect(formatFiat("20000", "GHS")).toBe("₵20,000.00")
+  })
+
+  it("re-hydration replaces the whole registry (dropped codes fall back)", () => {
+    hydrateFiatDisplay([{ code: "GHS", symbol: "₵", decimals: 2 }])
+    hydrateFiatDisplay([{ code: "NGN", symbol: "₦", decimals: 2 }])
+    // GHS is no longer configured → falls back to the static map.
+    expect(formatFiat("20000", "GHS")).toBe("GH₵20,000.00")
+  })
+
+  it("codes absent from both registry and static map still use the code prefix", () => {
+    hydrateFiatDisplay([{ code: "NGN", symbol: "₦", decimals: 2 }])
+    expect(formatFiat("1000", "EUR")).toBe("EUR 1,000.00")
   })
 })
 

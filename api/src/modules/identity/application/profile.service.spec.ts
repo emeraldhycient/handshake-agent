@@ -17,7 +17,20 @@ function makeConfig(limits: unknown = limitsConfig): EffectiveConfigService {
 }
 
 const config = makeConfig();
-const registry = { defaultFiat: () => 'NGN' };
+const registry = {
+  defaultFiat: () => 'NGN',
+  isCurrencyLive: (code: string) => code === 'NGN' || code === 'GHS',
+};
+
+/** Identity stub — settings default to null (no user-set phone/fiat). */
+function makeIdentity(overrides: Record<string, jest.Mock> = {}) {
+  return {
+    findKycProfile: jest.fn().mockResolvedValue(null),
+    findWhatsAppAddressByUserId: jest.fn().mockResolvedValue(null),
+    findProfileSettings: jest.fn().mockResolvedValue(null),
+    ...overrides,
+  };
+}
 
 describe('ProfileService', () => {
   it('composes email + name + phone + tier limits for a verified user', async () => {
@@ -30,14 +43,14 @@ describe('ProfileService', () => {
         hasPin: true,
       }),
     };
-    const identity = {
+    const identity = makeIdentity({
       findKycProfile: jest
         .fn()
         .mockResolvedValue({ firstName: 'Amara', lastName: 'Okeke' }),
       findWhatsAppAddressByUserId: jest
         .fn()
         .mockResolvedValue('+2348011112222'),
-    };
+    });
     const svc = new ProfileService(
       auth as never,
       identity as never,
@@ -71,10 +84,7 @@ describe('ProfileService', () => {
         hasPin: false,
       }),
     };
-    const identity = {
-      findKycProfile: jest.fn().mockResolvedValue(null),
-      findWhatsAppAddressByUserId: jest.fn().mockResolvedValue(null),
-    };
+    const identity = makeIdentity();
     const svc = new ProfileService(
       auth as never,
       identity as never,
@@ -101,12 +111,11 @@ describe('ProfileService', () => {
         hasPin: true,
       }),
     };
-    const identity = {
+    const identity = makeIdentity({
       findKycProfile: jest
         .fn()
         .mockResolvedValue({ firstName: 'Amara', lastName: null }),
-      findWhatsAppAddressByUserId: jest.fn().mockResolvedValue(null),
-    };
+    });
     const svc = new ProfileService(
       auth as never,
       identity as never,
@@ -142,12 +151,11 @@ describe('ProfileService', () => {
         hasPin: true,
       }),
     };
-    const identity = {
+    const identity = makeIdentity({
       findKycProfile: jest
         .fn()
         .mockResolvedValue({ firstName: 'Amara', lastName: 'Okeke' }),
-      findWhatsAppAddressByUserId: jest.fn().mockResolvedValue(null),
-    };
+    });
     const svc = new ProfileService(
       auth as never,
       identity as never,
@@ -161,5 +169,63 @@ describe('ProfileService', () => {
       dailyFiatMax: 8888888,
       dailyTxCountMax: 77,
     });
+  });
+
+  it('prefers the user-set phone and a LIVE preferred fiat over the defaults', async () => {
+    const auth = {
+      me: jest.fn().mockResolvedValue({
+        userId: 'u1',
+        email: 'a@b.com',
+        kycStatus: 'verified',
+        kycTier: 'tier_1',
+        hasPin: true,
+      }),
+    };
+    const identity = makeIdentity({
+      findWhatsAppAddressByUserId: jest
+        .fn()
+        .mockResolvedValue('+2348011112222'),
+      findProfileSettings: jest.fn().mockResolvedValue({
+        profilePhone: '+2348099998888',
+        preferredFiatCurrency: 'GHS',
+      }),
+    });
+    const svc = new ProfileService(
+      auth as never,
+      identity as never,
+      config,
+      registry as never,
+    );
+
+    const out = await svc.getProfile('u1');
+    expect(out.phone).toBe('+2348099998888');
+    expect(out.fiatCurrency).toBe('GHS');
+  });
+
+  it('falls back to the default fiat when the preferred one is no longer live (fail-safe)', async () => {
+    const auth = {
+      me: jest.fn().mockResolvedValue({
+        userId: 'u1',
+        email: 'a@b.com',
+        kycStatus: 'verified',
+        kycTier: 'tier_1',
+        hasPin: true,
+      }),
+    };
+    const identity = makeIdentity({
+      findProfileSettings: jest.fn().mockResolvedValue({
+        profilePhone: null,
+        preferredFiatCurrency: 'XOF',
+      }),
+    });
+    const svc = new ProfileService(
+      auth as never,
+      identity as never,
+      config,
+      registry as never,
+    );
+
+    const out = await svc.getProfile('u1');
+    expect(out.fiatCurrency).toBe('NGN');
   });
 });

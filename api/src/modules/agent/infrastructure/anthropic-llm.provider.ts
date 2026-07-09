@@ -132,7 +132,7 @@ export class AnthropicLlmProvider implements LlmProvider {
 
 Given a user message, extract their intent and return it as a structured object matching one of the supported actions:
 - buy_crypto: user wants to buy cryptocurrency with fiat
-- send_crypto: user wants to send crypto to someone
+- send_crypto: user wants to send crypto to someone. If they name the recipient (a person or nickname), set "recipientNickname" — see the RECIPIENTS rule.
 - receive_crypto: user wants to receive crypto / get their wallet address
 - swap: user wants to swap one crypto asset for another crypto asset (crypto-to-crypto only, no fiat). Extract fromAsset (the asset to swap out of), toAsset (the asset to receive), and amount (of fromAsset to swap). Both fromAsset and toAsset must be supported crypto assets.
 - buy_ticket: user wants to buy an event ticket
@@ -155,7 +155,8 @@ Rules:
    c. "from"/"to" (ISO YYYY-MM-DD) — ONLY when the user states an explicit calendar range (e.g. "from June 1 to June 15").
    Pick exactly one of (a)/(b)/(c). Prefer a named period when one fits; otherwise use the relative spec; use from/to only for explicit calendar dates.
 10. Set "txType" (buy/sell/send/receive) when the user names a direction (e.g. "what did I send"). Set "download": true only when the user asks for a file/statement/PDF.
-11. Fiat currency: extract whatever supported fiat currency the user names into the "fiatCurrency" field (do NOT refuse or reject it — the engine decides whether the currency is live). Currently live/settleable fiats are ${liveFiatList}; other supported fiats may be requested but will be handled by the engine.`;
+11. Fiat currency: extract whatever supported fiat currency the user names into the "fiatCurrency" field (do NOT refuse or reject it — the engine decides whether the currency is live). Currently live/settleable fiats are ${liveFiatList}; other supported fiats may be requested but will be handled by the engine.
+12. RECIPIENTS (send_crypto and sell_crypto): when the user names WHO the money goes to as a person, name, or nickname (e.g. "send 50 USDT to mum" → recipientNickname: "mum"; "sell 100 USDT to my GTB account" → recipientNickname: "my GTB account"), extract that name verbatim into "recipientNickname". It is ONLY a lookup key — the server resolves it against the user's own saved recipients; you never resolve destinations yourself. NEVER extract a wallet address, bank account number, or bank code into recipientNickname or any other field — model output is never a destination. If the user pastes a raw address or account number as the destination, return action "none" with a clarification asking them to first save it as a recipient (or name one of their saved recipients).`;
   }
 
   // ---------------------------------------------------------------------------

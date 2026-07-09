@@ -4,7 +4,6 @@ import { cn } from "@/lib/utils"
 import { FilterSelect } from "@/components/admin/filter-select"
 import { TableFilterBar } from "@/components/admin/table-filter-bar"
 import {
-  COUNTRY_OPTIONS,
   FILTER_SELECT_CLASS,
   KYC_OPTIONS,
   RISK_DEFS,
@@ -12,7 +11,7 @@ import {
 } from "@/constants/users"
 import type { UsersFilterBarProps } from "@/types/components"
 
-/** The Users-directory filter row: search + KYC/tier/country selects + risk chips. */
+/** The Users-directory filter row: search + KYC/tier selects + risk chips. */
 export function UsersFilterBar({
   search,
   onSearchChange,
@@ -20,8 +19,6 @@ export function UsersFilterBar({
   onKycChange,
   tier,
   onTierChange,
-  country,
-  onCountryChange,
   risk,
   onToggleRisk,
 }: UsersFilterBarProps) {
@@ -71,13 +68,6 @@ export function UsersFilterBar({
         options={TIER_OPTIONS}
         value={tier}
         onChange={(e) => onTierChange(e.target.value)}
-        className={FILTER_SELECT_CLASS}
-      />
-      <FilterSelect
-        label="Filter by country"
-        options={COUNTRY_OPTIONS}
-        value={country}
-        onChange={(e) => onCountryChange(e.target.value)}
         className={FILTER_SELECT_CLASS}
       />
 

@@ -206,7 +206,7 @@ describe("AssetsPage", () => {
       screen.getByRole("button", { name: /Toggle USDT on TRON · Ethereum live status/i })
     )
     await user.click(
-      screen.getByRole("button", { name: /Submit for approval/i })
+      screen.getByRole("button", { name: /Confirm change/i })
     )
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
@@ -231,7 +231,7 @@ describe("AssetsPage", () => {
       screen.getByRole("button", { name: /Toggle BTC on Bitcoin live status/i })
     )
     await user.click(
-      screen.getByRole("button", { name: /Submit for approval/i })
+      screen.getByRole("button", { name: /Confirm change/i })
     )
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
@@ -283,7 +283,7 @@ describe("AssetsPage", () => {
       screen.getByRole("button", { name: /Toggle USDT on TRON · Ethereum live status/i })
     )
     await user.click(
-      screen.getByRole("button", { name: /Submit for approval/i })
+      screen.getByRole("button", { name: /Confirm change/i })
     )
 
     expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()

@@ -322,13 +322,14 @@ describe('AdminComplianceService', () => {
       expect(item.matchType).toBe('brand_new_type');
     });
 
-    it('wraps travel-rule records into a list response', async () => {
+    it('wraps travel-rule records into a list response (threading the capture fiatCurrency)', async () => {
       const rec: TravelRuleRecord = {
         id: '66666666-6666-6666-6666-666666666666',
         transactionId: USER_ID,
         asset: 'USDT',
         amount: '1500',
         amountFiat: '2400000',
+        fiatCurrency: 'GHS',
         triggeringFactor: 'amount_threshold',
         capturedAt: new Date('2026-01-01T00:00:00.000Z'),
         reportedAt: null,
@@ -336,6 +337,7 @@ describe('AdminComplianceService', () => {
       travelRepo.list.mockResolvedValue([rec]);
       const res = await service.listTravelRule({ limit: 50 });
       expect(res.items[0].amountFiat).toBe('2400000');
+      expect(res.items[0].fiatCurrency).toBe('GHS');
       expect(res.items[0].reportedAt).toBeNull();
       expect(res.items[0].capturedAt).toBe('2026-01-01T00:00:00.000Z');
     });

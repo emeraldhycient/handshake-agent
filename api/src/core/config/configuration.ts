@@ -504,6 +504,26 @@ export interface TicketingConfig {
 }
 
 /**
+ * Treasury oversight configuration (Wave D, root CLAUDE.md §7). Admin-tunable via
+ * the DB-admin AppSetting layer (`treasury.largePayoutThresholds.<CODE>` keys in
+ * SETTING_REGISTRY). Note: the per-currency float targets
+ * (`treasury.fiatFloatTargets`) and low-float floor (`treasury.lowFloatThresholdBps`)
+ * remain DB-overlay-only values with in-service fallbacks — they carry no JSON
+ * defaults here.
+ */
+export interface TreasuryConfig {
+  /**
+   * Per-currency large-payout approval thresholds, keyed by fiat code in that
+   * currency's MAJOR units. A queued payout/withdrawal whose fiat notional — in
+   * its OWN currency — is at/above the threshold must clear maker-checker before
+   * release. FAIL-CLOSED: a currency with NO entry flags EVERY payout for
+   * approval until an operator configures a threshold (no silent auto-release
+   * in a freshly-enabled currency).
+   */
+  largePayoutThresholds: Record<string, number>;
+}
+
+/**
  * Embedded-agent configuration (Phase 4 wave 2). Admin-tunable via the DB-admin
  * AppSetting layer (§7). The system prompt is intentionally NOT a config value —
  * it is read-only and never editable (§3.1/§6); the ANTHROPIC_API_KEY is a secret
@@ -542,6 +562,7 @@ export interface AppConfig {
   statement: StatementConfig;
   media: MediaConfig;
   ticketing: TicketingConfig;
+  treasury: TreasuryConfig;
   agent: AgentConfig;
 }
 
@@ -970,6 +991,16 @@ const buildConfig = (): AppConfig => ({
   ticketing: {
     enabled: false,
     commissionBps: 0,
+  },
+  // ── Treasury oversight (Wave D, CLAUDE.md §7) ───────────────────────────────
+  // Only the launch fiat ships a default; every other currency FAILS CLOSED
+  // (all payouts require approval) until an operator sets its threshold via the
+  // DB-admin layer (treasury.largePayoutThresholds.<CODE>).
+  treasury: {
+    largePayoutThresholds: {
+      // ₦1,000,000 — the pre-Wave-D hardcoded gate, preserved as the NGN default.
+      NGN: 1_000_000,
+    },
   },
   // ── Embedded agent (Phase 4 wave 2, CLAUDE.md §7) ──────────────────────────
   // enabled defaults true (current behaviour). modelId mirrors the AGENT_MODEL env

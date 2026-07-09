@@ -1,9 +1,6 @@
 import { z } from "zod";
 
-import {
-  SupportedAssetSchema,
-  KNOWN_FIAT_CURRENCIES,
-} from "../common";
+import { SupportedAssetSchema, KNOWN_FIAT_CURRENCIES } from "../common";
 import {
   SETTING_REGISTRY,
   settingSchemaFor,
@@ -152,12 +149,8 @@ describe("SETTING_REGISTRY", () => {
     // The system prompt and the Anthropic API key are NEVER admin-editable (§3.1/§6).
     const keys = SETTING_REGISTRY.map((e) => e.key);
     expect(keys).not.toContain("agent.systemPrompt");
-    expect(
-      keys.some((k) => k.toLowerCase().includes("anthropic")),
-    ).toBe(false);
-    expect(
-      keys.some((k) => k.toLowerCase().includes("api_key")),
-    ).toBe(false);
+    expect(keys.some((k) => k.toLowerCase().includes("anthropic"))).toBe(false);
+    expect(keys.some((k) => k.toLowerCase().includes("api_key"))).toBe(false);
   });
 
   it("registers a catalog live-toggle for every SupportedAsset (Phase 9)", () => {
@@ -207,6 +200,16 @@ describe("SETTING_REGISTRY", () => {
     const fiatSchema = settingSchemaFor("catalog.fiats.NGN.enabled");
     expect(fiatSchema.parse(false)).toBe(false);
     expect(() => fiatSchema.parse(0)).toThrow();
+  });
+
+  it("registers a large-payout approval threshold for EVERY known fiat (treasury ops gate)", () => {
+    for (const code of KNOWN_FIAT_CURRENCIES) {
+      const e = entry(`treasury.largePayoutThresholds.${code}`);
+      expect(e.category).toBe("Config");
+      expect(e.valueType).toBe("number");
+      expect(e.editable).toBe(true);
+      expect(e.min).toBe(0);
+    }
   });
 
   it("registers the sanctions denylist as a Compliance string[] (Phase 3C)", () => {

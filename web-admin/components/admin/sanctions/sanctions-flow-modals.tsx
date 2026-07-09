@@ -1,26 +1,24 @@
 "use client"
 
-import {
-  MakerCheckerModal,
-  ReasonModal,
-  StepUpModal,
-} from "@/components/admin/flows"
+import { MakerCheckerModal, ReasonModal } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import type { SanctionsFlowModalsProps } from "@/types/components"
 
 /**
- * The shared disposition flow modals (design's `runFlow`, SPEC §5): Clear → ReasonModal
- * (audited); Escalate → MakerCheckerModal (dual-control); Block → ReasonModal → StepUpModal
- * (sensitive, step-up-gated). Each submit fires the disposition mutation; the server-side
- * StepUpDialog replays a 403'd POST on re-auth. Presentational — the mutation lives in the
- * `useSanctionsDispositions` hook; the disposition annotates, it never moves money (§3.1).
+ * The shared disposition flow modals (SPEC §5): Clear → ReasonModal (audited);
+ * Escalate → MakerCheckerModal in its honest IMMEDIATE mode (a disposition applies
+ * as soon as it is confirmed — no change request is raised); Block → ReasonModal
+ * (sensitive — the server demands step-up). Each submit fires the disposition
+ * mutation with the typed reason threaded as `comment`; the REAL step-up is
+ * server-driven: a 403 opens the StepUpDialog and the POST replays on re-auth.
+ * Presentational — the mutation lives in `useSanctionsDispositions`; the
+ * disposition annotates, it never moves money (§3.1).
  */
 export function SanctionsFlowModals({
   flow,
   labelOf,
   onClose,
   onDisposition,
-  onAdvanceBlock,
   mfaEnabled,
   stepUpOpen,
   onStepUpOpenChange,
@@ -30,7 +28,7 @@ export function SanctionsFlowModals({
 
   return (
     <>
-      {/* Clear → ReasonModal (recorded in the immutable audit log). */}
+      {/* Clear → ReasonModal (reason recorded as the audited disposition comment). */}
       <ReasonModal
         open={flow?.kind === "clear"}
         onOpenChange={close}
@@ -39,12 +37,13 @@ export function SanctionsFlowModals({
             ? `Clear screening match — ${labelOf(flow.matchId)}`
             : "Clear screening match"
         }
-        onContinue={() =>
-          flow?.kind === "clear" && onDisposition(flow.matchId, "cleared")
+        onContinue={(reason) =>
+          flow?.kind === "clear" &&
+          onDisposition(flow.matchId, "cleared", reason)
         }
       />
 
-      {/* Escalate → MakerCheckerModal (enters Pending approval). */}
+      {/* Escalate → honest immediate confirm (no approval queue exists here). */}
       <MakerCheckerModal
         open={flow?.kind === "escalate"}
         onOpenChange={close}
@@ -65,29 +64,18 @@ export function SanctionsFlowModals({
         }
       />
 
-      {/* Block → ReasonModal → StepUpModal (sensitive, step-up-gated). */}
+      {/* Block → ReasonModal (reason → audited comment; server enforces step-up). */}
       <ReasonModal
-        open={flow?.kind === "block" && flow.step === "reason"}
+        open={flow?.kind === "block"}
         onOpenChange={close}
         title={
           flow?.kind === "block"
             ? `Block — ${labelOf(flow.matchId)}`
             : "Block match"
         }
-        onContinue={() =>
-          flow?.kind === "block" && onAdvanceBlock(flow.matchId)
-        }
-      />
-      <StepUpModal
-        open={flow?.kind === "block" && flow.step === "stepup"}
-        onOpenChange={close}
-        title={
-          flow?.kind === "block"
-            ? `Block — ${labelOf(flow.matchId)}`
-            : "Block match"
-        }
-        onComplete={() =>
-          flow?.kind === "block" && onDisposition(flow.matchId, "blocked")
+        onContinue={(reason) =>
+          flow?.kind === "block" &&
+          onDisposition(flow.matchId, "blocked", reason)
         }
       />
 

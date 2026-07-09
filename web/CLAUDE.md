@@ -57,7 +57,7 @@ cd web && pnpm next typegen                                 # regenerate typed-r
 
 ## Testing (strict TDD, root §9)
 
-Vitest + React Testing Library + `@testing-library/user-event`; Playwright for E2E. **Add a `test` script to `package.json`** (Vitest) so the `turbo test` gate covers the frontend (it currently has none). Run `pnpm exec playwright install` once after adding `@playwright/test`.
+Vitest + React Testing Library + `@testing-library/user-event`; Playwright for E2E. The scripts are wired: `test` (vitest run — the `turbo test` gate covers this package), `test:watch`, and `test:e2e` (Playwright). Run `pnpm exec playwright install` once on a fresh machine before `test:e2e`.
 
 Run one file fast: `cd web && pnpm exec vitest run <path>` (the package `test` script does not narrow via a positional arg).
 
@@ -67,6 +67,8 @@ Pages/views are **orchestrators** — hooks + the four async branches + composit
 
 - **Tables** render through the `Table` primitive (`components/ui/table.tsx`) via **`shared/DataTable`** (`components/shared/data-table.tsx`) — column-config driven, one `ariaLabel` per table, `hideHeader` for headerless semantic tables, `empty` for the empty branch. No raw `<table>` or div-grid tables.
 - **Hooks** → `hooks/`. **Constants** → `constants/<feature>.ts` (JSX-bearing column configs stay in the section file). **Types** → `types/<feature>.ts` + the `types/index.ts` barrel; import from `@/types` (the legacy `@/types/components` path still resolves during the migration).
+- **Money display** goes through **`formatFiat(value, currency)`** in `lib/format.ts`: symbol + precision come from the `/config`-hydrated fiat registry (`hydrateFiatDisplay`), with `FIAT_SYMBOLS` as the offline fallback and `DISPLAY_LOCALE` (`en-GB`) for digit grouping. `formatNGN` is **deleted** — never reintroduce a hand-rolled `₦`/per-currency formatter; a new currency's display is config, not code.
+- **Settings** follows the orchestrator rule: `components/settings/settings-panel.tsx` orchestrates extracted sections (`profile-section`, `security-section`, `sessions-list`, `mcp-section`, dialogs) under `components/settings/` — add new settings surfaces as sections there, not inline in the panel.
 - Worked reference: the overview page (`components/desktop/overview-page.tsx` orchestrator + `overview/balance-hero.tsx` + `overview/assets-table.tsx` + `overview/recent-activity-table.tsx`).
 
 ### Visual verification runbook (every FE PR)

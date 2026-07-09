@@ -7,6 +7,7 @@ import { renderHook, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi, afterEach } from "vitest"
 import type { PublicConfigResponse } from "@handshake-agent/contracts"
 import { gateway } from "@/lib/api/gateway"
+import { formatFiat, hydrateFiatDisplay } from "@/lib/format"
 import { useConfig } from "./hooks"
 
 // ─── Fixture ─────────────────────────────────────────────────────────────────
@@ -95,5 +96,25 @@ describe("useConfig", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
     expect(result.current.data?.capabilities["crypto.buy"]).toBe(true)
+  })
+
+  it("hydrates the fiat display registry so formatFiat uses /config symbols + decimals", async () => {
+    // GHS is configured with a non-default symbol and 0 decimals — after the
+    // config loads, chat-card formatting must use these, not the static map.
+    vi.spyOn(gateway, "getConfig").mockResolvedValue({
+      ...mockConfig,
+      fiats: [
+        ...mockConfig.fiats,
+        { code: "GHS", displayName: "Ghanaian Cedi", symbol: "₵", decimals: 0 },
+      ],
+    })
+    const { wrapper } = makeWrapper()
+
+    const { result } = renderHook(() => useConfig(), { wrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(formatFiat("20000", "GHS")).toBe("₵20,000")
+    // Reset the module-level registry so other test files see the fallback.
+    hydrateFiatDisplay([])
   })
 })

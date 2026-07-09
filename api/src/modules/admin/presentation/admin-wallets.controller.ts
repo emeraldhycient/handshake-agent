@@ -56,8 +56,8 @@ import {
 import {
   WALLET_BACKFILL_QUEUE_NAME,
   WALLET_BACKFILL_JOB,
+  type CoordinateBackfillPayload,
 } from '../../wallets/application/wallet-backfill-queue.constants';
-import type { CoordinateBackfillPayload } from '../../wallets/infrastructure/coordinate-backfill.processor';
 import { WalletReconciliationService } from '../../wallets/application/wallet-reconciliation.service';
 import type { AssetReconciliationResult } from '../../wallets/application/wallet-reconciliation.service';
 import { ReconciliationPersistenceService } from '../../transactions/application/reconciliation-persistence.service';

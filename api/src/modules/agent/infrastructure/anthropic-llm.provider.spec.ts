@@ -462,6 +462,27 @@ describe('AnthropicLlmProvider', () => {
         expect(prompt).toMatch(/none|clarif/i);
       });
 
+      it('instructs the model to extract a named recipient into recipientNickname', () => {
+        // "send 50 USDT to mum" → recipientNickname: "mum" (a server-resolved
+        // lookup key against the user's own saved beneficiaries — Wave B).
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).toContain('recipientNickname');
+        expect(prompt).toMatch(/send 50 USDT to mum/i);
+        // Applies to both money-out actions that resolve a beneficiary.
+        expect(prompt).toMatch(/send_crypto/);
+        expect(prompt).toMatch(/sell_crypto/);
+      });
+
+      it('forbids extracting addresses or account numbers as the recipient (funds-safety)', () => {
+        // The nickname is a LOOKUP KEY, never a destination: the model must
+        // NEVER copy a wallet address or bank account number into any field
+        // (CLAUDE.md §3.1 — model free-text is never a financial parameter).
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).toMatch(/NEVER[^.]*(address|account number)/i);
+        expect(prompt).toMatch(/account number/i);
+        expect(prompt).toMatch(/address/i);
+      });
+
       it('lists ALL discovered assets (USDT + TRX) when the registry returns both', () => {
         // When CatalogSyncService discovers TRX alongside USDT, enabledCryptoAssets()
         // returns both. The system prompt MUST enumerate all of them so the model

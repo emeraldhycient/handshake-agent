@@ -45,6 +45,37 @@ export const AgentTurnOutcomeSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('needs_beneficiary'),
     beneficiaryType: z.enum(['bank_account', 'crypto_address']),
+    /**
+     * Optional targeted message, e.g. "No saved beneficiary called 'mum'."
+     * when a recipientNickname resolved to zero saved beneficiaries.
+     */
+    note: z.string().optional(),
+  }),
+  // Emitted when a recipientNickname resolves to MORE THAN ONE of the user's
+  // saved beneficiaries — the UI renders a pick-one list and re-sends the turn
+  // with the chosen `beneficiaryId`.
+  //
+  // SECURITY (CLAUDE.md §3.1): `detail` is a HUMAN-SAFE masked string only
+  // (bank: "<bank name> ••1234"; crypto: address head/tail ellipsis, the same
+  // masking the proposal confirmation uses) — never a full account number or
+  // address. `id` is the server-resolved beneficiaryId; the proposal/engine
+  // re-validate ownership, type, cooling-off, and sanctions before any money
+  // moves.
+  z.object({
+    kind: z.literal('choose_beneficiary'),
+    beneficiaryType: z.enum(['bank_account', 'crypto_address']),
+    /** The nickname the user said, echoed back for the picker copy. */
+    nickname: z.string(),
+    candidates: z
+      .array(
+        z.object({
+          id: z.string().uuid(),
+          label: z.string(),
+          /** Human-safe masked destination summary (never the full value). */
+          detail: z.string(),
+        }),
+      )
+      .min(1),
   }),
   z.object({
     kind: z.literal('receive'),
@@ -82,6 +113,13 @@ export const AgentTurnOutcomeSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('currency_not_live'),
     currency: FiatCurrencySchema,
+    /**
+     * The fiat codes the platform can settle TODAY (AssetRegistry enabled set),
+     * so the client copy ("we currently settle in NGN and GHS") is driven by the
+     * server's live catalog instead of a hardcoded constant. Optional for
+     * backwards compatibility with persisted history rows that pre-date it.
+     */
+    liveCurrencies: z.array(FiatCurrencySchema).optional(),
   }),
   TransactionHistoryResponseSchema.extend({ kind: z.literal('transactions') }),
 ])

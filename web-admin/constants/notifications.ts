@@ -39,13 +39,6 @@ export const AUDIENCE_OPTIONS: readonly BroadcastOption[] = (
   ["lagos", "tier_1", "verified", "all"] as const
 ).map((value) => ({ value, label: AUDIENCE_LABEL[value] }))
 
-/** Fallback template options — used only while the real templates list loads / is empty. */
-export const FALLBACK_TEMPLATE_OPTIONS: readonly BroadcastOption[] = [
-  { value: "kyc_reminder", label: "kyc_reminder" },
-  { value: "tx_confirmation", label: "tx_confirmation" },
-  { value: "promo_ticketing", label: "promo_ticketing" },
-]
-
 /** Schedule options — the design's <option>s. */
 export const SCHEDULE_OPTIONS: readonly BroadcastOption[] = [
   { value: "now", label: "Send now" },

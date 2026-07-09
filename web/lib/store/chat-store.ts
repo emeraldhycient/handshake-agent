@@ -32,8 +32,7 @@ import {
 import { parseIntent } from "@/lib/chat/intent"
 import { mapOutcomeToMessages } from "@/lib/chat/agent-outcome"
 import { GREETING_M, GREETING_D, greetingDesktop } from "@/lib/constants"
-import { formatFiat } from "@/lib/format"
-import { ApiError, isSessionExpiredError } from "@/lib/api/client"
+import { isSessionExpiredError } from "@/lib/api/client"
 import {
   buildCompletionReceipt,
   COMPLETION_SUCCESS_LABEL,
@@ -41,7 +40,6 @@ import {
 import {
   chatErrorMessage,
   isRetryablePinError,
-  GENERIC_AGENT_ERROR,
   SESSION_EXPIRED_NOTICE,
 } from "@/lib/chat/errors"
 import type {
@@ -145,9 +143,10 @@ interface ChatState {
   // fallback when a needs_beneficiary card does not pass its own message id.
   _lastIntentText: string | null
 
-  // Finding #3: each needs_beneficiary card is bound to the EXACT intent text
-  // that produced it (keyed by the card's message id), so resolving a stale card
-  // re-sends that intent — not whatever the user typed most recently.
+  // Finding #3: each needs_beneficiary / choose_beneficiary card is bound to
+  // the EXACT intent text that produced it (keyed by the card's message id), so
+  // resolving a stale card re-sends that intent — not whatever the user typed
+  // most recently.
   _beneficiaryIntents: Record<string, string>
 
   // Actions
@@ -165,10 +164,10 @@ interface ChatState {
    */
   hydrateHistory(surface: ChatSurface, items: ChatHistoryItem[]): void
   /**
-   * Re-sends the money request a specific needs_beneficiary card was created
-   * for, with a newly added/selected beneficiaryId so the sell/send proposal can
-   * be created. Called from the needs_beneficiary card once the user adds or
-   * picks a payout destination.
+   * Re-sends the money request a specific needs_beneficiary or
+   * choose_beneficiary card was created for, with a newly added/selected
+   * beneficiaryId so the sell/send proposal can be created. Called from those
+   * cards once the user adds or picks a payout destination.
    *
    * Finding #3: pass the card's `messageId` so the re-send uses the intent text
    * THAT card was bound to — not the mutable `_lastIntentText`, which a later
@@ -378,6 +377,11 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
 
         const built: ChatMessage[] = []
         let lastProposalId: string | null = null
+        // Bind reloaded needs_beneficiary / choose_beneficiary cards to the
+        // intent text that produced them (item.userText), exactly like the live
+        // send path — otherwise resolving a card after a page reload is a
+        // silent no-op (no bound intent, no _lastIntentText).
+        const beneficiaryIntents: Record<string, string> = {}
         for (const item of items) {
           built.push({
             id: nextId(),
@@ -392,6 +396,14 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             )
             built.push(...messages)
             if (proposalId) lastProposalId = proposalId
+            for (const m of messages) {
+              if (
+                m.kind === "needs_beneficiary" ||
+                m.kind === "choose_beneficiary"
+              ) {
+                beneficiaryIntents[m.id] = item.userText
+              }
+            }
           }
         }
 
@@ -405,6 +417,10 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
               [surface]: [greeting, ...built, ...rest],
             },
             historyHydrated: { ...s.historyHydrated, [surface]: true },
+            _beneficiaryIntents: {
+              ...s._beneficiaryIntents,
+              ...beneficiaryIntents,
+            },
             ...(lastProposalId ? { pendingProposalId: lastProposalId } : {}),
           }
         })
@@ -445,11 +461,13 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           const { messages, proposalId } = mapOutcomeToMessages(outcome, nextId)
           const pendingProposalId = proposalId ?? undefined
 
-          // Finding #3: bind any needs_beneficiary card to the EXACT intent text
-          // that produced it, keyed by the card's message id, so resolving a stale
-          // card later re-sends that intent and not a more recent unrelated one.
+          // Finding #3: bind any needs_beneficiary / choose_beneficiary card to
+          // the EXACT intent text that produced it, keyed by the card's message
+          // id, so resolving a stale card later re-sends that intent and not a
+          // more recent unrelated one.
           const beneficiaryCard = messages.find(
-            (m) => m.kind === "needs_beneficiary"
+            (m) =>
+              m.kind === "needs_beneficiary" || m.kind === "choose_beneficiary"
           )
 
           set((s) => ({
@@ -512,6 +530,15 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             nextId
           )
           const pendingProposalId = proposalId ?? undefined
+
+          // The transcript IS the intent text — bind it exactly like the text
+          // path does so a beneficiary card born from a voice note can be
+          // resolved (finding #3), and keep _lastIntentText for legacy callers.
+          const beneficiaryCard = messages.find(
+            (m) =>
+              m.kind === "needs_beneficiary" || m.kind === "choose_beneficiary"
+          )
+
           set((s) => ({
             threads: {
               ...s.threads,
@@ -519,7 +546,16 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             },
             typing: { ...s.typing, [surface]: false },
             chips: { ...s.chips, [surface]: startChips() },
+            _lastIntentText: response.transcript,
             ...(pendingProposalId ? { pendingProposalId } : {}),
+            ...(beneficiaryCard
+              ? {
+                  _beneficiaryIntents: {
+                    ...s._beneficiaryIntents,
+                    [beneficiaryCard.id]: response.transcript,
+                  },
+                }
+              : {}),
           }))
         } catch (err) {
           if (isSessionExpiredError(err)) {
@@ -908,8 +944,19 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             const successText =
               COMPLETION_SUCCESS_LABEL[pending.action] ?? "Done"
 
+            // Build the receipt from the CONFIRMED payload — mirroring the
+            // settling path's resolveSettlement — never the demo buildReceipt
+            // fixture (which carries hardcoded ₦50,000 rows and a fake ref).
+            // The execute response has no status payload, so synthesize the
+            // minimal terminal TransactionStatusResponse from what we know.
+            const completedTx: TransactionStatusResponse = {
+              id: result.transactionId,
+              type: pending.action,
+              status: "completed",
+              createdAt: new Date().toISOString(),
+            }
             const receipt: ChatMessage = {
-              ...buildReceipt(pending.action, pending.meta),
+              ...buildCompletionReceipt(pending.action, pending, completedTx),
               id: nextId(),
               role: "assistant",
             }

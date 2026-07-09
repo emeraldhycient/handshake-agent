@@ -7,7 +7,7 @@ import type {
   TreasurySweep,
 } from "@handshake-agent/contracts"
 
-import { formatAmount, formatCrypto } from "@/lib/format"
+import { formatAmount, formatCrypto, formatFiat } from "@/lib/format"
 import { EXPOSURE_DOT, SWEEP_LABEL } from "@/constants/treasury"
 import type {
   TreasuryCard,
@@ -15,18 +15,9 @@ import type {
   TreasurySweepRow,
 } from "@/types/components"
 
-// Amounts arrive as byte-stable decimal strings — format for display only, never for
-// math. A non-numeric string falls back to itself so nothing is silently dropped.
-const NGN = new Intl.NumberFormat("en-NG", {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-})
-
-/** An NGN decimal string → the "₦42,180,500.00" grouped label (or the raw string). */
-export function formatFiat(amount: string): string {
-  const n = Number(amount)
-  return Number.isFinite(n) ? `₦${NGN.format(n)}` : amount
-}
+// Amounts arrive as byte-stable decimal strings — format for display only,
+// never for math. All fiat figures go through the canonical `formatFiat(value,
+// currency)` so every card renders in its row's OWN currency (never a pinned ₦).
 
 /** Crypto/asset amount → the shared thousands-separated, native-precision format. */
 export function formatAssetAmount(amount: string, asset: string): string {
@@ -79,70 +70,81 @@ export function resolveHeroCard(
 }
 
 /**
- * The NGN fiat-float tile: balance + utilization-vs-target + a low/healthy status dot.
- * Falls back to an em-dash when no NGN float row exists (empty), never fabricated.
+ * The fiat-float tiles — ONE card per currency the float read returns (the API
+ * is already per-currency), each formatted in its OWN currency: balance +
+ * utilization-vs-target + a low/healthy status dot. No rows → a single em-dash
+ * fallback card (never fabricated).
  */
-export function resolveFiatFloatCard(
+export function resolveFiatFloatCards(
   floats: readonly TreasuryFiatFloat[]
-): TreasuryCard {
-  const ngn = floats.find((f) => f.currency === "NGN") ?? floats[0]
-  if (!ngn) {
-    return {
-      id: "ngn-float",
-      tone: "neutral",
-      label: "NGN fiat float",
-      value: "—",
-      dot: "warn",
-      note: "No fiat-float rows",
-      live: true,
-    }
+): TreasuryCard[] {
+  if (floats.length === 0) {
+    return [
+      {
+        id: "fiat-float",
+        tone: "neutral",
+        label: "Fiat float",
+        value: "—",
+        dot: "warn",
+        note: "No fiat-float rows",
+        live: true,
+      },
+    ]
   }
-  return {
-    id: "ngn-float",
+  return floats.map((f) => ({
+    id: `fiat-float-${f.currency.toLowerCase()}`,
     tone: "neutral",
-    label: `${ngn.currency} fiat float`,
-    value: formatFiat(ngn.balance),
-    dot: ngn.status === "low" ? "warn" : "ok",
-    note: `${bpsToPct(ngn.utilizationBps)} of target · ${ngn.status}`,
+    label: `${f.currency} fiat float`,
+    value: formatFiat(f.balance, f.currency),
+    dot: f.status === "low" ? "warn" : "ok",
+    note: `${bpsToPct(f.utilizationBps)} of target · ${f.status}`,
     live: true,
-  }
+  }))
 }
 
 /**
- * The FX-position tile: the signed net position valued in fiat + a long/short/flat
- * direction label. Falls back to an em-dash when no position row exists.
+ * The FX-position tiles — one card per (asset, fiat) position, the signed net
+ * position valued in ITS OWN fiat currency + a long/short/flat direction note.
+ * A single position keeps the design's plain "FX position" label; multiple
+ * positions disambiguate with the pair. No rows → a single em-dash fallback.
  */
-export function resolveFxPositionCard(
+export function resolveFxPositionCards(
   positions: readonly TreasuryFxPosition[]
-): TreasuryCard {
-  const primary =
-    positions.find((p) => p.asset.toUpperCase() === "USDT") ?? positions[0]
-  if (!primary) {
+): TreasuryCard[] {
+  if (positions.length === 0) {
+    return [
+      {
+        id: "fx-position",
+        tone: "neutral",
+        label: "FX position",
+        value: "—",
+        dot: "ok",
+        note: "No FX-position rows",
+        live: true,
+      },
+    ]
+  }
+  return positions.map((p) => {
+    const dirNote =
+      p.direction === "long"
+        ? `Net long ${p.asset} vs ${p.fiatCurrency}`
+        : p.direction === "short"
+          ? `Net short ${p.asset} vs ${p.fiatCurrency}`
+          : `Flat ${p.asset} vs ${p.fiatCurrency}`
     return {
-      id: "fx-position",
-      tone: "neutral",
-      label: "FX position",
-      value: "—",
-      dot: "ok",
-      note: "No FX-position rows",
+      id: `fx-position-${p.asset.toLowerCase()}-${p.fiatCurrency.toLowerCase()}`,
+      tone: "neutral" as const,
+      label:
+        positions.length === 1
+          ? "FX position"
+          : `FX position · ${p.asset}/${p.fiatCurrency}`,
+      value: formatFiat(p.netPositionFiat, p.fiatCurrency),
+      dot:
+        p.exposureStatus === "critical" ? ("danger" as const) : ("ok" as const),
+      note: dirNote,
       live: true,
     }
-  }
-  const dirNote =
-    primary.direction === "long"
-      ? `Net long ${primary.asset} vs ${primary.fiatCurrency}`
-      : primary.direction === "short"
-        ? `Net short ${primary.asset} vs ${primary.fiatCurrency}`
-        : `Flat ${primary.asset} vs ${primary.fiatCurrency}`
-  return {
-    id: "fx-position",
-    tone: "neutral",
-    label: "FX position",
-    value: formatFiat(primary.netPositionFiat),
-    dot: primary.exposureStatus === "critical" ? "danger" : "ok",
-    note: dirNote,
-    live: true,
-  }
+  })
 }
 
 /**
@@ -224,7 +226,12 @@ export function toSweepRow(s: TreasurySweep): TreasurySweepRow {
   }
 }
 
-/** Map a contract payout-queue item → the design's payout row. */
+/**
+ * Map a contract payout-queue item → the design's payout row. `amt` formats the
+ * payout amount by its asset (fiat symbol or crypto precision); `fiat` carries
+ * the fiat leg in the payout's OWN `fiatCurrency` when the asset is crypto
+ * (null when the amount already IS the fiat figure).
+ */
 export function toPayoutRow(p: TreasuryPayoutQueueItem): TreasuryPayoutRow {
   return {
     id: p.id,
@@ -232,6 +239,10 @@ export function toPayoutRow(p: TreasuryPayoutQueueItem): TreasuryPayoutRow {
     ref: p.reference,
     method: p.method,
     amt: formatAmount(p.amount, p.asset),
+    fiat:
+      p.fiatAmount !== null
+        ? `≈ ${formatFiat(p.fiatAmount, p.fiatCurrency)}`
+        : null,
     big: p.requiresApproval,
   }
 }

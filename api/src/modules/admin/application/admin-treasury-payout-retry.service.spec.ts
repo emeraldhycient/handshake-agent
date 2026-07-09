@@ -28,7 +28,7 @@ function makePayoutItem(overrides: Record<string, unknown> = {}) {
     asset: 'USDT',
     amount: '6.25',
     fiatAmount: '10000',
-    requiresApproval: false,
+    fiatCurrency: 'NGN',
     submittedAt: new Date('2026-07-04T10:00:00.000Z'),
     ...overrides,
   };

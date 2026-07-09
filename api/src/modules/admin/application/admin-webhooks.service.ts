@@ -27,6 +27,10 @@ import {
   WEBHOOK_DISPATCH,
   type IWebhookDispatch,
 } from '../../webhooks/application/ports/webhook-dispatch.port';
+import {
+  redactStoredSignature,
+  sanitizeWebhookHeaders,
+} from '../../webhooks/application/sanitize-webhook-headers';
 import { AdminNotFoundError } from '../domain/admin-errors';
 
 @Injectable()
@@ -117,8 +121,11 @@ function toDetail(r: WebhookEventRecord): WebhookDetail {
   return {
     ...toListItem(r),
     payload: r.payload,
-    headers: r.headers,
-    signature: r.signature,
+    // Defense-in-depth: ingestion sanitizes before persisting, but rows written
+    // before that policy may still hold authentication material (the Flutterwave
+    // verif-hash IS the static webhook secret) — redact again on read.
+    headers: sanitizeWebhookHeaders(r.headers),
+    signature: redactStoredSignature(r.provider, r.signature),
     lastAttemptAt: r.lastAttemptAt ? r.lastAttemptAt.toISOString() : null,
     deadAt: r.deadAt ? r.deadAt.toISOString() : null,
   };

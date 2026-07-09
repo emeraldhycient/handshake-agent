@@ -237,6 +237,69 @@ describe("ChatMessageSchema", () => {
   })
 })
 
+describe("ChooseBeneficiaryViewSchema (nickname disambiguation)", () => {
+  const base = {
+    id: "m20",
+    role: "assistant" as const,
+    kind: "choose_beneficiary" as const,
+    beneficiaryType: "bank_account" as const,
+    nickname: "mum",
+    candidates: [
+      {
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        label: "Mum",
+        detail: "Guaranty Trust Bank (GTBank) ••6789",
+      },
+    ],
+  }
+
+  it("parses a choose_beneficiary message through the ChatMessageSchema union", () => {
+    expect(ChatMessageSchema.safeParse(base).success).toBe(true)
+  })
+
+  it("rejects a choose_beneficiary message missing candidates", () => {
+    expect(
+      ChatMessageSchema.safeParse({ ...base, candidates: undefined }).success
+    ).toBe(false)
+  })
+
+  it("rejects a candidate missing the masked detail", () => {
+    expect(
+      ChatMessageSchema.safeParse({
+        ...base,
+        candidates: [
+          { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", label: "Mum" },
+        ],
+      }).success
+    ).toBe(false)
+  })
+})
+
+describe("NeedsBeneficiaryViewSchema.note (nickname miss copy)", () => {
+  it("parses a needs_beneficiary message WITHOUT a note (backwards compatible)", () => {
+    expect(
+      ChatMessageSchema.safeParse({
+        id: "m21",
+        role: "assistant",
+        kind: "needs_beneficiary",
+        beneficiaryType: "crypto_address",
+      }).success
+    ).toBe(true)
+  })
+
+  it("parses a needs_beneficiary message WITH a targeted note", () => {
+    expect(
+      ChatMessageSchema.safeParse({
+        id: "m22",
+        role: "assistant",
+        kind: "needs_beneficiary",
+        beneficiaryType: "bank_account",
+        note: "No saved beneficiary called 'mum'. Add one first, or pick from your saved list.",
+      }).success
+    ).toBe(true)
+  })
+})
+
 describe("SettlingViewSchema.txType (swap support)", () => {
   const base = {
     kind: "settling" as const,

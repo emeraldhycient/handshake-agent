@@ -12,7 +12,7 @@
  */
 import { FilterSelect } from "@/components/admin/filter-select"
 import { METRICS_RANGE_PRESETS, CUSTOM_PRESET_ID } from "@/lib/metrics-range"
-import { CURRENCY_OPTIONS, isFilterActive } from "@/lib/metrics-filter"
+import { isFilterActive } from "@/lib/metrics-filter"
 import {
   CAPABILITY_OPTIONS,
   TIER_OPTIONS,
@@ -24,7 +24,11 @@ import {
 import { cn } from "@/lib/utils"
 import type { MetricsFilterBarProps } from "@/types/components"
 
-export function MetricsFilterBar({ value, onChange }: MetricsFilterBarProps) {
+export function MetricsFilterBar({
+  value,
+  onChange,
+  currencyOptions,
+}: MetricsFilterBarProps) {
   const set = (patch: Partial<typeof value>) => onChange({ ...value, ...patch })
 
   return (
@@ -97,7 +101,7 @@ export function MetricsFilterBar({ value, onChange }: MetricsFilterBarProps) {
       />
       <FilterSelect
         label="Filter by currency"
-        options={CURRENCY_OPTIONS}
+        options={currencyOptions}
         value={value.currency}
         onChange={(e) => set({ currency: e.target.value })}
         className={SELECT_CLASS}

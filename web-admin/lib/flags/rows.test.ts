@@ -28,11 +28,13 @@ describe("resolveFlags", () => {
     expect(swap?.on).toBe(false)
     expect(swap?.settingKey).toBe("catalog.capabilities.crypto.swap")
   })
-  it("keeps the design default for an unbacked flag", () => {
+  it("renders an unbacked flag with no backing key and no fabricated on-state", () => {
     const rows = resolveFlags([])
     const voice = rows.find((r) => r.key === "voice_notes.web")
-    expect(voice?.on).toBe(true)
+    // Unbacked flags are read-only "Not yet wired" rows — never claimed enabled.
+    expect(voice?.on).toBe(false)
     expect(voice?.settingKey).toBeUndefined()
+    expect(voice?.rollout).toBeUndefined()
   })
   it("fail-closes a backed flag whose setting is absent/non-boolean to its default", () => {
     const rows = resolveFlags([])

@@ -102,6 +102,50 @@ describe('AdminWebhooksService', () => {
         AdminNotFoundError,
       );
     });
+
+    it('redacts secret-bearing headers on read (legacy rows persisted pre-sanitizer)', async () => {
+      repo.findById.mockResolvedValue(
+        makeRecord({
+          provider: 'flutterwave',
+          headers: {
+            'verif-hash': 'the-static-secret',
+            authorization: 'Bearer sk_live_abc',
+            'content-type': 'application/json',
+          },
+        }),
+      );
+
+      const d = await service.detail('wh-1');
+
+      expect(d.headers['verif-hash']).toBe('[REDACTED]');
+      expect(d.headers['authorization']).toBe('[REDACTED]');
+      expect(d.headers['content-type']).toBe('application/json');
+    });
+
+    it('redacts a legacy raw flutterwave signature but keeps the digest form', async () => {
+      repo.findById
+        .mockResolvedValueOnce(
+          makeRecord({
+            provider: 'flutterwave',
+            signature: 'the-static-secret',
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeRecord({ provider: 'flutterwave', signature: 'sha256:abc123' }),
+        );
+
+      const legacy = await service.detail('wh-1');
+      expect(legacy.signature).toBe('[REDACTED]');
+
+      const digested = await service.detail('wh-1');
+      expect(digested.signature).toBe('sha256:abc123');
+    });
+
+    it('keeps per-request HMAC signatures (blockradar/whatsapp) verbatim', async () => {
+      repo.findById.mockResolvedValue(makeRecord());
+      const d = await service.detail('wh-1');
+      expect(d.signature).toBe('sig');
+    });
   });
 
   describe('retry', () => {

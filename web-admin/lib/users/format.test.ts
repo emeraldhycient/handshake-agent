@@ -69,7 +69,7 @@ describe("toRow", () => {
     expect(row.name).toBe("Amara Okeke")
     expect(row.initials).toBe("AO")
     expect(row.email).toBe("amara.okeke@example.com")
-    expect(row.kyc).toBe("needs_info") // pending_review → needs_info bucket
+    expect(row.kyc).toBe("pending") // pending_review → Pending (awaiting review)
     expect(row.tier).toBe("tier_2")
     expect(row.sanctionsFlagged).toBe(true)
     expect(row.balance).toBe("1,200.5 USDT")

@@ -10,6 +10,11 @@ import type {
 
 import { AuditService } from '../../../core/audit/application/audit.service';
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
+import {
+  NOTIFICATION_TEMPLATE_REPOSITORY,
+  type INotificationTemplateRepository,
+} from '../../notifications/application/ports/notification-template.repository.port';
+import { BroadcastTemplateUnknownError } from '../domain/admin-errors';
 import { AdminApprovalsService } from './admin-approvals.service';
 import {
   BROADCAST_DISPATCH_REPOSITORY,
@@ -49,6 +54,8 @@ export class AdminNotificationBroadcastService {
   constructor(
     @Inject(BROADCAST_DISPATCH_REPOSITORY)
     private readonly dispatch: IBroadcastDispatchRepository,
+    @Inject(NOTIFICATION_TEMPLATE_REPOSITORY)
+    private readonly templates: INotificationTemplateRepository,
     private readonly approvals: AdminApprovalsService,
     private readonly audit: AuditService,
     private readonly config: EffectiveConfigService,
@@ -57,12 +64,19 @@ export class AdminNotificationBroadcastService {
   /**
    * Send (or queue-for-approval) a broadcast. The size gate is resolved from the
    * live cohort count, not the request — the client's reach estimate is never
-   * trusted (§3.3).
+   * trusted (§3.3). The templateKey is validated FAIL-CLOSED against the template
+   * store before EITHER branch (§3.6): an unknown key would make the outbox
+   * worker dead-letter every recipient, so nothing is enqueued and nothing enters
+   * the maker-checker inbox for it — the request 422s instead.
    */
   async send(
     input: BroadcastSendRequest,
     adminId: string,
   ): Promise<BroadcastSendResponse> {
+    if (!(await this.templates.existsByKey(input.templateKey))) {
+      throw new BroadcastTemplateUnknownError(input.templateKey);
+    }
+
     const recipientCount = await this.dispatch.countAudience(input.audience);
 
     if (recipientCount >= this.threshold()) {

@@ -28,7 +28,7 @@ export const TABS: readonly {
   status: KycStatus
 }[] = [
   { id: "pending", label: "Pending", status: "pending_review" },
-  { id: "needs_info", label: "Needs info", status: "pending" },
+  { id: "needs_info", label: "Needs info", status: "needs_info" },
   { id: "approved", label: "Approved", status: "verified" },
   { id: "rejected", label: "Rejected", status: "rejected" },
 ]

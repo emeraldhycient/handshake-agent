@@ -128,6 +128,31 @@ describe('WebhookIngestionService', () => {
     expect(dispatch.enqueue).not.toHaveBeenCalled();
   });
 
+  it('sanitizes secret-bearing headers before persisting (all providers)', async () => {
+    repo.createIfNew.mockResolvedValue({
+      record: makeRecord(),
+      duplicate: false,
+    });
+
+    await service.ingest({
+      provider: 'flutterwave',
+      parsedBody: { data: { id: 7 } },
+      rawBody: '{"data":{"id":7}}',
+      headers: {
+        'verif-hash': 'the-static-secret',
+        authorization: 'Bearer sk_live_abc',
+        'content-type': 'application/json',
+      },
+    });
+
+    const arg = repo.createIfNew.mock.calls[0][0];
+    expect(arg.headers).toEqual({
+      'verif-hash': '[REDACTED]',
+      authorization: '[REDACTED]',
+      'content-type': 'application/json',
+    });
+  });
+
   it('stores non-JSON bodies as { raw }', async () => {
     repo.createIfNew.mockResolvedValue({
       record: makeRecord(),

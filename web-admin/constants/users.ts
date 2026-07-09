@@ -21,16 +21,17 @@ export const KYC_META: Record<
   rejected: { label: "Rejected", bg: "bg-sdn", fg: "text-tdn" },
 }
 
-// Contract `KycStatus` → the design's four presentation buckets. `pending_review`
-// and `not_started` map to the "Needs info" / "Pending" pills; `expired` reads as
-// a rejected-style pill.
+// Contract `KycStatus` → the design's four presentation buckets. `not_started`,
+// `pending` and `pending_review` read as "Pending" (awaiting the applicant /
+// reviewer); only the real `needs_info` bucket shows the "Needs info" pill;
+// `expired` reads as a rejected-style pill.
 export const KYC_STATUS_TO_BUCKET: Record<
   AdminEndUserListItem["kycStatus"],
   UserKycStatus
 > = {
   not_started: "pending",
   pending: "pending",
-  pending_review: "needs_info",
+  pending_review: "pending",
   needs_info: "needs_info",
   verified: "verified",
   rejected: "rejected",
@@ -46,7 +47,7 @@ export const KYC_BUCKET_TO_STATUS: Record<
 > = {
   verified: "verified",
   pending: "pending",
-  needs_info: "pending_review",
+  needs_info: "needs_info",
   rejected: "rejected",
 }
 
@@ -67,12 +68,6 @@ export const FLAG_META: Record<
     bg: "bg-sdn",
     fg: "text-tdn",
   },
-  velocity: {
-    label: "VELOCITY",
-    full: "Velocity cap breach",
-    bg: "bg-swn",
-    fg: "text-twn",
-  },
 }
 
 // Filter-select option sets (design `uFilters`).
@@ -92,18 +87,14 @@ export const TIER_OPTIONS = [
   { value: "tier_3", label: "tier_3" },
 ] as const
 
-export const COUNTRY_OPTIONS = [
-  { value: "all", label: "All countries" },
-  { value: "NG", label: "Nigeria" },
-  { value: "RW", label: "Rwanda" },
-] as const
-
-// Risk-toggle chips (design `riskDef`).
+// Risk-toggle chips (design `riskDef`). Only the facets the list contract models
+// are offered — the design's Country select and Velocity chip matched nothing
+// (no such fields on `AdminEndUserListItem`) and were removed rather than left
+// as dead controls that silently empty the table.
 export const RISK_DEFS: ReadonlyArray<{ value: UserRiskFlag; label: string }> =
   [
     { value: "simSwap", label: "SIM-swap" },
     { value: "sanctions", label: "Sanctions" },
-    { value: "velocity", label: "Velocity" },
   ]
 
 // The design's filter-select className: sits on `--card` (not `--field`), with the

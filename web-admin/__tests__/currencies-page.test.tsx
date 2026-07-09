@@ -156,7 +156,7 @@ describe("CurrenciesPage", () => {
     // RWF is Off → enabling persists `true`.
     await user.click(screen.getByRole("button", { name: /Enable RWF/i }))
     await user.click(
-      screen.getByRole("button", { name: /Submit for approval/i })
+      screen.getByRole("button", { name: /Confirm change/i })
     )
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
@@ -178,7 +178,7 @@ describe("CurrenciesPage", () => {
     // NGN is Live → disabling persists `false`.
     await user.click(screen.getByRole("button", { name: /Disable NGN/i }))
     await user.click(
-      screen.getByRole("button", { name: /Submit for approval/i })
+      screen.getByRole("button", { name: /Confirm change/i })
     )
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
@@ -225,7 +225,7 @@ describe("CurrenciesPage", () => {
 
     await user.click(screen.getByRole("button", { name: /Enable RWF/i }))
     await user.click(
-      screen.getByRole("button", { name: /Submit for approval/i })
+      screen.getByRole("button", { name: /Confirm change/i })
     )
 
     expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
@@ -276,7 +276,7 @@ describe("CurrenciesPage", () => {
     // GHS is Off → enabling routes through the currency endpoint.
     await user.click(screen.getByRole("button", { name: /Enable GHS/i }))
     await user.click(
-      screen.getByRole("button", { name: /Submit for approval/i })
+      screen.getByRole("button", { name: /Confirm change/i })
     )
 
     await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1))

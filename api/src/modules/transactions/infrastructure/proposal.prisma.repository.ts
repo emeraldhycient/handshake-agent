@@ -11,6 +11,13 @@ import type {
 } from '../application/ports/proposal.repository.port';
 
 /**
+ * Upper bound for the MCP `list_pending_proposals` read — the actionable set is
+ * tiny in practice (proposals expire in minutes); the cap keeps the tool
+ * response bounded.
+ */
+const PENDING_LIST_LIMIT = 20;
+
+/**
  * Prisma adapter for the Proposal repository port. Maps application-level
  * CreateProposalData to Prisma create args; application never sees Prisma types.
  *
@@ -120,5 +127,53 @@ export class ProposalPrismaRepository implements IProposalRepository {
       select: { type: true },
     });
     return row?.type ?? null;
+  }
+
+  /**
+   * Still-actionable proposals for a user (pending/confirmed + unexpired),
+   * newest first, capped at PENDING_LIST_LIMIT. Read-only (§3.1) — backs the
+   * MCP `list_pending_proposals` tool.
+   */
+  async listPendingForUser(
+    userId: string,
+    asOf: Date,
+  ): Promise<ProposalRecord[]> {
+    const rows = await this.prisma.proposal.findMany({
+      where: {
+        userId,
+        // Mirrors the controller/engine EXECUTABLE_STATUSES set.
+        status: { in: ['pending', 'confirmed'] },
+        expiresAt: { gt: asOf },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: PENDING_LIST_LIMIT,
+      select: {
+        id: true,
+        userId: true,
+        conversationId: true,
+        type: true,
+        status: true,
+        parameters: true,
+        parametersChecksum: true,
+        quoteId: true,
+        expiresAt: true,
+        confirmedAt: true,
+        createdAt: true,
+      },
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      conversationId: row.conversationId,
+      type: row.type,
+      status: row.status as ProposalStatus,
+      parameters: row.parameters as Record<string, unknown>,
+      parametersChecksum: row.parametersChecksum,
+      quoteId: row.quoteId,
+      expiresAt: row.expiresAt,
+      confirmedAt: row.confirmedAt,
+      createdAt: row.createdAt,
+    }));
   }
 }

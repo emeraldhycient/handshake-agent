@@ -79,6 +79,8 @@ export interface LedgerTableProps {
   currency: string
   onAccount: (value: string) => void
   onCurrency: (value: string) => void
+  /** Currency axis options from the live catalog (fiats + assets), never hardcoded. */
+  currencyOptions: readonly FilterOption[]
   exporting: boolean
   onExport: () => void
   isLoading: boolean
@@ -103,6 +105,12 @@ export interface TxnLedgerProps {
 export interface CurrencyAmount {
   currency: string
   amount: string
+}
+
+/** One `{ value, label }` option for a FilterSelect-style control. */
+export interface FilterOption {
+  value: string
+  label: string
 }
 
 /** One point on a trend chart (an x label + a numeric y value). */
@@ -163,6 +171,8 @@ export interface MetricsFilterState {
 export interface MetricsFilterBarProps {
   value: MetricsFilterState
   onChange: (next: MetricsFilterState) => void
+  /** Currency options derived from the live catalog read (never hardcoded). */
+  currencyOptions: readonly FilterOption[]
 }
 
 /**
@@ -494,8 +504,8 @@ export interface UserKycMeta {
   fg: string
 }
 
-/** The three risk facets the users filter row exposes as toggle chips. */
-export type UserRiskFlag = "simSwap" | "sanctions" | "velocity"
+/** The risk facets the users filter row exposes as toggle chips (modeled fields only). */
+export type UserRiskFlag = "simSwap" | "sanctions"
 
 /** A rendered risk-filter chip's derived state. */
 export interface UserRiskChip {
@@ -548,7 +558,7 @@ export interface UsersHeaderProps {
   onExport: () => void
 }
 
-/** The Users-directory filter row: search + KYC/tier/country selects + risk chips. */
+/** The Users-directory filter row: search + KYC/tier selects + risk chips. */
 export interface UsersFilterBarProps {
   search: string
   onSearchChange: (value: string) => void
@@ -556,8 +566,6 @@ export interface UsersFilterBarProps {
   onKycChange: (value: string) => void
   tier: string
   onTierChange: (value: string) => void
-  country: string
-  onCountryChange: (value: string) => void
   risk: UserRiskFlag | ""
   onToggleRisk: (value: UserRiskFlag) => void
 }
@@ -736,8 +744,8 @@ export interface TransactionDetailProps {
 /** The engine-state stepper tone for one timeline node. */
 export type TxTimelineTone = "done" | "pending" | "fail"
 
-/** A triage action the operator can open on a transaction. `receipt` is a toast no-op. */
-export type TxFlowKind = "retry" | "refund" | "markFailed" | "recon" | "receipt"
+/** A triage action the operator can open on a transaction. */
+export type TxFlowKind = "retry" | "refund" | "markFailed" | "recon"
 
 /** One header triage-action button (label + the flow it opens + icon + danger tint). */
 export interface TxActionButton {
@@ -1010,18 +1018,18 @@ export interface AuditTableProps {
 export type SanctionsMatchDone =
   import("@handshake-agent/contracts").SanctionsDisposition
 
-/** One ongoing-monitoring toggle row, seeded from the config view. */
+/** One ongoing-monitoring status row (read-only), seeded from the config view. */
 export interface SanctionsMonitorRow {
   key: keyof import("@handshake-agent/contracts").SanctionsMonitoringView
   label: string
   on: boolean
 }
 
-/** The active disposition flow (mirrors the design's `runFlow` step chain). */
+/** The active disposition flow. Every kind captures its input then fires the POST. */
 export type SanctionsActiveFlow =
   | { kind: "clear"; matchId: string }
   | { kind: "escalate"; matchId: string }
-  | { kind: "block"; matchId: string; step: "reason" | "stepup" }
+  | { kind: "block"; matchId: string }
   | null
 
 /** One screening-match card — open matches offer Clear / Escalate / Block. */
@@ -1048,15 +1056,20 @@ export interface SanctionsMatchListProps {
   onBlock: (id: string) => void
 }
 
-/** The shared disposition flow modals (Clear / Escalate / Block → step-up). */
+/** The shared disposition flow modals (Clear / Escalate / Block). */
 export interface SanctionsFlowModalsProps {
   flow: SanctionsActiveFlow
   labelOf: (matchId: string) => string
   onClose: () => void
-  /** Fire the disposition mutation (step-up-gated). */
-  onDisposition: (matchId: string, done: SanctionsMatchDone) => void
-  /** Advance the Block flow reason → step-up. */
-  onAdvanceBlock: (matchId: string) => void
+  /**
+   * Fire the disposition mutation (server-step-up-gated). `comment` carries the
+   * operator's typed reason so it lands on the audited annotation.
+   */
+  onDisposition: (
+    matchId: string,
+    done: SanctionsMatchDone,
+    comment?: string
+  ) => void
   mfaEnabled: boolean
   stepUpOpen: boolean
   onStepUpOpenChange: (open: boolean) => void
@@ -1109,7 +1122,20 @@ export interface UdLimitsQuery {
 export interface UdLimitsTabProps {
   tier: string
   query: UdLimitsQuery
+  /** The operator-selected fiat scope; null → the server default (the response's own fiat). */
+  currency: string | null
+  /** Catalog fiat codes for the currency chips (empty/1 → no selector rendered). */
+  currencyOptions: readonly string[]
+  onCurrency: (code: string) => void
   onRetry: () => void
+}
+
+/** The Limits tab's fiat-scope chip row (one chip per catalog fiat). */
+export interface UdLimitsCurrencyChipsProps {
+  options: readonly string[]
+  /** The chip to highlight (the selected/served currency); null → none. */
+  active: string | null
+  onSelect: (code: string) => void
 }
 
 /** One labelled velocity bar (used / cap + a clamped progress track). */
@@ -1220,7 +1246,7 @@ export interface UdWalletsTabProps {
 }
 
 /** The steps a user-detail action flow walks (design runFlow: credit → reason → step-up → engine/maker). */
-export type UdFlowStep = "credit" | "reason" | "stepup" | "engine" | "maker"
+export type UdFlowStep = "credit" | "reason" | "engine" | "maker"
 
 /** A user-detail action flow's config: title, step sequence, modal payloads, and the completion side-effect. */
 export interface UdFlowConfig {
@@ -1301,12 +1327,10 @@ export interface BlockedTableProps {
   onUnblock: (entry: import("@handshake-agent/contracts").BlockedEntry) => void
 }
 
-/** The active supersede (unblock) flow: reason (audited) → step-up (client TOTP) → POST. */
+/** The active supersede (unblock) flow: reason (audited) → the step-up-guarded POST. */
 export interface SupersedeFlow {
   id: string
   value: string
-  reason: string
-  step: "reason" | "stepup"
 }
 
 /** A pending add awaiting its audited reason (the dialog already collected the value). */
@@ -1448,29 +1472,30 @@ export interface OperatorDashboardProps {
 
 // ─── Feature flags page (design §6.28) ─────────────────────────────────────────────
 // WIRED to the effective-config registry (`GET /admin/settings`): a registry-backed
-// flag (one with a `settingKey`) resolves a REAL effective `on`; unbacked design flags
-// keep their default. Flipping a backed flag is a maker-checker → step-up config write.
-// The `rollout` chip stays design-faithful (no cohort/percentage rollout engine).
+// flag (one with a `settingKey`) resolves a REAL effective `on` and exposes a working
+// toggle. An UNBACKED flag renders as a read-only "Not yet wired" row — no switch, no
+// modal, no fabricated eval/rollout claims.
 
 /**
  * One feature-flag row (design §6.28). `on` drives the toggle track +
- * `eval → on/off` preview; `rollout` is the per-cohort / percentage chip label.
+ * `eval → on/off` preview (registry-backed rows only); `rollout` is the scope
+ * chip label (present only when the flag is actually backed by config).
  */
 export interface FeatureFlagRow {
   /** Stable key (also the mono flag key rendered in the row). */
   key: string
   /** One-line description of what the flag gates. */
   desc: string
-  /** The per-cohort / percentage rollout chip label (e.g. "100% · all users"). */
-  rollout: string
-  /** Whether the flag is currently enabled (drives the toggle + eval preview). */
+  /** The scope chip label (e.g. "global · all users"); absent on unbacked rows. */
+  rollout?: string
+  /** Whether the flag is currently enabled — meaningful only when registry-backed. */
   on: boolean
 }
 
 /**
  * A flag definition. `settingKey` bridges the FE flag key → the registry dot-path
  * that backs it; when present, the row's `on` is the real effective value. Rows
- * without a `settingKey` are not registry-backed (they keep their design default).
+ * without a `settingKey` are not registry-backed (rendered read-only, never toggled).
  */
 export interface FlagDefinition extends FeatureFlagRow {
   settingKey?: string
@@ -1720,6 +1745,11 @@ export interface TreasuryPayoutRow {
   method: string
   /** The payout amount (mono / tabular, 13.5px/800). */
   amt: string
+  /**
+   * The fiat leg in the payout's OWN fiatCurrency ("≈ ₦…"), when the amount is
+   * crypto; null when the amount already is the fiat figure.
+   */
+  fiat: string | null
   /** Large payout → shows the "Maker-checker" tag + dual-control approve path. */
   big: boolean
 }
@@ -1729,7 +1759,11 @@ export interface BalanceCardProps {
   card: TreasuryCard
 }
 
-/** The 4-up balance-card row — error / loading / data over `BalanceCard`. */
+/**
+ * The balance-card row — error / loading / data over `BalanceCard`. The card
+ * list is currency-keyed (hero + one float card per currency + per-pair FX
+ * positions + exposure), so the grid flows past four tiles when needed.
+ */
 export interface BalanceCardsRowProps {
   cards: TreasuryCard[]
   isLoading: boolean
@@ -2104,8 +2138,8 @@ export interface AddPriceDialogProps {
 /** The two priced, fiat-denominated capabilities that carry per-row MIN/MAX bounds. */
 export type PricingCap = "buy" | "sell"
 
-/** The generalized pricing edit chain: value → reason → step-up → maker-checker → PATCH. */
-export type PricingFlowStep = "value" | "reason" | "stepup" | "maker"
+/** The generalized pricing edit chain: value → reason → confirm → the step-up-guarded PATCH. */
+export type PricingFlowStep = "value" | "reason" | "maker"
 
 /** One resolved spread row (buy or sell) of the design's pricing grid. */
 export interface SpreadRow {
@@ -2249,8 +2283,8 @@ export interface ResolvedCapability extends CapabilityRow {
 /** The config layer a key resolved from — `db` (an admin override) vs env/JSON baseline. */
 export type SettingSource = "DB" | "Baseline"
 
-/** The settings edit chain: value → reason → step-up → maker-checker → PATCH. */
-export type SettingsFlowStep = "value" | "reason" | "stepup" | "maker" | null
+/** The settings edit chain: value → reason → confirm → the step-up-guarded PATCH. */
+export type SettingsFlowStep = "value" | "reason" | "maker" | null
 
 /** One design-reproduction settings row, mapped from a real `EffectiveSetting`. */
 export interface SettingRow {
@@ -2335,7 +2369,8 @@ export interface WhatsAppHealthRowProps {
 /** An honest shape-gap note for a panel whose backing read endpoint does not exist yet. */
 export interface ShapeGapNoteProps {
   title: string
-  children: string
+  /** The explanatory copy (may embed an inline link to the real surface). */
+  children: ReactNode
 }
 
 // ─── Limits & velocity page (design §6.26) ─────────────────────────────────────────
@@ -2632,16 +2667,6 @@ export interface ReasonModalProps extends FlowModalBaseProps {
   categories?: readonly string[]
 }
 
-/**
- * StepUpModal (design line 1182) — dark-green lock, six TOTP digit boxes (active box
- * amber border), an on-screen keypad, Cancel. `onComplete` fires with the 6-digit
- * code once all boxes fill.
- */
-export interface StepUpModalProps extends FlowModalBaseProps {
-  /** Called with the assembled 6-digit code when the last box fills. */
-  onComplete: (code: string) => void
-}
-
 /** One "Itemized effect" key/value row in the engine-action modal. */
 export interface EngineEffectRow {
   /** The effect label (left, muted). */
@@ -2704,15 +2729,25 @@ export interface MakerCheckerDiffRow {
 }
 
 /**
- * MakerCheckerModal (design line 1214) — amber shield icon, "enters Pending approval"
- * copy, a from→to change-preview table, Cancel / dark "Submit for approval".
- * `onSubmit` fires when the dark CTA is pressed.
+ * How a confirmed change takes effect — drives the modal's honest copy.
+ * `immediate`: applies as soon as the operator confirms (step-up-gated, audited).
+ * `dual-control`: raises a ChangeRequest a SECOND admin must approve (four-eyes).
+ */
+export type MakerCheckerMode = "immediate" | "dual-control"
+
+/**
+ * MakerCheckerModal (design line 1214) — amber shield icon, a from→to
+ * change-preview table, Cancel / dark confirm CTA. The copy is honest per `mode`:
+ * only a surface that actually raises a ChangeRequest may claim "Pending
+ * approval". `onSubmit` fires when the dark CTA is pressed.
  */
 export interface MakerCheckerModalProps extends FlowModalBaseProps {
   /** The itemized change preview (from→to per field). */
   diff: MakerCheckerDiffRow[]
-  /** Fired when the operator submits for a second admin's approval. */
+  /** Fired when the operator confirms (immediate) / submits for approval (dual-control). */
   onSubmit: () => void
+  /** Defaults to "immediate" — the honest copy for direct step-up-gated writes. */
+  mode?: MakerCheckerMode
 }
 
 // ─── Shared UI primitives (design §5) ──────────────────────────────────────────────

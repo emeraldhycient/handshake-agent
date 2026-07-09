@@ -8,8 +8,10 @@
  *     (counterpartyId, provider/type, verdict), and the ongoing-monitoring card shows.
  *  2. empty: an empty screening-run history renders the design-consistent empty state.
  *  3. error: a failed fetch renders the tokened inline error with a Retry affordance.
- *  4. The ongoing-monitoring switches remain CONTROLLED — clicking one genuinely flips
- *     + holds its state (`aria-checked` toggles), matching the design's soft-toggle.
+ *  4. The ongoing-monitoring policy renders as READ-ONLY status pills — there is no
+ *     write path for it, so a flippable switch would be a local-state lie.
+ *  5. Dispositions thread the typed reason into `comment`; Escalate confirms with
+ *     honest immediate copy; the real step-up is server-driven (403 → StepUpDialog).
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
@@ -165,36 +167,21 @@ describe("SanctionsPage", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
   })
 
-  it("flips a monitoring switch on click and holds the new state", async () => {
-    const user = userEvent.setup()
+  it("renders the monitoring policy as read-only status pills (no toggle — nothing persists one)", async () => {
     renderPage()
 
     await screen.findByText("cp_musa_sani")
+    await screen.findByText("Re-screen all customers daily against updated lists")
 
-    // "Auto-block confirmed OFAC SDN-list hits" starts OFF.
-    const offToggle = screen.getByRole("switch", {
-      name: "Auto-block confirmed OFAC SDN-list hits",
-    })
-    expect(offToggle).toHaveAttribute("aria-checked", "false")
-
-    await user.click(offToggle)
-    await waitFor(() =>
-      expect(offToggle).toHaveAttribute("aria-checked", "true")
-    )
-
-    // "Re-screen all customers daily against updated lists" starts ON → toggles off.
-    const onToggle = screen.getByRole("switch", {
-      name: "Re-screen all customers daily against updated lists",
-    })
-    expect(onToggle).toHaveAttribute("aria-checked", "true")
-
-    await user.click(onToggle)
-    await waitFor(() =>
-      expect(onToggle).toHaveAttribute("aria-checked", "false")
-    )
+    // No fake switch: there is no write path for the monitoring policy, so a
+    // flippable toggle would be a local-state lie. Status pills only.
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument()
+    // Config: three flags on, auto-block off → three On pills + one Off pill.
+    expect(screen.getAllByText("On")).toHaveLength(3)
+    expect(screen.getAllByText("Off")).toHaveLength(1)
   })
 
-  it("seeds each monitoring switch from the fetched config view", async () => {
+  it("seeds each monitoring pill from the fetched config view", async () => {
     // Flip the config: re-screen OFF, PEP alert OFF, auto-block ON.
     mockGetMonitoring.mockResolvedValue({
       reScreenDaily: false,
@@ -204,21 +191,10 @@ describe("SanctionsPage", () => {
     })
     renderPage()
 
-    const reScreen = await screen.findByRole("switch", {
-      name: "Re-screen all customers daily against updated lists",
-    })
-    expect(reScreen).toHaveAttribute("aria-checked", "false")
-
-    expect(
-      screen.getByRole("switch", {
-        name: "Alert on new PEP (politically exposed person) matches",
-      })
-    ).toHaveAttribute("aria-checked", "false")
-    expect(
-      screen.getByRole("switch", {
-        name: "Auto-block confirmed OFAC SDN-list hits",
-      })
-    ).toHaveAttribute("aria-checked", "true")
+    await screen.findByText("Re-screen all customers daily against updated lists")
+    // Two flags on (outbound screen + auto-block), two off.
+    expect(screen.getAllByText("On")).toHaveLength(2)
+    expect(screen.getAllByText("Off")).toHaveLength(2)
   })
 
   it("renders a monitoring error branch with a Retry when the policy fetch fails", async () => {
@@ -273,15 +249,17 @@ describe("SanctionsPage (Phase 7 — disposition WRITE)", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }))
 
     await waitFor(() => expect(mockDispose).toHaveBeenCalledTimes(1))
+    // The typed reason is THREADED into the audited disposition as `comment` —
+    // never silently dropped.
     expect(mockDispose).toHaveBeenCalledWith(
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-      { disposition: "cleared" }
+      { disposition: "cleared", comment: "No true match" }
     )
     // The card flips to its done-label optimistically on success.
     expect(await screen.findByText("Cleared")).toBeInTheDocument()
   })
 
-  it("fires disposeSanctions with the blocked disposition through the Block reason → step-up flow", async () => {
+  it("fires disposeSanctions with the blocked disposition + comment through the Block reason flow", async () => {
     const user = userEvent.setup()
     mockDispose.mockResolvedValue({
       ...SANCTIONS.items[0],
@@ -290,21 +268,49 @@ describe("SanctionsPage (Phase 7 — disposition WRITE)", () => {
     renderPage()
 
     await screen.findByText("cp_musa_sani")
-    // Block → ReasonModal → StepUpModal → disposeSanctions.
+    // Block → ReasonModal → disposeSanctions. The old in-flow TOTP keypad is gone:
+    // the REAL step-up is server-driven (403 → StepUpDialog → replay).
     await user.click(screen.getAllByRole("button", { name: "Block" })[0])
     await user.type(
       await screen.findByRole("textbox", { name: "Reason" }),
       "OFAC SDN confirmed"
     )
     await user.click(screen.getByRole("button", { name: "Continue" }))
-    for (const d of ["1", "2", "3", "4", "5", "6"]) {
-      await user.click(await screen.findByRole("button", { name: d }))
-    }
 
     await waitFor(() => expect(mockDispose).toHaveBeenCalledTimes(1))
     expect(mockDispose).toHaveBeenCalledWith(
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-      { disposition: "blocked" }
+      { disposition: "blocked", comment: "OFAC SDN confirmed" }
+    )
+    // No decorative 6-digit keypad remains in the flow.
+    expect(
+      screen.queryByText("Step-up authentication")
+    ).not.toBeInTheDocument()
+  })
+
+  it("escalates through an HONEST immediate confirm (a disposition applies now — no approval queue)", async () => {
+    const user = userEvent.setup()
+    mockDispose.mockResolvedValue({
+      ...SANCTIONS.items[0],
+      disposition: "escalated",
+    })
+    renderPage()
+
+    await screen.findByText("cp_musa_sani")
+    await user.click(screen.getAllByRole("button", { name: "Escalate" })[0])
+
+    // The confirm modal must not claim "Pending approval" — the disposition POST
+    // applies immediately (step-up-gated + audited), no change request is raised.
+    const dialog = await screen.findByRole("dialog")
+    expect(screen.getByText(/applies immediately/i)).toBeInTheDocument()
+    expect(screen.queryByText(/pending approval/i)).not.toBeInTheDocument()
+    expect(dialog).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Confirm change" }))
+    await waitFor(() => expect(mockDispose).toHaveBeenCalledTimes(1))
+    expect(mockDispose).toHaveBeenCalledWith(
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      { disposition: "escalated" }
     )
   })
 

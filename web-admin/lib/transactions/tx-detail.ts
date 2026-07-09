@@ -113,8 +113,6 @@ export function flowSpecFor(
         // A detection pass posts no ledger legs (§3.1).
         ledger: [],
       }
-    case "receipt":
-      return null // design: no flow — just a toast
   }
 }
 

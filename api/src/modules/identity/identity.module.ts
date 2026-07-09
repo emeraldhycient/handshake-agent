@@ -20,9 +20,12 @@ import { VelocityPrismaRepository } from './infrastructure/velocity.prisma.repos
 import { KycPrismaRepository } from './infrastructure/kyc.prisma.repository';
 import { HandoffTokenPrismaRepository } from './infrastructure/handoff-token.prisma.repository';
 import { ActiveUserListerPrismaAdapter } from './infrastructure/active-user-lister.prisma';
+import { ProfileSessionPrismaRepository } from './infrastructure/profile-session.prisma.repository';
 import { MockKycProvider } from './infrastructure/mock-kyc.provider';
 import { KycController } from './presentation/kyc.controller';
 import { ProfileService } from './application/profile.service';
+import { ProfileSettingsService } from './application/profile-settings.service';
+import { PROFILE_SESSION_REPOSITORY } from './application/ports/profile-session.repository.port';
 import { ProfileController } from './presentation/profile.controller';
 
 /**
@@ -55,6 +58,13 @@ import { ProfileController } from './presentation/profile.controller';
   controllers: [KycController, ProfileController],
   providers: [
     ProfileService,
+    // Wave C settings writes (PIN change / profile patch / session revoke).
+    // PinService resolves from the imported core AuthModule.
+    ProfileSettingsService,
+    {
+      provide: PROFILE_SESSION_REPOSITORY,
+      useClass: ProfileSessionPrismaRepository,
+    },
     IdentityService,
     KycGateService,
     KycService,
@@ -79,6 +89,8 @@ import { ProfileController } from './presentation/profile.controller';
     KycGateService,
     KycService,
     HandoffTokenService,
+    // Wave C: exported for the MCP module's get_profile tool (read-only).
+    ProfileService,
     IDENTITY_REPOSITORY,
     // Phase 2, Task 2: export KYC_REPOSITORY so AdminModule can inject it for
     // the admin KYC-review decision write path (updateKycProfileDecision).

@@ -291,6 +291,16 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.UNPROCESSABLE_ENTITY,
     message: 'A manual credit is not allowed for this user.',
   },
+  // A client-supplied fiat code is not in the live catalog (built-in + custom) → 422.
+  ADMIN_UNSUPPORTED_CURRENCY: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'That currency is not in the fiat catalog.',
+  },
+  // A broadcast referenced a template key absent from the template store → 422.
+  ADMIN_BROADCAST_TEMPLATE_UNKNOWN: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'That notification template does not exist.',
+  },
 
   // ── Admin config settings (layered-config console) → 409 / 422 ──────────────
   ADMIN_SETTING_NOT_EDITABLE: {

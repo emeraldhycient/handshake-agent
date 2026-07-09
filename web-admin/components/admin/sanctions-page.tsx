@@ -36,9 +36,7 @@ export function SanctionsPage() {
         doneOf={s.doneOf}
         onClear={(id) => s.setFlow({ kind: "clear", matchId: id })}
         onEscalate={(id) => s.setFlow({ kind: "escalate", matchId: id })}
-        onBlock={(id) =>
-          s.setFlow({ kind: "block", matchId: id, step: "reason" })
-        }
+        onBlock={(id) => s.setFlow({ kind: "block", matchId: id })}
       />
 
       <OngoingMonitoring />
@@ -48,7 +46,6 @@ export function SanctionsPage() {
         labelOf={s.labelOf}
         onClose={() => s.setFlow(null)}
         onDisposition={s.disposition}
-        onAdvanceBlock={s.advanceBlock}
         mfaEnabled={s.me.data?.mfaEnabled ?? false}
         stepUpOpen={s.stepUp.open}
         onStepUpOpenChange={s.stepUp.setOpen}

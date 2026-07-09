@@ -17,6 +17,7 @@ import {
   AdminEndUserSessionSchema,
   AdminEndUserSessionListResponseSchema,
   AdminEndUserLimitsResponseSchema,
+  AdminEndUserLimitsQuerySchema,
   AdminEndUserTimelineEntrySchema,
   CreateManualCreditRequestSchema,
   AdminEndUserTimelineResponseSchema,
@@ -442,6 +443,7 @@ const limitsResponse = {
   velocity: {
     dailyFiatUsed: "252551.70",
     dailyTxCount: 6,
+    fiatCurrency: "NGN",
     windowStart: "2026-06-29T12:00:00.000Z",
     windowEnd: "2026-06-30T12:00:00.000Z",
   },
@@ -452,6 +454,18 @@ describe("AdminEndUserLimitsResponseSchema", () => {
     const parsed = AdminEndUserLimitsResponseSchema.parse(limitsResponse);
     expect(parsed.effectiveLimits?.dailyTxCountMax).toBe(50);
     expect(parsed.velocity.dailyTxCount).toBe(6);
+    expect(parsed.velocity.fiatCurrency).toBe("NGN");
+  });
+
+  it("requires velocity.fiatCurrency (the usage window is per-currency)", () => {
+    const { fiatCurrency: _dropped, ...velocityWithout } =
+      limitsResponse.velocity;
+    expect(() =>
+      AdminEndUserLimitsResponseSchema.parse({
+        ...limitsResponse,
+        velocity: velocityWithout,
+      }),
+    ).toThrow();
   });
 
   it("parses a null effectiveLimits (unverified user)", () => {
@@ -468,6 +482,24 @@ describe("AdminEndUserLimitsResponseSchema", () => {
         ...limitsResponse,
         velocity: { ...limitsResponse.velocity, dailyTxCount: "six" },
       }),
+    ).toThrow();
+  });
+});
+
+describe("AdminEndUserLimitsQuerySchema", () => {
+  it("parses an empty query (currency defaults server-side)", () => {
+    expect(AdminEndUserLimitsQuerySchema.parse({})).toEqual({});
+  });
+
+  it("parses a well-formed ?currency= code", () => {
+    expect(AdminEndUserLimitsQuerySchema.parse({ currency: "GHS" })).toEqual({
+      currency: "GHS",
+    });
+  });
+
+  it("rejects a malformed currency code", () => {
+    expect(() =>
+      AdminEndUserLimitsQuerySchema.parse({ currency: "naira!" }),
     ).toThrow();
   });
 });

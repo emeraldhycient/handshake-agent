@@ -25,6 +25,11 @@ import { MetricsDashboard } from "@/components/admin/metrics-dashboard"
 vi.mock("@/lib/api/metrics", () => ({
   getDashboardMetrics: vi.fn(),
 }))
+// The currency filter options derive from the catalog read; an empty catalog
+// falls back to the offline fiat set (covered in use-currency-filter-options).
+vi.mock("@/lib/api/catalog", () => ({
+  getAdminCatalog: vi.fn().mockResolvedValue({ assets: [], fiats: [] }),
+}))
 
 import { getDashboardMetrics } from "@/lib/api/metrics"
 

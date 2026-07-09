@@ -75,7 +75,9 @@ export const TIMELINE_TONE: Record<
   },
 }
 
-// The engine-brokered triage actions (Phase 7 owns their writes — propose-only here).
+// The engine-brokered triage actions (propose-only here — the engine disposes).
+// NOTE: "Resend receipt" is deliberately absent — no resend endpoint exists yet,
+// and a button that only toasts success would be a fabricated confirmation.
 export const TX_ACTIONS: TxActionButton[] = [
   {
     label: "Retry settlement",
@@ -94,7 +96,6 @@ export const TX_ACTIONS: TxActionButton[] = [
     danger: true,
   },
   { label: "Re-run recon", kind: "recon", icon: "M12 4v16M4 20h16" },
-  { label: "Resend receipt", kind: "receipt", icon: "M4 4h16v12H8l-4 4z" },
 ]
 
 /** Per-provider display label + (for TRON) an external explorer link builder. */

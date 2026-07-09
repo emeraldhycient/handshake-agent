@@ -116,7 +116,18 @@ describe("searchCatalogFixture", () => {
       expect(() => SearchResultSchema.parse(result)).not.toThrow()
     }
   })
-  it("has 10 catalog items", () => {
-    expect(searchCatalogFixture).toHaveLength(10)
+  it("has 9 catalog items", () => {
+    expect(searchCatalogFixture).toHaveLength(9)
+  })
+  it("contains NO fake Transaction rows (the catalog feeds the LIVE topbar search)", () => {
+    expect(searchCatalogFixture.every((r) => r.kind !== "Transaction")).toBe(
+      true
+    )
+  })
+  it("action copy is currency-neutral (no ₦ / naira pins)", () => {
+    for (const r of searchCatalogFixture) {
+      const copy = `${r.title} ${r.desc} ${r.label ?? ""}`
+      expect(copy).not.toMatch(/₦|naira/i)
+    }
   })
 })

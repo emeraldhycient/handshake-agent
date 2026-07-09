@@ -66,8 +66,15 @@ export function PayoutQueuePanel({
                   {row.ref} · {row.method}
                 </div>
               </div>
-              <div className="shrink-0 font-mono text-[13.5px] font-extrabold text-ink tabular-nums">
-                {row.amt}
+              <div className="shrink-0 text-right">
+                <div className="font-mono text-[13.5px] font-extrabold text-ink tabular-nums">
+                  {row.amt}
+                </div>
+                {row.fiat && (
+                  <div className="font-mono text-[11px] text-ink3 tabular-nums">
+                    {row.fiat}
+                  </div>
+                )}
               </div>
               {row.big && (
                 <span className="shrink-0 rounded-md bg-swn px-2 py-[3px] text-[9.5px] font-extrabold tracking-[0.02em] text-twn uppercase">

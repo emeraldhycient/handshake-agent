@@ -1,6 +1,8 @@
 "use client"
 
-import { MakerCheckerModal, StepUpModal } from "@/components/admin/flows"
+import { cn } from "@/lib/utils"
+import { MakerCheckerModal } from "@/components/admin/flows"
+import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { TemplateEditorDialog } from "@/components/admin/template-editor-dialog"
 import { NativeSelect } from "@/components/ui/native-select"
 import { useBroadcastComposer } from "@/lib/hooks/use-broadcast-composer"
@@ -97,11 +99,20 @@ export function BroadcastComposer() {
         <button
           type="button"
           onClick={c.queueBroadcast}
+          disabled={!c.canSend}
           aria-label={c.ctaLabel}
-          className="rounded-[11px] bg-brand-amber px-3 py-3 text-center text-[13.5px] font-extrabold text-[--ink-on-amber] transition-opacity hover:opacity-90 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          className={cn(
+            "rounded-[11px] bg-brand-amber px-3 py-3 text-center text-[13.5px] font-extrabold text-[--ink-on-amber] transition-opacity focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+            c.canSend ? "hover:opacity-90" : "cursor-not-allowed opacity-50"
+          )}
         >
           {c.ctaLabel}
         </button>
+        {c.sendDisabledHint && (
+          <p className="text-center text-[11.5px] text-ink3">
+            {c.sendDisabledHint}
+          </p>
+        )}
       </div>
 
       <MakerCheckerModal
@@ -116,12 +127,13 @@ export function BroadcastComposer() {
         onSubmit={() => void c.submitBroadcast()}
       />
 
-      {/* Step-up (TOTP) — opened when the send 403s; on completion the send replays. */}
-      <StepUpModal
+      {/* REAL step-up re-auth — opened when the send 403s ADMIN_STEP_UP_REQUIRED;
+          a successful re-auth replays the stashed send. */}
+      <StepUpDialog
         open={c.stepUp.open}
+        mfaEnabled={c.mfaEnabled}
         onOpenChange={c.stepUp.setOpen}
-        title="send broadcast"
-        onComplete={() => void c.retryAfterStepUp()}
+        onSuccess={() => void c.retryAfterStepUp()}
       />
 
       {/* Author a new notification template inline (POST via useUpsertTemplate). */}

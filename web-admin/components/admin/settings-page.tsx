@@ -4,15 +4,11 @@
  * SettingsPage — the layered-config (AppSetting) console (design §6.30), WIRED to
  * `useSettings()`. Orchestrator: pulls the editor state machine from `useSettingsEditor`
  * and composes the header, the key-search box, the settings table, and the shared
- * funds-safety edit chain (value → reason → step-up → maker-checker → the real PATCH).
+ * funds-safety edit chain (value → reason → confirm → the real step-up-guarded PATCH).
  * The PATCH re-validates + hot-reloads + audits `config_change` server-side — it never
  * moves money (§3.1/§3.2). A 403 opens the StepUpDialog and the PATCH replays on re-auth.
  */
-import {
-  MakerCheckerModal,
-  ReasonModal,
-  StepUpModal,
-} from "@/components/admin/flows"
+import { MakerCheckerModal, ReasonModal } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { useSettingsEditor } from "@/lib/hooks/use-settings-editor"
 import { SettingsTable } from "@/components/admin/settings/settings-table"
@@ -79,7 +75,8 @@ export function SettingsPage() {
         onEdit={s.startEdit}
       />
 
-      {/* Funds-safety flow chain: value → reason → step-up → maker-checker */}
+      {/* Funds-safety flow chain: value → reason → confirm. The REAL step-up is
+          server-driven — the PATCH 403s and the StepUpDialog below replays it. */}
       <SettingValueModal
         open={s.step === "value"}
         row={s.editing}
@@ -91,12 +88,6 @@ export function SettingsPage() {
         onOpenChange={(next) => (next ? undefined : s.closeFlow())}
         title={s.flowTitle}
         onContinue={s.onReasonContinue}
-      />
-      <StepUpModal
-        open={s.step === "stepup"}
-        onOpenChange={(next) => (next ? undefined : s.closeFlow())}
-        title={s.flowTitle}
-        onComplete={s.onStepUpComplete}
       />
       <MakerCheckerModal
         open={s.step === "maker"}

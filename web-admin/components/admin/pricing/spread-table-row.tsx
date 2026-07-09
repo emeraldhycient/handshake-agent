@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import { PRICING_GRID } from "@/constants/pricing"
-import { formatBound } from "@/lib/pricing/rows"
+import { formatFiat } from "@/lib/format"
 import type { SpreadTableRowProps } from "@/types/components"
 
 /**
@@ -41,7 +41,7 @@ export function SpreadTableRow({
         >
           {row.minValue !== null ? (
             <span className="text-ink2">
-              min {formatBound(row.currency, row.minValue)}
+              min {formatFiat(row.minValue, row.currency)}
             </span>
           ) : (
             <span className="text-ink3">+ min</span>
@@ -55,7 +55,7 @@ export function SpreadTableRow({
         >
           {row.maxValue !== null ? (
             <span className="text-ink2">
-              max {formatBound(row.currency, row.maxValue)}
+              max {formatFiat(row.maxValue, row.currency)}
             </span>
           ) : (
             <span className="text-ink3">+ max</span>

@@ -8,17 +8,17 @@
  *
  * The chain mirrors the canonical funds-safety flow (sanctions-page pattern):
  *   Reset 2FA → ReasonModal (recorded in the immutable audit log)
- *             → StepUpModal (client TOTP prompt)
  *             → useResetAdminMfa (POST /admin/admins/:id/mfa/reset).
- * The server independently re-checks step-up + write permission; a 403
- * ADMIN_STEP_UP_REQUIRED opens `StepUpDialog` and the POST replays after re-auth
- * (`useStepUpRetry`). On success we toast + the hook invalidates the admins query.
+ * The REAL step-up is server-driven: the server re-checks step-up + write
+ * permission; a 403 ADMIN_STEP_UP_REQUIRED opens `StepUpDialog` and the POST
+ * replays after re-auth (`useStepUpRetry`). On success we toast + the hook
+ * invalidates the admins query.
  */
 import { useState } from "react"
 import type { AdminUser } from "@handshake-agent/contracts"
 
 import { Button } from "@/components/ui/button"
-import { ReasonModal, StepUpModal } from "@/components/admin/flows"
+import { ReasonModal } from "@/components/admin/flows"
 import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { useAdminMe, useResetAdminMfa } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
@@ -34,8 +34,8 @@ interface AdminResetMfaActionProps {
   admin: AdminUser
 }
 
-// The active reset flow step (reason → step-up), or null when closed.
-type FlowStep = "reason" | "stepup" | null
+// The active reset flow step, or null when closed.
+type FlowStep = "reason" | null
 
 /** Normalizes a mutation/step-up failure into a user-facing message. */
 function errorMessage(error: unknown): string {
@@ -50,8 +50,6 @@ export function AdminResetMfaAction({ admin }: AdminResetMfaActionProps) {
   const stepUp = useStepUpRetry()
 
   const [step, setStep] = useState<FlowStep>(null)
-  // The reason captured in step 1, carried into the mutation fired from step 2.
-  const [reason, setReason] = useState("")
 
   /** Fire the reset through the server step-up guard; a 403 opens StepUpDialog. */
   function submit(auditReason: string) {
@@ -75,31 +73,18 @@ export function AdminResetMfaAction({ admin }: AdminResetMfaActionProps) {
         size="sm"
         variant="outline"
         disabled={reset.isPending}
-        onClick={() => {
-          setReason("")
-          setStep("reason")
-        }}
+        onClick={() => setStep("reason")}
       >
         Reset 2FA for {admin.email}
       </Button>
 
-      {/* Step 1 — reason (audited). */}
+      {/* Reason (audited) → the step-up-guarded POST fires directly; the server
+          demands re-auth via 403 when the operator's step-up is stale. */}
       <ReasonModal
         open={step === "reason"}
         onOpenChange={(next) => !next && setStep(null)}
         title={`Reset 2FA — ${admin.displayName}`}
-        onContinue={(entered) => {
-          setReason(entered)
-          setStep("stepup")
-        }}
-      />
-
-      {/* Step 2 — client step-up TOTP; completing it fires the reset. */}
-      <StepUpModal
-        open={step === "stepup"}
-        onOpenChange={(next) => !next && setStep(null)}
-        title={`Reset 2FA — ${admin.displayName}`}
-        onComplete={() => submit(reason)}
+        onContinue={(entered) => submit(entered)}
       />
 
       {/* Server-side step-up re-auth: a 403 on the POST opens this; it replays

@@ -25,7 +25,10 @@ import {
   VELOCITY_REPOSITORY,
   type IVelocityRepository,
 } from '../../identity/application/ports/velocity.repository.port';
-import { AdminNotFoundError } from '../domain/admin-errors';
+import {
+  AdminNotFoundError,
+  AdminUnsupportedCurrencyError,
+} from '../domain/admin-errors';
 import {
   USER_SESSION_READ_REPOSITORY,
   type IUserSessionReadRepository,
@@ -82,14 +85,21 @@ export class AdminUserSecurityService {
 
   /**
    * The user's effective per-tier caps (from layered config, resolved for the
-   * user's tier + default fiat) plus live 24-h velocity usage. `effectiveLimits`
-   * is null for an unverified user (no tier caps apply pre-verification).
+   * user's tier + the requested fiat) plus live 24-h velocity usage.
+   * `effectiveLimits` is null for an unverified user (no tier caps apply
+   * pre-verification). `currency` is an optional fiat code (?currency= on the
+   * endpoint) re-validated server-side against the live catalog — built-in AND
+   * runtime custom fiats — failing closed on an unrecognised code (§3.3);
+   * omitted → the registry default fiat.
    */
-  async getLimits(userId: string): Promise<AdminEndUserLimitsResponse> {
+  async getLimits(
+    userId: string,
+    currency?: string,
+  ): Promise<AdminEndUserLimitsResponse> {
     const user = await this.identity.loadUser(userId);
     if (user === null) throw new AdminNotFoundError('User');
 
-    const fiatCurrency = this.registry.defaultFiat();
+    const fiatCurrency = this.resolveRequestedCurrency(currency);
     const asOf = this.clock.now();
     const usage = await this.velocity.getDailyUsage(userId, asOf, fiatCurrency);
 
@@ -100,6 +110,7 @@ export class AdminUserSecurityService {
       velocity: {
         dailyFiatUsed: usage.fiatTotal,
         dailyTxCount: usage.txCount,
+        fiatCurrency,
         windowStart: windowStart.toISOString(),
         windowEnd: asOf.toISOString(),
       },
@@ -196,6 +207,21 @@ export class AdminUserSecurityService {
   private async assertUserExists(userId: string): Promise<void> {
     const user = await this.identity.loadUser(userId);
     if (user === null) throw new AdminNotFoundError('User');
+  }
+
+  /**
+   * Resolves the fiat the limits view is scoped to: the explicit `?currency=`
+   * when supplied (validated against the FULL recognised catalog —
+   * `supportedFiats()` spans built-ins + runtime custom fiats, enabled or not,
+   * since an operator may inspect usage in a currency that was later paused),
+   * else the registry default fiat. Unknown codes fail closed (§3.3).
+   */
+  private resolveRequestedCurrency(currency?: string): string {
+    if (currency === undefined) return this.registry.defaultFiat();
+    if (!this.registry.supportedFiats().includes(currency)) {
+      throw new AdminUnsupportedCurrencyError(currency);
+    }
+    return currency;
   }
 
   /**

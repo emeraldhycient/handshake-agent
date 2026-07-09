@@ -5,8 +5,6 @@ import {
   bpsToPct,
   buildBaseRates,
   buildSpreadRows,
-  fiatRate,
-  formatBound,
   formatRate,
   num,
   parseValue,
@@ -30,12 +28,8 @@ function s(key: string, value: unknown): EffectiveSetting {
 }
 
 describe("scalar formatters", () => {
-  it("bpsToPct / fiatRate / formatBound / formatRate / num", () => {
+  it("bpsToPct / formatRate / num", () => {
     expect(bpsToPct(150)).toBe("1.50%")
-    expect(fiatRate("NGN", 1375)).toBe("₦1,375.00")
-    expect(fiatRate("GHS", 19.5)).toBe("19.50 GHS")
-    expect(formatBound("NGN", 5_000_000)).toBe("₦5,000,000")
-    expect(formatBound("GHS", 5_000_000)).toBe("5,000,000 GHS")
     expect(formatRate("NGN", 1375)).toBe("1,375 NGN")
     expect(num(s("k", 12))).toBe(12)
     expect(num(s("k", "x"))).toBe(null)

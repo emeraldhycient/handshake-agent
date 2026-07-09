@@ -1,5 +1,7 @@
 import { AdminNotificationBroadcastService } from './admin-notification-broadcast.service';
+import { BroadcastTemplateUnknownError } from '../domain/admin-errors';
 import type { IBroadcastDispatchRepository } from './ports/broadcast-dispatch.repository.port';
+import type { INotificationTemplateRepository } from '../../notifications/application/ports/notification-template.repository.port';
 import type { AdminApprovalsService } from './admin-approvals.service';
 import type { AuditService } from '../../../core/audit/application/audit.service';
 import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
@@ -20,6 +22,9 @@ function req(over: Partial<BroadcastSendRequest> = {}): BroadcastSendRequest {
 
 describe('AdminNotificationBroadcastService', () => {
   let dispatch: jest.Mocked<IBroadcastDispatchRepository>;
+  let templates: jest.Mocked<
+    Pick<INotificationTemplateRepository, 'existsByKey'>
+  >;
   let approvals: jest.Mocked<Pick<AdminApprovalsService, 'create'>>;
   let audit: jest.Mocked<Pick<AuditService, 'record'>>;
   let config: jest.Mocked<Pick<EffectiveConfigService, 'get'>>;
@@ -30,6 +35,8 @@ describe('AdminNotificationBroadcastService', () => {
       countAudience: jest.fn(),
       enqueueBroadcast: jest.fn(),
     };
+    // The template store recognises the fixture key by default.
+    templates = { existsByKey: jest.fn().mockResolvedValue(true) };
     approvals = {
       create: jest.fn().mockResolvedValue({ id: CR_ID }),
     };
@@ -38,10 +45,40 @@ describe('AdminNotificationBroadcastService', () => {
     config = { get: jest.fn().mockReturnValue(10_000) };
     service = new AdminNotificationBroadcastService(
       dispatch,
+      templates as unknown as INotificationTemplateRepository,
       approvals as unknown as AdminApprovalsService,
       audit as unknown as AuditService,
       config as unknown as EffectiveConfigService,
     );
+  });
+
+  describe('templateKey validation (fail-closed against the template store)', () => {
+    it('rejects an unknown templateKey with a 422 domain error — nothing enqueued, nothing queued', async () => {
+      templates.existsByKey.mockResolvedValue(false);
+      dispatch.countAudience.mockResolvedValue(2140);
+
+      await expect(
+        service.send(req({ templateKey: 'ghost_template' }), ADMIN),
+      ).rejects.toBeInstanceOf(BroadcastTemplateUnknownError);
+
+      expect(templates.existsByKey).toHaveBeenCalledWith('ghost_template');
+      expect(dispatch.enqueueBroadcast).not.toHaveBeenCalled();
+      expect(approvals.create).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('validates BEFORE the maker-checker branch (a large blast with a ghost key never enters the inbox)', async () => {
+      templates.existsByKey.mockResolvedValue(false);
+      dispatch.countAudience.mockResolvedValue(50_000);
+
+      await expect(
+        service.send(
+          req({ templateKey: 'ghost_template', audience: 'all' }),
+          ADMIN,
+        ),
+      ).rejects.toBeInstanceOf(BroadcastTemplateUnknownError);
+      expect(approvals.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('small audience (below threshold) → direct dispatch', () => {

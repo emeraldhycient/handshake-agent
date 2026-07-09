@@ -261,4 +261,40 @@ describe("ChatMessageView", () => {
     // intent that produced this card (not the mutable last-intent).
     expect(onResolveBeneficiary).toHaveBeenCalledWith("ben-9", "needs-card-77")
   })
+
+  it("choose_beneficiary message renders the picker and forwards its message id on select", async () => {
+    const onResolveBeneficiary = vi.fn()
+    const msg: ChatMessage = {
+      id: "choose-card-88",
+      role: "assistant",
+      kind: "choose_beneficiary",
+      beneficiaryType: "bank_account",
+      nickname: "mum",
+      candidates: [
+        {
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          label: "Mum",
+          detail: "Guaranty Trust Bank (GTBank) ••6789",
+        },
+      ],
+    }
+    render(
+      <ChatMessageView
+        message={msg}
+        density="mobile"
+        onConfirm={noop}
+        onSelectTicket={noopTicket}
+        onResolveBeneficiary={onResolveBeneficiary}
+      />
+    )
+
+    expect(screen.getByText(/You have 1 saved as .mum./i)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: /Mum/i }))
+    // The picker binds to ITS OWN message id so the store resumes the exact
+    // intent that produced it.
+    expect(onResolveBeneficiary).toHaveBeenCalledWith(
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "choose-card-88"
+    )
+  })
 })

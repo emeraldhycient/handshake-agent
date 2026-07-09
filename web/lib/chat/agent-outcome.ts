@@ -18,7 +18,7 @@ import type {
   SwapProposalConfirmation,
 } from "@handshake-agent/contracts"
 import type { ChatAction, ChatMessage } from "@/lib/schemas"
-import { formatNGN } from "@/lib/format"
+import { formatFiat } from "@/lib/format"
 import { ASSET_NAMES, ASSET_TINTS } from "@/lib/constants"
 import { mapHistoryItemToRow } from "@/lib/api/mappers/history-row"
 
@@ -30,13 +30,14 @@ export interface MappedOutcome {
 }
 
 /**
- * The live settlement fiat at launch. Sourced from one named constant so the
- * `currency_not_live` copy never hardcodes the currency in two places (where it
- * could drift). When a second market goes live this is the single point to
- * update (audit #28 — mirrors the balance branch's use of `outcome.fiatCurrency`
- * rather than a hardcoded literal).
+ * Join fiat codes into prose: "NGN" / "NGN and GHS" / "NGN, GHS and KES".
+ * Used by the `currency_not_live` copy so the live settlement set reads
+ * naturally however many currencies the server reports.
  */
-export const LIVE_SETTLEMENT_FIAT = "NGN"
+function joinCurrencyList(codes: string[]): string {
+  if (codes.length === 1) return codes[0]
+  return `${codes.slice(0, -1).join(", ")} and ${codes[codes.length - 1]}`
+}
 
 export function mapOutcomeToMessages(
   outcome: AgentTurnOutcome,
@@ -109,20 +110,22 @@ export function mapOutcomeToMessages(
         const b = c as BuyProposalConfirmation
         receiveAmt = b.cryptoAmount + " " + b.asset
         receiveSub = "You receive"
+        // Drive every fiat row from the confirmation's fiatCurrency (§3.1
+        // confirmation integrity) — never a hardcoded ₦. Mirrors the sell branch.
         rows.push({
           label: "You pay",
-          value: formatNGN(b.fiatAmount),
+          value: formatFiat(b.fiatAmount, b.fiatCurrency),
         })
         rows.push({
           label: "Rate",
-          value: "1 " + b.asset + " = " + formatNGN(b.fxRate),
+          value: "1 " + b.asset + " = " + formatFiat(b.fxRate, b.fiatCurrency),
         })
         rows.push({
           label: "Fee",
-          value: formatNGN(b.processingFeeAmount),
+          value: formatFiat(b.processingFeeAmount, b.fiatCurrency),
         })
         totalLabel = "Total charged"
-        totalValue = formatNGN(b.totalFiat)
+        totalValue = formatFiat(b.totalFiat, b.fiatCurrency)
       } else if (outcome.txType === "sell") {
         // outcome.txType === 'sell' guarantees the server sent SellProposalConfirmation (schema-validated at ingress)
         const s = c as SellProposalConfirmation
@@ -191,11 +194,31 @@ export function mapOutcomeToMessages(
   } else if (outcome.kind === "needs_beneficiary") {
     // Inline add/select-beneficiary card; on resolve the store re-asks the
     // agent with the chosen beneficiaryId so the proposal can be created.
+    // `note` carries the server's targeted copy when a recipient nickname
+    // matched nothing (e.g. "No saved beneficiary called 'mum'…").
     messages.push({
       id: makeId(),
       role: "assistant",
       kind: "needs_beneficiary",
       beneficiaryType: outcome.beneficiaryType,
+      note: outcome.note,
+    })
+  } else if (outcome.kind === "choose_beneficiary") {
+    // Nickname matched MORE THAN ONE saved beneficiary — render the pick-one
+    // card. Candidates are passed through verbatim: `id` is a server-resolved
+    // lookup key and `detail` is already masked server-side (§3.1) — the mapper
+    // must never synthesize or unmask a destination.
+    messages.push({
+      id: makeId(),
+      role: "assistant",
+      kind: "choose_beneficiary",
+      beneficiaryType: outcome.beneficiaryType,
+      nickname: outcome.nickname,
+      candidates: outcome.candidates.map((c) => ({
+        id: c.id,
+        label: c.label,
+        detail: c.detail,
+      })),
     })
   } else if (outcome.kind === "balance") {
     // Use the outcome's fiatCurrency rather than hardcoding NGN, so the card
@@ -224,14 +247,19 @@ export function mapOutcomeToMessages(
       text: "That's not supported yet.",
     })
   } else if (outcome.kind === "currency_not_live") {
-    // Source the live settlement currency from the single named constant rather
-    // than hardcoding it twice in user-facing financial copy (audit #28).
-    const live = LIVE_SETTLEMENT_FIAT
+    // The server sends the catalog-driven live settlement set (liveCurrencies)
+    // so this copy names what CAN settle today. Older persisted history rows
+    // pre-date the field — fall back to the legacy launch copy for those.
+    const live = outcome.liveCurrencies ?? []
+    const text =
+      live.length > 0
+        ? `We currently settle in ${joinCurrencyList(live)} — ${outcome.currency} isn't live yet.`
+        : `We settle in NGN for now — ${outcome.currency} isn't live yet. Want to continue in NGN?`
     messages.push({
       id: makeId(),
       role: "assistant",
       kind: "text",
-      text: `We settle in ${live} for now — ${outcome.currency} isn't live yet. Want to continue in ${live}?`,
+      text,
     })
   } else if (outcome.kind === "transactions") {
     messages.push({

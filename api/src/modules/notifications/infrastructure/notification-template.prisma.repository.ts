@@ -52,6 +52,14 @@ export class NotificationTemplatePrismaRepository implements INotificationTempla
     return row ? toRecord(row) : null;
   }
 
+  async existsByKey(templateKey: string): Promise<boolean> {
+    const count = await this.prisma.notificationTemplate.count({
+      where: { templateKey },
+      take: 1,
+    });
+    return count > 0;
+  }
+
   async upsert(
     input: UpsertNotificationTemplateInput,
   ): Promise<NotificationTemplateRecord> {

@@ -137,6 +137,7 @@ beforeEach(() => {
     velocity: {
       dailyFiatUsed: "0",
       dailyTxCount: 0,
+      fiatCurrency: "NGN",
       windowStart: "2024-02-09T00:00:00.000Z",
       windowEnd: "2024-02-10T00:00:00.000Z",
     },
@@ -150,15 +151,10 @@ beforeEach(() => {
   mockStepUp.mockResolvedValue(undefined)
 })
 
-/** Fill the flow's six-box TOTP keypad (each keydown fills one box). */
-async function enterStepUpCode(user: ReturnType<typeof userEvent.setup>) {
-  await user.keyboard("123456")
-}
-
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("UserDetail — KYC decisions (Phase 7 WRITE)", () => {
-  it("approves through reason → step-up → maker-checker, promoting to the requested tier", async () => {
+  it("approves through reason → confirm, promoting to the requested tier", async () => {
     const user = userEvent.setup()
     renderDetail()
 
@@ -172,10 +168,10 @@ describe("UserDetail — KYC decisions (Phase 7 WRITE)", () => {
     await user.type(await screen.findByLabelText("Reason"), "Docs verified")
     await user.click(screen.getByRole("button", { name: "Continue" }))
 
-    // Step-up keypad → maker-checker dual-control confirmation.
-    await enterStepUpCode(user)
+    // Confirm step (honest immediate copy — the approve POST applies right after
+    // the SERVER-side step-up gate; no ChangeRequest is raised).
     await user.click(
-      await screen.findByRole("button", { name: "Submit for approval" })
+      await screen.findByRole("button", { name: "Confirm change" })
     )
 
     // The real approve mutation fires with the submission's requested verified tier.
@@ -205,17 +201,13 @@ describe("UserDetail — KYC decisions (Phase 7 WRITE)", () => {
     expect(mockApprove).not.toHaveBeenCalled()
   })
 
-  it("request-info → reason → step-up fires requestKycInfo (no approve/reject)", async () => {
+  it("request-info → reason fires requestKycInfo (no approve/reject)", async () => {
     const user = userEvent.setup()
     renderDetail()
 
     await user.click(await screen.findByRole("button", { name: "Request info" }))
     await user.type(await screen.findByLabelText("Reason"), "Need a clearer ID")
     await user.click(screen.getByRole("button", { name: "Continue" }))
-
-    // The request-info route is step-up-gated — the mutation must not fire yet.
-    expect(mockRequestInfo).not.toHaveBeenCalled()
-    await enterStepUpCode(user)
 
     await waitFor(() =>
       expect(mockRequestInfo).toHaveBeenCalledWith(USER_ID, "Need a clearer ID")

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import type { ChooseBeneficiaryView } from "@/lib/schemas"
 import type {
   Density,
   ConfirmSheetProps,
@@ -8,6 +9,24 @@ import type {
 
 /** Beneficiary kind ("bank_account" | "crypto_address"). */
 export type BeneficiaryKind = NeedsBeneficiaryCardProps["beneficiaryType"]
+
+/**
+ * Pick-one beneficiary card shown for a choose_beneficiary outcome (a recipient
+ * nickname matched more than one saved beneficiary). Mirrors
+ * NeedsBeneficiaryCardProps: `messageId` binds the resolve to THIS card so the
+ * store resumes the exact intent that produced it.
+ */
+export type ChooseBeneficiaryCardProps = ChooseBeneficiaryView & {
+  density: Density
+  /** This card's chat-message id — forwarded as `onResolve`'s second arg. */
+  messageId?: string
+  /**
+   * Called with the chosen candidate's beneficiaryId. The id is a server-side
+   * LOOKUP KEY only — the proposal/engine re-validate before any money moves.
+   */
+  onResolve: (beneficiaryId: string, messageId?: string) => void
+  className?: string
+}
 
 export interface SavedBeneficiaryListProps {
   beneficiaryType: BeneficiaryKind
