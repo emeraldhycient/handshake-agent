@@ -14,6 +14,7 @@ import {
   type BeneficiaryRecord,
 } from '../../beneficiaries/application/ports/beneficiary.repository.port';
 import { AdminNotFoundError } from '../domain/admin-errors';
+import { toIso } from './iso-date.util';
 
 /** Default page size for the admin beneficiary list when the caller omits one. */
 const DEFAULT_LIST_LIMIT = 50;
@@ -137,8 +138,4 @@ function toAdminBeneficiary(b: BeneficiaryRecord, now: Date): AdminBeneficiary {
       lockedUntil !== null && lockedUntil.getTime() > now.getTime(),
     createdAt: b.createdAt.toISOString(),
   };
-}
-
-function toIso(value: Date | null): string | null {
-  return value !== null ? value.toISOString() : null;
 }

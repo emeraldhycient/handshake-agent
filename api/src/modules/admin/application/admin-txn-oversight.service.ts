@@ -28,6 +28,7 @@ import {
   type IAdminTxnReadRepository,
 } from './ports/admin-txn-read.repository.port';
 import { AdminNotFoundError } from '../domain/admin-errors';
+import { toIso } from './iso-date.util';
 
 /** Default page size for the admin transactions list when the caller omits one. */
 const DEFAULT_LIST_LIMIT = 20;
@@ -272,10 +273,6 @@ export class AdminTxnOversightService {
       .sort((a, b) => a.at.getTime() - b.at.getTime())
       .map((c) => ({ status: c.status, at: c.at.toISOString() }));
   }
-}
-
-function toIso(value: Date | null): string | null {
-  return value !== null ? value.toISOString() : null;
 }
 
 /** Returns the value as a trimmed string when it is a non-empty string, else null. */
