@@ -29,6 +29,7 @@ import {
   type TreasuryPayoutQueueRecord,
 } from '../../treasury/application/ports/treasury-read.repository.port';
 import { AdminNotFoundError } from '../domain/admin-errors';
+import { toIso } from './iso-date.util';
 
 // Config keys (admin-tunable AppSetting overlay, root §7). Absent → fall back to a
 // documented constant so the endpoint stays live before the keys are seeded.
@@ -313,10 +314,6 @@ function toAlert(r: TreasuryAlertRecord): TreasuryAlert {
     triggeredAt: r.triggeredAt.toISOString(),
     acknowledgedAt: toIso(r.acknowledgedAt),
   };
-}
-
-function toIso(value: Date | null): string | null {
-  return value !== null ? value.toISOString() : null;
 }
 
 /**

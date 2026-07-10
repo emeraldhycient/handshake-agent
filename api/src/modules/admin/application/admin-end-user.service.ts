@@ -35,6 +35,7 @@ import {
 import { WalletBalanceService } from '../../wallets/application/wallet-balance.service';
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { AdminNotFoundError } from '../domain/admin-errors';
+import { toIso } from './iso-date.util';
 
 /** Ledger account type for a user's custodial wallet (mirrors LedgerAccountType.user_wallet). */
 const USER_WALLET_ACCOUNT = 'user_wallet';
@@ -476,10 +477,6 @@ export class AdminEndUserService {
         postedAt: e.postedAt.toISOString(),
       }));
   }
-}
-
-function toIso(value: Date | null): string | null {
-  return value ? value.toISOString() : null;
 }
 
 /**

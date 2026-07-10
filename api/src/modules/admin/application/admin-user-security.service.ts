@@ -34,6 +34,7 @@ import {
   type IUserSessionReadRepository,
   type UserSessionRecord,
 } from './ports/user-session-read.repository.port';
+import { toIso } from './iso-date.util';
 
 /** How many of the user's most-recent sessions to surface on the Security tab. */
 const SESSIONS_LIMIT = 20;
@@ -262,8 +263,4 @@ export class AdminUserSecurityService {
       revokedAt: toIso(s.revokedAt),
     };
   }
-}
-
-function toIso(value: Date | null): string | null {
-  return value ? value.toISOString() : null;
 }
