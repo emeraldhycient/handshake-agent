@@ -92,6 +92,17 @@ vi.mock("@/lib/api/admin", () => ({
   stepUp: vi.fn(),
 }))
 
+// The per-user tier override is now a four-eyes maker-checker request (A6): it
+// raises a `user_tier_override` ChangeRequest via POST /admin/approvals, never the
+// immediate PATCH. The approvals client is mocked so the override test can assert
+// the request payload.
+vi.mock("@/lib/api/approvals", () => ({
+  getApprovalsInbox: vi.fn(),
+  createChange: vi.fn(),
+  approveChange: vi.fn(),
+  rejectChange: vi.fn(),
+}))
+
 import {
   getEndUser,
   listEndUserDevices,
@@ -108,6 +119,7 @@ import {
 } from "@/lib/api/users"
 import { getKycSubmission } from "@/lib/api/kyc"
 import { getMe, stepUp } from "@/lib/api/admin"
+import { createChange } from "@/lib/api/approvals"
 
 const mockGetEndUser = vi.mocked(getEndUser)
 const mockListDevices = vi.mocked(listEndUserDevices)
@@ -124,6 +136,7 @@ const mockSimSwapReverify = vi.mocked(simSwapReverify)
 const mockRequestManualCredit = vi.mocked(requestManualCredit)
 const mockGetMe = vi.mocked(getMe)
 const mockStepUp = vi.mocked(stepUp)
+const mockCreateChange = vi.mocked(createChange)
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -264,6 +277,7 @@ beforeEach(() => {
   mockRevokeDevice.mockReset()
   mockSimSwapReverify.mockReset()
   mockRequestManualCredit.mockReset()
+  mockCreateChange.mockReset()
   mockGetMe.mockReset()
   mockStepUp.mockReset()
   mockGetEndUser.mockResolvedValue(DETAIL)
@@ -279,6 +293,7 @@ beforeEach(() => {
   mockRevokeDevice.mockResolvedValue(undefined)
   mockSimSwapReverify.mockResolvedValue(undefined)
   mockRequestManualCredit.mockResolvedValue({} as never)
+  mockCreateChange.mockResolvedValue({} as never)
   mockGetMe.mockResolvedValue({ mfaEnabled: true } as never)
   mockStepUp.mockResolvedValue(undefined)
 })
@@ -534,7 +549,7 @@ describe("UserDetail account actions (Phase 7 writes)", () => {
     await waitFor(() => expect(mockForcePinReset).toHaveBeenCalledWith(USER_ID))
   })
 
-  it("Override tier → reason → confirm fires adjustTier (de-escalated tier)", async () => {
+  it("Override tier → reason → submit raises a four-eyes change request (not an immediate PATCH)", async () => {
     searchParams = new URLSearchParams("tab=kyc")
     const user = userEvent.setup()
     renderDetail()
@@ -544,17 +559,27 @@ describe("UserDetail account actions (Phase 7 writes)", () => {
     )
     await completeReason(user, "Downgrade risk")
 
-    // The confirm step is final — the mutation fires only on confirm. The PATCH
-    // applies immediately (no ChangeRequest), so the copy is the honest immediate one.
-    expect(mockAdjustTier).not.toHaveBeenCalled()
-    expect(screen.getByText(/applies immediately/i)).toBeInTheDocument()
+    // A6: the per-user tier override is now a four-eyes maker-checker request — the
+    // confirm modal states it enters Pending approval (never "applies immediately"),
+    // and nothing fires until Submit. The immediate PATCH is never used.
+    expect(mockCreateChange).not.toHaveBeenCalled()
+    expect(screen.getByText(/pending approval/i)).toBeInTheDocument()
+    expect(screen.queryByText(/applies immediately/i)).not.toBeInTheDocument()
     await user.click(
-      await screen.findByRole("button", { name: "Confirm change" })
+      await screen.findByRole("button", { name: "Submit for approval" })
     )
-    // The DETAIL fixture is tier_2 → override de-escalates to tier_1.
+    // The DETAIL fixture is tier_2 → override de-escalates to tier_1. The maker's
+    // reason is threaded onto the request; the change is applied by the checker.
     await waitFor(() =>
-      expect(mockAdjustTier).toHaveBeenCalledWith(USER_ID, { tier: "tier_1" })
+      expect(mockCreateChange).toHaveBeenCalledWith({
+        kind: "user_tier_override",
+        resource: `User:${USER_ID}`,
+        payload: { userId: USER_ID, tier: "tier_1" },
+        reason: "Downgrade risk",
+      })
     )
+    // The direct tier PATCH is never invoked from this surface anymore.
+    expect(mockAdjustTier).not.toHaveBeenCalled()
   })
 
   it("Revoke device → reason fires revokeDevice with the row's device id", async () => {

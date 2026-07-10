@@ -13,7 +13,7 @@ export function SecuritySection() {
   const [changingPin, setChangingPin] = useState(false)
 
   return (
-    <div className="overflow-hidden rounded-[16px] border border-border bg-card">
+    <div className="rounded-[16px] border border-border bg-card">
       <p className="border-b border-border px-5 py-[13px] text-xs font-bold tracking-widest text-muted-foreground uppercase">
         Security
       </p>

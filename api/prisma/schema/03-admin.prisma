@@ -226,6 +226,11 @@ enum ChangeRequestKind {
   // approval the applier routes through the engine's atomic settleManualCreditAtomic
   // (AdminManualCreditService) — never a raw ledger write (§3.1).
   manual_credit
+  // Go-live (A6): a maker-checker override of a SINGLE end user's account KYC tier
+  // (formerly the immediate PATCH /admin/users/:id/tier). On approval the applier
+  // re-runs AdminEndUserService.adjustTier with { userId, tier } from the payload —
+  // it gates limits, it moves no money (§3.1).
+  user_tier_override
 
   @@map("change_request_kind")
 }

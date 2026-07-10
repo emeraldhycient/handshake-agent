@@ -429,14 +429,21 @@ describe('Admin end-user management + KYC review — e2e (AppModule, Testcontain
       where: { userId },
     });
     expect(needsInfoProfile.status).toBe('needs_info');
-    // A paused review: the earlier tier adjustment (tier_1) is preserved, not reset.
-    expect(needsInfoProfile.tier).toBe('tier_1');
+    // A paused review: request-info touches only the STATUS, never the tier. The
+    // admin tier adjustment lands on User.kycTier (the effective account tier the
+    // gate reads) — not KycProfile.tier, which records the tier the KYC
+    // submission was made at. So the profile tier stays at its seeded value
+    // (confirmed earlier via requestedTier === 'unverified'), while the
+    // User-level tier the admin set is preserved through the pause (asserted below).
+    expect(needsInfoProfile.tier).toBe('unverified');
     expect(needsInfoProfile.rejectionReason).toBeNull();
 
     const needsInfoUser = await prisma.user.findUniqueOrThrow({
       where: { id: userId },
     });
     expect(needsInfoUser.kycStatus).toBe('needs_info');
+    // The earlier admin tier adjustment (tier_1) survives the paused review.
+    expect(needsInfoUser.kycTier).toBe('tier_1');
 
     const requestInfoAudit = await prisma.auditLog.findFirst({
       where: { subject: `User:${userId}`, action: 'kyc_state_change' },
@@ -473,8 +480,9 @@ describe('Admin end-user management + KYC review — e2e (AppModule, Testcontain
     });
     expect(approveAudit).not.toBeNull();
 
-    // 9. POST /admin/users/:id/notes — append two operator notes (write, not
-    //    step-up-guarded: a note moves no money). Returns 201 with the wire shape.
+    // 9. POST /admin/users/:id/notes — append two operator notes (a step-up-guarded
+    //    write; the step-up stamped in step 5 is still fresh here). Returns 201 with
+    //    the wire shape. A dedicated test below asserts the step-up gate in isolation.
     const firstNote = await request(app.getHttpServer())
       .post(`/admin/users/${userId}/notes`)
       .set('Authorization', `Bearer ${rootToken}`)
@@ -596,5 +604,49 @@ describe('Admin end-user management + KYC review — e2e (AppModule, Testcontain
       where: { subject: `User:${userId}`, action: 'session_revoke' },
     });
     expect(revokeAudits).toBe(2);
+  }, 90_000);
+
+  // ===========================================================================
+  // NOTES STEP-UP — a case note is a write into a user's audit trail, so it must
+  // require a FRESH step-up (a cookie-authenticated CSRF must not plant one).
+  // ===========================================================================
+
+  it('requires a fresh step-up to append an operator note', async () => {
+    // A fresh session (loginRoot) carries NO step-up.
+    const rootToken = await loginRoot();
+    const user = await prisma.user.create({
+      data: {
+        email: 'note-stepup@e2e.test',
+        status: 'active',
+        kycStatus: 'verified',
+        kycTier: 'tier_1',
+      },
+    });
+
+    // Without a fresh step-up the note write is 403 (ADMIN_STEP_UP_REQUIRED) —
+    // nothing is persisted.
+    await request(app.getHttpServer())
+      .post(`/admin/users/${user.id}/notes`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ body: 'Should be blocked without step-up.' })
+      .expect(403);
+
+    const blockedCount = await prisma.adminUserNote.count({
+      where: { userId: user.id },
+    });
+    expect(blockedCount).toBe(0);
+
+    // After a fresh step-up the same write succeeds (201) and persists.
+    await stepUp(rootToken);
+    await request(app.getHttpServer())
+      .post(`/admin/users/${user.id}/notes`)
+      .set('Authorization', `Bearer ${rootToken}`)
+      .send({ body: 'Recorded after step-up.' })
+      .expect(201);
+
+    const afterCount = await prisma.adminUserNote.count({
+      where: { userId: user.id },
+    });
+    expect(afterCount).toBe(1);
   }, 90_000);
 });

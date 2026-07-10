@@ -159,7 +159,7 @@ export class CloudApiSender implements IWhatsAppSender {
   async sendBeneficiaryFlow(
     input: SendBeneficiaryFlowInput,
   ): Promise<SendResult> {
-    const { to, flowId, flowToken, type, beneficiaries } = input;
+    const { to, flowId, flowToken, type, beneficiaries, currency } = input;
 
     const payload = {
       messaging_product: 'whatsapp',
@@ -184,6 +184,10 @@ export class CloudApiSender implements IWhatsAppSender {
               data: {
                 type,
                 beneficiaries,
+                // Wave G: seed the payout currency so the bank add-form (and its
+                // data_exchange submit) carries it back to the Flow endpoint,
+                // which derives the country server-side. Omitted for crypto.
+                ...(currency ? { currency } : {}),
               },
             },
           },

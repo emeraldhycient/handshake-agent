@@ -57,6 +57,7 @@ const STUB_CATALOG = {
       symbol: '₦',
       decimals: 2,
       enabled: true,
+      country: 'NG',
     },
     // Supported but NOT live — matches the multi-currency foundation pattern.
     RWF: {
@@ -65,6 +66,7 @@ const STUB_CATALOG = {
       symbol: 'FRw',
       decimals: 0,
       enabled: false,
+      country: 'RW',
     },
     GHS: {
       code: 'GHS',
@@ -72,6 +74,7 @@ const STUB_CATALOG = {
       symbol: 'GH₵',
       decimals: 2,
       enabled: false,
+      country: 'GH',
     },
   },
   networks: {
@@ -771,6 +774,66 @@ describe('AssetRegistry', () => {
     });
   });
 
+  // ── countryForFiat() ──────────────────────────────────────────────────────
+
+  describe('countryForFiat()', () => {
+    it('returns the ISO alpha-2 country for a live fiat', () => {
+      expect(registry.countryForFiat('NGN')).toBe('NG');
+    });
+
+    it('returns the country for a registered-but-not-live fiat', () => {
+      expect(registry.countryForFiat('RWF')).toBe('RW');
+      expect(registry.countryForFiat('GHS')).toBe('GH');
+    });
+
+    it('throws UnsupportedFiatError for a code not in the catalog', () => {
+      expect(() => registry.countryForFiat('EUR')).toThrow(
+        UnsupportedFiatError,
+      );
+    });
+
+    it('throws UnsupportedFiatError for a fiat with no country mapping (fail-closed)', () => {
+      // A runtime custom fiat synced without a country → cannot derive a country.
+      registry.syncCustomFiats([
+        {
+          code: 'XAF',
+          displayName: 'Central African CFA',
+          symbol: 'FCFA',
+          decimals: 0,
+          enabled: false,
+        },
+      ]);
+      expect(() => registry.countryForFiat('XAF')).toThrow(
+        UnsupportedFiatError,
+      );
+    });
+  });
+
+  // ── knownCountries() ──────────────────────────────────────────────────────
+
+  describe('knownCountries()', () => {
+    it('returns the distinct set of catalog fiat countries', () => {
+      const countries = registry.knownCountries();
+      expect(countries).toContain('NG');
+      expect(countries).toContain('RW');
+      expect(countries).toContain('GH');
+    });
+
+    it('omits fiats with no country mapping', () => {
+      registry.syncCustomFiats([
+        {
+          code: 'XAF',
+          displayName: 'Central African CFA',
+          symbol: 'FCFA',
+          decimals: 0,
+          enabled: false,
+        },
+      ]);
+      // XAF has no country → not surfaced; no `undefined` leaks in.
+      expect(registry.knownCountries()).not.toContain(undefined);
+    });
+  });
+
   // ── enabledFiats() ───────────────────────────────────────────────────────
 
   describe('enabledFiats()', () => {
@@ -797,6 +860,103 @@ describe('AssetRegistry', () => {
 
     it('returns all three entries from the stub catalog', () => {
       expect(registry.supportedFiats()).toHaveLength(3);
+    });
+  });
+
+  // ── Hot-reload of catalog kill-switch toggles (go-live hardening F3) ──────
+  //
+  // The registry must read the HOT-RELOADED EffectiveConfigService live on every
+  // liveness call, NOT a boot-time snapshot. When an admin flips a catalog
+  // kill-switch (`catalog.fiats.<code>.enabled` / `catalog.assets.<sym>.enabled`)
+  // the settings write calls `effectiveConfig.refresh()`, which rebuilds the
+  // in-memory snapshot as a NEW object. These tests prove the SAME registry
+  // instance reflects the change — no reconstruction — so money-path liveness
+  // updates without a restart.
+  describe('hot-reload of catalog kill-switch toggles', () => {
+    /**
+     * A test double that mimics EffectiveConfigService: it holds a merged catalog
+     * snapshot and, on `refresh(next)`, swaps in a fresh object (exactly as
+     * `EffectiveConfigService.refresh()` does via `applyOverrides`). `get('catalog')`
+     * always reads the CURRENT snapshot.
+     */
+    function makeHotConfig(initial: typeof STUB_CATALOG) {
+      let current: typeof STUB_CATALOG = initial;
+      const config = {
+        get: (key: string) => (key === 'catalog' ? current : undefined),
+      } as unknown as ConfigService;
+      const refresh = (next: typeof STUB_CATALOG) => {
+        current = next;
+      };
+      return { config, refresh };
+    }
+
+    it('reflects a fiat enable toggle (false→true) without reconstructing the registry', () => {
+      const { config, refresh } = makeHotConfig(structuredClone(STUB_CATALOG));
+      const reg = new AssetRegistry(config);
+
+      // GHS starts disabled (not live).
+      expect(reg.isCurrencyLive('GHS')).toBe(false);
+      expect(reg.isFiatEnabled('GHS')).toBe(false);
+      expect(reg.enabledFiats()).not.toContain('GHS');
+
+      // Admin flips the kill-switch → EffectiveConfigService rebuilds its snapshot.
+      const next = structuredClone(STUB_CATALOG);
+      next.fiats.GHS.enabled = true;
+      refresh(next);
+
+      // Same registry instance — proves a per-call live read, not a boot snapshot.
+      expect(reg.isCurrencyLive('GHS')).toBe(true);
+      expect(reg.isFiatEnabled('GHS')).toBe(true);
+      expect(reg.enabledFiats()).toContain('GHS');
+      // supportedFiats always recognises the code (independent of enabled).
+      expect(reg.supportedFiats()).toContain('GHS');
+    });
+
+    it('reflects a fiat disable toggle (true→false) — the kill-switch takes effect immediately', () => {
+      const { config, refresh } = makeHotConfig(structuredClone(STUB_CATALOG));
+      const reg = new AssetRegistry(config);
+
+      expect(reg.isCurrencyLive('NGN')).toBe(true);
+      expect(reg.enabledFiats()).toContain('NGN');
+
+      const next = structuredClone(STUB_CATALOG);
+      next.fiats.NGN.enabled = false;
+      refresh(next);
+
+      expect(reg.isCurrencyLive('NGN')).toBe(false);
+      expect(reg.isFiatEnabled('NGN')).toBe(false);
+      expect(reg.enabledFiats()).not.toContain('NGN');
+    });
+
+    it('reflects an asset enable toggle (false→true) without reconstructing the registry', () => {
+      const { config, refresh } = makeHotConfig(structuredClone(STUB_CATALOG));
+      const reg = new AssetRegistry(config);
+
+      // BTC starts disabled.
+      expect(reg.isAssetEnabled('BTC')).toBe(false);
+      expect(reg.enabledCryptoAssets()).not.toContain('BTC');
+      expect(() => reg.asset('BTC')).toThrow(UnsupportedAssetError);
+
+      const next = structuredClone(STUB_CATALOG);
+      next.assets.BTC.enabled = true;
+      refresh(next);
+
+      expect(reg.isAssetEnabled('BTC')).toBe(true);
+      expect(reg.enabledCryptoAssets()).toContain('BTC');
+      expect(reg.asset('BTC').symbol).toBe('BTC');
+    });
+
+    it('reflects a capability flag flip live (crypto.swap false→true)', () => {
+      const { config, refresh } = makeHotConfig(structuredClone(STUB_CATALOG));
+      const reg = new AssetRegistry(config);
+
+      expect(reg.isCapabilityEnabled('crypto.swap')).toBe(false);
+
+      const next = structuredClone(STUB_CATALOG);
+      next.capabilities['crypto.swap'] = true;
+      refresh(next);
+
+      expect(reg.isCapabilityEnabled('crypto.swap')).toBe(true);
     });
   });
 });

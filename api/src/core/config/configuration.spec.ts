@@ -102,6 +102,29 @@ describe('configuration — compliance.travelRuleThresholds (multi-currency)', (
   });
 });
 
+describe('configuration — treasury float targets (per-currency)', () => {
+  it('exposes a per-currency fiatFloatTargets map keyed by every catalog fiat', () => {
+    const cfg = configuration();
+    const fiatCodes = Object.keys(cfg.catalog.fiats);
+    for (const code of fiatCodes) {
+      expect(cfg.treasury.fiatFloatTargets[code]).toBeDefined();
+      expect(typeof cfg.treasury.fiatFloatTargets[code]).toBe('number');
+      expect(cfg.treasury.fiatFloatTargets[code]).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('ships every currency opt-in (0 target) by default — NGN behaviour unchanged', () => {
+    const cfg = configuration();
+    expect(cfg.treasury.fiatFloatTargets['NGN']).toBe(0);
+    expect(cfg.treasury.fiatFloatTargets['USD']).toBe(0);
+  });
+
+  it('exposes a low-float threshold in bps (matches the in-service default)', () => {
+    const cfg = configuration();
+    expect(cfg.treasury.lowFloatThresholdBps).toBe(2500);
+  });
+});
+
 describe('configuration — boot-time enabled-fiat cross-validation (#25)', () => {
   it('the committed defaults pass validation (only NGN is live, fully configured)', () => {
     // configuration() runs validateConfig() internally; if it throws, boot fails.
@@ -169,6 +192,38 @@ describe('configuration — boot-time enabled-fiat cross-validation (#25)', () =
     // GHS stays enabled:false and has no limits/baseRates → must NOT throw.
     expect(cfg.catalog.fiats['GHS'].enabled).toBe(false);
     expect(cfg.limits['GHS']).toBeUndefined();
+    expect(() => validateConfig(cfg)).not.toThrow();
+  });
+
+  it('passes: the shipped feed staleness window out-lives the quote window', () => {
+    const cfg = configuration();
+    // Sanity: the committed defaults satisfy the invariant (900 > 300).
+    expect(cfg.pricing.feed?.stalenessSec).toBeGreaterThan(
+      cfg.pricing.expiresInSec,
+    );
+    expect(() => validateConfig(cfg)).not.toThrow();
+  });
+
+  it('throws when the feed staleness window is NOT longer than the quote window', () => {
+    const cfg = configuration();
+    // A live rate that goes stale WITHIN a quote's validity window would flip the
+    // money path live↔config mid-window — fail-closed at boot.
+    cfg.pricing.expiresInSec = 900;
+    cfg.pricing.feed!.stalenessSec = 900; // equal → not strictly greater → invalid
+    expect(() => validateConfig(cfg)).toThrow(/stalenessSec/);
+    expect(() => validateConfig(cfg)).toThrow(/expiresInSec/);
+  });
+
+  it('throws when staleness is shorter than the quote window', () => {
+    const cfg = configuration();
+    cfg.pricing.expiresInSec = 600;
+    cfg.pricing.feed!.stalenessSec = 300;
+    expect(() => validateConfig(cfg)).toThrow(/stalenessSec/);
+  });
+
+  it('skips the feed/quote guard when no feed section is configured', () => {
+    const cfg = configuration();
+    delete cfg.pricing.feed;
     expect(() => validateConfig(cfg)).not.toThrow();
   });
 

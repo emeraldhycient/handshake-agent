@@ -14,6 +14,7 @@ vi.mock("./client", () => ({
 
 import {
   listBeneficiaries,
+  listBanks,
   addBankAccount,
   addCryptoAddress,
   deleteBeneficiary,
@@ -26,6 +27,8 @@ const bankBeneficiary = {
   accountNumber: "0123456789",
   accountHolderName: "ADA LOVELACE",
   bankCode: "058",
+  currency: "NGN",
+  country: "NG",
   cryptoAddress: null,
   cryptoAsset: null,
   cryptoNetwork: null,
@@ -67,31 +70,57 @@ describe("beneficiaries api client", () => {
     expect(result.beneficiaries[0].accountHolderName).toBe("ADA LOVELACE")
   })
 
-  it("addBankAccount posts the validated body and parses the response", async () => {
+  it("addBankAccount posts the validated body (currency + pin) and parses the response", async () => {
     post.mockResolvedValue({ data: bankBeneficiary })
 
     const result = await addBankAccount({
       accountNumber: "0123456789",
       bankCode: "058",
       label: "My GTB",
+      currency: "NGN",
+      rail: "bank",
+      pin: "1379",
     })
 
     expect(post).toHaveBeenCalledWith("/beneficiaries/bank-account", {
       accountNumber: "0123456789",
       bankCode: "058",
       label: "My GTB",
+      currency: "NGN",
+      rail: "bank",
+      pin: "1379",
     })
     expect(result.id).toBe(bankBeneficiary.id)
   })
 
   it("addBankAccount rejects an invalid (short) account number before sending", async () => {
     await expect(
-      addBankAccount({ accountNumber: "123", bankCode: "058", label: "x" })
+      addBankAccount({
+        accountNumber: "123",
+        bankCode: "058",
+        label: "x",
+        currency: "NGN",
+        rail: "bank",
+        pin: "1379",
+      })
     ).rejects.toThrow()
     expect(post).not.toHaveBeenCalled()
   })
 
-  it("addCryptoAddress posts the validated body and parses the response", async () => {
+  it("addBankAccount rejects a missing PIN before sending (step-up is required)", async () => {
+    await expect(
+      // @ts-expect-error — omitting the now-required pin must be caught by the schema
+      addBankAccount({
+        accountNumber: "0123456789",
+        bankCode: "058",
+        label: "x",
+        currency: "NGN",
+      })
+    ).rejects.toThrow()
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it("addCryptoAddress posts the validated body (with pin) and parses the response", async () => {
     post.mockResolvedValue({ data: cryptoBeneficiary })
 
     const result = await addCryptoAddress({
@@ -99,6 +128,7 @@ describe("beneficiaries api client", () => {
       network: "TRON",
       asset: "USDT",
       label: "Cold wallet",
+      pin: "1379",
     })
 
     expect(post).toHaveBeenCalledWith("/beneficiaries/crypto-address", {
@@ -106,8 +136,27 @@ describe("beneficiaries api client", () => {
       network: "TRON",
       asset: "USDT",
       label: "Cold wallet",
+      pin: "1379",
     })
     expect(result.cryptoAddress).toBe("TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE")
+  })
+
+  it("listBanks calls GET /beneficiaries/banks with the country param and parses", async () => {
+    get.mockResolvedValue({
+      data: { banks: [{ name: "GTBank", code: "058" }] },
+    })
+
+    const result = await listBanks("NG")
+
+    expect(get).toHaveBeenCalledWith("/beneficiaries/banks", {
+      params: { country: "NG" },
+    })
+    expect(result.banks).toEqual([{ name: "GTBank", code: "058" }])
+  })
+
+  it("listBanks rejects a malformed country before sending", async () => {
+    await expect(listBanks("NGA")).rejects.toThrow()
+    expect(get).not.toHaveBeenCalled()
   })
 
   it("deleteBeneficiary calls DELETE /beneficiaries/:id and parses the ack", async () => {

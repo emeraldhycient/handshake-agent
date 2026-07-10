@@ -10,8 +10,9 @@
  *  3. error: a failed fetch renders the tokened inline error with a Retry affordance.
  *  4. The ongoing-monitoring policy renders as READ-ONLY status pills — there is no
  *     write path for it, so a flippable switch would be a local-state lie.
- *  5. Dispositions thread the typed reason into `comment`; Escalate confirms with
- *     honest immediate copy; the real step-up is server-driven (403 → StepUpDialog).
+ *  5. Every disposition (Clear / Escalate / Block) threads the typed reason into
+ *     `comment` via the ReasonModal; the real step-up is server-driven (403 →
+ *     StepUpDialog).
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
@@ -288,7 +289,18 @@ describe("SanctionsPage (Phase 7 — disposition WRITE)", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("escalates through an HONEST immediate confirm (a disposition applies now — no approval queue)", async () => {
+  it("does not call disposeSanctions until the reason modal's Continue fires (Escalate)", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByText("cp_musa_sani")
+    // Open the Escalate flow — the ReasonModal appears but nothing is persisted yet.
+    await user.click(screen.getAllByRole("button", { name: "Escalate" })[0])
+    await screen.findByRole("textbox", { name: "Reason" })
+    expect(mockDispose).not.toHaveBeenCalled()
+  })
+
+  it("fires disposeSanctions with the escalated disposition + comment through the Escalate reason flow", async () => {
     const user = userEvent.setup()
     mockDispose.mockResolvedValue({
       ...SANCTIONS.items[0],
@@ -297,21 +309,22 @@ describe("SanctionsPage (Phase 7 — disposition WRITE)", () => {
     renderPage()
 
     await screen.findByText("cp_musa_sani")
+    // Escalate → ReasonModal → disposeSanctions. The typed reason is THREADED into
+    // the audited disposition as `comment` (A7) — never silently dropped.
     await user.click(screen.getAllByRole("button", { name: "Escalate" })[0])
+    await user.type(
+      await screen.findByRole("textbox", { name: "Reason" }),
+      "Needs senior compliance review"
+    )
+    await user.click(screen.getByRole("button", { name: "Continue" }))
 
-    // The confirm modal must not claim "Pending approval" — the disposition POST
-    // applies immediately (step-up-gated + audited), no change request is raised.
-    const dialog = await screen.findByRole("dialog")
-    expect(screen.getByText(/applies immediately/i)).toBeInTheDocument()
-    expect(screen.queryByText(/pending approval/i)).not.toBeInTheDocument()
-    expect(dialog).toBeInTheDocument()
-
-    await user.click(screen.getByRole("button", { name: "Confirm change" }))
     await waitFor(() => expect(mockDispose).toHaveBeenCalledTimes(1))
     expect(mockDispose).toHaveBeenCalledWith(
       "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-      { disposition: "escalated" }
+      { disposition: "escalated", comment: "Needs senior compliance review" }
     )
+    // The card flips to its done-label optimistically on success.
+    expect(await screen.findByText("Escalated")).toBeInTheDocument()
   })
 
   it("opens the step-up dialog and retries the POST after re-auth when the server demands step-up", async () => {

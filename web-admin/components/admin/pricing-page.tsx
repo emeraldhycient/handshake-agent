@@ -15,6 +15,7 @@ import { StepUpDialog } from "@/components/admin/step-up-dialog"
 import { SettingValueModal } from "@/components/admin/flows/setting-value-modal"
 import { usePricingEditor } from "@/lib/hooks/use-pricing-editor"
 import { SpreadCard } from "@/components/admin/pricing/spread-card"
+import { MIN_CHANGE_REQUEST_REASON } from "@/constants/approvals"
 
 export function PricingPage() {
   const p = usePricingEditor()
@@ -64,8 +65,9 @@ export function PricingPage() {
         onContinue={p.onAddContinue}
       />
 
-      {/* Funds-safety flow chain: value → reason → confirm. The REAL step-up is
-          server-driven — the PATCH 403s and the StepUpDialog below replays it. */}
+      {/* Funds-safety flow chain: value → reason → dual-control. Submitting RAISES a
+          four-eyes pricing_change ChangeRequest — it does not apply. The REAL step-up is
+          server-driven — the raise 403s and the StepUpDialog below replays it. */}
       <SettingValueModal
         open={p.step === "value"}
         onOpenChange={(next) => (next ? undefined : p.closeFlow())}
@@ -81,6 +83,7 @@ export function PricingPage() {
         open={p.step === "reason"}
         onOpenChange={(next) => (next ? undefined : p.closeFlow())}
         title={p.flowTitle}
+        minLength={MIN_CHANGE_REQUEST_REASON}
         onContinue={p.onReasonContinue}
       />
       <MakerCheckerModal
@@ -88,11 +91,12 @@ export function PricingPage() {
         onOpenChange={(next) => (next ? undefined : p.closeFlow())}
         title={p.flowTitle}
         diff={p.diff}
+        mode="dual-control"
         onSubmit={p.approve}
       />
 
-      {/* Server-side step-up re-auth: a 403 on the PATCH opens this; it replays after
-          re-authentication (settings then invalidate). */}
+      {/* Server-side step-up re-auth: a 403 on the raise opens this; it replays after
+          re-authentication (the approvals inbox then invalidates). */}
       <StepUpDialog
         open={p.stepUp.open}
         mfaEnabled={p.me.data?.mfaEnabled ?? false}

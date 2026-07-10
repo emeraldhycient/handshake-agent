@@ -1,7 +1,9 @@
 import {
+  buyEffectiveRate,
   computeBuyQuote,
   computeSellQuote,
   QuotePricingError,
+  sellEffectiveRate,
   valueAtSellRate,
 } from './quote-pricing';
 
@@ -291,5 +293,52 @@ describe('buy rate > sell rate for the same baseRate (positive margin)', () => {
 
     // buyRate > sellRate: user pays more per USDT than they receive per USDT → platform margin > 0
     expect(buyRate).toBeGreaterThan(sellRate);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buyEffectiveRate / sellEffectiveRate — the shared spread-fold helpers (Wave K).
+// These MUST be the exact numbers computeBuyQuote/computeSellQuote embed, so the
+// rate-discovery surface (RatesService) displays what the engine transacts at.
+// ---------------------------------------------------------------------------
+
+describe('buyEffectiveRate', () => {
+  it('marks the base rate UP by the buy spread (6 d.p.)', () => {
+    expect(buyEffectiveRate(1600, 150)).toBe(1624); // 1600 * (1 + 0.015)
+  });
+
+  it('equals the effectiveRate computeBuyQuote embeds for the same inputs', () => {
+    const { effectiveRate } = computeBuyQuote({
+      fiatAmount: 100000,
+      baseRate: 1600,
+      buySpreadBps: 150,
+      processingFeeBps: 100,
+      cryptoDecimals: 6,
+    });
+    expect(buyEffectiveRate(1600, 150)).toBe(effectiveRate);
+  });
+
+  it('fails closed when a misconfigured spread drives the rate <= 0', () => {
+    expect(() => buyEffectiveRate(1600, -10000)).toThrow(QuotePricingError);
+  });
+});
+
+describe('sellEffectiveRate', () => {
+  it('marks the base rate DOWN by the sell spread (6 d.p.)', () => {
+    expect(sellEffectiveRate(1600, 200)).toBe(1568); // 1600 * (1 - 0.02)
+  });
+
+  it('equals the effectiveRate computeSellQuote embeds for the same inputs', () => {
+    const { effectiveRate } = computeSellQuote({
+      cryptoAmount: 100,
+      baseRate: 1600,
+      sellSpreadBps: 200,
+      processingFeeBps: 100,
+    });
+    expect(sellEffectiveRate(1600, 200)).toBe(effectiveRate);
+  });
+
+  it('fails closed when the sell spread drives the rate to <= 0 (>= 100%)', () => {
+    expect(() => sellEffectiveRate(1600, 10000)).toThrow(QuotePricingError);
   });
 });

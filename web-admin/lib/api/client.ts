@@ -1,16 +1,20 @@
 /**
  * Single Axios instance for the admin API.
  *
- * Request interceptors (in order of registration):
- *   1. Idempotency-Key — sets a UUID on every non-GET request.
- *   2. Auth Bearer    — attaches the admin store's in-memory access token.
+ * Auth (Wave H): the session is carried by the HttpOnly `ha_admin_session`
+ * cookie. `withCredentials: true` makes the browser send that cookie (and store
+ * the Set-Cookie) on every request — there is NO bearer token in JS, so no
+ * Authorization header is injected.
+ *
+ * Request interceptor:
+ *   Idempotency-Key — sets a UUID on every non-GET request.
  *
  * Response interceptor:
  *   Normalises every error to `ApiError`, carrying the HTTP `status` and the
  *   server-echoed `code` (e.g. `ADMIN_STEP_UP_REQUIRED`) so the UI can branch on
  *   it. On any 401 it clears the admin session and (client-side) redirects to
- *   `/login`. There is NO refresh-token flow — admin sessions are short-lived
- *   and a 401 means re-login.
+ *   `/login`. There is NO refresh-token flow — admin sessions end at logout or
+ *   cookie expiry and a 401 means re-login.
  *
  * Components and hooks must never import axios directly — use `api` from here
  * via the typed clients in `lib/api/admin.ts`.
@@ -36,25 +40,16 @@ export class ApiError extends Error {
 
 export const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_BASE_URL,
+  // Send + store the HttpOnly `ha_admin_session` cookie on every request.
+  withCredentials: true,
 })
 
-// ─── Request interceptor 1 — Idempotency-Key ─────────────────────────────────────
+// ─── Request interceptor — Idempotency-Key ───────────────────────────────────────
 
 api.interceptors.request.use((config) => {
   if (config.method && config.method.toUpperCase() !== "GET") {
     ;(config.headers as Record<string, string>)["Idempotency-Key"] ??=
       crypto.randomUUID()
-  }
-  return config
-})
-
-// ─── Request interceptor 2 — Auth Bearer ─────────────────────────────────────────
-
-api.interceptors.request.use((config) => {
-  const token = defaultAdminAuthStore.getState().accessToken
-  if (token) {
-    ;(config.headers as Record<string, string>)["Authorization"] =
-      `Bearer ${token}`
   }
   return config
 })

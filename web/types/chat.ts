@@ -1,4 +1,6 @@
 import type { ReactNode } from "react"
+import type { UseFormRegisterReturn } from "react-hook-form"
+import type { Beneficiary } from "@handshake-agent/contracts/beneficiaries"
 import type { ChooseBeneficiaryView } from "@/lib/schemas"
 import type {
   Density,
@@ -36,6 +38,37 @@ export interface SavedBeneficiaryListProps {
 
 export interface BeneficiaryFormProps {
   onResolve: (id: string) => void
+}
+
+/** One fiat/country option in the add-bank currency selector. */
+export interface BankFiatOption {
+  /** ISO 4217 currency submitted with the beneficiary (e.g. "NGN"). */
+  currency: string
+  /** ISO 3166-1 alpha-2 bank country the currency maps to (e.g. "NG"). */
+  country: string
+  /** Human label, e.g. "Nigeria (NGN)". */
+  label: string
+}
+
+/** Inner add-bank form, mounted once its currency/country options are resolved. */
+export interface AddBankFormFieldsProps extends BeneficiaryFormProps {
+  options: BankFiatOption[]
+  defaultCurrency: string
+}
+
+export interface BankSelectFieldProps {
+  /** ISO 3166-1 alpha-2 country whose banks to load. */
+  country: string
+  error?: string
+  /** RHF registration for the `bankCode` field. */
+  registration: UseFormRegisterReturn
+}
+
+/** Name-enquiry confirm step shown after a bank account is added. */
+export interface ConfirmBankNameProps {
+  beneficiary: Beneficiary
+  onConfirm: () => void
+  onReenter: () => void
 }
 
 export interface BeneficiaryFieldProps {

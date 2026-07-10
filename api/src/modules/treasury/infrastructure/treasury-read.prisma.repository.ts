@@ -20,6 +20,7 @@ import {
   SettlementOutboxStatus,
   SettlementType,
 } from '../../../../generated/prisma/client';
+import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import type {
   ITreasuryReadRepository,
@@ -37,6 +38,14 @@ import type {
 
 /** Cap on the bounded exposure / alert / policy feeds (newest-first). */
 const FEED_LIMIT = 100;
+
+/**
+ * Neutral fallback for a display value we genuinely cannot derive from metadata
+ * or the catalog. Deliberately NOT a currency/asset symbol so a non-NGN payout
+ * whose metadata is missing is never MISLABELED with a hardcoded 'NGN'/'USDT'
+ * (A9). Callers still prefer the real value from metadata / the registry default.
+ */
+const UNKNOWN_LABEL = 'unknown';
 
 /**
  * Configured gas-sweep threshold (native TRX) for child TRON addresses. This is the
@@ -61,7 +70,25 @@ const PENDING_OUTBOX_STATUSES: SettlementOutboxStatus[] = [
 
 @Injectable()
 export class TreasuryReadPrismaRepository implements ITreasuryReadRepository {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly registry: AssetRegistry,
+  ) {}
+
+  /**
+   * The catalog's base/settlement fiat, used as the display fallback for a payout
+   * row whose metadata predates currency capture. Defensive: `defaultFiat()`
+   * throws when no fiat is enabled, and this is a READ-ONLY display path that must
+   * never crash the treasury console over a catalog edge — fall back to a neutral
+   * label instead.
+   */
+  private resolveDefaultFiat(): string {
+    try {
+      return this.registry.defaultFiat();
+    } catch {
+      return UNKNOWN_LABEL;
+    }
+  }
 
   async aggregateBalances(): Promise<TreasuryBalanceRecord[]> {
     // latest: the most-recent snapshot per (walletId, asset).
@@ -293,7 +320,8 @@ export class TreasuryReadPrismaRepository implements ITreasuryReadRepository {
       take: FEED_LIMIT,
     });
 
-    return rows.map((row) => toPayoutRecord(row));
+    const defaultFiat = this.resolveDefaultFiat();
+    return rows.map((row) => toPayoutRecord(row, defaultFiat));
   }
 
   /**
@@ -319,7 +347,7 @@ export class TreasuryReadPrismaRepository implements ITreasuryReadRepository {
         transaction: { select: { metadata: true } },
       },
     });
-    return row === null ? null : toPayoutRecord(row);
+    return row === null ? null : toPayoutRecord(row, this.resolveDefaultFiat());
   }
 
   /**
@@ -405,18 +433,30 @@ function str(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-function defaultAssetFor(type: SettlementType): string {
-  return type === SettlementType.onchain_send ? 'USDT' : 'NGN';
+/**
+ * The asset display fallback when a payout row's metadata carries no explicit
+ * asset. For a fiat payout (processor_payout) this is the catalog default fiat,
+ * NOT a hardcoded 'NGN' — so a non-NGN payout is never mislabeled (A9). For a
+ * crypto send whose asset is unknown we surface a neutral label rather than
+ * guessing a symbol.
+ */
+function defaultAssetFor(type: SettlementType, defaultFiat: string): string {
+  return type === SettlementType.onchain_send ? UNKNOWN_LABEL : defaultFiat;
 }
 
 function methodFor(
   type: SettlementType,
   meta: Record<string, unknown>,
+  defaultFiat: string,
 ): string {
   if (type === SettlementType.onchain_send) {
-    return `${str(meta.asset) ?? 'USDT'} · Blockradar`;
+    return `${str(meta.asset) ?? UNKNOWN_LABEL} · Blockradar`;
   }
-  return 'NGN payout · Flutterwave';
+  // Read the ACTUAL payout currency from metadata; only fall back to the catalog
+  // default fiat (never a hardcoded 'NGN') for rows that predate currency capture.
+  const currency =
+    str(meta.fiatCurrency) ?? str(meta.velocityFiatCurrency) ?? defaultFiat;
+  return `${currency} payout · Flutterwave`;
 }
 
 function beneficiaryLabelFor(
@@ -425,9 +465,11 @@ function beneficiaryLabelFor(
 ): string {
   const name = str(meta.beneficiaryName) ?? str(meta.bankName);
   if (name !== null) return name;
+  // Neutral, currency/network-agnostic fallbacks so a non-NGN / non-TRON row is
+  // never mislabeled with a hardcoded market or chain (A9).
   return type === SettlementType.onchain_send
-    ? 'TRON withdrawal'
-    : 'NGN payout';
+    ? 'Crypto withdrawal'
+    : 'Bank payout';
 }
 
 /** The selected settlement-outbox row shape shared by list + single-item reads. */
@@ -452,9 +494,13 @@ interface PayoutOutboxRow {
  * large-payout approval flag is likewise a service concern (per-currency
  * layered-config thresholds), not derived in this projection.
  */
-function toPayoutRecord(row: PayoutOutboxRow): TreasuryPayoutQueueRecord {
+function toPayoutRecord(
+  row: PayoutOutboxRow,
+  defaultFiat: string,
+): TreasuryPayoutQueueRecord {
   const meta = asRecord(row.transaction?.metadata);
-  const asset = str(meta.asset) ?? defaultAssetFor(row.settlementType);
+  const asset =
+    str(meta.asset) ?? defaultAssetFor(row.settlementType, defaultFiat);
   const amount = str(meta.amount) ?? str(meta.fiatAmount) ?? '0';
   // Sell/buy metadata carries the fiat leg as (fiatAmount, fiatCurrency); on-chain
   // SEND metadata carries the engine's fiat-equivalent as the velocity pair
@@ -468,7 +514,7 @@ function toPayoutRecord(row: PayoutOutboxRow): TreasuryPayoutQueueRecord {
     transactionId: row.transactionId,
     beneficiaryLabel: beneficiaryLabelFor(meta, row.settlementType),
     reference: row.processorRef ?? `wd_${row.transactionId.slice(0, 8)}`,
-    method: methodFor(row.settlementType, meta),
+    method: methodFor(row.settlementType, meta, defaultFiat),
     asset,
     amount,
     fiatAmount,

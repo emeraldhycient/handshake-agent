@@ -86,6 +86,14 @@ export async function getMe(): Promise<AdminMe> {
   return AdminMeSchema.parse(res.data)
 }
 
+/**
+ * POST /admin/auth/logout — the API clears the HttpOnly `ha_admin_session`
+ * cookie. Sends no body; the cookie identifies the session to revoke.
+ */
+export async function logout(): Promise<void> {
+  await api.post("/admin/auth/logout", {})
+}
+
 /** Self-serve profile edit (`PATCH /admin/me`) — the operator's own display name.
  *  Returns the refreshed identity so the caller can update the cache in place. */
 export async function updateOwnProfile(

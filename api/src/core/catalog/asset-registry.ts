@@ -10,8 +10,9 @@
  * It can be instantiated directly in tests (no Nest test bed required).
  */
 
-import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable } from '@nestjs/common';
+
+import { EffectiveConfigService } from '../config/application/effective-config.service';
 
 import {
   UnsupportedAssetError,
@@ -71,6 +72,20 @@ export type NetworkMeta = CatalogNetwork;
 /** Catalog section shape as stored in the layered config (configuration.ts). */
 export type { CatalogConfig };
 
+/**
+ * The minimal synchronous config surface the registry depends on — the subset
+ * shared by `EffectiveConfigService` and `ConfigService`. Typing the constructor
+ * to this (rather than a concrete class) lets production DI inject the
+ * HOT-RELOADED `EffectiveConfigService` — so admin catalog kill-switch toggles
+ * (`catalog.fiats.<code>.enabled`, `catalog.assets.<sym>.enabled`) take effect
+ * immediately (go-live hardening F3) — while unit tests keep passing a plain
+ * config-shaped fake. Every liveness accessor reads through it on each call, so
+ * the registry never serves a stale boot-time catalog snapshot.
+ */
+export interface CatalogConfigSource {
+  get<T>(key: string): T | undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -82,7 +97,28 @@ export type { CatalogConfig };
  */
 @Injectable()
 export class AssetRegistry {
-  private readonly catalog: CatalogConfig;
+  /**
+   * Live view of the `catalog` config section, read from the hot-reloaded
+   * EffectiveConfigService on EVERY access — deliberately NOT snapshotted at
+   * construction. An admin kill-switch toggle rebuilds the EffectiveConfig
+   * snapshot (the settings write calls `effectiveConfig.refresh()`); reading
+   * live here means the money path sees the new liveness immediately, with no
+   * restart (go-live hardening F3). All reads within a single synchronous method
+   * observe one consistent snapshot: Node is single-threaded and `refresh()`
+   * swaps the snapshot atomically between (never during) calls.
+   *
+   * @throws {Error} when the `catalog` section is absent (misconfiguration).
+   */
+  private get catalog(): CatalogConfig {
+    const catalog = this.config.get<CatalogConfig>('catalog');
+    if (!catalog) {
+      throw new Error(
+        'AssetRegistry: "catalog" config section is missing. ' +
+          'Ensure the catalog block is present in configuration.ts.',
+      );
+    }
+    return catalog;
+  }
 
   /**
    * Pre-compiled address validation RegExps per network id.
@@ -149,17 +185,18 @@ export class AssetRegistry {
    */
   private readonly customFiats: Map<string, CatalogFiat> = new Map();
 
-  constructor(private readonly config: ConfigService) {
-    const catalog = this.config.get<CatalogConfig>('catalog');
-    if (!catalog) {
-      throw new Error(
-        'AssetRegistry: "catalog" config section is missing. ' +
-          'Ensure the catalog block is present in configuration.ts.',
-      );
-    }
-    this.catalog = catalog;
+  constructor(
+    @Inject(EffectiveConfigService)
+    private readonly config: CatalogConfigSource,
+  ) {
+    // Read once for structural setup (the getter validates presence, throwing
+    // at boot on a misconfiguration). The catalog itself is NOT cached — the
+    // `catalog` getter re-reads it live on every subsequent access.
+    const catalog = this.catalog;
 
-    // Compile one RegExp per network at construction time.
+    // Compile one RegExp per network at construction time. Address patterns are
+    // structural (not admin-toggled), so caching them at boot is intentional and
+    // keeps `validateAddress` off the per-call RegExp-compilation path.
     this.addressRegExps = new Map(
       Object.entries(catalog.networks).map(([id, net]) => [
         id,
@@ -460,6 +497,45 @@ export class AssetRegistry {
   }
 
   /**
+   * Returns the ISO 3166-1 alpha-2 country whose bank rails settle the given
+   * fiat (e.g. `'NGN'` → `'NG'`). Recognises supported-but-not-live fiats too
+   * (enable-agnostic — the bank-list dropdown needs a country before a market is
+   * live). Used to derive a bank beneficiary's country from its payout currency
+   * (server-side; the client-supplied country is never trusted, §3.3).
+   *
+   * @throws {UnsupportedFiatError} when the code is not in the catalog, OR when a
+   *   recognised fiat has no `country` mapping (fail-closed — a country cannot be
+   *   invented for a runtime custom fiat that omitted it).
+   */
+  countryForFiat(code: string): string {
+    const meta = this.resolveFiatMeta(code);
+    if (!meta) {
+      throw new UnsupportedFiatError(code);
+    }
+    if (!meta.country) {
+      throw new UnsupportedFiatError(
+        code,
+        'no country mapping configured for this currency',
+      );
+    }
+    return meta.country;
+  }
+
+  /**
+   * The distinct set of ISO alpha-2 countries across all recognised fiats
+   * (built-in + runtime custom overlay). Backs the `GET /beneficiaries/banks`
+   * country validation — a country outside this set is rejected before any
+   * provider call. Fiats without a `country` mapping are omitted (no `undefined`).
+   */
+  knownCountries(): string[] {
+    const set = new Set<string>();
+    for (const f of this.allFiats()) {
+      if (f.country) set.add(f.country);
+    }
+    return [...set];
+  }
+
+  /**
    * Returns the fiat codes for all currencies that are currently LIVE
    * (i.e. registered in the catalog with `enabled: true`).
    *
@@ -647,11 +723,16 @@ export class AssetRegistry {
   publicView(): PublicConfigResponse {
     const fiats = Object.values(this.catalog.fiats)
       .filter((f) => f.enabled)
-      .map(({ code, displayName, symbol, decimals }) => ({
+      .map(({ code, displayName, symbol, decimals, country }) => ({
         code,
         displayName,
         symbol,
         decimals,
+        // ISO alpha-2 bank-rail country (CatalogFiat.country). Non-secret and
+        // needed client-side to drive the add-bank country/bank-list lookup; the
+        // web derives it from here instead of duplicating countryForFiat. Absent
+        // for a runtime custom fiat with no mapping → the optional field is omitted.
+        country,
       }));
 
     const staticAssets = Object.values(this.catalog.assets)

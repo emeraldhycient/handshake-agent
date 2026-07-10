@@ -32,7 +32,10 @@ import {
   SettlementType,
   TransactionStatus,
 } from '../../../../generated/prisma/client';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
+import type { PricingFeedConfig } from '../../../core/config/configuration';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { LiveRateStore } from '../../quotes/application/live-rate.store';
 import type {
   ActivityEventRow,
   ActivityKind,
@@ -107,12 +110,18 @@ const OPEN_COMPLIANCE_STATUSES: ComplianceStatus[] = [
   ComplianceStatus.under_review,
 ];
 
+/** Fallback staleness window when `pricing.feed` is absent. */
+const DEFAULT_FEED_STALENESS_SEC = 900;
+
 @Injectable()
 export class MetricsOpsReadPrismaRepository implements IMetricsOpsReadRepository {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(PROVIDER_CONNECTIVITY)
     private readonly connectivity: IProviderConnectivity,
+    // F1: the live-rate feed's in-memory health surfaces on the same card.
+    private readonly liveRateStore: LiveRateStore,
+    private readonly config: EffectiveConfigService,
   ) {}
 
   async systemHealth(): Promise<SystemHealthResult> {
@@ -126,7 +135,50 @@ export class MetricsOpsReadPrismaRepository implements IMetricsOpsReadRepository
       }),
     ]);
 
-    return { providers, webhookQueueDepth, reconDriftCount };
+    return {
+      // Append the pricing-feed row (F1) so operators see feed freshness /
+      // degradation / which sources are down on the existing system-health card.
+      providers: [...providers, this.pricingFeedHealth()],
+      webhookQueueDepth,
+      reconDriftCount,
+    };
+  }
+
+  /**
+   * Derive the live market-rate feed's health from the in-memory LiveRateStore.
+   * `lastLatencyMs` carries the age (ms) since the last successful fetch — the
+   * card's existing latency column, repurposed here as "last-fetch age". When the
+   * admin kill-switch is off the feed reports `ok` (config rates are intended).
+   */
+  private pricingFeedHealth(): ProviderHealthRow {
+    const feed = this.config.get<PricingFeedConfig | undefined>('pricing.feed');
+    const base = { key: 'pricing-feed', name: 'Pricing feed' };
+
+    if (!feed || feed.enabled === false) {
+      return {
+        ...base,
+        note: 'Disabled (config rates)',
+        status: 'ok',
+        lastLatencyMs: null,
+      };
+    }
+
+    const stalenessSec =
+      typeof feed.stalenessSec === 'number'
+        ? feed.stalenessSec
+        : DEFAULT_FEED_STALENESS_SEC;
+    const snap = this.liveRateStore.healthSnapshot(new Date(), stalenessSec);
+    const note =
+      snap.sourcesDown.length > 0
+        ? `Sources down: ${snap.sourcesDown.join(', ')}`
+        : `Fresh ${snap.freshCount}/${snap.totalCount} rates`;
+
+    return {
+      ...base,
+      note,
+      status: snap.status,
+      lastLatencyMs: snap.lastFetchAgeMs,
+    };
   }
 
   /** Derive each provider's status + last observed latency from recent dispatches. */

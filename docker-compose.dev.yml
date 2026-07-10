@@ -1,0 +1,61 @@
+# Local development infrastructure — Postgres + Redis.
+#
+# Reproduces the containers the web/web-admin visual-verify runbooks assume
+# (`web/CLAUDE.md`, `web-admin` memory note): `handshake-agent-db` on host :5544
+# and `handshake-agent-redis` on :6379. The Postgres credentials/db match
+# `api/.env`'s `DATABASE_URL`
+# (postgresql://postgres:postgres@localhost:5544/handshake_agent) and the api
+# default `REDIS_URL` (redis://localhost:6379).
+#
+# Usage (from the repo root):
+#   docker compose -f docker-compose.dev.yml up -d          # start
+#   pnpm --filter @handshake-agent/api exec prisma migrate deploy   # apply schema
+#   pnpm --filter @handshake-agent/api db:seed              # QA users (idempotent)
+#   docker compose -f docker-compose.dev.yml down           # stop (keeps data)
+#   docker compose -f docker-compose.dev.yml down -v        # stop + wipe volumes
+#
+# Data survives restarts via the named volumes below. This file is for LOCAL dev
+# only — it is never used in CI (CI's api e2e lane spins its own testcontainers
+# Postgres) and never in staging/prod.
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: handshake-agent-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: handshake_agent
+    ports:
+      - "5544:5432"
+    volumes:
+      - handshake-agent-db-data:/var/lib/postgresql/data
+    healthcheck:
+      # `pg_isready` returns 0 only once the server accepts connections, so
+      # dependents (and `--wait`) block until the DB is genuinely usable.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d handshake_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: handshake-agent-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - handshake-agent-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  handshake-agent-db-data:
+  handshake-agent-redis-data:

@@ -44,6 +44,7 @@ describe('AdminApprovalsService', () => {
   let audit: jest.Mocked<Pick<AuditService, 'record'>>;
   let broadcast: jest.Mocked<IBroadcastDispatchRepository>;
   let manualCredit: { creditUser: jest.Mock };
+  let endUsers: { adjustTier: jest.Mock };
   let service: AdminApprovalsService;
 
   beforeEach(() => {
@@ -73,6 +74,9 @@ describe('AdminApprovalsService', () => {
     // The manual_credit applier — a bare stub of `creditUser` the manual_credit
     // applier tests assert against (routes the engine-brokered credit).
     manualCredit = { creditUser: jest.fn().mockResolvedValue(undefined) };
+    // The user_tier_override applier — a bare stub of `adjustTier` the tier-override
+    // applier tests assert against (routes the end-user tier-adjust service).
+    endUsers = { adjustTier: jest.fn().mockResolvedValue(undefined) };
     service = new AdminApprovalsService(
       repo,
       settings as unknown as AdminSettingsService,
@@ -83,6 +87,9 @@ describe('AdminApprovalsService', () => {
       manualCredit as unknown as ConstructorParameters<
         typeof AdminApprovalsService
       >[6],
+      endUsers as unknown as ConstructorParameters<
+        typeof AdminApprovalsService
+      >[7],
     );
   });
 
@@ -344,6 +351,66 @@ describe('AdminApprovalsService', () => {
         ChangeRequestNotApplicableError,
       );
       expect(manualCredit.creditUser).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('approve — user_tier_override applier (§3.1/§3.3)', () => {
+    const TIER_USER = '88888888-8888-8888-8888-888888888888';
+
+    function tierRecord(payload: Record<string, unknown>): ChangeRequestRecord {
+      return pendingRecord({
+        kind: 'user_tier_override',
+        resource: `User:${TIER_USER}`,
+        payload,
+      });
+    }
+
+    it('routes the tier change through the end-user tier-adjust service (never a raw write)', async () => {
+      repo.findById.mockResolvedValue(
+        tierRecord({ userId: TIER_USER, tier: 'tier_2' }),
+      );
+      repo.decideIfPending.mockResolvedValue(
+        pendingRecord({
+          kind: 'user_tier_override',
+          status: 'approved',
+          decidedByAdminId: CHECKER,
+          decidedAt: NOW,
+        }),
+      );
+
+      await service.approve(REQ_ID, CHECKER);
+
+      // The checker (deciding admin) is recorded as the actor of the tier adjustment.
+      expect(endUsers.adjustTier).toHaveBeenCalledWith(
+        TIER_USER,
+        'tier_2',
+        CHECKER,
+      );
+      // No money / config / refund side-channel.
+      expect(settings.update).not.toHaveBeenCalled();
+      expect(triage.markFailedAndRefund).not.toHaveBeenCalled();
+      expect(manualCredit.creditUser).not.toHaveBeenCalled();
+    });
+
+    it('fails closed on a missing userId — never adjusts a tier', async () => {
+      repo.findById.mockResolvedValue(tierRecord({ tier: 'tier_2' }));
+
+      await expect(service.approve(REQ_ID, CHECKER)).rejects.toBeInstanceOf(
+        ChangeRequestNotApplicableError,
+      );
+      expect(endUsers.adjustTier).not.toHaveBeenCalled();
+      expect(repo.decideIfPending).not.toHaveBeenCalled();
+    });
+
+    it('fails closed on an unknown tier value — never adjusts a tier', async () => {
+      repo.findById.mockResolvedValue(
+        tierRecord({ userId: TIER_USER, tier: 'platinum' }),
+      );
+
+      await expect(service.approve(REQ_ID, CHECKER)).rejects.toBeInstanceOf(
+        ChangeRequestNotApplicableError,
+      );
+      expect(endUsers.adjustTier).not.toHaveBeenCalled();
     });
   });
 

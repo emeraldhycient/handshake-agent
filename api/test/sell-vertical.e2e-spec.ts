@@ -244,6 +244,8 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
       fakeNameEnquiry,
       assetRegistry,
       config,
+      // Wave G: bank-list port (unused in these flows) — empty stub adapter.
+      { listBanks: () => Promise.resolve([]) },
     );
 
     proposalService = new ProposalService(

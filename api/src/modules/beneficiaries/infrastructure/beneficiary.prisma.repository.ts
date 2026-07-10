@@ -28,10 +28,13 @@ type PrismaRow = {
   accountNumber: string | null;
   accountHolderName: string | null;
   bankCode: string | null;
+  payoutCurrency: string | null;
+  bankCountry: string | null;
   cryptoAddress: string | null;
   cryptoAsset: string | null;
   cryptoNetwork: string | null;
   verificationStatus: string;
+  rail: string;
   firstUseLockedUntil: Date | null;
   verifiedAt: Date | null;
   isDefault: boolean;
@@ -49,10 +52,13 @@ const SELECT = {
   accountNumber: true,
   accountHolderName: true,
   bankCode: true,
+  payoutCurrency: true,
+  bankCountry: true,
   cryptoAddress: true,
   cryptoAsset: true,
   cryptoNetwork: true,
   verificationStatus: true,
+  rail: true,
   firstUseLockedUntil: true,
   verifiedAt: true,
   isDefault: true,
@@ -94,13 +100,22 @@ export class BeneficiaryPrismaRepository implements IBeneficiaryRepository {
         type: 'bank_account' as never,
         label: input.label,
         accountNumber: input.accountNumber,
-        // accountName is now the bank-resolved name (Fix E: BeneficiaryService
-        // calls INameEnquiry before this method; trusting the resolved name here).
+        // accountName is the bank-RESOLVED name where name-enquiry ran (NG),
+        // else the user-entered name (non-NG, saved unverified) — the service
+        // decides which before calling this method (country-gated name-enquiry).
         accountHolderName: input.accountName,
         bankCode: input.bankCode,
-        // Persist as verified — the name-enquiry resolved successfully (Fix E).
-        verificationStatus: 'verified' as never,
+        payoutCurrency: input.payoutCurrency,
+        bankCountry: input.bankCountry,
+        // Payout rail — defaults to 'bank' (NG + unset callers); 'mobile_money'
+        // only where the caller explicitly selects it.
+        rail: (input.rail ?? 'bank') as never,
+        // 'verified' when name-enquiry resolved the account; 'unverified' when
+        // the country's rail could not resolve it (do NOT fail closed).
+        verificationStatus: input.verificationStatus as never,
         verifiedAt: input.verifiedAt,
+        // B3: cooling-off for an unverified bank add (null for a verified one).
+        firstUseLockedUntil: input.firstUseLockedUntil ?? null,
         isDefault,
       },
       select: SELECT,
@@ -264,10 +279,13 @@ function toRecord(row: PrismaRow): BeneficiaryRecord {
     accountNumber: row.accountNumber,
     accountHolderName: row.accountHolderName,
     bankCode: row.bankCode,
+    payoutCurrency: row.payoutCurrency,
+    bankCountry: row.bankCountry,
     cryptoAddress: row.cryptoAddress,
     cryptoAsset: row.cryptoAsset,
     cryptoNetwork: row.cryptoNetwork,
     verificationStatus: row.verificationStatus,
+    rail: row.rail as 'bank' | 'mobile_money',
     firstUseLockedUntil: row.firstUseLockedUntil,
     verifiedAt: row.verifiedAt,
     isDefault: row.isDefault,

@@ -68,6 +68,12 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.UNAUTHORIZED,
     message: 'Authorization failed.',
   },
+  // Fresh device-bound step-up missing/expired (e.g. adding a withdrawal
+  // destination, R2) → 403 so the client can prompt a re-auth / step-up.
+  STEP_UP_REQUIRED: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'Please re-authenticate on a trusted device to continue.',
+  },
 
   // ── KYC / limits / velocity / SIM-swap / sanctions → 403 ───────────────────
   // Each cause gets a DISTINCT, actionable message so the user can tell *why* a
@@ -188,9 +194,25 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
       "That address isn't valid for the selected network. " +
       'Please check it and try again.',
   },
+  BENEFICIARY_INVALID_ACCOUNT_NUMBER: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message:
+      "That account number isn't valid for the selected currency. " +
+      'Please check it and try again.',
+  },
   BENEFICIARY_WRONG_TYPE: {
     status: HttpStatus.UNPROCESSABLE_ENTITY,
     message: "That recipient can't be used for this transaction.",
+  },
+  BENEFICIARY_CURRENCY_MISMATCH: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message:
+      "That bank account can't receive this currency. " +
+      'Please add or pick a bank account in the same currency.',
+  },
+  BENEFICIARY_UNKNOWN_COUNTRY: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'That country is not supported for bank accounts.',
   },
   BENEFICIARY_NAME_ENQUIRY_FAILED: {
     status: HttpStatus.UNPROCESSABLE_ENTITY,

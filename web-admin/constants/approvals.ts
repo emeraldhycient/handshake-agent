@@ -21,7 +21,15 @@ export const KIND_META: Record<
   manual_credit: { label: "Manual credit", variant: "warn" },
   notification_broadcast: { label: "Broadcast", variant: "warn" },
   payout_release: { label: "Payout release", variant: "warn" },
+  user_tier_override: { label: "User tier override", variant: "warn" },
 }
+
+/**
+ * The minimum trimmed reason length before a four-eyes ChangeRequest can be raised —
+ * mirrors the api's `CreateChangeRequestSchema.reason` floor (min 3). The ReasonModal
+ * enforces it (Continue stays disabled below it); the raising hooks guard defensively.
+ */
+export const MIN_CHANGE_REQUEST_REASON = 3
 
 /** The reason box's document glyph (design line 16). */
 export const REASON_ICON =

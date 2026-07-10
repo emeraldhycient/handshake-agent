@@ -21,6 +21,7 @@ import type {
   Intent,
   ChatHistoryResponse,
   BalanceSnapshot,
+  EffectiveRate,
 } from '@handshake-agent/contracts';
 
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
@@ -58,10 +59,12 @@ import {
 import type { ProposalService } from '../../transactions/application/proposal.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
 import { maskBeneficiaryDetail } from '../../beneficiaries/application/beneficiary-display';
 import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
 import { StatementTokenService } from '../../transactions/application/statement-token.service';
 import type { BalanceService } from '../../balances/application/balance.service';
+import type { RatesService } from '../../quotes/application/rates.service';
 import {
   InsufficientBalanceError,
   SwapSameAssetError,
@@ -84,6 +87,7 @@ export const WEB_CHAT_BENEFICIARY_SERVICE = Symbol(
 );
 export const WEB_CHAT_HISTORY_SERVICE = Symbol('WEB_CHAT_HISTORY_SERVICE');
 export const WEB_CHAT_BALANCE_SERVICE = Symbol('WEB_CHAT_BALANCE_SERVICE');
+export const WEB_CHAT_RATES_SERVICE = Symbol('WEB_CHAT_RATES_SERVICE');
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -144,6 +148,8 @@ export class WebChatService {
     private readonly historyService: TransactionHistoryService,
     @Inject(WEB_CHAT_BALANCE_SERVICE)
     private readonly balanceService: BalanceService,
+    @Inject(WEB_CHAT_RATES_SERVICE)
+    private readonly ratesService: RatesService,
     @Inject(IDENTITY_REPOSITORY)
     private readonly identityRepo: IIdentityRepository,
     @Inject(CONVERSATION_REPOSITORY)
@@ -298,6 +304,9 @@ export class WebChatService {
           'bank_account',
           input.beneficiaryId,
           intent.recipientNickname,
+          // Filter to banks that pay out in the sell currency so a non-NGN sell
+          // prompts to add a matching-currency bank instead of dead-ending.
+          intent.fiatCurrency,
         );
         if (!sellResolution.resolved) {
           outcome = sellResolution.outcome;
@@ -407,6 +416,28 @@ export class WebChatService {
         );
         outcome = { kind: 'balance', ...snapshot };
         summaryText = this.buildBalanceSummary(snapshot);
+        break;
+      }
+
+      case 'get_rate': {
+        // Read-only rate discovery (§3.1): no proposal, no engine, no KYC gate —
+        // a market rate is public information, not user-scoped data. The folded
+        // buy+sell figure is what the engine transacts at (shared pricing seam).
+        // Rendered as an assistant text reply (the `clarification` outcome is the
+        // general text channel; no new outcome card kind is introduced).
+        const fiatCurrency =
+          intent.fiatCurrency ?? this.assetRegistry.defaultFiat();
+        const rateText = await this.buildRateReply(intent.asset, fiatCurrency);
+        outcome = { kind: 'clarification', text: rateText };
+        summaryText = rateText;
+        break;
+      }
+
+      case 'list_rates': {
+        // Read-only: every enabled, tradeable, priced pair as a text list.
+        const listText = await this.buildRatesListReply();
+        outcome = { kind: 'clarification', text: listText };
+        summaryText = listText;
         break;
       }
 
@@ -602,20 +633,28 @@ export class WebChatService {
     type: 'bank_account' | 'crypto_address',
     explicitBeneficiaryId: string | undefined,
     recipientNickname: string | undefined,
+    matchCurrency?: string,
   ): Promise<
     | { resolved: true; beneficiaryId: string }
     | { resolved: false; outcome: AgentTurnOutcome; summaryText: string }
   > {
+    // Explicit pick always wins — the proposal service re-validates ownership,
+    // type, cooling-off, and (for a sell) the payout-currency match (§3.1/§3.3).
     if (explicitBeneficiaryId) {
       return { resolved: true, beneficiaryId: explicitBeneficiaryId };
     }
 
     if (recipientNickname) {
-      const matches = await this.beneficiaryService.resolveByNickname(
+      const all = await this.beneficiaryService.resolveByNickname(
         userId,
         type,
         recipientNickname,
       );
+      // Restrict a currency-scoped payout to matching-currency banks so a
+      // wrong-currency nickname hit does not silently route money.
+      const matches = matchCurrency
+        ? all.filter((b) => this.beneficiaryMatchesCurrency(b, matchCurrency))
+        : all;
       if (matches.length === 1) {
         return { resolved: true, beneficiaryId: matches[0].id };
       }
@@ -635,7 +674,29 @@ export class WebChatService {
           summaryText: `You have ${matches.length} saved recipients called '${recipientNickname}'. Which one did you mean?`,
         };
       }
-      const note = `No saved beneficiary called '${recipientNickname}'. Add one first, or pick from your saved list.`;
+      const note = matchCurrency
+        ? `No ${matchCurrency} bank account called '${recipientNickname}'. Add one first, or pick from your saved list.`
+        : `No saved beneficiary called '${recipientNickname}'. Add one first, or pick from your saved list.`;
+      return {
+        resolved: false,
+        outcome: { kind: 'needs_beneficiary', beneficiaryType: type, note },
+        summaryText: note,
+      };
+    }
+
+    // No nickname: for a currency-scoped payout, prefer a matching-currency bank
+    // (default if it matches, else the single matching one) instead of routing to
+    // a wrong-currency default.
+    if (matchCurrency) {
+      const bank = await this.resolveMatchingCurrencyBank(
+        userId,
+        type,
+        matchCurrency,
+      );
+      if (bank) {
+        return { resolved: true, beneficiaryId: bank.id };
+      }
+      const note = `Please add a ${matchCurrency} bank account first.`;
       return {
         resolved: false,
         outcome: { kind: 'needs_beneficiary', beneficiaryType: type, note },
@@ -655,6 +716,42 @@ export class WebChatService {
           ? 'Please add a bank account first.'
           : 'Please add a crypto address first.',
     };
+  }
+
+  /**
+   * True when a beneficiary's payout currency equals `currency`. Legacy null
+   * payoutCurrency rows predate the currency dimension → treated as the catalog
+   * base fiat (NGN today; post-backfill no bank row is null).
+   */
+  private beneficiaryMatchesCurrency(
+    beneficiary: BeneficiaryRecord,
+    currency: string,
+  ): boolean {
+    const payoutCurrency =
+      beneficiary.payoutCurrency ?? this.assetRegistry.defaultFiat();
+    return payoutCurrency === currency;
+  }
+
+  /**
+   * Resolves the bank to use for a currency-scoped payout without a nickname:
+   * the default when it matches the currency, else the SINGLE matching-currency
+   * bank. Returns null when there is no unambiguous match (none, or several) —
+   * the caller then prompts to add/pick a matching-currency bank.
+   */
+  private async resolveMatchingCurrencyBank(
+    userId: string,
+    type: 'bank_account' | 'crypto_address',
+    currency: string,
+  ): Promise<BeneficiaryRecord | null> {
+    const fallback = await this.beneficiaryService.getDefault(userId, type);
+    if (fallback && this.beneficiaryMatchesCurrency(fallback, currency)) {
+      return fallback;
+    }
+    const all = await this.beneficiaryService.listForUser(userId, type);
+    const matching = all.filter((b) =>
+      this.beneficiaryMatchesCurrency(b, currency),
+    );
+    return matching.length === 1 ? matching[0] : null;
   }
 
   /**
@@ -783,5 +880,55 @@ export class WebChatService {
       ? `Your ${snapshot.asset} balance:`
       : 'Your balances:';
     return `${header}\n${lines.join('\n')}`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rate discovery (Wave K — read-only, §3.1)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Text reply for a single-pair rate question. Surfaces the folded buy + sell
+   * figure the engine transacts at; when the pair is not tradeable / unpriced the
+   * rate provider throws — caught here and rendered as a graceful "no rate" line
+   * (a discovery miss is not an error, never a 5xx).
+   */
+  private async buildRateReply(
+    asset: string,
+    fiatCurrency: string,
+  ): Promise<string> {
+    try {
+      const rate = await this.ratesService.getEffectiveRate(
+        asset as EffectiveRate['asset'],
+        fiatCurrency,
+      );
+      return this.formatRateLine(rate);
+    } catch {
+      return `Sorry, I don't have a rate for ${asset}/${fiatCurrency} right now.`;
+    }
+  }
+
+  /**
+   * One human-readable rate line via registry formatters (no hardcoded symbols).
+   * Shows the folded buy and sell figures only — the FX spread is NEVER itemized
+   * (user rule / Wave K).
+   */
+  private formatRateLine(rate: EffectiveRate): string {
+    const assetMeta = this.assetRegistry.asset(rate.asset);
+    const buy = this.assetRegistry.formatFiat(rate.fiatCurrency, rate.buyRate);
+    const sell = this.assetRegistry.formatFiat(
+      rate.fiatCurrency,
+      rate.sellRate,
+    );
+    return `${assetMeta.displayName} (${rate.asset}) — buy ${buy}, sell ${sell} per 1 ${rate.asset}.`;
+  }
+
+  /** Text reply listing every enabled, tradeable, priced pair (never throws). */
+  private async buildRatesListReply(): Promise<string> {
+    const { rates } = await this.ratesService.listEffectiveRates();
+    if (rates.length === 0) {
+      return 'No rates are available right now. Please try again later.';
+    }
+    const lines = rates.map((rate) => `• ${this.formatRateLine(rate)}`);
+    return `Current rates:\n${lines.join('\n')}`;
   }
 }

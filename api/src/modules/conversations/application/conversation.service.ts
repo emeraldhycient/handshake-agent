@@ -743,6 +743,10 @@ export class ConversationService implements IInboundHandler {
       type: 'bank_account',
       recipientNickname: (intent as { recipientNickname?: string })
         .recipientNickname,
+      // Wave G: thread the sell fiat currency so an add-bank Flow collects a
+      // bank in the right currency (country derived server-side at the Flow
+      // endpoint). Undefined → the Flow endpoint defaults to the base fiat.
+      currency: sellFiatCurrency,
       noBeneficiaryRetryText:
         'Please add a bank account to sell crypto. Once added, send your sell request again.',
     });
@@ -1074,14 +1078,22 @@ export class ConversationService implements IInboundHandler {
     to: string;
     type: 'bank_account' | 'crypto_address';
     recipientNickname: string | undefined;
+    /** Payout currency seeded into a bank add-bank Flow (Wave G); undefined for crypto. */
+    currency?: string;
     /** Legacy retry guidance for the no-nickname, no-default path. */
     noBeneficiaryRetryText: string;
   }): Promise<
     | { resolved: true; beneficiaryId: string }
     | { resolved: false; reply: { replyText: string; flowSent: boolean } }
   > {
-    const { userId, to, type, recipientNickname, noBeneficiaryRetryText } =
-      params;
+    const {
+      userId,
+      to,
+      type,
+      recipientNickname,
+      currency,
+      noBeneficiaryRetryText,
+    } = params;
 
     if (recipientNickname) {
       const matches = await this.beneficiaryService.resolveByNickname(
@@ -1098,6 +1110,7 @@ export class ConversationService implements IInboundHandler {
           userId,
           to,
           type,
+          currency,
           retryText: question,
           // No Flow published → list the candidates inline so the user can
           // tell them apart (labels + masked details only — never a full
@@ -1116,6 +1129,7 @@ export class ConversationService implements IInboundHandler {
         userId,
         to,
         type,
+        currency,
         retryText: `No saved beneficiary called '${recipientNickname}'. Add one first, or pick from your saved list.`,
       });
       return { resolved: false, reply };
@@ -1129,6 +1143,7 @@ export class ConversationService implements IInboundHandler {
       userId,
       to,
       type,
+      currency,
       retryText: noBeneficiaryRetryText,
     });
     return { resolved: false, reply };
@@ -1165,12 +1180,14 @@ export class ConversationService implements IInboundHandler {
     to: string;
     type: 'bank_account' | 'crypto_address';
     retryText: string;
+    /** Payout currency seeded into a bank add-bank Flow (Wave G); undefined for crypto. */
+    currency?: string;
     /** Distinct guidance for the no-Flow text fallback (defaults to retryText). */
     fallbackText?: string;
     /** Candidates seeded into the Flow SELECT screen ({id, label} only). */
     beneficiaries?: Array<{ id: string; label: string }>;
   }): Promise<{ replyText: string; flowSent: boolean }> {
-    const { userId, to, type, retryText } = params;
+    const { userId, to, type, currency, retryText } = params;
     const flowId = this.configService.get<string>('WHATSAPP_FLOW_ID') ?? '';
 
     if (flowId) {
@@ -1192,6 +1209,8 @@ export class ConversationService implements IInboundHandler {
         flowToken,
         type,
         beneficiaries: params.beneficiaries ?? [],
+        // Only bank adds carry a currency; crypto flows leave it undefined.
+        ...(type === 'bank_account' && currency ? { currency } : {}),
       });
 
       // flowSent: false — the beneficiary Flow is a collection form, not the
@@ -1607,18 +1626,26 @@ export class ConversationService implements IInboundHandler {
 
     if (extraction.kind === 'bank_account') {
       if (extraction.bankCode) {
-        // We have enough to run name-enquiry — save the beneficiary immediately.
+        // Persist the extracted account, but as a FRESH UNVERIFIED destination
+        // with a first-use cooling-off (A2 / §3.1 / §3.4). An image message
+        // carries no PIN/step-up, so a vision-extracted account must NEVER become
+        // an immediately-usable, name-enquiry-verified payout target on session
+        // identity alone — `forceUnverified` skips name-enquiry and applies the
+        // cooling-off so the user reviews it before its first payout.
         try {
           const saved = await this.beneficiaryService.addBankAccount({
             userId: user.id,
             accountNumber: extraction.accountNumber,
             bankCode: extraction.bankCode,
-            // The BeneficiaryService overwrites this with the bank-resolved name.
             accountName: extraction.bankName ?? '',
             label: extraction.bankName ?? 'From image',
+            forceUnverified: true,
           });
           const displayName = saved.accountHolderName ?? 'your account';
-          return `Saved ${displayName} (•••${extraction.accountNumber.slice(-4)}) as a payout account.`;
+          return (
+            `Saved ${displayName} (•••${extraction.accountNumber.slice(-4)}) as a payout account. ` +
+            `For your security it's unverified with a short cooling-off — please review it before your first payout.`
+          );
         } catch {
           return (
             'I read bank details but could not verify the account. ' +

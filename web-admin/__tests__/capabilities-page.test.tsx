@@ -1,18 +1,19 @@
 /**
- * CapabilitiesPage test (design §6.25) — wired to real capability settings.
+ * CapabilitiesPage test (design §6.25) — wired to real capability settings, raised as a
+ * four-eyes ChangeRequest (Wave I).
  *
  * The crypto capability rows' ENABLED/DISABLED state is resolved from the
  * `catalog.capabilities.crypto.*` boolean settings (GET /admin/settings, mocked).
- * The kill-switch is dual-control: clicking a switch never flips it directly — it
- * opens the shared MakerCheckerModal. Approving ("Confirm change") toasts the
- * intended change (the real server-side flip + re-read is Phase 7). The api layer is
- * mocked — no server.
+ * The kill-switch is dual-control: clicking a switch never flips it directly — it opens
+ * the reason step, then the shared MakerCheckerModal (dual-control copy). Submitting
+ * RAISES a `capability_flip` ChangeRequest (createChange) for a SECOND admin to approve —
+ * it does NOT write the setting directly. The api layer is mocked — no server.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { EffectiveSetting } from "@handshake-agent/contracts"
+import type { ChangeRequest, EffectiveSetting } from "@handshake-agent/contracts"
 
 import { CapabilitiesPage } from "@/components/admin/capabilities-page"
 import { defaultToastStore } from "@/lib/store/toast-store"
@@ -24,16 +25,23 @@ vi.mock("@/lib/api/config", () => ({
   setSetting: vi.fn(),
 }))
 
+// The four-eyes maker-checker raise (POST /admin/approvals).
+vi.mock("@/lib/api/approvals", () => ({
+  createChange: vi.fn(),
+}))
+
 // The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
 vi.mock("@/lib/api/admin", () => ({
   getMe: vi.fn(),
 }))
 
 import { listEffectiveSettings, setSetting } from "@/lib/api/config"
+import { createChange } from "@/lib/api/approvals"
 import { getMe } from "@/lib/api/admin"
 
 const mockList = vi.mocked(listEffectiveSettings)
 const mockSet = vi.mocked(setSetting)
+const mockCreate = vi.mocked(createChange)
 const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
@@ -51,6 +59,23 @@ function flag(key: string, value: boolean): EffectiveSetting {
     scope: "global",
     scopeValue: null,
   }
+}
+
+/** A pending ChangeRequest the mocked createChange resolves with (bypasses parse). */
+const PENDING_CHANGE: ChangeRequest = {
+  id: "22222222-2222-2222-2222-222222222222",
+  kind: "capability_flip",
+  resource: "catalog.capabilities.crypto.buy",
+  payload: {},
+  status: "pending",
+  reason: "Kill switch",
+  requestedByAdminId: "11111111-1111-1111-1111-111111111111",
+  requestedByEmail: "amara@handshake.ng",
+  decidedByAdminId: null,
+  decidedByEmail: null,
+  decisionReason: null,
+  decidedAt: null,
+  createdAt: "2026-07-09T00:00:00.000Z",
 }
 
 const CATALOG_SETTINGS: EffectiveSetting[] = [
@@ -71,12 +96,26 @@ function renderPage() {
   )
 }
 
+/** Click the capability switch, then walk the reason → dual-control submit chain. */
+async function flipThroughApproval(
+  user: ReturnType<typeof userEvent.setup>,
+  switchName: string,
+  reason = "Kill switch"
+) {
+  await user.click(await screen.findByRole("switch", { name: switchName }))
+  await user.type(screen.getByRole("textbox", { name: "Reason" }), reason)
+  await user.click(screen.getByRole("button", { name: "Continue" }))
+  await user.click(screen.getByRole("button", { name: "Submit for approval" }))
+}
+
 beforeEach(() => {
   defaultToastStore.setState({ toasts: [] })
   mockList.mockReset()
   mockList.mockResolvedValue(CATALOG_SETTINGS)
   mockSet.mockReset()
   mockSet.mockResolvedValue(flag("catalog.capabilities.crypto.buy", false))
+  mockCreate.mockReset()
+  mockCreate.mockResolvedValue(PENDING_CHANGE)
   mockGetMe.mockReset()
   mockGetMe.mockResolvedValue({
     id: "11111111-1111-1111-1111-111111111111",
@@ -93,7 +132,7 @@ beforeEach(() => {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe("CapabilitiesPage (wired dual-control kill-switch)", () => {
+describe("CapabilitiesPage (four-eyes capability_flip)", () => {
   it("renders switchboard rows from the real capability settings", async () => {
     renderPage()
 
@@ -111,80 +150,115 @@ describe("CapabilitiesPage (wired dual-control kill-switch)", () => {
     )
   })
 
-  it("does not flip the switch on click — it opens the maker-checker modal", async () => {
+  it("does not flip the switch on click — it opens the reason step first", async () => {
     const user = userEvent.setup()
     renderPage()
 
     const toggle = await screen.findByRole("switch", { name: "crypto.buy" })
     await user.click(toggle)
 
-    // Still enabled — the click only opened dual-control approval.
+    // Still enabled — the click only opened the reason capture (not a direct flip).
     expect(toggle).toHaveAttribute("aria-checked", "true")
-    expect(
-      screen.getByRole("dialog", { name: /Disable crypto.buy/ })
-    ).toBeInTheDocument()
+    expect(screen.getByRole("textbox", { name: "Reason" })).toBeInTheDocument()
+    expect(mockCreate).not.toHaveBeenCalled()
+    expect(mockSet).not.toHaveBeenCalled()
   })
 
-  it("persists the flip via setSetting (PATCH) when the maker-checker is approved", async () => {
+  it("raises a capability_flip ChangeRequest (not a direct setSetting) when submitted", async () => {
     const user = userEvent.setup()
     renderPage()
 
-    const toggle = await screen.findByRole("switch", { name: "crypto.buy" })
-    await user.click(toggle)
+    await flipThroughApproval(user, "crypto.buy")
 
-    const dialog = screen.getByRole("dialog", { name: /Disable crypto.buy/ })
-    await user.click(
-      within(dialog).getByRole("button", { name: "Confirm change" })
-    )
-
-    // The real config-override PATCH fires with the toggled boolean + the setting's
-    // scope; the buy row was ON, so the flip persists `false`.
-    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
-    expect(mockSet).toHaveBeenCalledWith("catalog.capabilities.crypto.buy", {
-      value: false,
-      scope: "global",
-      scopeValue: null,
+    // A four-eyes change request is raised; crypto.buy was ON, so the payload flips
+    // it OFF, mirroring the setSetting body 1:1 inside the payload, with the reason.
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1))
+    expect(mockCreate).toHaveBeenCalledWith({
+      kind: "capability_flip",
+      resource: "catalog.capabilities.crypto.buy",
+      payload: {
+        key: "catalog.capabilities.crypto.buy",
+        value: false,
+        scope: "global",
+        scopeValue: null,
+      },
+      reason: "Kill switch",
     })
-    // A feedback toast fired and the modal closed.
+    // Nothing is written directly — no optimistic settings mutation fires.
+    expect(mockSet).not.toHaveBeenCalled()
+    // The copy says submitted-for-approval and the modal closed.
     expect(defaultToastStore.getState().toasts).toContainEqual(
-      expect.objectContaining({ message: "crypto.buy disabled" })
+      expect.objectContaining({ message: "Submitted for approval" })
     )
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   })
 
-  it("does not persist until the maker-checker submit fires", async () => {
+  it("raises an ENABLE flip for a disabled capability", async () => {
     const user = userEvent.setup()
     renderPage()
 
-    const toggle = await screen.findByRole("switch", { name: "crypto.buy" })
-    await user.click(toggle)
-    // The dialog is open but nothing has been persisted yet.
+    // swap is OFF → the flip enables it (value: true).
+    await flipThroughApproval(user, "swap", "Enable swap")
+
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1))
+    expect(mockCreate).toHaveBeenCalledWith({
+      kind: "capability_flip",
+      resource: "catalog.capabilities.crypto.swap",
+      payload: {
+        key: "catalog.capabilities.crypto.swap",
+        value: true,
+        scope: "global",
+        scopeValue: null,
+      },
+      reason: "Enable swap",
+    })
+  })
+
+  it("rejects a reason shorter than 3 chars — no change request is raised", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole("switch", { name: "crypto.buy" }))
+    await user.type(screen.getByRole("textbox", { name: "Reason" }), "no")
+    const continueBtn = screen.getByRole("button", { name: "Continue" })
+    expect(continueBtn).toBeDisabled()
+    await user.click(continueBtn)
+
     expect(
-      screen.getByRole("dialog", { name: /Disable crypto.buy/ })
+      screen.queryByRole("button", { name: "Submit for approval" })
+    ).not.toBeInTheDocument()
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it("does not raise until the maker-checker submit fires", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole("switch", { name: "crypto.buy" }))
+    await user.type(screen.getByRole("textbox", { name: "Reason" }), "Kill switch")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    // The dual-control confirm is up but nothing has been raised yet.
+    expect(
+      screen.getByRole("button", { name: "Submit for approval" })
     ).toBeInTheDocument()
+    expect(mockCreate).not.toHaveBeenCalled()
     expect(mockSet).not.toHaveBeenCalled()
   })
 
-  it("opens the step-up dialog and retries the PATCH after re-auth when the server demands step-up", async () => {
+  it("opens the step-up dialog and retries the raise after re-auth when the server demands step-up", async () => {
     const user = userEvent.setup()
     const { ApiError } = await import("@/lib/api/client")
-    mockSet
+    mockCreate
       .mockRejectedValueOnce(
         new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
       )
-      .mockResolvedValueOnce(flag("catalog.capabilities.crypto.buy", false))
+      .mockResolvedValueOnce(PENDING_CHANGE)
 
     renderPage()
-    const toggle = await screen.findByRole("switch", { name: "crypto.buy" })
-    await user.click(toggle)
-    await user.click(
-      within(
-        screen.getByRole("dialog", { name: /Disable crypto.buy/ })
-      ).getByRole("button", { name: "Confirm change" })
-    )
+    await flipThroughApproval(user, "crypto.buy")
 
     expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
-    expect(mockSet).toHaveBeenCalledTimes(1)
+    expect(mockCreate).toHaveBeenCalledTimes(1)
   })
 
   it("shows an error branch with a retry when the settings read fails", async () => {

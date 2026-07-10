@@ -1,5 +1,6 @@
 import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 
+import { ADMIN_SESSION_COOKIE } from '../../../core/common/cookie-options';
 import { AdminInvalidCredentialsError } from '../domain/admin-errors';
 import { AdminSessionGuard } from './admin-session.guard';
 import type { AdminContext } from './current-admin.decorator';
@@ -40,12 +41,20 @@ const user: AdminUserRecord = {
   loginLockedUntil: null,
 };
 
-function ctxWith(authorization: string | undefined): {
+function ctxWith(
+  authorization: string | undefined,
+  cookies?: Record<string, string | undefined>,
+): {
   ctx: ExecutionContext;
-  req: { headers: Record<string, string | undefined>; admin?: AdminContext };
+  req: {
+    headers: Record<string, string | undefined>;
+    cookies?: Record<string, string | undefined>;
+    admin?: AdminContext;
+  };
 } {
   const req = {
     headers: { authorization },
+    cookies,
     admin: undefined as AdminContext | undefined,
   };
   const ctx = {
@@ -89,9 +98,9 @@ function build(
 }
 
 describe('AdminSessionGuard', () => {
-  it('throws Unauthorized when the Authorization header is missing', async () => {
+  it('throws Unauthorized when neither a cookie nor a Bearer header is present', async () => {
     const { guard } = build();
-    const { ctx } = ctxWith(undefined);
+    const { ctx } = ctxWith(undefined, undefined);
     await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
@@ -149,7 +158,7 @@ describe('AdminSessionGuard', () => {
     );
   });
 
-  it('sets req.admin and returns true for a valid token', async () => {
+  it('sets req.admin and returns true for a valid Bearer header token', async () => {
     const { guard } = build();
     const { ctx, req } = ctxWith('Bearer good-token');
     await expect(guard.canActivate(ctx)).resolves.toBe(true);
@@ -159,5 +168,24 @@ describe('AdminSessionGuard', () => {
       roleId: 'role-1',
       email: 'admin@x.io',
     });
+  });
+
+  it('accepts the token from the ha_admin_session cookie (no header present)', async () => {
+    const { guard, tokens } = build();
+    const { ctx, req } = ctxWith(undefined, {
+      [ADMIN_SESSION_COOKIE]: 'cookie-jwt',
+    });
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    expect(tokens.verify).toHaveBeenCalledWith('cookie-jwt');
+    expect(req.admin?.adminId).toBe('admin-1');
+  });
+
+  it('prefers the cookie over the Authorization header when both are present', async () => {
+    const { guard, tokens } = build();
+    const { ctx } = ctxWith('Bearer header-jwt', {
+      [ADMIN_SESSION_COOKIE]: 'cookie-jwt',
+    });
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    expect(tokens.verify).toHaveBeenCalledWith('cookie-jwt');
   });
 });

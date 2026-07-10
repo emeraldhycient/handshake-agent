@@ -7,6 +7,8 @@ import { SwapIntentSchema } from './swap.intent'
 import { BuyTicketIntentSchema } from './buy-ticket.intent'
 import { CheckBalanceIntentSchema } from './check-balance.intent'
 import { QueryTransactionsIntentSchema } from './query-transactions.intent'
+import { GetRateIntentSchema } from './get-rate.intent'
+import { ListRatesIntentSchema } from './list-rates.intent'
 
 // Discriminated-union root — the only place IntentSchema is declared.
 // The NLU layer emits one of these validated intent objects; consumers narrow on `action`.
@@ -19,6 +21,8 @@ export const IntentSchema = z.discriminatedUnion('action', [
   BuyTicketIntentSchema,
   CheckBalanceIntentSchema,
   QueryTransactionsIntentSchema,
+  GetRateIntentSchema,
+  ListRatesIntentSchema,
   NoIntentSchema,
 ])
 export type Intent = z.infer<typeof IntentSchema>
@@ -31,3 +35,5 @@ export * from './swap.intent'
 export * from './buy-ticket.intent'
 export * from './check-balance.intent'
 export * from './query-transactions.intent'
+export * from './get-rate.intent'
+export * from './list-rates.intent'

@@ -375,6 +375,22 @@ describe('AnthropicLlmProvider', () => {
         expect(prompt).toMatch(/last 2 weeks|6 months|24 hours|an hour ago/i);
       });
 
+      it('documents the read-only get_rate and list_rates rate-discovery tools', () => {
+        // Wave K: the model must know a pure price/rate question maps to the
+        // read-only get_rate (single pair) / list_rates (all pairs) actions —
+        // NOT buy_crypto/sell_crypto (a price question moves no money, §3.1).
+        const prompt = provider.buildSystemPrompt();
+        expect(prompt).toContain('get_rate');
+        expect(prompt).toContain('list_rates');
+        // get_rate is a single-pair query naming the asset + fiat.
+        expect(prompt).toMatch(/get_rate[^\n]*asset/i);
+        // It must steer a rate/price question away from a buy/sell action.
+        expect(prompt).toMatch(/price|rate/i);
+        expect(prompt).toMatch(
+          /READ-ONLY|never buys or sells|never buy or sell/i,
+        );
+      });
+
       it('instructs the model to set the optional asset on check_balance', () => {
         const prompt = provider.buildSystemPrompt();
         // The check_balance bullet must explain the optional asset so that

@@ -31,6 +31,7 @@ import { WalletService } from '../../wallets/application/wallet.service';
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
 import { QuotesService } from '../../quotes/application/quotes.service';
+import { RatesService } from '../../quotes/application/rates.service';
 import { WebChatService } from '../../chat/application/web-chat.service';
 import {
   TRANSACTION_REPOSITORY,
@@ -75,6 +76,7 @@ export class McpToolsService {
     beneficiaryService: BeneficiaryService,
     historyService: TransactionHistoryService,
     quotesService: QuotesService,
+    ratesService: RatesService,
     webChatService: WebChatService,
     assetRegistry: AssetRegistry,
     @Inject(IDENTITY_REPOSITORY) identityRepo: IIdentityRepository,
@@ -89,6 +91,7 @@ export class McpToolsService {
       beneficiaries: beneficiaryService,
       history: historyService,
       quotes: quotesService,
+      rates: ratesService,
       chat: webChatService,
       identityRepo,
       transactionRepo,

@@ -7,6 +7,7 @@ import {
   LoginVerifyResponseSchema,
   MeResponseSchema,
   RefreshRequestSchema,
+  RefreshResponseSchema,
 } from "./index";
 
 describe("auth contracts", () => {
@@ -117,7 +118,33 @@ describe("auth contracts", () => {
     expect(v.lastName).toBeUndefined();
   });
 
-  it("refresh request requires a token", () => {
+  it("refresh request rejects an empty-string token but allows it omitted (cookie-primary)", () => {
+    // An explicit empty string is still invalid...
     expect(() => RefreshRequestSchema.parse({ refreshToken: "" })).toThrow();
+    // ...but omitting it entirely is valid: the token rides in the ha_refresh cookie.
+    expect(RefreshRequestSchema.parse({}).refreshToken).toBeUndefined();
+    expect(RefreshRequestSchema.parse({ refreshToken: "r" }).refreshToken).toBe(
+      "r",
+    );
+  });
+
+  it("refresh response carries the rotated tokens plus the user projection", () => {
+    const v = RefreshResponseSchema.parse({
+      accessToken: "a",
+      refreshToken: "r",
+      user: {
+        userId: "11111111-1111-1111-1111-111111111111",
+        email: "a@b.com",
+        kycStatus: "verified",
+        kycTier: "tier_1",
+        hasPin: true,
+      },
+    });
+    expect(v.accessToken).toBe("a");
+    expect(v.user.email).toBe("a@b.com");
+    // user is required on the refresh response (single round-trip boot rehydration).
+    expect(() =>
+      RefreshResponseSchema.parse({ accessToken: "a", refreshToken: "r" }),
+    ).toThrow();
   });
 });

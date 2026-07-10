@@ -2,17 +2,21 @@
  * BeneficiaryController — web (JWT-auth) CRUD for saved payout destinations.
  *
  *   GET  /beneficiaries?type=bank_account|crypto_address  → list
- *   POST /beneficiaries/bank-account   {accountNumber,bankCode,label}
- *   POST /beneficiaries/crypto-address {address,network,asset,label}
+ *   GET  /beneficiaries/banks?country=<ISO>               → bank dropdown
+ *   POST /beneficiaries/bank-account   {accountNumber,bankCode,label,currency,pin,…}
+ *   POST /beneficiaries/crypto-address {address,network,asset,label,pin,…}
  *
  * Reuses BeneficiaryService (the same engine the WhatsApp Flow surface uses):
- *   - bank-account add runs the name-enquiry port (resolved name persisted).
+ *   - bank-account add runs country-gated name-enquiry (resolved name persisted
+ *     where the rail supports it; user-entered name saved unverified otherwise).
  *   - crypto-address add runs address-pattern validation + first-use cooling-off.
  *
- * Security (CLAUDE.md §3.2 / §3.3): presentation layer only — no Prisma, no
- * domain logic. JwtAuthGuard on every route; the userId comes from the verified
- * session, never the request body. Domain errors map to 422 so the client can
- * surface a clear message without leaking internals.
+ * Security (CLAUDE.md §3.2 / §3.3 / §3.4): presentation layer only — no Prisma,
+ * no domain logic. JwtAuthGuard on every route; the userId comes from the
+ * verified session, never the request body. Adding a withdrawal destination is
+ * step-up gated (audit R2): PIN verify (lockout-protected) + a device-bound
+ * step-up recorded BEFORE the service persists. Domain errors map to 4xx so the
+ * client sees a clear message without leaking internals.
  */
 
 import {
@@ -34,6 +38,7 @@ import {
 import type {
   Beneficiary,
   BeneficiaryListResponse,
+  BankListResponse,
   DeleteBeneficiaryResponse,
 } from '@handshake-agent/contracts';
 
@@ -42,16 +47,19 @@ import {
   type AuthenticatedUser,
 } from '../../auth/presentation/jwt-auth.guard';
 import { CurrentUser } from '../../auth/presentation/current-user.decorator';
+import { StepUpService } from '../../../core/auth/step-up.service';
 
 import { BeneficiaryService } from '../application/beneficiary.service';
 import type { BeneficiaryRecord } from '../application/ports/beneficiary.repository.port';
 import {
   NameEnquiryFailedError,
   InvalidAddressError,
+  BeneficiaryInvalidAccountNumberError,
   BeneficiaryNotFoundError,
 } from '../domain/beneficiary-errors';
 import {
   ListBeneficiariesQueryDto,
+  BankListQueryDto,
   AddBankAccountDto,
   AddCryptoAddressDto,
 } from './dto/beneficiary.dto';
@@ -69,10 +77,13 @@ function toBeneficiaryDto(record: BeneficiaryRecord): Beneficiary {
     accountNumber: record.accountNumber,
     accountHolderName: record.accountHolderName,
     bankCode: record.bankCode,
+    currency: record.payoutCurrency,
+    country: record.bankCountry,
     cryptoAddress: record.cryptoAddress,
     cryptoAsset: record.cryptoAsset,
     cryptoNetwork: record.cryptoNetwork,
     verificationStatus: record.verificationStatus,
+    rail: record.rail ?? 'bank',
     isDefault: record.isDefault,
     firstUseLockedUntil: record.firstUseLockedUntil
       ? record.firstUseLockedUntil.toISOString()
@@ -84,7 +95,10 @@ function toBeneficiaryDto(record: BeneficiaryRecord): Beneficiary {
 @Controller('beneficiaries')
 @UseGuards(JwtAuthGuard)
 export class BeneficiaryController {
-  constructor(private readonly beneficiaryService: BeneficiaryService) {}
+  constructor(
+    private readonly beneficiaryService: BeneficiaryService,
+    private readonly stepUpService: StepUpService,
+  ) {}
 
   @Get()
   async list(
@@ -98,21 +112,47 @@ export class BeneficiaryController {
     return { beneficiaries: records.map(toBeneficiaryDto) };
   }
 
+  /**
+   * Lists the banks for a country to back the add-bank dropdown. Real
+   * Flutterwave `/banks/{country}` behind a per-country cache; unknown countries
+   * are rejected (422) by the service before any provider call.
+   */
+  @Get('banks')
+  async listBanks(@Query() query: BankListQueryDto): Promise<BankListResponse> {
+    const banks = await this.beneficiaryService.listBanks(query.country);
+    return { banks };
+  }
+
   @Post('bank-account')
   @HttpCode(HttpStatus.CREATED)
   async addBankAccount(
     @Body() dto: AddBankAccountDto,
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<Beneficiary> {
+    // R2: PIN + device-bound step-up BEFORE persisting a withdrawal destination.
+    await this.stepUpService.assertStepUpForSensitiveAction(
+      user.userId,
+      dto.pin,
+      dto.deviceFingerprint,
+    );
     try {
       const record = await this.beneficiaryService.addBankAccount({
         userId: user.userId,
         accountNumber: dto.accountNumber,
         bankCode: dto.bankCode,
         label: dto.label,
+        currency: dto.currency,
+        rail: dto.rail,
+        // Persisted only where the rail cannot resolve the true name (non-NG).
+        accountName: dto.accountHolderName,
       });
       return toBeneficiaryDto(record);
     } catch (err) {
+      if (err instanceof BeneficiaryInvalidAccountNumberError) {
+        throw new UnprocessableEntityException(
+          'That account number is not valid for the selected currency. Please check it and try again.',
+        );
+      }
       if (err instanceof NameEnquiryFailedError) {
         throw new UnprocessableEntityException(
           'Could not verify this bank account. Please check the account number and bank, then try again.',
@@ -128,6 +168,13 @@ export class BeneficiaryController {
     @Body() dto: AddCryptoAddressDto,
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<Beneficiary> {
+    // R2: PIN + device-bound step-up BEFORE persisting a withdrawal destination.
+    // This is ADDITIONAL to the first-use cooling-off, not a replacement.
+    await this.stepUpService.assertStepUpForSensitiveAction(
+      user.userId,
+      dto.pin,
+      dto.deviceFingerprint,
+    );
     try {
       const record = await this.beneficiaryService.addCryptoAddress({
         userId: user.userId,

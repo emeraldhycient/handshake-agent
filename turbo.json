@@ -29,6 +29,11 @@
       "outputs": ["coverage/**"],
       "cache": true
     },
+    "test:cov": {
+      "dependsOn": ["^build", "db:generate"],
+      "outputs": ["coverage/**"],
+      "cache": true
+    },
     "dev": {
       "cache": false,
       "persistent": true

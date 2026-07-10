@@ -7,10 +7,10 @@ import type { SupportedAsset } from "@handshake-agent/contracts"
 import { pushToast } from "@/lib/store/toast-store"
 import { ApiError } from "@/lib/api/client"
 import {
-  useAdjustTier,
   useAdminCatalog,
   useAdminMe,
   useApproveKyc,
+  useCreateChange,
   useCreateUserNote,
   useEndUserDetail,
   useEndUserDevices,
@@ -46,8 +46,11 @@ import type { UdFlowConfig, UdFlowStep, UdTab } from "@/types/components"
  * Funds/identity safety (§3.1/§3.3/§3.4): the model only proposes. Each sensitive
  * mutation runs through `runStepUpMutation` → `useStepUpRetry`, so a 403
  * ADMIN_STEP_UP_REQUIRED opens the real StepUpDialog and replays after re-auth.
- * A refund/manual-credit/tier-override is a four-eyes maker-checker request that a
- * SECOND admin approves — nothing here writes a raw ledger entry or moves money.
+ * Manual-credit AND the per-user tier override are the four-eyes maker-checker requests
+ * here (both land in a SECOND admin's approvals inbox — manual-credit via
+ * POST /admin/users/:id/credit, the tier override via a `user_tier_override`
+ * ChangeRequest on POST /admin/approvals — so their maker step is honest dual-control).
+ * Nothing here writes a raw ledger entry or moves money.
  */
 export function useUserDetailScreen(userId: string) {
   const router = useRouter()
@@ -79,7 +82,7 @@ export function useUserDetailScreen(userId: string) {
   const me = useAdminMe()
   const approveKyc = useApproveKyc()
   const rejectKyc = useRejectKyc()
-  const adjustTier = useAdjustTier()
+  const createChange = useCreateChange()
   const setUserStatus = useSetUserStatus()
   const forcePinReset = useForcePinReset()
   const revokeDevice = useRevokeDevice()
@@ -232,13 +235,17 @@ export function useUserDetailScreen(userId: string) {
           "KYC rejected"
         ),
     })
-  // Override tier — reason → confirm (applies immediately after server step-up), then
-  // PATCH /admin/users/:id/tier (a one-step de-escalation; engine re-validates §3.3).
+  // Override tier — reason → maker (four-eyes, §3.1): raises a `user_tier_override`
+  // ChangeRequest a SECOND admin approves (which re-runs the tier-adjust service,
+  // server-re-validated §3.3). It does NOT apply immediately — the maker step carries
+  // the honest dual-control copy. The reason captured at the reason step is threaded
+  // onto the request as the maker's justification.
   const overrideTargetTier = TIER_OVERRIDE_TARGET[detailQuery.data?.kycTier ?? "unverified"]
   const overrideTier = () =>
     runFlow({
       title: "Override tier",
       steps: ["reason", "maker"],
+      dualControl: true,
       diff: [
         {
           field: "KYC tier",
@@ -246,13 +253,18 @@ export function useUserDetailScreen(userId: string) {
           to: overrideTargetTier,
         },
       ],
-      onComplete: () =>
+      onComplete: (reason) =>
         runStepUpMutation(
           () =>
-            adjustTier
-              .mutateAsync({ id: userId, input: { tier: overrideTargetTier } })
+            createChange
+              .mutateAsync({
+                kind: "user_tier_override",
+                resource: `User:${userId}`,
+                payload: { userId, tier: overrideTargetTier },
+                reason,
+              })
               .then(() => undefined),
-          "Tier override applied"
+          "Tier override submitted for approval"
         ),
     })
   // Force re-KYC — reason, then the step-up-guarded POST /admin/users/:id/force-rekyc (§3.4).
@@ -342,7 +354,9 @@ export function useUserDetailScreen(userId: string) {
   }
 
   // Add note — the reason modal's free text IS the note body; onComplete POSTs
-  // /admin/users/:id/notes (an immutable case note). Low-risk (no step-up).
+  // /admin/users/:id/notes (an immutable case note). Step-up-guarded server-side
+  // (A5): the write goes through `runStepUpMutation`, so a 403 ADMIN_STEP_UP_REQUIRED
+  // opens the StepUpDialog and replays after re-auth.
   const addNote = () =>
     runFlow({
       title: "Add note",

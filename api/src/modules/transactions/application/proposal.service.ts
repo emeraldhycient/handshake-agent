@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import type {
   BuyCryptoIntent,
   SellCryptoIntent,
@@ -21,6 +21,7 @@ import type {
 
 import type {
   PricingConfig,
+  PricingFeedConfig,
   ComplianceConfig,
   SwapConfig,
 } from '../../../core/config/configuration';
@@ -54,6 +55,7 @@ import {
 import {
   BeneficiaryNotFoundError,
   BeneficiaryWrongTypeError,
+  BeneficiaryCurrencyMismatchError,
   BeneficiaryCoolingOffError,
 } from '../../beneficiaries/domain/beneficiary-errors';
 import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
@@ -69,7 +71,11 @@ import {
   type ISwapProvider,
 } from '../../wallets/application/ports/swap-provider.port';
 import { toScaled } from '../domain/ledger';
-import { resolveBaseRate } from './resolve-base-rate';
+import {
+  liveStoreWhenEnabled,
+  resolveEffectiveBaseRate,
+} from './resolve-base-rate';
+import { LiveRateStore } from '../../quotes/application/live-rate.store';
 
 export interface CreateBuyProposalInput {
   userId: string;
@@ -219,7 +225,27 @@ export class ProposalService {
     private readonly configService: EffectiveConfigService,
     @Inject(SWAP_PROVIDER)
     private readonly swapProvider: ISwapProvider,
+    // @Optional so the existing unit suite (positional construction) resolves the
+    // config fallback; production injects the shared live-rate store so the
+    // proposal fiat-equivalent uses the SAME live rate the execution re-quote does.
+    @Optional() private readonly liveRateStore?: LiveRateStore,
   ) {}
+
+  /** Live-feed staleness window (seconds) from config, defaulting when absent. */
+  private feedStalenessSec(): number {
+    const feed = this.configService.get<PricingFeedConfig | undefined>(
+      'pricing.feed',
+    );
+    return typeof feed?.stalenessSec === 'number' ? feed.stalenessSec : 900;
+  }
+
+  /** The live store honouring the admin kill-switch (null the moment enabled=false). */
+  private effectiveLiveStore(): LiveRateStore | null {
+    const feed = this.configService.get<PricingFeedConfig | undefined>(
+      'pricing.feed',
+    );
+    return liveStoreWhenEnabled(this.liveRateStore, feed);
+  }
 
   /**
    * Reads the admin-tunable amount-floor keys off the `pricing` config section.
@@ -482,6 +508,33 @@ export class ProposalService {
     if (beneficiary === null) {
       throw new BeneficiaryNotFoundError(beneficiaryId);
     }
+    // Currency-match guard (§3.3): the bank must pay out in the SAME currency as
+    // the sell, or the fiat leg settles to the wrong rail. Legacy null
+    // payoutCurrency rows predate the currency dimension → treated as the catalog
+    // base fiat (NGN today; post-backfill no bank row is null).
+    const payoutCurrency =
+      beneficiary.payoutCurrency ?? this.assetRegistry.defaultFiat();
+    if (payoutCurrency !== intent.fiatCurrency) {
+      throw new BeneficiaryCurrencyMismatchError(
+        beneficiaryId,
+        intent.fiatCurrency,
+        payoutCurrency,
+      );
+    }
+    // First-use cooling-off (B3) — same checkpoint the crypto send path uses
+    // (createSendProposal step 6). An unverified bank beneficiary (name-enquiry
+    // unavailable for its market) carries a cooling-off so an unverified name
+    // cannot go straight onto a real payout; a name-enquiry-verified NG bank has
+    // firstUseLockedUntil null and is unaffected.
+    if (
+      beneficiary.firstUseLockedUntil !== null &&
+      beneficiary.firstUseLockedUntil > now
+    ) {
+      throw new BeneficiaryCoolingOffError(
+        beneficiaryId,
+        beneficiary.firstUseLockedUntil,
+      );
+    }
     // NOTE: production gates on verifiedAt / name-enquiry (beneficiary.verifiedAt !== null).
     // This skeleton accepts any beneficiary regardless of verificationStatus.
 
@@ -642,7 +695,14 @@ export class ProposalService {
     // Fail closed on a missing / 0 / negative baseRate via the shared guard: a
     // zero rate would zero the fiat-equivalent and silently bypass the KYC /
     // velocity / Travel-Rule gate (§3.1 / §3.3). Same guard as ExecutionService.
-    const baseRate = resolveBaseRate(pricingConfig, intent.asset, baseFiat);
+    const baseRate = resolveEffectiveBaseRate(
+      pricingConfig,
+      this.effectiveLiveStore(),
+      intent.asset,
+      baseFiat,
+      this.clock.now(),
+      this.feedStalenessSec(),
+    );
     // Compute NGN equivalent: cryptoAmount × baseRate, BigInt-exact (Fix-C).
     // baseRate is an integer NGN-per-USDT rate from config (e.g. 1600).
     // toScaled(cryptoAmount) returns the 10^18-scaled representation of cryptoAmount.
@@ -933,7 +993,14 @@ export class ProposalService {
     // Use baseRate for the fromAsset.
     const pricingConfig = this.configService.get<PricingConfig>('pricing');
     const baseFiat = this.assetRegistry.defaultFiat();
-    const baseRate = resolveBaseRate(pricingConfig, fromAsset, baseFiat);
+    const baseRate = resolveEffectiveBaseRate(
+      pricingConfig,
+      this.effectiveLiveStore(),
+      fromAsset,
+      baseFiat,
+      this.clock.now(),
+      this.feedStalenessSec(),
+    );
     const LEDGER_SCALE = 10n ** 18n;
     const scaledFrom = toScaled(amount);
     const scaledNgn18 =

@@ -78,7 +78,7 @@ export function McpSection() {
   }
 
   return (
-    <div className="overflow-hidden rounded-[16px] border border-border bg-card">
+    <div className="rounded-[16px] border border-border bg-card">
       <div className="flex items-center border-b border-border px-5 py-[13px]">
         <p className="flex-1 text-xs font-bold tracking-widest text-muted-foreground uppercase">
           Connected agents (MCP)

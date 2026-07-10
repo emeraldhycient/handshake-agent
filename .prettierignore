@@ -7,3 +7,22 @@ coverage/
 .turbo/
 pnpm-lock.yaml
 **/generated/
+
+# --- Per-package Prettier ownership (see .lintstagedrc.cjs) ---
+# The root `format:check` guards repo-level files (root config, CI workflows)
+# and the api package. The trees below are formatted by each package's own
+# Prettier config + the per-package lint-staged on commit, NOT by this root
+# sweep:
+#   - web/ and web-admin/ resolve `prettier-plugin-tailwindcss` from their OWN
+#     node_modules; that plugin is not installed at the workspace root, so a
+#     root-level Prettier run cannot load their config at all.
+#   - packages/contracts/ predates a shared Prettier config and carries mixed
+#     quote/semi styles across files, so no single root config validates it.
+# Formatting drift inside these trees is caught by their per-package tooling.
+web/
+web-admin/
+packages/
+
+# docs/ holds long-form prose, design specs, and operational runbooks — not
+# code — so it is intentionally exempt from Prettier normalization.
+docs/

@@ -8,6 +8,7 @@
   "scripts": {
     "postinstall": "prisma generate",
     "db:generate": "prisma generate",
+    "db:seed": "ts-node --project tsconfig.dev.json -r tsconfig-paths/register prisma/seed.ts",
     "build": "nest build && tsc-alias -p tsconfig.build.json",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "pnpm build && node dist/api/src/main",
@@ -21,7 +22,7 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json --passWithNoTests",
+    "test:e2e": "jest --config ./test/jest-e2e.json",
     "start:worker": "node dist/api/src/worker.js",
     "start:worker:dev": "ts-node --project tsconfig.json -r tsconfig-paths/register src/worker.ts",
     "send:test": "ts-node --project tsconfig.json -r tsconfig-paths/register scripts/send-test-message.ts",
@@ -50,6 +51,7 @@
     "argon2": "^0.44.0",
     "axios": "^1.18.0",
     "bullmq": "^5.79.1",
+    "cookie-parser": "^1.4.7",
     "helmet": "^8.2.0",
     "ioredis": "^5.11.1",
     "nestjs-pino": "^4.6.1",
@@ -75,6 +77,7 @@
     "@swc/core": "^1.10.7",
     "@testcontainers/postgresql": "^12.0.3",
     "@testcontainers/redis": "^12.0.3",
+    "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.10.7",
@@ -112,9 +115,38 @@
       "^.+\\.(t|j)s$": "ts-jest"
     },
     "collectCoverageFrom": [
-      "**/*.(t|j)s"
+      "**/*.(t|j)s",
+      "!**/*.spec.ts",
+      "!**/*.d.ts",
+      "!**/*.module.ts",
+      "!**/*.port.ts",
+      "!**/ports/**",
+      "!**/*.interface.ts",
+      "!**/index.ts",
+      "!main.ts",
+      "!worker.ts"
     ],
     "coverageDirectory": "../coverage",
+    "coverageThreshold": {
+      "global": {
+        "statements": 45,
+        "branches": 33,
+        "functions": 35,
+        "lines": 45
+      },
+      "src/modules/**/domain/**/*.ts": {
+        "statements": 80,
+        "branches": 47,
+        "functions": 72,
+        "lines": 80
+      },
+      "src/modules/**/application/**/*.ts": {
+        "statements": 82,
+        "branches": 36,
+        "functions": 72,
+        "lines": 82
+      }
+    },
     "moduleNameMapper": {
       "^@handshake-agent/contracts$": "<rootDir>/../../packages/contracts/src/index.ts",
       "^@handshake-agent/contracts/(.*)$": "<rootDir>/../../packages/contracts/src/$1"

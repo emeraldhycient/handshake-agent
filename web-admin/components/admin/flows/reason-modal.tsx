@@ -37,10 +37,11 @@ export function ReasonModal({
   title,
   onContinue,
   categories = DEFAULT_CATEGORIES,
+  minLength = 1,
 }: ReasonModalProps) {
   const [reason, setReason] = useState("")
   const [category, setCategory] = useState("")
-  const canContinue = reason.trim().length > 0
+  const canContinue = reason.trim().length >= minLength
 
   function submit() {
     if (!canContinue) return

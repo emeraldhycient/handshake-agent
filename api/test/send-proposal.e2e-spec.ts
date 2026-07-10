@@ -203,6 +203,8 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
       fakeNameEnquiry,
       assetRegistry,
       config,
+      // Wave G: bank-list port (unused in these flows) — empty stub adapter.
+      { listBanks: () => Promise.resolve([]) },
     );
     const complianceService = new ComplianceService(
       sanctionsScreener,

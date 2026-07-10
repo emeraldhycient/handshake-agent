@@ -100,7 +100,11 @@ export function useLoginVerify() {
   return useMutation({
     mutationFn: (body: LoginVerifyRequest) => submitLoginVerify(body),
     onSuccess: (data) => {
-      defaultAuthStore.getState().setSession(data)
+      // The refresh token in `data` is ignored — the browser already stored it
+      // as the HttpOnly `ha_refresh` cookie from the login response's Set-Cookie.
+      defaultAuthStore
+        .getState()
+        .setSession({ accessToken: data.accessToken, user: data.user })
     },
   })
 }

@@ -4,7 +4,7 @@ import { useState } from "react"
 import { usePathname } from "next/navigation"
 
 import { useAdminMe, useNavBadges } from "@/lib/query/hooks"
-import { useAdminAuthStore } from "@/lib/store/admin-auth-store"
+import { useAdminLogout } from "@/lib/query/auth"
 import { useThemeStore } from "@/lib/store/theme-store"
 import { buildVisibleGroups, flattenNav } from "@/lib/nav/admin-nav"
 
@@ -18,7 +18,7 @@ import { buildVisibleGroups, flattenNav } from "@/lib/nav/admin-nav"
 export function useAppShell() {
   const pathname = usePathname()
   const me = useAdminMe()
-  const clear = useAdminAuthStore((s) => s.clear)
+  const logout = useAdminLogout()
   const theme = useThemeStore((s) => s.theme)
   const toggleTheme = useThemeStore((s) => s.toggle)
 
@@ -33,7 +33,8 @@ export function useAppShell() {
   return {
     pathname,
     me,
-    clear,
+    /** Sign out: POST /admin/auth/logout (clears the cookie) + tear down local session. */
+    signOut: () => logout.mutate(),
     theme,
     toggleTheme,
     collapsed,

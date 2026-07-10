@@ -8,10 +8,14 @@ import {
   HttpStatus,
   NotFoundException,
   Post,
+  Req,
+  Res,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
+import type { Request, Response } from 'express';
 
 import type {
   LoginRequestResponse,
@@ -22,6 +26,10 @@ import type {
   VerifyEmailResponse,
 } from '@handshake-agent/contracts';
 
+import {
+  WEB_REFRESH_COOKIE,
+  webRefreshCookieOptions,
+} from '../../../core/common/cookie-options';
 import { AuthService } from '../application/auth.service';
 import {
   InvalidOtpError,
@@ -43,7 +51,10 @@ import {
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly config: ConfigService,
+  ) {}
 
   @Post('signup')
   @HttpCode(HttpStatus.ACCEPTED)
@@ -93,21 +104,56 @@ export class AuthController {
   @Post('login/verify')
   @HttpCode(HttpStatus.OK)
   @Throttle({ auth: { limit: 30, ttl: 60_000 } })
-  async loginVerify(@Body() dto: LoginVerifyDto): Promise<LoginVerifyResponse> {
-    return this.guard(() => this.auth.loginVerify(dto));
+  async loginVerify(
+    @Body() dto: LoginVerifyDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<LoginVerifyResponse> {
+    const result = await this.guard(() => this.auth.loginVerify(dto));
+    // Persist the rotating refresh token in an HttpOnly cookie (Wave H). The body
+    // still returns it too (non-breaking for e2e/non-browser); browsers simply
+    // stop reading the body value and rely on the cookie.
+    res.cookie(
+      WEB_REFRESH_COOKIE,
+      result.refreshToken,
+      webRefreshCookieOptions(this.config),
+    );
+    return result;
   }
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  async refresh(@Body() dto: RefreshDto): Promise<RefreshResponse> {
-    return this.guard(() => this.auth.refresh(dto));
+  async refresh(
+    @Body() dto: RefreshDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<RefreshResponse> {
+    // Cookie-primary: read the ha_refresh cookie first, fall back to the optional
+    // body token (so existing e2e / non-browser callers keep working). Neither
+    // present → AuthService throws → mapped to 401. `req.cookies` is typed `any`
+    // by @types/cookie-parser; narrow it at this trust boundary.
+    const cookies = req.cookies as
+      | Record<string, string | undefined>
+      | undefined;
+    const refreshToken = cookies?.[WEB_REFRESH_COOKIE] ?? dto.refreshToken;
+    const result = await this.guard(() => this.auth.refresh({ refreshToken }));
+    res.cookie(
+      WEB_REFRESH_COOKIE,
+      result.refreshToken,
+      webRefreshCookieOptions(this.config),
+    );
+    return result;
   }
 
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(JwtAuthGuard)
-  async logout(@CurrentUser() user: AuthenticatedUser): Promise<void> {
+  async logout(
+    @CurrentUser() user: AuthenticatedUser,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
     await this.auth.logout(user.sessionId);
+    // Clear with the SAME attributes used to set it so the browser matches + deletes.
+    res.clearCookie(WEB_REFRESH_COOKIE, webRefreshCookieOptions(this.config));
   }
 
   @Get('me')

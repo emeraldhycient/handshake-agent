@@ -31,6 +31,9 @@ import { join } from 'node:path';
 const request = require('supertest') as typeof import('supertest');
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { PrismaPg } from '@prisma/adapter-pg';
+// cookie-parser is CJS (`export =`); the api tsconfig has no esModuleInterop, so
+// import it as a namespace (same pattern main.ts uses).
+import * as cookieParser from 'cookie-parser';
 import { PrismaClient } from '../generated/prisma/client';
 import type { INestApplication } from '@nestjs/common';
 
@@ -211,6 +214,9 @@ describe('Web auth flow — e2e (AppModule, Testcontainers Postgres)', () => {
       .compile();
 
     app = moduleRef.createNestApplication({ rawBody: true });
+    // Mirror main.ts: parse the Cookie header so req.cookies is populated. This
+    // is what makes the HttpOnly ha_refresh cookie flow (Wave H) exercisable e2e.
+    app.use(cookieParser());
     await app.init();
   }, 120_000);
 
@@ -326,6 +332,79 @@ describe('Web auth flow — e2e (AppModule, Testcontainers Postgres)', () => {
     await request(app.getHttpServer())
       .post('/auth/login/verify')
       .send({ email, otp: '000000', deviceFingerprint: 'fp-e2e-xyz' })
+      .expect(401);
+  }, 60_000);
+
+  // ===========================================================================
+  // HttpOnly refresh-cookie flow (Wave H) — cookie-primary, no body token
+  // ===========================================================================
+
+  it('login/verify Set-Cookies ha_refresh (HttpOnly); refresh works from the cookie with NO body; logout clears it', async () => {
+    // A cookie-jar agent persists Set-Cookie across requests (like a browser).
+    const agent = request.agent(app.getHttpServer());
+    const email = `e2e_cookie_${Date.now()}@test.com`;
+
+    const signup = await agent
+      .post('/auth/signup')
+      .send({ email, phone: '+2348017777777' })
+      .expect(202);
+    await agent
+      .post('/auth/verify-email')
+      .send({ token: (signup.body as { devToken: string }).devToken })
+      .expect(200);
+    const lr = await agent
+      .post('/auth/login/request')
+      .send({ email })
+      .expect(202);
+    const otp = (lr.body as { devOtp: string }).devOtp;
+
+    // login/verify sets the HttpOnly ha_refresh cookie (and still returns tokens).
+    const lv = await agent
+      .post('/auth/login/verify')
+      .send({ email, otp, deviceFingerprint: 'e2e-cookie-fp' })
+      .expect(200);
+    const setCookie = lv.headers['set-cookie'] as unknown as string[];
+    const refreshCookie = setCookie.find((c) => c.startsWith('ha_refresh='));
+    expect(refreshCookie).toBeDefined();
+    expect(refreshCookie).toMatch(/HttpOnly/i);
+    // The body still carries the tokens (non-breaking), but a browser ignores them.
+    const accessToken = (lv.body as { accessToken: string }).accessToken;
+
+    // refresh with the cookie ONLY (empty body) → 200, rotated pair + user.
+    const rf = await agent.post('/auth/refresh').send({}).expect(200);
+    const rfBody = rf.body as {
+      accessToken: string;
+      refreshToken: string;
+      user: { email: string };
+    };
+    expect(rfBody.accessToken).toBeDefined();
+    expect(rfBody.user.email).toBe(email);
+    // The rotation re-Set-Cookies a fresh ha_refresh.
+    const rfSetCookie = rf.headers['set-cookie'] as unknown as string[];
+    expect(rfSetCookie.some((c) => c.startsWith('ha_refresh='))).toBe(true);
+
+    // The new access token authenticates /auth/me (Bearer flow untouched).
+    await agent
+      .get('/auth/me')
+      .set('Authorization', `Bearer ${rfBody.accessToken}`)
+      .expect(200);
+
+    // logout clears the cookie (Set-Cookie with an expiry in the past).
+    const lo = await agent
+      .post('/auth/logout')
+      .set('Authorization', `Bearer ${rfBody.accessToken}`)
+      .expect(204);
+    const loSetCookie = lo.headers['set-cookie'] as unknown as string[];
+    expect(loSetCookie.some((c) => c.startsWith('ha_refresh='))).toBe(true);
+
+    // With no body token AND the (rotated-away) cookie now revoked, refresh 401s.
+    await agent.post('/auth/refresh').send({}).expect(401);
+
+    // Sanity: the original login access token was long-lived but the session is
+    // now revoked, so it no longer authenticates either.
+    await agent
+      .get('/auth/me')
+      .set('Authorization', `Bearer ${accessToken}`)
       .expect(401);
   }, 60_000);
 });

@@ -1,6 +1,15 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
+import type {
+  PricingConfig,
+  PricingFeedConfig,
+} from '../../../core/config/configuration';
+import {
+  liveStoreWhenEnabled,
+  resolveEffectiveBaseRate,
+} from '../../transactions/application/resolve-base-rate';
+import { LiveRateStore } from '../../quotes/application/live-rate.store';
 import type {
   ISwapProvider,
   GetSwapQuoteInput,
@@ -8,6 +17,9 @@ import type {
   ExecuteSwapInput,
   ExecuteSwapOutput,
 } from '../application/ports/swap-provider.port';
+
+/** Fallback staleness window when `pricing.feed` is absent (thin test config). */
+const DEFAULT_FEED_STALENESS_SEC = 900;
 
 /**
  * Deterministic mock swap provider — the default adapter when `SWAP_MOCK_MODE=true`
@@ -39,7 +51,12 @@ export class MockSwapProvider implements ISwapProvider {
   /** Fixed slippage bps. */
   private static readonly MOCK_SLIPPAGE_BPS = 50;
 
-  constructor(private readonly config: EffectiveConfigService) {}
+  constructor(
+    private readonly config: EffectiveConfigService,
+    // @Optional so the existing unit suite (which news this up with config only)
+    // resolves the config cross-rate; production injects the live store.
+    @Optional() private readonly liveRateStore?: LiveRateStore,
+  ) {}
 
   /**
    * Returns a deterministic quote derived from the catalog base rates (NGN).
@@ -113,8 +130,12 @@ export class MockSwapProvider implements ISwapProvider {
           'pricing.assets',
         ) ?? {};
 
-      const fromRate = pricingAssets[fromSymbol]?.baseRates?.['NGN'] ?? 0;
-      const toRate = pricingAssets[toSymbol]?.baseRates?.['NGN'] ?? 0;
+      // Route each leg through the SHARED base-rate seam so a fresh live NGN rate
+      // wins over config, while an empty store is byte-identical to the previous
+      // config-only read. The seam throws on a missing/0 rate → treat as 0 so the
+      // legacy rate=1 fallback (below) still holds for unconfigured pairs.
+      const fromRate = this.effectiveNgnRate(pricingAssets, fromSymbol);
+      const toRate = this.effectiveNgnRate(pricingAssets, toSymbol);
 
       if (fromRate > 0 && toRate > 0) {
         return fromRate / toRate;
@@ -125,6 +146,43 @@ export class MockSwapProvider implements ISwapProvider {
 
     // Default: 1:1 cross-rate (safe, deterministic for tests without pricing config).
     return 1;
+  }
+
+  /**
+   * Effective NGN base rate for a symbol via the shared seam (live-then-config),
+   * or 0 when neither exists (missing/0/negative) — 0 drives the rate=1 fallback.
+   */
+  private effectiveNgnRate(
+    pricingAssets: Record<string, { baseRates?: Record<string, number> }>,
+    symbol: string,
+  ): number {
+    try {
+      return resolveEffectiveBaseRate(
+        { assets: pricingAssets } as unknown as PricingConfig,
+        this.effectiveLiveStore(),
+        symbol,
+        'NGN',
+        new Date(),
+        this.feedStalenessSec(),
+      );
+    } catch {
+      // BaseRateMisconfiguredError (no live + no config rate) → 0 → rate=1 fallback.
+      return 0;
+    }
+  }
+
+  /** Staleness window (seconds) from config, defaulting when `pricing.feed` is absent. */
+  private feedStalenessSec(): number {
+    const feed = this.config.get<PricingFeedConfig | undefined>('pricing.feed');
+    return typeof feed?.stalenessSec === 'number'
+      ? feed.stalenessSec
+      : DEFAULT_FEED_STALENESS_SEC;
+  }
+
+  /** The live store honouring the admin kill-switch (null the moment enabled=false). */
+  private effectiveLiveStore(): LiveRateStore | null {
+    const feed = this.config.get<PricingFeedConfig | undefined>('pricing.feed');
+    return liveStoreWhenEnabled(this.liveRateStore, feed);
   }
 
   /**

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react"
 
-import { useAdminMe, useSetSetting, useSettings } from "@/lib/query/hooks"
+import { useAdminMe, useCreateChange, useSettings } from "@/lib/query/hooks"
 import { useStepUpRetry } from "@/lib/hooks/use-step-up-retry"
 import { toErrorMessage } from "@/lib/error-message"
 import { pushToast } from "@/lib/store/toast-store"
@@ -21,6 +21,7 @@ import {
   feeTarget,
   spreadTarget,
 } from "@/lib/pricing/targets"
+import { MIN_CHANGE_REQUEST_REASON } from "@/constants/approvals"
 import type {
   EditTarget,
   PricingBaseRateRow,
@@ -36,9 +37,11 @@ function toastError(error: unknown): string {
 /**
  * The Pricing-console state machine: pivots the flat `pricing.*` registry into spread
  * rows + base-rate rows, and drives the generalized numeric-edit chain (value → reason →
- * step-up → maker-checker → the real step-up-guarded PATCH). Every leaf DERIVES the
- * user-facing rate/margin — nothing stores a line item (§3.1). A 403 opens the
- * StepUpDialog and the PATCH replays after re-auth. Extracted so the page is composition.
+ * step-up → maker-checker → a four-eyes `pricing_change` ChangeRequest). Every leaf
+ * DERIVES the user-facing rate/margin — nothing stores a line item (§3.1). A raise does
+ * NOT apply: it lands in a SECOND admin's approvals inbox (the maker can never
+ * self-approve). A 403 opens the StepUpDialog and the raise replays after re-auth.
+ * Extracted so the page is composition.
  */
 export function usePricingEditor() {
   const query = useSettings("Pricing")
@@ -66,12 +69,13 @@ export function usePricingEditor() {
   const feeLabel = feeBps === null ? "—" : bpsToPct(feeBps)
 
   const me = useAdminMe()
-  const setSetting = useSetSetting()
+  const createChange = useCreateChange()
   const stepUp = useStepUpRetry()
 
   const [target, setTarget] = useState<EditTarget | null>(null)
   const [newValue, setNewValue] = useState("")
   const [step, setStep] = useState<PricingFlowStep | null>(null)
+  const [reason, setReason] = useState("")
   const [addOpen, setAddOpen] = useState(false)
 
   const parsed = target ? parseValue(newValue, target.integer) : null
@@ -85,14 +89,19 @@ export function usePricingEditor() {
     setStep(null)
     setTarget(null)
     setNewValue("")
+    setReason("")
   }
 
   // Flow transitions (value → reason → confirm). The REAL step-up is server-driven:
-  // the PATCH 403s and the StepUpDialog replays it.
+  // the raise 403s and the StepUpDialog replays it.
   function onValueContinue() {
     setStep("reason")
   }
-  function onReasonContinue() {
+  // The ReasonModal enforces the 3-char floor (min length), but guard defensively so a
+  // too-short reason can never advance to the maker step and raise the request.
+  function onReasonContinue(entered: string) {
+    if (entered.trim().length < MIN_CHANGE_REQUEST_REASON) return
+    setReason(entered.trim())
     setStep("maker")
   }
 
@@ -110,23 +119,37 @@ export function usePricingEditor() {
   }) =>
     startEdit(baseRateAddTarget(choice.asset, choice.code, choice.rate), false)
 
-  /** Approve the edit via the real step-up-guarded PATCH against the target key. */
+  /**
+   * Raise a four-eyes `pricing_change` ChangeRequest against the target key. This
+   * APPLIES NOTHING — it enters a SECOND admin's approvals inbox (§3.1); the payload
+   * mirrors the direct-write body 1:1 for the config applier to re-validate. A 403
+   * opens the StepUpDialog and this replays after re-auth.
+   */
   function approve() {
     if (!target || parsed === null) return
+    if (reason.trim().length < MIN_CHANGE_REQUEST_REASON) return
     const t = target
     const value = parsed
+    const changeReason = reason.trim()
     closeFlow()
     void (async () => {
       try {
         const ok = await stepUp.run(() =>
-          setSetting
+          createChange
             .mutateAsync({
-              key: t.key,
-              input: { value, scope: t.scope, scopeValue: t.scopeValue },
+              kind: "pricing_change",
+              resource: t.key,
+              payload: {
+                key: t.key,
+                value,
+                scope: t.scope,
+                scopeValue: t.scopeValue,
+              },
+              reason: changeReason,
             })
             .then(() => undefined)
         )
-        if (ok) pushToast(`${t.toastLabel} → ${t.format(value)}`, "ok")
+        if (ok) pushToast("Submitted for approval", "ok")
       } catch (error) {
         pushToast(toastError(error), "warn")
       }

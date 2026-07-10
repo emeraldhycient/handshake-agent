@@ -3,11 +3,13 @@ import { renderHook, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const listBeneficiaries = vi.fn()
+const listBanks = vi.fn()
 const addBankAccount = vi.fn()
 const addCryptoAddress = vi.fn()
 const deleteBeneficiary = vi.fn()
 vi.mock("@/lib/api/beneficiaries", () => ({
   listBeneficiaries: (...a: unknown[]) => listBeneficiaries(...a),
+  listBanks: (...a: unknown[]) => listBanks(...a),
   addBankAccount: (...a: unknown[]) => addBankAccount(...a),
   addCryptoAddress: (...a: unknown[]) => addCryptoAddress(...a),
   deleteBeneficiary: (...a: unknown[]) => deleteBeneficiary(...a),
@@ -15,6 +17,7 @@ vi.mock("@/lib/api/beneficiaries", () => ({
 
 import {
   useBeneficiaries,
+  useBanks,
   useAddBankAccount,
   useAddCryptoAddress,
   useDeleteBeneficiary,
@@ -33,6 +36,7 @@ function makeWrapper() {
 describe("beneficiaries query hooks", () => {
   beforeEach(() => {
     listBeneficiaries.mockReset()
+    listBanks.mockReset()
     addBankAccount.mockReset()
     addCryptoAddress.mockReset()
     deleteBeneficiary.mockReset()
@@ -55,6 +59,21 @@ describe("beneficiaries query hooks", () => {
     expect(listBeneficiaries).not.toHaveBeenCalled()
   })
 
+  it("useBanks loads the bank list for the given country", async () => {
+    listBanks.mockResolvedValue({ banks: [{ name: "GTBank", code: "058" }] })
+    const { wrapper } = makeWrapper()
+    const { result } = renderHook(() => useBanks("NG"), { wrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(listBanks).toHaveBeenCalledWith("NG")
+    expect(result.current.data?.banks).toHaveLength(1)
+  })
+
+  it("useBanks does not fetch until a country is known", () => {
+    const { wrapper } = makeWrapper()
+    renderHook(() => useBanks(undefined), { wrapper })
+    expect(listBanks).not.toHaveBeenCalled()
+  })
+
   it("useAddBankAccount invalidates the bank list on success", async () => {
     addBankAccount.mockResolvedValue({ id: "b1" })
     const { client, wrapper } = makeWrapper()
@@ -64,6 +83,9 @@ describe("beneficiaries query hooks", () => {
       accountNumber: "0123456789",
       bankCode: "058",
       label: "x",
+      currency: "NGN",
+      rail: "bank",
+      pin: "1379",
     })
     expect(spy).toHaveBeenCalledWith({
       queryKey: ["beneficiaries", "bank_account"],
@@ -80,6 +102,7 @@ describe("beneficiaries query hooks", () => {
       network: "TRON",
       asset: "USDT",
       label: "x",
+      pin: "1379",
     })
     expect(spy).toHaveBeenCalledWith({
       queryKey: ["beneficiaries", "crypto_address"],

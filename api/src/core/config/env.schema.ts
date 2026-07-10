@@ -148,6 +148,29 @@ export const envSchema = z
       (v) => (v === '' ? undefined : v),
       z.string().url().optional(),
     ),
+    // Base URL of the web-ADMIN console. Second entry (after WEB_APP_BASE_URL) in
+    // the credentialed CORS allowlist (Wave H). Coerce '' → undefined; the CORS
+    // helper falls back to http://localhost:3000 in dev (the admin visual-verify
+    // runbook serves the console on :3000). Never '*' — credentials require exact.
+    ADMIN_APP_BASE_URL: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z.string().url().optional(),
+    ),
+
+    // --- Auth cookies (Wave H — HttpOnly refresh/session cookies) ---
+    // All OPTIONAL with per-cookie dev-safe defaults resolved in cookie-options.ts
+    // (ha_refresh → SameSite=Lax; ha_admin_session → SameSite=Strict; secure only in
+    // production). SameSite is a SEPARATE knob per cookie so a cross-registrable-domain
+    // deploy of ONE surface can never silently downgrade the other:
+    //   AUTH_COOKIE_SAMESITE  → ha_refresh (web) only.
+    //   ADMIN_COOKIE_SAMESITE → ha_admin_session (admin console) only.
+    // Set the relevant knob to `none` for a cross-site deploy where the API is a
+    // different site than that app (browsers only send third-party cookies as None) —
+    // the helper then forces Secure on. Keep the admin cookie Strict unless the admin
+    // console is genuinely cross-site; None re-opens CSRF on non-step-up admin writes.
+    AUTH_COOKIE_SAMESITE: z.enum(['lax', 'strict', 'none']).optional(),
+    ADMIN_COOKIE_SAMESITE: z.enum(['lax', 'strict', 'none']).optional(),
+    AUTH_COOKIE_SECURE: z.enum(['true', 'false']).optional(),
 
     // --- Job queue (BQ-1: BullMQ / Redis) ---
     // URL for the Redis instance backing BullMQ. Uses lazyConnect so the app
@@ -205,6 +228,23 @@ export const envSchema = z
     MEDIA_EXTRACTION_MOCK_MODE: z.enum(['true', 'false']).default('true'),
     // Vision extraction reuses ANTHROPIC_API_KEY; only the model id is separate.
     MEDIA_EXTRACTION_MODEL: z.string().min(1).default('claude-opus-4-8'),
+
+    // --- Live market-rate feed (F1) ---
+    // NO mock mode: the poller always runs (gated only by the admin
+    // pricing.feed.enabled kill-switch). Base URLs are infra (kept in env for
+    // testability, mirroring FLUTTERWAVE_BASE_URL / BLOCKRADAR_BASE_URL); the
+    // CoinGecko key is OPTIONAL — the public endpoint works without it, a demo/pro
+    // key only raises rate limits.
+    COINGECKO_API_KEY: z.string().optional().default(''),
+    COINGECKO_BASE_URL: z
+      .string()
+      .url()
+      .default('https://api.coingecko.com/api/v3'),
+    QUIDAX_BASE_URL: z.string().url().default('https://www.quidax.com/api/v1'),
+    EXCHANGERATE_BASE_URL: z
+      .string()
+      .url()
+      .default('https://open.er-api.com/v6'),
 
     // --- Auth (web sessions) ---
     // JWT_SECRET is a SECRET — empty disables token issuance (fail-closed in
@@ -315,6 +355,32 @@ export const envSchema = z
         path: ['FLUTTERWAVE_SCENARIO_KEY'],
         message:
           'FLUTTERWAVE_SCENARIO_KEY must be empty when NODE_ENV=production (it is a sandbox-only pay-in simulation header).',
+      });
+    }
+
+    // 8. SANCTIONS_MOCK_MODE='true' selects MockSanctionsScreener, which screens
+    //    NOTHING — every counterparty passes AML/sanctions. AML is done by
+    //    Blockradar (BlockradarAmlScreener, selected when the flag is 'false'), so
+    //    screen-nothing must be impossible in production (mirrors the RESEND_API_KEY
+    //    account-takeover-oracle guard). Fail boot rather than launch blind (F4, §3.3).
+    if (env.NODE_ENV === 'production' && env.SANCTIONS_MOCK_MODE === 'true') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['SANCTIONS_MOCK_MODE'],
+        message:
+          'SANCTIONS_MOCK_MODE must be "false" when NODE_ENV=production (the mock screener screens nothing — real AML/sanctions via Blockradar is mandatory in prod).',
+      });
+    }
+
+    // Auth cookies (ha_refresh / ha_admin_session) carry the session; a Secure=false
+    // override in production would ship them over cleartext HTTP. Refuse it at boot
+    // rather than silently downgrade (R1 hardening).
+    if (env.NODE_ENV === 'production' && env.AUTH_COOKIE_SECURE === 'false') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['AUTH_COOKIE_SECURE'],
+        message:
+          'AUTH_COOKIE_SECURE must not be "false" when NODE_ENV=production (auth cookies would be sent over cleartext HTTP). Leave it unset (defaults to secure) or set "true".',
       });
     }
   });

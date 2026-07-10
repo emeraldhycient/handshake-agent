@@ -61,13 +61,21 @@ export const LoginVerifyResponseSchema = z.object({
 });
 export type LoginVerifyResponse = z.infer<typeof LoginVerifyResponseSchema>;
 
+// Refresh is COOKIE-PRIMARY (Wave H): the rotating refresh token rides in the
+// HttpOnly `ha_refresh` cookie, so the body token is OPTIONAL — present only for
+// non-browser/e2e callers that still post it. When present it must be non-empty.
+// The API reads the cookie first and falls back to this body value.
 export const RefreshRequestSchema = z.object({
-  refreshToken: z.string().min(1),
+  refreshToken: z.string().min(1).optional(),
 });
 export type RefreshRequest = z.infer<typeof RefreshRequestSchema>;
 
+// Refresh returns the user projection alongside the rotated tokens so the web FE
+// can boot-rehydrate in a single round-trip (cookie → access token + identity),
+// without a second GET /auth/me.
 export const RefreshResponseSchema = z.object({
   accessToken: z.string().min(1),
   refreshToken: z.string().min(1),
+  user: MeResponseSchema,
 });
 export type RefreshResponse = z.infer<typeof RefreshResponseSchema>;

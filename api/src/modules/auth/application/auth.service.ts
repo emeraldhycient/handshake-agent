@@ -245,6 +245,11 @@ export class AuthService {
   }
 
   async refresh(input: RefreshRequest): Promise<RefreshResponse> {
+    // Cookie-primary (Wave H): the controller passes the token from the
+    // ha_refresh cookie, or the optional body token, or neither. No token at all
+    // is an authentication failure, not a validation error (→ 401 via the guard).
+    if (!input.refreshToken) throw new InvalidRefreshTokenError();
+
     const now = new Date();
     const session = await this.sessions.findActiveByRefreshHash(
       this.tokens.hash(input.refreshToken),
@@ -259,7 +264,13 @@ export class AuthService {
       refreshTokenHash: this.tokens.hash(refreshToken),
       now,
     });
-    return { accessToken, refreshToken };
+
+    // Return the user projection so the web FE boot-rehydrates in one round-trip
+    // (cookie → access token + identity). A live session whose user is gone is
+    // treated as an invalid token (force re-login), never a partial response.
+    const me = await this.users.loadMe(session.userId);
+    if (me === null) throw new InvalidRefreshTokenError();
+    return { accessToken, refreshToken, user: me };
   }
 
   async logout(sessionId: string): Promise<void> {

@@ -225,15 +225,7 @@ export class FlutterwaveProvider implements IPaymentProvider {
 
   async createPayout(input: CreatePayoutInput): Promise<CreatePayoutOutput> {
     const url = `${this.baseUrl}/transfers`;
-    const body = {
-      account_bank: input.bankAccount.bankCode,
-      account_number: input.bankAccount.accountNumber,
-      // Coerce string → number at the provider boundary (Transfers API expects a number).
-      amount: Number(input.amount),
-      currency: input.currency,
-      narration: `Sell crypto ref ${input.reference}`,
-      reference: input.reference,
-    };
+    const body = this.buildTransferBody(input);
 
     try {
       const response = await firstValueFrom(
@@ -307,6 +299,52 @@ export class FlutterwaveProvider implements IPaymentProvider {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Builds the Flutterwave v3 Transfers API request body per payout corridor.
+   *
+   * Flutterwave transfers are per-(country, rail):
+   * - **NG bank** (the launch corridor): `account_bank` + `account_number` +
+   *   amount/currency/narration/reference only. This branch is BYTE-IDENTICAL to
+   *   the original NG-only body — nothing regresses for Nigeria.
+   * - **Every other corridor** (non-NG bank OR any `mobile_money` rail):
+   *   Flutterwave requires the recipient name outside NG, so we thread
+   *   `beneficiary_name`. For a `mobile_money` rail the caller supplies the
+   *   mobile network/scheme code as `bankCode` (→ `account_bank`) and the
+   *   wallet/phone as `accountNumber` (→ `account_number`).
+   *
+   * TODO(NG-LIVE): the per-network mobile-money scheme-code catalogue (e.g. the
+   * exact `account_bank` code for MTN GH / M-Pesa KE / Airtel UG) is a
+   * provider-data question that must be resolved from Flutterwave's live
+   * transfer-bank list before enabling a mobile_money corridor — the caller must
+   * pass the correct scheme code as the beneficiary's `bankCode`; this builder
+   * threads it verbatim and never guesses a code.
+   */
+  private buildTransferBody(input: CreatePayoutInput): Record<string, unknown> {
+    const country = (input.country ?? 'NG').toUpperCase();
+    const rail = input.rail ?? 'bank';
+
+    const base = {
+      account_bank: input.bankAccount.bankCode,
+      account_number: input.bankAccount.accountNumber,
+      // Coerce string → number at the provider boundary (Transfers API expects a number).
+      amount: Number(input.amount),
+      currency: input.currency,
+      narration: `Sell crypto ref ${input.reference}`,
+      reference: input.reference,
+    };
+
+    // NG bank transfer — the launch corridor. Return the base shape unchanged.
+    if (country === 'NG' && rail === 'bank') {
+      return base;
+    }
+
+    // Non-NG bank OR mobile_money (any country): carry the beneficiary name.
+    return {
+      ...base,
+      beneficiary_name: input.bankAccount.accountName,
+    };
+  }
 
   /** Common Flutterwave v3 auth headers. */
   private headers(): Record<string, string> {

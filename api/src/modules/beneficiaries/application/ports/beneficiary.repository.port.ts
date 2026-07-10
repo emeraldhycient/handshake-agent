@@ -26,11 +26,21 @@ export interface BeneficiaryRecord {
   accountNumber: string | null;
   accountHolderName: string | null;
   bankCode: string | null;
+  /** ISO 4217 payout currency (bank rows); null on crypto rows. */
+  payoutCurrency: string | null;
+  /** ISO 3166-1 alpha-2 bank country (bank rows); null on crypto rows. */
+  bankCountry: string | null;
   // Crypto-address fields
   cryptoAddress: string | null;
   cryptoAsset: string | null;
   cryptoNetwork: string | null;
   verificationStatus: string;
+  /**
+   * Payout rail for a bank beneficiary ('bank' default | 'mobile_money').
+   * Optional on the record type so pre-existing test fixtures need not set it;
+   * the repository always populates it from the (non-null, defaulted) column.
+   */
+  rail?: 'bank' | 'mobile_money';
   firstUseLockedUntil: Date | null;
   verifiedAt: Date | null;
   isDefault: boolean;
@@ -47,17 +57,38 @@ export interface AddBankAccountInput {
   userId: string;
   accountNumber: string;
   bankCode: string;
-  /** Resolved account-holder name (from the bank name-enquiry — not caller-supplied). */
+  /**
+   * The account-holder name to persist: the bank-RESOLVED name where the
+   * country's name-enquiry rail runs (NG), or the user-entered name where it
+   * does not (the row is then saved `unverified`).
+   */
   accountName: string;
   label: string;
+  /** ISO 4217 payout currency (e.g. 'NGN') — derived from the request currency. */
+  payoutCurrency: string;
+  /** ISO 3166-1 alpha-2 bank country (e.g. 'NG') — derived server-side from the currency. */
+  bankCountry: string;
+  /** Payout rail ('bank' default | 'mobile_money'); defaults to 'bank' when omitted. */
+  rail?: 'bank' | 'mobile_money';
   /**
-   * Timestamp at which the name-enquiry resolved the account (Fix E).
-   * Infrastructure must persist this as `verifiedAt` and set
-   * `verificationStatus` to `verified`. Passing it from the application layer
-   * (rather than letting the repository set it) keeps the timestamp consistent
-   * with what was shown to the user at confirmation time.
+   * Verification lifecycle to persist: `'verified'` when the name-enquiry
+   * resolved the account, `'unverified'` when the rail could not resolve it
+   * (non-NG today) and the user-entered name was kept.
    */
-  verifiedAt: Date;
+  verificationStatus: 'verified' | 'unverified';
+  /**
+   * Timestamp at which the name-enquiry resolved the account (Fix E); `null`
+   * when the account was saved unverified (no enquiry ran). Passing it from the
+   * application layer keeps the timestamp consistent with what was shown at
+   * confirmation time.
+   */
+  verifiedAt: Date | null;
+  /**
+   * First-use cooling-off expiry to persist (B3). Set for an `unverified` bank
+   * add (name-enquiry unavailable for the market) so an unverified name cannot
+   * go straight onto a real transfer; `null`/omitted for a verified account.
+   */
+  firstUseLockedUntil?: Date | null;
 }
 
 export interface AddCryptoAddressInput {

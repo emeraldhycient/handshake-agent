@@ -419,7 +419,13 @@ describe('Web sell + send + beneficiaries — e2e', () => {
     const bankRes = await request(app.getHttpServer())
       .post('/beneficiaries/bank-account')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ accountNumber: '0123456789', bankCode: '058', label: 'My GTB' })
+      .send({
+        accountNumber: '0123456789',
+        bankCode: '058',
+        label: 'My GTB',
+        currency: 'NGN',
+        pin: '1357',
+      })
       .expect(201);
     const bank = bankRes.body as {
       id: string;
@@ -440,6 +446,7 @@ describe('Web sell + send + beneficiaries — e2e', () => {
         network: 'TRON',
         asset: 'USDT',
         label: 'Cold wallet',
+        pin: '1357',
       })
       .expect(201);
     const crypto = cryptoRes.body as { type: string; cryptoAddress: string };
@@ -466,6 +473,7 @@ describe('Web sell + send + beneficiaries — e2e', () => {
         network: 'TRON',
         asset: 'USDT',
         label: 'bad',
+        pin: '1357',
       })
       .expect(422);
 
@@ -485,7 +493,13 @@ describe('Web sell + send + beneficiaries — e2e', () => {
     const benRes = await request(app.getHttpServer())
       .post('/beneficiaries/bank-account')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ accountNumber: '0123456789', bankCode: '058', label: 'My GTB' })
+      .send({
+        accountNumber: '0123456789',
+        bankCode: '058',
+        label: 'My GTB',
+        currency: 'NGN',
+        pin: '1357',
+      })
       .expect(201);
     const beneficiaryId = (benRes.body as { id: string }).id;
 
@@ -529,7 +543,13 @@ describe('Web sell + send + beneficiaries — e2e', () => {
     const benRes = await request(app.getHttpServer())
       .post('/beneficiaries/bank-account')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ accountNumber: '0123456789', bankCode: '058', label: 'My GTB' })
+      .send({
+        accountNumber: '0123456789',
+        bankCode: '058',
+        label: 'My GTB',
+        currency: 'NGN',
+        pin: '1357',
+      })
       .expect(201);
     const beneficiaryId = (benRes.body as { id: string }).id;
 
@@ -569,6 +589,7 @@ describe('Web sell + send + beneficiaries — e2e', () => {
         network: 'TRON',
         asset: 'USDT',
         label: 'My TRON wallet',
+        pin: '1357',
       })
       .expect(201);
     const beneficiaryId = (benRes.body as { id: string }).id;

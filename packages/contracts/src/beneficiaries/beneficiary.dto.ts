@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { SupportedAssetSchema, NetworkSchema } from '../common'
+import { SupportedAssetSchema, NetworkSchema, FiatCurrencySchema } from '../common'
+import { TransactionPinSchema } from '../dto/kyc-complete.dto'
 
 /**
  * Saved payout-destination contracts (sell → bank account, send → crypto
@@ -14,6 +15,17 @@ import { SupportedAssetSchema, NetworkSchema } from '../common'
 
 export const BeneficiaryTypeSchema = z.enum(['bank_account', 'crypto_address'])
 export type BeneficiaryType = z.infer<typeof BeneficiaryTypeSchema>
+
+// ─── Rail ─────────────────────────────────────────────────────────────────
+
+/**
+ * Payout rail for a bank beneficiary: a traditional `bank` account transfer, or
+ * a `mobile_money` wallet (e.g. MTN MoMo, M-Pesa) in markets where that is the
+ * dominant rail. NG stays `bank`. The engine (treasury) reads this to build the
+ * correct provider payout body; the model never sets it directly (§3.1).
+ */
+export const BeneficiaryRailSchema = z.enum(['bank', 'mobile_money'])
+export type BeneficiaryRail = z.infer<typeof BeneficiaryRailSchema>
 
 // ─── List query ───────────────────────────────────────────────────────────
 
@@ -39,6 +51,23 @@ export const BeneficiarySchema = z.object({
   accountNumber: z.string().nullable(),
   accountHolderName: z.string().nullable(),
   bankCode: z.string().nullable(),
+  /**
+   * Payout currency for a bank beneficiary (ISO 4217), null on crypto rows.
+   * Drives the sell currency-match guard: a sell only routes to a bank whose
+   * `currency` equals the sell fiat (server-re-validated, §3.3).
+   */
+  currency: FiatCurrencySchema.nullable(),
+  /**
+   * Bank country (ISO 3166-1 alpha-2, e.g. "NG"), derived server-side from the
+   * currency; null on crypto rows. Determines which name-enquiry rail applies.
+   */
+  country: z.string().length(2).nullable(),
+  /**
+   * Payout rail for a bank beneficiary (`bank` | `mobile_money`). Defaulted to
+   * `bank` server-side; crypto rows carry `bank` too (the field is meaningful
+   * only for fiat payouts). `.default` keeps older responses backward-compatible.
+   */
+  rail: BeneficiaryRailSchema.default('bank'),
   // Crypto-address fields
   cryptoAddress: z.string().nullable(),
   cryptoAsset: z.string().nullable(),
@@ -77,11 +106,49 @@ export type DeleteBeneficiaryResponse = z.infer<
 // ─── Add bank account ───────────────────────────────────────────────────────
 
 export const AddBankAccountRequestSchema = z.object({
-  /** 10-digit NUBAN. */
-  accountNumber: z.string().regex(/^\d{10}$/, 'Enter a valid 10-digit account number'),
+  /**
+   * Bank account / mobile-money number. Permissive at the wire boundary (digits
+   * only, 8–20) because this schema validates BEFORE the server derives the
+   * country from the currency; the PRECISE per-country format (NG = 10-digit
+   * NUBAN, others = that market's length range) is enforced server-side in
+   * BeneficiaryService (§3.3). This lets valid GHS/KES/etc numbers through here.
+   */
+  accountNumber: z
+    .string()
+    .regex(/^\d{8,20}$/, 'Enter a valid account number'),
   /** Bank / clearing code (e.g. "058" for GTB). */
   bankCode: z.string().min(3).max(10),
   label: z.string().min(1).max(60),
+  /**
+   * Payout currency (ISO 4217). The server derives the bank COUNTRY from this
+   * via `AssetRegistry.countryForFiat` — the client-supplied country is never
+   * trusted. Country-gated name-enquiry runs where the rail supports it (NG),
+   * otherwise the account is saved `unverified` (never fails closed).
+   */
+  currency: FiatCurrencySchema,
+  /**
+   * User-entered account-holder name. IGNORED where name-enquiry can resolve
+   * the true name (NG); persisted verbatim as an `unverified` name where the
+   * rail cannot resolve it. Optional so the NG happy-path form need not collect it.
+   */
+  accountHolderName: z.string().min(1).max(120).optional(),
+  /**
+   * Payout rail — optional, defaults to `bank`. `mobile_money` selects a wallet
+   * payout in markets where that is the dominant rail; NG stays `bank`. The
+   * engine (treasury) builds the correct provider payout body from this.
+   */
+  rail: BeneficiaryRailSchema.default('bank'),
+  /**
+   * Transaction PIN — required. Adding a withdrawal destination is step-up
+   * gated (audit R2): the server verifies the PIN (lockout-protected) and
+   * records a device-bound step-up BEFORE persisting.
+   */
+  pin: TransactionPinSchema,
+  /**
+   * Optional client device fingerprint. Binds the step-up to the acting
+   * device; when absent/unmatched the server falls back to the pinned device (§3.4).
+   */
+  deviceFingerprint: z.string().optional(),
 })
 export type AddBankAccountRequest = z.infer<typeof AddBankAccountRequestSchema>
 
@@ -93,6 +160,18 @@ export const AddCryptoAddressRequestSchema = z.object({
   network: NetworkSchema,
   asset: SupportedAssetSchema,
   label: z.string().min(1).max(60),
+  /**
+   * Transaction PIN — required. Adding a withdrawal destination is step-up
+   * gated (audit R2): the server verifies the PIN (lockout-protected) and
+   * records a device-bound step-up BEFORE persisting. This is ADDITIONAL to
+   * the existing first-use cooling-off, not a replacement.
+   */
+  pin: TransactionPinSchema,
+  /**
+   * Optional client device fingerprint. Binds the step-up to the acting
+   * device; when absent/unmatched the server falls back to the pinned device (§3.4).
+   */
+  deviceFingerprint: z.string().optional(),
 })
 export type AddCryptoAddressRequest = z.infer<
   typeof AddCryptoAddressRequestSchema

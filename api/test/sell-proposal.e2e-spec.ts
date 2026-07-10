@@ -164,6 +164,8 @@ describe('LedgerPrismaRepository.getAccountBalance + ProposalService.createSellP
       fakeNameEnquiry,
       assetRegistry,
       config,
+      // Wave G: bank-list port (unused in these flows) — empty stub adapter.
+      { listBanks: () => Promise.resolve([]) },
     );
 
     proposalService = new ProposalService(

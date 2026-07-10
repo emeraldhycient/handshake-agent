@@ -108,10 +108,16 @@ const FAKE_WALLET_ADDRESS = 'TFakeWalletSendVerticalAddress123';
 const FAKE_BLOCKRADAR_REF = 'fake_blockradar_ref_send_e2e';
 const FAKE_SEND_PROVIDER_REF = 'blockradar_send_tx_ref_e2e_001';
 
+// Each provision returns a UNIQUE address — Wallet.address is globally unique,
+// so the fresh user created per test (see beforeEach) cannot collide on it.
+let walletProvisionCounter = 0;
 const fakeWalletProvider: IWalletProvider = {
-  provisionAddress: jest.fn().mockResolvedValue({
-    address: FAKE_WALLET_ADDRESS,
-    providerReference: FAKE_BLOCKRADAR_REF,
+  provisionAddress: jest.fn().mockImplementation(() => {
+    walletProvisionCounter += 1;
+    return Promise.resolve({
+      address: `${FAKE_WALLET_ADDRESS}${walletProvisionCounter}`,
+      providerReference: `${FAKE_BLOCKRADAR_REF}-${walletProvisionCounter}`,
+    });
   }),
   getBalance: jest.fn().mockResolvedValue({
     available: '100',
@@ -162,7 +168,7 @@ function buildSendExecutionService(
   sessionService: SessionService,
 ): ExecutionService {
   const clock = { now: () => new Date() };
-  const assetRegistry = new AssetRegistry(config as never);
+  const assetRegistry = new AssetRegistry(config);
   seedRegistryAssets(assetRegistry);
   const rateProvider = new ConfigRateProvider(config as never);
   const quotesService = new QuotesService(rateProvider, clock, assetRegistry);
@@ -306,6 +312,8 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
       fakeNameEnquiry,
       assetRegistry,
       config,
+      // Wave G: bank-list port (unused in these flows) — empty stub adapter.
+      { listBanks: () => Promise.resolve([]) },
     );
     complianceService = new ComplianceService(
       sanctionsScreener,
@@ -327,7 +335,23 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
       undefined as never, // swapProvider: not needed on send proposal path
     );
 
-    // Seed a KYC-verified (Tier 1) user with a PIN + a bound device (Fix G).
+    executionService = buildSendExecutionService(
+      ps,
+      new StubConfigService(),
+      pinService,
+      walletService,
+      beneficiaryService,
+      complianceService,
+      sessionService,
+    );
+  });
+
+  // A FRESH KYC-verified (Tier 1) user per test, each with a PIN + a bound-and-
+  // pinned device (Fix G §3.4). The 10-minute on-chain send-velocity cap
+  // (5/tier_1) is a real cross-transaction guard; reusing one user across the
+  // ~8 sends this file drives would (correctly) trip it at the 6th. A fresh user
+  // per test keeps the velocity window empty and the tests independent.
+  beforeEach(async () => {
     const user = await prisma.user.create({
       data: {
         kycStatus: 'verified',
@@ -339,7 +363,6 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
 
     await pinService.setPin(userId, '194837');
 
-    // Create a bound device and pin it to the user (Fix G §3.4).
     const device = await prisma.device.create({
       data: {
         userId,
@@ -355,16 +378,6 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
       where: { id: userId },
       data: { pinnedDeviceId: device.id },
     });
-
-    executionService = buildSendExecutionService(
-      ps,
-      new StubConfigService(),
-      pinService,
-      walletService,
-      beneficiaryService,
-      complianceService,
-      sessionService,
-    );
   });
 
   afterAll(async () => {

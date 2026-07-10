@@ -50,6 +50,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       // after calling INameEnquiry (Fix E — service layer resolves before calling repo).
       accountName: 'JOHN DOE (RESOLVED)',
       label: 'GTB Savings',
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
       verifiedAt,
     });
 
@@ -60,6 +63,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
     expect(created.accountNumber).toBe('0123456789');
     expect(created.bankCode).toBe('058');
     expect(created.accountHolderName).toBe('JOHN DOE (RESOLVED)');
+    // Wave G: currency/country dimension persisted + read back.
+    expect(created.payoutCurrency).toBe('NGN');
+    expect(created.bankCountry).toBe('NG');
     // Fix E: repository now writes 'verified' (name was resolved by INameEnquiry).
     expect(created.verificationStatus).toBe('verified');
     expect(created.verifiedAt).toBeInstanceOf(Date);
@@ -69,6 +75,53 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
     const list = await repo.listForUser(user.id, 'bank_account');
     expect(list).toHaveLength(1);
     expect(list[0].id).toBe(created.id);
+  });
+
+  // ── Test 1b: unverified non-NG bank persists currency/country + null verifiedAt ──
+
+  it('persists an UNVERIFIED bank with payoutCurrency/bankCountry and null verifiedAt', async () => {
+    const user = await seedUser();
+
+    const created = await repo.addBankAccount({
+      userId: user.id,
+      accountNumber: '0123456789',
+      bankCode: '030100',
+      accountName: 'KOFI MENSAH', // user-entered, kept as-is (no rail to resolve)
+      label: 'My Ghana bank',
+      payoutCurrency: 'GHS',
+      bankCountry: 'GH',
+      verificationStatus: 'unverified',
+      verifiedAt: null,
+    });
+
+    expect(created.payoutCurrency).toBe('GHS');
+    expect(created.bankCountry).toBe('GH');
+    expect(created.accountHolderName).toBe('KOFI MENSAH');
+    expect(created.verificationStatus).toBe('unverified');
+    expect(created.verifiedAt).toBeNull();
+
+    // Read back through listForUser preserves the columns.
+    const [readBack] = await repo.listForUser(user.id, 'bank_account');
+    expect(readBack.payoutCurrency).toBe('GHS');
+    expect(readBack.bankCountry).toBe('GH');
+  });
+
+  // ── Test 1c: crypto rows leave currency/country null ─────────────────────
+
+  it('leaves payoutCurrency/bankCountry null on a crypto-address beneficiary', async () => {
+    const user = await seedUser();
+
+    const created = await repo.addCryptoAddress({
+      userId: user.id,
+      address: 'TQn9Y2khDD3VHKZ2GRdmKXD8bNkRuaBP2q',
+      network: 'TRON',
+      asset: 'USDT',
+      label: 'Cold wallet',
+      firstUseLockedUntil: new Date(Date.now() + 86400_000),
+    });
+
+    expect(created.payoutCurrency).toBeNull();
+    expect(created.bankCountry).toBeNull();
   });
 
   // ── Test 2: second bank account is not default ───────────────────────────
@@ -83,6 +136,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'Jane Doe',
       label: 'UBA',
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
 
     const second = await repo.addBankAccount({
@@ -92,6 +148,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'Jane Doe',
       label: 'First Bank',
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
 
     expect(second.isDefault).toBe(false);
@@ -137,6 +196,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'Test User',
       label: 'Access Bank',
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
 
     const cryptoBen = await repo.addCryptoAddress({
@@ -177,6 +239,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'User1',
       label: 'User1 GTB',
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
 
     // user2 must not be able to see user1's beneficiary.
@@ -196,6 +261,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'Main',
       label: 'Main Account',
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
 
     await repo.addBankAccount({
@@ -205,6 +273,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'Secondary',
       label: 'Secondary',
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
 
     const def = await repo.getDefault(user.id, 'bank_account');
@@ -234,6 +305,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'MOTHER DOE',
       label: 'Mum',
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
     await repo.addBankAccount({
       userId: user.id,
@@ -242,6 +316,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'FRIEND OF MUM',
       label: "Mum's friend",
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
 
     // Different casing still matches ("mum" ↔ "Mum") …
@@ -264,6 +341,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'GONE',
       label: 'Old account',
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
     await prisma.beneficiary.update({
       where: { id: ben.id },
@@ -285,6 +365,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'ONE',
       label: 'Savings',
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
     const second = await repo.addBankAccount({
       userId: user.id,
@@ -293,6 +376,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'TWO',
       label: 'savings',
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
     const third = await repo.addBankAccount({
       userId: user.id,
@@ -301,6 +387,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'THREE',
       label: 'SAVINGS',
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
 
     const matches = await repo.findByLabel(user.id, 'savings', 'bank_account');
@@ -321,6 +410,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'BANK MUM',
       label: 'Mum',
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
     const crypto = await repo.addCryptoAddress({
       userId: user.id,
@@ -352,6 +444,9 @@ describe('BeneficiaryPrismaRepository (integration, Testcontainers Postgres)', (
       accountName: 'USER ONE MUM',
       label: 'Mum',
       verifiedAt: new Date(),
+      payoutCurrency: 'NGN',
+      bankCountry: 'NG',
+      verificationStatus: 'verified',
     });
 
     const matches = await repo.findByLabel(user2.id, 'Mum');

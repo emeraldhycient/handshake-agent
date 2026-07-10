@@ -1,19 +1,21 @@
 /**
- * PricingPage test (design §6.22) — wired to real pricing settings + real persistence.
+ * PricingPage test (design §6.22) — wired to real pricing settings, raised as a
+ * four-eyes ChangeRequest (Wave I).
  *
  * The pricing figures resolve from `pricing.assets.<A>.buySpreadBps` /
  * `.sellSpreadBps` / `.baseRates.NGN` + the global `pricing.processingFeeBps` (GET
  * /admin/settings, mocked). Each priced asset contributes a Buy + Sell row; the
  * user-sees rate + operator margin are DERIVED from base rate + spread + fee. The Edit
- * pill opens the reason → step-up → maker-checker chain; the maker-checker submit fires
- * the REAL step-up-guarded PATCH /admin/settings/:key (setSetting) for the edited row's
- * spread key. The api layer is mocked — no server.
+ * pill opens the value → reason → dual-control chain; the maker-checker submit RAISES a
+ * `pricing_change` ChangeRequest (createChange) for a SECOND admin to approve — it does
+ * NOT write the setting directly, so `setSetting` never fires from this surface. The api
+ * layer is mocked — no server.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { EffectiveSetting } from "@handshake-agent/contracts"
+import type { ChangeRequest, EffectiveSetting } from "@handshake-agent/contracts"
 
 import { PricingPage } from "@/components/admin/pricing-page"
 import { defaultToastStore } from "@/lib/store/toast-store"
@@ -25,16 +27,23 @@ vi.mock("@/lib/api/config", () => ({
   setSetting: vi.fn(),
 }))
 
+// The four-eyes maker-checker raise (POST /admin/approvals).
+vi.mock("@/lib/api/approvals", () => ({
+  createChange: vi.fn(),
+}))
+
 // The signed-in admin (drives the step-up dialog's password-vs-TOTP mode).
 vi.mock("@/lib/api/admin", () => ({
   getMe: vi.fn(),
 }))
 
 import { listEffectiveSettings, setSetting } from "@/lib/api/config"
+import { createChange } from "@/lib/api/approvals"
 import { getMe } from "@/lib/api/admin"
 
 const mockList = vi.mocked(listEffectiveSettings)
 const mockSet = vi.mocked(setSetting)
+const mockCreate = vi.mocked(createChange)
 const mockGetMe = vi.mocked(getMe)
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
@@ -59,6 +68,23 @@ function unpriced(key: string): EffectiveSetting {
   return { ...n(key, 0), value: undefined }
 }
 
+/** A pending ChangeRequest the mocked createChange resolves with (bypasses parse). */
+const PENDING_CHANGE: ChangeRequest = {
+  id: "22222222-2222-2222-2222-222222222222",
+  kind: "pricing_change",
+  resource: "pricing.assets.USDT.buySpreadBps",
+  payload: {},
+  status: "pending",
+  reason: "Repricing",
+  requestedByAdminId: "11111111-1111-1111-1111-111111111111",
+  requestedByEmail: "amara@handshake.ng",
+  decidedByAdminId: null,
+  decidedByEmail: null,
+  decisionReason: null,
+  decidedAt: null,
+  createdAt: "2026-07-09T00:00:00.000Z",
+}
+
 // USDT only: base 1000 NGN, buy spread 100 bps (1.00%), sell 50 bps (0.50%),
 // processing fee 50 bps (0.50%).
 const PRICING_SETTINGS: EffectiveSetting[] = [
@@ -79,8 +105,8 @@ function renderPage() {
   )
 }
 
-/** Drive the shared flow chain: value → reason → confirm submit. The REAL step-up
- *  is server-driven (403 → StepUpDialog) — no decorative TOTP step remains. */
+/** Drive the shared flow chain: value → reason → dual-control submit. The REAL
+ *  step-up is server-driven (403 → StepUpDialog). */
 async function advanceToApproval(
   user: ReturnType<typeof userEvent.setup>,
   newSpread: string
@@ -95,15 +121,15 @@ async function advanceToApproval(
     "Repricing"
   )
   await user.click(screen.getByRole("button", { name: "Continue" }))
-  // confirm submit (honest immediate copy)
-  await user.click(screen.getByRole("button", { name: "Confirm change" }))
+  // dual-control submit (four-eyes copy)
+  await user.click(screen.getByRole("button", { name: "Submit for approval" }))
 }
 
-/** Drive only the audit chain (reason → confirm), value already captured. */
+/** Drive only the audit chain (reason → submit), value already captured. */
 async function finishAuditChain(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByRole("textbox", { name: "Reason" }), "Repricing")
   await user.click(screen.getByRole("button", { name: "Continue" }))
-  await user.click(screen.getByRole("button", { name: "Confirm change" }))
+  await user.click(screen.getByRole("button", { name: "Submit for approval" }))
 }
 
 beforeEach(() => {
@@ -112,6 +138,8 @@ beforeEach(() => {
   mockList.mockResolvedValue(PRICING_SETTINGS)
   mockSet.mockReset()
   mockSet.mockResolvedValue(n("pricing.assets.USDT.buySpreadBps", 120))
+  mockCreate.mockReset()
+  mockCreate.mockResolvedValue(PENDING_CHANGE)
   mockGetMe.mockReset()
   mockGetMe.mockResolvedValue({
     id: "11111111-1111-1111-1111-111111111111",
@@ -128,7 +156,7 @@ beforeEach(() => {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe("PricingPage (wired to pricing settings)", () => {
+describe("PricingPage (four-eyes pricing_change)", () => {
   it("pivots the flat keys into per-asset Buy + Sell rows with derived rates", async () => {
     renderPage()
 
@@ -172,7 +200,7 @@ describe("PricingPage (wired to pricing settings)", () => {
     )
   })
 
-  it("persists the edited spread via setSetting (PATCH) when the maker-checker is approved", async () => {
+  it("raises a pricing_change ChangeRequest (not a direct setSetting) when submitted", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -183,18 +211,25 @@ describe("PricingPage (wired to pricing settings)", () => {
     )
     await advanceToApproval(user, "120")
 
-    // The real PATCH fires against the buy row's spread key with the new bps value.
-    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
-    expect(mockSet).toHaveBeenCalledWith("pricing.assets.USDT.buySpreadBps", {
-      value: 120,
-      scope: "global",
-      scopeValue: null,
+    // A four-eyes change request is raised against the buy row's spread key,
+    // mirroring the setSetting body 1:1 inside the payload, with the reason.
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1))
+    expect(mockCreate).toHaveBeenCalledWith({
+      kind: "pricing_change",
+      resource: "pricing.assets.USDT.buySpreadBps",
+      payload: {
+        key: "pricing.assets.USDT.buySpreadBps",
+        value: 120,
+        scope: "global",
+        scopeValue: null,
+      },
+      reason: "Repricing",
     })
-    // A feedback toast fired and the flow closed.
+    // Nothing is written directly — no optimistic settings mutation fires.
+    expect(mockSet).not.toHaveBeenCalled()
+    // The copy says submitted-for-approval and the flow closed.
     expect(defaultToastStore.getState().toasts).toContainEqual(
-      expect.objectContaining({
-        message: expect.stringMatching(/crypto\.buy/),
-      })
+      expect.objectContaining({ message: "Submitted for approval" })
     )
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   })
@@ -210,12 +245,47 @@ describe("PricingPage (wired to pricing settings)", () => {
     )
     await advanceToApproval(user, "75")
 
-    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
-    expect(mockSet).toHaveBeenCalledWith("pricing.assets.USDT.sellSpreadBps", {
-      value: 75,
-      scope: "global",
-      scopeValue: null,
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1))
+    expect(mockCreate).toHaveBeenCalledWith({
+      kind: "pricing_change",
+      resource: "pricing.assets.USDT.sellSpreadBps",
+      payload: {
+        key: "pricing.assets.USDT.sellSpreadBps",
+        value: 75,
+        scope: "global",
+        scopeValue: null,
+      },
+      reason: "Repricing",
     })
+    expect(mockSet).not.toHaveBeenCalled()
+  })
+
+  it("rejects a reason shorter than 3 chars — no change request is raised", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Edit crypto.buy USDT / NGN spread",
+      })
+    )
+    const input = screen.getByRole("textbox", {
+      name: "New spread (basis points)",
+    })
+    await user.clear(input)
+    await user.type(input, "120")
+    await user.click(screen.getByRole("button", { name: "Continue" }))
+    // Type only 2 chars — the reason step's Continue must stay disabled.
+    await user.type(screen.getByRole("textbox", { name: "Reason" }), "no")
+    const continueBtn = screen.getByRole("button", { name: "Continue" })
+    expect(continueBtn).toBeDisabled()
+    await user.click(continueBtn)
+
+    // The dual-control step was never reached and nothing was raised.
+    expect(
+      screen.queryByRole("button", { name: "Submit for approval" })
+    ).not.toBeInTheDocument()
+    expect(mockCreate).not.toHaveBeenCalled()
   })
 
   it("shows configured per-row min/max, and '+ min/+ max' affordances when unset", async () => {
@@ -237,7 +307,7 @@ describe("PricingPage (wired to pricing settings)", () => {
     ).toBeInTheDocument()
   })
 
-  it("persists a per-(capability × asset × currency) MINIMUM via setSetting when approved", async () => {
+  it("raises a per-(capability × asset × currency) MINIMUM change when submitted", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -252,15 +322,22 @@ describe("PricingPage (wired to pricing settings)", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }))
     await finishAuditChain(user)
 
-    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
-    expect(mockSet).toHaveBeenCalledWith("pricing.assets.USDT.minFiat.buy.NGN", {
-      value: 250,
-      scope: "global",
-      scopeValue: null,
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1))
+    expect(mockCreate).toHaveBeenCalledWith({
+      kind: "pricing_change",
+      resource: "pricing.assets.USDT.minFiat.buy.NGN",
+      payload: {
+        key: "pricing.assets.USDT.minFiat.buy.NGN",
+        value: 250,
+        scope: "global",
+        scopeValue: null,
+      },
+      reason: "Repricing",
     })
+    expect(mockSet).not.toHaveBeenCalled()
   })
 
-  it("persists a per-row MAXIMUM (sell) via setSetting when approved", async () => {
+  it("raises a per-row MAXIMUM (sell) change when submitted", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -275,18 +352,21 @@ describe("PricingPage (wired to pricing settings)", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }))
     await finishAuditChain(user)
 
-    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
-    expect(mockSet).toHaveBeenCalledWith(
-      "pricing.assets.USDT.maxFiat.sell.NGN",
-      {
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1))
+    expect(mockCreate).toHaveBeenCalledWith({
+      kind: "pricing_change",
+      resource: "pricing.assets.USDT.maxFiat.sell.NGN",
+      payload: {
+        key: "pricing.assets.USDT.maxFiat.sell.NGN",
         value: 9000000,
         scope: "global",
         scopeValue: null,
-      }
-    )
+      },
+      reason: "Repricing",
+    })
   })
 
-  it("does not persist until the maker-checker submit fires", async () => {
+  it("does not raise until the maker-checker submit fires", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -302,17 +382,18 @@ describe("PricingPage (wired to pricing settings)", () => {
     await user.clear(input)
     await user.type(input, "120")
     await user.click(screen.getByRole("button", { name: "Continue" }))
+    expect(mockCreate).not.toHaveBeenCalled()
     expect(mockSet).not.toHaveBeenCalled()
   })
 
-  it("opens the step-up dialog and retries the PATCH after re-auth when the server demands step-up", async () => {
+  it("opens the step-up dialog and retries the raise after re-auth when the server demands step-up", async () => {
     const user = userEvent.setup()
     const { ApiError } = await import("@/lib/api/client")
-    mockSet
+    mockCreate
       .mockRejectedValueOnce(
         new ApiError("Step-up required", 403, "ADMIN_STEP_UP_REQUIRED")
       )
-      .mockResolvedValueOnce(n("pricing.assets.USDT.buySpreadBps", 120))
+      .mockResolvedValueOnce(PENDING_CHANGE)
 
     renderPage()
     await user.click(
@@ -324,7 +405,7 @@ describe("PricingPage (wired to pricing settings)", () => {
 
     // The re-auth dialog appears (TOTP mode, since mfaEnabled).
     expect(await screen.findByText("Confirm it's you")).toBeInTheDocument()
-    expect(mockSet).toHaveBeenCalledTimes(1)
+    expect(mockCreate).toHaveBeenCalledTimes(1)
   })
 
   it("renders configured base rates (the add-more-prices surface)", async () => {
@@ -337,7 +418,7 @@ describe("PricingPage (wired to pricing settings)", () => {
     ).toBeInTheDocument()
   })
 
-  it("edits the processing fee via setSetting (PATCH) when approved", async () => {
+  it("raises a processing-fee change when submitted", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -352,15 +433,21 @@ describe("PricingPage (wired to pricing settings)", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }))
     await finishAuditChain(user)
 
-    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
-    expect(mockSet).toHaveBeenCalledWith("pricing.processingFeeBps", {
-      value: 75,
-      scope: "global",
-      scopeValue: null,
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1))
+    expect(mockCreate).toHaveBeenCalledWith({
+      kind: "pricing_change",
+      resource: "pricing.processingFeeBps",
+      payload: {
+        key: "pricing.processingFeeBps",
+        value: 75,
+        scope: "global",
+        scopeValue: null,
+      },
+      reason: "Repricing",
     })
   })
 
-  it("edits an existing base rate via setSetting (PATCH) when approved", async () => {
+  it("raises an existing base-rate change when submitted", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -375,11 +462,17 @@ describe("PricingPage (wired to pricing settings)", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }))
     await finishAuditChain(user)
 
-    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
-    expect(mockSet).toHaveBeenCalledWith("pricing.assets.USDT.baseRates.NGN", {
-      value: 1650,
-      scope: "global",
-      scopeValue: null,
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1))
+    expect(mockCreate).toHaveBeenCalledWith({
+      kind: "pricing_change",
+      resource: "pricing.assets.USDT.baseRates.NGN",
+      payload: {
+        key: "pricing.assets.USDT.baseRates.NGN",
+        value: 1650,
+        scope: "global",
+        scopeValue: null,
+      },
+      reason: "Repricing",
     })
   })
 
@@ -420,14 +513,20 @@ describe("PricingPage (wired to pricing settings)", () => {
     await user.selectOptions(within(dialog).getByLabelText("Currency"), "GHS")
     await user.type(within(dialog).getByLabelText(/Base rate/), "19")
     await user.click(within(dialog).getByRole("button", { name: "Continue" }))
-    // The dialog captured the value; finish the audit chain to persist.
+    // The dialog captured the value; finish the audit chain to raise the request.
     await finishAuditChain(user)
 
-    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1))
-    expect(mockSet).toHaveBeenCalledWith("pricing.assets.USDT.baseRates.GHS", {
-      value: 19,
-      scope: "global",
-      scopeValue: null,
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1))
+    expect(mockCreate).toHaveBeenCalledWith({
+      kind: "pricing_change",
+      resource: "pricing.assets.USDT.baseRates.GHS",
+      payload: {
+        key: "pricing.assets.USDT.baseRates.GHS",
+        value: 19,
+        scope: "global",
+        scopeValue: null,
+      },
+      reason: "Repricing",
     })
   })
 })

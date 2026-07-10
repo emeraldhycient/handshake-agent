@@ -28,6 +28,7 @@ import type { WalletService } from '../../wallets/application/wallet.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { TransactionHistoryService } from '../../transactions/application/transaction-history.service';
 import type { QuotesService } from '../../quotes/application/quotes.service';
+import type { RatesService } from '../../quotes/application/rates.service';
 import type { WebChatService } from '../../chat/application/web-chat.service';
 import type { ITransactionRepository } from '../../transactions/application/ports/transaction.repository.port';
 import type { ISettlementRepository } from '../../transactions/application/ports/settlement.repository.port';
@@ -53,10 +54,21 @@ const READ_TOOL_NAMES = [
   'list_beneficiaries',
   'quote_buy',
   'quote_sell',
+  'get_rate',
+  'list_rates',
   'list_transactions',
   'get_transaction',
   'list_pending_proposals',
 ];
+
+const EFFECTIVE_RATE = {
+  asset: 'USDT',
+  fiatCurrency: 'NGN',
+  buyRate: '1650.5',
+  sellRate: '1600.25',
+  source: 'config',
+  asOf: '2026-07-09T00:00:00.000Z',
+};
 
 const PROFILE = {
   email: 'qa@example.com',
@@ -150,6 +162,12 @@ function makeFakes(overrides: FakeOverrides = {}) {
     quoteBuy: jest.fn().mockResolvedValue({ cryptoAmount: '3.21' }),
     quoteSell: jest.fn().mockResolvedValue({ netFiatAmount: '4900' }),
   };
+  const rates = {
+    getEffectiveRate: jest.fn().mockResolvedValue(EFFECTIVE_RATE),
+    listEffectiveRates: jest
+      .fn()
+      .mockResolvedValue({ rates: [EFFECTIVE_RATE] }),
+  };
   const chat = {
     handleMessage: jest.fn().mockResolvedValue({
       reply: { text: 'Your buy proposal is ready.' },
@@ -220,6 +238,7 @@ function makeFakes(overrides: FakeOverrides = {}) {
     beneficiaries,
     history,
     quotes,
+    rates,
     chat,
     identityRepo,
     transactionRepo,
@@ -237,6 +256,7 @@ function makeService(fakes: ReturnType<typeof makeFakes>): McpToolsService {
     fakes.beneficiaries as unknown as BeneficiaryService,
     fakes.history as unknown as TransactionHistoryService,
     fakes.quotes as unknown as QuotesService,
+    fakes.rates as unknown as RatesService,
     fakes.chat as unknown as WebChatService,
     fakes.registry as unknown as AssetRegistry,
     fakes.identityRepo as unknown as IIdentityRepository,
@@ -305,13 +325,13 @@ describe('McpToolsService — registration and scopes', () => {
     await close();
   });
 
-  it('advertises all 11 tools with both scopes — and NONE is execute-shaped (§3.1)', async () => {
+  it('advertises all 13 tools with both scopes — and NONE is execute-shaped (§3.1)', async () => {
     const { client, close } = await connect(makeService(makeFakes()), [
       'read',
       'chat:propose',
     ]);
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(11);
+    expect(tools).toHaveLength(13);
     for (const tool of tools) {
       // No execute/authorize/confirm/approve tool may EVER exist here (§3.1).
       expect(tool.name).not.toMatch(/execute|authoriz|confirm|approve|sign/i);
@@ -468,6 +488,51 @@ describe('McpToolsService — read tools', () => {
       cryptoAmount: '2.5',
       fiatCurrency: 'NGN',
     });
+    await close();
+  });
+
+  it('get_rate returns the folded buy+sell rate for a pair (fiatCurrency defaulted to NGN)', async () => {
+    const fakes = makeFakes();
+    const { client, close } = await connect(makeService(fakes), ['read']);
+    const result = await callTool(client, 'get_rate', { asset: 'USDT' });
+    expect(payloadOf(result)).toEqual(EFFECTIVE_RATE);
+    // Default applied by the shared contract schema — mirrors quote_buy.
+    expect(fakes.rates.getEffectiveRate).toHaveBeenCalledWith('USDT', 'NGN');
+    await close();
+  });
+
+  it('get_rate rejects an unsupported asset through the shared contract schema', async () => {
+    const fakes = makeFakes();
+    const { client, close } = await connect(makeService(fakes), ['read']);
+    const invalid = await callTool(client, 'get_rate', { asset: 'NOPE' });
+    expect(invalid.isError).toBe(true);
+    expect(textOf(invalid)).toContain('Invalid arguments');
+    expect(fakes.rates.getEffectiveRate).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('list_rates returns every enabled, priced pair (folded rates only)', async () => {
+    const fakes = makeFakes();
+    const { client, close } = await connect(makeService(fakes), ['read']);
+    const result = await callTool(client, 'list_rates');
+    expect(payloadOf(result)).toEqual({ rates: [EFFECTIVE_RATE] });
+    expect(fakes.rates.listEffectiveRates).toHaveBeenCalledTimes(1);
+    // The raw per-bps spread must never appear on this surface (§ Wave K).
+    expect(textOf(result)).not.toMatch(/spread|bps/i);
+    await close();
+  });
+
+  it('get_rate and list_rates are denied without the read scope', async () => {
+    const fakes = makeFakes();
+    const { client, close } = await connect(makeService(fakes), [
+      'chat:propose',
+    ]);
+    const rate = await callTool(client, 'get_rate', { asset: 'USDT' });
+    const list = await callTool(client, 'list_rates');
+    expect(rate.isError).toBe(true);
+    expect(list.isError).toBe(true);
+    expect(fakes.rates.getEffectiveRate).not.toHaveBeenCalled();
+    expect(fakes.rates.listEffectiveRates).not.toHaveBeenCalled();
     await close();
   });
 });

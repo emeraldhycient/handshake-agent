@@ -49,7 +49,14 @@ import {
 } from '../domain/flow-errors';
 import { ExecutionService } from '../../transactions/application/execution.service';
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
-import { InvalidAddressError } from '../../beneficiaries/domain/beneficiary-errors';
+import {
+  InvalidAddressError,
+  BeneficiaryInvalidAccountNumberError,
+  NameEnquiryFailedError,
+} from '../../beneficiaries/domain/beneficiary-errors';
+import { UnsupportedFiatError } from '../../../core/catalog/catalog-errors';
+import { StepUpService } from '../../../core/auth/step-up.service';
+import { StepUpRequiredError } from '../../../core/auth/domain/session-errors';
 import { verifyFlowToken } from '../application/flow-token';
 import {
   PROPOSAL_REPOSITORY,
@@ -111,6 +118,7 @@ export class WhatsAppFlowController {
     private readonly configService: ConfigService<Env, true>,
     @Inject(PROPOSAL_REPOSITORY)
     private readonly proposalRepo: IProposalRepository,
+    private readonly stepUpService: StepUpService,
   ) {}
 
   /**
@@ -454,110 +462,187 @@ export class WhatsAppFlowController {
   /**
    * Handles a `beneficiary_add` data_exchange action.
    * Accepts either bank-account fields or crypto-address fields (determined by
-   * the presence of `accountNumber` vs `address`). Bank/crypto details arrive
-   * via Flow E2E only — never logged.
+   * the presence of `accountNumber` vs `address`). Bank/crypto details — and the
+   * PIN — arrive via Flow E2E only, never as plaintext chat and never logged (§3.5).
+   *
+   * R2 (Wave G): adding a withdrawal destination requires PIN + a fresh
+   * device-bound step-up BEFORE persisting — the same chain the web
+   * `BeneficiaryController` runs. The PIN is threaded from the E2E-encrypted Flow
+   * payload (`data.pin`); it is verified server-side, never echoed back.
    */
   private async handleBeneficiaryAdd(
     userId: string,
     data: Record<string, unknown>,
   ): Promise<unknown> {
-    try {
-      // Discriminate by the presence of accountNumber (bank) vs address (crypto).
-      if (typeof data.accountNumber === 'string' && data.accountNumber) {
-        // Bank account add
-        const accountNumber = data.accountNumber;
-        const bankCode = typeof data.bankCode === 'string' ? data.bankCode : '';
-        const accountName =
-          typeof data.accountName === 'string' ? data.accountName : '';
-        const label =
-          typeof data.label === 'string' && data.label
-            ? data.label
-            : accountName;
+    const isBank =
+      typeof data.accountNumber === 'string' && data.accountNumber !== '';
+    const isCrypto = typeof data.address === 'string' && data.address !== '';
 
-        if (!bankCode || !accountName) {
-          return {
-            screen: 'ERROR',
-            data: { message: 'Incomplete bank account details.' },
-          };
-        }
-
-        const ben = await this.beneficiaryService.addBankAccount({
-          userId,
-          accountNumber,
-          bankCode,
-          accountName,
-          label,
-        });
-
-        return {
-          screen: 'BENEFICIARY_ADDED',
-          data: {
-            beneficiaryId: ben.id,
-            label: ben.label,
-            message: 'Bank account saved successfully.',
-          },
-        };
-      }
-
-      if (typeof data.address === 'string' && data.address) {
-        // Crypto address add
-        const address = data.address;
-        const network = typeof data.network === 'string' ? data.network : '';
-        const asset = typeof data.asset === 'string' ? data.asset : '';
-        const label =
-          typeof data.label === 'string' && data.label
-            ? data.label
-            : address.slice(0, 8) + '…';
-
-        if (!network || !asset) {
-          return {
-            screen: 'ERROR',
-            data: { message: 'Incomplete crypto address details.' },
-          };
-        }
-
-        const ben = await this.beneficiaryService.addCryptoAddress({
-          userId,
-          address,
-          network,
-          asset,
-          label,
-        });
-
-        return {
-          screen: 'BENEFICIARY_ADDED',
-          data: {
-            beneficiaryId: ben.id,
-            label: ben.label,
-            message:
-              'Crypto address saved. A cooling-off period applies before first use.',
-          },
-        };
-      }
-
+    if (!isBank && !isCrypto) {
       return {
         screen: 'ERROR',
         data: { message: 'No account details provided.' },
       };
+    }
+
+    // PIN travels ONLY inside the E2E-encrypted Flow payload (§3.5). Never fall
+    // back to a plaintext-chat PIN — absence is a hard error, not a bypass.
+    const pin = typeof data.pin === 'string' ? data.pin : '';
+    if (!pin) {
+      return {
+        screen: 'ERROR',
+        data: {
+          message: 'Please enter your PIN to save this payout account.',
+        },
+      };
+    }
+    const deviceFingerprint =
+      typeof data.deviceFingerprint === 'string'
+        ? data.deviceFingerprint
+        : undefined;
+
+    try {
+      // R2: verify PIN + record a device-bound step-up BEFORE persisting.
+      await this.stepUpService.assertStepUpForSensitiveAction(
+        userId,
+        pin,
+        deviceFingerprint,
+      );
+
+      return isBank
+        ? await this.addBankBeneficiary(userId, data)
+        : await this.addCryptoBeneficiary(userId, data);
     } catch (err) {
-      if (err instanceof InvalidAddressError) {
-        return {
-          screen: 'ERROR',
-          data: {
-            message:
-              'The crypto address you entered appears to be invalid. Please check and try again.',
-          },
-        };
-      }
       this.logger.warn(
         { errorName: err instanceof Error ? err.name : 'unknown' },
         'beneficiary_add failed',
       );
       return {
         screen: 'ERROR',
-        data: { message: 'Something went wrong. Please try again.' },
+        data: { message: this.mapBeneficiaryAddError(err) },
       };
     }
+  }
+
+  /**
+   * Persists a bank beneficiary from the Flow payload. The payout currency is
+   * seeded from the sell intent (`data.currency`); the country is derived
+   * server-side from it (the client-supplied country is never trusted, §3.3).
+   * When the country's rail cannot run name-enquiry the backend persists the
+   * account as `unverified` — this surfaces that state in the reply.
+   */
+  private async addBankBeneficiary(
+    userId: string,
+    data: Record<string, unknown>,
+  ): Promise<unknown> {
+    const accountNumber =
+      typeof data.accountNumber === 'string' ? data.accountNumber : '';
+    const bankCode = typeof data.bankCode === 'string' ? data.bankCode : '';
+    const accountName =
+      typeof data.accountName === 'string' ? data.accountName : '';
+    const label =
+      typeof data.label === 'string' && data.label ? data.label : accountName;
+    const currency =
+      typeof data.currency === 'string' && data.currency
+        ? data.currency
+        : undefined;
+
+    if (!bankCode || !accountName) {
+      return {
+        screen: 'ERROR',
+        data: { message: 'Incomplete bank account details.' },
+      };
+    }
+
+    const ben = await this.beneficiaryService.addBankAccount({
+      userId,
+      accountNumber,
+      bankCode,
+      accountName,
+      label,
+      currency,
+    });
+
+    const message =
+      ben.verificationStatus === 'unverified'
+        ? 'Bank account saved. We could not automatically verify the account name for this country — please double-check the details before your first payout.'
+        : 'Bank account saved successfully.';
+
+    return {
+      screen: 'BENEFICIARY_ADDED',
+      data: { beneficiaryId: ben.id, label: ben.label, message },
+    };
+  }
+
+  /** Persists a crypto-address beneficiary from the Flow payload. */
+  private async addCryptoBeneficiary(
+    userId: string,
+    data: Record<string, unknown>,
+  ): Promise<unknown> {
+    const address = typeof data.address === 'string' ? data.address : '';
+    const network = typeof data.network === 'string' ? data.network : '';
+    const asset = typeof data.asset === 'string' ? data.asset : '';
+    const label =
+      typeof data.label === 'string' && data.label
+        ? data.label
+        : address.slice(0, 8) + '…';
+
+    if (!network || !asset) {
+      return {
+        screen: 'ERROR',
+        data: { message: 'Incomplete crypto address details.' },
+      };
+    }
+
+    const ben = await this.beneficiaryService.addCryptoAddress({
+      userId,
+      address,
+      network,
+      asset,
+      label,
+    });
+
+    return {
+      screen: 'BENEFICIARY_ADDED',
+      data: {
+        beneficiaryId: ben.id,
+        label: ben.label,
+        message:
+          'Crypto address saved. A cooling-off period applies before first use.',
+      },
+    };
+  }
+
+  /**
+   * Maps a beneficiary-add failure to a safe, user-friendly message.
+   * NEVER leaks internal error text, the PIN, or account internals (§3.5).
+   */
+  private mapBeneficiaryAddError(err: unknown): string {
+    if (err instanceof PinInvalidError) {
+      return 'Incorrect PIN. Please try again.';
+    }
+    if (err instanceof PinLockedError) {
+      return 'Your account is temporarily locked due to too many PIN attempts. Please try again later.';
+    }
+    if (err instanceof PinNotSetError) {
+      return 'No PIN is set on your account. Please set a PIN in the app first.';
+    }
+    if (err instanceof StepUpRequiredError) {
+      return 'We could not verify your device. Please sign in on the web app, then try again.';
+    }
+    if (err instanceof InvalidAddressError) {
+      return 'The crypto address you entered appears to be invalid. Please check and try again.';
+    }
+    if (err instanceof BeneficiaryInvalidAccountNumberError) {
+      return 'That account number does not look valid for this country. Please check it and try again.';
+    }
+    if (err instanceof NameEnquiryFailedError) {
+      return 'Could not verify this bank account. Please check the account number and bank, then try again.';
+    }
+    if (err instanceof UnsupportedFiatError) {
+      return "We can't add a bank account for that currency yet.";
+    }
+    return 'Something went wrong. Please try again.';
   }
 
   /**

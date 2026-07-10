@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import {
@@ -9,10 +10,25 @@ import {
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { useAddCryptoAddress } from "@/lib/query/beneficiaries"
+import { getDeviceFingerprint } from "@/lib/device"
+import { pinErrorMessage } from "@/lib/settings/pin-error"
 import { BeneficiaryField } from "./beneficiary-field"
 import type { BeneficiaryFormProps } from "@/types/chat"
 
-/** Add a crypto (USDT/TRON) address; resolves immediately on a successful add. */
+const PIN_INPUT_PROPS = {
+  type: "password",
+  inputMode: "numeric",
+  autoComplete: "off",
+  maxLength: 6,
+  placeholder: "••••",
+} as const
+
+/**
+ * Add a crypto (USDT/TRON) address; resolves immediately on a successful add.
+ * Adding a payout destination is step-up gated server-side (§3.3), so the PIN
+ * is required (additional to the existing first-use cooling-off) and PIN
+ * failures map to distinct copy.
+ */
 export function AddCryptoForm({ onResolve }: BeneficiaryFormProps) {
   const {
     register,
@@ -24,13 +40,20 @@ export function AddCryptoForm({ onResolve }: BeneficiaryFormProps) {
     defaultValues: { network: "TRON", asset: "USDT" },
   })
   const add = useAddCryptoAddress()
+  const [serverError, setServerError] = useState<string | null>(null)
 
   async function onSubmit(values: AddCryptoAddressRequest) {
+    setServerError(null)
     try {
-      const created = await add.mutateAsync(values)
+      const created = await add.mutateAsync({
+        ...values,
+        // Binds the step-up to this device (§3.4) — same source as the send flow.
+        deviceFingerprint: getDeviceFingerprint(),
+      })
       onResolve(created.id)
-    } catch {
-      // Surfaced via add.error below.
+    } catch (err) {
+      // PIN wrong/locked read distinctly; other failures show the server reason.
+      setServerError(pinErrorMessage(err))
     }
   }
 
@@ -53,10 +76,16 @@ export function AddCryptoForm({ onResolve }: BeneficiaryFormProps) {
           {...register("label")}
         />
       </BeneficiaryField>
-      {add.isError && (
+      <BeneficiaryField label="Transaction PIN" error={errors.pin?.message}>
+        <Input
+          aria-label="Transaction PIN"
+          {...PIN_INPUT_PROPS}
+          {...register("pin")}
+        />
+      </BeneficiaryField>
+      {serverError && (
         <p className="text-[12.5px] text-warn" role="alert">
-          That address looks invalid for the TRON network. Please check it and
-          try again.
+          {serverError}
         </p>
       )}
       <Button type="submit" disabled={add.isPending} className="mt-1">

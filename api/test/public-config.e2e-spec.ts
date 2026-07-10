@@ -89,9 +89,10 @@ describe('GET /config (public catalog endpoint)', () => {
     const res = await request(app.getHttpServer()).get('/config').expect(200);
     const body = res.body as PublicConfigResponse;
 
-    // fiats contains NGN with its symbol
+    // fiats contains NGN with its symbol AND its ISO alpha-2 bank-rail country,
+    // so the web add-bank form derives the country from /config (no hardcoded map).
     expect(body.fiats).toEqual([
-      expect.objectContaining({ code: 'NGN', symbol: '₦' }),
+      expect.objectContaining({ code: 'NGN', symbol: '₦', country: 'NG' }),
     ]);
 
     // first asset is USDT

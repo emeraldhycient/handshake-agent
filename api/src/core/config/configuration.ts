@@ -37,10 +37,47 @@ export interface AssetPricing {
   maxFiat?: Partial<Record<'buy' | 'sell', Record<string, number>>>;
 }
 
+/**
+ * Live market-rate feed configuration (F1). The feed keeps the money-path base
+ * rates current; `pricing.assets.<asset>.baseRates.<fiat>` is the admin FLOOR /
+ * fallback the feed is validated against and falls back to. `enabled` is the
+ * admin kill-switch (default true) — flip it off to serve config rates only.
+ * All values are admin-tunable via the DB-admin AppSetting layer (root §7); the
+ * source base URLs + optional API key are env/infra (see env.schema.ts).
+ */
+export interface PricingFeedConfig {
+  /** Kill-switch. false → the poller does nothing and the seam serves config rates. */
+  enabled: boolean;
+  /** Poll cadence in seconds (LiveRateService schedules its interval from this). */
+  pollIntervalSec: number;
+  /** A live rate older than this (seconds) is treated as stale → config fallback. */
+  stalenessSec: number;
+  /**
+   * Maximum accepted divergence (basis points) between a composed live rate and
+   * its config-floor baseRate. Beyond this the tick is rejected (marked degraded,
+   * keeps the config fallback) — a bad upstream print never moves money.
+   */
+  divergenceBps: number;
+  /** Fiat ISO codes the feed composes rates for. */
+  fiats: string[];
+  /** CoinGecko `/simple/price` mapping: asset symbol → CoinGecko coin id. */
+  coingecko: { ids: Record<string, string> };
+  /** Quidax public ticker market slug for the USDT/NGN local override. */
+  quidax: { market: string };
+  /** open.er-api.com base currency for the USD→fiat legs. */
+  exchangerate: { base: string };
+}
+
 export interface PricingConfig {
   processingFeeBps: number;
   expiresInSec: number;
   assets: Record<string, AssetPricing>;
+  /**
+   * Live-feed section (F1). Optional on the type so the many PricingConfig test
+   * fixtures need not construct it; the shipped default ALWAYS provides it, and
+   * the base-rate seam reads `pricing.feed?.stalenessSec` defensively.
+   */
+  feed?: PricingFeedConfig;
 }
 
 /** Per-KYC-tier transaction limits for a single fiat currency. All values are admin-tunable later. */
@@ -233,6 +270,15 @@ export interface BeneficiaryConfig {
    * A real provider resolves from the bank — this field is mock-only.
    */
   nameEnquiryResolvedName: string;
+  /**
+   * ISO 3166-1 alpha-2 countries whose bank rails support account name-enquiry
+   * (Flutterwave `/accounts/resolve` is effectively NG/NUBAN-only today). When a
+   * bank beneficiary's derived country is in this set, addBankAccount runs the
+   * enquiry and persists the RESOLVED name (verified); otherwise it SKIPS the
+   * enquiry and saves the user-entered name as `unverified` (never fails closed).
+   * Registry-driven so enabling a new market's name-enquiry is a config flip (§7).
+   */
+  nameEnquiryResolvableCountries: string[];
 }
 
 /**
@@ -326,6 +372,15 @@ export interface CatalogFiat {
   symbol: string;
   decimals: number;
   enabled: boolean;
+  /**
+   * ISO 3166-1 alpha-2 country whose banking rails settle this currency
+   * (e.g. NGN → 'NG'). Used to derive a bank beneficiary's country from its
+   * payout currency (server-side; the client-supplied country is never trusted)
+   * and to back the `GET /beneficiaries/banks?country=` dropdown. Optional so a
+   * runtime-added custom fiat without a country mapping is still recognised —
+   * `AssetRegistry.countryForFiat` fails closed when it is absent.
+   */
+  country?: string;
 }
 
 /** Blockchain network entry in the catalog. */
@@ -505,11 +560,9 @@ export interface TicketingConfig {
 
 /**
  * Treasury oversight configuration (Wave D, root CLAUDE.md §7). Admin-tunable via
- * the DB-admin AppSetting layer (`treasury.largePayoutThresholds.<CODE>` keys in
- * SETTING_REGISTRY). Note: the per-currency float targets
- * (`treasury.fiatFloatTargets`) and low-float floor (`treasury.lowFloatThresholdBps`)
- * remain DB-overlay-only values with in-service fallbacks — they carry no JSON
- * defaults here.
+ * the DB-admin AppSetting layer — every leaf is registered in SETTING_REGISTRY
+ * (`treasury.largePayoutThresholds.<CODE>`, `treasury.fiatFloatTargets.<CODE>`,
+ * `treasury.lowFloatThresholdBps`).
  */
 export interface TreasuryConfig {
   /**
@@ -521,6 +574,20 @@ export interface TreasuryConfig {
    * in a freshly-enabled currency).
    */
   largePayoutThresholds: Record<string, number>;
+  /**
+   * Per-currency operating float targets, keyed by fiat code in that currency's
+   * MAJOR units. The treasury float-health view reports each currency's balance
+   * against its target. OPT-IN: 0 (the shipped default for every currency) means
+   * "no target" — the currency is always reported healthy — until an operator
+   * sets a real target via the DB-admin layer (treasury.fiatFloatTargets.<CODE>).
+   */
+  fiatFloatTargets: Record<string, number>;
+  /**
+   * Low-float floor in basis points: a currency's float is flagged "low" when its
+   * balance/target utilization drops below this fraction of its configured target
+   * (e.g. 2500 = 25%). A single global knob shared by every currency's float check.
+   */
+  lowFloatThresholdBps: number;
 }
 
 /**
@@ -585,6 +652,21 @@ export interface AppConfig {
  * their config may legitimately be incomplete until they go live.
  */
 export function validateConfig(cfg: AppConfig): void {
+  // ── Pricing-feed freshness invariant (F1) ──────────────────────────────────
+  // A live rate's freshness window MUST out-live the quote validity window:
+  // stalenessSec > expiresInSec. Otherwise a live rate could go stale WITHIN a
+  // still-valid quote's window, flipping the money path live↔config mid-window
+  // (a rate that changes source under a locked quote). Fail-closed at boot.
+  const feed = cfg.pricing.feed;
+  if (feed && feed.stalenessSec <= cfg.pricing.expiresInSec) {
+    throw new Error(
+      `Config invariant violated: pricing.feed.stalenessSec ` +
+        `(${feed.stalenessSec}s) must be GREATER than pricing.expiresInSec ` +
+        `(${cfg.pricing.expiresInSec}s) — a live rate must not out-live the ` +
+        `quote window, or a rate can flip live↔config mid-window (root CLAUDE.md §7).`,
+    );
+  }
+
   const enabledFiats = Object.values(cfg.catalog.fiats)
     .filter((fiat) => fiat.enabled)
     .map((fiat) => fiat.code);
@@ -658,6 +740,7 @@ const buildConfig = (): AppConfig => ({
         symbol: '₦',
         decimals: 2,
         enabled: true,
+        country: 'NG',
       },
       // ── Supported but NOT yet live (enabled: false) ─────────────────────
       // Flip `enabled` to true once the Flutterwave collection + disbursement
@@ -669,6 +752,7 @@ const buildConfig = (): AppConfig => ({
         symbol: 'GH₵',
         decimals: 2,
         enabled: false,
+        country: 'GH',
       },
       KES: {
         code: 'KES',
@@ -676,6 +760,7 @@ const buildConfig = (): AppConfig => ({
         symbol: 'KSh',
         decimals: 2,
         enabled: false,
+        country: 'KE',
       },
       UGX: {
         code: 'UGX',
@@ -683,6 +768,7 @@ const buildConfig = (): AppConfig => ({
         symbol: 'USh',
         decimals: 0,
         enabled: false,
+        country: 'UG',
       },
       TZS: {
         code: 'TZS',
@@ -690,6 +776,7 @@ const buildConfig = (): AppConfig => ({
         symbol: 'TSh',
         decimals: 0,
         enabled: false,
+        country: 'TZ',
       },
       RWF: {
         code: 'RWF',
@@ -697,6 +784,7 @@ const buildConfig = (): AppConfig => ({
         symbol: 'FRw',
         decimals: 0,
         enabled: false,
+        country: 'RW',
       },
       ZAR: {
         code: 'ZAR',
@@ -704,6 +792,7 @@ const buildConfig = (): AppConfig => ({
         symbol: 'R',
         decimals: 2,
         enabled: false,
+        country: 'ZA',
       },
       USD: {
         code: 'USD',
@@ -711,6 +800,7 @@ const buildConfig = (): AppConfig => ({
         symbol: '$',
         decimals: 2,
         enabled: false,
+        country: 'US',
       },
     },
     networks: {
@@ -818,6 +908,34 @@ const buildConfig = (): AppConfig => ({
     // Buy/sell quote validity (300s / 5 min). A human needs time to read the
     // confirmation and enter a PIN; 30s was too short to complete the flow.
     expiresInSec: 300,
+    // ── Live market-rate feed (F1, CLAUDE.md §7) ─────────────────────────────
+    // NO mock mode: the poller always runs when `enabled`. In local/dev without
+    // network, source fetches fail → rates go degraded → the seam serves the
+    // baseRates below (visual-verify still works). `enabled` is the admin
+    // kill-switch; staleness / divergence / cadence are admin-tunable.
+    feed: {
+      enabled: true,
+      pollIntervalSec: 300,
+      stalenessSec: 900,
+      // 1500 bps = 15% is the INTENDED product tolerance band (not a placeholder).
+      // Generous band: an NGN parallel-market vs config-floor gap is real, but a
+      // >15% jump vs the admin floor is almost certainly a bad print / wrong
+      // quote-currency → reject and keep the config fallback.
+      divergenceBps: 1500,
+      // Fiats to compose. Only NGN is live at launch; the rest are pre-wired so
+      // enabling a market stays a flag flip (§7) — a fiat with no config baseRate
+      // simply gets no live entry and keeps failing closed until priced.
+      fiats: ['NGN', 'GHS', 'KES', 'UGX', 'TZS', 'RWF', 'ZAR', 'USD'],
+      // Asset symbol → CoinGecko coin id (batched /simple/price lookup).
+      coingecko: {
+        ids: { USDT: 'tether', BTC: 'bitcoin', TRX: 'tron' },
+      },
+      // Quidax public ticker market slug — the Nigeria-local USDT/NGN override
+      // (more representative of the on-ground rate than a USD-derived cross).
+      quidax: { market: 'usdtngn' },
+      // open.er-api.com base for the USD→fiat legs.
+      exchangerate: { base: 'USD' },
+    },
     assets: {
       // buySpreadBps=150 matches the old global spreadBps so existing BUY quotes are unchanged.
       // sellSpreadBps is independently tunable — set to 150 as the conservative default.
@@ -933,6 +1051,11 @@ const buildConfig = (): AppConfig => ({
     // Default resolved name returned by MockNameEnquiry for all successful lookups.
     // A real provider resolves the actual account-holder name from the bank.
     nameEnquiryResolvedName: 'MOCK ACCOUNT HOLDER',
+    // Countries whose bank rails support account name-enquiry today. NG only
+    // (Flutterwave /accounts/resolve is NUBAN-only); other markets save the
+    // user-entered name as `unverified`. Add a market's code here (config/DB-admin,
+    // §7) once its name-enquiry rail is live — no code change required.
+    nameEnquiryResolvableCountries: ['NG'],
   },
   reconciliation: {
     // Only pick up rows older than 2 minutes so we don't race in-flight webhooks.
@@ -993,14 +1116,29 @@ const buildConfig = (): AppConfig => ({
     commissionBps: 0,
   },
   // ── Treasury oversight (Wave D, CLAUDE.md §7) ───────────────────────────────
-  // Only the launch fiat ships a default; every other currency FAILS CLOSED
-  // (all payouts require approval) until an operator sets its threshold via the
-  // DB-admin layer (treasury.largePayoutThresholds.<CODE>).
+  // largePayoutThresholds: only the launch fiat ships a default; every other
+  // currency FAILS CLOSED (all payouts require approval) until an operator sets
+  // its threshold via the DB-admin layer (treasury.largePayoutThresholds.<CODE>).
+  // fiatFloatTargets: OPT-IN — every currency ships 0 (no target → always healthy)
+  // so NGN behaviour is unchanged; operators set real targets per currency via the
+  // DB-admin layer (treasury.fiatFloatTargets.<CODE>). lowFloatThresholdBps mirrors
+  // the treasury service's in-service default (2500 bps = 25%).
   treasury: {
     largePayoutThresholds: {
       // ₦1,000,000 — the pre-Wave-D hardcoded gate, preserved as the NGN default.
       NGN: 1_000_000,
     },
+    fiatFloatTargets: {
+      NGN: 0,
+      GHS: 0,
+      KES: 0,
+      UGX: 0,
+      TZS: 0,
+      RWF: 0,
+      ZAR: 0,
+      USD: 0,
+    },
+    lowFloatThresholdBps: 2500,
   },
   // ── Embedded agent (Phase 4 wave 2, CLAUDE.md §7) ──────────────────────────
   // enabled defaults true (current behaviour). modelId mirrors the AGENT_MODEL env
