@@ -9,6 +9,8 @@ import {
   actionLabel,
   approveTargetTier,
   beneVerificationMeta,
+  creditFlowRows,
+  creditableAssetsFor,
   displayName,
   fmtFiat,
   initialsOf,
@@ -58,9 +60,9 @@ describe("approveTargetTier", () => {
     )
   })
   it("defaults to tier_1 for unverified / missing requested tier", () => {
-    expect(approveTargetTier({ tier: "unverified" } as KycSubmissionDetail)).toBe(
-      "tier_1"
-    )
+    expect(
+      approveTargetTier({ tier: "unverified" } as KycSubmissionDetail)
+    ).toBe("tier_1")
     expect(approveTargetTier(undefined)).toBe("tier_1")
   })
 })
@@ -125,5 +127,49 @@ describe("usageBar", () => {
     expect(usageBar("95%")).toBe("#c0563f")
     expect(usageBar("80%")).toBe("#f5a623")
     expect(usageBar("40%")).toBe("#1a4536")
+  })
+})
+
+describe("creditableAssetsFor", () => {
+  it("always offers USDT (the launch asset) even with no balances", () => {
+    expect(creditableAssetsFor([])).toEqual(["USDT"])
+  })
+  it("adds the user's held SupportedAssets and drops unsupported ones", () => {
+    expect(
+      creditableAssetsFor([
+        { asset: "TRX" },
+        { asset: "ETH" },
+        { asset: "BTC" },
+      ])
+    ).toEqual(["USDT", "TRX", "BTC"])
+  })
+  it("dedupes when the user already holds USDT", () => {
+    expect(creditableAssetsFor([{ asset: "USDT" }, { asset: "USDT" }])).toEqual(
+      ["USDT"]
+    )
+  })
+})
+
+describe("creditFlowRows", () => {
+  it("returns empty tables when no credit input is captured yet", () => {
+    expect(creditFlowRows(null, "user-1")).toEqual({
+      effect: [],
+      ledger: [],
+      diff: [],
+    })
+  })
+  it("derives the engine effect, double-entry ledger and maker-checker diff from the input", () => {
+    expect(creditFlowRows({ asset: "USDT", amount: "100" }, "user-1")).toEqual({
+      effect: [
+        { k: "Credit to", v: "user-1" },
+        { k: "Amount", v: "100 USDT" },
+        { k: "Proposal type", v: "manual_credit" },
+      ],
+      ledger: [
+        { acct: "treasury:USDT", dir: "DR", amt: "100 USDT" },
+        { acct: "user-1:USDT", dir: "CR", amt: "100 USDT" },
+      ],
+      diff: [{ field: "USDT available", from: "—", to: "+100 USDT" }],
+    })
   })
 })

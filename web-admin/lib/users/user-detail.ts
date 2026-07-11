@@ -1,12 +1,20 @@
-import type {
-  AdminEndUserDetail,
-  KycApproveRequest,
-  KycSubmissionDetail,
+import {
+  SupportedAssetSchema,
+  type AdminEndUserDetail,
+  type KycApproveRequest,
+  type KycSubmissionDetail,
+  type SupportedAsset,
 } from "@handshake-agent/contracts"
 
-import { formatFiat } from "@/lib/format"
+import { formatCrypto, formatFiat } from "@/lib/format"
 import { NOT_PROVIDED, ST_META } from "@/constants/user-detail"
-import type { PillMeta } from "@/types/components"
+import type {
+  CreditInput,
+  EngineEffectRow,
+  EngineLedgerRow,
+  MakerCheckerDiffRow,
+  PillMeta,
+} from "@/types/components"
 
 /** Display name from KYC identity, falling back to the email local-part, then id. */
 export function displayName(
@@ -61,7 +69,11 @@ export function actionDot(action: string): string {
 }
 
 /** Tx status → compact pill meta, tolerant of unknown engine statuses (no design fallback). */
-export function statusMeta(status: string): { l: string; bg: string; fg: string } {
+export function statusMeta(status: string): {
+  l: string
+  bg: string
+  fg: string
+} {
   return (
     ST_META[status] ?? {
       l: status.replace(/_/g, " "),
@@ -102,4 +114,57 @@ export function usageBar(pct: string): string {
   if (v >= 90) return "#c0563f"
   if (v >= 75) return "#f5a623"
   return "#1a4536"
+}
+
+/**
+ * Assets an admin can manually credit: the SUPPORTED assets the user already holds,
+ * plus USDT (the launch asset) so a brand-new user can still be credited. Balances
+ * whose asset is not a SupportedAsset are dropped (the request DTO only accepts the
+ * supported set). The server re-validates against the live catalog on approval
+ * (§3.3) — this list is a UX convenience, not the authority.
+ */
+export function creditableAssetsFor(
+  balances: readonly { asset: string }[]
+): SupportedAsset[] {
+  return Array.from(
+    new Set<SupportedAsset>([
+      "USDT",
+      ...balances
+        .map((b) => SupportedAssetSchema.safeParse(b.asset))
+        .filter((r) => r.success)
+        .map((r) => r.data),
+    ])
+  )
+}
+
+/**
+ * The engine-preview + maker-checker rows for the manual-credit flow, derived from
+ * the captured input (never hardcoded). Empty tables until the credit step is
+ * completed. The amount is rendered via the canonical `formatCrypto` (never a pinned
+ * symbol) and echoed identically across the effect, ledger and diff.
+ */
+export function creditFlowRows(
+  creditInput: CreditInput | null,
+  userId: string
+): {
+  effect: EngineEffectRow[]
+  ledger: EngineLedgerRow[]
+  diff: MakerCheckerDiffRow[]
+} {
+  if (!creditInput) return { effect: [], ledger: [], diff: [] }
+  const amount = formatCrypto(creditInput.amount, creditInput.asset)
+  return {
+    effect: [
+      { k: "Credit to", v: userId },
+      { k: "Amount", v: amount },
+      { k: "Proposal type", v: "manual_credit" },
+    ],
+    ledger: [
+      { acct: `treasury:${creditInput.asset}`, dir: "DR", amt: amount },
+      { acct: `${userId}:${creditInput.asset}`, dir: "CR", amt: amount },
+    ],
+    diff: [
+      { field: `${creditInput.asset} available`, from: "—", to: `+${amount}` },
+    ],
+  }
 }

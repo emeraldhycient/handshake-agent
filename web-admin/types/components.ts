@@ -1265,6 +1265,66 @@ export interface UdFlowConfig {
   onComplete?: (reason: string) => void
 }
 
+/** The manual-credit input the ManualCreditModal captures (asset + entered amount). */
+export type CreditInput = {
+  asset: import("@handshake-agent/contracts").SupportedAsset
+  amount: string
+}
+
+/**
+ * The minimal step-up controller the user-detail flow modals consume — the
+ * server-driven 403 → StepUpDialog `open`/`setOpen` pair. Structural on purpose so
+ * `types/` never imports the `useStepUpRetry` hook; its `StepUpRetry` return is
+ * assignable to this (same layering-safe pattern as `UdQueryState`).
+ */
+export interface UdStepUpController {
+  open: boolean
+  setOpen: (open: boolean) => void
+}
+
+/**
+ * UserDetail header — the back-link + identity card (avatar monogram, name, FROZEN /
+ * KYC / SIM-swap pills, copyable id) and the freeze / add-note / resend actions. The
+ * name, initials, frozen and KYC-pill meta are derived from `detail`/`kyc` inside.
+ */
+export interface UserDetailHeaderProps {
+  detail: import("@handshake-agent/contracts").AdminEndUserDetail
+  kyc: import("@handshake-agent/contracts").KycSubmissionDetail | undefined
+  simSwapFlagged: boolean
+  onBack: () => void
+  onFreeze: () => void
+  onAddNote: () => void
+  onResend: () => void
+}
+
+/** UserDetail tab strip (underline nav) — the active tab id + its setter. */
+export interface UserDetailTabsProps {
+  tab: UdTab
+  onTab: (tab: UdTab) => void
+}
+
+/**
+ * UserDetail flow modals — the credit → reason → engine / maker step sequence plus
+ * the shared server-driven step-up dialog. Renders whichever modal the flow's
+ * `current` step selects; the credit-preview tables derive from the captured
+ * `creditInput` (§3.1 — nothing here moves money; the engine settles only after a
+ * SECOND admin approves the four-eyes request).
+ */
+export interface UserDetailFlowModalsProps {
+  userId: string
+  balances: import("@handshake-agent/contracts").AdminEndUserDetail["balances"]
+  current: UdFlowStep | null
+  flow: UdFlowConfig | null
+  creditInput: CreditInput | null
+  setCreditInput: (input: CreditInput) => void
+  creditInputRef: import("react").RefObject<CreditInput | null>
+  advance: (reason?: string) => void
+  cancelFlow: () => void
+  stepUp: UdStepUpController
+  mfaEnabled: boolean
+  onStepUpSuccess: () => void
+}
+
 /** The report types a SAR/STR draft can carry — sourced from the contract enum. */
 export type ComplianceReportType =
   import("@handshake-agent/contracts").ComplianceReportDraftRequest["reportType"]
