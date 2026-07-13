@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation"
 import { FormField } from "@/components/shared/form-field"
 import { FormAlert } from "@/components/shared/form-alert"
 import { Button } from "@/components/ui/button"
+import { AuthStepHeader } from "../AuthStepHeader"
 import { LoginResendControls } from "./login-resend-controls"
 import { useLoginRequest, useLoginVerify } from "@/lib/query/auth"
 import { ApiError } from "@/lib/api/client"
@@ -120,10 +121,11 @@ export function LoginVerifyStep({
       aria-label="Log in form — step 2"
       className={`flex flex-col gap-5 ${className ?? ""}`}
     >
-      <p className="text-sm text-muted-foreground">
-        We sent a one-time code to{" "}
-        <span className="font-medium text-foreground">{email}</span>.
-      </p>
+      <AuthStepHeader
+        eyebrow="Log in · Verify"
+        heading="Enter your code"
+        subcopy={`We sent a 6-digit code to ${email}.`}
+      />
 
       {serverError && (
         <FormAlert tone={isLockedOut ? "warn" : "danger"}>
@@ -159,6 +161,7 @@ export function LoginVerifyStep({
 
       <Button
         type="submit"
+        variant="accent"
         size="lg"
         disabled={loading}
         aria-busy={loading}

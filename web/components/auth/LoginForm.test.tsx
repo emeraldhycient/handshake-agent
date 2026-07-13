@@ -75,6 +75,15 @@ describe("LoginForm", () => {
     ).toBeInTheDocument()
   })
 
+  it("step 1: renders the onboarding-styled step header (shell parity)", () => {
+    renderForm()
+
+    expect(
+      screen.getByRole("heading", { name: /welcome back/i })
+    ).toBeInTheDocument()
+    expect(screen.getByText(/^log in$/i)).toBeInTheDocument()
+  })
+
   it("step 1: blocks submit on invalid email and does not call mutation", async () => {
     const user = userEvent.setup()
     renderForm()

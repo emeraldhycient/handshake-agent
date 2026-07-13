@@ -1,10 +1,13 @@
 /**
  * /login — Log in to Handshake Agent.
  *
- * Server component — composition only, no business logic.
- * Renders a centred card layout with the LoginForm feature component.
+ * Server component — composition only, no business logic. Mirrors the
+ * `/get-started` onboarding shell: a green brand rail on the left (desktop)
+ * and a cream card holding the two-step LoginForm on the right, so login and
+ * signup read as one family (Task F4.2).
  */
 import type { Metadata } from "next"
+import { AuthBrandRail } from "@/components/auth/AuthBrandRail"
 import { LoginForm } from "@/components/auth/LoginForm"
 
 export const metadata: Metadata = {
@@ -16,19 +19,18 @@ export default function LoginPage() {
   return (
     <main
       id="main-content"
-      className="flex min-h-screen items-center justify-center bg-background px-4 py-12"
+      className="grid min-h-svh bg-background lg:grid-cols-[440px_1fr]"
     >
-      <div className="w-full max-w-md">
-        <header className="mb-8 text-center">
-          <h1 className="text-2xl font-semibold text-foreground">
-            Welcome back
-          </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Log in to your Handshake Agent account.
-          </p>
-        </header>
+      <AuthBrandRail
+        className="hidden lg:flex"
+        headline="Welcome back."
+        subcopy="Log in to pick up right where you left off — buy, send and swap crypto from a chat."
+      />
 
-        <LoginForm />
+      <div className="flex items-center justify-center overflow-y-auto px-6 py-12 lg:px-16">
+        <div className="w-full max-w-md">
+          <LoginForm />
+        </div>
       </div>
     </main>
   )
