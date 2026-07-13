@@ -74,6 +74,7 @@ const sumsubTokenMutation = vi.hoisted(() => ({
     isPending: true,
     isError: false,
     error: undefined,
+    status: "idle",
   } as Record<string, unknown>,
 }))
 vi.mock("@/lib/query/kyc-onboarding", () => ({
@@ -160,6 +161,7 @@ describe("OnboardingWizard", () => {
       isPending: true,
       isError: false,
       error: undefined,
+      status: "idle",
     }
   })
 

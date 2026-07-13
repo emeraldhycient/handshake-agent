@@ -13,3 +13,17 @@ export interface SumsubVerificationProps {
   onBack?: () => void
   className?: string
 }
+
+/**
+ * Props for the modal wrapper (`components/kyc/SumsubVerificationDialog`) — opens
+ * the Sumsub verification flow in a Dialog for a focused experience. Controlled
+ * via `open`/`onOpenChange`; the dialog closes itself on `onSubmitted`.
+ */
+export interface SumsubVerificationDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** Which rung to verify: tier_2 (doc + liveness) or tier_3 (proof of address). */
+  level: import("@handshake-agent/contracts/dto").KycTierLevel
+  /** Fired when the applicant submits inside the SDK (dialog then closes). */
+  onSubmitted?: () => void
+}

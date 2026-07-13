@@ -16,7 +16,7 @@
  * `me` changes (e.g. a step's mutation invalidating the `me` cache) must
  * never yank the user backward after they've already navigated forward.
  */
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { MeResponse } from "@handshake-agent/contracts/auth"
 import { useIsDesktop } from "@/hooks/use-is-desktop"
 import {
@@ -37,7 +37,7 @@ import { NameStep } from "./NameStep"
 import { PinStep } from "./PinStep"
 import { KycChoiceStep } from "./KycChoiceStep"
 import { DoneStep } from "./DoneStep"
-import { SumsubVerification } from "@/components/kyc/SumsubVerification"
+import { SumsubVerificationDialog } from "@/components/kyc/SumsubVerificationDialog"
 import { Keypad } from "./Keypad"
 import { OnboardingProgress } from "./OnboardingProgress"
 import { OnboardingRail } from "./OnboardingRail"
@@ -66,7 +66,6 @@ const MOBILE_KEYPAD_STEPS: ReadonlySet<OnboardingStep> = new Set(["otp", "pin"])
 const MOBILE_FULL_BLEED_STEPS: ReadonlySet<OnboardingStep> = new Set([
   "welcome",
   "kyc",
-  "sumsub",
   "done",
 ])
 
@@ -75,9 +74,9 @@ const MOBILE_FULL_BLEED_STEPS: ReadonlySet<OnboardingStep> = new Set([
  * dark-green header band (or, for `welcome`, the whole screen) over a cream
  * body — so the shell must not also impose its own background/padding on
  * top of it (that would show as a cream margin around the component's own
- * edge-to-edge box instead of a true full-bleed screen). `sumsub` stays in
- * the shell's plain centered/padded box: it mounts the Sumsub WebSDK iframe
- * (F3.2), which manages its own internal layout.
+ * edge-to-edge box instead of a true full-bleed screen). The Sumsub flow is
+ * no longer a step — it opens in a modal (SumsubVerificationDialog) over the
+ * current step.
  */
 const MOBILE_EDGE_TO_EDGE_STEPS: ReadonlySet<OnboardingStep> = new Set([
   "welcome",
@@ -90,6 +89,9 @@ const MOBILE_EDGE_TO_EDGE_STEPS: ReadonlySet<OnboardingStep> = new Set([
 function renderStep(
   machine: OnboardingMachine,
   me: MeResponse | null | undefined,
+  // Opens the Sumsub verification modal (SumsubVerificationDialog) — wired to
+  // the "verify now" affordance on the kyc-choice and done steps.
+  onVerifyNow: () => void,
   pinKeypadRef?: { current: PinStepKeypadHandle | null },
   // True on the mobile surface, where the shell renders the on-screen Keypad as
   // the single OTP input — the cells then render read-only (no native keyboard).
@@ -139,25 +141,11 @@ function renderStep(
       return (
         <KycChoiceStep
           firstName={firstName}
-          onVerifyNow={() => machine.goto("sumsub")}
+          onVerifyNow={onVerifyNow}
           onVerifyLater={() => {
             machine.setData({ kycChoice: "later" })
             machine.goto("done")
           }}
-        />
-      )
-    case "sumsub":
-      return (
-        <SumsubVerification
-          level="tier_2"
-          onSubmitted={() => {
-            // The engine grants tier_2 off the signed webhook (root §3.1);
-            // this only lets `done` show an honest "in review" state until
-            // `me` catches up.
-            machine.setData({ kycSubmitted: true })
-            machine.goto("done")
-          }}
-          onBack={machine.back}
         />
       )
     case "done":
@@ -168,7 +156,7 @@ function renderStep(
             machine.data.kycSubmitted ? "pending_review" : me?.kycStatus
           }
           skipped={machine.data.kycChoice === "later"}
-          onVerifyNow={() => machine.goto("sumsub")}
+          onVerifyNow={onVerifyNow}
         />
       )
     default:
@@ -181,6 +169,8 @@ function renderStep(
 interface OnboardingChromeProps {
   machine: OnboardingMachine
   me: MeResponse | null | undefined
+  /** Opens the Sumsub verification modal (owned by the wizard shell). */
+  onVerifyNow: () => void
 }
 
 function OnboardingLoading() {
@@ -191,18 +181,24 @@ function OnboardingLoading() {
   )
 }
 
-function DesktopOnboarding({ machine, me }: OnboardingChromeProps) {
+function DesktopOnboarding({
+  machine,
+  me,
+  onVerifyNow,
+}: OnboardingChromeProps) {
   return (
     <div className="grid min-h-svh grid-cols-[400px_1fr] bg-background">
       <OnboardingRail step={machine.step} />
       <div className="flex items-center justify-center overflow-y-auto p-12">
-        <div className="w-full max-w-[460px]">{renderStep(machine, me)}</div>
+        <div className="w-full max-w-[460px]">
+          {renderStep(machine, me, onVerifyNow)}
+        </div>
       </div>
     </div>
   )
 }
 
-function MobileOnboarding({ machine, me }: OnboardingChromeProps) {
+function MobileOnboarding({ machine, me, onVerifyNow }: OnboardingChromeProps) {
   const isFullBleed = MOBILE_FULL_BLEED_STEPS.has(machine.step)
   const isEdgeToEdge = MOBILE_EDGE_TO_EDGE_STEPS.has(machine.step)
   const showKeypad = MOBILE_KEYPAD_STEPS.has(machine.step)
@@ -243,13 +239,13 @@ function MobileOnboarding({ machine, me }: OnboardingChromeProps) {
   // welcome/kyc/done: the step component owns its full mobile treatment
   // (dark-green band + cream body) — no shell wrapper on top of it.
   if (isEdgeToEdge) {
-    return renderStep(machine, me)
+    return renderStep(machine, me, onVerifyNow)
   }
 
   if (isFullBleed) {
     return (
       <div className="flex min-h-svh flex-col justify-center bg-background px-6 py-10">
-        {renderStep(machine, me)}
+        {renderStep(machine, me, onVerifyNow)}
       </div>
     )
   }
@@ -260,7 +256,7 @@ function MobileOnboarding({ machine, me }: OnboardingChromeProps) {
       <div className="mt-[26px] flex-1">
         {/* keypadDriven=true: the on-screen Keypad below is the OTP input, so
             the cells render read-only (no competing native keyboard). */}
-        {renderStep(machine, me, pinKeypadRef, true)}
+        {renderStep(machine, me, onVerifyNow, pinKeypadRef, true)}
       </div>
       {showKeypad && (
         <div className="mt-2 pb-[26px]">
@@ -279,6 +275,10 @@ export function OnboardingWizard() {
   const authStatus = useAuthStore((s) => s.status)
   const { data: me, isLoading: meLoading } = useMe()
   const resumedRef = useRef(false)
+  // The Sumsub verification opens in a modal over the current step (kyc-choice
+  // or the done "verify to unlock" banner) rather than as its own full-screen
+  // step, for a more focused experience.
+  const [sumsubOpen, setSumsubOpen] = useState(false)
 
   // The auth store boots 'loading' and rehydrates the access token from the
   // HttpOnly cookie asynchronously (AuthProvider). `useMe` is disabled until a
@@ -313,9 +313,31 @@ export function OnboardingWizard() {
     return <OnboardingLoading />
   }
 
-  return isDesktop ? (
-    <DesktopOnboarding machine={machine} me={me} />
-  ) : (
-    <MobileOnboarding machine={machine} me={me} />
+  const onVerifyNow = () => setSumsubOpen(true)
+
+  return (
+    <>
+      {isDesktop ? (
+        <DesktopOnboarding
+          machine={machine}
+          me={me}
+          onVerifyNow={onVerifyNow}
+        />
+      ) : (
+        <MobileOnboarding machine={machine} me={me} onVerifyNow={onVerifyNow} />
+      )}
+      <SumsubVerificationDialog
+        open={sumsubOpen}
+        onOpenChange={setSumsubOpen}
+        level="tier_2"
+        onSubmitted={() => {
+          // The engine grants tier_2 off the signed webhook (root §3.1); this
+          // only lets `done` show an honest "in review" state until `me` catches
+          // up. The dialog closes itself after this fires.
+          machine.setData({ kycSubmitted: true })
+          machine.goto("done")
+        }}
+      />
+    </>
   )
 }

@@ -46,6 +46,7 @@ vi.mock("@sumsub/websdk-react", () => ({
 const mockMutate = vi.fn()
 const mockMutateAsync = vi.fn()
 let mockTokenState: {
+  status?: string
   data?: { token: string; userId: string }
   isPending: boolean
   isError: boolean
@@ -65,7 +66,14 @@ describe("SumsubVerification", () => {
   beforeEach(() => {
     mockMutate.mockReset()
     mockMutateAsync.mockReset()
-    mockTokenState = { isPending: true, isError: false, error: undefined }
+    // status "idle" so the mount effect fires the mint (the component guards the
+    // mint on the mutation's idle status, not a ref — StrictMode-safe).
+    mockTokenState = {
+      status: "idle",
+      isPending: true,
+      isError: false,
+      error: undefined,
+    }
   })
 
   it("mints a token for the requested level on mount", () => {

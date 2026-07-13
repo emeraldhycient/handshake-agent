@@ -52,24 +52,13 @@ export function deriveResumeStep(me: MeResponse | null): OnboardingStep {
   return "done"
 }
 
-/**
- * `sumsub` is deliberately excluded from `ONBOARDING_STEP_ORDER` (root
- * CLAUDE.md §16 — it is reached only via an explicit `goto` from `kyc`, the
- * "verify now" choice). It still needs a sane place in `next()`/`back()` so a
- * step component can call the same generic controls: back returns to the
- * `kyc` choice screen it came from, next proceeds to `done` (Sumsub itself
- * calls `goto("done")` on completion — `next()` from `sumsub` is the same
- * "move on" affordance for a cancel/skip path).
- */
 function stepAfter(step: OnboardingStep): OnboardingStep {
-  if (step === "sumsub") return "done"
   const index = ONBOARDING_STEP_ORDER.indexOf(step)
   if (index === -1 || index === ONBOARDING_STEP_ORDER.length - 1) return step
   return ONBOARDING_STEP_ORDER[index + 1]
 }
 
 function stepBefore(step: OnboardingStep): OnboardingStep {
-  if (step === "sumsub") return "kyc"
   const index = ONBOARDING_STEP_ORDER.indexOf(step)
   if (index <= 0) return ONBOARDING_STEP_ORDER[0]
   return ONBOARDING_STEP_ORDER[index - 1]

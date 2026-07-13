@@ -52,8 +52,8 @@ describe("OnboardingRail", () => {
     expect(rowStates(container)).toEqual(["done", "done", "active", "pending"])
   })
 
-  it("marks every tracker row done once past the core stages (kyc/sumsub/done)", () => {
-    for (const step of ["kyc", "sumsub", "done"] as const) {
+  it("marks every tracker row done once past the core stages (kyc/done)", () => {
+    for (const step of ["kyc", "done"] as const) {
       const { container, unmount } = render(<OnboardingRail step={step} />)
       expect(rowStates(container)).toEqual(["done", "done", "done", "done"])
       unmount()

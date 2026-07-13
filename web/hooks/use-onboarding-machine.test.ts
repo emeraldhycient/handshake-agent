@@ -113,23 +113,9 @@ describe("useOnboardingMachine", () => {
     expect(result.current.step).toBe("welcome")
   })
 
-  it("goto('sumsub') jumps out of the linear order from 'kyc'", () => {
+  it("goto('done') jumps out of the linear order from 'kyc' (verify-later skip)", () => {
     const { result } = renderHook(() => useOnboardingMachine("kyc"))
-    act(() => result.current.goto("sumsub"))
-    expect(result.current.step).toBe("sumsub")
-  })
-
-  it("back() from 'sumsub' returns to 'kyc'", () => {
-    const { result } = renderHook(() => useOnboardingMachine("kyc"))
-    act(() => result.current.goto("sumsub"))
-    act(() => result.current.back())
-    expect(result.current.step).toBe("kyc")
-  })
-
-  it("next() from 'sumsub' proceeds to 'done'", () => {
-    const { result } = renderHook(() => useOnboardingMachine("kyc"))
-    act(() => result.current.goto("sumsub"))
-    act(() => result.current.next())
+    act(() => result.current.goto("done"))
     expect(result.current.step).toBe("done")
   })
 

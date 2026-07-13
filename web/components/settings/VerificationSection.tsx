@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import type { KycTierLevel } from "@handshake-agent/contracts/dto"
-import { SumsubVerification } from "@/components/kyc/SumsubVerification"
+import { SumsubVerificationDialog } from "@/components/kyc/SumsubVerificationDialog"
 import { StatusPill } from "@/components/shared/status-pill"
 import { Button } from "@/components/ui/button"
 import { useProfile } from "@/lib/query/auth"
@@ -65,20 +65,21 @@ export function VerificationSection() {
       </div>
 
       <div className="px-5 py-[15px]">
-        {verifying && level ? (
-          <SumsubVerification
-            level={level}
-            onSubmitted={handleSubmitted}
-            onBack={() => setVerifying(false)}
-          />
-        ) : (
-          <VerificationBody
-            inReview={inReview}
-            level={level}
-            onVerify={() => setVerifying(true)}
-          />
-        )}
+        <VerificationBody
+          inReview={inReview}
+          level={level}
+          onVerify={() => setVerifying(true)}
+        />
       </div>
+
+      {level && (
+        <SumsubVerificationDialog
+          open={verifying}
+          onOpenChange={setVerifying}
+          level={level}
+          onSubmitted={handleSubmitted}
+        />
+      )}
     </div>
   )
 }

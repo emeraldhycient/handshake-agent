@@ -17,7 +17,7 @@
  * Branches: loading (minting) / error (mint failed → retry) / data (SDK). There
  * is no "empty" branch — a token mint either yields a token or errors.
  */
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import SumsubWebSdk from "@sumsub/websdk-react"
 import { useSumsubToken } from "@/lib/query/kyc-onboarding"
 import { Button } from "@/components/ui/button"
@@ -43,21 +43,26 @@ export function SumsubVerification({
   onBack,
   className,
 }: SumsubVerificationProps) {
-  const { mutate, mutateAsync, data, isPending, isError, error } =
+  const { mutate, mutateAsync, data, isPending, isError, error, status } =
     useSumsubToken()
   // A runtime error INSIDE the mounted SDK iframe (distinct from a token-mint
   // failure). Without surfacing it the user would sit on a broken/empty embed;
   // setting this routes them to the recoverable error branch below.
   const [sdkError, setSdkError] = useState<string | null>(null)
 
-  // Mint the initial token once on mount. The mutation IS the TanStack Query
-  // server-state layer (root §5); this effect only kicks it — no raw fetch here.
-  const requested = useRef(false)
+  // Mint the token on mount. Guard on the mutation's own `idle` STATUS — NOT a
+  // `useRef` "did-run" flag. React 19 StrictMode's dev double-mount preserves a
+  // ref across the throwaway probe remount, so a `requested` ref set during the
+  // discarded probe leaves the SURVIVING instance reading `true` and skipping
+  // its own mint — stuck on "Preparing…" forever (the probe fires the request;
+  // the visible instance never does). `status` resets with each fresh mutation
+  // instance, so `idle` triggers the mint exactly once per real mount. In dev
+  // StrictMode both instances mint, but Sumsub dedupes the applicant by userId,
+  // so the extra token request is inert. The mutation IS the TanStack Query
+  // server-state layer (root §5); this effect only kicks it — no raw fetch.
   useEffect(() => {
-    if (requested.current) return
-    requested.current = true
-    mutate(level)
-  }, [level, mutate])
+    if (status === "idle") mutate(level)
+  }, [level, status, mutate])
 
   // Sumsub calls this when the current token nears expiry — mint a fresh one.
   async function refreshToken(): Promise<string> {

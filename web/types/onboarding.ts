@@ -1,9 +1,8 @@
 /**
  * The `/get-started` onboarding wizard: welcome → email → otp → name → pin →
- * kyc-choice → [sumsub] → done. `sumsub` is reachable only via an explicit
- * `goto` from `kyc` (the "verify now" choice) — it never sits in the linear
- * next/back order (root CLAUDE.md §16; plan `2026-07-13-onboarding-frontend.md`
- * Task F1.1).
+ * kyc-choice → done. Sumsub verification is NOT a step — the "verify now"
+ * affordance (on the kyc-choice and done steps) opens it in a modal
+ * (SumsubVerificationDialog) over the current step (root CLAUDE.md §16).
  */
 export type OnboardingStep =
   | "welcome"
@@ -12,7 +11,6 @@ export type OnboardingStep =
   | "name"
   | "pin"
   | "kyc"
-  | "sumsub"
   | "done"
 
 /** The "verify now" vs "explore first" choice on the `kyc` step. */
@@ -49,7 +47,7 @@ export interface OnboardingMachine {
   next(): void
   /** Reverse along the linear step order. No-op at the first step. */
   back(): void
-  /** Jump directly to a step (used for the kyc → sumsub branch). */
+  /** Jump directly to a step (e.g. the resume jump, or kyc → done on skip). */
   goto(step: OnboardingStep): void
   /** Reset to `welcome` with empty wizard data. */
   restart(): void
@@ -157,7 +155,7 @@ export interface PinStepProps {
 
 export interface KycChoiceStepProps {
   firstName?: string | null
-  /** "Verify now" — the wizard shell wires this to `goto('sumsub')`. */
+  /** "Verify now" — the wizard shell opens the Sumsub verification modal. */
   onVerifyNow: () => void
   /** "Explore first, verify later" — wired to `setData({kycChoice:'later'})` + `goto('done')`. */
   onVerifyLater: () => void
