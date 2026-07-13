@@ -46,9 +46,18 @@ describe("deriveResumeStep", () => {
     expect(deriveResumeStep(me)).toBe("pin")
   })
 
-  it("returns 'kyc' when PIN is set and the tier is still tier_1", () => {
+  it("returns 'kyc' when PIN is set and the tier is still tier_1 (verification not started)", () => {
     const me = makeMe({ hasPin: true, kycTier: "tier_1" })
     expect(deriveResumeStep(me)).toBe("kyc")
+  })
+
+  it("returns 'done' when a tier_1 user has a Sumsub review in flight (kycStatus pending_review) — not the kyc choice fork again", () => {
+    const me = makeMe({
+      hasPin: true,
+      kycTier: "tier_1",
+      kycStatus: "pending_review",
+    })
+    expect(deriveResumeStep(me)).toBe("done")
   })
 
   it("returns 'done' when already identity-verified (tier_2)", () => {

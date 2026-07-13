@@ -40,6 +40,26 @@ vi.mock("@/lib/query/auth", () => ({
   useSignupVerify: () => signupVerifyMutation.current,
 }))
 
+// The wizard gates its resume on the auth store leaving 'loading'. Derive a
+// session state from the /me fixture so tests resolve the same way they intend:
+// a null me = anonymous (no session), any me object (or undefined-while-loading)
+// = authenticated. `authStatusOverride` lets a test pin 'loading' to exercise
+// the rehydration window explicitly.
+const authStatusOverride = vi.hoisted(() => ({
+  current: null as null | string,
+}))
+vi.mock("@/lib/store/auth-store", () => ({
+  useAuthStore: (
+    selector: (s: { status: string; accessToken: string | null }) => unknown
+  ) => {
+    const status =
+      authStatusOverride.current ??
+      (me.current === null ? "anonymous" : "authenticated")
+    const accessToken = status === "anonymous" ? null : "test-access-token"
+    return selector({ status, accessToken })
+  },
+}))
+
 const setNameMutation = vi.hoisted(() => ({
   current: { mutateAsync: vi.fn(), isPending: false } as Record<
     string,
@@ -132,6 +152,7 @@ describe("OnboardingWizard", () => {
     isDesktop.current = true
     me.current = undefined
     meLoading.current = false
+    authStatusOverride.current = null
     sumsubTokenMutation.current = {
       mutate: vi.fn(),
       mutateAsync: vi.fn(),
@@ -209,6 +230,34 @@ describe("OnboardingWizard", () => {
         screen.getByRole("heading", { name: /set your transaction pin/i })
       ).toBeInTheDocument()
     })
+  })
+
+  it("does NOT resume during auth rehydration (status 'loading'); resumes correctly once the session is authoritative", async () => {
+    // Hard-reload scenario: the access token is still rehydrating from the
+    // cookie, so the auth store is 'loading' and useMe is disabled (me undefined).
+    authStatusOverride.current = "loading"
+    me.current = makeMe({ hasPin: true, kycTier: "tier_1" })
+    const { rerender } = render(<OnboardingWizard />)
+
+    // Must show loading — NOT drop the returning user onto Welcome (the bug).
+    expect(screen.getByText(/loading/i)).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /get started/i })
+    ).not.toBeInTheDocument()
+
+    // Cookie refresh resolves → authenticated; the resume now uses the real me
+    // and lands on the KYC choice step (tier_1, verification not started).
+    authStatusOverride.current = "authenticated"
+    rerender(<OnboardingWizard />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /verify now/i })
+      ).toBeInTheDocument()
+    })
+    expect(
+      screen.queryByRole("button", { name: /get started/i })
+    ).not.toBeInTheDocument()
   })
 
   it("resumes a null (no-session) visitor at the welcome step", async () => {

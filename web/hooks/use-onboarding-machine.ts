@@ -33,7 +33,9 @@ const EMPTY_DATA: OnboardingData = {}
  * - session + email not yet verified → `otp`
  * - verified + no name on file → `name`
  * - named + no PIN set → `pin`
- * - PIN set + still tier_1 (not yet Sumsub-verified) → `kyc` (the choice step)
+ * - PIN set + a Sumsub review already in flight (`kycStatus === 'pending_review'`) → `done`
+ *   (DoneStep renders the honest "In review" state; do NOT re-offer the choice fork)
+ * - PIN set + still tier_1, verification not started → `kyc` (the choice step)
  * - PIN set + tier_2/tier_3 (already identity-verified) → `done`
  */
 export function deriveResumeStep(me: MeResponse | null): OnboardingStep {
@@ -41,6 +43,11 @@ export function deriveResumeStep(me: MeResponse | null): OnboardingStep {
   if (!me.emailVerified) return "otp"
   if (!me.firstName) return "name"
   if (!me.hasPin) return "pin"
+  // A submitted-but-not-yet-graded Sumsub review keeps kycTier at tier_1 while
+  // the webhook grants tier_2 asynchronously (root §3.1). Resume on `done` (the
+  // in-review confirmation) rather than dropping the user back onto the
+  // verify-now/later fork as if they never submitted.
+  if (me.kycStatus === "pending_review") return "done"
   if (me.kycTier === "tier_1") return "kyc"
   return "done"
 }

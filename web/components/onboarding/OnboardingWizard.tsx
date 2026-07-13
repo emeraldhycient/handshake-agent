@@ -24,6 +24,7 @@ import {
   useOnboardingMachine,
 } from "@/hooks/use-onboarding-machine"
 import { useMe } from "@/lib/query/auth"
+import { useAuthStore } from "@/lib/store/auth-store"
 import type {
   OnboardingMachine,
   OnboardingStep,
@@ -89,7 +90,10 @@ const MOBILE_EDGE_TO_EDGE_STEPS: ReadonlySet<OnboardingStep> = new Set([
 function renderStep(
   machine: OnboardingMachine,
   me: MeResponse | null | undefined,
-  pinKeypadRef?: { current: PinStepKeypadHandle | null }
+  pinKeypadRef?: { current: PinStepKeypadHandle | null },
+  // True on the mobile surface, where the shell renders the on-screen Keypad as
+  // the single OTP input — the cells then render read-only (no native keyboard).
+  keypadDriven = false
 ) {
   const firstName = machine.data.firstName ?? me?.firstName ?? undefined
 
@@ -111,6 +115,7 @@ function renderStep(
           setData={machine.setData}
           onNext={machine.next}
           onBack={machine.back}
+          keypadDriven={keypadDriven}
         />
       )
     case "name":
@@ -253,7 +258,9 @@ function MobileOnboarding({ machine, me }: OnboardingChromeProps) {
     <div className="flex min-h-svh flex-col bg-background px-6 pt-14">
       <OnboardingProgress step={machine.step} onBack={onProgressBack} />
       <div className="mt-[26px] flex-1">
-        {renderStep(machine, me, pinKeypadRef)}
+        {/* keypadDriven=true: the on-screen Keypad below is the OTP input, so
+            the cells render read-only (no competing native keyboard). */}
+        {renderStep(machine, me, pinKeypadRef, true)}
       </div>
       {showKeypad && (
         <div className="mt-2 pb-[26px]">
@@ -269,22 +276,35 @@ function MobileOnboarding({ machine, me }: OnboardingChromeProps) {
 export function OnboardingWizard() {
   const isDesktop = useIsDesktop()
   const machine = useOnboardingMachine()
+  const authStatus = useAuthStore((s) => s.status)
   const { data: me, isLoading: meLoading } = useMe()
   const resumedRef = useRef(false)
 
+  // The auth store boots 'loading' and rehydrates the access token from the
+  // HttpOnly cookie asynchronously (AuthProvider). `useMe` is disabled until a
+  // token exists, so during that window it reports isLoading===false with
+  // me===undefined — resuming on that would wrongly land a returning user on
+  // 'welcome' and then LOCK the one-shot guard, stranding them there even after
+  // the real session arrives. So only resume once the session is authoritative:
+  // 'anonymous' (genuinely no session → me is null), or 'authenticated' with the
+  // /me query resolved. RequireVerified gates on the same signal.
+  const sessionResolved =
+    authStatus === "anonymous" || (authStatus === "authenticated" && !meLoading)
+
   useEffect(() => {
-    if (resumedRef.current || meLoading) return
+    if (resumedRef.current || !sessionResolved) return
     resumedRef.current = true
     machine.goto(deriveResumeStep(me ?? null))
     // `machine`'s action functions (goto/next/back/...) are stable zustand
     // references even though the object itself gets a new identity on every
-    // step change — `me`/`meLoading` are the only real inputs. This re-runs
-    // harmlessly on later `me`/`machine` changes, but the ref guard above
-    // means only the FIRST resolved value ever moves the step.
-  }, [meLoading, me, machine])
+    // step change — `sessionResolved`/`me` are the only real inputs. This
+    // re-runs harmlessly on later changes, but the ref guard above means only
+    // the FIRST authoritative session ever moves the step.
+  }, [sessionResolved, me, machine])
 
-  // /me is still resolving (Task F1.4: handle the me-query loading branch).
-  if (meLoading) {
+  // Auth is still rehydrating, or /me is still resolving — show loading rather
+  // than resuming on a not-yet-authoritative session (Task F1.4).
+  if (!sessionResolved) {
     return <OnboardingLoading />
   }
 
