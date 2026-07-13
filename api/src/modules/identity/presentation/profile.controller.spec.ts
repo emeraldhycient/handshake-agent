@@ -6,6 +6,7 @@ import {
 import { PinLockedError } from '../../../core/auth/domain/pin-errors';
 import {
   FiatCurrencyNotEnabledError,
+  NameChangeNotAllowedError,
   ProfileSessionNotFoundError,
 } from '../domain/profile-errors';
 import type { ProfileService } from '../application/profile.service';
@@ -106,6 +107,15 @@ describe('ProfileController.setName (POST /profile/name)', () => {
     const out = await controller.setName(NAME, CURRENT_USER);
     expect(out).toEqual(NAME);
     expect(settings.setName).toHaveBeenCalledWith('u1', NAME);
+  });
+
+  it('lets NameChangeNotAllowedError bubble to the global filter unchanged (409, no local catch)', async () => {
+    const { controller } = makeController({
+      setName: jest.fn().mockRejectedValue(new NameChangeNotAllowedError()),
+    });
+    await expect(controller.setName(NAME, CURRENT_USER)).rejects.toBeInstanceOf(
+      NameChangeNotAllowedError,
+    );
   });
 });
 

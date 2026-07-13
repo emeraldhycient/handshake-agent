@@ -28,6 +28,7 @@ import { PinService } from '../../../core/auth/pin.service';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import {
   FiatCurrencyNotEnabledError,
+  NameChangeNotAllowedError,
   ProfileSessionNotFoundError,
 } from '../domain/profile-errors';
 import {
@@ -99,11 +100,26 @@ export class ProfileSettingsService {
    * name becomes immutable). The input is already trimmed/validated by
    * SetNameRequestSchema at the controller boundary, so it is safe to echo
    * back as the response.
+   *
+   * GATED (§3.4): the name is verified against NIN/BVN at KYC time and relied
+   * on as the immutable FATF Travel-Rule originator identity — so the write is
+   * only allowed while the account is still pre-verification. `User.kycStatus`
+   * mirrors `KycProfile.status` 1:1 (see schema comment + kyc.prisma.repository
+   * atomic writes), so a `not_started` status (the default, including when no
+   * KycProfile row exists yet) is the only status that may write here. Any
+   * other status — pending, pending_review, needs_info, verified, rejected,
+   * expired — throws BEFORE the upsert, so a verified user (or anyone holding
+   * their session) cannot silently overwrite the Travel-Rule originator name.
    */
   async setName(
     userId: string,
     input: SetNameRequest,
   ): Promise<SetNameRequest> {
+    const user = await this.identity.loadUser(userId);
+    if (user !== null && user.kycStatus !== 'not_started') {
+      throw new NameChangeNotAllowedError();
+    }
+
     await this.identity.upsertKycProfileName(userId, input);
     return input;
   }

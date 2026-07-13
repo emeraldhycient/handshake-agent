@@ -57,6 +57,7 @@ import {
   MultiCurrencyInvariantError,
 } from '../../modules/admin/domain/settings-errors';
 import { CurrencyCollisionError } from '../../modules/admin/domain/currency-errors';
+import { NameChangeNotAllowedError } from '../../modules/identity/domain/profile-errors';
 
 interface ErrorBody {
   statusCode: number;
@@ -150,6 +151,9 @@ describe('DomainExceptionFilter', () => {
     // Swap domain errors were previously uncoded → opaque 500s. They now map.
     [new SwapSameAssetError('USDT'), 422],
     [new SwapUnavailableError(), 422],
+    // POST /profile/name is pre-verification-only; a KYC-started account gets
+    // a clean 409, not an opaque 500 (critical-review finding, name-lock fix).
+    [new NameChangeNotAllowedError(), 409],
   ])('maps %s → %i', (err, expected) => {
     const { statusCode } = run(filter, err);
     expect(statusCode).toBe(expected);
@@ -243,6 +247,13 @@ describe('DomainExceptionFilter', () => {
     expect(statusCode).toBe(422);
     expect(body.code).toBe('SWAP_PROVIDER_UNAVAILABLE');
     expect(body.message).toMatch(/swap isn't available/i);
+  });
+
+  it('maps NameChangeNotAllowedError → 409 with the locked-name message and code echoed', () => {
+    const { statusCode, body } = run(filter, new NameChangeNotAllowedError());
+    expect(statusCode).toBe(409);
+    expect(body.code).toBe('NAME_CHANGE_NOT_ALLOWED');
+    expect(body.message).toMatch(/locked once identity verification/i);
   });
 
   it('passes a NestJS HttpException through with its own status', () => {

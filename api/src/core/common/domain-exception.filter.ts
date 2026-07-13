@@ -393,6 +393,13 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
       "We couldn't verify your identity with the details provided. " +
       'Please check them and try again.',
   },
+  // POST /profile/name is pre-verification name capture ONLY — the name is
+  // immutable once KYC has started (verified against NIN/BVN and relied on as
+  // the FATF Travel-Rule originator identity, root CLAUDE.md §3.4) → 409.
+  NAME_CHANGE_NOT_ALLOWED: {
+    status: HttpStatus.CONFLICT,
+    message: 'Your name is locked once identity verification has started.',
+  },
 };
 
 const STATUS_TEXT: Readonly<Record<number, string>> = {

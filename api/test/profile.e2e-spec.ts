@@ -461,4 +461,71 @@ describe('Profile — e2e (POST /profile/name)', () => {
       .send({ firstName: '', lastName: 'Obi' })
       .expect(400);
   }, 120_000);
+
+  /**
+   * Critical-review fix: the KYC-verified name is relied on as the immutable
+   * FATF Travel-Rule originator identity — POST /profile/name is pre-KYC name
+   * capture ONLY. A verified user (or anyone holding their session) attempting
+   * to overwrite it must be rejected 409, and the stored name must be
+   * unchanged.
+   */
+  it('a KYC-verified user posting /profile/name → 409, stored name unchanged', async () => {
+    const email = `e2e_profile_name_verified_${Date.now()}@test.com`;
+    const deviceFingerprint = `e2e-profile-name-fp-verified-${email.split('@')[0].slice(-24)}`;
+    const su = await request(app.getHttpServer())
+      .post('/auth/signup')
+      .send({ email, phone: SIGNUP_PHONE })
+      .expect(202);
+    const { devToken } = su.body as { devToken: string };
+    await request(app.getHttpServer())
+      .post('/auth/verify-email')
+      .send({ token: devToken })
+      .expect(200);
+    const lr = await request(app.getHttpServer())
+      .post('/auth/login/request')
+      .send({ email })
+      .expect(202);
+    const { devOtp } = lr.body as { devOtp: string };
+    const lv = await request(app.getHttpServer())
+      .post('/auth/login/verify')
+      .send({ email, otp: devOtp, deviceFingerprint })
+      .expect(200);
+    const { accessToken } = lv.body as { accessToken: string };
+
+    await request(app.getHttpServer())
+      .post('/kyc/submit')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        firstName: 'Eze',
+        lastName: 'Nweke',
+        nin: '12345678901',
+        pin: '1357',
+      })
+      .expect(200);
+
+    // Precondition: KYC verification has started (kycStatus=verified).
+    const before = await request(app.getHttpServer())
+      .get('/profile')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+    expect((before.body as { kycStatus: string }).kycStatus).toBe('verified');
+    expect((before.body as { fullName: string | null }).fullName).toBe(
+      'Eze Nweke',
+    );
+
+    await request(app.getHttpServer())
+      .post('/profile/name')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ firstName: 'Spoofed', lastName: 'Originator' })
+      .expect(409);
+
+    // The stored (verified) name must be unchanged — no partial/silent write.
+    const after = await request(app.getHttpServer())
+      .get('/profile')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+    expect((after.body as { fullName: string | null }).fullName).toBe(
+      'Eze Nweke',
+    );
+  }, 120_000);
 });
