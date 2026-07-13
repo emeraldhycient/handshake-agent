@@ -119,6 +119,9 @@ model KycProfile {
   idDocumentReference     String?
   livenessCheckResult     LivenessCheckResult @default(not_attempted)
   livenessCheckProviderId String?
+  /// Sumsub applicant id (externalUserId=userId is the webhook correlation key;
+  /// this is stored separately for status re-fetch against the Sumsub API).
+  sumsubApplicantId       String?             @unique
   firstName               String?
   lastName                String?
   dateOfBirth             DateTime?           @db.Date
