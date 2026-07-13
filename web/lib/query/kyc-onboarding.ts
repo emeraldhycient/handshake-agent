@@ -5,6 +5,7 @@
  * Wraps submitName / fetchSumsubToken from lib/api/kyc-onboarding so
  * components never touch the api client directly.
  */
+import { useCallback } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import type {
   KycTierLevel,
@@ -28,4 +29,17 @@ export function useSumsubToken() {
   return useMutation({
     mutationFn: (level: KycTierLevel) => fetchSumsubToken(level),
   })
+}
+
+/**
+ * Invalidate the cached identity (`/me` + `/profile`) so KYC tier / status
+ * re-fetch. Called after a Sumsub submission — the tier is granted server-side
+ * off the webhook (root §3.1), so the client just re-reads until it catches up.
+ */
+export function useRefreshIdentity() {
+  const queryClient = useQueryClient()
+  return useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: qk.me })
+    void queryClient.invalidateQueries({ queryKey: qk.profile })
+  }, [queryClient])
 }
