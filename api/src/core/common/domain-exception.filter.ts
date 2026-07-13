@@ -377,6 +377,15 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.TOO_MANY_REQUESTS,
     message: 'Too many attempts. Please request a new code.',
   },
+  // Device-bind unique-constraint collision (§3.4 one-device-per-identity): the
+  // fingerprint is already pinned to another account. Previously escaped as a raw
+  // Prisma P2002 → opaque 500. → 409 with an actionable, non-leaking message.
+  DEVICE_ALREADY_BOUND: {
+    status: HttpStatus.CONFLICT,
+    message:
+      'This device is already linked to another account. ' +
+      'Log in with that account, or use a different device.',
+  },
   KYC_REJECTED: {
     status: HttpStatus.UNPROCESSABLE_ENTITY,
     message:

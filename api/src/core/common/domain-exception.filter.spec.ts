@@ -242,6 +242,18 @@ describe('DomainExceptionFilter', () => {
     expect(body.message).toMatch(/swap isn't available/i);
   });
 
+  it('maps DEVICE_ALREADY_BOUND → 409 with a clear, non-leaking message and echoed code', () => {
+    // A device fingerprint already pinned to another user (§3.4 one-device-per-
+    // identity) previously escaped as a raw Prisma P2002 → opaque 500. It now
+    // maps to a mapped 409 the client can act on.
+    const { statusCode, body } = run(filter, { code: 'DEVICE_ALREADY_BOUND' });
+    expect(statusCode).toBe(409);
+    expect(body.code).toBe('DEVICE_ALREADY_BOUND');
+    expect(body.message).toMatch(/already linked to another account/i);
+    // No user id / fingerprint / raw Prisma detail leaks to the client.
+    expect(body.message).not.toMatch(/pinnedDeviceId|P2002/i);
+  });
+
   it('passes a NestJS HttpException through with its own status', () => {
     const { statusCode, body } = run(filter, new ForbiddenException('nope'));
     expect(statusCode).toBe(403);

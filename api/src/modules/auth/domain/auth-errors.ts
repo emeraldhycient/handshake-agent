@@ -67,3 +67,20 @@ export class UserNotFoundError extends AuthDomainError {
     this.name = 'UserNotFoundError';
   }
 }
+
+/**
+ * Device binding hit the `User.pinnedDeviceId` UNIQUE constraint: the device
+ * fingerprint being bound is already pinned to a DIFFERENT user (a shared or
+ * re-used browser, or a device that changed owners). §3.4 pins one device per
+ * identity, so this collision is an expected, actionable outcome — the caller
+ * (login/verify) must surface it as a clean 409, not as the raw Prisma P2002
+ * that would otherwise escape to the global filter as an opaque 500.
+ */
+export class DeviceAlreadyBoundError extends AuthDomainError {
+  readonly code = 'DEVICE_ALREADY_BOUND' as const;
+
+  constructor() {
+    super('This device is already linked to another account');
+    this.name = 'DeviceAlreadyBoundError';
+  }
+}

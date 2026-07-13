@@ -1,5 +1,6 @@
 import { PrismaClient } from '../generated/prisma/client';
 import { AuthUserPrismaRepository } from '../src/modules/auth/infrastructure/auth-user.prisma.repository';
+import { DeviceAlreadyBoundError } from '../src/modules/auth/domain/auth-errors';
 import type { PrismaService } from '../src/core/prisma/prisma.service';
 import { startTestPostgres } from './helpers/pg-testcontainer';
 
@@ -71,6 +72,30 @@ describe('AuthUserPrismaRepository (integration, Testcontainers Postgres)', () =
     expect(third.deviceId).not.toBe(first.deviceId); // a new device row was created
     const userAfter = await prisma.user.findUnique({ where: { id: userId } });
     expect(userAfter?.pinnedDeviceId).toBe(first.deviceId); // pin survives — not overwritten
+  });
+
+  it('bindDevice throws DeviceAlreadyBoundError when the fingerprint is already pinned to another user (§3.4)', async () => {
+    // User A signs up + binds a device on a shared browser → that device is
+    // pinned to A. When user B signs up on the SAME browser, re-binding the same
+    // fingerprint trips the User.pinnedDeviceId UNIQUE constraint (P2002). It must
+    // surface as a mapped domain error, not a raw Prisma error → opaque 500.
+    const a = await repo.createSignup({
+      email: 'shared-a@test.com',
+      phone: '+2348015555555',
+    });
+    await repo.bindDevice({ userId: a.userId, fingerprint: 'fp-shared' });
+
+    const b = await repo.createSignup({
+      email: 'shared-b@test.com',
+      phone: '+2348016666666',
+    });
+    await expect(
+      repo.bindDevice({ userId: b.userId, fingerprint: 'fp-shared' }),
+    ).rejects.toBeInstanceOf(DeviceAlreadyBoundError);
+
+    // B's pin stays unset — the failed bind left no partial state.
+    const userB = await prisma.user.findUnique({ where: { id: b.userId } });
+    expect(userB?.pinnedDeviceId).toBeNull();
   });
 
   it('loadMe projects kyc + hasPin', async () => {
