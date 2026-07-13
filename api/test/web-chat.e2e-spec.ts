@@ -480,6 +480,86 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
   }, 60_000);
 
   // ===========================================================================
+  // RATE DISCOVERY — the resolved intent action must persist to the DB enum
+  // ===========================================================================
+  //
+  // Regression: get_rate/list_rates were added to the contracts IntentSchema but
+  // NOT to the Prisma `intent_action` enum. WebChatService persists the resolved
+  // intent action verbatim, so a rate turn threw PrismaClientValidationError and
+  // 500'd the whole request ("the rates tool doesn't work"). The port types
+  // `action` as a plain string and the repo casts `as never`, so tsc never
+  // caught it — only the real Postgres enum does. These two cases drive the rate
+  // intents through real persistence and assert a clean 200 + persisted intent.
+
+  it('POST /chat/messages → list_rates intent persists + returns a rates list (NOT a 500)', async () => {
+    const { accessToken: token, userId } = await authVerifiedUser({
+      email: `listrates_${Date.now()}@test.com`,
+      phone: '+2348029999020',
+      nin: '22334455720',
+    });
+
+    fakeLlmProvider.extractIntent.mockResolvedValueOnce({
+      action: 'list_rates',
+    });
+
+    const res = await request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ text: 'what are the rates?' })
+      .expect(200);
+
+    const body = res.body as {
+      reply: { text: string };
+      outcome: { kind: string };
+    };
+    // A read-only rate list surfaces as an in-chat clarification/text, never a
+    // proposal — and never an opaque error.
+    expect(body.reply.text).toMatch(/rate/i);
+    expect(JSON.stringify(body)).not.toMatch(/internal server error/i);
+
+    // The exact write that used to throw: the intent row must exist with the
+    // list_rates action now that the enum admits it.
+    const conversation = await prisma.conversation.findFirst({
+      where: { userId },
+    });
+    const intent = await prisma.messageIntent.findFirst({
+      where: { conversationId: conversation!.id, action: 'list_rates' },
+    });
+    expect(intent).not.toBeNull();
+  }, 60_000);
+
+  it('POST /chat/messages → get_rate intent persists + returns the folded pair rate (NOT a 500)', async () => {
+    const { accessToken: token, userId } = await authVerifiedUser({
+      email: `getrate_${Date.now()}@test.com`,
+      phone: '+2348029999021',
+      nin: '22334455721',
+    });
+
+    fakeLlmProvider.extractIntent.mockResolvedValueOnce({
+      action: 'get_rate',
+      asset: 'USDT',
+      fiatCurrency: 'NGN',
+    });
+
+    const res = await request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ text: 'what is the USDT rate?' })
+      .expect(200);
+
+    const body = res.body as { reply: { text: string } };
+    expect(body.reply.text).toMatch(/rate|USDT|NGN|₦/i);
+
+    const conversation = await prisma.conversation.findFirst({
+      where: { userId },
+    });
+    const intent = await prisma.messageIntent.findFirst({
+      where: { conversationId: conversation!.id, action: 'get_rate' },
+    });
+    expect(intent).not.toBeNull();
+  }, 60_000);
+
+  // ===========================================================================
   // CHAT HISTORY — GET /chat/messages
   // ===========================================================================
 
