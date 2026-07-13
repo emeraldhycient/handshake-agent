@@ -480,8 +480,14 @@ describe('Web auth flow — e2e (AppModule, Testcontainers Postgres)', () => {
     // The body still carries the tokens (non-breaking), but a browser ignores them.
     const accessToken = (lv.body as { accessToken: string }).accessToken;
 
-    // refresh with the cookie ONLY (empty body) → 200, rotated pair + user.
-    const rf = await agent.post('/auth/refresh').send({}).expect(200);
+    // refresh with the cookie ONLY and a COMPLETELY ABSENT body → 200, rotated
+    // pair + user. This is exactly what the browser client sends (axios
+    // `api.post('/auth/refresh')` with no data): the token rides in the cookie.
+    // A bodyless POST hands the DTO layer `undefined`; the request schema must
+    // accept it (RefreshRequestSchema.default({})), or every browser boot-refresh
+    // 400s and the user is logged out on reload. Do NOT `.send({})` here — that
+    // masks the bug (an empty object validates even without the default).
+    const rf = await agent.post('/auth/refresh').expect(200);
     const rfBody = rf.body as {
       accessToken: string;
       refreshToken: string;

@@ -83,9 +83,17 @@ export type SignupVerifyResponse = z.infer<typeof SignupVerifyResponseSchema>;
 // HttpOnly `ha_refresh` cookie, so the body token is OPTIONAL — present only for
 // non-browser/e2e callers that still post it. When present it must be non-empty.
 // The API reads the cookie first and falls back to this body value.
-export const RefreshRequestSchema = z.object({
-  refreshToken: z.string().min(1).optional(),
-});
+// `.default({})` so a completely ABSENT body validates (→ {}). The web client
+// posts /auth/refresh with no body — the token rides in the HttpOnly ha_refresh
+// cookie — and Express hands the validation layer `undefined` for a bodyless
+// POST. A bare z.object rejects `undefined` ("Required" → 400), which would log
+// the user out on every reload and 401-retry. An empty-string token is still
+// rejected; a present token still flows through.
+export const RefreshRequestSchema = z
+  .object({
+    refreshToken: z.string().min(1).optional(),
+  })
+  .default({});
 export type RefreshRequest = z.infer<typeof RefreshRequestSchema>;
 
 // Refresh returns the user projection alongside the rotated tokens so the web FE

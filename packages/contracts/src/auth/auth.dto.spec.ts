@@ -129,6 +129,15 @@ describe("auth contracts", () => {
     );
   });
 
+  it("refresh request accepts a completely absent body (browser cookie-primary boot refresh)", () => {
+    // The web client posts /auth/refresh with NO body at all — the token rides
+    // in the HttpOnly ha_refresh cookie. Express hands the DTO layer `undefined`
+    // for a bodyless POST; a bare z.object rejects `undefined` ("Required"),
+    // which 400s every browser boot-refresh and 401-retry → the user is logged
+    // out on reload / on any settings action. The schema must accept it (→ {}).
+    expect(RefreshRequestSchema.parse(undefined)).toEqual({});
+  });
+
   it("refresh response carries the rotated tokens plus the user projection", () => {
     const v = RefreshResponseSchema.parse({
       accessToken: "a",
