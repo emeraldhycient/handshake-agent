@@ -49,4 +49,17 @@ describe("KycChoiceStep", () => {
     )
     expect(onVerifyLater).toHaveBeenCalledTimes(1)
   })
+
+  it("renders the mobile dark-green header band on the brand gradient", () => {
+    render(
+      <KycChoiceStep
+        firstName="Ada"
+        onVerifyNow={vi.fn()}
+        onVerifyLater={vi.fn()}
+      />
+    )
+    expect(screen.getByTestId("kyc-header-band")).toHaveClass(
+      "bg-[linear-gradient(168deg,var(--primary)_0%,var(--primary-deep)_100%)]"
+    )
+  })
 })

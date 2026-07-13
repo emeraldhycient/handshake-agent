@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { TransactionPinSchema } from "@handshake-agent/contracts/dto"
+import { BrandMark } from "@/components/shared/brand-mark"
 import { Button } from "@/components/ui/button"
 import { useSetPin } from "@/lib/query/kyc"
 import { toErrorMessage } from "@/lib/error-message"
@@ -66,9 +67,13 @@ export function PinStep({ onNext, onBack }: PinStepProps) {
       className="flex flex-col gap-6"
     >
       <div>
-        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          Step 4 of 4
-        </p>
+        <div className="flex items-center gap-3">
+          <BrandMark size={40} className="lg:hidden" />
+          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            <span className="lg:hidden">Step 4 of 4 · Set PIN</span>
+            <span className="hidden lg:inline">Step 4 of 4</span>
+          </p>
+        </div>
         <h1 className="mt-2 text-2xl font-extrabold tracking-tight text-foreground lg:text-3xl">
           Set your transaction PIN
         </h1>

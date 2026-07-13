@@ -4,6 +4,7 @@ import { useState } from "react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { SignupRequestSchema } from "@handshake-agent/contracts/auth"
+import { BrandMark } from "@/components/shared/brand-mark"
 import { FormAlert } from "@/components/shared/form-alert"
 import { Button } from "@/components/ui/button"
 import { useSignupRequest } from "@/lib/query/auth"
@@ -48,9 +49,13 @@ export function EmailStep({ data, setData, onNext }: EmailStepProps) {
       className="flex flex-col gap-6"
     >
       <div>
-        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          Step 1 of 4
-        </p>
+        <div className="flex items-center gap-3">
+          <BrandMark size={40} className="lg:hidden" />
+          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            <span className="lg:hidden">Step 1 of 4 · Your email</span>
+            <span className="hidden lg:inline">Step 1 of 4</span>
+          </p>
+        </div>
         <h1 className="mt-2 text-2xl font-extrabold tracking-tight text-foreground lg:text-3xl">
           What&apos;s your email?
         </h1>
@@ -68,7 +73,7 @@ export function EmailStep({ data, setData, onNext }: EmailStepProps) {
       >
         <span
           aria-hidden="true"
-          className="flex h-11 w-11 flex-none items-center justify-center rounded-xl bg-muted text-primary"
+          className="flex h-11 w-11 flex-none items-center justify-center rounded-xl bg-background text-primary"
         >
           <svg width="19" height="19" viewBox="0 0 19 19" fill="none">
             <rect

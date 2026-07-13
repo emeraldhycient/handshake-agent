@@ -71,6 +71,22 @@ const MOBILE_FULL_BLEED_STEPS: ReadonlySet<OnboardingStep> = new Set([
   "done",
 ])
 
+/**
+ * Full-bleed steps whose mockup owns its ENTIRE mobile treatment — a
+ * dark-green header band (or, for `welcome`, the whole screen) over a cream
+ * body — so the shell must not also impose its own background/padding on
+ * top of it (that would show as a cream margin around the component's own
+ * edge-to-edge box instead of a true full-bleed screen). `sumsub` is the one
+ * full-bleed step that stays in the shell's plain centered/padded box: it
+ * has no mockup of its own yet (Task F3 replaces the stub with the real
+ * Sumsub mount).
+ */
+const MOBILE_EDGE_TO_EDGE_STEPS: ReadonlySet<OnboardingStep> = new Set([
+  "welcome",
+  "kyc",
+  "done",
+])
+
 // ─── Sumsub stub ────────────────────────────────────────────────────────────
 
 interface SumsubStubProps {
@@ -197,6 +213,7 @@ function DesktopOnboarding({ machine, me }: OnboardingChromeProps) {
 
 function MobileOnboarding({ machine, me }: OnboardingChromeProps) {
   const isFullBleed = MOBILE_FULL_BLEED_STEPS.has(machine.step)
+  const isEdgeToEdge = MOBILE_EDGE_TO_EDGE_STEPS.has(machine.step)
   const showKeypad = MOBILE_KEYPAD_STEPS.has(machine.step)
 
   function onOtpDigit(digit: string) {
@@ -206,6 +223,12 @@ function MobileOnboarding({ machine, me }: OnboardingChromeProps) {
 
   function onOtpBackspace() {
     machine.setData({ otp: (machine.data.otp ?? "").slice(0, -1) })
+  }
+
+  // welcome/kyc/done: the step component owns its full mobile treatment
+  // (dark-green band + cream body) — no shell wrapper on top of it.
+  if (isEdgeToEdge) {
+    return renderStep(machine, me)
   }
 
   if (isFullBleed) {

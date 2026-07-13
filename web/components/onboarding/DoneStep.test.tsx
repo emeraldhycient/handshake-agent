@@ -50,7 +50,25 @@ describe("DoneStep", () => {
       />
     )
     expect(screen.getByText(/^unverified$/i)).toBeInTheDocument()
-    expect(screen.getByText(/verify to unlock/i)).toBeInTheDocument()
+    // Mobile ("Verify to unlock everything") and desktop ("Verify to unlock
+    // sending & cash-out") copy both render (the `lg:` breakpoint that picks
+    // between them isn't evaluated in jsdom) — assert at least one is present
+    // rather than pinning to a single element.
+    expect(screen.getAllByText(/verify to unlock/i).length).toBeGreaterThan(0)
+  })
+
+  it("renders the mobile dark-green header band on the brand gradient", () => {
+    render(
+      <DoneStep
+        firstName="Ada"
+        kycStatus="verified"
+        skipped={false}
+        onVerifyNow={vi.fn()}
+      />
+    )
+    expect(screen.getByTestId("done-header-band")).toHaveClass(
+      "bg-[linear-gradient(168deg,var(--primary)_0%,var(--primary-deep)_100%)]"
+    )
   })
 
   it("calls onVerifyNow from the banner CTA", async () => {

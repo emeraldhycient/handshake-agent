@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import { BrandMark } from "@/components/shared/brand-mark"
 import { FormAlert } from "@/components/shared/form-alert"
 import { Button } from "@/components/ui/button"
 import { useSignupRequest, useSignupVerify } from "@/lib/query/auth"
@@ -128,9 +129,13 @@ export function OtpStep({ data, setData, onNext, onBack }: OtpStepProps) {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          Step 2 of 4
-        </p>
+        <div className="flex items-center gap-3">
+          <BrandMark size={40} className="lg:hidden" />
+          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            <span className="lg:hidden">Step 2 of 4 · Verify email</span>
+            <span className="hidden lg:inline">Step 2 of 4</span>
+          </p>
+        </div>
         <h1 className="mt-2 text-2xl font-extrabold tracking-tight text-foreground lg:text-3xl">
           Enter your code
         </h1>

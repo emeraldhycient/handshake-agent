@@ -25,4 +25,12 @@ describe("WelcomeStep", () => {
 
     expect(onNext).toHaveBeenCalledTimes(1)
   })
+
+  it("renders full-bleed on the mobile dark-green brand gradient", () => {
+    render(<WelcomeStep onNext={vi.fn()} />)
+
+    expect(screen.getByTestId("welcome-mobile-shell")).toHaveClass(
+      "bg-[linear-gradient(168deg,var(--primary)_0%,var(--primary-deep)_100%)]"
+    )
+  })
 })
