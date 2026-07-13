@@ -1,35 +1,12 @@
 /**
- * /signup — Create a new Handshake Agent account.
+ * /signup — legacy route, redirects to the unified onboarding wizard.
  *
- * Server component — composition only, no business logic.
- * Renders a centred card layout with the SignupForm feature component.
+ * Task F2.1: signup now lives inside `/get-started` (its `email` step),
+ * which also handles OTP verification, name, PIN, and KYC choice. This
+ * route is kept only so old links/bookmarks still resolve.
  */
-import type { Metadata } from "next"
-import { SignupForm } from "@/components/auth/SignupForm"
-
-export const metadata: Metadata = {
-  title: "Sign up — Handshake Agent",
-  description: "Create your Handshake Agent account.",
-}
+import { redirect } from "next/navigation"
 
 export default function SignupPage() {
-  return (
-    <main
-      id="main-content"
-      className="flex min-h-screen items-center justify-center bg-background px-4 py-12"
-    >
-      <div className="w-full max-w-md">
-        <header className="mb-8 text-center">
-          <h1 className="text-2xl font-semibold text-foreground">
-            Create your account
-          </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Sign up to start using Handshake Agent for crypto and payments.
-          </p>
-        </header>
-
-        <SignupForm />
-      </div>
-    </main>
-  )
+  redirect("/get-started")
 }
