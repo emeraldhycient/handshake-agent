@@ -22,6 +22,8 @@ import {
   LoginVerifyResponseSchema,
   type LoginVerifyRequest,
   type LoginVerifyResponse,
+  SignupVerifyRequestSchema,
+  type SignupVerifyRequest,
   RefreshResponseSchema,
   type RefreshResponse,
   MeResponseSchema,
@@ -62,6 +64,34 @@ export async function submitLoginVerify(
 ): Promise<LoginVerifyResponse> {
   const validated = LoginVerifyRequestSchema.parse(body)
   const { data } = await api.post("/auth/login/verify", validated)
+  return LoginVerifyResponseSchema.parse(data)
+}
+
+/**
+ * Request an OTP for the email→OTP→session signup flow (onboarding wizard).
+ *
+ * Mirrors submitLoginRequest exactly, but hits the additive OTP-signup
+ * endpoint — the legacy link-based `/auth/signup` (submitSignup above) stays
+ * untouched. Reuses SignupRequestSchema (email required, phone optional) and
+ * parses only `{ email }` through it, since phone is not collected here.
+ */
+export async function submitSignupRequest(
+  email: string
+): Promise<LoginRequestResponse> {
+  const validated = SignupRequestSchema.parse({ email })
+  const { data } = await api.post("/auth/signup/request", validated)
+  return LoginRequestResponseSchema.parse(data)
+}
+
+/**
+ * Verify the signup OTP and mint a session. Mirrors submitLoginVerify exactly;
+ * the response shape is identical (SignupVerifyResponseSchema === LoginVerifyResponseSchema).
+ */
+export async function submitSignupVerify(
+  body: SignupVerifyRequest
+): Promise<LoginVerifyResponse> {
+  const validated = SignupVerifyRequestSchema.parse(body)
+  const { data } = await api.post("/auth/signup/verify", validated)
   return LoginVerifyResponseSchema.parse(data)
 }
 

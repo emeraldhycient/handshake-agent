@@ -11,7 +11,9 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { renderHook } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { defaultAuthStore } from "@/lib/store/auth-store"
+import { qk } from "./keys"
 
 const post = vi.fn()
 vi.mock("@/lib/api/client", () => ({
@@ -21,7 +23,12 @@ vi.mock("@/lib/api/client", () => ({
   },
 }))
 
-import { useResendLoginOtp, useResendVerification } from "./auth"
+import {
+  useResendLoginOtp,
+  useResendVerification,
+  useSignupRequest,
+  useSignupVerify,
+} from "./auth"
 
 function makeWrapper() {
   const client = new QueryClient({
@@ -81,3 +88,85 @@ describe("useResendVerification", () => {
 // (error / isError / isPending). The user-visible 429 / OTP_LOCKED messaging is
 // asserted where it renders — in the VerifyEmailForm / LoginForm component tests
 // — rather than re-testing the framework here.
+
+// ─── OTP signup hooks — mirror useLoginRequest / useLoginVerify (task F0.1) ───
+
+describe("useSignupRequest", () => {
+  beforeEach(() => post.mockReset())
+
+  it("posts the email to /auth/signup/request and parses the otp_sent response", async () => {
+    post.mockResolvedValue({ data: { status: "otp_sent", devOtp: "111111" } })
+    const { wrapper } = makeWrapper()
+    const { result } = renderHook(() => useSignupRequest(), { wrapper })
+
+    const res = await result.current.mutateAsync("newuser@example.com")
+
+    expect(post).toHaveBeenCalledWith("/auth/signup/request", {
+      email: "newuser@example.com",
+    })
+    expect(res.status).toBe("otp_sent")
+    expect(res.devOtp).toBe("111111")
+  })
+
+  it("rejects an invalid email before sending (UX parse gate)", async () => {
+    const { wrapper } = makeWrapper()
+    const { result } = renderHook(() => useSignupRequest(), { wrapper })
+
+    await expect(result.current.mutateAsync("not-an-email")).rejects.toThrow()
+    expect(post).not.toHaveBeenCalled()
+  })
+})
+
+describe("useSignupVerify", () => {
+  const verifyResponse = {
+    accessToken: "signup-access",
+    refreshToken: "signup-refresh",
+    user: {
+      userId: "00000000-0000-0000-0000-000000000002",
+      email: "newuser@example.com",
+      kycStatus: "none" as const,
+      kycTier: "0",
+      hasPin: false,
+    },
+  }
+
+  beforeEach(() => {
+    post.mockReset()
+    defaultAuthStore.getState().clear()
+  })
+
+  afterEach(() => {
+    defaultAuthStore.getState().clear()
+  })
+
+  it("posts email+otp+deviceFingerprint to /auth/signup/verify, stores the session, and invalidates 'me'", async () => {
+    post.mockResolvedValue({ data: verifyResponse })
+    const client = new QueryClient({
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
+    })
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries")
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const { result } = renderHook(() => useSignupVerify(), { wrapper })
+
+    await result.current.mutateAsync({
+      email: "newuser@example.com",
+      otp: "123456",
+      deviceFingerprint: "web-test-fingerprint-00000000",
+    })
+
+    expect(post).toHaveBeenCalledWith("/auth/signup/verify", {
+      email: "newuser@example.com",
+      otp: "123456",
+      deviceFingerprint: "web-test-fingerprint-00000000",
+    })
+    expect(defaultAuthStore.getState().accessToken).toBe("signup-access")
+    expect(defaultAuthStore.getState().user?.email).toBe("newuser@example.com")
+    expect(defaultAuthStore.getState().status).toBe("authenticated")
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: qk.me })
+  })
+})
