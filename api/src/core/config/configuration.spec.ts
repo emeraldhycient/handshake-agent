@@ -243,3 +243,94 @@ describe('configuration — boot-time enabled-fiat cross-validation (#25)', () =
     expect(() => validateConfig(cfg)).not.toThrow();
   });
 });
+
+describe('configuration — sumsub (Task 3.2)', () => {
+  const ORIGINAL_ENV = process.env;
+
+  beforeEach(() => {
+    // jest resetModules is NOT used here — configuration() re-reads process.env
+    // on every call (it is a plain function, not memoized), mirroring the
+    // existing agent.modelId / catalog.networks.TRON.masterWalletId pattern.
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  afterAll(() => {
+    process.env = ORIGINAL_ENV;
+  });
+
+  it('defaults mockMode to true and baseUrl to the real Sumsub API host when env is unset', () => {
+    delete process.env['KYC_MOCK_MODE'];
+    delete process.env['SUMSUB_BASE_URL'];
+    delete process.env['SUMSUB_LEVEL_TIER2'];
+    delete process.env['SUMSUB_LEVEL_TIER3'];
+
+    const cfg = configuration();
+
+    expect(cfg.sumsub.mockMode).toBe(true);
+    expect(cfg.sumsub.baseUrl).toBe('https://api.sumsub.com');
+  });
+
+  it('sets mockMode to false only when KYC_MOCK_MODE=false', () => {
+    process.env['KYC_MOCK_MODE'] = 'false';
+
+    const cfg = configuration();
+
+    expect(cfg.sumsub.mockMode).toBe(false);
+  });
+
+  it('reads SUMSUB_BASE_URL from env when set', () => {
+    process.env['SUMSUB_BASE_URL'] = 'https://test-api.sumsub.com';
+
+    const cfg = configuration();
+
+    expect(cfg.sumsub.baseUrl).toBe('https://test-api.sumsub.com');
+  });
+
+  it('builds levelToTier from SUMSUB_LEVEL_TIER2 / SUMSUB_LEVEL_TIER3 when both are set', () => {
+    process.env['SUMSUB_LEVEL_TIER2'] = 'basic-kyc-level';
+    process.env['SUMSUB_LEVEL_TIER3'] = 'enhanced-kyc-level';
+
+    const cfg = configuration();
+
+    expect(cfg.sumsub.levelToTier).toEqual({
+      'basic-kyc-level': 'tier_2',
+      'enhanced-kyc-level': 'tier_3',
+    });
+  });
+
+  it('omits BOTH keys from levelToTier when the level env vars are absent (no undefined key)', () => {
+    delete process.env['SUMSUB_LEVEL_TIER2'];
+    delete process.env['SUMSUB_LEVEL_TIER3'];
+
+    const cfg = configuration();
+
+    expect(cfg.sumsub.levelToTier).toEqual({});
+    expect(Object.keys(cfg.sumsub.levelToTier)).not.toContain('undefined');
+  });
+
+  it('omits only the absent level from levelToTier when just one of the two is set', () => {
+    process.env['SUMSUB_LEVEL_TIER2'] = 'basic-kyc-level';
+    delete process.env['SUMSUB_LEVEL_TIER3'];
+
+    const cfg = configuration();
+
+    expect(cfg.sumsub.levelToTier).toEqual({ 'basic-kyc-level': 'tier_2' });
+  });
+
+  it('treats an empty-string level env var the same as absent (no empty-string key)', () => {
+    process.env['SUMSUB_LEVEL_TIER2'] = '';
+    process.env['SUMSUB_LEVEL_TIER3'] = 'enhanced-kyc-level';
+
+    const cfg = configuration();
+
+    expect(cfg.sumsub.levelToTier).toEqual({ 'enhanced-kyc-level': 'tier_3' });
+    expect(cfg.sumsub.levelToTier['']).toBeUndefined();
+  });
+
+  it('the committed defaults (no Sumsub level env vars) still pass boot validation', () => {
+    delete process.env['SUMSUB_LEVEL_TIER2'];
+    delete process.env['SUMSUB_LEVEL_TIER3'];
+
+    expect(() => configuration()).not.toThrow();
+  });
+});

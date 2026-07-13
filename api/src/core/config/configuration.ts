@@ -626,6 +626,23 @@ export interface GatingConfig {
   capabilityMinTier: Record<string, KycTier>;
 }
 
+/**
+ * Sumsub (real KYC provider) configuration (Task 3.2, root CLAUDE.md §7).
+ * `mockMode` / `baseUrl` mirror the env values 1:1 (read here, not re-validated —
+ * env.schema.ts is the source of truth for shape/required-ness). `levelToTier`
+ * maps a Sumsub verification LEVEL NAME (configured in the Sumsub dashboard,
+ * env SUMSUB_LEVEL_TIER2 / SUMSUB_LEVEL_TIER3) to our internal KYC tier, so the
+ * webhook handler (later task) can resolve `applicant.reviewResult.levelName` →
+ * tier without a hardcoded string. Built ONLY from level names that are
+ * actually present — an absent level name (e.g. in mock mode, where the local
+ * .env has no SUMSUB_LEVEL_TIER2/3 yet) must not create an `undefined` key.
+ */
+export interface SumsubConfig {
+  mockMode: boolean;
+  baseUrl: string;
+  levelToTier: Record<string, KycTier>;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
@@ -646,6 +663,7 @@ export interface AppConfig {
   treasury: TreasuryConfig;
   agent: AgentConfig;
   gating: GatingConfig;
+  sumsub: SumsubConfig;
 }
 
 /**
@@ -717,6 +735,21 @@ export function validateConfig(cfg: AppConfig): void {
       }
     }
   }
+}
+
+/**
+ * Builds the [levelName, tier] pairs for `sumsub.levelToTier`, dropping any
+ * entry whose env-supplied level name is absent/empty. Kept as a standalone
+ * (widely-typed) helper because inlining the array literal makes TS infer
+ * narrow per-element tuple types that a single type-predicate can't cover
+ * (TS2677) — see configuration.spec.ts "sumsub" tests for the behavior.
+ */
+function buildSumsubLevelToTierEntries(): Array<[string, KycTier]> {
+  const candidates: Array<[string | undefined, KycTier]> = [
+    [process.env['SUMSUB_LEVEL_TIER2'], 'tier_2'],
+    [process.env['SUMSUB_LEVEL_TIER3'], 'tier_3'],
+  ];
+  return candidates.filter((entry): entry is [string, KycTier] => !!entry[0]);
 }
 
 const buildConfig = (): AppConfig => ({
@@ -1181,6 +1214,17 @@ const buildConfig = (): AppConfig => ({
       'crypto.send': 'tier_2',
       'crypto.swap': 'tier_2',
     },
+  },
+  // ── Sumsub (real KYC provider, Task 3.2, CLAUDE.md §7) ──────────────────────
+  // mockMode / baseUrl mirror env 1:1 (env-derived pattern, like
+  // catalog.networks.TRON.masterWalletId / agent.modelId above). levelToTier is
+  // built ONLY from level names that are actually set — filtering out undefined
+  // means an absent SUMSUB_LEVEL_TIER2/3 (e.g. the current local .env, which
+  // predates the level names) never produces an `undefined` map key.
+  sumsub: {
+    mockMode: (process.env['KYC_MOCK_MODE'] ?? 'true') !== 'false',
+    baseUrl: process.env['SUMSUB_BASE_URL'] ?? 'https://api.sumsub.com',
+    levelToTier: Object.fromEntries(buildSumsubLevelToTierEntries()),
   },
 });
 
