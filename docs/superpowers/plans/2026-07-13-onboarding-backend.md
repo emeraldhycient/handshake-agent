@@ -357,10 +357,11 @@ Keep the numeric limit resolution (`getTierLimits(fiat, user.kycTier)`) exactly 
 - Test: kyc.service spec + e2e
 
 **Interfaces:**
-- Produces: `POST /kyc/sumsub/token { level }` (JWT) → `{ token, userId }`; 409/403 if the prerequisite rung is unmet.
+- Produces: `POST /kyc/sumsub/token { level }` (JWT) → `{ token, userId }`; 403 if the prerequisite rung is unmet.
+- **Prerequisite (generalized):** requesting a `level` requires the user to already hold the PRIOR rung — `tier_2` requires `tierAtLeast(kycTier, 'tier_1')` (email-verified); `tier_3` requires `tierAtLeast(kycTier, 'tier_2')`. An `unverified` user requesting `tier_2` → 403.
 
-- [ ] **Step 1: Write failing test** — tier_1 user requesting `tier_2` token → 200; requesting `tier_3` → 403 (needs tier_2 first); tier_2 user requesting `tier_3` → 200.
-- [ ] **Step 2: Run** → FAIL. **Step 3: Implement** (call `provider.createVerificationSession`, persist `sumsubApplicantId`, set `kycStatus='pending_review'`). **Step 4: Run** → PASS.
+- [ ] **Step 1: Write failing test** — `unverified` requesting `tier_2` → 403; `tier_1` requesting `tier_2` → 200; `tier_1` requesting `tier_3` → 403 (needs tier_2 first); `tier_2` requesting `tier_3` → 200.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement** — call `provider.createVerificationSession`, persist `sumsubApplicantId` on the user's `KycProfile` (creating it if absent). **Do NOT change `kycStatus` here** — the Sumsub webhook (Tasks 3.5/3.6) owns ALL status transitions (`applicantPending → pending_review`, `applicantReviewed` GREEN → `verified` + tier, RED → `rejected`). Setting `pending_review` at token-mint would strand an abandoned session at "in review". **Step 4: Run** → PASS.
 - [ ] **Step 5: Commit** `feat(identity): POST /kyc/sumsub/token with tier prerequisite`.
 
 ### Task 3.5: Sumsub webhook → tier grant (pure mapping)
