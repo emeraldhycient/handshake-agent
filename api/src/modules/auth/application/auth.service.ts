@@ -56,8 +56,11 @@ const DUMMY_CHALLENGE_HASH =
 
 /**
  * Throwaway UUID used as the userId argument when performing a dummy DB lookup
- * on the unknown-user path of loginVerify. The result is always null and is
- * discarded; the call exists solely to equalise DB round-trip latency.
+ * on a no-write branch (loginVerify/signupVerify's unknown-or-ineligible user
+ * path, and loginRequest/signupRequest's fast branch). The result is always
+ * null and is discarded; the call exists solely to equalise DB round-trip
+ * latency so response timing does not leak whether an email is registered or
+ * verified.
  */
 const DUMMY_USER_ID = '00000000-0000-0000-0000-000000000000' as const;
 
@@ -132,6 +135,11 @@ export class AuthService {
       });
       await this.email.sendLoginOtp(user.email, otp);
       if (this.devExpose()) return { status: 'otp_sent', devOtp: otp };
+    } else {
+      // Unknown/unverified fast branch: no upsert/send happens above, so mirror
+      // the DUMMY_USER_ID dummy-lookup pattern to equalise DB round-trip latency
+      // and avoid a timing/enumeration oracle (same defence as loginVerify).
+      await this.dummyChallengeLookup();
     }
     return { status: 'otp_sent' };
   }
@@ -216,6 +224,11 @@ export class AuthService {
   async signupRequest(input: LoginRequest): Promise<LoginRequestResponse> {
     const existing = await this.users.findByEmail(input.email);
     if (existing !== null && existing.emailVerifiedAt !== null) {
+      // Already-verified fast branch: no createSignup/upsert happens below, so
+      // mirror the DUMMY_USER_ID dummy-lookup pattern to equalise DB round-trip
+      // latency and avoid a timing/enumeration oracle (same defence as
+      // loginRequest above and loginVerify).
+      await this.dummyChallengeLookup();
       await this.email.sendLoginInstead(existing.email);
       return { status: 'otp_sent' };
     }
@@ -335,6 +348,21 @@ export class AuthService {
     }
 
     await this.challenges.consume(challenge.id, now);
+  }
+
+  /**
+   * Fires a single throwaway challenge read against {@link DUMMY_USER_ID}. The
+   * result is always null and discarded; it exists solely so the no-write fast
+   * branches of {@link loginRequest} and {@link signupRequest} incur a DB
+   * round-trip comparable to their write branches, closing the timing/
+   * enumeration oracle (same defence + dummy-lookup pattern as the verify path).
+   */
+  private async dummyChallengeLookup(): Promise<void> {
+    await this.challenges.findActiveByUserAndType(
+      DUMMY_USER_ID,
+      'otp_email',
+      new Date(),
+    );
   }
 
   /**

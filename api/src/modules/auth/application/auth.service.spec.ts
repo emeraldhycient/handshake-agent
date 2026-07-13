@@ -216,6 +216,23 @@ describe('AuthService.loginRequest', () => {
     expect(email.sendLoginOtp).not.toHaveBeenCalled();
     expect(res).toEqual({ status: 'otp_sent' });
   });
+
+  it('still performs a dummy challenge lookup on the unknown/unverified fast branch (timing oracle defence)', async () => {
+    // The slow branch (verified user) does an upsert + email send; the fast
+    // branch must do an equivalent dummy DB round-trip so response latency does
+    // not reveal whether the email is registered/verified.
+    const { service, challengeRepo, userRepo } = makeDeps();
+    userRepo.findByEmail.mockResolvedValueOnce(null);
+    await service.loginRequest({ email: 'ghost@b.com' });
+    expect(challengeRepo.findActiveByUserAndType).toHaveBeenCalledTimes(1);
+    expect(challengeRepo.findActiveByUserAndType).toHaveBeenCalledWith(
+      '00000000-0000-0000-0000-000000000000',
+      'otp_email',
+      expect.any(Date),
+    );
+    // The dummy lookup is purely for latency parity — no write on this branch.
+    expect(challengeRepo.upsert).not.toHaveBeenCalled();
+  });
 });
 
 describe('AuthService.resendLoginOtp', () => {
@@ -346,6 +363,31 @@ describe('AuthService.signupRequest', () => {
     // Same shape as the non-verified branch — no devOtp leak either, since
     // dev-expose only echoes an OTP that was actually minted.
     expect(res).toEqual({ status: 'otp_sent' });
+  });
+
+  it('still performs a dummy challenge lookup on the already-verified fast branch (timing oracle defence)', async () => {
+    // The slow branch (new/unverified) does createSignup + upsert + email send;
+    // the already-verified fast branch must do an equivalent dummy DB round-trip
+    // so response latency does not reveal whether the email is already verified.
+    const { service, challengeRepo, userRepo } = makeDeps();
+    userRepo.findByEmail.mockResolvedValueOnce({
+      id: 'u1',
+      email: 'a@b.com',
+      emailVerifiedAt: new Date(),
+      kycStatus: 'verified',
+      kycTier: 'tier_1',
+      pinHash: 'x',
+    });
+    await service.signupRequest({ email: 'a@b.com' });
+    expect(challengeRepo.findActiveByUserAndType).toHaveBeenCalledTimes(1);
+    expect(challengeRepo.findActiveByUserAndType).toHaveBeenCalledWith(
+      '00000000-0000-0000-0000-000000000000',
+      'otp_email',
+      expect.any(Date),
+    );
+    // Fast/no-write branch — createSignup + upsert must not fire.
+    expect(userRepo.createSignup).not.toHaveBeenCalled();
+    expect(challengeRepo.upsert).not.toHaveBeenCalled();
   });
 });
 
