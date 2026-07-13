@@ -26,6 +26,14 @@ describe("WelcomeStep", () => {
     expect(onNext).toHaveBeenCalledTimes(1)
   })
 
+  it("renders Get started as the amber accent CTA", () => {
+    render(<WelcomeStep onNext={vi.fn()} />)
+
+    expect(
+      screen.getByRole("button", { name: /get started/i })
+    ).toHaveAttribute("data-variant", "accent")
+  })
+
   it("renders full-bleed on the mobile dark-green brand gradient", () => {
     render(<WelcomeStep onNext={vi.fn()} />)
 

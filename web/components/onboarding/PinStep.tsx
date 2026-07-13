@@ -165,6 +165,7 @@ export function PinStep({ onNext, onBack }: PinStepProps) {
         </Button>
         <Button
           type="submit"
+          variant="accent"
           size="lg"
           disabled={loading}
           aria-busy={loading}

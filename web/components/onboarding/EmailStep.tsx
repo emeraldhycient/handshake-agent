@@ -119,6 +119,7 @@ export function EmailStep({ data, setData, onNext }: EmailStepProps) {
 
       <Button
         type="submit"
+        variant="accent"
         size="lg"
         disabled={!isValid || loading}
         aria-busy={loading}

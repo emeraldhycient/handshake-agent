@@ -100,6 +100,34 @@ describe("DoneStep", () => {
     expect(push).toHaveBeenCalledWith("/")
   })
 
+  it("renders Open my wallet as the amber accent CTA", () => {
+    render(
+      <DoneStep
+        firstName="Ada"
+        kycStatus="verified"
+        skipped={false}
+        onVerifyNow={vi.fn()}
+      />
+    )
+    expect(
+      screen.getByRole("button", { name: /open my wallet/i })
+    ).toHaveAttribute("data-variant", "accent")
+  })
+
+  it("keeps the banner's Verify now CTA on the dark treatment, not amber (matches the mockup: this button is bg #15241d / white text, unlike every other primary CTA)", () => {
+    render(
+      <DoneStep
+        firstName="Ada"
+        kycStatus="unverified"
+        skipped
+        onVerifyNow={vi.fn()}
+      />
+    )
+    expect(
+      screen.getByRole("button", { name: /verify now/i })
+    ).not.toHaveAttribute("data-variant", "accent")
+  })
+
   it("shows an In review badge while KYC is pending", () => {
     render(
       <DoneStep

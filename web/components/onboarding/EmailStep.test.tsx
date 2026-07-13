@@ -81,4 +81,13 @@ describe("EmailStep", () => {
     )
     expect(screen.getByLabelText(/email/i)).toHaveValue("resume@example.com")
   })
+
+  it("renders Send code as the amber accent CTA", () => {
+    render(<EmailStep data={{}} setData={vi.fn()} onNext={vi.fn()} />)
+
+    expect(screen.getByRole("button", { name: /send code/i })).toHaveAttribute(
+      "data-variant",
+      "accent"
+    )
+  })
 })

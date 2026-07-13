@@ -103,4 +103,15 @@ describe("NameStep", () => {
     await user.click(screen.getByRole("button", { name: /back/i }))
     expect(onBack).toHaveBeenCalledTimes(1)
   })
+
+  it("renders Continue as the amber accent CTA", () => {
+    render(
+      <NameStep data={{}} setData={vi.fn()} onNext={vi.fn()} onBack={vi.fn()} />
+    )
+
+    expect(screen.getByRole("button", { name: /continue/i })).toHaveAttribute(
+      "data-variant",
+      "accent"
+    )
+  })
 })

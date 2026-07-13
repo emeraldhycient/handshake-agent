@@ -152,6 +152,7 @@ export function NameStep({ data, setData, onNext, onBack }: NameStepProps) {
         </Button>
         <Button
           type="submit"
+          variant="accent"
           size="lg"
           disabled={!isValid || loading}
           aria-busy={loading}

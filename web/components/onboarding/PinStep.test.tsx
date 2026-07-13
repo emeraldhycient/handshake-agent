@@ -87,4 +87,12 @@ describe("PinStep", () => {
     await user.click(screen.getByRole("button", { name: /back/i }))
     expect(onBack).toHaveBeenCalledTimes(1)
   })
+
+  it("renders Create account as the amber accent CTA", () => {
+    render(<PinStep onNext={vi.fn()} onBack={vi.fn()} />)
+
+    expect(
+      screen.getByRole("button", { name: /create account/i })
+    ).toHaveAttribute("data-variant", "accent")
+  })
 })

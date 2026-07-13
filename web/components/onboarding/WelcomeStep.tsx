@@ -60,7 +60,12 @@ export function WelcomeStep({ onNext }: WelcomeStepProps) {
       </div>
 
       <div>
-        <Button size="lg" className="w-full lg:w-auto" onClick={onNext}>
+        <Button
+          variant="accent"
+          size="lg"
+          className="w-full lg:w-auto"
+          onClick={onNext}
+        >
           Get started
         </Button>
         <p className="mt-4 text-sm text-primary-foreground/70 lg:text-muted-foreground">

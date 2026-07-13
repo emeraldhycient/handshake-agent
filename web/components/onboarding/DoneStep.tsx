@@ -145,7 +145,12 @@ export function DoneStep({
       </div>
 
       <div className="flex-none px-6 pt-3 pb-8 lg:p-0">
-        <Button size="lg" className="w-full" onClick={() => router.push("/")}>
+        <Button
+          variant="accent"
+          size="lg"
+          className="w-full"
+          onClick={() => router.push("/")}
+        >
           Open my wallet
         </Button>
       </div>
