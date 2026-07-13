@@ -226,9 +226,85 @@ describe('KycGateService.assertCanTransact', () => {
   // fails `tierAtLeast` for every configured capability, so it stays blocked
   // everywhere with no separate status check.
 
-  it('a tier_1 user may buy even when kycStatus is not verified (status is no longer gated)', async () => {
+  it('a fresh email-verified tier_1 user (kycStatus not_started) may buy — a non-verified but non-revoked status is not a hard block', async () => {
     const svc = makeService(
-      makeUser({ kycStatus: 'pending', kycTier: 'tier_1' }),
+      makeUser({ kycStatus: 'not_started', kycTier: 'tier_1' }),
+    );
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.buy' }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('a tier_1 user with a tier_2 Sumsub review in flight (kycStatus pending_review) may still buy at tier_1', async () => {
+    const svc = makeService(
+      makeUser({ kycStatus: 'pending_review', kycTier: 'tier_1' }),
+    );
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.buy' }),
+    ).resolves.toBeUndefined();
+  });
+
+  // ── Paused KYC status re-lock (§3.3) ─────────────────────────────────────
+  // The admin "Force re-KYC" ('pending') and needs-info bounce ('needs_info')
+  // paths restrict an account while PRESERVING its tier. The gate must fail
+  // closed on those (KYC_NOT_VERIFIED, distinct from the tier gate) or the
+  // retained tier would keep the flagged account transacting. Rejections are
+  // NOT a blanket status block — they lower the tier itself (see below).
+
+  it.each(['pending', 'needs_info'] as const)(
+    'blocks a tier_2 user whose kycStatus is "%s" from selling (paused-status re-lock, even though the tier is retained)',
+    async (kycStatus) => {
+      const svc = makeService(makeUser({ kycStatus, kycTier: 'tier_2' }));
+      await expect(
+        svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.sell' }),
+      ).rejects.toBeInstanceOf(KycNotVerifiedError);
+      await expect(
+        svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.sell' }),
+      ).rejects.toMatchObject({ code: 'KYC_NOT_VERIFIED' });
+    },
+  );
+
+  it.each(['pending', 'needs_info'] as const)(
+    'blocks even a tier_1-capability BUY when kycStatus is "%s" (a paused account transacts nothing)',
+    async (kycStatus) => {
+      const svc = makeService(makeUser({ kycStatus, kycTier: 'tier_1' }));
+      await expect(
+        svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.buy' }),
+      ).rejects.toBeInstanceOf(KycNotVerifiedError);
+    },
+  );
+
+  it('blocks a payout release for a force-re-KYC (pending) user (assertCanReleasePayout shares the baseline)', async () => {
+    const svc = makeService(
+      makeUser({ kycStatus: 'pending', kycTier: 'tier_2' }),
+    );
+    await expect(
+      svc.assertCanReleasePayout({
+        userId: 'user-id-1',
+        fiatAmount: '10000',
+        fiatCurrency: 'NGN',
+        asset: 'USDT',
+        capability: 'crypto.sell',
+      }),
+    ).rejects.toBeInstanceOf(KycNotVerifiedError);
+  });
+
+  // A Sumsub RED at a known level downgrades ONE rung (tier_2 → tier_1) and sets
+  // kycStatus='rejected'. Containment is via the TIER (CapabilityTierError re-
+  // locks send/sell/swap); the retained lower rung's capabilities (tier_1 buy)
+  // stay open by design — 'rejected' is NOT a blanket status block.
+  it('a RED-downgraded user (kycStatus rejected, kycTier tier_1) is re-locked from send by the TIER gate, not a status block', async () => {
+    const svc = makeService(
+      makeUser({ kycStatus: 'rejected', kycTier: 'tier_1' }),
+    );
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.send' }),
+    ).rejects.toBeInstanceOf(CapabilityTierError);
+  });
+
+  it('a RED-downgraded user (kycStatus rejected, kycTier tier_1) may still BUY (the lower rung is retained by design)', async () => {
+    const svc = makeService(
+      makeUser({ kycStatus: 'rejected', kycTier: 'tier_1' }),
     );
     await expect(
       svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.buy' }),

@@ -444,7 +444,7 @@ describe('SumsubWebhookHandler', () => {
       );
     });
 
-    it('RED at an unmapped level (no downgrade, fail-safe) STILL raises a flag (downgradedTo null)', async () => {
+    it('RED at an unmapped level (fail-closed) STILL raises a flag, recording the tier_1 re-lock floor', async () => {
       const compliance = makeComplianceEvents();
       const repo = makeRepo();
       const handler = new SumsubWebhookHandler(repo, compliance, makeConfig());
@@ -457,8 +457,10 @@ describe('SumsubWebhookHandler', () => {
       expect(repo.downgradeSumsubTier).not.toHaveBeenCalled();
       const flag = compliance.create.mock.calls[0][0];
       expect(flag.eventType).toBe('kyc_escalation');
+      // The unmapped-level RED fails closed to the tier_1 floor; the flag records
+      // that effective re-lock target (not null — the tier IS re-locked).
       expect(flag.details).toEqual(
-        expect.objectContaining({ downgradedTo: null }),
+        expect.objectContaining({ downgradedTo: 'tier_1' }),
       );
     });
 

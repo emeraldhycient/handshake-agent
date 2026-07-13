@@ -395,28 +395,57 @@ export class KycPrismaRepository implements IKycRepository {
   }
 
   /**
-   * Sumsub RED review → rejection (task 3.6). Tier is never touched — see the
-   * port doc for why this is intentionally NOT guarded against an existing
-   * `verified` status (a RED review is authoritative and must apply regardless).
+   * Sumsub RED review at an UNMAPPED/absent level → rejection + fail-closed tier
+   * re-lock (task 3.6, hardened). Sets `kycStatus='rejected'` AND drops any
+   * ELEVATED grant (tier_2/tier_3) to the `tier_1` (email-verified) FLOOR.
+   *
+   * Why the tier drop is mandatory: the money gate keys on `kycTier`, not
+   * `kycStatus`. A status-only rejection would leave a flagged user at tier_2/3,
+   * still able to send/sell/swap — so an unmappable adverse Sumsub finding
+   * (ongoing AML/PEP monitoring, an action-review RED, or a RED with no
+   * levelName) has to lower the tier to actually re-lock those capabilities.
+   * Since the level can't be attributed to a specific rung, it fails closed to
+   * tier_1 (mirroring `downgradeSumsubTier` with target=tier_1).
+   *
+   * Two conditional writes in ONE $transaction (no TOCTOU):
+   *   1. Unconditional (for an existing user): `kycStatus='rejected'`.
+   *   2. GUARDED: `kycTier → tier_1` (+ `tierChangedAt`) only when the current
+   *      tier is strictly ABOVE tier_1 — never raises a tier, never re-stamps
+   *      tierChangedAt for a user already at/below tier_1.
    */
   async markSumsubRejected(
     userId: string,
     reason: string,
   ): Promise<MarkSumsubStatusResult> {
+    const now = new Date();
     return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.user.updateMany({
+      const rejected = await tx.user.updateMany({
         where: { id: userId },
         data: { kycStatus: KycStatus.rejected },
       });
 
-      if (updated.count === 0) {
+      if (rejected.count === 0) {
         return { found: false };
       }
 
+      const relocked = await tx.user.updateMany({
+        where: { id: userId, kycTier: { in: tiersAbove(KycTier.tier_1) } },
+        data: { kycTier: KycTier.tier_1, tierChangedAt: now },
+      });
+
       await tx.kycProfile.upsert({
         where: { userId },
-        create: { userId, status: KycStatus.rejected, rejectionReason: reason },
-        update: { status: KycStatus.rejected, rejectionReason: reason },
+        create: {
+          userId,
+          status: KycStatus.rejected,
+          rejectionReason: reason,
+          ...(relocked.count > 0 ? { tier: KycTier.tier_1 } : {}),
+        },
+        update: {
+          status: KycStatus.rejected,
+          rejectionReason: reason,
+          ...(relocked.count > 0 ? { tier: KycTier.tier_1 } : {}),
+        },
       });
 
       return { found: true };

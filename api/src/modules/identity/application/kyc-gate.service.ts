@@ -12,6 +12,7 @@ import type {
 } from '../../../core/config/configuration';
 import {
   CapabilityTierError,
+  KycNotVerifiedError,
   OnChainSendLimitExceededError,
   SimSwapBlockedError,
   TierChangeCoolingOffError,
@@ -43,6 +44,34 @@ export type Capability =
 
 /** Fail-closed minimum tier for a capability with no configured gating entry. */
 const FAIL_CLOSED_MIN_TIER: KycTier = 'tier_2';
+
+/**
+ * KYC statuses that PAUSE money-movement while the tier is deliberately
+ * PRESERVED (§3.3).
+ *
+ * The capability gate keys on `kycTier`, not `kycStatus` (a tier_1 email-verified
+ * user carries `kycStatus='not_started'` yet may buy/receive). Two admin
+ * remediation paths restrict an account WITHOUT lowering the tier — they pause
+ * it pending re-verification/more-info, keeping the tier record intact so a
+ * clean reinstatement is possible:
+ *   - admin "Force re-KYC" (resetKycToPending)   → 'pending'
+ *   - admin needs-info bounce (markKycNeedsInfo)  → 'needs_info'
+ * Without a status check these would be toothless — the tier is retained, so the
+ * capability gate alone would still admit the (flagged) user. So the gate fails
+ * closed on this set.
+ *
+ * `'rejected'` is intentionally NOT here: every rejection path lowers the TIER
+ * itself (Sumsub RED → one-rung downgrade or fail-closed floor; admin reject →
+ * unverified), so a rejected user is already contained by the tier gate (and the
+ * one-rung Sumsub downgrade deliberately RETAINS the lower rung's capabilities,
+ * e.g. tier_1 buy — a blanket status block would wrongly revoke those too).
+ * `not_started` (fresh email-verified tier_1) and `pending_review` (a tier_1
+ * user whose tier_2 Sumsub review is in flight) are active states — excluded.
+ */
+const REVOKED_KYC_STATUSES: ReadonlySet<string> = new Set([
+  'pending',
+  'needs_info',
+]);
 
 /** Valid KYC tier keys that have limit entries. `unverified` is excluded — it is blocked before this helper is called. */
 type VerifiedTier = 'tier_1' | 'tier_2' | 'tier_3';
@@ -347,6 +376,15 @@ export class KycGateService {
     // 1. SIM-swap block — highest severity; checked before the capability gate.
     if (user.simSwapDetectedAt !== null) {
       throw new SimSwapBlockedError();
+    }
+
+    // 1b. Paused KYC-status re-lock (§3.3). The capability gate below keys on
+    // kycTier only, but the admin "Force re-KYC" ('pending') and needs-info
+    // ('needs_info') paths restrict an account while PRESERVING its tier — so the
+    // tier gate alone would still admit it. Fail closed on those. Rejections are
+    // NOT here: they lower the tier itself (see REVOKED_KYC_STATUSES).
+    if (REVOKED_KYC_STATUSES.has(user.kycStatus)) {
+      throw new KycNotVerifiedError('status');
     }
 
     // 2. Capability → minimum-tier gate (Task 1.3, §3.3). Replaces the old

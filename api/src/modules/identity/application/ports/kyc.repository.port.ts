@@ -212,14 +212,19 @@ export interface IKycRepository {
   grantSumsubTier(input: GrantSumsubTierInput): Promise<GrantSumsubTierResult>;
 
   /**
-   * Sumsub RED review → rejection (task 3.6). Sets `User.kycStatus='rejected'`
-   * and upserts `KycProfile.status='rejected'` + `rejectionReason`, in one
-   * $transaction. Tier is NEVER touched — a rejection revokes verified STATUS,
-   * not a previously-granted tier. Unlike `markSumsubPendingReview`, this is
-   * NOT guarded against an existing `verified` status: a RED review is Sumsub's
-   * authoritative negative determination (e.g. a post-verification fraud
-   * finding) and must apply even after an earlier GREEN. `found: false` when no
-   * User row exists (graceful no-op — see `GrantSumsubTierResult`).
+   * Sumsub RED review at an UNMAPPED/absent level → rejection + fail-closed tier
+   * re-lock (task 3.6, hardened). Sets `User.kycStatus='rejected'` AND drops any
+   * ELEVATED grant (tier_2/tier_3) to the `tier_1` (email-verified) FLOOR, in
+   * one $transaction. The tier drop is REQUIRED, not optional: the money gate
+   * keys on `kycTier`, so a status-only rejection would leave a flagged user at
+   * tier_2/3 and still able to send/sell/swap. Since an unmapped level can't be
+   * attributed to a specific rung, it fails closed to tier_1 (equivalent to
+   * `downgradeSumsubTier` with target=tier_1: a GUARDED `updateMany` that never
+   * raises a tier and never re-stamps `tierChangedAt` for a user already at/below
+   * tier_1). Like `downgradeSumsubTier` and unlike `markSumsubPendingReview`,
+   * this is NOT guarded against an existing `verified` status — a RED review is
+   * Sumsub's authoritative negative determination and must apply even after an
+   * earlier GREEN. `found: false` when no User row exists (graceful no-op).
    */
   markSumsubRejected(
     userId: string,

@@ -13,7 +13,9 @@
  *     no-downgrade — a replayed/out-of-order GREEN never re-stamps
  *     tierChangedAt or downgrades an already-higher tier).
  *   - rejected, no downgradeTo (unknown/unmapped level, fail-safe) →
- *     IKycRepository.markSumsubRejected (kycStatus only; tier untouched).
+ *     IKycRepository.markSumsubRejected (kycStatus=rejected AND a fail-closed
+ *     tier re-lock to the tier_1 floor — an unmappable adverse finding must not
+ *     leave elevated tier_2/tier_3 capabilities open under the tier-only gate).
  *   - rejected, with downgradeTo (RED at a KNOWN level — the compliance
  *     policy: a level's RED drops the user to the rung below it) →
  *     IKycRepository.downgradeSumsubTier (atomic, idempotent, never raises a
@@ -123,15 +125,15 @@ export class SumsubWebhookHandler implements WebhookHandler {
   }
 
   /**
-   * A RED review either revokes verified STATUS only (`markSumsubRejected` —
-   * unknown/unmapped `levelName`, the mapper's fail-safe) or, when the mapper
-   * resolved a `downgradeTo`, also auto-downgrades the tier
-   * (`downgradeSumsubTier` — the compliance policy: a RED at a level drops
-   * the user to the rung below it, re-locking send/sell/swap at the lower
-   * tier's gate). Both repo calls share the same `{ found }` no-op shape for
-   * an unknown externalUserId. On top of that deterministic containment, a
-   * known-user RED also raises the `kyc_escalation` compliance flag (the human
-   * backstop half of the hybrid policy).
+   * A RED review ALWAYS re-locks the TIER (so a rejected account can never
+   * retain elevated capabilities under the tier-only money gate): when the
+   * mapper resolved a `downgradeTo` (a KNOWN level), `downgradeSumsubTier` drops
+   * the user to the rung below the failed level; for an unmapped/absent level,
+   * `markSumsubRejected` fails closed to the tier_1 (email-verified) floor.
+   * Both repo calls share the same `{ found }` no-op shape for an unknown
+   * externalUserId. On top of that deterministic containment, a known-user RED
+   * also raises the `kyc_escalation` compliance flag (the human backstop half of
+   * the hybrid policy) carrying the effective re-lock target.
    */
   private async applyRejection(
     payload: SumsubWebhookPayload,
@@ -139,6 +141,9 @@ export class SumsubWebhookHandler implements WebhookHandler {
   ): Promise<void> {
     const { userId, downgradeTo } = mapping;
     const resolvedReason = mapping.reason ?? 'Sumsub review rejected';
+    // The effective tier cap after this RED: one rung below a known level, or
+    // the tier_1 floor for an unmapped/absent level. Surfaced on the flag.
+    const relockedTo: KycTierValue = downgradeTo ?? 'tier_1';
 
     const result = downgradeTo
       ? await this.kycRepo.downgradeSumsubTier(
@@ -156,7 +161,12 @@ export class SumsubWebhookHandler implements WebhookHandler {
       return;
     }
 
-    await this.raiseKycEscalationFlag(payload, mapping, resolvedReason);
+    await this.raiseKycEscalationFlag(
+      payload,
+      mapping,
+      resolvedReason,
+      relockedTo,
+    );
   }
 
   /**
@@ -174,8 +184,9 @@ export class SumsubWebhookHandler implements WebhookHandler {
     payload: SumsubWebhookPayload,
     mapping: SumsubReviewMapping,
     reason: string,
+    relockedTo: KycTierValue,
   ): Promise<void> {
-    const { userId, downgradeTo } = mapping;
+    const { userId } = mapping;
 
     const existing = await this.complianceEvents.findLatestOpenByUserAndType(
       userId,
@@ -210,14 +221,14 @@ export class SumsubWebhookHandler implements WebhookHandler {
         reviewRejectType: reviewRejectType ?? null,
         levelName: payload.levelName ?? null,
         rejectLabels: payload.reviewResult?.rejectLabels ?? [],
-        downgradedTo: downgradeTo ?? null,
+        downgradedTo: relockedTo,
         applicantId: payload.applicantId ?? null,
       },
       status: 'flagged',
     });
 
     this.logger.warn(
-      { userId, severity, downgradedTo: downgradeTo ?? null },
+      { userId, severity, downgradedTo: relockedTo },
       'Sumsub webhook: RED review — raised kyc_escalation compliance flag for manual review',
     );
   }

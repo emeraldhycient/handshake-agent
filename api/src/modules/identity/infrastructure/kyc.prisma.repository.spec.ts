@@ -512,9 +512,14 @@ describe('KycPrismaRepository — NIN/BVN encryption at rest (NFR-1)', () => {
       });
     });
 
-    describe('markSumsubRejected', () => {
-      it('sets kycStatus=rejected + rejectionReason, never touches tier', async () => {
-        const { prisma, writes } = makeSumsubPrisma();
+    describe('markSumsubRejected (unmapped-level RED → reject + fail-closed tier_1 re-lock)', () => {
+      it('rejects status AND re-locks an elevated tier to the tier_1 floor (guarded), stamping tierChangedAt + profile tier', async () => {
+        const { prisma, writes } = makeSumsubPrisma({
+          userUpdateMany: jest
+            .fn<Promise<{ count: number }>, [unknown]>()
+            .mockResolvedValueOnce({ count: 1 }) // reject
+            .mockResolvedValueOnce({ count: 1 }), // re-lock (was tier_2/tier_3)
+        });
         const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
 
         const result = await repo.markSumsubRejected(
@@ -523,19 +528,57 @@ describe('KycPrismaRepository — NIN/BVN encryption at rest (NFR-1)', () => {
         );
 
         expect(result).toEqual({ found: true });
-        const userArgs = writes.userUpdateMany.mock.calls[0][0] as {
+        expect(writes.userUpdateMany).toHaveBeenCalledTimes(2);
+
+        // 1. Unconditional rejection (status only, no tier on this write).
+        const rejectArgs = writes.userUpdateMany.mock.calls[0][0] as {
+          where: { id: string };
           data: Record<string, unknown>;
         };
-        expect(userArgs.data).not.toHaveProperty('kycTier');
-        expect(userArgs.data.kycStatus).toBe('rejected');
+        expect(rejectArgs.where).toEqual({ id: 'user-1' });
+        expect(rejectArgs.data.kycStatus).toBe('rejected');
+        expect(rejectArgs.data).not.toHaveProperty('kycTier');
+
+        // 2. Guarded fail-closed re-lock to tier_1 (only for elevated tiers).
+        const relockArgs = writes.userUpdateMany.mock.calls[1][0] as {
+          where: { id: string; kycTier: { in: string[] } };
+          data: { kycTier: string; tierChangedAt: Date };
+        };
+        expect(relockArgs.where).toEqual({
+          id: 'user-1',
+          kycTier: { in: ['tier_2', 'tier_3'] },
+        });
+        expect(relockArgs.data.kycTier).toBe('tier_1');
+        expect(relockArgs.data.tierChangedAt).toBeInstanceOf(Date);
+
         const profileArgs = writes.kycProfileUpsert.mock.calls[0][0] as {
           update: Record<string, unknown>;
         };
+        expect(profileArgs.update.status).toBe('rejected');
         expect(profileArgs.update.rejectionReason).toBe('DOCUMENT_TEMPLATE');
+        expect(profileArgs.update.tier).toBe('tier_1');
+      });
+
+      it('a user already at/below tier_1 → guarded re-lock matches 0 rows: kycStatus still rejected, tier + tierChangedAt UNCHANGED, profile tier untouched', async () => {
+        const { prisma, writes } = makeSumsubPrisma({
+          userUpdateMany: jest
+            .fn<Promise<{ count: number }>, [unknown]>()
+            .mockResolvedValueOnce({ count: 1 }) // reject
+            .mockResolvedValueOnce({ count: 0 }), // re-lock no-op (already tier_1)
+        });
+        const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+        const result = await repo.markSumsubRejected('user-1', 'reason');
+
+        expect(result).toEqual({ found: true });
+        const profileArgs = writes.kycProfileUpsert.mock.calls[0][0] as {
+          update: Record<string, unknown>;
+        };
+        expect(profileArgs.update.status).toBe('rejected');
         expect(profileArgs.update).not.toHaveProperty('tier');
       });
 
-      it('unknown user → found:false, no profile write', async () => {
+      it('unknown user → found:false, no re-lock, no profile write', async () => {
         const { prisma, writes } = makeSumsubPrisma({
           userUpdateMany: jest
             .fn<Promise<{ count: number }>, [unknown]>()
@@ -546,6 +589,7 @@ describe('KycPrismaRepository — NIN/BVN encryption at rest (NFR-1)', () => {
         const result = await repo.markSumsubRejected('no-such-user', 'reason');
 
         expect(result).toEqual({ found: false });
+        expect(writes.userUpdateMany).toHaveBeenCalledTimes(1);
         expect(writes.kycProfileUpsert).not.toHaveBeenCalled();
       });
     });
