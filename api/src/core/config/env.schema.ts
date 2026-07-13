@@ -151,9 +151,11 @@ export const envSchema = z
     // + master wallet id). WalletsModule selects the adapter via factory.
     WALLET_MOCK_MODE: z.enum(['true', 'false']).default('true'),
 
-    // --- Web App (K3 KYC web handoff) ---
-    // Base URL for the web application. Used to build the KYC CTA URL:
-    //   `${WEB_APP_BASE_URL}/kyc?t=<token>`
+    // --- Web App (WhatsApp KYC onboarding CTA) ---
+    // Base URL for the web application. Joined with the configured onboarding
+    // path (default `/get-started`) to build the KYC CTA URL:
+    //   `${WEB_APP_BASE_URL}${onboarding.webPath}`  (a plain onboarding link,
+    //   not a minted single-use token — the handoff-token flow was retired).
     // Optional: when unset, ConversationService falls back to a plain-text message.
     // Coerce '' → undefined so an empty placeholder passes boot-time validation
     // (same pattern as ANTHROPIC_API_KEY above).
