@@ -4601,6 +4601,58 @@ describe('ExecutionService.executeSwap', () => {
       ProposalExpiredError,
     );
   });
+
+  // ── §3.3: server-side KYC/limit/velocity re-gate at settle time ─────────────
+  // executeSwap must re-run assertCanTransact before moving funds — mirroring
+  // executeBuy/executeSell/executeSend. A tier downgrade or stale proposal between
+  // propose-time and execute-time must be re-caught here, not trusted from propose.
+
+  it('KYC gate throws → propagates, no reserve, directive not consumed, provider not called', async () => {
+    const kycError = new Error('KYC tier 1 exceeded');
+    const kycGate = makeKycGate(kycError);
+    const settlementRepo = makeSwapSettlementRepo();
+    const outboxRepo = makeOutboxRepo();
+    const directiveService = makeDirectiveService();
+    const pinService = makePinService();
+    const swapProvider = makeSwapProviderMock();
+
+    const svc = buildSwapService({
+      kycGate,
+      settlementRepo,
+      outboxRepo,
+      directiveService,
+      pinService,
+      swapProvider,
+    });
+
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toThrow(kycError);
+    // No funds moved: no reserve, no provider swap, no outbox row.
+    expect(
+      settlementRepo.createSwapSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+    expect(swapProvider.execute).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+    // Gate runs before PIN/directive (mirror sell/buy/send) — the one-shot
+    // directive is not burned and PIN is not spent when the gate denies.
+    expect(directiveService.consume).not.toHaveBeenCalled();
+    expect(pinService.verifyPin).not.toHaveBeenCalled();
+  });
+
+  it('happy path re-gates: calls assertCanTransact with the NGN-equivalent notional', async () => {
+    const kycGate = makeKycGate();
+
+    const svc = buildSwapService({ kycGate });
+    await svc.executeSwap(SWAP_BASE_INPUT);
+
+    // fromAmount 40 USDT × baseRate 1600 NGN = 64000 NGN notional.
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith({
+      userId: USER_ID,
+      fiatAmount: '64000',
+      fiatCurrency: 'NGN',
+      asset: 'USDT',
+      capability: 'crypto.swap',
+    });
+  });
 });
 
 describe('ExecutionService.settleSwap', () => {
