@@ -45,9 +45,3 @@ export class HandoffTokenWrongPurposeError extends HandoffTokenDomainError {
     );
   }
 }
-
-/** Union type for callers that handle all HandoffToken error cases. */
-export type HandoffTokenError =
-  | HandoffTokenNotFoundError
-  | HandoffTokenExpiredError
-  | HandoffTokenWrongPurposeError;
