@@ -166,6 +166,7 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
       select: {
         id: true,
         email: true,
+        emailVerifiedAt: true,
         kycStatus: true,
         kycTier: true,
         pinHash: true,
@@ -184,6 +185,7 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
       kycStatus: row.kycStatus,
       kycTier: row.kycTier,
       hasPin: row.pinHash !== null,
+      emailVerified: row.emailVerifiedAt !== null,
       firstName: row.kycProfile?.firstName ?? null,
       lastName: row.kycProfile?.lastName ?? null,
     };

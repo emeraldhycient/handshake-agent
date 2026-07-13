@@ -15,6 +15,8 @@ export interface MeProjection {
   kycStatus: string;
   kycTier: string;
   hasPin: boolean;
+  /** Derived from `emailVerifiedAt !== null` (Task 4.1). */
+  emailVerified: boolean;
   /** Null when the user has no KYC profile yet. */
   firstName: string | null;
   lastName: string | null;

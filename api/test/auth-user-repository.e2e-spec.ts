@@ -129,12 +129,28 @@ describe('AuthUserPrismaRepository (integration, Testcontainers Postgres)', () =
     expect(userAfter?.pinnedDeviceId).toBe(first.deviceId); // pin survives — not overwritten
   });
 
-  it('loadMe projects kyc + hasPin', async () => {
+  it('loadMe projects kyc + hasPin, and emailVerified:false for a fresh unverified user', async () => {
     const { userId } = await repo.createSignup({
       email: 'm@test.com',
       phone: '+2348014444444',
     });
     const me = await repo.loadMe(userId);
-    expect(me).toMatchObject({ userId, email: 'm@test.com', hasPin: false });
+    expect(me).toMatchObject({
+      userId,
+      email: 'm@test.com',
+      hasPin: false,
+      emailVerified: false,
+    });
+  });
+
+  it('loadMe returns emailVerified:true once markEmailVerified has stamped emailVerifiedAt (Task 4.1)', async () => {
+    const { userId } = await repo.createSignup({
+      email: 'me-verified@test.com',
+      phone: '+2348014444455',
+    });
+    await repo.markEmailVerified(userId, new Date());
+
+    const me = await repo.loadMe(userId);
+    expect(me).toMatchObject({ userId, emailVerified: true });
   });
 });

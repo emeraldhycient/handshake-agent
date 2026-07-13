@@ -274,24 +274,33 @@ describe('Web auth flow — e2e (AppModule, Testcontainers Postgres)', () => {
     expect(lvBody.user.email).toBe(email);
     const { accessToken, refreshToken } = lvBody;
 
-    // 5. /auth/me with the access token
+    // 5. /auth/me with the access token — emailVerified:true for a verified
+    // user (Task 4.1: loadMe now derives it from emailVerifiedAt).
     const me = await request(app.getHttpServer())
       .get('/auth/me')
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(200);
-    expect((me.body as { email: string }).email).toBe(email);
+    const meBody = me.body as { email: string; emailVerified: boolean };
+    expect(meBody.email).toBe(email);
+    expect(meBody.emailVerified).toBe(true);
 
     // 6. /auth/me without a token → 401
     await request(app.getHttpServer()).get('/auth/me').expect(401);
 
-    // 7. refresh rotates the pair
+    // 7. refresh rotates the pair — same loadMe projection, so the boot-
+    // rehydrate user object also carries emailVerified:true (Task 4.1).
     const rf = await request(app.getHttpServer())
       .post('/auth/refresh')
       .send({ refreshToken })
       .expect(200);
-    const rfBody = rf.body as { accessToken: string; refreshToken: string };
+    const rfBody = rf.body as {
+      accessToken: string;
+      refreshToken: string;
+      user: { emailVerified: boolean };
+    };
     expect(rfBody.accessToken).toBeDefined();
     expect(rfBody.refreshToken).not.toBe(refreshToken);
+    expect(rfBody.user.emailVerified).toBe(true);
 
     // 8. old refresh token no longer works
     await request(app.getHttpServer())

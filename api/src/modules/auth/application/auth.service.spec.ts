@@ -63,6 +63,7 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
         kycStatus: string;
         kycTier: string;
         hasPin: boolean;
+        emailVerified: boolean;
         firstName: string | null;
         lastName: string | null;
       } | null>,
@@ -74,6 +75,7 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
         kycStatus: 'not_started',
         kycTier: 'unverified',
         hasPin: false,
+        emailVerified: false,
         firstName: null,
         lastName: null,
       }),
@@ -373,6 +375,7 @@ describe('AuthService.signupVerify', () => {
       kycStatus: 'not_started',
       kycTier: 'tier_1',
       hasPin: false,
+      emailVerified: true,
       firstName: null,
       lastName: null,
     });
@@ -529,6 +532,7 @@ describe('AuthService.loginVerify', () => {
         kycStatus: 'not_started',
         kycTier: 'unverified',
         hasPin: false,
+        emailVerified: false,
         firstName: null,
         lastName: null,
       },
@@ -684,6 +688,7 @@ describe('AuthService.refresh', () => {
         kycStatus: 'not_started',
         kycTier: 'unverified',
         hasPin: false,
+        emailVerified: false,
         firstName: null,
         lastName: null,
       },
@@ -737,6 +742,7 @@ describe('AuthService.logout + me', () => {
       kycStatus: 'not_started',
       kycTier: 'unverified',
       hasPin: false,
+      emailVerified: false,
       firstName: null,
       lastName: null,
     });
@@ -750,6 +756,7 @@ describe('AuthService.logout + me', () => {
       kycStatus: 'verified',
       kycTier: 'tier_1',
       hasPin: true,
+      emailVerified: true,
       firstName: 'Amara',
       lastName: 'Okeke',
     });
