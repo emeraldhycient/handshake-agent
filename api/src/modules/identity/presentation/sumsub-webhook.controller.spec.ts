@@ -112,6 +112,66 @@ describe('SumsubWebhookController (thin)', () => {
     expect(ingestion.ingest).not.toHaveBeenCalled();
   });
 
+  it('honors x-payload-digest-alg=HMAC_SHA512_HEX (verifies a SHA-512 digest)', async () => {
+    const { controller, ingestion } = makeController();
+    const raw = makeRawBody(body);
+    const sig = hmacHex('sha512', SECRET, raw);
+
+    const res = await controller.handleWebhook(
+      body,
+      raw,
+      sig,
+      'HMAC_SHA512_HEX',
+    );
+
+    expect(res).toEqual({ status: 'ok' });
+    expect(ingestion.ingest).toHaveBeenCalled();
+  });
+
+  it('honors x-payload-digest-alg=HMAC_SHA1_HEX (verifies a SHA-1 digest)', async () => {
+    const { controller, ingestion } = makeController();
+    const raw = makeRawBody(body);
+    const sig = hmacHex('sha1', SECRET, raw);
+
+    const res = await controller.handleWebhook(body, raw, sig, 'HMAC_SHA1_HEX');
+
+    expect(res).toEqual({ status: 'ok' });
+    expect(ingestion.ingest).toHaveBeenCalled();
+  });
+
+  it('a SHA-512 digest is rejected when the alg header still claims SHA-256 (mismatch → 401)', async () => {
+    const { controller, ingestion } = makeController();
+    const raw = makeRawBody(body);
+    const sha512Sig = hmacHex('sha512', SECRET, raw);
+
+    await expect(
+      controller.handleWebhook(body, raw, sha512Sig, 'HMAC_SHA256_HEX'),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(ingestion.ingest).not.toHaveBeenCalled();
+  });
+
+  it('an unrecognized x-payload-digest-alg → 401 fail-closed', async () => {
+    const { controller, ingestion } = makeController();
+    const raw = makeRawBody(body);
+    const sig = makeValidSig(raw);
+
+    await expect(
+      controller.handleWebhook(body, raw, sig, 'HMAC_MD5_HEX'),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(ingestion.ingest).not.toHaveBeenCalled();
+  });
+
+  it('defaults to SHA-256 when the alg header is absent (back-compat)', async () => {
+    const { controller, ingestion } = makeController();
+    const raw = makeRawBody(body);
+    const sig = makeValidSig(raw);
+
+    const res = await controller.handleWebhook(body, raw, sig);
+
+    expect(res).toEqual({ status: 'ok' });
+    expect(ingestion.ingest).toHaveBeenCalled();
+  });
+
   it('persistence failure propagates (5xx so Sumsub redelivers)', async () => {
     const { controller } = makeController('throw');
     const raw = makeRawBody(body);
