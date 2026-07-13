@@ -37,6 +37,7 @@ import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.p
 import type { IWalletProvider } from '../src/modules/wallets/application/ports/wallet-provider.port';
 import type { IPaymentProvider } from '../src/modules/treasury/application/ports/payment-provider.port';
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
+import { mintTier1User } from './helpers/mint-verified-user';
 
 jest.setTimeout(180_000);
 
@@ -177,62 +178,27 @@ describe('Web chat check_balance — e2e (AppModule, Testcontainers Postgres)', 
     await stopContainer?.();
   });
 
-  // Monotonic counter so each onboarding uses a distinct email / phone / device
-  // fingerprint (phone is a unique ChannelIdentity; the device binds per user).
-  let onboardSeq = 0;
-
-  /** Runs the auth+KYC flow and returns the access token + userId. */
+  /** Runs the email-OTP+PIN onboarding flow and returns the access token + userId. */
   async function onboardVerifiedUser(): Promise<{
     accessToken: string;
     userId: string;
   }> {
-    const seq = ++onboardSeq;
-    const email = `e2e_wb_${Date.now()}_${seq}@test.com`;
-    const phone = `+23480299970${String(seq).padStart(2, '0')}`;
-
-    const signup = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone })
-      .expect(202);
-    const devToken = (signup.body as { devToken: string }).devToken;
-
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const otp = (lr.body as { devOtp: string }).devOtp;
-
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email, otp, deviceFingerprint: `e2e-wb-fingerprint-${seq}` })
-      .expect(200);
-    const accessToken = (lv.body as { accessToken: string }).accessToken;
-
-    const ks = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Bola',
-        lastName: 'Adeyemi',
-        nin: '33445566778',
-        pin: '1357',
-      })
-      .expect(200);
-    const userId = (ks.body as { userId: string }).userId;
-
+    const { accessToken, userId } = await mintTier1User(app, { pin: '1357' });
     return { accessToken, userId };
   }
 
   it('seeded USDT balance → balance outcome (all assets) then single-asset scope', async () => {
     const { accessToken, userId } = await onboardVerifiedUser();
 
-    // KYC completion provisions the per-network wallets. Seed a settled USDT
-    // ledger entry on the user's TRON wallet (the ledger is authoritative).
+    // The tier_1 mint (email-OTP + PIN) no longer eagerly provisions
+    // per-network wallets the way legacy /kyc/submit did — trigger lazy
+    // provisioning of the TRON wallet explicitly, then seed a settled USDT
+    // ledger entry on it (the ledger is authoritative).
+    await request(app.getHttpServer())
+      .get('/wallets/deposit-address?network=TRON')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+
     const wallet = await prisma.wallet.findFirst({
       where: { userId, network: 'TRON' },
     });

@@ -35,6 +35,7 @@ import { LLM_PROVIDER } from '../src/modules/agent/application/ports/agent.port'
 import { WALLET_PROVIDER } from '../src/modules/wallets/application/ports/wallet-provider.port';
 import { AssetRegistry } from '../src/core/catalog/asset-registry';
 import { seedRegistryAssets } from './helpers/seed-registry-assets';
+import { mintTier1User } from './helpers/mint-verified-user';
 import { randomUUID } from 'node:crypto';
 import { PAYMENT_PROVIDER } from '../src/modules/treasury/application/ports/payment-provider.port';
 import { WHATSAPP_SENDER } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
@@ -224,52 +225,10 @@ describe('Wallet reads — e2e (GET /wallets/balances + /wallets/deposit-address
   async function setupVerifiedUser(
     userEmail: string,
   ): Promise<{ accessToken: string; userId: string }> {
-    const deviceFingerprint = `e2e-wallet-reads-fp-${userEmail.slice(0, 16)}`;
-
-    // 1. Signup
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email: userEmail, phone: '+2348099991234' })
-      .expect(202);
-    const { devToken } = su.body as { status: string; devToken: string };
-
-    // 2. Verify email
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-
-    // 3. Login request
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email: userEmail })
-      .expect(202);
-    const { devOtp } = lr.body as { status: string; devOtp: string };
-
-    // 4. Login verify
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email: userEmail, otp: devOtp, deviceFingerprint })
-      .expect(200);
-    const { accessToken } = lv.body as {
-      accessToken: string;
-      refreshToken: string;
-      user: { email: string; id: string };
-    };
-
-    // 5. KYC submit (sets PIN + provisions wallet)
-    const ks = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Eze',
-        lastName: 'Nweke',
-        nin: '12345678901',
-        pin: '1357',
-      })
-      .expect(200);
-    const { userId } = ks.body as { userId: string; status: string };
-
+    const { accessToken, userId } = await mintTier1User(app, {
+      email: userEmail,
+      pin: '1357',
+    });
     return { accessToken, userId };
   }
 
@@ -283,7 +242,14 @@ describe('Wallet reads — e2e (GET /wallets/balances + /wallets/deposit-address
 
     // The balance endpoint reads the custodial LEDGER (not the provider's
     // getBalance — see WalletBalanceService), so seed a USDT credit on this
-    // user's TRON wallet (provisioned by KYC submit above) to assert it surfaces.
+    // user's TRON wallet to assert it surfaces. The tier_1 mint no longer
+    // eagerly provisions per-network wallets like legacy /kyc/submit did —
+    // trigger lazy provisioning explicitly first.
+    await request(app.getHttpServer())
+      .get('/wallets/deposit-address?network=TRON')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(200);
+
     const wallet = await prisma.wallet.findFirst({
       where: { userId, network: 'TRON' },
       select: { id: true },

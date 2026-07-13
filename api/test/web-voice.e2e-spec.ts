@@ -3,12 +3,10 @@
  *
  * Boots the REAL AppModule (Testcontainers Postgres) via supertest and drives:
  *
- *   1. POST /auth/signup         → 202, devToken
- *   2. POST /auth/verify-email   → 200, { verified: true }
- *   3. POST /auth/login/request  → 202, devOtp
- *   4. POST /auth/login/verify   → 200, { accessToken }
- *   5. POST /kyc/submit (Bearer) → 200, { userId, status: 'verified' }
- *   6. POST /chat/voice (Bearer, multipart audio) → 200, { transcript, outcome.kind, conversationId }
+ *   1. POST /auth/signup/request → 202, devOtp
+ *   2. POST /auth/signup/verify  → 200, { accessToken } (grants kycTier=tier_1)
+ *   3. POST /kyc/pin (Bearer)    → 200, { hasPin: true }
+ *   4. POST /chat/voice (Bearer, multipart audio) → 200, { transcript, outcome.kind, conversationId }
  *
  * Plus:
  *   - POST /chat/voice with bad MIME → 400/415
@@ -45,6 +43,7 @@ import type { IWalletProvider } from '../src/modules/wallets/application/ports/w
 import type { IPaymentProvider } from '../src/modules/treasury/application/ports/payment-provider.port';
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 import type { ITranscriptionPort } from '../src/modules/media/application/ports/transcription.port';
+import { mintTier1User } from './helpers/mint-verified-user';
 
 jest.setTimeout(180_000);
 
@@ -228,46 +227,10 @@ describe('Web voice — e2e (AppModule, Testcontainers Postgres)', () => {
     app = moduleRef.createNestApplication({ rawBody: true });
     await app.init();
 
-    // ── Shared auth setup: signup → verify → login → kyc ──────────────────
+    // ── Shared auth setup: email-OTP signup (tier_1) + PIN ─────────────────
     const email = `e2e_wv_${Date.now()}@test.com`;
-
-    const signup = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone: '+2348029999011' })
-      .expect(202);
-    const signupBody = signup.body as { status: string; devToken: string };
-    const devToken = signupBody.devToken;
-
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const lrBody = lr.body as { status: string; devOtp: string };
-    const otp = lrBody.devOtp;
-
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email, otp, deviceFingerprint: 'e2e-wv-fingerprint-123' })
-      .expect(200);
-    const lvBody = lv.body as { accessToken: string };
-    accessToken = lvBody.accessToken;
-
-    // KYC-verify the user so the receive flow completes
-    await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Adaugo',
-        lastName: 'Nwosu',
-        nin: '33445566778',
-        pin: '1357',
-      })
-      .expect(200);
+    const minted = await mintTier1User(app, { email, pin: '1357' });
+    accessToken = minted.accessToken;
   }, 120_000);
 
   afterAll(async () => {

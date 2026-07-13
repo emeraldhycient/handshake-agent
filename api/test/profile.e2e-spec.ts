@@ -2,9 +2,10 @@
  * Profile read end-to-end acceptance test (Task 4).
  *
  * Boots the REAL AppModule (Testcontainers Postgres) and drives GET /profile:
- *   1. signup → verify-email → login → kyc/submit → accessToken
- *   2. GET /profile (Bearer) → 200 with email, fullName, phone, tier + limits
- *   3. GET /profile (no token) → 401
+ *   1. email-OTP signup+verify (tier_1) + PIN → accessToken
+ *   2. POST /profile/name (pre-KYC name capture — /kyc/submit is retired)
+ *   3. GET /profile (Bearer) → 200 with email, fullName, phone, tier + limits
+ *   4. GET /profile (no token) → 401
  *
  * Bootstrap mirrors wallet-reads.e2e-spec.ts.
  */
@@ -27,6 +28,7 @@ import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.p
 import type { IWalletProvider } from '../src/modules/wallets/application/ports/wallet-provider.port';
 import type { IPaymentProvider } from '../src/modules/treasury/application/ports/payment-provider.port';
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
+import { mintTier1User } from './helpers/mint-verified-user';
 
 jest.setTimeout(180_000);
 
@@ -162,41 +164,25 @@ describe('Profile — e2e (GET /profile)', () => {
     await stopContainer?.();
   });
 
+  /**
+   * Email-OTP signup+verify (tier_1) + PIN, then the pre-KYC name capture
+   * step (POST /profile/name — the onboarding "what should we call you?"
+   * step; /kyc/submit no longer exists to set a name).
+   */
   async function setupVerifiedUser(userEmail: string): Promise<string> {
-    const deviceFingerprint = `e2e-profile-fp-${userEmail.slice(0, 16)}`;
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email: userEmail, phone: SIGNUP_PHONE })
-      .expect(202);
-    const { devToken } = su.body as { devToken: string };
+    const { accessToken } = await mintTier1User(app, {
+      email: userEmail,
+      pin: '1357',
+    });
     await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email: userEmail })
-      .expect(202);
-    const { devOtp } = lr.body as { devOtp: string };
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email: userEmail, otp: devOtp, deviceFingerprint })
-      .expect(200);
-    const { accessToken } = lv.body as { accessToken: string };
-    await request(app.getHttpServer())
-      .post('/kyc/submit')
+      .post('/profile/name')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Eze',
-        lastName: 'Nweke',
-        nin: '12345678901',
-        pin: '1357',
-      })
+      .send({ firstName: 'Eze', lastName: 'Nweke' })
       .expect(200);
     return accessToken;
   }
 
-  it('signup → verify → login → kyc → GET /profile returns identity + tier limits', async () => {
+  it('signup → verify → PIN → name → GET /profile returns identity + tier limits', async () => {
     const email = `e2e_profile_${Date.now()}@test.com`;
     const accessToken = await setupVerifiedUser(email);
 
@@ -220,7 +206,9 @@ describe('Profile — e2e (GET /profile)', () => {
 
     expect(body.email).toBe(email);
     expect(body.fullName).toBe('Eze Nweke');
-    expect(body.kycStatus).toBe('verified');
+    // kycStatus stays 'not_started' for an email+PIN tier_1 user — 'verified'
+    // is reserved for a full Sumsub GREEN review (sumsub-webhook.e2e-spec.ts).
+    expect(body.kycStatus).toBe('not_started');
     expect(body.kycTier).toBe('tier_1');
     expect(body.fiatCurrency).toBe('NGN');
     expect(body.limits).not.toBeNull();
@@ -471,39 +459,28 @@ describe('Profile — e2e (POST /profile/name)', () => {
    */
   it('a KYC-verified user posting /profile/name → 409, stored name unchanged', async () => {
     const email = `e2e_profile_name_verified_${Date.now()}@test.com`;
-    const deviceFingerprint = `e2e-profile-name-fp-verified-${email.split('@')[0].slice(-24)}`;
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone: SIGNUP_PHONE })
-      .expect(202);
-    const { devToken } = su.body as { devToken: string };
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const { devOtp } = lr.body as { devOtp: string };
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email, otp: devOtp, deviceFingerprint })
-      .expect(200);
-    const { accessToken } = lv.body as { accessToken: string };
+    const { accessToken, userId } = await mintTier1User(app, {
+      email,
+      pin: '1357',
+    });
 
+    // Set the pre-KYC name while still 'not_started' (the only path now that
+    // /kyc/submit is retired), then simulate a completed KYC review directly
+    // via the DB — mirrors the tier_2-fixture pattern used elsewhere in the
+    // e2e suites (e.g. web-chat.e2e-spec.ts); the Sumsub webhook flow itself
+    // is exercised in sumsub-webhook.e2e-spec.ts.
     await request(app.getHttpServer())
-      .post('/kyc/submit')
+      .post('/profile/name')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Eze',
-        lastName: 'Nweke',
-        nin: '12345678901',
-        pin: '1357',
-      })
+      .send({ firstName: 'Eze', lastName: 'Nweke' })
       .expect(200);
 
-    // Precondition: KYC verification has started (kycStatus=verified).
+    await prisma.user.update({
+      where: { id: userId },
+      data: { kycStatus: 'verified' },
+    });
+
+    // Precondition: KYC verification is complete (kycStatus=verified).
     const before = await request(app.getHttpServer())
       .get('/profile')
       .set('Authorization', `Bearer ${accessToken}`)

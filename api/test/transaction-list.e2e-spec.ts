@@ -38,6 +38,7 @@ import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.p
 import type { IWalletProvider } from '../src/modules/wallets/application/ports/wallet-provider.port';
 import type { IPaymentProvider } from '../src/modules/treasury/application/ports/payment-provider.port';
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
+import { mintTier1User } from './helpers/mint-verified-user';
 
 jest.setTimeout(180_000);
 
@@ -217,52 +218,10 @@ describe('Transaction list — e2e (GET /transactions)', () => {
   async function setupVerifiedUser(
     userEmail: string,
   ): Promise<{ accessToken: string; userId: string }> {
-    const deviceFingerprint = `e2e-txn-list-fp-${userEmail.slice(0, 16)}`;
-
-    // 1. Signup
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email: userEmail, phone: '+2348099991234' })
-      .expect(202);
-    const { devToken } = su.body as { status: string; devToken: string };
-
-    // 2. Verify email
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-
-    // 3. Login request
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email: userEmail })
-      .expect(202);
-    const { devOtp } = lr.body as { status: string; devOtp: string };
-
-    // 4. Login verify
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email: userEmail, otp: devOtp, deviceFingerprint })
-      .expect(200);
-    const { accessToken } = lv.body as {
-      accessToken: string;
-      refreshToken: string;
-      user: { email: string; id: string };
-    };
-
-    // 5. KYC submit (sets PIN + provisions wallet)
-    const ks = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Eze',
-        lastName: 'Nweke',
-        nin: '12345678901',
-        pin: '1357',
-      })
-      .expect(200);
-    const { userId } = ks.body as { userId: string; status: string };
-
+    const { accessToken, userId } = await mintTier1User(app, {
+      email: userEmail,
+      pin: '1357',
+    });
     return { accessToken, userId };
   }
 

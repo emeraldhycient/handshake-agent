@@ -23,6 +23,7 @@ import { WALLET_PROVIDER } from '../src/modules/wallets/application/ports/wallet
 import { PAYMENT_PROVIDER } from '../src/modules/treasury/application/ports/payment-provider.port';
 import { WHATSAPP_SENDER } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.port';
+import { mintTier1User } from './helpers/mint-verified-user';
 
 jest.setTimeout(180_000);
 const API_ROOT = join(__dirname, '..');
@@ -140,35 +141,12 @@ describe('Transaction history — e2e', () => {
 
   async function onboard(
     email: string,
-    phone: string,
   ): Promise<{ accessToken: string; userId: string }> {
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone })
-      .expect(202);
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: (su.body as { devToken: string }).devToken })
-      .expect(200);
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({
-        email,
-        otp: (lr.body as { devOtp: string }).devOtp,
-        deviceFingerprint: `fp-${phone}`,
-      })
-      .expect(200);
-    const accessToken = (lv.body as { accessToken: string }).accessToken;
-    const ks = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({ firstName: 'A', lastName: 'B', nin: '22334455667', pin: '1357' })
-      .expect(200);
-    return { accessToken, userId: (ks.body as { userId: string }).userId };
+    const { accessToken, userId } = await mintTier1User(app, {
+      email,
+      pin: '1357',
+    });
+    return { accessToken, userId };
   }
 
   async function seedTxn(
@@ -195,10 +173,7 @@ describe('Transaction history — e2e', () => {
   }
 
   it('POST /chat/messages → transactions outcome with a downloadUrl', async () => {
-    const { accessToken, userId } = await onboard(
-      `txh_${Date.now()}@t.com`,
-      '+2348020000001',
-    );
+    const { accessToken, userId } = await onboard(`txh_${Date.now()}@t.com`);
     await seedTxn(userId, 'buy', new Date('2026-06-10T10:00:00.000Z'));
     await seedTxn(userId, 'send', new Date('2026-06-12T10:00:00.000Z'));
 
@@ -225,9 +200,9 @@ describe('Transaction history — e2e', () => {
   }, 120_000);
 
   it('GET /transactions/history scopes to the user (other user → empty)', async () => {
-    const a = await onboard(`txa_${Date.now()}@t.com`, '+2348020000002');
+    const a = await onboard(`txa_${Date.now()}@t.com`);
     await seedTxn(a.userId, 'buy', new Date('2026-06-10T10:00:00.000Z'));
-    const b = await onboard(`txb_${Date.now()}@t.com`, '+2348020000003');
+    const b = await onboard(`txb_${Date.now()}@t.com`);
 
     const mine = await request(app.getHttpServer())
       .get('/transactions/history?period=all')
@@ -245,10 +220,7 @@ describe('Transaction history — e2e', () => {
   }, 120_000);
 
   it('GET /transactions/statement/download streams a PDF; tampered token → 401', async () => {
-    const { accessToken, userId } = await onboard(
-      `txd_${Date.now()}@t.com`,
-      '+2348020000004',
-    );
+    const { accessToken, userId } = await onboard(`txd_${Date.now()}@t.com`);
     await seedTxn(userId, 'buy', new Date('2026-06-10T10:00:00.000Z'));
 
     const hist = await request(app.getHttpServer())
@@ -283,10 +255,7 @@ describe('Transaction history — e2e', () => {
   }, 120_000);
 
   it('GET /transactions/:id still resolves (no route collision with /history)', async () => {
-    const { accessToken } = await onboard(
-      `txc_${Date.now()}@t.com`,
-      '+2348020000005',
-    );
+    const { accessToken } = await onboard(`txc_${Date.now()}@t.com`);
     await request(app.getHttpServer())
       .get('/transactions/00000000-0000-0000-0000-000000000000')
       .set('Authorization', `Bearer ${accessToken}`)
@@ -302,10 +271,7 @@ describe('Transaction history — e2e', () => {
   }
 
   it('GET /transactions/history keyset-paginates with a stable cursor (no dup/skip)', async () => {
-    const { accessToken, userId } = await onboard(
-      `txpg_${Date.now()}@t.com`,
-      '+2348020000009',
-    );
+    const { accessToken, userId } = await onboard(`txpg_${Date.now()}@t.com`);
     // 5 rows at distinct, recent timestamps so they fall in any "all" window.
     const base = Date.now();
     for (let i = 0; i < 5; i++) {
@@ -359,10 +325,7 @@ describe('Transaction history — e2e', () => {
   }, 120_000);
 
   it('GET /transactions/history resolves a relative-duration window', async () => {
-    const { accessToken, userId } = await onboard(
-      `txrel_${Date.now()}@t.com`,
-      '+2348020000010',
-    );
+    const { accessToken, userId } = await onboard(`txrel_${Date.now()}@t.com`);
     // A row "now" falls inside any recent relative window.
     await seedTxn(userId, 'buy', new Date());
 
