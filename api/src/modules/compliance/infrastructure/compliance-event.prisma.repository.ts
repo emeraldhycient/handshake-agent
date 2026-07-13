@@ -165,6 +165,26 @@ export class ComplianceEventPrismaRepository implements IComplianceEventReposito
     return row !== null ? toRecord(row) : null;
   }
 
+  async findLatestOpenByUserAndType(
+    userId: string,
+    eventType: ComplianceEventTypeValue,
+  ): Promise<ComplianceEventRecord | null> {
+    // "Open" = not yet dispositioned: still flagged or actively under review.
+    // Backed by @@index([userId, status, createdAt]) on ComplianceEvent.
+    const row = await this.prisma.complianceEvent.findFirst({
+      where: {
+        userId,
+        eventType: toEventType(eventType),
+        status: {
+          in: [ComplianceStatus.flagged, ComplianceStatus.under_review],
+        },
+      },
+      select: EVENT_SELECT,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+    return row !== null ? toRecord(row) : null;
+  }
+
   async updateDisposition(
     id: string,
     input: ComplianceEventDispositionInput,

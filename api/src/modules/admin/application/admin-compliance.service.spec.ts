@@ -98,6 +98,7 @@ describe('AdminComplianceService', () => {
       create: jest.fn(),
       listByStatus: jest.fn(),
       findById: jest.fn(),
+      findLatestOpenByUserAndType: jest.fn(),
       updateDisposition: jest.fn(),
     };
     sanctionsRepo = {

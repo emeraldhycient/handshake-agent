@@ -75,6 +75,7 @@ function makeEventRepo(
     create: jest.fn().mockResolvedValue(base),
     listByStatus: jest.fn(),
     findById: jest.fn(),
+    findLatestOpenByUserAndType: jest.fn(),
     updateDisposition: jest.fn(),
   };
 }
