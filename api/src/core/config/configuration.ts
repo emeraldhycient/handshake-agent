@@ -8,6 +8,8 @@
  * `sellSpreadBps` / `processingFeeBps` are genuinely admin-tunable and belong
  * in config.
  */
+import type { KycTier } from '@handshake-agent/contracts';
+
 export interface AssetPricing {
   /** Base mid-market rate per 1 unit of the crypto asset, keyed by fiat code. */
   baseRates: Record<string, number>;
@@ -612,6 +614,18 @@ export interface AgentConfig {
   maxToolCallsPerTurn: number;
 }
 
+/**
+ * Capability-gating configuration (Task 1.2, root CLAUDE.md §7). Maps each
+ * transactable capability key (matching the `catalog.capabilities` dotted
+ * leaves, e.g. `crypto.buy`) to the minimum KYC tier required to use it. A
+ * code-default for now — the gate (Task 1.3) reads it through
+ * `EffectiveConfigService`, which serves this default until an operator
+ * registers a DB-admin override (deferred follow-up, not part of this task).
+ */
+export interface GatingConfig {
+  capabilityMinTier: Record<string, KycTier>;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
@@ -631,6 +645,7 @@ export interface AppConfig {
   ticketing: TicketingConfig;
   treasury: TreasuryConfig;
   agent: AgentConfig;
+  gating: GatingConfig;
 }
 
 /**
@@ -1151,6 +1166,21 @@ const buildConfig = (): AppConfig => ({
     // Single-node intent-extraction graph today → one pass per turn. Admin-tunable
     // (§7) so a future tool-call loop can raise it without a code change.
     maxToolCallsPerTurn: 1,
+  },
+  // ── Capability gating (Task 1.2, CLAUDE.md §7) ─────────────────────────────
+  // Minimum KYC tier required to use each transactable capability. Keys mirror
+  // the `catalog.capabilities` dotted leaves. Code-default now; the gate
+  // (Task 1.3) reads it through EffectiveConfigService, which falls back to
+  // this default until an operator registers a DB-admin override (deferred
+  // follow-up — NOT part of this task).
+  gating: {
+    capabilityMinTier: {
+      'crypto.buy': 'tier_1',
+      'crypto.receive': 'tier_1',
+      'crypto.sell': 'tier_2',
+      'crypto.send': 'tier_2',
+      'crypto.swap': 'tier_2',
+    },
   },
 });
 
