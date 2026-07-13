@@ -23,6 +23,7 @@ import type {
   MeResponse,
   RefreshResponse,
   SignupResponse,
+  SignupVerifyResponse,
   VerifyEmailResponse,
 } from '@handshake-agent/contracts';
 
@@ -46,6 +47,8 @@ import {
   LoginVerifyDto,
   RefreshDto,
   SignupDto,
+  SignupOtpRequestDto,
+  SignupVerifyDto,
   VerifyEmailDto,
 } from './dto/auth.dto';
 
@@ -68,6 +71,43 @@ export class AuthController {
   @Throttle({ auth: { limit: 30, ttl: 60_000 } })
   async verifyEmail(@Body() dto: VerifyEmailDto): Promise<VerifyEmailResponse> {
     return this.guard(() => this.auth.verifyEmail(dto));
+  }
+
+  /**
+   * OTP signup — additive, non-breaking (Task 2.2). Mirrors login/request:
+   * same { email } input shape and LoginRequestResponse output shape. Does
+   * NOT replace `POST /auth/signup` (the legacy link flow above stays intact
+   * for backward-compat).
+   */
+  @Post('signup/request')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ auth: { limit: 30, ttl: 60_000 } })
+  async signupRequest(
+    @Body() dto: SignupOtpRequestDto,
+  ): Promise<LoginRequestResponse> {
+    return this.guard(() => this.auth.signupRequest(dto));
+  }
+
+  /**
+   * OTP signup verification (Task 2.2). Mirrors login/verify: validates the
+   * OTP, issues the session, and Set-Cookies the HttpOnly ha_refresh token the
+   * same way — additionally, this call is what grants tier_1 (via
+   * markEmailVerified inside AuthService.signupVerify).
+   */
+  @Post('signup/verify')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ auth: { limit: 30, ttl: 60_000 } })
+  async signupVerify(
+    @Body() dto: SignupVerifyDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<SignupVerifyResponse> {
+    const result = await this.guard(() => this.auth.signupVerify(dto));
+    res.cookie(
+      WEB_REFRESH_COOKIE,
+      result.refreshToken,
+      webRefreshCookieOptions(this.config),
+    );
+    return result;
   }
 
   @Post('login/request')

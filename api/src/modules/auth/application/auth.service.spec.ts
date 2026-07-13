@@ -19,6 +19,7 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
   const email = {
     sendEmailVerification: jest.fn(() => Promise.resolve(undefined)),
     sendLoginOtp: jest.fn(() => Promise.resolve(undefined)),
+    sendLoginInstead: jest.fn(() => Promise.resolve(undefined)),
   };
   const challengeRepo = {
     upsert: jest.fn(() => Promise.resolve(undefined)),
@@ -281,6 +282,202 @@ describe('AuthService.resendEmailVerification', () => {
     const res = await service.resendEmailVerification({ email: 'ghost@b.com' });
     expect(email.sendEmailVerification).not.toHaveBeenCalled();
     expect(res).toEqual({ status: 'pending_verification' });
+  });
+});
+
+describe('AuthService.signupRequest', () => {
+  it('creates-or-resumes the user, mints+sends a signup OTP, and echoes devOtp when dev-expose is on', async () => {
+    const { service, email, challengeRepo, userRepo } = makeDeps({
+      AUTH_DEV_EXPOSE_OTP: 'true',
+    });
+    userRepo.findByEmail.mockResolvedValueOnce(null); // brand-new email
+    const res = await service.signupRequest({ email: 'new@b.com' });
+    expect(userRepo.createSignup).toHaveBeenCalledWith({ email: 'new@b.com' });
+    expect(challengeRepo.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        type: 'otp_email',
+        challengeHash: 'hash(123456)',
+      }),
+    );
+    expect(email.sendLoginOtp).toHaveBeenCalledWith('new@b.com', '123456');
+    expect(email.sendLoginInstead).not.toHaveBeenCalled();
+    expect(res).toEqual({ status: 'otp_sent', devOtp: '123456' });
+  });
+
+  it('resumes an existing UNVERIFIED user (no duplicate) and mints a fresh OTP', async () => {
+    const { service, email, challengeRepo, userRepo } = makeDeps();
+    userRepo.findByEmail.mockResolvedValueOnce({
+      id: 'u1',
+      email: 'a@b.com',
+      emailVerifiedAt: null,
+      kycStatus: 'not_started',
+      kycTier: 'unverified',
+      pinHash: null as unknown as string,
+    });
+    const res = await service.signupRequest({ email: 'a@b.com' });
+    expect(userRepo.createSignup).toHaveBeenCalledWith({ email: 'a@b.com' });
+    expect(challengeRepo.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', type: 'otp_email' }),
+    );
+    expect(email.sendLoginOtp).toHaveBeenCalled();
+    expect(res).toEqual({ status: 'otp_sent' });
+  });
+
+  it('an already-verified email gets the SAME otp_sent shape but mints no usable OTP (no enumeration oracle)', async () => {
+    const { service, email, challengeRepo, userRepo } = makeDeps({
+      AUTH_DEV_EXPOSE_OTP: 'true',
+    });
+    userRepo.findByEmail.mockResolvedValueOnce({
+      id: 'u1',
+      email: 'a@b.com',
+      emailVerifiedAt: new Date(),
+      kycStatus: 'verified',
+      kycTier: 'tier_1',
+      pinHash: 'x',
+    });
+    const res = await service.signupRequest({ email: 'a@b.com' });
+    expect(userRepo.createSignup).not.toHaveBeenCalled();
+    expect(challengeRepo.upsert).not.toHaveBeenCalled();
+    expect(email.sendLoginOtp).not.toHaveBeenCalled();
+    expect(email.sendLoginInstead).toHaveBeenCalledWith('a@b.com');
+    // Same shape as the non-verified branch — no devOtp leak either, since
+    // dev-expose only echoes an OTP that was actually minted.
+    expect(res).toEqual({ status: 'otp_sent' });
+  });
+});
+
+describe('AuthService.signupVerify', () => {
+  const unverified = {
+    id: 'u1',
+    email: 'a@b.com',
+    emailVerifiedAt: null,
+    kycStatus: 'not_started',
+    kycTier: 'unverified',
+    pinHash: null as unknown as string,
+  };
+
+  it('verifies the OTP, marks the email verified (tier_1 grant), binds device, creates a session, and sets emailVerified:true', async () => {
+    const { service, userRepo, challengeRepo, sessionRepo, tokenService } =
+      makeDeps();
+    userRepo.findByEmail.mockResolvedValueOnce(unverified);
+    challengeRepo.findActiveByUserAndType.mockResolvedValueOnce({
+      id: 'c1',
+      challengeHash: 'hash(123456)',
+      attemptCount: 0,
+    });
+    tokenService.generateOpaqueToken.mockReturnValueOnce('refresh-token');
+    userRepo.loadMe.mockResolvedValueOnce({
+      userId: 'u1',
+      email: 'a@b.com',
+      kycStatus: 'not_started',
+      kycTier: 'tier_1',
+      hasPin: false,
+      firstName: null,
+      lastName: null,
+    });
+
+    const res = await service.signupVerify({
+      email: 'a@b.com',
+      otp: '123456',
+      deviceFingerprint: 'fp-1',
+    });
+
+    expect(challengeRepo.consume).toHaveBeenCalledWith('c1', expect.any(Date));
+    expect(userRepo.markEmailVerified).toHaveBeenCalledWith(
+      'u1',
+      expect.any(Date),
+    );
+    expect(userRepo.bindDevice).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', fingerprint: 'fp-1' }),
+    );
+    expect(sessionRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        deviceId: 'd1',
+        accessTokenHash: 'hash(access.jwt)',
+        refreshTokenHash: 'hash(refresh-token)',
+      }),
+    );
+    expect(res).toEqual({
+      accessToken: 'access.jwt',
+      refreshToken: 'refresh-token',
+      user: {
+        userId: 'u1',
+        email: 'a@b.com',
+        kycStatus: 'not_started',
+        kycTier: 'tier_1',
+        hasPin: false,
+        firstName: null,
+        lastName: null,
+        emailVerified: true,
+      },
+    });
+  });
+
+  it('throws InvalidOtpError on a wrong code, increments attempt, and never verifies or issues a session', async () => {
+    const { service, userRepo, challengeRepo, sessionRepo } = makeDeps();
+    userRepo.findByEmail.mockResolvedValueOnce(unverified);
+    challengeRepo.findActiveByUserAndType.mockResolvedValueOnce({
+      id: 'c1',
+      challengeHash: 'hash(999999)',
+      attemptCount: 0,
+    });
+    await expect(
+      service.signupVerify({
+        email: 'a@b.com',
+        otp: '123456',
+        deviceFingerprint: 'fp-1',
+      }),
+    ).rejects.toBeInstanceOf(InvalidOtpError);
+    expect(challengeRepo.incrementAttempt).toHaveBeenCalledWith('c1');
+    expect(userRepo.markEmailVerified).not.toHaveBeenCalled();
+    expect(sessionRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('throws InvalidOtpError for an ALREADY-VERIFIED email — no usable challenge exists (no enumeration oracle), never verifies or issues a session', async () => {
+    const { service, userRepo, challengeRepo, sessionRepo } = makeDeps();
+    userRepo.findByEmail.mockResolvedValueOnce({
+      id: 'u1',
+      email: 'a@b.com',
+      emailVerifiedAt: new Date(),
+      kycStatus: 'verified',
+      kycTier: 'tier_1',
+      pinHash: 'x',
+    });
+    // Even if a challenge happens to exist under this real user id (e.g. a
+    // stray login OTP the user requested separately), the eligibility gate
+    // must reject BEFORE ever inspecting it — OtpLockedError must stay
+    // structurally unreachable here, mirroring loginVerify's unknown-user
+    // defence.
+    challengeRepo.findActiveByUserAndType.mockResolvedValueOnce({
+      id: 'stray-login-otp',
+      challengeHash: 'hash(123456)',
+      attemptCount: 99,
+    });
+    await expect(
+      service.signupVerify({
+        email: 'a@b.com',
+        otp: '123456',
+        deviceFingerprint: 'fp-1',
+      }),
+    ).rejects.toBeInstanceOf(InvalidOtpError);
+    expect(userRepo.markEmailVerified).not.toHaveBeenCalled();
+    expect(sessionRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('throws InvalidOtpError for an unknown email — still performs a dummy challenge lookup (timing oracle defence)', async () => {
+    const { service, userRepo, challengeRepo } = makeDeps();
+    userRepo.findByEmail.mockResolvedValueOnce(null);
+    await expect(
+      service.signupVerify({
+        email: 'ghost@b.com',
+        otp: '123456',
+        deviceFingerprint: 'fp',
+      }),
+    ).rejects.toBeInstanceOf(InvalidOtpError);
+    expect(challengeRepo.findActiveByUserAndType).toHaveBeenCalledTimes(1);
+    expect(challengeRepo.incrementAttempt).not.toHaveBeenCalled();
   });
 });
 

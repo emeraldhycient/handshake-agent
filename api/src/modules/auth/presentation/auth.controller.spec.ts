@@ -163,6 +163,69 @@ describe('AuthController.loginVerify — refresh cookie', () => {
   });
 });
 
+describe('AuthController.signupVerify — refresh cookie (mirrors loginVerify)', () => {
+  const body = {
+    email: 'a@b.com',
+    otp: '123456',
+    deviceFingerprint: 'fp-12345678',
+  } as never;
+
+  it('sets the HttpOnly ha_refresh cookie and returns the tier_1 + emailVerified user', async () => {
+    const verifiedMe = { ...ME, kycTier: 'tier_1', emailVerified: true };
+    const signupVerify = jest.fn().mockResolvedValue({
+      accessToken: 'access.jwt',
+      refreshToken: 'refresh.tok',
+      user: verifiedMe,
+    });
+    const controller = new AuthController(
+      { signupVerify } as unknown as AuthService,
+      config,
+    );
+    const res = makeRes();
+    const result = await controller.signupVerify(
+      body,
+      res as unknown as Response,
+    );
+    expect(res.cookie).toHaveBeenCalledWith(
+      WEB_REFRESH_COOKIE,
+      'refresh.tok',
+      expect.objectContaining({ httpOnly: true, sameSite: 'lax', path: '/' }),
+    );
+    expect(result).toEqual({
+      accessToken: 'access.jwt',
+      refreshToken: 'refresh.tok',
+      user: verifiedMe,
+    });
+  });
+
+  it('does NOT set a cookie when signup verification fails', async () => {
+    const signupVerify = jest.fn().mockRejectedValue(new InvalidOtpError());
+    const controller = new AuthController(
+      { signupVerify } as unknown as AuthService,
+      config,
+    );
+    const res = makeRes();
+    await controller
+      .signupVerify(body, res as unknown as Response)
+      .catch(() => undefined);
+    expect(res.cookie).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthController.signupRequest', () => {
+  it('delegates to AuthService.signupRequest and returns the neutral otp_sent response', async () => {
+    const signupRequest = jest
+      .fn()
+      .mockResolvedValue({ status: 'otp_sent', devOtp: '123456' });
+    const auth = { signupRequest } as unknown as AuthService;
+    const controller = new AuthController(auth, config);
+    await expect(
+      controller.signupRequest({ email: 'a@b.com' }),
+    ).resolves.toEqual({ status: 'otp_sent', devOtp: '123456' });
+    expect(signupRequest).toHaveBeenCalledWith({ email: 'a@b.com' });
+  });
+});
+
 describe('AuthController.refresh — cookie-primary', () => {
   const rotated = {
     accessToken: 'new.access',

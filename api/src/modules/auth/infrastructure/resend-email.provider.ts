@@ -100,6 +100,26 @@ export class ResendEmailProvider implements IEmailProvider {
     await this.send({ to, subject, html, text });
   }
 
+  /**
+   * Notifies an already-registered, already-verified email that a signup was
+   * attempted for it. No OTP/code is included — there is nothing to enter,
+   * this is a nudge to use the login flow instead.
+   */
+  async sendLoginInstead(to: string): Promise<void> {
+    const subject = 'You already have a Handshake account';
+    const html = `
+<p>Hi,</p>
+<p>Someone (hopefully you) just tried to sign up for Handshake using this email address, but an account already exists for it.</p>
+<p>If this was you, there's nothing to do here — just log in instead, no new account needed.</p>
+<p>If you did not request this, you can safely ignore this email.</p>
+<p>— The Handshake Team</p>
+    `.trim();
+    const text = `You already have a Handshake account\n\nSomeone (hopefully you) just tried to sign up for Handshake using this email address, but an account already exists for it.\n\nIf this was you, there's nothing to do here — just log in instead, no new account needed.\n\nIf you did not request this, you can safely ignore this email.\n\n— The Handshake Team`;
+
+    this.logger.log(`[resend] sending login-instead notice to ${to}`);
+    await this.send({ to, subject, html, text });
+  }
+
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
