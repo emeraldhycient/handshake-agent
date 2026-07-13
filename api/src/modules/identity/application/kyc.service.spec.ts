@@ -303,6 +303,40 @@ describe('KycService.completeVerification', () => {
     // The hashed form must be present under 'pinHash'
     expect(call.pinHash).toBe(PIN_HASH);
   });
+
+  // ── Granted tier is threaded through, not hardcoded (Task 1.1) ───────────
+
+  it('provider approves at tier_2 → completeVerificationAtomic is called with tier: tier_2', async () => {
+    const tier2Provider = makeKycProvider({
+      approved: true,
+      tier: 'tier_2',
+      reference: 'ref-tier2',
+    });
+
+    const { svc, kycRepo } = buildService({ kycProvider: tier2Provider });
+
+    await svc.completeVerification(VALID_INPUT);
+
+    expect(kycRepo.completeVerificationAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({ tier: 'tier_2' }),
+    );
+  });
+
+  it('provider approves at tier_1 (mock default) → completeVerificationAtomic is still called with tier: tier_1 (behavior preservation)', async () => {
+    const tier1Provider = makeKycProvider({
+      approved: true,
+      tier: 'tier_1',
+      reference: 'ref-tier1',
+    });
+
+    const { svc, kycRepo } = buildService({ kycProvider: tier1Provider });
+
+    await svc.completeVerification(VALID_INPUT);
+
+    expect(kycRepo.completeVerificationAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({ tier: 'tier_1' }),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -488,5 +522,55 @@ describe('KycService.completeVerificationForUser', () => {
     expect(err).toBeInstanceOf(KycRejectedError);
     expect((err as KycRejectedError).reason).toBe('BVN liveness failed');
     expect((err as KycRejectedError).code).toBe('KYC_REJECTED');
+  });
+
+  // ── Granted tier is threaded through, not hardcoded (Task 1.1) ───────────
+
+  it('provider approves at tier_2 → completeVerificationForUserAtomic is called with tier: tier_2', async () => {
+    const identityRepo = makeIdentityRepo({
+      loadUser: jest.fn().mockResolvedValue(UNVERIFIED_USER),
+    });
+    const tier2Provider = makeKycProvider({
+      approved: true,
+      tier: 'tier_2',
+      reference: 'ref-tier2',
+    });
+    const kycRepo = makeKycRepo();
+
+    const { svc } = buildService({
+      identityRepo,
+      kycProvider: tier2Provider,
+      kycRepo,
+    });
+
+    await svc.completeVerificationForUser(VALID_WEB_INPUT);
+
+    expect(kycRepo.completeVerificationForUserAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({ tier: 'tier_2' }),
+    );
+  });
+
+  it('provider approves at tier_1 (mock default) → completeVerificationForUserAtomic is still called with tier: tier_1 (behavior preservation)', async () => {
+    const identityRepo = makeIdentityRepo({
+      loadUser: jest.fn().mockResolvedValue(UNVERIFIED_USER),
+    });
+    const tier1Provider = makeKycProvider({
+      approved: true,
+      tier: 'tier_1',
+      reference: 'ref-tier1',
+    });
+    const kycRepo = makeKycRepo();
+
+    const { svc } = buildService({
+      identityRepo,
+      kycProvider: tier1Provider,
+      kycRepo,
+    });
+
+    await svc.completeVerificationForUser(VALID_WEB_INPUT);
+
+    expect(kycRepo.completeVerificationForUserAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({ tier: 'tier_1' }),
+    );
   });
 });

@@ -23,20 +23,24 @@ const ENC_KEY = 'a'.repeat(64);
 const NIN = '12345678901';
 const BVN = '22233344455';
 
-/** The encrypted-at-rest shape the repo persists for KycProfile.{nin,bvn}. */
+/** The encrypted-at-rest shape the repo persists for KycProfile.{nin,bvn,tier}. */
 interface KycProfileData {
   nin: string | null;
   bvn: string | null;
+  tier: string;
 }
 type KycProfileCreateArg = { data: KycProfileData };
 type KycProfileUpsertArg = { create: KycProfileData; update: KycProfileData };
+
+/** The shape the repo persists for User.kycTier (Task 1.1: threaded, not hardcoded). */
+type UserWriteArg = { data: { kycTier?: string } };
 
 /** Typed jest mocks so `.mock.calls[…]` are not `any`. */
 interface CapturedWrites {
   kycProfileCreate: jest.Mock<Promise<void>, [KycProfileCreateArg]>;
   kycProfileUpsert: jest.Mock<Promise<void>, [KycProfileUpsertArg]>;
-  userCreate: jest.Mock<Promise<{ id: string }>, [unknown]>;
-  userUpdate: jest.Mock<Promise<void>, [unknown]>;
+  userCreate: jest.Mock<Promise<{ id: string }>, [UserWriteArg]>;
+  userUpdate: jest.Mock<Promise<void>, [UserWriteArg]>;
   contactUpdate: jest.Mock<Promise<void>, [unknown]>;
   channelIdentityUpdate: jest.Mock<Promise<void>, [unknown]>;
 }
@@ -74,9 +78,9 @@ function freshCaptured(): CapturedWrites {
     kycProfileCreate: jest.fn<Promise<void>, [KycProfileCreateArg]>(),
     kycProfileUpsert: jest.fn<Promise<void>, [KycProfileUpsertArg]>(),
     userCreate: jest
-      .fn<Promise<{ id: string }>, [unknown]>()
+      .fn<Promise<{ id: string }>, [UserWriteArg]>()
       .mockResolvedValue({ id: 'user-1' }),
-    userUpdate: jest.fn<Promise<void>, [unknown]>(),
+    userUpdate: jest.fn<Promise<void>, [UserWriteArg]>(),
     contactUpdate: jest.fn<Promise<void>, [unknown]>(),
     channelIdentityUpdate: jest.fn<Promise<void>, [unknown]>(),
   };
@@ -91,6 +95,7 @@ const ATOMIC_INPUT = {
   lastName: 'Okafor',
   dateOfBirth: '1992-07-14',
   pinHash: 'aa:bb',
+  tier: 'tier_1' as const,
   now: new Date('2026-06-30T00:00:00.000Z'),
 };
 
@@ -102,6 +107,7 @@ const FOR_USER_INPUT = {
   lastName: 'Okafor',
   dateOfBirth: '1992-07-14',
   pinHash: 'aa:bb',
+  tier: 'tier_1' as const,
   now: new Date('2026-06-30T00:00:00.000Z'),
 };
 
@@ -172,6 +178,44 @@ describe('KycPrismaRepository — NIN/BVN encryption at rest (NFR-1)', () => {
         repo.completeVerificationAtomic(ATOMIC_INPUT),
       ).resolves.toEqual({ userId: 'user-1' });
     });
+
+    // ── Task 1.1: the granted tier is threaded through, not hardcoded ────────
+
+    it('persists input.tier on both User.kycTier and KycProfile.tier — a tier_2 grant is NOT downgraded to tier_1', async () => {
+      const captured = freshCaptured();
+      const repo = new KycPrismaRepository(
+        makePrisma(captured),
+        makeConfig(ENC_KEY),
+      );
+
+      await repo.completeVerificationAtomic({
+        ...ATOMIC_INPUT,
+        tier: 'tier_2',
+      });
+
+      expect(captured.userCreate.mock.calls[0][0].data.kycTier).toBe('tier_2');
+      expect(captured.kycProfileCreate.mock.calls[0][0].data.tier).toBe(
+        'tier_2',
+      );
+    });
+
+    it('a tier_1 grant still persists tier_1 (behavior preservation for the mock provider)', async () => {
+      const captured = freshCaptured();
+      const repo = new KycPrismaRepository(
+        makePrisma(captured),
+        makeConfig(ENC_KEY),
+      );
+
+      await repo.completeVerificationAtomic({
+        ...ATOMIC_INPUT,
+        tier: 'tier_1',
+      });
+
+      expect(captured.userCreate.mock.calls[0][0].data.kycTier).toBe('tier_1');
+      expect(captured.kycProfileCreate.mock.calls[0][0].data.tier).toBe(
+        'tier_1',
+      );
+    });
   });
 
   describe('completeVerificationForUserAtomic', () => {
@@ -191,6 +235,44 @@ describe('KycPrismaRepository — NIN/BVN encryption at rest (NFR-1)', () => {
         expect(repo.decryptIdentifier(branch.nin)).toBe(NIN);
         expect(repo.decryptIdentifier(branch.bvn)).toBe(BVN);
       }
+    });
+
+    // ── Task 1.1: the granted tier is threaded through, not hardcoded ────────
+
+    it('persists input.tier on both User.kycTier and the KycProfile upsert (create + update branches) — a tier_2 grant is NOT downgraded to tier_1', async () => {
+      const captured = freshCaptured();
+      const repo = new KycPrismaRepository(
+        makePrisma(captured),
+        makeConfig(ENC_KEY),
+      );
+
+      await repo.completeVerificationForUserAtomic({
+        ...FOR_USER_INPUT,
+        tier: 'tier_2',
+      });
+
+      const args = captured.kycProfileUpsert.mock.calls[0][0];
+      expect(args.create.tier).toBe('tier_2');
+      expect(args.update.tier).toBe('tier_2');
+      expect(captured.userUpdate.mock.calls[0][0].data.kycTier).toBe('tier_2');
+    });
+
+    it('a tier_1 grant still persists tier_1 (behavior preservation for the mock provider)', async () => {
+      const captured = freshCaptured();
+      const repo = new KycPrismaRepository(
+        makePrisma(captured),
+        makeConfig(ENC_KEY),
+      );
+
+      await repo.completeVerificationForUserAtomic({
+        ...FOR_USER_INPUT,
+        tier: 'tier_1',
+      });
+
+      const args = captured.kycProfileUpsert.mock.calls[0][0];
+      expect(args.create.tier).toBe('tier_1');
+      expect(args.update.tier).toBe('tier_1');
+      expect(captured.userUpdate.mock.calls[0][0].data.kycTier).toBe('tier_1');
     });
 
     it('fails closed when a value is present but no key', async () => {

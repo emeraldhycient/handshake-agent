@@ -81,12 +81,13 @@ export class KycPrismaRepository implements IKycRepository {
 
   /**
    * Atomically:
-   *   1. Creates a User (status=active, kycStatus=verified, kycTier=tier_1, pinHash).
-   *   2. Creates a KycProfile (status=verified, tier=tier_1, identity fields, verifiedAt=now).
+   *   1. Creates a User (status=active, kycStatus=verified, kycTier=input.tier, pinHash).
+   *   2. Creates a KycProfile (status=verified, tier=input.tier, identity fields, verifiedAt=now).
    *   3. Links the Contact (linkedUserId = user.id).
    *   4. Updates the ChannelIdentity (userId = user.id, verificationStatus=verified, verifiedAt=now).
    *
-   * NIN/BVN are AES-256-GCM-encrypted before they reach the DB (NFR-1).
+   * NIN/BVN are AES-256-GCM-encrypted before they reach the DB (NFR-1). The
+   * tier is whatever IKycProvider granted (input.tier) — never hardcoded here.
    */
   async completeVerificationAtomic(
     input: CompleteVerificationAtomicInput,
@@ -100,6 +101,7 @@ export class KycPrismaRepository implements IKycRepository {
       lastName,
       dateOfBirth,
       pinHash,
+      tier,
       now,
     } = input;
 
@@ -113,8 +115,7 @@ export class KycPrismaRepository implements IKycRepository {
         data: {
           status: UserStatus.active,
           kycStatus: KycStatus.verified,
-          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
-          kycTier: KycTier.tier_1,
+          kycTier: tier,
           // Stamp the initial tier grant so the gate can enforce the cooling-off.
           tierChangedAt: new Date(),
           pinHash,
@@ -127,8 +128,7 @@ export class KycPrismaRepository implements IKycRepository {
         data: {
           userId: user.id,
           status: KycStatus.verified,
-          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
-          tier: KycTier.tier_1,
+          tier,
           nin: ninEnc,
           bvn: bvnEnc,
           firstName,
@@ -162,17 +162,28 @@ export class KycPrismaRepository implements IKycRepository {
   }
 
   /**
-   * Atomically upgrades an existing web-native User to Tier-1 verified status:
+   * Atomically upgrades an existing web-native User to verified status at the
+   * provider-granted tier:
    *   1. Upserts the KycProfile (web users have no KycProfile yet at this point).
-   *   2. Updates the User row: kycStatus=verified, kycTier=tier_1, status=active, pinHash.
+   *   2. Updates the User row: kycStatus=verified, kycTier=input.tier, status=active, pinHash.
    *
-   * NIN/BVN are AES-256-GCM-encrypted before they reach the DB (NFR-1).
+   * NIN/BVN are AES-256-GCM-encrypted before they reach the DB (NFR-1). The
+   * tier is whatever IKycProvider granted (input.tier) — never hardcoded here.
    */
   async completeVerificationForUserAtomic(
     input: CompleteVerificationForUserAtomicInput,
   ): Promise<CompleteVerificationForUserAtomicResult> {
-    const { userId, nin, bvn, firstName, lastName, dateOfBirth, pinHash, now } =
-      input;
+    const {
+      userId,
+      nin,
+      bvn,
+      firstName,
+      lastName,
+      dateOfBirth,
+      pinHash,
+      tier,
+      now,
+    } = input;
 
     // Encrypt PII outside the transaction (fail-closed before any write).
     const ninEnc = this.encryptIdentifier(nin);
@@ -185,8 +196,7 @@ export class KycPrismaRepository implements IKycRepository {
         create: {
           userId,
           status: KycStatus.verified,
-          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
-          tier: KycTier.tier_1,
+          tier,
           nin: ninEnc,
           bvn: bvnEnc,
           firstName,
@@ -196,8 +206,7 @@ export class KycPrismaRepository implements IKycRepository {
         },
         update: {
           status: KycStatus.verified,
-          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
-          tier: KycTier.tier_1,
+          tier,
           nin: ninEnc,
           bvn: bvnEnc,
           firstName,
@@ -212,8 +221,7 @@ export class KycPrismaRepository implements IKycRepository {
         where: { id: userId },
         data: {
           kycStatus: KycStatus.verified,
-          // TODO(KYC-TIER): thread result.tier from IKycProvider through the port input instead of hardcoding tier_1.
-          kycTier: KycTier.tier_1,
+          kycTier: tier,
           // Stamp the tier grant so the gate can enforce the post-change cooling-off.
           tierChangedAt: new Date(),
           status: UserStatus.active,

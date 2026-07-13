@@ -138,6 +138,7 @@ export class KycService {
       lastName,
       dateOfBirth,
       pinHash,
+      tier: result.tier,
       now: new Date(),
     });
 
@@ -190,6 +191,7 @@ export class KycService {
       lastName,
       dateOfBirth,
       pinHash,
+      tier: result.tier,
       now: new Date(),
     });
 

@@ -127,6 +127,7 @@ describe('KycPrismaRepository (integration, Testcontainers Postgres)', () => {
       lastName: 'Adeyemi',
       dateOfBirth: '1988-03-20',
       pinHash,
+      tier: 'tier_1',
       now,
     });
 
@@ -231,6 +232,7 @@ describe('KycPrismaRepository (integration, Testcontainers Postgres)', () => {
       lastName: 'Eze',
       dateOfBirth: undefined,
       pinHash: pin1,
+      tier: 'tier_1',
       now,
     });
 
@@ -243,6 +245,7 @@ describe('KycPrismaRepository (integration, Testcontainers Postgres)', () => {
       lastName: 'Adele',
       dateOfBirth: '1995-11-01',
       pinHash: pin2,
+      tier: 'tier_1',
       now,
     });
 

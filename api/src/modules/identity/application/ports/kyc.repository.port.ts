@@ -8,6 +8,8 @@
  * Infrastructure provides the Prisma adapter; application only depends on this
  * symbol and the types below — it never imports @prisma/client (CLAUDE.md §3.2).
  */
+import type { KycTierValue } from './kyc-provider.port';
+
 export const KYC_REPOSITORY = Symbol('KYC_REPOSITORY');
 
 // ---------------------------------------------------------------------------
@@ -27,6 +29,8 @@ export interface CompleteVerificationAtomicInput {
   dateOfBirth: string | undefined;
   /** scrypt hash of the raw PIN — the ONLY form that reaches the DB. */
   pinHash: string;
+  /** The tier granted by IKycProvider — persisted as-is, never hardcoded. */
+  tier: KycTierValue;
   /** Timestamp used for verifiedAt on both KycProfile and ChannelIdentity. */
   now: Date;
 }
@@ -50,6 +54,8 @@ export interface CompleteVerificationForUserAtomicInput {
   dateOfBirth?: string;
   /** scrypt hash of the raw PIN — the ONLY form that reaches the DB. */
   pinHash: string;
+  /** The tier granted by IKycProvider — persisted as-is, never hardcoded. */
+  tier: KycTierValue;
   /** Timestamp used for verifiedAt on the KycProfile. */
   now: Date;
 }
@@ -80,8 +86,8 @@ export interface UpdateKycProfileDecisionInput {
 export interface IKycRepository {
   /**
    * Atomically (one $transaction):
-   *   1. Creates a User (status=active, kycStatus=verified, kycTier=tier_1, pinHash).
-   *   2. Creates a KycProfile (status=verified, tier=tier_1, identity fields, verifiedAt=now).
+   *   1. Creates a User (status=active, kycStatus=verified, kycTier=input.tier, pinHash).
+   *   2. Creates a KycProfile (status=verified, tier=input.tier, identity fields, verifiedAt=now).
    *   3. Links the Contact (linkedUserId = user.id).
    *   4. Links the ChannelIdentity (userId = user.id, verificationStatus=verified, verifiedAt=now).
    *
@@ -96,8 +102,8 @@ export interface IKycRepository {
 
   /**
    * Atomically (one $transaction):
-   *   1. Upserts a KycProfile (status=verified, tier=tier_1, identity fields, verifiedAt=now).
-   *   2. Updates User: kycStatus=verified, kycTier=tier_1, status=active, pinHash.
+   *   1. Upserts a KycProfile (status=verified, tier=input.tier, identity fields, verifiedAt=now).
+   *   2. Updates User: kycStatus=verified, kycTier=input.tier, status=active, pinHash.
    *
    * Returns { userId } of the updated User.
    *
