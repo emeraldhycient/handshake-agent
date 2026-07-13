@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   SignupRequestSchema,
+  SignupVerifyRequestSchema,
   VerifyEmailRequestSchema,
   LoginRequestSchema,
   LoginVerifyRequestSchema,
@@ -146,5 +147,49 @@ describe("auth contracts", () => {
     expect(() =>
       RefreshResponseSchema.parse({ accessToken: "a", refreshToken: "r" }),
     ).toThrow();
+  });
+
+  it("SignupRequest accepts email only (phone now optional)", () => {
+    expect(SignupRequestSchema.safeParse({ email: "a@b.co" }).success).toBe(
+      true,
+    );
+    // phone remains accepted (optional) so existing callers keep compiling
+    expect(
+      SignupRequestSchema.safeParse({
+        email: "a@b.co",
+        phone: "+2348012345678",
+      }).success,
+    ).toBe(true);
+    expect(SignupRequestSchema.safeParse({ email: "bad" }).success).toBe(
+      false,
+    );
+  });
+
+  it("SignupVerifyRequest requires email+otp+deviceFingerprint", () => {
+    const ok = {
+      email: "a@b.co",
+      otp: "204815",
+      deviceFingerprint: "device-abc-123",
+    };
+    expect(SignupVerifyRequestSchema.safeParse(ok).success).toBe(true);
+    expect(
+      SignupVerifyRequestSchema.safeParse({ ...ok, otp: "12" }).success,
+    ).toBe(false);
+    expect(
+      SignupVerifyRequestSchema.safeParse({ ...ok, deviceFingerprint: "short" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("MeResponse carries emailVerified", () => {
+    const me = {
+      userId: "11111111-1111-1111-1111-111111111111",
+      email: "a@b.co",
+      kycStatus: "not_started",
+      kycTier: "tier_1",
+      hasPin: false,
+      emailVerified: true,
+    };
+    expect(MeResponseSchema.safeParse(me).success).toBe(true);
   });
 });

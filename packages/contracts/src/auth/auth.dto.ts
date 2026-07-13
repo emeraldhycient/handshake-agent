@@ -2,10 +2,14 @@ import { z } from "zod";
 
 // Email-first web auth. The phone is captured for later WhatsApp linking only —
 // it is a routing key, never the auth anchor (root CLAUDE.md §3.4).
+//
+// Phone made OPTIONAL (not removed) so existing api/web callers keep compiling
+// during the migration. The wizard omits it; the backend ignores it; a final
+// cleanup task removes the vestigial field once both plans land.
 export const SignupRequestSchema = z.object({
   email: z.string().email().max(254),
   // Loose E.164-ish: leading + optional, 8–15 digits. Server normalizes.
-  phone: z.string().regex(/^\+?[0-9]{8,15}$/, "Enter a valid phone number"),
+  phone: z.string().regex(/^\+?[0-9]{8,15}$/, "Enter a valid phone number").optional(),
 });
 export type SignupRequest = z.infer<typeof SignupRequestSchema>;
 
@@ -15,6 +19,13 @@ export const SignupResponseSchema = z.object({
   devToken: z.string().optional(),
 });
 export type SignupResponse = z.infer<typeof SignupResponseSchema>;
+
+export const SignupVerifyRequestSchema = z.object({
+  email: z.string().email().max(254),
+  otp: z.string().min(4).max(10),
+  deviceFingerprint: z.string().min(8).max(200),
+});
+export type SignupVerifyRequest = z.infer<typeof SignupVerifyRequestSchema>;
 
 export const VerifyEmailRequestSchema = z.object({ token: z.string().min(1) });
 export type VerifyEmailRequest = z.infer<typeof VerifyEmailRequestSchema>;
@@ -48,6 +59,9 @@ export const MeResponseSchema = z.object({
   kycStatus: z.string(),
   kycTier: z.string(),
   hasPin: z.boolean(),
+  // Optional so the api can adopt it in Task 4.1 without breaking the current
+  // /auth/me response in the interim — FE treats a missing value as false.
+  emailVerified: z.boolean().optional(),
   /** From KycProfile — null when no KYC profile exists yet. */
   firstName: z.string().nullable().optional(),
   lastName: z.string().nullable().optional(),
@@ -60,6 +74,10 @@ export const LoginVerifyResponseSchema = z.object({
   user: MeResponseSchema,
 });
 export type LoginVerifyResponse = z.infer<typeof LoginVerifyResponseSchema>;
+
+// SignupVerifyResponse === LoginVerifyResponse (session + user projection).
+export const SignupVerifyResponseSchema = LoginVerifyResponseSchema;
+export type SignupVerifyResponse = z.infer<typeof SignupVerifyResponseSchema>;
 
 // Refresh is COOKIE-PRIMARY (Wave H): the rotating refresh token rides in the
 // HttpOnly `ha_refresh` cookie, so the body token is OPTIONAL — present only for
