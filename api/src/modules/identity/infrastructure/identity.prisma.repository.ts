@@ -254,6 +254,26 @@ export class IdentityPrismaRepository implements IIdentityRepository {
     return { firstName: row.firstName, lastName: row.lastName };
   }
 
+  async upsertKycProfileName(
+    userId: string,
+    input: { firstName: string; lastName: string },
+  ): Promise<void> {
+    await this.prisma.kycProfile.upsert({
+      where: { userId },
+      // status/tier are omitted on create — the schema defaults apply
+      // (not_started / unverified), matching a pre-KYC onboarding write.
+      create: {
+        userId,
+        firstName: input.firstName,
+        lastName: input.lastName,
+      },
+      update: {
+        firstName: input.firstName,
+        lastName: input.lastName,
+      },
+    });
+  }
+
   async findOriginatorIdentity(
     userId: string,
   ): Promise<OriginatorIdentityRecord | null> {

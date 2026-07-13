@@ -3,6 +3,7 @@
  *
  * GET    /profile              read the composed profile projection
  * PATCH  /profile              update non-identity fields (phone, fiat)
+ * POST   /profile/name         set the KYC-profile display name (onboarding)
  * POST   /profile/pin/change   verify current PIN (lockout-gated) → set new
  * GET    /profile/sessions     list own ACTIVE sessions (current flagged)
  * DELETE /profile/sessions/:id revoke own session (current = logout)
@@ -33,10 +34,12 @@ import { Throttle } from '@nestjs/throttler';
 import type {
   ProfileResponse,
   ProfileSessionListResponse,
+  SetNameRequest,
 } from '@handshake-agent/contracts';
 import {
   ProfileResponseSchema,
   ProfileSessionListResponseSchema,
+  SetNameRequestSchema,
 } from '@handshake-agent/contracts';
 
 import {
@@ -51,6 +54,7 @@ import {
 import { ProfileService } from '../application/profile.service';
 import { ProfileSettingsService } from '../application/profile-settings.service';
 import { ChangePinDto } from './dto/change-pin.dto';
+import { SetNameDto } from './dto/set-name.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @Controller('profile')
@@ -83,6 +87,23 @@ export class ProfileController {
       }
       throw err;
     }
+  }
+
+  /**
+   * Set the KYC-profile display name — the onboarding "what should we call
+   * you?" step, posted from the tier_1 session right after signup/verify,
+   * before KYC submission. Upserts the KycProfile (creates it if absent).
+   * Idempotent: re-posting updates the names.
+   */
+  @Post('name')
+  @HttpCode(HttpStatus.OK)
+  async setName(
+    @Body() dto: SetNameDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<SetNameRequest> {
+    return SetNameRequestSchema.parse(
+      await this.settings.setName(user.userId, dto),
+    );
   }
 
   /**

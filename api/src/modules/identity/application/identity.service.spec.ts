@@ -57,6 +57,7 @@ function makeRepo(
     loadContact: jest.fn().mockResolvedValue(null),
     // findKycProfile: not used by IdentityService.resolveByChannel; stub returns null.
     findKycProfile: jest.fn().mockResolvedValue(null),
+    upsertKycProfileName: jest.fn().mockResolvedValue(undefined),
     // findOriginatorIdentity: not used by IdentityService.resolveByChannel; stub returns null.
     findOriginatorIdentity: jest.fn().mockResolvedValue(null),
     // Profile settings (Wave C) — unused by IdentityService; stubbed for type completeness.

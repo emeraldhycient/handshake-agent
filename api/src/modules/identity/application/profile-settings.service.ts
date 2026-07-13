@@ -20,6 +20,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type {
   ProfileResponse,
   ProfileSessionListResponse,
+  SetNameRequest,
   UpdateProfileRequest,
 } from '@handshake-agent/contracts';
 
@@ -85,6 +86,26 @@ export class ProfileSettingsService {
     });
 
     return this.profile.getProfile(userId);
+  }
+
+  /**
+   * Sets/updates the KYC-profile display name — the onboarding "what should
+   * we call you?" step, which runs on the tier_1 session right after
+   * signup/verify, BEFORE any KYC submission. Upserts KycProfile (creating it
+   * if absent; status/tier take their schema defaults). Idempotent: re-posting
+   * updates the names. Unlike `updateProfile`, this deliberately DOES write a
+   * KYC-owned field — the two surfaces serve different moments in the
+   * lifecycle (pre-KYC name capture vs. post-verification settings, where the
+   * name becomes immutable). The input is already trimmed/validated by
+   * SetNameRequestSchema at the controller boundary, so it is safe to echo
+   * back as the response.
+   */
+  async setName(
+    userId: string,
+    input: SetNameRequest,
+  ): Promise<SetNameRequest> {
+    await this.identity.upsertKycProfileName(userId, input);
+    return input;
   }
 
   /** Own ACTIVE sessions, current one flagged and surfaced first. */

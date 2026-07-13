@@ -128,6 +128,7 @@ function makeIdentityRepo(
     loadUser: jest.fn().mockResolvedValue(user),
     loadContact: jest.fn(),
     findKycProfile: jest.fn().mockResolvedValue(kycProfile),
+    upsertKycProfileName: jest.fn().mockResolvedValue(undefined),
     findOriginatorIdentity: jest.fn().mockResolvedValue(originator),
     // Profile settings (Wave C) — unused by KycGateService; stubbed for type completeness.
     findProfileSettings: jest.fn().mockResolvedValue(null),

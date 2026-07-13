@@ -29,6 +29,7 @@ function makeService(
     verifyPin?: jest.Mock;
     setPin?: jest.Mock;
     updateProfileSettings?: jest.Mock;
+    upsertKycProfileName?: jest.Mock;
     isCurrencyLive?: (code: string) => boolean;
     sessions?: Partial<IProfileSessionRepository>;
   } = {},
@@ -40,6 +41,8 @@ function makeService(
   const identity = {
     updateProfileSettings:
       overrides.updateProfileSettings ?? jest.fn().mockResolvedValue(undefined),
+    upsertKycProfileName:
+      overrides.upsertKycProfileName ?? jest.fn().mockResolvedValue(undefined),
   };
   const sessionRepo: IProfileSessionRepository = {
     listActiveForUser: jest.fn().mockResolvedValue([]),
@@ -145,6 +148,41 @@ describe('ProfileSettingsService.updateProfile', () => {
       svc.updateProfile('u1', { fiatCurrency: 'GHS' }),
     ).rejects.toBeInstanceOf(FiatCurrencyNotEnabledError);
     expect(updateProfileSettings).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProfileSettingsService.setName', () => {
+  it('upserts the KycProfile name and returns the persisted (trimmed) names', async () => {
+    const upsertKycProfileName = jest.fn().mockResolvedValue(undefined);
+    const { svc } = makeService({ upsertKycProfileName });
+
+    const out = await svc.setName('u1', {
+      firstName: 'Amara',
+      lastName: 'Okeke',
+    });
+
+    expect(upsertKycProfileName).toHaveBeenCalledWith('u1', {
+      firstName: 'Amara',
+      lastName: 'Okeke',
+    });
+    expect(out).toEqual({ firstName: 'Amara', lastName: 'Okeke' });
+  });
+
+  it("is idempotent — re-posting with new names upserts again (create-or-update is the repo's job)", async () => {
+    const upsertKycProfileName = jest.fn().mockResolvedValue(undefined);
+    const { svc } = makeService({ upsertKycProfileName });
+
+    await svc.setName('u1', { firstName: 'Amara', lastName: 'Okeke' });
+    const out = await svc.setName('u1', {
+      firstName: 'Chidi',
+      lastName: 'Nwosu',
+    });
+
+    expect(upsertKycProfileName).toHaveBeenNthCalledWith(2, 'u1', {
+      firstName: 'Chidi',
+      lastName: 'Nwosu',
+    });
+    expect(out).toEqual({ firstName: 'Chidi', lastName: 'Nwosu' });
   });
 });
 

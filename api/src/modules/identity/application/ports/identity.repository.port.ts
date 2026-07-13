@@ -271,6 +271,19 @@ export interface IIdentityRepository {
   ): Promise<void>;
 
   /**
+   * Upserts KycProfile.firstName/lastName for the given user — creates the
+   * KycProfile row if none exists yet (status/tier take their schema
+   * defaults, `not_started`/`unverified`), or updates the names on an
+   * existing row. Idempotent. Backs the onboarding "what should we call
+   * you?" step (POST /profile/name), which runs BEFORE KYC submission —
+   * distinct from the immutable-on-settings-page rule in updateProfile.
+   */
+  upsertKycProfileName(
+    userId: string,
+    input: { firstName: string; lastName: string },
+  ): Promise<void>;
+
+  /**
    * Creates a Contact + a linked ChannelIdentity in a single transaction.
    * Returns both created records.
    */
