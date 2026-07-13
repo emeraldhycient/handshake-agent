@@ -111,10 +111,11 @@ WHATSAPP_FLOW_PRIVATE_KEY=…           # SECRET — PEM for Flow E2E decryption
 WHATSAPP_FLOW_ID=…                    WHATSAPP_BENEFICIARY_FLOW_ID=…
 ```
 
-**KYC** (mocked at launch; provider TBD)
+**KYC** (Sumsub — document + liveness → tier_2, proof-of-address → tier_3; mocked in dev via `KYC_MOCK_MODE`)
 ```
-KYC_MOCK_MODE=true                    # flip to false with a real provider
-KYC_PROVIDER_API_KEY=…  KYC_PROVIDER_BASE_URL=…
+KYC_MOCK_MODE=true                    # flip to false with real Sumsub creds (must be false in prod)
+SUMSUB_API_TOKEN=…  SUMSUB_API_SECRET_KEY=…  SUMSUB_WEBHOOK_SECRET=…   # SECRETS — required when KYC_MOCK_MODE=false
+SUMSUB_BASE_URL=https://api.sumsub.com  SUMSUB_LEVEL_TIER2=…  SUMSUB_LEVEL_TIER3=…   # dashboard level names → tiers
 KYC_ENCRYPTION_KEY=…                  # SECRET — required when KYC_MOCK_MODE=false; AES-256-GCM for NIN/BVN at rest (§3.4)
 ```
 
