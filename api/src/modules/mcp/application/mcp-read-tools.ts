@@ -20,8 +20,12 @@ import {
   QuoteSellInputSchema,
 } from '@handshake-agent/contracts';
 
+import type { KycTier } from '@handshake-agent/contracts';
+
 import { McpToolError } from '../domain/mcp-tool-error';
 import { maskBeneficiaryDetail } from '../../beneficiaries/application/beneficiary-display';
+import type { GatingConfig } from '../../../core/config/configuration';
+import { meetsCapabilityMinTier } from '../../identity/domain/tier-order';
 import { defineTool } from './mcp-tool-types';
 import type { McpToolDefinition, McpToolDeps } from './mcp-tool-types';
 
@@ -62,7 +66,22 @@ export function buildReadTools(deps: McpToolDeps): McpToolDefinition[] {
       }),
       handler: async (args, principal) => {
         const user = await deps.identityRepo.loadUser(principal.userId);
-        if (user === null || user.kycStatus !== 'verified') {
+        // Gate on the capability→min-tier ladder (crypto.receive = tier_1),
+        // mirroring the web-chat `receive_crypto` gate — NOT the legacy
+        // `kycStatus==='verified'` check, which the onboarding redesign made
+        // stale (an email-verified tier_1 user has kycStatus='not_started' yet
+        // may receive). Fails closed for `unverified` and any unconfigured
+        // capability (meetsCapabilityMinTier → tier_2 floor).
+        const capabilityMinTier =
+          deps.config.get<GatingConfig>('gating')?.capabilityMinTier ?? {};
+        if (
+          user === null ||
+          !meetsCapabilityMinTier(
+            user.kycTier as KycTier,
+            'crypto.receive',
+            capabilityMinTier,
+          )
+        ) {
           throw new McpToolError(KYC_REQUIRED_MESSAGE);
         }
         // Registry validation throws typed catalog errors (client-safe copy).

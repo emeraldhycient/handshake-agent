@@ -21,6 +21,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { UnsupportedAssetError } from '../../../core/catalog/catalog-errors';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type { ProfileService } from '../../identity/application/profile.service';
 import type { IIdentityRepository } from '../../identity/application/ports/identity.repository.port';
 import type { BalanceService } from '../../balances/application/balance.service';
@@ -91,8 +92,20 @@ const PUBLIC_VIEW = {
 
 interface FakeOverrides {
   kycStatus?: string;
+  kycTier?: string;
   chatOutcome?: Record<string, unknown>;
 }
+
+// Mirrors the real code-default gating map (configuration.ts): receive is tier_1.
+const GATING = {
+  capabilityMinTier: {
+    'crypto.buy': 'tier_1',
+    'crypto.receive': 'tier_1',
+    'crypto.sell': 'tier_2',
+    'crypto.send': 'tier_2',
+    'crypto.swap': 'tier_2',
+  },
+};
 
 function makeFakes(overrides: FakeOverrides = {}) {
   const profile = { getProfile: jest.fn().mockResolvedValue(PROFILE) };
@@ -185,7 +198,11 @@ function makeFakes(overrides: FakeOverrides = {}) {
     loadUser: jest.fn().mockResolvedValue({
       id: USER_ID,
       kycStatus: overrides.kycStatus ?? 'verified',
+      kycTier: overrides.kycTier ?? 'tier_1',
     }),
+  };
+  const config = {
+    get: jest.fn((key: string) => (key === 'gating' ? GATING : undefined)),
   };
   const transactionRepo = {
     findById: jest.fn().mockResolvedValue({
@@ -245,6 +262,7 @@ function makeFakes(overrides: FakeOverrides = {}) {
     settlementRepo,
     proposalRepo,
     registry,
+    config,
   };
 }
 
@@ -263,6 +281,7 @@ function makeService(fakes: ReturnType<typeof makeFakes>): McpToolsService {
     fakes.transactionRepo as unknown as ITransactionRepository,
     fakes.settlementRepo as unknown as ISettlementRepository,
     fakes.proposalRepo as unknown as IProposalRepository,
+    fakes.config as unknown as EffectiveConfigService,
   );
 }
 
@@ -411,8 +430,10 @@ describe('McpToolsService — read tools', () => {
     await close();
   });
 
-  it('get_deposit_address is KYC-gated server-side (§3.3) — unverified users never provision', async () => {
-    const fakes = makeFakes({ kycStatus: 'pending' });
+  it('get_deposit_address is tier-gated server-side (§3.3) — an unverified-tier user never provisions', async () => {
+    // crypto.receive needs tier_1; an `unverified` tier fails the capability gate
+    // (the check is tier-based now, not the stale kycStatus==='verified').
+    const fakes = makeFakes({ kycTier: 'unverified' });
     const { client, close } = await connect(makeService(fakes), ['read']);
     const result = await callTool(client, 'get_deposit_address', {
       asset: 'USDT',
@@ -420,6 +441,20 @@ describe('McpToolsService — read tools', () => {
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('KYC verification is required');
     expect(fakes.wallets.getOrProvisionNetworkWallet).not.toHaveBeenCalled();
+    await close();
+  });
+
+  it('get_deposit_address provisions for an email-verified tier_1 user whose kycStatus is not "verified" (redesign: tier-based gate)', async () => {
+    const fakes = makeFakes({ kycTier: 'tier_1', kycStatus: 'not_started' });
+    const { client, close } = await connect(makeService(fakes), ['read']);
+    const result = await callTool(client, 'get_deposit_address', {
+      asset: 'USDT',
+    });
+    expect(payloadOf(result)).toEqual({
+      asset: 'USDT',
+      network: 'tron',
+      address: 'TXYZaddr123456789',
+    });
     await close();
   });
 

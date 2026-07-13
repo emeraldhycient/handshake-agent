@@ -21,6 +21,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { ProfileService } from '../../identity/application/profile.service';
 import {
   IDENTITY_REPOSITORY,
@@ -83,6 +84,7 @@ export class McpToolsService {
     @Inject(TRANSACTION_REPOSITORY) transactionRepo: ITransactionRepository,
     @Inject(SETTLEMENT_REPOSITORY) settlementRepo: ISettlementRepository,
     @Inject(PROPOSAL_REPOSITORY) proposalRepo: IProposalRepository,
+    config: EffectiveConfigService,
   ) {
     const deps: McpToolDeps = {
       profile: profileService,
@@ -98,6 +100,7 @@ export class McpToolsService {
       settlementRepo,
       proposalRepo,
       registry: assetRegistry,
+      config,
     };
     this.tools = [
       ...buildReadTools(deps),
