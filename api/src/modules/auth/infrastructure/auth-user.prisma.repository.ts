@@ -95,28 +95,37 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
   }
 
   async markEmailVerified(userId: string, now: Date): Promise<void> {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { emailVerifiedAt: now },
-    });
+    // Both writes run in one interactive transaction (same shape as
+    // createSignup above): if the process crashes or the DB errors between
+    // them, a non-transactional pair could leave a user with emailVerifiedAt
+    // set but still `unverified` — and since resendEmailVerification only
+    // re-issues a token when emailVerifiedAt is null, that user would be
+    // permanently stuck below tier_1 with no way to retrigger the grant.
+    // $transaction makes the pair all-or-nothing.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: { emailVerifiedAt: now },
+      });
 
-    // Task 2.1 (onboarding redesign): an email-verified account may transact
-    // tier_1 capabilities (buy/receive) immediately — KycGateService already
-    // admits tier_1 regardless of kycStatus (§3.3). Guarded promotion, NOT an
-    // unconditional write: the `where: { kycTier: unverified }` clause is
-    // evaluated atomically by Postgres, so this only ever fires for a fresh
-    // `unverified` user. A user already at tier_1/2/3 re-hitting verify (e.g.
-    // a stale/resent link) matches zero rows here — no downgrade, and no
-    // tierChangedAt re-stamp, which would wrongly restart the tier-change
-    // cooling-off window. Same guarded-updateMany shape as the pinnedDeviceId
-    // guard in bindDevice below — no read-then-write race.
-    await this.prisma.user.updateMany({
-      where: { id: userId, kycTier: KycTier.unverified },
-      data: {
-        kycTier: KycTier.tier_1,
-        status: UserStatus.active,
-        tierChangedAt: now,
-      },
+      // Task 2.1 (onboarding redesign): an email-verified account may transact
+      // tier_1 capabilities (buy/receive) immediately — KycGateService already
+      // admits tier_1 regardless of kycStatus (§3.3). Guarded promotion, NOT an
+      // unconditional write: the `where: { kycTier: unverified }` clause is
+      // evaluated atomically by Postgres, so this only ever fires for a fresh
+      // `unverified` user. A user already at tier_1/2/3 re-hitting verify (e.g.
+      // a stale/resent link) matches zero rows here — no downgrade, and no
+      // tierChangedAt re-stamp, which would wrongly restart the tier-change
+      // cooling-off window. Same guarded-updateMany shape as the pinnedDeviceId
+      // guard in bindDevice below — no read-then-write race.
+      await tx.user.updateMany({
+        where: { id: userId, kycTier: KycTier.unverified },
+        data: {
+          kycTier: KycTier.tier_1,
+          status: UserStatus.active,
+          tierChangedAt: now,
+        },
+      });
     });
   }
 

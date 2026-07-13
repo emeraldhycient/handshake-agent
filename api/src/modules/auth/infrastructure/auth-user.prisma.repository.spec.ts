@@ -4,12 +4,14 @@
  * status=active, guarded so it only ever promotes a fresh `unverified` user.
  *
  * No Nest TestingModule — the repository is constructed directly with a faked
- * PrismaService whose `user.update`/`user.updateMany` are jest mocks. We
- * capture exactly what the repo sends to Prisma (mirrors the pattern in
- * kyc.prisma.repository.spec.ts) — the `where: { kycTier: 'unverified' }`
- * guard on the second call is what makes the promotion atomic (no
- * read-then-write race) and non-downgrading; Prisma enforces it at the DB
- * level (also exercised end-to-end in auth-user-repository.e2e-spec.ts).
+ * PrismaService whose `$transaction` invokes the callback with stub `tx`
+ * writers (mirrors the pattern in kyc.prisma.repository.spec.ts). Both writes
+ * now run inside one interactive transaction so a crash/DB-error between them
+ * can never leave emailVerifiedAt stamped without the tier grant (or vice
+ * versa) — the `where: { kycTier: 'unverified' }` guard on the second call is
+ * what makes the promotion itself atomic (no read-then-write race) and
+ * non-downgrading; Prisma enforces it at the DB level (also exercised
+ * end-to-end in auth-user-repository.e2e-spec.ts).
  */
 
 import type { PrismaService } from '../../../core/prisma/prisma.service';
@@ -30,11 +32,15 @@ interface CapturedWrites {
 }
 
 function makePrisma(captured: CapturedWrites): PrismaService {
-  return {
+  const tx = {
     user: {
       update: captured.userUpdate,
       updateMany: captured.userUpdateMany,
     },
+  };
+
+  return {
+    $transaction: jest.fn((cb: (t: typeof tx) => Promise<unknown>) => cb(tx)),
   } as unknown as PrismaService;
 }
 
@@ -97,5 +103,21 @@ describe('AuthUserPrismaRepository.markEmailVerified', () => {
     await repo.markEmailVerified('u1', now);
 
     expect(calls).toEqual(['update', 'updateMany']);
+  });
+
+  it('runs both writes inside a single $transaction (atomic pair)', async () => {
+    const captured = freshCaptured();
+    const prisma = makePrisma(captured);
+    const repo = new AuthUserPrismaRepository(prisma);
+
+    await repo.markEmailVerified('u1', now);
+
+    // Exactly one $transaction call wrapping both writes — if the process
+    // crashes or the DB errors between them, Postgres rolls back the whole
+    // pair, so a user can never be left emailVerifiedAt-stamped but still
+    // `unverified` with no way to retrigger the tier grant.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(captured.userUpdate).toHaveBeenCalledTimes(1);
+    expect(captured.userUpdateMany).toHaveBeenCalledTimes(1);
   });
 });
