@@ -4,7 +4,6 @@ import { ConfigService } from '@nestjs/config';
 
 import { AuthModule } from '../../core/auth/auth.module';
 import { WebAuthModule } from '../auth/auth.module';
-import { WalletsModule } from '../wallets/wallets.module';
 import { CLOCK, SystemClock } from '../../core/common/clock';
 import { IDENTITY_REPOSITORY } from './application/ports/identity.repository.port';
 import { VELOCITY_REPOSITORY } from './application/ports/velocity.repository.port';
@@ -13,17 +12,14 @@ import {
   type IKycProvider,
 } from './application/ports/kyc-provider.port';
 import { KYC_REPOSITORY } from './application/ports/kyc.repository.port';
-import { HANDOFF_TOKEN_REPOSITORY } from './application/ports/handoff-token.repository.port';
 import { USER_LISTER } from '../wallets/application/ports/user-lister.port';
 import { IdentityService } from './application/identity.service';
 import { KycGateService } from './application/kyc-gate.service';
 import { KycService } from './application/kyc.service';
 import { PinSetupService } from './application/pin-setup.service';
-import { HandoffTokenService } from './application/handoff-token.service';
 import { IdentityPrismaRepository } from './infrastructure/identity.prisma.repository';
 import { VelocityPrismaRepository } from './infrastructure/velocity.prisma.repository';
 import { KycPrismaRepository } from './infrastructure/kyc.prisma.repository';
-import { HandoffTokenPrismaRepository } from './infrastructure/handoff-token.prisma.repository';
 import { ActiveUserListerPrismaAdapter } from './infrastructure/active-user-lister.prisma';
 import { ProfileSessionPrismaRepository } from './infrastructure/profile-session.prisma.repository';
 import { MockKycProvider } from './infrastructure/mock-kyc.provider';
@@ -80,7 +76,7 @@ export function selectKycProvider(
  * the composition root that imports both and resolves the binding.
  */
 @Module({
-  imports: [AuthModule, WebAuthModule, WalletsModule, HttpModule],
+  imports: [AuthModule, WebAuthModule, HttpModule],
   controllers: [KycController, ProfileController],
   providers: [
     ProfileService,
@@ -95,14 +91,9 @@ export function selectKycProvider(
     KycGateService,
     KycService,
     PinSetupService,
-    HandoffTokenService,
     { provide: IDENTITY_REPOSITORY, useClass: IdentityPrismaRepository },
     { provide: VELOCITY_REPOSITORY, useClass: VelocityPrismaRepository },
     { provide: KYC_REPOSITORY, useClass: KycPrismaRepository },
-    {
-      provide: HANDOFF_TOKEN_REPOSITORY,
-      useClass: HandoffTokenPrismaRepository,
-    },
     // Both KYC adapters registered so the factory can inject either (mock default).
     MockKycProvider,
     SumsubKycProvider,
@@ -121,7 +112,6 @@ export function selectKycProvider(
     IdentityService,
     KycGateService,
     KycService,
-    HandoffTokenService,
     // Wave C: exported for the MCP module's get_profile tool (read-only).
     ProfileService,
     IDENTITY_REPOSITORY,

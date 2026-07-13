@@ -58,10 +58,7 @@ import {
 } from '../../modules/admin/domain/settings-errors';
 import { CurrencyCollisionError } from '../../modules/admin/domain/currency-errors';
 import { NameChangeNotAllowedError } from '../../modules/identity/domain/profile-errors';
-import {
-  KycVerificationUnavailableError,
-  SumsubPrerequisiteNotMetError,
-} from '../../modules/identity/domain/kyc-errors';
+import { SumsubPrerequisiteNotMetError } from '../../modules/identity/domain/kyc-errors';
 
 interface ErrorBody {
   statusCode: number;
@@ -160,9 +157,6 @@ describe('DomainExceptionFilter', () => {
     [new NameChangeNotAllowedError(), 409],
     // Task 3.4: Sumsub token requested for a tier above the earned prerequisite.
     [new SumsubPrerequisiteNotMetError('tier_2', 'tier_1', 'unverified'), 403],
-    // Legacy sync KYC path against the real Sumsub provider (no synchronous
-    // verify()) → 503, not an opaque 500.
-    [new KycVerificationUnavailableError('no sync verify'), 503],
   ])('maps %s → %i', (err, expected) => {
     const { statusCode } = run(filter, err);
     expect(statusCode).toBe(expected);

@@ -7,14 +7,11 @@ import type { AxiosError } from 'axios';
 import type { KycTierLevel } from '@handshake-agent/contracts';
 
 import { hmacHex } from '../../../core/crypto/hmac';
-import { KycVerificationUnavailableError } from '../domain/kyc-errors';
 import type { Env } from '../../../core/config/env.schema';
 import type {
   CreateVerificationSessionInput,
   CreateVerificationSessionResult,
   IKycProvider,
-  KycVerifyInput,
-  KycVerifyResult,
 } from '../application/ports/kyc-provider.port';
 
 // ---------------------------------------------------------------------------
@@ -107,14 +104,11 @@ interface SumsubErrorBody {
  * callers can distinguish a definitive 4xx rejection from an ambiguous
  * network/5xx failure.
  *
- * `verify()` (the legacy synchronous NIN/BVN path used by /kyc/submit and
- * /kyc/complete for tier_1 onboarding) is intentionally NOT implemented
- * against the real Sumsub API — Sumsub has no equivalent synchronous
- * NIN/BVN check; its real flow is applicant-creation + document upload +
- * webhook review. Faking an approval/rejection here would be a security bug
- * (root CLAUDE.md §3.6), so it fails closed (throws) instead.
- * TODO(KYC-TIER1-SUMSUB): decide + implement the tier_1 path once
- * KYC_MOCK_MODE=false ships to production — out of scope for task 3.3.
+ * There is deliberately no synchronous NIN/BVN `verify()` — Sumsub has no such
+ * check (its flow is applicant-creation + document upload + webhook review), and
+ * the legacy `/kyc/submit` + `/kyc/complete` endpoints that used it are retired.
+ * tier_1 is granted at email verification; tier_2/tier_3 via the signed
+ * `applicantReviewed` webhook.
  */
 @Injectable()
 export class SumsubKycProvider implements IKycProvider {
@@ -136,23 +130,6 @@ export class SumsubKycProvider implements IKycProvider {
       tier_2: this.config.get<'SUMSUB_LEVEL_TIER2'>('SUMSUB_LEVEL_TIER2'),
       tier_3: this.config.get<'SUMSUB_LEVEL_TIER3'>('SUMSUB_LEVEL_TIER3'),
     };
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  verify(_input: KycVerifyInput): Promise<KycVerifyResult> {
-    // Fail CLOSED with a coded domain error (→ 503 via DomainExceptionFilter),
-    // never an opaque 500 and never a faked approval/rejection (root §3.6). The
-    // real Sumsub flow is async createVerificationSession (WebSDK) +
-    // applicantReviewed webhook; there is no synchronous NIN/BVN verify().
-    // TODO(KYC-TIER1-SUMSUB): the legacy tier_1 /kyc/submit + /kyc/complete
-    // endpoints are slated for removal (see the retire-legacy-sync-kyc plan);
-    // until then this keeps a mis-routed prod call legible instead of a 500.
-    return Promise.reject(
-      new KycVerificationUnavailableError(
-        'the Sumsub provider has no synchronous NIN/BVN verify(); tier_1 is ' +
-          'granted at email verification and tier_2/tier_3 via the Sumsub webhook',
-      ),
-    );
   }
 
   async createVerificationSession(

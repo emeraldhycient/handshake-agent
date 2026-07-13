@@ -643,6 +643,15 @@ export interface SumsubConfig {
   levelToTier: Record<string, KycTier>;
 }
 
+/**
+ * Onboarding configuration. `webPath` is the web route the WhatsApp KYC CTA
+ * links to (joined onto WEB_APP_BASE_URL) — a token-less onboarding link since
+ * the legacy handoff-token path was retired. A developer default (§7).
+ */
+export interface OnboardingConfig {
+  webPath: string;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
@@ -664,6 +673,7 @@ export interface AppConfig {
   agent: AgentConfig;
   gating: GatingConfig;
   sumsub: SumsubConfig;
+  onboarding: OnboardingConfig;
 }
 
 /**
@@ -1225,6 +1235,12 @@ const buildConfig = (): AppConfig => ({
     mockMode: (process.env['KYC_MOCK_MODE'] ?? 'true') !== 'false',
     baseUrl: process.env['SUMSUB_BASE_URL'] ?? 'https://api.sumsub.com',
     levelToTier: Object.fromEntries(buildSumsubLevelToTierEntries()),
+  },
+  // ── Onboarding (CLAUDE.md §7) ──────────────────────────────────────────────
+  // The WhatsApp KYC CTA links here (joined onto WEB_APP_BASE_URL) — a token-less
+  // onboarding link; the FE serves this route (OnboardingWizard at /get-started).
+  onboarding: {
+    webPath: '/get-started',
   },
 });
 

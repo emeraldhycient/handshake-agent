@@ -18,51 +18,6 @@ export abstract class KycDomainError extends Error {
 }
 
 /**
- * The supplied channelAddress has no matching Contact + ChannelIdentity in the
- * system. The caller should guide the user through onboarding first.
- */
-export class ContactNotFoundError extends KycDomainError {
-  readonly code = 'CONTACT_NOT_FOUND' as const;
-
-  constructor(channelAddress: string) {
-    super(
-      `No Contact found for channel address: ${channelAddress}. ` +
-        'The user must be onboarded before completing KYC.',
-    );
-  }
-}
-
-/**
- * Friendly, client-safe copy for a KYC rejection. The raw provider `reason`
- * (which may carry internal provider detail) is kept on the error for
- * server-side logging only and is NEVER sent to the client (CLAUDE.md §3.3).
- */
-export const KYC_REJECTED_USER_MESSAGE =
-  "We couldn't verify your identity. Please check that your NIN or BVN is " +
-  'correct (11 digits) and that your name matches your records, then try ' +
-  'again.';
-
-/**
- * The KYC provider rejected the submitted identity data. Carries the raw
- * provider `reason` for logging and a separate `userMessage` for display —
- * callers map the friendly `userMessage` to the HTTP response, never `reason`.
- */
-export class KycRejectedError extends KycDomainError {
-  readonly code = 'KYC_REJECTED' as const;
-
-  /** Client-safe message — safe to surface verbatim to the user. */
-  readonly userMessage = KYC_REJECTED_USER_MESSAGE;
-
-  constructor(readonly reason: string | undefined) {
-    super(
-      reason
-        ? `KYC verification was rejected: ${reason}`
-        : 'KYC verification was rejected by the provider.',
-    );
-  }
-}
-
-/**
  * The user requested a Sumsub verification-session `level` above what their
  * current KYC tier permits (task 3.4). The tier ladder must be climbed one
  * rung at a time: minting a `tier_2` token requires `tierAtLeast(kycTier,
@@ -81,28 +36,6 @@ export class SumsubPrerequisiteNotMetError extends KycDomainError {
     super(
       `Cannot request Sumsub verification level '${requestedLevel}': requires ` +
         `KYC tier '${requiredTier}' or above; this account is '${actualTier}'.`,
-    );
-  }
-}
-
-/**
- * The active KYC provider has no implementation for the requested verification
- * operation (e.g. SumsubKycProvider has no synchronous NIN/BVN `verify()` — the
- * legacy tier_1 `/kyc/complete` + `/kyc/submit` path, superseded by email-OTP
- * tier_1 + the Sumsub webhook for tier_2/3). Fail closed with a stable code so
- * the global filter maps it to a clean 503 ("temporarily unavailable") instead
- * of an opaque 500, and never fakes an approval/rejection (root CLAUDE.md §3.6).
- *
- * NOTE: this is interim containment. These legacy synchronous endpoints are
- * slated for removal — see docs/superpowers/plans/2026-07-13-retire-legacy-sync-kyc-endpoints.md.
- */
-export class KycVerificationUnavailableError extends KycDomainError {
-  readonly code = 'KYC_VERIFICATION_UNAVAILABLE' as const;
-
-  constructor(detail?: string) {
-    super(
-      'KYC verification is not available on this path' +
-        (detail ? `: ${detail}` : '.'),
     );
   }
 }

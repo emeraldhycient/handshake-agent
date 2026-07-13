@@ -13,7 +13,6 @@ import {
   PROPOSAL_SERVICE,
   DIRECTIVE_SERVICE,
   WALLET_SERVICE,
-  HANDOFF_TOKEN_SERVICE,
   BENEFICIARY_SERVICE,
   TRANSACTION_HISTORY_SERVICE,
   BALANCE_SERVICE,
@@ -32,7 +31,6 @@ import { INBOUND_HANDLER } from '../whatsapp/application/ports/inbound-handler.p
 import { ProposalService } from '../transactions/application/proposal.service';
 import { DirectiveService } from '../transactions/application/directive.service';
 import { WalletService } from '../wallets/application/wallet.service';
-import { HandoffTokenService } from '../identity/application/handoff-token.service';
 import { BeneficiaryService } from '../beneficiaries/application/beneficiary.service';
 import { TransactionHistoryService } from '../transactions/application/transaction-history.service';
 import { BalanceService } from '../balances/application/balance.service';
@@ -80,8 +78,6 @@ import { BalanceService } from '../balances/application/balance.service';
     // Expose WalletService under our local WALLET_SERVICE token so
     // ConversationService can provision/read deposit addresses (read-only; §3.1).
     { provide: WALLET_SERVICE, useExisting: WalletService },
-    // Expose HandoffTokenService under our local HANDOFF_TOKEN_SERVICE token (K3).
-    { provide: HANDOFF_TOKEN_SERVICE, useExisting: HandoffTokenService },
     // Expose BeneficiaryService under our local BENEFICIARY_SERVICE token (W1).
     { provide: BENEFICIARY_SERVICE, useExisting: BeneficiaryService },
     // Expose TransactionHistoryService under TRANSACTION_HISTORY_SERVICE (read-only history).

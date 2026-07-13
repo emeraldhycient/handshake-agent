@@ -24,32 +24,6 @@ export const KYC_PROVIDER = Symbol('KYC_PROVIDER');
 export type KycTierValue = 'unverified' | 'tier_1' | 'tier_2' | 'tier_3';
 
 // ---------------------------------------------------------------------------
-// Port input / output shapes
-// ---------------------------------------------------------------------------
-
-export interface KycVerifyInput {
-  /** Nigerian national identification number (optional; nin OR bvn required). */
-  nin?: string;
-  /** Nigerian bank verification number (optional; nin OR bvn required). */
-  bvn?: string;
-  firstName: string;
-  lastName: string;
-  /** ISO-8601 date string (optional, e.g. "1990-05-15"). */
-  dateOfBirth?: string;
-}
-
-export interface KycVerifyResult {
-  /** Whether the verification passed at the given tier. */
-  approved: boolean;
-  /** The tier granted if approved, or 'unverified' if not. */
-  tier: KycTierValue;
-  /** Opaque provider reference id for audit / reconciliation. */
-  reference: string;
-  /** Human-readable rejection reason (present when approved is false). */
-  reason?: string;
-}
-
-// ---------------------------------------------------------------------------
 // Async verification-session (Sumsub WebSDK) input / output — task 3.3
 // ---------------------------------------------------------------------------
 
@@ -72,16 +46,6 @@ export interface CreateVerificationSessionResult {
 // ---------------------------------------------------------------------------
 
 export interface IKycProvider {
-  /**
-   * Submits the identity fields for verification and returns the result.
-   * Implementations must be idempotent (the execution engine may retry).
-   *
-   * This is the legacy synchronous NIN/BVN path still used by /kyc/submit and
-   * /kyc/complete (tier_1 onboarding). It is distinct from
-   * `createVerificationSession` (the tier_2/tier_3 Sumsub WebSDK upgrade path).
-   */
-  verify(input: KycVerifyInput): Promise<KycVerifyResult>;
-
   /**
    * Mints a short-lived Sumsub WebSDK access token so the frontend can launch
    * an in-browser verification session for a tier_2/tier_3 upgrade. Read-only

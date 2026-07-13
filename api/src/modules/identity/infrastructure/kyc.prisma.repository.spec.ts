@@ -13,7 +13,10 @@
 
 import type { ConfigService } from '@nestjs/config';
 
-import { FieldEncryptionKeyError } from '../../../core/crypto/field-encryption';
+import {
+  encryptField,
+  FieldEncryptionKeyError,
+} from '../../../core/crypto/field-encryption';
 import type { PrismaService } from '../../../core/prisma/prisma.service';
 import { KycPrismaRepository } from './kyc.prisma.repository';
 
@@ -86,209 +89,7 @@ function freshCaptured(): CapturedWrites {
   };
 }
 
-const ATOMIC_INPUT = {
-  channelIdentityId: 'ci-1',
-  contactId: 'contact-1',
-  nin: NIN,
-  bvn: BVN,
-  firstName: 'Amaka',
-  lastName: 'Okafor',
-  dateOfBirth: '1992-07-14',
-  pinHash: 'aa:bb',
-  tier: 'tier_1' as const,
-  now: new Date('2026-06-30T00:00:00.000Z'),
-};
-
-const FOR_USER_INPUT = {
-  userId: 'user-1',
-  nin: NIN,
-  bvn: BVN,
-  firstName: 'Amaka',
-  lastName: 'Okafor',
-  dateOfBirth: '1992-07-14',
-  pinHash: 'aa:bb',
-  tier: 'tier_1' as const,
-  now: new Date('2026-06-30T00:00:00.000Z'),
-};
-
 describe('KycPrismaRepository — NIN/BVN encryption at rest (NFR-1)', () => {
-  describe('completeVerificationAtomic', () => {
-    it('encrypts nin/bvn on write — never persists plaintext', async () => {
-      const captured = freshCaptured();
-      const repo = new KycPrismaRepository(
-        makePrisma(captured),
-        makeConfig(ENC_KEY),
-      );
-
-      await repo.completeVerificationAtomic(ATOMIC_INPUT);
-
-      const data = captured.kycProfileCreate.mock.calls[0][0].data;
-      // Persisted values are NOT the plaintext.
-      expect(data.nin).not.toBe(NIN);
-      expect(data.bvn).not.toBe(BVN);
-      // They are versioned AES-256-GCM blobs.
-      expect(data.nin).toMatch(/^v1\./);
-      expect(data.bvn).toMatch(/^v1\./);
-      // And they decrypt back to the original plaintext (round trip).
-      expect(repo.decryptIdentifier(data.nin)).toBe(NIN);
-      expect(repo.decryptIdentifier(data.bvn)).toBe(BVN);
-    });
-
-    it('stores null for absent nin/bvn (no encryption of nothing)', async () => {
-      const captured = freshCaptured();
-      const repo = new KycPrismaRepository(
-        makePrisma(captured),
-        makeConfig(ENC_KEY),
-      );
-
-      await repo.completeVerificationAtomic({
-        ...ATOMIC_INPUT,
-        nin: undefined,
-        bvn: undefined,
-      });
-
-      const data = captured.kycProfileCreate.mock.calls[0][0].data;
-      expect(data.nin).toBeNull();
-      expect(data.bvn).toBeNull();
-    });
-
-    it('fails closed: throws (no write) when a value is present but no key', async () => {
-      const captured = freshCaptured();
-      const repo = new KycPrismaRepository(
-        makePrisma(captured),
-        makeConfig(''),
-      );
-
-      await expect(
-        repo.completeVerificationAtomic(ATOMIC_INPUT),
-      ).rejects.toBeInstanceOf(FieldEncryptionKeyError);
-      // Nothing was persisted — the throw happens before the transaction.
-      expect(captured.kycProfileCreate).not.toHaveBeenCalled();
-      expect(captured.userCreate).not.toHaveBeenCalled();
-    });
-
-    it('returns the new userId', async () => {
-      const captured = freshCaptured();
-      const repo = new KycPrismaRepository(
-        makePrisma(captured),
-        makeConfig(ENC_KEY),
-      );
-
-      await expect(
-        repo.completeVerificationAtomic(ATOMIC_INPUT),
-      ).resolves.toEqual({ userId: 'user-1' });
-    });
-
-    // ── Task 1.1: the granted tier is threaded through, not hardcoded ────────
-
-    it('persists input.tier on both User.kycTier and KycProfile.tier — a tier_2 grant is NOT downgraded to tier_1', async () => {
-      const captured = freshCaptured();
-      const repo = new KycPrismaRepository(
-        makePrisma(captured),
-        makeConfig(ENC_KEY),
-      );
-
-      await repo.completeVerificationAtomic({
-        ...ATOMIC_INPUT,
-        tier: 'tier_2',
-      });
-
-      expect(captured.userCreate.mock.calls[0][0].data.kycTier).toBe('tier_2');
-      expect(captured.kycProfileCreate.mock.calls[0][0].data.tier).toBe(
-        'tier_2',
-      );
-    });
-
-    it('a tier_1 grant still persists tier_1 (behavior preservation for the mock provider)', async () => {
-      const captured = freshCaptured();
-      const repo = new KycPrismaRepository(
-        makePrisma(captured),
-        makeConfig(ENC_KEY),
-      );
-
-      await repo.completeVerificationAtomic({
-        ...ATOMIC_INPUT,
-        tier: 'tier_1',
-      });
-
-      expect(captured.userCreate.mock.calls[0][0].data.kycTier).toBe('tier_1');
-      expect(captured.kycProfileCreate.mock.calls[0][0].data.tier).toBe(
-        'tier_1',
-      );
-    });
-  });
-
-  describe('completeVerificationForUserAtomic', () => {
-    it('encrypts nin/bvn in both upsert create and update branches', async () => {
-      const captured = freshCaptured();
-      const repo = new KycPrismaRepository(
-        makePrisma(captured),
-        makeConfig(ENC_KEY),
-      );
-
-      await repo.completeVerificationForUserAtomic(FOR_USER_INPUT);
-
-      const args = captured.kycProfileUpsert.mock.calls[0][0];
-      for (const branch of [args.create, args.update]) {
-        expect(branch.nin).not.toBe(NIN);
-        expect(branch.bvn).not.toBe(BVN);
-        expect(repo.decryptIdentifier(branch.nin)).toBe(NIN);
-        expect(repo.decryptIdentifier(branch.bvn)).toBe(BVN);
-      }
-    });
-
-    // ── Task 1.1: the granted tier is threaded through, not hardcoded ────────
-
-    it('persists input.tier on both User.kycTier and the KycProfile upsert (create + update branches) — a tier_2 grant is NOT downgraded to tier_1', async () => {
-      const captured = freshCaptured();
-      const repo = new KycPrismaRepository(
-        makePrisma(captured),
-        makeConfig(ENC_KEY),
-      );
-
-      await repo.completeVerificationForUserAtomic({
-        ...FOR_USER_INPUT,
-        tier: 'tier_2',
-      });
-
-      const args = captured.kycProfileUpsert.mock.calls[0][0];
-      expect(args.create.tier).toBe('tier_2');
-      expect(args.update.tier).toBe('tier_2');
-      expect(captured.userUpdate.mock.calls[0][0].data.kycTier).toBe('tier_2');
-    });
-
-    it('a tier_1 grant still persists tier_1 (behavior preservation for the mock provider)', async () => {
-      const captured = freshCaptured();
-      const repo = new KycPrismaRepository(
-        makePrisma(captured),
-        makeConfig(ENC_KEY),
-      );
-
-      await repo.completeVerificationForUserAtomic({
-        ...FOR_USER_INPUT,
-        tier: 'tier_1',
-      });
-
-      const args = captured.kycProfileUpsert.mock.calls[0][0];
-      expect(args.create.tier).toBe('tier_1');
-      expect(args.update.tier).toBe('tier_1');
-      expect(captured.userUpdate.mock.calls[0][0].data.kycTier).toBe('tier_1');
-    });
-
-    it('fails closed when a value is present but no key', async () => {
-      const captured = freshCaptured();
-      const repo = new KycPrismaRepository(
-        makePrisma(captured),
-        makeConfig(undefined),
-      );
-
-      await expect(
-        repo.completeVerificationForUserAtomic(FOR_USER_INPUT),
-      ).rejects.toBeInstanceOf(FieldEncryptionKeyError);
-      expect(captured.kycProfileUpsert).not.toHaveBeenCalled();
-    });
-  });
-
   describe('markKycNeedsInfo (Phase 9 request-info)', () => {
     /** Captures the atomic KycProfile + User updates the needs-info write performs. */
     interface NeedsInfoWrites {
@@ -831,18 +632,21 @@ describe('KycPrismaRepository — NIN/BVN encryption at rest (NFR-1)', () => {
   });
 
   describe('decryptIdentifier (read path)', () => {
-    it('decrypts what completeVerificationAtomic wrote (round trip on read)', async () => {
-      const captured = freshCaptured();
+    it('decrypts a versioned AES-256-GCM blob back to plaintext (round trip on read)', () => {
       const repo = new KycPrismaRepository(
-        makePrisma(captured),
+        makePrisma(freshCaptured()),
         makeConfig(ENC_KEY),
       );
 
-      await repo.completeVerificationAtomic(ATOMIC_INPUT);
-      const stored = captured.kycProfileCreate.mock.calls[0][0].data;
+      // The same field-encryption helper the repo uses on write produces the
+      // at-rest ciphertext; decryptIdentifier must round-trip it on read.
+      const storedNin = encryptField(NIN, ENC_KEY);
+      const storedBvn = encryptField(BVN, ENC_KEY);
+      expect(storedNin).toMatch(/^v1\./);
+      expect(storedBvn).toMatch(/^v1\./);
 
-      expect(repo.decryptIdentifier(stored.nin)).toBe(NIN);
-      expect(repo.decryptIdentifier(stored.bvn)).toBe(BVN);
+      expect(repo.decryptIdentifier(storedNin)).toBe(NIN);
+      expect(repo.decryptIdentifier(storedBvn)).toBe(BVN);
     });
 
     it('returns null for null/empty stored values', () => {
