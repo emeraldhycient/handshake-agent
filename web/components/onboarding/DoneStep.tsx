@@ -46,19 +46,19 @@ export function DoneStep({
       <div
         data-testid="done-header-band"
         className={cn(
-          "flex-none px-6 pt-[70px] pb-[34px] text-center text-primary-foreground",
+          "flex-none px-[26px] pt-[70px] pb-[34px] text-center text-primary-foreground",
           "bg-[linear-gradient(168deg,var(--primary)_0%,var(--primary-deep)_100%)]",
           "lg:bg-none lg:px-0 lg:pt-0 lg:pb-0 lg:text-left lg:text-foreground"
         )}
       >
-        <div className="relative mx-auto h-16 w-16 lg:mx-0">
+        <div className="relative mx-auto h-[74px] w-[74px] lg:mx-0 lg:h-16 lg:w-16">
           <div
             aria-hidden="true"
             className="absolute inset-0 animate-hs-ring rounded-full border-2 border-success-bright"
           />
           <div
             aria-hidden="true"
-            className="relative flex h-16 w-16 animate-hs-pop items-center justify-center rounded-full bg-success-muted"
+            className="relative flex h-[74px] w-[74px] animate-hs-pop items-center justify-center rounded-full bg-success-muted lg:h-16 lg:w-16"
           >
             <svg width="32" height="32" viewBox="0 0 36 36" fill="none">
               <path
@@ -73,26 +73,26 @@ export function DoneStep({
           </div>
         </div>
 
-        <h1 className="mt-4 text-2xl font-extrabold tracking-tight lg:mt-6 lg:text-3xl">
+        <h1 className="mt-[22px] text-[27px] font-extrabold tracking-[-0.025em] lg:text-3xl lg:tracking-[-0.028em]">
           Welcome to Handshake{firstName ? `, ${firstName}` : ""}.
         </h1>
-        <p className="mt-2 text-sm leading-relaxed text-primary-foreground/80 lg:text-base lg:text-muted-foreground">
+        <p className="mt-[9px] text-[14.5px] leading-relaxed text-primary-foreground/80 lg:mt-[10px] lg:text-[15px] lg:text-muted-foreground">
           {subcopy}
         </p>
       </div>
 
-      <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-6 pt-5 pb-4 lg:flex-none lg:gap-6 lg:overflow-visible lg:p-0">
-        <div className="flex items-center gap-4 rounded-2xl border border-border bg-card p-5">
-          <div className="flex h-[50px] w-[50px] flex-none items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-primary-deep">
+      <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-5 pt-5 pb-0 lg:flex-none lg:gap-6 lg:overflow-visible lg:p-0">
+        <div className="flex items-center gap-[14px] rounded-[18px] border border-border bg-card p-[18px] lg:gap-[15px] lg:p-5">
+          <div className="flex h-12 w-12 flex-none items-center justify-center rounded-[14px] bg-gradient-to-br from-primary to-primary-deep lg:h-[50px] lg:w-[50px]">
             <span className="font-mono text-xl font-extrabold text-accent">
               ₦
             </span>
           </div>
           <div className="flex-1">
-            <p className="text-xs font-semibold text-muted-foreground">
+            <p className="text-[12.5px] font-semibold text-muted-foreground">
               Naira balance
             </p>
-            <p className="text-xl font-extrabold text-foreground tabular-nums">
+            <p className="text-[22px] font-extrabold text-foreground tabular-nums lg:text-[23px]">
               {formatFiat(0, "NGN")}
             </p>
           </div>
@@ -100,25 +100,26 @@ export function DoneStep({
         </div>
 
         {skipped && (
-          <div className="rounded-2xl border border-warn bg-warn-muted p-4">
+          <div className="rounded-[18px] border border-warn bg-warn-muted px-[17px] py-4 lg:p-[18px]">
             <div className="flex-1">
-              <p className="text-sm font-bold text-warn-foreground lg:hidden">
+              <p className="text-[14.5px] font-bold text-warn-foreground lg:hidden">
                 Verify to unlock everything
               </p>
-              <p className="hidden text-sm font-bold text-warn-foreground lg:block">
+              <p className="hidden text-[15px] font-bold text-warn-foreground lg:block">
                 Verify to unlock sending &amp; cash-out
               </p>
-              <p className="mt-0.5 text-xs text-warn-foreground/80 lg:hidden">
+              <p className="mt-0.5 text-[12.5px] text-warn-foreground/80 lg:hidden">
                 Sending &amp; cash-out are locked until you verify.
               </p>
-              <p className="mt-0.5 hidden text-xs text-warn-foreground/80 lg:block">
+              <p className="mt-0.5 hidden text-[13px] text-warn-foreground/80 lg:block">
                 Takes about a minute.
               </p>
             </div>
             <Button
               type="button"
+              size="lg"
               onClick={onVerifyNow}
-              className="mt-3 w-full bg-primary-deep text-primary-foreground hover:bg-primary-deep/90"
+              className="mt-[13px] w-full rounded-[12px] bg-primary-deep px-[18px] text-sm font-bold text-primary-foreground hover:bg-primary-deep/90 lg:w-auto"
             >
               <span className="lg:hidden">Verify now · 1 min</span>
               <span className="hidden lg:inline">Verify now</span>
@@ -126,28 +127,28 @@ export function DoneStep({
           </div>
         )}
 
-        <div className="flex items-center gap-4 rounded-2xl border border-border bg-card p-5">
+        <div className="flex items-center gap-[13px] rounded-[18px] border border-border bg-card p-[18px]">
           <div className="relative h-11 w-11 flex-none">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-accent to-accent-deep">
+            <div className="flex h-11 w-11 items-center justify-center rounded-[13px] bg-gradient-to-br from-accent to-accent-deep">
               <div className="h-4 w-4 rounded-md bg-primary-deep" />
             </div>
-            <div className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-2 border-card bg-success-bright" />
+            <div className="absolute -right-0.5 -bottom-0.5 h-[13px] w-[13px] rounded-full border-2 border-card bg-success-bright" />
           </div>
           <div className="flex-1">
-            <p className="text-sm font-bold text-foreground">
+            <p className="text-[15px] font-bold text-foreground">
               Your agent is ready
             </p>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-[13px] text-muted-foreground">
               Just say &ldquo;Buy ₦50,000 of USDT&rdquo; to begin.
             </p>
           </div>
         </div>
       </div>
 
-      <div className="flex-none px-6 pt-3 pb-8 lg:p-0">
+      <div className="flex-none px-5 pt-[14px] pb-[30px] lg:p-0">
         <Button
           variant="accent"
-          size="lg"
+          size="xl"
           className="w-full"
           onClick={() => router.push("/")}
         >

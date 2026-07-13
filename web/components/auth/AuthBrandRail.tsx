@@ -20,16 +20,18 @@ export function AuthBrandRail({
         className
       )}
     >
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-[11px]">
         <BrandMark size={40} />
-        <span className="text-[17px] font-bold tracking-tight">Handshake</span>
+        <span className="text-[17px] font-bold tracking-[-0.01em]">
+          Handshake
+        </span>
       </div>
 
       <div className="flex flex-1 flex-col justify-center py-6">
-        <h2 className="text-[32px] leading-[1.08] font-extrabold tracking-tight">
+        <h2 className="text-[32px] leading-[1.08] font-extrabold tracking-[-0.03em]">
           {headline}
         </h2>
-        <p className="mt-3.5 max-w-[290px] text-sm leading-relaxed text-primary-foreground/80">
+        <p className="mt-3.5 max-w-[290px] text-[15px] leading-[1.5] text-primary-foreground/80">
           {subcopy}
         </p>
       </div>

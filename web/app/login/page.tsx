@@ -19,7 +19,7 @@ export default function LoginPage() {
   return (
     <main
       id="main-content"
-      className="grid min-h-svh bg-background lg:grid-cols-[440px_1fr]"
+      className="grid min-h-svh bg-background lg:grid-cols-[400px_1fr]"
     >
       <AuthBrandRail
         className="hidden lg:flex"
@@ -27,8 +27,8 @@ export default function LoginPage() {
         subcopy="Log in to pick up right where you left off — buy, send and swap crypto from a chat."
       />
 
-      <div className="flex items-center justify-center overflow-y-auto px-6 py-12 lg:px-16">
-        <div className="w-full max-w-md">
+      <div className="flex items-center justify-center overflow-y-auto px-6 py-12 lg:p-12">
+        <div className="w-full max-w-[460px]">
           <LoginForm />
         </div>
       </div>

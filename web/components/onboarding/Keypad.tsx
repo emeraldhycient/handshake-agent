@@ -37,7 +37,7 @@ export function Keypad({ onDigit, onBackspace, disabled }: KeypadProps) {
     <div
       role="group"
       aria-label="Numeric keypad"
-      className="grid grid-cols-3 gap-2.5"
+      className="grid grid-cols-3 gap-[9px]"
     >
       {KEYPAD_LAYOUT.map((key, index) => {
         if (key === null) {
@@ -54,7 +54,7 @@ export function Keypad({ onDigit, onBackspace, disabled }: KeypadProps) {
               disabled={disabled}
               onClick={onBackspace}
               aria-label="Backspace"
-              className="h-[54px] rounded-2xl text-2xl font-semibold text-foreground"
+              className="h-[54px] rounded-[14px] text-[23px] font-semibold text-foreground"
             >
               ⌫
             </Button>
@@ -69,7 +69,7 @@ export function Keypad({ onDigit, onBackspace, disabled }: KeypadProps) {
             size="lg"
             disabled={disabled}
             onClick={() => onDigit(key)}
-            className="h-[54px] rounded-2xl bg-card text-2xl font-semibold text-foreground shadow-xs hover:bg-card/80"
+            className="h-[54px] rounded-[14px] bg-card text-[23px] font-semibold text-foreground shadow-xs hover:bg-card/80"
           >
             {key}
           </Button>

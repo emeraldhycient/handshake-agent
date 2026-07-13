@@ -28,16 +28,18 @@ export function OnboardingRail({ step }: OnboardingRailProps) {
 
   return (
     <div className="flex h-full w-full flex-col bg-[linear-gradient(168deg,var(--primary)_0%,var(--primary-deep)_100%)] px-10 py-11 text-primary-foreground">
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-[11px]">
         <BrandMark size={40} />
-        <span className="text-[17px] font-bold tracking-tight">Handshake</span>
+        <span className="text-[17px] font-bold tracking-[-0.01em]">
+          Handshake
+        </span>
       </div>
 
       <div className="flex flex-1 flex-col justify-center py-6">
-        <h2 className="text-[32px] leading-[1.08] font-extrabold tracking-tight">
+        <h2 className="text-[32px] leading-[1.08] font-extrabold tracking-[-0.03em]">
           Money that moves at the speed of chat.
         </h2>
-        <p className="mt-3.5 max-w-[290px] text-sm leading-relaxed text-primary-foreground/80">
+        <p className="mt-3.5 max-w-[290px] text-[15px] leading-[1.5] text-primary-foreground/80">
           Buy, send and swap crypto just by talking to your agent. Setup takes
           about a minute.
         </p>
@@ -51,7 +53,7 @@ export function OnboardingRail({ step }: OnboardingRailProps) {
               key={item.step}
               data-onboarding-tracker-row
               data-state={state}
-              className="flex items-center gap-3.5 py-2.5"
+              className="flex items-center gap-3.5 py-[11px]"
             >
               <span
                 className={cn(

@@ -215,14 +215,14 @@ export function PinStep({ onNext, onBack, keypadRef }: PinStepProps) {
         <div>
           <div className="flex items-center gap-3">
             <BrandMark size={40} />
-            <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            <p className="text-[13px] font-semibold tracking-[0.02em] text-muted-foreground uppercase">
               {stepTag}
             </p>
           </div>
-          <h1 className="mt-2 text-2xl font-extrabold tracking-tight text-foreground">
+          <h1 className="mt-2 text-[27px] leading-[1.1] font-extrabold tracking-[-0.025em] text-foreground">
             {heading}
           </h1>
-          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+          <p className="mt-[9px] text-[14.5px] leading-[1.45] text-muted-foreground">
             {subcopy}
           </p>
         </div>
@@ -267,15 +267,15 @@ export function PinStep({ onNext, onBack, keypadRef }: PinStepProps) {
       <div>
         <div className="flex items-center gap-3">
           <BrandMark size={40} className="lg:hidden" />
-          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          <p className="text-[13px] font-semibold tracking-[0.02em] text-muted-foreground uppercase lg:tracking-[0.04em]">
             <span className="lg:hidden">Step 4 of 4 · Set PIN</span>
             <span className="hidden lg:inline">Step 4 of 4</span>
           </p>
         </div>
-        <h1 className="mt-2 text-2xl font-extrabold tracking-tight text-foreground lg:text-3xl">
+        <h1 className="mt-2 text-[27px] leading-[1.1] font-extrabold tracking-[-0.025em] text-foreground lg:text-3xl lg:tracking-[-0.028em]">
           Set your transaction PIN
         </h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground lg:text-base">
+        <p className="mt-[9px] text-[14.5px] leading-[1.45] text-muted-foreground lg:text-[15px]">
           You&apos;ll enter this 4-digit PIN to approve every payment.
         </p>
       </div>
@@ -283,7 +283,7 @@ export function PinStep({ onNext, onBack, keypadRef }: PinStepProps) {
       <div className="flex flex-col gap-2">
         <label
           htmlFor="onboarding-pin"
-          className="text-sm font-semibold text-muted-foreground"
+          className="text-[13px] font-semibold text-muted-foreground"
         >
           Create PIN
         </label>
@@ -292,7 +292,7 @@ export function PinStep({ onNext, onBack, keypadRef }: PinStepProps) {
           aria-invalid={!!errors.pin}
           aria-describedby={errors.pin ? "onboarding-pin-error" : undefined}
           disabled={loading}
-          className={`w-full rounded-2xl border-2 bg-card py-4 text-center text-2xl font-extrabold text-foreground shadow-xs focus:outline-none ${
+          className={`w-full rounded-[15px] border-2 bg-card p-4 text-center text-[26px] font-extrabold text-foreground shadow-xs focus:outline-none ${
             errors.pin ? "border-destructive" : "border-input"
           }`}
           style={{ letterSpacing: "1rem" }}
@@ -304,7 +304,7 @@ export function PinStep({ onNext, onBack, keypadRef }: PinStepProps) {
           <p
             id="onboarding-pin-error"
             role="alert"
-            className="text-xs text-destructive"
+            className="text-[13.5px] font-semibold text-destructive"
           >
             {errors.pin.message}
           </p>
@@ -312,7 +312,7 @@ export function PinStep({ onNext, onBack, keypadRef }: PinStepProps) {
 
         <label
           htmlFor="onboarding-confirm-pin"
-          className="mt-2 text-sm font-semibold text-muted-foreground"
+          className="mt-[18px] text-[13px] font-semibold text-muted-foreground"
         >
           Confirm PIN
         </label>
@@ -323,7 +323,7 @@ export function PinStep({ onNext, onBack, keypadRef }: PinStepProps) {
             errors.confirmPin ? "onboarding-confirm-pin-error" : undefined
           }
           disabled={loading}
-          className={`w-full rounded-2xl border-2 bg-card py-4 text-center text-2xl font-extrabold text-foreground shadow-xs focus:outline-none ${
+          className={`w-full rounded-[15px] border-2 bg-card p-4 text-center text-[26px] font-extrabold text-foreground shadow-xs focus:outline-none ${
             errors.confirmPin ? "border-destructive" : "border-input"
           }`}
           style={{ letterSpacing: "1rem" }}
@@ -335,14 +335,17 @@ export function PinStep({ onNext, onBack, keypadRef }: PinStepProps) {
           <p
             id="onboarding-confirm-pin-error"
             role="alert"
-            className="text-xs font-semibold text-destructive"
+            className="text-[13.5px] font-semibold text-destructive"
           >
             {errors.confirmPin.message}
           </p>
         )}
 
         {serverError && (
-          <p role="alert" className="text-xs font-semibold text-destructive">
+          <p
+            role="alert"
+            className="text-[13.5px] font-semibold text-destructive"
+          >
             {serverError}
           </p>
         )}
@@ -356,15 +359,17 @@ export function PinStep({ onNext, onBack, keypadRef }: PinStepProps) {
         <Button
           type="button"
           variant="outline"
+          size="xl"
           onClick={onBack}
           disabled={loading}
+          className="font-semibold"
         >
           Back
         </Button>
         <Button
           type="submit"
           variant="accent"
-          size="lg"
+          size="xl"
           disabled={loading}
           aria-busy={loading}
           className="flex-1"

@@ -70,10 +70,10 @@ export function LoginRequestStep({ onSent, className }: LoginRequestStepProps) {
       <Button
         type="submit"
         variant="accent"
-        size="lg"
+        size="xl"
         disabled={loading}
         aria-busy={loading}
-        className="mt-2 w-full"
+        className="mt-[22px] w-full"
       >
         {loading ? "Sending OTP…" : "Get OTP"}
       </Button>

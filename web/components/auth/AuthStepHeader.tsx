@@ -15,14 +15,14 @@ export function AuthStepHeader({
     <div>
       <div className="flex items-center gap-3">
         <BrandMark size={40} className="lg:hidden" />
-        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        <p className="text-[13px] font-semibold tracking-[0.04em] text-muted-foreground uppercase">
           {eyebrow}
         </p>
       </div>
-      <h1 className="mt-2 text-2xl font-extrabold tracking-tight text-foreground lg:text-3xl">
+      <h1 className="mt-2 text-[27px] leading-[1.1] font-extrabold tracking-[-0.028em] text-foreground lg:text-3xl">
         {heading}
       </h1>
-      <p className="mt-2 text-sm leading-relaxed text-muted-foreground lg:text-base">
+      <p className="mt-[9px] text-[15px] leading-[1.45] text-muted-foreground">
         {subcopy}
       </p>
     </div>

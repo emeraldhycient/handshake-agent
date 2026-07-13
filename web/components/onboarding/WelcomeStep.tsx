@@ -27,32 +27,37 @@ export function WelcomeStep({ onNext }: WelcomeStepProps) {
     <div
       data-testid="welcome-mobile-shell"
       className={cn(
-        "flex min-h-svh flex-col gap-6 px-6 pt-[70px] pb-[34px] text-primary-foreground",
+        "flex min-h-svh flex-col gap-6 px-[26px] pt-[70px] pb-[34px] text-primary-foreground",
         "bg-[linear-gradient(168deg,var(--primary)_0%,var(--primary-deep)_100%)]",
         "lg:min-h-0 lg:bg-none lg:px-0 lg:pt-0 lg:pb-0 lg:text-foreground"
       )}
     >
       <div className="flex flex-1 flex-col justify-center gap-6 lg:flex-none lg:justify-start">
-        <div className="relative h-[66px] w-[66px]">
+        {/* Logo tile — 66px mobile (radius 20) / 60px desktop (radius 18), per spec. */}
+        <div className="relative h-[66px] w-[66px] lg:h-[60px] lg:w-[60px]">
           <div
             aria-hidden="true"
-            className="absolute inset-0 animate-hs-ring rounded-2xl bg-accent opacity-50"
+            className="absolute inset-0 animate-hs-ring rounded-[20px] bg-accent opacity-50 lg:rounded-[18px]"
           />
-          <BrandMark size={66} className="relative shadow-cta" />
+          <BrandMark size={66} className="relative shadow-cta lg:hidden" />
+          <BrandMark
+            size={60}
+            className="relative hidden shadow-cta lg:block"
+          />
         </div>
 
         <div>
-          <h1 className="text-3xl font-extrabold tracking-tight lg:hidden">
+          <h1 className="text-[34px] leading-[1.06] font-extrabold tracking-[-0.03em] lg:hidden">
             Money that moves at the speed of chat.
           </h1>
-          <h1 className="hidden text-3xl font-extrabold tracking-tight text-foreground lg:block">
+          <h1 className="hidden text-[32px] leading-[1.08] font-extrabold tracking-[-0.03em] text-foreground lg:block">
             Let&apos;s set up your wallet.
           </h1>
-          <p className="mt-3 text-base leading-relaxed text-primary-foreground/80 lg:hidden">
+          <p className="mt-[14px] max-w-[310px] text-[15.5px] leading-[1.5] text-primary-foreground/80 lg:hidden">
             Buy, send and swap crypto just by talking to your agent. Let&apos;s
             set up your wallet — it takes about a minute.
           </p>
-          <p className="mt-3 hidden text-base leading-relaxed text-muted-foreground lg:block">
+          <p className="mt-3 hidden text-base leading-[1.5] text-muted-foreground lg:block">
             Four quick steps — email, a code, your name and a PIN. Then choose
             to verify now or explore first.
           </p>
@@ -62,13 +67,13 @@ export function WelcomeStep({ onNext }: WelcomeStepProps) {
       <div>
         <Button
           variant="accent"
-          size="lg"
-          className="w-full lg:w-auto"
+          size="xl"
+          className="w-full lg:w-auto lg:px-[34px]"
           onClick={onNext}
         >
           Get started
         </Button>
-        <p className="mt-4 text-sm text-primary-foreground/70 lg:text-muted-foreground">
+        <p className="mt-4 text-[13.5px] text-primary-foreground/70 lg:mt-5 lg:text-sm lg:text-muted-foreground">
           Already have an account?{" "}
           <Link
             href="/login"

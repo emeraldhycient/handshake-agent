@@ -188,10 +188,10 @@ function OnboardingLoading() {
 
 function DesktopOnboarding({ machine, me }: OnboardingChromeProps) {
   return (
-    <div className="grid min-h-svh grid-cols-[440px_1fr] bg-background">
+    <div className="grid min-h-svh grid-cols-[400px_1fr] bg-background">
       <OnboardingRail step={machine.step} />
-      <div className="flex items-center justify-center overflow-y-auto px-16 py-12">
-        <div className="w-full max-w-md">{renderStep(machine, me)}</div>
+      <div className="flex items-center justify-center overflow-y-auto p-12">
+        <div className="w-full max-w-[460px]">{renderStep(machine, me)}</div>
       </div>
     </div>
   )
@@ -250,11 +250,13 @@ function MobileOnboarding({ machine, me }: OnboardingChromeProps) {
   }
 
   return (
-    <div className="flex min-h-svh flex-col bg-background px-6 py-6">
+    <div className="flex min-h-svh flex-col bg-background px-6 pt-14">
       <OnboardingProgress step={machine.step} onBack={onProgressBack} />
-      <div className="mt-8 flex-1">{renderStep(machine, me, pinKeypadRef)}</div>
+      <div className="mt-[26px] flex-1">
+        {renderStep(machine, me, pinKeypadRef)}
+      </div>
       {showKeypad && (
-        <div className="mt-6 pb-2">
+        <div className="mt-2 pb-[26px]">
           <Keypad onDigit={onKeypadDigit} onBackspace={onKeypadBackspace} />
         </div>
       )}

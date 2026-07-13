@@ -76,15 +76,15 @@ export function NameStep({ data, setData, onNext, onBack }: NameStepProps) {
       <div>
         <div className="flex items-center gap-3">
           <BrandMark size={40} className="lg:hidden" />
-          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          <p className="text-[13px] font-semibold tracking-[0.02em] text-muted-foreground uppercase lg:tracking-[0.04em]">
             <span className="lg:hidden">Step 3 of 4 · Your name</span>
             <span className="hidden lg:inline">Step 3 of 4</span>
           </p>
         </div>
-        <h1 className="mt-2 text-2xl font-extrabold tracking-tight text-foreground lg:text-3xl">
+        <h1 className="mt-2 text-[27px] leading-[1.1] font-extrabold tracking-[-0.025em] text-foreground lg:text-3xl lg:tracking-[-0.028em]">
           What should we call you?
         </h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground lg:text-base">
+        <p className="mt-[9px] text-[14.5px] leading-[1.45] text-muted-foreground lg:text-[15px]">
           Use the name on your ID — it speeds up verification later.
         </p>
       </div>
@@ -92,13 +92,13 @@ export function NameStep({ data, setData, onNext, onBack }: NameStepProps) {
       {serverError && <FormAlert>{serverError}</FormAlert>}
 
       <div
-        className={`flex items-center gap-2.5 rounded-2xl border-2 bg-card px-2 py-1 shadow-xs ${
+        className={`flex items-center gap-2.5 rounded-[16px] border-2 bg-card px-1.5 py-1 shadow-xs lg:rounded-[15px] lg:px-2 lg:py-[5px] ${
           errors.fullName ? "border-destructive" : "border-input"
         }`}
       >
         <span
           aria-hidden="true"
-          className="flex h-11 w-11 flex-none items-center justify-center rounded-xl bg-background text-primary"
+          className="flex h-11 w-11 flex-none items-center justify-center rounded-[12px] bg-background text-primary"
         >
           <svg width="19" height="19" viewBox="0 0 19 19" fill="none">
             <circle
@@ -127,7 +127,7 @@ export function NameStep({ data, setData, onNext, onBack }: NameStepProps) {
             errors.fullName ? "onboarding-full-name-error" : undefined
           }
           disabled={loading}
-          className="min-w-0 flex-1 border-none bg-transparent py-3 text-base font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none"
+          className="min-w-0 flex-1 border-none bg-transparent py-3 text-[17px] font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none"
           {...register("fullName")}
         />
       </div>
@@ -135,7 +135,7 @@ export function NameStep({ data, setData, onNext, onBack }: NameStepProps) {
         <p
           id="onboarding-full-name-error"
           role="alert"
-          className="-mt-4 text-xs text-destructive"
+          className="-mt-4 text-[13px] text-destructive"
         >
           {errors.fullName.message}
         </p>
@@ -145,15 +145,17 @@ export function NameStep({ data, setData, onNext, onBack }: NameStepProps) {
         <Button
           type="button"
           variant="outline"
+          size="xl"
           onClick={onBack}
           disabled={loading}
+          className="w-auto font-semibold lg:px-[22px]"
         >
           Back
         </Button>
         <Button
           type="submit"
           variant="accent"
-          size="lg"
+          size="xl"
           disabled={!isValid || loading}
           aria-busy={loading}
           className="flex-1"

@@ -162,10 +162,10 @@ export function LoginVerifyStep({
       <Button
         type="submit"
         variant="accent"
-        size="lg"
+        size="xl"
         disabled={loading}
         aria-busy={loading}
-        className="mt-2 w-full"
+        className="mt-[22px] w-full"
       >
         {loading ? "Verifying…" : "Verify and log in"}
       </Button>

@@ -26,7 +26,7 @@ export function OnboardingProgress({ step, onBack }: OnboardingProgressProps) {
         size="icon"
         onClick={onBack}
         aria-label="Back"
-        className="size-[38px] flex-none rounded-xl"
+        className="size-[38px] flex-none rounded-[12px]"
       >
         <svg
           width="17"
@@ -66,7 +66,7 @@ export function OnboardingProgress({ step, onBack }: OnboardingProgressProps) {
               data-onboarding-segment
               data-state={state}
               className={cn(
-                "h-[5px] flex-1 rounded-full",
+                "h-[5px] flex-1 rounded-[3px]",
                 state === "done" && "bg-primary",
                 state === "active" && "bg-accent",
                 state === "pending" && "bg-border"

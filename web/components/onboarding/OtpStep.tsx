@@ -131,15 +131,15 @@ export function OtpStep({ data, setData, onNext, onBack }: OtpStepProps) {
       <div>
         <div className="flex items-center gap-3">
           <BrandMark size={40} className="lg:hidden" />
-          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          <p className="text-[13px] font-semibold tracking-[0.02em] text-muted-foreground uppercase lg:tracking-[0.04em]">
             <span className="lg:hidden">Step 2 of 4 · Verify email</span>
             <span className="hidden lg:inline">Step 2 of 4</span>
           </p>
         </div>
-        <h1 className="mt-2 text-2xl font-extrabold tracking-tight text-foreground lg:text-3xl">
+        <h1 className="mt-2 text-[27px] leading-[1.1] font-extrabold tracking-[-0.025em] text-foreground lg:text-3xl lg:tracking-[-0.028em]">
           Enter your code
         </h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground lg:text-base">
+        <p className="mt-[9px] text-[14.5px] leading-[1.45] text-muted-foreground lg:text-[15px]">
           Sent to <span className="font-bold text-foreground">{email}</span>.
           Expires in{" "}
           <span className="font-bold text-foreground tabular-nums">
@@ -162,7 +162,11 @@ export function OtpStep({ data, setData, onNext, onBack }: OtpStepProps) {
         </div>
       )}
 
-      <div className="flex gap-2.5" role="group" aria-label="One-time code">
+      <div
+        className="flex gap-[9px] lg:gap-2.5"
+        role="group"
+        aria-label="One-time code"
+      >
         {Array.from({ length: OTP_LENGTH }, (_, i) => (
           <input
             key={i}
@@ -177,7 +181,7 @@ export function OtpStep({ data, setData, onNext, onBack }: OtpStepProps) {
             disabled={verifying}
             onChange={(e) => onCellChange(i, e.target.value)}
             onKeyDown={(e) => onCellKeyDown(i, e)}
-            className={`h-16 w-full min-w-0 flex-1 rounded-2xl border-2 bg-card text-center text-2xl font-extrabold text-foreground tabular-nums shadow-xs focus:outline-none ${
+            className={`h-[58px] w-full min-w-0 flex-1 rounded-[14px] border-2 bg-card text-center text-[25px] font-extrabold text-foreground tabular-nums shadow-xs focus:outline-none lg:h-[68px] lg:w-[60px] lg:flex-none lg:rounded-[15px] lg:text-[27px] ${
               otp[i] ? "border-primary" : "border-input"
             }`}
           />
@@ -188,6 +192,8 @@ export function OtpStep({ data, setData, onNext, onBack }: OtpStepProps) {
         <Button
           type="button"
           variant="outline"
+          size="lg"
+          className="rounded-[12px] px-[18px] text-sm font-semibold"
           onClick={onBack}
           disabled={verifying}
         >
