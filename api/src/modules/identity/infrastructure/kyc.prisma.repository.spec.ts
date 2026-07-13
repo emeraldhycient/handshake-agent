@@ -738,6 +738,38 @@ describe('KycPrismaRepository — NIN/BVN encryption at rest (NFR-1)', () => {
       expect(downgradeArgs.where.kycTier).toEqual({ in: ['tier_3'] });
     });
 
+    it('a user with NO existing KycProfile (upsert create branch) where the downgrade applies → create payload also carries tier: target, mirroring the update branch', async () => {
+      const { prisma, writes } = makeDowngradePrisma(1, 1);
+      const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+      const result = await repo.downgradeSumsubTier(
+        'user-1',
+        'tier_1',
+        'ID_MISMATCH',
+      );
+
+      expect(result).toEqual({ found: true });
+      const profileArgs = writes.kycProfileUpsert.mock.calls[0][0] as {
+        create: Record<string, unknown>;
+      };
+      expect(profileArgs.create.userId).toBe('user-1');
+      expect(profileArgs.create.status).toBe('rejected');
+      expect(profileArgs.create.rejectionReason).toBe('ID_MISMATCH');
+      expect(profileArgs.create.tier).toBe('tier_1');
+    });
+
+    it('a user with NO existing KycProfile (upsert create branch) where the downgrade is a no-op (count 0) → create payload omits tier, matching the update branch', async () => {
+      const { prisma, writes } = makeDowngradePrisma(1, 0);
+      const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+      await repo.downgradeSumsubTier('user-1', 'tier_1', 'ID_MISMATCH');
+
+      const profileArgs = writes.kycProfileUpsert.mock.calls[0][0] as {
+        create: Record<string, unknown>;
+      };
+      expect(profileArgs.create).not.toHaveProperty('tier');
+    });
+
     it('unknown user (no matching User row) → found:false, no profile write, no downgrade attempt', async () => {
       const { prisma, writes } = makeDowngradePrisma(0, 0);
       const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));

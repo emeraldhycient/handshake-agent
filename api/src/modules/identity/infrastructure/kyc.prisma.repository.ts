@@ -499,7 +499,12 @@ export class KycPrismaRepository implements IKycRepository {
 
       await tx.kycProfile.upsert({
         where: { userId },
-        create: { userId, status: KycStatus.rejected, rejectionReason: reason },
+        create: {
+          userId,
+          status: KycStatus.rejected,
+          rejectionReason: reason,
+          ...(downgraded.count > 0 ? { tier: target } : {}),
+        },
         update: {
           status: KycStatus.rejected,
           rejectionReason: reason,
