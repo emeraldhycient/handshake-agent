@@ -25,6 +25,7 @@ import { MESSAGE_REPOSITORY } from '../../conversations/application/ports/messag
 import { INTENT_REPOSITORY } from '../../conversations/application/ports/intent.repository.port';
 import { REPLY_REPOSITORY } from '../../conversations/application/ports/reply.repository.port';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { StatementTokenService } from '../../transactions/application/statement-token.service';
 import {
   SwapSameAssetError,
@@ -100,13 +101,45 @@ const fakeAssetRegistry = {
   isCapabilityEnabled: jest.fn().mockReturnValue(true),
 };
 
+// Mirrors the real `gating.capabilityMinTier` code default (Task 1.2,
+// api/src/core/config/configuration.ts) so the chat-entry gate is exercised
+// against the SAME map the deterministic engine (KycGateService) reads.
+const CAPABILITY_MIN_TIER: Record<string, string> = {
+  'crypto.buy': 'tier_1',
+  'crypto.receive': 'tier_1',
+  'crypto.sell': 'tier_2',
+  'crypto.send': 'tier_2',
+  'crypto.swap': 'tier_2',
+};
+const fakeConfig = {
+  get: jest.fn((key: string) =>
+    key === 'gating' ? { capabilityMinTier: CAPABILITY_MIN_TIER } : undefined,
+  ),
+};
+
 // ---------------------------------------------------------------------------
 // Shared test data
 // ---------------------------------------------------------------------------
 
+// tier_2: satisfies every capability's minimum tier (buy/receive at tier_1,
+// sell/send/swap at tier_2), so this is the fixture for "fully able to
+// transact" tests below — most of which exercise sell/send/swap.
 const VERIFIED_USER = {
   id: 'user-1',
   kycStatus: 'verified',
+  kycTier: 'tier_2',
+  status: 'active',
+  simSwapDetectedAt: null,
+};
+
+// tier_1: email-verified only (the new onboarding grant — root CLAUDE.md §3.3/
+// Task 1.2/1.3). kycStatus deliberately stays NOT 'verified' (that status is
+// reserved for full Sumsub KYC) — this fixture is the regression case for the
+// bug this fix addresses: a tier_1 user must still get buy/receive/check_balance,
+// gated on kycTier, never on the stale kycStatus check.
+const TIER_1_USER = {
+  id: 'user-1',
+  kycStatus: 'not_started',
   kycTier: 'tier_1',
   status: 'active',
   simSwapDetectedAt: null,
@@ -190,6 +223,7 @@ describe('WebChatService', () => {
         { provide: REPLY_REPOSITORY, useValue: fakeReplyRepo },
         { provide: AssetRegistry, useValue: fakeAssetRegistry },
         { provide: StatementTokenService, useValue: fakeStatementTokens },
+        { provide: EffectiveConfigService, useValue: fakeConfig },
       ],
     }).compile();
 
@@ -2041,6 +2075,218 @@ describe('WebChatService', () => {
       expect(outcome.hasMore).toBe(true);
       expect(outcome.nextCursor).toBe('cur-1');
       expect(outcome.txType).toBe('all');
+    });
+  });
+
+  // ── capability → minimum-tier gate (Task 4.2b) ─────────────────────────────
+  // Regression coverage for the bug this fix addresses: the onboarding model
+  // grants kycTier='tier_1' on EMAIL verification WITHOUT setting
+  // kycStatus='verified' (reserved for full Sumsub KYC). The chat-entry gate
+  // must key off capability→kycTier (mirroring KycGateService), never the
+  // stale kycStatus==='verified' check.
+
+  describe('capability → minimum-tier gate (Task 4.2b)', () => {
+    it('tier_1 user, buy_crypto intent → a buy proposal outcome (NOT needs_kyc)', async () => {
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      const buyConf = {
+        proposalId: 'prop-t1',
+        asset: 'USDT',
+        fiatAmount: '5000',
+        fiatCurrency: 'NGN',
+        cryptoAmount: '5.0',
+        fxRate: '1000',
+        spreadBps: 50,
+        processingFeeBps: 100,
+        processingFeeAmount: '50.00',
+        totalFiat: '5050.00',
+        expiresAt: new Date().toISOString(),
+      };
+      fakeProposalService.createBuyProposal.mockResolvedValue({
+        proposalId: 'prop-t1',
+        quoteId: 'q-t1',
+        confirmation: buyConf,
+      });
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'buy_crypto',
+        asset: 'USDT',
+        fiatAmount: '5000',
+        fiatCurrency: 'NGN',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'buy 5000 NGN of USDT',
+      });
+
+      expect(result.outcome).toMatchObject({
+        kind: 'proposal',
+        txType: 'buy',
+        proposalId: 'prop-t1',
+      });
+    });
+
+    it('tier_1 user, receive_crypto intent → a receive outcome (NOT needs_kyc)', async () => {
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      fakeWalletService.getOrProvisionNetworkWallet.mockResolvedValue({
+        id: 'w1',
+        userId: 'user-1',
+        network: 'tron',
+        address: 'TXxxx',
+        providerReference: 'ref',
+        status: 'active',
+        provisionedAt: new Date(),
+      });
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'receive_crypto',
+        asset: 'USDT',
+        network: 'tron',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'receive',
+      });
+
+      expect(result.outcome.kind).toBe('receive');
+    });
+
+    it('tier_1 user, check_balance intent → a balance outcome (NOT needs_kyc)', async () => {
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      fakeBalanceService.getBalances.mockResolvedValue({
+        fiatCurrency: 'NGN',
+        totalFiatValue: '0.00',
+        balances: [],
+      });
+      fakeAgentPort.run.mockResolvedValue({ action: 'check_balance' });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: "what's my balance",
+      });
+
+      expect(result.outcome.kind).toBe('balance');
+      expect(fakeBalanceService.getBalances).toHaveBeenCalledWith(
+        'user-1',
+        undefined,
+      );
+    });
+
+    it('tier_1 user, sell_crypto intent → needs_kyc (sell requires tier_2)', async () => {
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'sell_crypto',
+        asset: 'USDT',
+        cryptoAmount: '5',
+        fiatCurrency: 'NGN',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'sell 5 USDT',
+      });
+
+      expect(result.outcome).toEqual({ kind: 'needs_kyc' });
+      expect(fakeProposalService.createSellProposal).not.toHaveBeenCalled();
+    });
+
+    it('tier_1 user, send_crypto intent → needs_kyc (send requires tier_2)', async () => {
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'send_crypto',
+        asset: 'USDT',
+        cryptoAmount: '2',
+        toAddress: 'TYyyy',
+        network: 'tron',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'send 2 USDT',
+      });
+
+      expect(result.outcome).toEqual({ kind: 'needs_kyc' });
+      expect(fakeProposalService.createSendProposal).not.toHaveBeenCalled();
+    });
+
+    it('tier_2 user, send_crypto intent → a send proposal outcome (NOT needs_kyc)', async () => {
+      // The default `loadUser` mock (VERIFIED_USER) is tier_2 — explicit here
+      // for clarity since this test's whole point is the tier boundary.
+      fakeIdentityRepo.loadUser.mockResolvedValue(VERIFIED_USER);
+      fakeBeneficiaryService.getDefault.mockResolvedValue({
+        id: 'bene-crypto-1',
+      });
+      const sendConf = {
+        proposalId: 'prop-t2-send',
+        asset: 'USDT',
+        cryptoAmount: '2',
+        network: 'tron',
+        networkFeeCrypto: '1.0',
+        totalDebit: '3.0',
+        toAddressMasked: 'TYyyy...Zzzz',
+        beneficiaryLabel: 'My wallet',
+        expiresAt: new Date().toISOString(),
+      };
+      fakeProposalService.createSendProposal.mockResolvedValue({
+        proposalId: sendConf.proposalId,
+        confirmation: sendConf,
+      });
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'send_crypto',
+        asset: 'USDT',
+        cryptoAmount: '2',
+        toAddress: 'TYyyyZzzz',
+        network: 'tron',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'send 2 USDT',
+      });
+
+      expect(result.outcome).toMatchObject({
+        kind: 'proposal',
+        txType: 'send',
+        proposalId: sendConf.proposalId,
+      });
+    });
+
+    it('tier_1 user, swap intent → needs_kyc (swap requires tier_2)', async () => {
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'swap',
+        fromAsset: 'USDT',
+        toAsset: 'TRX',
+        amount: '10',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'swap 10 USDT to TRX',
+      });
+
+      expect(result.outcome).toEqual({ kind: 'needs_kyc' });
+      expect(fakeProposalService.createSwapProposal).not.toHaveBeenCalled();
+    });
+
+    it('a capability with no configured gating entry fails closed to tier_2 (defense in depth)', async () => {
+      // Simulates a gating map missing e.g. crypto.buy's entry — the chat-entry
+      // gate must fail closed (needs_kyc) for a tier_1 user rather than
+      // silently allow, mirroring KycGateService's FAIL_CLOSED_MIN_TIER.
+      fakeConfig.get.mockReturnValueOnce({ capabilityMinTier: {} });
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'buy_crypto',
+        asset: 'USDT',
+        fiatAmount: '5000',
+        fiatCurrency: 'NGN',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'buy 5000 NGN of USDT',
+      });
+
+      expect(result.outcome).toEqual({ kind: 'needs_kyc' });
     });
   });
 });

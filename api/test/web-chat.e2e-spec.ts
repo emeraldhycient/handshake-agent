@@ -333,10 +333,18 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
   }, 120_000);
 
   // ===========================================================================
-  // KYC-FAILURE PATH — user with no KYC → outcome.kind === 'needs_kyc'
+  // CAPABILITY → MINIMUM-TIER GATE — email-verified-only (tier_1) user
   // ===========================================================================
+  //
+  // Task 4.2b regression coverage: the onboarding model grants kycTier='tier_1'
+  // on EMAIL verification alone, WITHOUT setting kycStatus='verified' (reserved
+  // for full Sumsub KYC — no /kyc/submit step below). The chat-entry gate must
+  // key off capability→kycTier, matching KycGateService, not a stale
+  // kycStatus==='verified' check: a tier_1 user gets a buy/receive proposal
+  // (previously — the bug — a false needs_kyc), while sell/send/swap (tier_2)
+  // still correctly needs_kyc.
 
-  it('signup → verify-email → login (no KYC) → POST /chat/messages → 200 needs_kyc outcome', async () => {
+  it('signup → verify-email → login (email-verified only, tier_1) → receive succeeds, send needs_kyc', async () => {
     // Use a distinct email to avoid state collision with the happy-path test above.
     const email = `unverified_chat_${Date.now()}@test.com`;
 
@@ -350,7 +358,7 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
     const devToken = signupBody.devToken;
     expect(devToken).toBeDefined();
 
-    // 2. Verify email
+    // 2. Verify email — grants kycTier='tier_1' (kycStatus stays NOT 'verified').
     await request(app.getHttpServer())
       .post('/auth/verify-email')
       .send({ token: devToken })
@@ -366,7 +374,7 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
     const otp = lrBody.devOtp;
     expect(otp).toMatch(/^[0-9]{6}$/);
 
-    // 4. Login verify → accessToken (NO KYC submit step)
+    // 4. Login verify → accessToken (NO KYC submit step — stays tier_1)
     const lv = await request(app.getHttpServer())
       .post('/auth/login/verify')
       .send({ email, otp, deviceFingerprint: 'e2e-wc-unverified-fingerprint' })
@@ -375,36 +383,64 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
     expect(lvBody.accessToken).toBeDefined();
     const { accessToken } = lvBody;
 
-    // 5. POST /chat/messages — LLM fake returns receive_crypto which requires KYC.
-    //    Without KYC, the service short-circuits to needs_kyc.
-    const chat = await request(app.getHttpServer())
+    // 5. POST /chat/messages — receive_crypto only requires tier_1 → succeeds.
+    //    This is the exact scenario the bug produced a false needs_kyc for.
+    const receiveChat = await request(app.getHttpServer())
       .post('/chat/messages')
       .set('Authorization', `Bearer ${accessToken}`)
       .send({ text: 'receive USDT' })
       .expect(200);
 
-    const chatBody = chat.body as {
+    const receiveBody = receiveChat.body as {
       reply: { text: string };
       outcome: { kind: string };
       conversationId: string;
       messageId: string;
     };
 
-    expect(chatBody.outcome.kind).toBe('needs_kyc');
-    expect(chatBody.conversationId).toBeDefined();
-    expect(chatBody.messageId).toBeDefined();
+    expect(receiveBody.outcome.kind).toBe('receive');
+    expect(receiveBody.conversationId).toBeDefined();
+    expect(receiveBody.messageId).toBeDefined();
+
+    // 6. POST /chat/messages — send_crypto requires tier_2 → still needs_kyc.
+    //    (No destination address in the intent — §3.1: the NLU layer never
+    //    extracts one; it is resolved server-side from a saved beneficiary.)
+    fakeLlmProvider.extractIntent.mockResolvedValueOnce({
+      action: 'send_crypto',
+      asset: 'USDT',
+      cryptoAmount: '2',
+      network: 'TRON',
+    });
+
+    const sendChat = await request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ text: 'send 2 USDT' })
+      .expect(200);
+
+    const sendBody = sendChat.body as { outcome: { kind: string } };
+    expect(sendBody.outcome.kind).toBe('needs_kyc');
   }, 120_000);
 
   // ===========================================================================
   // I1/I2 — domain/agent errors map to a clean status, never an opaque 500
   // ===========================================================================
 
-  /** signup → verify → login → kyc; returns a Bearer token for a verified user. */
+  /**
+   * signup → verify → login → kyc/submit; returns a Bearer token + userId for
+   * a user at kycStatus='verified'/kycTier='tier_1' — /kyc/submit (the mock
+   * KYC provider) only ever auto-approves tier_1 (root CLAUDE.md §3.3/Task
+   * 1.2/1.3 — tier_2+ comes exclusively through the Sumsub webhook flow,
+   * exercised in sumsub-webhook.e2e-spec.ts). Callers that need a tier_2
+   * capability (sell/send/swap) must bump kycTier themselves — see the
+   * sell test below, which mirrors the direct-DB-seed pattern already used
+   * for tier_2 fixtures in sell-vertical.e2e-spec.ts.
+   */
   async function authVerifiedUser(opts: {
     email: string;
     phone: string;
     nin: string;
-  }): Promise<string> {
+  }): Promise<{ accessToken: string; userId: string }> {
     const { email, phone, nin } = opts;
     const su = await request(app.getHttpServer())
       .post('/auth/signup')
@@ -425,16 +461,17 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
       .send({ email, otp, deviceFingerprint: `fp-${email}` })
       .expect(200);
     const accessToken = (lv.body as { accessToken: string }).accessToken;
-    await request(app.getHttpServer())
+    const ks = await request(app.getHttpServer())
       .post('/kyc/submit')
       .set('Authorization', `Bearer ${accessToken}`)
       .send({ firstName: 'Test', lastName: 'User', nin, pin: '1357' })
       .expect(200);
-    return accessToken;
+    const userId = (ks.body as { userId: string }).userId;
+    return { accessToken, userId };
   }
 
   it('POST /chat/messages → agent/LLM failure → 503 with a clean message (NOT an opaque 500)', async () => {
-    const token = await authVerifiedUser({
+    const { accessToken: token } = await authVerifiedUser({
       email: `agentfail_${Date.now()}@test.com`,
       phone: '+2348029999010',
       nin: '22334455710',
@@ -460,10 +497,21 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
   }, 60_000);
 
   it('POST /chat/messages → sell with zero balance → in-chat clarification (parity with swap, NOT a 422/500)', async () => {
-    const token = await authVerifiedUser({
+    const { accessToken: token, userId } = await authVerifiedUser({
       email: `sellpoor_${Date.now()}@test.com`,
       phone: '+2348029999011',
       nin: '22334455711',
+    });
+
+    // crypto.sell is gated to tier_2 (root CLAUDE.md §3.3/Task 1.2/1.3); the
+    // mock /kyc/submit provider only ever grants tier_1 (a real tier_2 upgrade
+    // goes through the Sumsub webhook flow — sumsub-webhook.e2e-spec.ts).
+    // Bump directly, mirroring the tier_2 fixture pattern in
+    // sell-vertical.e2e-spec.ts, so this test can reach the proposal-builder
+    // error it actually exercises rather than the (separately covered) gate.
+    await prisma.user.update({
+      where: { id: userId },
+      data: { kycTier: 'tier_2' },
     });
 
     // Agent returns a sell intent this turn; the user has zero USDT. Sell/send

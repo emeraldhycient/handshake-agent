@@ -5,7 +5,11 @@
  *   - §3.1 model proposes, engine disposes: this service interprets intent and
  *     delegates to ProposalService for proposal creation, never executing transactions.
  *   - §3.2 no DB access here: all persistence goes through injected repository ports.
- *   - §3.3 KYC gate: checks kycStatus === 'verified' before any money-moving flow.
+ *   - §3.3 KYC gate: checks capability → minimum-KYC-tier (buy/receive at
+ *     tier_1, sell/send/swap at tier_2 — `meetsCapability`), mirroring the
+ *     engine's authoritative `KycGateService.assertBaselineEligibility`. This is
+ *     a chat-entry UX pre-check only; the engine re-checks server-side before
+ *     any money moves.
  *
  * Clean arch: no @prisma/client import here (application layer).
  */
@@ -22,9 +26,12 @@ import type {
   ChatHistoryResponse,
   BalanceSnapshot,
   EffectiveRate,
+  KycTier,
 } from '@handshake-agent/contracts';
 
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
+import type { GatingConfig } from '../../../core/config/configuration';
 import {
   AGENT_PORT,
   type IAgentPort,
@@ -39,7 +46,13 @@ import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors
 import {
   IDENTITY_REPOSITORY,
   type IIdentityRepository,
+  type UserRecord,
 } from '../../identity/application/ports/identity.repository.port';
+import type { Capability } from '../../identity/application/kyc-gate.service';
+import {
+  meetsCapabilityMinTier,
+  tierAtLeast,
+} from '../../identity/domain/tier-order';
 import {
   CONVERSATION_REPOSITORY,
   type IConversationRepository,
@@ -162,6 +175,7 @@ export class WebChatService {
     private readonly replyRepo: IReplyRepository,
     private readonly assetRegistry: AssetRegistry,
     private readonly statementTokens: StatementTokenService,
+    private readonly config: EffectiveConfigService,
   ) {}
 
   async handleMessage(input: HandleMessageInput): Promise<WebChatResponse> {
@@ -227,7 +241,7 @@ export class WebChatService {
       }
 
       case 'receive_crypto': {
-        if (user.kycStatus !== 'verified') {
+        if (!this.meetsCapability(user, 'crypto.receive')) {
           outcome = { kind: 'needs_kyc' };
           summaryText = 'KYC required';
           break;
@@ -258,7 +272,7 @@ export class WebChatService {
       }
 
       case 'buy_crypto': {
-        if (user.kycStatus !== 'verified') {
+        if (!this.meetsCapability(user, 'crypto.buy')) {
           outcome = { kind: 'needs_kyc' };
           summaryText = 'KYC required';
           break;
@@ -285,7 +299,7 @@ export class WebChatService {
       }
 
       case 'sell_crypto': {
-        if (user.kycStatus !== 'verified') {
+        if (!this.meetsCapability(user, 'crypto.sell')) {
           outcome = { kind: 'needs_kyc' };
           summaryText = 'KYC required';
           break;
@@ -342,7 +356,7 @@ export class WebChatService {
       }
 
       case 'send_crypto': {
-        if (user.kycStatus !== 'verified') {
+        if (!this.meetsCapability(user, 'crypto.send')) {
           outcome = { kind: 'needs_kyc' };
           summaryText = 'KYC required';
           break;
@@ -403,9 +417,12 @@ export class WebChatService {
       }
 
       case 'check_balance': {
-        // Read-only (§3.1): no proposal, no engine. KYC-gated like the other
-        // surfaces — an unverified user has no provisioned wallets to read.
-        if (user.kycStatus !== 'verified') {
+        // Read-only (§3.1): no proposal, no engine. Gated at tier_1 like the
+        // other tier_1 surfaces — an unverified user has no provisioned wallets
+        // to read. `check_balance` is not a transactable capability (no
+        // `Capability` entry / `gating.capabilityMinTier` key), so it is gated
+        // directly against `tierAtLeast` rather than `meetsCapability`.
+        if (!tierAtLeast(user.kycTier as KycTier, 'tier_1')) {
           outcome = { kind: 'needs_kyc' };
           summaryText = 'KYC required';
           break;
@@ -447,7 +464,7 @@ export class WebChatService {
           summaryText = 'That feature is not yet available.';
           break;
         }
-        if (user.kycStatus !== 'verified') {
+        if (!this.meetsCapability(user, 'crypto.swap')) {
           outcome = { kind: 'needs_kyc' };
           summaryText = 'KYC required';
           break;
@@ -576,6 +593,31 @@ export class WebChatService {
       );
       throw new AgentUnavailableError();
     }
+  }
+
+  /**
+   * True when `user.kycTier` meets the minimum tier configured for
+   * `capability` in `gating.capabilityMinTier` (root CLAUDE.md §7 / Task 1.2).
+   *
+   * This is a chat-entry UX pre-check ONLY — it exists so a tier_1
+   * (email-verified) user's buy/receive request produces a proposal instead of
+   * a false `needs_kyc`, matching the engine's authoritative gate
+   * (`KycGateService.assertBaselineEligibility`,
+   * `api/src/modules/identity/application/kyc-gate.service.ts`). It does not
+   * replace that gate: `ProposalService`/`ExecutionService` re-check
+   * capability→tier, velocity, and sanctions server-side before any money
+   * moves (§3.1/§3.3). Reuses `meetsCapabilityMinTier` (identity domain) so the
+   * capability→tier mapping is never duplicated — both this pre-check and the
+   * engine read the SAME `gating.capabilityMinTier` config map.
+   */
+  private meetsCapability(user: UserRecord, capability: Capability): boolean {
+    const capabilityMinTierMap =
+      this.config.get<GatingConfig>('gating')?.capabilityMinTier ?? {};
+    return meetsCapabilityMinTier(
+      user.kycTier as KycTier,
+      capability,
+      capabilityMinTierMap,
+    );
   }
 
   /**
