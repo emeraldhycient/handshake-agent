@@ -407,14 +407,6 @@ export interface FocusTrapProps {
   className?: string
 }
 
-// ─── KYC web-handoff form (Fix H) ────────────────────────────────────────────
-
-/** Props for the KycForm feature component. */
-export interface KycFormProps {
-  /** Single-use handoff token from the URL query param `t`. */
-  token: string
-}
-
 // ─── Auth forms ──────────────────────────────────────────────────────────────
 
 /** Props for SignupForm — no required props; self-contained. */
