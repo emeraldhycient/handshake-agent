@@ -27,3 +27,24 @@ export const ONBOARDING_STEP_TRACKER: readonly OnboardingTrackerItem[] = [
   { step: "name", label: "Your name" },
   { step: "pin", label: "Set PIN" },
 ] as const
+
+/**
+ * Maps an `OnboardingStep` onto an index into `ONBOARDING_STEP_TRACKER`, so
+ * `OnboardingRail` (desktop) and `OnboardingProgress` (mobile) derive each
+ * tracker row/segment's done/active/pending state from one source of truth
+ * (Task F1.3) instead of duplicating the mapping.
+ *
+ * - `welcome` (before the tracker starts) → `-1`: nothing done, nothing active.
+ * - one of the four tracked steps → its index (0–3).
+ * - `kyc` / `sumsub` / `done` (past the tracker) → `ONBOARDING_STEP_TRACKER.length`,
+ *   so every row reads as done and none as active (mirrors the mockup's
+ *   `done` flag, which short-circuits the per-row `isDone` check).
+ */
+export function getOnboardingStageIndex(step: OnboardingStep): number {
+  const index = ONBOARDING_STEP_TRACKER.findIndex((item) => item.step === step)
+  if (index !== -1) return index
+  if (step === "kyc" || step === "sumsub" || step === "done") {
+    return ONBOARDING_STEP_TRACKER.length
+  }
+  return -1
+}

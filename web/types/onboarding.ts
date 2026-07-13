@@ -120,3 +120,28 @@ export interface DoneStepProps {
   /** Launches Sumsub verification from the "Verify to unlock" banner. */
   onVerifyNow: () => void
 }
+
+// ─── Chrome component props (Task F1.3) ────────────────────────────────────
+// Keypad/OnboardingProgress/OnboardingRail are the mobile on-screen keypad,
+// mobile top bar, and desktop brand rail respectively — pure chrome, wired
+// into the wizard shell by Task F1.4.
+
+export interface KeypadProps {
+  /** Called with the tapped digit ("0"–"9"). */
+  onDigit: (digit: string) => void
+  /** Called when the backspace (⌫) key is tapped. */
+  onBackspace: () => void
+  disabled?: boolean
+}
+
+export interface OnboardingProgressProps {
+  /** Current wizard step — derives which of the 4 core-stage segments are done/active/pending. */
+  step: OnboardingStep
+  /** Navigates to the previous step. */
+  onBack: () => void
+}
+
+export interface OnboardingRailProps {
+  /** Current wizard step — drives the vertical step-tracker's done/active/pending rows. */
+  step: OnboardingStep
+}
