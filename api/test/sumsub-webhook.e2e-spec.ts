@@ -4,7 +4,8 @@
  *
  * Boots the REAL AppModule (Testcontainers Postgres) via supertest and drives:
  *
- *   1. Sign up + verify + login a fresh user, upgrade to tier_1 via /kyc/submit.
+ *   1. mintTier1User() — email-OTP signup/verify → active tier_1 session + PIN
+ *      (replaces the retired signup → verify-email → login → /kyc/submit path).
  *   2. BEFORE any Sumsub webhook: KycGateService.assertCanTransact({capability:
  *      'crypto.send'}) throws CapabilityTierError — tier_1 cannot send
  *      (gating.capabilityMinTier['crypto.send'] = 'tier_2').
@@ -56,6 +57,7 @@ import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/
 import { KycGateService } from '../src/modules/identity/application/kyc-gate.service';
 import { CapabilityTierError } from '../src/modules/identity/domain/gate-errors';
 import { drainWebhooks } from './helpers/drain-webhooks';
+import { mintTier1User } from './helpers/mint-verified-user';
 
 jest.setTimeout(180_000);
 
@@ -251,55 +253,6 @@ describe('Sumsub webhook — e2e (AppModule, Testcontainers Postgres)', () => {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  async function signUpAndLogin(): Promise<string> {
-    const unique = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-    const email = `e2e_sw_${unique}@test.com`;
-
-    const signup = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone: '+2348039999002' })
-      .expect(202);
-    const signupBody = signup.body as { devToken: string };
-
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: signupBody.devToken })
-      .expect(200);
-
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const lrBody = lr.body as { devOtp: string };
-
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({
-        email,
-        otp: lrBody.devOtp,
-        deviceFingerprint: `e2e-sw-fingerprint-${unique}`,
-      })
-      .expect(200);
-    const lvBody = lv.body as { accessToken: string };
-
-    return lvBody.accessToken;
-  }
-
-  /** Upgrades the signed-in user to tier_1 via /kyc/submit. Returns their userId. */
-  async function upgradeToTier1(accessToken: string): Promise<string> {
-    const res = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Ada',
-        lastName: 'Chukwu',
-        nin: '99887766554',
-        pin: '2468',
-      })
-      .expect(200);
-    return (res.body as { userId: string }).userId;
-  }
-
   async function getMe(
     accessToken: string,
   ): Promise<{ kycTier: string; kycStatus: string }> {
@@ -380,8 +333,9 @@ describe('Sumsub webhook — e2e (AppModule, Testcontainers Postgres)', () => {
       'blocked to passed; a redelivered GREEN is idempotent (no downgrade, ' +
       'no tierChangedAt re-stamp); a bad signature 401s with no state change',
     async () => {
-      const accessToken = await signUpAndLogin();
-      const userId = await upgradeToTier1(accessToken);
+      const { accessToken, userId } = await mintTier1User(app, {
+        pin: '2468',
+      });
 
       // ── Baseline: tier_1, crypto.send blocked by the real gate ──────────────
       const before = await getMe(accessToken);
@@ -468,8 +422,9 @@ describe('Sumsub webhook — e2e (AppModule, Testcontainers Postgres)', () => {
       're-locks crypto.send; a replayed RED is idempotent (no re-downgrade, ' +
       'no tierChangedAt re-stamp)',
     async () => {
-      const accessToken = await signUpAndLogin();
-      const userId = await upgradeToTier1(accessToken);
+      const { accessToken, userId } = await mintTier1User(app, {
+        pin: '2468',
+      });
 
       // ── Grant tier_2 via a signed GREEN webhook (same flow as the main test).
       //    Distinct applicantId — KycProfile.sumsubApplicantId is @unique and

@@ -44,11 +44,17 @@ import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.p
 import type { IWalletProvider } from '../src/modules/wallets/application/ports/wallet-provider.port';
 import type { IPaymentProvider } from '../src/modules/treasury/application/ports/payment-provider.port';
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
+import {
+  mintTier1User,
+  grantTierViaSumsubWebhook,
+} from './helpers/mint-verified-user';
 
 jest.setTimeout(180_000);
 
 const API_ROOT = join(__dirname, '..');
 const FLUTTERWAVE_WEBHOOK_SECRET = 'e2e-flw-webhook-secret-web-sellsend';
+const SUMSUB_WEBHOOK_SECRET = 'e2e-sumsub-webhook-secret';
+const SUMSUB_LEVEL_TIER2 = 'id-and-liveness';
 
 const FAKE_WALLET_ADDRESS = 'TWebSellSendFakeWalletAddr12345xx';
 const FAKE_BLOCKRADAR_REF = 'fake_blockradar_ref_web_sellsend';
@@ -104,6 +110,9 @@ describe('Web sell + send + beneficiaries — e2e', () => {
       FLUTTERWAVE_WEBHOOK_SECRET,
       JWT_SECRET: 'e2e-web-ss-jwt-secret-at-least-32-bytes!!',
       AUTH_DEV_EXPOSE_OTP: 'true',
+      SUMSUB_WEBHOOK_SECRET,
+      SUMSUB_LEVEL_TIER2,
+      SUMSUB_LEVEL_TIER3: 'full-kyc',
     });
     delete process.env.ANTHROPIC_API_KEY;
 
@@ -248,44 +257,19 @@ describe('Web sell + send + beneficiaries — e2e', () => {
     userEmail: string,
     pin = '1357',
   ): Promise<{ accessToken: string; userId: string }> {
-    const deviceFingerprint = `e2e-web-ss-fp-${userEmail.slice(0, 16)}`;
+    const { accessToken, userId } = await mintTier1User(app, {
+      email: userEmail,
+      pin,
+    });
 
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email: userEmail, phone: '+2348099998888' })
-      .expect(202);
-    const { devToken } = su.body as { devToken: string };
-
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email: userEmail })
-      .expect(202);
-    const { devOtp } = lr.body as { devOtp: string };
-
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email: userEmail, otp: devOtp, deviceFingerprint })
-      .expect(200);
-    const { accessToken } = lv.body as { accessToken: string };
-
-    const ks = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({ firstName: 'Ada', lastName: 'Eze', nin: '12345678901', pin })
-      .expect(200);
-    const { userId } = ks.body as { userId: string };
-
-    // /kyc/submit (the mock provider) grants tier_1 (email-verified identity
-    // only). Sell/send/swap now require tier_2 (doc + liveness verification) —
-    // bump here to represent completed Sumsub verification for these e2e users.
-    await prisma.user.update({
-      where: { id: userId },
-      data: { kycTier: 'tier_2' },
+    // mintTier1User grants tier_1 (email-verified identity only). Sell/send/
+    // swap now require tier_2 (doc + liveness verification) — grant it via a
+    // signed GREEN Sumsub webhook to represent completed verification for
+    // these e2e users, exercising the real webhook-grant path (§3.1/§3.3).
+    await grantTierViaSumsubWebhook(app, {
+      userId,
+      levelName: SUMSUB_LEVEL_TIER2,
+      secret: SUMSUB_WEBHOOK_SECRET,
     });
 
     return { accessToken, userId };
