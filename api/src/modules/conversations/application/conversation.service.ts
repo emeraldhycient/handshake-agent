@@ -32,7 +32,6 @@ import { IdentityService } from '../../identity/application/identity.service';
 import type { ProposalService } from '../../transactions/application/proposal.service';
 import type { DirectiveService } from '../../transactions/application/directive.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
-import type { HandoffTokenService } from '../../identity/application/handoff-token.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { maskBeneficiaryDetail } from '../../beneficiaries/application/beneficiary-display';
 import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
@@ -72,9 +71,6 @@ export const DIRECTIVE_SERVICE = Symbol('DIRECTIVE_SERVICE');
 
 /** DI token for WalletService — injected by symbol to avoid coupling at module level */
 export const WALLET_SERVICE = Symbol('WALLET_SERVICE');
-
-/** DI token for HandoffTokenService — injected by symbol (K3). */
-export const HANDOFF_TOKEN_SERVICE = Symbol('HANDOFF_TOKEN_SERVICE');
 
 /** DI token for BeneficiaryService — injected by symbol to avoid coupling at module level (W1). */
 export const BENEFICIARY_SERVICE = Symbol('BENEFICIARY_SERVICE');
@@ -162,8 +158,6 @@ export class ConversationService implements IInboundHandler {
     @Inject(WALLET_SERVICE)
     private readonly walletService: WalletService,
     private readonly assetRegistry: AssetRegistry,
-    @Inject(HANDOFF_TOKEN_SERVICE)
-    private readonly handoffTokenService: HandoffTokenService,
     @Inject(BENEFICIARY_SERVICE)
     private readonly beneficiaryService: BeneficiaryService,
     @Inject(TRANSACTION_HISTORY_SERVICE)
@@ -575,31 +569,28 @@ export class ConversationService implements IInboundHandler {
   }
 
   /**
-   * Mints a KYC handoff token and sends a CTA-URL button to the user.
+   * Sends a CTA-URL button linking to the plain web onboarding route.
    *
-   * Single shared path for all needs-KYC and needs-reverify cases (K3).
-   * If WEB_APP_BASE_URL is unset, falls back to a plain-text message.
+   * Single shared path for all needs-KYC and needs-reverify cases. No token
+   * is minted — the handoff-token flow is retired; the WhatsApp Contact links
+   * to the web account later via Settings (onboarding spec §9.4). If
+   * WEB_APP_BASE_URL is unset, falls back to a plain-text message.
    *
    * Returns the short summary text that goes into the reply row.
    */
   private async sendKycHandoff(channelAddress: string): Promise<string> {
+    const url = this.onboardingUrl();
+    if (!url) {
+      // WEB_APP_BASE_URL not configured → text fallback.
+      return this.kycRequiredFallbackReply();
+    }
     try {
-      const { url } = await this.handoffTokenService.mintKycToken({
-        channelAddress,
-      });
-
-      if (!url) {
-        // WEB_APP_BASE_URL not configured → text fallback.
-        return this.kycRequiredFallbackReply();
-      }
-
       await this.sender.sendCtaUrl({
         to: channelAddress,
         body: 'To start transacting, please verify your identity. It only takes a minute.',
         buttonText: 'Verify now',
         url,
       });
-
       return "I've sent you a secure link to verify your identity.";
     } catch (err: unknown) {
       this.logger.warn(
@@ -608,6 +599,19 @@ export class ConversationService implements IInboundHandler {
       );
       return this.kycRequiredFallbackReply();
     }
+  }
+
+  /**
+   * Builds the onboarding CTA URL from config. Returns '' when WEB_APP_BASE_URL
+   * is unset (callers fall back to text). No token — the WhatsApp Contact links
+   * to the web account later via Settings (onboarding spec §9.4).
+   */
+  private onboardingUrl(): string {
+    const baseUrl = this.configService.get<string>('WEB_APP_BASE_URL') ?? '';
+    if (!baseUrl) return '';
+    const path =
+      this.configService.get<string>('onboarding.webPath') ?? '/get-started';
+    return `${baseUrl}${path}`;
   }
 
   /**

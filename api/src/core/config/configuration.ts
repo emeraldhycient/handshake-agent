@@ -643,6 +643,17 @@ export interface SumsubConfig {
   levelToTier: Record<string, KycTier>;
 }
 
+/**
+ * Onboarding CTA configuration (Task 7, root CLAUDE.md §7). The WhatsApp KYC
+ * CTA links here — a plain web onboarding path, not a minted single-use token
+ * (the HandoffToken model + minting flow are retired; kept dormant in the
+ * schema). Joined onto `WEB_APP_BASE_URL` by ConversationService.onboardingUrl().
+ */
+export interface OnboardingConfig {
+  /** Web path the WhatsApp KYC CTA links to (joined onto WEB_APP_BASE_URL). */
+  webPath: string;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
@@ -664,6 +675,7 @@ export interface AppConfig {
   agent: AgentConfig;
   gating: GatingConfig;
   sumsub: SumsubConfig;
+  onboarding: OnboardingConfig;
 }
 
 /**
@@ -1225,6 +1237,12 @@ const buildConfig = (): AppConfig => ({
     mockMode: (process.env['KYC_MOCK_MODE'] ?? 'true') !== 'false',
     baseUrl: process.env['SUMSUB_BASE_URL'] ?? 'https://api.sumsub.com',
     levelToTier: Object.fromEntries(buildSumsubLevelToTierEntries()),
+  },
+  // ── Onboarding CTA (Task 7, CLAUDE.md §7) ──────────────────────────────────
+  // Web path the WhatsApp KYC CTA links to (joined onto WEB_APP_BASE_URL).
+  // A developer default; the FE serves this route (frontend plan → /get-started).
+  onboarding: {
+    webPath: '/get-started',
   },
 });
 

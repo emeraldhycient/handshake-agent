@@ -82,7 +82,6 @@ import type { TransactionHistoryService } from '../../transactions/application/t
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { WalletRecord } from '../../wallets/application/ports/wallet.repository.port';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
-import type { HandoffTokenService } from '../../identity/application/handoff-token.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
 import type { BalanceService } from '../../balances/application/balance.service';
@@ -452,14 +451,21 @@ function makeReplyRepo(
 }
 
 function makeConfigService(
-  overrides: { flowId?: string; signingKey?: string } = {},
+  overrides: {
+    flowId?: string;
+    signingKey?: string;
+    /** Defaults to a fixed base URL so the KYC CTA sends sendCtaUrl by default. */
+    webAppBaseUrl?: string;
+  } = {},
 ): jest.Mocked<ConfigService> {
   const flowId = overrides.flowId ?? '';
   const signingKey = overrides.signingKey ?? '';
+  const webAppBaseUrl = overrides.webAppBaseUrl ?? 'https://app.example.com';
   return {
     get: jest.fn((key: string) => {
       if (key === 'WHATSAPP_FLOW_ID') return flowId;
       if (key === 'DIRECTIVE_SIGNING_KEY') return signingKey;
+      if (key === 'WEB_APP_BASE_URL') return webAppBaseUrl;
       return undefined;
     }),
   } as unknown as jest.Mocked<ConfigService>;
@@ -509,24 +515,6 @@ function makeBalanceService(
   },
 ): { getBalances: jest.Mock } {
   return { getBalances: jest.fn().mockResolvedValue(snapshot) };
-}
-
-function makeHandoffTokenService(
-  mintOutput: { token: string; url: string } | Error = {
-    token: 'raw-token-hex',
-    url: 'https://app.example.com/kyc?t=raw-token-hex',
-  },
-): jest.Mocked<Pick<HandoffTokenService, 'mintKycToken' | 'consumeKycToken'>> {
-  const svc = {
-    mintKycToken: jest.fn(),
-    consumeKycToken: jest.fn(),
-  };
-  if (mintOutput instanceof Error) {
-    svc.mintKycToken.mockRejectedValue(mintOutput);
-  } else {
-    svc.mintKycToken.mockResolvedValue(mintOutput);
-  }
-  return svc;
 }
 
 /**
@@ -607,9 +595,6 @@ function buildService(
       Pick<WalletService, 'getOrProvisionNetworkWallet'>
     >;
     assetRegistry?: jest.Mocked<AssetRegistry>;
-    handoffTokenService?: jest.Mocked<
-      Pick<HandoffTokenService, 'mintKycToken' | 'consumeKycToken'>
-    >;
     beneficiaryService?: jest.Mocked<
       Pick<
         BeneficiaryService,
@@ -636,8 +621,6 @@ function buildService(
   const directiveService = overrides.directiveService ?? makeDirectiveService();
   const walletService = overrides.walletService ?? makeWalletService();
   const assetRegistry = overrides.assetRegistry ?? makeAssetRegistry();
-  const handoffTokenService =
-    overrides.handoffTokenService ?? makeHandoffTokenService();
   const beneficiaryService =
     overrides.beneficiaryService ?? makeBeneficiaryService();
   const historyService = overrides.historyService ?? makeHistoryService();
@@ -657,7 +640,6 @@ function buildService(
     directiveService as unknown as DirectiveService,
     walletService as unknown as WalletService,
     assetRegistry,
-    handoffTokenService as unknown as HandoffTokenService,
     beneficiaryService as unknown as BeneficiaryService,
     historyService as unknown as TransactionHistoryService,
     balanceService as unknown as BalanceService,
@@ -677,7 +659,6 @@ function buildService(
     directiveService,
     walletService,
     assetRegistry,
-    handoffTokenService,
     beneficiaryService,
     historyService,
     balanceService,
@@ -904,7 +885,7 @@ describe('ConversationService.handleInbound', () => {
 
   // ── Contact (unlinked) + buy_crypto → KYC CTA handoff ───────────────────
 
-  it('contact (unlinked) + buy_crypto → calls mintKycToken + sendCtaUrl, does NOT call proposalService', async () => {
+  it('contact (unlinked) + buy_crypto with WEB_APP_BASE_URL set → sends onboarding CTA, does NOT call proposalService', async () => {
     const identityService = makeIdentityService({
       resolveByChannel: jest.fn().mockResolvedValue({
         kind: 'contact',
@@ -926,18 +907,19 @@ describe('ConversationService.handleInbound', () => {
       contactId: 'contact-id-1',
     });
     const proposalService = makeProposalService();
-    const handoffTokenService = makeHandoffTokenService();
     const { svc, sender } = buildService({
       identityService,
       convRepo,
       proposalService,
-      handoffTokenService,
+      configService: makeConfigService({
+        webAppBaseUrl: 'https://app.example.com',
+      }),
     });
 
     await svc.handleInbound(baseMsg());
 
     expect(proposalService.createBuyProposal).not.toHaveBeenCalled();
-    // K3: CTA URL sent, not plain text
+    // CTA URL sent, not plain text — no token, plain onboarding path.
     expect(sender.sendCtaUrl).toHaveBeenCalledTimes(1);
     const [ctaArg] = (
       sender.sendCtaUrl as jest.Mock<
@@ -946,7 +928,7 @@ describe('ConversationService.handleInbound', () => {
       >
     ).mock.calls[0];
     expect(ctaArg.to).toBe(FIXED_FROM);
-    expect(ctaArg.url).toContain('kyc');
+    expect(ctaArg.url).toBe('https://app.example.com/get-started');
     expect(ctaArg.buttonText).toBeTruthy();
     // Reply summary text sent via sendText
     const sentText = captureFirstSentText(sender);
@@ -975,22 +957,18 @@ describe('ConversationService.handleInbound', () => {
       contactId: 'contact-id-1',
     });
     const proposalService = makeProposalService();
-    // Simulate WEB_APP_BASE_URL not set: mintKycToken returns empty url
-    const handoffTokenService = makeHandoffTokenService({
-      token: 'raw-token',
-      url: '', // empty → triggers text fallback
-    });
     const { svc, sender } = buildService({
       identityService,
       convRepo,
       proposalService,
-      handoffTokenService,
+      // Simulate WEB_APP_BASE_URL not set → onboardingUrl() returns '' → text fallback.
+      configService: makeConfigService({ webAppBaseUrl: '' }),
     });
 
     await svc.handleInbound(baseMsg());
 
     expect(proposalService.createBuyProposal).not.toHaveBeenCalled();
-    // sendCtaUrl NOT called since url is empty
+    // sendCtaUrl NOT called since WEB_APP_BASE_URL is unset
     expect(sender.sendCtaUrl).not.toHaveBeenCalled();
     // Plain text fallback sent
     const sentText = captureFirstSentText(sender);
@@ -1483,7 +1461,7 @@ describe('ConversationService.handleInbound', () => {
 
   // ── receive_crypto: unlinked contact → KYC CTA handoff ──────────────────
 
-  it('contact (unlinked) + receive_crypto → mintKycToken + sendCtaUrl, walletService NOT called', async () => {
+  it('contact (unlinked) + receive_crypto → sends onboarding CTA, walletService NOT called', async () => {
     const identityService = makeIdentityService({
       resolveByChannel: jest.fn().mockResolvedValue({
         kind: 'contact',
@@ -1506,14 +1484,12 @@ describe('ConversationService.handleInbound', () => {
 
     const agentPort = makeAgentPort({ action: 'receive_crypto' });
     const walletService = makeWalletService();
-    const handoffTokenService = makeHandoffTokenService();
 
     const { svc, sender } = buildService({
       identityService,
       convRepo,
       agentPort,
       walletService,
-      handoffTokenService,
     });
 
     await svc.handleInbound(baseMsg());
@@ -1521,7 +1497,7 @@ describe('ConversationService.handleInbound', () => {
     // WalletService must NOT be called for unlinked contact
     expect(walletService.getOrProvisionNetworkWallet).not.toHaveBeenCalled();
 
-    // K3: CTA URL sent
+    // CTA URL sent (default configService WEB_APP_BASE_URL is set)
     expect(sender.sendCtaUrl).toHaveBeenCalledTimes(1);
     // Reply summary text sent via sendText
     const sentText = captureFirstSentText(sender);
@@ -2702,13 +2678,11 @@ describe('ConversationService.handleInbound', () => {
     });
 
     const beneficiaryService = makeBeneficiaryService();
-    const handoffTokenService = makeHandoffTokenService();
 
     const { svc, sender } = buildService({
       identityService,
       convRepo,
       beneficiaryService,
-      handoffTokenService,
     });
 
     await svc.handleInbound(

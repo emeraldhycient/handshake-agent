@@ -607,9 +607,10 @@ describe('WhatsApp inbound image → beneficiary saved — e2e (AppModule, Testc
     // ───────────────────────────────────────────────────────────────────────
     // Assert KYC handoff was dispatched — either sendCtaUrl (when
     // WEB_APP_BASE_URL is set) or sendText with KYC guidance (fallback).
-    // WA_FLOW_ID is empty and WEB_APP_BASE_URL is unset in our test env, so
-    // HandoffTokenService.mintKycToken will produce an empty url → text fallback.
-    // Either way, sendText must have been called with KYC / verify content.
+    // WEB_APP_BASE_URL is unset in our test env, so ConversationService's
+    // onboardingUrl() (no token — the handoff-token flow is retired) returns
+    // '' and the handler falls back to text. Either way, sendText must have
+    // been called with KYC / verify content.
     // ───────────────────────────────────────────────────────────────────────
 
     const textCalls = fakeSender.sendText.mock.calls;
