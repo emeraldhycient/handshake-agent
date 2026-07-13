@@ -26,10 +26,12 @@ export interface IAuthUserRepository {
    * ChannelIdentity for the phone (the later-link hook, §3.4). If the email
    * already exists, returns its userId with created:false (no duplicate). If the
    * phone already has an active WhatsApp ChannelIdentity, the CI is skipped.
+   * When `phone` is absent/empty (email-only signup), no ChannelIdentity is
+   * created at all.
    */
   createSignup(input: {
     email: string;
-    phone: string;
+    phone?: string;
   }): Promise<{ userId: string; created: boolean }>;
 
   findByEmail(email: string): Promise<AuthUserRecord | null>;

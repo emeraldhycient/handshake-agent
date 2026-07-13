@@ -17,10 +17,14 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
 
   async createSignup(input: {
     email: string;
-    phone: string;
+    phone?: string;
   }): Promise<{ userId: string; created: boolean }> {
     const email = input.email.trim().toLowerCase();
-    const phone = normalizePhone(input.phone.trim());
+    const trimmedPhone = input.phone?.trim();
+    const phone =
+      trimmedPhone && trimmedPhone.length > 0
+        ? normalizePhone(trimmedPhone)
+        : null;
 
     const existing = await this.prisma.user.findUnique({
       where: { email },
@@ -34,22 +38,30 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
         select: { id: true },
       });
 
-      // Pending WhatsApp ChannelIdentity = the later-link hook (§3.4). Skip if
-      // the phone already has an active WhatsApp CI (avoid hijack / unique clash).
-      const existingCi = await tx.channelIdentity.findFirst({
-        where: { channel: 'whatsapp', channelAddress: phone, deletedAt: null },
-        select: { id: true },
-      });
-      if (existingCi === null) {
-        await tx.channelIdentity.create({
-          data: {
+      // Email-only signup (no phone) creates no ChannelIdentity at all.
+      if (phone !== null) {
+        // Pending WhatsApp ChannelIdentity = the later-link hook (§3.4). Skip if
+        // the phone already has an active WhatsApp CI (avoid hijack / unique
+        // clash).
+        const existingCi = await tx.channelIdentity.findFirst({
+          where: {
             channel: 'whatsapp',
             channelAddress: phone,
-            normalizedPhone: phone,
-            userId: user.id,
-            verificationStatus: 'pending',
+            deletedAt: null,
           },
+          select: { id: true },
         });
+        if (existingCi === null) {
+          await tx.channelIdentity.create({
+            data: {
+              channel: 'whatsapp',
+              channelAddress: phone,
+              normalizedPhone: phone,
+              userId: user.id,
+              verificationStatus: 'pending',
+            },
+          });
+        }
       }
 
       return { userId: user.id, created: true };

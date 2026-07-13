@@ -43,6 +43,20 @@ describe('AuthUserPrismaRepository (integration, Testcontainers Postgres)', () =
     expect(again.userId).toBe(a.userId);
   });
 
+  it('createSignup with no phone creates a provisional user and NO WhatsApp ChannelIdentity', async () => {
+    const a = await repo.createSignup({ email: 'NoPhone@Test.com' });
+    expect(a.created).toBe(true);
+
+    const user = await prisma.user.findUnique({ where: { id: a.userId } });
+    expect(user?.email).toBe('nophone@test.com'); // lowercased
+    expect(user?.status).toBe('provisional');
+
+    const ci = await prisma.channelIdentity.findFirst({
+      where: { userId: a.userId, channel: 'whatsapp' },
+    });
+    expect(ci).toBeNull();
+  });
+
   it('findByEmail is case-insensitive on the stored lowercase; markEmailVerified sets it', async () => {
     const { userId } = await repo.createSignup({
       email: 'v@test.com',
