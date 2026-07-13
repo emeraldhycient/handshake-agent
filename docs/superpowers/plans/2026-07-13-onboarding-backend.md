@@ -93,8 +93,8 @@ And add `emailVerified: z.boolean().optional()` to `MeResponseSchema` (place aft
 ### Task 0.2: Set-name, Sumsub token, Sumsub webhook payload schemas
 
 **Files:**
-- Create: `packages/contracts/src/kyc/kyc-onboarding.dto.ts` (+ export from the `index.ts` barrel; if a new `kyc/` dir, add to the `exports` map per `packages/contracts/CLAUDE.md`)
-- Test: `packages/contracts/src/kyc/kyc-onboarding.dto.spec.ts`
+- Create: `packages/contracts/src/dto/kyc-onboarding.dto.ts` (the existing `dto/` dir that already hosts `kyc-complete.dto.ts`; export it via the `index.ts` barrel exactly the way `kyc-complete.dto.ts` is exported — no new top-level dir, so **no `exports`-map change**)
+- Test: `packages/contracts/src/dto/kyc-onboarding.dto.spec.ts`
 
 **Interfaces:**
 - Produces: `SetNameRequest = { firstName, lastName }`; `SumsubTokenRequest = { level: 'tier_2' | 'tier_3' }`; `SumsubTokenResponse = { token, userId }`; `SumsubWebhookPayload` (loose, boundary-validated: `{ type, applicantId, externalUserId, levelName?, reviewResult? }`); `KycTierLevel = z.enum(['tier_2','tier_3'])`.
