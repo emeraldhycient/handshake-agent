@@ -1839,12 +1839,13 @@ export class ExecutionService {
    * Validation gauntlet (ORDER IS SECURITY-CRITICAL):
    *   1. Load Proposal(swap, status pending|confirmed, owner, not expired).
    *   2. Re-quote drift check against stored rate.
-   *   3. Verify PIN (BEFORE consuming directive — I5 invariant).
-   *   4. DirectiveService.consume (ref must be request_pin).
-   *   5. Idempotency check (after auth, before writes).
-   *   6. Atomic write: Transaction(settling) + reserve ledger + Proposal→executing.
-   *   7. SWAP_PROVIDER.execute → providerSwapId.
-   *   8. Enqueue SettlementOutbox(swap).
+   *   3. KYC gate — assertCanTransact on the NGN-equivalent notional (§3.3 re-check).
+   *   4. Verify PIN (BEFORE consuming directive — I5 invariant).
+   *   5. DirectiveService.consume (ref must be request_pin).
+   *   6. Idempotency check (after auth, before writes).
+   *   7. Atomic write: Transaction(settling) + reserve ledger + Proposal→executing.
+   *   8. SWAP_PROVIDER.execute → providerSwapId.
+   *   9. Enqueue SettlementOutbox(swap).
    */
   async executeSwap(
     input: ExecuteSwapServiceInput,
@@ -1941,41 +1942,13 @@ export class ExecutionService {
       throw new QuoteDriftError(driftBps, this.maxSwapDriftBps);
     }
 
-    // ── Step 3: Verify PIN (BEFORE consuming the one-shot directive) ─────────
-    // I5: verify PIN first so a wrong-PIN typo does not burn the single-use
-    // directive and block a legitimate retry.
-    await this.pinService.verifyPin(userId, pin);
-
-    // ── Step 4: Consume directive grant ──────────────────────────────────────
-    const grant = await this.directiveService.consume({
-      directiveId,
-      nonce,
-      proposalId,
-    });
-
-    if (grant.directiveRef !== REQUIRED_DIRECTIVE_REF) {
-      throw new ProposalNotExecutableError(
-        `directive ref '${grant.directiveRef}' is not '${REQUIRED_DIRECTIVE_REF}'`,
-      );
-    }
-
-    // ── Step 5: Idempotency check ────────────────────────────────────────────
-    const existing =
-      await this.transactionRepo.findByIdempotencyKey(idempotencyKey);
-    if (existing !== null) {
-      const meta = existing.metadata as Record<string, string>;
-      return {
-        transactionId: existing.id,
-        status: 'settling',
-        swap: {
-          providerSwapId: meta.providerSwapId ?? '',
-        },
-      };
-    }
-
-    // ── Step 6: Atomic write ─────────────────────────────────────────────────
-    // create Transaction(swap, settling) + reserve fromAsset (user_wallet→swap_clearing)
-    // + mark Proposal→executing — all in a SINGLE DB $transaction (C1).
+    // ── Step 3: KYC gate (server-side, always) ──────────────────────────────
+    // §3.3: re-run the full KYC/tier/velocity/sanctions gauntlet at settle time,
+    // mirroring executeBuy/executeSell/executeSend. proposeSwap gated at propose
+    // time, but a tier downgrade or a stale proposal between propose and execute
+    // must be re-caught HERE — the engine never trusts the proposal-time check.
+    // Gate on the NGN-equivalent of fromAmount (same computation proposeSwap and
+    // the reserve write use); a swap is not an on-chain send, so no onChainSend flag.
     const pricingConfig = this.config.get<PricingConfig>('pricing');
     const baseFiat = this.assetRegistry.defaultFiat();
     const baseRate = resolveEffectiveBaseRate(
@@ -2000,6 +1973,50 @@ export class ExecutionService {
         : '.' + frac.toString().padStart(18, '0').replace(/0+$/, '');
     const ngnEquivalentStr = (isNeg ? '-' : '') + whole.toString() + fracStr;
 
+    await this.kycGate.assertCanTransact({
+      userId,
+      fiatAmount: ngnEquivalentStr,
+      fiatCurrency: baseFiat,
+      asset: fromAsset,
+    });
+
+    // ── Step 4: Verify PIN (BEFORE consuming the one-shot directive) ─────────
+    // I5: verify PIN first so a wrong-PIN typo does not burn the single-use
+    // directive and block a legitimate retry.
+    await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 5: Consume directive grant ──────────────────────────────────────
+    const grant = await this.directiveService.consume({
+      directiveId,
+      nonce,
+      proposalId,
+    });
+
+    if (grant.directiveRef !== REQUIRED_DIRECTIVE_REF) {
+      throw new ProposalNotExecutableError(
+        `directive ref '${grant.directiveRef}' is not '${REQUIRED_DIRECTIVE_REF}'`,
+      );
+    }
+
+    // ── Step 6: Idempotency check ────────────────────────────────────────────
+    const existing =
+      await this.transactionRepo.findByIdempotencyKey(idempotencyKey);
+    if (existing !== null) {
+      const meta = existing.metadata as Record<string, string>;
+      return {
+        transactionId: existing.id,
+        status: 'settling',
+        swap: {
+          providerSwapId: meta.providerSwapId ?? '',
+        },
+      };
+    }
+
+    // ── Step 7: Atomic write ─────────────────────────────────────────────────
+    // create Transaction(swap, settling) + reserve fromAsset (user_wallet→swap_clearing)
+    // + mark Proposal→executing — all in a SINGLE DB $transaction (C1).
+    // baseFiat / baseRate / ngnEquivalentStr were computed at the KYC gate (Step 3)
+    // and are reused here so the reserve's velocity contribution matches the gate.
     const requestChecksum = this.buildRequestChecksum({
       userId,
       proposalId,
@@ -2045,9 +2062,9 @@ export class ExecutionService {
         now,
       });
 
-    // ── Step 7: Execute swap via provider ────────────────────────────────────
+    // ── Step 8: Execute swap via provider ────────────────────────────────────
     // FUNDS-SAFETY (§3.1): same reserve-then-callProvider shape as executeSend.
-    // The reserve (Step 6, user_wallet → swap_clearing) is already committed. On a
+    // The reserve (Step 7, user_wallet → swap_clearing) is already committed. On a
     // DEFINITIVE rejection (HTTP 4xx — the provider rejected the request and never
     // performed the swap) refund the reserve and fail HERE. On an AMBIGUOUS failure
     // (5xx / timeout / no status) the swap MIGHT be in-flight; leave it 'settling'
@@ -2092,7 +2109,7 @@ export class ExecutionService {
     // Persist providerSwapId into Transaction metadata for idempotent replay.
     await this.transactionRepo.mergeMetadata(txn.id, { providerSwapId });
 
-    // ── Step 8: Enqueue SettlementOutbox ────────────────────────────────────
+    // ── Step 9: Enqueue SettlementOutbox ────────────────────────────────────
     await this.outboxRepo.create({
       transactionId: txn.id,
       settlementType: 'swap',
