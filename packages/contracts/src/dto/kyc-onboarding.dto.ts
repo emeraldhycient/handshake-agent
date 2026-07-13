@@ -9,10 +9,8 @@ export const KycTierLevelSchema = z.enum(["tier_2", "tier_3"]);
 export type KycTierLevel = z.infer<typeof KycTierLevelSchema>;
 
 /**
- * Request DTO for the set-name step of onboarding. Distinct from
- * `KycCompleteRequestSchema`/`KycSubmitRequestSchema` in kyc-complete.dto.ts:
- * this captures only the display name early in onboarding, before identity
- * documents are collected.
+ * Request DTO for the set-name step of onboarding. Captures only the display
+ * name early in onboarding (before identity documents are collected via Sumsub).
  */
 export const SetNameRequestSchema = z.object({
   firstName: z.string().trim().min(1).max(80),
