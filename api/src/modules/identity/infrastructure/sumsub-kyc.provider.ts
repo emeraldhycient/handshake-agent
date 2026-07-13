@@ -7,6 +7,7 @@ import type { AxiosError } from 'axios';
 import type { KycTierLevel } from '@handshake-agent/contracts';
 
 import { hmacHex } from '../../../core/crypto/hmac';
+import { KycVerificationUnavailableError } from '../domain/kyc-errors';
 import type { Env } from '../../../core/config/env.schema';
 import type {
   CreateVerificationSessionInput,
@@ -139,14 +140,17 @@ export class SumsubKycProvider implements IKycProvider {
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   verify(_input: KycVerifyInput): Promise<KycVerifyResult> {
+    // Fail CLOSED with a coded domain error (→ 503 via DomainExceptionFilter),
+    // never an opaque 500 and never a faked approval/rejection (root §3.6). The
+    // real Sumsub flow is async createVerificationSession (WebSDK) +
+    // applicantReviewed webhook; there is no synchronous NIN/BVN verify().
+    // TODO(KYC-TIER1-SUMSUB): the legacy tier_1 /kyc/submit + /kyc/complete
+    // endpoints are slated for removal (see the retire-legacy-sync-kyc plan);
+    // until then this keeps a mis-routed prod call legible instead of a 500.
     return Promise.reject(
-      new Error(
-        'SumsubKycProvider.verify() is not implemented: the real Sumsub ' +
-          'provider only supports the async createVerificationSession ' +
-          '(WebSDK) flow for tier_2/tier_3 upgrades. TODO(KYC-TIER1-SUMSUB): ' +
-          'the tier_1 NIN/BVN legacy path needs a dedicated design decision ' +
-          'before KYC_MOCK_MODE=false can serve /kyc/submit or /kyc/complete ' +
-          'in production.',
+      new KycVerificationUnavailableError(
+        'the Sumsub provider has no synchronous NIN/BVN verify(); tier_1 is ' +
+          'granted at email verification and tier_2/tier_3 via the Sumsub webhook',
       ),
     );
   }

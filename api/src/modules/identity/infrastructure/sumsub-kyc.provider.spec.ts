@@ -282,12 +282,12 @@ describe('SumsubKycProvider — createVerificationSession', () => {
 // ---------------------------------------------------------------------------
 
 describe('SumsubKycProvider — verify (legacy NIN/BVN path)', () => {
-  it('fails closed (throws) rather than faking an approval/rejection', async () => {
+  it('fails closed with a coded KYC_VERIFICATION_UNAVAILABLE error (→ 503, not an opaque 500) rather than faking an approval/rejection', async () => {
     const provider = new SumsubKycProvider(makeHttpService(), makeConfig());
 
     await expect(
       provider.verify({ nin: '12345678901', firstName: 'A', lastName: 'B' }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: 'KYC_VERIFICATION_UNAVAILABLE' });
   });
 });
 

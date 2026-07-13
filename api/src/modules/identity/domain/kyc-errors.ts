@@ -86,6 +86,28 @@ export class SumsubPrerequisiteNotMetError extends KycDomainError {
 }
 
 /**
+ * The active KYC provider has no implementation for the requested verification
+ * operation (e.g. SumsubKycProvider has no synchronous NIN/BVN `verify()` — the
+ * legacy tier_1 `/kyc/complete` + `/kyc/submit` path, superseded by email-OTP
+ * tier_1 + the Sumsub webhook for tier_2/3). Fail closed with a stable code so
+ * the global filter maps it to a clean 503 ("temporarily unavailable") instead
+ * of an opaque 500, and never fakes an approval/rejection (root CLAUDE.md §3.6).
+ *
+ * NOTE: this is interim containment. These legacy synchronous endpoints are
+ * slated for removal — see docs/superpowers/plans/2026-07-13-retire-legacy-sync-kyc-endpoints.md.
+ */
+export class KycVerificationUnavailableError extends KycDomainError {
+  readonly code = 'KYC_VERIFICATION_UNAVAILABLE' as const;
+
+  constructor(detail?: string) {
+    super(
+      'KYC verification is not available on this path' +
+        (detail ? `: ${detail}` : '.'),
+    );
+  }
+}
+
+/**
  * The Contact is already linked to a verified User. The service returns the
  * existing userId (idempotent) and this error is NOT thrown — the service
  * documents the idempotent-return behavior. However, callers that want to

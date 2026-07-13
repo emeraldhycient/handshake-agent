@@ -86,6 +86,18 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     message:
       'Please finish verifying your identity before making this transaction.',
   },
+  // The active KYC provider has no implementation for a requested verification
+  // operation (e.g. the legacy synchronous /kyc/complete + /kyc/submit path
+  // against the real Sumsub provider, which has no synchronous NIN/BVN check).
+  // 503 (service-unavailable), NOT an opaque 500 — the request was well-formed;
+  // the capability is simply not served here. Mirrors the other *_UNAVAILABLE
+  // 503s (AGENT_UNAVAILABLE / BASE_RATE_MISCONFIGURED / SANCTIONS_*_UNAVAILABLE).
+  KYC_VERIFICATION_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message:
+      'Identity verification is temporarily unavailable here. Please verify ' +
+      'from the Handshake app to continue.',
+  },
   // Task 1.3: the account's KYC tier is below the minimum required for the
   // requested capability (e.g. a tier_1/email-verified account trying to
   // send/sell/swap, which need tier_2) — distinct from KYC_NOT_VERIFIED so the
