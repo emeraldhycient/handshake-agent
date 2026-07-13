@@ -39,9 +39,10 @@
 ```ts
 import { SignupRequestSchema, SignupVerifyRequestSchema, MeResponseSchema } from "./auth.dto";
 
-it("SignupRequest accepts email only, rejects phone-required legacy shape", () => {
+it("SignupRequest accepts email only (phone now optional)", () => {
   expect(SignupRequestSchema.safeParse({ email: "a@b.co" }).success).toBe(true);
-  // phone no longer part of the schema — extra key stripped, still valid
+  // phone remains accepted (optional) so existing callers keep compiling
+  expect(SignupRequestSchema.safeParse({ email: "a@b.co", phone: "+2348012345678" }).success).toBe(true);
   expect(SignupRequestSchema.safeParse({ email: "bad" }).success).toBe(false);
 });
 
@@ -63,7 +64,13 @@ it("MeResponse carries emailVerified", () => {
 - [ ] **Step 3: Edit `auth.dto.ts`** — replace `SignupRequestSchema` (drop `phone`), add verify + emailVerified:
 
 ```ts
-export const SignupRequestSchema = z.object({ email: z.string().email().max(254) });
+// Phone made OPTIONAL (not removed) so existing api/web callers keep compiling
+// during the migration. The wizard omits it; the backend ignores it; a final
+// cleanup task removes the vestigial field once both plans land.
+export const SignupRequestSchema = z.object({
+  email: z.string().email().max(254),
+  phone: z.string().regex(/^\+?[0-9]{8,15}$/, "Enter a valid phone number").optional(),
+});
 export type SignupRequest = z.infer<typeof SignupRequestSchema>;
 
 export const SignupVerifyRequestSchema = z.object({
@@ -77,9 +84,9 @@ export type SignupVerifyRequest = z.infer<typeof SignupVerifyRequestSchema>;
 export const SignupVerifyResponseSchema = LoginVerifyResponseSchema;
 export type SignupVerifyResponse = z.infer<typeof SignupVerifyResponseSchema>;
 ```
-And add `emailVerified: z.boolean()` to `MeResponseSchema` (place after `hasPin`). Keep `SignupResponseSchema` (`{ status: "otp_sent", devOtp? }`) for the OTP-send step — reshape its status literal from `pending_verification` to `otp_sent` and rename its dev field to `devOtp` to match the login mechanic.
+And add `emailVerified: z.boolean().optional()` to `MeResponseSchema` (place after `hasPin`; optional so the api can adopt it in Task 4.1 without breaking `/auth/me` in the interim — FE treats missing as `false`). **Do NOT** reshape `SignupResponseSchema` — signup's OTP-send step reuses the existing `LoginRequestResponseSchema` (`{ status: "otp_sent", devOtp? }`) in Task 2.2, so no existing consumer breaks here. This task is **purely additive** + one field made optional; scope strictly to `packages/contracts` (only fix contracts-internal fixtures — do not touch `api/` or `web/`).
 
-- [ ] **Step 4: Run** the spec → PASS. Also run the full contracts suite `pnpm --filter @handshake-agent/contracts test` (other suites must stay green; `MeResponse` consumers may need the new field in fixtures — fix those fixtures in the same commit).
+- [ ] **Step 4: Run** the spec → PASS. Also run the full contracts suite `pnpm --filter @handshake-agent/contracts test` — it must stay green. (Because both new-field changes are optional/additive, no `api`/`web` consumer needs editing here; leave them for their own tasks.)
 
 - [ ] **Step 5: Commit** `feat(contracts): email-only OTP signup + signup-verify + me.emailVerified`.
 
