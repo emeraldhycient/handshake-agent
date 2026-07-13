@@ -46,8 +46,38 @@ const setNameMutation = vi.hoisted(() => ({
     unknown
   >,
 }))
+const sumsubTokenMutation = vi.hoisted(() => ({
+  current: {
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    data: undefined,
+    isPending: true,
+    isError: false,
+    error: undefined,
+  } as Record<string, unknown>,
+}))
 vi.mock("@/lib/query/kyc-onboarding", () => ({
   useSetName: () => setNameMutation.current,
+  useSumsubToken: () => sumsubTokenMutation.current,
+}))
+
+// The real Sumsub WebSDK renders a remote iframe — stub it to a token echo plus
+// a button that emits the applicant-submitted message the wizard listens for.
+vi.mock("@sumsub/websdk-react", () => ({
+  default: (props: {
+    accessToken: string
+    onMessage?: (type: string) => void
+  }) => (
+    <div data-testid="sumsub-sdk">
+      <span data-testid="sdk-token">{props.accessToken}</span>
+      <button
+        type="button"
+        onClick={() => props.onMessage?.("idCheck.onApplicantSubmitted")}
+      >
+        emit-submitted
+      </button>
+    </div>
+  ),
 }))
 
 const setPinMutation = vi.hoisted(() => ({
@@ -102,6 +132,14 @@ describe("OnboardingWizard", () => {
     isDesktop.current = true
     me.current = undefined
     meLoading.current = false
+    sumsubTokenMutation.current = {
+      mutate: vi.fn(),
+      mutateAsync: vi.fn(),
+      data: undefined,
+      isPending: true,
+      isError: false,
+      error: undefined,
+    }
   })
 
   it("shows a loading state while /me is still resolving", () => {
@@ -353,7 +391,7 @@ describe("OnboardingWizard", () => {
     })
   })
 
-  it("wires the kyc-choice 'verify now' branch to the sumsub stub", async () => {
+  it("wires the kyc-choice 'verify now' branch to the Sumsub verification surface", async () => {
     const user = userEvent.setup()
     me.current = makeMe({ hasPin: true, kycTier: "tier_1" })
     render(<OnboardingWizard />)
@@ -365,7 +403,39 @@ describe("OnboardingWizard", () => {
     })
     await user.click(screen.getByRole("button", { name: /verify now/i }))
 
-    expect(screen.getByText(/loading verification/i)).toBeInTheDocument()
+    // The token is still minting (mock defaults to isPending) — the loading branch.
+    expect(screen.getByText(/preparing verification/i)).toBeInTheDocument()
+    expect(sumsubTokenMutation.current.mutate).toHaveBeenCalledWith("tier_2")
+  })
+
+  it("moves to an in-review done step once the Sumsub flow is submitted", async () => {
+    const user = userEvent.setup()
+    me.current = makeMe({ hasPin: true, kycTier: "tier_1" })
+    // Token already minted → the SDK stub renders.
+    sumsubTokenMutation.current = {
+      mutate: vi.fn(),
+      mutateAsync: vi.fn(),
+      data: { token: "sbx-token", userId: "u-1" },
+      isPending: false,
+      isError: false,
+      error: undefined,
+    }
+    render(<OnboardingWizard />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /verify now/i })
+      ).toBeInTheDocument()
+    })
+    await user.click(screen.getByRole("button", { name: /verify now/i }))
+
+    // Applicant submits inside the SDK → wizard advances to the in-review done step.
+    await user.click(screen.getByRole("button", { name: /emit-submitted/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/in review/i)).toBeInTheDocument()
+    })
+    expect(screen.getByText(/reviewing your verification/i)).toBeInTheDocument()
   })
 
   it("wires the kyc-choice 'explore later' branch to a skipped done step", async () => {

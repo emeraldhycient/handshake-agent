@@ -18,7 +18,6 @@
  */
 import { useEffect, useRef } from "react"
 import type { MeResponse } from "@handshake-agent/contracts/auth"
-import { Button } from "@/components/ui/button"
 import { useIsDesktop } from "@/hooks/use-is-desktop"
 import {
   deriveResumeStep,
@@ -37,6 +36,7 @@ import { NameStep } from "./NameStep"
 import { PinStep } from "./PinStep"
 import { KycChoiceStep } from "./KycChoiceStep"
 import { DoneStep } from "./DoneStep"
+import { SumsubVerification } from "@/components/kyc/SumsubVerification"
 import { Keypad } from "./Keypad"
 import { OnboardingProgress } from "./OnboardingProgress"
 import { OnboardingRail } from "./OnboardingRail"
@@ -74,48 +74,15 @@ const MOBILE_FULL_BLEED_STEPS: ReadonlySet<OnboardingStep> = new Set([
  * dark-green header band (or, for `welcome`, the whole screen) over a cream
  * body — so the shell must not also impose its own background/padding on
  * top of it (that would show as a cream margin around the component's own
- * edge-to-edge box instead of a true full-bleed screen). `sumsub` is the one
- * full-bleed step that stays in the shell's plain centered/padded box: it
- * has no mockup of its own yet (Task F3 replaces the stub with the real
- * Sumsub mount).
+ * edge-to-edge box instead of a true full-bleed screen). `sumsub` stays in
+ * the shell's plain centered/padded box: it mounts the Sumsub WebSDK iframe
+ * (F3.2), which manages its own internal layout.
  */
 const MOBILE_EDGE_TO_EDGE_STEPS: ReadonlySet<OnboardingStep> = new Set([
   "welcome",
   "kyc",
   "done",
 ])
-
-// ─── Sumsub stub ────────────────────────────────────────────────────────────
-
-interface SumsubStubProps {
-  onBack: () => void
-}
-
-/**
- * TODO(F3): replace with the real `@sumsub/websdk-react` mount (plan Task
- * F3.1/F3.2) — fetch a token via `useSumsubToken('tier_2')` and render
- * `<SumsubWebSdk accessToken={...} />`, advancing to `done` on
- * `applicantSubmitted`/`applicantReviewed`. Stubbed here (rather than
- * rendering `DoneStep` directly) so the wizard has a distinct, honest
- * "verification is in progress" moment instead of silently pretending the
- * user is already done.
- */
-function SumsubStub({ onBack }: SumsubStubProps) {
-  return (
-    <div className="flex flex-col items-center gap-4 py-10 text-center">
-      <div
-        aria-hidden="true"
-        className="h-10 w-10 animate-spin rounded-full border-2 border-accent border-t-transparent"
-      />
-      <p className="text-base font-semibold text-foreground">
-        Loading verification…
-      </p>
-      <Button type="button" variant="outline" onClick={onBack}>
-        Back
-      </Button>
-    </div>
-  )
-}
 
 // ─── Step dispatch ──────────────────────────────────────────────────────────
 
@@ -175,12 +142,26 @@ function renderStep(
         />
       )
     case "sumsub":
-      return <SumsubStub onBack={machine.back} />
+      return (
+        <SumsubVerification
+          level="tier_2"
+          onSubmitted={() => {
+            // The engine grants tier_2 off the signed webhook (root §3.1);
+            // this only lets `done` show an honest "in review" state until
+            // `me` catches up.
+            machine.setData({ kycSubmitted: true })
+            machine.goto("done")
+          }}
+          onBack={machine.back}
+        />
+      )
     case "done":
       return (
         <DoneStep
           firstName={firstName}
-          kycStatus={me?.kycStatus}
+          kycStatus={
+            machine.data.kycSubmitted ? "pending_review" : me?.kycStatus
+          }
           skipped={machine.data.kycChoice === "later"}
           onVerifyNow={() => machine.goto("sumsub")}
         />

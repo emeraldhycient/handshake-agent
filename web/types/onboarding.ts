@@ -32,6 +32,12 @@ export interface OnboardingData {
   firstName?: string
   lastName?: string
   kycChoice?: OnboardingKycChoice
+  /**
+   * Set once the user submits the Sumsub flow in-wizard (F3.2). The tier is
+   * still granted server-side off the webhook (root §3.1) — this only lets the
+   * final `done` step show an honest "in review" state before `me` catches up.
+   */
+  kycSubmitted?: boolean
 }
 
 /** Return shape of `useOnboardingMachine`. */
