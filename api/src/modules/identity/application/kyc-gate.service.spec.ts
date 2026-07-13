@@ -256,6 +256,21 @@ describe('KycGateService.assertCanTransact', () => {
     ).rejects.toBeInstanceOf(CapabilityTierError);
   });
 
+  it('a tier_1 user may NOT swap (crypto.swap requires tier_2)', async () => {
+    const svc = makeService(makeUser({ kycTier: 'tier_1' }));
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.swap' }),
+    ).rejects.toBeInstanceOf(CapabilityTierError);
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.swap' }),
+    ).rejects.toMatchObject({
+      code: 'CAPABILITY_TIER_REQUIRED',
+      capability: 'crypto.swap',
+      requiredTier: 'tier_2',
+      actualTier: 'tier_1',
+    });
+  });
+
   it('a tier_2 user may send, sell, and swap', async () => {
     const svc = makeService(makeUser({ kycTier: 'tier_2' }));
     for (const capability of [

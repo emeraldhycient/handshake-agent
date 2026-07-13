@@ -554,6 +554,25 @@ describe('ProposalService.createBuyProposal', () => {
     expect(callArg.fiatAmount).toBe('10000');
   });
 
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+  // Regression guard: a future edit that swaps the capability literal on this
+  // call site (e.g. leaving a send/sell literal here) must fail the unit
+  // suite, not silently change the effective min-tier gate for buy.
+
+  it('calls KYC gate with capability "crypto.buy"', async () => {
+    const kycGate = makeKycGate();
+    const svc = makeBuySvc(
+      makeQuotesService() as unknown as QuotesService,
+      kycGate as unknown as KycGateService,
+    );
+
+    await svc.createBuyProposal(BASE_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.buy' }),
+    );
+  });
+
   // ── Amount-floor guard (findings #2, #3, #6) ─────────────────────────────
   // The guard runs BEFORE quoteBuy and BEFORE the KYC gate, so a non-positive /
   // dust / below-minimum amount surfaces as a clean AMOUNT_TOO_SMALL (422) — not
@@ -1085,6 +1104,19 @@ describe('ProposalService.createSellProposal', () => {
     expect(typeof sellCallArg.fiatAmount).toBe('string');
     // STUB_SELL_QUOTE.netFiatAmount = '7500'
     expect(sellCallArg.fiatAmount).toBe('7500');
+  });
+
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+
+  it('calls KYC gate with capability "crypto.sell"', async () => {
+    const kycGate = makeKycGate();
+    const svc = makeSellSvc({ kycGate });
+
+    await svc.createSellProposal(BASE_SELL_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.sell' }),
+    );
   });
 
   // ── Amount-floor guard (finding #4) ──────────────────────────────────────
@@ -1704,6 +1736,19 @@ describe('ProposalService.createSendProposal', () => {
     expect(sendCallArg.fiatAmount).toBe('16000');
   });
 
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+
+  it('calls KYC gate with capability "crypto.send"', async () => {
+    const kycGate = makeKycGate();
+    const svc = makeSendSvc({ kycGate });
+
+    await svc.createSendProposal(BASE_SEND_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.send' }),
+    );
+  });
+
   // ── Fix-2: exact rate scaling — fractional baseRate handled exactly ────────
 
   it('computes NGN-equivalent exactly with a fractional baseRate (no Math.round drift)', async () => {
@@ -2168,6 +2213,19 @@ describe('ProposalService.createSwapProposal', () => {
     await svc.createSwapProposal(BASE_SWAP_INPUT);
 
     expect(callOrder.indexOf('kyc')).toBeLessThan(callOrder.indexOf('create'));
+  });
+
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+
+  it('calls KYC gate with capability "crypto.swap"', async () => {
+    const kycGate = makeKycGate();
+    const svc = makeSwapSvc({ kycGate });
+
+    await svc.createSwapProposal(BASE_SWAP_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.swap' }),
+    );
   });
 
   it('calls swap provider getQuote to price the swap', async () => {

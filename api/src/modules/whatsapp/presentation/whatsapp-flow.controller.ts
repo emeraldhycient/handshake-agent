@@ -83,6 +83,7 @@ import {
   TierLimitExceededError,
   VelocityExceededError,
   SimSwapBlockedError,
+  CapabilityTierError,
 } from '../../identity/domain/gate-errors';
 import type { Env } from '../../../core/config/env.schema';
 
@@ -674,6 +675,9 @@ export class WhatsAppFlowController {
     }
     if (err instanceof ProposalNotExecutableError) {
       return 'This transaction is no longer available. Please start again.';
+    }
+    if (err instanceof CapabilityTierError) {
+      return 'Verify your identity to unlock this. Sending, selling and swapping need identity verification — open the app to verify.';
     }
     if (
       err instanceof KycNotVerifiedError ||

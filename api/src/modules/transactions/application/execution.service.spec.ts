@@ -988,6 +988,22 @@ describe('ExecutionService.executeBuy', () => {
     expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
   });
 
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+  // Regression guard: a future edit that swaps the capability literal on this
+  // re-validation call site must fail the unit suite, not silently downgrade
+  // the effective min-tier gate for buy.
+
+  it('calls KYC gate with capability "crypto.buy"', async () => {
+    const kycGate = makeKycGate();
+    const svc = buildService({ kycGate });
+
+    await svc.executeBuy(BASE_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.buy' }),
+    );
+  });
+
   // ── Directive consume throws (replay) ─────────────────────────────────────
 
   it('directive consume throws replay → DirectiveReplayError propagates; no Transaction (replay protection intact after I5 reorder)', async () => {
@@ -2041,6 +2057,19 @@ describe('ExecutionService.executeSell', () => {
     ).not.toHaveBeenCalled();
   });
 
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+
+  it('calls KYC gate with capability "crypto.sell"', async () => {
+    const kycGate = makeKycGate();
+    const svc = buildSellService({ kycGate });
+
+    await svc.executeSell(SELL_BASE_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.sell' }),
+    );
+  });
+
   // ── Directive replay ─────────────────────────────────────────────────────
 
   it('directive already consumed → DirectiveReplayError, no Transaction', async () => {
@@ -2957,6 +2986,22 @@ describe('ExecutionService.executeSend', () => {
         settlementType: 'onchain_send',
         status: 'pending',
       }),
+    );
+  });
+
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+  // Regression guard: a future edit that swaps the capability literal on this
+  // re-validation call site must fail the unit suite, not silently downgrade
+  // the effective min-tier gate for send.
+
+  it('calls KYC gate with capability "crypto.send"', async () => {
+    const kycGate = makeKycGate();
+    const svc = buildSendService({ kycGate });
+
+    await svc.executeSend(SEND_BASE_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.send' }),
     );
   });
 

@@ -23,6 +23,7 @@ import {
   KycNotVerifiedError,
   TierLimitExceededError,
   VelocityExceededError,
+  CapabilityTierError,
 } from '../../modules/identity/domain/gate-errors';
 import {
   SanctionsBlockedError,
@@ -124,6 +125,7 @@ describe('DomainExceptionFilter', () => {
 
   it.each([
     [new KycNotVerifiedError('status'), 403],
+    [new CapabilityTierError('crypto.send', 'tier_2', 'tier_1'), 403],
     [new TierLimitExceededError(1000, 500, '1', 'NGN'), 403],
     [new VelocityExceededError('fiat', 1000, 500, '1', 'NGN'), 403],
     [new SanctionsBlockedError('addr', 'flagged', 'evt-1', 'ref-1'), 403],
@@ -160,6 +162,7 @@ describe('DomainExceptionFilter', () => {
   describe('gate causes get distinct, actionable, non-leaking messages', () => {
     const gate: Array<[string, RegExp]> = [
       ['KYC_NOT_VERIFIED', /verif/i],
+      ['CAPABILITY_TIER_REQUIRED', /verify your identity/i],
       ['TIER_LIMIT_EXCEEDED', /per-transaction limit/i],
       ['SEND_LIMIT_EXCEEDED', /send limit/i],
       ['TIER_CHANGE_COOLING_OFF', /on hold|try again a little later/i],

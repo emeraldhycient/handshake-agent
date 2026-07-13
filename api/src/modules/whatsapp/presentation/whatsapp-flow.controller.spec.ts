@@ -29,6 +29,7 @@ import { ExecutionService } from '../../transactions/application/execution.servi
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { InvalidAddressError } from '../../beneficiaries/domain/beneficiary-errors';
 import { PinInvalidError } from '../../../core/auth/domain/pin-errors';
+import { CapabilityTierError } from '../../identity/domain/gate-errors';
 import { PinService } from '../../../core/auth/pin.service';
 import { SessionService } from '../../../core/auth/session.service';
 import { StepUpService } from '../../../core/auth/step-up.service';
@@ -327,6 +328,51 @@ describe('WhatsAppFlowController', () => {
       // Must not leak internal error text or PIN.
       expect(JSON.stringify(encryptedWith)).not.toContain('PIN_WRONG_SECRET');
       expect(JSON.stringify(encryptedWith)).not.toContain('PIN_INVALID');
+      expect(result).toBe(ENCRYPTED_SENTINEL);
+    });
+  });
+
+  // ── data_exchange → CapabilityTierError → actionable ERROR screen ────────
+  // Task 1.3 regression guard: a tier downgrade between proposal creation and
+  // WhatsApp Flow PIN confirmation must surface an actionable message, not the
+  // generic "Something went wrong" fallback (mapExecutionError previously had
+  // no branch for CapabilityTierError).
+
+  describe('data_exchange when execution throws CapabilityTierError', () => {
+    it('returns an actionable ERROR screen, not the generic fallback', async () => {
+      mockFlowCrypto.decryptRequest.mockReturnValue({
+        decrypted: {
+          version: '3.0',
+          action: 'data_exchange',
+          flow_token: 'token',
+          data: { pin: 'PIN_SENTINEL_9191', nonce: 'n' },
+        },
+        aesKey: MOCK_AES_KEY,
+        iv: MOCK_IV,
+      });
+
+      mockExecutionService.executeBuy.mockRejectedValue(
+        new CapabilityTierError('crypto.send', 'tier_2', 'tier_1'),
+      );
+
+      const result = await controller.handleFlow(
+        makeEncryptedBody(),
+        makeRes(),
+      );
+
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({
+        screen: 'ERROR',
+        data: {
+          message:
+            'Verify your identity to unlock this. Sending, selling and swapping need identity verification — open the app to verify.',
+        },
+      });
+      const data = encryptedWith.data as Record<string, unknown>;
+      // Must be the actionable message, not the generic catch-all fallback.
+      expect(data.message).not.toBe(
+        'Something went wrong. Please try again or contact support.',
+      );
       expect(result).toBe(ENCRYPTED_SENTINEL);
     });
   });
