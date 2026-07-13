@@ -58,6 +58,7 @@ import {
 } from '../../modules/admin/domain/settings-errors';
 import { CurrencyCollisionError } from '../../modules/admin/domain/currency-errors';
 import { NameChangeNotAllowedError } from '../../modules/identity/domain/profile-errors';
+import { SumsubPrerequisiteNotMetError } from '../../modules/identity/domain/kyc-errors';
 
 interface ErrorBody {
   statusCode: number;
@@ -154,6 +155,8 @@ describe('DomainExceptionFilter', () => {
     // POST /profile/name is pre-verification-only; a KYC-started account gets
     // a clean 409, not an opaque 500 (critical-review finding, name-lock fix).
     [new NameChangeNotAllowedError(), 409],
+    // Task 3.4: Sumsub token requested for a tier above the earned prerequisite.
+    [new SumsubPrerequisiteNotMetError('tier_2', 'tier_1', 'unverified'), 403],
   ])('maps %s → %i', (err, expected) => {
     const { statusCode } = run(filter, err);
     expect(statusCode).toBe(expected);

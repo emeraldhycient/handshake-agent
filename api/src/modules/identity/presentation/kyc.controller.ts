@@ -41,6 +41,7 @@ import {
 import type {
   KycCompleteResponse,
   SetPinResponse,
+  SumsubTokenResponse,
 } from '@handshake-agent/contracts';
 
 import { HandoffTokenDomainError } from '../domain/handoff-token-errors';
@@ -59,6 +60,7 @@ import type { AuthenticatedUser } from '../../auth/presentation/jwt-auth.guard';
 import { KycCompleteDto } from './dto/kyc-complete.dto';
 import { KycSubmitDto } from './dto/kyc-submit.dto';
 import { SetPinDto } from './dto/set-pin.dto';
+import { SumsubTokenDto } from './dto/sumsub-token.dto';
 
 @Controller('kyc')
 export class KycController {
@@ -218,5 +220,25 @@ export class KycController {
       }
       throw err;
     }
+  }
+
+  /**
+   * Mints a Sumsub WebSDK access token for a `tier_2`/`tier_3` verification
+   * upgrade (task 3.4). JWT-authenticated; the prerequisite tier check and the
+   * provider call happen in KycService.createSumsubSession.
+   *
+   * No local try/catch: KycService.createSumsubSession throws
+   * SumsubPrerequisiteNotMetError (code SUMSUB_PREREQUISITE_NOT_MET) when the
+   * account hasn't earned the prior tier rung — the global DomainExceptionFilter
+   * maps it to 403, mirroring the other KYC/gate error codes.
+   */
+  @Post('sumsub/token')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  async createSumsubToken(
+    @Body() dto: SumsubTokenDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<SumsubTokenResponse> {
+    return this.kycService.createSumsubSession(currentUser.userId, dto.level);
   }
 }

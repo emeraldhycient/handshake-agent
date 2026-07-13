@@ -143,4 +143,14 @@ export interface IKycRepository {
    * KycProfile column. Pre-condition: the KycProfile already exists.
    */
   markKycNeedsInfo(userId: string, reviewedByAdminId: string): Promise<void>;
+
+  /**
+   * Persists the Sumsub applicant id onto the user's KycProfile (task 3.4) —
+   * upserts the profile if none exists yet (status/tier take their schema
+   * defaults, `not_started`/`unverified`). This is a FOCUSED write: it never
+   * touches kycStatus or kycTier — the Sumsub `applicantReviewed` webhook
+   * (tasks 3.5/3.6) owns every status/tier transition, so minting a token for
+   * an abandoned session can never strand the account mid-review.
+   */
+  setSumsubApplicantId(userId: string, applicantId: string): Promise<void>;
 }

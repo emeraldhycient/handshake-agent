@@ -292,4 +292,21 @@ export class KycPrismaRepository implements IKycRepository {
       });
     });
   }
+
+  /**
+   * Upserts KycProfile.sumsubApplicantId (task 3.4). Creates the profile if
+   * none exists yet — status/tier take their schema defaults (`not_started`/
+   * `unverified`) — or updates the applicant id on an existing row. Does NOT
+   * touch status/tier: the Sumsub webhook (later task) owns those transitions.
+   */
+  async setSumsubApplicantId(
+    userId: string,
+    applicantId: string,
+  ): Promise<void> {
+    await this.prisma.kycProfile.upsert({
+      where: { userId },
+      create: { userId, sumsubApplicantId: applicantId },
+      update: { sumsubApplicantId: applicantId },
+    });
+  }
 }

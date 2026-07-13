@@ -19,8 +19,15 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 
+import type { KycTier, KycTierLevel } from '@handshake-agent/contracts';
+
 import { PinService } from '../../../core/auth/pin.service';
-import { ContactNotFoundError, KycRejectedError } from '../domain/kyc-errors';
+import {
+  ContactNotFoundError,
+  KycRejectedError,
+  SumsubPrerequisiteNotMetError,
+} from '../domain/kyc-errors';
+import { tierAtLeast } from '../domain/tier-order';
 import type { IIdentityRepository } from './ports/identity.repository.port';
 import { IDENTITY_REPOSITORY } from './ports/identity.repository.port';
 import type { IKycProvider, KycVerifyInput } from './ports/kyc-provider.port';
@@ -56,6 +63,12 @@ export interface CompleteVerificationForUserInput {
   dateOfBirth?: string;
   /** Raw PIN — hashed immediately; never reaches persistence or logs. */
   pin: string;
+}
+
+export interface CreateSumsubSessionResult {
+  /** Short-lived Sumsub WebSDK access token the frontend passes to the SDK init call. */
+  token: string;
+  userId: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -196,5 +209,48 @@ export class KycService {
     });
 
     return { userId: atomicResult.userId };
+  }
+
+  /**
+   * Mints a Sumsub WebSDK access token so the frontend can launch an
+   * in-browser verification session for a `tier_2`/`tier_3` upgrade (task 3.4).
+   *
+   * Prerequisite (tier ladder — climbed one rung at a time): `level==='tier_2'`
+   * requires `tierAtLeast(kycTier, 'tier_1')`; `level==='tier_3'` requires
+   * `tierAtLeast(kycTier, 'tier_2')`.
+   *
+   * Persists the provider's `applicantId` onto the user's KycProfile for later
+   * webhook correlation. Deliberately does NOT change `kycStatus`/`kycTier` —
+   * the Sumsub `applicantReviewed` webhook (tasks 3.5/3.6) owns every status
+   * transition, so an abandoned session can never strand the account at
+   * "in review".
+   *
+   * @throws {SumsubPrerequisiteNotMetError} — the account hasn't earned the
+   *   prior tier rung yet.
+   */
+  async createSumsubSession(
+    userId: string,
+    level: KycTierLevel,
+  ): Promise<CreateSumsubSessionResult> {
+    const user = await this.identityRepo.loadUser(userId);
+    if (user === null) {
+      throw new Error(`User not found: ${userId}`);
+    }
+
+    const requiredTier: KycTier = level === 'tier_2' ? 'tier_1' : 'tier_2';
+    if (!tierAtLeast(user.kycTier as KycTier, requiredTier)) {
+      throw new SumsubPrerequisiteNotMetError(
+        level,
+        requiredTier,
+        user.kycTier,
+      );
+    }
+
+    const { token, applicantId } =
+      await this.kycProvider.createVerificationSession({ userId, level });
+
+    await this.kycRepo.setSumsubApplicantId(userId, applicantId);
+
+    return { token, userId };
   }
 }

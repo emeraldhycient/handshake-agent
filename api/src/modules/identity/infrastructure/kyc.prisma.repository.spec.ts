@@ -354,6 +354,33 @@ describe('KycPrismaRepository — NIN/BVN encryption at rest (NFR-1)', () => {
     });
   });
 
+  describe('setSumsubApplicantId (task 3.4)', () => {
+    /** Faked PrismaService exposing only `kycProfile.upsert` (no $transaction needed). */
+    function makeUpsertPrisma(): {
+      prisma: PrismaService;
+      upsert: jest.Mock<Promise<void>, [unknown]>;
+    } {
+      const upsert = jest.fn<Promise<void>, [unknown]>();
+      return {
+        prisma: { kycProfile: { upsert } } as unknown as PrismaService,
+        upsert,
+      };
+    }
+
+    it('upserts KycProfile.sumsubApplicantId, touching neither status nor tier', async () => {
+      const { prisma, upsert } = makeUpsertPrisma();
+      const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+      await repo.setSumsubApplicantId('user-1', 'sumsub-applicant-abc');
+
+      expect(upsert).toHaveBeenCalledWith({
+        where: { userId: 'user-1' },
+        create: { userId: 'user-1', sumsubApplicantId: 'sumsub-applicant-abc' },
+        update: { sumsubApplicantId: 'sumsub-applicant-abc' },
+      });
+    });
+  });
+
   describe('decryptIdentifier (read path)', () => {
     it('decrypts what completeVerificationAtomic wrote (round trip on read)', async () => {
       const captured = freshCaptured();

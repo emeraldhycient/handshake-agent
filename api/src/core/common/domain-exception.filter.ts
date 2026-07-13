@@ -393,6 +393,13 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
       "We couldn't verify your identity with the details provided. " +
       'Please check them and try again.',
   },
+  // Task 3.4: requesting a Sumsub WebSDK token for a tier the account hasn't
+  // earned the prerequisite rung for (e.g. tier_3 before tier_2) → 403.
+  SUMSUB_PREREQUISITE_NOT_MET: {
+    status: HttpStatus.FORBIDDEN,
+    message:
+      'Please complete the previous verification step before continuing.',
+  },
   // POST /profile/name is pre-verification name capture ONLY — the name is
   // immutable once KYC has started (verified against NIN/BVN and relied on as
   // the FATF Travel-Rule originator identity, root CLAUDE.md §3.4) → 409.

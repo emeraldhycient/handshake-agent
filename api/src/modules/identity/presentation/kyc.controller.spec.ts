@@ -29,7 +29,11 @@ import {
   HandoffTokenNotFoundError,
   HandoffTokenWrongPurposeError,
 } from '../domain/handoff-token-errors';
-import { ContactNotFoundError, KycRejectedError } from '../domain/kyc-errors';
+import {
+  ContactNotFoundError,
+  KycRejectedError,
+  SumsubPrerequisiteNotMetError,
+} from '../domain/kyc-errors';
 import {
   PinAlreadySetError,
   PinSetupNotVerifiedError,
@@ -83,6 +87,26 @@ function makeKycService(
     svc.completeVerification.mockRejectedValue(result);
   } else {
     svc.completeVerification.mockResolvedValue(result);
+  }
+  return svc;
+}
+
+function makeKycServiceForSumsub(
+  result: { token: string; userId: string } | Error = {
+    token: 'sumsub-webSdk-token-abc',
+    userId: USER_ID,
+  },
+): jest.Mocked<
+  Pick<KycService, 'completeVerification' | 'createSumsubSession'>
+> {
+  const svc = {
+    completeVerification: jest.fn(),
+    createSumsubSession: jest.fn(),
+  };
+  if (result instanceof Error) {
+    svc.createSumsubSession.mockRejectedValue(result);
+  } else {
+    svc.createSumsubSession.mockResolvedValue(result);
   }
   return svc;
 }
@@ -388,5 +412,54 @@ describe('KycController.setPin', () => {
     await expect(controller.setPin({ pin: '1357' }, AUTH_USER)).rejects.toThrow(
       'unexpected boom',
     );
+  });
+});
+
+describe('KycController.createSumsubToken', () => {
+  const AUTH_USER = { userId: USER_ID } as never;
+
+  it('calls kycService.createSumsubSession(userId, level) and returns { token, userId }', async () => {
+    const kycService = makeKycServiceForSumsub({
+      token: 'sumsub-webSdk-token-abc',
+      userId: USER_ID,
+    });
+    const controller = buildController(makeHandoffTokenService(), kycService);
+
+    const result = await controller.createSumsubToken(
+      { level: 'tier_2' },
+      AUTH_USER,
+    );
+
+    expect(kycService.createSumsubSession).toHaveBeenCalledWith(
+      USER_ID,
+      'tier_2',
+    );
+    expect(result).toEqual({
+      token: 'sumsub-webSdk-token-abc',
+      userId: USER_ID,
+    });
+  });
+
+  it('passes the requested level through untouched (tier_3)', async () => {
+    const kycService = makeKycServiceForSumsub();
+    const controller = buildController(makeHandoffTokenService(), kycService);
+
+    await controller.createSumsubToken({ level: 'tier_3' }, AUTH_USER);
+
+    expect(kycService.createSumsubSession).toHaveBeenCalledWith(
+      USER_ID,
+      'tier_3',
+    );
+  });
+
+  it('SumsubPrerequisiteNotMetError from the service is NOT caught locally — it bubbles for the global filter to map to 403', async () => {
+    const kycService = makeKycServiceForSumsub(
+      new SumsubPrerequisiteNotMetError('tier_2', 'tier_1', 'unverified'),
+    );
+    const controller = buildController(makeHandoffTokenService(), kycService);
+
+    await expect(
+      controller.createSumsubToken({ level: 'tier_2' }, AUTH_USER),
+    ).rejects.toBeInstanceOf(SumsubPrerequisiteNotMetError);
   });
 });

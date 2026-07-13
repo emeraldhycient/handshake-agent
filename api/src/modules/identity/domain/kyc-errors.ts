@@ -63,6 +63,29 @@ export class KycRejectedError extends KycDomainError {
 }
 
 /**
+ * The user requested a Sumsub verification-session `level` above what their
+ * current KYC tier permits (task 3.4). The tier ladder must be climbed one
+ * rung at a time: minting a `tier_2` token requires `tierAtLeast(kycTier,
+ * 'tier_1')`; minting a `tier_3` token requires `tierAtLeast(kycTier,
+ * 'tier_2')`. An `unverified` user requesting `tier_2` (or any user trying to
+ * skip a rung) hits this — mapped to a 403 by DomainExceptionFilter.
+ */
+export class SumsubPrerequisiteNotMetError extends KycDomainError {
+  readonly code = 'SUMSUB_PREREQUISITE_NOT_MET' as const;
+
+  constructor(
+    readonly requestedLevel: string,
+    readonly requiredTier: string,
+    readonly actualTier: string,
+  ) {
+    super(
+      `Cannot request Sumsub verification level '${requestedLevel}': requires ` +
+        `KYC tier '${requiredTier}' or above; this account is '${actualTier}'.`,
+    );
+  }
+}
+
+/**
  * The Contact is already linked to a verified User. The service returns the
  * existing userId (idempotent) and this error is NOT thrown — the service
  * documents the idempotent-return behavior. However, callers that want to
