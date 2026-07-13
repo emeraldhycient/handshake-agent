@@ -129,7 +129,7 @@ export function mapOutcomeToMessages(
       } else if (outcome.txType === "sell") {
         // outcome.txType === 'sell' guarantees the server sent SellProposalConfirmation (schema-validated at ingress)
         const s = c as SellProposalConfirmation
-        receiveAmt = s.fiatCurrency + " " + s.netFiatAmount
+        receiveAmt = formatFiat(s.netFiatAmount, s.fiatCurrency)
         receiveSub = "You receive"
         rows.push({
           label: "You sell",
@@ -137,17 +137,17 @@ export function mapOutcomeToMessages(
         })
         rows.push({
           label: "Rate",
-          value: "1 " + s.asset + " = " + s.fiatCurrency + " " + s.fxRate,
+          value: "1 " + s.asset + " = " + formatFiat(s.fxRate, s.fiatCurrency),
         })
         rows.push({
           label: "Fee",
-          value: s.fiatCurrency + " " + s.processingFeeAmount,
+          value: formatFiat(s.processingFeeAmount, s.fiatCurrency),
         })
         if (s.beneficiaryLabel) {
           rows.push({ label: "To", value: s.beneficiaryLabel })
         }
         totalLabel = "Net payout"
-        totalValue = s.fiatCurrency + " " + s.netFiatAmount
+        totalValue = formatFiat(s.netFiatAmount, s.fiatCurrency)
       } else if (outcome.txType === "send") {
         // outcome.txType === 'send' guarantees the server sent SendProposalConfirmation (schema-validated at ingress)
         const sn = c as SendProposalConfirmation
@@ -229,13 +229,13 @@ export function mapOutcomeToMessages(
       role: "assistant",
       kind: "balance",
       total: outcome.totalFiatValue
-        ? "≈ " + fiatCcy + " " + outcome.totalFiatValue
+        ? "≈ " + formatFiat(outcome.totalFiatValue, fiatCcy)
         : "—",
       assets: outcome.balances.map((b) => ({
         sym: b.asset,
         name: ASSET_NAMES[b.asset] ?? b.asset,
         amount: `${b.amount} ${b.asset}`,
-        value: b.fiatValue ? fiatCcy + " " + b.fiatValue : "—",
+        value: b.fiatValue ? formatFiat(b.fiatValue, fiatCcy) : "—",
         tint: ASSET_TINTS[b.asset] ?? ASSET_TINTS.NGN,
       })),
     })
