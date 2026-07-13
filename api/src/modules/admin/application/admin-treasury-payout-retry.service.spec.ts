@@ -185,6 +185,7 @@ describe('AdminTreasuryPayoutRetryService', () => {
       fiatAmount: '10000',
       fiatCurrency: 'NGN',
       asset: 'USDT',
+      capability: 'crypto.sell',
     });
     expect(complianceService.screenSendDestination).not.toHaveBeenCalled();
     expect(outbox.resetToPending).toHaveBeenCalledWith('ob_1');
@@ -301,6 +302,7 @@ describe('AdminTreasuryPayoutRetryService', () => {
       fiatAmount: '10000',
       fiatCurrency: 'NGN',
       asset: 'USDT',
+      capability: 'crypto.send',
     });
     expect(complianceService.screenSendDestination).toHaveBeenCalledWith({
       userId: 'user_1',

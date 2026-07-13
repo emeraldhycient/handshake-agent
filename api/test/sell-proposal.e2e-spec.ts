@@ -187,9 +187,9 @@ describe('LedgerPrismaRepository.getAccountBalance + ProposalService.createSellP
       undefined as never, // swapProvider: not needed on sell proposal path
     );
 
-    // Seed a KYC-verified user
+    // Seed a KYC-verified user. Task 1.3: crypto.sell is gated to tier_2.
     const user = await prisma.user.create({
-      data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },
+      data: { kycStatus: 'verified', kycTier: 'tier_2', status: 'active' },
     });
     userId = user.id;
 

@@ -1,21 +1,24 @@
 import { Inject, Injectable } from '@nestjs/common';
+import type { KycTier } from '@handshake-agent/contracts';
 
 import { CLOCK, type Clock } from '../../../core/common/clock';
 import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type {
   ComplianceConfig,
   FiatLimits,
+  GatingConfig,
   LimitsConfig,
   TierLimits,
 } from '../../../core/config/configuration';
 import {
-  KycNotVerifiedError,
+  CapabilityTierError,
   OnChainSendLimitExceededError,
   SimSwapBlockedError,
   TierChangeCoolingOffError,
   TierLimitExceededError,
   VelocityExceededError,
 } from '../domain/gate-errors';
+import { tierAtLeast } from '../domain/tier-order';
 import { toScaled } from '../../transactions/domain/ledger';
 import type {
   IIdentityRepository,
@@ -24,6 +27,22 @@ import type {
 import { IDENTITY_REPOSITORY } from './ports/identity.repository.port';
 import type { IVelocityRepository } from './ports/velocity.repository.port';
 import { VELOCITY_REPOSITORY } from './ports/velocity.repository.port';
+
+/**
+ * Transactable capability keys — mirrors the `catalog.capabilities` dotted leaves
+ * and the keys of `gating.capabilityMinTier` (Task 1.2, root CLAUDE.md §7).
+ * Required on every gate input (Task 1.3) so a call site can never silently omit
+ * the tier check.
+ */
+export type Capability =
+  | 'crypto.buy'
+  | 'crypto.sell'
+  | 'crypto.send'
+  | 'crypto.swap'
+  | 'crypto.receive';
+
+/** Fail-closed minimum tier for a capability with no configured gating entry. */
+const FAIL_CLOSED_MIN_TIER: KycTier = 'tier_2';
 
 /** Valid KYC tier keys that have limit entries. `unverified` is excluded — it is blocked before this helper is called. */
 type VerifiedTier = 'tier_1' | 'tier_2' | 'tier_3';
@@ -36,8 +55,10 @@ type VerifiedTier = 'tier_1' | 'tier_2' | 'tier_3';
  * fiat currency to the catalog requires an explicit config entry before it can be
  * used in transactions.
  *
- * Narrows a raw `kycTier` string to one of the three verified tier keys;
- * the runtime guard is the previous `kycTier === 'unverified'` block.
+ * Narrows a raw `kycTier` string to one of the three verified tier keys; the
+ * runtime guard is the capability→minimum-tier check in `assertBaselineEligibility`
+ * (Task 1.3) — `requiredTier` is always `'tier_1'` or above, so an `unverified` user
+ * always fails `tierAtLeast` and throws `CapabilityTierError` before reaching here.
  */
 function getTierLimits(
   tier: string,
@@ -102,6 +123,13 @@ export interface AssertCanTransactInput {
    * per-transaction cap. Absent/false for buys, sells, swaps, and fiat payouts.
    */
   onChainSend?: boolean;
+  /**
+   * The capability this transaction exercises (e.g. `'crypto.send'`). Resolves the
+   * minimum KYC tier required via `gating.capabilityMinTier` (Task 1.3, §3.3).
+   * Required — never inferred — so a new call site can never silently skip the
+   * tier check.
+   */
+  capability: Capability;
 }
 
 /**
@@ -113,7 +141,12 @@ export interface AssertCanTransactInput {
  *
  * Checks (in order — first failing check throws, remaining are skipped):
  *   1.  SIM-swap block (high-severity; blocks regardless of KYC state)
- *   2.  KYC status must be `verified` AND tier must not be `unverified`
+ *   2.  Capability → minimum-tier gate (Task 1.3): the account's `kycTier` must be
+ *       at least the tier configured for `capability` in `gating.capabilityMinTier`
+ *       (fails closed to `tier_2` if the capability has no configured entry). A
+ *       `tier_1` (email-verified) account may use tier_1 capabilities (buy/receive)
+ *       regardless of `kycStatus`; `unverified` fails this check for every
+ *       configured capability, so there is no separate KYC-status check.
  *   2b. Tier-change cooling-off hold (compliance.tierChangeCoolingOffSeconds)
  *   3.  Positive-amount guard + per-transaction fiat amount ≤ tier limit
  *   4c. Single on-chain send cap (perSendOnChainFiatMax; on-chain sends only)
@@ -182,15 +215,16 @@ export class KycGateService {
    * Resolves (void) on success; throws a `GateError` subclass on any failure.
    */
   async assertCanTransact(input: AssertCanTransactInput): Promise<void> {
-    const { userId, fiatAmount, fiatCurrency } = input;
+    const { userId, fiatAmount, fiatCurrency, capability } = input;
 
-    // Steps 1–4b (SIM-swap / KYC status+tier / tier-change cooling-off / positive +
+    // Steps 1–4b (SIM-swap / capability-tier / tier-change cooling-off / positive +
     // per-tx cap) are shared with assertCanReleasePayout via assertBaselineEligibility.
     const { user, tierLimits, scaledTxAmount } =
       await this.assertBaselineEligibility({
         userId,
         fiatAmount,
         fiatCurrency,
+        capability,
       });
 
     // 4c. Single on-chain send cap — an ADDITIONAL per-send limit applied ONLY to
@@ -287,7 +321,7 @@ export class KycGateService {
 
   /**
    * Baseline money-gate eligibility shared by `assertCanTransact` and
-   * `assertCanReleasePayout`: SIM-swap block, KYC status + tier, tier-change
+   * `assertCanReleasePayout`: SIM-swap block, capability→minimum-tier, tier-change
    * cooling-off, and the positive-amount + per-transaction cap (steps 1–4b).
    * Returns the loaded user, resolved tier limits, and the BigInt-scaled tx amount
    * so `assertCanTransact` can continue with the cumulative velocity checks. Throws
@@ -297,29 +331,41 @@ export class KycGateService {
     userId: string;
     fiatAmount: string;
     fiatCurrency: string;
+    capability: Capability;
   }): Promise<{
     user: UserRecord;
     tierLimits: TierLimits;
     scaledTxAmount: bigint;
   }> {
-    const { userId, fiatAmount, fiatCurrency } = input;
+    const { userId, fiatAmount, fiatCurrency, capability } = input;
 
     const user = await this.identityRepo.loadUser(userId);
     if (user === null) {
       throw new Error(`User not found: ${userId}`);
     }
 
-    // 1. SIM-swap block — highest severity; checked before KYC.
+    // 1. SIM-swap block — highest severity; checked before the capability gate.
     if (user.simSwapDetectedAt !== null) {
       throw new SimSwapBlockedError();
     }
 
-    // 2. KYC status + tier gate.
-    if (user.kycStatus !== 'verified') {
-      throw new KycNotVerifiedError('status');
-    }
-    if (user.kycTier === 'unverified') {
-      throw new KycNotVerifiedError('tier');
+    // 2. Capability → minimum-tier gate (Task 1.3, §3.3). Replaces the old
+    // `kycStatus !== 'verified'` hard block: a tier_1 (email-verified) user may
+    // use tier_1 capabilities (buy/receive) regardless of kycStatus; sell/send/swap
+    // require tier_2. `unverified` (tier 0) fails `tierAtLeast` against every
+    // configured capability, so it stays blocked everywhere without a separate
+    // status check. Fails closed to `tier_2` when a capability has no configured
+    // `gating.capabilityMinTier` entry (a capability added to the catalog without a
+    // matching gating entry requires the stricter tier until configured explicitly).
+    // The cast is safe: `UserRecord.kycTier` is a raw DB string but the Prisma
+    // schema enforces the `KycTier` enum, mirroring the existing `getTierLimits`
+    // narrowing below.
+    const requiredTier: KycTier =
+      this.config.get<GatingConfig>('gating')?.capabilityMinTier?.[
+        capability
+      ] ?? FAIL_CLOSED_MIN_TIER;
+    if (!tierAtLeast(user.kycTier as KycTier, requiredTier)) {
+      throw new CapabilityTierError(capability, requiredTier, user.kycTier);
     }
 
     // 2b. Tier-change cooling-off — a time-based hold on ALL money moves within
@@ -395,23 +441,27 @@ export class KycGateService {
 
   /**
    * Re-check gate for RETRYING a payout whose reserve + velocity were ALREADY
-   * consumed at execute time. Runs the baseline (SIM-swap / KYC / tier /
+   * consumed at execute time. Runs the baseline (SIM-swap / capability-tier /
    * cooling-off / per-tx cap) but intentionally OMITS the cumulative daily/weekly
    * velocity + 10-min send caps — re-adding this tx's amount would double-count and
    * falsely block a legitimate retry (§3.3). Resolves (void) on success; throws a
    * `GateError` subclass on failure. `asset` is accepted for call-site symmetry with
-   * `assertCanTransact`; it does not affect the fiat gate.
+   * `assertCanTransact`; it does not affect the fiat gate. `capability` must match
+   * the payout's underlying transaction type (`'crypto.sell'` / `'crypto.send'` —
+   * the only two retryable payout types, Task 1.3).
    */
   async assertCanReleasePayout(input: {
     userId: string;
     fiatAmount: string;
     fiatCurrency: string;
     asset: string;
+    capability: Capability;
   }): Promise<void> {
     await this.assertBaselineEligibility({
       userId: input.userId,
       fiatAmount: input.fiatAmount,
       fiatCurrency: input.fiatCurrency,
+      capability: input.capability,
     });
   }
 }

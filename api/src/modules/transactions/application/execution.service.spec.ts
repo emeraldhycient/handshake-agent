@@ -25,6 +25,7 @@ import type { Clock } from '../../../core/common/clock';
 import type { PinService } from '../../../core/auth/pin.service';
 import type { SessionService } from '../../../core/auth/session.service';
 import type {
+  AssertCanTransactInput,
   KycGateService,
   OriginatorIdentity,
 } from '../../identity/application/kyc-gate.service';
@@ -308,17 +309,9 @@ function makeKycGate(
 > {
   const svc = {
     // Fix-C: fiatAmount is now a string (exact NGN decimal).
-    assertCanTransact: jest.fn<
-      Promise<void>,
-      [
-        {
-          userId: string;
-          fiatAmount: string;
-          fiatCurrency: string;
-          asset: string;
-        },
-      ]
-    >(),
+    // Task 1.3: input is typed against the real AssertCanTransactInput (now
+    // requires `capability`) so this mock stays assignable to KycGateService.
+    assertCanTransact: jest.fn<Promise<void>, [AssertCanTransactInput]>(),
     getOriginatorName: jest.fn<Promise<string | null>, [string]>(),
     getOriginatorIdentity: jest.fn<Promise<OriginatorIdentity>, [string]>(),
   };

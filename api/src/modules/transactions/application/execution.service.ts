@@ -456,6 +456,7 @@ export class ExecutionService {
       fiatAmount: storedQuote.fiatAmount,
       fiatCurrency: storedQuote.fiatCurrency,
       asset: storedQuote.asset,
+      capability: 'crypto.buy',
     });
 
     // ── Step 4: Verify PIN (BEFORE consuming the one-shot directive) ─────────
@@ -831,6 +832,7 @@ export class ExecutionService {
       fiatAmount: storedQuote.fiatAmount,
       fiatCurrency: storedQuote.fiatCurrency,
       asset: storedQuote.asset,
+      capability: 'crypto.sell',
     });
 
     // ── Step 4: Re-check balance via ledger (TOCTOU guard) ──────────────────
@@ -1366,6 +1368,7 @@ export class ExecutionService {
       // Settle-time re-check of a crypto-address send (on-chain, irreversible) — mirror
       // the proposal-time flag so the single on-chain send cap is re-enforced (§3.3).
       onChainSend: true,
+      capability: 'crypto.send',
     });
 
     // Numeric form retained only for metadata storage (approximate use — Fix-C scope).

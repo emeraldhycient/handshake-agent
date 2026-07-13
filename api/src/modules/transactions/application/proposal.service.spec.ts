@@ -31,7 +31,10 @@ import {
 
 import type { Clock } from '../../../core/common/clock';
 import type { QuotesService } from '../../quotes/application/quotes.service';
-import type { KycGateService } from '../../identity/application/kyc-gate.service';
+import type {
+  AssertCanTransactInput,
+  KycGateService,
+} from '../../identity/application/kyc-gate.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
@@ -97,17 +100,9 @@ function makeKycGate(
 ): jest.Mocked<Pick<KycGateService, 'assertCanTransact'>> {
   const svc = {
     // Fix-C: fiatAmount is now a string (exact NGN decimal).
-    assertCanTransact: jest.fn<
-      Promise<void>,
-      [
-        {
-          userId: string;
-          fiatAmount: string;
-          fiatCurrency: string;
-          asset: string;
-        },
-      ]
-    >(),
+    // Task 1.3: input is typed against the real AssertCanTransactInput (now
+    // requires `capability`) so this mock stays assignable to KycGateService.
+    assertCanTransact: jest.fn<Promise<void>, [AssertCanTransactInput]>(),
   };
   if (throws) {
     svc.assertCanTransact.mockRejectedValue(throws);

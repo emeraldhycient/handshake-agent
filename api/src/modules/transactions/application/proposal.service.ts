@@ -377,6 +377,7 @@ export class ProposalService {
       fiatAmount: intent.fiatAmount,
       fiatCurrency: intent.fiatCurrency,
       asset: intent.asset,
+      capability: 'crypto.buy',
     });
 
     // 5. Build parameters + checksum.
@@ -498,6 +499,7 @@ export class ProposalService {
       fiatAmount: quote.netFiatAmount,
       fiatCurrency: intent.fiatCurrency,
       asset: intent.asset,
+      capability: 'crypto.sell',
     });
 
     // 5. Beneficiary lookup — must exist and belong to the user.
@@ -738,6 +740,7 @@ export class ProposalService {
       // A crypto-address send is on-chain + irreversible → the single on-chain send
       // cap (perSendOnChainFiatMax) applies on top of the general per-tx cap.
       onChainSend: true,
+      capability: 'crypto.send',
     });
 
     // Keep a numeric form only for the Travel Rule threshold comparison and metadata
@@ -1021,6 +1024,7 @@ export class ProposalService {
       fiatAmount: ngnEquivalentStr,
       fiatCurrency: baseFiat,
       asset: fromAsset,
+      capability: 'crypto.swap',
     });
 
     // 8. Persist Quote + Proposal.

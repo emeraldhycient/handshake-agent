@@ -294,11 +294,12 @@ describe('Sell vertical (executeSell → settleSellPayout, Testcontainers Postgr
       undefined, // swapProvider: not needed on sell path
     );
 
-    // Seed a KYC-verified (Tier 1) user with a PIN.
+    // Seed a KYC-verified (Tier 2) user with a PIN. Task 1.3: crypto.sell is
+    // gated to tier_2.
     const user = await prisma.user.create({
       data: {
         kycStatus: 'verified',
-        kycTier: 'tier_1',
+        kycTier: 'tier_2',
         status: 'active',
       },
     });

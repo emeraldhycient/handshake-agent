@@ -163,6 +163,12 @@ export class AdminTreasuryPayoutRetryService {
       );
     }
 
+    // Task 1.3: capability→min-tier gate — retryPayout's earlier hard status/type
+    // gate already restricts txn.type to 'sell' | 'send' (the only two keys in
+    // EXPECTED_OUTBOX_BY_TYPE), so the mapping is unambiguous: no other txn type
+    // reaches this re-check.
+    const capability = txn.type === 'sell' ? 'crypto.sell' : 'crypto.send';
+
     let failure: string | null = null;
     try {
       await this.kycGate.assertCanReleasePayout({
@@ -170,6 +176,7 @@ export class AdminTreasuryPayoutRetryService {
         fiatAmount,
         fiatCurrency,
         asset,
+        capability,
       });
     } catch (err: unknown) {
       failure = err instanceof Error ? err.message : 'kyc re-check failed';

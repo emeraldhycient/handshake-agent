@@ -86,6 +86,16 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     message:
       'Please finish verifying your identity before making this transaction.',
   },
+  // Task 1.3: the account's KYC tier is below the minimum required for the
+  // requested capability (e.g. a tier_1/email-verified account trying to
+  // send/sell/swap, which need tier_2) — distinct from KYC_NOT_VERIFIED so the
+  // client can point the user at identity verification specifically.
+  CAPABILITY_TIER_REQUIRED: {
+    status: HttpStatus.FORBIDDEN,
+    message:
+      'Verify your identity to unlock this — sending, selling and swapping ' +
+      'need identity verification.',
+  },
   TIER_LIMIT_EXCEEDED: {
     status: HttpStatus.FORBIDDEN,
     message:
