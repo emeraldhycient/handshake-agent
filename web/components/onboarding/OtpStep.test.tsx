@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 const signupVerifyMutation = vi.hoisted(() => ({
@@ -171,5 +171,107 @@ describe("OtpStep", () => {
       />
     )
     expect(screen.getByText(/999999/)).toBeInTheDocument()
+  })
+
+  it("distributes a pasted 6-digit code across all cells (paste support)", async () => {
+    const user = userEvent.setup()
+    const setData = vi.fn()
+    render(
+      <OtpStep
+        data={{ email: "a@b.com", otp: "" }}
+        setData={setData}
+        onNext={vi.fn()}
+        onBack={vi.fn()}
+      />
+    )
+    otpCells()[0].focus()
+    await user.paste("123456")
+    expect(setData).toHaveBeenCalledWith({ otp: "123456" })
+  })
+
+  it("strips non-digits and truncates an over-long paste to 6 digits", async () => {
+    const user = userEvent.setup()
+    const setData = vi.fn()
+    render(
+      <OtpStep
+        data={{ email: "a@b.com", otp: "" }}
+        setData={setData}
+        onNext={vi.fn()}
+        onBack={vi.fn()}
+      />
+    )
+    otpCells()[0].focus()
+    await user.paste("12-34-56-78")
+    expect(setData).toHaveBeenCalledWith({ otp: "123456" })
+  })
+
+  it("marks the first cell with autoComplete=one-time-code for autofill (editable/desktop mode)", () => {
+    render(
+      <OtpStep
+        data={{ email: "a@b.com", otp: "" }}
+        setData={vi.fn()}
+        onNext={vi.fn()}
+        onBack={vi.fn()}
+      />
+    )
+    expect(otpCells()[0]).toHaveAttribute("autocomplete", "one-time-code")
+  })
+
+  it("keypad-driven (mobile) cells are read-only with inputMode=none so the native keyboard never competes with the Keypad", () => {
+    render(
+      <OtpStep
+        data={{ email: "a@b.com", otp: "12" }}
+        setData={vi.fn()}
+        onNext={vi.fn()}
+        onBack={vi.fn()}
+        keypadDriven
+      />
+    )
+    const cells = otpCells()
+    expect(cells[0]).toHaveAttribute("readonly")
+    expect(cells[0]).toHaveAttribute("inputmode", "none")
+    // Still reflects the code driven in from the external Keypad.
+    expect(cells[0]).toHaveValue("1")
+  })
+
+  it("resets the expiry countdown when a new code is requested (resend), not leaving a stale/expired timer", async () => {
+    vi.useFakeTimers()
+    try {
+      const setData = vi.fn()
+      signupRequestMutation.current.mutateAsync = vi
+        .fn()
+        .mockResolvedValue({ status: "otp_sent", devOtp: undefined })
+      render(
+        <OtpStep
+          data={{ email: "a@b.com", otp: "" }}
+          setData={setData}
+          onNext={vi.fn()}
+          onBack={vi.fn()}
+        />
+      )
+
+      // Advance just past the 30s resend cooldown so the button enables and the
+      // original expiry has visibly ticked down (~4:25 of the 5:00 TTL).
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(35 * 1000)
+      })
+      expect(screen.getByText(/expires in/i).textContent).toMatch(/4:2\d/)
+
+      // Request a fresh code (fireEvent — no userEvent/fake-timer coupling).
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /resend code/i }))
+        await Promise.resolve()
+      })
+
+      // The resend fired and the expiry re-anchored to a fresh full TTL — the
+      // header must NOT still read the stale ~4:25 for a code that just arrived.
+      expect(signupRequestMutation.current.mutateAsync).toHaveBeenCalledWith(
+        "a@b.com"
+      )
+      expect(setData).toHaveBeenCalledWith({ otp: "", devOtp: undefined })
+      expect(screen.getByText(/expires in/i).textContent).toMatch(/(5:00|4:59)/)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

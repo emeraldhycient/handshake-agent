@@ -16,15 +16,22 @@ import type { OtpStepProps } from "@/types"
 const OTP_LENGTH = 6
 
 /** Step 2 of 4 — enter and verify the 6-digit signup code. */
-export function OtpStep({ data, setData, onNext, onBack }: OtpStepProps) {
+export function OtpStep({
+  data,
+  setData,
+  onNext,
+  onBack,
+  keypadDriven = false,
+}: OtpStepProps) {
   const otp = data.otp ?? ""
   const email = data.email ?? ""
   const cellRefs = useRef<Array<HTMLInputElement | null>>([])
   const submittedRef = useRef<string | null>(null)
+  const focusedOnMount = useRef(false)
   const [serverError, setServerError] = useState<string | null>(null)
   const [isLockedOut, setIsLockedOut] = useState(false)
 
-  const [expiresAt] = useState(() =>
+  const [expiresAt, setExpiresAt] = useState(() =>
     new Date(Date.now() + OTP_TTL_SECONDS * 1000).toISOString()
   )
   const [resendReadyAt, setResendReadyAt] = useState<string>(() =>
@@ -47,6 +54,16 @@ export function OtpStep({ data, setData, onNext, onBack }: OtpStepProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.devOtp])
+
+  // Desktop/editable surface: focus the first empty cell on mount so a user can
+  // type or paste immediately (the mobile surface is keypad-driven — no focus).
+  useEffect(() => {
+    if (keypadDriven || focusedOnMount.current) return
+    focusedOnMount.current = true
+    const firstEmpty = Math.min(otp.length, OTP_LENGTH - 1)
+    cellRefs.current[firstEmpty]?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (otp.length !== OTP_LENGTH) return
@@ -108,6 +125,21 @@ export function OtpStep({ data, setData, onNext, onBack }: OtpStepProps) {
     }
   }
 
+  // Paste the full code in one action — the most common OTP interaction. Strips
+  // non-digits and distributes up to OTP_LENGTH across the cells (the auto-submit
+  // effect fires once six digits are present).
+  function onPaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    const digits = e.clipboardData
+      .getData("text")
+      .replace(/\D/g, "")
+      .slice(0, OTP_LENGTH)
+    if (!digits) return
+    e.preventDefault()
+    setData({ otp: digits })
+    const focusIndex = Math.min(digits.length, OTP_LENGTH) - 1
+    cellRefs.current[focusIndex]?.focus()
+  }
+
   async function onResend() {
     setServerError(null)
     setIsLockedOut(false)
@@ -115,8 +147,14 @@ export function OtpStep({ data, setData, onNext, onBack }: OtpStepProps) {
       const result = await signupRequest.mutateAsync(email)
       setData({ otp: "", devOtp: result.devOtp })
       submittedRef.current = null
+      // Restart BOTH countdowns: the resend cooldown AND the code-expiry timer.
+      // The resent code is valid for a fresh OTP_TTL, so the "Expires in m:ss"
+      // header must re-anchor — otherwise it keeps counting down from the
+      // original send and can read 0:00 for a code that just arrived.
+      const nowMs = Date.now()
+      setExpiresAt(new Date(nowMs + OTP_TTL_SECONDS * 1000).toISOString())
       setResendReadyAt(
-        new Date(Date.now() + RESEND_COOLDOWN_SECONDS * 1000).toISOString()
+        new Date(nowMs + RESEND_COOLDOWN_SECONDS * 1000).toISOString()
       )
       cellRefs.current[0]?.focus()
     } catch (err) {
@@ -174,13 +212,21 @@ export function OtpStep({ data, setData, onNext, onBack }: OtpStepProps) {
               cellRefs.current[i] = el
             }}
             type="text"
-            inputMode="numeric"
+            // Mobile (keypadDriven): inputMode="none" + readOnly so tapping a
+            // cell never summons the native keyboard over the custom Keypad.
+            // Desktop: a numeric keyboard, editable, with OTP autofill on cell 1.
+            inputMode={keypadDriven ? "none" : "numeric"}
+            readOnly={keypadDriven}
+            autoComplete={!keypadDriven && i === 0 ? "one-time-code" : "off"}
             maxLength={1}
             aria-label={`Digit ${i + 1}`}
             value={otp[i] ?? ""}
             disabled={verifying}
-            onChange={(e) => onCellChange(i, e.target.value)}
-            onKeyDown={(e) => onCellKeyDown(i, e)}
+            onChange={
+              keypadDriven ? undefined : (e) => onCellChange(i, e.target.value)
+            }
+            onKeyDown={keypadDriven ? undefined : (e) => onCellKeyDown(i, e)}
+            onPaste={keypadDriven ? undefined : onPaste}
             className={`h-[58px] w-full min-w-0 flex-1 rounded-[14px] border-2 bg-card text-center text-[25px] font-extrabold text-foreground tabular-nums shadow-xs focus:outline-none lg:h-[68px] lg:w-[60px] lg:flex-none lg:rounded-[15px] lg:text-[27px] ${
               otp[i] ? "border-primary" : "border-input"
             }`}

@@ -86,6 +86,15 @@ export interface OtpStepProps {
   onNext: () => void
   /** Return to the `email` step. */
   onBack: () => void
+  /**
+   * True on the mobile surface, where the shell renders the on-screen `Keypad`
+   * as the single input for the code. The cells then render read-only with
+   * `inputMode="none"` so tapping a cell does NOT summon the native keyboard
+   * over the custom keypad (two competing input surfaces). Desktop leaves this
+   * false: the cells are editable and support typing, paste, autofill, and
+   * mount autofocus.
+   */
+  keypadDriven?: boolean
 }
 
 export interface NameStepProps {
