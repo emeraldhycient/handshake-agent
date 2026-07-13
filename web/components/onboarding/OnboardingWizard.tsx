@@ -25,7 +25,11 @@ import {
   useOnboardingMachine,
 } from "@/hooks/use-onboarding-machine"
 import { useMe } from "@/lib/query/auth"
-import type { OnboardingMachine, OnboardingStep } from "@/types"
+import type {
+  OnboardingMachine,
+  OnboardingStep,
+  PinStepKeypadHandle,
+} from "@/types"
 import { WelcomeStep } from "./WelcomeStep"
 import { EmailStep } from "./EmailStep"
 import { OtpStep } from "./OtpStep"
@@ -46,18 +50,12 @@ const OTP_LENGTH = 6
  * machine's shared `data.otp` — a controlled field `OtpStep` re-renders
  * from, so the shell can compute the append/trim itself.
  *
- * `pin` is deliberately excluded: `PinStep` (Task F1.2) keeps its PIN
- * entirely inside an uncontrolled react-hook-form field and never accepts
- * `data`/`setData` — by design, a transaction PIN never lingers in the
- * wizard's shared `data` (see `PinStepProps`'s doc comment). Driving a
- * shell-level Keypad into that field would mean either rewriting PinStep
- * (out of scope — root CLAUDE.md §16, "adapt the shell to the step, don't
- * rewrite the step") or reaching into its internal DOM, which this shell
- * does not do. PinStep's own inputs are `inputMode="numeric"`, which already
- * raises the device numeric keyboard on mobile, so PIN entry is still a
- * numeric-keypad experience — just the OS's, not a custom on-screen one.
+ * `pin` (Task FID-B) routes taps directly to `PinStep` via an imperative
+ * `PinStepKeypadHandle` ref (see that type's doc comment) — `PinStep` owns
+ * its own PIN entry state entirely, so this shell holds no PIN digit state
+ * at all, just the ref used to reach it.
  */
-const MOBILE_KEYPAD_STEPS: ReadonlySet<OnboardingStep> = new Set(["otp"])
+const MOBILE_KEYPAD_STEPS: ReadonlySet<OnboardingStep> = new Set(["otp", "pin"])
 
 /**
  * Steps that render full-bleed on mobile — no top progress bar, no bottom
@@ -123,7 +121,8 @@ function SumsubStub({ onBack }: SumsubStubProps) {
 
 function renderStep(
   machine: OnboardingMachine,
-  me: MeResponse | null | undefined
+  me: MeResponse | null | undefined,
+  pinKeypadRef?: { current: PinStepKeypadHandle | null }
 ) {
   const firstName = machine.data.firstName ?? me?.firstName ?? undefined
 
@@ -157,7 +156,13 @@ function renderStep(
         />
       )
     case "pin":
-      return <PinStep onNext={machine.next} onBack={machine.back} />
+      return (
+        <PinStep
+          onNext={machine.next}
+          onBack={machine.back}
+          keypadRef={pinKeypadRef}
+        />
+      )
     case "kyc":
       return (
         <KycChoiceStep
@@ -216,6 +221,11 @@ function MobileOnboarding({ machine, me }: OnboardingChromeProps) {
   const isEdgeToEdge = MOBILE_EDGE_TO_EDGE_STEPS.has(machine.step)
   const showKeypad = MOBILE_KEYPAD_STEPS.has(machine.step)
 
+  // Task FID-B: `PinStep` owns its own PIN entry state entirely (see
+  // `PinStepKeypadHandle`'s doc comment) — this shell holds no PIN digit
+  // state, just the ref used to route `Keypad` taps into it.
+  const pinKeypadRef = useRef<PinStepKeypadHandle>(null)
+
   function onOtpDigit(digit: string) {
     const next = `${machine.data.otp ?? ""}${digit}`.slice(0, OTP_LENGTH)
     machine.setData({ otp: next })
@@ -223,6 +233,25 @@ function MobileOnboarding({ machine, me }: OnboardingChromeProps) {
 
   function onOtpBackspace() {
     machine.setData({ otp: (machine.data.otp ?? "").slice(0, -1) })
+  }
+
+  function onKeypadDigit(digit: string) {
+    if (machine.step === "otp") onOtpDigit(digit)
+    else if (machine.step === "pin") pinKeypadRef.current?.onDigit(digit)
+  }
+
+  function onKeypadBackspace() {
+    if (machine.step === "otp") onOtpBackspace()
+    else if (machine.step === "pin") pinKeypadRef.current?.onBackspace()
+  }
+
+  // On the pin step, PinStep's own back arrow first returns confirm → create
+  // internally (see `PinStepKeypadHandle.handleBack`); only when it reports
+  // it didn't consume the tap (already on the create screen) does the shell
+  // fall through to its normal `machine.back()`.
+  function onProgressBack() {
+    if (machine.step === "pin" && pinKeypadRef.current?.handleBack()) return
+    machine.back()
   }
 
   // welcome/kyc/done: the step component owns its full mobile treatment
@@ -241,11 +270,11 @@ function MobileOnboarding({ machine, me }: OnboardingChromeProps) {
 
   return (
     <div className="flex min-h-svh flex-col bg-background px-6 py-6">
-      <OnboardingProgress step={machine.step} onBack={machine.back} />
-      <div className="mt-8 flex-1">{renderStep(machine, me)}</div>
+      <OnboardingProgress step={machine.step} onBack={onProgressBack} />
+      <div className="mt-8 flex-1">{renderStep(machine, me, pinKeypadRef)}</div>
       {showKeypad && (
         <div className="mt-6 pb-2">
-          <Keypad onDigit={onOtpDigit} onBackspace={onOtpBackspace} />
+          <Keypad onDigit={onKeypadDigit} onBackspace={onKeypadBackspace} />
         </div>
       )}
     </div>

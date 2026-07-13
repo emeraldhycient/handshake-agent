@@ -86,6 +86,14 @@ function otpCells() {
   return screen.getAllByRole("textbox", { name: /digit/i })
 }
 
+function pinDots() {
+  return document.querySelectorAll("[data-pin-dot]")
+}
+
+function filledPinDots() {
+  return document.querySelectorAll('[data-pin-dot][data-state="filled"]')
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("OnboardingWizard", () => {
@@ -220,6 +228,129 @@ describe("OnboardingWizard", () => {
 
     await user.click(screen.getByRole("button", { name: /backspace/i }))
     expect(otpCells()[0]).toHaveValue("")
+  })
+
+  it("renders the mobile pin step as keypad-driven dots, not masked inputs", async () => {
+    isDesktop.current = false
+    me.current = makeMe({
+      emailVerified: true,
+      firstName: "Ada",
+      hasPin: false,
+    })
+    render(<OnboardingWizard />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: /create a transaction pin/i })
+      ).toBeInTheDocument()
+    })
+    expect(
+      screen.getByRole("group", { name: /numeric keypad/i })
+    ).toBeInTheDocument()
+    expect(pinDots()).toHaveLength(4)
+    expect(screen.queryByLabelText(/^create pin/i)).not.toBeInTheDocument()
+  })
+
+  it("mobile keypad taps fill the create screen then advance to the confirm screen", async () => {
+    const user = userEvent.setup()
+    isDesktop.current = false
+    me.current = makeMe({
+      emailVerified: true,
+      firstName: "Ada",
+      hasPin: false,
+    })
+    render(<OnboardingWizard />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: /create a transaction pin/i })
+      ).toBeInTheDocument()
+    })
+
+    for (const digit of ["2", "4", "6", "8"]) {
+      await user.click(screen.getByRole("button", { name: digit }))
+    }
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: /confirm your pin/i })
+      ).toBeInTheDocument()
+    })
+    expect(filledPinDots()).toHaveLength(0)
+  })
+
+  it("a mismatched mobile confirm shows the mismatch message and clears", async () => {
+    const user = userEvent.setup()
+    isDesktop.current = false
+    me.current = makeMe({
+      emailVerified: true,
+      firstName: "Ada",
+      hasPin: false,
+    })
+    render(<OnboardingWizard />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: /create a transaction pin/i })
+      ).toBeInTheDocument()
+    })
+    for (const digit of ["2", "4", "6", "8"]) {
+      await user.click(screen.getByRole("button", { name: digit }))
+    }
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: /confirm your pin/i })
+      ).toBeInTheDocument()
+    })
+    for (const digit of ["1", "1", "1", "1"]) {
+      await user.click(screen.getByRole("button", { name: digit }))
+    }
+
+    expect(
+      await screen.findByText(/don't match — try again/i)
+    ).toBeInTheDocument()
+    expect(filledPinDots()).toHaveLength(0)
+    expect(setPinMutation.current.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it("a matching mobile confirm calls the set-pin hook and advances past the pin step", async () => {
+    setPinMutation.current.mutateAsync = vi
+      .fn()
+      .mockResolvedValue({ hasPin: true })
+    const user = userEvent.setup()
+    isDesktop.current = false
+    me.current = makeMe({
+      emailVerified: true,
+      firstName: "Ada",
+      hasPin: false,
+    })
+    render(<OnboardingWizard />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: /create a transaction pin/i })
+      ).toBeInTheDocument()
+    })
+    for (const digit of ["2", "4", "6", "8"]) {
+      await user.click(screen.getByRole("button", { name: digit }))
+    }
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: /confirm your pin/i })
+      ).toBeInTheDocument()
+    })
+    for (const digit of ["2", "4", "6", "8"]) {
+      await user.click(screen.getByRole("button", { name: digit }))
+    }
+
+    await waitFor(() => {
+      expect(setPinMutation.current.mutateAsync).toHaveBeenCalledWith("2468")
+    })
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /verify now/i })
+      ).toBeInTheDocument()
+    })
   })
 
   it("wires the kyc-choice 'verify now' branch to the sumsub stub", async () => {

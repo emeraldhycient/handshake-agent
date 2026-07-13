@@ -91,6 +91,35 @@ export interface NameStepProps {
   onBack: () => void
 }
 
+/** The two mobile-only PIN entry screens (Task FID-B) — create, then confirm. */
+export type PinConfirmStage = "create" | "confirm"
+
+/**
+ * Imperative handle for the mobile keypad-driven PIN flow (Task FID-B). The
+ * shell's on-screen `Keypad` calls these methods directly — via a plain ref
+ * PROP (`PinStepProps.keypadRef`), not React's reserved `ref` — so `PinStep`
+ * can own its entire PIN-entry state (stage, digit buffers, mismatch)
+ * internally via its own `useState`, exactly like the desktop RHF form does.
+ * This keeps state transitions inside real event-handler call sites (a
+ * `Keypad` tap → `onDigit`) rather than a `useEffect` deriving them from
+ * props, and means a transaction PIN never lingers in the wizard's shared,
+ * persisted `OnboardingData` — it lives only inside `PinStep`, cleared the
+ * moment the mutation that consumes it settles.
+ */
+export interface PinStepKeypadHandle {
+  /** Routes a tapped digit ("0"–"9") into whichever screen is active. */
+  onDigit: (digit: string) => void
+  /** Routes a backspace tap into whichever screen is active. */
+  onBackspace: () => void
+  /**
+   * Called when the shell's top-bar back arrow is pressed while on the
+   * `pin` step. Returns `true` if `PinStep` handled it internally (confirm
+   * screen → create screen); `false` means the shell should fall through to
+   * its normal `machine.back()`.
+   */
+  handleBack: () => boolean
+}
+
 export interface PinStepProps {
   /**
    * Advance to the `kyc` choice step once the PIN is set. The PIN itself is
@@ -101,6 +130,14 @@ export interface PinStepProps {
   onNext: () => void
   /** Return to the `name` step. */
   onBack: () => void
+  /**
+   * Present ONLY on mobile (Task FID-B) — a ref object the shell attaches so
+   * its on-screen `Keypad` can route taps into this step's own internal PIN
+   * entry state. Passing this ref is what selects the keypad-driven
+   * two-screen dots view instead of the desktop RHF form. See
+   * `PinStepKeypadHandle`.
+   */
+  keypadRef?: { current: PinStepKeypadHandle | null }
 }
 
 export interface KycChoiceStepProps {
