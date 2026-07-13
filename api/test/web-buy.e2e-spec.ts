@@ -48,6 +48,7 @@ import type { IWalletProvider } from '../src/modules/wallets/application/ports/w
 import type { IPaymentProvider } from '../src/modules/treasury/application/ports/payment-provider.port';
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 import { drainWebhooks } from './helpers/drain-webhooks';
+import { mintTier1User } from './helpers/mint-verified-user';
 
 jest.setTimeout(180_000);
 
@@ -243,56 +244,17 @@ describe('Web buy — e2e (authorize → execute → settle → status)', () => 
   });
 
   // ---------------------------------------------------------------------------
-  // Helper: full signup → verify → login → kyc → accessToken
+  // Helper: mint a verified tier_1 user (email-OTP signup → tier_1 [+ PIN])
   // ---------------------------------------------------------------------------
 
   async function setupVerifiedUser(
     userEmail: string,
     pin = '1357',
   ): Promise<{ accessToken: string; userId: string }> {
-    // Each user gets a unique fingerprint derived from the email to avoid
-    // the unique constraint on pinnedDeviceId when multiple tests share the DB.
-    const deviceFingerprint = `e2e-web-buy-fp-${userEmail.slice(0, 16)}`;
-
-    // 1. Signup
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email: userEmail, phone: '+2348099998888' })
-      .expect(202);
-    const { devToken } = su.body as { status: string; devToken: string };
-
-    // 2. Verify email
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-
-    // 3. Login request
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email: userEmail })
-      .expect(202);
-    const { devOtp } = lr.body as { status: string; devOtp: string };
-
-    // 4. Login verify
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email: userEmail, otp: devOtp, deviceFingerprint })
-      .expect(200);
-    const { accessToken } = lv.body as {
-      accessToken: string;
-      refreshToken: string;
-      user: { email: string; id: string };
-    };
-
-    // 5. KYC submit (sets PIN)
-    const ks = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({ firstName: 'Eze', lastName: 'Nweke', nin: '12345678901', pin })
-      .expect(200);
-    const { userId } = ks.body as { userId: string; status: string };
-
+    const { accessToken, userId } = await mintTier1User(app, {
+      email: userEmail,
+      pin,
+    });
     return { accessToken, userId };
   }
 

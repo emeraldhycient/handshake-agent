@@ -24,6 +24,8 @@ import { PAYMENT_PROVIDER } from '../src/modules/treasury/application/ports/paym
 import { WHATSAPP_SENDER } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.port';
 
+import { mintTier1User } from './helpers/mint-verified-user';
+
 jest.setTimeout(180_000);
 const API_ROOT = join(__dirname, '..');
 
@@ -142,33 +144,12 @@ describe('Transaction history — e2e', () => {
     email: string,
     phone: string,
   ): Promise<{ accessToken: string; userId: string }> {
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone })
-      .expect(202);
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: (su.body as { devToken: string }).devToken })
-      .expect(200);
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({
-        email,
-        otp: (lr.body as { devOtp: string }).devOtp,
-        deviceFingerprint: `fp-${phone}`,
-      })
-      .expect(200);
-    const accessToken = (lv.body as { accessToken: string }).accessToken;
-    const ks = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({ firstName: 'A', lastName: 'B', nin: '22334455667', pin: '1357' })
-      .expect(200);
-    return { accessToken, userId: (ks.body as { userId: string }).userId };
+    void phone; // legacy positional arg kept for the helper signature
+    const { accessToken, userId } = await mintTier1User(app, {
+      email,
+      pin: '1357',
+    });
+    return { accessToken, userId };
   }
 
   async function seedTxn(

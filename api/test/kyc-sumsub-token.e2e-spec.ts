@@ -41,6 +41,7 @@ import type { INestApplication } from '@nestjs/common';
 // ConfigModule.forRoot(). They export only const symbols and interfaces.
 import { LLM_PROVIDER } from '../src/modules/agent/application/ports/agent.port';
 import { WALLET_PROVIDER } from '../src/modules/wallets/application/ports/wallet-provider.port';
+import { mintTier1User } from './helpers/mint-verified-user';
 import { PAYMENT_PROVIDER } from '../src/modules/treasury/application/ports/payment-provider.port';
 import { WHATSAPP_SENDER } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.port';
@@ -224,68 +225,12 @@ describe('KYC Sumsub token — e2e (AppModule, Testcontainers Postgres)', () => 
     await stopContainer?.();
   });
 
-  /**
-   * Signs up + verifies + logs in a fresh user, returning their accessToken.
-   * Each call uses a fresh email AND a fresh device fingerprint — User.pinnedDeviceId
-   * is globally unique, so reusing one fingerprint across two different users in
-   * the same suite would collide on device-bind (unrelated to this task).
-   */
-  async function signUpAndLogin(): Promise<string> {
-    const unique = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-    const email = `e2e_st_${unique}@test.com`;
-
-    const signup = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone: '+2348029999001' })
-      .expect(202);
-    const signupBody = signup.body as { devToken: string };
-
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: signupBody.devToken })
-      .expect(200);
-
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const lrBody = lr.body as { devOtp: string };
-
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({
-        email,
-        otp: lrBody.devOtp,
-        deviceFingerprint: `e2e-st-fingerprint-${unique}`,
-      })
-      .expect(200);
-    const lvBody = lv.body as { accessToken: string };
-
-    return lvBody.accessToken;
-  }
-
-  /** Upgrades the signed-in user to tier_1 via /kyc/submit. Returns their userId. */
-  async function upgradeToTier1(accessToken: string): Promise<string> {
-    const res = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Tunde',
-        lastName: 'Balogun',
-        nin: '11223344557',
-        pin: '1357',
-      })
-      .expect(200);
-    return (res.body as { userId: string }).userId;
-  }
-
   // ===========================================================================
   // MAIN TEST — tier_1 → tier_2 mint happy path + DB assertions
   // ===========================================================================
 
   it('tier_1 user: POST /kyc/sumsub/token { level: tier_2 } → 200 { token, userId }; persists applicantId; does not touch kycStatus/kycTier', async () => {
-    const accessToken = await signUpAndLogin();
-    const userId = await upgradeToTier1(accessToken);
+    const { accessToken, userId } = await mintTier1User(app, { pin: '1357' });
 
     const res = await request(app.getHttpServer())
       .post('/kyc/sumsub/token')
@@ -299,15 +244,18 @@ describe('KYC Sumsub token — e2e (AppModule, Testcontainers Postgres)', () => 
     expect(body.token).toBe(`mock-${userId}-tier_2`);
 
     // DB: applicantId persisted, but kycStatus/kycTier untouched by this endpoint
-    // — the Sumsub webhook (a later task) owns those transitions.
+    // — the Sumsub webhook (a later task) owns those transitions. An email-OTP
+    // tier_1 user has kycStatus='not_started' and no KycProfile until this
+    // endpoint upserts one (with schema-default status/tier) to hold the
+    // applicantId.
     const dbProfile = await prisma.kycProfile.findUnique({ where: { userId } });
     expect(dbProfile).not.toBeNull();
     expect(dbProfile!.sumsubApplicantId).toBe(`mock-app-${userId}`);
-    expect(dbProfile!.status).toBe('verified'); // set by /kyc/submit, unchanged here
-    expect(dbProfile!.tier).toBe('tier_1'); // set by /kyc/submit, unchanged here
+    expect(dbProfile!.status).toBe('not_started'); // upsert-create default; endpoint doesn't set it
+    expect(dbProfile!.tier).toBe('unverified'); // upsert-create default; endpoint doesn't set it
 
     const dbUser = await prisma.user.findUnique({ where: { id: userId } });
-    expect(dbUser!.kycStatus).toBe('verified');
+    expect(dbUser!.kycStatus).toBe('not_started');
     expect(dbUser!.kycTier).toBe('tier_1');
   }, 60_000);
 
@@ -316,8 +264,7 @@ describe('KYC Sumsub token — e2e (AppModule, Testcontainers Postgres)', () => 
   // ===========================================================================
 
   it('tier_1 user: POST /kyc/sumsub/token { level: tier_3 } → 403 (needs tier_2 first)', async () => {
-    const accessToken = await signUpAndLogin();
-    await upgradeToTier1(accessToken);
+    const { accessToken } = await mintTier1User(app, { pin: '1357' });
 
     const res = await request(app.getHttpServer())
       .post('/kyc/sumsub/token')

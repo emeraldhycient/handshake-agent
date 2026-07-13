@@ -23,6 +23,7 @@ import { LLM_PROVIDER } from '../src/modules/agent/application/ports/agent.port'
 import { WALLET_PROVIDER } from '../src/modules/wallets/application/ports/wallet-provider.port';
 import { PAYMENT_PROVIDER } from '../src/modules/treasury/application/ports/payment-provider.port';
 import { WHATSAPP_SENDER } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
+import { mintTier1User } from './helpers/mint-verified-user';
 import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.port';
 import type { IWalletProvider } from '../src/modules/wallets/application/ports/wallet-provider.port';
 import type { IPaymentProvider } from '../src/modules/treasury/application/ports/payment-provider.port';
@@ -31,7 +32,6 @@ import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/
 jest.setTimeout(180_000);
 
 const API_ROOT = join(__dirname, '..');
-const SIGNUP_PHONE = '+2348099995678';
 
 describe('Profile — e2e (GET /profile)', () => {
   let app: INestApplication;
@@ -163,35 +163,16 @@ describe('Profile — e2e (GET /profile)', () => {
   });
 
   async function setupVerifiedUser(userEmail: string): Promise<string> {
-    const deviceFingerprint = `e2e-profile-fp-${userEmail.slice(0, 16)}`;
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email: userEmail, phone: SIGNUP_PHONE })
-      .expect(202);
-    const { devToken } = su.body as { devToken: string };
+    const { accessToken } = await mintTier1User(app, {
+      email: userEmail,
+      pin: '1357',
+    });
+    // The retired /kyc/submit captured the display name; on the new path the
+    // pre-KYC name is set via POST /profile/name (writable while not_started).
     await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email: userEmail })
-      .expect(202);
-    const { devOtp } = lr.body as { devOtp: string };
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email: userEmail, otp: devOtp, deviceFingerprint })
-      .expect(200);
-    const { accessToken } = lv.body as { accessToken: string };
-    await request(app.getHttpServer())
-      .post('/kyc/submit')
+      .post('/profile/name')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Eze',
-        lastName: 'Nweke',
-        nin: '12345678901',
-        pin: '1357',
-      })
+      .send({ firstName: 'Eze', lastName: 'Nweke' })
       .expect(200);
     return accessToken;
   }
@@ -220,7 +201,9 @@ describe('Profile — e2e (GET /profile)', () => {
 
     expect(body.email).toBe(email);
     expect(body.fullName).toBe('Eze Nweke');
-    expect(body.kycStatus).toBe('verified');
+    // New onboarding path: email-OTP grants tier_1 with kycStatus still
+    // 'not_started' (full KYC is a later Sumsub step) — not 'verified'.
+    expect(body.kycStatus).toBe('not_started');
     expect(body.kycTier).toBe('tier_1');
     expect(body.fiatCurrency).toBe('NGN');
     expect(body.limits).not.toBeNull();
@@ -362,36 +345,11 @@ describe('Profile — e2e (POST /profile/name)', () => {
     await stopContainer?.();
   });
 
-  /** signup → verify-email → login — a tier_1 session with NO KycProfile yet. */
+  /** email-OTP signup → a tier_1 session with NO KycProfile / PIN yet. */
   async function setupTier1UserWithNoKycProfile(
     userEmail: string,
   ): Promise<string> {
-    // Slice from the END (not the start) so the timestamp suffix — the part
-    // that actually varies between callers — survives; a fixed-length prefix
-    // slice collides across calls in this describe block because every email
-    // here shares the same "e2e_profile_name_…" literal prefix, which would
-    // otherwise bind two users to the same Device row and blow the
-    // User.pinnedDeviceId unique constraint on the second bindDevice.
-    const deviceFingerprint = `e2e-profile-name-fp-${userEmail.split('@')[0].slice(-24)}`;
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email: userEmail, phone: SIGNUP_PHONE })
-      .expect(202);
-    const { devToken } = su.body as { devToken: string };
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email: userEmail })
-      .expect(202);
-    const { devOtp } = lr.body as { devOtp: string };
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email: userEmail, otp: devOtp, deviceFingerprint })
-      .expect(200);
-    const { accessToken } = lv.body as { accessToken: string };
+    const { accessToken } = await mintTier1User(app, { email: userEmail });
     return accessToken;
   }
 
@@ -471,37 +429,26 @@ describe('Profile — e2e (POST /profile/name)', () => {
    */
   it('a KYC-verified user posting /profile/name → 409, stored name unchanged', async () => {
     const email = `e2e_profile_name_verified_${Date.now()}@test.com`;
-    const deviceFingerprint = `e2e-profile-name-fp-verified-${email.split('@')[0].slice(-24)}`;
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone: SIGNUP_PHONE })
-      .expect(202);
-    const { devToken } = su.body as { devToken: string };
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const { devOtp } = lr.body as { devOtp: string };
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email, otp: devOtp, deviceFingerprint })
-      .expect(200);
-    const { accessToken } = lv.body as { accessToken: string };
+    const { accessToken, userId } = await mintTier1User(app, {
+      email,
+      pin: '1357',
+    });
 
+    // Capture the pre-KYC name while it is still writable (kycStatus
+    // 'not_started'), then simulate a completed KYC verification by seeding
+    // kycStatus='verified' directly — the new-onboarding equivalent of the
+    // state the retired /kyc/submit produced, which makes the name the
+    // immutable Travel-Rule originator identity. Direct kycStatus seeding is
+    // the established e2e pattern across the money-path suites.
     await request(app.getHttpServer())
-      .post('/kyc/submit')
+      .post('/profile/name')
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Eze',
-        lastName: 'Nweke',
-        nin: '12345678901',
-        pin: '1357',
-      })
+      .send({ firstName: 'Eze', lastName: 'Nweke' })
       .expect(200);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { kycStatus: 'verified', kycTier: 'tier_2' },
+    });
 
     // Precondition: KYC verification has started (kycStatus=verified).
     const before = await request(app.getHttpServer())

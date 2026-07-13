@@ -46,6 +46,7 @@ import type { INestApplication } from '@nestjs/common';
 // Port symbol imports — these do NOT transitively import AppModule or trigger
 // ConfigModule.forRoot(). They export only const symbols and interfaces.
 import { LLM_PROVIDER } from '../src/modules/agent/application/ports/agent.port';
+import { mintTier1User } from './helpers/mint-verified-user';
 import { WALLET_PROVIDER } from '../src/modules/wallets/application/ports/wallet-provider.port';
 import { PAYMENT_PROVIDER } from '../src/modules/treasury/application/ports/payment-provider.port';
 import { WHATSAPP_SENDER } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
@@ -251,55 +252,6 @@ describe('Sumsub webhook — e2e (AppModule, Testcontainers Postgres)', () => {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  async function signUpAndLogin(): Promise<string> {
-    const unique = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-    const email = `e2e_sw_${unique}@test.com`;
-
-    const signup = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone: '+2348039999002' })
-      .expect(202);
-    const signupBody = signup.body as { devToken: string };
-
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: signupBody.devToken })
-      .expect(200);
-
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const lrBody = lr.body as { devOtp: string };
-
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({
-        email,
-        otp: lrBody.devOtp,
-        deviceFingerprint: `e2e-sw-fingerprint-${unique}`,
-      })
-      .expect(200);
-    const lvBody = lv.body as { accessToken: string };
-
-    return lvBody.accessToken;
-  }
-
-  /** Upgrades the signed-in user to tier_1 via /kyc/submit. Returns their userId. */
-  async function upgradeToTier1(accessToken: string): Promise<string> {
-    const res = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Ada',
-        lastName: 'Chukwu',
-        nin: '99887766554',
-        pin: '2468',
-      })
-      .expect(200);
-    return (res.body as { userId: string }).userId;
-  }
-
   async function getMe(
     accessToken: string,
   ): Promise<{ kycTier: string; kycStatus: string }> {
@@ -380,8 +332,7 @@ describe('Sumsub webhook — e2e (AppModule, Testcontainers Postgres)', () => {
       'blocked to passed; a redelivered GREEN is idempotent (no downgrade, ' +
       'no tierChangedAt re-stamp); a bad signature 401s with no state change',
     async () => {
-      const accessToken = await signUpAndLogin();
-      const userId = await upgradeToTier1(accessToken);
+      const { accessToken, userId } = await mintTier1User(app, { pin: '2468' });
 
       // ── Baseline: tier_1, crypto.send blocked by the real gate ──────────────
       const before = await getMe(accessToken);
@@ -469,8 +420,7 @@ describe('Sumsub webhook — e2e (AppModule, Testcontainers Postgres)', () => {
       'flag; a replayed RED is idempotent (no re-downgrade, no tierChangedAt ' +
       're-stamp, no duplicate flag)',
     async () => {
-      const accessToken = await signUpAndLogin();
-      const userId = await upgradeToTier1(accessToken);
+      const { accessToken, userId } = await mintTier1User(app, { pin: '2468' });
 
       // ── Grant tier_2 via a signed GREEN webhook (same flow as the main test).
       //    Distinct applicantId — KycProfile.sumsubApplicantId is @unique and

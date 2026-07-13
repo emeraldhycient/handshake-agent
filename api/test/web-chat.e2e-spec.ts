@@ -42,6 +42,8 @@ import type { IWalletProvider } from '../src/modules/wallets/application/ports/w
 import type { IPaymentProvider } from '../src/modules/treasury/application/ports/payment-provider.port';
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 
+import { mintTier1User } from './helpers/mint-verified-user';
+
 jest.setTimeout(180_000);
 
 // ---------------------------------------------------------------------------
@@ -238,63 +240,21 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
   // HAPPY PATH — receive_crypto (full flow)
   // ===========================================================================
 
-  it('signup → verify-email → login → kyc/submit → POST /chat/messages → 200 receive outcome', async () => {
+  it('mint tier_1 user → POST /chat/messages → 200 receive outcome', async () => {
     const email = `e2e_wc_${Date.now()}@test.com`;
 
-    // 1. Signup returns devToken (AUTH_DEV_EXPOSE_OTP=true)
-    const signup = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone: '+2348029999001' })
-      .expect(202);
-    const signupBody = signup.body as { status: string; devToken: string };
-    expect(signupBody.status).toBe('pending_verification');
-    const devToken = signupBody.devToken;
-    expect(devToken).toBeDefined();
+    // Mint a verified tier_1 user (email-OTP signup → tier_1 + PIN).
+    const { accessToken, userId } = await mintTier1User(app, {
+      email,
+      pin: '1357',
+    });
 
-    // 2. Verify email
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200)
-      .expect((r) => expect(r.body).toEqual({ verified: true }));
+    // The onboarding model grants kycTier='tier_1' on email-OTP verification —
+    // the capability gate is tier-based now, not a kycStatus flag.
+    const minted = await prisma.user.findUnique({ where: { id: userId } });
+    expect(minted!.kycTier).toBe('tier_1');
 
-    // 3. Login request returns devOtp
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const lrBody = lr.body as { status: string; devOtp: string };
-    const otp = lrBody.devOtp;
-    expect(otp).toMatch(/^[0-9]{6}$/);
-
-    // 4. Login verify returns accessToken
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email, otp, deviceFingerprint: 'e2e-wc-fingerprint-123' })
-      .expect(200);
-    const lvBody = lv.body as {
-      accessToken: string;
-      refreshToken: string;
-      user: { email: string; id: string };
-    };
-    expect(lvBody.accessToken).toBeDefined();
-    const { accessToken } = lvBody;
-
-    // 5. POST /kyc/submit (authenticated) → get kycStatus=verified
-    const ks = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Adaeze',
-        lastName: 'Okonkwo',
-        nin: '22334455667',
-        pin: '1357',
-      })
-      .expect(200);
-    const ksBody = ks.body as { userId: string; status: string };
-    expect(ksBody.status).toBe('verified');
-
-    // 6. POST /chat/messages → agent returns receive_crypto → outcome.kind === 'receive'
+    // POST /chat/messages → agent returns receive_crypto → outcome.kind === 'receive'
     const chat = await request(app.getHttpServer())
       .post('/chat/messages')
       .set('Authorization', `Bearer ${accessToken}`)
@@ -320,7 +280,7 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
 
     // DB assertions: conversation and message were persisted
     const dbConversation = await prisma.conversation.findFirst({
-      where: { userId: ksBody.userId },
+      where: { userId },
     });
     expect(dbConversation).not.toBeNull();
 
@@ -427,46 +387,22 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
   // ===========================================================================
 
   /**
-   * signup → verify → login → kyc/submit; returns a Bearer token + userId for
-   * a user at kycStatus='verified'/kycTier='tier_1' — /kyc/submit (the mock
-   * KYC provider) only ever auto-approves tier_1 (root CLAUDE.md §3.3/Task
-   * 1.2/1.3 — tier_2+ comes exclusively through the Sumsub webhook flow,
-   * exercised in sumsub-webhook.e2e-spec.ts). Callers that need a tier_2
-   * capability (sell/send/swap) must bump kycTier themselves — see the
-   * sell test below, which mirrors the direct-DB-seed pattern already used
-   * for tier_2 fixtures in sell-vertical.e2e-spec.ts.
+   * Mints a verified tier_1 user (email-OTP signup → tier_1 + PIN) and returns a
+   * Bearer token + userId. The onboarding model only ever grants tier_1 here —
+   * tier_2+ comes exclusively through the Sumsub webhook flow (exercised in
+   * sumsub-webhook.e2e-spec.ts). Callers that need a tier_2 capability
+   * (sell/send/swap) must bump kycTier themselves — see the sell test below,
+   * which mirrors the direct-DB-seed pattern in sell-vertical.e2e-spec.ts.
    */
   async function authVerifiedUser(opts: {
     email: string;
     phone: string;
     nin: string;
   }): Promise<{ accessToken: string; userId: string }> {
-    const { email, phone, nin } = opts;
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone })
-      .expect(202);
-    const devToken = (su.body as { devToken: string }).devToken;
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const otp = (lr.body as { devOtp: string }).devOtp;
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email, otp, deviceFingerprint: `fp-${email}` })
-      .expect(200);
-    const accessToken = (lv.body as { accessToken: string }).accessToken;
-    const ks = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({ firstName: 'Test', lastName: 'User', nin, pin: '1357' })
-      .expect(200);
-    const userId = (ks.body as { userId: string }).userId;
+    const { accessToken, userId } = await mintTier1User(app, {
+      email: opts.email,
+      pin: '1357',
+    });
     return { accessToken, userId };
   }
 
@@ -547,50 +483,18 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
   // CHAT HISTORY — GET /chat/messages
   // ===========================================================================
 
-  // Register → verify → login → KYC; returns a Bearer token + userId.
+  // Mint a verified tier_1 user (email-OTP signup → tier_1 + PIN); returns a
+  // Bearer token + userId.
   let userSeq = 5000;
   async function registerVerifiedUser(
     prefix: string,
   ): Promise<{ accessToken: string; userId: string }> {
     const n = userSeq++;
     const email = `${prefix}_${n}_${Date.now()}@test.com`;
-    const phone = `+23480299${n.toString().padStart(5, '0')}`;
-
-    const signup = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone })
-      .expect(202);
-    const devToken = (signup.body as { devToken: string }).devToken;
-
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const otp = (lr.body as { devOtp: string }).devOtp;
-
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email, otp, deviceFingerprint: `e2e-hist-fingerprint-${n}` })
-      .expect(200);
-    const accessToken = (lv.body as { accessToken: string }).accessToken;
-
-    const ks = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Hist',
-        lastName: 'User',
-        nin: '22334455667',
-        pin: '1357',
-      })
-      .expect(200);
-    const userId = (ks.body as { userId: string }).userId;
-
+    const { accessToken, userId } = await mintTier1User(app, {
+      email,
+      pin: '1357',
+    });
     return { accessToken, userId };
   }
 

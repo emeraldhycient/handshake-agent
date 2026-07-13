@@ -34,6 +34,7 @@ import { PrismaClient } from '../generated/prisma/client';
 import type { INestApplication } from '@nestjs/common';
 
 import { WalletService } from '../src/modules/wallets/application/wallet.service';
+import { mintTier1User } from './helpers/mint-verified-user';
 import { LLM_PROVIDER } from '../src/modules/agent/application/ports/agent.port';
 import { WALLET_PROVIDER } from '../src/modules/wallets/application/ports/wallet-provider.port';
 import { AssetRegistry } from '../src/core/catalog/asset-registry';
@@ -248,41 +249,15 @@ describe('Web sell + send + beneficiaries — e2e', () => {
     userEmail: string,
     pin = '1357',
   ): Promise<{ accessToken: string; userId: string }> {
-    const deviceFingerprint = `e2e-web-ss-fp-${userEmail.slice(0, 16)}`;
+    const { accessToken, userId } = await mintTier1User(app, {
+      email: userEmail,
+      pin,
+    });
 
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email: userEmail, phone: '+2348099998888' })
-      .expect(202);
-    const { devToken } = su.body as { devToken: string };
-
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email: userEmail })
-      .expect(202);
-    const { devOtp } = lr.body as { devOtp: string };
-
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email: userEmail, otp: devOtp, deviceFingerprint })
-      .expect(200);
-    const { accessToken } = lv.body as { accessToken: string };
-
-    const ks = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({ firstName: 'Ada', lastName: 'Eze', nin: '12345678901', pin })
-      .expect(200);
-    const { userId } = ks.body as { userId: string };
-
-    // /kyc/submit (the mock provider) grants tier_1 (email-verified identity
-    // only). Sell/send/swap now require tier_2 (doc + liveness verification) —
-    // bump here to represent completed Sumsub verification for these e2e users.
+    // mintTier1User grants tier_1 (email-verified). Sell/send/swap require
+    // tier_2 (doc + liveness) — bump here to represent completed Sumsub
+    // verification for these e2e users (a direct DB seed, the established
+    // pattern across the money-path suites).
     await prisma.user.update({
       where: { id: userId },
       data: { kycTier: 'tier_2' },
