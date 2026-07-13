@@ -4,7 +4,6 @@ import { ConfigService } from '@nestjs/config';
 
 import { AuthModule } from '../../core/auth/auth.module';
 import { WebAuthModule } from '../auth/auth.module';
-import { WalletsModule } from '../wallets/wallets.module';
 import { CLOCK, SystemClock } from '../../core/common/clock';
 import { IDENTITY_REPOSITORY } from './application/ports/identity.repository.port';
 import { VELOCITY_REPOSITORY } from './application/ports/velocity.repository.port';
@@ -68,11 +67,6 @@ export function selectKycProvider(
  *
  * K3: HandoffTokenService + HandoffTokenPrismaRepository + KycController added.
  *
- * WN-3: WalletsModule imported so WalletService can be injected into
- * KycController for eager post-KYC address provisioning (best-effort).
- * The dependency lives at the presentation/composition layer — dep-cruiser
- * permits this; no forbidden cross-feature rule applies here.
- *
  * WN-5: USER_LISTER token bound to ActiveUserListerPrismaAdapter and exported
  * so AdminModule can provide it to WalletBackfillService. This keeps the
  * wallets→identity cycle broken: wallets/application owns the IUserLister port
@@ -80,7 +74,7 @@ export function selectKycProvider(
  * the composition root that imports both and resolves the binding.
  */
 @Module({
-  imports: [AuthModule, WebAuthModule, WalletsModule, HttpModule],
+  imports: [AuthModule, WebAuthModule, HttpModule],
   controllers: [KycController, ProfileController],
   providers: [
     ProfileService,

@@ -54,8 +54,6 @@ function makeRepo(
   overrides: Partial<jest.Mocked<IKycRepository>> = {},
 ): jest.Mocked<IKycRepository> {
   return {
-    completeVerificationAtomic: jest.fn(),
-    completeVerificationForUserAtomic: jest.fn(),
     updateKycProfileDecision: jest.fn(),
     markKycNeedsInfo: jest.fn(),
     setSumsubApplicantId: jest.fn(),
