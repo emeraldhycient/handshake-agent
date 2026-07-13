@@ -12,8 +12,6 @@ import type {
   CreateVerificationSessionInput,
   CreateVerificationSessionResult,
   IKycProvider,
-  KycVerifyInput,
-  KycVerifyResult,
 } from '../application/ports/kyc-provider.port';
 
 // ---------------------------------------------------------------------------
@@ -105,15 +103,6 @@ interface SumsubErrorBody {
  * wrapped into a descriptive `Error` carrying a structural `httpStatus` so
  * callers can distinguish a definitive 4xx rejection from an ambiguous
  * network/5xx failure.
- *
- * `verify()` (the legacy synchronous NIN/BVN path used by /kyc/submit and
- * /kyc/complete for tier_1 onboarding) is intentionally NOT implemented
- * against the real Sumsub API — Sumsub has no equivalent synchronous
- * NIN/BVN check; its real flow is applicant-creation + document upload +
- * webhook review. Faking an approval/rejection here would be a security bug
- * (root CLAUDE.md §3.6), so it fails closed (throws) instead.
- * TODO(KYC-TIER1-SUMSUB): decide + implement the tier_1 path once
- * KYC_MOCK_MODE=false ships to production — out of scope for task 3.3.
  */
 @Injectable()
 export class SumsubKycProvider implements IKycProvider {
@@ -135,20 +124,6 @@ export class SumsubKycProvider implements IKycProvider {
       tier_2: this.config.get<'SUMSUB_LEVEL_TIER2'>('SUMSUB_LEVEL_TIER2'),
       tier_3: this.config.get<'SUMSUB_LEVEL_TIER3'>('SUMSUB_LEVEL_TIER3'),
     };
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  verify(_input: KycVerifyInput): Promise<KycVerifyResult> {
-    return Promise.reject(
-      new Error(
-        'SumsubKycProvider.verify() is not implemented: the real Sumsub ' +
-          'provider only supports the async createVerificationSession ' +
-          '(WebSDK) flow for tier_2/tier_3 upgrades. TODO(KYC-TIER1-SUMSUB): ' +
-          'the tier_1 NIN/BVN legacy path needs a dedicated design decision ' +
-          'before KYC_MOCK_MODE=false can serve /kyc/submit or /kyc/complete ' +
-          'in production.',
-      ),
-    );
   }
 
   async createVerificationSession(

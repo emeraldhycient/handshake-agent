@@ -12,7 +12,6 @@
 import type {
   CreateVerificationSessionResult,
   IKycProvider,
-  KycVerifyResult,
 } from './ports/kyc-provider.port';
 import type {
   IIdentityRepository,
@@ -27,11 +26,8 @@ import { KycService } from './kyc.service';
 // ---------------------------------------------------------------------------
 
 /** Creates a mock IKycProvider. */
-function makeKycProvider(result: KycVerifyResult): jest.Mocked<IKycProvider> {
+function makeKycProvider(): jest.Mocked<IKycProvider> {
   return {
-    verify: jest.fn().mockResolvedValue(result),
-    // Not exercised by KycService.createSumsubSession — stubbed only to
-    // satisfy the IKycProvider shape (task 3.3).
     createVerificationSession: jest.fn(),
   };
 }
@@ -82,9 +78,7 @@ function buildService(opts: {
   identityRepo?: jest.Mocked<IIdentityRepository>;
   kycRepo?: jest.Mocked<IKycRepository>;
 }) {
-  const kycProvider =
-    opts.kycProvider ??
-    makeKycProvider({ approved: true, tier: 'tier_1', reference: 'ref-1' });
+  const kycProvider = opts.kycProvider ?? makeKycProvider();
   const identityRepo = opts.identityRepo ?? makeIdentityRepo();
   const kycRepo = opts.kycRepo ?? makeKycRepo();
 
@@ -120,11 +114,7 @@ describe('KycService.createSumsubSession', () => {
     const identityRepo = makeIdentityRepo({
       loadUser: jest.fn().mockResolvedValue(userAtTier('unverified')),
     });
-    const kycProvider = makeKycProvider({
-      approved: true,
-      tier: 'tier_1',
-      reference: 'unused',
-    });
+    const kycProvider = makeKycProvider();
     const kycRepo = makeKycRepo();
 
     const { svc } = buildService({ identityRepo, kycProvider, kycRepo });
@@ -155,11 +145,7 @@ describe('KycService.createSumsubSession', () => {
     const identityRepo = makeIdentityRepo({
       loadUser: jest.fn().mockResolvedValue(userAtTier('tier_1')),
     });
-    const kycProvider = makeKycProvider({
-      approved: true,
-      tier: 'tier_1',
-      reference: 'unused',
-    });
+    const kycProvider = makeKycProvider();
     kycProvider.createVerificationSession.mockResolvedValue(SESSION_RESULT);
     const kycRepo = makeKycRepo();
 
@@ -185,11 +171,7 @@ describe('KycService.createSumsubSession', () => {
     const identityRepo = makeIdentityRepo({
       loadUser: jest.fn().mockResolvedValue(userAtTier('tier_1')),
     });
-    const kycProvider = makeKycProvider({
-      approved: true,
-      tier: 'tier_1',
-      reference: 'unused',
-    });
+    const kycProvider = makeKycProvider();
     const kycRepo = makeKycRepo();
 
     const { svc } = buildService({ identityRepo, kycProvider, kycRepo });
@@ -206,11 +188,7 @@ describe('KycService.createSumsubSession', () => {
     const identityRepo = makeIdentityRepo({
       loadUser: jest.fn().mockResolvedValue(userAtTier('tier_2')),
     });
-    const kycProvider = makeKycProvider({
-      approved: true,
-      tier: 'tier_2',
-      reference: 'unused',
-    });
+    const kycProvider = makeKycProvider();
     kycProvider.createVerificationSession.mockResolvedValue(SESSION_RESULT);
     const kycRepo = makeKycRepo();
 
@@ -236,11 +214,7 @@ describe('KycService.createSumsubSession', () => {
     const identityRepo = makeIdentityRepo({
       loadUser: jest.fn().mockResolvedValue(userAtTier('tier_3')),
     });
-    const kycProvider = makeKycProvider({
-      approved: true,
-      tier: 'tier_3',
-      reference: 'unused',
-    });
+    const kycProvider = makeKycProvider();
     kycProvider.createVerificationSession.mockResolvedValue(SESSION_RESULT);
 
     const { svc } = buildService({ identityRepo, kycProvider });
@@ -260,11 +234,7 @@ describe('KycService.createSumsubSession', () => {
     const identityRepo = makeIdentityRepo({
       loadUser: jest.fn().mockResolvedValue(userAtTier('tier_1')),
     });
-    const kycProvider = makeKycProvider({
-      approved: true,
-      tier: 'tier_1',
-      reference: 'unused',
-    });
+    const kycProvider = makeKycProvider();
     kycProvider.createVerificationSession.mockResolvedValue(SESSION_RESULT);
     const kycRepo = makeKycRepo();
 

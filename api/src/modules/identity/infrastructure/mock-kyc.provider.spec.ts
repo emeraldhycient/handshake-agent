@@ -1,10 +1,11 @@
 /**
- * Unit tests for MockKycProvider (task K1).
+ * Unit tests for MockKycProvider.createVerificationSession.
  *
- * The mock auto-approves Tier-1 when (nin OR bvn) AND firstName AND lastName
- * are all non-empty. Otherwise it returns approved:false with tier:'unverified'.
- *
- * TDD: written before the implementation to drive the design.
+ * `verify()` was removed from IKycProvider (task 6 of
+ * docs/superpowers/plans/2026-07-13-retire-legacy-sync-kyc-endpoints.md) —
+ * its legacy NIN/BVN auto-approval tests were removed with it. The mock's
+ * `createVerificationSession` is also exercised end-to-end by the
+ * `kyc-sumsub-token` e2e suite.
  */
 
 import { MockKycProvider } from './mock-kyc.provider';
@@ -20,143 +21,10 @@ function makeProvider(): MockKycProvider {
 }
 
 // ---------------------------------------------------------------------------
-// Test suites
+// createVerificationSession (task 3.3) — deterministic fake token/applicantId
 // ---------------------------------------------------------------------------
 
 describe('MockKycProvider', () => {
-  describe('verify — approved paths', () => {
-    it('approves at tier_1 when nin + firstName + lastName are present', async () => {
-      const provider = makeProvider();
-
-      const result = await provider.verify({
-        nin: '12345678901',
-        firstName: 'Amaka',
-        lastName: 'Okonkwo',
-      });
-
-      expect(result.approved).toBe(true);
-      expect(result.tier).toBe('tier_1');
-      expect(result.reference).toMatch(/^mock-kyc-/);
-      expect(result.reason).toBeUndefined();
-    });
-
-    it('approves at tier_1 when bvn (no nin) + firstName + lastName are present', async () => {
-      const provider = makeProvider();
-
-      const result = await provider.verify({
-        bvn: '22234567890',
-        firstName: 'Chukwuemeka',
-        lastName: 'Eze',
-      });
-
-      expect(result.approved).toBe(true);
-      expect(result.tier).toBe('tier_1');
-      expect(result.reference).toMatch(/^mock-kyc-/);
-    });
-
-    it('approves when both nin and bvn are supplied (uses either)', async () => {
-      const provider = makeProvider();
-
-      const result = await provider.verify({
-        nin: '11111111111',
-        bvn: '22222222222',
-        firstName: 'Ngozi',
-        lastName: 'Adeyemi',
-      });
-
-      expect(result.approved).toBe(true);
-      expect(result.tier).toBe('tier_1');
-    });
-
-    it('includes an optional dateOfBirth without affecting approval', async () => {
-      const provider = makeProvider();
-
-      const result = await provider.verify({
-        nin: '98765432100',
-        firstName: 'Tunde',
-        lastName: 'Balogun',
-        dateOfBirth: '1990-05-15',
-      });
-
-      expect(result.approved).toBe(true);
-      expect(result.tier).toBe('tier_1');
-    });
-  });
-
-  describe('verify — rejected paths', () => {
-    it('rejects when neither nin nor bvn is present', async () => {
-      const provider = makeProvider();
-
-      const result = await provider.verify({
-        firstName: 'Adaeze',
-        lastName: 'Nwosu',
-      });
-
-      expect(result.approved).toBe(false);
-      expect(result.tier).toBe('unverified');
-      expect(result.reference).toMatch(/^mock-kyc-/);
-      expect(result.reason).toMatch(/missing/i);
-    });
-
-    it('rejects when firstName is empty (nin present)', async () => {
-      const provider = makeProvider();
-
-      const result = await provider.verify({
-        nin: '12345678901',
-        firstName: '',
-        lastName: 'Obi',
-      });
-
-      expect(result.approved).toBe(false);
-      expect(result.tier).toBe('unverified');
-      expect(result.reason).toMatch(/missing/i);
-    });
-
-    it('rejects when lastName is empty (nin present)', async () => {
-      const provider = makeProvider();
-
-      const result = await provider.verify({
-        nin: '12345678901',
-        firstName: 'Chidera',
-        lastName: '',
-      });
-
-      expect(result.approved).toBe(false);
-      expect(result.tier).toBe('unverified');
-      expect(result.reason).toMatch(/missing/i);
-    });
-
-    it('rejects when firstName is whitespace-only', async () => {
-      const provider = makeProvider();
-
-      const result = await provider.verify({
-        bvn: '22234567890',
-        firstName: '   ',
-        lastName: 'Okonkwo',
-      });
-
-      expect(result.approved).toBe(false);
-      expect(result.tier).toBe('unverified');
-    });
-  });
-
-  describe('reference uniqueness', () => {
-    it('generates a distinct reference for each call', async () => {
-      const provider = makeProvider();
-
-      const [r1, r2] = await Promise.all([
-        provider.verify({ nin: '11111111111', firstName: 'A', lastName: 'B' }),
-        provider.verify({ nin: '22222222222', firstName: 'C', lastName: 'D' }),
-      ]);
-
-      expect(r1.reference).not.toBe(r2.reference);
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // createVerificationSession (task 3.3) — deterministic fake token/applicantId
-  // -------------------------------------------------------------------------
-
   describe('createVerificationSession', () => {
     it('returns a deterministic token and applicantId for tier_2', async () => {
       const provider = makeProvider();

@@ -278,20 +278,6 @@ describe('SumsubKycProvider — createVerificationSession', () => {
 });
 
 // ---------------------------------------------------------------------------
-// verify() — legacy sync NIN/BVN path is NOT implemented against real Sumsub
-// ---------------------------------------------------------------------------
-
-describe('SumsubKycProvider — verify (legacy NIN/BVN path)', () => {
-  it('fails closed (throws) rather than faking an approval/rejection', async () => {
-    const provider = new SumsubKycProvider(makeHttpService(), makeConfig());
-
-    await expect(
-      provider.verify({ nin: '12345678901', firstName: 'A', lastName: 'B' }),
-    ).rejects.toThrow();
-  });
-});
-
-// ---------------------------------------------------------------------------
 // (c) IdentityModule KYC_PROVIDER binding
 // ---------------------------------------------------------------------------
 
@@ -329,9 +315,8 @@ describe('IdentityModule — selectKycProvider binding', () => {
     expect(resolve('false')).toBeInstanceOf(SumsubKycProvider);
   });
 
-  it('the selected provider satisfies the port (has verify + createVerificationSession)', () => {
+  it('the selected provider satisfies the port (has createVerificationSession)', () => {
     const real = resolve('false');
-    expect(typeof real.verify).toBe('function');
     expect(typeof real.createVerificationSession).toBe('function');
   });
 });
