@@ -280,6 +280,14 @@ describe('Web sell + send + beneficiaries — e2e', () => {
       .expect(200);
     const { userId } = ks.body as { userId: string };
 
+    // /kyc/submit (the mock provider) grants tier_1 (email-verified identity
+    // only). Sell/send/swap now require tier_2 (doc + liveness verification) —
+    // bump here to represent completed Sumsub verification for these e2e users.
+    await prisma.user.update({
+      where: { id: userId },
+      data: { kycTier: 'tier_2' },
+    });
+
     return { accessToken, userId };
   }
 

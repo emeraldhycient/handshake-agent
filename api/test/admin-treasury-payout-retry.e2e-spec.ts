@@ -203,7 +203,7 @@ describe('Treasury payout-retry — e2e (AppModule, Testcontainers Postgres)', (
     txnStatus: 'settling' | 'completed',
   ): Promise<SeededPayout> {
     const user = await prisma.user.create({
-      data: { status: 'active', kycStatus: 'verified', kycTier: 'tier_1' },
+      data: { status: 'active', kycStatus: 'verified', kycTier: 'tier_2' },
     });
     const idempotencyKey = randomUUID();
     const metadata =
