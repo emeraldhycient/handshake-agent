@@ -2,8 +2,13 @@ import { Injectable } from '@nestjs/common';
 
 // The generated Prisma client is the ONLY sanctioned DB door (CLAUDE.md §3.2).
 // This is the infrastructure layer — the only place it is allowed.
-import { KycTier, UserStatus } from '../../../../generated/prisma/client';
+import {
+  KycTier,
+  Prisma,
+  UserStatus,
+} from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { DeviceAlreadyBoundError } from '../domain/auth-errors';
 import type {
   AuthUserRecord,
   IAuthUserRepository,
@@ -152,10 +157,25 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
     });
 
     // Pin on first bind (User.pinnedDeviceId is unique; only set when null).
-    await this.prisma.user.updateMany({
-      where: { id: input.userId, pinnedDeviceId: null },
-      data: { pinnedDeviceId: device.id },
-    });
+    // The `pinnedDeviceId: null` guard means this only fires when the user has no
+    // pinned device — but the device itself may already be pinned to ANOTHER user
+    // (a shared/re-used browser, §3.4 one-device-per-identity). That trips the
+    // unique constraint (P2002); map it to a clean domain error so the caller can
+    // return a 409 instead of leaking a raw Prisma error as an opaque 500.
+    try {
+      await this.prisma.user.updateMany({
+        where: { id: input.userId, pinnedDeviceId: null },
+        data: { pinnedDeviceId: device.id },
+      });
+    } catch (err: unknown) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new DeviceAlreadyBoundError();
+      }
+      throw err;
+    }
 
     return { deviceId: device.id };
   }
