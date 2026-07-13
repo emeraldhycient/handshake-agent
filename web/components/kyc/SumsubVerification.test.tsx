@@ -31,6 +31,12 @@ vi.mock("@sumsub/websdk-react", () => ({
         >
           emit-submitted
         </button>
+        <button
+          type="button"
+          onClick={() => props.onError?.(new Error("iframe failed to load"))}
+        >
+          emit-error
+        </button>
       </div>
     )
   },
@@ -115,6 +121,57 @@ describe("SumsubVerification", () => {
     ).toBeInTheDocument()
     expect(screen.getByText(/token mint failed/i)).toBeInTheDocument()
     // A retry re-mints the token.
+    mockMutate.mockClear()
+    await userEvent.click(
+      screen.getByRole("button", { name: /try again|retry/i })
+    )
+    expect(mockMutate).toHaveBeenCalledWith("tier_2")
+  })
+
+  it("shows a persistent Back control on the loading branch so the user is never trapped", () => {
+    mockTokenState = { isPending: true, isError: false, error: undefined }
+    const onBack = vi.fn()
+    render(<SumsubVerification level="tier_2" onBack={onBack} />)
+
+    expect(screen.getByText(/preparing verification/i)).toBeInTheDocument()
+    const back = screen.getByRole("button", { name: /back/i })
+    back.click()
+    expect(onBack).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows a persistent Back control on the data (SDK) branch", async () => {
+    mockTokenState = {
+      data: { token: "sbx-token-abc", userId: "u-1" },
+      isPending: false,
+      isError: false,
+      error: undefined,
+    }
+    const onBack = vi.fn()
+    render(<SumsubVerification level="tier_2" onBack={onBack} />)
+
+    expect(await screen.findByTestId("sumsub-sdk")).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: /back/i }))
+    expect(onBack).toHaveBeenCalledTimes(1)
+  })
+
+  it("surfaces an SDK runtime error to the user (not just the console) with a retry", async () => {
+    mockTokenState = {
+      data: { token: "sbx-token-abc", userId: "u-1" },
+      isPending: false,
+      isError: false,
+      error: undefined,
+    }
+    render(<SumsubVerification level="tier_2" />)
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /emit-error/i })
+    )
+
+    // The broken iframe is replaced by a user-visible error + recovery.
+    expect(
+      await screen.findByText(/couldn.t start verification/i)
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId("sumsub-sdk")).not.toBeInTheDocument()
     mockMutate.mockClear()
     await userEvent.click(
       screen.getByRole("button", { name: /try again|retry/i })

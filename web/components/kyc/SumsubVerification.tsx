@@ -17,7 +17,7 @@
  * Branches: loading (minting) / error (mint failed → retry) / data (SDK). There
  * is no "empty" branch — a token mint either yields a token or errors.
  */
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import SumsubWebSdk from "@sumsub/websdk-react"
 import { useSumsubToken } from "@/lib/query/kyc-onboarding"
 import { Button } from "@/components/ui/button"
@@ -45,6 +45,10 @@ export function SumsubVerification({
 }: SumsubVerificationProps) {
   const { mutate, mutateAsync, data, isPending, isError, error } =
     useSumsubToken()
+  // A runtime error INSIDE the mounted SDK iframe (distinct from a token-mint
+  // failure). Without surfacing it the user would sit on a broken/empty embed;
+  // setting this routes them to the recoverable error branch below.
+  const [sdkError, setSdkError] = useState<string | null>(null)
 
   // Mint the initial token once on mount. The mutation IS the TanStack Query
   // server-state layer (root §5); this effect only kicks it — no raw fetch here.
@@ -65,33 +69,51 @@ export function SumsubVerification({
     if (DONE_MESSAGES.has(type)) onSubmitted?.()
   }
 
+  function retry() {
+    setSdkError(null)
+    mutate(level)
+  }
+
+  // A persistent, low-emphasis escape hatch. The Sumsub step is the highest-
+  // friction moment of onboarding; without this the user is trapped once the
+  // SDK mounts (the shell renders this step full-bleed with no chrome back
+  // button). `onBack` returns to the KYC choice, where "verify later" reaches
+  // the app.
+  const backControl = onBack ? (
+    <button
+      type="button"
+      onClick={onBack}
+      className="text-sm font-semibold text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+    >
+      ← Back, I&apos;ll verify later
+    </button>
+  ) : null
+
   // ── loading ──
-  if (!data && !isError) {
+  if (!data && !isError && !sdkError) {
     return (
-      <div
-        className={cn(
-          "flex flex-col items-center gap-4 py-10 text-center",
-          className
-        )}
-      >
-        <div
-          aria-hidden="true"
-          className="h-10 w-10 animate-spin rounded-full border-2 border-accent border-t-transparent"
-        />
-        <p className="text-base font-semibold text-foreground">
-          Preparing verification…
-        </p>
-        {isPending && (
-          <span className="sr-only" role="status">
-            Loading
-          </span>
-        )}
+      <div className={cn("flex flex-col gap-4", className)}>
+        {backControl}
+        <div className="flex flex-col items-center gap-4 py-10 text-center">
+          <div
+            aria-hidden="true"
+            className="h-10 w-10 animate-spin rounded-full border-2 border-accent border-t-transparent"
+          />
+          <p className="text-base font-semibold text-foreground">
+            Preparing verification…
+          </p>
+          {isPending && (
+            <span className="sr-only" role="status">
+              Loading
+            </span>
+          )}
+        </div>
       </div>
     )
   }
 
-  // ── error ──
-  if (isError || !data) {
+  // ── error (token-mint failure OR a runtime error inside the SDK iframe) ──
+  if (isError || !data || sdkError) {
     return (
       <div
         className={cn(
@@ -103,7 +125,9 @@ export function SumsubVerification({
           We couldn&apos;t start verification.
         </p>
         <p className="text-sm text-muted-foreground">
-          {toErrorMessage(error) ?? "Something went wrong. Please try again."}
+          {sdkError ??
+            toErrorMessage(error) ??
+            "Something went wrong. Please try again."}
         </p>
         <div className="flex gap-3">
           {onBack && (
@@ -111,7 +135,7 @@ export function SumsubVerification({
               Back
             </Button>
           )}
-          <Button type="button" onClick={() => mutate(level)}>
+          <Button type="button" onClick={retry}>
             Try again
           </Button>
         </div>
@@ -121,7 +145,8 @@ export function SumsubVerification({
 
   // ── data ──
   return (
-    <div className={className}>
+    <div className={cn("flex flex-col gap-3", className)}>
+      {backControl}
       <SumsubWebSdk
         accessToken={data.token}
         expirationHandler={refreshToken}
@@ -130,9 +155,12 @@ export function SumsubVerification({
         onMessage={handleMessage}
         onError={(e) => {
           // The engine is the source of truth; a client SDK error is UI-only.
-          // Surface it to the console for support and let the user retry via
-          // the SDK's own controls.
+          // Log it for support AND surface it to the user (→ error branch) so a
+          // broken iframe is never a silent dead-end.
           console.error("[SumsubVerification] SDK error", e)
+          setSdkError(
+            toErrorMessage(e) ?? "Verification couldn't load. Please try again."
+          )
         }}
       />
     </div>
