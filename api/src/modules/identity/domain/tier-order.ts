@@ -21,6 +21,28 @@ export const TIER_ORDER: Record<KycTier, number> = {
 export const tierAtLeast = (actual: KycTier, required: KycTier): boolean =>
   TIER_ORDER[actual] >= TIER_ORDER[required];
 
+/** Tiers ordered low → high; index mirrors `TIER_ORDER`'s ordinal values. */
+const TIER_SEQUENCE: readonly KycTier[] = [
+  'unverified',
+  'tier_1',
+  'tier_2',
+  'tier_3',
+];
+
+/**
+ * The tier one rung below `tier`, or `null` when `tier` is already the floor
+ * (`unverified` — nothing sits below it).
+ *
+ * Backs the Sumsub RED auto-downgrade compliance policy (root CLAUDE.md's
+ * KYC-gating invariant, §3.3): a RED verdict at a given level means THAT
+ * level's verification failed, so the user drops to the rung below it —
+ * `tierBelow('tier_2')` → `'tier_1'`, `tierBelow('tier_3')` → `'tier_2'`.
+ */
+export const tierBelow = (tier: KycTier): KycTier | null => {
+  const index = TIER_ORDER[tier];
+  return index > 0 ? TIER_SEQUENCE[index - 1] : null;
+};
+
 /** Fail-closed minimum tier for a capability with no configured map entry. */
 const FAIL_CLOSED_MIN_TIER: KycTier = 'tier_2';
 

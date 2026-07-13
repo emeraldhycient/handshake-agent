@@ -62,6 +62,7 @@ function makeRepo(
     grantSumsubTier: jest.fn().mockResolvedValue({ granted: true }),
     markSumsubRejected: jest.fn().mockResolvedValue({ found: true }),
     markSumsubPendingReview: jest.fn().mockResolvedValue({ found: true }),
+    downgradeSumsubTier: jest.fn().mockResolvedValue({ found: true }),
     ...overrides,
   };
 }
@@ -197,6 +198,85 @@ describe('SumsubWebhookHandler', () => {
     await expect(
       handler.handle(
         makeEvent({ type: 'applicantCreated', externalUserId: 'no-such-user' }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('RED at the tier_2 level → calls downgradeSumsubTier(userId, tier_1, reason), never markSumsubRejected', async () => {
+    const repo = makeRepo();
+    const handler = new SumsubWebhookHandler(repo, makeConfig());
+
+    await handler.handle(
+      makeEvent({
+        type: 'applicantReviewed',
+        externalUserId: 'user-5',
+        levelName: 'id-and-liveness',
+        reviewResult: { reviewAnswer: 'RED', reviewRejectType: 'FINAL' },
+      }),
+    );
+
+    expect(repo.downgradeSumsubTier).toHaveBeenCalledWith(
+      'user-5',
+      'tier_1',
+      expect.stringContaining('FINAL'),
+    );
+    expect(repo.markSumsubRejected).not.toHaveBeenCalled();
+  });
+
+  it('RED at the tier_3 level → calls downgradeSumsubTier(userId, tier_2, reason)', async () => {
+    const repo = makeRepo();
+    const handler = new SumsubWebhookHandler(repo, makeConfig());
+
+    await handler.handle(
+      makeEvent({
+        type: 'applicantReviewed',
+        externalUserId: 'user-6',
+        levelName: 'full-kyc',
+        reviewResult: { reviewAnswer: 'RED', reviewRejectType: 'FINAL' },
+      }),
+    );
+
+    expect(repo.downgradeSumsubTier).toHaveBeenCalledWith(
+      'user-6',
+      'tier_2',
+      expect.any(String),
+    );
+    expect(repo.markSumsubRejected).not.toHaveBeenCalled();
+  });
+
+  it('RED with an unrecognized/absent level → falls back to markSumsubRejected, never downgradeSumsubTier', async () => {
+    const repo = makeRepo();
+    const handler = new SumsubWebhookHandler(repo, makeConfig());
+
+    await handler.handle(
+      makeEvent({
+        type: 'applicantReviewed',
+        externalUserId: 'user-7',
+        reviewResult: { reviewAnswer: 'RED', reviewRejectType: 'FINAL' },
+      }),
+    );
+
+    expect(repo.markSumsubRejected).toHaveBeenCalledWith(
+      'user-7',
+      expect.any(String),
+    );
+    expect(repo.downgradeSumsubTier).not.toHaveBeenCalled();
+  });
+
+  it('unknown externalUserId on a downgrade RED (repo reports not found) → does not throw', async () => {
+    const repo = makeRepo({
+      downgradeSumsubTier: jest.fn().mockResolvedValue({ found: false }),
+    });
+    const handler = new SumsubWebhookHandler(repo, makeConfig());
+
+    await expect(
+      handler.handle(
+        makeEvent({
+          type: 'applicantReviewed',
+          externalUserId: 'no-such-user',
+          levelName: 'id-and-liveness',
+          reviewResult: { reviewAnswer: 'RED' },
+        }),
       ),
     ).resolves.toBeUndefined();
   });

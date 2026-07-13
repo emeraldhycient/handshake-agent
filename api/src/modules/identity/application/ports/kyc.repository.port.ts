@@ -237,4 +237,31 @@ export interface IKycRepository {
    * `grantSumsubTier`). `found: false` when no User row exists.
    */
   markSumsubPendingReview(userId: string): Promise<MarkSumsubStatusResult>;
+
+  /**
+   * Sumsub RED review at a KNOWN level → auto-downgrade (the compliance
+   * policy: a RED at a given level means that level's verification failed,
+   * so the user drops to the rung below it — see `tierBelow` in
+   * `identity/domain/tier-order.ts`). Atomically, in ONE $transaction:
+   *   1. Always sets `User.kycStatus='rejected'` and upserts
+   *      `KycProfile.status='rejected'` + `rejectionReason=reason` — the
+   *      same unconditional rejection `markSumsubRejected` applies.
+   *   2. A GUARDED downgrade — `User.kycTier` is written to `targetTier`
+   *      (with `tierChangedAt=now`) ONLY when the row's CURRENT `kycTier` is
+   *      strictly ABOVE `targetTier` (a single conditional `updateMany`,
+   *      mirroring `grantSumsubTier`'s no-TOCTOU shape — no read-then-write
+   *      race with a concurrent redelivery). When it wrote, `KycProfile.tier`
+   *      is set to `targetTier` too.
+   *
+   * A user already AT or BELOW `targetTier` is left untouched: 0 rows match
+   * the guard, so `tierChangedAt` is NOT re-stamped (a replayed RED must
+   * never restart the tier-change cooling-off window, §3.3) and the tier is
+   * never RAISED. `found: false` when no User row exists for `userId` — same
+   * graceful no-op shape as `markSumsubRejected`/`grantSumsubTier`.
+   */
+  downgradeSumsubTier(
+    userId: string,
+    targetTier: KycTierValue,
+    reason: string,
+  ): Promise<MarkSumsubStatusResult>;
 }

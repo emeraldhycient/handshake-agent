@@ -12,8 +12,12 @@
  *   - verified + grantTier → IKycRepository.grantSumsubTier (atomic, idempotent,
  *     no-downgrade — a replayed/out-of-order GREEN never re-stamps
  *     tierChangedAt or downgrades an already-higher tier).
- *   - rejected → IKycRepository.markSumsubRejected (kycStatus only; tier
- *     untouched).
+ *   - rejected, no downgradeTo (unknown/unmapped level, fail-safe) →
+ *     IKycRepository.markSumsubRejected (kycStatus only; tier untouched).
+ *   - rejected, with downgradeTo (RED at a KNOWN level — the compliance
+ *     policy: a level's RED drops the user to the rung below it) →
+ *     IKycRepository.downgradeSumsubTier (atomic, idempotent, never raises a
+ *     tier — re-locks send/sell/swap at the lower tier's gate, §3.3).
  *   - pending_review (no reviewResult, OR GREEN with an unrecognized level —
  *     the mapper's fail-safe) → IKycRepository.markSumsubPendingReview
  *     (guarded: never un-verifies an already-verified user).
@@ -73,7 +77,11 @@ export class SumsubWebhookHandler implements WebhookHandler {
     }
 
     if (mapping.status === 'rejected') {
-      await this.applyRejection(mapping.userId, mapping.reason);
+      await this.applyRejection(
+        mapping.userId,
+        mapping.reason,
+        mapping.downgradeTo,
+      );
       return;
     }
 
@@ -99,14 +107,29 @@ export class SumsubWebhookHandler implements WebhookHandler {
     );
   }
 
+  /**
+   * A RED review either revokes verified STATUS only (`markSumsubRejected` —
+   * unknown/unmapped `levelName`, the mapper's fail-safe) or, when the mapper
+   * resolved a `downgradeTo`, also auto-downgrades the tier
+   * (`downgradeSumsubTier` — the compliance policy: a RED at a level drops
+   * the user to the rung below it, re-locking send/sell/swap at the lower
+   * tier's gate). Both repo calls share the same `{ found }` no-op shape for
+   * an unknown externalUserId.
+   */
   private async applyRejection(
     userId: string,
     reason: string | undefined,
+    downgradeTo: KycTierValue | undefined,
   ): Promise<void> {
-    const result = await this.kycRepo.markSumsubRejected(
-      userId,
-      reason ?? 'Sumsub review rejected',
-    );
+    const resolvedReason = reason ?? 'Sumsub review rejected';
+    const result = downgradeTo
+      ? await this.kycRepo.downgradeSumsubTier(
+          userId,
+          downgradeTo,
+          resolvedReason,
+        )
+      : await this.kycRepo.markSumsubRejected(userId, resolvedReason);
+
     if (!result.found) {
       this.logger.warn(
         { userId },

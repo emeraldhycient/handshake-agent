@@ -1,4 +1,4 @@
-import { meetsCapabilityMinTier, tierAtLeast } from './tier-order';
+import { meetsCapabilityMinTier, tierAtLeast, tierBelow } from './tier-order';
 
 describe('tierAtLeast', () => {
   it('orders tiers', () => {
@@ -49,5 +49,23 @@ describe('meetsCapabilityMinTier', () => {
   it('fails closed to tier_2 for a capability with no configured map entry', () => {
     expect(meetsCapabilityMinTier('tier_1', 'crypto.unknown', map)).toBe(false);
     expect(meetsCapabilityMinTier('tier_2', 'crypto.unknown', map)).toBe(true);
+  });
+});
+
+describe('tierBelow', () => {
+  it('returns the rung directly below tier_3', () => {
+    expect(tierBelow('tier_3')).toBe('tier_2');
+  });
+
+  it('returns the rung directly below tier_2', () => {
+    expect(tierBelow('tier_2')).toBe('tier_1');
+  });
+
+  it('returns the rung directly below tier_1 (the unverified floor)', () => {
+    expect(tierBelow('tier_1')).toBe('unverified');
+  });
+
+  it('returns null at the floor — nothing sits below unverified', () => {
+    expect(tierBelow('unverified')).toBeNull();
   });
 });

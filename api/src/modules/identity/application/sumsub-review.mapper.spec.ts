@@ -159,3 +159,77 @@ describe('mapSumsubReview', () => {
     expect(result.grantTier).toBeUndefined();
   });
 });
+
+describe('mapSumsubReview — RED auto-downgrade (compliance policy)', () => {
+  it('RED at the tier_2 level (doc+liveness) → downgradeTo tier_1', () => {
+    const result = mapSumsubReview(
+      payload({
+        levelName: 'id-and-liveness',
+        reviewResult: { reviewAnswer: 'RED', reviewRejectType: 'FINAL' },
+      }),
+      LEVEL_TO_TIER,
+    );
+
+    expect(result.status).toBe('rejected');
+    expect(result.downgradeTo).toBe('tier_1');
+  });
+
+  it('RED at the tier_3 level (proof-of-address) → downgradeTo tier_2', () => {
+    const result = mapSumsubReview(
+      payload({
+        levelName: 'full-kyc',
+        reviewResult: { reviewAnswer: 'RED', reviewRejectType: 'FINAL' },
+      }),
+      LEVEL_TO_TIER,
+    );
+
+    expect(result.status).toBe('rejected');
+    expect(result.downgradeTo).toBe('tier_2');
+  });
+
+  it('RED at an unrecognized level → NO downgradeTo (fail-safe), still rejected', () => {
+    const result = mapSumsubReview(
+      payload({
+        levelName: 'some-unregistered-level',
+        reviewResult: { reviewAnswer: 'RED', reviewRejectType: 'FINAL' },
+      }),
+      LEVEL_TO_TIER,
+    );
+
+    expect(result.status).toBe('rejected');
+    expect(result.downgradeTo).toBeUndefined();
+  });
+
+  it('RED with no levelName at all → NO downgradeTo', () => {
+    const result = mapSumsubReview(
+      payload({
+        reviewResult: { reviewAnswer: 'RED', reviewRejectType: 'FINAL' },
+      }),
+      LEVEL_TO_TIER,
+    );
+
+    expect(result.status).toBe('rejected');
+    expect(result.downgradeTo).toBeUndefined();
+  });
+
+  it('GREEN paths never carry downgradeTo', () => {
+    const result = mapSumsubReview(
+      payload({
+        levelName: 'id-and-liveness',
+        reviewResult: { reviewAnswer: 'GREEN' },
+      }),
+      LEVEL_TO_TIER,
+    );
+
+    expect(result.downgradeTo).toBeUndefined();
+  });
+
+  it('pending_review paths never carry downgradeTo', () => {
+    const result = mapSumsubReview(
+      payload({ type: 'applicantPending' }),
+      LEVEL_TO_TIER,
+    );
+
+    expect(result.downgradeTo).toBeUndefined();
+  });
+});

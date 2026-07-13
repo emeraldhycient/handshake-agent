@@ -341,6 +341,22 @@ describe('Sumsub webhook — e2e (AppModule, Testcontainers Postgres)', () => {
     };
   }
 
+  /** A RED verdict at the tier_2 level (SUMSUB_LEVEL_TIER2) — the compliance
+   * auto-downgrade policy drops a tier_2 (or higher) user to tier_1. */
+  function buildRedPayload(
+    userId: string,
+    extra: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      type: 'applicantReviewed',
+      applicantId: 'sumsub-app-e2e-red-1',
+      externalUserId: userId,
+      levelName: SUMSUB_LEVEL_TIER2,
+      reviewResult: { reviewAnswer: 'RED', reviewRejectType: 'FINAL' },
+      ...extra,
+    };
+  }
+
   async function postSignedWebhook(
     payload: Record<string, unknown>,
     secret: string = SUMSUB_WEBHOOK_SECRET,
@@ -436,6 +452,90 @@ describe('Sumsub webhook — e2e (AppModule, Testcontainers Postgres)', () => {
       });
       expect(userAfterRedelivery!.tierChangedAt!.getTime()).toBe(
         tierChangedAtAfterGrant,
+      );
+    },
+    120_000,
+  );
+
+  // ===========================================================================
+  // RED AUTO-DOWNGRADE — compliance policy (a RED at a level drops the user
+  // to the rung below it; §3.3 re-locks the gate for capabilities that
+  // required the revoked tier)
+  // ===========================================================================
+
+  it(
+    'a signed RED webhook at the tier_2 level downgrades tier_2 → tier_1 and ' +
+      're-locks crypto.send; a replayed RED is idempotent (no re-downgrade, ' +
+      'no tierChangedAt re-stamp)',
+    async () => {
+      const accessToken = await signUpAndLogin();
+      const userId = await upgradeToTier1(accessToken);
+
+      // ── Grant tier_2 via a signed GREEN webhook (same flow as the main test).
+      //    Distinct applicantId — KycProfile.sumsubApplicantId is @unique and
+      //    the main test's suite-wide GREEN grant already claimed the default. ─
+      const greenRes = await postSignedWebhook(
+        buildGreenPayload(userId, {
+          applicantId: 'sumsub-app-e2e-red-downgrade-green-1',
+        }),
+      );
+      expect(greenRes.status).toBe(200);
+      await drainWebhooks(app);
+
+      const afterGrant = await getMe(accessToken);
+      expect(afterGrant.kycTier).toBe('tier_2');
+      expect(afterGrant.kycStatus).toBe('verified');
+
+      // ── The real send gate passes at tier_2 (crypto.send requires tier_2) ────
+      expect(await assertSendGate(userId)).toBe('passed');
+
+      // ── A RED verdict AT THE TIER_2 LEVEL → auto-downgrade to tier_1 ─────────
+      const redRes = await postSignedWebhook(buildRedPayload(userId));
+      expect(redRes.status).toBe(200);
+      expect(redRes.body).toEqual({ status: 'ok' });
+
+      await drainWebhooks(app);
+
+      const afterRed = await getMe(accessToken);
+      expect(afterRed.kycTier).toBe('tier_1');
+      expect(afterRed.kycStatus).toBe('rejected');
+
+      // ── The real send gate (the money path a proposal endpoint would hit,
+      //    §3.1/§3.3 — CapabilityTierError maps to 403 at the HTTP layer) is
+      //    re-locked: it passed at tier_2, now blocks again at tier_1 ──────────
+      expect(await assertSendGate(userId)).toBe('blocked');
+
+      const profileAfterRed = await prisma.kycProfile.findUnique({
+        where: { userId },
+      });
+      expect(profileAfterRed!.tier).toBe('tier_1');
+      expect(profileAfterRed!.status).toBe('rejected');
+
+      const userAfterRed = await prisma.user.findUnique({
+        where: { id: userId },
+      });
+      expect(userAfterRed!.tierChangedAt).not.toBeNull();
+      const tierChangedAtAfterRed = userAfterRed!.tierChangedAt!.getTime();
+
+      // ── A replayed RED (identical verdict, distinct delivery) is idempotent:
+      //    still tier_1, tierChangedAt UNCHANGED — never re-downgrades below
+      //    tier_1 and never re-stamps the cooling-off window ─────────────────
+      const replayedRes = await postSignedWebhook(
+        buildRedPayload(userId, { redeliveryMarker: 'red-replay-1' }),
+      );
+      expect(replayedRes.status).toBe(200);
+
+      await drainWebhooks(app);
+
+      const afterReplay = await getMe(accessToken);
+      expect(afterReplay.kycTier).toBe('tier_1');
+      expect(afterReplay.kycStatus).toBe('rejected');
+
+      const userAfterReplay = await prisma.user.findUnique({
+        where: { id: userId },
+      });
+      expect(userAfterReplay!.tierChangedAt!.getTime()).toBe(
+        tierChangedAtAfterRed,
       );
     },
     120_000,

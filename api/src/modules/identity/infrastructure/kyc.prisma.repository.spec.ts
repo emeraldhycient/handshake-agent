@@ -601,6 +601,159 @@ describe('KycPrismaRepository — NIN/BVN encryption at rest (NFR-1)', () => {
     });
   });
 
+  describe('downgradeSumsubTier (RED auto-downgrade compliance policy)', () => {
+    interface DowngradeWrites {
+      userUpdateMany: jest.Mock<Promise<{ count: number }>, [unknown]>;
+      kycProfileUpsert: jest.Mock<Promise<void>, [unknown]>;
+    }
+
+    /**
+     * `downgradeSumsubTier` issues TWO `user.updateMany` calls in sequence
+     * (the unconditional rejection, then the guarded tier downgrade) against
+     * the SAME tx function — `mockResolvedValueOnce` chains their results in
+     * call order.
+     */
+    function makeDowngradePrisma(
+      rejectCount: number,
+      downgradeCount: number,
+    ): { prisma: PrismaService; writes: DowngradeWrites } {
+      const userUpdateMany = jest
+        .fn<Promise<{ count: number }>, [unknown]>()
+        .mockResolvedValueOnce({ count: rejectCount })
+        .mockResolvedValueOnce({ count: downgradeCount });
+      const kycProfileUpsert = jest
+        .fn<Promise<void>, [unknown]>()
+        .mockResolvedValue(undefined);
+      const tx = {
+        user: { updateMany: userUpdateMany },
+        kycProfile: { upsert: kycProfileUpsert },
+      };
+      const prisma = {
+        $transaction: jest.fn((cb: (t: typeof tx) => Promise<unknown>) =>
+          cb(tx),
+        ),
+      } as unknown as PrismaService;
+      return { prisma, writes: { userUpdateMany, kycProfileUpsert } };
+    }
+
+    it('tier_2-level RED (targetTier tier_1): rejects status, downgrades tier, stamps tierChangedAt, upserts profile tier+status+reason', async () => {
+      const { prisma, writes } = makeDowngradePrisma(1, 1);
+      const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+      const result = await repo.downgradeSumsubTier(
+        'user-1',
+        'tier_1',
+        'ID_MISMATCH',
+      );
+
+      expect(result).toEqual({ found: true });
+      expect(writes.userUpdateMany).toHaveBeenCalledTimes(2);
+
+      const rejectArgs = writes.userUpdateMany.mock.calls[0][0] as {
+        where: { id: string };
+        data: { kycStatus: string };
+      };
+      expect(rejectArgs.where).toEqual({ id: 'user-1' });
+      expect(rejectArgs.data.kycStatus).toBe('rejected');
+
+      const downgradeArgs = writes.userUpdateMany.mock.calls[1][0] as {
+        where: { id: string; kycTier: { in: string[] } };
+        data: { kycTier: string; tierChangedAt: Date };
+      };
+      // tiersAbove(tier_1) — a tier_2 or tier_3 user both drop to tier_1.
+      expect(downgradeArgs.where).toEqual({
+        id: 'user-1',
+        kycTier: { in: ['tier_2', 'tier_3'] },
+      });
+      expect(downgradeArgs.data.kycTier).toBe('tier_1');
+      expect(downgradeArgs.data.tierChangedAt).toBeInstanceOf(Date);
+
+      const profileArgs = writes.kycProfileUpsert.mock.calls[0][0] as {
+        update: Record<string, unknown>;
+      };
+      expect(profileArgs.update.status).toBe('rejected');
+      expect(profileArgs.update.rejectionReason).toBe('ID_MISMATCH');
+      expect(profileArgs.update.tier).toBe('tier_1');
+    });
+
+    it('tier_3-level RED (targetTier tier_2): tiersAbove(tier_2) = [tier_3] only', async () => {
+      const { prisma, writes } = makeDowngradePrisma(1, 1);
+      const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+      await repo.downgradeSumsubTier('user-1', 'tier_2', 'LIVENESS_FAILED');
+
+      const downgradeArgs = writes.userUpdateMany.mock.calls[1][0] as {
+        where: { kycTier: { in: string[] } };
+        data: { kycTier: string };
+      };
+      expect(downgradeArgs.where.kycTier).toEqual({ in: ['tier_3'] });
+      expect(downgradeArgs.data.kycTier).toBe('tier_2');
+    });
+
+    it('a tier_3 user hit by a tier_2-level RED (targetTier tier_1) drops all the way to tier_1', async () => {
+      const { prisma, writes } = makeDowngradePrisma(1, 1);
+      const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+      await repo.downgradeSumsubTier('user-1', 'tier_1', 'DOC_MISMATCH');
+
+      const downgradeArgs = writes.userUpdateMany.mock.calls[1][0] as {
+        where: { kycTier: { in: string[] } };
+        data: { kycTier: string };
+      };
+      expect(downgradeArgs.where.kycTier).toEqual({ in: ['tier_2', 'tier_3'] });
+      expect(downgradeArgs.data.kycTier).toBe('tier_1');
+    });
+
+    it('idempotent no-op: already at/below target tier → guarded updateMany matches 0 rows, tier + tierChangedAt UNCHANGED, kycStatus still set to rejected', async () => {
+      const { prisma, writes } = makeDowngradePrisma(1, 0);
+      const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+      const result = await repo.downgradeSumsubTier(
+        'user-1',
+        'tier_1',
+        'ID_MISMATCH',
+      );
+
+      expect(result).toEqual({ found: true });
+      expect(writes.userUpdateMany).toHaveBeenCalledTimes(2);
+
+      const profileArgs = writes.kycProfileUpsert.mock.calls[0][0] as {
+        update: Record<string, unknown>;
+      };
+      expect(profileArgs.update.status).toBe('rejected');
+      expect(profileArgs.update.rejectionReason).toBe('ID_MISMATCH');
+      expect(profileArgs.update).not.toHaveProperty('tier');
+    });
+
+    it('never RAISES a tier: a tier_1 user hit by a (hypothetical) tier_3-level RED (targetTier tier_2) is left untouched', async () => {
+      const { prisma, writes } = makeDowngradePrisma(1, 0);
+      const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+      await repo.downgradeSumsubTier('user-1', 'tier_2', 'reason');
+
+      const downgradeArgs = writes.userUpdateMany.mock.calls[1][0] as {
+        where: { kycTier: { in: string[] } };
+      };
+      // tiersAbove(tier_2) = [tier_3] — a tier_1 user never matches.
+      expect(downgradeArgs.where.kycTier).toEqual({ in: ['tier_3'] });
+    });
+
+    it('unknown user (no matching User row) → found:false, no profile write, no downgrade attempt', async () => {
+      const { prisma, writes } = makeDowngradePrisma(0, 0);
+      const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+      const result = await repo.downgradeSumsubTier(
+        'no-such-user',
+        'tier_1',
+        'reason',
+      );
+
+      expect(result).toEqual({ found: false });
+      expect(writes.userUpdateMany).toHaveBeenCalledTimes(1);
+      expect(writes.kycProfileUpsert).not.toHaveBeenCalled();
+    });
+  });
+
   describe('decryptIdentifier (read path)', () => {
     it('decrypts what completeVerificationAtomic wrote (round trip on read)', async () => {
       const captured = freshCaptured();

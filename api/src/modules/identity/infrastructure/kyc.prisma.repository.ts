@@ -31,6 +31,7 @@ import {
   FieldEncryptionKeyError,
 } from '../../../core/crypto/field-encryption';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import type { KycTierValue } from '../application/ports/kyc-provider.port';
 import type {
   CompleteVerificationAtomicInput,
   CompleteVerificationAtomicResult,
@@ -56,6 +57,14 @@ const KYC_TIER_LADDER: KycTier[] = [
 
 function tiersBelow(target: KycTier): KycTier[] {
   return KYC_TIER_LADDER.slice(0, KYC_TIER_LADDER.indexOf(target));
+}
+
+/** The complement of `tiersBelow` — used by `downgradeSumsubTier`'s guarded
+ * downgrade (WHERE kycTier IN tiersAbove(target)): a user strictly ABOVE the
+ * RED-downgrade target actually gets downgraded; a user already at/below it
+ * is left untouched (idempotent, never raises a tier). */
+function tiersAbove(target: KycTier): KycTier[] {
+  return KYC_TIER_LADDER.slice(KYC_TIER_LADDER.indexOf(target) + 1);
 }
 
 @Injectable()
@@ -444,6 +453,58 @@ export class KycPrismaRepository implements IKycRepository {
         where: { userId },
         create: { userId, status: KycStatus.pending_review },
         update: { status: KycStatus.pending_review },
+      });
+
+      return { found: true };
+    });
+  }
+
+  /**
+   * Sumsub RED review at a KNOWN level → auto-downgrade (task R-red-downgrade).
+   * See the port doc for the full atomic/idempotent/no-raise contract. Two
+   * conditional writes in ONE $transaction, mirroring `grantSumsubTier`'s
+   * no-TOCTOU shape:
+   *   1. Unconditional (for an existing user): `User.kycStatus='rejected'`.
+   *   2. GUARDED: `User.kycTier` → `targetTier` (+ `tierChangedAt=now`) only
+   *      when the row's CURRENT `kycTier` is strictly ABOVE `targetTier`
+   *      (`WHERE kycTier IN tiersAbove(targetTier)`) — a single conditional
+   *      `updateMany`, not a read-then-write.
+   *
+   * The `KycProfile` upsert always sets `status`/`rejectionReason`, and
+   * additionally sets `tier` only when step 2 actually wrote a row — so a
+   * no-op downgrade never touches the profile's tier either.
+   */
+  async downgradeSumsubTier(
+    userId: string,
+    targetTier: KycTierValue,
+    reason: string,
+  ): Promise<MarkSumsubStatusResult> {
+    const target: KycTier = targetTier;
+    const now = new Date();
+
+    return this.prisma.$transaction(async (tx) => {
+      const rejected = await tx.user.updateMany({
+        where: { id: userId },
+        data: { kycStatus: KycStatus.rejected },
+      });
+
+      if (rejected.count === 0) {
+        return { found: false };
+      }
+
+      const downgraded = await tx.user.updateMany({
+        where: { id: userId, kycTier: { in: tiersAbove(target) } },
+        data: { kycTier: target, tierChangedAt: now },
+      });
+
+      await tx.kycProfile.upsert({
+        where: { userId },
+        create: { userId, status: KycStatus.rejected, rejectionReason: reason },
+        update: {
+          status: KycStatus.rejected,
+          rejectionReason: reason,
+          ...(downgraded.count > 0 ? { tier: target } : {}),
+        },
       });
 
       return { found: true };
