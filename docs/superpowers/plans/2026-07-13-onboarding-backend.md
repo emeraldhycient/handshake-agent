@@ -256,23 +256,26 @@ Keep the numeric limit resolution (`getTierLimits(fiat, user.kycTier)`) exactly 
 - [ ] **Step 4: Run** → PASS.
 - [ ] **Step 5: Commit** `feat(auth): email verification grants tier_1`.
 
-### Task 2.2: `POST /auth/signup` (email-only, sends OTP) + `POST /auth/signup/verify`
+### Task 2.2: `POST /auth/signup/request` (email → OTP) + `POST /auth/signup/verify` (OTP → session + tier_1)
+
+**Approach — ADDITIVE, non-breaking.** ADD two new OTP endpoints mirroring the login flow (`/auth/login/request` + `/auth/login/verify`). LEAVE the legacy link-based `POST /auth/signup` + `POST /auth/verify-email` UNCHANGED — 12 e2e setups depend on them. The FE wizard uses the new OTP endpoints; the legacy link flow is deprecated but kept for backward-compat/existing tests (removed in a later cleanup, out of scope here).
 
 **Files:**
-- Modify: `api/src/modules/auth/presentation/auth.controller.ts` (+ request DTOs via `createZodDto`)
-- Modify: `api/src/modules/auth/application/auth.service.ts` (`signup` sends OTP not link; add `signupVerify` reusing the login-OTP verify + session issuance + tier_1 grant)
-- Modify: `api/src/modules/auth/infrastructure/auth-user.prisma.repository.ts` (`createSignup` drops the pending-WhatsApp-phone write)
-- Test: `auth.service.spec.ts`, `api/test/auth.e2e-spec.ts` (extend)
+- Modify: `api/src/modules/auth/presentation/auth.controller.ts` (add the two routes + DTOs via `createZodDto`)
+- Modify: `api/src/modules/auth/application/auth.service.ts` (add `signupRequest` + `signupVerify`; reuse the existing login-OTP mint/send + session issuance; do NOT change existing `signup`/`verifyEmail`)
+- Test: `auth.service.spec.ts` (unit), `api/test/auth.e2e-spec.ts` (ADD the new-flow cases; do NOT alter existing link-flow cases)
 
 **Interfaces:**
-- Consumes: existing OTP infra (`auth.otp` config, OTP challenge store), session issuance (`SessionService`), device binding.
-- Produces: `POST /auth/signup { email } → { status: 'otp_sent', devOtp? }`; `POST /auth/signup/verify { email, otp, deviceFingerprint } → LoginVerifyResponse` (access token + `ha_refresh` cookie + user with `kycTier='tier_1'`).
+- Consumes: `createSignup({ email })` (create-or-resume provisional user — reuse); the login OTP challenge infra (`auth.otp` config, `IAuthChallengeRepository`); `SessionService` + device binding; `markEmailVerified` (Task 2.1 → tier_1 + active + `ha_refresh` session).
+- Produces:
+  - `POST /auth/signup/request { email }` (reuse `LoginRequestSchema`) → `LoginRequestResponse` `{ status: 'otp_sent', devOtp? }`. Creates-or-resumes the provisional user, mints+sends an OTP (a signup-context OTP challenge — reuse the login OTP mechanics). An already-**verified** email returns the same `otp_sent` shape but sends a "log in instead" email and does NOT mint a usable signup OTP (no account-enumeration oracle).
+  - `POST /auth/signup/verify { email, otp, deviceFingerprint }` (`SignupVerifyRequestSchema`) → `SignupVerifyResponse` (= `LoginVerifyResponse`): validates the OTP, calls `markEmailVerified` (→ tier_1), binds the device, issues the session (access token + `Set-Cookie: ha_refresh`), returns the user (`kycTier='tier_1'`, `emailVerified=true`).
 
-- [ ] **Step 1: Write failing e2e** — signup(email) → 200 `{status:'otp_sent', devOtp}` (dev echo); signup/verify(otp) → 200 with `user.kycTier==='tier_1'`, `emailVerified===true`, and a `Set-Cookie: ha_refresh`.
-- [ ] **Step 2: Run** `pnpm --filter @handshake-agent/api test:e2e auth` → FAIL.
-- [ ] **Step 3: Implement** — `signup`: create-or-resume provisional user (email only, no phone), mint+send OTP (reuse the login OTP path), return `{status:'otp_sent', devOtp?}`. `signupVerify`: validate OTP, call `markEmailVerified` (Task 2.1 → tier_1), bind device, issue session, return `LoginVerifyResponse`. Handle already-verified email (return `otp_sent` shape, send a "log in instead" email — no enumeration oracle).
-- [ ] **Step 4: Run** → PASS. Confirm existing login e2e still green.
-- [ ] **Step 5: Commit** `feat(auth): email-only OTP signup + signup/verify → session + tier_1`.
+- [ ] **Step 1: Write failing e2e** in `auth.e2e-spec.ts` — `signup/request(email)` → 200 `{status:'otp_sent', devOtp}`; `signup/verify(email, devOtp, deviceFingerprint)` → 200 with `user.kycTier==='tier_1'`, `emailVerified===true`, `Set-Cookie: ha_refresh`. Add an assertion that an existing LEGACY link case in the file still passes.
+- [ ] **Step 2: Run** `pnpm --filter @handshake-agent/api test:e2e -- auth` → FAIL (new routes 404).
+- [ ] **Step 3: Implement** the two service methods + controller routes. Reuse login's OTP internals (factor a shared private helper if it removes duplication, but do NOT change login's observable behavior). Do not modify `createSignup` beyond what already exists (phone is already optional).
+- [ ] **Step 4: Run** the new + existing auth e2e → all PASS (no legacy breakage). Full unit suite + typecheck before commit.
+- [ ] **Step 5: Commit** `feat(auth): OTP signup (/auth/signup/request + /auth/signup/verify) → session + tier_1`.
 
 ### Task 2.3: `POST /profile/name` (set name on KycProfile)
 
