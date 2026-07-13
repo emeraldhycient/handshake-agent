@@ -465,8 +465,9 @@ describe('Sumsub webhook — e2e (AppModule, Testcontainers Postgres)', () => {
 
   it(
     'a signed RED webhook at the tier_2 level downgrades tier_2 → tier_1 and ' +
-      're-locks crypto.send; a replayed RED is idempotent (no re-downgrade, ' +
-      'no tierChangedAt re-stamp)',
+      're-locks crypto.send AND raises a single kyc_escalation compliance ' +
+      'flag; a replayed RED is idempotent (no re-downgrade, no tierChangedAt ' +
+      're-stamp, no duplicate flag)',
     async () => {
       const accessToken = await signUpAndLogin();
       const userId = await upgradeToTier1(accessToken);
@@ -517,6 +518,20 @@ describe('Sumsub webhook — e2e (AppModule, Testcontainers Postgres)', () => {
       expect(userAfterRed!.tierChangedAt).not.toBeNull();
       const tierChangedAtAfterRed = userAfterRed!.tierChangedAt!.getTime();
 
+      // ── Hybrid policy's human-review half: exactly one kyc_escalation
+      //    ComplianceEvent is flagged for the operator queue, carrying the
+      //    downgrade + review context ────────────────────────────────────────
+      const flagsAfterRed = await prisma.complianceEvent.findMany({
+        where: { userId, eventType: 'kyc_escalation' },
+      });
+      expect(flagsAfterRed).toHaveLength(1);
+      expect(flagsAfterRed[0].status).toBe('flagged');
+      expect(flagsAfterRed[0].severity).toBe('high');
+      expect(flagsAfterRed[0].screeningProvider).toBe('sumsub');
+      expect(
+        (flagsAfterRed[0].details as { downgradedTo?: string }).downgradedTo,
+      ).toBe('tier_1');
+
       // ── A replayed RED (identical verdict, distinct delivery) is idempotent:
       //    still tier_1, tierChangedAt UNCHANGED — never re-downgrades below
       //    tier_1 and never re-stamps the cooling-off window ─────────────────
@@ -537,6 +552,14 @@ describe('Sumsub webhook — e2e (AppModule, Testcontainers Postgres)', () => {
       expect(userAfterReplay!.tierChangedAt!.getTime()).toBe(
         tierChangedAtAfterRed,
       );
+
+      // ── Idempotent flag: the replayed RED does NOT pile a second
+      //    kyc_escalation case onto the reviewer's queue (the first is still
+      //    open) — findLatestOpenByUserAndType guards the create ─────────────
+      const flagsAfterReplay = await prisma.complianceEvent.findMany({
+        where: { userId, eventType: 'kyc_escalation' },
+      });
+      expect(flagsAfterReplay).toHaveLength(1);
     },
     120_000,
   );

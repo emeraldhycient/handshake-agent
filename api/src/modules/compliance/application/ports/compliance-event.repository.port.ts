@@ -116,6 +116,24 @@ export interface IComplianceEventRepository {
   findById(id: string): Promise<ComplianceEventRecord | null>;
 
   /**
+   * Returns the most recent OPEN (status `flagged` or `under_review`)
+   * compliance event of `eventType` for `userId`, or null when none is open.
+   *
+   * An idempotency/dedup guard for event producers that must raise at most one
+   * open flag per user per concern — e.g. the Sumsub RED handler's
+   * `kyc_escalation` flag. It makes flag-raising safe under the webhook queue's
+   * at-least-once retry (a re-run of the same event finds the flag it already
+   * created and skips) and avoids piling duplicate open cases on the reviewer
+   * when a fresh RED arrives while an earlier one is still undisposed. Once the
+   * existing flag is disposed (approved/blocked/dismissed) it is no longer
+   * "open", so a genuinely new adverse signal raises a fresh flag.
+   */
+  findLatestOpenByUserAndType(
+    userId: string,
+    eventType: ComplianceEventTypeValue,
+  ): Promise<ComplianceEventRecord | null>;
+
+  /**
    * Records an admin disposition: sets status, dispositionAdminId,
    * dispositionComment, dispositionAt. The full before/after trail lives in
    * the AuditLog (this only writes the operational state).

@@ -7,7 +7,9 @@
  *   SumsubWebhookModule
  *     → IdentityModule   (exports KYC_REPOSITORY)
  *     → WebhooksModule   (exports WebhookIngestionService)
- *   Neither imports SumsubWebhookModule back → no cycle. Mirrors
+ *     → ComplianceModule (exports COMPLIANCE_EVENT_REPOSITORY — the handler
+ *                         raises a kyc_escalation flag on a post-approval RED)
+ *   None imports SumsubWebhookModule back → no cycle. Mirrors
  *   BlockradarWebhookModule (wallets) / FlutterwaveWebhookModule (treasury).
  *
  * ConfigModule is global (AppModule), so ConfigService<Env, true> resolves
@@ -17,12 +19,13 @@
 import { Module } from '@nestjs/common';
 
 import { IdentityModule } from './identity.module';
+import { ComplianceModule } from '../compliance/compliance.module';
 import { WebhooksModule } from '../webhooks/webhooks.module';
 import { SumsubWebhookController } from './presentation/sumsub-webhook.controller';
 import { SumsubWebhookHandler } from './application/sumsub-webhook.handler';
 
 @Module({
-  imports: [IdentityModule, WebhooksModule],
+  imports: [IdentityModule, ComplianceModule, WebhooksModule],
   controllers: [SumsubWebhookController],
   providers: [SumsubWebhookHandler],
   exports: [SumsubWebhookHandler],
