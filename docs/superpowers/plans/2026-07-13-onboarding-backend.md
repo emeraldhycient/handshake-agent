@@ -150,13 +150,14 @@ export const SumsubWebhookPayloadSchema = z.object({
 ### Task 1.2: Capability→min-tier config + tier-order helper (domain)
 
 **Files:**
-- Modify: `api/src/core/config/configuration.ts` (add a `gating` section)
+- Modify: `api/src/core/config/configuration.ts` (add a `gating` section + its `AppConfig` interface field; update any AppConfig test fixtures that construct the whole config)
 - Create: `api/src/modules/identity/domain/tier-order.ts` (pure helper)
-- Modify: `packages/contracts/src/admin/settings.ts` (register `gating.capabilityMinTier.<cap>` keys so they're admin-tunable — follow the existing `limits.<CODE>.<tier>.<cap>` registry pattern)
 - Test: `api/src/modules/identity/domain/tier-order.spec.ts`
 
 **Interfaces:**
-- Produces: `TIER_ORDER: Record<KycTierValue, number>`; `tierAtLeast(actual, required): boolean`; `config.gating.capabilityMinTier: Record<string, KycTierValue>`.
+- Produces: `TIER_ORDER: Record<KycTier, number>`; `tierAtLeast(actual, required): boolean`; `config.gating.capabilityMinTier: Record<string, KycTier>`.
+- **Layering:** `tier-order.ts` is in `domain` — type it against the tier union imported from `@handshake-agent/contracts` (`KycTier` = `z.infer<typeof KycTierSchema>`, from `admin/user-mgmt.dto.ts`). Do NOT import `KycTierValue` from the application port (`kyc-provider.port.ts`) — a `domain → application` import breaks `dependency-cruiser`. Keep `pnpm depcruise` clean.
+- **Admin-tunability:** the `gating.capabilityMinTier` map is a **code-default config value** for now; the gate (Task 1.3) reads it through `EffectiveConfigService`, which serves the code default when there's no DB override. Registering it in the `AppSetting` settings registry (to expose it in the admin console) is a deferred follow-up — NOT part of this task.
 
 - [ ] **Step 1: Write failing test** — `tier-order.spec.ts`:
 
@@ -174,25 +175,25 @@ it("orders tiers", () => {
 - [ ] **Step 3: Implement** `tier-order.ts`:
 
 ```ts
-import type { KycTierValue } from "...";
-export const TIER_ORDER: Record<KycTierValue, number> = { unverified: 0, tier_1: 1, tier_2: 2, tier_3: 3 };
-export const tierAtLeast = (actual: KycTierValue, required: KycTierValue): boolean =>
+import type { KycTier } from "@handshake-agent/contracts"; // z.infer<typeof KycTierSchema>
+export const TIER_ORDER: Record<KycTier, number> = { unverified: 0, tier_1: 1, tier_2: 2, tier_3: 3 };
+export const tierAtLeast = (actual: KycTier, required: KycTier): boolean =>
   TIER_ORDER[actual] >= TIER_ORDER[required];
 ```
-Add to `configuration.ts` (inside `buildConfig()`), plus the `AppConfig`/interface:
+(If `KycTier` is not already exported from the contracts barrel, export it from `admin/user-mgmt.dto.ts` as `export type KycTier = z.infer<typeof KycTierSchema>` and add it to the barrel.) Add the `gating` section to `configuration.ts` (inside `buildConfig()`), plus its `AppConfig` interface field:
 
 ```ts
 gating: {
-  // Minimum KYC tier required to use each transactable capability. Admin-tunable (§7).
+  // Minimum KYC tier required to use each transactable capability (root §7).
+  // Code-default now; admin-override via AppSetting is a deferred follow-up.
   capabilityMinTier: {
     'crypto.buy': 'tier_1', 'crypto.receive': 'tier_1',
     'crypto.sell': 'tier_2', 'crypto.send': 'tier_2', 'crypto.swap': 'tier_2',
-  } as Record<string, KycTierValue>,
+  } as Record<string, KycTier>,
 },
 ```
-Register the keys in `settings.ts`.
 
-- [ ] **Step 4: Run** → PASS. Confirm boot `validateConfig` still passes (add the `gating` field to any AppConfig fixtures).
+- [ ] **Step 4: Run** → PASS. Confirm boot `validateConfig` still passes; add the `gating` field to any AppConfig test fixtures that build the whole config so `typecheck` + config tests stay green.
 - [ ] **Step 5: Commit** `feat(config): capability→min-tier gating map + tier-order helper`.
 
 ### Task 1.3: Enforce capability min-tier in `KycGateService`
