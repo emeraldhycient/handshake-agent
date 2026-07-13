@@ -31,7 +31,7 @@ type UserUpdateArg = {
   data: { emailVerifiedAt: Date };
 };
 type UserUpdateManyArg = {
-  where: { id: string; kycTier: string };
+  where: { id: string; kycTier: string; status: string };
   data: { kycTier: string; status: string; tierChangedAt: Date };
 };
 
@@ -79,19 +79,21 @@ describe('AuthUserPrismaRepository.markEmailVerified', () => {
     });
   });
 
-  it('grants tier_1 + active status via a conditional write guarded to unverified users only', async () => {
+  it('grants tier_1 + active status via a conditional write guarded to unverified, PROVISIONAL users only', async () => {
     const captured = freshCaptured();
     const repo = new AuthUserPrismaRepository(makePrisma(captured));
 
     await repo.markEmailVerified('u1', now);
 
-    // The guard is the `where: { kycTier: 'unverified' }` clause itself — this
-    // is what Prisma/Postgres evaluates atomically server-side, so a user
-    // already at tier_1/2/3 never matches and is left untouched (no downgrade,
-    // no tierChangedAt re-stamp — which would wrongly restart the tier-change
-    // cooling-off window, §3.3).
+    // The guard is the `where` clause itself — Prisma/Postgres evaluates it
+    // atomically server-side, so a user already at tier_1/2/3 never matches and
+    // is left untouched (no downgrade, no tierChangedAt re-stamp, §3.3). The
+    // `status: 'provisional'` term is a security guard: it scopes the
+    // `status: 'active'` promotion to a genuine fresh signup so completing email
+    // verification can NEVER reactivate an operator-suspended/deactivated
+    // (still-unverified) account as a side effect.
     expect(captured.userUpdateMany).toHaveBeenCalledWith({
-      where: { id: 'u1', kycTier: 'unverified' },
+      where: { id: 'u1', kycTier: 'unverified', status: 'provisional' },
       data: { kycTier: 'tier_1', status: 'active', tierChangedAt: now },
     });
   });

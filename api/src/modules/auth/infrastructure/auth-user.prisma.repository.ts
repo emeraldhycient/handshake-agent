@@ -116,15 +116,25 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
       // Task 2.1 (onboarding redesign): an email-verified account may transact
       // tier_1 capabilities (buy/receive) immediately — KycGateService already
       // admits tier_1 regardless of kycStatus (§3.3). Guarded promotion, NOT an
-      // unconditional write: the `where: { kycTier: unverified }` clause is
-      // evaluated atomically by Postgres, so this only ever fires for a fresh
-      // `unverified` user. A user already at tier_1/2/3 re-hitting verify (e.g.
-      // a stale/resent link) matches zero rows here — no downgrade, and no
-      // tierChangedAt re-stamp, which would wrongly restart the tier-change
-      // cooling-off window. Same guarded-updateMany shape as the pinnedDeviceId
-      // guard in bindDevice below — no read-then-write race.
+      // unconditional write: the `where` clause is evaluated atomically by
+      // Postgres, so this only ever fires for a fresh, PROVISIONAL, `unverified`
+      // user. A user already at tier_1/2/3 re-hitting verify (e.g. a stale/
+      // resent link) matches zero rows here — no downgrade, and no tierChangedAt
+      // re-stamp, which would wrongly restart the tier-change cooling-off window.
+      //
+      // `status: provisional` in the guard is a security control (not just no-
+      // downgrade): fresh signups are created `provisional` (see createSignup),
+      // so scoping the `status: active` promotion to `provisional` means an
+      // operator-suspended/deactivated account that is still `unverified` can
+      // NEVER be silently reactivated as a side effect of completing email
+      // verification — the promotion simply matches zero rows and the suspension
+      // stands. Same guarded-updateMany shape as the pinnedDeviceId guard below.
       await tx.user.updateMany({
-        where: { id: userId, kycTier: KycTier.unverified },
+        where: {
+          id: userId,
+          kycTier: KycTier.unverified,
+          status: UserStatus.provisional,
+        },
         data: {
           kycTier: KycTier.tier_1,
           status: UserStatus.active,
