@@ -29,7 +29,7 @@
 - Test: co-located `.test.ts`
 
 **Interfaces:**
-- Produces: `useSignup()` → posts `SignupRequestSchema.parse({email})` to `/auth/signup`, returns `{status, devOtp?}`; `useSignupVerify()` → posts `SignupVerifyRequestSchema` to `/auth/signup/verify`, on success calls `setSession(accessToken, user)` (same as `useLoginVerify`).
+- Produces: `useSignup()` → posts `SignupRequestSchema.parse({email})` to **`/auth/signup/request`** (NOT `/auth/signup` — the backend added additive OTP endpoints; the legacy link `/auth/signup` still exists but is deprecated), returns `LoginRequestResponse` `{status:'otp_sent', devOtp?}`; `useSignupVerify()` → posts `SignupVerifyRequestSchema` to **`/auth/signup/verify`**, returns `LoginVerifyResponse`, on success calls `setSession(accessToken, user)` (same as `useLoginVerify`). Device fingerprint from `lib/device.ts`.
 
 - [ ] **Step 1: Write failing tests** — mock the Axios instance; assert `submitSignup` parses+posts email-only; `submitSignupVerify` posts otp+deviceFingerprint and stores the session.
 - [ ] **Step 2: Run** `pnpm --filter @handshake-agent/web test auth` → FAIL.
