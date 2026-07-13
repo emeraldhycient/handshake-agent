@@ -18,7 +18,7 @@
  *   12. DB asserts: auditLog rows incl. a session_create action
  *   +   re-bootstrap → 403 (admins now exist)
  *
- * Bootstrap mirrors kyc-submit.e2e-spec.ts:
+ * Bootstrap mirrors onboarding-vertical.e2e-spec.ts:
  *   - Testcontainers Postgres + prisma migrate deploy
  *   - env vars (incl. ADMIN_*) set BEFORE the AppModule dynamic import
  *   - the four external-edge fakes overridden via .overrideProvider()
