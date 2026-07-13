@@ -69,6 +69,48 @@ describe('AuthUserPrismaRepository (integration, Testcontainers Postgres)', () =
     ).not.toBeNull();
   });
 
+  it('markEmailVerified grants kycTier=tier_1 + status=active + tierChangedAt on a fresh unverified user (Task 2.1)', async () => {
+    const { userId } = await repo.createSignup({
+      email: 'fresh-verify@test.com',
+      phone: '+2348012222233',
+    });
+    const before = await prisma.user.findUnique({ where: { id: userId } });
+    expect(before?.kycTier).toBe('unverified');
+    expect(before?.status).toBe('provisional');
+    expect(before?.tierChangedAt).toBeNull();
+
+    const now = new Date();
+    await repo.markEmailVerified(userId, now);
+
+    const after = await prisma.user.findUnique({ where: { id: userId } });
+    expect(after?.kycTier).toBe('tier_1');
+    expect(after?.status).toBe('active');
+    expect(after?.tierChangedAt?.getTime()).toBe(now.getTime());
+    expect(after?.emailVerifiedAt?.getTime()).toBe(now.getTime());
+  });
+
+  it('markEmailVerified does NOT downgrade or re-stamp tierChangedAt for a user already at tier_2 (guarded, no cooling-off restart)', async () => {
+    const { userId } = await repo.createSignup({
+      email: 're-verify@test.com',
+      phone: '+2348012222244',
+    });
+    const originalTierChangedAt = new Date(Date.now() - 60_000);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { kycTier: 'tier_2', tierChangedAt: originalTierChangedAt },
+    });
+
+    // Simulate the user re-hitting a (still-valid) verification link.
+    await repo.markEmailVerified(userId, new Date());
+
+    const after = await prisma.user.findUnique({ where: { id: userId } });
+    expect(after?.kycTier).toBe('tier_2'); // unchanged — no downgrade
+    expect(after?.tierChangedAt?.getTime()).toBe(
+      originalTierChangedAt.getTime(),
+    ); // NOT re-stamped — cooling-off window must not restart
+    expect(after?.emailVerifiedAt).not.toBeNull(); // still (re)stamped, that's fine
+  });
+
   it('bindDevice upserts by fingerprint and pins on first bind', async () => {
     const { userId } = await repo.createSignup({
       email: 'd@test.com',

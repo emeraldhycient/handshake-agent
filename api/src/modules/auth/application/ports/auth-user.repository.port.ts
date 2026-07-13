@@ -36,6 +36,14 @@ export interface IAuthUserRepository {
 
   findByEmail(email: string): Promise<AuthUserRecord | null>;
 
+  /**
+   * Stamps `emailVerifiedAt` and, guarded, grants `kycTier=tier_1` +
+   * `status=active` + `tierChangedAt=now` (Task 2.1: an email-verified
+   * account may transact tier_1 capabilities — buy/receive — immediately,
+   * §3.3). The tier grant only ever promotes a fresh `unverified` user: a
+   * user already at tier_1/2/3 re-hitting verify is left unchanged (no
+   * downgrade, no cooling-off re-stamp).
+   */
   markEmailVerified(userId: string, now: Date): Promise<void>;
 
   /**

@@ -108,6 +108,9 @@ export class AuthService {
     if (challenge === null) throw new InvalidVerificationTokenError();
 
     await this.challenges.consume(challenge.id, now);
+    // Also grants kycTier=tier_1 + status=active, guarded to unverified users
+    // only (Task 2.1) — see the port/repo for the promotion + no-downgrade
+    // details.
     await this.users.markEmailVerified(challenge.userId, now);
     return { verified: true };
   }
