@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 
 import type {
+  CreateVerificationSessionInput,
+  CreateVerificationSessionResult,
   IKycProvider,
   KycVerifyInput,
   KycVerifyResult,
@@ -46,6 +48,20 @@ export class MockKycProvider implements IKycProvider {
       tier: 'unverified',
       reference,
       reason: 'missing required identity fields',
+    });
+  }
+
+  /**
+   * Deterministic fake Sumsub WebSDK access token (task 3.3). No network call,
+   * no tier is granted — the real tier upgrade only happens once a later task
+   * wires the `applicantReviewed` webhook.
+   */
+  createVerificationSession(
+    input: CreateVerificationSessionInput,
+  ): Promise<CreateVerificationSessionResult> {
+    return Promise.resolve({
+      token: `mock-${input.userId}-${input.level}`,
+      applicantId: `mock-app-${input.userId}`,
     });
   }
 }

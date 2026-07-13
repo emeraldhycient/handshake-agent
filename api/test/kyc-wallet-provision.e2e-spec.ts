@@ -184,6 +184,11 @@ describe('WN-3: eager wallet provisioning on KYC completion (Testcontainers Post
         tier: 'tier_1' as const,
         reference: 'mock-ref-wn3',
       }),
+      // Not exercised by this legacy tier_1 flow — stubbed only to satisfy
+      // the IKycProvider shape (task 3.3).
+      createVerificationSession: () => {
+        throw new Error('not used in this e2e spec');
+      },
     };
     const pinServiceStub = {
       // eslint-disable-next-line @typescript-eslint/require-await

@@ -1,10 +1,12 @@
+import type { KycTierLevel } from '@handshake-agent/contracts';
+
 /**
  * DI token and port contract for the KYC verification provider.
  *
- * Infrastructure provides the concrete adapter (mock for now; a real
- * NIN/BVN/liveness provider implements the same interface later).
- * Application code only depends on this token and the types below — it never
- * imports infrastructure or the concrete class (clean-arch §4.1).
+ * Infrastructure provides the concrete adapter (mock, or the real Sumsub
+ * adapter — task 3.3). Application code only depends on this token and the
+ * types below — it never imports infrastructure or the concrete class
+ * (clean-arch §4.1).
  */
 export const KYC_PROVIDER = Symbol('KYC_PROVIDER');
 
@@ -48,6 +50,24 @@ export interface KycVerifyResult {
 }
 
 // ---------------------------------------------------------------------------
+// Async verification-session (Sumsub WebSDK) input / output — task 3.3
+// ---------------------------------------------------------------------------
+
+export interface CreateVerificationSessionInput {
+  /** Our internal user id — sent to Sumsub as `externalUserId`/`userId`. */
+  userId: string;
+  /** Our tier — the adapter maps this to the Sumsub dashboard LEVEL NAME. */
+  level: KycTierLevel;
+}
+
+export interface CreateVerificationSessionResult {
+  /** Short-lived Sumsub WebSDK access token the frontend passes to the SDK init call. */
+  token: string;
+  /** Sumsub applicant reference (externalUserId-derived) for audit / reconciliation. */
+  applicantId: string;
+}
+
+// ---------------------------------------------------------------------------
 // Port interface
 // ---------------------------------------------------------------------------
 
@@ -55,6 +75,21 @@ export interface IKycProvider {
   /**
    * Submits the identity fields for verification and returns the result.
    * Implementations must be idempotent (the execution engine may retry).
+   *
+   * This is the legacy synchronous NIN/BVN path still used by /kyc/submit and
+   * /kyc/complete (tier_1 onboarding). It is distinct from
+   * `createVerificationSession` (the tier_2/tier_3 Sumsub WebSDK upgrade path).
    */
   verify(input: KycVerifyInput): Promise<KycVerifyResult>;
+
+  /**
+   * Mints a short-lived Sumsub WebSDK access token so the frontend can launch
+   * an in-browser verification session for a tier_2/tier_3 upgrade. Read-only
+   * from the money-path's perspective — it never grants a tier itself; the
+   * tier is only granted once Sumsub's `applicantReviewed` webhook reports a
+   * GREEN review (a later task).
+   */
+  createVerificationSession(
+    input: CreateVerificationSessionInput,
+  ): Promise<CreateVerificationSessionResult>;
 }

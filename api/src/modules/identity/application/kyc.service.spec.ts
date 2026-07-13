@@ -40,7 +40,12 @@ const VALID_INPUT = {
 
 /** Creates a mock IKycProvider. */
 function makeKycProvider(result: KycVerifyResult): jest.Mocked<IKycProvider> {
-  return { verify: jest.fn().mockResolvedValue(result) };
+  return {
+    verify: jest.fn().mockResolvedValue(result),
+    // Not exercised by KycService.completeVerification (legacy sync path) —
+    // stubbed only to satisfy the IKycProvider shape (task 3.3).
+    createVerificationSession: jest.fn(),
+  };
 }
 
 /** Creates a stub PinService with only hashPin mocked. */

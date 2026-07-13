@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { HttpModule } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
 
 import { AuthModule } from '../../core/auth/auth.module';
 import { WebAuthModule } from '../auth/auth.module';
@@ -6,7 +8,10 @@ import { WalletsModule } from '../wallets/wallets.module';
 import { CLOCK, SystemClock } from '../../core/common/clock';
 import { IDENTITY_REPOSITORY } from './application/ports/identity.repository.port';
 import { VELOCITY_REPOSITORY } from './application/ports/velocity.repository.port';
-import { KYC_PROVIDER } from './application/ports/kyc-provider.port';
+import {
+  KYC_PROVIDER,
+  type IKycProvider,
+} from './application/ports/kyc-provider.port';
 import { KYC_REPOSITORY } from './application/ports/kyc.repository.port';
 import { HANDOFF_TOKEN_REPOSITORY } from './application/ports/handoff-token.repository.port';
 import { USER_LISTER } from '../wallets/application/ports/user-lister.port';
@@ -22,6 +27,7 @@ import { HandoffTokenPrismaRepository } from './infrastructure/handoff-token.pri
 import { ActiveUserListerPrismaAdapter } from './infrastructure/active-user-lister.prisma';
 import { ProfileSessionPrismaRepository } from './infrastructure/profile-session.prisma.repository';
 import { MockKycProvider } from './infrastructure/mock-kyc.provider';
+import { SumsubKycProvider } from './infrastructure/sumsub-kyc.provider';
 import { KycController } from './presentation/kyc.controller';
 import { ProfileService } from './application/profile.service';
 import { ProfileSettingsService } from './application/profile-settings.service';
@@ -29,13 +35,33 @@ import { PROFILE_SESSION_REPOSITORY } from './application/ports/profile-session.
 import { ProfileController } from './presentation/profile.controller';
 
 /**
+ * Selects the active KYC adapter from the layered config.
+ *
+ *   KYC_MOCK_MODE=true  (env-schema default) → MockKycProvider
+ *   KYC_MOCK_MODE=false                       → SumsubKycProvider (live)
+ *
+ * Default is mock (safe): only an explicit 'false' activates real Sumsub
+ * calls. Mirrors selectWalletProvider / selectPaymentProvider / selectSwapProvider
+ * (WalletsModule / TreasuryModule). Exported so the binding decision can be
+ * unit-tested without booting the full DI graph (task 3.3).
+ */
+export function selectKycProvider(
+  mock: MockKycProvider,
+  real: SumsubKycProvider,
+  config: ConfigService,
+): IKycProvider {
+  return config.get<string>('KYC_MOCK_MODE') === 'false' ? real : mock;
+}
+
+/**
  * Identity feature module. PrismaModule is global, so PrismaService is already
  * available in the DI container without importing it here. ConfigModule is
  * global (see AppModule), so ConfigService is also available without import.
  *
- * KYC_PROVIDER is bound to MockKycProvider at launch. A real NIN/BVN/liveness
- * adapter implements IKycProvider and replaces useClass here (same isolation
- * pattern as WALLET_PROVIDER / LlmProvider — task K1).
+ * KYC_PROVIDER is bound via `selectKycProvider`: MockKycProvider by default,
+ * or the real SumsubKycProvider when KYC_MOCK_MODE=false (task 3.3 — same
+ * isolation pattern as WALLET_PROVIDER / SWAP_PROVIDER / PAYMENT_PROVIDER).
+ * HttpModule is imported for SumsubKycProvider's HTTP client.
  *
  * AuthModule is imported to provide PinService (needed by KycService for
  * PIN hashing — task K2).
@@ -54,7 +80,7 @@ import { ProfileController } from './presentation/profile.controller';
  * the composition root that imports both and resolves the binding.
  */
 @Module({
-  imports: [AuthModule, WebAuthModule, WalletsModule],
+  imports: [AuthModule, WebAuthModule, WalletsModule, HttpModule],
   controllers: [KycController, ProfileController],
   providers: [
     ProfileService,
@@ -77,7 +103,14 @@ import { ProfileController } from './presentation/profile.controller';
       provide: HANDOFF_TOKEN_REPOSITORY,
       useClass: HandoffTokenPrismaRepository,
     },
-    { provide: KYC_PROVIDER, useClass: MockKycProvider },
+    // Both KYC adapters registered so the factory can inject either (mock default).
+    MockKycProvider,
+    SumsubKycProvider,
+    {
+      provide: KYC_PROVIDER,
+      useFactory: selectKycProvider,
+      inject: [MockKycProvider, SumsubKycProvider, ConfigService],
+    },
     { provide: CLOCK, useClass: SystemClock },
     // WN-5: USER_LISTER adapter lives in identity/infrastructure (the only layer
     // allowed to import PrismaService — CLAUDE.md §3.2). Exported so AdminModule
