@@ -1,11 +1,19 @@
 /**
- * TDD tests for RequireVerified — the verified-KYC route gate.
+ * TDD tests for RequireVerified — the app-shell tier gate.
  *
- * Covers the funds-safety gap where a verified user WITHOUT a transaction PIN
- * (`hasPin: false`) passed the gate and later hit an unrecoverable
- * PinNotSetError at execute time. The gate must now route a PIN-less verified
- * user to the set-PIN flow, the same way it routes unverified users to
- * onboarding.
+ * The onboarding redesign grants an email-verified user **tier_1** (buy /
+ * receive) immediately, before any Sumsub document check. The gate must admit
+ * any user who has cleared onboarding — a granted tier (`kycTier !== 'unverified'`)
+ * AND a transaction PIN — into the app shell, and send everyone else back to the
+ * onboarding wizard at `/get-started` to finish.
+ *
+ * The two funds-safety bounces it still enforces:
+ * - a user with no granted tier (`kycTier === 'unverified'`) → `/get-started`;
+ * - a user with a tier but no transaction PIN (`hasPin === false`) → `/get-started`
+ *   (execute would otherwise throw an unrecoverable PinNotSetError — root §3.1).
+ *
+ * Money-moving stays server-gated per capability→min-tier (root §3.3); this gate
+ * is app-shell admission UX, not the security boundary.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
@@ -25,7 +33,7 @@ vi.mock("@/lib/store/auth-store", () => ({
   }),
 }))
 
-type MeShape = { kycStatus: string; hasPin: boolean } | undefined
+type MeShape = { kycTier: string; hasPin: boolean } | undefined
 let mockMe: MeShape
 let mockMeLoading = false
 vi.mock("@/lib/query/auth", () => ({
@@ -44,9 +52,9 @@ describe("RequireVerified", () => {
     mockMeLoading = false
   })
 
-  it("renders children when verified AND has a PIN", async () => {
+  it("renders children for a tier_1 user with a PIN (email-verified is enough)", async () => {
     mockAccessToken = "tok"
-    mockMe = { kycStatus: "verified", hasPin: true }
+    mockMe = { kycTier: "tier_1", hasPin: true }
 
     render(
       <RequireVerified>
@@ -60,9 +68,9 @@ describe("RequireVerified", () => {
     expect(mockPush).not.toHaveBeenCalled()
   })
 
-  it("redirects to /onboarding when not verified", async () => {
+  it("renders children for a higher-tier (tier_2) user with a PIN", async () => {
     mockAccessToken = "tok"
-    mockMe = { kycStatus: "none", hasPin: false }
+    mockMe = { kycTier: "tier_2", hasPin: true }
 
     render(
       <RequireVerified>
@@ -71,14 +79,30 @@ describe("RequireVerified", () => {
     )
 
     await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith("/onboarding")
+      expect(screen.getByText("protected content")).toBeInTheDocument()
+    })
+    expect(mockPush).not.toHaveBeenCalled()
+  })
+
+  it("redirects an unverified user (no granted tier) to /get-started", async () => {
+    mockAccessToken = "tok"
+    mockMe = { kycTier: "unverified", hasPin: false }
+
+    render(
+      <RequireVerified>
+        <span>protected content</span>
+      </RequireVerified>
+    )
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith("/get-started")
     })
     expect(screen.queryByText("protected content")).not.toBeInTheDocument()
   })
 
-  it("redirects a verified-but-PIN-less user to the set-PIN flow, not into the app", async () => {
+  it("redirects a tier_1 user with no transaction PIN to /get-started", async () => {
     mockAccessToken = "tok"
-    mockMe = { kycStatus: "verified", hasPin: false }
+    mockMe = { kycTier: "tier_1", hasPin: false }
 
     render(
       <RequireVerified>
@@ -87,7 +111,7 @@ describe("RequireVerified", () => {
     )
 
     await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith("/onboarding")
+      expect(mockPush).toHaveBeenCalledWith("/get-started")
     })
     expect(screen.queryByText("protected content")).not.toBeInTheDocument()
   })
