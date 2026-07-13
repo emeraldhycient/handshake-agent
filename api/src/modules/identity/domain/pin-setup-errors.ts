@@ -17,15 +17,16 @@ export abstract class PinSetupError extends Error {
 }
 
 /**
- * Set-PIN was requested for a user who is not KYC-verified. The PIN belongs to
- * the verified-account state; an unverified user must finish KYC first (which
- * already bundles PIN setup via /kyc/submit).
+ * Set-PIN was requested for a user below tier_1 (not even email-verified).
+ * The PIN belongs to at-least-tier_1 account state; an unverified user must
+ * finish email verification (or full KYC, which bundles PIN setup via
+ * /kyc/submit) first.
  */
 export class PinSetupNotVerifiedError extends PinSetupError {
   readonly code = 'PIN_SETUP_NOT_VERIFIED' as const;
 
   constructor() {
-    super('Complete KYC verification before setting a transaction PIN.');
+    super('Verify your email before setting a transaction PIN.');
   }
 }
 
