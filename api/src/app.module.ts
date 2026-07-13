@@ -21,6 +21,7 @@ import { ConversationsModule } from './modules/conversations/conversations.modul
 import { WhatsAppModule } from './modules/whatsapp/whatsapp.module';
 import { FlutterwaveWebhookModule } from './modules/treasury/flutterwave-webhook.module';
 import { BlockradarWebhookModule } from './modules/wallets/blockradar-webhook.module';
+import { SumsubWebhookModule } from './modules/identity/sumsub-webhook.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { WebhookProcessingModule } from './modules/webhooks/webhook-processing.module';
 import { ComplianceModule } from './modules/compliance/compliance.module';
@@ -77,6 +78,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     WhatsAppModule,
     FlutterwaveWebhookModule,
     BlockradarWebhookModule,
+    SumsubWebhookModule,
     // Durable inbound-webhook queue (Track A): WebhooksModule = producer
     // (ingestion + persistence + metrics + sweeper); WebhookProcessingModule =
     // the handler registry + lifecycle service (NO @Processor here — the BullMQ

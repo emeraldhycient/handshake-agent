@@ -381,6 +381,226 @@ describe('KycPrismaRepository — NIN/BVN encryption at rest (NFR-1)', () => {
     });
   });
 
+  describe('grantSumsubTier / markSumsubRejected / markSumsubPendingReview (task 3.6)', () => {
+    interface SumsubWrites {
+      userUpdateMany: jest.Mock<Promise<{ count: number }>, [unknown]>;
+      userFindUnique: jest.Mock<Promise<{ id: string } | null>, [unknown]>;
+      kycProfileUpsert: jest.Mock<Promise<void>, [unknown]>;
+    }
+
+    function makeSumsubPrisma(overrides: Partial<SumsubWrites> = {}): {
+      prisma: PrismaService;
+      writes: SumsubWrites;
+    } {
+      const writes: SumsubWrites = {
+        userUpdateMany: jest
+          .fn<Promise<{ count: number }>, [unknown]>()
+          .mockResolvedValue({ count: 1 }),
+        userFindUnique: jest
+          .fn<Promise<{ id: string } | null>, [unknown]>()
+          .mockResolvedValue({ id: 'user-1' }),
+        kycProfileUpsert: jest
+          .fn<Promise<void>, [unknown]>()
+          .mockResolvedValue(undefined),
+        ...overrides,
+      };
+      const tx = {
+        user: {
+          updateMany: writes.userUpdateMany,
+          findUnique: writes.userFindUnique,
+        },
+        kycProfile: { upsert: writes.kycProfileUpsert },
+      };
+      const prisma = {
+        $transaction: jest.fn((cb: (t: typeof tx) => Promise<unknown>) =>
+          cb(tx),
+        ),
+      } as unknown as PrismaService;
+      return { prisma, writes };
+    }
+
+    describe('grantSumsubTier', () => {
+      it('grants when the guarded updateMany matches (strictly below target) — upserts the profile', async () => {
+        const { prisma, writes } = makeSumsubPrisma();
+        const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+        const result = await repo.grantSumsubTier({
+          userId: 'user-1',
+          tier: 'tier_2',
+          applicantId: 'app-1',
+        });
+
+        expect(result).toEqual({ granted: true });
+        const userArgs = writes.userUpdateMany.mock.calls[0][0] as {
+          where: { id: string; kycTier: { in: string[] } };
+          data: { kycStatus: string; kycTier: string };
+        };
+        expect(userArgs.where).toEqual({
+          id: 'user-1',
+          kycTier: { in: ['unverified', 'tier_1'] },
+        });
+        expect(userArgs.data.kycStatus).toBe('verified');
+        expect(userArgs.data.kycTier).toBe('tier_2');
+        const profileArgs = writes.kycProfileUpsert.mock.calls[0][0] as {
+          create: Record<string, unknown>;
+          update: Record<string, unknown>;
+        };
+        expect(profileArgs.update.tier).toBe('tier_2');
+        expect(profileArgs.update.sumsubApplicantId).toBe('app-1');
+        expect(profileArgs.update.livenessCheckResult).toBe('passed');
+      });
+
+      it('defaults livenessCheckResult to "passed" when omitted', async () => {
+        const { prisma, writes } = makeSumsubPrisma();
+        const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+        await repo.grantSumsubTier({ userId: 'user-1', tier: 'tier_3' });
+
+        const profileArgs = writes.kycProfileUpsert.mock.calls[0][0] as {
+          create: Record<string, unknown>;
+        };
+        expect(profileArgs.create.livenessCheckResult).toBe('passed');
+        // A tier_3 target is strictly above unverified/tier_1/tier_2.
+        const userArgs = writes.userUpdateMany.mock.calls[0][0] as {
+          where: { id: string; kycTier: { in: string[] } };
+        };
+        expect(userArgs.where).toEqual({
+          id: 'user-1',
+          kycTier: { in: ['unverified', 'tier_1', 'tier_2'] },
+        });
+      });
+
+      it('idempotent no-op: already at/above target tier → updateMany matches 0 rows, profile untouched (no tierChangedAt re-stamp)', async () => {
+        const { prisma, writes } = makeSumsubPrisma({
+          userUpdateMany: jest
+            .fn<Promise<{ count: number }>, [unknown]>()
+            .mockResolvedValue({ count: 0 }),
+        });
+        const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+        const result = await repo.grantSumsubTier({
+          userId: 'user-1',
+          tier: 'tier_2',
+        });
+
+        expect(result).toEqual({ granted: false });
+        expect(writes.kycProfileUpsert).not.toHaveBeenCalled();
+      });
+
+      it('unknown user (no matching row) → same guarded updateMany, same no-op result', async () => {
+        const { prisma, writes } = makeSumsubPrisma({
+          userUpdateMany: jest
+            .fn<Promise<{ count: number }>, [unknown]>()
+            .mockResolvedValue({ count: 0 }),
+        });
+        const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+        const result = await repo.grantSumsubTier({
+          userId: 'no-such-user',
+          tier: 'tier_3',
+        });
+
+        expect(result).toEqual({ granted: false });
+        const userArgs = writes.userUpdateMany.mock.calls[0][0] as {
+          where: { id: string; kycTier: { in: string[] } };
+        };
+        expect(userArgs.where).toEqual({
+          id: 'no-such-user',
+          kycTier: { in: ['unverified', 'tier_1', 'tier_2'] },
+        });
+        expect(writes.kycProfileUpsert).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('markSumsubRejected', () => {
+      it('sets kycStatus=rejected + rejectionReason, never touches tier', async () => {
+        const { prisma, writes } = makeSumsubPrisma();
+        const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+        const result = await repo.markSumsubRejected(
+          'user-1',
+          'DOCUMENT_TEMPLATE',
+        );
+
+        expect(result).toEqual({ found: true });
+        const userArgs = writes.userUpdateMany.mock.calls[0][0] as {
+          data: Record<string, unknown>;
+        };
+        expect(userArgs.data).not.toHaveProperty('kycTier');
+        expect(userArgs.data.kycStatus).toBe('rejected');
+        const profileArgs = writes.kycProfileUpsert.mock.calls[0][0] as {
+          update: Record<string, unknown>;
+        };
+        expect(profileArgs.update.rejectionReason).toBe('DOCUMENT_TEMPLATE');
+        expect(profileArgs.update).not.toHaveProperty('tier');
+      });
+
+      it('unknown user → found:false, no profile write', async () => {
+        const { prisma, writes } = makeSumsubPrisma({
+          userUpdateMany: jest
+            .fn<Promise<{ count: number }>, [unknown]>()
+            .mockResolvedValue({ count: 0 }),
+        });
+        const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+        const result = await repo.markSumsubRejected('no-such-user', 'reason');
+
+        expect(result).toEqual({ found: false });
+        expect(writes.kycProfileUpsert).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('markSumsubPendingReview', () => {
+      it('sets kycStatus=pending_review when not already verified', async () => {
+        const { prisma, writes } = makeSumsubPrisma();
+        const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+        const result = await repo.markSumsubPendingReview('user-1');
+
+        expect(result).toEqual({ found: true });
+        expect(writes.userUpdateMany).toHaveBeenCalledWith({
+          where: { id: 'user-1', kycStatus: { not: 'verified' } },
+          data: { kycStatus: 'pending_review' },
+        });
+        expect(writes.kycProfileUpsert).toHaveBeenCalled();
+      });
+
+      it('guarded no-op: already verified → does not un-verify (existence check confirms found:true, no profile write)', async () => {
+        const { prisma, writes } = makeSumsubPrisma({
+          userUpdateMany: jest
+            .fn<Promise<{ count: number }>, [unknown]>()
+            .mockResolvedValue({ count: 0 }),
+          userFindUnique: jest
+            .fn<Promise<{ id: string } | null>, [unknown]>()
+            .mockResolvedValue({ id: 'user-1' }),
+        });
+        const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+        const result = await repo.markSumsubPendingReview('user-1');
+
+        expect(result).toEqual({ found: true });
+        expect(writes.kycProfileUpsert).not.toHaveBeenCalled();
+      });
+
+      it('unknown user → found:false', async () => {
+        const { prisma, writes } = makeSumsubPrisma({
+          userUpdateMany: jest
+            .fn<Promise<{ count: number }>, [unknown]>()
+            .mockResolvedValue({ count: 0 }),
+          userFindUnique: jest
+            .fn<Promise<{ id: string } | null>, [unknown]>()
+            .mockResolvedValue(null),
+        });
+        const repo = new KycPrismaRepository(prisma, makeConfig(ENC_KEY));
+
+        const result = await repo.markSumsubPendingReview('no-such-user');
+
+        expect(result).toEqual({ found: false });
+        expect(writes.kycProfileUpsert).not.toHaveBeenCalled();
+      });
+    });
+  });
+
   describe('decryptIdentifier (read path)', () => {
     it('decrypts what completeVerificationAtomic wrote (round trip on read)', async () => {
       const captured = freshCaptured();

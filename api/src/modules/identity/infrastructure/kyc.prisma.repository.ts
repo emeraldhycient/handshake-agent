@@ -21,6 +21,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   KycStatus,
   KycTier,
+  LivenessCheckResult,
   UserStatus,
   VerificationStatus,
 } from '../../../../generated/prisma/client';
@@ -35,9 +36,27 @@ import type {
   CompleteVerificationAtomicResult,
   CompleteVerificationForUserAtomicInput,
   CompleteVerificationForUserAtomicResult,
+  GrantSumsubTierInput,
+  GrantSumsubTierResult,
   IKycRepository,
+  MarkSumsubStatusResult,
   UpdateKycProfileDecisionInput,
 } from '../application/ports/kyc.repository.port';
+
+/** Ordinal tier ladder — mirrors identity/domain/tier-order.ts's TIER_ORDER, but
+ * expressed against the Prisma `KycTier` enum (infrastructure-only). Used to
+ * compute the "strictly below target" set for the atomic no-downgrade guard in
+ * `grantSumsubTier` — a single conditional UPDATE, not a read-then-write. */
+const KYC_TIER_LADDER: KycTier[] = [
+  KycTier.unverified,
+  KycTier.tier_1,
+  KycTier.tier_2,
+  KycTier.tier_3,
+];
+
+function tiersBelow(target: KycTier): KycTier[] {
+  return KYC_TIER_LADDER.slice(0, KYC_TIER_LADDER.indexOf(target));
+}
 
 @Injectable()
 export class KycPrismaRepository implements IKycRepository {
@@ -307,6 +326,127 @@ export class KycPrismaRepository implements IKycRepository {
       where: { userId },
       create: { userId, sumsubApplicantId: applicantId },
       update: { sumsubApplicantId: applicantId },
+    });
+  }
+
+  /**
+   * Sumsub GREEN review → tier grant (task 3.6). See the port doc for the full
+   * atomic/idempotent/no-downgrade contract — the guard is a single conditional
+   * `updateMany` (WHERE kycTier IN <tiers strictly below target>), not a
+   * read-then-write, so there is no TOCTOU race with a concurrent redelivery.
+   */
+  async grantSumsubTier(
+    input: GrantSumsubTierInput,
+  ): Promise<GrantSumsubTierResult> {
+    const { userId, applicantId, livenessCheckResult } = input;
+    const targetTier: KycTier = input.tier;
+    const now = new Date();
+    const resolvedLiveness =
+      (livenessCheckResult as LivenessCheckResult | undefined) ??
+      LivenessCheckResult.passed;
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.updateMany({
+        where: { id: userId, kycTier: { in: tiersBelow(targetTier) } },
+        data: {
+          kycStatus: KycStatus.verified,
+          kycTier: targetTier,
+          tierChangedAt: now,
+        },
+      });
+
+      if (updated.count === 0) {
+        // Idempotent no-op: either the userId doesn't match any User row, or
+        // the user is already at/above `targetTier` (a redelivered/out-of-order
+        // GREEN). Either way: no downgrade, no tierChangedAt re-stamp.
+        return { granted: false };
+      }
+
+      await tx.kycProfile.upsert({
+        where: { userId },
+        create: {
+          userId,
+          status: KycStatus.verified,
+          tier: targetTier,
+          sumsubApplicantId: applicantId ?? null,
+          livenessCheckResult: resolvedLiveness,
+          verifiedAt: now,
+        },
+        update: {
+          status: KycStatus.verified,
+          tier: targetTier,
+          ...(applicantId ? { sumsubApplicantId: applicantId } : {}),
+          livenessCheckResult: resolvedLiveness,
+          verifiedAt: now,
+        },
+      });
+
+      return { granted: true };
+    });
+  }
+
+  /**
+   * Sumsub RED review → rejection (task 3.6). Tier is never touched — see the
+   * port doc for why this is intentionally NOT guarded against an existing
+   * `verified` status (a RED review is authoritative and must apply regardless).
+   */
+  async markSumsubRejected(
+    userId: string,
+    reason: string,
+  ): Promise<MarkSumsubStatusResult> {
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.updateMany({
+        where: { id: userId },
+        data: { kycStatus: KycStatus.rejected },
+      });
+
+      if (updated.count === 0) {
+        return { found: false };
+      }
+
+      await tx.kycProfile.upsert({
+        where: { userId },
+        create: { userId, status: KycStatus.rejected, rejectionReason: reason },
+        update: { status: KycStatus.rejected, rejectionReason: reason },
+      });
+
+      return { found: true };
+    });
+  }
+
+  /**
+   * A Sumsub webhook with no `reviewResult` → pending_review (task 3.6),
+   * GUARDED against overwriting an existing `verified` status via a single
+   * conditional `updateMany` (WHERE kycStatus != verified) — no TOCTOU race.
+   * When the guard blocks the write (0 rows matched), a separate existence
+   * check distinguishes "already verified" (found: true, no-op) from "no such
+   * user" (found: false) for the caller's logging — this extra read never
+   * affects the atomicity of the actual state mutation above.
+   */
+  async markSumsubPendingReview(
+    userId: string,
+  ): Promise<MarkSumsubStatusResult> {
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.updateMany({
+        where: { id: userId, kycStatus: { not: KycStatus.verified } },
+        data: { kycStatus: KycStatus.pending_review },
+      });
+
+      if (updated.count === 0) {
+        const existing = await tx.user.findUnique({
+          where: { id: userId },
+          select: { id: true },
+        });
+        return { found: existing !== null };
+      }
+
+      await tx.kycProfile.upsert({
+        where: { userId },
+        create: { userId, status: KycStatus.pending_review },
+        update: { status: KycStatus.pending_review },
+      });
+
+      return { found: true };
     });
   }
 }

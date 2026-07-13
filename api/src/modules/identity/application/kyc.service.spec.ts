@@ -105,6 +105,9 @@ function makeKycRepo(): jest.Mocked<IKycRepository> {
     updateKycProfileDecision: jest.fn().mockResolvedValue(undefined),
     markKycNeedsInfo: jest.fn().mockResolvedValue(undefined),
     setSumsubApplicantId: jest.fn().mockResolvedValue(undefined),
+    grantSumsubTier: jest.fn().mockResolvedValue({ granted: true }),
+    markSumsubRejected: jest.fn().mockResolvedValue({ found: true }),
+    markSumsubPendingReview: jest.fn().mockResolvedValue({ found: true }),
   };
 }
 

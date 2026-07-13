@@ -3,15 +3,16 @@
  *
  * A handler runs the *existing* idempotent settlement/ingest logic for one
  * provider (§3.1 — the handler calls the engine; it never moves money itself).
- * The concrete handlers live in the provider modules (wallets/treasury/whatsapp)
- * where their settlement dependencies already are; they are aggregated into the
- * registry at the worker composition root (WebhookWorkerModule) so WebhooksModule
- * stays free of provider imports (acyclic).
+ * The concrete handlers live in the provider modules (wallets/treasury/whatsapp/
+ * identity) where their settlement dependencies already are; they are
+ * aggregated into the registry at the worker composition root
+ * (WebhookWorkerModule) so WebhooksModule stays free of provider imports
+ * (acyclic).
  */
 import type { WebhookEventRecord } from './webhook-event.repository.port';
 
 export interface WebhookHandler {
-  /** "blockradar" | "flutterwave" | "whatsapp". */
+  /** "blockradar" | "flutterwave" | "whatsapp" | "sumsub". */
   readonly provider: string;
   /**
    * Process a verified, persisted webhook. THROW to signal a retryable failure

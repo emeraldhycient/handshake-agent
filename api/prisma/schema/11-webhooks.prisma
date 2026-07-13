@@ -46,6 +46,8 @@ enum WebhookProvider {
   blockradar
   flutterwave
   whatsapp
+  /// Sumsub `applicantReviewed` (KYC review) webhook — task 3.6.
+  sumsub
 
   @@map("webhook_provider")
 }
