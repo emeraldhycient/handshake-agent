@@ -444,7 +444,7 @@ describe('Outbound vertical — capstone acceptance e2e (SELL + SEND, AppModule,
 
     // 6. Seed: Tier-1 KYC-verified User + PIN + WhatsApp ChannelIdentity
     const user = await prisma.user.create({
-      data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },
+      data: { kycStatus: 'verified', kycTier: 'tier_2', status: 'active' },
     });
     userId = user.id;
 
