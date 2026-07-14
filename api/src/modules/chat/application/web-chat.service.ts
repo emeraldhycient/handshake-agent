@@ -896,10 +896,11 @@ export class WebChatService {
       //     NEVER falls through to the private-nickname lookup or the default
       //     beneficiary (§3.1 NO-MISROUTE). recipientUserId/displayHandle come
       //     from the resolver, never the model.
-      if (recipientNickname.startsWith('@')) {
-        const hit = await this.handleService.resolveHandle(recipientNickname);
+      const trimmedNickname = recipientNickname.trimStart();
+      if (trimmedNickname.startsWith('@')) {
+        const hit = await this.handleService.resolveHandle(trimmedNickname);
         if (hit === null) {
-          const text = `No Handshake user ${recipientNickname} — double-check the handle.`;
+          const text = `No Handshake user ${trimmedNickname} — double-check the handle.`;
           return {
             resolved: false,
             outcome: { kind: 'clarification', text },

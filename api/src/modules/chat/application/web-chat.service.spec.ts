@@ -2599,7 +2599,63 @@ describe('WebChatService', () => {
       });
       if (r.resolved) throw new Error('expected an unresolved outcome');
       expect(r.outcome).toHaveProperty('kind', 'clarification');
+      if (r.outcome.kind !== 'clarification') {
+        throw new Error('expected a clarification outcome');
+      }
+      // Pin the user-facing contract string (§3.1 no-misroute): must name the
+      // handle the user typed and tell them to double-check it.
+      expect(r.outcome.text).toContain('@nobody');
+      expect(r.outcome.text).toContain('double-check the handle');
       // The miss must NOT fall through to the private-nickname or default path.
+      expect(fakeBeneficiaryService.resolveByNickname).not.toHaveBeenCalled();
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    // ── Fix 1/3 — whitespace-prefixed/bare @handles still route to the handle
+    //    rail, never the private-nickname path or the silent default.
+    it.each(['@', '@ '])(
+      '%j (bare/blank sigil) routes into the @-branch and returns a clarification, never getDefault/resolveByNickname',
+      async (nickname) => {
+        fakeHandleService.resolveHandle.mockResolvedValue(null);
+        const r = await service.resolveSendDestination(
+          'user-1',
+          {},
+          nickname,
+          `send 50 USDT to ${nickname}`,
+        );
+        expect(r).toMatchObject({
+          resolved: false,
+          outcome: { kind: 'clarification' },
+        });
+        expect(fakeHandleService.resolveHandle).toHaveBeenCalledWith(nickname);
+        expect(fakeBeneficiaryService.resolveByNickname).not.toHaveBeenCalled();
+        expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+      },
+    );
+
+    it('a leading-whitespace @handle (" @ada") routes to resolveHandle (handle rail), NOT resolveByNickname', async () => {
+      fakeHandleService.resolveHandle.mockResolvedValue({
+        userId: 'user-ada',
+        displayName: 'Ada I.',
+        handle: 'ada',
+      });
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        ' @ada',
+        'send 50 USDT to  @ada',
+      );
+      expect(r).toEqual({
+        resolved: true,
+        destination: {
+          kind: 'internal_user',
+          recipientUserId: 'user-ada',
+          displayHandle: '@ada',
+          recipientDisplayName: 'Ada I.',
+        },
+      });
+      // The trimmed handle is what's passed to the resolver.
+      expect(fakeHandleService.resolveHandle).toHaveBeenCalledWith('@ada');
       expect(fakeBeneficiaryService.resolveByNickname).not.toHaveBeenCalled();
       expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
     });
