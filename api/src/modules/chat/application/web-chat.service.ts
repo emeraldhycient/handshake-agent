@@ -1090,12 +1090,17 @@ export class WebChatService {
     const page = hasMore ? turns.slice(0, input.limit) : turns;
     const nextCursor = hasMore ? page[page.length - 1].id : null;
 
-    const messages = [...page].reverse().map((turn) => ({
-      messageId: turn.id,
-      userText: turn.userText,
-      outcome: this.parseStoredOutcome(turn.reply?.outcome, input.userId),
-      createdAt: turn.createdAt.toISOString(),
-    }));
+    const messages = await Promise.all(
+      [...page].reverse().map(async (turn) => ({
+        messageId: turn.id,
+        userText: turn.userText,
+        outcome: await this.parseStoredOutcome(
+          turn.reply?.outcome,
+          input.userId,
+        ),
+        createdAt: turn.createdAt.toISOString(),
+      })),
+    );
 
     return { conversationId: conversation.id, messages, nextCursor, hasMore };
   }
@@ -1110,15 +1115,27 @@ export class WebChatService {
    * verbatim on history reload yields a 401 expired link once the card is older
    * than the TTL, so the link is re-issued here from the stored window + txType,
    * scoped to the requesting user — always valid when rendered.
+   *
+   * For a `proposal` outcome the stored blob was captured at proposal-CREATION
+   * time and carries NO execution status (Bug 2). Look up the proposal's CURRENT
+   * status (read-only, §3.1) and attach it so a reloaded card can render a
+   * terminal "Completed"/"Cancelled" state instead of a live quote whose confirm
+   * would 409. A missing proposal (null status) leaves the outcome as-is.
    */
-  private parseStoredOutcome(
+  private async parseStoredOutcome(
     raw: unknown,
     userId: string,
-  ): AgentTurnOutcome | null {
+  ): Promise<AgentTurnOutcome | null> {
     if (raw === null || raw === undefined) return null;
     const parsed = AgentTurnOutcomeSchema.safeParse(raw);
     if (!parsed.success) return null;
     const outcome = parsed.data;
+    if (outcome.kind === 'proposal') {
+      const proposalStatus = await this.proposalService.getProposalStatus(
+        outcome.proposalId,
+      );
+      return proposalStatus ? { ...outcome, proposalStatus } : outcome;
+    }
     if (outcome.kind !== 'transactions') return outcome;
     const token = this.statementTokens.sign({
       userId,

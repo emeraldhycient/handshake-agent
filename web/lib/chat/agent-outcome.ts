@@ -97,6 +97,9 @@ export function mapOutcomeToMessages(
         estimatedArrivalSec: sw.estimatedArrivalSec,
         expiresAt: sw.expiresAt,
         lockSeconds,
+        // Bug 2: carry the rehydrated proposal status so an executed/rejected
+        // swap reloads as a terminal card, not a clickable quote.
+        proposalStatus: outcome.proposalStatus,
       })
     } else {
       const rows: Array<{ label: string; value: string }> = []
@@ -211,6 +214,10 @@ export function mapOutcomeToMessages(
         lockSeconds,
         // ISO expiry drives the live quote countdown (and "expired" state on reload).
         expiresAt: c.expiresAt,
+        // Bug 2: on a rehydrated turn this carries the proposal's CURRENT status
+        // so an already-executed/rejected proposal renders a terminal card
+        // instead of a live "Review & confirm" button that would 409.
+        proposalStatus: outcome.proposalStatus,
       })
     }
 

@@ -54,6 +54,9 @@ const fakeProposalService = {
   createSellProposal: jest.fn(),
   createSendProposal: jest.fn(),
   createSwapProposal: jest.fn(),
+  // Bug 2: read-only lookup of a proposal's CURRENT lifecycle status, used by
+  // the history read to render an executed proposal's card as terminal.
+  getProposalStatus: jest.fn(),
 };
 const fakeWalletService = { getOrProvisionNetworkWallet: jest.fn() };
 const fakeBeneficiaryService = {
@@ -2047,6 +2050,81 @@ describe('WebChatService', () => {
       const result = await service.getHistory({ userId: 'user-1', limit: 30 });
 
       expect(result.messages[0].outcome).toEqual(storedOutcome);
+    });
+
+    // ── proposal outcome: current status is injected on reload (Bug 2) ─────────
+
+    const validBuyConfirmation = {
+      proposalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      asset: 'USDT',
+      fiatAmount: '5000',
+      fiatCurrency: 'NGN',
+      cryptoAmount: '4.5',
+      fxRate: '1110',
+      spreadBps: 50,
+      processingFeeBps: 30,
+      processingFeeAmount: '15',
+      totalFiat: '5015',
+      expiresAt: '2026-06-29T12:00:00.000Z',
+    };
+
+    it("enriches a stored proposal outcome with the proposal's CURRENT status (Bug 2)", async () => {
+      // The persisted outcome was captured at proposal-CREATION and has no
+      // execution status. On reload the history read must look up the proposal's
+      // CURRENT status so an already-executed proposal renders a terminal card,
+      // never a live quote whose confirm would 409.
+      const storedProposalOutcome = {
+        kind: 'proposal',
+        txType: 'buy',
+        proposalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        confirmation: validBuyConfirmation,
+      };
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm1',
+          userText: 'buy 5000 NGN of USDT',
+          createdAt: new Date('2026-07-08T10:00:00.000Z'),
+          reply: { text: 'Ready to confirm', outcome: storedProposalOutcome },
+        },
+      ]);
+      fakeProposalService.getProposalStatus.mockResolvedValue('executed');
+
+      const result = await service.getHistory({ userId: 'user-1', limit: 30 });
+
+      expect(fakeProposalService.getProposalStatus).toHaveBeenCalledWith(
+        'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      );
+      const outcome = result.messages[0].outcome as {
+        kind: 'proposal';
+        proposalStatus?: string;
+      };
+      expect(outcome.kind).toBe('proposal');
+      expect(outcome.proposalStatus).toBe('executed');
+    });
+
+    it('leaves a proposal outcome un-enriched when the proposal is gone (null status)', async () => {
+      const storedProposalOutcome = {
+        kind: 'proposal',
+        txType: 'buy',
+        proposalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        confirmation: validBuyConfirmation,
+      };
+      fakeMessageRepo.findWebHistory.mockResolvedValue([
+        {
+          id: 'm1',
+          userText: 'buy 5000 NGN of USDT',
+          createdAt: new Date('2026-07-08T10:00:00.000Z'),
+          reply: { text: 'Ready to confirm', outcome: storedProposalOutcome },
+        },
+      ]);
+      fakeProposalService.getProposalStatus.mockResolvedValue(null);
+
+      const result = await service.getHistory({ userId: 'user-1', limit: 30 });
+
+      const outcome = result.messages[0].outcome as {
+        proposalStatus?: string;
+      };
+      expect(outcome.proposalStatus).toBeUndefined();
     });
 
     // ── transactions outcome: stale signed download URL is re-issued ───────────

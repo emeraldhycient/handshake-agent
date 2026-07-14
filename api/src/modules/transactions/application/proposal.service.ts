@@ -62,7 +62,10 @@ import {
 } from '../../beneficiaries/domain/beneficiary-errors';
 import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
 import { ComplianceService } from '../../compliance/application/compliance.service';
-import type { IProposalRepository } from './ports/proposal.repository.port';
+import type {
+  IProposalRepository,
+  ProposalStatus,
+} from './ports/proposal.repository.port';
 import { PROPOSAL_REPOSITORY } from './ports/proposal.repository.port';
 import type { IQuoteRepository } from './ports/quote.repository.port';
 import { QUOTE_REPOSITORY } from './ports/quote.repository.port';
@@ -389,6 +392,19 @@ export class ProposalService {
     const ngnEquivalent =
       (isNegNgn ? '-' : '') + wholeNgn.toString() + fracNgnStr;
     return { baseFiat, baseRate, ngnEquivalent };
+  }
+
+  /**
+   * Read-only lookup of a proposal's CURRENT lifecycle status (Bug 2).
+   * Returns null when the proposal no longer exists. Used by the web chat
+   * history read to render an already-executed / rejected proposal's card as a
+   * terminal state instead of a live, clickable quote whose confirm would 409.
+   * NEVER mutates — the §3.1 model-proposes/engine-disposes invariant is intact
+   * (this only reads proposal state, it does not authorize or execute).
+   */
+  async getProposalStatus(proposalId: string): Promise<ProposalStatus | null> {
+    const record = await this.proposalRepo.findById(proposalId);
+    return record ? record.status : null;
   }
 
   async createBuyProposal(

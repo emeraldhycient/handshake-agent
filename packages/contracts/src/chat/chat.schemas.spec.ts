@@ -243,6 +243,43 @@ describe('AgentTurnOutcomeSchema', () => {
     }
   })
 
+  it('accepts a proposal outcome carrying a terminal proposalStatus (Bug 2)', () => {
+    const result = AgentTurnOutcomeSchema.parse({
+      kind: 'proposal',
+      txType: 'send',
+      proposalId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+      confirmation: validBuyConfirmation,
+      proposalStatus: 'executed',
+    })
+    expect(result.kind).toBe('proposal')
+    if (result.kind === 'proposal') {
+      expect(result.proposalStatus).toBe('executed')
+    }
+  })
+
+  it('proposalStatus is optional — an old persisted proposal turn omits it', () => {
+    const result = AgentTurnOutcomeSchema.parse({
+      kind: 'proposal',
+      txType: 'buy',
+      proposalId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+      confirmation: validBuyConfirmation,
+    })
+    if (result.kind === 'proposal') {
+      expect(result.proposalStatus).toBeUndefined()
+    }
+  })
+
+  it('rejects an unknown proposalStatus value', () => {
+    const result = AgentTurnOutcomeSchema.safeParse({
+      kind: 'proposal',
+      txType: 'buy',
+      proposalId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+      confirmation: validBuyConfirmation,
+      proposalStatus: 'not-a-status',
+    })
+    expect(result.success).toBe(false)
+  })
+
   it('accepts a balance outcome for all assets', () => {
     const result = AgentTurnOutcomeSchema.parse({
       kind: 'balance',

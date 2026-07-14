@@ -143,6 +143,34 @@ describe("mapOutcomeToMessages", () => {
     })
   })
 
+  it("threads a rehydrated proposalStatus onto the quote card (Bug 2)", () => {
+    const outcome: AgentTurnOutcome = {
+      kind: "proposal",
+      txType: "buy",
+      proposalId: buyConfirmation.proposalId,
+      confirmation: buyConfirmation,
+      proposalStatus: "executed",
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    expect(messages[0]).toMatchObject({
+      kind: "quote",
+      proposalStatus: "executed",
+    })
+  })
+
+  it("leaves proposalStatus undefined on a live proposal (no status field)", () => {
+    const outcome: AgentTurnOutcome = {
+      kind: "proposal",
+      txType: "buy",
+      proposalId: buyConfirmation.proposalId,
+      confirmation: buyConfirmation,
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    expect(
+      (messages[0] as { proposalStatus?: string }).proposalStatus
+    ).toBeUndefined()
+  })
+
   it("buy quote rows drive the symbol from the confirmation's fiatCurrency, never a hardcoded ₦", () => {
     // §3.1 confirmation integrity: a GHS-settled buy must render GH₵ on every
     // fiat row — the sell branch already keys off fiatCurrency; buy must too.

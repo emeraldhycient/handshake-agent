@@ -10,6 +10,20 @@ import type {
   NeedsBeneficiaryCardProps,
 } from "./components"
 
+/**
+ * Bug 2 — terminal (non-actionable) state for a rehydrated quote/swap card whose
+ * proposal has already executed or been cancelled. Derived from the proposal's
+ * status by `lib/chat/proposal-terminal.ts`.
+ */
+export interface CardTerminalState {
+  /** Label shown on the (disabled) CTA button and the header pill. */
+  label: string
+  /** Sub-hint under the CTA. */
+  hint: string
+  /** A completed action reads as success; a cancelled one is neutral. */
+  tone: "success" | "neutral"
+}
+
 /** Beneficiary kind ("bank_account" | "crypto_address"). */
 export type BeneficiaryKind = NeedsBeneficiaryCardProps["beneficiaryType"]
 
@@ -138,6 +152,12 @@ export interface QuoteExpiryPillProps {
   remaining: number
   isExpired: boolean
   density: Density
+  /**
+   * When set, the pill shows the terminal label/tone instead of the countdown
+   * (Bug 2) — so a completed card's header never contradicts its body with a
+   * live "Locked mm:ss" or "Expired" badge.
+   */
+  terminal?: CardTerminalState | null
 }
 
 export interface ExpiringCardCtaProps {
@@ -148,4 +168,10 @@ export interface ExpiringCardCtaProps {
   activeHint: string
   expiredHint: string
   density: Density
+  /**
+   * When set, the card is in a terminal (non-actionable) state — this overrides
+   * both the active and expired states (Bug 2). The button is disabled and shows
+   * the terminal label/tone; the confirm handler can never fire.
+   */
+  terminal?: CardTerminalState | null
 }

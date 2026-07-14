@@ -2692,3 +2692,39 @@ describe('ProposalService.createSwapProposal', () => {
     expect(swapProvider.getQuote).not.toHaveBeenCalled();
   });
 });
+
+describe('ProposalService.getProposalStatus (Bug 2 — read-only status lookup)', () => {
+  it("returns the proposal's current status when it exists", async () => {
+    const proposalRepo = makeProposalRepo();
+    (proposalRepo.findById as jest.Mock).mockResolvedValue({
+      id: FIXED_PROPOSAL_ID,
+      status: 'executed',
+    });
+    const svc = makeBuySvc(undefined, undefined, undefined, proposalRepo);
+
+    await expect(svc.getProposalStatus(FIXED_PROPOSAL_ID)).resolves.toBe(
+      'executed',
+    );
+    expect(proposalRepo.findById).toHaveBeenCalledWith(FIXED_PROPOSAL_ID);
+  });
+
+  it('returns null when the proposal does not exist', async () => {
+    const proposalRepo = makeProposalRepo();
+    (proposalRepo.findById as jest.Mock).mockResolvedValue(null);
+    const svc = makeBuySvc(undefined, undefined, undefined, proposalRepo);
+
+    await expect(svc.getProposalStatus('missing')).resolves.toBeNull();
+  });
+
+  it('never mutates the proposal (§3.1 — read-only)', async () => {
+    const proposalRepo = makeProposalRepo();
+    (proposalRepo.findById as jest.Mock).mockResolvedValue({
+      id: FIXED_PROPOSAL_ID,
+      status: 'pending',
+    });
+    const svc = makeBuySvc(undefined, undefined, undefined, proposalRepo);
+
+    await svc.getProposalStatus(FIXED_PROPOSAL_ID);
+    expect(proposalRepo.updateStatus).not.toHaveBeenCalled();
+  });
+});
