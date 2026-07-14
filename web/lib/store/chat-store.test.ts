@@ -1486,14 +1486,15 @@ describe("sendToAgent", () => {
     const last = store.getState().threads.m.at(-1)!
     expect(last.kind).toBe("balance")
     if (last.kind === "balance") {
-      // total prefixes the outcome's fiatCurrency code (not a hardcoded ₦ symbol)
-      expect(last.total).toContain("NGN")
-      expect(last.total).toContain("16800.00")
+      // total renders through formatFiat — the ₦ symbol + grouped thousands,
+      // never the raw ISO code (matches the buy/sell cards).
+      expect(last.total).toContain("₦")
+      expect(last.total).toContain("16,800.00")
       expect(last.assets).toHaveLength(1)
       expect(last.assets[0].sym).toBe("USDT")
       expect(last.assets[0].name).toBe("Tether USD")
       expect(last.assets[0].amount).toBe("10.5 USDT")
-      expect(last.assets[0].value).toBe("NGN 16800.00")
+      expect(last.assets[0].value).toBe("₦16,800.00")
     }
     expect(store.getState().typing.m).toBe(false)
   })
@@ -1760,9 +1761,9 @@ describe("hydrateHistory", () => {
   it("binds a reloaded needs_beneficiary card to its intent so resolving after reload re-sends it", async () => {
     // Pre-fix, hydrateHistory never populated _beneficiaryIntents, so resolving
     // a reloaded card was a silent no-op (no _lastIntentText either).
-    const chatApi = vi.fn().mockResolvedValue(
-      makeResponse({ kind: "clarification", text: "ok" })
-    )
+    const chatApi = vi
+      .fn()
+      .mockResolvedValue(makeResponse({ kind: "clarification", text: "ok" }))
     const boundStore = createChatStore({ schedule: immediate, chatApi })
     boundStore.getState().hydrateHistory("m", [
       historyItem({
@@ -1788,9 +1789,9 @@ describe("hydrateHistory", () => {
   })
 
   it("binds a reloaded choose_beneficiary card to its intent the same way", async () => {
-    const chatApi = vi.fn().mockResolvedValue(
-      makeResponse({ kind: "clarification", text: "ok" })
-    )
+    const chatApi = vi
+      .fn()
+      .mockResolvedValue(makeResponse({ kind: "clarification", text: "ok" }))
     const boundStore = createChatStore({ schedule: immediate, chatApi })
     boundStore.getState().hydrateHistory("m", [
       historyItem({
