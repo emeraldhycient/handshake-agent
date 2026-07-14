@@ -10,7 +10,10 @@ import {
   UserStatus,
 } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
-import { DeviceAlreadyBoundError } from '../domain/auth-errors';
+import {
+  DeviceAlreadyBoundError,
+  PayIdMintExhaustedError,
+} from '../domain/auth-errors';
 import type {
   AuthUserRecord,
   IAuthUserRepository,
@@ -90,19 +93,9 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
    * catching the P2002 unique-constraint violation (mirrors `bindDevice`
    * above) and retrying with an incrementing numeric suffix. After a handful
    * of numeric retries exhaust (pathological pile-up on one slug), a random
-   * suffix guarantees termination without an unbounded loop.
-   *
-   * Each attempt is wrapped in its own SAVEPOINT. This is load-bearing, not
-   * defensive polish: Postgres aborts the ENTIRE surrounding transaction the
-   * instant one statement inside it errors — catching the P2002 in JS does
-   * not undo that at the DB-session level, so a naive retry loop's second
-   * `tx.user.update` would fail with "current transaction is aborted,
-   * commands ignored until end of transaction block" (a plain
-   * `DriverAdapterError`, not a `PrismaClientKnownRequestError`/P2002), which
-   * would bubble out uncaught and 500 the whole signup — discarding the
-   * already-created user and ChannelIdentity along with it. Rolling back to
-   * the savepoint on failure restores the transaction to a usable state so
-   * the next candidate (or the caller's subsequent statements) can proceed.
+   * suffix guarantees termination without an unbounded loop; if even that
+   * collides, a typed {@link PayIdMintExhaustedError} surfaces rather than
+   * silently leaving the user without a payId.
    */
   private async mintPayId(
     tx: Prisma.TransactionClient,
@@ -116,41 +109,57 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
         .slice(0, 26) || 'user';
     const slug = base.length < 3 ? `${base}user` : base;
 
-    const tryCandidate = async (candidate: string): Promise<boolean> => {
-      await tx.$executeRawUnsafe('SAVEPOINT mint_payid_attempt');
-      try {
-        await tx.user.update({
-          where: { id: userId },
-          data: { payId: candidate },
-        });
-        await tx.$executeRawUnsafe('RELEASE SAVEPOINT mint_payid_attempt');
-        return true;
-      } catch (err) {
-        await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT mint_payid_attempt');
-        if (
-          err instanceof Prisma.PrismaClientKnownRequestError &&
-          err.code === 'P2002'
-        ) {
-          return false;
-        }
-        throw err;
-      }
-    };
-
     for (let attempt = 0; attempt < 6; attempt++) {
       const candidate = attempt === 0 ? slug : `${slug.slice(0, 26)}${attempt}`;
-      if (await tryCandidate(candidate)) return candidate;
+      if (await this.tryMintCandidate(tx, userId, candidate)) return candidate;
     }
 
-    // Numeric suffixes exhausted — fall back to a random 4-digit suffix. A
-    // collision here is astronomically unlikely but not impossible, so this
-    // still isn't wrapped in a retry loop of its own; a repeat P2002 at this
-    // point surfaces as a genuine failure rather than silently looping
-    // forever or leaving the user without a payId.
-    const randomSuffix = randomInt(1000, 10000);
-    const fallback = `${slug.slice(0, 22)}${randomSuffix}`;
-    if (await tryCandidate(fallback)) return fallback;
-    throw new Error(`mintPayId: exhausted retries for seed "${seed}"`);
+    const fallback = `${slug.slice(0, 22)}${randomInt(1000, 10000)}`;
+    if (await this.tryMintCandidate(tx, userId, fallback)) return fallback;
+    throw new PayIdMintExhaustedError();
+  }
+
+  /**
+   * Attempts to claim one PayID candidate for the user, wrapped in its own
+   * SAVEPOINT. Returns `true` on success, `false` on a P2002 collision (so the
+   * caller can try the next candidate); any other error rethrows.
+   *
+   * The SAVEPOINT is load-bearing, not defensive polish: Postgres aborts the
+   * ENTIRE surrounding transaction the instant one statement inside it errors —
+   * catching the P2002 in JS does not undo that at the DB-session level, so a
+   * naive retry loop's next `tx.user.update` would fail with "current
+   * transaction is aborted, commands ignored until end of transaction block" (a
+   * plain `DriverAdapterError`, not a `PrismaClientKnownRequestError`/P2002),
+   * bubble out uncaught, and 500 the whole signup — discarding the
+   * already-created user and ChannelIdentity along with it. Rolling back to the
+   * savepoint restores the transaction to a usable state. Both the success and
+   * the failure path also RELEASE the savepoint, so each attempt is fully
+   * self-contained (the reused literal name never nests across iterations).
+   */
+  private async tryMintCandidate(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    candidate: string,
+  ): Promise<boolean> {
+    await tx.$executeRawUnsafe('SAVEPOINT mint_payid_attempt');
+    try {
+      await tx.user.update({
+        where: { id: userId },
+        data: { payId: candidate },
+      });
+      await tx.$executeRawUnsafe('RELEASE SAVEPOINT mint_payid_attempt');
+      return true;
+    } catch (err) {
+      await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT mint_payid_attempt');
+      await tx.$executeRawUnsafe('RELEASE SAVEPOINT mint_payid_attempt');
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        return false;
+      }
+      throw err;
+    }
   }
 
   async findByEmail(email: string): Promise<AuthUserRecord | null> {
