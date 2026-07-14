@@ -344,29 +344,6 @@ export interface SuccessOverlayProps {
   text: string
 }
 
-// ─── Phase 14 onboarding ──────────────────────────────────────────────────────
-
-/** 14.1 — presentational; no router dependency */
-export interface KycSummaryProps {
-  onFinish: () => void
-}
-
-/** 14.2 — single verification row inside KycSummary */
-export interface VerificationRowProps {
-  /**
-   * Left-slot override. When provided, renders `iconNode` directly instead of
-   * the default icon-box wrapper. Used for the selfie circular thumbnail.
-   */
-  iconNode?: React.ReactNode
-  /** Icon element rendered inside the default square icon-box (ignored when `iconNode` is set). */
-  icon?: React.ReactNode
-  label: string
-  value: string
-  /** Apply font-mono to the value (masked numbers). */
-  valueMono?: boolean
-  pillLabel: string
-}
-
 // ─── Phase 16 desktop components ─────────────────────────────────────────────
 
 /**
