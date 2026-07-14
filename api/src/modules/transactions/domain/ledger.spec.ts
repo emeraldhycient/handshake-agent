@@ -19,6 +19,7 @@ import {
   buildSendReserveEntries,
   buildSendFinalizeEntries,
   buildSendRefundEntries,
+  buildInternalTransferLedgerEntries,
   LedgerError,
   LedgerAccountType,
   LedgerDirection,
@@ -32,6 +33,7 @@ import {
   type BuildSendReserveInput,
   type BuildSendFinalizeInput,
   type BuildSendRefundInput,
+  type BuildInternalTransferLedgerInput,
   type LedgerEntryDraft,
 } from './ledger';
 
@@ -1779,6 +1781,196 @@ describe('WN-4: buildSendRefundEntries — non-USDT asset (USDC)', () => {
 
     expect(entries.filter((e) => e.currency === USDC)).toHaveLength(2);
     expect(entries.filter((e) => e.currency === 'USDT')).toHaveLength(0);
+    expect(sumByCurrency(entries, USDC)).toBe(0n);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildInternalTransferLedgerEntries (Task 5 — Spec 2: internal user-to-user
+// transfer, single-phase, execute-time settlement between two user_wallet
+// accounts of the same asset).
+// ---------------------------------------------------------------------------
+
+function freshInternalTransferInput(
+  overrides?: Partial<BuildInternalTransferLedgerInput>,
+): BuildInternalTransferLedgerInput {
+  return {
+    senderWalletId: 'wallet-sender-abc',
+    recipientWalletId: 'wallet-recipient-abc',
+    asset: 'USDT',
+    cryptoAmount: '5',
+    postedAt: new Date('2026-07-14T12:00:00Z'),
+    accountStates: {},
+    ...overrides,
+  };
+}
+
+describe('buildInternalTransferLedgerEntries', () => {
+  describe('happy path — fresh account states', () => {
+    let entries: LedgerEntryDraft[];
+
+    beforeAll(() => {
+      entries = buildInternalTransferLedgerEntries(
+        freshInternalTransferInput(),
+      );
+    });
+
+    it('returns exactly 2 entries', () => {
+      expect(entries).toHaveLength(2);
+    });
+
+    it('USDT signed amounts sum to exactly zero (invariant 1)', () => {
+      expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+    });
+
+    it('every amount is non-zero (invariant 2)', () => {
+      const SCALE = 10n ** 18n;
+      for (const e of entries) {
+        const isNeg = e.amount.startsWith('-');
+        const abs = isNeg ? e.amount.slice(1) : e.amount;
+        const [whole = '0', frac = ''] = abs.split('.');
+        const fracPadded = frac.slice(0, 18).padEnd(18, '0');
+        const scaled = BigInt(whole) * SCALE + BigInt(fracPadded);
+        expect(scaled).not.toBe(0n);
+      }
+    });
+
+    it('direction matches the sign of amount (invariant 2)', () => {
+      for (const e of entries) {
+        const isNeg = e.amount.startsWith('-');
+        if (isNeg) {
+          expect(e.direction).toBe(LedgerDirection.debit);
+        } else {
+          expect(e.direction).toBe(LedgerDirection.credit);
+        }
+      }
+    });
+
+    it('sequence is 1 for fresh accounts (invariant 3)', () => {
+      for (const e of entries) {
+        expect(e.sequence).toBe(1);
+      }
+    });
+
+    it('balanceAfter equals normalised signedAmount for fresh accounts (invariant 4)', () => {
+      for (const e of entries) {
+        expect(e.balanceAfter).toBe(e.amount);
+      }
+    });
+
+    it('debits the sender user_wallet by −cryptoAmount', () => {
+      const e = entries.find(
+        (x) =>
+          x.accountType === LedgerAccountType.user_wallet &&
+          x.accountId === 'wallet-sender-abc',
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('-5');
+      expect(e!.direction).toBe(LedgerDirection.debit);
+    });
+
+    it('credits the recipient user_wallet by +cryptoAmount', () => {
+      const e = entries.find(
+        (x) =>
+          x.accountType === LedgerAccountType.user_wallet &&
+          x.accountId === 'wallet-recipient-abc',
+      );
+      expect(e).toBeDefined();
+      expect(e!.amount).toBe('5');
+      expect(e!.direction).toBe(LedgerDirection.credit);
+    });
+
+    it('entries are in deterministic order (invariant 5)', () => {
+      const a = buildInternalTransferLedgerEntries(
+        freshInternalTransferInput(),
+      );
+      const b = buildInternalTransferLedgerEntries(
+        freshInternalTransferInput(),
+      );
+      expect(
+        a.map((e) => `${e.accountType}:${e.accountId}:${e.currency}`),
+      ).toEqual(b.map((e) => `${e.accountType}:${e.accountId}:${e.currency}`));
+    });
+  });
+
+  describe('with non-zero prior account states', () => {
+    it('advances sequence and balanceAfter independently per account', () => {
+      const accountStates: Record<string, AccountState> = {
+        'user_wallet:wallet-sender-abc:USDT': { sequence: 4, balance: '20' },
+        'user_wallet:wallet-recipient-abc:USDT': {
+          sequence: 9,
+          balance: '3.5',
+        },
+      };
+
+      const entries = buildInternalTransferLedgerEntries(
+        freshInternalTransferInput({ cryptoAmount: '5', accountStates }),
+      );
+
+      const senderEntry = entries.find(
+        (e) => e.accountId === 'wallet-sender-abc',
+      )!;
+      expect(senderEntry.sequence).toBe(5);
+      expect(senderEntry.balanceAfter).toBe('15');
+
+      const recipientEntry = entries.find(
+        (e) => e.accountId === 'wallet-recipient-abc',
+      )!;
+      expect(recipientEntry.sequence).toBe(10);
+      expect(recipientEntry.balanceAfter).toBe('8.5');
+    });
+  });
+
+  describe('guards', () => {
+    it('throws LedgerError when cryptoAmount is zero', () => {
+      expect(() =>
+        buildInternalTransferLedgerEntries(
+          freshInternalTransferInput({ cryptoAmount: '0' }),
+        ),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when cryptoAmount is negative', () => {
+      expect(() =>
+        buildInternalTransferLedgerEntries(
+          freshInternalTransferInput({ cryptoAmount: '-1' }),
+        ),
+      ).toThrow(LedgerError);
+    });
+
+    it('throws LedgerError when cryptoAmount is not a valid decimal', () => {
+      expect(() =>
+        buildInternalTransferLedgerEntries(
+          freshInternalTransferInput({ cryptoAmount: 'abc' }),
+        ),
+      ).toThrow(LedgerError);
+    });
+  });
+
+  describe('property: signed amounts sum to 0 for various amounts', () => {
+    const cases = [
+      { cryptoAmount: '0.000001' },
+      { cryptoAmount: '1' },
+      { cryptoAmount: '100.5' },
+      { cryptoAmount: '999999.123456789012345678' },
+    ];
+
+    it.each(cases)(
+      'USDT sum=0 for cryptoAmount=$cryptoAmount',
+      ({ cryptoAmount }) => {
+        const entries = buildInternalTransferLedgerEntries(
+          freshInternalTransferInput({ cryptoAmount }),
+        );
+        expect(sumByCurrency(entries, 'USDT')).toBe(0n);
+      },
+    );
+  });
+
+  it('keys both legs by the passed asset (not a hardcoded literal)', () => {
+    const entries = buildInternalTransferLedgerEntries(
+      freshInternalTransferInput({ asset: USDC, cryptoAmount: '10' }),
+    );
+    expect(entries.every((e) => e.currency === USDC)).toBe(true);
     expect(sumByCurrency(entries, USDC)).toBe(0n);
   });
 });
