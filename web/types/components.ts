@@ -4,6 +4,7 @@
  * into the component files.
  */
 
+import type { SendDestinationInput } from "@handshake-agent/contracts"
 import type {
   QuoteRow,
   StatusTone,
@@ -335,6 +336,15 @@ export type NeedsBeneficiaryCardProps = NeedsBeneficiaryView & {
    * card forwards its own `messageId` as the second arg for per-card binding.
    */
   onResolve: (beneficiaryId: string, messageId?: string) => void
+  /**
+   * Raw send-to-address path (crypto only, offered when `allowRawSend` is
+   * set): called with the user-confirmed destination once the send-mode form
+   * is submitted. `messageId` mirrors `onResolve`'s per-card binding. Optional
+   * because the store wiring (turning this into a re-ask with
+   * `sendDestination`) lands separately — until then the card renders the
+   * form but has nothing to call.
+   */
+  onSendRaw?: (destination: SendDestinationInput, messageId?: string) => void
   className?: string
 }
 

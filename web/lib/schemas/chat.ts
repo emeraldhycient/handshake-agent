@@ -175,6 +175,17 @@ export const NeedsBeneficiaryViewSchema = z.object({
    * Rendered in place of the card's generic intro line when present.
    */
   note: z.string().optional(),
+  /**
+   * Edge-parsed address from the user's own message (crypto only) — pre-fills
+   * the send-mode form. §3.1: this is a UI convenience only, the user still
+   * edits/confirms it in the field before anything is sent.
+   */
+  prefillAddress: z.string().optional(),
+  /**
+   * When true (crypto only), the card offers a raw send-to-address path
+   * alongside the saved-beneficiary list/add form.
+   */
+  allowRawSend: z.boolean().optional(),
 })
 export type NeedsBeneficiaryView = z.infer<typeof NeedsBeneficiaryViewSchema>
 

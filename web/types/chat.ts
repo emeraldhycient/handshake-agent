@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import type { UseFormRegisterReturn } from "react-hook-form"
 import type { Beneficiary } from "@handshake-agent/contracts/beneficiaries"
+import type { SendDestinationInput } from "@handshake-agent/contracts"
 import type { ChooseBeneficiaryView } from "@/lib/schemas"
 import type {
   Density,
@@ -38,6 +39,23 @@ export interface SavedBeneficiaryListProps {
 
 export interface BeneficiaryFormProps {
   onResolve: (id: string) => void
+  /**
+   * "add" (default) — the standalone add-beneficiary form (PIN-gated, saved
+   * via the add mutation). "send" (crypto only) — the send-to-address inline
+   * form: address prefilled from the server's edge-parsed value but still
+   * user-edited/confirmed (§3.1), an optional "save as beneficiary" toggle,
+   * and NO PIN — send authorization happens later via the proposal's
+   * PIN + step-up flow, not on this form.
+   */
+  mode?: "add" | "send"
+  /** send mode: address to prefill the field with; the user can still edit it. */
+  prefillAddress?: string
+  /**
+   * send mode: called with the user-confirmed destination on submit, instead
+   * of the add-beneficiary mutation. Shape matches the contract's
+   * `sendDestination` request field 1:1 so the caller can forward it as-is.
+   */
+  onSend?: (destination: SendDestinationInput) => void
 }
 
 /** One fiat/country option in the add-bank currency selector. */

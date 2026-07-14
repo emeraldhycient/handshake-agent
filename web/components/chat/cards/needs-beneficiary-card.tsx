@@ -18,8 +18,11 @@ import type { NeedsBeneficiaryCardProps } from "@/types/components"
 export function NeedsBeneficiaryCard({
   beneficiaryType,
   note,
+  prefillAddress,
+  allowRawSend,
   messageId,
   onResolve,
+  onSendRaw,
   density,
   className,
 }: NeedsBeneficiaryCardProps) {
@@ -64,10 +67,17 @@ export function NeedsBeneficiaryCard({
         className={cn("mt-3 h-px bg-border", isMobile ? "mx-4" : "mx-[15px]")}
       />
 
-      {/* Add form */}
+      {/* Add / send form */}
       <div className={cn(isMobile ? "px-4 py-3.5" : "px-[15px] py-[13px]")}>
         {isBank ? (
           <AddBankForm onResolve={resolve} />
+        ) : allowRawSend ? (
+          <AddCryptoForm
+            mode="send"
+            prefillAddress={prefillAddress}
+            onSend={(d) => onSendRaw?.(d, messageId)}
+            onResolve={resolve}
+          />
         ) : (
           <AddCryptoForm onResolve={resolve} />
         )}

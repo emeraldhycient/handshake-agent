@@ -202,6 +202,10 @@ export function mapOutcomeToMessages(
       kind: "needs_beneficiary",
       beneficiaryType: outcome.beneficiaryType,
       note: outcome.note,
+      // Edge-parsed address + raw-send eligibility (crypto only) — pre-fills
+      // and unlocks the send-mode form on the card (§3.1: still user-edited).
+      prefillAddress: outcome.prefillAddress,
+      allowRawSend: outcome.allowRawSend,
     })
   } else if (outcome.kind === "choose_beneficiary") {
     // Nickname matched MORE THAN ONE saved beneficiary — render the pick-one
