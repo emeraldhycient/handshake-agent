@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { PayIdSchema } from "../common";
 
 // Email-first web auth. The phone is captured for later WhatsApp linking only —
 // it is a routing key, never the auth anchor (root CLAUDE.md §3.4).

@@ -1,9 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   ChangePinRequestSchema,
+  ClaimPayIdSchema,
+  CreatePublicNicknameSchema,
   ProfileResponseSchema,
   ProfileSessionListResponseSchema,
   ProfileSessionSchema,
+  PublicNicknameSchema,
+  PublicNicknamesResponseSchema,
   UpdateProfileRequestSchema,
 } from "./profile.dto";
 
@@ -49,6 +53,95 @@ describe("ProfileResponseSchema", () => {
         limits: null,
       }),
     ).toThrow();
+  });
+
+  it("parses a profile with a payId present (Spec 2 @-handle)", () => {
+    const ok = {
+      email: "a@b.com",
+      fullName: "Amara Okeke",
+      phone: "+2348011112222",
+      kycStatus: "verified",
+      kycTier: "tier_1",
+      fiatCurrency: "NGN",
+      limits: null,
+      payId: "ada",
+    };
+    expect(ProfileResponseSchema.parse(ok)).toEqual(ok);
+  });
+
+  it("parses a profile with an omitted payId (optional — not yet claimed)", () => {
+    const ok = {
+      email: "a@b.com",
+      fullName: null,
+      phone: null,
+      kycStatus: "not_started",
+      kycTier: "unverified",
+      fiatCurrency: "NGN",
+      limits: null,
+    };
+    expect(ProfileResponseSchema.parse(ok).payId).toBeUndefined();
+  });
+});
+
+describe("ClaimPayIdSchema", () => {
+  it("parses a valid PayId claim", () => {
+    expect(ClaimPayIdSchema.parse({ payId: "ada" })).toEqual({ payId: "ada" });
+  });
+
+  it("rejects an unknown key (.strict())", () => {
+    expect(() =>
+      ClaimPayIdSchema.parse({ payId: "ada", extra: 1 }),
+    ).toThrow();
+  });
+
+  it("rejects a reserved / malformed handle (PayIdSchema policy)", () => {
+    expect(() => ClaimPayIdSchema.parse({ payId: "admin" })).toThrow();
+    expect(() => ClaimPayIdSchema.parse({ payId: "Bad-Char" })).toThrow();
+  });
+});
+
+describe("CreatePublicNicknameSchema", () => {
+  it("parses a valid nickname alias", () => {
+    expect(CreatePublicNicknameSchema.parse({ alias: "ada" })).toEqual({
+      alias: "ada",
+    });
+  });
+
+  it("rejects an unknown key (.strict())", () => {
+    expect(() =>
+      CreatePublicNicknameSchema.parse({ alias: "ada", extra: 1 }),
+    ).toThrow();
+  });
+
+  it("rejects a reserved / malformed alias (PayIdSchema policy)", () => {
+    expect(() => CreatePublicNicknameSchema.parse({ alias: "support" })).toThrow();
+    expect(() => CreatePublicNicknameSchema.parse({ alias: "no" })).toThrow();
+  });
+});
+
+describe("PublicNicknameSchema / PublicNicknamesResponseSchema", () => {
+  const nickname = {
+    id: "018f6b3a-0000-7000-8000-000000000001",
+    alias: "ada",
+  };
+
+  it("parses a public nickname row", () => {
+    expect(PublicNicknameSchema.parse(nickname)).toEqual(nickname);
+  });
+
+  it("rejects a non-uuid id", () => {
+    expect(() =>
+      PublicNicknameSchema.parse({ id: "not-a-uuid", alias: "ada" }),
+    ).toThrow();
+  });
+
+  it("parses the list envelope", () => {
+    expect(
+      PublicNicknamesResponseSchema.parse({ nicknames: [nickname] }).nicknames,
+    ).toHaveLength(1);
+    expect(
+      PublicNicknamesResponseSchema.parse({ nicknames: [] }).nicknames,
+    ).toHaveLength(0);
   });
 });
 
