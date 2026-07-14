@@ -162,7 +162,7 @@ describe('BQ-2: async wallet backfill integration (Testcontainers Redis + Postgr
     walletRepo = new WalletPrismaRepository(ps);
     backfillRunRepo = new PrismaBackfillRunRepository(ps);
     const userLister = new ActiveUserListerPrismaAdapter(ps);
-    const assetRegistry = new AssetRegistry(makeConfigService() as never);
+    const assetRegistry = new AssetRegistry(makeConfigService());
     const provider = makeFakeProvider();
     const clock = new SystemClock();
     const walletService = new WalletService(
