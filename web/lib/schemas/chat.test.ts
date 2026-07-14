@@ -183,6 +183,7 @@ describe("ChatMessageSchema", () => {
         amount: "+ 29.97 USDT",
         rows: [{ label: "Rate", value: "₦1,669/USDT" }],
         txRef: "HS-20250101-ABCD",
+        action: "buy",
       }).success
     ).toBe(true)
   })
@@ -197,6 +198,7 @@ describe("ChatMessageSchema", () => {
         subtitle: "USDT bought",
         amount: "+ 29.97 USDT",
         rows: [],
+        action: "buy",
         // txRef omitted
       }).success
     ).toBe(false)

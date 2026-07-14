@@ -98,6 +98,14 @@ export const ReceiptViewSchema = z.object({
   amount: z.string(),
   rows: z.array(QuoteRowSchema),
   txRef: z.string(),
+  // Originating action — lets consumers (e.g. the receipt's "Save this
+  // recipient" affordance) branch without parsing title/rows text.
+  action: ChatActionSchema,
+  // SEND only: the saved beneficiary's label, present when the destination
+  // was an already-saved beneficiary. Absent on a raw (unsaved) send — the
+  // signal ReceiptCard uses to offer "Save this recipient". Never the
+  // address itself (§3.5 — the receipt only ever holds the masked address).
+  beneficiaryLabel: z.string().optional(),
 })
 export type ReceiptView = z.infer<typeof ReceiptViewSchema>
 

@@ -214,6 +214,7 @@ describe("ChatMessageView", () => {
       amount: "+ 29.97 USDT",
       rows: [],
       txRef: "HS-20240701-7X9K",
+      action: "buy",
     }
     render(
       <ChatMessageView

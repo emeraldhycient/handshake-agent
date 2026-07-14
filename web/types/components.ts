@@ -226,6 +226,16 @@ export type ReceiptCardProps = ReceiptView & {
   className?: string
 }
 
+/**
+ * "Save this recipient" — shown on a completed SEND receipt only for a raw
+ * (unsaved) destination (ReceiptCard gates this on action==="send" &&
+ * !beneficiaryLabel). Opens the standard add-crypto flow in a dialog.
+ */
+export interface SaveRecipientButtonProps {
+  density: Density
+  className?: string
+}
+
 // ─── Phase 12 chat thread components ──────────────────────────────────────────
 
 /** 12.2 */

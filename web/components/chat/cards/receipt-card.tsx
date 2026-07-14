@@ -2,6 +2,7 @@ import { cn } from "@/lib/utils"
 import { Money } from "@/components/shared/money"
 import { DetailRows } from "@/components/shared/detail-rows"
 import { ChatCardShell } from "@/components/chat/cards/chat-card-shell"
+import { SaveRecipientButton } from "@/components/chat/cards/receipt/save-recipient-button"
 import type { ReceiptCardProps } from "@/types/components"
 
 /**
@@ -10,6 +11,10 @@ import type { ReceiptCardProps } from "@/types/components"
  * Green success header on bg-success-muted; dashed divider above txRef row.
  * Mobile shows a "Share receipt" button (desktop omits it — line 886 has
  * none). No hex literals. DetailRows and Money atoms reused.
+ *
+ * A completed SEND to a raw (unsaved) address also offers "Save this
+ * recipient" — gated on action==="send" && !beneficiaryLabel (a send to an
+ * already-saved beneficiary has nothing to save). See SaveRecipientButton.
  */
 export function ReceiptCard({
   title,
@@ -17,11 +22,14 @@ export function ReceiptCard({
   amount,
   rows,
   txRef,
+  action,
+  beneficiaryLabel,
   density,
   onShare,
   className,
 }: ReceiptCardProps) {
   const isMobile = density === "mobile"
+  const isRawSend = action === "send" && !beneficiaryLabel
 
   return (
     <ChatCardShell density={density} className={className}>
@@ -124,6 +132,13 @@ export function ReceiptCard({
           </button>
         )}
       </div>
+
+      {/* Save-after-send: raw (unsaved) destination only (§3.5, §3.3) */}
+      {isRawSend && (
+        <div className={cn(isMobile ? "px-4 pb-3.5" : "px-[15px] pb-[13px]")}>
+          <SaveRecipientButton density={density} />
+        </div>
+      )}
     </ChatCardShell>
   )
 }
