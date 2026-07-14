@@ -901,6 +901,10 @@ const buildConfig = (): AppConfig => ({
       // catalog (USDT + TRX at launch). Engine gates on KYC + limits + sanctions
       // before calling the provider (root CLAUDE.md §3.1 / §3.3).
       'crypto.swap': true,
+      // Internal (user→user, PayID) ledger transfer — settled off-chain by the
+      // engine as a double-entry, no on-chain send (Spec 2, Task 6). Gated at
+      // tier_2 (gating.capabilityMinTier below), no on-chain per-send cap.
+      'crypto.transfer': true,
     },
     // Validity window for send quotes (300s / 5 min — same as buy/sell).
     // A human needs time to read the itemized confirmation and enter a PIN;
@@ -1223,6 +1227,8 @@ const buildConfig = (): AppConfig => ({
       'crypto.sell': 'tier_2',
       'crypto.send': 'tier_2',
       'crypto.swap': 'tier_2',
+      // Internal (PayID) transfer — same tier_2 floor as send/swap (Task 6).
+      'crypto.transfer': 'tier_2',
     },
   },
   // ── Sumsub (real KYC provider, Task 3.2, CLAUDE.md §7) ──────────────────────

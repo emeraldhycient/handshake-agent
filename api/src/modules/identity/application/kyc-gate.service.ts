@@ -40,7 +40,9 @@ export type Capability =
   | 'crypto.sell'
   | 'crypto.send'
   | 'crypto.swap'
-  | 'crypto.receive';
+  | 'crypto.receive'
+  // Internal (user→user, PayID) ledger transfer — no on-chain send (Task 6).
+  | 'crypto.transfer';
 
 /** Fail-closed minimum tier for a capability with no configured gating entry. */
 const FAIL_CLOSED_MIN_TIER: KycTier = 'tier_2';

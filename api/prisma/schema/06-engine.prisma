@@ -53,6 +53,9 @@ enum ProposalType {
   swap
   ticket_purchase
   add_beneficiary
+  // Internal (user→user, PayID) ledger transfer — settled off-chain by the
+  // engine as a double-entry, no on-chain send (Spec 2, Task 6).
+  internal_transfer
 
   @@map("proposal_type")
 }
