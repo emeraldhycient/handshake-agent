@@ -1339,6 +1339,38 @@ describe('WebChatService', () => {
     });
   });
 
+  // ── send_crypto with a raw sendDestination → raw_address proposal (Task 5) ──
+  // The user-confirmed raw address flows to the engine ONLY via the structured
+  // sendDestination field (§3.1) — the model never carries it.
+
+  it('send_crypto with a sendDestination creates a raw-address proposal', async () => {
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'send_crypto',
+      asset: 'USDT',
+      cryptoAmount: '5',
+      network: 'TRON',
+    });
+    fakeProposalService.createSendProposal.mockResolvedValue({
+      proposalId: 'p1',
+      confirmation: { toAddressMasked: 'TRaw…0001' },
+    });
+    const res = await service.handleMessage({
+      userId: 'user-1',
+      text: 'send 5 USDT to TRawAddr0000000001',
+      sendDestination: { address: 'TRawAddr0000000001', network: 'TRON' },
+    });
+    expect(fakeProposalService.createSendProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        destination: {
+          kind: 'raw_address',
+          address: 'TRawAddr0000000001',
+          network: 'TRON',
+        },
+      }),
+    );
+    expect(res.outcome).toMatchObject({ kind: 'proposal', txType: 'send' });
+  });
+
   // ── send_crypto proposal-error parity → graceful clarification ───────────────
 
   describe('send_crypto proposal errors → clarification (not an unhandled throw)', () => {

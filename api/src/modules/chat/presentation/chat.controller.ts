@@ -35,6 +35,7 @@ export class ChatController {
       userId: user.userId,
       text: body.text,
       beneficiaryId: body.beneficiaryId,
+      sendDestination: body.sendDestination,
     });
   }
 

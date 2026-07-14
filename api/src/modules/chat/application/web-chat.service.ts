@@ -91,6 +91,7 @@ import {
   AmountTooSmallError,
   SelfSendError,
 } from '../../transactions/domain/amount-guard-errors';
+import { InvalidSendAddressError } from '../../transactions/domain/invalid-send-address.error';
 
 // ---------------------------------------------------------------------------
 // DI tokens for proposal / wallet / beneficiary services.
@@ -145,6 +146,13 @@ export interface HandleMessageInput {
   userId: string;
   text: string;
   beneficiaryId?: string;
+  /**
+   * A USER-SUPPLIED raw on-chain destination captured in the send-to-address
+   * card / Flow (§3.1 — never model output). Mutually exclusive with
+   * `beneficiaryId` (enforced by `ChatMessageRequestSchema`). The engine
+   * re-validates the address + network before any money moves.
+   */
+  sendDestination?: SendDestinationInput;
 }
 
 export interface GetHistoryInput {
@@ -376,11 +384,32 @@ export class WebChatService {
           summaryText = 'KYC required';
           break;
         }
-        const sendResolution = await this.resolvePayoutBeneficiary(
+        // Network-consistency guard (§3.1): the engine validates, screens, and
+        // settles the send on `intent.network` authoritatively. A client-supplied
+        // `sendDestination.network` MUST NOT diverge from it — sending on a
+        // network other than the one that was validated is a misroute hazard.
+        // For Spec 1 (USDT/TRON) the two coincide; fail closed to a clarification
+        // on any mismatch rather than silently proceed. Compared case-insensitively
+        // so schema-canonical casing drift never yields a false positive.
+        if (
+          input.sendDestination &&
+          input.sendDestination.network.toUpperCase() !==
+            intent.network.toUpperCase()
+        ) {
+          const networkMismatchText =
+            "That address is for a different network than the one I'd send on. Please double-check the network and try again.";
+          outcome = { kind: 'clarification', text: networkMismatchText };
+          summaryText = networkMismatchText;
+          break;
+        }
+        const sendResolution = await this.resolveSendDestination(
           userId,
-          'crypto_address',
-          input.beneficiaryId,
+          {
+            beneficiaryId: input.beneficiaryId,
+            sendDestination: input.sendDestination,
+          },
           intent.recipientNickname,
+          input.text,
         );
         if (!sendResolution.resolved) {
           outcome = sendResolution.outcome;
@@ -392,10 +421,7 @@ export class WebChatService {
             await this.proposalService.createSendProposal({
               userId,
               intent,
-              destination: {
-                kind: 'saved_beneficiary',
-                beneficiaryId: sendResolution.beneficiaryId,
-              },
+              destination: sendResolution.destination,
             });
           outcome = {
             kind: 'proposal',
@@ -407,8 +433,9 @@ export class WebChatService {
             'Your send proposal is ready. Please review and confirm.';
         } catch (sendErr) {
           // Same parity as sell: convert the stable-coded proposal rejections
-          // (insufficient balance, cooling-off, wrong beneficiary type,
-          // sanctions, dust amount, self-send) into a first-class clarification.
+          // (insufficient balance, cooling-off, wrong beneficiary type, sanctions,
+          // dust amount, self-send, invalid raw address) into a first-class
+          // clarification rather than an opaque 4xx/5xx that drops the thread.
           const clarification = this.proposalErrorClarification(sendErr);
           if (clarification === null) throw sendErr;
           outcome = { kind: 'clarification', text: clarification };
@@ -971,6 +998,12 @@ export class WebChatService {
     }
     if (err instanceof SelfSendError) {
       return 'That’s your own wallet address — no transfer is needed. Choose a different recipient.';
+    }
+    if (err instanceof InvalidSendAddressError) {
+      // A user-pasted raw address that failed the network's pattern check.
+      // Surface a clean, actionable clarification — NEVER the raw domain
+      // message (it echoes the invalid address back verbatim).
+      return `That doesn’t look like a valid ${err.network} address — please check it and try again.`;
     }
     if (err instanceof BeneficiaryCoolingOffError) {
       return (
