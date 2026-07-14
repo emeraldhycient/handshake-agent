@@ -99,6 +99,9 @@ const fakeAssetRegistry = {
   // Base fiat for the sell currency-match filter (legacy-null payoutCurrency → NGN).
   defaultFiat: jest.fn().mockReturnValue('NGN'),
   isCapabilityEnabled: jest.fn().mockReturnValue(true),
+  // Deterministic edge classifier used by parseAddressFromText (§3.1 — NOT the
+  // model). Defaults to TRON; individual tests override as needed.
+  inferNetworkForAddress: jest.fn().mockReturnValue('TRON'),
 };
 
 // Mirrors the real `gating.capabilityMinTier` code default (Task 1.2,
@@ -2292,6 +2295,127 @@ describe('WebChatService', () => {
       });
 
       expect(result.outcome).toEqual({ kind: 'needs_kyc' });
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Task 4 — resolveSendDestination (crypto): a discriminated SendDestination
+  // descriptor with the §3.1 NO-MISROUTE guarantee — an explicit-but-unsaved
+  // crypto destination (a pasted address, or a nickname that matched nothing, or
+  // a bare "send N") returns needs_beneficiary(allowRawSend) and NEVER falls
+  // through to the user's default beneficiary. parseAddressFromText is the
+  // deterministic edge parser (NOT the model) that only pre-fills the
+  // user-confirmed card.
+  // ───────────────────────────────────────────────────────────────────────────
+  describe('resolveSendDestination (crypto)', () => {
+    it('returns a raw_address descriptor when the request carries sendDestination', async () => {
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {
+          sendDestination: {
+            address: 'TValidAddr0000000001',
+            network: 'TRON',
+            saveAsBeneficiary: true,
+            label: 'Mum',
+          },
+        },
+        undefined,
+        'send 50 USDT to TValidAddr0000000001',
+      );
+      expect(r).toEqual({
+        resolved: true,
+        destination: {
+          kind: 'raw_address',
+          address: 'TValidAddr0000000001',
+          network: 'TRON',
+          save: { label: 'Mum' },
+        },
+      });
+    });
+
+    it('a raw-address paste with NO saved match returns needs_beneficiary(allowRawSend, prefillAddress) — NEVER the default', async () => {
+      fakeBeneficiaryService.getDefault.mockResolvedValue({
+        id: 'default-ben',
+      }); // user HAS a default
+      fakeAssetRegistry.inferNetworkForAddress.mockReturnValue('TRON');
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        undefined,
+        'send 50 USDT to TPastedAddr0000001',
+      );
+      expect(r).toMatchObject({
+        resolved: false,
+        outcome: {
+          kind: 'needs_beneficiary',
+          beneficiaryType: 'crypto_address',
+          allowRawSend: true,
+          prefillAddress: 'TPastedAddr0000001',
+        },
+      });
+      // §3.1: the default beneficiary must NEVER be consulted for a crypto send.
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('an explicit beneficiaryId still resolves to a saved_beneficiary descriptor', async () => {
+      const r = await service.resolveSendDestination(
+        'user-1',
+        { beneficiaryId: 'ben-1' },
+        undefined,
+        'send 50',
+      );
+      expect(r).toEqual({
+        resolved: true,
+        destination: { kind: 'saved_beneficiary', beneficiaryId: 'ben-1' },
+      });
+    });
+
+    it('a bare "send 50 USDT" (no address, no nickname, no id) offers the card, not the silent default', async () => {
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        undefined,
+        'send 50 USDT',
+      );
+      expect(r).toMatchObject({
+        resolved: false,
+        outcome: { kind: 'needs_beneficiary', allowRawSend: true },
+      });
+      if (r.resolved) throw new Error('expected an unresolved outcome');
+      expect(r.outcome).not.toHaveProperty('prefillAddress');
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('a matching nickname resolves to a saved_beneficiary (unchanged)', async () => {
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([
+        { id: 'ben-mum' },
+      ]);
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        'mum',
+        'send 50 USDT to mum',
+      );
+      expect(r).toEqual({
+        resolved: true,
+        destination: { kind: 'saved_beneficiary', beneficiaryId: 'ben-mum' },
+      });
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('parseAddressFromText', () => {
+    it('extracts a TRON address token and its network', () => {
+      fakeAssetRegistry.inferNetworkForAddress.mockReturnValue('TRON');
+      expect(
+        service.parseAddressFromText(
+          'send 50 USDT to TValidAddr0000000001 now',
+        ),
+      ).toEqual({ address: 'TValidAddr0000000001', network: 'TRON' });
+    });
+
+    it('returns null when no address-shaped token is present', () => {
+      expect(service.parseAddressFromText('send 50 USDT to mum')).toBeNull();
     });
   });
 });
