@@ -343,6 +343,39 @@ describe("mapOutcomeToMessages", () => {
     })
   })
 
+  it("passes prefillAddress + allowRawSend through for a raw-send-eligible crypto outcome", () => {
+    // A crypto send with an edge-parsed address in the user's message and no
+    // saved beneficiary: the server marks the card raw-send-eligible so the
+    // web UI can offer a send-to-address path alongside the saved list.
+    const outcome: AgentTurnOutcome = {
+      kind: "needs_beneficiary",
+      beneficiaryType: "crypto_address",
+      prefillAddress: "TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE",
+      allowRawSend: true,
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      kind: "needs_beneficiary",
+      beneficiaryType: "crypto_address",
+      prefillAddress: "TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE",
+      allowRawSend: true,
+    })
+  })
+
+  it("omits prefillAddress/allowRawSend when the outcome doesn't carry them (backwards compatible)", () => {
+    const { messages } = mapOutcomeToMessages(
+      { kind: "needs_beneficiary", beneficiaryType: "bank_account" },
+      makeIder()
+    )
+    expect(messages[0]).toMatchObject({ kind: "needs_beneficiary" })
+    if (messages[0].kind === "needs_beneficiary") {
+      expect(messages[0].prefillAddress).toBeUndefined()
+      expect(messages[0].allowRawSend).toBeUndefined()
+    }
+  })
+
   it("maps choose_beneficiary to a picker card carrying nickname + candidates", () => {
     // SECURITY (§3.1): candidates carry only server-resolved beneficiary ids and
     // human-safe masked details — the mapper must pass them through verbatim and

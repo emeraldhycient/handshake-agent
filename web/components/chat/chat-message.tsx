@@ -23,6 +23,7 @@ export function ChatMessageView({
   onConfirm,
   onSelectTicket,
   onResolveBeneficiary,
+  onSendRaw,
 }: ChatMessageViewProps) {
   const isUser = message.kind === "text" && message.role === "user"
 
@@ -98,6 +99,7 @@ export function ChatMessageView({
                 // exact intent that produced it (not the mutable last-intent).
                 messageId={message.id}
                 onResolve={onResolveBeneficiary}
+                onSendRaw={onSendRaw}
               />
             )
           case "choose_beneficiary":

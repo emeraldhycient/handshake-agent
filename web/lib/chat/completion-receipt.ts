@@ -40,10 +40,18 @@ export function buildCompletionReceipt(
         { label: "Date", value: date },
       ],
       txRef,
+      action,
     }
   }
 
   if (action === "send") {
+    // Carried through from the proposal's confirmation rows (agent-outcome.ts)
+    // only when the destination was an already-saved beneficiary. Its ABSENCE
+    // is the signal ReceiptCard uses to offer "Save this recipient" for a raw
+    // (unsaved) send — never the address itself (§3.5).
+    const beneficiaryLabel = pending.rows.find(
+      (r) => r.label === "Beneficiary"
+    )?.value
     return {
       kind: "receipt" as const,
       title: "Transfer sent",
@@ -56,6 +64,8 @@ export function buildCompletionReceipt(
         { label: "Date", value: date },
       ],
       txRef,
+      action,
+      ...(beneficiaryLabel ? { beneficiaryLabel } : {}),
     }
   }
 
@@ -72,6 +82,7 @@ export function buildCompletionReceipt(
         { label: "Date", value: date },
       ],
       txRef,
+      action,
     }
   }
 
@@ -94,5 +105,6 @@ export function buildCompletionReceipt(
       { label: "Date", value: date },
     ],
     txRef,
+    action,
   }
 }

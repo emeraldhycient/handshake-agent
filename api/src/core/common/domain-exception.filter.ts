@@ -368,6 +368,14 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.UNPROCESSABLE_ENTITY,
     message: "That's your own wallet address — no transfer is needed.",
   },
+  // A user-supplied raw send address failed the network's pattern validation
+  // (createSendProposal raw_address branch) → 422, never an opaque 500.
+  INVALID_SEND_ADDRESS: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message:
+      "That address isn't valid for the selected network. " +
+      'Please check it and try again.',
+  },
 
   // ── Auth / PIN-setup / KYC (backstops; controllers also map these) ─────────
   PIN_WEAK: {

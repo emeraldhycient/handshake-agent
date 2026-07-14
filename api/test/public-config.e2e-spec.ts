@@ -67,7 +67,7 @@ describe('GET /config (public catalog endpoint)', () => {
     // constructor param (ConfigService). No framework coupling beyond the DI
     // decorator, so instantiation outside a full Nest context is safe.
     const configService = makeConfigService();
-    const assetRegistry = new AssetRegistry(configService as never);
+    const assetRegistry = new AssetRegistry(configService);
 
     const moduleRef = await Test.createTestingModule({
       controllers: [PublicConfigController],
@@ -159,7 +159,7 @@ describe('GET /config (public catalog endpoint)', () => {
     };
 
     const configService = makeConfigService({ catalog: catalogWithDisabled });
-    const assetRegistry = new AssetRegistry(configService as never);
+    const assetRegistry = new AssetRegistry(configService);
 
     const moduleRef = await Test.createTestingModule({
       controllers: [PublicConfigController],

@@ -55,6 +55,7 @@ import {
   AmountTooSmallError,
   SelfSendError,
 } from '../domain/amount-guard-errors';
+import { InvalidSendAddressError } from '../domain/invalid-send-address.error';
 import {
   BeneficiaryNotFoundError,
   BeneficiaryWrongTypeError,
@@ -1347,7 +1348,10 @@ const BASE_SEND_INPUT = {
     cryptoAmount: '10.0',
     network: 'TRON' as const,
   },
-  beneficiaryId: FIXED_SEND_BENEFICIARY_ID,
+  destination: {
+    kind: 'saved_beneficiary' as const,
+    beneficiaryId: FIXED_SEND_BENEFICIARY_ID,
+  },
 };
 
 describe('ProposalService.createSendProposal', () => {
@@ -1947,6 +1951,135 @@ describe('ProposalService.createSendProposal', () => {
     const svc = makeSendSvc();
     const result = await svc.createSendProposal(BASE_SEND_INPUT);
     expect(result.confirmation.beneficiaryLabel).toBe('My TRON Wallet');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createSendProposal — raw_address destination (send-to-address, Task 2)
+// ---------------------------------------------------------------------------
+
+describe('createSendProposal — raw_address destination', () => {
+  it('creates a proposal to a user-supplied raw address (no beneficiary lookup)', async () => {
+    // assetRegistry.validateAddress → true; ledger balance sufficient; kycGate passes.
+    const beneficiaryService = makeBeneficiaryServiceSend();
+    const svc = makeSendSvc({ beneficiaryService });
+    const out = await svc.createSendProposal({
+      ...BASE_SEND_INPUT,
+      destination: {
+        kind: 'raw_address',
+        address: 'TValidAddr000000000001',
+        network: 'TRON',
+      },
+    });
+    expect(out.confirmation.toAddressMasked).toMatch(/^TValid.*0001$/);
+    expect(out.confirmation.beneficiaryLabel).toBeUndefined();
+    expect(beneficiaryService.getById).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid raw address with InvalidSendAddressError (not a 5xx)', async () => {
+    const svc = makeSendSvc({
+      assetRegistry: makeAssetRegistrySend({ addressValid: false }),
+    });
+    await expect(
+      svc.createSendProposal({
+        ...BASE_SEND_INPUT,
+        destination: {
+          kind: 'raw_address',
+          address: 'not-an-address',
+          network: 'TRON',
+        },
+      }),
+    ).rejects.toBeInstanceOf(InvalidSendAddressError);
+  });
+
+  it('runs the self-send guard on a raw address (own wallet address → SelfSendError)', async () => {
+    const svc = makeSendSvc();
+    await expect(
+      svc.createSendProposal({
+        ...BASE_SEND_INPUT,
+        destination: {
+          kind: 'raw_address',
+          address: STUB_SEND_WALLET_RECORD.address,
+          network: 'TRON',
+        },
+      }),
+    ).rejects.toBeInstanceOf(SelfSendError);
+  });
+
+  it('screens the raw address for sanctions (blocked → SanctionsBlockedError)', async () => {
+    const svc = makeSendSvc({
+      complianceService: makeComplianceService(false),
+    });
+    await expect(
+      svc.createSendProposal({
+        ...BASE_SEND_INPUT,
+        destination: {
+          kind: 'raw_address',
+          address: 'TSanctioned00000000001',
+          network: 'TRON',
+        },
+      }),
+    ).rejects.toBeInstanceOf(SanctionsBlockedError);
+  });
+
+  it('does NOT apply first-use cooling-off to a raw send', async () => {
+    // No beneficiary record → cooling-off cannot even be read; proposal succeeds.
+    const svc = makeSendSvc();
+    const out = await svc.createSendProposal({
+      ...BASE_SEND_INPUT,
+      destination: {
+        kind: 'raw_address',
+        address: 'TValidAddr000000000002',
+        network: 'TRON',
+      },
+    });
+    expect(out.proposalId).toBeDefined();
+  });
+
+  it('persists destinationKind=raw_address + null beneficiaryId + save flag', async () => {
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeSendSvc({ proposalRepo });
+    await svc.createSendProposal({
+      ...BASE_SEND_INPUT,
+      destination: {
+        kind: 'raw_address',
+        address: 'TValidAddr000000000003',
+        network: 'TRON',
+        save: { label: 'Mum' },
+      },
+    });
+    const createArg = (
+      proposalRepo.create as jest.Mock<
+        Promise<{ id: string }>,
+        [CreateProposalData]
+      >
+    ).mock.calls[0][0];
+    expect(createArg.parameters).toMatchObject({
+      destinationKind: 'raw_address',
+      toAddress: 'TValidAddr000000000003',
+      beneficiaryId: null,
+      saveAsBeneficiary: 'true',
+      saveLabel: 'Mum',
+    });
+  });
+});
+
+describe('createSendProposal — saved_beneficiary destination (unchanged behaviour)', () => {
+  it('still resolves the address from the saved beneficiary + applies cooling-off', async () => {
+    const beneficiaryService = makeBeneficiaryServiceSend();
+    const svc = makeSendSvc({ beneficiaryService });
+    const out = await svc.createSendProposal({
+      ...BASE_SEND_INPUT,
+      destination: {
+        kind: 'saved_beneficiary',
+        beneficiaryId: FIXED_SEND_BENEFICIARY_ID,
+      },
+    });
+    expect(beneficiaryService.getById).toHaveBeenCalledWith(
+      'user-id-1',
+      FIXED_SEND_BENEFICIARY_ID,
+    );
+    expect(out.confirmation.beneficiaryLabel).toBeDefined();
   });
 });
 

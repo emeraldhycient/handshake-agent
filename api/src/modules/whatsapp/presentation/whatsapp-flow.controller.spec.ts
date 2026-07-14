@@ -13,6 +13,9 @@
  *   - (W1) data_exchange for 'sell' proposal type → executeSell called, SUCCESS screen
  *   - (W1) data_exchange for 'send' proposal type → executeSend called, SUCCESS screen
  *   - (W1) data_exchange for 'buy' proposal type → executeBuy called (unchanged)
+ *   - (Task 11) data_exchange / send_to_address → createSendProposal called with a
+ *     raw_address descriptor; itemized SEND_CONFIRM screen returned; invalid
+ *     address / sanctions / self-send map to an ERROR screen, never a 5xx.
  */
 
 import { Test } from '@nestjs/testing';
@@ -26,8 +29,12 @@ import {
   FlowKeyNotConfiguredError,
 } from '../domain/flow-errors';
 import { ExecutionService } from '../../transactions/application/execution.service';
+import { ProposalService } from '../../transactions/application/proposal.service';
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { InvalidAddressError } from '../../beneficiaries/domain/beneficiary-errors';
+import { InvalidSendAddressError } from '../../transactions/domain/invalid-send-address.error';
+import { SelfSendError } from '../../transactions/domain/amount-guard-errors';
+import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
 import { PinInvalidError } from '../../../core/auth/domain/pin-errors';
 import { CapabilityTierError } from '../../identity/domain/gate-errors';
 import { PinService } from '../../../core/auth/pin.service';
@@ -97,6 +104,10 @@ describe('WhatsAppFlowController', () => {
     requireById: jest.Mock;
   };
 
+  let mockProposalService: {
+    createSendProposal: jest.Mock;
+  };
+
   let mockProposalRepository: {
     getType: jest.Mock;
     listPendingForUser: jest.Mock;
@@ -151,6 +162,10 @@ describe('WhatsAppFlowController', () => {
       updateStatus: jest.fn(),
     };
 
+    mockProposalService = {
+      createSendProposal: jest.fn(),
+    };
+
     mockConfigService = {
       get: jest.fn().mockReturnValue('test-signing-key'),
     };
@@ -181,6 +196,7 @@ describe('WhatsAppFlowController', () => {
       providers: [
         { provide: FLOW_CRYPTO, useValue: mockFlowCrypto },
         { provide: ExecutionService, useValue: mockExecutionService },
+        { provide: ProposalService, useValue: mockProposalService },
         { provide: BeneficiaryService, useValue: mockBeneficiaryService },
         { provide: PROPOSAL_REPOSITORY, useValue: mockProposalRepository },
         { provide: ConfigService, useValue: mockConfigService },
@@ -695,6 +711,199 @@ describe('WhatsAppFlowController', () => {
         'user-001',
         'ben-id-1',
       );
+    });
+  });
+
+  // ── send_to_address (Task 11) ─────────────────────────────────────────────
+
+  describe('data_exchange / send_to_address', () => {
+    const RAW_CONFIRMATION = {
+      proposalId: 'prop-raw-1',
+      asset: 'USDT',
+      cryptoAmount: '5',
+      network: 'TRON',
+      networkFeeCrypto: '1',
+      totalDebit: '6',
+      toAddressMasked: 'TRawAd...0001',
+      expiresAt: new Date().toISOString(),
+    };
+
+    function makeSendToAddressBody(extra: Record<string, unknown> = {}) {
+      mockFlowCrypto.decryptRequest.mockReturnValue({
+        decrypted: {
+          version: '3.0',
+          action: 'data_exchange',
+          flow_token: 'tok',
+          data: {
+            action: 'send_to_address',
+            address: 'TRawAddr0000000000001',
+            network: 'TRON',
+            asset: 'USDT',
+            cryptoAmount: '5',
+            saveAsBeneficiary: true,
+            label: 'Mum',
+            ...extra,
+          },
+        },
+        aesKey: MOCK_AES_KEY,
+        iv: MOCK_IV,
+      });
+    }
+
+    function mockHappyProposal() {
+      mockProposalService.createSendProposal.mockResolvedValue({
+        proposalId: RAW_CONFIRMATION.proposalId,
+        quoteId: null,
+        confirmation: RAW_CONFIRMATION,
+      });
+    }
+
+    it('calls createSendProposal with a raw_address descriptor built from the Flow data', async () => {
+      makeSendToAddressBody();
+      mockHappyProposal();
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      expect(mockProposalService.createSendProposal).toHaveBeenCalledWith({
+        userId: 'user-001',
+        intent: {
+          action: 'send_crypto',
+          asset: 'USDT',
+          cryptoAmount: '5',
+          network: 'TRON',
+        },
+        destination: {
+          kind: 'raw_address',
+          address: 'TRawAddr0000000000001',
+          network: 'TRON',
+          save: { label: 'Mum' },
+        },
+      });
+    });
+
+    it('returns the itemized SEND_CONFIRM screen and never leaks internals', async () => {
+      makeSendToAddressBody();
+      mockHappyProposal();
+
+      const result = await controller.handleFlow(
+        makeEncryptedBody(),
+        makeRes(),
+      );
+
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({
+        screen: 'SEND_CONFIRM',
+        data: {
+          proposalId: RAW_CONFIRMATION.proposalId,
+          asset: 'USDT',
+          cryptoAmount: '5',
+          network: 'TRON',
+          networkFeeCrypto: '1',
+          totalDebit: '6',
+          toAddressMasked: 'TRawAd...0001',
+        },
+      });
+      // The full unmasked address must never appear in the response.
+      expect(JSON.stringify(encryptedWith)).not.toContain(
+        'TRawAddr0000000000001',
+      );
+      expect(result).toBe(ENCRYPTED_SENTINEL);
+    });
+
+    it('omits `save` on the descriptor when saveAsBeneficiary is not set', async () => {
+      makeSendToAddressBody({ saveAsBeneficiary: undefined, label: undefined });
+      mockHappyProposal();
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      expect(mockProposalService.createSendProposal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          destination: {
+            kind: 'raw_address',
+            address: 'TRawAddr0000000000001',
+            network: 'TRON',
+          },
+        }),
+      );
+    });
+
+    it('maps InvalidSendAddressError to an ERROR screen (never a 5xx)', async () => {
+      makeSendToAddressBody();
+      mockProposalService.createSendProposal.mockRejectedValue(
+        new InvalidSendAddressError('TRawAddr0000000000001', 'TRON'),
+      );
+
+      const result = await controller.handleFlow(
+        makeEncryptedBody(),
+        makeRes(),
+      );
+
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({ screen: 'ERROR' });
+      const data = encryptedWith.data as Record<string, unknown>;
+      expect(String(data.message)).toMatch(/valid.*TRON.*address/i);
+      expect(JSON.stringify(encryptedWith)).not.toContain(
+        'TRawAddr0000000000001',
+      );
+      expect(result).toBe(ENCRYPTED_SENTINEL);
+    });
+
+    it('maps SanctionsBlockedError to an ERROR screen with a distinct message', async () => {
+      makeSendToAddressBody();
+      mockProposalService.createSendProposal.mockRejectedValue(
+        new SanctionsBlockedError(
+          'TRawAddr0000000000001',
+          'ofac',
+          'evt-1',
+          'evt-1',
+        ),
+      );
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({ screen: 'ERROR' });
+      const data = encryptedWith.data as Record<string, unknown>;
+      expect(String(data.message)).toMatch(
+        /can.t be completed|different recipient/i,
+      );
+      expect(JSON.stringify(encryptedWith)).not.toContain('ofac');
+      expect(JSON.stringify(encryptedWith)).not.toContain('evt-1');
+    });
+
+    it('maps SelfSendError to an ERROR screen with a distinct message', async () => {
+      makeSendToAddressBody();
+      mockProposalService.createSendProposal.mockRejectedValue(
+        new SelfSendError(),
+      );
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({ screen: 'ERROR' });
+      const data = encryptedWith.data as Record<string, unknown>;
+      expect(String(data.message)).toMatch(/own wallet address/i);
+    });
+
+    it('returns ERROR and does not call createSendProposal when the address is missing', async () => {
+      makeSendToAddressBody({ address: undefined });
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      expect(mockProposalService.createSendProposal).not.toHaveBeenCalled();
+      const encryptedWith = captureEncryptArg(mockFlowCrypto.encryptResponse);
+      expect(encryptedWith).toMatchObject({ screen: 'ERROR' });
+    });
+
+    it('does not call executeBuy/executeSell/executeSend for this action', async () => {
+      makeSendToAddressBody();
+      mockHappyProposal();
+
+      await controller.handleFlow(makeEncryptedBody(), makeRes());
+
+      expect(mockExecutionService.executeBuy).not.toHaveBeenCalled();
+      expect(mockExecutionService.executeSell).not.toHaveBeenCalled();
+      expect(mockExecutionService.executeSend).not.toHaveBeenCalled();
     });
   });
 

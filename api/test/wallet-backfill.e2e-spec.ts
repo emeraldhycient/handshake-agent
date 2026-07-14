@@ -120,7 +120,7 @@ describe('WN-5: WalletBackfillService (Testcontainers Postgres)', () => {
     const ps = prisma as unknown as PrismaService;
     walletRepo = new WalletPrismaRepository(ps);
     userLister = new ActiveUserListerPrismaAdapter(ps);
-    assetRegistry = new AssetRegistry(makeConfigService() as never);
+    assetRegistry = new AssetRegistry(makeConfigService());
   });
 
   afterAll(async () => {

@@ -4,14 +4,33 @@ import { SellProposalConfirmationSchema } from '../tools/execute-sell.tool'
 import { SendProposalConfirmationSchema } from '../tools/execute-send.tool'
 import { SwapProposalConfirmationSchema } from '../tools/execute-swap.tool'
 import { TransactionHistoryResponseSchema } from '../transactions/transaction-history.schema'
-import { FiatCurrencySchema } from '../common'
+import { FiatCurrencySchema, NetworkSchema } from '../common'
+
+// On-chain destination for a raw send (user-supplied address, not a saved beneficiary).
+export const SendDestinationInputSchema = z.object({
+  // On-chain address — pattern re-validated server-side against the network.
+  address: z.string().min(1).max(120),
+  network: NetworkSchema,
+  // Persist this address as a saved beneficiary as part of this send.
+  saveAsBeneficiary: z.boolean().optional(),
+  label: z.string().min(1).max(60).optional(),
+})
+export type SendDestinationInput = z.infer<typeof SendDestinationInputSchema>
 
 // Request body sent from the web chat UI to POST /agent/chat.
-export const ChatMessageRequestSchema = z.object({
-  text: z.string().min(1).max(1000),
-  // Optional: pre-selected beneficiary so the agent can skip the lookup step.
-  beneficiaryId: z.string().uuid().optional(),
-})
+export const ChatMessageRequestSchema = z
+  .object({
+    text: z.string().min(1).max(1000),
+    // Optional: pre-selected saved beneficiary (skip the lookup step).
+    beneficiaryId: z.string().uuid().optional(),
+    // Optional: a USER-SUPPLIED raw destination (§3.1 — never model output),
+    // captured in the send-to-address card / Flow. Mutually exclusive with
+    // beneficiaryId; the engine re-validates the address before any send.
+    sendDestination: SendDestinationInputSchema.optional(),
+  })
+  .refine((d) => !(d.beneficiaryId && d.sendDestination), {
+    message: 'Provide either beneficiaryId or sendDestination, not both.',
+  })
 export type ChatMessageRequest = z.infer<typeof ChatMessageRequestSchema>
 
 // One asset's balance line within a balance snapshot.
@@ -50,6 +69,10 @@ export const AgentTurnOutcomeSchema = z.discriminatedUnion('kind', [
      * when a recipientNickname resolved to zero saved beneficiaries.
      */
     note: z.string().optional(),
+    /** Edge-parsed address from the user's own message, to pre-fill the card. */
+    prefillAddress: z.string().optional(),
+    /** When true, the card offers a raw-address send path (crypto only). */
+    allowRawSend: z.boolean().optional(),
   }),
   // Emitted when a recipientNickname resolves to MORE THAN ONE of the user's
   // saved beneficiaries — the UI renders a pick-one list and re-sends the turn

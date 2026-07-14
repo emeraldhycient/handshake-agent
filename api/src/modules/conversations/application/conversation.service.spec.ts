@@ -37,6 +37,7 @@ import {
   AmountTooSmallError,
   SelfSendError,
 } from '../../transactions/domain/amount-guard-errors';
+import { InvalidSendAddressError } from '../../transactions/domain/invalid-send-address.error';
 import {
   BeneficiaryCoolingOffError,
   BeneficiaryWrongTypeError,
@@ -1947,7 +1948,7 @@ describe('ConversationService.handleInbound', () => {
     expect(proposalService.createSendProposal).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'user-id-1',
-        beneficiaryId: cryptoBen.id,
+        destination: { kind: 'saved_beneficiary', beneficiaryId: cryptoBen.id },
       }),
     );
 
@@ -2118,7 +2119,12 @@ describe('ConversationService.handleInbound', () => {
         'mum',
       );
       expect(proposalService.createSendProposal).toHaveBeenCalledWith(
-        expect.objectContaining({ beneficiaryId: 'ben-crypto-mum-1' }),
+        expect.objectContaining({
+          destination: {
+            kind: 'saved_beneficiary',
+            beneficiaryId: 'ben-crypto-mum-1',
+          },
+        }),
       );
       expect(beneficiaryService.getDefault).not.toHaveBeenCalled();
       expect(sender.sendBeneficiaryFlow).not.toHaveBeenCalled();
@@ -2305,7 +2311,12 @@ describe('ConversationService.handleInbound', () => {
         'crypto_address',
       );
       expect(proposalService.createSendProposal).toHaveBeenCalledWith(
-        expect.objectContaining({ beneficiaryId: cryptoBen.id }),
+        expect.objectContaining({
+          destination: {
+            kind: 'saved_beneficiary',
+            beneficiaryId: cryptoBen.id,
+          },
+        }),
       );
     });
   });
@@ -2387,6 +2398,10 @@ describe('ConversationService.handleInbound', () => {
         new AmountTooSmallError('send', '0.1', '1', 'USDT'),
       ],
       ['SelfSendError', new SelfSendError()],
+      [
+        'InvalidSendAddressError',
+        new InvalidSendAddressError('bad-address', 'TRON'),
+      ],
     ])(
       'send_crypto createSendProposal throws %s → clarification text, message not failed',
       async (_label, err: Error) => {

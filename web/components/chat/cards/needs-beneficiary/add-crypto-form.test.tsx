@@ -79,3 +79,85 @@ describe("AddCryptoForm", () => {
     ).toBeInTheDocument()
   })
 })
+
+describe("AddCryptoForm — send mode", () => {
+  it("send mode: prefilled address, no PIN, save toggle drives onSend", async () => {
+    const user = userEvent.setup()
+    const onSend = vi.fn()
+    render(
+      <AddCryptoForm
+        mode="send"
+        prefillAddress="TPrefill0000000001"
+        onResolve={vi.fn()}
+        onSend={onSend}
+      />
+    )
+    expect(screen.getByLabelText(/USDT address/i)).toHaveValue(
+      "TPrefill0000000001"
+    )
+    expect(screen.queryByLabelText(/Transaction PIN/i)).not.toBeInTheDocument()
+
+    await user.click(
+      screen.getByRole("checkbox", { name: /save this recipient/i })
+    )
+    await user.type(screen.getByLabelText(/Label/i), "Mum")
+    await user.click(screen.getByRole("button", { name: /send/i }))
+
+    expect(onSend).toHaveBeenCalledWith({
+      address: "TPrefill0000000001",
+      network: "TRON",
+      saveAsBeneficiary: true,
+      label: "Mum",
+    })
+  })
+
+  it("send mode: unchecked save toggle sends without a label", async () => {
+    const user = userEvent.setup()
+    const onSend = vi.fn()
+    render(
+      <AddCryptoForm
+        mode="send"
+        prefillAddress="TPrefill0000000001"
+        onResolve={vi.fn()}
+        onSend={onSend}
+      />
+    )
+
+    expect(
+      screen.queryByRole("textbox", { name: /^label$/i })
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: /send/i }))
+
+    expect(onSend).toHaveBeenCalledWith({
+      address: "TPrefill0000000001",
+      network: "TRON",
+      saveAsBeneficiary: false,
+    })
+  })
+
+  it("send mode: the address field is editable, not locked to the prefill", async () => {
+    const user = userEvent.setup()
+    const onSend = vi.fn()
+    render(
+      <AddCryptoForm
+        mode="send"
+        prefillAddress="TPrefill0000000001"
+        onResolve={vi.fn()}
+        onSend={onSend}
+      />
+    )
+    const input = screen.getByLabelText(/USDT address/i)
+    await user.clear(input)
+    await user.type(input, "TEditedAddress000000")
+    await user.click(screen.getByRole("button", { name: /send/i }))
+
+    expect(onSend).toHaveBeenCalledWith(
+      expect.objectContaining({ address: "TEditedAddress000000" })
+    )
+  })
+
+  it("add mode is unchanged (PIN present, save mutation)", () => {
+    render(<AddCryptoForm onResolve={vi.fn()} />)
+    expect(screen.getByLabelText(/Transaction PIN/i)).toBeInTheDocument()
+  })
+})

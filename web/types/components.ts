@@ -4,6 +4,7 @@
  * into the component files.
  */
 
+import type { SendDestinationInput } from "@handshake-agent/contracts"
 import type {
   QuoteRow,
   StatusTone,
@@ -225,6 +226,16 @@ export type ReceiptCardProps = ReceiptView & {
   className?: string
 }
 
+/**
+ * "Save this recipient" — shown on a completed SEND receipt only for a raw
+ * (unsaved) destination (ReceiptCard gates this on action==="send" &&
+ * !beneficiaryLabel). Opens the standard add-crypto flow in a dialog.
+ */
+export interface SaveRecipientButtonProps {
+  density: Density
+  className?: string
+}
+
 // ─── Phase 12 chat thread components ──────────────────────────────────────────
 
 /** 12.2 */
@@ -240,6 +251,12 @@ export interface ChatMessageViewProps {
    * callers that don't forward it.
    */
   onResolveBeneficiary: (beneficiaryId: string, messageId?: string) => void
+  /**
+   * Raw send-to-address resolve (crypto only, needs_beneficiary cards with
+   * `allowRawSend`): forwarded to the card's `onSendRaw`. Optional — surfaces
+   * that don't offer the raw-send path (or existing tests) omit it.
+   */
+  onSendRaw?: (destination: SendDestinationInput, messageId?: string) => void
 }
 
 /** 12.3 */
@@ -267,6 +284,8 @@ export interface ChatThreadProps {
   onSelectTicket: (opt: TicketOption) => void
   /** Forwarded to each card; `messageId` binds the resume to that exact card. */
   onResolveBeneficiary: (beneficiaryId: string, messageId?: string) => void
+  /** Forwarded to each card's raw send-to-address resolve — see ChatMessageViewProps. */
+  onSendRaw?: (destination: SendDestinationInput, messageId?: string) => void
 }
 
 // ─── Phase 13 overlay components ──────────────────────────────────────────────
@@ -335,6 +354,15 @@ export type NeedsBeneficiaryCardProps = NeedsBeneficiaryView & {
    * card forwards its own `messageId` as the second arg for per-card binding.
    */
   onResolve: (beneficiaryId: string, messageId?: string) => void
+  /**
+   * Raw send-to-address path (crypto only, offered when `allowRawSend` is
+   * set): called with the user-confirmed destination once the send-mode form
+   * is submitted. `messageId` mirrors `onResolve`'s per-card binding. Optional
+   * because the store wiring (turning this into a re-ask with
+   * `sendDestination`) lands separately — until then the card renders the
+   * form but has nothing to call.
+   */
+  onSendRaw?: (destination: SendDestinationInput, messageId?: string) => void
   className?: string
 }
 

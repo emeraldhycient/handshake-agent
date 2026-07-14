@@ -60,6 +60,7 @@ import type {
   AuthorizeProposalResponse,
   ExecuteProposalResponse,
   TransactionStatusResponse,
+  SendDestinationInput,
 } from "@handshake-agent/contracts"
 import { getDeviceFingerprint } from "@/lib/device"
 
@@ -151,10 +152,17 @@ interface ChatState {
 
   // Actions
   send(surface: ChatSurface, text: string, action?: ChatAction): void
+  /**
+   * Sends `text` to the live agent. `opts.beneficiaryId` and
+   * `opts.sendDestination` are mutually exclusive (the request contract's
+   * `.refine` rejects both) — pass at most one. `sendDestination` is the
+   * USER-confirmed raw on-chain destination captured by the send-mode card
+   * (§3.1 — never fabricated client-side, forwarded verbatim).
+   */
   sendToAgent(
     surface: ChatSurface,
     text: string,
-    beneficiaryId?: string
+    opts?: { beneficiaryId?: string; sendDestination?: SendDestinationInput }
   ): Promise<void>
   /**
    * Rebuild the thread from persisted server history (GET /chat/messages).
@@ -177,6 +185,19 @@ interface ChatState {
   resolveBeneficiary(
     surface: ChatSurface,
     beneficiaryId: string,
+    messageId?: string
+  ): Promise<void>
+  /**
+   * Re-sends the money request a needs_beneficiary card was created for, with
+   * a raw user-confirmed on-chain destination instead of a saved beneficiary
+   * id (crypto send-to-address path, Task 8's send-mode card). Mirrors
+   * `resolveBeneficiary` exactly: looks up the intent text bound to `messageId`
+   * via `_beneficiaryIntents`, falling back to `_lastIntentText` when no
+   * messageId is passed (legacy callers).
+   */
+  resolveSendRaw(
+    surface: ChatSurface,
+    dest: SendDestinationInput,
     messageId?: string
   ): Promise<void>
   /** Wire (or replace) the dead-session redirect after construction (findings #1/#2). */
@@ -426,7 +447,7 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
         })
       },
 
-      async sendToAgent(surface, text, beneficiaryId) {
+      async sendToAgent(surface, text, opts) {
         const trimmed = text.trim()
         if (!trimmed) return
 
@@ -451,9 +472,15 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
         }))
 
         try {
-          const response = await chatApiFn(
-            beneficiaryId ? { text: trimmed, beneficiaryId } : { text: trimmed }
-          )
+          // beneficiaryId and sendDestination are mutually exclusive (the
+          // contract's ChatMessageRequestSchema `.refine` rejects both) —
+          // build the body with at most one present.
+          const body: ChatMessageRequest = opts?.beneficiaryId
+            ? { text: trimmed, beneficiaryId: opts.beneficiaryId }
+            : opts?.sendDestination
+              ? { text: trimmed, sendDestination: opts.sendDestination }
+              : { text: trimmed }
+          const response = await chatApiFn(body)
           const { outcome } = response
 
           // Shared mapping — identical to the reload/hydration path so a live reply
@@ -587,7 +614,19 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
           (messageId ? _beneficiaryIntents[messageId] : undefined) ??
           _lastIntentText
         if (!intentText) return
-        await get().sendToAgent(surface, intentText, beneficiaryId)
+        await get().sendToAgent(surface, intentText, { beneficiaryId })
+      },
+
+      async resolveSendRaw(surface, dest, messageId) {
+        // Mirrors resolveBeneficiary: prefer the intent bound to THIS card;
+        // fall back to the mutable last-intent only for legacy callers that
+        // pass no messageId.
+        const { _beneficiaryIntents, _lastIntentText } = get()
+        const intentText =
+          (messageId ? _beneficiaryIntents[messageId] : undefined) ??
+          _lastIntentText
+        if (!intentText) return
+        await get().sendToAgent(surface, intentText, { sendDestination: dest })
       },
 
       send(surface, text, explicitAction) {

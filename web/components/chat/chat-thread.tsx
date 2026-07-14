@@ -18,6 +18,7 @@ export function ChatThread({
   onConfirm,
   onSelectTicket,
   onResolveBeneficiary,
+  onSendRaw,
 }: ChatThreadProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -61,6 +62,7 @@ export function ChatThread({
           onConfirm={onConfirm}
           onSelectTicket={onSelectTicket}
           onResolveBeneficiary={onResolveBeneficiary}
+          onSendRaw={onSendRaw}
         />
       ))}
 

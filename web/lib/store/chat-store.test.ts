@@ -1348,6 +1348,180 @@ describe("sendToAgent", () => {
     })
   })
 
+  // ─── resolveSendRaw (Task 9: raw send-to-address destination) ────────────────
+
+  it("resolveSendRaw re-sends the bound intent with a sendDestination", async () => {
+    // Turn 1: "send 50 USDT to TRaw0000000001" → needs_beneficiary card bound
+    // to THIS text (crypto_address, raw-send offered).
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "needs_beneficiary",
+        beneficiaryType: "crypto_address",
+      })
+    )
+    await store.getState().sendToAgent("m", "send 50 USDT to TRaw0000000001")
+    const card = store
+      .getState()
+      .threads.m.find((m) => m.kind === "needs_beneficiary")!
+    const cardId = card.id
+
+    // Turn 2 (after the user confirms the raw destination): proposal renders.
+    const proposalId = "44444444-4444-4444-4444-444444444444"
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "proposal",
+        txType: "send",
+        proposalId,
+        confirmation: {
+          proposalId,
+          asset: "USDT",
+          cryptoAmount: "50",
+          network: "TRON",
+          networkFeeCrypto: "1",
+          totalDebit: "51",
+          toAddressMasked: "TRaw00...0001",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        },
+      })
+    )
+
+    await store.getState().resolveSendRaw(
+      "m",
+      {
+        address: "TRaw0000000001",
+        network: "TRON",
+        saveAsBeneficiary: false,
+      },
+      cardId
+    )
+
+    // The re-send used the intent text bound to THIS card + the raw
+    // sendDestination — never a beneficiaryId (§3.1: the destination is the
+    // user-confirmed structured field, passed verbatim).
+    expect(mockApi).toHaveBeenLastCalledWith({
+      text: "send 50 USDT to TRaw0000000001",
+      sendDestination: {
+        address: "TRaw0000000001",
+        network: "TRON",
+        saveAsBeneficiary: false,
+      },
+    })
+    const last = store.getState().threads.m.at(-1)!
+    expect(last.kind).toBe("quote")
+    expect(store.getState().pendingProposalId).toBe(proposalId)
+  })
+
+  it("resolveSendRaw falls back to _lastIntentText when no messageId is passed", async () => {
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "needs_beneficiary",
+        beneficiaryType: "crypto_address",
+      })
+    )
+    await store.getState().sendToAgent("m", "send 2 usdt to TRawLegacy001")
+
+    const proposalId = "66666666-6666-6666-6666-666666666666"
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "proposal",
+        txType: "send",
+        proposalId,
+        confirmation: {
+          proposalId,
+          asset: "USDT",
+          cryptoAmount: "2",
+          network: "TRON",
+          networkFeeCrypto: "1",
+          totalDebit: "3",
+          toAddressMasked: "TRawLe...y001",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        },
+      })
+    )
+
+    await store.getState().resolveSendRaw("m", {
+      address: "TRawLegacy001",
+      network: "TRON",
+      saveAsBeneficiary: true,
+      label: "Legacy",
+    })
+
+    expect(mockApi).toHaveBeenLastCalledWith({
+      text: "send 2 usdt to TRawLegacy001",
+      sendDestination: {
+        address: "TRawLegacy001",
+        network: "TRON",
+        saveAsBeneficiary: true,
+        label: "Legacy",
+      },
+    })
+  })
+
+  it("resolveSendRaw re-sends the originating intent, not a later unrelated message", async () => {
+    // Turn 1: "send 50 USDT to TRawAAA0001" → needs_beneficiary card bound to
+    // THIS text (crypto_address, raw-send offered).
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "needs_beneficiary",
+        beneficiaryType: "crypto_address",
+      })
+    )
+    await store.getState().sendToAgent("m", "send 50 USDT to TRawAAA0001")
+    const card = store
+      .getState()
+      .threads.m.find((m) => m.kind === "needs_beneficiary")!
+    const cardId = card.id
+
+    // Turn 2: the user types something else entirely, overwriting the mutable
+    // _lastIntentText.
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "balance",
+        fiatCurrency: "NGN",
+        totalFiatValue: "100.00",
+        balances: [],
+      })
+    )
+    await store.getState().sendToAgent("m", "what's my balance")
+
+    // Resolve the OLD card with a raw destination. It must re-send
+    // "send 50 USDT to TRawAAA0001" — never "what's my balance".
+    const proposalId = "77777777-7777-7777-7777-777777777777"
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "proposal",
+        txType: "send",
+        proposalId,
+        confirmation: {
+          proposalId,
+          asset: "USDT",
+          cryptoAmount: "50",
+          network: "TRON",
+          networkFeeCrypto: "1",
+          totalDebit: "51",
+          toAddressMasked: "TRawAA...0001",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        },
+      })
+    )
+    await store
+      .getState()
+      .resolveSendRaw(
+        "m",
+        { address: "TRawAAA0001", network: "TRON", saveAsBeneficiary: false },
+        cardId
+      )
+
+    expect(mockApi).toHaveBeenLastCalledWith({
+      text: "send 50 USDT to TRawAAA0001",
+      sendDestination: {
+        address: "TRawAAA0001",
+        network: "TRON",
+        saveAsBeneficiary: false,
+      },
+    })
+  })
+
   // ─── choose_beneficiary (nickname disambiguation) ────────────────────────────
 
   it("choose_beneficiary outcome → picker card appended + typing cleared", async () => {
@@ -1486,14 +1660,15 @@ describe("sendToAgent", () => {
     const last = store.getState().threads.m.at(-1)!
     expect(last.kind).toBe("balance")
     if (last.kind === "balance") {
-      // total prefixes the outcome's fiatCurrency code (not a hardcoded ₦ symbol)
-      expect(last.total).toContain("NGN")
-      expect(last.total).toContain("16800.00")
+      // total renders through formatFiat — the ₦ symbol + grouped thousands,
+      // never the raw ISO code (matches the buy/sell cards).
+      expect(last.total).toContain("₦")
+      expect(last.total).toContain("16,800.00")
       expect(last.assets).toHaveLength(1)
       expect(last.assets[0].sym).toBe("USDT")
       expect(last.assets[0].name).toBe("Tether USD")
       expect(last.assets[0].amount).toBe("10.5 USDT")
-      expect(last.assets[0].value).toBe("NGN 16800.00")
+      expect(last.assets[0].value).toBe("₦16,800.00")
     }
     expect(store.getState().typing.m).toBe(false)
   })
@@ -1760,9 +1935,9 @@ describe("hydrateHistory", () => {
   it("binds a reloaded needs_beneficiary card to its intent so resolving after reload re-sends it", async () => {
     // Pre-fix, hydrateHistory never populated _beneficiaryIntents, so resolving
     // a reloaded card was a silent no-op (no _lastIntentText either).
-    const chatApi = vi.fn().mockResolvedValue(
-      makeResponse({ kind: "clarification", text: "ok" })
-    )
+    const chatApi = vi
+      .fn()
+      .mockResolvedValue(makeResponse({ kind: "clarification", text: "ok" }))
     const boundStore = createChatStore({ schedule: immediate, chatApi })
     boundStore.getState().hydrateHistory("m", [
       historyItem({
@@ -1788,9 +1963,9 @@ describe("hydrateHistory", () => {
   })
 
   it("binds a reloaded choose_beneficiary card to its intent the same way", async () => {
-    const chatApi = vi.fn().mockResolvedValue(
-      makeResponse({ kind: "clarification", text: "ok" })
-    )
+    const chatApi = vi
+      .fn()
+      .mockResolvedValue(makeResponse({ kind: "clarification", text: "ok" }))
     const boundStore = createChatStore({ schedule: immediate, chatApi })
     boundStore.getState().hydrateHistory("m", [
       historyItem({

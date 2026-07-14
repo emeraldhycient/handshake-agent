@@ -103,6 +103,9 @@ export function ChatRail({ store: injectedStore, className }: ChatRailProps) {
         onResolveBeneficiary={(id, messageId) =>
           void state.resolveBeneficiary("d", id, messageId)
         }
+        onSendRaw={(dest, messageId) =>
+          void state.resolveSendRaw("d", dest, messageId)
+        }
       />
 
       {/* ── Composer (chips + input) ───────────────────────────────────────── */}

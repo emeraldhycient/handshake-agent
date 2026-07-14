@@ -27,6 +27,7 @@ import type {
   BalanceSnapshot,
   EffectiveRate,
   KycTier,
+  SendDestinationInput,
 } from '@handshake-agent/contracts';
 
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
@@ -69,7 +70,10 @@ import {
   REPLY_REPOSITORY,
   type IReplyRepository,
 } from '../../conversations/application/ports/reply.repository.port';
-import type { ProposalService } from '../../transactions/application/proposal.service';
+import type {
+  ProposalService,
+  SendDestination,
+} from '../../transactions/application/proposal.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
@@ -87,6 +91,7 @@ import {
   AmountTooSmallError,
   SelfSendError,
 } from '../../transactions/domain/amount-guard-errors';
+import { InvalidSendAddressError } from '../../transactions/domain/invalid-send-address.error';
 
 // ---------------------------------------------------------------------------
 // DI tokens for proposal / wallet / beneficiary services.
@@ -122,6 +127,17 @@ const HISTORY_TURN_LIMIT = 6;
 const UNPARSEABLE_INTENT_CLARIFICATION =
   "Sorry, I didn't quite catch that. Could you rephrase your request?";
 
+/**
+ * Minimum length for a message token to be worth classifying as an on-chain
+ * address in `parseAddressFromText`. A conservative floor: every supported
+ * network's address is far longer (TRON ~34, EVM 42), while send-command words
+ * ("send", "USDT", "to", a nickname) are short — so this cheaply skips obvious
+ * non-addresses before the registry runs its regexes, and never skips a real
+ * address. Correctness still rests on `AssetRegistry.inferNetworkForAddress`;
+ * this is only a short-circuit.
+ */
+const MIN_ADDRESS_TOKEN_LENGTH = 12;
+
 // ---------------------------------------------------------------------------
 // Input type
 // ---------------------------------------------------------------------------
@@ -130,6 +146,13 @@ export interface HandleMessageInput {
   userId: string;
   text: string;
   beneficiaryId?: string;
+  /**
+   * A USER-SUPPLIED raw on-chain destination captured in the send-to-address
+   * card / Flow (§3.1 — never model output). Mutually exclusive with
+   * `beneficiaryId` (enforced by `ChatMessageRequestSchema`). The engine
+   * re-validates the address + network before any money moves.
+   */
+  sendDestination?: SendDestinationInput;
 }
 
 export interface GetHistoryInput {
@@ -361,11 +384,32 @@ export class WebChatService {
           summaryText = 'KYC required';
           break;
         }
-        const sendResolution = await this.resolvePayoutBeneficiary(
+        // Network-consistency guard (§3.1): the engine validates, screens, and
+        // settles the send on `intent.network` authoritatively. A client-supplied
+        // `sendDestination.network` MUST NOT diverge from it — sending on a
+        // network other than the one that was validated is a misroute hazard.
+        // For Spec 1 (USDT/TRON) the two coincide; fail closed to a clarification
+        // on any mismatch rather than silently proceed. Compared case-insensitively
+        // so schema-canonical casing drift never yields a false positive.
+        if (
+          input.sendDestination &&
+          input.sendDestination.network.toUpperCase() !==
+            intent.network.toUpperCase()
+        ) {
+          const networkMismatchText =
+            "That address is for a different network than the one I'd send on. Please double-check the network and try again.";
+          outcome = { kind: 'clarification', text: networkMismatchText };
+          summaryText = networkMismatchText;
+          break;
+        }
+        const sendResolution = await this.resolveSendDestination(
           userId,
-          'crypto_address',
-          input.beneficiaryId,
+          {
+            beneficiaryId: input.beneficiaryId,
+            sendDestination: input.sendDestination,
+          },
           intent.recipientNickname,
+          input.text,
         );
         if (!sendResolution.resolved) {
           outcome = sendResolution.outcome;
@@ -377,7 +421,7 @@ export class WebChatService {
             await this.proposalService.createSendProposal({
               userId,
               intent,
-              beneficiaryId: sendResolution.beneficiaryId,
+              destination: sendResolution.destination,
             });
           outcome = {
             kind: 'proposal',
@@ -389,8 +433,9 @@ export class WebChatService {
             'Your send proposal is ready. Please review and confirm.';
         } catch (sendErr) {
           // Same parity as sell: convert the stable-coded proposal rejections
-          // (insufficient balance, cooling-off, wrong beneficiary type,
-          // sanctions, dust amount, self-send) into a first-class clarification.
+          // (insufficient balance, cooling-off, wrong beneficiary type, sanctions,
+          // dust amount, self-send, invalid raw address) into a first-class
+          // clarification rather than an opaque 4xx/5xx that drops the thread.
           const clarification = this.proposalErrorClarification(sendErr);
           if (clarification === null) throw sendErr;
           outcome = { kind: 'clarification', text: clarification };
@@ -761,6 +806,145 @@ export class WebChatService {
   }
 
   /**
+   * Deterministic edge parser (§3.1 — NOT the model): scans the user's OWN
+   * message for an address-shaped token and classifies its network via the
+   * registry (`AssetRegistry.inferNetworkForAddress`). Used only to pre-fill the
+   * user-confirmed send card and to force that card instead of the default
+   * beneficiary; the engine re-validates the address before any money moves.
+   *
+   * Public for direct unit testing and for the send dispatch (Task 5).
+   */
+  parseAddressFromText(
+    text: string,
+  ): { address: string; network: string } | null {
+    for (const token of text.split(/\s+/)) {
+      if (token.length < MIN_ADDRESS_TOKEN_LENGTH) continue; // skip words
+      const network = this.assetRegistry.inferNetworkForAddress(token);
+      if (network) return { address: token, network };
+    }
+    return null;
+  }
+
+  /**
+   * Resolve a CRYPTO send destination to a discriminated `SendDestination`
+   * descriptor. Unlike `resolvePayoutBeneficiary` (the bank/sell path), this
+   * NEVER falls through to the user's default beneficiary (§3.1 NO-MISROUTE): an
+   * explicit-but-unsaved destination — a pasted address, a nickname that matched
+   * nothing, or a bare "send N" — returns a `needs_beneficiary` card offering a
+   * raw send, so money is never silently routed to the wrong recipient.
+   *
+   * Precedence:
+   *   1. explicit `sendDestination` (user-confirmed raw address) → raw_address
+   *   2. explicit `beneficiaryId` (picked in the resolve loop) → saved_beneficiary
+   *   3. `recipientNickname` → saved_beneficiary (1 match); >1 → choose_beneficiary;
+   *      0 → needs_beneficiary(allowRawSend) — the nickname miss offers the card,
+   *      never the default.
+   *   4. no explicit destination → needs_beneficiary(allowRawSend), pre-filled
+   *      with a pasted address when the message contains one — NEVER the default.
+   *
+   * The proposal service and engine re-validate ownership, type, cooling-off,
+   * the address pattern, and sanctions before any money moves (§3.1/§3.3).
+   *
+   * Public for direct unit testing and for the send dispatch (Task 5).
+   */
+  async resolveSendDestination(
+    userId: string,
+    req: { beneficiaryId?: string; sendDestination?: SendDestinationInput },
+    recipientNickname: string | undefined,
+    messageText: string,
+  ): Promise<
+    | { resolved: true; destination: SendDestination }
+    | { resolved: false; outcome: AgentTurnOutcome; summaryText: string }
+  > {
+    // 1. A user-confirmed raw address from the send-to-address card / Flow (§3.1).
+    if (req.sendDestination) {
+      const d = req.sendDestination;
+      return {
+        resolved: true,
+        destination: {
+          kind: 'raw_address',
+          address: d.address,
+          network: d.network,
+          ...(d.saveAsBeneficiary ? { save: { label: d.label } } : {}),
+        },
+      };
+    }
+
+    // 2. An explicit pick from the resolve loop — the engine re-validates.
+    if (req.beneficiaryId) {
+      return {
+        resolved: true,
+        destination: {
+          kind: 'saved_beneficiary',
+          beneficiaryId: req.beneficiaryId,
+        },
+      };
+    }
+
+    // 3. A spoken nickname — a server-resolved lookup key against the user's OWN
+    //    saved recipients (§3.1: never an address). A miss offers the card, never
+    //    the silent default.
+    if (recipientNickname) {
+      const matches = await this.beneficiaryService.resolveByNickname(
+        userId,
+        'crypto_address',
+        recipientNickname,
+      );
+      if (matches.length === 1) {
+        return {
+          resolved: true,
+          destination: {
+            kind: 'saved_beneficiary',
+            beneficiaryId: matches[0].id,
+          },
+        };
+      }
+      if (matches.length > 1) {
+        return {
+          resolved: false,
+          outcome: {
+            kind: 'choose_beneficiary',
+            beneficiaryType: 'crypto_address',
+            nickname: recipientNickname,
+            candidates: matches.map((match) => ({
+              id: match.id,
+              label: match.label,
+              detail: maskBeneficiaryDetail(match),
+            })),
+          },
+          summaryText: `You have ${matches.length} saved recipients called '${recipientNickname}'. Which one did you mean?`,
+        };
+      }
+      const note = `No saved recipient called '${recipientNickname}'. Send to an address or add one.`;
+      return {
+        resolved: false,
+        outcome: {
+          kind: 'needs_beneficiary',
+          beneficiaryType: 'crypto_address',
+          note,
+          allowRawSend: true,
+        },
+        summaryText: note,
+      };
+    }
+
+    // 4. No explicit destination — offer the card, pre-filled from a pasted
+    //    address if present. NEVER fall through to the default beneficiary (§3.1).
+    const parsed = this.parseAddressFromText(messageText);
+    return {
+      resolved: false,
+      outcome: {
+        kind: 'needs_beneficiary',
+        beneficiaryType: 'crypto_address',
+        allowRawSend: true,
+        ...(parsed ? { prefillAddress: parsed.address } : {}),
+      },
+      summaryText:
+        'Where would you like to send it? Pick a saved recipient or paste an address.',
+    };
+  }
+
+  /**
    * True when a beneficiary's payout currency equals `currency`. Legacy null
    * payoutCurrency rows predate the currency dimension → treated as the catalog
    * base fiat (NGN today; post-backfill no bank row is null).
@@ -814,6 +998,12 @@ export class WebChatService {
     }
     if (err instanceof SelfSendError) {
       return 'That’s your own wallet address — no transfer is needed. Choose a different recipient.';
+    }
+    if (err instanceof InvalidSendAddressError) {
+      // A user-pasted raw address that failed the network's pattern check.
+      // Surface a clean, actionable clarification — NEVER the raw domain
+      // message (it echoes the invalid address back verbatim).
+      return `That doesn’t look like a valid ${err.network} address — please check it and try again.`;
     }
     if (err instanceof BeneficiaryCoolingOffError) {
       return (

@@ -46,6 +46,7 @@ import { QuotesService } from '../../quotes/application/quotes.service';
 import { WalletService } from '../../wallets/application/wallet.service';
 import type { WithdrawOutput } from '../../wallets/application/ports/wallet-provider.port';
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import {
   WHATSAPP_SENDER,
@@ -1297,7 +1298,10 @@ export class ExecutionService {
     const cryptoAmount = params.cryptoAmount ?? '0';
     const networkFeeCrypto = params.networkFeeCrypto ?? '0';
     const totalDebit = params.totalDebit ?? '0';
-    const beneficiaryId = params.beneficiaryId;
+    // beneficiaryId is nullable: a raw-address send (destinationKind ==
+    // 'raw_address') carries none. Normalise falsy → null so the saved-beneficiary
+    // path (cooling-off re-check below) is entered ONLY when a real id is present.
+    const beneficiaryId = params.beneficiaryId || null;
     const walletId = params.walletId;
     const toAddress = params.toAddress ?? '';
     const network = params.network;
@@ -1308,9 +1312,13 @@ export class ExecutionService {
     }
     const requiresTravelRule = params.requiresTravelRule === 'true';
 
-    if (!beneficiaryId) {
+    // A raw-address send carries no beneficiaryId — require the destination
+    // ADDRESS instead (the on-chain withdraw target the engine must reach), not
+    // the beneficiary. The address was user-confirmed at propose time and is
+    // re-screened for sanctions below (§3.3).
+    if (!toAddress) {
       throw new ProposalNotExecutableError(
-        'proposal parameters missing beneficiaryId',
+        'proposal parameters missing toAddress',
       );
     }
     // IMPORTANT 2: walletId null-guard — a missing walletId would silently pass
@@ -1386,25 +1394,33 @@ export class ExecutionService {
       throw new InsufficientBalanceError(balance, totalDebit, asset);
     }
 
-    // ── Step 4: Cooling-off re-check ─────────────────────────────────────────
-    const beneficiary = await this.beneficiaryService.getById(
-      userId,
-      beneficiaryId,
-    );
-    if (beneficiary === null) {
-      throw new ProposalNotExecutableError(
-        `beneficiary '${beneficiaryId}' not found`,
-      );
-    }
-    if (
-      beneficiary.firstUseLockedUntil !== null &&
-      beneficiary.firstUseLockedUntil !== undefined &&
-      beneficiary.firstUseLockedUntil > now
-    ) {
-      throw new BeneficiaryCoolingOffError(
+    // ── Step 4: Cooling-off re-check (saved-beneficiary path only) ───────────
+    // A raw-address send has no saved beneficiary to look up — its destination is
+    // the user-confirmed toAddress (sanctions-screened just below, §3.3). First-use
+    // cooling-off only governs SAVED destinations, so it is skipped for the raw
+    // path (mirrors ProposalService.createSendProposal step 5). The save-on-success
+    // side-effect creates a fresh record whose cooling-off governs FUTURE reuse.
+    let beneficiary: BeneficiaryRecord | null = null;
+    if (beneficiaryId) {
+      beneficiary = await this.beneficiaryService.getById(
+        userId,
         beneficiaryId,
-        beneficiary.firstUseLockedUntil,
       );
+      if (beneficiary === null) {
+        throw new ProposalNotExecutableError(
+          `beneficiary '${beneficiaryId}' not found`,
+        );
+      }
+      if (
+        beneficiary.firstUseLockedUntil !== null &&
+        beneficiary.firstUseLockedUntil !== undefined &&
+        beneficiary.firstUseLockedUntil > now
+      ) {
+        throw new BeneficiaryCoolingOffError(
+          beneficiaryId,
+          beneficiary.firstUseLockedUntil,
+        );
+      }
     }
 
     // ── Step 5: Re-screen sanctions ───────────────────────────────────────────
@@ -1513,7 +1529,12 @@ export class ExecutionService {
     // beneficiaries (not expected on send paths) prefer accountHolderName.
     // If neither is available, null is the correct sentinel — do NOT invent data.
     const beneficiaryName: string | null =
-      beneficiary.accountHolderName ?? beneficiary.label ?? null;
+      beneficiary?.accountHolderName ??
+      beneficiary?.label ??
+      // Raw-address send: no saved record — the user's save label (when present)
+      // is the best available identifier; null when they did not name it.
+      params.saveLabel ??
+      null;
 
     const { txn } =
       await this.settlementRepo.createSendSettlingWithReserveAtomic({
@@ -1653,6 +1674,33 @@ export class ExecutionService {
       status: 'pending',
       processorRef: providerRef,
     });
+
+    // ── Step 14: Save-on-success — persist the raw destination as a beneficiary ─
+    // The user ticked "save" on a raw-address send. Persist it now that the send's
+    // PIN + device-bound step-up have authorized this destination (§3.3 — no second
+    // PIN; the send's auth is at least as strong as the add-on step-up enforced at
+    // the beneficiaries controller). The service only validates + persists (with a
+    // first-use cooling-off that governs FUTURE reuse — not this already-settled
+    // send). Best-effort: a failed save must NEVER fail the settled send.
+    if (params.saveAsBeneficiary === 'true') {
+      try {
+        await this.beneficiaryService.addCryptoAddress({
+          userId: proposal.userId,
+          address: toAddress,
+          network,
+          asset,
+          label: params.saveLabel || toAddress.slice(0, 8),
+        });
+      } catch (err) {
+        this.logger.warn(
+          {
+            errorName: err instanceof Error ? err.name : 'unknown',
+            proposalId: proposal.id,
+          },
+          'save-after-send-authorization failed; send already settled',
+        );
+      }
+    }
 
     return {
       transactionId: txn.id,

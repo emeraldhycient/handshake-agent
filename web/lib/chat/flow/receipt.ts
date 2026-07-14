@@ -25,6 +25,7 @@ export function buildReceipt(
           { label: "Date", value: "18 Jun, 2:14pm" },
         ],
         txRef: "REF · HS-9F4C-22A1",
+        action,
       }
 
     case "send":
@@ -39,6 +40,7 @@ export function buildReceipt(
           { label: "Date", value: "18 Jun, 2:16pm" },
         ],
         txRef: "TX · a91f…7c0e",
+        action,
       }
 
     case "swap":
@@ -53,6 +55,7 @@ export function buildReceipt(
           { label: "Date", value: "18 Jun, 2:18pm" },
         ],
         txRef: "REF · HS-7B22-90C4",
+        action,
       }
 
     case "ticket": {
@@ -70,6 +73,7 @@ export function buildReceipt(
           { label: "Date", value: "Sat 12 Jul, 8:00pm" },
         ],
         txRef: "Saved to Wallet · tap to view QR",
+        action,
       }
     }
 
