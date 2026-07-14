@@ -87,6 +87,10 @@ export class HandleService {
 
     await this.assertHandleAvailable(normalized);
 
+    // Best-effort ≤5 cap (read-count-then-insert). This is a benign TOCTOU
+    // under true concurrency — see IHandleRepository.countPublicNicknames. The
+    // cap is an anti-abuse ceiling, not a funds/identity invariant (§3.1), so a
+    // rare transient 6th row is acceptable; not worth a serialized row-lock.
     const count = await this.repo.countPublicNicknames(userId);
     if (count >= MAX_PUBLIC_NICKNAMES) {
       throw new NicknameCapError(MAX_PUBLIC_NICKNAMES);
@@ -112,13 +116,23 @@ export class HandleService {
   async changePayId(userId: string, payId: string): Promise<void> {
     const normalized = PayIdSchema.parse(normalizeHandle(payId));
 
+    // Fast-path read: reject an obvious second change early (and gives the
+    // one-change error precedence over the shared-namespace check). This is
+    // NOT the real guard — a concurrent pair could both pass here.
     const changedAt = await this.repo.getPayIdChangedAt(userId);
     if (changedAt !== null) {
       throw new PayIdAlreadyChangedError();
     }
 
     await this.assertHandleAvailable(normalized);
-    await this.repo.setPayId(userId, normalized);
+
+    // Real guard: the conditional write only succeeds when payIdChangedAt is
+    // still null. A concurrent second change that passed the stale read above
+    // loses here (count === 0 → written === false) and is rejected atomically.
+    const written = await this.repo.setPayId(userId, normalized);
+    if (!written) {
+      throw new PayIdAlreadyChangedError();
+    }
   }
 
   /**

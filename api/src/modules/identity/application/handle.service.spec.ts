@@ -22,7 +22,7 @@ function makeService(overrides: Partial<jest.Mocked<IHandleRepository>> = {}) {
     deletePublicNickname: jest.fn().mockResolvedValue(undefined),
     listPublicNicknames: jest.fn().mockResolvedValue([]),
     getPayIdChangedAt: jest.fn().mockResolvedValue(null),
-    setPayId: jest.fn().mockResolvedValue(undefined),
+    setPayId: jest.fn().mockResolvedValue(true),
     ...overrides,
   };
   const svc = new HandleService(repo);
@@ -249,6 +249,24 @@ describe('HandleService.changePayId', () => {
     ).rejects.toBeInstanceOf(PayIdAlreadyChangedError);
     expect(repo.isPayIdTaken).not.toHaveBeenCalled();
     expect(repo.setPayId).not.toHaveBeenCalled();
+  });
+
+  it('rejects a concurrent second change that passed the stale read but LOST the conditional write (count===0)', async () => {
+    // Simulates the TOCTOU race: getPayIdChangedAt still reads null (the
+    // competing change had not committed yet), the handle is free, but the
+    // conditional `updateMany({ where: { payIdChangedAt: null } })` matches
+    // zero rows because the other change won — setPayId returns false. The
+    // service must translate that into PayIdAlreadyChangedError, NOT succeed.
+    const { svc, repo } = makeService({
+      getPayIdChangedAt: jest.fn().mockResolvedValue(null),
+      setPayId: jest.fn().mockResolvedValue(false),
+    });
+
+    await expect(
+      svc.changePayId('user-1', 'racedhandle'),
+    ).rejects.toBeInstanceOf(PayIdAlreadyChangedError);
+    // It DID attempt the conditional write (the guard is the write, not the read).
+    expect(repo.setPayId).toHaveBeenCalledWith('user-1', 'racedhandle');
   });
 
   it('rejects a handle already taken (shared namespace) on a first change', async () => {
