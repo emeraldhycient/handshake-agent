@@ -247,6 +247,39 @@ export interface QuerySendWithdrawalStatusOutput {
 }
 
 // ---------------------------------------------------------------------------
+// Internal transfer types (Spec 2, Task 7)
+// ---------------------------------------------------------------------------
+
+export interface ExecuteInternalTransferInput {
+  userId: string;
+  proposalId: string;
+  directiveId: string;
+  nonce: string;
+  pin: string;
+  idempotencyKey: string;
+  /**
+   * The device ID to bind this step-up to (§3.4). When omitted, the engine
+   * resolves it from User.pinnedDeviceId; if neither is resolvable the transfer
+   * is rejected (fail-closed — identity is anchored to a bound device).
+   */
+  deviceId?: string;
+}
+
+export interface ExecuteInternalTransferResult {
+  transactionId: string;
+  /** Internal transfers settle INSTANTLY (single-phase ledger post) — always 'completed'. */
+  status: 'completed';
+  /** Signed receipt number for the sender's transaction. */
+  receiptNumber: string;
+  /** Sender's user_wallet balance after the debit (decimal string). */
+  senderBalanceAfter: string;
+  /** Recipient's user_wallet balance after the credit (decimal string). */
+  recipientBalanceAfter: string;
+  /** The recipient user id (for the caller's response / notifications). */
+  recipientUserId: string;
+}
+
+// ---------------------------------------------------------------------------
 // Swap types
 // ---------------------------------------------------------------------------
 
@@ -301,6 +334,12 @@ export interface QuerySwapStatusOutput {
 
 // The directive ref required to authorize a send execution (step-up auth).
 const REQUIRED_SEND_DIRECTIVE_REF = 'request_step_up';
+
+// The directive ref required to authorize an internal (user→user) transfer.
+// Step-up parity with send: an internal transfer is an irreversible value move
+// between users, so it demands the same step-up grant as an on-chain send —
+// NOT the weaker request_pin used by buy/sell (§3.4 device-bound step-up).
+const REQUIRED_INTERNAL_TRANSFER_DIRECTIVE_REF = 'request_step_up';
 
 // Statuses that allow the engine to execute against a proposal (I1: typed set).
 const EXECUTABLE_STATUSES = new Set<string>(['pending', 'confirmed']);
@@ -1706,6 +1745,285 @@ export class ExecutionService {
       transactionId: txn.id,
       status: 'settling',
       onChain: { providerRef },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internal transfer execution (Spec 2, Task 7)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Executes an internal (user→user, PayID) crypto TRANSFER.
+   *
+   * SINGLE-PHASE + INSTANT: unlike send/sell/swap there is NO reserve/finalize
+   * split, NO on-chain withdraw, NO SettlementOutbox and NO webhook — the crypto
+   * never leaves Handshake's custody, it only moves between two users'
+   * `user_wallet` ledger accounts. The engine re-validates everything at execute
+   * (§3.1), then posts a balanced double-entry (debit sender, credit recipient)
+   * and marks the Transaction `completed` in ONE atomic $transaction.
+   *
+   * Validation gauntlet (ORDER IS SECURITY-CRITICAL — mirrors executeSend):
+   *   1. Load Proposal(internal_transfer, status pending|confirmed, owner, not expired).
+   *   2. KYC gate (server-side) — NGN-equivalent of cryptoAmount × baseRate,
+   *      capability 'crypto.transfer', onChainSend:false.
+   *   3. Balance re-check via ledger ≥ cryptoAmount (TOCTOU guard at execute time).
+   *   4. Re-screen the RECIPIENT (counterparty) for sanctions — by identity.
+   *   5. PinService.verifyPin.
+   *   6. DirectiveService.consume (ref MUST be request_step_up — step-up parity).
+   *   7. Record device-bound step-up (§3.4).
+   *   8. Idempotency check (after auth, before writes).
+   *   9. Atomic single-phase settle (ledger double-entry + Transaction completed).
+   */
+  async executeInternalTransfer(
+    input: ExecuteInternalTransferInput,
+  ): Promise<ExecuteInternalTransferResult> {
+    const {
+      userId,
+      proposalId,
+      directiveId,
+      nonce,
+      pin,
+      idempotencyKey,
+      deviceId: inputDeviceId,
+    } = input;
+    const now = this.clock.now();
+
+    // Fail-CLOSED: ComplianceService must always be wired — the counterparty
+    // sanctions re-screen is a security invariant (§3.3), never silently skipped.
+    if (this.complianceService === undefined) {
+      throw new InternalServerErrorException(
+        'ExecutionService: ComplianceService is not wired — cannot execute internal transfer (fail-closed, §3.3)',
+      );
+    }
+    // Fail-CLOSED: SessionService must always be wired — device-bound step-up
+    // recording is a security invariant (§3.4).
+    if (this.sessionService === undefined) {
+      throw new InternalServerErrorException(
+        'ExecutionService: SessionService is not wired — cannot execute internal transfer (fail-closed, §3.4)',
+      );
+    }
+
+    // ── Step 1: Load and validate proposal ──────────────────────────────────
+    const proposal = await this.proposalRepo.findById(proposalId);
+
+    if (proposal === null) {
+      throw new ProposalNotExecutableError('not found');
+    }
+    if (proposal.userId !== userId) {
+      throw new ProposalNotExecutableError('userId mismatch');
+    }
+    if (!EXECUTABLE_STATUSES.has(proposal.status)) {
+      throw new ProposalNotExecutableError(
+        `status '${proposal.status}' is not executable`,
+      );
+    }
+    if (proposal.expiresAt <= now) {
+      throw new ProposalExpiredError();
+    }
+    if (proposal.type !== 'internal_transfer') {
+      throw new ProposalNotExecutableError(
+        `proposal type '${proposal.type}' is not 'internal_transfer'`,
+      );
+    }
+
+    // Internal-transfer parameters — resolved server-side at propose time (Task 6),
+    // never model free-text (§3.1). No quote row; no toAddress; no beneficiaryId.
+    const params = proposal.parameters as Record<string, string>;
+    const asset = params.asset ?? 'USDT';
+    const cryptoAmount = params.cryptoAmount ?? '0';
+    const recipientUserId = params.recipientUserId;
+    const recipientWalletId = params.recipientWalletId;
+    const walletId = params.walletId;
+    if (!recipientUserId) {
+      throw new ProposalNotExecutableError(
+        'proposal parameters missing recipientUserId',
+      );
+    }
+    if (!recipientWalletId) {
+      throw new ProposalNotExecutableError(
+        'proposal parameters missing recipientWalletId',
+      );
+    }
+    // walletId null-guard — a missing sender walletId would poison the ledger read/post.
+    if (!walletId) {
+      throw new ProposalNotExecutableError(
+        'proposal parameters missing walletId',
+      );
+    }
+
+    // ── Step 2: KYC gate (server-side, always) ──────────────────────────────
+    // No quote on an internal transfer — use cryptoAmount × baseRate for the
+    // NGN-equivalent. resolveEffectiveBaseRate fails closed on a 0/negative rate
+    // (the SAME shared guard ProposalService uses), so the money gate cannot be
+    // bypassed by a misconfigured rate.
+    const pricingConfig = this.config.get<PricingConfig>('pricing');
+    const baseFiat = this.assetRegistry.defaultFiat();
+    const baseRate = resolveEffectiveBaseRate(
+      pricingConfig,
+      this.effectiveLiveStore(),
+      asset,
+      baseFiat,
+      this.clock.now(),
+      this.feedStalenessSec(),
+    );
+    // BigInt-exact NGN-equivalent (mirror executeSend — no float drift at the gate).
+    const LEDGER_SCALE = 10n ** 18n;
+    const scaledCryptoForGate = toScaled(cryptoAmount);
+    const scaledNgn18ForGate =
+      (scaledCryptoForGate * toScaled(String(baseRate))) / LEDGER_SCALE;
+    const isNegNgn = scaledNgn18ForGate < 0n;
+    const absNgn = isNegNgn ? -scaledNgn18ForGate : scaledNgn18ForGate;
+    const wholeNgn = absNgn / LEDGER_SCALE;
+    const fracNgn = absNgn % LEDGER_SCALE;
+    const fracNgnStr =
+      fracNgn === 0n
+        ? ''
+        : '.' + fracNgn.toString().padStart(18, '0').replace(/0+$/, '');
+    const ngnEquivalentStr =
+      (isNegNgn ? '-' : '') + wholeNgn.toString() + fracNgnStr;
+
+    await this.kycGate.assertCanTransact({
+      userId,
+      fiatAmount: ngnEquivalentStr,
+      fiatCurrency: baseFiat,
+      asset,
+      // An internal transfer never touches the chain — the on-chain per-send cap
+      // does not apply. capability 'crypto.transfer' resolves the tier floor.
+      onChainSend: false,
+      capability: 'crypto.transfer',
+    });
+
+    // Numeric form retained only for velocity/metadata (approximate — mirrors send).
+    const ngnEquivalent = Number(cryptoAmount) * baseRate;
+
+    // ── Step 3: Re-check sender balance via ledger ≥ cryptoAmount (TOCTOU) ───
+    const balance = await this.ledgerRepo.getAccountBalance(
+      'user_wallet',
+      walletId,
+      asset,
+    );
+    if (toScaled(balance) < toScaled(cryptoAmount)) {
+      throw new InsufficientBalanceError(balance, cryptoAmount, asset);
+    }
+
+    // ── Step 4: Re-screen the RECIPIENT (counterparty) for sanctions ─────────
+    // Screened by IDENTITY (there is no on-chain address). Always runs, fails
+    // CLOSED — §3.3 server-side check on every value move.
+    const screening = await this.complianceService.screenCounterpartyUser({
+      userId: recipientUserId,
+    });
+    if (!screening.passed) {
+      throw new SanctionsBlockedError(
+        // No masked address for an in-custody transfer — the recipient user id
+        // is the best available identifier (displayHandle is not persisted).
+        recipientUserId,
+        screening.reason ?? undefined,
+        screening.complianceEventId,
+        screening.complianceEventId,
+      );
+    }
+
+    // ── Step 5: Verify PIN (BEFORE consuming the one-shot step-up directive) ─
+    await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 6: Consume directive grant (ref MUST be request_step_up) ────────
+    const grant = await this.directiveService.consume({
+      directiveId,
+      nonce,
+      proposalId,
+    });
+    if (grant.directiveRef !== REQUIRED_INTERNAL_TRANSFER_DIRECTIVE_REF) {
+      throw new ProposalNotExecutableError(
+        `directive ref '${grant.directiveRef}' is not '${REQUIRED_INTERNAL_TRANSFER_DIRECTIVE_REF}'`,
+      );
+    }
+
+    // ── Step 6b: Record device-bound step-up (§3.4) ─────────────────────────
+    const resolvedDeviceId =
+      inputDeviceId ?? (await this.sessionService.findPinnedDeviceId(userId));
+    if (!resolvedDeviceId) {
+      throw new ProposalNotExecutableError(
+        'no bound device for this user — step-up cannot be recorded (fail-closed, §3.4)',
+      );
+    }
+    await this.sessionService.startOrTouch(userId, resolvedDeviceId);
+    await this.sessionService.recordStepUp(userId, resolvedDeviceId, now);
+
+    // ── Step 7: Idempotency check (after auth, before writes) ────────────────
+    // Replay of an in-process retry holding a still-valid directive returns the
+    // prior result without re-posting. (A fresh re-submit is already stopped by
+    // the single-use directive above.) The settle method carries its OWN
+    // in-atomic idempotency guard as defence against a concurrent double-post.
+    const existing =
+      await this.transactionRepo.findByIdempotencyKey(idempotencyKey);
+    if (existing !== null) {
+      const meta = existing.metadata as Record<string, string>;
+      const replayRecipientWalletId =
+        meta.recipientWalletId ?? recipientWalletId;
+      const [senderBalanceAfter, recipientBalanceAfter, receiptNumber] =
+        await Promise.all([
+          this.ledgerRepo.getAccountBalance('user_wallet', walletId, asset),
+          this.ledgerRepo.getAccountBalance(
+            'user_wallet',
+            replayRecipientWalletId,
+            asset,
+          ),
+          this.settlementRepo.findReceiptNumber(existing.id),
+        ]);
+      return {
+        transactionId: existing.id,
+        status: 'completed',
+        receiptNumber: receiptNumber ?? '',
+        senderBalanceAfter,
+        recipientBalanceAfter,
+        recipientUserId: meta.recipientUserId ?? recipientUserId,
+      };
+    }
+
+    // ── Step 8: Atomic single-phase settle (ledger double-entry) ─────────────
+    // NO withdraw, NO outbox. The settle posts both legs, marks the Transaction
+    // completed + the Proposal executed, upserts the SENDER's velocity counters,
+    // updates both WalletBalance snapshots, and mints the signed Receipt.
+    const assetMeta = this.assetRegistry.asset(asset);
+    const requestChecksum = this.buildRequestChecksum({
+      userId,
+      proposalId,
+      asset,
+      fiatAmount: String(ngnEquivalent),
+      fxRate: String(baseRate),
+    });
+    const year = now.getFullYear().toString();
+
+    const result = await this.settlementRepo.settleInternalTransferAtomic({
+      proposalId,
+      senderUserId: userId,
+      recipientUserId,
+      senderWalletId: walletId,
+      recipientWalletId,
+      asset,
+      cryptoAmount,
+      assetDecimals: assetMeta.decimals,
+      idempotencyKey,
+      requestChecksum,
+      velocityIncrement: {
+        userId,
+        fiatCurrency: baseFiat,
+        fiatAmountStr: String(ngnEquivalent),
+        now,
+      },
+      confirmedAt: now,
+      pinVerifiedAt: now,
+      now,
+      year,
+    });
+
+    return {
+      transactionId: result.txn.id,
+      status: 'completed',
+      receiptNumber: result.receiptNumber,
+      senderBalanceAfter: result.senderBalanceAfter,
+      recipientBalanceAfter: result.recipientBalanceAfter,
+      recipientUserId,
     };
   }
 

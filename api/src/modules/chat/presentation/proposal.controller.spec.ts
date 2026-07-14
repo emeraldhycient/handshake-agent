@@ -137,6 +137,7 @@ const mockExecutionService = {
   executeSell: jest.fn(),
   executeSend: jest.fn(),
   executeSwap: jest.fn(),
+  executeInternalTransfer: jest.fn(),
 };
 
 const mockSessionService = {
@@ -263,6 +264,24 @@ describe('ProposalController.authorize', () => {
   it('uses request_step_up ref for send proposals', async () => {
     mockProposalRepo.findById.mockResolvedValue(makeProposal({ type: 'send' }));
     mockProposalRepo.getType.mockResolvedValue('send');
+    mockDirectiveService.issue.mockResolvedValue({
+      directiveId: 'dir-uuid',
+      nonce: 'abc123',
+      expiresAt: new Date(),
+    });
+
+    await controller.authorize('proposal-uuid', TEST_USER);
+
+    expect(mockDirectiveService.issue).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: 'request_step_up' }),
+    );
+  });
+
+  it('uses request_step_up ref for internal_transfer proposals', async () => {
+    mockProposalRepo.findById.mockResolvedValue(
+      makeProposal({ type: 'internal_transfer' }),
+    );
+    mockProposalRepo.getType.mockResolvedValue('internal_transfer');
     mockDirectiveService.issue.mockResolvedValue({
       directiveId: 'dir-uuid',
       nonce: 'abc123',
@@ -488,6 +507,49 @@ describe('ProposalController.execute', () => {
     expect(mockExecutionService.executeSend).toHaveBeenCalledWith(
       expect.objectContaining({ deviceId: undefined }),
     );
+  });
+
+  it('dispatches internal_transfer (idempotencyKey=proposalId, resolving device) and returns status', async () => {
+    mockProposalRepo.findById.mockResolvedValue(
+      makeProposal({ type: 'internal_transfer' }),
+    );
+    mockSessionService.findDeviceIdByFingerprint.mockResolvedValue(
+      'device-uuid',
+    );
+    mockExecutionService.executeInternalTransfer.mockResolvedValue({
+      transactionId: 'txn-transfer',
+      status: 'completed',
+      receiptNumber: 'HS-2026-000001',
+      senderBalanceAfter: '90',
+      recipientBalanceAfter: '10',
+      recipientUserId: 'recipient-uuid',
+    });
+
+    const transferBody = { ...validBody, deviceFingerprint: 'web-fp-1' };
+    const result = await controller.execute(
+      'proposal-uuid',
+      transferBody,
+      TEST_USER,
+    );
+
+    expect(mockSessionService.findDeviceIdByFingerprint).toHaveBeenCalledWith(
+      TEST_USER.userId,
+      'web-fp-1',
+    );
+    expect(mockExecutionService.executeInternalTransfer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: TEST_USER.userId,
+        proposalId: 'proposal-uuid',
+        directiveId: validBody.directiveId,
+        nonce: validBody.nonce,
+        pin: validBody.pin,
+        // I8: idempotencyKey = proposalId (NOT the client-supplied body key).
+        idempotencyKey: 'proposal-uuid',
+        deviceId: 'device-uuid',
+      }),
+    );
+    expect(result.transactionId).toBe('txn-transfer');
+    expect(result.status).toBe('completed');
   });
 
   it('maps send InsufficientBalanceError → 422', async () => {

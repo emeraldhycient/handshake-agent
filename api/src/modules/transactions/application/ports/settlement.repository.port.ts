@@ -468,6 +468,79 @@ export interface SettleManualCreditAtomicOutput {
 }
 
 // ---------------------------------------------------------------------------
+// Internal transfer (user→user, PayID — engine-brokered, single-phase)
+// ---------------------------------------------------------------------------
+
+/**
+ * An internal user→user crypto TRANSFER settled entirely on the ledger (Spec 2,
+ * Task 7). Unlike buy/sell/send/swap this is SINGLE-PHASE + instant: the crypto
+ * never leaves Handshake's custody, so there is no reserve/finalize split, no
+ * on-chain withdraw, no SettlementOutbox and no webhook. The engine posts both
+ * legs (debit sender, credit recipient) and marks the Transaction `completed`
+ * in ONE `$transaction`, keyed by `idempotencyKey` so a replayed settle is a
+ * no-op (never a double post, §3.1).
+ */
+export interface SettleInternalTransferAtomicInput {
+  /** The Proposal(type=internal_transfer) this settlement executes. */
+  proposalId: string;
+  /** The sending user (owner of the anchor Transaction). */
+  senderUserId: string;
+  /** The receiving user (credited via the ledger + WalletBalance snapshot). */
+  recipientUserId: string;
+  /** WalletPrismaRepository id of the sender's crypto wallet (debited leg). */
+  senderWalletId: string;
+  /** WalletPrismaRepository id of the recipient's crypto wallet (credited leg). */
+  recipientWalletId: string;
+  /** The crypto asset symbol (e.g. 'USDT'); threaded to the ledger builder. */
+  asset: string;
+  /** Crypto amount moved from sender to recipient (positive decimal string). */
+  cryptoAmount: string;
+  /**
+   * Per-asset decimal places for the WalletBalance snapshots. Resolved from the
+   * AssetRegistry by the executor, so the repository never hardcodes a decimals
+   * literal (§7).
+   */
+  assetDecimals: number;
+  /**
+   * At-most-once key (= proposalId per the controller's I8 rule). A prior settle
+   * with the same key short-circuits WITHOUT re-posting — the double-post guard.
+   */
+  idempotencyKey: string;
+  /** Deterministic checksum of the request parameters (audit trail). */
+  requestChecksum: string;
+  /**
+   * Velocity counters to upsert atomically for the SENDER (the transfer counts
+   * against the sender's daily/weekly caps — mirrors the send reserve, V1).
+   */
+  velocityIncrement: {
+    userId: string;
+    /** Fiat currency code for the counter's window (e.g. 'NGN'). */
+    fiatCurrency: string;
+    fiatAmountStr: string;
+    now: Date;
+  };
+  /** Timestamp the user confirmed the proposal (persisted on the Proposal). */
+  confirmedAt: Date;
+  /** Timestamp the PIN was verified (persisted on the Transaction). */
+  pinVerifiedAt: Date;
+  /** Timestamp to use for postedAt / completedAt / issuedAt (from CLOCK). */
+  now: Date;
+  /** Current year string for receiptNumber (e.g. "2026"). Derived from CLOCK. */
+  year: string;
+}
+
+export interface SettleInternalTransferAtomicOutput {
+  /** The completed anchor Transaction (owned by the sender). */
+  txn: import('./transaction.repository.port').TransactionRecord;
+  /** Human-readable sequential receipt number, e.g. "HS-2026-000001". */
+  receiptNumber: string;
+  /** The sender's user_wallet running balance after the debit (decimal string). */
+  senderBalanceAfter: string;
+  /** The recipient's user_wallet running balance after the credit (decimal string). */
+  recipientBalanceAfter: string;
+}
+
+// ---------------------------------------------------------------------------
 // Port interface
 // ---------------------------------------------------------------------------
 
@@ -627,4 +700,27 @@ export interface ISettlementRepository {
   settleManualCreditAtomic(
     input: SettleManualCreditAtomicInput,
   ): Promise<SettleManualCreditAtomicOutput>;
+
+  /**
+   * Atomically settles an internal user→user crypto TRANSFER (Spec 2, Task 7) as
+   * a SINGLE-PHASE ledger double-entry — no reserve/finalize split, no on-chain
+   * send, no outbox. Inside one `$transaction` (isolation Serializable):
+   *   0. Advisory-lock BOTH user_wallet accounts (sender + recipient).
+   *   1. Idempotency check on `idempotencyKey` under the lock — if a prior settle
+   *      already posted, return its receipt + both current balances (no re-post).
+   *   2. Read both user_wallet account states inside the tx.
+   *   3. FUNDS-SAFETY guard: sender balance ≥ cryptoAmount or throw
+   *      InsufficientBalanceError BEFORE posting (the debit leg must never drive
+   *      balanceAfter negative under concurrency, §3.1).
+   *   4. buildInternalTransferLedgerEntries → 2 legs (debit sender, credit recipient).
+   *   5. Create the anchor Transaction (type=internal_transfer, completed, owned
+   *      by the sender) linked to the Proposal; mark the Proposal executed.
+   *   6. Upsert the SENDER's velocity counters.
+   *   7. Insert both LedgerEntry rows; capture sender + recipient balanceAfter.
+   *   8. Update BOTH WalletBalance snapshots (sender debited, recipient credited).
+   *   9. Mint a signed Receipt (fail-closed) for the sender's Transaction.
+   */
+  settleInternalTransferAtomic(
+    input: SettleInternalTransferAtomicInput,
+  ): Promise<SettleInternalTransferAtomicOutput>;
 }

@@ -55,6 +55,7 @@ import {
   buildSwapReserveEntries,
   buildSwapFinalizeEntries,
   buildSwapRefundEntries,
+  buildInternalTransferLedgerEntries,
   toScaled,
 } from '../domain/ledger';
 import type {
@@ -84,8 +85,13 @@ import type {
   SettleSendRefundInput,
   SettleManualCreditAtomicInput,
   SettleManualCreditAtomicOutput,
+  SettleInternalTransferAtomicInput,
+  SettleInternalTransferAtomicOutput,
 } from '../application/ports/settlement.repository.port';
-import { ReceiptNotSignableError } from '../domain/execution-errors';
+import {
+  ReceiptNotSignableError,
+  InsufficientBalanceError,
+} from '../domain/execution-errors';
 import type { TransactionRecord } from '../application/ports/transaction.repository.port';
 
 // ---------------------------------------------------------------------------
@@ -739,6 +745,47 @@ function buildManualCreditReceiptContent(input: {
 <p>Reason: ${input.reason}</p>
 <p>Approved By (admin): ${input.approvedByAdminId}</p>
 <p>Type: manual_credit</p>
+<p>Issued At: ${input.issuedAt.toISOString()}</p>
+</body>
+</html>`;
+
+  return { htmlContent, itemized };
+}
+
+/**
+ * Builds the deterministic HTML content and itemized JSON for an internal
+ * user→user TRANSFER receipt. Byte-stable for the same inputs (canonical JSON,
+ * ISO dates). The recipient is identified by internal user id (there is no
+ * on-chain address for an in-custody transfer).
+ */
+function buildInternalTransferReceiptContent(input: {
+  receiptNumber: string;
+  transactionId: string;
+  userId: string;
+  asset: string;
+  cryptoAmount: string;
+  recipientUserId: string;
+  issuedAt: Date;
+}): { htmlContent: string; itemized: Record<string, unknown> } {
+  const itemized = {
+    asset: input.asset,
+    cryptoAmount: input.cryptoAmount,
+    recipientUserId: input.recipientUserId,
+    type: 'internal_transfer',
+  };
+
+  const htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Receipt ${input.receiptNumber}</title></head>
+<body>
+<h1>Handshake Transfer Receipt</h1>
+<p>Receipt Number: ${input.receiptNumber}</p>
+<p>Transaction ID: ${input.transactionId}</p>
+<p>User ID: ${input.userId}</p>
+<p>Asset: ${input.asset}</p>
+<p>Amount Sent: ${input.cryptoAmount} ${input.asset}</p>
+<p>Recipient (user): ${input.recipientUserId}</p>
+<p>Type: internal_transfer</p>
 <p>Issued At: ${input.issuedAt.toISOString()}</p>
 </body>
 </html>`;
@@ -2775,5 +2822,300 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       },
       { isolationLevel: 'ReadCommitted' },
     );
+  }
+
+  async settleInternalTransferAtomic(
+    input: SettleInternalTransferAtomicInput,
+  ): Promise<SettleInternalTransferAtomicOutput> {
+    const {
+      proposalId,
+      senderUserId,
+      recipientUserId,
+      senderWalletId,
+      recipientWalletId,
+      asset,
+      cryptoAmount,
+      assetDecimals,
+      idempotencyKey,
+      requestChecksum,
+      velocityIncrement,
+      confirmedAt,
+      pinVerifiedAt,
+      now,
+      year,
+    } = input;
+    const signingKey = this.signingKey;
+
+    return this.prisma.$transaction(
+      async (tx) => {
+        // ── 0. Advisory locks — serialize concurrent transfers on BOTH accounts ─
+        // Locks both user_wallet ledger accounts (sender + recipient) so two
+        // concurrent transfers touching either wallet cannot race on sequence
+        // allocation. Auto-released at commit/rollback.
+        await acquireAccountAdvisoryLocks(tx, [
+          { accountType: 'user_wallet', accountId: senderWalletId },
+          { accountType: 'user_wallet', accountId: recipientWalletId },
+        ]);
+
+        // ── 1. Idempotency check (under the lock) — the double-post guard ──────
+        // A prior settle of the SAME proposal already posted this transfer — its
+        // Transaction carries this idempotencyKey. Return its receipt + both
+        // current balances WITHOUT re-posting (§3.1).
+        const existing = await tx.transaction.findUnique({
+          where: { idempotencyKey },
+          select: { id: true },
+        });
+        if (existing !== null) {
+          const receipt = await tx.receipt.findUnique({
+            where: { transactionId: existing.id },
+            select: { receiptNumber: true },
+          });
+          const senderBal = await tx.ledgerEntry.findFirst({
+            where: {
+              accountType: LedgerAccountType.user_wallet,
+              accountId: senderWalletId,
+              currency: asset,
+            },
+            orderBy: { sequence: 'desc' },
+            select: { balanceAfter: true },
+          });
+          const recipientBal = await tx.ledgerEntry.findFirst({
+            where: {
+              accountType: LedgerAccountType.user_wallet,
+              accountId: recipientWalletId,
+              currency: asset,
+            },
+            orderBy: { sequence: 'desc' },
+            select: { balanceAfter: true },
+          });
+          const rec = await this.rebuildExistingTransferOutput(
+            tx,
+            existing.id,
+            senderBal?.balanceAfter,
+            recipientBal?.balanceAfter,
+            receipt?.receiptNumber ?? '',
+          );
+          return rec;
+        }
+
+        // ── 2. Read both user_wallet account states (inside tx for isolation) ──
+        const accountStates = await fetchAccountStatesByList(
+          tx as unknown as PrismaService,
+          [
+            {
+              accountType: 'user_wallet',
+              accountId: senderWalletId,
+              currency: asset,
+            },
+            {
+              accountType: 'user_wallet',
+              accountId: recipientWalletId,
+              currency: asset,
+            },
+          ],
+        );
+
+        // ── 3. FUNDS-SAFETY balance guard (under the lock, before posting) ────
+        // The pre-atomic execute check is not enough under concurrency: the debit
+        // leg must never drive the sender's balanceAfter negative. Re-read the
+        // sender's authoritative ledger balance HERE and fail closed (§3.1).
+        const senderState =
+          accountStates[`user_wallet:${senderWalletId}:${asset}`];
+        const senderBalanceBefore = senderState?.balance ?? '0';
+        if (toScaled(senderBalanceBefore) < toScaled(cryptoAmount)) {
+          throw new InsufficientBalanceError(
+            senderBalanceBefore,
+            cryptoAmount,
+            asset,
+          );
+        }
+
+        // ── 4. Build the balanced double-entry (pure domain function) ─────────
+        const drafts: LedgerEntryDraft[] = buildInternalTransferLedgerEntries({
+          senderWalletId,
+          recipientWalletId,
+          asset,
+          cryptoAmount,
+          postedAt: now,
+          accountStates,
+        });
+
+        // ── 5. Create the anchor Transaction (internal_transfer, completed) ────
+        // ONE sender-owned Transaction with the 2 ledger legs — the recipient's
+        // credit is authoritative via the ledger + WalletBalance snapshot
+        // (mirrors manual credit's single-anchor model).
+        const created = await tx.transaction.create({
+          data: {
+            userId: senderUserId,
+            proposalId,
+            type: TransactionType.internal_transfer,
+            status: TransactionStatus.completed,
+            idempotencyKey,
+            requestChecksum,
+            metadata: {
+              asset,
+              cryptoAmount,
+              recipientUserId,
+              recipientWalletId,
+              // Persist the sender's velocity contribution for parity with the
+              // send/sell paths (audit + any future reversal).
+              velocityFiatAmount: velocityIncrement.fiatAmountStr,
+              velocityFiatCurrency: velocityIncrement.fiatCurrency,
+            },
+            pinVerifiedAt,
+            executedAt: now,
+            completedAt: now,
+          },
+          select: TRANSACTION_SELECT_SELL,
+        });
+
+        // ── 6. Flip the Proposal to a terminal 'executed' (single-phase) ──────
+        await tx.proposal.update({
+          where: { id: proposalId },
+          data: {
+            status: 'executed',
+            confirmedAt,
+          },
+        });
+
+        // ── 7. Upsert the SENDER's velocity counters (V1) ─────────────────────
+        // The transfer counts against the SENDER's daily/weekly/count caps.
+        await writeVelocityIncrementsInSettle(tx, velocityIncrement);
+
+        // ── 8. Insert both LedgerEntry rows; capture each balanceAfter ────────
+        let senderBalanceAfter = senderBalanceBefore;
+        let recipientBalanceAfter =
+          accountStates[`user_wallet:${recipientWalletId}:${asset}`]?.balance ??
+          '0';
+        for (const draft of drafts) {
+          await tx.ledgerEntry.create({
+            data: {
+              transactionId: created.id,
+              accountType: draft.accountType,
+              accountId: draft.accountId,
+              currency: draft.currency,
+              amount: draft.amount as unknown as Prisma.Decimal,
+              direction: draft.direction,
+              description: draft.description,
+              balanceAfter: draft.balanceAfter as unknown as Prisma.Decimal,
+              sequence: draft.sequence,
+              postedAt: draft.postedAt,
+            },
+          });
+          if (draft.accountId === senderWalletId) {
+            senderBalanceAfter = draft.balanceAfter;
+          } else if (draft.accountId === recipientWalletId) {
+            recipientBalanceAfter = draft.balanceAfter;
+          }
+        }
+
+        // ── 9. Update BOTH WalletBalance snapshots (sender debited, recipient
+        //      credited). The ledger is authoritative for balances; these are the
+        //      ledger-derived reconciliation snapshots (source=provider_sync — an
+        //      internal transfer never touches a provider, but the snapshot is
+        //      synced from our own authoritative ledger, not an operator action).
+        await tx.walletBalance.create({
+          data: {
+            walletId: senderWalletId,
+            asset,
+            amount: senderBalanceAfter as unknown as Prisma.Decimal,
+            assetDecimals,
+            source: BalanceSource.provider_sync,
+            syncedAt: now,
+          },
+        });
+        await tx.walletBalance.create({
+          data: {
+            walletId: recipientWalletId,
+            asset,
+            amount: recipientBalanceAfter as unknown as Prisma.Decimal,
+            assetDecimals,
+            source: BalanceSource.provider_sync,
+            syncedAt: now,
+          },
+        });
+
+        // ── 10. Mint the signed Receipt (fail-closed) for the sender's tx ─────
+        if (!signingKey) {
+          throw new ReceiptNotSignableError();
+        }
+        const seqResult = await tx.$queryRaw<[{ nextval: bigint }]>`
+          SELECT nextval('hs_receipt_seq')`;
+        const receiptNumber = formatReceiptNumber(year, seqResult[0].nextval);
+
+        const { htmlContent, itemized } = buildInternalTransferReceiptContent({
+          receiptNumber,
+          transactionId: created.id,
+          userId: senderUserId,
+          asset,
+          cryptoAmount,
+          recipientUserId,
+          issuedAt: now,
+        });
+
+        const contentHash = createHash('sha256')
+          .update(htmlContent + JSON.stringify(itemized), 'utf8')
+          .digest('hex');
+
+        const signaturePayload = [
+          receiptNumber,
+          created.id,
+          contentHash,
+          senderUserId,
+          now.toISOString(),
+        ].join('|');
+        const signatureHash = hmacHex('sha256', signingKey, signaturePayload);
+
+        await tx.receipt.create({
+          data: {
+            transactionId: created.id,
+            receiptNumber,
+            userId: senderUserId,
+            itemized: itemized as unknown as Prisma.InputJsonValue,
+            htmlContent,
+            contentHash,
+            signatureHash,
+            deliveryStatus: ReceiptDeliveryStatus.pending,
+            issuedAt: now,
+          },
+        });
+
+        return {
+          txn: toTransactionRecord(created),
+          receiptNumber,
+          senderBalanceAfter,
+          recipientBalanceAfter,
+        };
+      },
+      { isolationLevel: 'Serializable' },
+    );
+  }
+
+  /**
+   * Rebuilds the idempotent-replay output for an already-settled internal
+   * transfer: loads the anchor Transaction row and returns it with both current
+   * balances + the prior receipt number, WITHOUT re-posting.
+   */
+  private async rebuildExistingTransferOutput(
+    tx: Prisma.TransactionClient,
+    transactionId: string,
+    senderBalanceAfter: unknown,
+    recipientBalanceAfter: unknown,
+    receiptNumber: string,
+  ): Promise<SettleInternalTransferAtomicOutput> {
+    const row = await tx.transaction.findUniqueOrThrow({
+      where: { id: transactionId },
+      select: TRANSACTION_SELECT_SELL,
+    });
+    return {
+      txn: toTransactionRecord(row),
+      receiptNumber,
+      senderBalanceAfter: senderBalanceAfter
+        ? (senderBalanceAfter as { toString(): string }).toString()
+        : '0',
+      recipientBalanceAfter: recipientBalanceAfter
+        ? (recipientBalanceAfter as { toString(): string }).toString()
+        : '0',
+    };
   }
 }
