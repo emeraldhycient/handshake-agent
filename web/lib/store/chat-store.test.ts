@@ -1385,17 +1385,15 @@ describe("sendToAgent", () => {
       })
     )
 
-    await store
-      .getState()
-      .resolveSendRaw(
-        "m",
-        {
-          address: "TRaw0000000001",
-          network: "TRON",
-          saveAsBeneficiary: false,
-        },
-        cardId
-      )
+    await store.getState().resolveSendRaw(
+      "m",
+      {
+        address: "TRaw0000000001",
+        network: "TRON",
+        saveAsBeneficiary: false,
+      },
+      cardId
+    )
 
     // The re-send used the intent text bound to THIS card + the raw
     // sendDestination — never a beneficiaryId (§3.1: the destination is the
@@ -1455,6 +1453,71 @@ describe("sendToAgent", () => {
         network: "TRON",
         saveAsBeneficiary: true,
         label: "Legacy",
+      },
+    })
+  })
+
+  it("resolveSendRaw re-sends the originating intent, not a later unrelated message", async () => {
+    // Turn 1: "send 50 USDT to TRawAAA0001" → needs_beneficiary card bound to
+    // THIS text (crypto_address, raw-send offered).
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "needs_beneficiary",
+        beneficiaryType: "crypto_address",
+      })
+    )
+    await store.getState().sendToAgent("m", "send 50 USDT to TRawAAA0001")
+    const card = store
+      .getState()
+      .threads.m.find((m) => m.kind === "needs_beneficiary")!
+    const cardId = card.id
+
+    // Turn 2: the user types something else entirely, overwriting the mutable
+    // _lastIntentText.
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "balance",
+        fiatCurrency: "NGN",
+        totalFiatValue: "100.00",
+        balances: [],
+      })
+    )
+    await store.getState().sendToAgent("m", "what's my balance")
+
+    // Resolve the OLD card with a raw destination. It must re-send
+    // "send 50 USDT to TRawAAA0001" — never "what's my balance".
+    const proposalId = "77777777-7777-7777-7777-777777777777"
+    mockApi.mockResolvedValueOnce(
+      makeResponse({
+        kind: "proposal",
+        txType: "send",
+        proposalId,
+        confirmation: {
+          proposalId,
+          asset: "USDT",
+          cryptoAmount: "50",
+          network: "TRON",
+          networkFeeCrypto: "1",
+          totalDebit: "51",
+          toAddressMasked: "TRawAA...0001",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        },
+      })
+    )
+    await store
+      .getState()
+      .resolveSendRaw(
+        "m",
+        { address: "TRawAAA0001", network: "TRON", saveAsBeneficiary: false },
+        cardId
+      )
+
+    expect(mockApi).toHaveBeenLastCalledWith({
+      text: "send 50 USDT to TRawAAA0001",
+      sendDestination: {
+        address: "TRawAAA0001",
+        network: "TRON",
+        saveAsBeneficiary: false,
       },
     })
   })
