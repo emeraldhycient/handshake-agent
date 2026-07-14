@@ -2836,9 +2836,12 @@ function makeComplianceService(opts: { passed: boolean } = { passed: true }): {
 
 function makeBeneficiaryServiceForSend(
   record: BeneficiaryRecord | null = STUB_CRYPTO_BENEFICIARY,
-): { getById: jest.Mock } {
+): { getById: jest.Mock; addCryptoAddress: jest.Mock } {
   return {
     getById: jest.fn().mockResolvedValue(record),
+    // Task 3: save-on-success persist path. The send's PIN + device-bound
+    // step-up already authorized this; addCryptoAddress needs no second PIN.
+    addCryptoAddress: jest.fn().mockResolvedValue(STUB_CRYPTO_BENEFICIARY),
   };
 }
 
@@ -3663,6 +3666,7 @@ describe('ExecutionService.executeSend', () => {
         callOrder.push('cooling_off');
         return Promise.resolve(STUB_CRYPTO_BENEFICIARY);
       }),
+      addCryptoAddress: jest.fn().mockResolvedValue(STUB_CRYPTO_BENEFICIARY),
     };
     const complianceService = {
       screenSendDestination: jest.fn().mockImplementation(() => {
@@ -3838,6 +3842,138 @@ describe('ExecutionService.executeSend', () => {
     );
 
     await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toThrow();
+  });
+});
+
+// =============================================================================
+// ExecutionService.executeSend — raw address + save-on-success (Task 3)
+// =============================================================================
+
+const RAW_SEND_ADDRESS_1 = 'TRawExecAddr0000000001';
+const RAW_SEND_ADDRESS_2 = 'TRawExecAddr0000000002';
+
+/**
+ * A send proposal with NO beneficiaryId — the raw-address shape Task 2 persists
+ * ({ destinationKind: 'raw_address', beneficiaryId: null, toAddress, … }).
+ */
+function makeRawSendProposal(
+  paramOverrides: Record<string, unknown> = {},
+): ProposalRecord {
+  return {
+    ...STUB_SEND_PROPOSAL,
+    parameters: {
+      asset: 'USDT',
+      cryptoAmount: '10.000000',
+      networkFeeCrypto: '1.000000',
+      totalDebit: '11.000000',
+      destinationKind: 'raw_address',
+      beneficiaryId: null,
+      walletId: 'wallet-id',
+      toAddress: RAW_SEND_ADDRESS_1,
+      network: 'TRON',
+      requiresTravelRule: 'false',
+      ...paramOverrides,
+    },
+  };
+}
+
+describe('ExecutionService.executeSend — raw address (Task 3)', () => {
+  it('executes a raw-address send with no beneficiaryId (guard no longer requires it)', async () => {
+    const walletService = makeWalletServiceWithWithdraw(SEND_PROVIDER_REF);
+    const beneficiaryService = makeBeneficiaryServiceForSend();
+    const svc = buildSendService({
+      proposalRepo: makeProposalRepo(makeRawSendProposal()),
+      walletService,
+      beneficiaryService,
+    });
+
+    const result = await svc.executeSend(SEND_BASE_INPUT);
+
+    expect(result.status).toBe('settling');
+    // The on-chain withdraw target is the raw address (positional arg 2).
+    expect(walletService.withdraw).toHaveBeenCalledWith(
+      expect.anything(),
+      RAW_SEND_ADDRESS_1,
+      '10.000000',
+      expect.any(String),
+      SEND_IDEMPOTENCY_KEY,
+    );
+    // No saved beneficiary → the cooling-off lookup is skipped entirely.
+    expect(beneficiaryService.getById).not.toHaveBeenCalled();
+  });
+
+  it('still rejects a proposal missing toAddress', async () => {
+    const svc = buildSendService({
+      proposalRepo: makeProposalRepo(makeRawSendProposal({ toAddress: '' })),
+    });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toThrow(
+      /missing toAddress/,
+    );
+  });
+
+  it('persists the beneficiary on success when saveAsBeneficiary is set (no second PIN)', async () => {
+    const beneficiaryService = makeBeneficiaryServiceForSend();
+    const pinService = makePinService();
+    const svc = buildSendService({
+      proposalRepo: makeProposalRepo(
+        makeRawSendProposal({
+          toAddress: RAW_SEND_ADDRESS_2,
+          saveAsBeneficiary: 'true',
+          saveLabel: 'Mum',
+        }),
+      ),
+      beneficiaryService,
+      pinService,
+    });
+
+    await svc.executeSend(SEND_BASE_INPUT);
+
+    expect(beneficiaryService.addCryptoAddress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER_ID,
+        address: RAW_SEND_ADDRESS_2,
+        network: 'TRON',
+        asset: 'USDT',
+        label: 'Mum',
+      }),
+    );
+    // The send's own PIN is verified exactly once — no second PIN for the save.
+    expect(pinService.verifyPin).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT persist when saveAsBeneficiary is absent', async () => {
+    const beneficiaryService = makeBeneficiaryServiceForSend();
+    const svc = buildSendService({
+      proposalRepo: makeProposalRepo(makeRawSendProposal()),
+      beneficiaryService,
+    });
+
+    await svc.executeSend(SEND_BASE_INPUT);
+
+    expect(beneficiaryService.addCryptoAddress).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fail the settled send when the save side-effect throws (best-effort)', async () => {
+    const beneficiaryService = makeBeneficiaryServiceForSend();
+    beneficiaryService.addCryptoAddress.mockRejectedValueOnce(
+      new Error('cooling-off write failed'),
+    );
+    const svc = buildSendService({
+      proposalRepo: makeProposalRepo(
+        makeRawSendProposal({
+          toAddress: RAW_SEND_ADDRESS_2,
+          saveAsBeneficiary: 'true',
+          saveLabel: 'Mum',
+        }),
+      ),
+      beneficiaryService,
+    });
+
+    // The withdraw already settled — a failed save must be swallowed.
+    const result = await svc.executeSend(SEND_BASE_INPUT);
+    expect(result.status).toBe('settling');
+    expect(beneficiaryService.addCryptoAddress).toHaveBeenCalledTimes(1);
   });
 });
 
