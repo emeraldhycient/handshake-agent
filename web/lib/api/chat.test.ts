@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { fetchChatHistory, sendVoiceNote } from "./chat"
+import { fetchChatHistory, sendChatMessage, sendVoiceNote } from "./chat"
 import { api } from "./client"
 
 vi.mock("./client", () => ({ api: { get: vi.fn(), post: vi.fn() } }))
 
 const getMock = api.get as unknown as ReturnType<typeof vi.fn>
+const postMock = api.post as unknown as ReturnType<typeof vi.fn>
 
 const validHistory = {
   conversationId: "dddddddd-dddd-dddd-dddd-dddddddddddd",
@@ -49,6 +50,62 @@ describe("fetchChatHistory", () => {
   it("throws when the response fails schema validation (UX gate)", async () => {
     getMock.mockResolvedValue({ data: { messages: "not-an-array" } })
     await expect(fetchChatHistory()).rejects.toThrow()
+  })
+})
+
+const validChatResponse = {
+  reply: { text: "ok" },
+  outcome: { kind: "clarification", text: "ok" },
+  conversationId: "11111111-1111-1111-1111-111111111111",
+  messageId: "22222222-2222-2222-2222-222222222222",
+}
+
+describe("sendChatMessage", () => {
+  beforeEach(() => {
+    postMock.mockReset()
+  })
+
+  it("POSTs a beneficiaryId body as-is", async () => {
+    postMock.mockResolvedValue({ data: validChatResponse })
+    await sendChatMessage({
+      text: "sell 10 usdt",
+      beneficiaryId: "33333333-3333-3333-3333-333333333333",
+    })
+    expect(postMock).toHaveBeenCalledWith("/chat/messages", {
+      text: "sell 10 usdt",
+      beneficiaryId: "33333333-3333-3333-3333-333333333333",
+    })
+  })
+
+  it("POSTs a sendDestination body through the schema unchanged", async () => {
+    postMock.mockResolvedValue({ data: validChatResponse })
+    const sendDestination = {
+      address: "TRaw0000000001",
+      network: "TRON" as const,
+      saveAsBeneficiary: false,
+    }
+    await sendChatMessage({
+      text: "send 50 usdt to TRaw0000000001",
+      sendDestination,
+    })
+    expect(postMock).toHaveBeenCalledWith("/chat/messages", {
+      text: "send 50 usdt to TRaw0000000001",
+      sendDestination,
+    })
+  })
+
+  it("rejects a body carrying both beneficiaryId and sendDestination (schema .refine)", async () => {
+    await expect(
+      sendChatMessage({
+        text: "send 5 usdt",
+        beneficiaryId: "33333333-3333-3333-3333-333333333333",
+        sendDestination: {
+          address: "TRaw0000000001",
+          network: "TRON",
+        },
+      })
+    ).rejects.toThrow()
+    expect(postMock).not.toHaveBeenCalled()
   })
 })
 

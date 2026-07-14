@@ -32,7 +32,12 @@ vi.mock("@/lib/query/hooks", () => ({
   useConfig: () => ({
     data: {
       fiats: [
-        { code: "NGN", displayName: "Nigerian Naira", symbol: "₦", decimals: 2 },
+        {
+          code: "NGN",
+          displayName: "Nigerian Naira",
+          symbol: "₦",
+          decimals: 2,
+        },
       ],
     },
   }),
@@ -41,6 +46,9 @@ vi.mock("@/lib/query/hooks", () => ({
 // Sections have their own specs — the orchestrator test asserts composition.
 vi.mock("./profile-section", () => ({
   ProfileSection: () => <div data-testid="profile-section" />,
+}))
+vi.mock("./VerificationSection", () => ({
+  VerificationSection: () => <div data-testid="verification-section" />,
 }))
 vi.mock("./security-section", () => ({
   SecuritySection: () => <div data-testid="security-section" />,
@@ -60,8 +68,8 @@ describe("SettingsPanel (orchestrator)", () => {
   beforeEach(() => {
     routerPush.mockReset()
     logoutMutation.current = {
-      mutate: vi.fn(
-        (_: unknown, opts?: { onSettled?: () => void }) => opts?.onSettled?.()
+      mutate: vi.fn((_: unknown, opts?: { onSettled?: () => void }) =>
+        opts?.onSettled?.()
       ),
       isPending: false,
     }
@@ -70,6 +78,7 @@ describe("SettingsPanel (orchestrator)", () => {
   it("composes the profile, security, MCP and language sections", () => {
     render(<SettingsPanel />)
     expect(screen.getByTestId("profile-section")).toBeInTheDocument()
+    expect(screen.getByTestId("verification-section")).toBeInTheDocument()
     expect(screen.getByTestId("security-section")).toBeInTheDocument()
     expect(screen.getByTestId("mcp-section")).toBeInTheDocument()
     expect(screen.getByTestId("language-selector")).toBeInTheDocument()

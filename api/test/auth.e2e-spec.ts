@@ -274,24 +274,33 @@ describe('Web auth flow — e2e (AppModule, Testcontainers Postgres)', () => {
     expect(lvBody.user.email).toBe(email);
     const { accessToken, refreshToken } = lvBody;
 
-    // 5. /auth/me with the access token
+    // 5. /auth/me with the access token — emailVerified:true for a verified
+    // user (Task 4.1: loadMe now derives it from emailVerifiedAt).
     const me = await request(app.getHttpServer())
       .get('/auth/me')
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(200);
-    expect((me.body as { email: string }).email).toBe(email);
+    const meBody = me.body as { email: string; emailVerified: boolean };
+    expect(meBody.email).toBe(email);
+    expect(meBody.emailVerified).toBe(true);
 
     // 6. /auth/me without a token → 401
     await request(app.getHttpServer()).get('/auth/me').expect(401);
 
-    // 7. refresh rotates the pair
+    // 7. refresh rotates the pair — same loadMe projection, so the boot-
+    // rehydrate user object also carries emailVerified:true (Task 4.1).
     const rf = await request(app.getHttpServer())
       .post('/auth/refresh')
       .send({ refreshToken })
       .expect(200);
-    const rfBody = rf.body as { accessToken: string; refreshToken: string };
+    const rfBody = rf.body as {
+      accessToken: string;
+      refreshToken: string;
+      user: { emailVerified: boolean };
+    };
     expect(rfBody.accessToken).toBeDefined();
     expect(rfBody.refreshToken).not.toBe(refreshToken);
+    expect(rfBody.user.emailVerified).toBe(true);
 
     // 8. old refresh token no longer works
     await request(app.getHttpServer())
@@ -336,6 +345,107 @@ describe('Web auth flow — e2e (AppModule, Testcontainers Postgres)', () => {
   }, 60_000);
 
   // ===========================================================================
+  // OTP SIGNUP (Task 2.2) — additive /auth/signup/request + /auth/signup/verify
+  // ===========================================================================
+
+  it('signup/request → signup/verify issues a session with tier_1 + emailVerified, and Set-Cookies ha_refresh', async () => {
+    const email = `e2e_otp_signup_${Date.now()}@test.com`;
+
+    const sr = await request(app.getHttpServer())
+      .post('/auth/signup/request')
+      .send({ email })
+      .expect(200);
+    const srBody = sr.body as { status: string; devOtp: string };
+    expect(srBody.status).toBe('otp_sent');
+    const otp = srBody.devOtp;
+    expect(otp).toMatch(/^[0-9]{6}$/);
+
+    const sv = await request(app.getHttpServer())
+      .post('/auth/signup/verify')
+      .send({ email, otp, deviceFingerprint: 'e2e-signup-fingerprint-1' })
+      .expect(200);
+    const svBody = sv.body as {
+      accessToken: string;
+      refreshToken: string;
+      user: { email: string; kycTier: string; emailVerified: boolean };
+    };
+    expect(svBody.accessToken).toBeDefined();
+    expect(svBody.refreshToken).toBeDefined();
+    expect(svBody.user.email).toBe(email);
+    expect(svBody.user.kycTier).toBe('tier_1');
+    expect(svBody.user.emailVerified).toBe(true);
+
+    const setCookie = sv.headers['set-cookie'] as unknown as string[];
+    expect(setCookie.some((c) => c.startsWith('ha_refresh='))).toBe(true);
+
+    // The issued access token authenticates /auth/me like any other session.
+    await request(app.getHttpServer())
+      .get('/auth/me')
+      .set('Authorization', `Bearer ${svBody.accessToken}`)
+      .expect(200);
+  }, 60_000);
+
+  it('signup/verify rejects a wrong OTP with 401', async () => {
+    const email = `e2e_otp_signup_bad_${Date.now()}@test.com`;
+    await request(app.getHttpServer())
+      .post('/auth/signup/request')
+      .send({ email })
+      .expect(200);
+    await request(app.getHttpServer())
+      .post('/auth/signup/verify')
+      .send({ email, otp: '000000', deviceFingerprint: 'e2e-signup-badotp-fp' })
+      .expect(401);
+  }, 60_000);
+
+  it('signup/request on an already-verified email returns the same otp_sent shape but mints no usable OTP (no enumeration oracle)', async () => {
+    // Create + verify a real user first via the legacy link flow (still intact).
+    const email = `e2e_otp_signup_dup_${Date.now()}@test.com`;
+    const signup = await request(app.getHttpServer())
+      .post('/auth/signup')
+      .send({ email, phone: '+2348016666666' })
+      .expect(202);
+    await request(app.getHttpServer())
+      .post('/auth/verify-email')
+      .send({ token: (signup.body as { devToken: string }).devToken })
+      .expect(200);
+
+    // Hitting signup/request again for the now-verified email is neutral.
+    const sr = await request(app.getHttpServer())
+      .post('/auth/signup/request')
+      .send({ email })
+      .expect(200);
+    const srBody = sr.body as { status: string; devOtp?: string };
+    expect(srBody.status).toBe('otp_sent');
+    expect(srBody.devOtp).toBeUndefined();
+
+    // No usable challenge was minted — any code is rejected the same way an
+    // unknown email would be.
+    await request(app.getHttpServer())
+      .post('/auth/signup/verify')
+      .send({ email, otp: '000000', deviceFingerprint: 'e2e-signup-dup-fp' })
+      .expect(401);
+  }, 60_000);
+
+  // ===========================================================================
+  // LEGACY link flow still passes (kept for backward-compat, Task 2.2 is additive)
+  // ===========================================================================
+
+  it('LEGACY: signup → verify-email link flow still works unmodified', async () => {
+    const email = `e2e_legacy_link_${Date.now()}@test.com`;
+    const signup = await request(app.getHttpServer())
+      .post('/auth/signup')
+      .send({ email, phone: '+2348015555555' })
+      .expect(202);
+    const token = (signup.body as { devToken: string }).devToken;
+    expect(token).toBeDefined();
+    await request(app.getHttpServer())
+      .post('/auth/verify-email')
+      .send({ token })
+      .expect(200)
+      .expect((r) => expect(r.body).toEqual({ verified: true }));
+  }, 60_000);
+
+  // ===========================================================================
   // HttpOnly refresh-cookie flow (Wave H) — cookie-primary, no body token
   // ===========================================================================
 
@@ -370,8 +480,14 @@ describe('Web auth flow — e2e (AppModule, Testcontainers Postgres)', () => {
     // The body still carries the tokens (non-breaking), but a browser ignores them.
     const accessToken = (lv.body as { accessToken: string }).accessToken;
 
-    // refresh with the cookie ONLY (empty body) → 200, rotated pair + user.
-    const rf = await agent.post('/auth/refresh').send({}).expect(200);
+    // refresh with the cookie ONLY and a COMPLETELY ABSENT body → 200, rotated
+    // pair + user. This is exactly what the browser client sends (axios
+    // `api.post('/auth/refresh')` with no data): the token rides in the cookie.
+    // A bodyless POST hands the DTO layer `undefined`; the request schema must
+    // accept it (RefreshRequestSchema.default({})), or every browser boot-refresh
+    // 400s and the user is logged out on reload. Do NOT `.send({})` here — that
+    // masks the bug (an empty object validates even without the default).
+    const rf = await agent.post('/auth/refresh').expect(200);
     const rfBody = rf.body as {
       accessToken: string;
       refreshToken: string;

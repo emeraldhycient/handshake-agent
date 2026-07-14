@@ -12,6 +12,7 @@ export const WEBHOOK_PROVIDERS = [
   'blockradar',
   'flutterwave',
   'whatsapp',
+  'sumsub',
 ] as const;
 export type WebhookProvider = (typeof WEBHOOK_PROVIDERS)[number];
 

@@ -23,6 +23,7 @@ import {
   AmountTooSmallError,
   SelfSendError,
 } from '../../transactions/domain/amount-guard-errors';
+import { InvalidSendAddressError } from '../../transactions/domain/invalid-send-address.error';
 import {
   BeneficiaryCoolingOffError,
   BeneficiaryWrongTypeError,
@@ -32,7 +33,6 @@ import { IdentityService } from '../../identity/application/identity.service';
 import type { ProposalService } from '../../transactions/application/proposal.service';
 import type { DirectiveService } from '../../transactions/application/directive.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
-import type { HandoffTokenService } from '../../identity/application/handoff-token.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import { maskBeneficiaryDetail } from '../../beneficiaries/application/beneficiary-display';
 import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
@@ -72,9 +72,6 @@ export const DIRECTIVE_SERVICE = Symbol('DIRECTIVE_SERVICE');
 
 /** DI token for WalletService — injected by symbol to avoid coupling at module level */
 export const WALLET_SERVICE = Symbol('WALLET_SERVICE');
-
-/** DI token for HandoffTokenService — injected by symbol (K3). */
-export const HANDOFF_TOKEN_SERVICE = Symbol('HANDOFF_TOKEN_SERVICE');
 
 /** DI token for BeneficiaryService — injected by symbol to avoid coupling at module level (W1). */
 export const BENEFICIARY_SERVICE = Symbol('BENEFICIARY_SERVICE');
@@ -162,8 +159,6 @@ export class ConversationService implements IInboundHandler {
     @Inject(WALLET_SERVICE)
     private readonly walletService: WalletService,
     private readonly assetRegistry: AssetRegistry,
-    @Inject(HANDOFF_TOKEN_SERVICE)
-    private readonly handoffTokenService: HandoffTokenService,
     @Inject(BENEFICIARY_SERVICE)
     private readonly beneficiaryService: BeneficiaryService,
     @Inject(TRANSACTION_HISTORY_SERVICE)
@@ -437,6 +432,12 @@ export class ConversationService implements IInboundHandler {
     if (err instanceof SelfSendError) {
       return "That's your own wallet address — no transfer is needed. Choose a different recipient.";
     }
+    if (err instanceof InvalidSendAddressError) {
+      // A user-pasted raw address that failed the network's pattern check.
+      // Surface a clean, actionable clarification — NEVER the raw domain
+      // message (it echoes the invalid address back verbatim).
+      return `That doesn’t look like a valid ${err.network} address — please check it and try again.`;
+    }
     if (err instanceof BeneficiaryCoolingOffError) {
       return (
         'For your security, newly added recipients have a short cooling-off ' +
@@ -583,16 +584,12 @@ export class ConversationService implements IInboundHandler {
    * Returns the short summary text that goes into the reply row.
    */
   private async sendKycHandoff(channelAddress: string): Promise<string> {
+    const url = this.onboardingUrl();
+    if (!url) {
+      // WEB_APP_BASE_URL not configured → text fallback.
+      return this.kycRequiredFallbackReply();
+    }
     try {
-      const { url } = await this.handoffTokenService.mintKycToken({
-        channelAddress,
-      });
-
-      if (!url) {
-        // WEB_APP_BASE_URL not configured → text fallback.
-        return this.kycRequiredFallbackReply();
-      }
-
       await this.sender.sendCtaUrl({
         to: channelAddress,
         body: 'To start transacting, please verify your identity. It only takes a minute.',
@@ -608,6 +605,21 @@ export class ConversationService implements IInboundHandler {
       );
       return this.kycRequiredFallbackReply();
     }
+  }
+
+  /**
+   * Builds the onboarding CTA URL from config: `${WEB_APP_BASE_URL}${webPath}`
+   * (webPath defaults to `/get-started`). Returns '' when WEB_APP_BASE_URL is
+   * unset so callers fall back to a plain-text reply. No token — the legacy
+   * handoff-token path was retired; a WhatsApp Contact links to a web account
+   * later via Settings.
+   */
+  private onboardingUrl(): string {
+    const baseUrl = this.configService.get<string>('WEB_APP_BASE_URL') ?? '';
+    if (!baseUrl) return '';
+    const path =
+      this.configService.get<string>('onboarding.webPath') ?? '/get-started';
+    return `${baseUrl}${path}`;
   }
 
   /**
@@ -865,7 +877,10 @@ export class ConversationService implements IInboundHandler {
         intent: intent as Parameters<
           ProposalService['createSendProposal']
         >[0]['intent'],
-        beneficiaryId: sendResolution.beneficiaryId,
+        destination: {
+          kind: 'saved_beneficiary',
+          beneficiaryId: sendResolution.beneficiaryId,
+        },
       });
       proposalId = out.proposalId;
       confirmation = out.confirmation;

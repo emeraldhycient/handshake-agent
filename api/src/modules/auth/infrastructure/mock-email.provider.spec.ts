@@ -28,4 +28,11 @@ describe('MockEmailProvider', () => {
     ).resolves.toBeUndefined();
     expect(spy).toHaveBeenCalledWith(expect.stringContaining('123456'));
   });
+
+  it('resolves for sendLoginInstead and logs the recipient (no OTP/code involved)', async () => {
+    const provider = make('https://app.test');
+    const spy = jest.spyOn(provider['logger'], 'log');
+    await expect(provider.sendLoginInstead('a@b.com')).resolves.toBeUndefined();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('a@b.com'));
+  });
 });

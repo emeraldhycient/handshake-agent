@@ -49,7 +49,11 @@ describe("NeedsBeneficiaryCard", () => {
     deleteMutate.mockReset()
     // Add-bank form data hooks — a single NGN currency (no picker) + GTBank list.
     useConfig.mockReturnValue({
-      data: { fiats: [{ code: "NGN", displayName: "Naira", symbol: "₦", decimals: 2 }] },
+      data: {
+        fiats: [
+          { code: "NGN", displayName: "Naira", symbol: "₦", decimals: 2 },
+        ],
+      },
     })
     useProfile.mockReturnValue({ data: { fiatCurrency: "NGN" } })
     useBanks.mockReturnValue({
@@ -239,6 +243,52 @@ describe("NeedsBeneficiaryCard", () => {
       screen.getByRole("button", { name: /My GTB0123456789/i })
     )
     expect(onResolve).toHaveBeenCalledWith("ben-1", "msg-42")
+  })
+
+  it("renders the send-mode crypto form and forwards onSendRaw with the card's messageId", async () => {
+    // allowRawSend flips the crypto add-form into send mode: the server's
+    // edge-parsed address pre-fills the field, there is NO PIN (send is
+    // authorized later via the proposal's PIN+step-up flow), and submitting
+    // forwards the user-confirmed destination + THIS card's messageId so the
+    // store resumes the exact intent (§3.1).
+    useBeneficiaries.mockReturnValue({
+      isPending: false,
+      isError: false,
+      data: { beneficiaries: [] },
+    })
+    const onSendRaw = vi.fn()
+    render(
+      <NeedsBeneficiaryCard
+        kind="needs_beneficiary"
+        beneficiaryType="crypto_address"
+        allowRawSend={true}
+        prefillAddress="TPrefill0000000001"
+        density="mobile"
+        messageId="msg-77"
+        onResolve={vi.fn()}
+        onSendRaw={onSendRaw}
+      />
+    )
+
+    // Send-mode form: prefilled + editable address, no PIN, no add mutation.
+    expect(screen.getByLabelText(/USDT address/i)).toHaveValue(
+      "TPrefill0000000001"
+    )
+    expect(screen.queryByLabelText(/Transaction PIN/i)).not.toBeInTheDocument()
+
+    // Leave "save this recipient" off and send.
+    await userEvent.click(screen.getByRole("button", { name: /send/i }))
+
+    expect(onSendRaw).toHaveBeenCalledWith(
+      {
+        address: "TPrefill0000000001",
+        network: "TRON",
+        saveAsBeneficiary: false,
+      },
+      "msg-77"
+    )
+    // No PIN-gated add mutation runs in the send path.
+    expect(addCryptoMutate).not.toHaveBeenCalled()
   })
 
   it("renders the server's targeted note in place of the generic copy (nickname miss)", () => {

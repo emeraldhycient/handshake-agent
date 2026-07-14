@@ -23,6 +23,7 @@ import {
   KycNotVerifiedError,
   TierLimitExceededError,
   VelocityExceededError,
+  CapabilityTierError,
 } from '../../modules/identity/domain/gate-errors';
 import {
   SanctionsBlockedError,
@@ -56,6 +57,8 @@ import {
   MultiCurrencyInvariantError,
 } from '../../modules/admin/domain/settings-errors';
 import { CurrencyCollisionError } from '../../modules/admin/domain/currency-errors';
+import { NameChangeNotAllowedError } from '../../modules/identity/domain/profile-errors';
+import { SumsubPrerequisiteNotMetError } from '../../modules/identity/domain/kyc-errors';
 
 interface ErrorBody {
   statusCode: number;
@@ -124,6 +127,7 @@ describe('DomainExceptionFilter', () => {
 
   it.each([
     [new KycNotVerifiedError('status'), 403],
+    [new CapabilityTierError('crypto.send', 'tier_2', 'tier_1'), 403],
     [new TierLimitExceededError(1000, 500, '1', 'NGN'), 403],
     [new VelocityExceededError('fiat', 1000, 500, '1', 'NGN'), 403],
     [new SanctionsBlockedError('addr', 'flagged', 'evt-1', 'ref-1'), 403],
@@ -148,6 +152,11 @@ describe('DomainExceptionFilter', () => {
     // Swap domain errors were previously uncoded → opaque 500s. They now map.
     [new SwapSameAssetError('USDT'), 422],
     [new SwapUnavailableError(), 422],
+    // POST /profile/name is pre-verification-only; a KYC-started account gets
+    // a clean 409, not an opaque 500 (critical-review finding, name-lock fix).
+    [new NameChangeNotAllowedError(), 409],
+    // Task 3.4: Sumsub token requested for a tier above the earned prerequisite.
+    [new SumsubPrerequisiteNotMetError('tier_2', 'tier_1', 'unverified'), 403],
   ])('maps %s → %i', (err, expected) => {
     const { statusCode } = run(filter, err);
     expect(statusCode).toBe(expected);
@@ -160,6 +169,7 @@ describe('DomainExceptionFilter', () => {
   describe('gate causes get distinct, actionable, non-leaking messages', () => {
     const gate: Array<[string, RegExp]> = [
       ['KYC_NOT_VERIFIED', /verif/i],
+      ['CAPABILITY_TIER_REQUIRED', /verify your identity/i],
       ['TIER_LIMIT_EXCEEDED', /per-transaction limit/i],
       ['SEND_LIMIT_EXCEEDED', /send limit/i],
       ['TIER_CHANGE_COOLING_OFF', /on hold|try again a little later/i],
@@ -240,6 +250,25 @@ describe('DomainExceptionFilter', () => {
     expect(statusCode).toBe(422);
     expect(body.code).toBe('SWAP_PROVIDER_UNAVAILABLE');
     expect(body.message).toMatch(/swap isn't available/i);
+  });
+
+  it('maps NameChangeNotAllowedError → 409 with the locked-name message and code echoed', () => {
+    const { statusCode, body } = run(filter, new NameChangeNotAllowedError());
+    expect(statusCode).toBe(409);
+    expect(body.code).toBe('NAME_CHANGE_NOT_ALLOWED');
+    expect(body.message).toMatch(/locked once identity verification/i);
+  });
+
+  it('maps DEVICE_ALREADY_BOUND → 409 with a clear, non-leaking message and echoed code', () => {
+    // A device fingerprint already pinned to another user (§3.4 one-device-per-
+    // identity) previously escaped as a raw Prisma P2002 → opaque 500. It now
+    // maps to a mapped 409 the client can act on.
+    const { statusCode, body } = run(filter, { code: 'DEVICE_ALREADY_BOUND' });
+    expect(statusCode).toBe(409);
+    expect(body.code).toBe('DEVICE_ALREADY_BOUND');
+    expect(body.message).toMatch(/already linked to another account/i);
+    // No user id / fingerprint / raw Prisma detail leaks to the client.
+    expect(body.message).not.toMatch(/pinnedDeviceId|P2002/i);
   });
 
   it('passes a NestJS HttpException through with its own status', () => {

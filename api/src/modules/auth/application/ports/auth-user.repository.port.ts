@@ -15,6 +15,8 @@ export interface MeProjection {
   kycStatus: string;
   kycTier: string;
   hasPin: boolean;
+  /** Derived from `emailVerifiedAt !== null` (Task 4.1). */
+  emailVerified: boolean;
   /** Null when the user has no KYC profile yet. */
   firstName: string | null;
   lastName: string | null;
@@ -26,14 +28,24 @@ export interface IAuthUserRepository {
    * ChannelIdentity for the phone (the later-link hook, §3.4). If the email
    * already exists, returns its userId with created:false (no duplicate). If the
    * phone already has an active WhatsApp ChannelIdentity, the CI is skipped.
+   * When `phone` is absent/empty (email-only signup), no ChannelIdentity is
+   * created at all.
    */
   createSignup(input: {
     email: string;
-    phone: string;
+    phone?: string;
   }): Promise<{ userId: string; created: boolean }>;
 
   findByEmail(email: string): Promise<AuthUserRecord | null>;
 
+  /**
+   * Stamps `emailVerifiedAt` and, guarded, grants `kycTier=tier_1` +
+   * `status=active` + `tierChangedAt=now` (Task 2.1: an email-verified
+   * account may transact tier_1 capabilities — buy/receive — immediately,
+   * §3.3). The tier grant only ever promotes a fresh `unverified` user: a
+   * user already at tier_1/2/3 re-hitting verify is left unchanged (no
+   * downgrade, no cooling-off re-stamp).
+   */
   markEmailVerified(userId: string, now: Date): Promise<void>;
 
   /**

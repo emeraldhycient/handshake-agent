@@ -9,4 +9,11 @@ export interface IEmailProvider {
   sendEmailVerification(to: string, token: string): Promise<void>;
   /** Sends the one-time login code. */
   sendLoginOtp(to: string, otp: string): Promise<void>;
+  /**
+   * Notifies an already-verified email that a signup was attempted for it —
+   * nudges the owner to log in instead. Sent in place of (never alongside) a
+   * signup OTP: no code is minted for this case (auth.service.ts
+   * `signupRequest`, no-enumeration-oracle defence).
+   */
+  sendLoginInstead(to: string): Promise<void>;
 }

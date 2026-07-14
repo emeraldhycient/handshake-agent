@@ -16,9 +16,13 @@ import type {
 } from './ports/identity.repository.port';
 import type { IVelocityRepository } from './ports/velocity.repository.port';
 import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
-import type { AppConfig } from '../../../core/config/configuration';
+import type {
+  AppConfig,
+  GatingConfig,
+} from '../../../core/config/configuration';
 import type { Clock } from '../../../core/common/clock';
 import {
+  CapabilityTierError,
   GateError,
   KycNotVerifiedError,
   OnChainSendLimitExceededError,
@@ -27,7 +31,10 @@ import {
   TierLimitExceededError,
   VelocityExceededError,
 } from '../domain/gate-errors';
-import { KycGateService } from './kyc-gate.service';
+import {
+  KycGateService,
+  type AssertCanTransactInput,
+} from './kyc-gate.service';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -57,19 +64,34 @@ const DEFAULT_LIMITS: AppConfig['limits'] = {
   },
 };
 
+// Task 1.3: mirrors the real code-default `gating.capabilityMinTier` map
+// (configuration.ts) — buy/receive need tier_1, sell/send/swap need tier_2.
+const DEFAULT_GATING: GatingConfig = {
+  capabilityMinTier: {
+    'crypto.buy': 'tier_1',
+    'crypto.receive': 'tier_1',
+    'crypto.sell': 'tier_2',
+    'crypto.send': 'tier_2',
+    'crypto.swap': 'tier_2',
+  },
+};
+
 /**
- * Builds an EffectiveConfigService stub returning `limits` from `get('limits')`.
- * Passing a custom `limits` simulates a DB `AppSetting` override flowing through
- * the layered config — the consumer reads it at the same call site.
+ * Builds an EffectiveConfigService stub returning `limits`/`gating` from
+ * `get('limits')`/`get('gating')`. Passing custom values simulates a DB
+ * `AppSetting` override flowing through the layered config — the consumer reads
+ * it at the same call site.
  */
 function makeConfig(
   limits: AppConfig['limits'] = DEFAULT_LIMITS,
   tierChangeCoolingOffSeconds = 0,
+  gating: GatingConfig = DEFAULT_GATING,
 ): EffectiveConfigService {
   return {
     get: (key: string) => {
       if (key === 'limits') return limits;
       if (key === 'compliance') return { tierChangeCoolingOffSeconds };
+      if (key === 'gating') return gating;
       return undefined;
     },
   } as unknown as EffectiveConfigService;
@@ -106,6 +128,7 @@ function makeIdentityRepo(
     loadUser: jest.fn().mockResolvedValue(user),
     loadContact: jest.fn(),
     findKycProfile: jest.fn().mockResolvedValue(kycProfile),
+    upsertKycProfileName: jest.fn().mockResolvedValue(undefined),
     findOriginatorIdentity: jest.fn().mockResolvedValue(originator),
     // Profile settings (Wave C) — unused by KycGateService; stubbed for type completeness.
     findProfileSettings: jest.fn().mockResolvedValue(null),
@@ -162,11 +185,14 @@ function makeService(
 
 // Fix-C: fiatAmount is now a string (exact NGN decimal) — no Number() at the gate.
 // Task 8: fiatCurrency is now required on AssertCanTransactInput.
-const BASE_INPUT = {
+// Task 1.3: capability is now required — 'crypto.buy' (tier_1) is the default so
+// existing limit/velocity tests (which exercise a tier_1 user) keep resolving.
+const BASE_INPUT: AssertCanTransactInput = {
   userId: 'user-id-1',
   fiatAmount: '10000',
   asset: 'USDT',
   fiatCurrency: 'NGN',
+  capability: 'crypto.buy',
 };
 
 // ---------------------------------------------------------------------------
@@ -193,48 +219,193 @@ describe('KycGateService.assertCanTransact', () => {
     });
   });
 
-  // ── KYC status / tier ─────────────────────────────────────────────────────
+  // ── Capability → minimum-tier gate (Task 1.3) ────────────────────────────
+  // Replaces the old `kycStatus !== 'verified'` hard block: a tier_1 (email-
+  // verified) user may use tier_1 capabilities (buy/receive) regardless of
+  // kycStatus; tier_2 capabilities (sell/send/swap) require tier_2. `unverified`
+  // fails `tierAtLeast` for every configured capability, so it stays blocked
+  // everywhere with no separate status check.
 
-  it('throws KycNotVerifiedError when kycStatus is pending', async () => {
+  it('a fresh email-verified tier_1 user (kycStatus not_started) may buy — a non-verified but non-revoked status is not a hard block', async () => {
     const svc = makeService(
-      makeUser({ kycStatus: 'pending', kycTier: 'tier_1' }),
+      makeUser({ kycStatus: 'not_started', kycTier: 'tier_1' }),
     );
-    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toThrow(
-      KycNotVerifiedError,
-    );
-    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toMatchObject({
-      code: 'KYC_NOT_VERIFIED',
-    });
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.buy' }),
+    ).resolves.toBeUndefined();
   });
 
-  it('throws KycNotVerifiedError when kycStatus is rejected', async () => {
+  it('a tier_1 user with a tier_2 Sumsub review in flight (kycStatus pending_review) may still buy at tier_1', async () => {
+    const svc = makeService(
+      makeUser({ kycStatus: 'pending_review', kycTier: 'tier_1' }),
+    );
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.buy' }),
+    ).resolves.toBeUndefined();
+  });
+
+  // ── Paused KYC status re-lock (§3.3) ─────────────────────────────────────
+  // The admin "Force re-KYC" ('pending') and needs-info bounce ('needs_info')
+  // paths restrict an account while PRESERVING its tier. The gate must fail
+  // closed on those (KYC_NOT_VERIFIED, distinct from the tier gate) or the
+  // retained tier would keep the flagged account transacting. Rejections are
+  // NOT a blanket status block — they lower the tier itself (see below).
+
+  it.each(['pending', 'needs_info'] as const)(
+    'blocks a tier_2 user whose kycStatus is "%s" from selling (paused-status re-lock, even though the tier is retained)',
+    async (kycStatus) => {
+      const svc = makeService(makeUser({ kycStatus, kycTier: 'tier_2' }));
+      await expect(
+        svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.sell' }),
+      ).rejects.toBeInstanceOf(KycNotVerifiedError);
+      await expect(
+        svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.sell' }),
+      ).rejects.toMatchObject({ code: 'KYC_NOT_VERIFIED' });
+    },
+  );
+
+  it.each(['pending', 'needs_info'] as const)(
+    'blocks even a tier_1-capability BUY when kycStatus is "%s" (a paused account transacts nothing)',
+    async (kycStatus) => {
+      const svc = makeService(makeUser({ kycStatus, kycTier: 'tier_1' }));
+      await expect(
+        svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.buy' }),
+      ).rejects.toBeInstanceOf(KycNotVerifiedError);
+    },
+  );
+
+  it('blocks a payout release for a force-re-KYC (pending) user (assertCanReleasePayout shares the baseline)', async () => {
+    const svc = makeService(
+      makeUser({ kycStatus: 'pending', kycTier: 'tier_2' }),
+    );
+    await expect(
+      svc.assertCanReleasePayout({
+        userId: 'user-id-1',
+        fiatAmount: '10000',
+        fiatCurrency: 'NGN',
+        asset: 'USDT',
+        capability: 'crypto.sell',
+      }),
+    ).rejects.toBeInstanceOf(KycNotVerifiedError);
+  });
+
+  // A Sumsub RED at a known level downgrades ONE rung (tier_2 → tier_1) and sets
+  // kycStatus='rejected'. Containment is via the TIER (CapabilityTierError re-
+  // locks send/sell/swap); the retained lower rung's capabilities (tier_1 buy)
+  // stay open by design — 'rejected' is NOT a blanket status block.
+  it('a RED-downgraded user (kycStatus rejected, kycTier tier_1) is re-locked from send by the TIER gate, not a status block', async () => {
     const svc = makeService(
       makeUser({ kycStatus: 'rejected', kycTier: 'tier_1' }),
     );
-    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toThrow(
-      KycNotVerifiedError,
-    );
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.send' }),
+    ).rejects.toBeInstanceOf(CapabilityTierError);
   });
 
-  it('throws KycNotVerifiedError when kycStatus is verified but kycTier is unverified', async () => {
+  it('a RED-downgraded user (kycStatus rejected, kycTier tier_1) may still BUY (the lower rung is retained by design)', async () => {
     const svc = makeService(
-      makeUser({ kycStatus: 'verified', kycTier: 'unverified' }),
+      makeUser({ kycStatus: 'rejected', kycTier: 'tier_1' }),
     );
-    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toThrow(
-      KycNotVerifiedError,
-    );
-    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toMatchObject({
-      code: 'KYC_NOT_VERIFIED',
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.buy' }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('a tier_1 user may NOT send (crypto.send requires tier_2)', async () => {
+    const svc = makeService(makeUser({ kycTier: 'tier_1' }));
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.send' }),
+    ).rejects.toBeInstanceOf(CapabilityTierError);
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.send' }),
+    ).rejects.toMatchObject({
+      code: 'CAPABILITY_TIER_REQUIRED',
+      capability: 'crypto.send',
+      requiredTier: 'tier_2',
+      actualTier: 'tier_1',
     });
   });
 
-  it('throws KycNotVerifiedError when kycStatus is not_started', async () => {
+  it('a tier_1 user may NOT sell (crypto.sell requires tier_2)', async () => {
+    const svc = makeService(makeUser({ kycTier: 'tier_1' }));
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.sell' }),
+    ).rejects.toBeInstanceOf(CapabilityTierError);
+  });
+
+  it('a tier_1 user may NOT swap (crypto.swap requires tier_2)', async () => {
+    const svc = makeService(makeUser({ kycTier: 'tier_1' }));
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.swap' }),
+    ).rejects.toBeInstanceOf(CapabilityTierError);
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.swap' }),
+    ).rejects.toMatchObject({
+      code: 'CAPABILITY_TIER_REQUIRED',
+      capability: 'crypto.swap',
+      requiredTier: 'tier_2',
+      actualTier: 'tier_1',
+    });
+  });
+
+  it('a tier_2 user may send, sell, and swap', async () => {
+    const svc = makeService(makeUser({ kycTier: 'tier_2' }));
+    for (const capability of [
+      'crypto.send',
+      'crypto.sell',
+      'crypto.swap',
+    ] as const) {
+      await expect(
+        svc.assertCanTransact({ ...BASE_INPUT, capability }),
+      ).resolves.toBeUndefined();
+    }
+  });
+
+  it('an unverified user may not buy', async () => {
     const svc = makeService(
-      makeUser({ kycStatus: 'not_started', kycTier: 'unverified' }),
+      makeUser({ kycStatus: 'verified', kycTier: 'unverified' }),
     );
-    await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toThrow(
-      KycNotVerifiedError,
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.buy' }),
+    ).rejects.toBeInstanceOf(CapabilityTierError);
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.buy' }),
+    ).rejects.toMatchObject({
+      code: 'CAPABILITY_TIER_REQUIRED',
+      capability: 'crypto.buy',
+      requiredTier: 'tier_1',
+      actualTier: 'unverified',
+    });
+  });
+
+  it('an unverified user is blocked from every capability (no separate status check needed)', async () => {
+    const svc = makeService(makeUser({ kycTier: 'unverified' }));
+    for (const capability of [
+      'crypto.buy',
+      'crypto.receive',
+      'crypto.sell',
+      'crypto.send',
+      'crypto.swap',
+    ] as const) {
+      await expect(
+        svc.assertCanTransact({ ...BASE_INPUT, capability }),
+      ).rejects.toBeInstanceOf(CapabilityTierError);
+    }
+  });
+
+  it('fails closed to tier_2 when a capability has no configured gating entry', async () => {
+    const svc = makeService(
+      makeUser({ kycTier: 'tier_1' }),
+      '0',
+      0,
+      makeConfig(DEFAULT_LIMITS, 0, { capabilityMinTier: {} }),
     );
+    await expect(
+      svc.assertCanTransact({ ...BASE_INPUT, capability: 'crypto.buy' }),
+    ).rejects.toMatchObject({
+      code: 'CAPABILITY_TIER_REQUIRED',
+      requiredTier: 'tier_2',
+    });
   });
 
   // ── Per-tx limit ──────────────────────────────────────────────────────────
@@ -311,15 +482,15 @@ describe('KycGateService.assertCanTransact', () => {
     );
   });
 
-  it('the positive-amount guard fires AFTER the KYC/tier gate (still blocks unverified first)', async () => {
-    // A zero amount from an unverified user surfaces the KYC error, not the
-    // amount error — KYC is the higher-severity gate and runs first.
+  it('the positive-amount guard fires AFTER the capability-tier gate (still blocks unverified first)', async () => {
+    // A zero amount from an unverified user surfaces the capability-tier error,
+    // not the amount error — the tier gate is higher-severity and runs first.
     const svc = makeService(
       makeUser({ kycStatus: 'verified', kycTier: 'unverified' }),
     );
     await expect(
       svc.assertCanTransact({ ...BASE_INPUT, fiatAmount: '0' }),
-    ).rejects.toThrow(KycNotVerifiedError);
+    ).rejects.toThrow(CapabilityTierError);
   });
 
   it('the positive-amount guard does NOT increment velocity (rejects before usage load)', async () => {
@@ -629,15 +800,18 @@ describe('KycGateService.assertCanTransact', () => {
     expect(
       new VelocityExceededError('fiat', 1, 2, 'tier_1', 'NGN'),
     ).toBeInstanceOf(GateError);
+    expect(
+      new CapabilityTierError('crypto.send', 'tier_2', 'tier_1'),
+    ).toBeInstanceOf(GateError);
   });
 
-  // ── Order of checks (sim-swap fires before KYC) ───────────────────────────
+  // ── Order of checks (sim-swap fires before the capability-tier gate) ─────
 
-  it('SimSwapBlockedError fires before KycNotVerifiedError when both would trigger', async () => {
+  it('SimSwapBlockedError fires before the capability-tier gate when both would trigger', async () => {
     const svc = makeService(
       makeUser({
         simSwapDetectedAt: new Date(),
-        kycStatus: 'pending',
+        kycTier: 'unverified',
       }),
     );
     await expect(svc.assertCanTransact(BASE_INPUT)).rejects.toThrow(
@@ -717,6 +891,7 @@ describe('KycGateService.assertCanTransact', () => {
         fiatAmount: '60000',
         asset: 'USDT',
         fiatCurrency: 'NGN',
+        capability: 'crypto.buy',
       }),
     ).rejects.toBeInstanceOf(TierLimitExceededError);
   });
@@ -729,6 +904,7 @@ describe('KycGateService.assertCanTransact', () => {
         fiatAmount: '1',
         asset: 'USDT',
         fiatCurrency: 'USD',
+        capability: 'crypto.buy',
       }),
     ).rejects.toThrow(/USD/);
   });
@@ -743,6 +919,7 @@ describe('KycGateService.assertCanTransact', () => {
         fiatAmount: '60000',
         asset: 'USDT',
         fiatCurrency: 'NGN',
+        capability: 'crypto.buy',
       })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(TierLimitExceededError);
@@ -777,6 +954,7 @@ describe('KycGateService.assertCanTransact', () => {
         fiatAmount: '60000',
         asset: 'USDT',
         fiatCurrency: 'NGN',
+        capability: 'crypto.buy',
       })
       .catch((e: unknown) => e);
     expect(err).toMatchObject({
@@ -983,22 +1161,27 @@ describe('KycGateService.getOriginatorIdentity', () => {
 // ---------------------------------------------------------------------------
 
 describe('KycGateService.assertCanReleasePayout', () => {
-  const PAYOUT_INPUT = {
+  // Task 1.3: payout retries are only issued for sell/send transactions (both
+  // capability-gated to tier_2 — see AdminTreasuryPayoutRetryService), so the
+  // fixture defaults to 'crypto.sell' with a tier_2 user; the existing per-tx /
+  // velocity-skip assertions are bumped from tier_1 to tier_2 accordingly.
+  const PAYOUT_INPUT: AssertCanTransactInput = {
     userId: 'user-id-1',
     fiatAmount: '10000',
     fiatCurrency: 'NGN',
     asset: 'USDT',
+    capability: 'crypto.sell',
   };
 
-  it('resolves for a verified tier_1 user within the per-tx cap', async () => {
-    const svc = makeService(makeUser(), '0', 0);
+  it('resolves for a verified tier_2 user within the per-tx cap', async () => {
+    const svc = makeService(makeUser({ kycTier: 'tier_2' }), '0', 0);
     await expect(
       svc.assertCanReleasePayout(PAYOUT_INPUT),
     ).resolves.toBeUndefined();
   });
 
   it('does NOT consult the daily/weekly velocity counters (avoids double-count)', async () => {
-    const identityRepo = makeIdentityRepo(makeUser());
+    const identityRepo = makeIdentityRepo(makeUser({ kycTier: 'tier_2' }));
     const velocityRepo = makeVelocityRepo('0', 0);
     const svc = new KycGateService(
       identityRepo,
@@ -1013,8 +1196,8 @@ describe('KycGateService.assertCanReleasePayout', () => {
   });
 
   it('passes even when daily usage is already AT the cap (velocity skipped)', async () => {
-    // tier_1 dailyFiatMax is 200_000; a fresh assertCanTransact would trip velocity.
-    const svc = makeService(makeUser(), '200000', 10);
+    // tier_2 dailyFiatMax is 2_000_000; a fresh assertCanTransact would trip velocity.
+    const svc = makeService(makeUser({ kycTier: 'tier_2' }), '2000000', 30);
     await expect(
       svc.assertCanReleasePayout(PAYOUT_INPUT),
     ).resolves.toBeUndefined();
@@ -1022,30 +1205,44 @@ describe('KycGateService.assertCanReleasePayout', () => {
 
   it('throws SimSwapBlockedError when simSwapDetectedAt is set', async () => {
     const svc = makeService(
-      makeUser({ simSwapDetectedAt: new Date('2024-05-30T10:00:00Z') }),
+      makeUser({
+        kycTier: 'tier_2',
+        simSwapDetectedAt: new Date('2024-05-30T10:00:00Z'),
+      }),
     );
     await expect(svc.assertCanReleasePayout(PAYOUT_INPUT)).rejects.toThrow(
       SimSwapBlockedError,
     );
   });
 
-  it('throws KycNotVerifiedError when kycStatus is not verified', async () => {
-    const svc = makeService(makeUser({ kycStatus: 'pending' }));
+  it('throws CapabilityTierError when the tier is below the capability minimum (tier_1 retrying a sell payout)', async () => {
+    const svc = makeService(makeUser({ kycTier: 'tier_1' }));
     await expect(svc.assertCanReleasePayout(PAYOUT_INPUT)).rejects.toThrow(
-      KycNotVerifiedError,
+      CapabilityTierError,
     );
+    await expect(
+      svc.assertCanReleasePayout(PAYOUT_INPUT),
+    ).rejects.toMatchObject({
+      code: 'CAPABILITY_TIER_REQUIRED',
+      capability: 'crypto.sell',
+      requiredTier: 'tier_2',
+      actualTier: 'tier_1',
+    });
   });
 
   it('throws TierLimitExceededError when amount exceeds the per-tx cap', async () => {
-    const svc = makeService(makeUser()); // tier_1 perTxFiatMax = 50_000
+    const svc = makeService(makeUser({ kycTier: 'tier_2' })); // perTxFiatMax = 500_000
     await expect(
-      svc.assertCanReleasePayout({ ...PAYOUT_INPUT, fiatAmount: '60000' }),
+      svc.assertCanReleasePayout({ ...PAYOUT_INPUT, fiatAmount: '600000' }),
     ).rejects.toThrow(TierLimitExceededError);
   });
 
   it('throws TierChangeCoolingOffError inside the cooling-off window', async () => {
     const svc = makeService(
-      makeUser({ tierChangedAt: new Date(FIXED_NOW.getTime() - 1000) }),
+      makeUser({
+        kycTier: 'tier_2',
+        tierChangedAt: new Date(FIXED_NOW.getTime() - 1000),
+      }),
       '0',
       0,
       makeConfig(DEFAULT_LIMITS, 3600),

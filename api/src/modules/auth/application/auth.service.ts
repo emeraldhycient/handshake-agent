@@ -13,6 +13,8 @@ import type {
   RefreshResponse,
   SignupRequest,
   SignupResponse,
+  SignupVerifyRequest,
+  SignupVerifyResponse,
   VerifyEmailRequest,
   VerifyEmailResponse,
 } from '@handshake-agent/contracts';
@@ -54,8 +56,11 @@ const DUMMY_CHALLENGE_HASH =
 
 /**
  * Throwaway UUID used as the userId argument when performing a dummy DB lookup
- * on the unknown-user path of loginVerify. The result is always null and is
- * discarded; the call exists solely to equalise DB round-trip latency.
+ * on a no-write branch (loginVerify/signupVerify's unknown-or-ineligible user
+ * path, and loginRequest/signupRequest's fast branch). The result is always
+ * null and is discarded; the call exists solely to equalise DB round-trip
+ * latency so response timing does not leak whether an email is registered or
+ * verified.
  */
 const DUMMY_USER_ID = '00000000-0000-0000-0000-000000000000' as const;
 
@@ -108,6 +113,9 @@ export class AuthService {
     if (challenge === null) throw new InvalidVerificationTokenError();
 
     await this.challenges.consume(challenge.id, now);
+    // Also grants kycTier=tier_1 + status=active, guarded to unverified users
+    // only (Task 2.1) — see the port/repo for the promotion + no-downgrade
+    // details.
     await this.users.markEmailVerified(challenge.userId, now);
     return { verified: true };
   }
@@ -127,6 +135,11 @@ export class AuthService {
       });
       await this.email.sendLoginOtp(user.email, otp);
       if (this.devExpose()) return { status: 'otp_sent', devOtp: otp };
+    } else {
+      // Unknown/unverified fast branch: no upsert/send happens above, so mirror
+      // the DUMMY_USER_ID dummy-lookup pattern to equalise DB round-trip latency
+      // and avoid a timing/enumeration oracle (same defence as loginVerify).
+      await this.dummyChallengeLookup();
     }
     return { status: 'otp_sent' };
   }
@@ -183,6 +196,128 @@ export class AuthService {
     const isRealUser = user !== null && user.emailVerifiedAt !== null;
     const lookupUserId = isRealUser ? user.id : DUMMY_USER_ID;
 
+    await this.validateAndConsumeOtp(isRealUser, lookupUserId, input.otp, now);
+
+    // isRealUser guaranteed true here (validateAndConsumeOtp throws otherwise),
+    // so user is guaranteed non-null.
+    return this.issueSession(user!.id, {
+      fingerprint: input.deviceFingerprint,
+      userAgent: input.userAgent,
+      ip: input.ip,
+    });
+  }
+
+  /**
+   * OTP signup — additive counterpart to {@link signup}/{@link verifyEmail}
+   * (Task 2.2). Creates-or-resumes the provisional user via
+   * `createSignup({ email })` and mints+sends an OTP using the SAME
+   * `otp_email` challenge mechanics as {@link loginRequest} (length/TTL/attempt
+   * budget, single-active-challenge-per-user upsert).
+   *
+   * An already-**verified** email returns the identical `otp_sent` shape (no
+   * enumeration) but deliberately mints NO challenge — it sends a "log in
+   * instead" notice. This is more than a UX nicety: {@link signupVerify}'s
+   * eligibility gate can only stay structurally airtight against OtpLockedError
+   * leaking "is this email already verified?" if no real signup challenge ever
+   * exists for a verified email (see signupVerify's doc comment).
+   */
+  async signupRequest(input: LoginRequest): Promise<LoginRequestResponse> {
+    const existing = await this.users.findByEmail(input.email);
+    if (existing !== null && existing.emailVerifiedAt !== null) {
+      // Already-verified fast branch: no createSignup/upsert happens below, so
+      // mirror the DUMMY_USER_ID dummy-lookup pattern to equalise DB round-trip
+      // latency and avoid a timing/enumeration oracle (same defence as
+      // loginRequest above and loginVerify).
+      await this.dummyChallengeLookup();
+      await this.email.sendLoginInstead(existing.email);
+      return { status: 'otp_sent' };
+    }
+
+    const { userId } = await this.users.createSignup({ email: input.email });
+
+    const length = this.config.get<number>('auth.otp.length') ?? 6;
+    const ttl = this.config.get<number>('auth.otp.ttlSeconds') ?? 300;
+    const otp = this.tokens.generateNumericOtp(length);
+    await this.challenges.upsert({
+      userId,
+      type: 'otp_email',
+      challengeHash: this.tokens.hash(otp),
+      expiresAt: new Date(Date.now() + ttl * 1000),
+    });
+    await this.email.sendLoginOtp(input.email, otp);
+
+    return this.devExpose()
+      ? { status: 'otp_sent', devOtp: otp }
+      : { status: 'otp_sent' };
+  }
+
+  /**
+   * OTP signup verification (Task 2.2). Validates the OTP via the same
+   * `otp_email` challenge as {@link loginVerify}, then — unlike login — this
+   * call is what PERFORMS the verification: it calls
+   * {@link IAuthUserRepository.markEmailVerified} (grants tier_1 + active,
+   * Task 2.1) before binding the device and issuing the session.
+   *
+   * Eligibility is the MIRROR IMAGE of loginVerify's: a real user who is
+   * **not yet** verified (loginVerify requires the opposite). Gating on this —
+   * not just "the user exists" — keeps OtpLockedError structurally unreachable
+   * for an already-verified email, even if that email happens to have an
+   * unrelated active login-OTP challenge in flight; {@link signupRequest}
+   * never mints a challenge for a verified email, so an ineligible caller is
+   * rejected with the generic InvalidOtpError before the attempt-cap check is
+   * ever reached — same anti-enumeration shape as loginVerify's unknown-user
+   * path.
+   */
+  async signupVerify(
+    input: SignupVerifyRequest & { userAgent?: string; ip?: string },
+  ): Promise<SignupVerifyResponse> {
+    const now = new Date();
+    const user = await this.users.findByEmail(input.email);
+
+    const isEligible = user !== null && user.emailVerifiedAt === null;
+    const lookupUserId = isEligible ? user.id : DUMMY_USER_ID;
+
+    await this.validateAndConsumeOtp(isEligible, lookupUserId, input.otp, now);
+
+    // isEligible guaranteed true here, so user is guaranteed non-null.
+    await this.users.markEmailVerified(user!.id, now);
+    const session = await this.issueSession(user!.id, {
+      fingerprint: input.deviceFingerprint,
+      userAgent: input.userAgent,
+      ip: input.ip,
+    });
+
+    // markEmailVerified above guarantees this by the time we get here.
+    // MeProjection/loadMe don't carry emailVerifiedAt (that's Task 4.1
+    // territory) so it is set explicitly here rather than widening that port
+    // for this one call site.
+    return {
+      ...session,
+      user: { ...session.user, emailVerified: true },
+    };
+  }
+
+  /**
+   * Validates a numeric OTP challenge for (lookupUserId, 'otp_email') and
+   * consumes it on success. Shared tail of {@link loginVerify} and
+   * {@link signupVerify} — each caller computes its own eligibility gate (they
+   * are opposite: login requires an already-verified user, signup requires an
+   * unverified one) and passes DUMMY_USER_ID instead of a real id when
+   * ineligible, so the DB round-trip (and therefore response timing) is
+   * identical to the real-user path regardless of outcome (timing oracle
+   * defence — same purpose as DUMMY_CHALLENGE_HASH above).
+   *
+   * Throws {@link InvalidOtpError} (ineligible caller, no active challenge, or
+   * wrong code) or {@link OtpLockedError} (guess budget exhausted); resolves
+   * with no value when the code is correct, immediately after consuming the
+   * challenge.
+   */
+  private async validateAndConsumeOtp(
+    isEligible: boolean,
+    lookupUserId: string,
+    otp: string,
+    now: Date,
+  ): Promise<void> {
     const challenge = await this.challenges.findActiveByUserAndType(
       lookupUserId,
       'otp_email',
@@ -192,19 +327,15 @@ export class AuthService {
     const maxAttempts = this.config.get<number>('auth.otp.maxAttempts') ?? 5;
     const storedHash = challenge?.challengeHash ?? DUMMY_CHALLENGE_HASH;
     const otpMatches = this.constantTimeEquals(
-      this.tokens.hash(input.otp),
+      this.tokens.hash(otp),
       storedHash,
     );
 
-    // All rejection conditions: unknown/unverified user, no active challenge,
-    // exhausted attempts, or wrong code. We gate the incrementAttempt call
-    // inside the real-user + real-challenge + wrong-code branch only.
-    //
-    // Order matters for enumeration safety: the unknown/unverified path throws
+    // Order matters for enumeration safety: the ineligible-caller path throws
     // the GENERIC InvalidOtpError FIRST, so the distinguishable OtpLockedError
-    // below is only ever reachable for a real, verified user with a real active
-    // challenge — telling that user to request a new code leaks nothing.
-    if (!isRealUser) throw new InvalidOtpError();
+    // below is only ever reachable for an eligible caller with a real active
+    // challenge — telling that caller to request a new code leaks nothing.
+    if (!isEligible) throw new InvalidOtpError();
     if (challenge === null) throw new InvalidOtpError();
     if (challenge.attemptCount >= maxAttempts) {
       // Distinct from a wrong code: the guess budget is spent. The FE routes
@@ -217,26 +348,52 @@ export class AuthService {
     }
 
     await this.challenges.consume(challenge.id, now);
+  }
+
+  /**
+   * Fires a single throwaway challenge read against {@link DUMMY_USER_ID}. The
+   * result is always null and discarded; it exists solely so the no-write fast
+   * branches of {@link loginRequest} and {@link signupRequest} incur a DB
+   * round-trip comparable to their write branches, closing the timing/
+   * enumeration oracle (same defence + dummy-lookup pattern as the verify path).
+   */
+  private async dummyChallengeLookup(): Promise<void> {
+    await this.challenges.findActiveByUserAndType(
+      DUMMY_USER_ID,
+      'otp_email',
+      new Date(),
+    );
+  }
+
+  /**
+   * Binds the device, signs a fresh access/refresh pair, and persists the
+   * session — the common tail of {@link loginVerify} and {@link signupVerify}
+   * once the OTP has been validated and consumed.
+   */
+  private async issueSession(
+    userId: string,
+    device: { fingerprint: string; userAgent?: string; ip?: string },
+  ): Promise<LoginVerifyResponse> {
     const { deviceId } = await this.users.bindDevice({
-      userId: user.id,
-      fingerprint: input.deviceFingerprint,
-      userAgent: input.userAgent,
-      ip: input.ip,
+      userId,
+      fingerprint: device.fingerprint,
+      userAgent: device.userAgent,
+      ip: device.ip,
     });
 
-    const accessToken = this.tokens.signAccessToken(user.id);
+    const accessToken = this.tokens.signAccessToken(userId);
     const refreshToken = this.tokens.generateOpaqueToken();
     const refreshTtl =
       this.config.get<number>('auth.jwt.refreshTtlSeconds') ?? 2592000;
     await this.sessions.create({
-      userId: user.id,
+      userId,
       deviceId,
       accessTokenHash: this.tokens.hash(accessToken),
       refreshTokenHash: this.tokens.hash(refreshToken),
       expiresAt: new Date(Date.now() + refreshTtl * 1000),
     });
 
-    const me = await this.users.loadMe(user.id);
+    const me = await this.users.loadMe(userId);
     return {
       accessToken,
       refreshToken,

@@ -42,6 +42,29 @@ export class KycNotVerifiedError extends GateError {
   }
 }
 
+/**
+ * The user's KYC tier is below the minimum tier required for the requested
+ * capability (Task 1.3, §3.3). Distinct from `KycNotVerifiedError` (the prior
+ * status-only gate) and `TierLimitExceededError` (a per-transaction AMOUNT cap for
+ * an already-permitted capability) — this is a capability-eligibility gate: e.g. a
+ * `tier_1` (email-verified, not-yet-fully-KYC'd) user may buy/receive but not
+ * send/sell/swap until their account reaches the capability's required tier.
+ */
+export class CapabilityTierError extends GateError {
+  readonly code = 'CAPABILITY_TIER_REQUIRED' as const;
+
+  constructor(
+    readonly capability: string,
+    readonly requiredTier: string,
+    readonly actualTier: string,
+  ) {
+    super(
+      `Transaction blocked: '${capability}' requires KYC tier ${requiredTier} or ` +
+        `above; this account is ${actualTier}.`,
+    );
+  }
+}
+
 /** The requested fiat amount exceeds the per-transaction limit for the user's KYC tier. */
 export class TierLimitExceededError extends GateError {
   readonly code = 'TIER_LIMIT_EXCEEDED' as const;

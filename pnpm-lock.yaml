@@ -273,6 +273,12 @@ importers:
       '@hookform/resolvers':
         specifier: ^5.4.0
         version: 5.4.0(react-hook-form@7.79.0(react@19.2.4))
+      '@sumsub/websdk':
+        specifier: ^2.6.3
+        version: 2.6.3
+      '@sumsub/websdk-react':
+        specifier: ^2.6.3
+        version: 2.6.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@tanstack/react-query':
         specifier: ^5.101.0
         version: 5.101.0(react@19.2.4)
@@ -2924,6 +2930,15 @@ packages:
 
   '@standard-schema/utils@0.3.0':
     resolution: {integrity: sha512-e7Mew686owMaPJVNNLs55PUvgz371nKgwsc4vxE49zsODpJEnxgxRo2y/OKrqueavXgZNMDVj3DdHFlaSAeU8g==}
+
+  '@sumsub/websdk-react@2.6.3':
+    resolution: {integrity: sha512-j9D9UQ1n5CPquqjhVTc/mCpQSA1cL/0ASLKwbncC7Wqvi8FEtbJmzWHlAF91rlT1iqPtM/mD05Rmax5SQDKUrA==}
+    peerDependencies:
+      react: '>=16.8.0'
+      react-dom: '>=16.8.0'
+
+  '@sumsub/websdk@2.6.3':
+    resolution: {integrity: sha512-uTetb3QjfOzcy42B5oxxo30Cv87rwq30ekfdr/qrRunDryf8DijV4k7raVqCSXD/QZN/ADobXNc92jfSjKHVSg==}
 
   '@swc/cli@0.6.0':
     resolution: {integrity: sha512-Q5FsI3Cw0fGMXhmsg7c08i4EmXCrcl+WnAxb6LYOLHw4JFFC3yzmx9LaXZ7QMbA+JZXbigU2TirI7RAfO0Qlnw==}
@@ -11185,6 +11200,13 @@ snapshots:
   '@standard-schema/spec@1.1.0': {}
 
   '@standard-schema/utils@0.3.0': {}
+
+  '@sumsub/websdk-react@2.6.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+    dependencies:
+      react: 19.2.4
+      react-dom: 19.2.4(react@19.2.4)
+
+  '@sumsub/websdk@2.6.3': {}
 
   '@swc/cli@0.6.0(@swc/core@1.15.41)(chokidar@4.0.3)':
     dependencies:

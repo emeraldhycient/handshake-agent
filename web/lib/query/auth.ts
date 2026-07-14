@@ -23,6 +23,7 @@ import {
   type LoginRequestResponse,
   type SignupResponse,
   type SignupRequest,
+  type SignupVerifyRequest,
   type VerifyEmailRequest,
 } from "@handshake-agent/contracts/auth"
 import {
@@ -32,6 +33,8 @@ import {
   submitLoginRequest,
   submitLoginVerify,
   submitSignup,
+  submitSignupRequest,
+  submitSignupVerify,
   submitVerifyEmail,
 } from "@/lib/api/auth"
 import { api } from "@/lib/api/client"
@@ -105,6 +108,38 @@ export function useLoginVerify() {
       defaultAuthStore
         .getState()
         .setSession({ accessToken: data.accessToken, user: data.user })
+    },
+  })
+}
+
+/**
+ * Request an OTP for the email→OTP→session signup flow (onboarding wizard).
+ * Mirrors useLoginRequest exactly, but hits the additive OTP-signup endpoint.
+ */
+export function useSignupRequest() {
+  return useMutation({
+    mutationFn: (email: string) => submitSignupRequest(email),
+  })
+}
+
+/**
+ * Verify the signup OTP and mint a session. Mirrors useLoginVerify's
+ * setSession-on-success behavior, and additionally invalidates the cached
+ * `me` query so a subsequent useMe() re-fetches the freshly created identity
+ * instead of holding a stale cache entry from before the session existed.
+ */
+export function useSignupVerify() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: SignupVerifyRequest) => submitSignupVerify(body),
+    onSuccess: (data) => {
+      // The refresh token in `data` is ignored — the browser already stored it
+      // as the HttpOnly `ha_refresh` cookie from the signup-verify response's
+      // Set-Cookie.
+      defaultAuthStore
+        .getState()
+        .setSession({ accessToken: data.accessToken, user: data.user })
+      queryClient.invalidateQueries({ queryKey: qk.me })
     },
   })
 }

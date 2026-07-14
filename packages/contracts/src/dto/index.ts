@@ -1,6 +1,7 @@
 export * from './buy-order.dto'
 export * from './config.dto'
 export * from './kyc-complete.dto'
+export * from './kyc-onboarding.dto'
 export * from './notification.dto'
 export * from './profile.dto'
 export * from './transaction.dto'

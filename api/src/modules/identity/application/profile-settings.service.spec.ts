@@ -5,6 +5,7 @@ import {
 import type { PinService } from '../../../core/auth/pin.service';
 import {
   FiatCurrencyNotEnabledError,
+  NameChangeNotAllowedError,
   ProfileSessionNotFoundError,
 } from '../domain/profile-errors';
 import type {
@@ -29,6 +30,8 @@ function makeService(
     verifyPin?: jest.Mock;
     setPin?: jest.Mock;
     updateProfileSettings?: jest.Mock;
+    upsertKycProfileName?: jest.Mock;
+    loadUser?: jest.Mock;
     isCurrencyLive?: (code: string) => boolean;
     sessions?: Partial<IProfileSessionRepository>;
   } = {},
@@ -40,6 +43,13 @@ function makeService(
   const identity = {
     updateProfileSettings:
       overrides.updateProfileSettings ?? jest.fn().mockResolvedValue(undefined),
+    upsertKycProfileName:
+      overrides.upsertKycProfileName ?? jest.fn().mockResolvedValue(undefined),
+    // Default: pre-verification (not_started) — the happy path for setName.
+    // Tests that need a different KYC status override this explicitly.
+    loadUser:
+      overrides.loadUser ??
+      jest.fn().mockResolvedValue({ kycStatus: 'not_started' }),
   };
   const sessionRepo: IProfileSessionRepository = {
     listActiveForUser: jest.fn().mockResolvedValue([]),
@@ -145,6 +155,95 @@ describe('ProfileSettingsService.updateProfile', () => {
       svc.updateProfile('u1', { fiatCurrency: 'GHS' }),
     ).rejects.toBeInstanceOf(FiatCurrencyNotEnabledError);
     expect(updateProfileSettings).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProfileSettingsService.setName', () => {
+  it('upserts the KycProfile name and returns the persisted (trimmed) names', async () => {
+    const upsertKycProfileName = jest.fn().mockResolvedValue(undefined);
+    const { svc } = makeService({ upsertKycProfileName });
+
+    const out = await svc.setName('u1', {
+      firstName: 'Amara',
+      lastName: 'Okeke',
+    });
+
+    expect(upsertKycProfileName).toHaveBeenCalledWith('u1', {
+      firstName: 'Amara',
+      lastName: 'Okeke',
+    });
+    expect(out).toEqual({ firstName: 'Amara', lastName: 'Okeke' });
+  });
+
+  it("is idempotent — re-posting with new names upserts again (create-or-update is the repo's job)", async () => {
+    const upsertKycProfileName = jest.fn().mockResolvedValue(undefined);
+    const { svc } = makeService({ upsertKycProfileName });
+
+    await svc.setName('u1', { firstName: 'Amara', lastName: 'Okeke' });
+    const out = await svc.setName('u1', {
+      firstName: 'Chidi',
+      lastName: 'Nwosu',
+    });
+
+    expect(upsertKycProfileName).toHaveBeenNthCalledWith(2, 'u1', {
+      firstName: 'Chidi',
+      lastName: 'Nwosu',
+    });
+    expect(out).toEqual({ firstName: 'Chidi', lastName: 'Nwosu' });
+  });
+
+  it('allows the write when no User row is found (fails open on this unrelated edge case)', async () => {
+    const upsertKycProfileName = jest.fn().mockResolvedValue(undefined);
+    const { svc } = makeService({
+      upsertKycProfileName,
+      loadUser: jest.fn().mockResolvedValue(null),
+    });
+
+    const out = await svc.setName('u1', {
+      firstName: 'Amara',
+      lastName: 'Okeke',
+    });
+
+    expect(upsertKycProfileName).toHaveBeenCalledWith('u1', {
+      firstName: 'Amara',
+      lastName: 'Okeke',
+    });
+    expect(out).toEqual({ firstName: 'Amara', lastName: 'Okeke' });
+  });
+
+  it.each([
+    'pending',
+    'pending_review',
+    'needs_info',
+    'verified',
+    'rejected',
+    'expired',
+  ])(
+    'GATED (§3.4): rejects with NameChangeNotAllowedError BEFORE any write when kycStatus=%s',
+    async (kycStatus) => {
+      const upsertKycProfileName = jest.fn();
+      const { svc } = makeService({
+        upsertKycProfileName,
+        loadUser: jest.fn().mockResolvedValue({ kycStatus }),
+      });
+
+      await expect(
+        svc.setName('u1', { firstName: 'Amara', lastName: 'Okeke' }),
+      ).rejects.toBeInstanceOf(NameChangeNotAllowedError);
+      expect(upsertKycProfileName).not.toHaveBeenCalled();
+    },
+  );
+
+  it('a verified user is blocked from silently overwriting the Travel-Rule originator name', async () => {
+    const upsertKycProfileName = jest.fn();
+    const loadUser = jest.fn().mockResolvedValue({ kycStatus: 'verified' });
+    const { svc } = makeService({ upsertKycProfileName, loadUser });
+
+    await expect(
+      svc.setName('u1', { firstName: 'Spoofed', lastName: 'Name' }),
+    ).rejects.toBeInstanceOf(NameChangeNotAllowedError);
+    expect(loadUser).toHaveBeenCalledWith('u1');
+    expect(upsertKycProfileName).not.toHaveBeenCalled();
   });
 });
 

@@ -346,16 +346,17 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
     );
   });
 
-  // A FRESH KYC-verified (Tier 1) user per test, each with a PIN + a bound-and-
-  // pinned device (Fix G §3.4). The 10-minute on-chain send-velocity cap
-  // (5/tier_1) is a real cross-transaction guard; reusing one user across the
-  // ~8 sends this file drives would (correctly) trip it at the 6th. A fresh user
-  // per test keeps the velocity window empty and the tests independent.
+  // A FRESH KYC-verified (Tier 2) user per test, each with a PIN + a bound-and-
+  // pinned device (Fix G §3.4). Task 1.3: crypto.send is gated to tier_2. The
+  // 10-minute on-chain send-velocity cap (20/tier_2) is a real cross-transaction
+  // guard; reusing one user across the ~8 sends this file drives would (correctly)
+  // trip a tighter cap. A fresh user per test keeps the velocity window empty and
+  // the tests independent.
   beforeEach(async () => {
     const user = await prisma.user.create({
       data: {
         kycStatus: 'verified',
-        kycTier: 'tier_1',
+        kycTier: 'tier_2',
         status: 'active',
       },
     });
@@ -477,7 +478,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
     // Create a send proposal via ProposalService.
     const proposal = await proposalService.createSendProposal({
       userId,
-      beneficiaryId: ben.id,
+      destination: { kind: 'saved_beneficiary', beneficiaryId: ben.id },
       intent: {
         action: 'send_crypto',
         asset: 'USDT',

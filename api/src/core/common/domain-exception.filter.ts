@@ -86,6 +86,16 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     message:
       'Please finish verifying your identity before making this transaction.',
   },
+  // Task 1.3: the account's KYC tier is below the minimum required for the
+  // requested capability (e.g. a tier_1/email-verified account trying to
+  // send/sell/swap, which need tier_2) — distinct from KYC_NOT_VERIFIED so the
+  // client can point the user at identity verification specifically.
+  CAPABILITY_TIER_REQUIRED: {
+    status: HttpStatus.FORBIDDEN,
+    message:
+      'Verify your identity to unlock this — sending, selling and swapping ' +
+      'need identity verification.',
+  },
   TIER_LIMIT_EXCEEDED: {
     status: HttpStatus.FORBIDDEN,
     message:
@@ -358,6 +368,14 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.UNPROCESSABLE_ENTITY,
     message: "That's your own wallet address — no transfer is needed.",
   },
+  // A user-supplied raw send address failed the network's pattern validation
+  // (createSendProposal raw_address branch) → 422, never an opaque 500.
+  INVALID_SEND_ADDRESS: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message:
+      "That address isn't valid for the selected network. " +
+      'Please check it and try again.',
+  },
 
   // ── Auth / PIN-setup / KYC (backstops; controllers also map these) ─────────
   PIN_WEAK: {
@@ -377,11 +395,34 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.TOO_MANY_REQUESTS,
     message: 'Too many attempts. Please request a new code.',
   },
+  // Device-bind unique-constraint collision (§3.4 one-device-per-identity): the
+  // fingerprint is already pinned to another account. Previously escaped as a raw
+  // Prisma P2002 → opaque 500. → 409 with an actionable, non-leaking message.
+  DEVICE_ALREADY_BOUND: {
+    status: HttpStatus.CONFLICT,
+    message:
+      'This device is already linked to another account. ' +
+      'Log in with that account, or use a different device.',
+  },
   KYC_REJECTED: {
     status: HttpStatus.UNPROCESSABLE_ENTITY,
     message:
       "We couldn't verify your identity with the details provided. " +
       'Please check them and try again.',
+  },
+  // Task 3.4: requesting a Sumsub WebSDK token for a tier the account hasn't
+  // earned the prerequisite rung for (e.g. tier_3 before tier_2) → 403.
+  SUMSUB_PREREQUISITE_NOT_MET: {
+    status: HttpStatus.FORBIDDEN,
+    message:
+      'Please complete the previous verification step before continuing.',
+  },
+  // POST /profile/name is pre-verification name capture ONLY — the name is
+  // immutable once KYC has started (verified against NIN/BVN and relied on as
+  // the FATF Travel-Rule originator identity, root CLAUDE.md §3.4) → 409.
+  NAME_CHANGE_NOT_ALLOWED: {
+    status: HttpStatus.CONFLICT,
+    message: 'Your name is locked once identity verification has started.',
   },
 };
 

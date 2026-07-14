@@ -42,6 +42,8 @@ import type { IWalletProvider } from '../src/modules/wallets/application/ports/w
 import type { IPaymentProvider } from '../src/modules/treasury/application/ports/payment-provider.port';
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 
+import { mintTier1User } from './helpers/mint-verified-user';
+
 jest.setTimeout(180_000);
 
 // ---------------------------------------------------------------------------
@@ -238,63 +240,21 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
   // HAPPY PATH — receive_crypto (full flow)
   // ===========================================================================
 
-  it('signup → verify-email → login → kyc/submit → POST /chat/messages → 200 receive outcome', async () => {
+  it('mint tier_1 user → POST /chat/messages → 200 receive outcome', async () => {
     const email = `e2e_wc_${Date.now()}@test.com`;
 
-    // 1. Signup returns devToken (AUTH_DEV_EXPOSE_OTP=true)
-    const signup = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone: '+2348029999001' })
-      .expect(202);
-    const signupBody = signup.body as { status: string; devToken: string };
-    expect(signupBody.status).toBe('pending_verification');
-    const devToken = signupBody.devToken;
-    expect(devToken).toBeDefined();
+    // Mint a verified tier_1 user (email-OTP signup → tier_1 + PIN).
+    const { accessToken, userId } = await mintTier1User(app, {
+      email,
+      pin: '1357',
+    });
 
-    // 2. Verify email
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200)
-      .expect((r) => expect(r.body).toEqual({ verified: true }));
+    // The onboarding model grants kycTier='tier_1' on email-OTP verification —
+    // the capability gate is tier-based now, not a kycStatus flag.
+    const minted = await prisma.user.findUnique({ where: { id: userId } });
+    expect(minted!.kycTier).toBe('tier_1');
 
-    // 3. Login request returns devOtp
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const lrBody = lr.body as { status: string; devOtp: string };
-    const otp = lrBody.devOtp;
-    expect(otp).toMatch(/^[0-9]{6}$/);
-
-    // 4. Login verify returns accessToken
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email, otp, deviceFingerprint: 'e2e-wc-fingerprint-123' })
-      .expect(200);
-    const lvBody = lv.body as {
-      accessToken: string;
-      refreshToken: string;
-      user: { email: string; id: string };
-    };
-    expect(lvBody.accessToken).toBeDefined();
-    const { accessToken } = lvBody;
-
-    // 5. POST /kyc/submit (authenticated) → get kycStatus=verified
-    const ks = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Adaeze',
-        lastName: 'Okonkwo',
-        nin: '22334455667',
-        pin: '1357',
-      })
-      .expect(200);
-    const ksBody = ks.body as { userId: string; status: string };
-    expect(ksBody.status).toBe('verified');
-
-    // 6. POST /chat/messages → agent returns receive_crypto → outcome.kind === 'receive'
+    // POST /chat/messages → agent returns receive_crypto → outcome.kind === 'receive'
     const chat = await request(app.getHttpServer())
       .post('/chat/messages')
       .set('Authorization', `Bearer ${accessToken}`)
@@ -320,7 +280,7 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
 
     // DB assertions: conversation and message were persisted
     const dbConversation = await prisma.conversation.findFirst({
-      where: { userId: ksBody.userId },
+      where: { userId },
     });
     expect(dbConversation).not.toBeNull();
 
@@ -333,10 +293,18 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
   }, 120_000);
 
   // ===========================================================================
-  // KYC-FAILURE PATH — user with no KYC → outcome.kind === 'needs_kyc'
+  // CAPABILITY → MINIMUM-TIER GATE — email-verified-only (tier_1) user
   // ===========================================================================
+  //
+  // Task 4.2b regression coverage: the onboarding model grants kycTier='tier_1'
+  // on EMAIL verification alone, WITHOUT setting kycStatus='verified' (reserved
+  // for full Sumsub KYC — no /kyc/submit step below). The chat-entry gate must
+  // key off capability→kycTier, matching KycGateService, not a stale
+  // kycStatus==='verified' check: a tier_1 user gets a buy/receive proposal
+  // (previously — the bug — a false needs_kyc), while sell/send/swap (tier_2)
+  // still correctly needs_kyc.
 
-  it('signup → verify-email → login (no KYC) → POST /chat/messages → 200 needs_kyc outcome', async () => {
+  it('signup → verify-email → login (email-verified only, tier_1) → receive succeeds, send needs_kyc', async () => {
     // Use a distinct email to avoid state collision with the happy-path test above.
     const email = `unverified_chat_${Date.now()}@test.com`;
 
@@ -350,7 +318,7 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
     const devToken = signupBody.devToken;
     expect(devToken).toBeDefined();
 
-    // 2. Verify email
+    // 2. Verify email — grants kycTier='tier_1' (kycStatus stays NOT 'verified').
     await request(app.getHttpServer())
       .post('/auth/verify-email')
       .send({ token: devToken })
@@ -366,7 +334,7 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
     const otp = lrBody.devOtp;
     expect(otp).toMatch(/^[0-9]{6}$/);
 
-    // 4. Login verify → accessToken (NO KYC submit step)
+    // 4. Login verify → accessToken (NO KYC submit step — stays tier_1)
     const lv = await request(app.getHttpServer())
       .post('/auth/login/verify')
       .send({ email, otp, deviceFingerprint: 'e2e-wc-unverified-fingerprint' })
@@ -375,66 +343,71 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
     expect(lvBody.accessToken).toBeDefined();
     const { accessToken } = lvBody;
 
-    // 5. POST /chat/messages — LLM fake returns receive_crypto which requires KYC.
-    //    Without KYC, the service short-circuits to needs_kyc.
-    const chat = await request(app.getHttpServer())
+    // 5. POST /chat/messages — receive_crypto only requires tier_1 → succeeds.
+    //    This is the exact scenario the bug produced a false needs_kyc for.
+    const receiveChat = await request(app.getHttpServer())
       .post('/chat/messages')
       .set('Authorization', `Bearer ${accessToken}`)
       .send({ text: 'receive USDT' })
       .expect(200);
 
-    const chatBody = chat.body as {
+    const receiveBody = receiveChat.body as {
       reply: { text: string };
       outcome: { kind: string };
       conversationId: string;
       messageId: string;
     };
 
-    expect(chatBody.outcome.kind).toBe('needs_kyc');
-    expect(chatBody.conversationId).toBeDefined();
-    expect(chatBody.messageId).toBeDefined();
+    expect(receiveBody.outcome.kind).toBe('receive');
+    expect(receiveBody.conversationId).toBeDefined();
+    expect(receiveBody.messageId).toBeDefined();
+
+    // 6. POST /chat/messages — send_crypto requires tier_2 → still needs_kyc.
+    //    (No destination address in the intent — §3.1: the NLU layer never
+    //    extracts one; it is resolved server-side from a saved beneficiary.)
+    fakeLlmProvider.extractIntent.mockResolvedValueOnce({
+      action: 'send_crypto',
+      asset: 'USDT',
+      cryptoAmount: '2',
+      network: 'TRON',
+    });
+
+    const sendChat = await request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ text: 'send 2 USDT' })
+      .expect(200);
+
+    const sendBody = sendChat.body as { outcome: { kind: string } };
+    expect(sendBody.outcome.kind).toBe('needs_kyc');
   }, 120_000);
 
   // ===========================================================================
   // I1/I2 — domain/agent errors map to a clean status, never an opaque 500
   // ===========================================================================
 
-  /** signup → verify → login → kyc; returns a Bearer token for a verified user. */
+  /**
+   * Mints a verified tier_1 user (email-OTP signup → tier_1 + PIN) and returns a
+   * Bearer token + userId. The onboarding model only ever grants tier_1 here —
+   * tier_2+ comes exclusively through the Sumsub webhook flow (exercised in
+   * sumsub-webhook.e2e-spec.ts). Callers that need a tier_2 capability
+   * (sell/send/swap) must bump kycTier themselves — see the sell test below,
+   * which mirrors the direct-DB-seed pattern in sell-vertical.e2e-spec.ts.
+   */
   async function authVerifiedUser(opts: {
     email: string;
     phone: string;
     nin: string;
-  }): Promise<string> {
-    const { email, phone, nin } = opts;
-    const su = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone })
-      .expect(202);
-    const devToken = (su.body as { devToken: string }).devToken;
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const otp = (lr.body as { devOtp: string }).devOtp;
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email, otp, deviceFingerprint: `fp-${email}` })
-      .expect(200);
-    const accessToken = (lv.body as { accessToken: string }).accessToken;
-    await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({ firstName: 'Test', lastName: 'User', nin, pin: '1357' })
-      .expect(200);
-    return accessToken;
+  }): Promise<{ accessToken: string; userId: string }> {
+    const { accessToken, userId } = await mintTier1User(app, {
+      email: opts.email,
+      pin: '1357',
+    });
+    return { accessToken, userId };
   }
 
   it('POST /chat/messages → agent/LLM failure → 503 with a clean message (NOT an opaque 500)', async () => {
-    const token = await authVerifiedUser({
+    const { accessToken: token } = await authVerifiedUser({
       email: `agentfail_${Date.now()}@test.com`,
       phone: '+2348029999010',
       nin: '22334455710',
@@ -460,10 +433,21 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
   }, 60_000);
 
   it('POST /chat/messages → sell with zero balance → in-chat clarification (parity with swap, NOT a 422/500)', async () => {
-    const token = await authVerifiedUser({
+    const { accessToken: token, userId } = await authVerifiedUser({
       email: `sellpoor_${Date.now()}@test.com`,
       phone: '+2348029999011',
       nin: '22334455711',
+    });
+
+    // crypto.sell is gated to tier_2 (root CLAUDE.md §3.3/Task 1.2/1.3); the
+    // mock /kyc/submit provider only ever grants tier_1 (a real tier_2 upgrade
+    // goes through the Sumsub webhook flow — sumsub-webhook.e2e-spec.ts).
+    // Bump directly, mirroring the tier_2 fixture pattern in
+    // sell-vertical.e2e-spec.ts, so this test can reach the proposal-builder
+    // error it actually exercises rather than the (separately covered) gate.
+    await prisma.user.update({
+      where: { id: userId },
+      data: { kycTier: 'tier_2' },
     });
 
     // Agent returns a sell intent this turn; the user has zero USDT. Sell/send
@@ -496,53 +480,101 @@ describe('Web chat — e2e (AppModule, Testcontainers Postgres)', () => {
   }, 60_000);
 
   // ===========================================================================
+  // RATE DISCOVERY — the resolved intent action must persist to the DB enum
+  // ===========================================================================
+  //
+  // Regression: get_rate/list_rates were added to the contracts IntentSchema but
+  // NOT to the Prisma `intent_action` enum. WebChatService persists the resolved
+  // intent action verbatim, so a rate turn threw PrismaClientValidationError and
+  // 500'd the whole request ("the rates tool doesn't work"). The port types
+  // `action` as a plain string and the repo casts `as never`, so tsc never
+  // caught it — only the real Postgres enum does. These two cases drive the rate
+  // intents through real persistence and assert a clean 200 + persisted intent.
+
+  it('POST /chat/messages → list_rates intent persists + returns a rates list (NOT a 500)', async () => {
+    const { accessToken: token, userId } = await authVerifiedUser({
+      email: `listrates_${Date.now()}@test.com`,
+      phone: '+2348029999020',
+      nin: '22334455720',
+    });
+
+    fakeLlmProvider.extractIntent.mockResolvedValueOnce({
+      action: 'list_rates',
+    });
+
+    const res = await request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ text: 'what are the rates?' })
+      .expect(200);
+
+    const body = res.body as {
+      reply: { text: string };
+      outcome: { kind: string };
+    };
+    // A read-only rate list surfaces as an in-chat clarification/text, never a
+    // proposal — and never an opaque error.
+    expect(body.reply.text).toMatch(/rate/i);
+    expect(JSON.stringify(body)).not.toMatch(/internal server error/i);
+
+    // The exact write that used to throw: the intent row must exist with the
+    // list_rates action now that the enum admits it.
+    const conversation = await prisma.conversation.findFirst({
+      where: { userId },
+    });
+    const intent = await prisma.messageIntent.findFirst({
+      where: { conversationId: conversation!.id, action: 'list_rates' },
+    });
+    expect(intent).not.toBeNull();
+  }, 60_000);
+
+  it('POST /chat/messages → get_rate intent persists + returns the folded pair rate (NOT a 500)', async () => {
+    const { accessToken: token, userId } = await authVerifiedUser({
+      email: `getrate_${Date.now()}@test.com`,
+      phone: '+2348029999021',
+      nin: '22334455721',
+    });
+
+    fakeLlmProvider.extractIntent.mockResolvedValueOnce({
+      action: 'get_rate',
+      asset: 'USDT',
+      fiatCurrency: 'NGN',
+    });
+
+    const res = await request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ text: 'what is the USDT rate?' })
+      .expect(200);
+
+    const body = res.body as { reply: { text: string } };
+    expect(body.reply.text).toMatch(/rate|USDT|NGN|₦/i);
+
+    const conversation = await prisma.conversation.findFirst({
+      where: { userId },
+    });
+    const intent = await prisma.messageIntent.findFirst({
+      where: { conversationId: conversation!.id, action: 'get_rate' },
+    });
+    expect(intent).not.toBeNull();
+  }, 60_000);
+
+  // ===========================================================================
   // CHAT HISTORY — GET /chat/messages
   // ===========================================================================
 
-  // Register → verify → login → KYC; returns a Bearer token + userId.
+  // Mint a verified tier_1 user (email-OTP signup → tier_1 + PIN); returns a
+  // Bearer token + userId.
   let userSeq = 5000;
   async function registerVerifiedUser(
     prefix: string,
   ): Promise<{ accessToken: string; userId: string }> {
     const n = userSeq++;
     const email = `${prefix}_${n}_${Date.now()}@test.com`;
-    const phone = `+23480299${n.toString().padStart(5, '0')}`;
-
-    const signup = await request(app.getHttpServer())
-      .post('/auth/signup')
-      .send({ email, phone })
-      .expect(202);
-    const devToken = (signup.body as { devToken: string }).devToken;
-
-    await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: devToken })
-      .expect(200);
-
-    const lr = await request(app.getHttpServer())
-      .post('/auth/login/request')
-      .send({ email })
-      .expect(202);
-    const otp = (lr.body as { devOtp: string }).devOtp;
-
-    const lv = await request(app.getHttpServer())
-      .post('/auth/login/verify')
-      .send({ email, otp, deviceFingerprint: `e2e-hist-fingerprint-${n}` })
-      .expect(200);
-    const accessToken = (lv.body as { accessToken: string }).accessToken;
-
-    const ks = await request(app.getHttpServer())
-      .post('/kyc/submit')
-      .set('Authorization', `Bearer ${accessToken}`)
-      .send({
-        firstName: 'Hist',
-        lastName: 'User',
-        nin: '22334455667',
-        pin: '1357',
-      })
-      .expect(200);
-    const userId = (ks.body as { userId: string }).userId;
-
+    const { accessToken, userId } = await mintTier1User(app, {
+      email,
+      pin: '1357',
+    });
     return { accessToken, userId };
   }
 

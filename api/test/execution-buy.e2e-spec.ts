@@ -543,6 +543,7 @@ describe('ExecutionService.executeBuy (integration, Testcontainers Postgres)', (
           fiatAmount: '10000',
           fiatCurrency: 'NGN',
           asset: 'USDT',
+          capability: 'crypto.buy',
         });
       })(),
     ).rejects.toBeInstanceOf(VelocityExceededError);

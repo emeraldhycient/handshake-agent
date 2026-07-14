@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation"
 import { FormField } from "@/components/shared/form-field"
 import { FormAlert } from "@/components/shared/form-alert"
 import { Button } from "@/components/ui/button"
+import { AuthStepHeader } from "../AuthStepHeader"
 import { LoginResendControls } from "./login-resend-controls"
 import { useLoginRequest, useLoginVerify } from "@/lib/query/auth"
 import { ApiError } from "@/lib/api/client"
@@ -68,11 +69,15 @@ export function LoginVerifyStep({
         otp: values.otp,
         deviceFingerprint: getDeviceFingerprint(),
       })
-      // Route unverified users to onboarding; verified users go to the app.
-      if (result.user?.kycStatus === "verified") {
+      // A user who finished onboarding has both a granted tier and a
+      // transaction PIN — hasPin implies tier_1+, since email-verify grants
+      // tier_1 before the PIN is set. Send them straight to the app (the shell
+      // gate now admits tier_1). Anyone mid-onboarding resumes the wizard at
+      // /get-started, which lands on their first unfinished step.
+      if (result.user?.hasPin) {
         router.push("/")
       } else {
-        router.push("/onboarding")
+        router.push("/get-started")
       }
     } catch {
       // Error surfaces via loginVerify.error — rendered below.
@@ -116,10 +121,11 @@ export function LoginVerifyStep({
       aria-label="Log in form — step 2"
       className={`flex flex-col gap-5 ${className ?? ""}`}
     >
-      <p className="text-sm text-muted-foreground">
-        We sent a one-time code to{" "}
-        <span className="font-medium text-foreground">{email}</span>.
-      </p>
+      <AuthStepHeader
+        eyebrow="Log in · Verify"
+        heading="Enter your code"
+        subcopy={`We sent a 6-digit code to ${email}.`}
+      />
 
       {serverError && (
         <FormAlert tone={isLockedOut ? "warn" : "danger"}>
@@ -155,10 +161,11 @@ export function LoginVerifyStep({
 
       <Button
         type="submit"
-        size="lg"
+        variant="accent"
+        size="xl"
         disabled={loading}
         aria-busy={loading}
-        className="mt-2 w-full"
+        className="mt-[22px] w-full"
       >
         {loading ? "Verifying…" : "Verify and log in"}
       </Button>

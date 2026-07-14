@@ -8,6 +8,7 @@ export const WebhookProviderSchema = z.enum([
   "blockradar",
   "flutterwave",
   "whatsapp",
+  "sumsub",
 ]);
 export type WebhookProvider = z.infer<typeof WebhookProviderSchema>;
 

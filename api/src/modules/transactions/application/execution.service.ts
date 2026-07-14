@@ -46,6 +46,7 @@ import { QuotesService } from '../../quotes/application/quotes.service';
 import { WalletService } from '../../wallets/application/wallet.service';
 import type { WithdrawOutput } from '../../wallets/application/ports/wallet-provider.port';
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
+import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
 import {
   WHATSAPP_SENDER,
@@ -456,6 +457,7 @@ export class ExecutionService {
       fiatAmount: storedQuote.fiatAmount,
       fiatCurrency: storedQuote.fiatCurrency,
       asset: storedQuote.asset,
+      capability: 'crypto.buy',
     });
 
     // ── Step 4: Verify PIN (BEFORE consuming the one-shot directive) ─────────
@@ -831,6 +833,7 @@ export class ExecutionService {
       fiatAmount: storedQuote.fiatAmount,
       fiatCurrency: storedQuote.fiatCurrency,
       asset: storedQuote.asset,
+      capability: 'crypto.sell',
     });
 
     // ── Step 4: Re-check balance via ledger (TOCTOU guard) ──────────────────
@@ -1295,7 +1298,10 @@ export class ExecutionService {
     const cryptoAmount = params.cryptoAmount ?? '0';
     const networkFeeCrypto = params.networkFeeCrypto ?? '0';
     const totalDebit = params.totalDebit ?? '0';
-    const beneficiaryId = params.beneficiaryId;
+    // beneficiaryId is nullable: a raw-address send (destinationKind ==
+    // 'raw_address') carries none. Normalise falsy → null so the saved-beneficiary
+    // path (cooling-off re-check below) is entered ONLY when a real id is present.
+    const beneficiaryId = params.beneficiaryId || null;
     const walletId = params.walletId;
     const toAddress = params.toAddress ?? '';
     const network = params.network;
@@ -1306,9 +1312,13 @@ export class ExecutionService {
     }
     const requiresTravelRule = params.requiresTravelRule === 'true';
 
-    if (!beneficiaryId) {
+    // A raw-address send carries no beneficiaryId — require the destination
+    // ADDRESS instead (the on-chain withdraw target the engine must reach), not
+    // the beneficiary. The address was user-confirmed at propose time and is
+    // re-screened for sanctions below (§3.3).
+    if (!toAddress) {
       throw new ProposalNotExecutableError(
-        'proposal parameters missing beneficiaryId',
+        'proposal parameters missing toAddress',
       );
     }
     // IMPORTANT 2: walletId null-guard — a missing walletId would silently pass
@@ -1366,6 +1376,7 @@ export class ExecutionService {
       // Settle-time re-check of a crypto-address send (on-chain, irreversible) — mirror
       // the proposal-time flag so the single on-chain send cap is re-enforced (§3.3).
       onChainSend: true,
+      capability: 'crypto.send',
     });
 
     // Numeric form retained only for metadata storage (approximate use — Fix-C scope).
@@ -1383,25 +1394,33 @@ export class ExecutionService {
       throw new InsufficientBalanceError(balance, totalDebit, asset);
     }
 
-    // ── Step 4: Cooling-off re-check ─────────────────────────────────────────
-    const beneficiary = await this.beneficiaryService.getById(
-      userId,
-      beneficiaryId,
-    );
-    if (beneficiary === null) {
-      throw new ProposalNotExecutableError(
-        `beneficiary '${beneficiaryId}' not found`,
-      );
-    }
-    if (
-      beneficiary.firstUseLockedUntil !== null &&
-      beneficiary.firstUseLockedUntil !== undefined &&
-      beneficiary.firstUseLockedUntil > now
-    ) {
-      throw new BeneficiaryCoolingOffError(
+    // ── Step 4: Cooling-off re-check (saved-beneficiary path only) ───────────
+    // A raw-address send has no saved beneficiary to look up — its destination is
+    // the user-confirmed toAddress (sanctions-screened just below, §3.3). First-use
+    // cooling-off only governs SAVED destinations, so it is skipped for the raw
+    // path (mirrors ProposalService.createSendProposal step 5). The save-on-success
+    // side-effect creates a fresh record whose cooling-off governs FUTURE reuse.
+    let beneficiary: BeneficiaryRecord | null = null;
+    if (beneficiaryId) {
+      beneficiary = await this.beneficiaryService.getById(
+        userId,
         beneficiaryId,
-        beneficiary.firstUseLockedUntil,
       );
+      if (beneficiary === null) {
+        throw new ProposalNotExecutableError(
+          `beneficiary '${beneficiaryId}' not found`,
+        );
+      }
+      if (
+        beneficiary.firstUseLockedUntil !== null &&
+        beneficiary.firstUseLockedUntil !== undefined &&
+        beneficiary.firstUseLockedUntil > now
+      ) {
+        throw new BeneficiaryCoolingOffError(
+          beneficiaryId,
+          beneficiary.firstUseLockedUntil,
+        );
+      }
     }
 
     // ── Step 5: Re-screen sanctions ───────────────────────────────────────────
@@ -1510,7 +1529,12 @@ export class ExecutionService {
     // beneficiaries (not expected on send paths) prefer accountHolderName.
     // If neither is available, null is the correct sentinel — do NOT invent data.
     const beneficiaryName: string | null =
-      beneficiary.accountHolderName ?? beneficiary.label ?? null;
+      beneficiary?.accountHolderName ??
+      beneficiary?.label ??
+      // Raw-address send: no saved record — the user's save label (when present)
+      // is the best available identifier; null when they did not name it.
+      params.saveLabel ??
+      null;
 
     const { txn } =
       await this.settlementRepo.createSendSettlingWithReserveAtomic({
@@ -1650,6 +1674,33 @@ export class ExecutionService {
       status: 'pending',
       processorRef: providerRef,
     });
+
+    // ── Step 14: Save-on-success — persist the raw destination as a beneficiary ─
+    // The user ticked "save" on a raw-address send. Persist it now that the send's
+    // PIN + device-bound step-up have authorized this destination (§3.3 — no second
+    // PIN; the send's auth is at least as strong as the add-on step-up enforced at
+    // the beneficiaries controller). The service only validates + persists (with a
+    // first-use cooling-off that governs FUTURE reuse — not this already-settled
+    // send). Best-effort: a failed save must NEVER fail the settled send.
+    if (params.saveAsBeneficiary === 'true') {
+      try {
+        await this.beneficiaryService.addCryptoAddress({
+          userId: proposal.userId,
+          address: toAddress,
+          network,
+          asset,
+          label: params.saveLabel || toAddress.slice(0, 8),
+        });
+      } catch (err) {
+        this.logger.warn(
+          {
+            errorName: err instanceof Error ? err.name : 'unknown',
+            proposalId: proposal.id,
+          },
+          'save-after-send-authorization failed; send already settled',
+        );
+      }
+    }
 
     return {
       transactionId: txn.id,
@@ -1839,12 +1890,13 @@ export class ExecutionService {
    * Validation gauntlet (ORDER IS SECURITY-CRITICAL):
    *   1. Load Proposal(swap, status pending|confirmed, owner, not expired).
    *   2. Re-quote drift check against stored rate.
-   *   3. Verify PIN (BEFORE consuming directive — I5 invariant).
-   *   4. DirectiveService.consume (ref must be request_pin).
-   *   5. Idempotency check (after auth, before writes).
-   *   6. Atomic write: Transaction(settling) + reserve ledger + Proposal→executing.
-   *   7. SWAP_PROVIDER.execute → providerSwapId.
-   *   8. Enqueue SettlementOutbox(swap).
+   *   3. KYC gate — assertCanTransact on the NGN-equivalent notional (§3.3 re-check).
+   *   4. Verify PIN (BEFORE consuming directive — I5 invariant).
+   *   5. DirectiveService.consume (ref must be request_pin).
+   *   6. Idempotency check (after auth, before writes).
+   *   7. Atomic write: Transaction(settling) + reserve ledger + Proposal→executing.
+   *   8. SWAP_PROVIDER.execute → providerSwapId.
+   *   9. Enqueue SettlementOutbox(swap).
    */
   async executeSwap(
     input: ExecuteSwapServiceInput,
@@ -1941,41 +1993,14 @@ export class ExecutionService {
       throw new QuoteDriftError(driftBps, this.maxSwapDriftBps);
     }
 
-    // ── Step 3: Verify PIN (BEFORE consuming the one-shot directive) ─────────
-    // I5: verify PIN first so a wrong-PIN typo does not burn the single-use
-    // directive and block a legitimate retry.
-    await this.pinService.verifyPin(userId, pin);
-
-    // ── Step 4: Consume directive grant ──────────────────────────────────────
-    const grant = await this.directiveService.consume({
-      directiveId,
-      nonce,
-      proposalId,
-    });
-
-    if (grant.directiveRef !== REQUIRED_DIRECTIVE_REF) {
-      throw new ProposalNotExecutableError(
-        `directive ref '${grant.directiveRef}' is not '${REQUIRED_DIRECTIVE_REF}'`,
-      );
-    }
-
-    // ── Step 5: Idempotency check ────────────────────────────────────────────
-    const existing =
-      await this.transactionRepo.findByIdempotencyKey(idempotencyKey);
-    if (existing !== null) {
-      const meta = existing.metadata as Record<string, string>;
-      return {
-        transactionId: existing.id,
-        status: 'settling',
-        swap: {
-          providerSwapId: meta.providerSwapId ?? '',
-        },
-      };
-    }
-
-    // ── Step 6: Atomic write ─────────────────────────────────────────────────
-    // create Transaction(swap, settling) + reserve fromAsset (user_wallet→swap_clearing)
-    // + mark Proposal→executing — all in a SINGLE DB $transaction (C1).
+    // ── Step 3: KYC gate (server-side, always) ──────────────────────────────
+    // §3.3: re-run the full KYC/tier/velocity/sanctions gauntlet at settle time,
+    // mirroring executeBuy/executeSell/executeSend. proposeSwap gated at propose
+    // time, but a tier downgrade or a stale proposal between propose and execute
+    // must be re-caught HERE — the engine never trusts the proposal-time check.
+    // Gate on the NGN-equivalent of fromAmount (same computation proposeSwap and
+    // the reserve write use); capability 'crypto.swap' resolves the min-tier check
+    // (mirrors proposeSwap). A swap is not an on-chain send, so no onChainSend flag.
     const pricingConfig = this.config.get<PricingConfig>('pricing');
     const baseFiat = this.assetRegistry.defaultFiat();
     const baseRate = resolveEffectiveBaseRate(
@@ -2000,6 +2025,51 @@ export class ExecutionService {
         : '.' + frac.toString().padStart(18, '0').replace(/0+$/, '');
     const ngnEquivalentStr = (isNeg ? '-' : '') + whole.toString() + fracStr;
 
+    await this.kycGate.assertCanTransact({
+      userId,
+      fiatAmount: ngnEquivalentStr,
+      fiatCurrency: baseFiat,
+      asset: fromAsset,
+      capability: 'crypto.swap',
+    });
+
+    // ── Step 4: Verify PIN (BEFORE consuming the one-shot directive) ─────────
+    // I5: verify PIN first so a wrong-PIN typo does not burn the single-use
+    // directive and block a legitimate retry.
+    await this.pinService.verifyPin(userId, pin);
+
+    // ── Step 5: Consume directive grant ──────────────────────────────────────
+    const grant = await this.directiveService.consume({
+      directiveId,
+      nonce,
+      proposalId,
+    });
+
+    if (grant.directiveRef !== REQUIRED_DIRECTIVE_REF) {
+      throw new ProposalNotExecutableError(
+        `directive ref '${grant.directiveRef}' is not '${REQUIRED_DIRECTIVE_REF}'`,
+      );
+    }
+
+    // ── Step 6: Idempotency check ────────────────────────────────────────────
+    const existing =
+      await this.transactionRepo.findByIdempotencyKey(idempotencyKey);
+    if (existing !== null) {
+      const meta = existing.metadata as Record<string, string>;
+      return {
+        transactionId: existing.id,
+        status: 'settling',
+        swap: {
+          providerSwapId: meta.providerSwapId ?? '',
+        },
+      };
+    }
+
+    // ── Step 7: Atomic write ─────────────────────────────────────────────────
+    // create Transaction(swap, settling) + reserve fromAsset (user_wallet→swap_clearing)
+    // + mark Proposal→executing — all in a SINGLE DB $transaction (C1).
+    // baseFiat / baseRate / ngnEquivalentStr were computed at the KYC gate (Step 3)
+    // and are reused here so the reserve's velocity contribution matches the gate.
     const requestChecksum = this.buildRequestChecksum({
       userId,
       proposalId,
@@ -2045,9 +2115,9 @@ export class ExecutionService {
         now,
       });
 
-    // ── Step 7: Execute swap via provider ────────────────────────────────────
+    // ── Step 8: Execute swap via provider ────────────────────────────────────
     // FUNDS-SAFETY (§3.1): same reserve-then-callProvider shape as executeSend.
-    // The reserve (Step 6, user_wallet → swap_clearing) is already committed. On a
+    // The reserve (Step 7, user_wallet → swap_clearing) is already committed. On a
     // DEFINITIVE rejection (HTTP 4xx — the provider rejected the request and never
     // performed the swap) refund the reserve and fail HERE. On an AMBIGUOUS failure
     // (5xx / timeout / no status) the swap MIGHT be in-flight; leave it 'settling'
@@ -2092,7 +2162,7 @@ export class ExecutionService {
     // Persist providerSwapId into Transaction metadata for idempotent replay.
     await this.transactionRepo.mergeMetadata(txn.id, { providerSwapId });
 
-    // ── Step 8: Enqueue SettlementOutbox ────────────────────────────────────
+    // ── Step 9: Enqueue SettlementOutbox ────────────────────────────────────
     await this.outboxRepo.create({
       transactionId: txn.id,
       settlementType: 'swap',

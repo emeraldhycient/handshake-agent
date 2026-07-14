@@ -12,6 +12,7 @@
   --animate-hs-scrim: hsScrim 0.2s ease both;
   --animate-hs-spark-spin: hsSparkSpin 3s linear infinite;
   --animate-hs-spark-breathe: hsSparkBreathe 2.2s ease-in-out infinite;
+  --animate-hs-shake: hsShake 0.4s;
   --font-heading: var(--font-sans);
   --font-sans: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -296,6 +297,26 @@
   50% {
     transform: scale(1.12);
     opacity: 0.78;
+  }
+}
+
+/* Mismatched PIN confirm (mobile onboarding, Task FID-B) — mirrors the mockup's hsShake. */
+@keyframes hsShake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-8px);
+  }
+  40% {
+    transform: translateX(8px);
+  }
+  60% {
+    transform: translateX(-6px);
+  }
+  80% {
+    transform: translateX(6px);
   }
 }
 

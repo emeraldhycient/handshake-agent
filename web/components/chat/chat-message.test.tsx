@@ -214,6 +214,7 @@ describe("ChatMessageView", () => {
       amount: "+ 29.97 USDT",
       rows: [],
       txRef: "HS-20240701-7X9K",
+      action: "buy",
     }
     render(
       <ChatMessageView
@@ -280,6 +281,45 @@ describe("ChatMessageView", () => {
     // The card must bind to ITS OWN message id so the store resumes the exact
     // intent that produced this card (not the mutable last-intent).
     expect(onResolveBeneficiary).toHaveBeenCalledWith("ben-9", "needs-card-77")
+  })
+
+  it("forwards the raw send-to-address destination + message id to onSendRaw", async () => {
+    const onSendRaw = vi.fn()
+    // A crypto needs_beneficiary card offering the raw send-to-address path
+    // (Task 8): the send-mode form prefills the server-parsed address, which the
+    // user confirms (§3.1 — never fabricated). Submitting must reach onSendRaw
+    // with the structured destination AND this card's own message id, so the
+    // store replays the exact intent this card was bound to.
+    const msg: ChatMessage = {
+      id: "needs-card-99",
+      role: "assistant",
+      kind: "needs_beneficiary",
+      beneficiaryType: "crypto_address",
+      allowRawSend: true,
+      prefillAddress: "TPrefillAddr0000000001",
+    }
+    render(
+      <ChatMessageView
+        message={msg}
+        density="mobile"
+        onConfirm={noop}
+        onSelectTicket={noopTicket}
+        onResolveBeneficiary={() => {}}
+        onSendRaw={onSendRaw}
+      />
+    )
+
+    // "Save this recipient" is off by default → saveAsBeneficiary:false, no label.
+    await userEvent.click(screen.getByRole("button", { name: /^Send$/ }))
+
+    expect(onSendRaw).toHaveBeenCalledWith(
+      {
+        address: "TPrefillAddr0000000001",
+        network: "TRON",
+        saveAsBeneficiary: false,
+      },
+      "needs-card-99"
+    )
   })
 
   it("choose_beneficiary message renders the picker and forwards its message id on select", async () => {

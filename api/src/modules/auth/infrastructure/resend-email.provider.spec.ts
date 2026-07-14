@@ -327,4 +327,48 @@ describe('ResendEmailProvider', () => {
       );
     });
   });
+
+  // ── sendLoginInstead ─────────────────────────────────────────────────────
+
+  describe('sendLoginInstead', () => {
+    const TO = 'carol@example.com';
+
+    it('POSTs to https://api.resend.com/emails with the recipient and a non-empty subject', async () => {
+      http.post.mockReturnValue(of(axiosOk({ id: 'email-id-3' })));
+
+      await provider.sendLoginInstead(TO);
+
+      expect(http.post).toHaveBeenCalledTimes(1);
+      const [url, body] = http.post.mock.calls[0] as [
+        string,
+        { from: string; to: string; subject: string; html: string },
+        unknown,
+      ];
+      expect(url).toBe(RESEND_BASE_URL);
+      expect(body.to).toBe(TO);
+      expect(body.from).toBe(EMAIL_FROM);
+      expect(body.subject.length).toBeGreaterThan(0);
+    });
+
+    it('resolves without throwing on a 2xx response', async () => {
+      http.post.mockReturnValue(of(axiosOk({ id: 'email-id-3' })));
+
+      await expect(provider.sendLoginInstead(TO)).resolves.toBeUndefined();
+    });
+
+    it('throws a descriptive error on non-2xx response', async () => {
+      const axiosErr = Object.assign(new Error('Unprocessable Entity'), {
+        response: {
+          status: 422,
+          data: { name: 'validation_error', message: 'Invalid "to" field' },
+        },
+        isAxiosError: true,
+      });
+      http.post.mockReturnValue(throwError(() => axiosErr));
+
+      await expect(provider.sendLoginInstead(TO)).rejects.toThrow(
+        /Invalid "to" field/,
+      );
+    });
+  });
 });

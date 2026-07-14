@@ -226,9 +226,9 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
       undefined as never, // swapProvider: not needed on send proposal path
     );
 
-    // Seed a KYC-verified user
+    // Seed a KYC-verified user. Task 1.3: crypto.send is gated to tier_2.
     const user = await prisma.user.create({
-      data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },
+      data: { kycStatus: 'verified', kycTier: 'tier_2', status: 'active' },
     });
     userId = user.id;
 
@@ -350,7 +350,10 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
         cryptoAmount: '10.0',
         network: 'TRON',
       },
-      beneficiaryId: cryptoBeneficiaryId,
+      destination: {
+        kind: 'saved_beneficiary',
+        beneficiaryId: cryptoBeneficiaryId,
+      },
     });
 
     expect(result.proposalId).toBeTruthy();
@@ -394,7 +397,10 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
           cryptoAmount: '20.0', // totalDebit = 21, balance = 20
           network: 'TRON',
         },
-        beneficiaryId: cryptoBeneficiaryId,
+        destination: {
+          kind: 'saved_beneficiary',
+          beneficiaryId: cryptoBeneficiaryId,
+        },
       }),
     ).rejects.toThrow(InsufficientBalanceError);
 
@@ -435,7 +441,10 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
           cryptoAmount: '5.0',
           network: 'TRON',
         },
-        beneficiaryId: coolingBen.id,
+        destination: {
+          kind: 'saved_beneficiary',
+          beneficiaryId: coolingBen.id,
+        },
       }),
     ).rejects.toThrow(BeneficiaryCoolingOffError);
   });
@@ -452,7 +461,10 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
           cryptoAmount: '5.0',
           network: 'TRON',
         },
-        beneficiaryId: blockedBeneficiaryId,
+        destination: {
+          kind: 'saved_beneficiary',
+          beneficiaryId: blockedBeneficiaryId,
+        },
       }),
     ).rejects.toThrow(SanctionsBlockedError);
 

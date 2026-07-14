@@ -531,7 +531,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
 
     const sendProposal = await proposalService.createSendProposal({
       userId,
-      beneficiaryId: beneficiary.id,
+      destination: { kind: 'saved_beneficiary', beneficiaryId: beneficiary.id },
       intent: {
         action: 'send_crypto',
         asset: 'USDT',
@@ -611,7 +611,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
 
     const sendProposal = await proposalService.createSendProposal({
       userId,
-      beneficiaryId: beneficiary.id,
+      destination: { kind: 'saved_beneficiary', beneficiaryId: beneficiary.id },
       intent: {
         action: 'send_crypto',
         asset: 'USDT',
@@ -685,7 +685,7 @@ describe('SettlementReconciliationService (Testcontainers Postgres)', () => {
 
     const sendProposal = await proposalService.createSendProposal({
       userId,
-      beneficiaryId: beneficiary.id,
+      destination: { kind: 'saved_beneficiary', beneficiaryId: beneficiary.id },
       intent: {
         action: 'send_crypto',
         asset: 'USDT',

@@ -10,6 +10,7 @@ import {
 import { FormField } from "@/components/shared/form-field"
 import { FormAlert } from "@/components/shared/form-alert"
 import { Button } from "@/components/ui/button"
+import { AuthStepHeader } from "../AuthStepHeader"
 import { useLoginRequest } from "@/lib/query/auth"
 import { toErrorMessage } from "@/lib/error-message"
 import type { LoginRequestStepProps } from "@/types/auth"
@@ -42,6 +43,12 @@ export function LoginRequestStep({ onSent, className }: LoginRequestStepProps) {
       aria-label="Log in form — step 1"
       className={`flex flex-col gap-5 ${className ?? ""}`}
     >
+      <AuthStepHeader
+        eyebrow="Log in"
+        heading="Welcome back"
+        subcopy="Enter your email and we'll send you a one-time code."
+      />
+
       {serverError && <FormAlert>{serverError}</FormAlert>}
 
       <FormField
@@ -62,10 +69,11 @@ export function LoginRequestStep({ onSent, className }: LoginRequestStepProps) {
 
       <Button
         type="submit"
-        size="lg"
+        variant="accent"
+        size="xl"
         disabled={loading}
         aria-busy={loading}
-        className="mt-2 w-full"
+        className="mt-[22px] w-full"
       >
         {loading ? "Sending OTP…" : "Get OTP"}
       </Button>
@@ -73,7 +81,7 @@ export function LoginRequestStep({ onSent, className }: LoginRequestStepProps) {
       <p className="text-center text-sm text-muted-foreground">
         Don&apos;t have an account?{" "}
         <Link
-          href="/signup"
+          href="/get-started"
           className="font-medium text-primary underline underline-offset-2"
         >
           Sign up

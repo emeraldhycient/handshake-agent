@@ -11,6 +11,27 @@ const validRaw = {
   FLUTTERWAVE_SECRET_KEY: 'FLWSECK_TEST-abc-X',
 };
 
+// A fully-populated set of Sumsub credentials/level names — what an operator
+// supplies once KYC_MOCK_MODE=false (Task 3.2). Reused by the boot-guard tests
+// below whenever a "real KYC" env needs to satisfy the KYC_MOCK_MODE=false
+// superRefine requirement without that being the thing under test.
+const validSumsub = {
+  SUMSUB_API_TOKEN: 'sbx:test-token',
+  SUMSUB_API_SECRET_KEY: 'test-secret',
+  SUMSUB_WEBHOOK_SECRET: 'test-webhook-secret',
+  SUMSUB_LEVEL_TIER2: 'basic-kyc-level',
+  SUMSUB_LEVEL_TIER3: 'enhanced-kyc-level',
+};
+
+// KYC_MOCK_MODE=false plus everything it requires (KYC_ENCRYPTION_KEY + the
+// five Sumsub fields) — spread this into any "accepts ... in production" test
+// so the new KYC_MOCK_MODE prod guard doesn't fail tests unrelated to KYC.
+const realKyc = {
+  KYC_MOCK_MODE: 'false',
+  KYC_ENCRYPTION_KEY: 'a'.repeat(64),
+  ...validSumsub,
+};
+
 describe('validateEnv', () => {
   it('applies defaults for omitted optional vars', () => {
     const env = validateEnv(validRaw);
@@ -138,11 +159,10 @@ describe('validateEnv', () => {
   });
 
   it('accepts KYC_MOCK_MODE=false', () => {
-    // Real KYC mode requires an encryption key (boot guard) — supply it.
+    // Real KYC mode requires an encryption key + Sumsub credentials (boot guard) — supply them.
     const env = validateEnv({
       ...validRaw,
-      KYC_MOCK_MODE: 'false',
-      KYC_ENCRYPTION_KEY: 'a'.repeat(64),
+      ...realKyc,
     });
 
     expect(env.KYC_MOCK_MODE).toBe('false');
@@ -257,6 +277,7 @@ describe('env.schema boot guards', () => {
       DIRECTIVE_SIGNING_KEY: 'directive-key',
       RESEND_API_KEY: 're_test_key',
       SANCTIONS_MOCK_MODE: 'false',
+      ...realKyc,
     });
     expect(env.AUTH_DEV_EXPOSE_OTP).toBe('false');
   });
@@ -314,6 +335,7 @@ describe('env.schema boot guards', () => {
       DIRECTIVE_SIGNING_KEY: 'directive-key',
       RESEND_API_KEY: 're_test_key',
       SANCTIONS_MOCK_MODE: 'false',
+      ...realKyc,
     });
     expect(env.STATEMENT_SIGNING_KEY).toBe('stmt-key');
   });
@@ -358,6 +380,7 @@ describe('env.schema boot guards', () => {
       DIRECTIVE_SIGNING_KEY: 'directive-key',
       RESEND_API_KEY: 're_test_key',
       SANCTIONS_MOCK_MODE: 'false',
+      ...realKyc,
     });
     expect(env.DIRECTIVE_SIGNING_KEY).toBe('directive-key');
   });
@@ -401,6 +424,7 @@ describe('env.schema boot guards', () => {
       DIRECTIVE_SIGNING_KEY: 'directive-key',
       RESEND_API_KEY: 're_test_key',
       SANCTIONS_MOCK_MODE: 'false',
+      ...realKyc,
     });
     expect(env.RESEND_API_KEY).toBe('re_test_key');
   });
@@ -435,6 +459,7 @@ describe('env.schema boot guards', () => {
       RESEND_API_KEY: 're_test_key',
       FLUTTERWAVE_SCENARIO_KEY: '',
       SANCTIONS_MOCK_MODE: 'false',
+      ...realKyc,
     });
     expect(env.FLUTTERWAVE_SCENARIO_KEY).toBe('');
   });
@@ -485,6 +510,7 @@ describe('env.schema boot guards', () => {
       DIRECTIVE_SIGNING_KEY: 'directive-key',
       RESEND_API_KEY: 're_test_key',
       SANCTIONS_MOCK_MODE: 'false',
+      ...realKyc,
     });
     expect(env.SANCTIONS_MOCK_MODE).toBe('false');
   });
@@ -503,6 +529,7 @@ describe('env.schema boot guards', () => {
     DIRECTIVE_SIGNING_KEY: 'directive-key',
     RESEND_API_KEY: 're_test_key',
     SANCTIONS_MOCK_MODE: 'false',
+    ...realKyc,
   };
 
   it('rejects AUTH_COOKIE_SECURE=false when NODE_ENV=production', () => {
@@ -642,8 +669,7 @@ describe('env.schema KYC_ENCRYPTION_KEY', () => {
   it('accepts a present KYC_ENCRYPTION_KEY when KYC_MOCK_MODE=false', () => {
     const env = validateEnv({
       ...validRaw,
-      KYC_MOCK_MODE: 'false',
-      KYC_ENCRYPTION_KEY: 'a'.repeat(64),
+      ...realKyc,
     });
     expect(env.KYC_ENCRYPTION_KEY).toBe('a'.repeat(64));
   });
@@ -651,5 +677,151 @@ describe('env.schema KYC_ENCRYPTION_KEY', () => {
   it('tolerates an empty KYC_ENCRYPTION_KEY while KYC_MOCK_MODE=true', () => {
     const env = validateEnv({ ...validRaw, KYC_MOCK_MODE: 'true' });
     expect(env.KYC_ENCRYPTION_KEY).toBe('');
+  });
+});
+
+// --- Sumsub (real KYC provider, Task 3.2) ---
+
+describe('env.schema Sumsub keys', () => {
+  it('defaults every Sumsub field to empty string and SUMSUB_BASE_URL to the real API host', () => {
+    const env = validateEnv(validRaw);
+    expect(env.SUMSUB_API_TOKEN).toBe('');
+    expect(env.SUMSUB_API_SECRET_KEY).toBe('');
+    expect(env.SUMSUB_WEBHOOK_SECRET).toBe('');
+    expect(env.SUMSUB_LEVEL_TIER2).toBe('');
+    expect(env.SUMSUB_LEVEL_TIER3).toBe('');
+    expect(env.SUMSUB_BASE_URL).toBe('https://api.sumsub.com');
+  });
+
+  it('accepts operator-supplied Sumsub values', () => {
+    const env = validateEnv({
+      ...validRaw,
+      ...validSumsub,
+      SUMSUB_BASE_URL: 'https://api.sumsub.com',
+    });
+    expect(env.SUMSUB_API_TOKEN).toBe('sbx:test-token');
+    expect(env.SUMSUB_API_SECRET_KEY).toBe('test-secret');
+    expect(env.SUMSUB_WEBHOOK_SECRET).toBe('test-webhook-secret');
+    expect(env.SUMSUB_LEVEL_TIER2).toBe('basic-kyc-level');
+    expect(env.SUMSUB_LEVEL_TIER3).toBe('enhanced-kyc-level');
+  });
+
+  it('throws when SUMSUB_BASE_URL is not a valid URL', () => {
+    expect(() =>
+      validateEnv({ ...validRaw, SUMSUB_BASE_URL: 'not-a-url' }),
+    ).toThrow(/SUMSUB_BASE_URL/);
+  });
+
+  // This mirrors the CURRENT local api/.env reality: SUMSUB_API_TOKEN/SECRET_KEY/
+  // WEBHOOK_SECRET are set, but SUMSUB_LEVEL_TIER2/TIER3 are not — and
+  // KYC_MOCK_MODE is omitted (defaults to 'true'). Boot must still succeed.
+  it('accepts dev env with KYC_MOCK_MODE=true and Sumsub level names absent (current local .env)', () => {
+    const env = validateEnv({
+      ...validRaw,
+      SUMSUB_API_TOKEN: 'sbx:test-token',
+      SUMSUB_API_SECRET_KEY: 'test-secret',
+      SUMSUB_WEBHOOK_SECRET: 'test-webhook-secret',
+      // SUMSUB_LEVEL_TIER2 / SUMSUB_LEVEL_TIER3 intentionally omitted.
+    });
+    expect(env.KYC_MOCK_MODE).toBe('true');
+    expect(env.SUMSUB_LEVEL_TIER2).toBe('');
+    expect(env.SUMSUB_LEVEL_TIER3).toBe('');
+  });
+
+  // Also accepts the fully-absent case (no Sumsub keys at all) in mock mode.
+  it('accepts dev env with KYC_MOCK_MODE=true and ALL Sumsub fields absent', () => {
+    const env = validateEnv(validRaw);
+    expect(env.KYC_MOCK_MODE).toBe('true');
+    expect(env.SUMSUB_API_TOKEN).toBe('');
+  });
+
+  it('rejects KYC_MOCK_MODE=false with every Sumsub field absent', () => {
+    expect(() => validateEnv({ ...validRaw, KYC_MOCK_MODE: 'false' })).toThrow(
+      /SUMSUB_API_TOKEN/,
+    );
+  });
+
+  it.each([
+    'SUMSUB_API_TOKEN',
+    'SUMSUB_API_SECRET_KEY',
+    'SUMSUB_WEBHOOK_SECRET',
+    'SUMSUB_LEVEL_TIER2',
+    'SUMSUB_LEVEL_TIER3',
+  ])(
+    'rejects KYC_MOCK_MODE=false with %s missing (others present)',
+    (missingKey) => {
+      const raw: Record<string, unknown> = {
+        ...validRaw,
+        KYC_MOCK_MODE: 'false',
+        KYC_ENCRYPTION_KEY: 'a'.repeat(64),
+        ...validSumsub,
+      };
+      delete raw[missingKey];
+      expect(() => validateEnv(raw)).toThrow(new RegExp(missingKey));
+    },
+  );
+
+  it('accepts KYC_MOCK_MODE=false with every Sumsub field present', () => {
+    const env = validateEnv({
+      ...validRaw,
+      KYC_MOCK_MODE: 'false',
+      KYC_ENCRYPTION_KEY: 'a'.repeat(64),
+      ...validSumsub,
+    });
+    expect(env.KYC_MOCK_MODE).toBe('false');
+    expect(env.SUMSUB_API_TOKEN).toBe('sbx:test-token');
+    expect(env.SUMSUB_LEVEL_TIER3).toBe('enhanced-kyc-level');
+  });
+});
+
+// --- KYC_MOCK_MODE production boot guard (mirrors SANCTIONS_MOCK_MODE) ---
+
+describe('env.schema KYC_MOCK_MODE production guard', () => {
+  it('rejects KYC_MOCK_MODE=true when NODE_ENV=production', () => {
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        NODE_ENV: 'production',
+        STATEMENT_SIGNING_KEY: 'stmt-key',
+        DIRECTIVE_SIGNING_KEY: 'directive-key',
+        RESEND_API_KEY: 're_test_key',
+        SANCTIONS_MOCK_MODE: 'false',
+        KYC_MOCK_MODE: 'true',
+      }),
+    ).toThrow(/KYC_MOCK_MODE/);
+  });
+
+  it('rejects a defaulted (omitted) KYC_MOCK_MODE when NODE_ENV=production', () => {
+    // The default is 'true' — omitting it in prod must still fail closed.
+    expect(() =>
+      validateEnv({
+        ...validRaw,
+        NODE_ENV: 'production',
+        STATEMENT_SIGNING_KEY: 'stmt-key',
+        DIRECTIVE_SIGNING_KEY: 'directive-key',
+        RESEND_API_KEY: 're_test_key',
+        SANCTIONS_MOCK_MODE: 'false',
+      }),
+    ).toThrow(/KYC_MOCK_MODE/);
+  });
+
+  it('accepts KYC_MOCK_MODE=false in production (with Sumsub credentials supplied)', () => {
+    const env = validateEnv({
+      ...validRaw,
+      NODE_ENV: 'production',
+      STATEMENT_SIGNING_KEY: 'stmt-key',
+      DIRECTIVE_SIGNING_KEY: 'directive-key',
+      RESEND_API_KEY: 're_test_key',
+      SANCTIONS_MOCK_MODE: 'false',
+      KYC_MOCK_MODE: 'false',
+      KYC_ENCRYPTION_KEY: 'a'.repeat(64),
+      ...validSumsub,
+    });
+    expect(env.KYC_MOCK_MODE).toBe('false');
+  });
+
+  it('tolerates KYC_MOCK_MODE=true outside production (dev/test)', () => {
+    const env = validateEnv({ ...validRaw, NODE_ENV: 'development' });
+    expect(env.KYC_MOCK_MODE).toBe('true');
   });
 });

@@ -96,6 +96,7 @@ function makeComplianceEventRepo(): jest.Mocked<IComplianceEventRepository> {
     create: jest.fn(),
     listByStatus: jest.fn(),
     findById: jest.fn(),
+    findLatestOpenByUserAndType: jest.fn(),
     updateDisposition: jest.fn(),
   };
 }

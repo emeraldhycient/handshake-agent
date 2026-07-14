@@ -25,6 +25,7 @@ import type { Clock } from '../../../core/common/clock';
 import type { PinService } from '../../../core/auth/pin.service';
 import type { SessionService } from '../../../core/auth/session.service';
 import type {
+  AssertCanTransactInput,
   KycGateService,
   OriginatorIdentity,
 } from '../../identity/application/kyc-gate.service';
@@ -308,17 +309,9 @@ function makeKycGate(
 > {
   const svc = {
     // Fix-C: fiatAmount is now a string (exact NGN decimal).
-    assertCanTransact: jest.fn<
-      Promise<void>,
-      [
-        {
-          userId: string;
-          fiatAmount: string;
-          fiatCurrency: string;
-          asset: string;
-        },
-      ]
-    >(),
+    // Task 1.3: input is typed against the real AssertCanTransactInput (now
+    // requires `capability`) so this mock stays assignable to KycGateService.
+    assertCanTransact: jest.fn<Promise<void>, [AssertCanTransactInput]>(),
     getOriginatorName: jest.fn<Promise<string | null>, [string]>(),
     getOriginatorIdentity: jest.fn<Promise<OriginatorIdentity>, [string]>(),
   };
@@ -993,6 +986,22 @@ describe('ExecutionService.executeBuy', () => {
       'KYC_NOT_VERIFIED',
     );
     expect(transactionRepo.createSettlingWithProposal).not.toHaveBeenCalled();
+  });
+
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+  // Regression guard: a future edit that swaps the capability literal on this
+  // re-validation call site must fail the unit suite, not silently downgrade
+  // the effective min-tier gate for buy.
+
+  it('calls KYC gate with capability "crypto.buy"', async () => {
+    const kycGate = makeKycGate();
+    const svc = buildService({ kycGate });
+
+    await svc.executeBuy(BASE_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.buy' }),
+    );
   });
 
   // ── Directive consume throws (replay) ─────────────────────────────────────
@@ -2048,6 +2057,19 @@ describe('ExecutionService.executeSell', () => {
     ).not.toHaveBeenCalled();
   });
 
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+
+  it('calls KYC gate with capability "crypto.sell"', async () => {
+    const kycGate = makeKycGate();
+    const svc = buildSellService({ kycGate });
+
+    await svc.executeSell(SELL_BASE_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.sell' }),
+    );
+  });
+
   // ── Directive replay ─────────────────────────────────────────────────────
 
   it('directive already consumed → DirectiveReplayError, no Transaction', async () => {
@@ -2814,9 +2836,12 @@ function makeComplianceService(opts: { passed: boolean } = { passed: true }): {
 
 function makeBeneficiaryServiceForSend(
   record: BeneficiaryRecord | null = STUB_CRYPTO_BENEFICIARY,
-): { getById: jest.Mock } {
+): { getById: jest.Mock; addCryptoAddress: jest.Mock } {
   return {
     getById: jest.fn().mockResolvedValue(record),
+    // Task 3: save-on-success persist path. The send's PIN + device-bound
+    // step-up already authorized this; addCryptoAddress needs no second PIN.
+    addCryptoAddress: jest.fn().mockResolvedValue(STUB_CRYPTO_BENEFICIARY),
   };
 }
 
@@ -2964,6 +2989,22 @@ describe('ExecutionService.executeSend', () => {
         settlementType: 'onchain_send',
         status: 'pending',
       }),
+    );
+  });
+
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+  // Regression guard: a future edit that swaps the capability literal on this
+  // re-validation call site must fail the unit suite, not silently downgrade
+  // the effective min-tier gate for send.
+
+  it('calls KYC gate with capability "crypto.send"', async () => {
+    const kycGate = makeKycGate();
+    const svc = buildSendService({ kycGate });
+
+    await svc.executeSend(SEND_BASE_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.send' }),
     );
   });
 
@@ -3625,6 +3666,7 @@ describe('ExecutionService.executeSend', () => {
         callOrder.push('cooling_off');
         return Promise.resolve(STUB_CRYPTO_BENEFICIARY);
       }),
+      addCryptoAddress: jest.fn().mockResolvedValue(STUB_CRYPTO_BENEFICIARY),
     };
     const complianceService = {
       screenSendDestination: jest.fn().mockImplementation(() => {
@@ -3800,6 +3842,138 @@ describe('ExecutionService.executeSend', () => {
     );
 
     await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toThrow();
+  });
+});
+
+// =============================================================================
+// ExecutionService.executeSend — raw address + save-on-success (Task 3)
+// =============================================================================
+
+const RAW_SEND_ADDRESS_1 = 'TRawExecAddr0000000001';
+const RAW_SEND_ADDRESS_2 = 'TRawExecAddr0000000002';
+
+/**
+ * A send proposal with NO beneficiaryId — the raw-address shape Task 2 persists
+ * ({ destinationKind: 'raw_address', beneficiaryId: null, toAddress, … }).
+ */
+function makeRawSendProposal(
+  paramOverrides: Record<string, unknown> = {},
+): ProposalRecord {
+  return {
+    ...STUB_SEND_PROPOSAL,
+    parameters: {
+      asset: 'USDT',
+      cryptoAmount: '10.000000',
+      networkFeeCrypto: '1.000000',
+      totalDebit: '11.000000',
+      destinationKind: 'raw_address',
+      beneficiaryId: null,
+      walletId: 'wallet-id',
+      toAddress: RAW_SEND_ADDRESS_1,
+      network: 'TRON',
+      requiresTravelRule: 'false',
+      ...paramOverrides,
+    },
+  };
+}
+
+describe('ExecutionService.executeSend — raw address (Task 3)', () => {
+  it('executes a raw-address send with no beneficiaryId (guard no longer requires it)', async () => {
+    const walletService = makeWalletServiceWithWithdraw(SEND_PROVIDER_REF);
+    const beneficiaryService = makeBeneficiaryServiceForSend();
+    const svc = buildSendService({
+      proposalRepo: makeProposalRepo(makeRawSendProposal()),
+      walletService,
+      beneficiaryService,
+    });
+
+    const result = await svc.executeSend(SEND_BASE_INPUT);
+
+    expect(result.status).toBe('settling');
+    // The on-chain withdraw target is the raw address (positional arg 2).
+    expect(walletService.withdraw).toHaveBeenCalledWith(
+      expect.anything(),
+      RAW_SEND_ADDRESS_1,
+      '10.000000',
+      expect.any(String),
+      SEND_IDEMPOTENCY_KEY,
+    );
+    // No saved beneficiary → the cooling-off lookup is skipped entirely.
+    expect(beneficiaryService.getById).not.toHaveBeenCalled();
+  });
+
+  it('still rejects a proposal missing toAddress', async () => {
+    const svc = buildSendService({
+      proposalRepo: makeProposalRepo(makeRawSendProposal({ toAddress: '' })),
+    });
+
+    await expect(svc.executeSend(SEND_BASE_INPUT)).rejects.toThrow(
+      /missing toAddress/,
+    );
+  });
+
+  it('persists the beneficiary on success when saveAsBeneficiary is set (no second PIN)', async () => {
+    const beneficiaryService = makeBeneficiaryServiceForSend();
+    const pinService = makePinService();
+    const svc = buildSendService({
+      proposalRepo: makeProposalRepo(
+        makeRawSendProposal({
+          toAddress: RAW_SEND_ADDRESS_2,
+          saveAsBeneficiary: 'true',
+          saveLabel: 'Mum',
+        }),
+      ),
+      beneficiaryService,
+      pinService,
+    });
+
+    await svc.executeSend(SEND_BASE_INPUT);
+
+    expect(beneficiaryService.addCryptoAddress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER_ID,
+        address: RAW_SEND_ADDRESS_2,
+        network: 'TRON',
+        asset: 'USDT',
+        label: 'Mum',
+      }),
+    );
+    // The send's own PIN is verified exactly once — no second PIN for the save.
+    expect(pinService.verifyPin).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT persist when saveAsBeneficiary is absent', async () => {
+    const beneficiaryService = makeBeneficiaryServiceForSend();
+    const svc = buildSendService({
+      proposalRepo: makeProposalRepo(makeRawSendProposal()),
+      beneficiaryService,
+    });
+
+    await svc.executeSend(SEND_BASE_INPUT);
+
+    expect(beneficiaryService.addCryptoAddress).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fail the settled send when the save side-effect throws (best-effort)', async () => {
+    const beneficiaryService = makeBeneficiaryServiceForSend();
+    beneficiaryService.addCryptoAddress.mockRejectedValueOnce(
+      new Error('cooling-off write failed'),
+    );
+    const svc = buildSendService({
+      proposalRepo: makeProposalRepo(
+        makeRawSendProposal({
+          toAddress: RAW_SEND_ADDRESS_2,
+          saveAsBeneficiary: 'true',
+          saveLabel: 'Mum',
+        }),
+      ),
+      beneficiaryService,
+    });
+
+    // The withdraw already settled — a failed save must be swallowed.
+    const result = await svc.executeSend(SEND_BASE_INPUT);
+    expect(result.status).toBe('settling');
+    expect(beneficiaryService.addCryptoAddress).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -4562,6 +4736,58 @@ describe('ExecutionService.executeSwap', () => {
     await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toThrow(
       ProposalExpiredError,
     );
+  });
+
+  // ── §3.3: server-side KYC/limit/velocity re-gate at settle time ─────────────
+  // executeSwap must re-run assertCanTransact before moving funds — mirroring
+  // executeBuy/executeSell/executeSend. A tier downgrade or stale proposal between
+  // propose-time and execute-time must be re-caught here, not trusted from propose.
+
+  it('KYC gate throws → propagates, no reserve, directive not consumed, provider not called', async () => {
+    const kycError = new Error('KYC tier 1 exceeded');
+    const kycGate = makeKycGate(kycError);
+    const settlementRepo = makeSwapSettlementRepo();
+    const outboxRepo = makeOutboxRepo();
+    const directiveService = makeDirectiveService();
+    const pinService = makePinService();
+    const swapProvider = makeSwapProviderMock();
+
+    const svc = buildSwapService({
+      kycGate,
+      settlementRepo,
+      outboxRepo,
+      directiveService,
+      pinService,
+      swapProvider,
+    });
+
+    await expect(svc.executeSwap(SWAP_BASE_INPUT)).rejects.toThrow(kycError);
+    // No funds moved: no reserve, no provider swap, no outbox row.
+    expect(
+      settlementRepo.createSwapSettlingWithReserveAtomic,
+    ).not.toHaveBeenCalled();
+    expect(swapProvider.execute).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+    // Gate runs before PIN/directive (mirror sell/buy/send) — the one-shot
+    // directive is not burned and PIN is not spent when the gate denies.
+    expect(directiveService.consume).not.toHaveBeenCalled();
+    expect(pinService.verifyPin).not.toHaveBeenCalled();
+  });
+
+  it('happy path re-gates: calls assertCanTransact with the NGN-equivalent notional', async () => {
+    const kycGate = makeKycGate();
+
+    const svc = buildSwapService({ kycGate });
+    await svc.executeSwap(SWAP_BASE_INPUT);
+
+    // fromAmount 40 USDT × baseRate 1600 NGN = 64000 NGN notional.
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith({
+      userId: USER_ID,
+      fiatAmount: '64000',
+      fiatCurrency: 'NGN',
+      asset: 'USDT',
+      capability: 'crypto.swap',
+    });
   });
 });
 

@@ -91,14 +91,34 @@ export const envSchema = z
     STATEMENT_SIGNING_KEY: z.string().optional().default(''),
 
     // --- KYC (task K1) ---
-    // When 'true', the MockKycProvider is active (the only adapter at launch).
-    // Flip to 'false' once a real NIN/BVN provider is wired in IdentityModule.
+    // When 'true', the MockKycProvider is active. Flip to 'false' once the real
+    // Sumsub provider is wired into IdentityModule (Task 3.x). Fail-closed in
+    // production (superRefine below) — mirrors SANCTIONS_MOCK_MODE / PAYMENTS_MOCK_MODE.
     KYC_MOCK_MODE: z.enum(['true', 'false']).default('true'),
     // Symmetric key for encrypting NIN/BVN at rest (the NIN/BVN encryption fix).
     // Empty is tolerated while KYC_MOCK_MODE='true' (no real PII is stored), but the
     // superRefine below requires it non-empty once KYC_MOCK_MODE='false' so live KYC
     // identifiers are never persisted in plaintext (fail-fast at boot).
     KYC_ENCRYPTION_KEY: z.string().optional().default(''),
+
+    // --- Sumsub (real KYC provider, Task 3.x) ---
+    // API_TOKEN + API_SECRET_KEY authenticate server-to-server calls (HMAC-SHA256
+    // signed requests per the Sumsub API). WEBHOOK_SECRET verifies the inbound
+    // applicantReviewed webhook signature (X-Payload-Digest). LEVEL_TIER2 /
+    // LEVEL_TIER3 are the Sumsub verification-level names (configured in the
+    // Sumsub dashboard) that map to our tier_2 / tier_3 (see configuration.ts
+    // sumsub.levelToTier). All FIVE are OPTIONAL while KYC_MOCK_MODE='true' —
+    // the mock adapter is active and none of these are read, and the local
+    // .env does not yet have the level names — but the superRefine below
+    // REQUIRES every one of them once KYC_MOCK_MODE='false' (fail-closed,
+    // mirrors the KYC_ENCRYPTION_KEY / RECEIPT_SIGNING_KEY pattern).
+    SUMSUB_API_TOKEN: z.string().optional().default(''),
+    SUMSUB_API_SECRET_KEY: z.string().optional().default(''),
+    SUMSUB_WEBHOOK_SECRET: z.string().optional().default(''),
+    // Non-secret host; kept in env for testability (mirrors BLOCKRADAR_BASE_URL).
+    SUMSUB_BASE_URL: z.string().url().default('https://api.sumsub.com'),
+    SUMSUB_LEVEL_TIER2: z.string().optional().default(''),
+    SUMSUB_LEVEL_TIER3: z.string().optional().default(''),
 
     // --- Sanctions / AML (compliance) ---
     // When 'true' (default), MockSanctionsScreener is active — no live Blockradar
@@ -381,6 +401,67 @@ export const envSchema = z
         path: ['AUTH_COOKIE_SECURE'],
         message:
           'AUTH_COOKIE_SECURE must not be "false" when NODE_ENV=production (auth cookies would be sent over cleartext HTTP). Leave it unset (defaults to secure) or set "true".',
+      });
+    }
+
+    // 10. Real Sumsub KYC (KYC_MOCK_MODE=false) needs live credentials + the
+    //     level→tier name mappings; without them onboarding submission fails,
+    //     inbound webhooks can't be signature-verified, and a reviewed applicant
+    //     can never be mapped to a tier. Fail-closed per field (mirrors the
+    //     KYC_ENCRYPTION_KEY guard) so the operator knows exactly what's missing.
+    if (env.KYC_MOCK_MODE === 'false') {
+      if (env.SUMSUB_API_TOKEN === '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SUMSUB_API_TOKEN'],
+          message:
+            'SUMSUB_API_TOKEN must be non-empty when KYC_MOCK_MODE=false (required to authenticate Sumsub API calls).',
+        });
+      }
+      if (env.SUMSUB_API_SECRET_KEY === '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SUMSUB_API_SECRET_KEY'],
+          message:
+            'SUMSUB_API_SECRET_KEY must be non-empty when KYC_MOCK_MODE=false (required to sign Sumsub API requests).',
+        });
+      }
+      if (env.SUMSUB_WEBHOOK_SECRET === '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SUMSUB_WEBHOOK_SECRET'],
+          message:
+            'SUMSUB_WEBHOOK_SECRET must be non-empty when KYC_MOCK_MODE=false (required to verify the inbound Sumsub webhook signature).',
+        });
+      }
+      if (env.SUMSUB_LEVEL_TIER2 === '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SUMSUB_LEVEL_TIER2'],
+          message:
+            'SUMSUB_LEVEL_TIER2 must be non-empty when KYC_MOCK_MODE=false (maps the Sumsub verification level to tier_2).',
+        });
+      }
+      if (env.SUMSUB_LEVEL_TIER3 === '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SUMSUB_LEVEL_TIER3'],
+          message:
+            'SUMSUB_LEVEL_TIER3 must be non-empty when KYC_MOCK_MODE=false (maps the Sumsub verification level to tier_3).',
+        });
+      }
+    }
+
+    // 11. KYC_MOCK_MODE must be 'false' in production — the mock KYC adapter
+    //     grants tiers without any real identity verification (mirrors the
+    //     SANCTIONS_MOCK_MODE screen-nothing guard). Real KYC via Sumsub is
+    //     mandatory in prod; screen-nothing/verify-nothing must be impossible.
+    if (env.NODE_ENV === 'production' && env.KYC_MOCK_MODE === 'true') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['KYC_MOCK_MODE'],
+        message:
+          'KYC_MOCK_MODE must be "false" when NODE_ENV=production (the mock KYC adapter grants tiers with no real verification — Sumsub is mandatory in prod).',
       });
     }
   });

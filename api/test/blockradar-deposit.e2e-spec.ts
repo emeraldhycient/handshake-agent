@@ -460,7 +460,7 @@ describe('BlockradarWebhookController (integration, Testcontainers Postgres)', (
 
   it('TRX deposit: WalletBalance is created with asset="TRX" (TEXT column, not enum)', async () => {
     // Merge TRX as a discovered asset so AssetRegistry accepts it.
-    const assetRegistry = new AssetRegistry(new StubConfigService() as never);
+    const assetRegistry = new AssetRegistry(new StubConfigService());
     assetRegistry.mergeDiscoveredAssets([
       {
         assetId: 'mock-trx-asset-id',

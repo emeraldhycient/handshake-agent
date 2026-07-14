@@ -25,4 +25,11 @@ export class MockEmailProvider implements IEmailProvider {
     this.logger.log(`[mock-email] login OTP for ${to}: ${otp}`);
     return Promise.resolve();
   }
+
+  async sendLoginInstead(to: string): Promise<void> {
+    this.logger.log(
+      `[mock-email] signup requested for already-verified ${to}: log in instead (no OTP sent)`,
+    );
+    return Promise.resolve();
+  }
 }

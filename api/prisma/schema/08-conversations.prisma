@@ -117,6 +117,8 @@ enum IntentAction {
   buy_ticket
   check_balance
   query_transactions
+  get_rate
+  list_rates
   none
 
   @@map("intent_action")

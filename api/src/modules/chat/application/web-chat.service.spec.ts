@@ -25,6 +25,7 @@ import { MESSAGE_REPOSITORY } from '../../conversations/application/ports/messag
 import { INTENT_REPOSITORY } from '../../conversations/application/ports/intent.repository.port';
 import { REPLY_REPOSITORY } from '../../conversations/application/ports/reply.repository.port';
 import { AssetRegistry } from '../../../core/catalog/asset-registry';
+import { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import { StatementTokenService } from '../../transactions/application/statement-token.service';
 import {
   SwapSameAssetError,
@@ -35,6 +36,7 @@ import {
   AmountTooSmallError,
   SelfSendError,
 } from '../../transactions/domain/amount-guard-errors';
+import { InvalidSendAddressError } from '../../transactions/domain/invalid-send-address.error';
 import {
   BeneficiaryCoolingOffError,
   BeneficiaryWrongTypeError,
@@ -98,15 +100,50 @@ const fakeAssetRegistry = {
   // Base fiat for the sell currency-match filter (legacy-null payoutCurrency → NGN).
   defaultFiat: jest.fn().mockReturnValue('NGN'),
   isCapabilityEnabled: jest.fn().mockReturnValue(true),
+  // Deterministic edge classifier used by parseAddressFromText (§3.1 — NOT the
+  // model). Defaults to TRON; individual tests override as needed.
+  inferNetworkForAddress: jest.fn().mockReturnValue('TRON'),
+};
+
+// Mirrors the real `gating.capabilityMinTier` code default (Task 1.2,
+// api/src/core/config/configuration.ts) so the chat-entry gate is exercised
+// against the SAME map the deterministic engine (KycGateService) reads.
+const CAPABILITY_MIN_TIER: Record<string, string> = {
+  'crypto.buy': 'tier_1',
+  'crypto.receive': 'tier_1',
+  'crypto.sell': 'tier_2',
+  'crypto.send': 'tier_2',
+  'crypto.swap': 'tier_2',
+};
+const fakeConfig = {
+  get: jest.fn((key: string) =>
+    key === 'gating' ? { capabilityMinTier: CAPABILITY_MIN_TIER } : undefined,
+  ),
 };
 
 // ---------------------------------------------------------------------------
 // Shared test data
 // ---------------------------------------------------------------------------
 
+// tier_2: satisfies every capability's minimum tier (buy/receive at tier_1,
+// sell/send/swap at tier_2), so this is the fixture for "fully able to
+// transact" tests below — most of which exercise sell/send/swap.
 const VERIFIED_USER = {
   id: 'user-1',
   kycStatus: 'verified',
+  kycTier: 'tier_2',
+  status: 'active',
+  simSwapDetectedAt: null,
+};
+
+// tier_1: email-verified only (the new onboarding grant — root CLAUDE.md §3.3/
+// Task 1.2/1.3). kycStatus deliberately stays NOT 'verified' (that status is
+// reserved for full Sumsub KYC) — this fixture is the regression case for the
+// bug this fix addresses: a tier_1 user must still get buy/receive/check_balance,
+// gated on kycTier, never on the stale kycStatus check.
+const TIER_1_USER = {
+  id: 'user-1',
+  kycStatus: 'not_started',
   kycTier: 'tier_1',
   status: 'active',
   simSwapDetectedAt: null,
@@ -190,6 +227,7 @@ describe('WebChatService', () => {
         { provide: REPLY_REPOSITORY, useValue: fakeReplyRepo },
         { provide: AssetRegistry, useValue: fakeAssetRegistry },
         { provide: StatementTokenService, useValue: fakeStatementTokens },
+        { provide: EffectiveConfigService, useValue: fakeConfig },
       ],
     }).compile();
 
@@ -1263,12 +1301,11 @@ describe('WebChatService', () => {
     expect(result.outcome).toEqual({ kind: 'needs_kyc' });
   });
 
-  // ── send_crypto, verified + beneficiary → proposal ────────────────────────
+  // ── send_crypto, verified + explicit saved beneficiary → proposal ─────────
 
-  it('send_crypto, verified, beneficiary exists → proposal outcome', async () => {
-    fakeBeneficiaryService.getDefault.mockResolvedValue({
-      id: 'bene-crypto-1',
-    });
+  it('send_crypto, verified, explicit saved beneficiary → proposal outcome', async () => {
+    // §3.1 always-confirm-destination: a proposal is reached only via an EXPLICIT
+    // destination — here a resolve-loop beneficiaryId pick, NEVER a silent default.
     const sendConf = {
       proposalId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
       asset: 'USDT',
@@ -1294,12 +1331,53 @@ describe('WebChatService', () => {
     const result = await service.handleMessage({
       userId: 'user-1',
       text: 'send 2 USDT',
+      beneficiaryId: 'bene-crypto-1',
     });
+    expect(fakeProposalService.createSendProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        destination: {
+          kind: 'saved_beneficiary',
+          beneficiaryId: 'bene-crypto-1',
+        },
+      }),
+    );
     expect(result.outcome).toMatchObject({
       kind: 'proposal',
       txType: 'send',
       proposalId: sendConf.proposalId,
     });
+  });
+
+  // ── send_crypto with a raw sendDestination → raw_address proposal (Task 5) ──
+  // The user-confirmed raw address flows to the engine ONLY via the structured
+  // sendDestination field (§3.1) — the model never carries it.
+
+  it('send_crypto with a sendDestination creates a raw-address proposal', async () => {
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'send_crypto',
+      asset: 'USDT',
+      cryptoAmount: '5',
+      network: 'TRON',
+    });
+    fakeProposalService.createSendProposal.mockResolvedValue({
+      proposalId: 'p1',
+      confirmation: { toAddressMasked: 'TRaw…0001' },
+    });
+    const res = await service.handleMessage({
+      userId: 'user-1',
+      text: 'send 5 USDT to TRawAddr0000000001',
+      sendDestination: { address: 'TRawAddr0000000001', network: 'TRON' },
+    });
+    expect(fakeProposalService.createSendProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        destination: {
+          kind: 'raw_address',
+          address: 'TRawAddr0000000001',
+          network: 'TRON',
+        },
+      }),
+    );
+    expect(res.outcome).toMatchObject({ kind: 'proposal', txType: 'send' });
   });
 
   // ── send_crypto proposal-error parity → graceful clarification ───────────────
@@ -1313,12 +1391,10 @@ describe('WebChatService', () => {
       network: 'tron',
     };
 
-    beforeEach(() => {
-      fakeBeneficiaryService.getDefault.mockResolvedValue({
-        id: 'bene-crypto-1',
-      });
-    });
-
+    // §3.1 always-confirm-destination: each case routes via an EXPLICIT
+    // beneficiaryId (a non-misrouting destination) so the resolver resolves and
+    // createSendProposal is reached — the behaviour under test is the
+    // proposal-error → clarification mapping, not destination resolution.
     it.each([
       [
         'InsufficientBalanceError',
@@ -1355,12 +1431,39 @@ describe('WebChatService', () => {
       const result = await service.handleMessage({
         userId: 'user-1',
         text: 'send 2 USDT',
+        beneficiaryId: 'bene-crypto-1',
       });
 
       expect(result.outcome.kind).toBe('clarification');
       expect(
         (result.outcome as { kind: 'clarification'; text: string }).text,
       ).toBeTruthy();
+    });
+
+    it('maps InvalidSendAddressError (bad raw address) to a clarification outcome', async () => {
+      // A user-pasted raw address that fails the engine's pattern check must
+      // surface as an in-chat clarification, never a 5xx (parity with the other
+      // proposal-builder rejections). The raw-address path is the natural trigger.
+      fakeProposalService.createSendProposal.mockRejectedValue(
+        new InvalidSendAddressError('TBadAddr', 'TRON'),
+      );
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'send_crypto',
+        asset: 'USDT',
+        cryptoAmount: '2',
+        network: 'TRON',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'send 2 USDT to TBadAddr',
+        sendDestination: { address: 'TBadAddr', network: 'TRON' },
+      });
+
+      expect(result.outcome.kind).toBe('clarification');
+      expect(
+        (result.outcome as { kind: 'clarification'; text: string }).text,
+      ).toContain('address');
     });
 
     it('still propagates an unexpected error (mapped to 500 by the filter)', async () => {
@@ -1370,15 +1473,18 @@ describe('WebChatService', () => {
       fakeAgentPort.run.mockResolvedValue(sendIntent);
 
       await expect(
-        service.handleMessage({ userId: 'user-1', text: 'send 2 USDT' }),
+        service.handleMessage({
+          userId: 'user-1',
+          text: 'send 2 USDT',
+          beneficiaryId: 'bene-crypto-1',
+        }),
       ).rejects.toThrow('unexpected boom');
     });
   });
 
-  // ── send_crypto, verified, no default beneficiary → needs_beneficiary ──────
+  // ── send_crypto, bare send (no destination) → needs_beneficiary(allowRawSend) ─
 
-  it('send_crypto, verified, no default beneficiary → needs_beneficiary (crypto_address)', async () => {
-    fakeBeneficiaryService.getDefault.mockResolvedValue(null);
+  it('send_crypto, verified, bare "send" (no destination) → needs_beneficiary(allowRawSend) — never the default', async () => {
     fakeAgentPort.run.mockResolvedValue({
       action: 'send_crypto',
       asset: 'USDT',
@@ -1390,10 +1496,15 @@ describe('WebChatService', () => {
       userId: 'user-1',
       text: 'send',
     });
+    // §3.1 always-confirm-destination: a bare send with no id/nickname/pasted
+    // address surfaces the card (with allowRawSend), NEVER routes to a default.
     expect(result.outcome).toEqual({
       kind: 'needs_beneficiary',
       beneficiaryType: 'crypto_address',
+      allowRawSend: true,
     });
+    expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    expect(fakeProposalService.createSendProposal).not.toHaveBeenCalled();
   });
 
   // ── recipientNickname resolution (Wave B — beneficiary nicknames) ──────────
@@ -1526,7 +1637,12 @@ describe('WebChatService', () => {
       );
       expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
       expect(fakeProposalService.createSendProposal).toHaveBeenCalledWith(
-        expect.objectContaining({ beneficiaryId: MUM_WALLET.id }),
+        expect.objectContaining({
+          destination: {
+            kind: 'saved_beneficiary',
+            beneficiaryId: MUM_WALLET.id,
+          },
+        }),
       );
       expect(result.outcome).toMatchObject({
         kind: 'proposal',
@@ -2041,6 +2157,409 @@ describe('WebChatService', () => {
       expect(outcome.hasMore).toBe(true);
       expect(outcome.nextCursor).toBe('cur-1');
       expect(outcome.txType).toBe('all');
+    });
+  });
+
+  // ── capability → minimum-tier gate (Task 4.2b) ─────────────────────────────
+  // Regression coverage for the bug this fix addresses: the onboarding model
+  // grants kycTier='tier_1' on EMAIL verification WITHOUT setting
+  // kycStatus='verified' (reserved for full Sumsub KYC). The chat-entry gate
+  // must key off capability→kycTier (mirroring KycGateService), never the
+  // stale kycStatus==='verified' check.
+
+  describe('capability → minimum-tier gate (Task 4.2b)', () => {
+    it('tier_1 user, buy_crypto intent → a buy proposal outcome (NOT needs_kyc)', async () => {
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      const buyConf = {
+        proposalId: 'prop-t1',
+        asset: 'USDT',
+        fiatAmount: '5000',
+        fiatCurrency: 'NGN',
+        cryptoAmount: '5.0',
+        fxRate: '1000',
+        spreadBps: 50,
+        processingFeeBps: 100,
+        processingFeeAmount: '50.00',
+        totalFiat: '5050.00',
+        expiresAt: new Date().toISOString(),
+      };
+      fakeProposalService.createBuyProposal.mockResolvedValue({
+        proposalId: 'prop-t1',
+        quoteId: 'q-t1',
+        confirmation: buyConf,
+      });
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'buy_crypto',
+        asset: 'USDT',
+        fiatAmount: '5000',
+        fiatCurrency: 'NGN',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'buy 5000 NGN of USDT',
+      });
+
+      expect(result.outcome).toMatchObject({
+        kind: 'proposal',
+        txType: 'buy',
+        proposalId: 'prop-t1',
+      });
+    });
+
+    it('tier_1 user, receive_crypto intent → a receive outcome (NOT needs_kyc)', async () => {
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      fakeWalletService.getOrProvisionNetworkWallet.mockResolvedValue({
+        id: 'w1',
+        userId: 'user-1',
+        network: 'tron',
+        address: 'TXxxx',
+        providerReference: 'ref',
+        status: 'active',
+        provisionedAt: new Date(),
+      });
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'receive_crypto',
+        asset: 'USDT',
+        network: 'tron',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'receive',
+      });
+
+      expect(result.outcome.kind).toBe('receive');
+    });
+
+    it('tier_1 user, check_balance intent → a balance outcome (NOT needs_kyc)', async () => {
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      fakeBalanceService.getBalances.mockResolvedValue({
+        fiatCurrency: 'NGN',
+        totalFiatValue: '0.00',
+        balances: [],
+      });
+      fakeAgentPort.run.mockResolvedValue({ action: 'check_balance' });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: "what's my balance",
+      });
+
+      expect(result.outcome.kind).toBe('balance');
+      expect(fakeBalanceService.getBalances).toHaveBeenCalledWith(
+        'user-1',
+        undefined,
+      );
+    });
+
+    it('tier_1 user, sell_crypto intent → needs_kyc (sell requires tier_2)', async () => {
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'sell_crypto',
+        asset: 'USDT',
+        cryptoAmount: '5',
+        fiatCurrency: 'NGN',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'sell 5 USDT',
+      });
+
+      expect(result.outcome).toEqual({ kind: 'needs_kyc' });
+      expect(fakeProposalService.createSellProposal).not.toHaveBeenCalled();
+    });
+
+    it('tier_1 user, send_crypto intent → needs_kyc (send requires tier_2)', async () => {
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'send_crypto',
+        asset: 'USDT',
+        cryptoAmount: '2',
+        toAddress: 'TYyyy',
+        network: 'tron',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'send 2 USDT',
+      });
+
+      expect(result.outcome).toEqual({ kind: 'needs_kyc' });
+      expect(fakeProposalService.createSendProposal).not.toHaveBeenCalled();
+    });
+
+    it('tier_2 user, send_crypto intent → a send proposal outcome (NOT needs_kyc)', async () => {
+      // The default `loadUser` mock (VERIFIED_USER) is tier_2 — explicit here
+      // for clarity since this test's whole point is the tier boundary.
+      fakeIdentityRepo.loadUser.mockResolvedValue(VERIFIED_USER);
+      const sendConf = {
+        proposalId: 'prop-t2-send',
+        asset: 'USDT',
+        cryptoAmount: '2',
+        network: 'tron',
+        networkFeeCrypto: '1.0',
+        totalDebit: '3.0',
+        toAddressMasked: 'TYyyy...Zzzz',
+        beneficiaryLabel: 'My wallet',
+        expiresAt: new Date().toISOString(),
+      };
+      fakeProposalService.createSendProposal.mockResolvedValue({
+        proposalId: sendConf.proposalId,
+        confirmation: sendConf,
+      });
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'send_crypto',
+        asset: 'USDT',
+        cryptoAmount: '2',
+        toAddress: 'TYyyyZzzz',
+        network: 'tron',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'send 2 USDT',
+        // §3.1 always-confirm: reach the proposal via an EXPLICIT beneficiary; the
+        // behaviour under test is the tier boundary (tier_2 ≠ needs_kyc).
+        beneficiaryId: 'bene-crypto-1',
+      });
+
+      expect(result.outcome).toMatchObject({
+        kind: 'proposal',
+        txType: 'send',
+        proposalId: sendConf.proposalId,
+      });
+    });
+
+    it('tier_1 user, swap intent → needs_kyc (swap requires tier_2)', async () => {
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'swap',
+        fromAsset: 'USDT',
+        toAsset: 'TRX',
+        amount: '10',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'swap 10 USDT to TRX',
+      });
+
+      expect(result.outcome).toEqual({ kind: 'needs_kyc' });
+      expect(fakeProposalService.createSwapProposal).not.toHaveBeenCalled();
+    });
+
+    it('a capability with no configured gating entry fails closed to tier_2 (defense in depth)', async () => {
+      // Simulates a gating map missing e.g. crypto.buy's entry — the chat-entry
+      // gate must fail closed (needs_kyc) for a tier_1 user rather than
+      // silently allow, mirroring KycGateService's FAIL_CLOSED_MIN_TIER.
+      fakeConfig.get.mockReturnValueOnce({ capabilityMinTier: {} });
+      fakeIdentityRepo.loadUser.mockResolvedValue(TIER_1_USER);
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'buy_crypto',
+        asset: 'USDT',
+        fiatAmount: '5000',
+        fiatCurrency: 'NGN',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'buy 5000 NGN of USDT',
+      });
+
+      expect(result.outcome).toEqual({ kind: 'needs_kyc' });
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Task 4 — resolveSendDestination (crypto): a discriminated SendDestination
+  // descriptor with the §3.1 NO-MISROUTE guarantee — an explicit-but-unsaved
+  // crypto destination (a pasted address, or a nickname that matched nothing, or
+  // a bare "send N") returns needs_beneficiary(allowRawSend) and NEVER falls
+  // through to the user's default beneficiary. parseAddressFromText is the
+  // deterministic edge parser (NOT the model) that only pre-fills the
+  // user-confirmed card.
+  // ───────────────────────────────────────────────────────────────────────────
+  describe('resolveSendDestination (crypto)', () => {
+    it('returns a raw_address descriptor when the request carries sendDestination', async () => {
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {
+          sendDestination: {
+            address: 'TValidAddr0000000001',
+            network: 'TRON',
+            saveAsBeneficiary: true,
+            label: 'Mum',
+          },
+        },
+        undefined,
+        'send 50 USDT to TValidAddr0000000001',
+      );
+      expect(r).toEqual({
+        resolved: true,
+        destination: {
+          kind: 'raw_address',
+          address: 'TValidAddr0000000001',
+          network: 'TRON',
+          save: { label: 'Mum' },
+        },
+      });
+    });
+
+    it('a raw-address paste with NO saved match returns needs_beneficiary(allowRawSend, prefillAddress) — NEVER the default', async () => {
+      fakeBeneficiaryService.getDefault.mockResolvedValue({
+        id: 'default-ben',
+      }); // user HAS a default
+      fakeAssetRegistry.inferNetworkForAddress.mockReturnValue('TRON');
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        undefined,
+        'send 50 USDT to TPastedAddr0000001',
+      );
+      expect(r).toMatchObject({
+        resolved: false,
+        outcome: {
+          kind: 'needs_beneficiary',
+          beneficiaryType: 'crypto_address',
+          allowRawSend: true,
+          prefillAddress: 'TPastedAddr0000001',
+        },
+      });
+      // §3.1: the default beneficiary must NEVER be consulted for a crypto send.
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('an explicit beneficiaryId still resolves to a saved_beneficiary descriptor', async () => {
+      const r = await service.resolveSendDestination(
+        'user-1',
+        { beneficiaryId: 'ben-1' },
+        undefined,
+        'send 50',
+      );
+      expect(r).toEqual({
+        resolved: true,
+        destination: { kind: 'saved_beneficiary', beneficiaryId: 'ben-1' },
+      });
+    });
+
+    it('a bare "send 50 USDT" (no address, no nickname, no id) offers the card, not the silent default', async () => {
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        undefined,
+        'send 50 USDT',
+      );
+      expect(r).toMatchObject({
+        resolved: false,
+        outcome: { kind: 'needs_beneficiary', allowRawSend: true },
+      });
+      if (r.resolved) throw new Error('expected an unresolved outcome');
+      expect(r.outcome).not.toHaveProperty('prefillAddress');
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('a matching nickname resolves to a saved_beneficiary (unchanged)', async () => {
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([
+        { id: 'ben-mum' },
+      ]);
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        'mum',
+        'send 50 USDT to mum',
+      );
+      expect(r).toEqual({
+        resolved: true,
+        destination: { kind: 'saved_beneficiary', beneficiaryId: 'ben-mum' },
+      });
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('ZERO nickname matches returns needs_beneficiary(allowRawSend) — never the default (§3.1 NO-MISROUTE)', async () => {
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([]);
+      // Even with a default saved, a missed nickname must NOT silently route
+      // to it — the user named someone specific.
+      fakeBeneficiaryService.getDefault.mockResolvedValue({
+        id: 'default-ben',
+      });
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        'mum',
+        'send 50 USDT to mum',
+      );
+      expect(r).toMatchObject({
+        resolved: false,
+        outcome: {
+          kind: 'needs_beneficiary',
+          beneficiaryType: 'crypto_address',
+          allowRawSend: true,
+        },
+      });
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('TWO nickname matches returns choose_beneficiary with both masked candidates — never the default', async () => {
+      const MUM_WALLET = {
+        id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        label: 'Mum',
+        type: 'crypto_address' as const,
+        bankCode: null,
+        accountNumber: null,
+        cryptoAddress: 'TQn9Y2khDD3VHKZ2GRdmKXD8bNkRuaBP2p',
+        isDefault: false,
+      };
+      const MUM_WALLET_2 = {
+        id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        label: 'Mum',
+        type: 'crypto_address' as const,
+        bankCode: null,
+        accountNumber: null,
+        cryptoAddress: 'TXk4mzhDD3VHKZ2GRdmKXD8bNkRuaZZ9q',
+        isDefault: false,
+      };
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([
+        MUM_WALLET,
+        MUM_WALLET_2,
+      ]);
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        'mum',
+        'send 50 USDT to mum',
+      );
+      expect(r).toEqual({
+        resolved: false,
+        outcome: {
+          kind: 'choose_beneficiary',
+          beneficiaryType: 'crypto_address',
+          nickname: 'mum',
+          candidates: [
+            { id: MUM_WALLET.id, label: 'Mum', detail: 'TQn9Y2...BP2p' },
+            { id: MUM_WALLET_2.id, label: 'Mum', detail: 'TXk4mz...ZZ9q' },
+          ],
+        },
+        summaryText:
+          "You have 2 saved recipients called 'mum'. Which one did you mean?",
+      });
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('parseAddressFromText', () => {
+    it('extracts a TRON address token and its network', () => {
+      fakeAssetRegistry.inferNetworkForAddress.mockReturnValue('TRON');
+      expect(
+        service.parseAddressFromText(
+          'send 50 USDT to TValidAddr0000000001 now',
+        ),
+      ).toEqual({ address: 'TValidAddr0000000001', network: 'TRON' });
+    });
+
+    it('returns null when no address-shaped token is present', () => {
+      expect(service.parseAddressFromText('send 50 USDT to mum')).toBeNull();
     });
   });
 });

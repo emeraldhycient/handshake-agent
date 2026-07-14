@@ -15,6 +15,7 @@ import type { z, ZodTypeAny } from 'zod';
 import type { PatScope } from '@handshake-agent/contracts';
 
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
+import type { EffectiveConfigService } from '../../../core/config/application/effective-config.service';
 import type { ProfileService } from '../../identity/application/profile.service';
 import type { IIdentityRepository } from '../../identity/application/ports/identity.repository.port';
 import type { BalanceService } from '../../balances/application/balance.service';
@@ -68,6 +69,8 @@ export interface McpToolDeps {
     AssetRegistry,
     'asset' | 'network' | 'defaultNetworkFor' | 'publicView'
   >;
+  /** Layered config — capability→min-tier gating for KYC-gated read tools. */
+  config: Pick<EffectiveConfigService, 'get'>;
 }
 
 /**

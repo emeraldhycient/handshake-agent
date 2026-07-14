@@ -17,3 +17,14 @@ process.env.KYC_ENCRYPTION_KEY ||=
 // not set this key fails at module init; provide a deterministic test key here so
 // the whole e2e lane can boot. `||=` leaves any explicitly-set value untouched.
 process.env.ADMIN_MFA_ENC_KEY ||= '0'.repeat(64);
+
+// Sumsub webhook e2e (task 3.6): SUMSUB_WEBHOOK_SECRET verifies the inbound
+// applicantReviewed webhook's x-payload-digest HMAC; SUMSUB_LEVEL_TIER2/3 map
+// the Sumsub verification-level names to our tier_2/tier_3 so a signed GREEN
+// webhook can grant a real tier in tests. All three are optional while
+// KYC_MOCK_MODE=true (the e2e default) — provided here so any suite that
+// boots AppModule and posts a signed webhook has deterministic values without
+// repeating them per-spec. `||=` leaves any explicitly-set value untouched.
+process.env.SUMSUB_WEBHOOK_SECRET ||= 'e2e-sumsub-webhook-secret-test-key';
+process.env.SUMSUB_LEVEL_TIER2 ||= 'id-and-liveness';
+process.env.SUMSUB_LEVEL_TIER3 ||= 'full-kyc';

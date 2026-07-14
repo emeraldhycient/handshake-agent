@@ -24,3 +24,22 @@ export class ProfileSessionNotFoundError extends Error {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+/**
+ * The caller tried to write POST /profile/name after KYC verification has
+ * started. The name is verified against NIN/BVN at KYC time and is relied on
+ * as the immutable FATF Travel-Rule originator identity (execution.service.ts
+ * reads it as immutable, without re-locking, right before the settlement
+ * write) — allowing a write here for any status past `not_started` would let
+ * a verified user silently overwrite their verified name with no PIN, no
+ * step-up, and no audit trail.
+ */
+export class NameChangeNotAllowedError extends Error {
+  readonly code = 'NAME_CHANGE_NOT_ALLOWED' as const;
+
+  constructor() {
+    super('Your name is locked once identity verification has started.');
+    this.name = this.constructor.name;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

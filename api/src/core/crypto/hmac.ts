@@ -11,15 +11,19 @@ export function sha256Hex(input: string): string {
   return crypto.createHash('sha256').update(input, 'utf8').digest('hex');
 }
 
+/** HMAC digest algorithms this module supports (Node `crypto` names). */
+export type HmacAlgo = 'sha1' | 'sha256' | 'sha512';
+
 /**
  * Returns a lowercase hex HMAC digest.
  *
- * Supports sha256 (WhatsApp/Meta X-Hub-Signature-256) and sha512
- * (Blockradar deposit webhooks — keyed by API key per ADR-0006).
+ * Supports sha256 (WhatsApp/Meta X-Hub-Signature-256), sha512 (Blockradar
+ * deposit webhooks — keyed by API key per ADR-0006), and sha1 (one of Sumsub's
+ * operator-selectable webhook digest algorithms, HMAC_SHA1_HEX).
  * Node `crypto` only; no external dependencies.
  */
 export function hmacHex(
-  algo: 'sha256' | 'sha512',
+  algo: HmacAlgo,
   key: string,
   payload: Buffer | string,
 ): string {
@@ -37,7 +41,7 @@ export function hmacHex(
  * length, so we check lengths before comparing and short-circuit to `false`.
  */
 export function verifyHmacHeader(
-  algo: 'sha256' | 'sha512',
+  algo: HmacAlgo,
   key: string,
   payload: Buffer,
   headerValue: string | undefined,

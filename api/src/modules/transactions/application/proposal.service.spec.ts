@@ -31,7 +31,10 @@ import {
 
 import type { Clock } from '../../../core/common/clock';
 import type { QuotesService } from '../../quotes/application/quotes.service';
-import type { KycGateService } from '../../identity/application/kyc-gate.service';
+import type {
+  AssertCanTransactInput,
+  KycGateService,
+} from '../../identity/application/kyc-gate.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
@@ -52,6 +55,7 @@ import {
   AmountTooSmallError,
   SelfSendError,
 } from '../domain/amount-guard-errors';
+import { InvalidSendAddressError } from '../domain/invalid-send-address.error';
 import {
   BeneficiaryNotFoundError,
   BeneficiaryWrongTypeError,
@@ -97,17 +101,9 @@ function makeKycGate(
 ): jest.Mocked<Pick<KycGateService, 'assertCanTransact'>> {
   const svc = {
     // Fix-C: fiatAmount is now a string (exact NGN decimal).
-    assertCanTransact: jest.fn<
-      Promise<void>,
-      [
-        {
-          userId: string;
-          fiatAmount: string;
-          fiatCurrency: string;
-          asset: string;
-        },
-      ]
-    >(),
+    // Task 1.3: input is typed against the real AssertCanTransactInput (now
+    // requires `capability`) so this mock stays assignable to KycGateService.
+    assertCanTransact: jest.fn<Promise<void>, [AssertCanTransactInput]>(),
   };
   if (throws) {
     svc.assertCanTransact.mockRejectedValue(throws);
@@ -557,6 +553,25 @@ describe('ProposalService.createBuyProposal', () => {
     const callArg = calls[0][0];
     expect(typeof callArg.fiatAmount).toBe('string');
     expect(callArg.fiatAmount).toBe('10000');
+  });
+
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+  // Regression guard: a future edit that swaps the capability literal on this
+  // call site (e.g. leaving a send/sell literal here) must fail the unit
+  // suite, not silently change the effective min-tier gate for buy.
+
+  it('calls KYC gate with capability "crypto.buy"', async () => {
+    const kycGate = makeKycGate();
+    const svc = makeBuySvc(
+      makeQuotesService() as unknown as QuotesService,
+      kycGate as unknown as KycGateService,
+    );
+
+    await svc.createBuyProposal(BASE_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.buy' }),
+    );
   });
 
   // ── Amount-floor guard (findings #2, #3, #6) ─────────────────────────────
@@ -1092,6 +1107,19 @@ describe('ProposalService.createSellProposal', () => {
     expect(sellCallArg.fiatAmount).toBe('7500');
   });
 
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+
+  it('calls KYC gate with capability "crypto.sell"', async () => {
+    const kycGate = makeKycGate();
+    const svc = makeSellSvc({ kycGate });
+
+    await svc.createSellProposal(BASE_SELL_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.sell' }),
+    );
+  });
+
   // ── Amount-floor guard (finding #4) ──────────────────────────────────────
   // A zero/dust sell must be rejected at the boundary with AMOUNT_TOO_SMALL
   // BEFORE quoting / balance check / gate — never let dust reach confirmation.
@@ -1320,7 +1348,10 @@ const BASE_SEND_INPUT = {
     cryptoAmount: '10.0',
     network: 'TRON' as const,
   },
-  beneficiaryId: FIXED_SEND_BENEFICIARY_ID,
+  destination: {
+    kind: 'saved_beneficiary' as const,
+    beneficiaryId: FIXED_SEND_BENEFICIARY_ID,
+  },
 };
 
 describe('ProposalService.createSendProposal', () => {
@@ -1709,6 +1740,19 @@ describe('ProposalService.createSendProposal', () => {
     expect(sendCallArg.fiatAmount).toBe('16000');
   });
 
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+
+  it('calls KYC gate with capability "crypto.send"', async () => {
+    const kycGate = makeKycGate();
+    const svc = makeSendSvc({ kycGate });
+
+    await svc.createSendProposal(BASE_SEND_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.send' }),
+    );
+  });
+
   // ── Fix-2: exact rate scaling — fractional baseRate handled exactly ────────
 
   it('computes NGN-equivalent exactly with a fractional baseRate (no Math.round drift)', async () => {
@@ -1907,6 +1951,135 @@ describe('ProposalService.createSendProposal', () => {
     const svc = makeSendSvc();
     const result = await svc.createSendProposal(BASE_SEND_INPUT);
     expect(result.confirmation.beneficiaryLabel).toBe('My TRON Wallet');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createSendProposal — raw_address destination (send-to-address, Task 2)
+// ---------------------------------------------------------------------------
+
+describe('createSendProposal — raw_address destination', () => {
+  it('creates a proposal to a user-supplied raw address (no beneficiary lookup)', async () => {
+    // assetRegistry.validateAddress → true; ledger balance sufficient; kycGate passes.
+    const beneficiaryService = makeBeneficiaryServiceSend();
+    const svc = makeSendSvc({ beneficiaryService });
+    const out = await svc.createSendProposal({
+      ...BASE_SEND_INPUT,
+      destination: {
+        kind: 'raw_address',
+        address: 'TValidAddr000000000001',
+        network: 'TRON',
+      },
+    });
+    expect(out.confirmation.toAddressMasked).toMatch(/^TValid.*0001$/);
+    expect(out.confirmation.beneficiaryLabel).toBeUndefined();
+    expect(beneficiaryService.getById).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid raw address with InvalidSendAddressError (not a 5xx)', async () => {
+    const svc = makeSendSvc({
+      assetRegistry: makeAssetRegistrySend({ addressValid: false }),
+    });
+    await expect(
+      svc.createSendProposal({
+        ...BASE_SEND_INPUT,
+        destination: {
+          kind: 'raw_address',
+          address: 'not-an-address',
+          network: 'TRON',
+        },
+      }),
+    ).rejects.toBeInstanceOf(InvalidSendAddressError);
+  });
+
+  it('runs the self-send guard on a raw address (own wallet address → SelfSendError)', async () => {
+    const svc = makeSendSvc();
+    await expect(
+      svc.createSendProposal({
+        ...BASE_SEND_INPUT,
+        destination: {
+          kind: 'raw_address',
+          address: STUB_SEND_WALLET_RECORD.address,
+          network: 'TRON',
+        },
+      }),
+    ).rejects.toBeInstanceOf(SelfSendError);
+  });
+
+  it('screens the raw address for sanctions (blocked → SanctionsBlockedError)', async () => {
+    const svc = makeSendSvc({
+      complianceService: makeComplianceService(false),
+    });
+    await expect(
+      svc.createSendProposal({
+        ...BASE_SEND_INPUT,
+        destination: {
+          kind: 'raw_address',
+          address: 'TSanctioned00000000001',
+          network: 'TRON',
+        },
+      }),
+    ).rejects.toBeInstanceOf(SanctionsBlockedError);
+  });
+
+  it('does NOT apply first-use cooling-off to a raw send', async () => {
+    // No beneficiary record → cooling-off cannot even be read; proposal succeeds.
+    const svc = makeSendSvc();
+    const out = await svc.createSendProposal({
+      ...BASE_SEND_INPUT,
+      destination: {
+        kind: 'raw_address',
+        address: 'TValidAddr000000000002',
+        network: 'TRON',
+      },
+    });
+    expect(out.proposalId).toBeDefined();
+  });
+
+  it('persists destinationKind=raw_address + null beneficiaryId + save flag', async () => {
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeSendSvc({ proposalRepo });
+    await svc.createSendProposal({
+      ...BASE_SEND_INPUT,
+      destination: {
+        kind: 'raw_address',
+        address: 'TValidAddr000000000003',
+        network: 'TRON',
+        save: { label: 'Mum' },
+      },
+    });
+    const createArg = (
+      proposalRepo.create as jest.Mock<
+        Promise<{ id: string }>,
+        [CreateProposalData]
+      >
+    ).mock.calls[0][0];
+    expect(createArg.parameters).toMatchObject({
+      destinationKind: 'raw_address',
+      toAddress: 'TValidAddr000000000003',
+      beneficiaryId: null,
+      saveAsBeneficiary: 'true',
+      saveLabel: 'Mum',
+    });
+  });
+});
+
+describe('createSendProposal — saved_beneficiary destination (unchanged behaviour)', () => {
+  it('still resolves the address from the saved beneficiary + applies cooling-off', async () => {
+    const beneficiaryService = makeBeneficiaryServiceSend();
+    const svc = makeSendSvc({ beneficiaryService });
+    const out = await svc.createSendProposal({
+      ...BASE_SEND_INPUT,
+      destination: {
+        kind: 'saved_beneficiary',
+        beneficiaryId: FIXED_SEND_BENEFICIARY_ID,
+      },
+    });
+    expect(beneficiaryService.getById).toHaveBeenCalledWith(
+      'user-id-1',
+      FIXED_SEND_BENEFICIARY_ID,
+    );
+    expect(out.confirmation.beneficiaryLabel).toBeDefined();
   });
 });
 
@@ -2173,6 +2346,19 @@ describe('ProposalService.createSwapProposal', () => {
     await svc.createSwapProposal(BASE_SWAP_INPUT);
 
     expect(callOrder.indexOf('kyc')).toBeLessThan(callOrder.indexOf('create'));
+  });
+
+  // ── Task 1.3: pin the capability literal per call site ────────────────────
+
+  it('calls KYC gate with capability "crypto.swap"', async () => {
+    const kycGate = makeKycGate();
+    const svc = makeSwapSvc({ kycGate });
+
+    await svc.createSwapProposal(BASE_SWAP_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'crypto.swap' }),
+    );
   });
 
   it('calls swap provider getQuote to price the swap', async () => {

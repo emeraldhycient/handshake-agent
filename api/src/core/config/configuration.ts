@@ -8,6 +8,8 @@
  * `sellSpreadBps` / `processingFeeBps` are genuinely admin-tunable and belong
  * in config.
  */
+import type { KycTier } from '@handshake-agent/contracts';
+
 export interface AssetPricing {
   /** Base mid-market rate per 1 unit of the crypto asset, keyed by fiat code. */
   baseRates: Record<string, number>;
@@ -612,6 +614,44 @@ export interface AgentConfig {
   maxToolCallsPerTurn: number;
 }
 
+/**
+ * Capability-gating configuration (Task 1.2, root CLAUDE.md §7). Maps each
+ * transactable capability key (matching the `catalog.capabilities` dotted
+ * leaves, e.g. `crypto.buy`) to the minimum KYC tier required to use it. A
+ * code-default for now — the gate (Task 1.3) reads it through
+ * `EffectiveConfigService`, which serves this default until an operator
+ * registers a DB-admin override (deferred follow-up, not part of this task).
+ */
+export interface GatingConfig {
+  capabilityMinTier: Record<string, KycTier>;
+}
+
+/**
+ * Sumsub (real KYC provider) configuration (Task 3.2, root CLAUDE.md §7).
+ * `mockMode` / `baseUrl` mirror the env values 1:1 (read here, not re-validated —
+ * env.schema.ts is the source of truth for shape/required-ness). `levelToTier`
+ * maps a Sumsub verification LEVEL NAME (configured in the Sumsub dashboard,
+ * env SUMSUB_LEVEL_TIER2 / SUMSUB_LEVEL_TIER3) to our internal KYC tier, so the
+ * webhook handler (later task) can resolve `applicant.reviewResult.levelName` →
+ * tier without a hardcoded string. Built ONLY from level names that are
+ * actually present — an absent level name (e.g. in mock mode, where the local
+ * .env has no SUMSUB_LEVEL_TIER2/3 yet) must not create an `undefined` key.
+ */
+export interface SumsubConfig {
+  mockMode: boolean;
+  baseUrl: string;
+  levelToTier: Record<string, KycTier>;
+}
+
+/**
+ * Onboarding configuration. `webPath` is the web route the WhatsApp KYC CTA
+ * links to (joined onto WEB_APP_BASE_URL) — a token-less onboarding link since
+ * the legacy handoff-token path was retired. A developer default (§7).
+ */
+export interface OnboardingConfig {
+  webPath: string;
+}
+
 export interface AppConfig {
   pricing: PricingConfig;
   limits: LimitsConfig;
@@ -631,6 +671,9 @@ export interface AppConfig {
   ticketing: TicketingConfig;
   treasury: TreasuryConfig;
   agent: AgentConfig;
+  gating: GatingConfig;
+  sumsub: SumsubConfig;
+  onboarding: OnboardingConfig;
 }
 
 /**
@@ -702,6 +745,21 @@ export function validateConfig(cfg: AppConfig): void {
       }
     }
   }
+}
+
+/**
+ * Builds the [levelName, tier] pairs for `sumsub.levelToTier`, dropping any
+ * entry whose env-supplied level name is absent/empty. Kept as a standalone
+ * (widely-typed) helper because inlining the array literal makes TS infer
+ * narrow per-element tuple types that a single type-predicate can't cover
+ * (TS2677) — see configuration.spec.ts "sumsub" tests for the behavior.
+ */
+function buildSumsubLevelToTierEntries(): Array<[string, KycTier]> {
+  const candidates: Array<[string | undefined, KycTier]> = [
+    [process.env['SUMSUB_LEVEL_TIER2'], 'tier_2'],
+    [process.env['SUMSUB_LEVEL_TIER3'], 'tier_3'],
+  ];
+  return candidates.filter((entry): entry is [string, KycTier] => !!entry[0]);
 }
 
 const buildConfig = (): AppConfig => ({
@@ -1151,6 +1209,38 @@ const buildConfig = (): AppConfig => ({
     // Single-node intent-extraction graph today → one pass per turn. Admin-tunable
     // (§7) so a future tool-call loop can raise it without a code change.
     maxToolCallsPerTurn: 1,
+  },
+  // ── Capability gating (Task 1.2, CLAUDE.md §7) ─────────────────────────────
+  // Minimum KYC tier required to use each transactable capability. Keys mirror
+  // the `catalog.capabilities` dotted leaves. Code-default now; the gate
+  // (Task 1.3) reads it through EffectiveConfigService, which falls back to
+  // this default until an operator registers a DB-admin override (deferred
+  // follow-up — NOT part of this task).
+  gating: {
+    capabilityMinTier: {
+      'crypto.buy': 'tier_1',
+      'crypto.receive': 'tier_1',
+      'crypto.sell': 'tier_2',
+      'crypto.send': 'tier_2',
+      'crypto.swap': 'tier_2',
+    },
+  },
+  // ── Sumsub (real KYC provider, Task 3.2, CLAUDE.md §7) ──────────────────────
+  // mockMode / baseUrl mirror env 1:1 (env-derived pattern, like
+  // catalog.networks.TRON.masterWalletId / agent.modelId above). levelToTier is
+  // built ONLY from level names that are actually set — filtering out undefined
+  // means an absent SUMSUB_LEVEL_TIER2/3 (e.g. the current local .env, which
+  // predates the level names) never produces an `undefined` map key.
+  sumsub: {
+    mockMode: (process.env['KYC_MOCK_MODE'] ?? 'true') !== 'false',
+    baseUrl: process.env['SUMSUB_BASE_URL'] ?? 'https://api.sumsub.com',
+    levelToTier: Object.fromEntries(buildSumsubLevelToTierEntries()),
+  },
+  // ── Onboarding (CLAUDE.md §7) ──────────────────────────────────────────────
+  // The WhatsApp KYC CTA links here (joined onto WEB_APP_BASE_URL) — a token-less
+  // onboarding link; the FE serves this route (OnboardingWizard at /get-started).
+  onboarding: {
+    webPath: '/get-started',
   },
 });
 

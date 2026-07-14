@@ -75,6 +75,15 @@ describe("LoginForm", () => {
     ).toBeInTheDocument()
   })
 
+  it("step 1: renders the onboarding-styled step header (shell parity)", () => {
+    renderForm()
+
+    expect(
+      screen.getByRole("heading", { name: /welcome back/i })
+    ).toBeInTheDocument()
+    expect(screen.getByText(/^log in$/i)).toBeInTheDocument()
+  })
+
   it("step 1: blocks submit on invalid email and does not call mutation", async () => {
     const user = userEvent.setup()
     renderForm()
@@ -186,7 +195,7 @@ describe("LoginForm", () => {
     })
   })
 
-  it("step 2: success navigates to '/onboarding' when kycStatus is not 'verified'", async () => {
+  it("step 2: success navigates to '/get-started' when the user has no PIN (mid-onboarding)", async () => {
     const user = userEvent.setup()
     mockLoginRequest.mockResolvedValueOnce({ status: "otp_sent" })
     mockLoginVerify.mockResolvedValueOnce({
@@ -196,7 +205,7 @@ describe("LoginForm", () => {
         userId: "11111111-1111-1111-1111-111111111111",
         email: VALID_EMAIL,
         kycStatus: "none",
-        kycTier: "0",
+        kycTier: "unverified",
         hasPin: false,
       },
     })
@@ -226,11 +235,11 @@ describe("LoginForm", () => {
     )
 
     await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith("/onboarding")
+      expect(mockPush).toHaveBeenCalledWith("/get-started")
     })
   })
 
-  it("step 2: success navigates to '/' when user is already verified", async () => {
+  it("step 2: success navigates to '/' for a tier_1 user with a PIN (onboarding complete)", async () => {
     const user = userEvent.setup()
     mockLoginRequest.mockResolvedValueOnce({ status: "otp_sent" })
     mockLoginVerify.mockResolvedValueOnce({
@@ -239,8 +248,10 @@ describe("LoginForm", () => {
       user: {
         userId: "11111111-1111-1111-1111-111111111111",
         email: VALID_EMAIL,
-        kycStatus: "verified",
-        kycTier: "1",
+        // Email-verified tier_1 (not "verified") with a PIN — the loop-fix case:
+        // hasPin means onboarding is done, so land in the app, not the wizard.
+        kycStatus: "not_started",
+        kycTier: "tier_1",
         hasPin: true,
       },
     })

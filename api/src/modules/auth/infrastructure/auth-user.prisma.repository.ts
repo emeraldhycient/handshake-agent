@@ -1,6 +1,14 @@
 import { Injectable } from '@nestjs/common';
 
+// The generated Prisma client is the ONLY sanctioned DB door (CLAUDE.md §3.2).
+// This is the infrastructure layer — the only place it is allowed.
+import {
+  KycTier,
+  Prisma,
+  UserStatus,
+} from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
+import { DeviceAlreadyBoundError } from '../domain/auth-errors';
 import type {
   AuthUserRecord,
   IAuthUserRepository,
@@ -17,10 +25,14 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
 
   async createSignup(input: {
     email: string;
-    phone: string;
+    phone?: string;
   }): Promise<{ userId: string; created: boolean }> {
     const email = input.email.trim().toLowerCase();
-    const phone = normalizePhone(input.phone.trim());
+    const trimmedPhone = input.phone?.trim();
+    const phone =
+      trimmedPhone && trimmedPhone.length > 0
+        ? normalizePhone(trimmedPhone)
+        : null;
 
     const existing = await this.prisma.user.findUnique({
       where: { email },
@@ -34,22 +46,30 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
         select: { id: true },
       });
 
-      // Pending WhatsApp ChannelIdentity = the later-link hook (§3.4). Skip if
-      // the phone already has an active WhatsApp CI (avoid hijack / unique clash).
-      const existingCi = await tx.channelIdentity.findFirst({
-        where: { channel: 'whatsapp', channelAddress: phone, deletedAt: null },
-        select: { id: true },
-      });
-      if (existingCi === null) {
-        await tx.channelIdentity.create({
-          data: {
+      // Email-only signup (no phone) creates no ChannelIdentity at all.
+      if (phone !== null) {
+        // Pending WhatsApp ChannelIdentity = the later-link hook (§3.4). Skip if
+        // the phone already has an active WhatsApp CI (avoid hijack / unique
+        // clash).
+        const existingCi = await tx.channelIdentity.findFirst({
+          where: {
             channel: 'whatsapp',
             channelAddress: phone,
-            normalizedPhone: phone,
-            userId: user.id,
-            verificationStatus: 'pending',
+            deletedAt: null,
           },
+          select: { id: true },
         });
+        if (existingCi === null) {
+          await tx.channelIdentity.create({
+            data: {
+              channel: 'whatsapp',
+              channelAddress: phone,
+              normalizedPhone: phone,
+              userId: user.id,
+              verificationStatus: 'pending',
+            },
+          });
+        }
       }
 
       return { userId: user.id, created: true };
@@ -80,9 +100,47 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
   }
 
   async markEmailVerified(userId: string, now: Date): Promise<void> {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { emailVerifiedAt: now },
+    // Both writes run in one interactive transaction (same shape as
+    // createSignup above): if the process crashes or the DB errors between
+    // them, a non-transactional pair could leave a user with emailVerifiedAt
+    // set but still `unverified` — and since resendEmailVerification only
+    // re-issues a token when emailVerifiedAt is null, that user would be
+    // permanently stuck below tier_1 with no way to retrigger the grant.
+    // $transaction makes the pair all-or-nothing.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: { emailVerifiedAt: now },
+      });
+
+      // Task 2.1 (onboarding redesign): an email-verified account may transact
+      // tier_1 capabilities (buy/receive) immediately — KycGateService already
+      // admits tier_1 regardless of kycStatus (§3.3). Guarded promotion, NOT an
+      // unconditional write: the `where` clause is evaluated atomically by
+      // Postgres, so this only ever fires for a fresh, PROVISIONAL, `unverified`
+      // user. A user already at tier_1/2/3 re-hitting verify (e.g. a stale/
+      // resent link) matches zero rows here — no downgrade, and no tierChangedAt
+      // re-stamp, which would wrongly restart the tier-change cooling-off window.
+      //
+      // `status: provisional` in the guard is a security control (not just no-
+      // downgrade): fresh signups are created `provisional` (see createSignup),
+      // so scoping the `status: active` promotion to `provisional` means an
+      // operator-suspended/deactivated account that is still `unverified` can
+      // NEVER be silently reactivated as a side effect of completing email
+      // verification — the promotion simply matches zero rows and the suspension
+      // stands. Same guarded-updateMany shape as the pinnedDeviceId guard below.
+      await tx.user.updateMany({
+        where: {
+          id: userId,
+          kycTier: KycTier.unverified,
+          status: UserStatus.provisional,
+        },
+        data: {
+          kycTier: KycTier.tier_1,
+          status: UserStatus.active,
+          tierChangedAt: now,
+        },
+      });
     });
   }
 
@@ -109,10 +167,25 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
     });
 
     // Pin on first bind (User.pinnedDeviceId is unique; only set when null).
-    await this.prisma.user.updateMany({
-      where: { id: input.userId, pinnedDeviceId: null },
-      data: { pinnedDeviceId: device.id },
-    });
+    // The `pinnedDeviceId: null` guard means this only fires when the user has no
+    // pinned device — but the device itself may already be pinned to ANOTHER user
+    // (a shared/re-used browser, §3.4 one-device-per-identity). That trips the
+    // unique constraint (P2002); map it to a clean domain error so the caller can
+    // return a 409 instead of leaking a raw Prisma error as an opaque 500.
+    try {
+      await this.prisma.user.updateMany({
+        where: { id: input.userId, pinnedDeviceId: null },
+        data: { pinnedDeviceId: device.id },
+      });
+    } catch (err: unknown) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new DeviceAlreadyBoundError();
+      }
+      throw err;
+    }
 
     return { deviceId: device.id };
   }
@@ -123,6 +196,7 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
       select: {
         id: true,
         email: true,
+        emailVerifiedAt: true,
         kycStatus: true,
         kycTier: true,
         pinHash: true,
@@ -141,6 +215,7 @@ export class AuthUserPrismaRepository implements IAuthUserRepository {
       kycStatus: row.kycStatus,
       kycTier: row.kycTier,
       hasPin: row.pinHash !== null,
+      emailVerified: row.emailVerifiedAt !== null,
       firstName: row.kycProfile?.firstName ?? null,
       lastName: row.kycProfile?.lastName ?? null,
     };

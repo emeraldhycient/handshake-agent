@@ -1,6 +1,8 @@
 /**
- * Unit tests for PinSetupService — set a transaction PIN on an already-verified
- * user who has no PIN yet (verified-but-PIN-less recovery).
+ * Unit tests for PinSetupService — set a transaction PIN on a tier_1-or-above
+ * (email-verified) user who has no PIN yet. Covers both the pre-KYC
+ * onboarding-wizard path (tier_1, kycStatus not yet 'verified') and the
+ * already-fully-verified recovery path.
  *
  * TDD: tests written RED first. PinService + IIdentityRepository are mocked;
  * the service is constructed directly (no Nest TestingModule).
@@ -24,7 +26,9 @@ function makeUser(overrides: Partial<UserRecord> = {}): UserRecord {
   return {
     id: USER_ID,
     status: 'active',
-    kycStatus: 'verified',
+    // Realistic default: email-verified (tier_1) but full KYC not yet done —
+    // the onboarding-wizard scenario this service exists to unblock.
+    kycStatus: 'not_started',
     kycTier: 'tier_1',
     simSwapDetectedAt: null,
     tierChangedAt: null,
@@ -50,7 +54,7 @@ function makeIdentityRepo(
 }
 
 describe('PinSetupService.setTransactionPin', () => {
-  it('sets the PIN for a verified, PIN-less user and returns hasPin:true', async () => {
+  it('sets the PIN for a tier_1 (email-verified), PIN-less user pre-KYC and returns hasPin:true', async () => {
     const pinService = makePinService(false);
     const identityRepo = makeIdentityRepo(makeUser());
     const svc = new PinSetupService(pinService, identityRepo as never);
@@ -61,11 +65,22 @@ describe('PinSetupService.setTransactionPin', () => {
     expect(result).toEqual({ hasPin: true });
   });
 
-  it('throws PinSetupNotVerifiedError when the user is not verified', async () => {
+  it('sets the PIN for a fully KYC-verified (tier_2+) PIN-less user too', async () => {
     const pinService = makePinService(false);
     const identityRepo = makeIdentityRepo(
-      makeUser({ kycStatus: 'not_started' }),
+      makeUser({ kycStatus: 'verified', kycTier: 'tier_2' }),
     );
+    const svc = new PinSetupService(pinService, identityRepo as never);
+
+    const result = await svc.setTransactionPin(USER_ID, STRONG_PIN);
+
+    expect(pinService.setPin).toHaveBeenCalledWith(USER_ID, STRONG_PIN);
+    expect(result).toEqual({ hasPin: true });
+  });
+
+  it('throws PinSetupNotVerifiedError when the user is below tier_1 (unverified)', async () => {
+    const pinService = makePinService(false);
+    const identityRepo = makeIdentityRepo(makeUser({ kycTier: 'unverified' }));
     const svc = new PinSetupService(pinService, identityRepo as never);
 
     await expect(
@@ -85,7 +100,7 @@ describe('PinSetupService.setTransactionPin', () => {
     expect(pinService.setPin).not.toHaveBeenCalled();
   });
 
-  it('throws PinAlreadySetError when a PIN already exists (never overwrites)', async () => {
+  it('throws PinAlreadySetError when a tier_1 user already has a PIN (never overwrites)', async () => {
     const pinService = makePinService(true);
     const identityRepo = makeIdentityRepo(makeUser());
     const svc = new PinSetupService(pinService, identityRepo as never);
@@ -96,17 +111,15 @@ describe('PinSetupService.setTransactionPin', () => {
     expect(pinService.setPin).not.toHaveBeenCalled();
   });
 
-  it('checks verification BEFORE checking for an existing PIN', async () => {
+  it('checks tier BEFORE checking for an existing PIN', async () => {
     const pinService = makePinService(true);
-    const identityRepo = makeIdentityRepo(
-      makeUser({ kycStatus: 'not_started' }),
-    );
+    const identityRepo = makeIdentityRepo(makeUser({ kycTier: 'unverified' }));
     const svc = new PinSetupService(pinService, identityRepo as never);
 
     await expect(
       svc.setTransactionPin(USER_ID, STRONG_PIN),
     ).rejects.toBeInstanceOf(PinSetupNotVerifiedError);
-    // hasPin must not even be consulted when the user is unverified.
+    // hasPin must not even be consulted when the user is below tier_1.
     expect(pinService.hasPin).not.toHaveBeenCalled();
   });
 });

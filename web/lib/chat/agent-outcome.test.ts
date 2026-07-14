@@ -183,7 +183,20 @@ describe("mapOutcomeToMessages", () => {
     }
     const { messages, proposalId } = mapOutcomeToMessages(outcome, makeIder())
     expect(proposalId).toBe("22222222-2222-2222-2222-222222222222")
-    expect(messages[0]).toMatchObject({ kind: "quote", action: "sell" })
+    // Every fiat field renders through formatFiat — the ₦ symbol + grouped
+    // thousands, never the raw ISO code (mirrors the buy branch).
+    expect(messages[0]).toMatchObject({
+      kind: "quote",
+      action: "sell",
+      receiveAmt: "₦15,800.00",
+      rows: [
+        { label: "You sell", value: "10 USDT" },
+        { label: "Rate", value: "1 USDT = ₦1,600.00" },
+        { label: "Fee", value: "₦100.00" },
+      ],
+      totalLabel: "Net payout",
+      totalValue: "₦15,800.00",
+    })
   })
 
   it("maps a send proposal to a quote card", () => {
@@ -246,6 +259,33 @@ describe("mapOutcomeToMessages", () => {
     expect((msg as Record<string, unknown>)["spreadBps"]).toBeUndefined()
   })
 
+  it("maps a balance snapshot to a formatted balance card (₦ symbol + grouping, never the ISO code)", () => {
+    const outcome: AgentTurnOutcome = {
+      kind: "balance",
+      fiatCurrency: "NGN",
+      totalFiatValue: "63972.88",
+      balances: [
+        {
+          asset: "USDT",
+          network: "TRON",
+          amount: "47.245072",
+          fiatValue: "63972.88",
+        },
+        // An unpriced asset (no fiatValue) must render an em-dash, not "NGN ".
+        { asset: "TRX", network: "TRON", amount: "2005.5" },
+      ],
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    expect(messages[0]).toMatchObject({
+      kind: "balance",
+      total: "≈ ₦63,972.88",
+      assets: [
+        { sym: "USDT", amount: "47.245072 USDT", value: "₦63,972.88" },
+        { sym: "TRX", amount: "2005.5 TRX", value: "—" },
+      ],
+    })
+  })
+
   it("maps needs_kyc to a verification text", () => {
     const { messages } = mapOutcomeToMessages({ kind: "needs_kyc" }, makeIder())
     expect(messages[0].kind).toBe("text")
@@ -301,6 +341,39 @@ describe("mapOutcomeToMessages", () => {
       beneficiaryType: "bank_account",
       note,
     })
+  })
+
+  it("passes prefillAddress + allowRawSend through for a raw-send-eligible crypto outcome", () => {
+    // A crypto send with an edge-parsed address in the user's message and no
+    // saved beneficiary: the server marks the card raw-send-eligible so the
+    // web UI can offer a send-to-address path alongside the saved list.
+    const outcome: AgentTurnOutcome = {
+      kind: "needs_beneficiary",
+      beneficiaryType: "crypto_address",
+      prefillAddress: "TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE",
+      allowRawSend: true,
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      kind: "needs_beneficiary",
+      beneficiaryType: "crypto_address",
+      prefillAddress: "TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE",
+      allowRawSend: true,
+    })
+  })
+
+  it("omits prefillAddress/allowRawSend when the outcome doesn't carry them (backwards compatible)", () => {
+    const { messages } = mapOutcomeToMessages(
+      { kind: "needs_beneficiary", beneficiaryType: "bank_account" },
+      makeIder()
+    )
+    expect(messages[0]).toMatchObject({ kind: "needs_beneficiary" })
+    if (messages[0].kind === "needs_beneficiary") {
+      expect(messages[0].prefillAddress).toBeUndefined()
+      expect(messages[0].allowRawSend).toBeUndefined()
+    }
   })
 
   it("maps choose_beneficiary to a picker card carrying nickname + candidates", () => {

@@ -6,6 +6,7 @@ import {
 import { PinLockedError } from '../../../core/auth/domain/pin-errors';
 import {
   FiatCurrencyNotEnabledError,
+  NameChangeNotAllowedError,
   ProfileSessionNotFoundError,
 } from '../domain/profile-errors';
 import type { ProfileService } from '../application/profile.service';
@@ -29,6 +30,8 @@ const PROFILE = {
   limits: null,
 };
 
+const NAME = { firstName: 'Amara', lastName: 'Okeke' };
+
 function makeController(
   settingsOverrides: Partial<ProfileSettingsService> = {},
 ) {
@@ -36,6 +39,7 @@ function makeController(
   const settings = {
     changePin: jest.fn(),
     updateProfile: jest.fn().mockResolvedValue(PROFILE),
+    setName: jest.fn().mockResolvedValue(NAME),
     listSessions: jest.fn().mockResolvedValue({ sessions: [] }),
     revokeSession: jest.fn(),
     ...settingsOverrides,
@@ -94,6 +98,24 @@ describe('ProfileController.update (PATCH /profile)', () => {
     await expect(
       controller.update({ fiatCurrency: 'XOF' }, CURRENT_USER),
     ).rejects.toBeInstanceOf(UnprocessableEntityException);
+  });
+});
+
+describe('ProfileController.setName (POST /profile/name)', () => {
+  it('delegates to the settings service for the CURRENT user and returns the persisted names', async () => {
+    const { controller, settings } = makeController();
+    const out = await controller.setName(NAME, CURRENT_USER);
+    expect(out).toEqual(NAME);
+    expect(settings.setName).toHaveBeenCalledWith('u1', NAME);
+  });
+
+  it('lets NameChangeNotAllowedError bubble to the global filter unchanged (409, no local catch)', async () => {
+    const { controller } = makeController({
+      setName: jest.fn().mockRejectedValue(new NameChangeNotAllowedError()),
+    });
+    await expect(controller.setName(NAME, CURRENT_USER)).rejects.toBeInstanceOf(
+      NameChangeNotAllowedError,
+    );
   });
 });
 

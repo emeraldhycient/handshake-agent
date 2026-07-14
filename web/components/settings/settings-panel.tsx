@@ -10,6 +10,7 @@ import { tierLabel } from "@/lib/format/tier"
 import { cn } from "@/lib/utils"
 import type { SettingsPanelProps } from "@/types"
 import { ProfileSection } from "./profile-section"
+import { VerificationSection } from "./VerificationSection"
 import { SecuritySection } from "./security-section"
 import { McpSection } from "./mcp-section"
 
@@ -48,6 +49,7 @@ export function SettingsPanel({
       </h1>
 
       <ProfileSection />
+      <VerificationSection />
       <SecuritySection />
       <McpSection />
 

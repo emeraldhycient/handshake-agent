@@ -37,6 +37,7 @@ import {
   AmountTooSmallError,
   SelfSendError,
 } from '../../transactions/domain/amount-guard-errors';
+import { InvalidSendAddressError } from '../../transactions/domain/invalid-send-address.error';
 import {
   BeneficiaryCoolingOffError,
   BeneficiaryWrongTypeError,
@@ -82,7 +83,6 @@ import type { TransactionHistoryService } from '../../transactions/application/t
 import type { WalletService } from '../../wallets/application/wallet.service';
 import type { WalletRecord } from '../../wallets/application/ports/wallet.repository.port';
 import type { AssetRegistry } from '../../../core/catalog/asset-registry';
-import type { HandoffTokenService } from '../../identity/application/handoff-token.service';
 import type { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import type { BeneficiaryRecord } from '../../beneficiaries/application/ports/beneficiary.repository.port';
 import type { BalanceService } from '../../balances/application/balance.service';
@@ -452,14 +452,24 @@ function makeReplyRepo(
 }
 
 function makeConfigService(
-  overrides: { flowId?: string; signingKey?: string } = {},
+  overrides: {
+    flowId?: string;
+    signingKey?: string;
+    webAppBaseUrl?: string;
+  } = {},
 ): jest.Mocked<ConfigService> {
   const flowId = overrides.flowId ?? '';
   const signingKey = overrides.signingKey ?? '';
+  // Default to a configured base URL so the KYC handoff sends a token-less CTA
+  // to `${WEB_APP_BASE_URL}${onboarding.webPath}`; pass '' to exercise the
+  // plain-text fallback for an unconfigured base URL.
+  const webAppBaseUrl = overrides.webAppBaseUrl ?? 'https://app.example.com';
   return {
     get: jest.fn((key: string) => {
       if (key === 'WHATSAPP_FLOW_ID') return flowId;
       if (key === 'DIRECTIVE_SIGNING_KEY') return signingKey;
+      if (key === 'WEB_APP_BASE_URL') return webAppBaseUrl;
+      if (key === 'onboarding.webPath') return '/get-started';
       return undefined;
     }),
   } as unknown as jest.Mocked<ConfigService>;
@@ -509,24 +519,6 @@ function makeBalanceService(
   },
 ): { getBalances: jest.Mock } {
   return { getBalances: jest.fn().mockResolvedValue(snapshot) };
-}
-
-function makeHandoffTokenService(
-  mintOutput: { token: string; url: string } | Error = {
-    token: 'raw-token-hex',
-    url: 'https://app.example.com/kyc?t=raw-token-hex',
-  },
-): jest.Mocked<Pick<HandoffTokenService, 'mintKycToken' | 'consumeKycToken'>> {
-  const svc = {
-    mintKycToken: jest.fn(),
-    consumeKycToken: jest.fn(),
-  };
-  if (mintOutput instanceof Error) {
-    svc.mintKycToken.mockRejectedValue(mintOutput);
-  } else {
-    svc.mintKycToken.mockResolvedValue(mintOutput);
-  }
-  return svc;
 }
 
 /**
@@ -607,9 +599,6 @@ function buildService(
       Pick<WalletService, 'getOrProvisionNetworkWallet'>
     >;
     assetRegistry?: jest.Mocked<AssetRegistry>;
-    handoffTokenService?: jest.Mocked<
-      Pick<HandoffTokenService, 'mintKycToken' | 'consumeKycToken'>
-    >;
     beneficiaryService?: jest.Mocked<
       Pick<
         BeneficiaryService,
@@ -636,8 +625,6 @@ function buildService(
   const directiveService = overrides.directiveService ?? makeDirectiveService();
   const walletService = overrides.walletService ?? makeWalletService();
   const assetRegistry = overrides.assetRegistry ?? makeAssetRegistry();
-  const handoffTokenService =
-    overrides.handoffTokenService ?? makeHandoffTokenService();
   const beneficiaryService =
     overrides.beneficiaryService ?? makeBeneficiaryService();
   const historyService = overrides.historyService ?? makeHistoryService();
@@ -657,7 +644,6 @@ function buildService(
     directiveService as unknown as DirectiveService,
     walletService as unknown as WalletService,
     assetRegistry,
-    handoffTokenService as unknown as HandoffTokenService,
     beneficiaryService as unknown as BeneficiaryService,
     historyService as unknown as TransactionHistoryService,
     balanceService as unknown as BalanceService,
@@ -677,7 +663,6 @@ function buildService(
     directiveService,
     walletService,
     assetRegistry,
-    handoffTokenService,
     beneficiaryService,
     historyService,
     balanceService,
@@ -904,7 +889,7 @@ describe('ConversationService.handleInbound', () => {
 
   // ── Contact (unlinked) + buy_crypto → KYC CTA handoff ───────────────────
 
-  it('contact (unlinked) + buy_crypto → calls mintKycToken + sendCtaUrl, does NOT call proposalService', async () => {
+  it('contact (unlinked) + buy_crypto → sends a token-less onboarding CTA, does NOT call proposalService', async () => {
     const identityService = makeIdentityService({
       resolveByChannel: jest.fn().mockResolvedValue({
         kind: 'contact',
@@ -926,12 +911,10 @@ describe('ConversationService.handleInbound', () => {
       contactId: 'contact-id-1',
     });
     const proposalService = makeProposalService();
-    const handoffTokenService = makeHandoffTokenService();
     const { svc, sender } = buildService({
       identityService,
       convRepo,
       proposalService,
-      handoffTokenService,
     });
 
     await svc.handleInbound(baseMsg());
@@ -946,7 +929,9 @@ describe('ConversationService.handleInbound', () => {
       >
     ).mock.calls[0];
     expect(ctaArg.to).toBe(FIXED_FROM);
-    expect(ctaArg.url).toContain('kyc');
+    // Token-less onboarding URL: `${WEB_APP_BASE_URL}${onboarding.webPath}`.
+    expect(ctaArg.url).toBe('https://app.example.com/get-started');
+    expect(ctaArg.url).not.toContain('t=');
     expect(ctaArg.buttonText).toBeTruthy();
     // Reply summary text sent via sendText
     const sentText = captureFirstSentText(sender);
@@ -975,22 +960,18 @@ describe('ConversationService.handleInbound', () => {
       contactId: 'contact-id-1',
     });
     const proposalService = makeProposalService();
-    // Simulate WEB_APP_BASE_URL not set: mintKycToken returns empty url
-    const handoffTokenService = makeHandoffTokenService({
-      token: 'raw-token',
-      url: '', // empty → triggers text fallback
-    });
     const { svc, sender } = buildService({
       identityService,
       convRepo,
       proposalService,
-      handoffTokenService,
+      // WEB_APP_BASE_URL unset → onboardingUrl() returns '' → text fallback.
+      configService: makeConfigService({ webAppBaseUrl: '' }),
     });
 
     await svc.handleInbound(baseMsg());
 
     expect(proposalService.createBuyProposal).not.toHaveBeenCalled();
-    // sendCtaUrl NOT called since url is empty
+    // sendCtaUrl NOT called since no base URL is configured
     expect(sender.sendCtaUrl).not.toHaveBeenCalled();
     // Plain text fallback sent
     const sentText = captureFirstSentText(sender);
@@ -1483,7 +1464,7 @@ describe('ConversationService.handleInbound', () => {
 
   // ── receive_crypto: unlinked contact → KYC CTA handoff ──────────────────
 
-  it('contact (unlinked) + receive_crypto → mintKycToken + sendCtaUrl, walletService NOT called', async () => {
+  it('contact (unlinked) + receive_crypto → onboarding CTA sent, walletService NOT called', async () => {
     const identityService = makeIdentityService({
       resolveByChannel: jest.fn().mockResolvedValue({
         kind: 'contact',
@@ -1506,14 +1487,12 @@ describe('ConversationService.handleInbound', () => {
 
     const agentPort = makeAgentPort({ action: 'receive_crypto' });
     const walletService = makeWalletService();
-    const handoffTokenService = makeHandoffTokenService();
 
     const { svc, sender } = buildService({
       identityService,
       convRepo,
       agentPort,
       walletService,
-      handoffTokenService,
     });
 
     await svc.handleInbound(baseMsg());
@@ -1969,7 +1948,7 @@ describe('ConversationService.handleInbound', () => {
     expect(proposalService.createSendProposal).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'user-id-1',
-        beneficiaryId: cryptoBen.id,
+        destination: { kind: 'saved_beneficiary', beneficiaryId: cryptoBen.id },
       }),
     );
 
@@ -2140,7 +2119,12 @@ describe('ConversationService.handleInbound', () => {
         'mum',
       );
       expect(proposalService.createSendProposal).toHaveBeenCalledWith(
-        expect.objectContaining({ beneficiaryId: 'ben-crypto-mum-1' }),
+        expect.objectContaining({
+          destination: {
+            kind: 'saved_beneficiary',
+            beneficiaryId: 'ben-crypto-mum-1',
+          },
+        }),
       );
       expect(beneficiaryService.getDefault).not.toHaveBeenCalled();
       expect(sender.sendBeneficiaryFlow).not.toHaveBeenCalled();
@@ -2327,7 +2311,12 @@ describe('ConversationService.handleInbound', () => {
         'crypto_address',
       );
       expect(proposalService.createSendProposal).toHaveBeenCalledWith(
-        expect.objectContaining({ beneficiaryId: cryptoBen.id }),
+        expect.objectContaining({
+          destination: {
+            kind: 'saved_beneficiary',
+            beneficiaryId: cryptoBen.id,
+          },
+        }),
       );
     });
   });
@@ -2409,6 +2398,10 @@ describe('ConversationService.handleInbound', () => {
         new AmountTooSmallError('send', '0.1', '1', 'USDT'),
       ],
       ['SelfSendError', new SelfSendError()],
+      [
+        'InvalidSendAddressError',
+        new InvalidSendAddressError('bad-address', 'TRON'),
+      ],
     ])(
       'send_crypto createSendProposal throws %s → clarification text, message not failed',
       async (_label, err: Error) => {
@@ -2702,13 +2695,11 @@ describe('ConversationService.handleInbound', () => {
     });
 
     const beneficiaryService = makeBeneficiaryService();
-    const handoffTokenService = makeHandoffTokenService();
 
     const { svc, sender } = buildService({
       identityService,
       convRepo,
       beneficiaryService,
-      handoffTokenService,
     });
 
     await svc.handleInbound(

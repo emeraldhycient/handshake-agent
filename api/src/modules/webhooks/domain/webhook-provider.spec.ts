@@ -7,11 +7,12 @@ import {
 
 describe('webhook domain helpers', () => {
   describe('constants', () => {
-    it('lists the three providers', () => {
+    it('lists the four providers', () => {
       expect(WEBHOOK_PROVIDERS).toEqual([
         'blockradar',
         'flutterwave',
         'whatsapp',
+        'sumsub',
       ]);
     });
 
@@ -75,6 +76,17 @@ describe('webhook domain helpers', () => {
         expected,
       );
       expect(deriveWebhookEventId('whatsapp', {}, raw)).toBe(expected);
+    });
+
+    it('sumsub always falls back to sha256(rawBody) — the payload carries no natural cross-event id', () => {
+      const expected = sha256Hex(raw);
+      expect(
+        deriveWebhookEventId(
+          'sumsub',
+          { type: 'applicantReviewed', externalUserId: 'user-1' },
+          raw,
+        ),
+      ).toBe(expected);
     });
 
     it('accepts a Buffer rawBody for the fallback', () => {
