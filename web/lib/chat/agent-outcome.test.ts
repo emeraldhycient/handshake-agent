@@ -230,7 +230,7 @@ describe("mapOutcomeToMessages", () => {
     })
   })
 
-  it("maps an internal-transfer send proposal to a quote card showing the recipient name + @handle and an instant/no-fee row (never a masked address or a '0 USDT' fee line)", () => {
+  it("maps an internal-transfer send proposal to a quote card showing the recipient name + @handle (single '@', never '@@') and an instant/no-fee row (never a masked address or a '0 USDT' fee line)", () => {
     const outcome: AgentTurnOutcome = {
       kind: "proposal",
       txType: "send",
@@ -243,7 +243,11 @@ describe("mapOutcomeToMessages", () => {
         networkFeeCrypto: "0",
         totalDebit: "10",
         recipientDisplayName: "Ada T.",
-        recipientHandle: "adat",
+        // The resolver's displayHandle already carries the '@' sigil
+        // (recipientHandle: destination.displayHandle === '@' + hit.handle,
+        // per proposal.service.ts) — this is the real shape sent over the
+        // wire, not a bare handle.
+        recipientHandle: "@adat",
         instant: true,
         expiresAt: new Date(Date.now() + 60000).toISOString(),
       },
@@ -264,6 +268,31 @@ describe("mapOutcomeToMessages", () => {
       (r) => r.label === "Network fee"
     )
     expect(row).toBeUndefined()
+  })
+
+  it("normalizes a bare recipientHandle (no leading '@') to exactly one '@', proving the fix is idempotent either way", () => {
+    const outcome: AgentTurnOutcome = {
+      kind: "proposal",
+      txType: "send",
+      proposalId: "66666666-6666-6666-6666-666666666666",
+      confirmation: {
+        proposalId: "66666666-6666-6666-6666-666666666666",
+        asset: "USDT",
+        cryptoAmount: "10",
+        network: "TRON",
+        networkFeeCrypto: "0",
+        totalDebit: "10",
+        recipientDisplayName: "Ada T.",
+        recipientHandle: "adat",
+        instant: true,
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+      },
+    }
+    const { messages } = mapOutcomeToMessages(outcome, makeIder())
+    const toRow = (
+      messages[0] as { rows: Array<{ label: string; value: string }> }
+    ).rows.find((r) => r.label === "To")
+    expect(toRow?.value).toBe("Ada T. · @adat")
   })
 
   it("maps a swap proposal to a swap card message and returns its proposalId", () => {

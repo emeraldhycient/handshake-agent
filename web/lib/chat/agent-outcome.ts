@@ -166,7 +166,12 @@ export function mapOutcomeToMessages(
 
         if (isInternalTransfer) {
           const name = sn.recipientDisplayName
-          const handle = sn.recipientHandle ? `@${sn.recipientHandle}` : ""
+          // recipientHandle already carries the '@' sigil from the resolver
+          // (displayHandle: '@' + handle, threaded through the proposal
+          // confirmation) — normalize to exactly one leading '@' rather than
+          // blindly prepending, which produced a literal "@@handle".
+          const raw = sn.recipientHandle
+          const handle = raw ? (raw.startsWith("@") ? raw : `@${raw}`) : ""
           rows.push({
             label: "To",
             value: [name, handle].filter(Boolean).join(" · "),

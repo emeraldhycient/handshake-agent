@@ -58,6 +58,12 @@ export class ProfileService {
       kycTier: me.kycTier,
       fiatCurrency: fiatCurrency,
       limits,
+      // me.payId already carries the claimed PayId (loadMe selects it, and
+      // MeResponse.payId was wired in Task 3) — ProfileResponse just never
+      // surfaced it, so /profile always showed "Not yet claimed" even for a
+      // user who had one. `?? undefined` coerces the nullable auth
+      // projection to the ProfileResponse.payId's optional-string shape.
+      payId: me.payId ?? undefined,
     };
   }
 
