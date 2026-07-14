@@ -1527,13 +1527,25 @@ export class ConversationService implements IInboundHandler {
     network: string;
     networkFeeCrypto: string;
     totalDebit: string;
-    toAddressMasked: string;
+    // Optional: an on-chain send masks its address; an internal (PayID) transfer
+    // has none and is legible via recipientDisplayName/recipientHandle instead.
+    toAddressMasked?: string;
+    recipientDisplayName?: string;
+    recipientHandle?: string;
     expiresAt: string;
     beneficiaryLabel?: string;
   }): string {
     const assetMeta = this.assetRegistry.asset(c.asset);
     const networkMeta = this.assetRegistry.network(c.network);
     const destLabel = c.beneficiaryLabel ? ` (${c.beneficiaryLabel})` : '';
+    // Prefer the masked address (on-chain send); fall back to the PayID handle /
+    // display name for an internal transfer, which carries no address.
+    const destValue =
+      c.toAddressMasked ??
+      c.recipientHandle ??
+      c.recipientDisplayName ??
+      c.beneficiaryLabel ??
+      '';
     return (
       `Here is your send summary:\n` +
       `Asset: ${assetMeta.displayName}\n` +
@@ -1541,7 +1553,7 @@ export class ConversationService implements IInboundHandler {
       `You send: ${this.assetRegistry.formatCrypto(c.asset, c.cryptoAmount)}\n` +
       `Network fee: ${this.assetRegistry.formatCrypto(c.asset, c.networkFeeCrypto)}\n` +
       `Total debit: ${this.assetRegistry.formatCrypto(c.asset, c.totalDebit)}\n` +
-      `To${destLabel}: ${c.toAddressMasked}\n` +
+      `To${destLabel}: ${destValue}\n` +
       `Expires at: ${c.expiresAt}\n` +
       `Reply CONFIRM to proceed.`
     );

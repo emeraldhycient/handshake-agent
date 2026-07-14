@@ -153,7 +153,16 @@ export function mapOutcomeToMessages(
         const sn = c as SendProposalConfirmation
         receiveAmt = sn.cryptoAmount + " " + sn.asset
         receiveSub = "Amount sent"
-        rows.push({ label: "To", value: sn.toAddressMasked })
+        // On-chain send masks its address; an internal (PayID) transfer has no
+        // address and is legible via the recipient handle / display name instead.
+        rows.push({
+          label: "To",
+          value:
+            sn.toAddressMasked ??
+            sn.recipientHandle ??
+            sn.recipientDisplayName ??
+            "",
+        })
         if (sn.beneficiaryLabel) {
           rows.push({ label: "Beneficiary", value: sn.beneficiaryLabel })
         }

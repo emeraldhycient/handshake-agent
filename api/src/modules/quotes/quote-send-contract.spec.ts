@@ -165,11 +165,24 @@ describe('SendProposalConfirmationSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects a missing toAddressMasked', () => {
+  it('accepts a confirmation without toAddressMasked (internal transfer has no address)', () => {
+    // toAddressMasked is now optional: an on-chain send sets it, an internal
+    // (PayID) transfer omits it and is legible via recipientHandle instead (Task 6).
     const result = SendProposalConfirmationSchema.safeParse(
       omitKey(VALID_CONFIRMATION, 'toAddressMasked'),
     );
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts an internal-transfer shape (no toAddressMasked, instant:true)', () => {
+    const result = SendProposalConfirmationSchema.safeParse({
+      ...omitKey(VALID_CONFIRMATION, 'toAddressMasked'),
+      networkFeeCrypto: '0',
+      recipientDisplayName: 'Alice A.',
+      recipientHandle: 'alice',
+      instant: true,
+    });
+    expect(result.success).toBe(true);
   });
 
   it('rejects a non-datetime expiresAt', () => {
