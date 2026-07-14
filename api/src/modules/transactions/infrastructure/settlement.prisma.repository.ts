@@ -3087,7 +3087,17 @@ export class SettlementPrismaRepository implements ISettlementRepository {
           recipientBalanceAfter,
         };
       },
-      { isolationLevel: 'Serializable' },
+      {
+        // ReadCommitted (Postgres default) — the advisory locks acquired on
+        // BOTH wallets at the start of this transaction serialize concurrent
+        // transfers touching either account. SSI (Serializable) freezes the
+        // snapshot at the first statement — BEFORE the advisory lock is
+        // granted — which would make the in-atomic sender-balance guard and
+        // the idempotency findUnique read stale pre-lock state. The advisory
+        // lock + ReadCommitted pairing avoids both P2002 and SSI rollback, as
+        // established for every other settle* method in this file.
+        isolationLevel: 'ReadCommitted',
+      },
     );
   }
 

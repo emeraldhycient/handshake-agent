@@ -704,7 +704,10 @@ export interface ISettlementRepository {
   /**
    * Atomically settles an internal user→user crypto TRANSFER (Spec 2, Task 7) as
    * a SINGLE-PHASE ledger double-entry — no reserve/finalize split, no on-chain
-   * send, no outbox. Inside one `$transaction` (isolation Serializable):
+   * send, no outbox. Inside one `$transaction` (isolation ReadCommitted — the
+   * advisory locks on both wallets serialize concurrent writers, so the
+   * in-atomic guards below read fresh committed state instead of a frozen
+   * pre-lock SSI snapshot):
    *   0. Advisory-lock BOTH user_wallet accounts (sender + recipient).
    *   1. Idempotency check on `idempotencyKey` under the lock — if a prior settle
    *      already posted, return its receipt + both current balances (no re-post).
