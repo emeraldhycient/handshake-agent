@@ -55,6 +55,28 @@ describe("mapTransactions", () => {
     expect(mapTransactions({ items: [] }, now)).toEqual([])
   })
 
+  it("maps an internal_transfer as an OUTGOING debit (sender-side row)", () => {
+    // The sender's completed internal (PayID) transfer must read as money
+    // LEAVING the wallet — `dir:"out"`, a leading "-", and the outflow icon —
+    // never as an inflow with a green "+".
+    const r: TransactionListResponse = {
+      items: [
+        {
+          id: "it",
+          type: "internal_transfer",
+          status: "completed",
+          asset: "USDT",
+          cryptoAmount: "3",
+          createdAt: "2026-06-29T13:00:00.000Z",
+        },
+      ],
+    }
+    const item = mapTransactions(r, now)[0].items[0]
+    expect(item.dir).toBe("out")
+    expect(item.amount).toBe("-3 USDT")
+    expect(item.icon).toBe("↗")
+  })
+
   it("formats fiat amounts with the provided symbol map (no hardcoded NGN)", () => {
     const r: TransactionListResponse = {
       items: [
