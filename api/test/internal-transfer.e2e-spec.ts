@@ -1,374 +1,304 @@
 /**
- * Integration test for the internal (user→user, PayID) transfer money path
- * (Spec 2, Task 7). CLAUDE.md §3.1 — model proposes, the deterministic engine
- * disposes.
+ * Internal (user→user, PayID) transfer vertical — end-to-end acceptance test
+ * (Spec 2, Task 10). CLOSES the funds-safety coverage gap: Tasks 6/7 unit-test
+ * the executor with a MOCKED settlement repo, so the REAL atomic ledger
+ * double-entry, the in-atomic sender-balance guard, and the
+ * idempotency/advisory-lock guards are unverified until this suite runs the
+ * full HTTP stack against real Postgres.
  *
- * The executor (ExecutionService.executeInternalTransfer) is unit-tested
- * (execution.service.spec.ts), but the settlement repository
- * (SettlementPrismaRepository.settleInternalTransferAtomic) has NO unit spec —
- * its real DB-level behavior (advisory locks, the in-atomic sender-balance
- * guard, the double-post idempotency guard, the balanced double-entry, the two
- * WalletBalance snapshots and the signed Receipt) is only exercisable against a
- * REAL Postgres. This suite closes that gap.
+ * Boots the REAL AppModule (Testcontainers Postgres) via supertest and proves
+ * Tasks 1-9 end-to-end over real HTTP + real Postgres:
  *
- * Verifies against a REAL Postgres (Testcontainers):
- *   1. Happy path (propose → authorize(request_step_up) → execute):
- *      - Exactly TWO LedgerEntry rows: a debit on the sender's user_wallet and a
- *        credit on the recipient's user_wallet, SAME asset, per-currency sum = 0.
- *      - Sender balance decreases by the amount; recipient increases by it.
- *      - Transaction: type=internal_transfer, status=completed, owned by the sender.
- *      - Proposal → executed.
- *      - Exactly ONE signed Receipt minted.
- *      - Both WalletBalance snapshots written (sender + recipient).
- *   2. In-atomic sender-balance guard: a transfer exceeding the sender's ledger
- *      balance throws InsufficientBalanceError and posts NOTHING.
- *   3. Concurrent double-execute (same proposalId / idempotencyKey) is a no-op on
- *      the second call — one pair of ledger legs, one Receipt, balances moved once.
+ *   1. Happy path A→B: an `@handle` send → internal_transfer proposal (handle
+ *      resolved SERVER-SIDE, §3.1) → authorize (step-up) → execute → INSTANT
+ *      completed. Balanced double-entry (A −5, B +5, legs sum 0), ONE
+ *      Transaction + ONE Receipt, NO walletProvider.withdraw, NO onchain
+ *      SettlementOutbox, B's TRON wallet auto-provisioned. + velocity attributed
+ *      to the SENDER, never the recipient (Task 8 folded in).
+ *   2. /auth/me carries a valid payId (Task 3).
+ *   3. Self-send (@A.payId) → clarification, NO proposal (§3.1 no-misroute).
+ *   4. Unknown handle → clarification, NO proposal.
+ *   5. Sequential replay: a completed transfer cannot be re-executed — no second
+ *      post (exactly ONE of everything; A debited once, B credited once).
+ *   6. Concurrent double-execute (one proposal, two parallel executes): the
+ *      invariant holds regardless of which layer blocks the loser
+ *      (single-use directive / status guard / in-atomic idempotency).
+ *   7. Concurrent drain (A→B & A→C, each 5, A seeded 5): at most one commits, A
+ *      never goes negative, the loser fails cleanly (in-atomic balance guard).
  *
- * Wiring is manual (no Nest DI), mirroring send-vertical.e2e-spec.ts — the closest
- * sibling money path (both use request_step_up + ComplianceService + SessionService).
- * The only fakes are the wallet/payment providers, neither of which the
- * internal-transfer path touches (the crypto never leaves custody).
- *
- * Requires Docker. Runs only in the `test:e2e` lane (jest-e2e.json):
- *   pnpm --filter @handshake-agent/api test:e2e -- internal-transfer
+ * Bootstrap (env vars, Testcontainers Postgres, the four external-edge fakes)
+ * and the seed / authorize→execute helpers are copied from
+ * send-raw-address.e2e-spec.ts (the Spec-1 send surface). A focused,
+ * repo-level companion (settleInternalTransferAtomic in isolation, both
+ * WalletBalance snapshots, deterministic in-atomic guard) lives in
+ * internal-transfer-settle.e2e-spec.ts.
  */
 
+import { execSync } from 'node:child_process';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+// supertest is a CommonJS module
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const request = require('supertest') as typeof import('supertest');
+import { PostgreSqlContainer } from '@testcontainers/postgresql';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../generated/prisma/client';
-import { startTestPostgres } from './helpers/pg-testcontainer';
-import { seedRegistryAssets } from './helpers/seed-registry-assets';
+import type { INestApplication } from '@nestjs/common';
 
-// Repos
-import { ProposalPrismaRepository } from '../src/modules/transactions/infrastructure/proposal.prisma.repository';
-import { QuotePrismaRepository } from '../src/modules/transactions/infrastructure/quote.prisma.repository';
-import { DirectivePrismaRepository } from '../src/modules/transactions/infrastructure/directive.prisma.repository';
-import { TransactionPrismaRepository } from '../src/modules/transactions/infrastructure/transaction.prisma.repository';
-import { SettlementOutboxPrismaRepository } from '../src/modules/transactions/infrastructure/settlement-outbox.prisma.repository';
-import { SettlementPrismaRepository } from '../src/modules/transactions/infrastructure/settlement.prisma.repository';
-import { LedgerPrismaRepository } from '../src/modules/transactions/infrastructure/ledger.prisma.repository';
-import { PinPrismaRepository } from '../src/core/auth/infrastructure/pin.prisma.repository';
-import { SessionPrismaRepository } from '../src/core/auth/infrastructure/session.prisma.repository';
-import { IdentityPrismaRepository } from '../src/modules/identity/infrastructure/identity.prisma.repository';
-import { VelocityPrismaRepository } from '../src/modules/identity/infrastructure/velocity.prisma.repository';
-import { WalletPrismaRepository } from '../src/modules/wallets/infrastructure/wallet.prisma.repository';
-import { ComplianceEventPrismaRepository } from '../src/modules/compliance/infrastructure/compliance-event.prisma.repository';
-
-// Services
-import { PinService } from '../src/core/auth/pin.service';
-import { SessionService } from '../src/core/auth/session.service';
-import { DirectiveService } from '../src/modules/transactions/application/directive.service';
-import { ProposalService } from '../src/modules/transactions/application/proposal.service';
-import { ExecutionService } from '../src/modules/transactions/application/execution.service';
-import { KycGateService } from '../src/modules/identity/application/kyc-gate.service';
-import { QuotesService } from '../src/modules/quotes/application/quotes.service';
-import { WalletService } from '../src/modules/wallets/application/wallet.service';
-import { ComplianceService } from '../src/modules/compliance/application/compliance.service';
-import { MockSanctionsScreener } from '../src/modules/compliance/infrastructure/mock-sanctions.screener';
-import { ConfigRateProvider } from '../src/modules/quotes/infrastructure/config-rate.provider';
-import { AssetRegistry } from '../src/core/catalog/asset-registry';
-
-// Domain errors
-import { InsufficientBalanceError } from '../src/modules/transactions/domain/execution-errors';
-
-// Ports/types
-import type { PrismaService } from '../src/core/prisma/prisma.service';
+// Port symbol imports — these do NOT transitively import AppModule or trigger
+// ConfigModule.forRoot(). They export only const symbols and interfaces.
+import { LLM_PROVIDER } from '../src/modules/agent/application/ports/agent.port';
+import { WALLET_PROVIDER } from '../src/modules/wallets/application/ports/wallet-provider.port';
+import { PAYMENT_PROVIDER } from '../src/modules/treasury/application/ports/payment-provider.port';
+import { WHATSAPP_SENDER } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
+import type { LlmProvider } from '../src/modules/agent/core/ports/llm-provider.port';
 import type { IWalletProvider } from '../src/modules/wallets/application/ports/wallet-provider.port';
 import type { IPaymentProvider } from '../src/modules/treasury/application/ports/payment-provider.port';
-import type { SettleInternalTransferAtomicInput } from '../src/modules/transactions/application/ports/settlement.repository.port';
-import type { EffectiveConfigService } from '../src/core/config/application/effective-config.service';
+import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 
-// Config
-import configuration from '../src/core/config/configuration';
+import { WalletService } from '../src/modules/wallets/application/wallet.service';
+import { AssetRegistry } from '../src/core/catalog/asset-registry';
+import { seedRegistryAssets } from './helpers/seed-registry-assets';
+import { mintTier1User } from './helpers/mint-verified-user';
 
-jest.setTimeout(300_000);
-
-// ---------------------------------------------------------------------------
-// Fake ConfigService
-// ---------------------------------------------------------------------------
-
-const appConfig = configuration();
-
-class StubConfigService {
-  get<T = unknown>(key: string): T {
-    if (key === 'DIRECTIVE_SIGNING_KEY') {
-      return 'internal-transfer-e2e-signing-key-32bytes!' as T;
-    }
-    if (key === 'RECEIPT_SIGNING_KEY') {
-      return 'internal-transfer-e2e-receipt-signing-32b!' as T;
-    }
-    const parts = key.split('.');
-    let val: unknown = appConfig;
-    for (const part of parts) {
-      if (val === null || typeof val !== 'object') return undefined as T;
-      val = (val as Record<string, unknown>)[part];
-    }
-    return val as T;
-  }
-}
+jest.setTimeout(180_000);
 
 // ---------------------------------------------------------------------------
-// Fake external providers — the internal-transfer path never calls either
-// (crypto never leaves custody), but the ExecutionService constructor requires
-// both. Each wallet provision returns a UNIQUE address (Wallet.address is
-// globally unique) so sender + recipient wallets cannot collide.
+// Constants
 // ---------------------------------------------------------------------------
 
-let walletProvisionCounter = 0;
-const fakeWalletProvider: IWalletProvider = {
-  provisionAddress: jest.fn().mockImplementation(() => {
-    walletProvisionCounter += 1;
-    return Promise.resolve({
-      address: `TFakeInternalTransferAddr${walletProvisionCounter}`,
-      providerReference: `fake_blockradar_ref_it_${walletProvisionCounter}`,
-    });
-  }),
-  getBalance: jest.fn().mockResolvedValue({
-    available: '0',
-    pending: '0',
-    asset: 'USDT',
-    network: 'TRON',
-  }),
-  withdraw: jest.fn().mockResolvedValue({
-    providerReference: 'unused',
-    status: 'pending' as const,
-  }),
-  getWithdrawalStatus: jest
-    .fn()
-    .mockResolvedValue({ status: 'pending' as const }),
-  listWalletAssets: jest.fn().mockResolvedValue([
-    {
-      assetId: 'e2e-usdt-tron-asset-id',
-      symbol: 'USDT',
-      name: 'Tether USD',
-      network: 'TRON',
-      contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
-      decimals: 6,
-      isMainnet: false,
-    },
-  ]),
-};
+const API_ROOT = join(__dirname, '..');
+const WHATSAPP_PHONE_NUMBER_ID = 'test-pnid-e2e-internal-xfer';
+const WA_ACCESS_TOKEN = 'e2e-wa-access-token-internal-xfer-fake';
+const WA_APP_SECRET = 'e2e-internal-xfer-app-secret-123';
+const WA_VERIFY_TOKEN = 'e2e-verify-token-internal-xfer';
 
-const fakePaymentProvider: IPaymentProvider = {
-  createCollection: jest.fn(),
-  verify: jest.fn(),
-  createPayout: jest.fn(),
-  verifyPayout: jest.fn(),
-  verifyWebhookSignature: jest.fn().mockReturnValue(true),
-};
+const FAKE_WALLET_ADDRESS = 'TInternalXferFakeWalletAddress12xxx';
+const FAKE_BLOCKRADAR_REF = 'fake-blockradar-ref-e2e-internal-xfer';
+const FAKE_WITHDRAW_REF = 'e2e-onchain-withdraw-ref-internal-xfer';
 
-// ---------------------------------------------------------------------------
-// Decimal-safe sum/compare helper (10^18-scaled) for ledger-balance assertions.
-// ---------------------------------------------------------------------------
+const PIN = '1357';
 
-const SCALE = 10n ** 18n;
+// ===========================================================================
+// THE TEST SUITE
+// ===========================================================================
 
-function toScaled(s: string): bigint {
-  const str = s.trim();
-  const isNeg = str.startsWith('-');
-  const abs = isNeg ? str.slice(1) : str;
-  const [whole = '0', frac = ''] = abs.split('.');
-  const fracPadded = frac.slice(0, 18).padEnd(18, '0');
-  const scaled = BigInt(whole) * SCALE + BigInt(fracPadded);
-  return isNeg ? -scaled : scaled;
-}
-
-// ---------------------------------------------------------------------------
-// Test suite
-// ---------------------------------------------------------------------------
-
-describe('Internal transfer money path (settleInternalTransferAtomic, Testcontainers Postgres)', () => {
+describe('Internal transfer vertical — e2e (AppModule, Testcontainers Postgres)', () => {
+  let app: INestApplication;
   let prisma: PrismaClient;
-  let ps: PrismaService;
-  let stop: (() => Promise<void>) | undefined;
+  let stopContainer: () => Promise<void>;
+  let fakeLlmProvider: jest.Mocked<LlmProvider>;
+  let fakeWalletProvider: jest.Mocked<IWalletProvider>;
 
-  let proposalService: ProposalService;
-  let executionService: ExecutionService;
-  let directiveService: DirectiveService;
-  let pinService: PinService;
-  let walletService: WalletService;
-  let ledgerRepo: LedgerPrismaRepository;
-  let settlementRepo: SettlementPrismaRepository;
-  let assetRegistry: AssetRegistry;
-
-  const clock = { now: () => new Date() };
-
-  // Fresh sender + recipient per test (beforeEach) — keeps velocity windows empty
-  // and the tests independent (crypto.transfer is gated to tier_2, §3.3).
-  let senderId: string;
-  let recipientId: string;
+  // ── beforeAll: set env → import AppModule → boot ───────────────────────────
 
   beforeAll(async () => {
-    const result = await startTestPostgres();
-    stop = result.stop;
-    prisma = result.prisma;
-    ps = prisma as unknown as PrismaService;
+    // 1. Boot Postgres container and apply migrations
+    const container = await new PostgreSqlContainer(
+      'postgres:16-alpine',
+    ).start();
+    const dbUrl = container.getConnectionUri();
 
-    const config = new StubConfigService() as never;
-    assetRegistry = new AssetRegistry(config);
-    seedRegistryAssets(assetRegistry);
+    execSync('node_modules/.bin/prisma migrate deploy', {
+      cwd: API_ROOT,
+      env: { ...process.env, DATABASE_URL: dbUrl },
+      stdio: 'inherit',
+    });
 
-    // Repos
-    const proposalRepo = new ProposalPrismaRepository(ps);
-    const quoteRepo = new QuotePrismaRepository(ps);
-    const directiveRepo = new DirectivePrismaRepository(ps);
-    ledgerRepo = new LedgerPrismaRepository(ps);
-    const pinRepo = new PinPrismaRepository(ps);
-    const sessionRepo = new SessionPrismaRepository(ps);
-    const identityRepo = new IdentityPrismaRepository(ps);
-    const velocityRepo = new VelocityPrismaRepository(ps);
-    const walletRepo = new WalletPrismaRepository(ps);
-    const complianceEventRepo = new ComplianceEventPrismaRepository(ps);
-    settlementRepo = new SettlementPrismaRepository(ps, config);
+    prisma = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: dbUrl }),
+    });
+    await prisma.$connect();
 
-    // MockSanctionsScreener with an empty denylist — every recipient passes.
-    const sanctionsConfigStub = {
-      get: (key: string) => {
-        if (key === 'compliance') {
-          return { travelRuleThresholdNgn: 1_000_000, sanctionsDenylist: [] };
-        }
-        return new StubConfigService().get(key);
-      },
-    } as unknown as EffectiveConfigService;
-    const sanctionsScreener = new MockSanctionsScreener(sanctionsConfigStub);
+    stopContainer = async () => {
+      await prisma.$disconnect();
+      await container.stop();
+    };
 
-    // Services
-    const rateProvider = new ConfigRateProvider(config);
-    const quotesService = new QuotesService(rateProvider, clock, assetRegistry);
-    const kycGateService = new KycGateService(
-      identityRepo,
-      velocityRepo,
-      config,
-      clock,
-    );
-    pinService = new PinService(pinRepo, config, clock);
-    const sessionService = new SessionService(sessionRepo, config, clock);
-    walletService = new WalletService(
-      fakeWalletProvider,
-      walletRepo,
-      clock,
-      assetRegistry,
-    );
-    directiveService = new DirectiveService(
-      directiveRepo,
-      config,
-      clock,
-      config,
-    );
-    const complianceService = new ComplianceService(
-      sanctionsScreener,
-      complianceEventRepo,
-    );
+    // 2. Set ALL required env vars BEFORE importing AppModule.
+    Object.assign(process.env, {
+      NODE_ENV: 'test',
+      DATABASE_URL: dbUrl,
+      WHATSAPP_PHONE_NUMBER_ID,
+      WHATSAPP_ACCESS_TOKEN: WA_ACCESS_TOKEN,
+      WHATSAPP_APP_SECRET: WA_APP_SECRET,
+      WHATSAPP_VERIFY_TOKEN: WA_VERIFY_TOKEN,
+      WHATSAPP_FLOW_PRIVATE_KEY: '',
+      WHATSAPP_FLOW_ID: '',
+      DIRECTIVE_SIGNING_KEY: 'e2e-internal-xfer-directive-key-32bytes!',
+      RECEIPT_SIGNING_KEY: 'e2e-internal-xfer-receipt-signing-key32b!',
+      BLOCKRADAR_API_KEY: 'fake-blockradar-key-e2e-internal-xfer',
+      BLOCKRADAR_MASTER_WALLET_ID: 'fake-master-wallet-id-e2e-internal-xfer',
+      FLUTTERWAVE_SECRET_KEY: 'fake-flw-secret-key-e2e-internal-xfer',
+      FLUTTERWAVE_WEBHOOK_SECRET: 'e2e-flw-webhook-secret-internal-xfer',
+      JWT_SECRET: 'e2e-internal-xfer-jwt-secret-at-least-32-bytes!!',
+      AUTH_DEV_EXPOSE_OTP: 'true',
+    });
+    // Ensure ANTHROPIC_API_KEY is absent (not empty string) to pass optional validation
+    delete process.env.ANTHROPIC_API_KEY;
 
-    // beneficiaryService is a required ProposalService/ExecutionService dep but is
-    // NEVER called on the internal-transfer path (destination is a user, not a
-    // saved beneficiary) — a minimal stub suffices (same pattern as settlement-buy).
-    const beneficiaryStub = { getById: () => Promise.resolve(null) } as never;
+    // 3. Dynamic import of AppModule (happens AFTER env vars are set above).
+    const { AppModule } = await import('../src/app.module');
+    const { Test } = await import('@nestjs/testing');
 
-    proposalService = new ProposalService(
-      quotesService,
-      kycGateService,
-      quoteRepo,
-      proposalRepo,
-      clock,
-      walletService,
-      beneficiaryStub,
-      assetRegistry,
-      ledgerRepo,
-      complianceService,
-      config,
-      undefined as never, // swapProvider: not needed on the transfer proposal path
-    );
+    // 4. Build fake providers with correct interface shapes.
+    //    The LLM fake is reconfigured per-test via mockResolvedValueOnce.
+    fakeLlmProvider = {
+      extractIntent: jest.fn().mockResolvedValue({
+        action: 'none',
+        clarification: 'default fake — reconfigure per test',
+      }),
+    };
 
-    executionService = new ExecutionService(
-      proposalRepo,
-      quoteRepo,
-      new TransactionPrismaRepository(ps),
-      new SettlementOutboxPrismaRepository(ps),
-      settlementRepo,
-      quotesService,
-      kycGateService,
-      directiveService,
-      pinService,
-      walletService,
-      fakePaymentProvider,
-      config,
-      clock,
-      assetRegistry,
-      beneficiaryStub,
-      ledgerRepo,
-      undefined, // identityService (optional)
-      undefined, // whatsAppSender (optional)
-      complianceService, // required for the counterparty sanctions re-screen (§3.3)
-      sessionService, // required for device-bound step-up recording (§3.4)
-      undefined, // swapProvider: not needed on the transfer path
-    );
-  });
+    // Unique address per call — multiple users provision wallets across the
+    // tests, so a fixed address would violate the wallet unique constraint.
+    let addrSeq = 0;
+    fakeWalletProvider = {
+      provisionAddress: jest.fn().mockImplementation(() => {
+        addrSeq += 1;
+        return Promise.resolve({
+          address: `${FAKE_WALLET_ADDRESS}${addrSeq.toString().padStart(4, '0')}`,
+          providerReference: `${FAKE_BLOCKRADAR_REF}-${addrSeq}`,
+        });
+      }),
+      getBalance: jest.fn().mockResolvedValue({
+        available: '0',
+        pending: '0',
+        asset: 'USDT',
+      }),
+      // An internal transfer NEVER calls withdraw — asserted in test 1. The
+      // stub is shaped correctly regardless so a stray call would not crash.
+      withdraw: jest.fn().mockResolvedValue({
+        providerReference: FAKE_WITHDRAW_REF,
+        status: 'pending' as const,
+      }),
+      getWithdrawalStatus: jest
+        .fn()
+        .mockResolvedValue({ status: 'pending' as const }),
+      listWalletAssets: jest.fn().mockResolvedValue([
+        {
+          assetId: 'e2e-usdt-tron-asset-id',
+          symbol: 'USDT',
+          name: 'Tether USD',
+          network: 'TRON',
+          contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+          decimals: 6,
+          isMainnet: false,
+        },
+      ]),
+    };
+
+    const fakePaymentProvider: jest.Mocked<IPaymentProvider> = {
+      createCollection: jest.fn().mockResolvedValue({
+        accountNumber: '0091234568',
+        bankName: 'Internal Xfer Test MFB',
+        providerRef: 'flw_fake_ref_internal_xfer_e2e',
+      }),
+      verify: jest.fn().mockResolvedValue({
+        status: 'successful',
+        amount: '5000',
+        currency: 'NGN',
+        providerRef: 'flw_fake_ref_internal_xfer_e2e',
+      }),
+      createPayout: jest.fn(),
+      verifyPayout: jest.fn(),
+      verifyWebhookSignature: jest.fn().mockReturnValue(false),
+    };
+
+    const fakeSender: jest.Mocked<IWhatsAppSender> = {
+      sendText: jest
+        .fn()
+        .mockResolvedValue({ externalMessageId: 'wamid.out.text.it.e2e' }),
+      sendTemplate: jest
+        .fn()
+        .mockResolvedValue({ externalMessageId: 'wamid.out.tmpl.it.e2e' }),
+      sendCtaUrl: jest
+        .fn()
+        .mockResolvedValue({ externalMessageId: 'wamid.out.cta.it.e2e' }),
+      sendFlow: jest
+        .fn()
+        .mockResolvedValue({ externalMessageId: 'wamid.out.flow.it.e2e' }),
+      sendBeneficiaryFlow: jest
+        .fn()
+        .mockResolvedValue({ externalMessageId: 'wamid.out.ben.it.e2e' }),
+    };
+
+    // 5. Compile NestJS TestingModule with provider overrides
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(LLM_PROVIDER)
+      .useValue(fakeLlmProvider)
+      .overrideProvider(WALLET_PROVIDER)
+      .useValue(fakeWalletProvider)
+      .overrideProvider(PAYMENT_PROVIDER)
+      .useValue(fakePaymentProvider)
+      .overrideProvider(WHATSAPP_SENDER)
+      .useValue(fakeSender)
+      .compile();
+
+    app = moduleRef.createNestApplication({ rawBody: true });
+    await app.init();
+
+    // Seed the AssetRegistry's provider-id overlay (USDT/TRX on TRON) so any
+    // asset-provider-id lookup resolves — CatalogSyncService never ran against
+    // a real Blockradar in this suite. Mirrors send-raw-address.e2e-spec.ts.
+    seedRegistryAssets(app.get(AssetRegistry, { strict: false }));
+  }, 120_000);
 
   afterAll(async () => {
-    await stop?.();
+    jest.restoreAllMocks();
+    await app?.close();
+    await stopContainer?.();
   });
 
-  // A fresh tier_2 sender (PIN + bound-and-pinned device, §3.4) and a fresh
-  // verified recipient per test.
-  beforeEach(async () => {
-    const sender = await prisma.user.create({
-      data: { kycStatus: 'verified', kycTier: 'tier_2', status: 'active' },
-    });
-    senderId = sender.id;
-    await pinService.setPin(senderId, '194837');
+  // ── Helpers ────────────────────────────────────────────────────────────────
 
-    const device = await prisma.device.create({
-      data: {
-        userId: senderId,
-        fingerprint: `e2e-internal-transfer-device-${randomUUID()}`,
-        trustState: 'bound',
-        boundAt: new Date(),
-      },
+  let userSeq = 0;
+
+  /**
+   * Mints a tier_1 user (email-OTP signup, PIN set), bumps to tier_2 (the
+   * crypto.transfer capability floor, §3.3), and reads the PayID minted at
+   * signup (Task 3). A monotonic counter + Date.now keeps emails — and thus the
+   * derived PayIDs — unique across the run.
+   */
+  async function mintTransferUser(
+    role: string,
+  ): Promise<{ accessToken: string; userId: string; payId: string }> {
+    userSeq += 1;
+    const email = `${role}${userSeq}_${Date.now()}@test.com`.toLowerCase();
+    const { accessToken, userId } = await mintTier1User(app, {
+      email,
+      pin: PIN,
     });
-    // Pin the device so the engine resolves it via User.pinnedDeviceId during
-    // execute (executeInternalTransfer records the device-bound step-up, §3.4).
     await prisma.user.update({
-      where: { id: senderId },
-      data: { pinnedDeviceId: device.id },
+      where: { id: userId },
+      data: { kycTier: 'tier_2' },
     });
-
-    const recipient = await prisma.user.create({
-      data: { kycStatus: 'verified', kycTier: 'tier_1', status: 'active' },
+    const row = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { payId: true },
     });
-    recipientId = recipient.id;
-  });
-
-  // -------------------------------------------------------------------------
-  // Helpers
-  // -------------------------------------------------------------------------
-
-  /** Provisions the user's TRON wallet and returns its WalletPrisma id. */
-  async function provisionWallet(userId: string): Promise<string> {
-    const wallet = await walletService.getOrProvisionNetworkWallet(
-      userId,
-      'TRON',
-    );
-    return wallet.id;
+    if (!row?.payId) throw new Error(`user '${role}' has no minted payId`);
+    return { accessToken, userId, payId: row.payId };
   }
 
   /**
-   * Seeds a USDT ledger credit into a user_wallet account (cumulative — reads the
-   * current max sequence/balance first so re-use in one process is safe).
+   * Seeds a USDT credit on the user's TRON wallet ledger (as a settled buy
+   * would), so a transfer proposal passes the balance check. Mirrors
+   * `seedUsdtBalance` in send-raw-address.e2e-spec.ts. Returns the wallet id.
    */
-  async function seedLedgerCredit(
-    walletId: string,
+  async function seedUsdtBalance(
     userId: string,
-    amount: string,
-  ): Promise<void> {
-    const latest = await prisma.ledgerEntry.findFirst({
-      where: { accountType: 'user_wallet', accountId: walletId },
-      orderBy: { sequence: 'desc' },
+    amount: number,
+  ): Promise<string> {
+    const walletService = app.get(WalletService, { strict: false });
+    await walletService.getOrProvisionNetworkWallet(userId, 'TRON');
+
+    const wallet = await prisma.wallet.findFirst({
+      where: { userId, network: 'TRON' },
+      select: { id: true },
     });
-    const seq = (latest?.sequence ?? 0) + 1;
-    const before = latest?.balanceAfter ? Number(latest.balanceAfter) : 0;
-    const after = before + Number(amount);
+    if (wallet === null) throw new Error('no TRON wallet for user');
 
     const seedTxn = await prisma.transaction.create({
       data: {
@@ -382,413 +312,454 @@ describe('Internal transfer money path (settleInternalTransferAtomic, Testcontai
         pinVerifiedAt: new Date(),
       },
     });
+
+    const latest = await prisma.ledgerEntry.findFirst({
+      where: { accountType: 'user_wallet', accountId: wallet.id },
+      orderBy: { sequence: 'desc' },
+    });
+    const seq = (latest?.sequence ?? 0) + 1;
+    const before = latest?.balanceAfter ? Number(latest.balanceAfter) : 0;
+
     await prisma.ledgerEntry.create({
       data: {
         transactionId: seedTxn.id,
         accountType: 'user_wallet',
-        accountId: walletId,
+        accountId: wallet.id,
         currency: 'USDT',
         direction: 'credit',
-        amount: Number(amount).toFixed(6),
+        amount: amount.toFixed(6),
         description: 'seed credit for internal-transfer e2e',
-        balanceAfter: after.toFixed(6),
+        balanceAfter: (before + amount).toFixed(6),
         sequence: seq,
         postedAt: new Date(),
       },
     });
+    return wallet.id;
   }
 
-  /** Issues a request_step_up directive grant for the sender's proposal. */
-  async function issueStepUp(
+  /**
+   * Drives an `@handle` internal-transfer turn: stubs the LLM to emit a
+   * `send_crypto` intent naming the PUBLIC handle (resolved server-side, §3.1 —
+   * the model never supplies a destination), then POSTs /chat/messages with NO
+   * `sendDestination` in the body. Returns the supertest response.
+   */
+  async function postHandleSend(
+    accessToken: string,
+    handle: string,
+    amount: string,
+  ): Promise<import('supertest').Response> {
+    fakeLlmProvider.extractIntent.mockResolvedValueOnce({
+      action: 'send_crypto',
+      asset: 'USDT',
+      cryptoAmount: amount,
+      network: 'TRON',
+      recipientNickname: `@${handle}`,
+    });
+    return request(app.getHttpServer())
+      .post('/chat/messages')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ text: `send ${amount} USDT to @${handle}` })
+      .expect(200);
+  }
+
+  /** Issues a step-up directive for the proposal; returns { directiveId, nonce }. */
+  async function authorizeOnly(
+    accessToken: string,
     proposalId: string,
   ): Promise<{ directiveId: string; nonce: string }> {
-    const result = await directiveService.issue({
-      userId: senderId,
-      proposalId,
-      ref: 'request_step_up',
-    });
-    return { directiveId: result.directiveId, nonce: result.nonce };
+    const authRes = await request(app.getHttpServer())
+      .post(`/chat/proposals/${proposalId}/authorize`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(201);
+    return authRes.body as { directiveId: string; nonce: string };
   }
 
-  /** Creates a pending internal_transfer Proposal row directly (tests 2 + 3). */
-  async function createTransferProposal(
-    senderWalletId: string,
-    recipientWalletId: string,
-    cryptoAmount: string,
-  ): Promise<string> {
-    const proposal = await prisma.proposal.create({
-      data: {
-        userId: senderId,
-        type: 'internal_transfer',
-        status: 'pending',
-        expiresAt: new Date(Date.now() + 5 * 60 * 1_000),
-        parameters: {
-          asset: 'USDT',
-          cryptoAmount,
-          network: 'TRON',
-          networkFeeCrypto: '0',
-          totalDebit: cryptoAmount,
-          destinationKind: 'internal_user',
-          recipientUserId: recipientId,
-          recipientWalletId,
-          walletId: senderWalletId,
-          requiresTravelRule: false,
-        },
-        parametersChecksum: 'internal-transfer-e2e-checksum',
-      },
-    });
-    return proposal.id;
+  /** Fires a single execute (no status assertion); resolves with the Response. */
+  function executeOnce(
+    accessToken: string,
+    proposalId: string,
+    directiveId: string,
+    nonce: string,
+  ): Promise<import('supertest').Response> {
+    return request(app.getHttpServer())
+      .post(`/chat/proposals/${proposalId}/execute`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        directiveId,
+        nonce,
+        pin: PIN,
+        idempotencyKey: randomUUID(),
+      });
   }
 
-  /** Builds a valid SettleInternalTransferAtomicInput (tests 2 + 3). */
-  function buildSettleInput(o: {
-    proposalId: string;
-    senderWalletId: string;
-    recipientWalletId: string;
-    cryptoAmount: string;
-    idempotencyKey: string;
-    now: Date;
-  }): SettleInternalTransferAtomicInput {
-    return {
-      proposalId: o.proposalId,
-      senderUserId: senderId,
-      recipientUserId: recipientId,
-      senderWalletId: o.senderWalletId,
-      recipientWalletId: o.recipientWalletId,
-      asset: 'USDT',
-      cryptoAmount: o.cryptoAmount,
-      assetDecimals: assetRegistry.asset('USDT').decimals,
-      idempotencyKey: o.idempotencyKey,
-      requestChecksum: 'internal-transfer-e2e-checksum',
-      velocityIncrement: {
-        userId: senderId,
-        fiatCurrency: 'NGN',
-        fiatAmountStr: '16000',
-        now: o.now,
-      },
-      confirmedAt: o.now,
-      pinVerifiedAt: o.now,
-      now: o.now,
-      year: o.now.getFullYear().toString(),
-    };
+  /** Authorizes the proposal then executes it; resolves with the execute Response. */
+  async function authorizeAndExecute(
+    accessToken: string,
+    proposalId: string,
+  ): Promise<import('supertest').Response> {
+    const { directiveId, nonce } = await authorizeOnly(accessToken, proposalId);
+    return executeOnce(accessToken, proposalId, directiveId, nonce);
   }
 
-  // -------------------------------------------------------------------------
-  // Test 1 — Happy path: propose → authorize → execute
-  // -------------------------------------------------------------------------
-
-  it('happy path: propose → authorize → execute posts a balanced 2-leg ledger, moves both balances, marks tx/proposal, mints ONE receipt, writes both WalletBalance snapshots', async () => {
-    const senderWalletId = await provisionWallet(senderId);
-    const recipientWalletId = await provisionWallet(recipientId);
-    await seedLedgerCredit(senderWalletId, senderId, '100');
-
-    // ── Propose ────────────────────────────────────────────────────────────
-    const proposal = await proposalService.createSendProposal({
-      userId: senderId,
-      destination: {
-        kind: 'internal_user',
-        recipientUserId: recipientId,
-        displayHandle: '@recipient',
-        recipientDisplayName: 'Recipient User',
+  /** Latest authoritative USDT ledger balance for a wallet (0 if no entries). */
+  async function ledgerBalance(walletId: string): Promise<number> {
+    const row = await prisma.ledgerEntry.findFirst({
+      where: {
+        accountType: 'user_wallet',
+        accountId: walletId,
+        currency: 'USDT',
       },
-      intent: {
-        action: 'send_crypto',
-        asset: 'USDT',
-        cryptoAmount: '10.000000',
-        network: 'TRON',
-      },
+      orderBy: { sequence: 'desc' },
+      select: { balanceAfter: true },
     });
+    return row ? Number(row.balanceAfter) : 0;
+  }
 
-    // ── Authorize (request_step_up) ──────────────────────────────────────────
-    const { directiveId, nonce } = await issueStepUp(proposal.proposalId);
-
-    // ── Execute ──────────────────────────────────────────────────────────────
-    const idempotencyKey = randomUUID();
-    const result = await executionService.executeInternalTransfer({
-      userId: senderId,
-      proposalId: proposal.proposalId,
-      directiveId,
-      nonce,
-      pin: '194837',
-      idempotencyKey,
+  /** Resolves a user's TRON wallet id, or null if none provisioned. */
+  async function tronWalletId(userId: string): Promise<string | null> {
+    const wallet = await prisma.wallet.findFirst({
+      where: { userId, network: 'TRON' },
+      select: { id: true },
     });
+    return wallet?.id ?? null;
+  }
 
-    // ── Result ───────────────────────────────────────────────────────────────
-    expect(result.status).toBe('completed');
-    expect(result.receiptNumber).toMatch(/^HS-\d{4}-\d{6}$/);
-    expect(result.recipientUserId).toBe(recipientId);
-    expect(toScaled(result.senderBalanceAfter)).toBe(toScaled('90'));
-    expect(toScaled(result.recipientBalanceAfter)).toBe(toScaled('10'));
+  // ===========================================================================
+  // TEST 1 — happy path A→B (+ velocity attribution, Task 8 folded in)
+  // ===========================================================================
 
-    // ── Transaction: internal_transfer, completed, owned by the sender ────────
-    const txn = await prisma.transaction.findUnique({
-      where: { id: result.transactionId },
-    });
-    expect(txn).not.toBeNull();
-    expect(txn!.type).toBe('internal_transfer');
-    expect(txn!.status).toBe('completed');
-    expect(txn!.userId).toBe(senderId);
-    expect(txn!.completedAt).not.toBeNull();
+  it('sends 5 USDT A→B via @handle: internal_transfer proposal → instant completed, balanced double-entry, one Transaction + Receipt, no withdraw/outbox, recipient wallet auto-provisioned, velocity to sender', async () => {
+    const a = await mintTransferUser('a');
+    const b = await mintTransferUser('b');
 
-    // ── Exactly TWO ledger legs: debit sender, credit recipient, sum = 0 ──────
-    const entries = await prisma.ledgerEntry.findMany({
-      where: { transactionId: result.transactionId },
-    });
-    expect(entries).toHaveLength(2);
+    // B has NO wallet before the transfer — the recipient wallet must be
+    // auto-provisioned by the internal-transfer path.
+    expect(await tronWalletId(b.userId)).toBeNull();
 
-    const debit = entries.find((e) => e.direction === 'debit');
-    const credit = entries.find((e) => e.direction === 'credit');
-    expect(debit).toBeDefined();
-    expect(credit).toBeDefined();
-    // Debit leg → sender's user_wallet, USDT.
-    expect(debit!.accountType).toBe('user_wallet');
-    expect(debit!.accountId).toBe(senderWalletId);
-    expect(debit!.currency).toBe('USDT');
-    // Credit leg → recipient's user_wallet, USDT.
-    expect(credit!.accountType).toBe('user_wallet');
-    expect(credit!.accountId).toBe(recipientWalletId);
-    expect(credit!.currency).toBe('USDT');
-    // Same asset on both legs, per-currency signed sum = 0 (balanced double-entry).
-    expect(debit!.currency).toBe(credit!.currency);
-    const sum = entries.reduce(
-      (acc, e) => acc + toScaled(String(e.amount)),
-      0n,
-    );
-    expect(sum).toBe(0n);
+    const aWalletId = await seedUsdtBalance(a.userId, 100);
+    const aBalanceBefore = await ledgerBalance(aWalletId);
+    expect(aBalanceBefore).toBe(100);
 
-    // ── Balances: sender -10, recipient +10 (authoritative ledger) ────────────
-    expect(
-      toScaled(
-        await ledgerRepo.getAccountBalance(
-          'user_wallet',
-          senderWalletId,
-          'USDT',
-        ),
-      ),
-    ).toBe(toScaled('90'));
-    expect(
-      toScaled(
-        await ledgerRepo.getAccountBalance(
-          'user_wallet',
-          recipientWalletId,
-          'USDT',
-        ),
-      ),
-    ).toBe(toScaled('10'));
+    // POST /chat/messages — the @handle is resolved SERVER-SIDE (§3.1); no
+    // sendDestination in the body.
+    const res = await postHandleSend(a.accessToken, b.payId, '5');
+    const outcome = (
+      res.body as { outcome: { kind: string; proposalId?: string } }
+    ).outcome;
+    expect(outcome.kind).toBe('proposal');
+    expect(outcome.proposalId).toBeTruthy();
+    const proposalId = outcome.proposalId!;
 
-    // ── Proposal → executed ───────────────────────────────────────────────────
-    const prop = await prisma.proposal.findUnique({
-      where: { id: proposal.proposalId },
-    });
-    expect(prop!.status).toBe('executed');
-
-    // ── Exactly ONE signed Receipt (transactionId is unique) ──────────────────
-    const receipts = await prisma.receipt.findMany({
-      where: { transactionId: result.transactionId },
-    });
-    expect(receipts).toHaveLength(1);
-    expect(receipts[0].receiptNumber).toBe(result.receiptNumber);
-    expect(receipts[0].userId).toBe(senderId);
-    expect(receipts[0].signatureHash).toBeTruthy();
-    expect(receipts[0].contentHash).toBeTruthy();
-
-    // ── Both WalletBalance snapshots written ──────────────────────────────────
-    const senderSnapshots = await prisma.walletBalance.findMany({
-      where: { walletId: senderWalletId },
-    });
-    const recipientSnapshots = await prisma.walletBalance.findMany({
-      where: { walletId: recipientWalletId },
-    });
-    expect(senderSnapshots).toHaveLength(1);
-    expect(recipientSnapshots).toHaveLength(1);
-    expect(toScaled(String(senderSnapshots[0].amount))).toBe(toScaled('90'));
-    expect(toScaled(String(recipientSnapshots[0].amount))).toBe(toScaled('10'));
-  });
-
-  // -------------------------------------------------------------------------
-  // Test 2 — In-atomic sender-balance guard
-  // -------------------------------------------------------------------------
-
-  it('in-atomic sender-balance guard: a transfer exceeding the sender ledger balance throws InsufficientBalanceError and posts NOTHING', async () => {
-    const senderWalletId = await provisionWallet(senderId);
-    const recipientWalletId = await provisionWallet(recipientId);
-    // Sender holds only 1 USDT; the settle attempts to move 999.
-    await seedLedgerCredit(senderWalletId, senderId, '1');
-
-    const proposalId = await createTransferProposal(
-      senderWalletId,
-      recipientWalletId,
-      '999',
-    );
-
-    const idempotencyKey = randomUUID();
-    const input = buildSettleInput({
-      proposalId,
-      senderWalletId,
-      recipientWalletId,
-      cryptoAmount: '999',
-      idempotencyKey,
-      now: new Date(),
-    });
-
-    // Snapshot ledger-entry counts before (sender has 1 seed row; recipient has 0).
-    const senderEntriesBefore = await prisma.ledgerEntry.count({
-      where: { accountType: 'user_wallet', accountId: senderWalletId },
-    });
-    const recipientEntriesBefore = await prisma.ledgerEntry.count({
-      where: { accountType: 'user_wallet', accountId: recipientWalletId },
-    });
-
-    // The in-atomic balance guard must fail closed.
-    await expect(
-      settlementRepo.settleInternalTransferAtomic(input),
-    ).rejects.toThrow(InsufficientBalanceError);
-
-    // ── Posts NOTHING — the whole $transaction rolled back ────────────────────
-    // No anchor Transaction created for this idempotency key.
-    expect(
-      await prisma.transaction.findUnique({ where: { idempotencyKey } }),
-    ).toBeNull();
-    // No new ledger entries on either wallet.
-    expect(
-      await prisma.ledgerEntry.count({
-        where: { accountType: 'user_wallet', accountId: senderWalletId },
-      }),
-    ).toBe(senderEntriesBefore);
-    expect(
-      await prisma.ledgerEntry.count({
-        where: { accountType: 'user_wallet', accountId: recipientWalletId },
-      }),
-    ).toBe(recipientEntriesBefore);
-    // No Receipt minted (fresh sender → 0 receipts).
-    expect(await prisma.receipt.count({ where: { userId: senderId } })).toBe(0);
-    // No WalletBalance snapshot written for either wallet.
-    expect(
-      await prisma.walletBalance.count({ where: { walletId: senderWalletId } }),
-    ).toBe(0);
-    expect(
-      await prisma.walletBalance.count({
-        where: { walletId: recipientWalletId },
-      }),
-    ).toBe(0);
-    // Sender balance untouched at 1; recipient untouched at 0.
-    expect(
-      toScaled(
-        await ledgerRepo.getAccountBalance(
-          'user_wallet',
-          senderWalletId,
-          'USDT',
-        ),
-      ),
-    ).toBe(toScaled('1'));
-    expect(
-      toScaled(
-        await ledgerRepo.getAccountBalance(
-          'user_wallet',
-          recipientWalletId,
-          'USDT',
-        ),
-      ),
-    ).toBe(toScaled('0'));
-    // Proposal stays pending (never flipped to executed).
-    const prop = await prisma.proposal.findUnique({
+    // The PERSISTED proposal is a genuine internal_transfer resolved to B's
+    // userId — NO on-chain address; destinationKind internal_user.
+    const proposal = await prisma.proposal.findUnique({
       where: { id: proposalId },
     });
-    expect(prop!.status).toBe('pending');
-  });
+    expect(proposal).not.toBeNull();
+    expect(proposal?.type).toBe('internal_transfer');
+    const params = proposal?.parameters as Record<string, unknown>;
+    expect(params.destinationKind).toBe('internal_user');
+    expect(params.recipientUserId).toBe(b.userId);
+    expect(params.toAddress).toBeUndefined();
 
-  // -------------------------------------------------------------------------
-  // Test 3 — Concurrent double-execute (the double-post guard)
-  // -------------------------------------------------------------------------
+    // B's TRON wallet was auto-provisioned at propose time.
+    const bWalletId = await tronWalletId(b.userId);
+    expect(bWalletId).not.toBeNull();
 
-  it('concurrent double-execute (same proposalId/idempotencyKey) posts once: one Transaction, one 2-leg pair, one Receipt, balances moved once', async () => {
-    const senderWalletId = await provisionWallet(senderId);
-    const recipientWalletId = await provisionWallet(recipientId);
-    await seedLedgerCredit(senderWalletId, senderId, '100');
+    // Authorize (step-up) + execute — INSTANT settle.
+    const execRes = await authorizeAndExecute(a.accessToken, proposalId);
+    expect(execRes.status).toBe(201);
+    expect((execRes.body as { status: string }).status).toBe('completed');
 
-    const proposalId = await createTransferProposal(
-      senderWalletId,
-      recipientWalletId,
-      '10',
-    );
+    // Balances: A −5, B +5.
+    const aBalanceAfter = await ledgerBalance(aWalletId);
+    const bBalanceAfter = await ledgerBalance(bWalletId!);
+    expect(aBalanceBefore - aBalanceAfter).toBe(5);
+    expect(aBalanceAfter).toBe(95);
+    expect(bBalanceAfter).toBe(5);
 
-    // idempotencyKey = proposalId per the controller's I8 at-most-once rule.
-    const idempotencyKey = proposalId;
-    const input = buildSettleInput({
-      proposalId,
-      senderWalletId,
-      recipientWalletId,
-      cryptoAmount: '10',
-      idempotencyKey,
-      now: new Date(),
-    });
-
-    // Fire two concurrent settles for the SAME proposal/key — the overlapping-tick
-    // race. The advisory locks on both wallets serialize them; the second finds the
-    // committed anchor under the lock and returns the rebuilt output WITHOUT posting.
-    const [r1, r2] = await Promise.all([
-      settlementRepo.settleInternalTransferAtomic(input),
-      settlementRepo.settleInternalTransferAtomic(input),
-    ]);
-
-    // Both resolve to the SAME anchor Transaction + receipt (no P2002, no throw).
-    expect(r1.txn.id).toBe(r2.txn.id);
-    expect(r1.receiptNumber).toBe(r2.receiptNumber);
-    expect(r1.receiptNumber).toMatch(/^HS-\d{4}-\d{6}$/);
-
-    // Exactly ONE anchor Transaction for the key.
+    // Exactly ONE Transaction (internal_transfer, sender-owned).
     const txns = await prisma.transaction.findMany({
-      where: { idempotencyKey },
+      where: { userId: a.userId, type: 'internal_transfer' },
     });
     expect(txns).toHaveLength(1);
+    const txnId = txns[0].id;
 
-    // Exactly TWO ledger legs for that transaction (one debit + one credit), sum = 0.
-    const entries = await prisma.ledgerEntry.findMany({
+    // The two ledger legs sum to exactly 0 (amount is signed: −5 debit, +5 credit).
+    const legs = await prisma.ledgerEntry.findMany({
+      where: { transactionId: txnId },
+    });
+    expect(legs).toHaveLength(2);
+    const legSum = legs.reduce((acc, l) => acc + Number(l.amount), 0);
+    expect(legSum).toBe(0);
+    const senderLeg = legs.find((l) => l.accountId === aWalletId);
+    const recipientLeg = legs.find((l) => l.accountId === bWalletId);
+    expect(Number(senderLeg?.amount)).toBe(-5);
+    expect(senderLeg?.direction).toBe('debit');
+    expect(Number(recipientLeg?.amount)).toBe(5);
+    expect(recipientLeg?.direction).toBe('credit');
+
+    // Exactly ONE Receipt (the sender's transaction).
+    const receipts = await prisma.receipt.findMany({
+      where: { transactionId: txnId },
+    });
+    expect(receipts).toHaveLength(1);
+
+    // NO on-chain withdraw was called and NO onchain SettlementOutbox row exists.
+    expect(fakeWalletProvider.withdraw).not.toHaveBeenCalled();
+    const outbox = await prisma.settlementOutbox.findMany({
+      where: { transactionId: txnId },
+    });
+    expect(outbox).toHaveLength(0);
+
+    // Velocity attribution (Task 8): the SENDER's counters incremented; the
+    // recipient's did not.
+    const senderCounters = await prisma.velocityCounter.findMany({
+      where: { userId: a.userId },
+    });
+    const recipientCounters = await prisma.velocityCounter.findMany({
+      where: { userId: b.userId },
+    });
+    expect(senderCounters.length).toBeGreaterThan(0);
+    expect(recipientCounters).toHaveLength(0);
+  }, 120_000);
+
+  // ===========================================================================
+  // TEST 2 — /auth/me carries a valid payId
+  // ===========================================================================
+
+  it('/auth/me carries a payId matching the handle format', async () => {
+    const a = await mintTransferUser('me');
+    const res = await request(app.getHttpServer())
+      .get('/auth/me')
+      .set('Authorization', `Bearer ${a.accessToken}`)
+      .expect(200);
+    const payId = (res.body as { payId?: string }).payId;
+    expect(payId).toBeTruthy();
+    expect(payId).toMatch(/^[a-z0-9_]{3,30}$/);
+    expect(payId).toBe(a.payId);
+  }, 120_000);
+
+  // ===========================================================================
+  // TEST 3 — self-send → clarification, NO proposal (§3.1 no-misroute)
+  // ===========================================================================
+
+  it('a self-send to your own @handle → clarification, NO proposal', async () => {
+    const a = await mintTransferUser('self');
+
+    const res = await postHandleSend(a.accessToken, a.payId, '5');
+    const outcome = (res.body as { outcome: { kind: string } }).outcome;
+    expect(outcome.kind).toBe('clarification');
+
+    const proposals = await prisma.proposal.count({
+      where: { userId: a.userId, type: 'internal_transfer' },
+    });
+    expect(proposals).toBe(0);
+  }, 120_000);
+
+  // ===========================================================================
+  // TEST 4 — unknown handle → clarification, NO proposal
+  // ===========================================================================
+
+  it('an unknown @handle → clarification, NO proposal', async () => {
+    const a = await mintTransferUser('unknown');
+    const nobody = `nobody_${Date.now()}`;
+
+    const res = await postHandleSend(a.accessToken, nobody, '5');
+    const outcome = (res.body as { outcome: { kind: string } }).outcome;
+    expect(outcome.kind).toBe('clarification');
+
+    const proposals = await prisma.proposal.count({
+      where: { userId: a.userId, type: 'internal_transfer' },
+    });
+    expect(proposals).toBe(0);
+  }, 120_000);
+
+  // ===========================================================================
+  // TEST 5 — sequential replay: a completed transfer cannot post twice
+  // ===========================================================================
+
+  it('a completed transfer cannot be re-executed: the replay creates no second post (at-most-once)', async () => {
+    const a = await mintTransferUser('replaya');
+    const b = await mintTransferUser('replayb');
+    const aWalletId = await seedUsdtBalance(a.userId, 100);
+
+    const res = await postHandleSend(a.accessToken, b.payId, '5');
+    const proposalId = (res.body as { outcome: { proposalId: string } }).outcome
+      .proposalId;
+
+    // First execute — posts.
+    const firstExec = await authorizeAndExecute(a.accessToken, proposalId);
+    expect(firstExec.status).toBe(201);
+    expect((firstExec.body as { status: string }).status).toBe('completed');
+
+    const bWalletId = (await tronWalletId(b.userId))!;
+    expect(await ledgerBalance(aWalletId)).toBe(95);
+    expect(await ledgerBalance(bWalletId)).toBe(5);
+
+    // Second attempt on the SAME proposal — authorize again (new directive) then
+    // execute again. The proposal is now terminal ('executed'), so the money
+    // path refuses a second post at SOME layer (the controller's proposal-status
+    // guard fires first for a sequential replay; the engine's in-atomic
+    // idempotency guard is the defence-in-depth for the CONCURRENT case, test 6).
+    // Either way: exactly ONE of everything must remain — no second post.
+    let secondAttemptRejected = false;
+    try {
+      const { directiveId, nonce } = await authorizeOnly(
+        a.accessToken,
+        proposalId,
+      );
+      const secondExec = await executeOnce(
+        a.accessToken,
+        proposalId,
+        directiveId,
+        nonce,
+      );
+      // A 2xx here would only be acceptable as an idempotent replay of the PRIOR
+      // result — never a fresh second post; the DB invariant below is the
+      // authoritative check either way.
+      secondAttemptRejected = secondExec.status >= 400;
+    } catch {
+      // authorize itself may 409 the terminal proposal — that is a clean refusal.
+      secondAttemptRejected = true;
+    }
+    expect(secondAttemptRejected).toBe(true);
+
+    // Funds-safety invariant: NO second post — still exactly one of everything,
+    // A debited once, B credited once.
+    const txns = await prisma.transaction.findMany({
+      where: { userId: a.userId, type: 'internal_transfer' },
+    });
+    expect(txns).toHaveLength(1);
+    const legs = await prisma.ledgerEntry.findMany({
       where: { transactionId: txns[0].id },
     });
-    expect(entries).toHaveLength(2);
-    expect(entries.filter((e) => e.direction === 'debit')).toHaveLength(1);
-    expect(entries.filter((e) => e.direction === 'credit')).toHaveLength(1);
-    const sum = entries.reduce(
-      (acc, e) => acc + toScaled(String(e.amount)),
-      0n,
-    );
-    expect(sum).toBe(0n);
-
-    // Exactly ONE Receipt.
+    expect(legs).toHaveLength(2);
     const receipts = await prisma.receipt.findMany({
       where: { transactionId: txns[0].id },
     });
     expect(receipts).toHaveLength(1);
+    expect(await ledgerBalance(aWalletId)).toBe(95);
+    expect(await ledgerBalance(bWalletId)).toBe(5);
+  }, 120_000);
 
-    // Balances moved exactly ONCE — sender 90, recipient 10 (not 80 / 20).
-    expect(
-      toScaled(
-        await ledgerRepo.getAccountBalance(
-          'user_wallet',
-          senderWalletId,
-          'USDT',
-        ),
-      ),
-    ).toBe(toScaled('90'));
-    expect(
-      toScaled(
-        await ledgerRepo.getAccountBalance(
-          'user_wallet',
-          recipientWalletId,
-          'USDT',
-        ),
-      ),
-    ).toBe(toScaled('10'));
+  // ===========================================================================
+  // TEST 6 — concurrent double-execute (one proposal, two parallel executes)
+  // ===========================================================================
 
-    // Exactly one WalletBalance snapshot per wallet (only one post happened).
-    expect(
-      await prisma.walletBalance.count({ where: { walletId: senderWalletId } }),
-    ).toBe(1);
-    expect(
-      await prisma.walletBalance.count({
-        where: { walletId: recipientWalletId },
-      }),
-    ).toBe(1);
-  });
+  it('two parallel executes of ONE proposal post exactly once (advisory lock + single-use directive + in-atomic idempotency)', async () => {
+    const a = await mintTransferUser('racea');
+    const b = await mintTransferUser('raceb');
+    const aWalletId = await seedUsdtBalance(a.userId, 100);
+
+    const res = await postHandleSend(a.accessToken, b.payId, '5');
+    const proposalId = (res.body as { outcome: { proposalId: string } }).outcome
+      .proposalId;
+
+    // Authorize ONCE, then fire TWO executes in parallel with the SAME
+    // directiveId + nonce + proposalId.
+    const { directiveId, nonce } = await authorizeOnly(
+      a.accessToken,
+      proposalId,
+    );
+    const [r1, r2] = await Promise.all([
+      executeOnce(a.accessToken, proposalId, directiveId, nonce),
+      executeOnce(a.accessToken, proposalId, directiveId, nonce),
+    ]);
+
+    const completed = [r1, r2].filter(
+      (r) =>
+        r.status === 201 &&
+        (r.body as { status?: string }).status === 'completed',
+    );
+    // At least one commits; the loser is blocked at SOME layer (single-use
+    // directive / status guard / in-atomic idempotency) — never a second post.
+    expect(completed.length).toBeGreaterThanOrEqual(1);
+
+    const bWalletId = (await tronWalletId(b.userId))!;
+
+    // The INVARIANT — exactly one ledger pair, one Transaction, one Receipt;
+    // A debited exactly once (95, never negative), B credited exactly once (5).
+    const txns = await prisma.transaction.findMany({
+      where: { userId: a.userId, type: 'internal_transfer' },
+    });
+    expect(txns).toHaveLength(1);
+    const legs = await prisma.ledgerEntry.findMany({
+      where: { transactionId: txns[0].id },
+    });
+    expect(legs).toHaveLength(2);
+    expect(legs.reduce((acc, l) => acc + Number(l.amount), 0)).toBe(0);
+    const receipts = await prisma.receipt.findMany({
+      where: { transactionId: txns[0].id },
+    });
+    expect(receipts).toHaveLength(1);
+    const aFinal = await ledgerBalance(aWalletId);
+    expect(aFinal).toBe(95);
+    expect(aFinal).toBeGreaterThanOrEqual(0);
+    expect(await ledgerBalance(bWalletId)).toBe(5);
+  }, 120_000);
+
+  // ===========================================================================
+  // TEST 7 — concurrent drain of the sender (A→B and A→C, only 5 available)
+  // ===========================================================================
+
+  it('two concurrent transfers draining the sender: at most one commits, sender never goes negative, the loser fails cleanly', async () => {
+    const a = await mintTransferUser('draina');
+    const b = await mintTransferUser('drainb');
+    const c = await mintTransferUser('drainc');
+    // Exactly 5 USDT — only ONE of the two 5-USDT transfers can be funded.
+    const aWalletId = await seedUsdtBalance(a.userId, 5);
+
+    // Build TWO proposals (each its own directive) — both pass the propose-time
+    // balance check because nothing is debited until execute.
+    const resB = await postHandleSend(a.accessToken, b.payId, '5');
+    const proposalB = (resB.body as { outcome: { proposalId: string } }).outcome
+      .proposalId;
+    const resC = await postHandleSend(a.accessToken, c.payId, '5');
+    const proposalC = (resC.body as { outcome: { proposalId: string } }).outcome
+      .proposalId;
+
+    const authB = await authorizeOnly(a.accessToken, proposalB);
+    const authC = await authorizeOnly(a.accessToken, proposalC);
+
+    const [rB, rC] = await Promise.all([
+      executeOnce(a.accessToken, proposalB, authB.directiveId, authB.nonce),
+      executeOnce(a.accessToken, proposalC, authC.directiveId, authC.nonce),
+    ]);
+
+    const completed = [rB, rC].filter(
+      (r) =>
+        r.status === 201 &&
+        (r.body as { status?: string }).status === 'completed',
+    );
+    const failed = [rB, rC].filter((r) => r.status >= 400);
+    // AT MOST one commits; the other fails cleanly (no partial post).
+    expect(completed.length).toBeLessThanOrEqual(1);
+    expect(completed.length + failed.length).toBe(2);
+
+    // Sender never goes negative and ends at >= 0.
+    const aFinal = await ledgerBalance(aWalletId);
+    expect(aFinal).toBeGreaterThanOrEqual(0);
+
+    // Exactly one committed internal_transfer for A matches the success count;
+    // its legs sum to 0 and exactly one recipient was credited 5.
+    const txns = await prisma.transaction.findMany({
+      where: { userId: a.userId, type: 'internal_transfer' },
+    });
+    expect(txns.length).toBe(completed.length);
+    if (completed.length === 1) {
+      expect(aFinal).toBe(0);
+      const legs = await prisma.ledgerEntry.findMany({
+        where: { transactionId: txns[0].id },
+      });
+      expect(legs).toHaveLength(2);
+      expect(legs.reduce((acc, l) => acc + Number(l.amount), 0)).toBe(0);
+      const bWalletId = await tronWalletId(b.userId);
+      const cWalletId = await tronWalletId(c.userId);
+      const bBal = bWalletId ? await ledgerBalance(bWalletId) : 0;
+      const cBal = cWalletId ? await ledgerBalance(cWalletId) : 0;
+      expect(bBal + cBal).toBe(5);
+      expect([bBal, cBal].filter((x) => x === 5)).toHaveLength(1);
+    }
+  }, 120_000);
 });
