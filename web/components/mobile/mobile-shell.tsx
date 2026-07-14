@@ -98,6 +98,9 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
               onResolveBeneficiary={(id, messageId) =>
                 void state.resolveBeneficiary("m", id, messageId)
               }
+              onSendRaw={(dest, messageId) =>
+                void state.resolveSendRaw("m", dest, messageId)
+              }
             />
             <ChatComposer
               chips={state.chips.m}

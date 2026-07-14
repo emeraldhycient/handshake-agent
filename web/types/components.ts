@@ -241,6 +241,12 @@ export interface ChatMessageViewProps {
    * callers that don't forward it.
    */
   onResolveBeneficiary: (beneficiaryId: string, messageId?: string) => void
+  /**
+   * Raw send-to-address resolve (crypto only, needs_beneficiary cards with
+   * `allowRawSend`): forwarded to the card's `onSendRaw`. Optional — surfaces
+   * that don't offer the raw-send path (or existing tests) omit it.
+   */
+  onSendRaw?: (destination: SendDestinationInput, messageId?: string) => void
 }
 
 /** 12.3 */
@@ -268,6 +274,8 @@ export interface ChatThreadProps {
   onSelectTicket: (opt: TicketOption) => void
   /** Forwarded to each card; `messageId` binds the resume to that exact card. */
   onResolveBeneficiary: (beneficiaryId: string, messageId?: string) => void
+  /** Forwarded to each card's raw send-to-address resolve — see ChatMessageViewProps. */
+  onSendRaw?: (destination: SendDestinationInput, messageId?: string) => void
 }
 
 // ─── Phase 13 overlay components ──────────────────────────────────────────────
