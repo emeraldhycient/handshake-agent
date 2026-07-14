@@ -49,6 +49,7 @@ import {
   type IIdentityRepository,
   type UserRecord,
 } from '../../identity/application/ports/identity.repository.port';
+import { HandleService } from '../../identity/application/handle.service';
 import type { Capability } from '../../identity/application/kyc-gate.service';
 import {
   meetsCapabilityMinTier,
@@ -199,6 +200,7 @@ export class WebChatService {
     private readonly assetRegistry: AssetRegistry,
     private readonly statementTokens: StatementTokenService,
     private readonly config: EffectiveConfigService,
+    private readonly handleService: HandleService,
   ) {}
 
   async handleMessage(input: HandleMessageInput): Promise<WebChatResponse> {
@@ -836,10 +838,13 @@ export class WebChatService {
    * Precedence:
    *   1. explicit `sendDestination` (user-confirmed raw address) → raw_address
    *   2. explicit `beneficiaryId` (picked in the resolve loop) → saved_beneficiary
-   *   3. `recipientNickname` → saved_beneficiary (1 match); >1 → choose_beneficiary;
-   *      0 → needs_beneficiary(allowRawSend) — the nickname miss offers the card,
-   *      never the default.
-   *   4. no explicit destination → needs_beneficiary(allowRawSend), pre-filled
+   *   3. `recipientNickname` starting with `@` → a PUBLIC handle resolved via
+   *      HandleService → internal_user; a miss (or a self-send) → clarification,
+   *      NEVER the private-nickname lookup or the default (§3.1 NO-MISROUTE).
+   *   4. `recipientNickname` (no `@`) → saved_beneficiary (1 match); >1 →
+   *      choose_beneficiary; 0 → needs_beneficiary(allowRawSend) — the nickname
+   *      miss offers the card, never the default.
+   *   5. no explicit destination → needs_beneficiary(allowRawSend), pre-filled
    *      with a pasted address when the message contains one — NEVER the default.
    *
    * The proposal service and engine re-validate ownership, type, cooling-off,
@@ -885,6 +890,44 @@ export class WebChatService {
     //    saved recipients (§3.1: never an address). A miss offers the card, never
     //    the silent default.
     if (recipientNickname) {
+      // 3a. An `@handle` is a PUBLIC handle (PayID / public nickname), not a
+      //     private saved recipient — resolve it via the global HandleService
+      //     to an internal_user transfer. A miss surfaces a clarification and
+      //     NEVER falls through to the private-nickname lookup or the default
+      //     beneficiary (§3.1 NO-MISROUTE). recipientUserId/displayHandle come
+      //     from the resolver, never the model.
+      if (recipientNickname.startsWith('@')) {
+        const hit = await this.handleService.resolveHandle(recipientNickname);
+        if (hit === null) {
+          const text = `No Handshake user ${recipientNickname} — double-check the handle.`;
+          return {
+            resolved: false,
+            outcome: { kind: 'clarification', text },
+            summaryText: text,
+          };
+        }
+        // Self-send → clarification (clean UX). The proposal service's
+        // SelfSendError guard remains the authoritative gate (§3.1) — this only
+        // avoids a needless round-trip to the engine for the obvious case.
+        if (hit.userId === userId) {
+          const text = `That's your own handle — you can't send money to yourself.`;
+          return {
+            resolved: false,
+            outcome: { kind: 'clarification', text },
+            summaryText: text,
+          };
+        }
+        return {
+          resolved: true,
+          destination: {
+            kind: 'internal_user',
+            recipientUserId: hit.userId,
+            displayHandle: `@${hit.handle}`,
+            recipientDisplayName: hit.displayName,
+          },
+        };
+      }
+
       const matches = await this.beneficiaryService.resolveByNickname(
         userId,
         'crypto_address',

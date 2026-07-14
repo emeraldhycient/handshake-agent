@@ -19,6 +19,7 @@ import {
   WEB_CHAT_RATES_SERVICE,
 } from './web-chat.service';
 import { AGENT_PORT } from '../../agent/application/ports/agent.port';
+import { HandleService } from '../../identity/application/handle.service';
 import { IDENTITY_REPOSITORY } from '../../identity/application/ports/identity.repository.port';
 import { CONVERSATION_REPOSITORY } from '../../conversations/application/ports/conversation.repository.port';
 import { MESSAGE_REPOSITORY } from '../../conversations/application/ports/message.repository.port';
@@ -60,6 +61,10 @@ const fakeBeneficiaryService = {
   resolveByNickname: jest.fn(),
   listForUser: jest.fn(),
 };
+// Global handle resolver (Task 4): turns an `@handle` into a userId + display
+// name, or null on a miss. Injected so `@`-prefixed crypto sends route to the
+// internal-transfer resolver (Task 9), never the saved-nickname/default path.
+const fakeHandleService = { resolveHandle: jest.fn() };
 const fakeHistoryService = { query: jest.fn() };
 const fakeBalanceService = { getBalances: jest.fn() };
 const fakeRatesService = {
@@ -228,6 +233,7 @@ describe('WebChatService', () => {
         { provide: AssetRegistry, useValue: fakeAssetRegistry },
         { provide: StatementTokenService, useValue: fakeStatementTokens },
         { provide: EffectiveConfigService, useValue: fakeConfig },
+        { provide: HandleService, useValue: fakeHandleService },
       ],
     }).compile();
 
@@ -2545,6 +2551,99 @@ describe('WebChatService', () => {
           "You have 2 saved recipients called 'mum'. Which one did you mean?",
       });
       expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    // ── Task 9 — @handle → internal-transfer resolver ────────────────────────
+    // An `@`-prefixed recipientNickname is a PUBLIC handle, resolved via the
+    // global HandleService (Task 4) to an internal_user destination — NOT a
+    // private saved-beneficiary lookup. A miss surfaces a clarification and
+    // NEVER falls through to the nickname/default path (§3.1 NO-MISROUTE).
+    it('an @handle that resolves routes to an internal_user destination — never the saved-nickname/default path', async () => {
+      fakeHandleService.resolveHandle.mockResolvedValue({
+        userId: 'user-ada',
+        displayName: 'Ada I.',
+        handle: 'ada',
+      });
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        '@ada',
+        'send 50 USDT to @ada',
+      );
+      expect(r).toEqual({
+        resolved: true,
+        destination: {
+          kind: 'internal_user',
+          recipientUserId: 'user-ada',
+          displayHandle: '@ada',
+          recipientDisplayName: 'Ada I.',
+        },
+      });
+      expect(fakeHandleService.resolveHandle).toHaveBeenCalledWith('@ada');
+      // The private saved-nickname path must NOT run for an @handle.
+      expect(fakeBeneficiaryService.resolveByNickname).not.toHaveBeenCalled();
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('an @handle that resolves to NOBODY returns a clarification — never resolveByNickname/getDefault (§3.1 NO-MISROUTE)', async () => {
+      fakeHandleService.resolveHandle.mockResolvedValue(null);
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        '@nobody',
+        'send 50 USDT to @nobody',
+      );
+      expect(r).toMatchObject({
+        resolved: false,
+        outcome: { kind: 'clarification' },
+      });
+      if (r.resolved) throw new Error('expected an unresolved outcome');
+      expect(r.outcome).toHaveProperty('kind', 'clarification');
+      // The miss must NOT fall through to the private-nickname or default path.
+      expect(fakeBeneficiaryService.resolveByNickname).not.toHaveBeenCalled();
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('a self-send @handle (resolves to the sender) returns a clarification, no destination', async () => {
+      fakeHandleService.resolveHandle.mockResolvedValue({
+        userId: 'user-1',
+        displayName: 'You',
+        handle: 'me',
+      });
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        '@me',
+        'send 50 USDT to @me',
+      );
+      expect(r).toMatchObject({
+        resolved: false,
+        outcome: { kind: 'clarification' },
+      });
+      expect(fakeBeneficiaryService.resolveByNickname).not.toHaveBeenCalled();
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('a plain nickname (no @) routes to the saved-beneficiary path UNCHANGED — resolveHandle is never consulted', async () => {
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([
+        { id: 'ben-mum' },
+      ]);
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        'mum',
+        'send 50 USDT to mum',
+      );
+      expect(r).toEqual({
+        resolved: true,
+        destination: { kind: 'saved_beneficiary', beneficiaryId: 'ben-mum' },
+      });
+      expect(fakeBeneficiaryService.resolveByNickname).toHaveBeenCalledWith(
+        'user-1',
+        'crypto_address',
+        'mum',
+      );
+      expect(fakeHandleService.resolveHandle).not.toHaveBeenCalled();
     });
   });
 
