@@ -3,6 +3,7 @@ import type {
   ProfileResponse,
   ProfileSession,
   PublicConfigResponse,
+  PublicNickname,
 } from "@handshake-agent/contracts"
 
 // ─── Settings feature types (root §16.6) ──────────────────────────────────────
@@ -51,4 +52,21 @@ export interface SessionRowProps {
 export interface TokenRowProps {
   token: PatListItem
   onRevoke: (token: PatListItem) => void
+}
+
+// ─── PayID + public nicknames (Spec 2) ────────────────────────────────────────
+
+export interface ChangePayIdFormProps {
+  onDone: () => void
+  /** Fired on a PAYID_ALREADY_CHANGED 409 — carries the server's message. */
+  onAlreadyChanged: (message: string) => void
+}
+
+export interface NicknameRowProps {
+  nickname: PublicNickname
+  onRemove: (nickname: PublicNickname) => void
+}
+
+export interface AddNicknameFormProps {
+  onDone: () => void
 }

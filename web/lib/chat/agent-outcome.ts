@@ -153,24 +153,41 @@ export function mapOutcomeToMessages(
         const sn = c as SendProposalConfirmation
         receiveAmt = sn.cryptoAmount + " " + sn.asset
         receiveSub = "Amount sent"
-        // On-chain send masks its address; an internal (PayID) transfer has no
-        // address and is legible via the recipient handle / display name instead.
-        rows.push({
-          label: "To",
-          value:
-            sn.toAddressMasked ??
-            sn.recipientHandle ??
-            sn.recipientDisplayName ??
-            "",
-        })
-        if (sn.beneficiaryLabel) {
-          rows.push({ label: "Beneficiary", value: sn.beneficiaryLabel })
+        // An internal (PayID) transfer settles instantly in-custody: no
+        // on-chain address to mask and no network fee. It is legible via the
+        // recipient's display name + handle instead. `instant` is the
+        // authoritative server signal; the absent-address fallback covers any
+        // older persisted row that predates the field (defensive, never the
+        // other way around — an on-chain send always carries toAddressMasked).
+        const isInternalTransfer =
+          sn.instant === true ||
+          (!sn.toAddressMasked &&
+            !!(sn.recipientHandle || sn.recipientDisplayName))
+
+        if (isInternalTransfer) {
+          const name = sn.recipientDisplayName
+          const handle = sn.recipientHandle ? `@${sn.recipientHandle}` : ""
+          rows.push({
+            label: "To",
+            value: [name, handle].filter(Boolean).join(" · "),
+          })
+          if (sn.beneficiaryLabel) {
+            rows.push({ label: "Beneficiary", value: sn.beneficiaryLabel })
+          }
+          // Never a literal "0 USDT" fee row — an instant ledger transfer has
+          // no network fee to itemize, so state that directly instead.
+          rows.push({ label: "Delivery", value: "Instant · No network fee" })
+        } else {
+          rows.push({ label: "To", value: sn.toAddressMasked ?? "" })
+          if (sn.beneficiaryLabel) {
+            rows.push({ label: "Beneficiary", value: sn.beneficiaryLabel })
+          }
+          rows.push({ label: "Network", value: sn.network })
+          rows.push({
+            label: "Network fee",
+            value: sn.networkFeeCrypto + " " + sn.asset,
+          })
         }
-        rows.push({ label: "Network", value: sn.network })
-        rows.push({
-          label: "Network fee",
-          value: sn.networkFeeCrypto + " " + sn.asset,
-        })
         totalLabel = "Total debit"
         totalValue = sn.totalDebit + " " + sn.asset
       }

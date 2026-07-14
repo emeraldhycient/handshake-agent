@@ -199,7 +199,7 @@ describe("mapOutcomeToMessages", () => {
     })
   })
 
-  it("maps a send proposal to a quote card", () => {
+  it("maps an on-chain send proposal to a quote card with the masked address + fee row (unchanged)", () => {
     const outcome: AgentTurnOutcome = {
       kind: "proposal",
       txType: "send",
@@ -217,7 +217,53 @@ describe("mapOutcomeToMessages", () => {
     }
     const { messages, proposalId } = mapOutcomeToMessages(outcome, makeIder())
     expect(proposalId).toBe("33333333-3333-3333-3333-333333333333")
-    expect(messages[0]).toMatchObject({ kind: "quote", action: "send" })
+    expect(messages[0]).toMatchObject({
+      kind: "quote",
+      action: "send",
+      rows: [
+        { label: "To", value: "TX1234...abcd" },
+        { label: "Network", value: "TRON" },
+        { label: "Network fee", value: "1 USDT" },
+      ],
+      totalLabel: "Total debit",
+      totalValue: "6 USDT",
+    })
+  })
+
+  it("maps an internal-transfer send proposal to a quote card showing the recipient name + @handle and an instant/no-fee row (never a masked address or a '0 USDT' fee line)", () => {
+    const outcome: AgentTurnOutcome = {
+      kind: "proposal",
+      txType: "send",
+      proposalId: "55555555-5555-5555-5555-555555555555",
+      confirmation: {
+        proposalId: "55555555-5555-5555-5555-555555555555",
+        asset: "USDT",
+        cryptoAmount: "10",
+        network: "TRON",
+        networkFeeCrypto: "0",
+        totalDebit: "10",
+        recipientDisplayName: "Ada T.",
+        recipientHandle: "adat",
+        instant: true,
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+      },
+    }
+    const { messages, proposalId } = mapOutcomeToMessages(outcome, makeIder())
+    expect(proposalId).toBe("55555555-5555-5555-5555-555555555555")
+    expect(messages[0]).toMatchObject({
+      kind: "quote",
+      action: "send",
+      rows: [
+        { label: "To", value: "Ada T. · @adat" },
+        { label: "Delivery", value: "Instant · No network fee" },
+      ],
+      totalLabel: "Total debit",
+      totalValue: "10 USDT",
+    })
+    const row = (messages[0] as { rows: Array<{ label: string }> }).rows.find(
+      (r) => r.label === "Network fee"
+    )
+    expect(row).toBeUndefined()
   })
 
   it("maps a swap proposal to a swap card message and returns its proposalId", () => {

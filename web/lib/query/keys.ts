@@ -18,6 +18,7 @@ export const qk = {
   profile: ["auth", "profile"] as const,
   profileSessions: ["auth", "profileSessions"] as const,
   pats: ["auth", "pats"] as const,
+  publicNicknames: ["auth", "publicNicknames"] as const,
   transactionStatus: (id: string) => ["transaction", id, "status"] as const,
   transactionDetail: (id: string) => ["transaction", id, "detail"] as const,
   chatHistory: ["chatHistory"] as const,
