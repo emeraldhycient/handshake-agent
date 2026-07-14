@@ -424,6 +424,25 @@ const DOMAIN_ERROR_MAP: Readonly<Record<string, MappedError>> = {
     status: HttpStatus.CONFLICT,
     message: 'Your name is locked once identity verification has started.',
   },
+
+  // ── Handle resolver / PayID / public nicknames (Spec 2) → 409 / 422 ────────
+  // PayID and public nicknames share one namespace (design §4.2): claiming a
+  // nickname or renaming a PayID against an already-claimed handle → 409.
+  HANDLE_TAKEN: {
+    status: HttpStatus.CONFLICT,
+    message: 'That handle is already taken. Please choose another.',
+  },
+  // A user may hold at most a fixed number of public nicknames → 422.
+  NICKNAME_CAP_EXCEEDED: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: "You've reached the maximum number of public nicknames.",
+  },
+  // A PayID may be changed exactly once → 409 on a second attempt.
+  PAYID_ALREADY_CHANGED: {
+    status: HttpStatus.CONFLICT,
+    message:
+      'Your PayID has already been changed once and cannot be changed again.',
+  },
 };
 
 const STATUS_TEXT: Readonly<Record<number, string>> = {
