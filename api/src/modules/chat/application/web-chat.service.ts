@@ -377,7 +377,10 @@ export class WebChatService {
             await this.proposalService.createSendProposal({
               userId,
               intent,
-              beneficiaryId: sendResolution.beneficiaryId,
+              destination: {
+                kind: 'saved_beneficiary',
+                beneficiaryId: sendResolution.beneficiaryId,
+              },
             });
           outcome = {
             kind: 'proposal',

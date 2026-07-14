@@ -43,6 +43,7 @@ import {
   AmountTooSmallError,
   SelfSendError,
 } from '../domain/amount-guard-errors';
+import { InvalidSendAddressError } from '../domain/invalid-send-address.error';
 import {
   resolveFiatMax,
   resolveFiatMin,
@@ -103,12 +104,23 @@ export interface CreateSellProposalOutput {
   confirmation: SellProposalConfirmation;
 }
 
+export type SendDestination =
+  | { kind: 'saved_beneficiary'; beneficiaryId: string }
+  | {
+      kind: 'raw_address';
+      address: string;
+      network: string;
+      save?: { label?: string };
+    };
+// reserved for Spec 2 (do NOT implement now):
+// | { kind: 'internal_user'; recipientUserId: string; displayHandle: string };
+
 export interface CreateSendProposalInput {
   userId: string;
   conversationId?: string;
   intent: SendCryptoIntent;
-  /** Id of the crypto-address beneficiary to send to. */
-  beneficiaryId: string;
+  /** Where to send: a saved beneficiary or a user-supplied raw address (§3.1). */
+  destination: SendDestination;
 }
 
 export interface CreateSendProposalOutput {
@@ -616,12 +628,14 @@ export class ProposalService {
    *      → throws InsufficientBalanceError if short.
    *   4. KYC/velocity gate on the NGN-equivalent value of the send (§3.3).
    *      → throws a GateError subclass if the user cannot transact.
-   *   5. Beneficiary lookup:
-   *      - must exist + belong to the user (BeneficiaryNotFoundError)
-   *      - type must be crypto_address (BeneficiaryWrongTypeError)
-   *      - address must pass AssetRegistry.validateAddress (domain guard)
-   *   6. First-use cooling-off (IDN-08):
-   *      - if beneficiary.firstUseLockedUntil > clock.now → BeneficiaryCoolingOffError
+   *   5. Resolve the destination address — a discriminated SendDestination:
+   *      - saved_beneficiary → lookup (BeneficiaryNotFoundError / BeneficiaryWrongTypeError)
+   *        + first-use cooling-off (IDN-08): firstUseLockedUntil > clock.now → BeneficiaryCoolingOffError.
+   *      - raw_address → the user-confirmed address (§3.1); NO cooling-off (one-time send).
+   *      Both kinds then re-run the SAME guards on the resolved toAddress:
+   *      - address must pass AssetRegistry.validateAddress → else InvalidSendAddressError
+   *      - self-send guard (own wallet address → SelfSendError)
+   *   6. (folded into 5) Self-send + address-pattern guards run for both kinds.
    *   7. Sanctions screening:
    *      - complianceService.screenSendDestination → if !passed → SanctionsBlockedError
    *   8. Travel-Rule flag:
@@ -633,7 +647,7 @@ export class ProposalService {
   async createSendProposal(
     input: CreateSendProposalInput,
   ): Promise<CreateSendProposalOutput> {
-    const { userId, conversationId, intent, beneficiaryId } = input;
+    const { userId, conversationId, intent, destination } = input;
     const now = this.clock.now();
 
     // 0. Amount-floor guard (finding #4) — BEFORE quoting / balance / gate.
@@ -747,33 +761,55 @@ export class ProposalService {
     // storage (those are approximate uses, not money-gate comparisons — Fix-C scope).
     const fiatValue = Number(intent.cryptoAmount) * baseRate;
 
-    // 5. Beneficiary lookup — must exist, belong to user, and be a crypto_address.
-    const beneficiary = await this.beneficiaryService.getById(
-      userId,
-      beneficiaryId,
-    );
-    if (beneficiary === null) {
-      throw new BeneficiaryNotFoundError(beneficiaryId);
-    }
-    if (beneficiary.type !== 'crypto_address') {
-      throw new BeneficiaryWrongTypeError(
-        beneficiaryId,
-        'crypto_address',
-        beneficiary.type,
+    // 5. Resolve the destination address (saved beneficiary OR user-supplied raw).
+    let toAddress: string;
+    let beneficiaryLabel: string | undefined;
+    let beneficiaryIdForParams: string | null = null;
+    let saveAsBeneficiary = false;
+    let saveLabel: string | undefined;
+
+    if (destination.kind === 'saved_beneficiary') {
+      beneficiaryIdForParams = destination.beneficiaryId;
+      // Beneficiary lookup — must exist, belong to user, and be a crypto_address.
+      const beneficiary = await this.beneficiaryService.getById(
+        userId,
+        destination.beneficiaryId,
       );
+      if (beneficiary === null) {
+        throw new BeneficiaryNotFoundError(destination.beneficiaryId);
+      }
+      if (beneficiary.type !== 'crypto_address') {
+        throw new BeneficiaryWrongTypeError(
+          destination.beneficiaryId,
+          'crypto_address',
+          beneficiary.type,
+        );
+      }
+      toAddress = beneficiary.cryptoAddress!;
+      beneficiaryLabel = beneficiary.label || undefined;
+      // First-use cooling-off (IDN-08) — SAVED destinations only. A one-time
+      // raw send is not a reusable saved destination, so it skips this.
+      if (
+        beneficiary.firstUseLockedUntil !== null &&
+        beneficiary.firstUseLockedUntil > now
+      ) {
+        throw new BeneficiaryCoolingOffError(
+          destination.beneficiaryId,
+          beneficiary.firstUseLockedUntil,
+        );
+      }
+    } else {
+      // raw_address — the address originated from a user-confirmed field (§3.1);
+      // the model never supplies it. The engine re-validates it below.
+      toAddress = destination.address;
+      saveAsBeneficiary = destination.save !== undefined;
+      saveLabel = destination.save?.label;
     }
-    // Address must still pass pattern validation (defensive re-check).
-    const toAddress = beneficiary.cryptoAddress!;
-    const addressValid = this.assetRegistry.validateAddress(
-      intent.network,
-      toAddress,
-    );
-    if (!addressValid) {
-      throw new BeneficiaryWrongTypeError(
-        beneficiaryId,
-        'valid crypto_address',
-        `invalid address: ${toAddress}`,
-      );
+
+    // 5a. Address pattern validation — primary check for the raw branch,
+    // defensive re-check for the saved branch. Same guard, both kinds (§3.3).
+    if (!this.assetRegistry.validateAddress(intent.network, toAddress)) {
+      throw new InvalidSendAddressError(toAddress, intent.network);
     }
 
     // 5b. Self-send guard (finding #5) — sending to the user's OWN provisioned
@@ -785,18 +821,8 @@ export class ProposalService {
       throw new SelfSendError();
     }
 
-    // 6. First-use cooling-off (IDN-08).
-    if (
-      beneficiary.firstUseLockedUntil !== null &&
-      beneficiary.firstUseLockedUntil > now
-    ) {
-      throw new BeneficiaryCoolingOffError(
-        beneficiaryId,
-        beneficiary.firstUseLockedUntil,
-      );
-    }
-
-    // 7. Sanctions screening — screen BEFORE persisting; event always written.
+    // 7. Sanctions screening on the resolved address — screen BEFORE persisting;
+    // event always written. Identical for both destination kinds (§3.3).
     const screeningResult = await this.complianceService.screenSendDestination({
       userId,
       address: toAddress,
@@ -832,10 +858,14 @@ export class ProposalService {
       network: intent.network,
       networkFeeCrypto,
       totalDebit,
-      beneficiaryId,
+      destinationKind: destination.kind,
+      beneficiaryId: beneficiaryIdForParams,
       walletId: wallet.id,
       toAddress,
       requiresTravelRule,
+      ...(saveAsBeneficiary
+        ? { saveAsBeneficiary: 'true', saveLabel: saveLabel ?? '' }
+        : {}),
     };
     const parametersChecksum = sha256Hex(parameters);
 
@@ -854,8 +884,6 @@ export class ProposalService {
       toAddress.length > 10
         ? `${toAddress.slice(0, 6)}...${toAddress.slice(-4)}`
         : toAddress;
-
-    const beneficiaryLabel = beneficiary.label || undefined;
 
     const confirmation = SendProposalConfirmationSchema.parse({
       proposalId,

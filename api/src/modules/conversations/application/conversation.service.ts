@@ -870,7 +870,10 @@ export class ConversationService implements IInboundHandler {
         intent: intent as Parameters<
           ProposalService['createSendProposal']
         >[0]['intent'],
-        beneficiaryId: sendResolution.beneficiaryId,
+        destination: {
+          kind: 'saved_beneficiary',
+          beneficiaryId: sendResolution.beneficiaryId,
+        },
       });
       proposalId = out.proposalId;
       confirmation = out.confirmation;

@@ -478,7 +478,7 @@ describe('Send vertical (executeSend → settleSendOnChain, Testcontainers Postg
     // Create a send proposal via ProposalService.
     const proposal = await proposalService.createSendProposal({
       userId,
-      beneficiaryId: ben.id,
+      destination: { kind: 'saved_beneficiary', beneficiaryId: ben.id },
       intent: {
         action: 'send_crypto',
         asset: 'USDT',

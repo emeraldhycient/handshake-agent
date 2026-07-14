@@ -1947,7 +1947,7 @@ describe('ConversationService.handleInbound', () => {
     expect(proposalService.createSendProposal).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'user-id-1',
-        beneficiaryId: cryptoBen.id,
+        destination: { kind: 'saved_beneficiary', beneficiaryId: cryptoBen.id },
       }),
     );
 
@@ -2118,7 +2118,12 @@ describe('ConversationService.handleInbound', () => {
         'mum',
       );
       expect(proposalService.createSendProposal).toHaveBeenCalledWith(
-        expect.objectContaining({ beneficiaryId: 'ben-crypto-mum-1' }),
+        expect.objectContaining({
+          destination: {
+            kind: 'saved_beneficiary',
+            beneficiaryId: 'ben-crypto-mum-1',
+          },
+        }),
       );
       expect(beneficiaryService.getDefault).not.toHaveBeenCalled();
       expect(sender.sendBeneficiaryFlow).not.toHaveBeenCalled();
@@ -2305,7 +2310,12 @@ describe('ConversationService.handleInbound', () => {
         'crypto_address',
       );
       expect(proposalService.createSendProposal).toHaveBeenCalledWith(
-        expect.objectContaining({ beneficiaryId: cryptoBen.id }),
+        expect.objectContaining({
+          destination: {
+            kind: 'saved_beneficiary',
+            beneficiaryId: cryptoBen.id,
+          },
+        }),
       );
     });
   });

@@ -350,7 +350,10 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
         cryptoAmount: '10.0',
         network: 'TRON',
       },
-      beneficiaryId: cryptoBeneficiaryId,
+      destination: {
+        kind: 'saved_beneficiary',
+        beneficiaryId: cryptoBeneficiaryId,
+      },
     });
 
     expect(result.proposalId).toBeTruthy();
@@ -394,7 +397,10 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
           cryptoAmount: '20.0', // totalDebit = 21, balance = 20
           network: 'TRON',
         },
-        beneficiaryId: cryptoBeneficiaryId,
+        destination: {
+          kind: 'saved_beneficiary',
+          beneficiaryId: cryptoBeneficiaryId,
+        },
       }),
     ).rejects.toThrow(InsufficientBalanceError);
 
@@ -435,7 +441,10 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
           cryptoAmount: '5.0',
           network: 'TRON',
         },
-        beneficiaryId: coolingBen.id,
+        destination: {
+          kind: 'saved_beneficiary',
+          beneficiaryId: coolingBen.id,
+        },
       }),
     ).rejects.toThrow(BeneficiaryCoolingOffError);
   });
@@ -452,7 +461,10 @@ describe('ProposalService.createSendProposal (integration, Testcontainers Postgr
           cryptoAmount: '5.0',
           network: 'TRON',
         },
-        beneficiaryId: blockedBeneficiaryId,
+        destination: {
+          kind: 'saved_beneficiary',
+          beneficiaryId: blockedBeneficiaryId,
+        },
       }),
     ).rejects.toThrow(SanctionsBlockedError);
 

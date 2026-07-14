@@ -1560,7 +1560,12 @@ describe('WebChatService', () => {
       );
       expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
       expect(fakeProposalService.createSendProposal).toHaveBeenCalledWith(
-        expect.objectContaining({ beneficiaryId: MUM_WALLET.id }),
+        expect.objectContaining({
+          destination: {
+            kind: 'saved_beneficiary',
+            beneficiaryId: MUM_WALLET.id,
+          },
+        }),
       );
       expect(result.outcome).toMatchObject({
         kind: 'proposal',
