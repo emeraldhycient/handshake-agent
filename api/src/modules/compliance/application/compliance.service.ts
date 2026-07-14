@@ -42,6 +42,20 @@ export interface ScreenSendDestinationResult {
   complianceEventId: string;
 }
 
+export interface ScreenCounterpartyUserInput {
+  /** The recipient's userId — the counterparty of an internal transfer. */
+  userId: string;
+}
+
+export interface ScreenCounterpartyUserResult {
+  /** true = clear to proceed; false = blocked. */
+  passed: boolean;
+  /** Provider reason when passed is false; null when clear or unavailable. */
+  reason: string | null;
+  /** Id of the persisted ComplianceEvent (always present — event is always written). */
+  complianceEventId: string;
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -104,6 +118,66 @@ export class ComplianceService {
     return {
       passed: screening.passed,
       ...(screening.reason !== undefined ? { reason: screening.reason } : {}),
+      complianceEventId: event.id,
+    };
+  }
+
+  /**
+   * Screens an internal-transfer counterparty (recipient) and persists the
+   * result as a ComplianceEvent (Task 8).
+   *
+   * Internal transfers move value user→user via a ledger double-entry — there
+   * is no on-chain destination address to screen. Rather than change the
+   * shared `ISanctionsScreener` port (which would touch every screener
+   * implementation for a single new caller), the counterparty's userId stands
+   * in for the screen subject: it is passed as `address` on the same
+   * `screen()` call, with `network: 'internal'` marking the screen kind. This
+   * is non-breaking — `screenSendDestination` and the port/mock/real adapters
+   * are untouched and behave identically for address screens.
+   *
+   * The event is always written — regardless of pass/fail — keyed to the
+   * counterparty (`userId` on the event) with `counterpartyUserId` also
+   * recorded in `details` for explicit traceability. Task 6 (the internal
+   * transfer proposal) calls this method; when `passed` is false, Task 6 must
+   * throw `SanctionsBlockedError` to block the transfer — this method never
+   * throws, it only reports.
+   *
+   * Severity/status mapping mirrors screenSendDestination exactly:
+   *   - passed: true  → severity 'low',  status 'approved'
+   *   - passed: false → severity 'high', status 'flagged'
+   */
+  async screenCounterpartyUser(
+    input: ScreenCounterpartyUserInput,
+  ): Promise<ScreenCounterpartyUserResult> {
+    const { userId: counterpartyUserId } = input;
+
+    // ── Step 1: Call the screening provider (userId stands in for address) ──
+    const screening = await this.sanctionsScreener.screen({
+      address: counterpartyUserId,
+      network: 'internal',
+      userId: counterpartyUserId,
+    });
+
+    // ── Step 2: Persist an immutable ComplianceEvent ───────────────────────
+    const event = await this.eventRepo.create({
+      userId: counterpartyUserId,
+      transactionId: null,
+      eventType: 'sanctions_hit',
+      severity: screening.passed ? 'low' : 'high',
+      screeningProvider: screening.provider,
+      ruleOrHit: screening.passed ? null : (screening.reason ?? 'sanctioned'),
+      details: {
+        counterpartyUserId,
+        reference: screening.reference,
+        ...(screening.reason !== undefined ? { reason: screening.reason } : {}),
+      },
+      status: screening.passed ? 'approved' : 'flagged',
+    });
+
+    // ── Step 3: Return the result ───────────────────────────────────────────
+    return {
+      passed: screening.passed,
+      reason: screening.reason ?? null,
       complianceEventId: event.id,
     };
   }

@@ -268,3 +268,108 @@ describe('ComplianceService.screenSendDestination', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// screenCounterpartyUser (Task 8 — counterparty sanctions screening for
+// internal user→user transfers). Reuses the same ISanctionsScreener /
+// IComplianceEventRepository fixtures as screenSendDestination above: the
+// screener port is shared and unchanged (non-breaking), only the screen
+// subject differs — the counterparty's userId stands in for `address`.
+// ---------------------------------------------------------------------------
+
+describe('ComplianceService.screenCounterpartyUser', () => {
+  const COUNTERPARTY_USER_ID = 'counterparty-uuid-001';
+
+  it('clean counterparty → calls screener, persists an approved ComplianceEvent, returns passed:true + eventId', async () => {
+    const eventRepo = makeEventRepo({
+      userId: COUNTERPARTY_USER_ID,
+      status: 'approved',
+      eventType: 'sanctions_hit',
+    });
+    const { svc, screener } = buildService({ eventRepo });
+
+    const result = await svc.screenCounterpartyUser({
+      userId: COUNTERPARTY_USER_ID,
+    });
+
+    expect(result.passed).toBe(true);
+    expect(result.reason).toBeNull();
+    expect(result.complianceEventId).toBe(EVENT_ID);
+
+    // Screener called with the counterparty's userId standing in for the
+    // screen subject (address) — same port, no port change.
+    expect(screener.screen).toHaveBeenCalledWith({
+      address: COUNTERPARTY_USER_ID,
+      network: 'internal',
+      userId: COUNTERPARTY_USER_ID,
+    });
+
+    expect(eventRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: COUNTERPARTY_USER_ID,
+        eventType: 'sanctions_hit',
+        screeningProvider: PROVIDER,
+        status: 'approved',
+      }),
+    );
+  });
+
+  it('sanctioned counterparty (denylisted userId via the screener) → persists a flagged ComplianceEvent, returns passed:false + reason + eventId', async () => {
+    const eventRepo = makeEventRepo({
+      userId: COUNTERPARTY_USER_ID,
+      status: 'flagged',
+      eventType: 'sanctions_hit',
+    });
+    const { svc, screener } = buildService({
+      screener: makeBlockedScreener('sanctioned counterparty'),
+      eventRepo,
+    });
+
+    const result = await svc.screenCounterpartyUser({
+      userId: COUNTERPARTY_USER_ID,
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.reason).toBe('sanctioned counterparty');
+    expect(result.complianceEventId).toBe(EVENT_ID);
+
+    expect(screener.screen).toHaveBeenCalledWith({
+      address: COUNTERPARTY_USER_ID,
+      network: 'internal',
+      userId: COUNTERPARTY_USER_ID,
+    });
+
+    expect(eventRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: COUNTERPARTY_USER_ID,
+        status: 'flagged',
+        severity: 'high',
+      }),
+    );
+  });
+
+  it('persisted event records the counterparty userId in details', async () => {
+    const eventRepo = makeEventRepo({ status: 'approved' });
+    const { svc } = buildService({ eventRepo });
+
+    await svc.screenCounterpartyUser({ userId: COUNTERPARTY_USER_ID });
+
+    const createCall = eventRepo.create.mock.calls[0][0];
+    expect(createCall.details).toMatchObject({
+      counterpartyUserId: COUNTERPARTY_USER_ID,
+      reference: REFERENCE,
+    });
+  });
+
+  it('ComplianceEvent is always persisted — even on a failed screen', async () => {
+    const eventRepo = makeEventRepo();
+    const { svc } = buildService({
+      screener: makeBlockedScreener(),
+      eventRepo,
+    });
+
+    await svc.screenCounterpartyUser({ userId: COUNTERPARTY_USER_ID });
+
+    expect(eventRepo.create).toHaveBeenCalledTimes(1);
+  });
+});
