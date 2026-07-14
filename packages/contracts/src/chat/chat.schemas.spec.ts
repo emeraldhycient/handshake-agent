@@ -907,3 +907,35 @@ describe('TransactionStatusResponseSchema', () => {
     ).toThrow()
   })
 })
+
+describe('ChatMessageRequestSchema — sendDestination', () => {
+  it('accepts a raw sendDestination', () => {
+    const r = ChatMessageRequestSchema.parse({
+      text: 'send 50 USDT',
+      sendDestination: { address: 'TXYZ1234567890', network: 'TRON', saveAsBeneficiary: true, label: 'Mum' },
+    })
+    expect(r.sendDestination?.address).toBe('TXYZ1234567890')
+  })
+
+  it('rejects both beneficiaryId AND sendDestination in one request', () => {
+    expect(() =>
+      ChatMessageRequestSchema.parse({
+        text: 'send 50 USDT',
+        beneficiaryId: '11111111-1111-1111-1111-111111111111',
+        sendDestination: { address: 'TXYZ', network: 'TRON' },
+      }),
+    ).toThrow()
+  })
+})
+
+describe('needs_beneficiary outcome — raw send affordance', () => {
+  it('carries prefillAddress + allowRawSend', () => {
+    const o = AgentTurnOutcomeSchema.parse({
+      kind: 'needs_beneficiary',
+      beneficiaryType: 'crypto_address',
+      prefillAddress: 'TXYZ1234567890',
+      allowRawSend: true,
+    })
+    expect(o).toMatchObject({ prefillAddress: 'TXYZ1234567890', allowRawSend: true })
+  })
+})
