@@ -36,6 +36,7 @@ import {
   AmountTooSmallError,
   SelfSendError,
 } from '../../transactions/domain/amount-guard-errors';
+import { InvalidSendAddressError } from '../../transactions/domain/invalid-send-address.error';
 import {
   BeneficiaryCoolingOffError,
   BeneficiaryWrongTypeError,
@@ -1300,12 +1301,11 @@ describe('WebChatService', () => {
     expect(result.outcome).toEqual({ kind: 'needs_kyc' });
   });
 
-  // ── send_crypto, verified + beneficiary → proposal ────────────────────────
+  // ── send_crypto, verified + explicit saved beneficiary → proposal ─────────
 
-  it('send_crypto, verified, beneficiary exists → proposal outcome', async () => {
-    fakeBeneficiaryService.getDefault.mockResolvedValue({
-      id: 'bene-crypto-1',
-    });
+  it('send_crypto, verified, explicit saved beneficiary → proposal outcome', async () => {
+    // §3.1 always-confirm-destination: a proposal is reached only via an EXPLICIT
+    // destination — here a resolve-loop beneficiaryId pick, NEVER a silent default.
     const sendConf = {
       proposalId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
       asset: 'USDT',
@@ -1331,7 +1331,16 @@ describe('WebChatService', () => {
     const result = await service.handleMessage({
       userId: 'user-1',
       text: 'send 2 USDT',
+      beneficiaryId: 'bene-crypto-1',
     });
+    expect(fakeProposalService.createSendProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        destination: {
+          kind: 'saved_beneficiary',
+          beneficiaryId: 'bene-crypto-1',
+        },
+      }),
+    );
     expect(result.outcome).toMatchObject({
       kind: 'proposal',
       txType: 'send',
@@ -1382,12 +1391,10 @@ describe('WebChatService', () => {
       network: 'tron',
     };
 
-    beforeEach(() => {
-      fakeBeneficiaryService.getDefault.mockResolvedValue({
-        id: 'bene-crypto-1',
-      });
-    });
-
+    // §3.1 always-confirm-destination: each case routes via an EXPLICIT
+    // beneficiaryId (a non-misrouting destination) so the resolver resolves and
+    // createSendProposal is reached — the behaviour under test is the
+    // proposal-error → clarification mapping, not destination resolution.
     it.each([
       [
         'InsufficientBalanceError',
@@ -1424,12 +1431,39 @@ describe('WebChatService', () => {
       const result = await service.handleMessage({
         userId: 'user-1',
         text: 'send 2 USDT',
+        beneficiaryId: 'bene-crypto-1',
       });
 
       expect(result.outcome.kind).toBe('clarification');
       expect(
         (result.outcome as { kind: 'clarification'; text: string }).text,
       ).toBeTruthy();
+    });
+
+    it('maps InvalidSendAddressError (bad raw address) to a clarification outcome', async () => {
+      // A user-pasted raw address that fails the engine's pattern check must
+      // surface as an in-chat clarification, never a 5xx (parity with the other
+      // proposal-builder rejections). The raw-address path is the natural trigger.
+      fakeProposalService.createSendProposal.mockRejectedValue(
+        new InvalidSendAddressError('TBadAddr', 'TRON'),
+      );
+      fakeAgentPort.run.mockResolvedValue({
+        action: 'send_crypto',
+        asset: 'USDT',
+        cryptoAmount: '2',
+        network: 'TRON',
+      });
+
+      const result = await service.handleMessage({
+        userId: 'user-1',
+        text: 'send 2 USDT to TBadAddr',
+        sendDestination: { address: 'TBadAddr', network: 'TRON' },
+      });
+
+      expect(result.outcome.kind).toBe('clarification');
+      expect(
+        (result.outcome as { kind: 'clarification'; text: string }).text,
+      ).toContain('address');
     });
 
     it('still propagates an unexpected error (mapped to 500 by the filter)', async () => {
@@ -1439,15 +1473,18 @@ describe('WebChatService', () => {
       fakeAgentPort.run.mockResolvedValue(sendIntent);
 
       await expect(
-        service.handleMessage({ userId: 'user-1', text: 'send 2 USDT' }),
+        service.handleMessage({
+          userId: 'user-1',
+          text: 'send 2 USDT',
+          beneficiaryId: 'bene-crypto-1',
+        }),
       ).rejects.toThrow('unexpected boom');
     });
   });
 
-  // ── send_crypto, verified, no default beneficiary → needs_beneficiary ──────
+  // ── send_crypto, bare send (no destination) → needs_beneficiary(allowRawSend) ─
 
-  it('send_crypto, verified, no default beneficiary → needs_beneficiary (crypto_address)', async () => {
-    fakeBeneficiaryService.getDefault.mockResolvedValue(null);
+  it('send_crypto, verified, bare "send" (no destination) → needs_beneficiary(allowRawSend) — never the default', async () => {
     fakeAgentPort.run.mockResolvedValue({
       action: 'send_crypto',
       asset: 'USDT',
@@ -1459,10 +1496,15 @@ describe('WebChatService', () => {
       userId: 'user-1',
       text: 'send',
     });
+    // §3.1 always-confirm-destination: a bare send with no id/nickname/pasted
+    // address surfaces the card (with allowRawSend), NEVER routes to a default.
     expect(result.outcome).toEqual({
       kind: 'needs_beneficiary',
       beneficiaryType: 'crypto_address',
+      allowRawSend: true,
     });
+    expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    expect(fakeProposalService.createSendProposal).not.toHaveBeenCalled();
   });
 
   // ── recipientNickname resolution (Wave B — beneficiary nicknames) ──────────
@@ -2252,9 +2294,6 @@ describe('WebChatService', () => {
       // The default `loadUser` mock (VERIFIED_USER) is tier_2 — explicit here
       // for clarity since this test's whole point is the tier boundary.
       fakeIdentityRepo.loadUser.mockResolvedValue(VERIFIED_USER);
-      fakeBeneficiaryService.getDefault.mockResolvedValue({
-        id: 'bene-crypto-1',
-      });
       const sendConf = {
         proposalId: 'prop-t2-send',
         asset: 'USDT',
@@ -2281,6 +2320,9 @@ describe('WebChatService', () => {
       const result = await service.handleMessage({
         userId: 'user-1',
         text: 'send 2 USDT',
+        // §3.1 always-confirm: reach the proposal via an EXPLICIT beneficiary; the
+        // behaviour under test is the tier boundary (tier_2 ≠ needs_kyc).
+        beneficiaryId: 'bene-crypto-1',
       });
 
       expect(result.outcome).toMatchObject({
