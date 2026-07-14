@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PayIdSchema } from "../common";
 
 // Email-first web auth. The phone is captured for later WhatsApp linking only —
 // it is a routing key, never the auth anchor (root CLAUDE.md §3.4).
@@ -65,6 +66,8 @@ export const MeResponseSchema = z.object({
   /** From KycProfile — null when no KYC profile exists yet. */
   firstName: z.string().nullable().optional(),
   lastName: z.string().nullable().optional(),
+  /** PayId handle for @-mention sends (Spec 2). Present when claimed. */
+  payId: z.string().optional(),
 });
 export type MeResponse = z.infer<typeof MeResponseSchema>;
 

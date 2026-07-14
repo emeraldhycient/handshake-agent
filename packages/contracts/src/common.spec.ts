@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FiatCurrencySchema, SupportedAssetSchema } from './common'
+import { FiatCurrencySchema, SupportedAssetSchema, PayIdSchema, normalizeHandle } from './common'
 
 describe('FiatCurrencySchema', () => {
   it('accepts NGN (the only live currency at launch)', () => {
@@ -73,5 +73,29 @@ describe('SupportedAssetSchema', () => {
 
   it('rejects ETH', () => {
     expect(() => SupportedAssetSchema.parse('ETH')).toThrow()
+  })
+})
+
+describe('PayIdSchema', () => {
+  it('accepts a valid handle', () => {
+    expect(PayIdSchema.parse('hycient_1')).toBe('hycient_1')
+  })
+
+  it('rejects too short', () => {
+    expect(() => PayIdSchema.parse('ab')).toThrow()
+  })
+
+  it('rejects bad chars', () => {
+    expect(() => PayIdSchema.parse('Bad-Char')).toThrow()
+  })
+
+  it('rejects reserved words', () => {
+    expect(() => PayIdSchema.parse('admin')).toThrow()
+  })
+})
+
+describe('normalizeHandle', () => {
+  it('strips @, trims, lowercases', () => {
+    expect(normalizeHandle('  @Ada ')).toBe('ada')
   })
 })
