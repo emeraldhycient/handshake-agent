@@ -29,12 +29,14 @@ const PROVIDER = 'mock';
 
 /** Builds a mock screener that returns a clean (passed) result. */
 function makeCleanScreener(): jest.Mocked<ISanctionsScreener> {
+  const clean = {
+    passed: true,
+    provider: PROVIDER,
+    reference: REFERENCE,
+  };
   return {
-    screen: jest.fn().mockResolvedValue({
-      passed: true,
-      provider: PROVIDER,
-      reference: REFERENCE,
-    }),
+    screen: jest.fn().mockResolvedValue(clean),
+    screenIdentity: jest.fn().mockResolvedValue(clean),
   };
 }
 
@@ -42,13 +44,15 @@ function makeCleanScreener(): jest.Mocked<ISanctionsScreener> {
 function makeBlockedScreener(
   reason = 'sanctioned address',
 ): jest.Mocked<ISanctionsScreener> {
+  const blocked = {
+    passed: false,
+    reason,
+    provider: PROVIDER,
+    reference: REFERENCE,
+  };
   return {
-    screen: jest.fn().mockResolvedValue({
-      passed: false,
-      reason,
-      provider: PROVIDER,
-      reference: REFERENCE,
-    }),
+    screen: jest.fn().mockResolvedValue(blocked),
+    screenIdentity: jest.fn().mockResolvedValue(blocked),
   };
 }
 
@@ -272,9 +276,11 @@ describe('ComplianceService.screenSendDestination', () => {
 // ---------------------------------------------------------------------------
 // screenCounterpartyUser (Task 8 — counterparty sanctions screening for
 // internal user→user transfers). Reuses the same ISanctionsScreener /
-// IComplianceEventRepository fixtures as screenSendDestination above: the
-// screener port is shared and unchanged (non-breaking), only the screen
-// subject differs — the counterparty's userId stands in for `address`.
+// IComplianceEventRepository fixtures as screenSendDestination above, but the
+// counterparty is screened through the dedicated IDENTITY path
+// (`screenIdentity`) — NOT the address `screen()` path. This keeps the
+// on-chain-address screener untouched and stops the real Blockradar adapter
+// from fail-closing on a fake `network: 'internal'`.
 // ---------------------------------------------------------------------------
 
 describe('ComplianceService.screenCounterpartyUser', () => {
@@ -296,13 +302,12 @@ describe('ComplianceService.screenCounterpartyUser', () => {
     expect(result.reason).toBeNull();
     expect(result.complianceEventId).toBe(EVENT_ID);
 
-    // Screener called with the counterparty's userId standing in for the
-    // screen subject (address) — same port, no port change.
-    expect(screener.screen).toHaveBeenCalledWith({
-      address: COUNTERPARTY_USER_ID,
-      network: 'internal',
+    // Screened through the dedicated identity path — NOT the address screen().
+    expect(screener.screenIdentity).toHaveBeenCalledWith({
       userId: COUNTERPARTY_USER_ID,
+      reference: null,
     });
+    expect(screener.screen).not.toHaveBeenCalled();
 
     expect(eventRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -333,10 +338,9 @@ describe('ComplianceService.screenCounterpartyUser', () => {
     expect(result.reason).toBe('sanctioned counterparty');
     expect(result.complianceEventId).toBe(EVENT_ID);
 
-    expect(screener.screen).toHaveBeenCalledWith({
-      address: COUNTERPARTY_USER_ID,
-      network: 'internal',
+    expect(screener.screenIdentity).toHaveBeenCalledWith({
       userId: COUNTERPARTY_USER_ID,
+      reference: null,
     });
 
     expect(eventRepo.create).toHaveBeenCalledWith(

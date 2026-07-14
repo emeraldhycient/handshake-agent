@@ -426,6 +426,54 @@ describe('BlockradarAmlScreener', () => {
     });
   });
 
+  // ── Identity screen (counterparty-user path, Task 8 fix) ──────────────────
+  // REGRESSION GUARD for the exact reviewed bug: the old code routed the
+  // counterparty screen through screen({ network: 'internal' }), which
+  // resolveBlockchain fail-closes on (no 'internal' mapping in the catalog),
+  // throwing BEFORE the ComplianceEvent is written. screenIdentity must NEVER
+  // throw and must NEVER touch resolveBlockchain — Blockradar has no
+  // name/entity screening, so pass-through is correct (not a screen failure).
+
+  describe('screenIdentity — non-throwing pass-through (no address AML)', () => {
+    it('returns passed:true even though no "internal"/identity network is mapped', async () => {
+      const result = await screener.screenIdentity({
+        userId: 'counterparty-uuid-001',
+      });
+
+      expect(result.passed).toBe(true);
+    });
+
+    it('does NOT throw (regression guard: old path fail-closed via resolveBlockchain)', async () => {
+      await expect(
+        screener.screenIdentity({ userId: 'counterparty-uuid-002' }),
+      ).resolves.toBeDefined();
+    });
+
+    it('does NOT call the HTTP endpoint (no on-chain AML lookup for an identity)', async () => {
+      await screener.screenIdentity({ userId: 'counterparty-uuid-003' });
+
+      expect(http.get).not.toHaveBeenCalled();
+    });
+
+    it('marks the provider gap explicitly (identity screening unsupported)', async () => {
+      const result = await screener.screenIdentity({
+        userId: 'counterparty-uuid-004',
+      });
+
+      expect(result.provider).toContain('identity-screen-unsupported');
+      expect(result.reference).toBeTruthy();
+    });
+
+    it('honors a caller-supplied reference for traceability', async () => {
+      const result = await screener.screenIdentity({
+        userId: 'counterparty-uuid-005',
+        reference: 'txn-correlation-ref',
+      });
+
+      expect(result.reference).toBe('txn-correlation-ref');
+    });
+  });
+
   // ── Retry logic ───────────────────────────────────────────────────────────
 
   describe('retry on transient 5xx', () => {

@@ -127,13 +127,15 @@ export class ComplianceService {
    * result as a ComplianceEvent (Task 8).
    *
    * Internal transfers move value user→user via a ledger double-entry — there
-   * is no on-chain destination address to screen. Rather than change the
-   * shared `ISanctionsScreener` port (which would touch every screener
-   * implementation for a single new caller), the counterparty's userId stands
-   * in for the screen subject: it is passed as `address` on the same
-   * `screen()` call, with `network: 'internal'` marking the screen kind. This
-   * is non-breaking — `screenSendDestination` and the port/mock/real adapters
-   * are untouched and behave identically for address screens.
+   * is no on-chain destination address to AML-screen. The counterparty is
+   * screened by IDENTITY through the dedicated `screenIdentity` port method,
+   * NOT by overloading the address `screen()` path with a fake
+   * `network: 'internal'` — that fake network fail-closes the real Blockradar
+   * adapter (which only maps real on-chain networks), throwing before the
+   * ComplianceEvent is written and breaking every internal transfer in prod.
+   * `screenIdentity` is non-throwing: address-only providers pass through and
+   * record the gap; a name/entity provider can be wired later without changing
+   * this caller.
    *
    * The event is always written — regardless of pass/fail — keyed to the
    * counterparty (`userId` on the event) with `counterpartyUserId` also
@@ -151,11 +153,10 @@ export class ComplianceService {
   ): Promise<ScreenCounterpartyUserResult> {
     const { userId: counterpartyUserId } = input;
 
-    // ── Step 1: Call the screening provider (userId stands in for address) ──
-    const screening = await this.sanctionsScreener.screen({
-      address: counterpartyUserId,
-      network: 'internal',
+    // ── Step 1: Screen the counterparty by identity (not by address) ────────
+    const screening = await this.sanctionsScreener.screenIdentity({
       userId: counterpartyUserId,
+      reference: null,
     });
 
     // ── Step 2: Persist an immutable ComplianceEvent ───────────────────────
