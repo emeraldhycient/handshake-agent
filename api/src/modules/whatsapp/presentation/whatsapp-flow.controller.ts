@@ -38,6 +38,8 @@ import { ConfigService } from '@nestjs/config';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 
+import { SendCryptoIntentSchema } from '@handshake-agent/contracts';
+
 import {
   FLOW_CRYPTO,
   type IFlowCrypto,
@@ -48,6 +50,7 @@ import {
   FlowKeyNotConfiguredError,
 } from '../domain/flow-errors';
 import { ExecutionService } from '../../transactions/application/execution.service';
+import { ProposalService } from '../../transactions/application/proposal.service';
 import { BeneficiaryService } from '../../beneficiaries/application/beneficiary.service';
 import {
   InvalidAddressError,
@@ -78,6 +81,9 @@ import {
   ProposalNotExecutableError,
   QuoteDriftError,
 } from '../../transactions/domain/execution-errors';
+import { InvalidSendAddressError } from '../../transactions/domain/invalid-send-address.error';
+import { SelfSendError } from '../../transactions/domain/amount-guard-errors';
+import { SanctionsBlockedError } from '../../compliance/domain/compliance-errors';
 import {
   KycNotVerifiedError,
   TierLimitExceededError,
@@ -115,6 +121,7 @@ export class WhatsAppFlowController {
   constructor(
     @Inject(FLOW_CRYPTO) private readonly flowCrypto: IFlowCrypto,
     private readonly executionService: ExecutionService,
+    private readonly proposalService: ProposalService,
     private readonly beneficiaryService: BeneficiaryService,
     private readonly configService: ConfigService<Env, true>,
     @Inject(PROPOSAL_REPOSITORY)
@@ -261,6 +268,11 @@ export class WhatsAppFlowController {
     }
     if (action === 'beneficiary_add') {
       return this.handleBeneficiaryAdd(userId, data);
+    }
+    // Task 11: a raw on-chain address entered in-Flow (§3.5 — never plaintext
+    // chat) routes to the engine's raw_address branch of createSendProposal.
+    if (action === 'send_to_address') {
+      return this.handleSendToAddress(userId, data);
     }
 
     // Default: proposal confirmation flow — extract PIN + nonce (§3.5: never log them).
@@ -458,6 +470,118 @@ export class WhatsAppFlowController {
         data: { message: 'Something went wrong. Please try again.' },
       };
     }
+  }
+
+  /**
+   * Handles a `send_to_address` data_exchange action (Task 11).
+   *
+   * The user enters a raw on-chain address in-Flow (§3.5 — E2E-encrypted,
+   * never plaintext chat). This is the WhatsApp analogue of the web
+   * `sendDestination` card path (`web-chat.service.ts#resolveSendDestination`):
+   * both surfaces converge on the SAME engine call, `ProposalService
+   * .createSendProposal`, with a `raw_address` destination descriptor — the
+   * engine re-runs every guard identically regardless of channel (§3.1/§3.3).
+   *
+   * Intent carrying: the flow_token for this session binds only `userId`
+   * (no proposal exists yet — same pattern as the beneficiary-select Flow,
+   * `signFlowToken({ proposalId: '', directiveId: '', userId, exp })` in
+   * ConversationService). The send intent (asset + amount + network) is
+   * therefore read from the SAME decrypted `data` payload as the address,
+   * exactly like every other data_exchange action in this controller reads
+   * multiple related fields off one flat `data` object (e.g.
+   * `handleBeneficiaryAdd`'s `currency` alongside `accountNumber`). Nothing
+   * here mints a new token or invents a parallel channel — see the task
+   * report for the corresponding gap on the OUTBOUND side (no code path
+   * today seeds `asset`/`cryptoAmount` into a Flow that reaches this screen).
+   */
+  private async handleSendToAddress(
+    userId: string,
+    data: Record<string, unknown>,
+  ): Promise<unknown> {
+    const address = typeof data.address === 'string' ? data.address : '';
+    const network = typeof data.network === 'string' ? data.network : '';
+    const asset = typeof data.asset === 'string' ? data.asset : '';
+    const cryptoAmount =
+      typeof data.cryptoAmount === 'string' ? data.cryptoAmount : '';
+    const saveAsBeneficiary = data.saveAsBeneficiary === true;
+    const label =
+      typeof data.label === 'string' && data.label ? data.label : undefined;
+
+    if (!address) {
+      return { screen: 'ERROR', data: { message: 'No address provided.' } };
+    }
+
+    // Validate the carried intent at this external-input boundary (§3.3) —
+    // the WhatsApp Flow payload is untrusted client input, unlike the agent's
+    // already-validated structured output on the web/text path.
+    const intentResult = SendCryptoIntentSchema.safeParse({
+      action: 'send_crypto',
+      asset,
+      cryptoAmount,
+      network,
+    });
+    if (!intentResult.success) {
+      return {
+        screen: 'ERROR',
+        data: { message: 'Incomplete send details. Please try again.' },
+      };
+    }
+
+    try {
+      const { proposalId, confirmation } =
+        await this.proposalService.createSendProposal({
+          userId,
+          intent: intentResult.data,
+          destination: {
+            kind: 'raw_address',
+            address,
+            network,
+            ...(saveAsBeneficiary ? { save: { label } } : {}),
+          },
+        });
+
+      return {
+        screen: 'SEND_CONFIRM',
+        data: {
+          proposalId,
+          asset: confirmation.asset,
+          cryptoAmount: confirmation.cryptoAmount,
+          network: confirmation.network,
+          networkFeeCrypto: confirmation.networkFeeCrypto,
+          totalDebit: confirmation.totalDebit,
+          toAddressMasked: confirmation.toAddressMasked,
+          message: 'Please review and confirm your send.',
+        },
+      };
+    } catch (err) {
+      this.logger.warn(
+        { errorName: err instanceof Error ? err.name : 'unknown' },
+        'send_to_address failed',
+      );
+      return {
+        screen: 'ERROR',
+        data: { message: this.mapSendToAddressError(err) },
+      };
+    }
+  }
+
+  /**
+   * Maps a `send_to_address` proposal-builder rejection to a safe,
+   * user-friendly message. NEVER leaks the raw domain message (which may
+   * echo the address or a compliance event id) — mirrors the copy already
+   * used on the web/text paths (web-chat.service.ts, conversation.service.ts).
+   */
+  private mapSendToAddressError(err: unknown): string {
+    if (err instanceof InvalidSendAddressError) {
+      return `That doesn't look like a valid ${err.network} address — please check it and try again.`;
+    }
+    if (err instanceof SelfSendError) {
+      return "That's your own wallet address — no transfer is needed. Choose a different recipient.";
+    }
+    if (err instanceof SanctionsBlockedError) {
+      return "This transfer can't be completed. Please use a different recipient.";
+    }
+    return 'Something went wrong. Please try again.';
   }
 
   /**

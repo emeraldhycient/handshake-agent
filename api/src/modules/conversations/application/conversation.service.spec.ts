@@ -37,6 +37,7 @@ import {
   AmountTooSmallError,
   SelfSendError,
 } from '../../transactions/domain/amount-guard-errors';
+import { InvalidSendAddressError } from '../../transactions/domain/invalid-send-address.error';
 import {
   BeneficiaryCoolingOffError,
   BeneficiaryWrongTypeError,
@@ -2397,6 +2398,10 @@ describe('ConversationService.handleInbound', () => {
         new AmountTooSmallError('send', '0.1', '1', 'USDT'),
       ],
       ['SelfSendError', new SelfSendError()],
+      [
+        'InvalidSendAddressError',
+        new InvalidSendAddressError('bad-address', 'TRON'),
+      ],
     ])(
       'send_crypto createSendProposal throws %s → clarification text, message not failed',
       async (_label, err: Error) => {

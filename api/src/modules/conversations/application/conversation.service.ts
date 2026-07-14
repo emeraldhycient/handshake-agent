@@ -23,6 +23,7 @@ import {
   AmountTooSmallError,
   SelfSendError,
 } from '../../transactions/domain/amount-guard-errors';
+import { InvalidSendAddressError } from '../../transactions/domain/invalid-send-address.error';
 import {
   BeneficiaryCoolingOffError,
   BeneficiaryWrongTypeError,
@@ -430,6 +431,12 @@ export class ConversationService implements IInboundHandler {
     }
     if (err instanceof SelfSendError) {
       return "That's your own wallet address — no transfer is needed. Choose a different recipient.";
+    }
+    if (err instanceof InvalidSendAddressError) {
+      // A user-pasted raw address that failed the network's pattern check.
+      // Surface a clean, actionable clarification — NEVER the raw domain
+      // message (it echoes the invalid address back verbatim).
+      return `That doesn’t look like a valid ${err.network} address — please check it and try again.`;
     }
     if (err instanceof BeneficiaryCoolingOffError) {
       return (
