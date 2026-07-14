@@ -2402,6 +2402,76 @@ describe('WebChatService', () => {
       });
       expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
     });
+
+    it('ZERO nickname matches returns needs_beneficiary(allowRawSend) — never the default (§3.1 NO-MISROUTE)', async () => {
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([]);
+      // Even with a default saved, a missed nickname must NOT silently route
+      // to it — the user named someone specific.
+      fakeBeneficiaryService.getDefault.mockResolvedValue({
+        id: 'default-ben',
+      });
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        'mum',
+        'send 50 USDT to mum',
+      );
+      expect(r).toMatchObject({
+        resolved: false,
+        outcome: {
+          kind: 'needs_beneficiary',
+          beneficiaryType: 'crypto_address',
+          allowRawSend: true,
+        },
+      });
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
+
+    it('TWO nickname matches returns choose_beneficiary with both masked candidates — never the default', async () => {
+      const MUM_WALLET = {
+        id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        label: 'Mum',
+        type: 'crypto_address' as const,
+        bankCode: null,
+        accountNumber: null,
+        cryptoAddress: 'TQn9Y2khDD3VHKZ2GRdmKXD8bNkRuaBP2p',
+        isDefault: false,
+      };
+      const MUM_WALLET_2 = {
+        id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        label: 'Mum',
+        type: 'crypto_address' as const,
+        bankCode: null,
+        accountNumber: null,
+        cryptoAddress: 'TXk4mzhDD3VHKZ2GRdmKXD8bNkRuaZZ9q',
+        isDefault: false,
+      };
+      fakeBeneficiaryService.resolveByNickname.mockResolvedValue([
+        MUM_WALLET,
+        MUM_WALLET_2,
+      ]);
+      const r = await service.resolveSendDestination(
+        'user-1',
+        {},
+        'mum',
+        'send 50 USDT to mum',
+      );
+      expect(r).toEqual({
+        resolved: false,
+        outcome: {
+          kind: 'choose_beneficiary',
+          beneficiaryType: 'crypto_address',
+          nickname: 'mum',
+          candidates: [
+            { id: MUM_WALLET.id, label: 'Mum', detail: 'TQn9Y2...BP2p' },
+            { id: MUM_WALLET_2.id, label: 'Mum', detail: 'TXk4mz...ZZ9q' },
+          ],
+        },
+        summaryText:
+          "You have 2 saved recipients called 'mum'. Which one did you mean?",
+      });
+      expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+    });
   });
 
   describe('parseAddressFromText', () => {
