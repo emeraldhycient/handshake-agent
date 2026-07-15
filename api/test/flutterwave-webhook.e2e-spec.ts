@@ -324,6 +324,7 @@ describe('FlutterwaveWebhookController (integration, Testcontainers Postgres)', 
       executionService,
       identityService,
       fakeSender,
+      assetRegistry,
     );
 
     // Seed a verified user with a PIN.

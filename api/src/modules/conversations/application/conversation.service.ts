@@ -1709,8 +1709,12 @@ export class ConversationService implements IInboundHandler {
     // The supported set grows via config (§7); this fallback covers deferred actions.
     // `action` is logged in the future; for now build a generic reply from registry.
     void action; // acknowledged — surface it in a future logging enhancement
-    const defaultAsset = this.assetRegistry.asset('USDT').displayName;
-    const defaultFiat = this.assetRegistry.fiat('NGN').displayName;
+    const defaultAsset = this.assetRegistry.asset(
+      this.assetRegistry.defaultCryptoAsset(),
+    ).displayName;
+    const defaultFiat = this.assetRegistry.fiat(
+      this.assetRegistry.defaultFiat(),
+    ).displayName;
     return `That's not supported yet — you can buy ${defaultAsset} with ${defaultFiat}.`;
   }
 }

@@ -550,6 +550,7 @@ function makeAssetRegistry(): jest.Mocked<AssetRegistry> {
       enabled: true,
     })),
     defaultCryptoAsset: jest.fn(() => 'USDT'),
+    defaultFiat: jest.fn(() => 'NGN'),
     defaultNetworkFor: jest.fn(() => 'TRON'),
     formatCrypto: jest.fn(
       (symbol: string, amount: string) => `${amount} ${symbol}`,
@@ -1139,6 +1140,37 @@ describe('ConversationService.handleInbound', () => {
     const sentText = captureFirstSentText(sender);
     expect(sentText).toContain('not supported');
     expect(proposalService.createSwapProposal).not.toHaveBeenCalled();
+  });
+
+  it('swap intent, capability disabled → "not supported" reply names the CONFIG default fiat, not a hardcoded NGN', async () => {
+    const agentPort = makeAgentPort({
+      action: 'swap',
+      fromAsset: 'USDT',
+      toAsset: 'TRX',
+      amount: '10',
+    });
+    const assetRegistry = makeAssetRegistry();
+    assetRegistry.isCapabilityEnabled.mockReturnValueOnce(false);
+    (assetRegistry.defaultFiat as jest.Mock).mockReturnValue('USD');
+    (assetRegistry.fiat as jest.Mock).mockImplementation((code: string) => ({
+      code,
+      displayName: code === 'USD' ? 'US Dollar' : code,
+      symbol: code === 'USD' ? '$' : code,
+      decimals: 2,
+      enabled: true,
+    }));
+    const proposalService = makeProposalService();
+    const { svc, sender } = buildService({
+      agentPort,
+      assetRegistry,
+      proposalService,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    const sentText = captureFirstSentText(sender);
+    expect(sentText).toContain('US Dollar');
+    expect(sentText).not.toContain('Naira');
   });
 
   // ── swap, capability live, verified user → proposal + flow/text confirmation ──
