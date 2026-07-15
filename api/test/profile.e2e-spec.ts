@@ -196,7 +196,11 @@ describe('Profile — e2e (GET /profile)', () => {
         perTxFiatMax: number;
         dailyFiatMax: number;
         dailyTxCountMax: number;
+        dailyFiatUsed: number;
+        dailyTxCountUsed: number;
       } | null;
+      memberSince: string | null;
+      security: { score: number; label: string };
     };
 
     expect(body.email).toBe(email);
@@ -208,6 +212,15 @@ describe('Profile — e2e (GET /profile)', () => {
     expect(body.fiatCurrency).toBe('NGN');
     expect(body.limits).not.toBeNull();
     expect(body.limits?.dailyFiatMax).toBe(200000);
+    // Live membership data: usage folded into limits (0 with no settled tx),
+    // memberSince is the account-creation ISO, security is a real 0..4 score.
+    expect(body.limits?.dailyFiatUsed).toBe(0);
+    expect(body.limits?.dailyTxCountUsed).toBe(0);
+    expect(typeof body.memberSince).toBe('string');
+    expect(Number.isNaN(Date.parse(body.memberSince as string))).toBe(false);
+    expect(body.security.score).toBeGreaterThanOrEqual(0);
+    expect(body.security.score).toBeLessThanOrEqual(4);
+    expect(['weak', 'fair', 'good', 'strong']).toContain(body.security.label);
     expect(typeof body.phone === 'string' || body.phone === null).toBe(true);
   }, 120_000);
 
