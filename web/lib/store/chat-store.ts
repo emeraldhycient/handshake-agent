@@ -72,6 +72,29 @@ export { chipLabel, actionPrompt }
 /** Milliseconds before the success overlay auto-dismisses. Matches prototype (line 1352). */
 const SUCCESS_DISMISS_MS = 1150
 
+/**
+ * Once a proposal is executed (buy → pay-in, or an instant completion), the
+ * quote/swap card that spawned it must stop offering "Review & confirm" — a
+ * spent quote's confirm would 409. Mark the most recent still-live quote/swap in
+ * the thread terminal, mirroring what a reload does when GET /chat/messages
+ * returns the proposal with status "executed".
+ */
+function markLatestProposalCardExecuted(thread: ChatMessage[]): ChatMessage[] {
+  for (let i = thread.length - 1; i >= 0; i--) {
+    const m = thread[i]
+    if (
+      (m.kind === "quote" || m.kind === "swap") &&
+      m.proposalStatus !== "executed" &&
+      m.proposalStatus !== "rejected"
+    ) {
+      const next = thread.slice()
+      next[i] = { ...m, proposalStatus: "executed" }
+      return next
+    }
+  }
+  return thread
+}
+
 // ─── Scheduler type ───────────────────────────────────────────────────────────
 
 /** A function that schedules `fn` to run after a typing delay (or immediately in tests). */
@@ -985,7 +1008,10 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             set((s) => ({
               threads: {
                 ...s.threads,
-                [overlaySurface]: [...s.threads[overlaySurface], inFlight],
+                [overlaySurface]: [
+                  ...markLatestProposalCardExecuted(s.threads[overlaySurface]),
+                  inFlight,
+                ],
               },
               chips: { ...s.chips, [overlaySurface]: startChips() },
               pending: null,
@@ -1027,7 +1053,10 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             set((s) => ({
               threads: {
                 ...s.threads,
-                [overlaySurface]: [...s.threads[overlaySurface], receipt],
+                [overlaySurface]: [
+                  ...markLatestProposalCardExecuted(s.threads[overlaySurface]),
+                  receipt,
+                ],
               },
               chips: { ...s.chips, [overlaySurface]: startChips() },
               pending: null,

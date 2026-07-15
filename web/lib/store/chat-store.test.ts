@@ -481,6 +481,56 @@ describe("buy execute flow (authenticated path)", () => {
     expect(store.getState()._settlingSurface).toBe("m")
   })
 
+  it("marks the originating quote card terminal on confirm so its 'Review & confirm' stops being active", async () => {
+    const transactionId = "uuuuuuuu-uuuu-uuuu-uuuu-uuuuuuuuuuuu"
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.resolve({
+        transactionId,
+        status: "settling" as const,
+        payment: {
+          accountNumber: "0123456789",
+          bankName: "Test Bank",
+          providerRef: "REF002",
+          amount: "50000",
+          currency: "NGN",
+        },
+      })
+    )
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+    })
+    store.getState().openConfirm("m", buildBuyConfirm())
+    store.setState({ pendingProposalId: proposalId })
+    // Seed a live quote card in the thread (as the agent flow would) — no
+    // proposalStatus means the QuoteCard renders an active "Review & confirm".
+    const quoteMsg = {
+      id: "q1",
+      role: "assistant" as const,
+      kind: "quote" as const,
+      action: "buy" as const,
+      receiveAmt: "35.30 USDT",
+      receiveSub: "You receive",
+      rows: [],
+      totalLabel: "Total charged",
+      totalValue: "₦50,000.00",
+      lockSeconds: 300,
+    }
+    store.setState({
+      threads: { ...store.getState().threads, m: [quoteMsg] },
+    })
+
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    const quote = store.getState().threads.m.find((x) => x.kind === "quote")
+    // Once confirmed, the spent quote is terminal — re-confirming would 409.
+    expect(quote?.kind === "quote" && quote.proposalStatus).toBe("executed")
+  })
+
   it("I8: pinComplete sends a STABLE idempotencyKey (= proposalId) so a retry cannot double-execute", async () => {
     const authorizeApi = makeAuthApi()
     let capturedKey: string | undefined
