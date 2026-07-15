@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
 import type { SectionCardProps, SettingRowProps } from "@/types"
 
 /**
@@ -172,7 +173,10 @@ export function PillSelect({
   )
 }
 
-/** The destructive row action button ("Revoke" / "Disconnect"). */
+/**
+ * The destructive row action ("Revoke" / "Disconnect") — the canonical Button
+ * primitive (destructive variant, compact size) so it matches the rest of the app.
+ */
 export function DangerButton({
   children,
   onClick,
@@ -184,25 +188,24 @@ export function DangerButton({
   density: "desktop" | "mobile"
   ariaLabel?: string
 }) {
-  const mobile = density === "mobile"
   return (
-    <button
+    <Button
       type="button"
+      variant="destructive"
+      size="sm"
       onClick={onClick}
       aria-label={ariaLabel}
-      className={cn(
-        "flex-none border border-settings-danger-border bg-settings-danger-bg font-semibold text-settings-danger hover:bg-settings-danger-hover",
-        mobile
-          ? "rounded-[9px] px-[11px] py-1.5 text-[12px]"
-          : "rounded-[10px] px-[13px] py-[7px] text-[12.5px]"
-      )}
+      className={cn("flex-none", density === "mobile" && "ml-auto")}
     >
       {children}
-    </button>
+    </Button>
   )
 }
 
-/** The neutral row action button ("Edit" / "Change" / "Claim" / "Add"). */
+/**
+ * The neutral row action ("Edit" / "Change" / "Claim" / "Add") — the canonical
+ * Button primitive (outline, compact size) for consistency with Get Started etc.
+ */
 export function RowButton({
   children,
   onClick,
@@ -214,20 +217,15 @@ export function RowButton({
   density: "desktop" | "mobile"
   className?: string
 }) {
-  const mobile = density === "mobile"
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
+      size="sm"
       onClick={onClick}
-      className={cn(
-        "flex-none rounded-[10px] border border-settings-btn-border bg-card-muted font-semibold text-settings-btn-text hover:bg-settings-btn-hover",
-        mobile
-          ? "ml-auto px-[13px] py-[7px] text-[12.5px]"
-          : "px-[14px] py-2 text-[13px]",
-        className
-      )}
+      className={cn("flex-none", density === "mobile" && "ml-auto", className)}
     >
       {children}
-    </button>
+    </Button>
   )
 }

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
 import { useLogout } from "@/lib/query/auth"
 import { Toast } from "@/components/shared/toast"
 import { useToast } from "@/hooks/use-toast"
@@ -97,15 +98,15 @@ function LogOutButton({
 }) {
   const mobile = density === "mobile"
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
+      size="xl"
       onClick={onClick}
       aria-label="Log out"
       className={cn(
-        "inline-flex items-center gap-[9px] border border-settings-danger-border bg-card font-bold text-settings-danger hover:bg-settings-danger-bg",
-        mobile
-          ? "w-full justify-center rounded-[14px] py-[13px] text-[14px]"
-          : "self-start rounded-[13px] px-5 py-3 text-[14px]"
+        "gap-[9px] border-settings-danger-border font-bold text-settings-danger hover:bg-settings-danger-bg hover:text-settings-danger",
+        mobile ? "w-full" : "self-start"
       )}
     >
       <svg width="16" height="16" viewBox="0 0 18 18" fill="none">
@@ -123,6 +124,6 @@ function LogOutButton({
         />
       </svg>
       Log out
-    </button>
+    </Button>
   )
 }

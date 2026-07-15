@@ -9,6 +9,7 @@ import { formatDate } from "@/lib/transaction/format"
 import { toErrorMessage } from "@/lib/error-message"
 import { PAT_SCOPE_OPTIONS, MCP_CAPABILITY_NOTE } from "@/constants/settings"
 import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { CopyButton } from "@/components/shared/copy-button"
 import { useToast } from "@/hooks/use-toast"
@@ -46,18 +47,14 @@ export function ConnectedAgentsSection({ density }: SettingsSectionProps) {
       label={mobile ? "Agents · MCP" : "Connected agents · MCP"}
       density={density}
       action={
-        <button
+        <Button
           type="button"
+          size="sm"
           onClick={() => setCreating(true)}
-          className={cn(
-            "flex-none border-none bg-foreground font-semibold text-white hover:bg-settings-dark-hover",
-            mobile
-              ? "rounded-[9px] px-3 py-[7px] text-[12px]"
-              : "rounded-[10px] px-[14px] py-2 text-[12.5px]"
-          )}
+          className="flex-none"
         >
           Create token
-        </button>
+        </Button>
       }
     >
       {pats.isLoading ? (

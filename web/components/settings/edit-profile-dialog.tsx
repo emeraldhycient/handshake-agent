@@ -136,17 +136,24 @@ export function EditProfileDialog({
               {errorMessage}
             </p>
           )}
-          <DialogFooter>
+          <DialogFooter className="flex-col gap-2 sm:flex-col sm:space-x-0">
+            <Button
+              type="submit"
+              size="xl"
+              disabled={pending}
+              className="w-full"
+            >
+              {pending ? "Saving…" : "Save changes"}
+            </Button>
             <Button
               type="button"
               variant="outline"
+              size="xl"
               onClick={() => onOpenChange(false)}
               disabled={pending}
+              className="w-full"
             >
               Cancel
-            </Button>
-            <Button type="submit" disabled={pending}>
-              {pending ? "Saving…" : "Save changes"}
             </Button>
           </DialogFooter>
         </form>

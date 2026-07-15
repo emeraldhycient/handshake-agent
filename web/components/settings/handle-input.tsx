@@ -1,6 +1,7 @@
 "use client"
 
 import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
 import type { HandleInputProps } from "@/types"
 
 /**
@@ -49,17 +50,15 @@ export function HandleInput({
           )}
         />
       </div>
-      <button
+      <Button
         type="button"
+        size="sm"
         onClick={onCommit}
         disabled={pending}
-        className={cn(
-          "rounded-[11px] border-none bg-foreground text-[13px] font-semibold text-white disabled:opacity-60",
-          mobile ? "px-4 py-[9px]" : "px-[18px] py-2.5"
-        )}
+        className="flex-none"
       >
         Add
-      </button>
+      </Button>
     </div>
   )
 }
