@@ -15,6 +15,8 @@ export type PublicFiatOption = PublicConfigResponse["fiats"][number]
 export interface SettingsPanelProps {
   density?: "desktop" | "mobile"
   className?: string
+  /** Mobile app-bar back action (provided by the mobile shell). */
+  onBack?: () => void
 }
 
 export interface EditProfileDialogProps {
@@ -121,6 +123,8 @@ export interface SettingRowProps {
   className?: string
   /** When set, the row is the first in its card (no top border/hairline). */
   first?: boolean
+  /** Extra content rendered below the row inside the same padded cell (chips, inline input). */
+  below?: ReactNode
 }
 
 export interface ToastProps {
