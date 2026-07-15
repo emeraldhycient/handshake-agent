@@ -32,6 +32,7 @@ import {
   TransactionStatus,
   TransactionType,
 } from '../../../../generated/prisma/client';
+import type { Prisma } from '../../../../generated/prisma/client';
 import { PrismaService } from '../../../core/prisma/prisma.service';
 import { computeTxProfit } from '../domain/tx-profit';
 import type {
@@ -167,6 +168,28 @@ function txnFilterWhere(filter?: MetricsFilter): {
   return where;
 }
 
+/**
+ * Excludes the recipient-side mirror row of an internal transfer from aggregate
+ * transaction-COUNT metrics. Each internal transfer settles as TWO Transaction
+ * rows — the sender-owned anchor (`metadata.direction:'out'`) and the
+ * recipient-owned mirror (`metadata.direction:'in'`) — so both parties see the
+ * transfer in their own read projections. A COUNT aggregate must attribute one
+ * transfer to one event, not two, so the recipient row is excluded here. Money
+ * aggregates (GMV/revenue amounts) are unaffected either way: internal
+ * transfers carry no fiatAmount/quote, so they never contribute to those sums
+ * regardless of row count. Deliberately NOT applied to the admin activityFeed
+ * (metrics-ops-read.prisma.repository.ts) — an operator feed legitimately shows
+ * both the sent and received events.
+ */
+const EXCLUDE_INTERNAL_TRANSFER_RECIPIENT_ROW: Prisma.TransactionWhereInput = {
+  NOT: {
+    AND: [
+      { type: TransactionType.internal_transfer },
+      { metadata: { path: ['direction'], equals: 'in' } },
+    ],
+  },
+};
+
 @Injectable()
 export class MetricsReadPrismaRepository implements IMetricsReadRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -179,6 +202,7 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
     const where = {
       createdAt: { gte: from, lte: to },
       ...txnFilterWhere(filter),
+      ...EXCLUDE_INTERNAL_TRANSFER_RECIPIENT_ROW,
     };
     // One scan: group by (type, status) for the per-type breakdown + success rate.
     const grouped = await this.prisma.transaction.groupBy({
@@ -409,6 +433,7 @@ export class MetricsReadPrismaRepository implements IMetricsReadRepository {
         status: TransactionStatus.completed,
         createdAt: { gte: from, lte: to },
         ...txnFilterWhere(filter),
+        ...EXCLUDE_INTERNAL_TRANSFER_RECIPIENT_ROW,
       },
     });
 
