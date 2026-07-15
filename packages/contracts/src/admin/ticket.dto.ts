@@ -12,8 +12,10 @@ export const TicketOrderItemSchema = z.object({
   vendorKey: z.string(),
   ticketType: z.string(),
   quantity: z.number(),
-  /** Canonical decimal string (NGN) — never a JS float. */
+  /** Canonical decimal string — never a JS float. Denominated in `currency`. */
   totalAmount: z.string(),
+  /** ISO fiat code `totalAmount` is denominated in — never assume NGN. */
+  currency: z.string(),
   paymentStatus: z.string(),
   settlementStatus: z.string(),
   deliveryStatus: z.string(),

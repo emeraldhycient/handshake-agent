@@ -36,6 +36,7 @@ const RESPONSE: TicketOrderListResponse = {
       ticketType: "Afrobeats Live · Lagos",
       quantity: 2,
       totalAmount: "45000.00",
+      currency: "NGN",
       paymentStatus: "captured",
       settlementStatus: "settled",
       deliveryStatus: "delivered",
@@ -48,6 +49,7 @@ const RESPONSE: TicketOrderListResponse = {
       ticketType: "Detty December Fest",
       quantity: 1,
       totalAmount: "120000.00",
+      currency: "NGN",
       paymentStatus: "captured",
       settlementStatus: "pending",
       deliveryStatus: "pending",
@@ -126,6 +128,32 @@ describe("TicketsPage (real-data wiring)", () => {
     expect(
       await screen.findByText(/no vendor-port registry endpoint/i)
     ).toBeInTheDocument()
+  })
+
+  it("renders a non-default currency order via formatFiat, not a hardcoded ₦/formatNgn", async () => {
+    mockList.mockResolvedValue({
+      items: [
+        {
+          id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+          userId: UUID_A,
+          vendorKey: "ticketing.eventbrite",
+          ticketType: "Global Summit · NYC",
+          quantity: 1,
+          totalAmount: "45.00",
+          currency: "USD",
+          paymentStatus: "captured",
+          settlementStatus: "settled",
+          deliveryStatus: "delivered",
+          createdAt: "2026-07-01T09:42:00.000Z",
+        },
+      ],
+      nextCursor: null,
+    })
+    renderPage()
+
+    expect(await screen.findByText("Global Summit · NYC")).toBeInTheDocument()
+    expect(screen.getByText("$45.00")).toBeInTheDocument()
+    expect(screen.queryByText(/₦/)).not.toBeInTheDocument()
   })
 
   it("renders the design-consistent empty state when there are no orders", async () => {

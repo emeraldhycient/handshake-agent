@@ -2,7 +2,8 @@
 // Event ticketing (TKT). The platform is merchant-of-record: it collects payment
 // from the user and settles the provider out-of-band (TKT-04). Provider-specific
 // logic stays behind the TicketProvider port (vendorKey selects the adapter);
-// vendorOrderId/eventId are opaque provider refs. Amounts are fiat (NGN) Decimals.
+// vendorOrderId/eventId are opaque provider refs. Amounts are fiat Decimals,
+// denominated per-order in TicketOrder.currency (never assume NGN).
 // =============================================================================
 
 model TicketOrder {
@@ -18,6 +19,11 @@ model TicketOrder {
   /// Handshake commission per ticket (included in totalAmount).
   platformFee      Decimal                @db.Decimal(38, 2)
   totalAmount      Decimal                @db.Decimal(38, 2)
+  /// ISO fiat code the amounts above are denominated in. Defaults to the
+  /// catalog's historical settlement fiat (NGN) — there is no writer yet
+  /// (tickets module is future), so every existing/seeded row predates
+  /// explicit currency capture. Never assume NGN in display code (§7).
+  currency         String                 @default("NGN")
   /// Optional link to a crypto buy Quote if funded that way (plain ref).
   quoteId          String?                @db.Uuid
   paymentStatus    TicketPaymentStatus    @default(pending)

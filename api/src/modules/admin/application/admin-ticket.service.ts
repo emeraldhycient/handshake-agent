@@ -53,6 +53,7 @@ export class AdminTicketService {
       ticketType: t.ticketType,
       quantity: t.quantity,
       totalAmount: t.totalAmount,
+      currency: t.currency,
       paymentStatus: t.paymentStatus,
       settlementStatus: t.settlementStatus,
       deliveryStatus: t.deliveryStatus,

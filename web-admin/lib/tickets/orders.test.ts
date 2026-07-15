@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { TicketOrderItem } from "@handshake-agent/contracts"
 
-import { formatNgn, orderPillStatus } from "./orders"
+import { orderPillStatus } from "./orders"
 
 function order(
   over: Partial<TicketOrderItem> & Pick<TicketOrderItem, "id">
@@ -12,6 +12,7 @@ function order(
     ticketType: "GA",
     quantity: 1,
     totalAmount: "45000.00",
+    currency: "NGN",
     paymentStatus: "paid",
     settlementStatus: "settled",
     deliveryStatus: "delivered",
@@ -19,16 +20,6 @@ function order(
     ...over,
   }
 }
-
-describe("formatNgn", () => {
-  it("formats a canonical NGN decimal string with 2 dp", () => {
-    expect(formatNgn("45000.00")).toBe("₦45,000.00")
-    expect(formatNgn("1234.5")).toBe("₦1,234.50")
-  })
-  it("returns the raw input for a non-numeric value", () => {
-    expect(formatNgn("n/a")).toBe("n/a")
-  })
-})
 
 describe("orderPillStatus", () => {
   it("maps known settlement statuses", () => {
