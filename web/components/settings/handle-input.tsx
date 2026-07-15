@@ -1,21 +1,14 @@
 "use client"
 
 import { cn } from "@/lib/utils"
-import type { SettingsDensity } from "@/types"
-
-interface HandleInputProps {
-  density: SettingsDensity
-  value: string
-  onChange: (value: string) => void
-  onCommit: () => void
-  onCancel: () => void
-  pending?: boolean
-}
+import type { HandleInputProps } from "@/types"
 
 /**
  * The design's inline "@handle" entry: a pill input prefixed with `@` and a
  * dark "Add" button. Shared by the PayID claim and the public-nickname add.
- * Enter commits, Escape cancels. Indented to align under the row's text.
+ * Enter commits (unless pending), Escape cancels. Indented to align under the
+ * row's text. Focus is shown on the pill wrapper (the input's own outline is
+ * suppressed to keep the seamless pill look).
  */
 export function HandleInput({
   density,
@@ -35,7 +28,7 @@ export function HandleInput({
     >
       <div
         className={cn(
-          "flex flex-1 items-center gap-0.5 rounded-[11px] border border-settings-btn-border bg-card-muted",
+          "flex flex-1 items-center gap-0.5 rounded-[11px] border border-settings-btn-border bg-card-muted focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30",
           mobile ? "px-[11px]" : "px-3"
         )}
       >
@@ -44,7 +37,7 @@ export function HandleInput({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") onCommit()
+            if (e.key === "Enter" && !pending) onCommit()
             if (e.key === "Escape") onCancel()
           }}
           placeholder="yourhandle"

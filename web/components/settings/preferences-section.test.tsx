@@ -5,7 +5,26 @@ import { PreferencesSection } from "./preferences-section"
 
 const setLanguage = vi.hoisted(() => vi.fn())
 const showToast = vi.hoisted(() => vi.fn())
+const updateProfile = vi.hoisted(() => ({
+  current: { mutateAsync: vi.fn().mockResolvedValue(undefined) },
+}))
 
+vi.mock("@/lib/query/auth", () => ({
+  useProfile: () => ({ data: { fiatCurrency: "NGN" } }),
+}))
+vi.mock("@/lib/query/hooks", () => ({
+  useConfig: () => ({
+    data: {
+      fiats: [
+        { code: "NGN", displayName: "Naira", symbol: "₦", decimals: 2 },
+        { code: "GHS", displayName: "Cedi", symbol: "₵", decimals: 2 },
+      ],
+    },
+  }),
+}))
+vi.mock("@/lib/query/profile", () => ({
+  useUpdateProfile: () => updateProfile.current,
+}))
 vi.mock("@/components/shared/translation-provider", () => ({
   useTranslation: () => ({
     language: { code: "en", englishName: "English", nativeName: "English" },
@@ -21,12 +40,25 @@ vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ showToast }) }))
 beforeEach(() => {
   setLanguage.mockClear()
   showToast.mockClear()
+  updateProfile.current = { mutateAsync: vi.fn().mockResolvedValue(undefined) }
 })
 
 describe("PreferencesSection", () => {
-  it("renders the language row and changes language with a toast", async () => {
+  it("changes the display currency with a toast", async () => {
     render(<PreferencesSection density="desktop" />)
-    expect(screen.getByText("Language")).toBeInTheDocument()
+    expect(screen.getByText("Display currency")).toBeInTheDocument()
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Display currency" }),
+      "GHS"
+    )
+    expect(updateProfile.current.mutateAsync).toHaveBeenCalledWith({
+      fiatCurrency: "GHS",
+    })
+    expect(showToast).toHaveBeenCalledWith("Display currency set to GHS")
+  })
+
+  it("changes the language with a toast", async () => {
+    render(<PreferencesSection density="desktop" />)
     await userEvent.selectOptions(
       screen.getByRole("combobox", { name: "Language" }),
       "fr"

@@ -18,7 +18,7 @@ export function SettingsHeader({
 }: SettingsHeaderProps) {
   if (density === "mobile") {
     return (
-      <div className="flex flex-none items-center gap-3 border-b border-settings-chip-border bg-background px-[18px] pt-[54px] pb-[14px]">
+      <div className="flex flex-none items-center gap-3 border-b border-settings-chip-border bg-background px-[18px] pt-[calc(env(safe-area-inset-top,0px)+18px)] pb-[14px]">
         <button
           type="button"
           onClick={onBack}

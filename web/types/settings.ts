@@ -90,3 +90,13 @@ export interface ToastProps {
   density?: SettingsDensity
   className?: string
 }
+
+/** Inline "@handle" entry used by the PayID claim + public-nickname add. */
+export interface HandleInputProps {
+  density: SettingsDensity
+  value: string
+  onChange: (value: string) => void
+  onCommit: () => void
+  onCancel: () => void
+  pending?: boolean
+}

@@ -81,8 +81,8 @@ export function SettingRow({
           className={cn(
             "flex flex-none items-center justify-center",
             mobile
-              ? "h-[34px] w-[34px] rounded-[10px]"
-              : "h-[38px] w-[38px] rounded-[11px]",
+              ? "h-[34px] w-[34px] rounded-[10px] [&_svg]:size-[17px]"
+              : "h-[38px] w-[38px] rounded-[11px] [&_svg]:size-[18px]",
             accentIcon
               ? "[background:linear-gradient(150deg,var(--color-accent),var(--color-accent-deep))]"
               : "bg-background"
@@ -113,6 +113,61 @@ export function SettingRow({
         {trailing}
       </div>
       {below}
+    </div>
+  )
+}
+
+/** The design's compact pill `<select>` (chevron + cream fill). Row-trailing. */
+export function PillSelect({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+  density,
+}: {
+  value: string
+  onChange: (value: string) => void
+  options: { value: string; label: string }[]
+  ariaLabel: string
+  density: "desktop" | "mobile"
+}) {
+  const mobile = density === "mobile"
+  return (
+    <div className={cn("relative flex-none", mobile && "ml-auto")}>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={ariaLabel}
+        className={cn(
+          "cursor-pointer appearance-none rounded-[11px] border border-settings-btn-border bg-card-muted font-semibold text-settings-ink",
+          mobile
+            ? "py-2 pr-8 pl-3 text-[13px]"
+            : "py-[9px] pr-[34px] pl-[13px] text-[13.5px]"
+        )}
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 12 12"
+        fill="none"
+        className={cn(
+          "pointer-events-none absolute top-1/2 -translate-y-1/2 text-settings-label",
+          mobile ? "right-[11px]" : "right-3"
+        )}
+      >
+        <path
+          d="M3 4.5L6 7.5L9 4.5"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+        />
+      </svg>
     </div>
   )
 }

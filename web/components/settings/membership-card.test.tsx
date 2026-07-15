@@ -48,10 +48,11 @@ beforeEach(() => {
 })
 
 describe("MembershipCard", () => {
-  it("renders nothing until the profile has loaded", () => {
+  it("renders a skeleton (no content) until the profile has loaded", () => {
     profileRef.current = { data: undefined }
-    const { container } = render(<MembershipCard density="desktop" />)
-    expect(container).toBeEmptyDOMElement()
+    render(<MembershipCard density="desktop" />)
+    expect(screen.queryByText("olivia lee")).not.toBeInTheDocument()
+    expect(document.querySelector(".animate-pulse")).toBeInTheDocument()
   })
 
   it("shows the masked phone, tier, formatted daily limit, and used amount", () => {

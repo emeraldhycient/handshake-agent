@@ -23,4 +23,11 @@ describe("maskPhone", () => {
   it("returns the original for a too-short number (nothing meaningful to mask)", () => {
     expect(maskPhone("12345")).toBe("12345")
   })
+
+  it("never leaks every digit for a 7–10 digit number (always hides the middle)", () => {
+    // 8 digits: first 3 + last 4 = 7 shown, index 3 stays hidden behind ••••
+    expect(maskPhone("08031234")).toBe("080 •••• 1234")
+    // 7 digits: only 2 leading shown so index 2 stays hidden
+    expect(maskPhone("0803123")).toBe("08 •••• 3123")
+  })
 })

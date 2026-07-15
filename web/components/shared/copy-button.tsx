@@ -15,9 +15,13 @@ export function CopyButton({
   const onDark = tone === "onDark"
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(value)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard can reject (permissions / insecure context) — never throw.
+    }
   }
 
   return (

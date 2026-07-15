@@ -9,6 +9,7 @@ import { formatDate } from "@/lib/transaction/format"
 import { toErrorMessage } from "@/lib/error-message"
 import { PAT_SCOPE_OPTIONS, MCP_CAPABILITY_NOTE } from "@/constants/settings"
 import { cn } from "@/lib/utils"
+import { Skeleton } from "@/components/ui/skeleton"
 import { CopyButton } from "@/components/shared/copy-button"
 import { useToast } from "@/hooks/use-toast"
 import { CreateTokenDialog } from "./create-token-dialog"
@@ -59,7 +60,18 @@ export function ConnectedAgentsSection({ density }: SettingsSectionProps) {
         </button>
       }
     >
-      {tokens.length > 0 ? (
+      {pats.isLoading ? (
+        <div className="flex flex-col gap-2 px-[18px] py-4">
+          <Skeleton className="h-10 w-full" />
+        </div>
+      ) : pats.isError ? (
+        <p
+          className="border-b border-settings-hairline px-[18px] py-4 text-[12.5px] text-danger"
+          role="alert"
+        >
+          Could not load your connected agents. Please refresh the page.
+        </p>
+      ) : tokens.length > 0 ? (
         tokens.map((token, i) => (
           <SettingRow
             key={token.id}
@@ -101,8 +113,8 @@ export function ConnectedAgentsSection({ density }: SettingsSectionProps) {
             className={cn(
               "flex flex-none items-center justify-center bg-background text-settings-soft",
               mobile
-                ? "h-[34px] w-[34px] rounded-[10px]"
-                : "h-[38px] w-[38px] rounded-[11px]"
+                ? "h-[34px] w-[34px] rounded-[10px] [&_svg]:size-[17px]"
+                : "h-[38px] w-[38px] rounded-[11px] [&_svg]:size-[18px]"
             )}
           >
             <RobotIcon />

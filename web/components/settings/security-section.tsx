@@ -128,8 +128,8 @@ function SessionRow({
         className={cn(
           "flex flex-none items-center justify-center bg-background text-settings-label",
           mobile
-            ? "h-[34px] w-[34px] rounded-[10px]"
-            : "h-[38px] w-[38px] rounded-[11px]"
+            ? "h-[34px] w-[34px] rounded-[10px] [&_svg]:size-[17px]"
+            : "h-[38px] w-[38px] rounded-[11px] [&_svg]:size-[18px]"
         )}
       >
         {ua.isDesktop ? <DesktopIcon /> : <MobileIcon />}

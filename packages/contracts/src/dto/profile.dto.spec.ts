@@ -24,7 +24,11 @@ describe("ProfileResponseSchema", () => {
         perTxFiatMax: 50000,
         dailyFiatMax: 200000,
         dailyTxCountMax: 10,
+        dailyFiatUsed: 32000,
+        dailyTxCountUsed: 3,
       },
+      memberSince: "2026-07-01T00:00:00.000Z",
+      security: { score: 3, label: "good" },
     };
     expect(ProfileResponseSchema.parse(ok)).toEqual(ok);
   });
@@ -38,6 +42,8 @@ describe("ProfileResponseSchema", () => {
       kycTier: "unverified",
       fiatCurrency: "NGN",
       limits: null,
+      memberSince: null,
+      security: { score: 0, label: "weak" },
     };
     expect(ProfileResponseSchema.parse(ok)).toEqual(ok);
   });
@@ -65,6 +71,8 @@ describe("ProfileResponseSchema", () => {
       fiatCurrency: "NGN",
       limits: null,
       payId: "ada",
+      memberSince: "2026-07-01T00:00:00.000Z",
+      security: { score: 2, label: "fair" },
     };
     expect(ProfileResponseSchema.parse(ok)).toEqual(ok);
   });
@@ -78,8 +86,61 @@ describe("ProfileResponseSchema", () => {
       kycTier: "unverified",
       fiatCurrency: "NGN",
       limits: null,
+      memberSince: null,
+      security: { score: 0, label: "weak" },
     };
     expect(ProfileResponseSchema.parse(ok).payId).toBeUndefined();
+  });
+
+  it("folds live usage into limits and requires those fields", () => {
+    const withUsage = {
+      email: "a@b.com",
+      fullName: "Ada",
+      phone: "+2348011112222",
+      kycStatus: "verified",
+      kycTier: "tier_2",
+      fiatCurrency: "NGN",
+      limits: {
+        perTxFiatMax: 500000,
+        dailyFiatMax: 2000000,
+        dailyTxCountMax: 20,
+        dailyFiatUsed: 320000,
+        dailyTxCountUsed: 3,
+      },
+      memberSince: "2026-07-01T00:00:00.000Z",
+      security: { score: 4, label: "strong" },
+    };
+    expect(ProfileResponseSchema.parse(withUsage).limits?.dailyFiatUsed).toBe(320000);
+    const { dailyFiatUsed: _drop, ...noUsage } = withUsage.limits;
+    expect(
+      ProfileResponseSchema.safeParse({ ...withUsage, limits: noUsage }).success,
+    ).toBe(false);
+  });
+
+  it("requires the security field and bounds the score to 0..4", () => {
+    const base = {
+      email: "a@b.com",
+      fullName: null,
+      phone: null,
+      kycStatus: "not_started",
+      kycTier: "unverified",
+      fiatCurrency: "NGN",
+      limits: null,
+      memberSince: null,
+    };
+    expect(ProfileResponseSchema.safeParse(base).success).toBe(false);
+    expect(
+      ProfileResponseSchema.safeParse({
+        ...base,
+        security: { score: 5, label: "strong" },
+      }).success,
+    ).toBe(false);
+    expect(
+      ProfileResponseSchema.safeParse({
+        ...base,
+        security: { score: 3, label: "nope" },
+      }).success,
+    ).toBe(false);
   });
 });
 

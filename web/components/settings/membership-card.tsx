@@ -31,19 +31,34 @@ export function MembershipCard({ density, className }: MembershipCardProps) {
   const refreshIdentity = useRefreshIdentity()
   const [verifying, setVerifying] = useState(false)
 
-  if (!profile.data) return null
-  const p = profile.data
   const isMobile = density === "mobile"
+
+  if (!profile.data) {
+    return (
+      <div
+        aria-hidden
+        className={cn(
+          "animate-pulse [background:var(--membership-card-bg)]",
+          isMobile
+            ? "h-[360px] rounded-[22px]"
+            : "sticky top-8 h-[520px] rounded-[26px]",
+          className
+        )}
+      />
+    )
+  }
+  const p = profile.data
 
   const tierNum = tierNumber(p.kycTier)
   const level = nextKycLevel(p.kycTier)
   const verified = p.kycStatus === "verified" || tierNum >= 2
-  const usedPct = p.limits
-    ? Math.min(
-        100,
-        Math.round((p.limits.dailyFiatUsed / p.limits.dailyFiatMax) * 100)
-      )
-    : 0
+  const usedPct =
+    p.limits && p.limits.dailyFiatMax > 0
+      ? Math.min(
+          100,
+          Math.round((p.limits.dailyFiatUsed / p.limits.dailyFiatMax) * 100)
+        )
+      : 0
   const country = COUNTRY_BY_FIAT[p.fiatCurrency] ?? p.fiatCurrency
   const memberSince = p.memberSince
     ? new Date(p.memberSince)

@@ -19,7 +19,7 @@ export function Toast({ density = "desktop", className }: ToastProps) {
       role="status"
       aria-live="polite"
       className={cn(
-        "pointer-events-none left-1/2 z-50 animate-hs-toast rounded-[12px] bg-foreground font-semibold text-white",
+        "pointer-events-none left-1/2 z-50 -translate-x-1/2 animate-hs-toast rounded-[12px] bg-foreground font-semibold text-white",
         isMobile
           ? "absolute bottom-24 max-w-[88%] px-[18px] py-[11px] text-center text-[12.5px] shadow-[0_12px_30px_rgb(14_36_28/0.32)]"
           : "fixed bottom-[26px] px-5 py-3 text-[13.5px] whitespace-nowrap shadow-[0_12px_30px_rgb(14_36_28/0.28)]",
