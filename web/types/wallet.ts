@@ -1,7 +1,7 @@
 import type { ChatAction, WalletAsset, DepositView } from "@/lib/schemas"
 
 export interface WalletHeaderProps {
-  canSwap: boolean
+  canSell: boolean
   onQuickAction: (action: ChatAction, label: string) => void
 }
 

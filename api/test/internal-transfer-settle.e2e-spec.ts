@@ -529,6 +529,13 @@ describe('Internal transfer money path (settleInternalTransferAtomic, Testcontai
     expect(txn!.status).toBe('completed');
     expect(txn!.userId).toBe(senderId);
     expect(txn!.completedAt).not.toBeNull();
+    // The recipient @handle + display name are audit-snapshotted onto the
+    // Transaction metadata so the read projections (MCP + chat) can show the
+    // counterparty identity without a read-time cross-module lookup.
+    expect(txn!.metadata).toMatchObject({
+      recipientHandle: '@recipient',
+      recipientDisplayName: 'Recipient User',
+    });
 
     // ── Exactly TWO ledger legs: debit sender, credit recipient, sum = 0 ──────
     const entries = await prisma.ledgerEntry.findMany({

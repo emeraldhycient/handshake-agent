@@ -4,15 +4,15 @@ import { chipLabel } from "@/lib/chat/flow"
 import { cn } from "@/lib/utils"
 import type { BalanceHeroProps } from "@/types/overview"
 
-/** Balance hero + quick-action buttons. Swap is hidden until crypto.swap is on. */
+/** Balance hero + quick-action buttons. Sell is hidden until crypto.sell is on. */
 export function BalanceHero({
   total,
-  canSwap,
+  canSell,
   onQuickAction,
 }: BalanceHeroProps) {
-  const actions = canSwap
+  const actions = canSell
     ? HERO_ACTIONS
-    : HERO_ACTIONS.filter((a) => a.action !== "swap")
+    : HERO_ACTIONS.filter((a) => a.action !== "sell")
 
   return (
     <div className="flex flex-wrap items-end gap-x-8 gap-y-5 rounded-[18px] bg-gradient-to-b from-primary to-primary-deep px-[26px] py-6 text-primary-foreground">

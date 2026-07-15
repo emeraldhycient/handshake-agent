@@ -40,7 +40,7 @@ describe("WalletTab", () => {
     expect(screen.getByText("Bitcoin")).toBeInTheDocument()
   })
 
-  it("shows the enabled quick actions and hides Swap when swap is off", async () => {
+  it("shows the enabled quick actions (incl. Sell) and hides Swap when swap is off", async () => {
     render(<WalletTab onQuickAction={() => {}} />, { wrapper: makeWrapper() })
     await waitFor(
       () =>
@@ -51,10 +51,61 @@ describe("WalletTab", () => {
     )
     expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /receive/i })).toBeInTheDocument()
+    // Sell is shown: the default config has crypto.sell enabled.
+    expect(screen.getByRole("button", { name: /sell/i })).toBeInTheDocument()
     // Swap is hidden: the default config has crypto.swap disabled.
     expect(
       screen.queryByRole("button", { name: /swap/i })
     ).not.toBeInTheDocument()
+  })
+
+  it("hides Sell when the crypto.sell capability is off", async () => {
+    vi.spyOn(gatewayModule.gateway, "getConfig").mockResolvedValue({
+      fiats: [
+        {
+          code: "NGN",
+          displayName: "Nigerian Naira",
+          symbol: "₦",
+          decimals: 2,
+        },
+      ],
+      assets: [
+        {
+          symbol: "USDT",
+          displayName: "Tether USD",
+          decimals: 6,
+          networks: ["tron"],
+        },
+      ],
+      networks: [{ id: "tron", displayName: "TRON (TRC-20)" }],
+      capabilities: { "crypto.buy": true, send: true },
+    })
+    render(<WalletTab onQuickAction={() => {}} />, { wrapper: makeWrapper() })
+    await waitFor(
+      () =>
+        expect(
+          screen.getByRole("button", { name: /buy/i })
+        ).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+    expect(
+      screen.queryByRole("button", { name: /sell/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it("fires onQuickAction('sell', ...) when Sell is clicked", async () => {
+    const user = userEvent.setup()
+    const onQuickAction = vi.fn()
+    render(<WalletTab onQuickAction={onQuickAction} />, {
+      wrapper: makeWrapper(),
+    })
+    const sellBtn = await screen.findByRole(
+      "button",
+      { name: /sell/i },
+      { timeout: 3000 }
+    )
+    await user.click(sellBtn)
+    expect(onQuickAction).toHaveBeenCalledWith("sell", expect.any(String))
   })
 
   it("fires onQuickAction('buy', chipLabel('buy')) when Buy is clicked", async () => {

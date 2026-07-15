@@ -15,6 +15,7 @@ export function useCapabilities() {
   return {
     has,
     canSwap: has("crypto.swap"),
+    canSell: has("crypto.sell"),
     canTickets: has("ticketing"),
   }
 }

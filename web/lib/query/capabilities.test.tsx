@@ -36,24 +36,30 @@ function makeWrapper() {
 describe("useCapabilities", () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it("disables swap + tickets when the flags are absent or false", async () => {
+  it("disables swap + sell + tickets when the flags are absent or false", async () => {
     vi.spyOn(gateway, "getConfig").mockResolvedValue(
-      makeConfig({ "crypto.buy": true, "crypto.swap": false })
+      makeConfig({
+        "crypto.buy": true,
+        "crypto.swap": false,
+        "crypto.sell": false,
+      })
     )
     const { wrapper } = makeWrapper()
     const { result } = renderHook(() => useCapabilities(), { wrapper })
     await waitFor(() => expect(result.current.has("crypto.buy")).toBe(true))
     expect(result.current.canSwap).toBe(false)
+    expect(result.current.canSell).toBe(false)
     expect(result.current.canTickets).toBe(false)
   })
 
-  it("enables swap + tickets when their flags are true", async () => {
+  it("enables swap + sell + tickets when their flags are true", async () => {
     vi.spyOn(gateway, "getConfig").mockResolvedValue(
-      makeConfig({ "crypto.swap": true, ticketing: true })
+      makeConfig({ "crypto.swap": true, "crypto.sell": true, ticketing: true })
     )
     const { wrapper } = makeWrapper()
     const { result } = renderHook(() => useCapabilities(), { wrapper })
     await waitFor(() => expect(result.current.canSwap).toBe(true))
+    expect(result.current.canSell).toBe(true)
     expect(result.current.canTickets).toBe(true)
   })
 })

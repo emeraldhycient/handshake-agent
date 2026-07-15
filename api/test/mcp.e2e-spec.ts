@@ -23,6 +23,7 @@
 
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 // supertest is a CommonJS module
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -41,6 +42,9 @@ import type { IWalletProvider } from '../src/modules/wallets/application/ports/w
 import type { IPaymentProvider } from '../src/modules/treasury/application/ports/payment-provider.port';
 import type { IWhatsAppSender } from '../src/modules/whatsapp/application/ports/whatsapp-sender.port';
 
+import { WalletService } from '../src/modules/wallets/application/wallet.service';
+import { AssetRegistry } from '../src/core/catalog/asset-registry';
+import { seedRegistryAssets } from './helpers/seed-registry-assets';
 import { mintTier1User } from './helpers/mint-verified-user';
 
 jest.setTimeout(180_000);
@@ -367,4 +371,178 @@ describe('MCP surface — e2e (AppModule, Testcontainers Postgres)', () => {
     expect(body.error).toBeUndefined();
     expect(body.result.isError).toBeFalsy();
   });
+
+  // ── internal transfer over MCP: propose-only + read own PayID (§3.1 / §6) ────
+  // An MCP client naming a peer's `@payId` yields an internal_transfer PROPOSAL
+  // (the handle is resolved SERVER-SIDE, never model free-text) — and NOTHING
+  // executes over MCP. get_profile round-trips the caller's own PayID.
+
+  /** Parses the single text content block of a tool result as JSON. */
+  function toolJson<T>(
+    body: JsonRpcResult<{
+      content: Array<{ type: string; text: string }>;
+      isError?: boolean;
+    }>,
+  ): T {
+    expect(body.error).toBeUndefined();
+    expect(body.result.isError).toBeFalsy();
+    return JSON.parse(body.result.content[0].text) as T;
+  }
+
+  let transferSeq = 0;
+
+  /**
+   * Mints a tier_1 user (email-OTP + PIN), bumps to tier_2 (the crypto.transfer
+   * capability floor, §3.3), and reads the PayID minted at signup (Task 3).
+   */
+  async function mintTier2WithPayId(
+    role: string,
+  ): Promise<{ accessToken: string; userId: string; payId: string }> {
+    transferSeq += 1;
+    const email =
+      `mcp_it_${role}_${transferSeq}_${Date.now()}@test.com`.toLowerCase();
+    const { accessToken, userId } = await mintTier1User(app, {
+      email,
+      pin: '2468',
+    });
+    await prisma.user.update({
+      where: { id: userId },
+      data: { kycTier: 'tier_2' },
+    });
+    const row = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { payId: true },
+    });
+    if (!row?.payId) throw new Error(`user '${role}' has no minted payId`);
+    return { accessToken, userId, payId: row.payId };
+  }
+
+  /** PIN-gated PAT mint (POST /profile/tokens). */
+  async function mintPat(
+    accessToken: string,
+    scopes: string[],
+  ): Promise<string> {
+    const res = await request(app.getHttpServer())
+      .post('/profile/tokens')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ label: `mcp-it-${scopes.join('-')}`, pin: '2468', scopes })
+      .expect(201);
+    return (res.body as { token: string }).token;
+  }
+
+  /** Seeds a settled USDT credit on the user's TRON wallet ledger. */
+  async function seedUsdtBalance(
+    userId: string,
+    amount: number,
+  ): Promise<void> {
+    const walletService = app.get(WalletService, { strict: false });
+    await walletService.getOrProvisionNetworkWallet(userId, 'TRON');
+    const wallet = await prisma.wallet.findFirst({
+      where: { userId, network: 'TRON' },
+      select: { id: true },
+    });
+    if (wallet === null) throw new Error('no TRON wallet for user');
+
+    const seedTxn = await prisma.transaction.create({
+      data: {
+        userId,
+        type: 'buy',
+        status: 'completed',
+        idempotencyKey: randomUUID(),
+        requestChecksum: 'seed',
+        fxRateSnapshot: '1600',
+        metadata: {},
+        pinVerifiedAt: new Date(),
+      },
+    });
+    const latest = await prisma.ledgerEntry.findFirst({
+      where: { accountType: 'user_wallet', accountId: wallet.id },
+      orderBy: { sequence: 'desc' },
+    });
+    const seq = (latest?.sequence ?? 0) + 1;
+    const before = latest?.balanceAfter ? Number(latest.balanceAfter) : 0;
+    await prisma.ledgerEntry.create({
+      data: {
+        transactionId: seedTxn.id,
+        accountType: 'user_wallet',
+        accountId: wallet.id,
+        currency: 'USDT',
+        direction: 'credit',
+        amount: amount.toFixed(6),
+        description: 'seed credit for mcp internal-transfer e2e',
+        balanceAfter: (before + amount).toFixed(6),
+        sequence: seq,
+        postedAt: new Date(),
+      },
+    });
+  }
+
+  it('send_chat_message "send 3 USDT to @<B.payId>" → internal_transfer PROPOSAL (destinationKind internal_user), and get_profile round-trips the caller PayID', async () => {
+    // No CatalogSync ran here — seed the AssetRegistry provider-id overlay so any
+    // asset lookup on the transfer path resolves (mirrors internal-transfer.e2e).
+    seedRegistryAssets(app.get(AssetRegistry, { strict: false }));
+
+    const a = await mintTier2WithPayId('a');
+    const b = await mintTier2WithPayId('b');
+    await seedUsdtBalance(a.userId, 100);
+    const pat = await mintPat(a.accessToken, ['read', 'chat:propose']);
+
+    // The @handle is resolved SERVER-SIDE (§3.1) — the model only names it.
+    fakeLlmProvider.extractIntent.mockResolvedValueOnce({
+      action: 'send_crypto',
+      asset: 'USDT',
+      cryptoAmount: '3',
+      network: 'TRON',
+      recipientNickname: `@${b.payId}`,
+    });
+
+    const proposeRes = await callMcp(pat, {
+      jsonrpc: '2.0',
+      id: 10,
+      method: 'tools/call',
+      params: {
+        name: 'send_chat_message',
+        arguments: { text: `send 3 USDT to @${b.payId}` },
+      },
+    }).expect(200);
+
+    const proposePayload = toolJson<{
+      outcome: { kind: string; proposalId?: string };
+    }>(
+      proposeRes.body as JsonRpcResult<{
+        content: Array<{ type: string; text: string }>;
+        isError?: boolean;
+      }>,
+    );
+    expect(proposePayload.outcome.kind).toBe('proposal');
+    const proposalId = proposePayload.outcome.proposalId;
+    expect(proposalId).toBeTruthy();
+
+    // The PERSISTED proposal is a genuine internal_transfer resolved to B's
+    // userId — NO on-chain address; destinationKind internal_user.
+    const proposal = await prisma.proposal.findUnique({
+      where: { id: proposalId! },
+    });
+    expect(proposal?.type).toBe('internal_transfer');
+    const params = proposal?.parameters as Record<string, unknown>;
+    expect(params.destinationKind).toBe('internal_user');
+    expect(params.recipientUserId).toBe(b.userId);
+    expect(params.toAddress).toBeUndefined();
+
+    // get_profile round-trips the caller's OWN PayID (format-valid).
+    const profileRes = await callMcp(pat, {
+      jsonrpc: '2.0',
+      id: 11,
+      method: 'tools/call',
+      params: { name: 'get_profile', arguments: {} },
+    }).expect(200);
+    const profile = toolJson<{ payId?: string }>(
+      profileRes.body as JsonRpcResult<{
+        content: Array<{ type: string; text: string }>;
+        isError?: boolean;
+      }>,
+    );
+    expect(profile.payId).toBe(a.payId);
+    expect(profile.payId).toMatch(/^[a-z0-9_]{3,30}$/);
+  }, 120_000);
 });

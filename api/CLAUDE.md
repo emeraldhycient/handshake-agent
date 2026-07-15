@@ -85,7 +85,7 @@ pnpm --filter @handshake-agent/api build        # tsc build (nest build + tsc-al
 pnpm --filter @handshake-agent/api lint         # flat-config ESLint (auto-fix)
 pnpm --filter @handshake-agent/api typecheck    # tsc --noEmit
 pnpm --filter @handshake-agent/api test         # jest unit (config inline in package.json)
-pnpm --filter @handshake-agent/api test:e2e     # supertest e2e (test/jest-e2e.json) — LOCAL lane, not in CI
+pnpm --filter @handshake-agent/api test:e2e     # supertest e2e (test/jest-e2e.json) — also a gating CI job (worker-capped, run locally too)
 pnpm --filter @handshake-agent/api test:cov     # coverage
 ```
 
@@ -93,7 +93,7 @@ pnpm --filter @handshake-agent/api test:cov     # coverage
 
 ## Testing (strict TDD, root §9)
 
-Red → Green → Refactor. ~100% coverage on `domain` + `application` + the execution engine. Unit test config is the inline `jest` block in `package.json` (`*.spec.ts`, `rootDir: src`); e2e is `test/jest-e2e.json` (`*.e2e-spec.ts`). Integration/e2e tests use `@testcontainers/postgresql` against real Postgres — not mocks — but **this lane runs locally only (`test:e2e`); CI runs the unit suites** (root `CLAUDE.md` §9). Run the e2e suites yourself for anything on the money path. The contracts `moduleNameMapper` is already wired into the Jest config so shared schemas resolve.
+Red → Green → Refactor. ~100% coverage on `domain` + `application` + the execution engine. Unit test config is the inline `jest` block in `package.json` (`*.spec.ts`, `rootDir: src`); e2e is `test/jest-e2e.json` (`*.e2e-spec.ts`). Integration/e2e tests use `@testcontainers/postgresql` against real Postgres — not mocks. **This lane runs BOTH locally (`test:e2e`) and as a gating CI `e2e` job** (worker-capped `--maxWorkers=2 --workerIdleMemoryLimit=1500M` + raised Node heap to avoid OOM); CI also runs the unit suites with coverage thresholds (`test:cov`). Run the e2e suites yourself for anything on the money path. The contracts `moduleNameMapper` is already wired into the Jest config so shared schemas resolve.
 
 ## Stack gotchas (verified)
 

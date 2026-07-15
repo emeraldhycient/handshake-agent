@@ -25,7 +25,7 @@ export function WalletPage({
 }: PageWithQuickActionProps) {
   const assets = useWalletAssets()
   const deposit = useDepositAddress()
-  const { canSwap } = useCapabilities()
+  const { canSell } = useCapabilities()
 
   if (assets.isLoading) {
     return (
@@ -89,7 +89,7 @@ export function WalletPage({
         className
       )}
     >
-      <WalletHeader canSwap={canSwap} onQuickAction={onQuickAction} />
+      <WalletHeader canSell={canSell} onQuickAction={onQuickAction} />
       <WalletAssetCards assets={assetData} />
       <WalletDepositPanel
         assets={assetData}

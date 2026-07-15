@@ -440,7 +440,10 @@ export class TransactionStatusController {
       const str = (k: string) =>
         typeof meta[k] === 'string' ? meta[k] : undefined;
       const counterparty =
-        str('destination') ?? str('counterparty') ?? str('senderAddress');
+        str('destination') ??
+        str('counterparty') ??
+        str('senderAddress') ??
+        str('recipientHandle');
       // Deposits store the amount under `amount`; trades use `cryptoAmount`.
       const cryptoAmt = str('cryptoAmount') ?? str('amount');
       return {
@@ -500,13 +503,17 @@ export class TransactionStatusController {
       ? 'in'
       : 'out';
 
-    // Counterparty: prefer destination (send), then senderAddress (deposit).
+    // Counterparty: prefer destination (send), then senderAddress (deposit),
+    // then recipientHandle (internal transfer — no address/destination to show).
+    // Kept in lockstep with the list projection above + the MCP surface.
     const counterparty =
       typeof meta.destination === 'string'
         ? meta.destination
         : typeof meta.senderAddress === 'string'
           ? meta.senderAddress
-          : undefined;
+          : typeof meta.recipientHandle === 'string'
+            ? meta.recipientHandle
+            : undefined;
 
     // On-chain fields — present for deposits (from Blockradar webhook) and sends.
     const txHash = typeof meta.txHash === 'string' ? meta.txHash : undefined;
