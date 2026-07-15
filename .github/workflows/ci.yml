@@ -118,4 +118,9 @@ jobs:
         # crosses the idle limit so long-lived state is reclaimed between suites.
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-        run: pnpm --filter @handshake-agent/api test:e2e -- --maxWorkers=2 --workerIdleMemoryLimit=1500M
+        # NB: no `--` before the flags. pnpm 10 forwards trailing args to the
+        # script verbatim, INCLUDING a literal `--`; jest then reads everything
+        # after `--` as positional testPathPatterns, matches zero suites, and
+        # exits 1 ("No tests found"). Pass the flags directly so jest parses them
+        # as flags (`jest --config … --maxWorkers=2 --workerIdleMemoryLimit=1500M`).
+        run: pnpm --filter @handshake-agent/api test:e2e --maxWorkers=2 --workerIdleMemoryLimit=1500M
