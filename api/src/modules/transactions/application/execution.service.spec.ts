@@ -5072,6 +5072,21 @@ function makeInternalTransferSettlementRepo(
   return repo;
 }
 
+/**
+ * HandleService stub resolving the SENDER's own @handle — the executor snapshots
+ * it onto the recipient-side row's "from @A" counterparty. handle is returned
+ * raw (no @); the executor formats `@${handle}`.
+ */
+function makeHandleServiceForTransfer(): { findOwnHandle: jest.Mock } {
+  return {
+    findOwnHandle: jest.fn().mockResolvedValue({
+      userId: USER_ID,
+      handle: 'sam.pay',
+      displayName: 'Sam S.',
+    }),
+  };
+}
+
 function buildInternalTransferService(
   overrides: {
     proposalRepo?: jest.Mocked<IProposalRepository>;
@@ -5089,6 +5104,7 @@ function buildInternalTransferService(
     ledgerRepo?: ReturnType<typeof makeLedgerRepo>;
     complianceService?: ReturnType<typeof makeCounterpartyComplianceService>;
     sessionService?: ReturnType<typeof makeSessionService>;
+    handleService?: ReturnType<typeof makeHandleServiceForTransfer>;
   } = {},
 ): ExecutionService {
   const assetRegistry = makeAssetRegistry();
@@ -5127,6 +5143,10 @@ function buildInternalTransferService(
     (overrides.complianceService as never) ??
       (makeCounterpartyComplianceService() as never),
     (overrides.sessionService as never) ?? (makeSessionService() as never),
+    undefined, // swapProvider — not needed on the transfer path
+    undefined, // liveRateStore — config fallback
+    (overrides.handleService as never) ??
+      (makeHandleServiceForTransfer() as never),
   );
 }
 
@@ -5169,6 +5189,10 @@ describe('ExecutionService.executeInternalTransfer', () => {
         // Transaction metadata (read projections show the counterparty identity).
         recipientHandle: '@ada',
         recipientDisplayName: 'Ada A.',
+        // The SENDER's own @handle is resolved via HandleService and threaded so
+        // the recipient-side row can show "from @A". Formatted `@${handle}`.
+        senderHandle: '@sam.pay',
+        senderDisplayName: 'Sam S.',
       }),
     );
 

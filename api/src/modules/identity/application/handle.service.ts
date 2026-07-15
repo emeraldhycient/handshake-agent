@@ -75,6 +75,24 @@ export class HandleService {
   }
 
   /**
+   * Resolves a user's OWN public handle by internal user id — their PayID (or,
+   * failing that, their earliest public nickname) plus a minimal-reveal display
+   * name. Read-only, moves no money (§3.1). Returns null when the user has
+   * claimed no handle at all. Used to audit-snapshot the SENDER's counterparty
+   * identity onto an internal-transfer recipient row.
+   */
+  async findOwnHandle(userId: string): Promise<ResolvedHandle | null> {
+    const owner = await this.repo.findHandleByUserId(userId);
+    if (!owner) return null;
+
+    return {
+      userId: owner.userId,
+      displayName: this.minimalRevealName(owner),
+      handle: owner.handle,
+    };
+  }
+
+  /**
    * Claims a new public nickname for the user: `firstName + ' ' + lastName +
    * '.'` minimal reveal. Format-validates, then enforces the shared
    * namespace + the ≤5 cap, in that order (design §4.2 / task brief).

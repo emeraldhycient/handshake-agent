@@ -12,6 +12,7 @@ import { HandleService } from './handle.service';
 function makeService(overrides: Partial<jest.Mocked<IHandleRepository>> = {}) {
   const repo: jest.Mocked<IHandleRepository> = {
     findUserByPayId: jest.fn().mockResolvedValue(null),
+    findHandleByUserId: jest.fn().mockResolvedValue(null),
     findAliasOwner: jest.fn().mockResolvedValue(null),
     isPayIdTaken: jest.fn().mockResolvedValue(false),
     isAliasTaken: jest.fn().mockResolvedValue(false),
@@ -35,6 +36,28 @@ const ADA_OWNER: HandleOwnerRecord = {
   firstName: 'Ada',
   lastName: 'Lovelace',
 };
+
+describe('HandleService.findOwnHandle', () => {
+  it("resolves a user's own handle + minimal-reveal display name by user id", async () => {
+    const { svc, repo } = makeService({
+      findHandleByUserId: jest.fn().mockResolvedValue(ADA_OWNER),
+    });
+
+    const out = await svc.findOwnHandle('user-ada');
+
+    expect(repo.findHandleByUserId).toHaveBeenCalledWith('user-ada');
+    expect(out).toEqual({
+      userId: 'user-ada',
+      displayName: 'Ada L.',
+      handle: 'ada',
+    });
+  });
+
+  it('returns null when the user has claimed no handle', async () => {
+    const { svc } = makeService();
+    await expect(svc.findOwnHandle('user-none')).resolves.toBeNull();
+  });
+});
 
 describe('HandleService.resolveHandle', () => {
   it('resolves a payId hit case-insensitively and applies leading-@ normalization', async () => {

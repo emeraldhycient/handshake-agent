@@ -457,6 +457,9 @@ describe('Internal transfer money path (settleInternalTransferAtomic, Testcontai
       recipientWalletId: o.recipientWalletId,
       asset: 'USDT',
       cryptoAmount: o.cryptoAmount,
+      // Audit-snapshot the SENDER's @handle so the recipient-side row shows "from @A".
+      senderHandle: '@sam.pay',
+      senderDisplayName: 'Sam S.',
       assetDecimals: assetRegistry.asset('USDT').decimals,
       idempotencyKey: o.idempotencyKey,
       requestChecksum: 'internal-transfer-e2e-checksum',
@@ -536,6 +539,37 @@ describe('Internal transfer money path (settleInternalTransferAtomic, Testcontai
       recipientHandle: '@recipient',
       recipientDisplayName: 'Recipient User',
     });
+
+    // ── RECIPIENT-side Transaction row (additive display/audit artifact) ──────
+    // Owned by the recipient, direction 'in', role 'recipient', linked to the
+    // sender row. NO ledger legs of its own, NO receipt.
+    const recipientTxns = await prisma.transaction.findMany({
+      where: { userId: recipientId, type: 'internal_transfer' },
+    });
+    expect(recipientTxns).toHaveLength(1);
+    const recipientTxn = recipientTxns[0];
+    expect(recipientTxn.status).toBe('completed');
+    expect(recipientTxn.id).not.toBe(result.transactionId);
+    expect(recipientTxn.metadata).toMatchObject({
+      direction: 'in',
+      role: 'recipient',
+      senderUserId: senderId,
+      counterpartyTransactionId: result.transactionId,
+    });
+    // Executor path here has no HandleService wired, so senderHandle is absent —
+    // the recipient row still resolves (blank counterparty), proving optionality.
+    // The recipient row carries NO ledger legs and NO receipt.
+    expect(
+      await prisma.ledgerEntry.count({
+        where: { transactionId: recipientTxn.id },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.receipt.count({ where: { transactionId: recipientTxn.id } }),
+    ).toBe(0);
+
+    // ── Sender row carries the per-viewer direction 'out' ─────────────────────
+    expect(txn!.metadata).toMatchObject({ direction: 'out', role: 'sender' });
 
     // ── Exactly TWO ledger legs: debit sender, credit recipient, sum = 0 ──────
     const entries = await prisma.ledgerEntry.findMany({
@@ -656,6 +690,12 @@ describe('Internal transfer money path (settleInternalTransferAtomic, Testcontai
     expect(
       await prisma.transaction.findUnique({ where: { idempotencyKey } }),
     ).toBeNull();
+    // No recipient-side row either — the whole $transaction rolled back.
+    expect(
+      await prisma.transaction.count({
+        where: { userId: recipientId, type: 'internal_transfer' },
+      }),
+    ).toBe(0);
     // No new ledger entries on either wallet.
     expect(
       await prisma.ledgerEntry.count({
@@ -748,6 +788,19 @@ describe('Internal transfer money path (settleInternalTransferAtomic, Testcontai
       where: { idempotencyKey },
     });
     expect(txns).toHaveLength(1);
+
+    // Exactly ONE recipient-side row (the derived idempotency key is protected by
+    // the sender-key guard — a double settle never posts a second recipient row).
+    const recipientTxns = await prisma.transaction.findMany({
+      where: { userId: recipientId, type: 'internal_transfer' },
+    });
+    expect(recipientTxns).toHaveLength(1);
+    expect(recipientTxns[0].metadata).toMatchObject({
+      direction: 'in',
+      role: 'recipient',
+      senderHandle: '@sam.pay',
+      counterpartyTransactionId: txns[0].id,
+    });
 
     // Exactly TWO ledger legs for that transaction (one debit + one credit), sum = 0.
     const entries = await prisma.ledgerEntry.findMany({

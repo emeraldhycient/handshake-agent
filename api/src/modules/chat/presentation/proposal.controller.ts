@@ -98,6 +98,16 @@ import { ExecuteProposalDto } from './dto/proposal.dto';
 // Inflow transaction types — used to derive `direction` when not already in metadata.
 const INFLOW_TYPES = new Set(['buy', 'deposit', 'receive', 'reward', 'refund']);
 
+/**
+ * Per-viewer flow direction: prefer an explicit metadata snapshot (internal
+ * transfers write `direction` per row — 'out' on the sender's, 'in' on the
+ * recipient's), fall back to the type heuristic for every legacy/other row.
+ */
+function directionOf(metaDirection: unknown, type: string): 'in' | 'out' {
+  if (metaDirection === 'in' || metaDirection === 'out') return metaDirection;
+  return INFLOW_TYPES.has(type) ? 'in' : 'out';
+}
+
 // The executable proposal statuses (must match the engine's own check).
 const EXECUTABLE_STATUSES = new Set<string>(['pending', 'confirmed']);
 
@@ -439,17 +449,24 @@ export class TransactionStatusController {
       const meta = t.metadata;
       const str = (k: string) =>
         typeof meta[k] === 'string' ? meta[k] : undefined;
+      // Counterparty: destination/senderAddress (send/deposit) → recipientHandle
+      // (internal_transfer sender row) → senderHandle (internal_transfer
+      // recipient row). Kept in lockstep with getStatus + the MCP surface.
       const counterparty =
         str('destination') ??
         str('counterparty') ??
         str('senderAddress') ??
-        str('recipientHandle');
+        str('recipientHandle') ??
+        str('senderHandle');
       // Deposits store the amount under `amount`; trades use `cryptoAmount`.
       const cryptoAmt = str('cryptoAmount') ?? str('amount');
       return {
         id: t.id,
         type: t.type,
         status: t.status,
+        // Per-viewer direction from metadata (internal transfers snapshot it per
+        // row), falling back to the type heuristic for every legacy/other row.
+        direction: directionOf(meta.direction, t.type),
         ...(str('asset') ? { asset: str('asset') } : {}),
         ...(cryptoAmt ? { cryptoAmount: cryptoAmt } : {}),
         ...(str('fiatAmount') ? { fiatAmount: str('fiatAmount') } : {}),
@@ -498,14 +515,17 @@ export class TransactionStatusController {
       receiptNumber = found ?? undefined;
     }
 
-    // Derive direction: prefer an explicit metadata flag, fall back to type heuristic.
-    const direction: 'in' | 'out' = INFLOW_TYPES.has(transaction.type)
-      ? 'in'
-      : 'out';
+    // Per-viewer direction: prefer the metadata snapshot (internal transfers set
+    // it per row), fall back to the type heuristic.
+    const direction: 'in' | 'out' = directionOf(
+      meta.direction,
+      transaction.type,
+    );
 
     // Counterparty: prefer destination (send), then senderAddress (deposit),
-    // then recipientHandle (internal transfer — no address/destination to show).
-    // Kept in lockstep with the list projection above + the MCP surface.
+    // then recipientHandle (internal_transfer sender row), then senderHandle
+    // (internal_transfer recipient row — "from @A"). Kept in lockstep with the
+    // list projection above + the MCP surface.
     const counterparty =
       typeof meta.destination === 'string'
         ? meta.destination
@@ -513,7 +533,9 @@ export class TransactionStatusController {
           ? meta.senderAddress
           : typeof meta.recipientHandle === 'string'
             ? meta.recipientHandle
-            : undefined;
+            : typeof meta.senderHandle === 'string'
+              ? meta.senderHandle
+              : undefined;
 
     // On-chain fields — present for deposits (from Blockradar webhook) and sends.
     const txHash = typeof meta.txHash === 'string' ? meta.txHash : undefined;

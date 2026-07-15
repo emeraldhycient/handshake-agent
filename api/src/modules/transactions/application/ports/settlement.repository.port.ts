@@ -505,6 +505,16 @@ export interface SettleInternalTransferAtomicInput {
   /** The recipient's resolved display name (audit snapshot from the proposal params). */
   recipientDisplayName?: string;
   /**
+   * The SENDER's own `@handle` (their PayID/public nickname), resolved by the
+   * executor via the identity handle read. Written to the RECIPIENT-side
+   * Transaction metadata so the recipient's read projections surface "from @A"
+   * — the recipient row has no destination/address to fall back on. Optional:
+   * a sender who has claimed no handle simply yields a blank counterparty.
+   */
+  senderHandle?: string;
+  /** The SENDER's resolved display name (audit snapshot for the recipient row). */
+  senderDisplayName?: string;
+  /**
    * Per-asset decimal places for the WalletBalance snapshots. Resolved from the
    * AssetRegistry by the executor, so the repository never hardcodes a decimals
    * literal (§7).
@@ -726,11 +736,19 @@ export interface ISettlementRepository {
    *      balanceAfter negative under concurrency, §3.1).
    *   4. buildInternalTransferLedgerEntries → 2 legs (debit sender, credit recipient).
    *   5. Create the anchor Transaction (type=internal_transfer, completed, owned
-   *      by the sender) linked to the Proposal; mark the Proposal executed.
-   *   6. Upsert the SENDER's velocity counters.
+   *      by the sender, metadata.direction='out') linked to the Proposal; mark
+   *      the Proposal executed.
+   *   5b. Create the RECIPIENT-side Transaction (type=internal_transfer,
+   *      completed, owned by the recipient, metadata.direction='in',
+   *      counterpartyTransactionId → the sender row). Additive display/audit
+   *      artifact ONLY — NO ledger legs of its own, NO velocity, NO receipt. Its
+   *      idempotencyKey is derived deterministically from the sender's so the
+   *      §3.1 sender-key idempotency guard (which returns BEFORE creating either
+   *      row) also protects against a double recipient row.
+   *   6. Upsert the SENDER's velocity counters (receiving is not a money-move).
    *   7. Insert both LedgerEntry rows; capture sender + recipient balanceAfter.
    *   8. Update BOTH WalletBalance snapshots (sender debited, recipient credited).
-   *   9. Mint a signed Receipt (fail-closed) for the sender's Transaction.
+   *   9. Mint a signed Receipt (fail-closed) for the SENDER's Transaction only.
    */
   settleInternalTransferAtomic(
     input: SettleInternalTransferAtomicInput,
