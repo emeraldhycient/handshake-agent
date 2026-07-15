@@ -15,10 +15,12 @@ export const RateAmountSchema = z
   .string()
   .regex(/^\d+(\.\d{1,8})?$/, 'must be a positive decimal string')
 
-// get_rate input — one pair. `fiatCurrency` defaults to NGN, mirroring quote_buy.
+// get_rate input — one pair. `fiatCurrency` is optional: the calling layer
+// defaults to the catalog base fiat when the caller names none — never
+// hardcoded here (§7), mirroring GetRateIntentSchema.
 export const GetRateInputSchema = z.object({
   asset: SupportedAssetSchema,
-  fiatCurrency: FiatCurrencySchema.default('NGN'),
+  fiatCurrency: FiatCurrencySchema.optional(),
 })
 export type GetRateInput = z.infer<typeof GetRateInputSchema>
 

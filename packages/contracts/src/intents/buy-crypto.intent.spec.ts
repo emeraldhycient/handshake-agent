@@ -25,13 +25,13 @@ describe("BuyCryptoIntentSchema", () => {
     expect(result.fiatCurrency).toBe("NGN");
   });
 
-  it("defaults fiatCurrency to NGN when omitted", () => {
+  it("accepts a buy_crypto intent with no fiat (calling layer defaults it)", () => {
     const result = BuyCryptoIntentSchema.parse({
       action: "buy_crypto",
       asset: "USDT",
       fiatAmount: "1000",
     });
-    expect(result.fiatCurrency).toBe("NGN");
+    expect(result.fiatCurrency).toBeUndefined();
   });
 
   it("accepts a fiatAmount with up to 2 decimal places", () => {

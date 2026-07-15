@@ -7,7 +7,10 @@ import { FiatAmountSchema, FiatCurrencySchema, SupportedAssetSchema } from '../c
 export const QuoteBuyInputSchema = z.object({
   asset: SupportedAssetSchema,
   fiatAmount: FiatAmountSchema,
-  fiatCurrency: FiatCurrencySchema.default('NGN'),
+  // Which fiat to spend. Optional: the calling layer defaults to the catalog
+  // base fiat when the caller names none — never hardcoded here (§7),
+  // mirroring GetRateIntentSchema.
+  fiatCurrency: FiatCurrencySchema.optional(),
 })
 export type QuoteBuyInput = z.infer<typeof QuoteBuyInputSchema>
 

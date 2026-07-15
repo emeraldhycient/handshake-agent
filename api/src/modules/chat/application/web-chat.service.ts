@@ -302,21 +302,27 @@ export class WebChatService {
           summaryText = 'KYC required';
           break;
         }
-        if (!this.assetRegistry.isCurrencyLive(intent.fiatCurrency)) {
+        // Single resolution point (multi-currency ergonomics, CLAUDE.md §7):
+        // default to the catalog base fiat when the model omitted it, then
+        // thread the SAME resolved value into both this handler's own gating
+        // and the engine call below — mirroring the get_rate handling.
+        const buyFiatCurrency =
+          intent.fiatCurrency ?? this.assetRegistry.defaultFiat();
+        if (!this.assetRegistry.isCurrencyLive(buyFiatCurrency)) {
           outcome = {
             kind: 'currency_not_live',
-            currency: intent.fiatCurrency,
+            currency: buyFiatCurrency,
             // Catalog-driven live set so the client copy names what CAN settle
             // today instead of hardcoding a launch currency.
             liveCurrencies: this.assetRegistry.enabledFiats(),
           };
-          summaryText = `${intent.fiatCurrency} isn't available for settlement yet.`;
+          summaryText = `${buyFiatCurrency} isn't available for settlement yet.`;
           break;
         }
         const { proposalId, confirmation } =
           await this.proposalService.createBuyProposal({
             userId,
-            intent,
+            intent: { ...intent, fiatCurrency: buyFiatCurrency },
           });
         outcome = { kind: 'proposal', txType: 'buy', proposalId, confirmation };
         summaryText = 'Your buy proposal is ready. Please review and confirm.';
@@ -329,13 +335,17 @@ export class WebChatService {
           summaryText = 'KYC required';
           break;
         }
-        if (!this.assetRegistry.isCurrencyLive(intent.fiatCurrency)) {
+        // Single resolution point (multi-currency ergonomics, CLAUDE.md §7) —
+        // see the matching comment in the buy_crypto branch.
+        const sellFiatCurrency =
+          intent.fiatCurrency ?? this.assetRegistry.defaultFiat();
+        if (!this.assetRegistry.isCurrencyLive(sellFiatCurrency)) {
           outcome = {
             kind: 'currency_not_live',
-            currency: intent.fiatCurrency,
+            currency: sellFiatCurrency,
             liveCurrencies: this.assetRegistry.enabledFiats(),
           };
-          summaryText = `${intent.fiatCurrency} isn't available for settlement yet.`;
+          summaryText = `${sellFiatCurrency} isn't available for settlement yet.`;
           break;
         }
         const sellResolution = await this.resolvePayoutBeneficiary(
@@ -345,7 +355,7 @@ export class WebChatService {
           intent.recipientNickname,
           // Filter to banks that pay out in the sell currency so a non-NGN sell
           // prompts to add a matching-currency bank instead of dead-ending.
-          intent.fiatCurrency,
+          sellFiatCurrency,
         );
         if (!sellResolution.resolved) {
           outcome = sellResolution.outcome;
@@ -356,7 +366,7 @@ export class WebChatService {
           const { proposalId: sp, confirmation: sc } =
             await this.proposalService.createSellProposal({
               userId,
-              intent,
+              intent: { ...intent, fiatCurrency: sellFiatCurrency },
               beneficiaryId: sellResolution.beneficiaryId,
             });
           outcome = {

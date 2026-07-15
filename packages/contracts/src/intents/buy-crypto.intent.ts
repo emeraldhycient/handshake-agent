@@ -8,7 +8,10 @@ export const BuyCryptoIntentSchema = z.object({
   action: z.literal('buy_crypto'),
   asset: SupportedAssetSchema,
   fiatAmount: FiatAmountSchema,
-  fiatCurrency: FiatCurrencySchema.default('NGN'),
+  // Which fiat to spend. Optional: the calling layer defaults to the catalog
+  // base fiat when the user names none — never hardcoded here (§7), mirroring
+  // GetRateIntentSchema.
+  fiatCurrency: FiatCurrencySchema.optional(),
 })
 export type BuyCryptoIntent = z.infer<typeof BuyCryptoIntentSchema>
 

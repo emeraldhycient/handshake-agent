@@ -7,7 +7,10 @@ import { CryptoAmountSchema, FiatCurrencySchema, SupportedAssetSchema } from '..
 export const QuoteSellInputSchema = z.object({
   asset: SupportedAssetSchema,
   cryptoAmount: CryptoAmountSchema,
-  fiatCurrency: FiatCurrencySchema.default('NGN'),
+  // Which fiat the payout settles in. Optional: the calling layer defaults to
+  // the catalog base fiat when the caller names none — never hardcoded here
+  // (§7), mirroring GetRateIntentSchema.
+  fiatCurrency: FiatCurrencySchema.optional(),
 })
 export type QuoteSellInput = z.infer<typeof QuoteSellInputSchema>
 

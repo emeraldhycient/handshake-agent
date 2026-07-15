@@ -2558,6 +2558,55 @@ describe('ConversationService.handleInbound', () => {
     expect(sentText).toMatch(/GHS|not available|settle/i);
   });
 
+  // ── fiatCurrency defaulting (multi-currency ergonomics, CLAUDE.md §7) ──────
+
+  it('buy_crypto with NO fiatCurrency in the intent → resolves to AssetRegistry.defaultFiat(), still runs the liveness gate, and reaches a proposal', async () => {
+    const assetRegistry = makeAssetRegistry();
+    const proposalOut = stubBuyProposalOutput();
+    const { svc, proposalService } = buildService({
+      agentPort: makeAgentPort({
+        action: 'buy_crypto',
+        asset: 'USDT',
+        fiatAmount: '5000',
+        // fiatCurrency deliberately omitted.
+      }),
+      proposalService: makeProposalService(proposalOut),
+      assetRegistry,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(assetRegistry.defaultFiat).toHaveBeenCalled();
+    expect(assetRegistry.isCurrencyLive).toHaveBeenCalledWith('NGN');
+    const [buyCallArg] = proposalService.createBuyProposal.mock.calls[0] as [
+      { intent: { fiatCurrency?: string } },
+    ];
+    expect(buyCallArg.intent.fiatCurrency).toBe('NGN');
+  });
+
+  it('sell_crypto with NO fiatCurrency in the intent → resolves to AssetRegistry.defaultFiat(), still runs the liveness gate, and reaches a proposal', async () => {
+    const assetRegistry = makeAssetRegistry();
+    const { svc, proposalService } = buildService({
+      agentPort: makeAgentPort({
+        action: 'sell_crypto',
+        asset: 'USDT',
+        cryptoAmount: '5',
+        // fiatCurrency deliberately omitted.
+      }),
+      beneficiaryService: makeBeneficiaryService(stubBankBeneficiary()),
+      assetRegistry,
+    });
+
+    await svc.handleInbound(baseMsg());
+
+    expect(assetRegistry.defaultFiat).toHaveBeenCalled();
+    expect(assetRegistry.isCurrencyLive).toHaveBeenCalledWith('NGN');
+    const [sellCallArg] = proposalService.createSellProposal.mock.calls[0] as [
+      { intent: { fiatCurrency?: string } },
+    ];
+    expect(sellCallArg.intent.fiatCurrency).toBe('NGN');
+  });
+
   // ── query_transactions (linked user) → text list + download CTA ────────────
 
   it('query_transactions (linked user) → sends a text list + a download CTA', async () => {

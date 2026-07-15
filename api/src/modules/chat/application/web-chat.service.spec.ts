@@ -989,6 +989,10 @@ describe('WebChatService', () => {
 
   it('sell_crypto, verified, no default beneficiary → needs_beneficiary', async () => {
     fakeBeneficiaryService.getDefault.mockResolvedValue(null);
+    // No fiatCurrency in the raw intent → resolved to the catalog default
+    // ('NGN' here), which currency-scopes the beneficiary lookup — the
+    // no-match note therefore names the resolved currency.
+    fakeBeneficiaryService.listForUser.mockResolvedValue([]);
     fakeAgentPort.run.mockResolvedValue({
       action: 'sell_crypto',
       asset: 'USDT',
@@ -1001,6 +1005,7 @@ describe('WebChatService', () => {
     expect(result.outcome).toEqual({
       kind: 'needs_beneficiary',
       beneficiaryType: 'bank_account',
+      note: 'Please add a NGN bank account first.',
     });
   });
 
@@ -1250,6 +1255,47 @@ describe('WebChatService', () => {
     });
   });
 
+  // ── fiatCurrency defaulting (multi-currency ergonomics, CLAUDE.md §7) ──────
+
+  it('buy_crypto with NO fiatCurrency in the intent → resolves to AssetRegistry.defaultFiat() and reaches a proposal', async () => {
+    const buyConf = {
+      proposalId: 'prop-default-fiat',
+      asset: 'USDT',
+      fiatAmount: '5000',
+      fiatCurrency: 'NGN',
+      cryptoAmount: '5.0',
+      fxRate: '1000',
+      spreadBps: 50,
+      processingFeeBps: 100,
+      processingFeeAmount: '50.00',
+      totalFiat: '5050.00',
+      expiresAt: new Date().toISOString(),
+    };
+    fakeProposalService.createBuyProposal.mockResolvedValue({
+      proposalId: 'prop-default-fiat',
+      quoteId: 'q-default',
+      confirmation: buyConf,
+    });
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'buy_crypto',
+      asset: 'USDT',
+      fiatAmount: '5000',
+      // fiatCurrency deliberately omitted.
+    });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'buy 5000 of USDT',
+    });
+
+    expect(fakeAssetRegistry.defaultFiat).toHaveBeenCalled();
+    expect(fakeAssetRegistry.isCurrencyLive).toHaveBeenCalledWith('NGN');
+    const [buyCallArg] = fakeProposalService.createBuyProposal.mock
+      .calls[0] as [{ intent: { fiatCurrency?: string } }];
+    expect(buyCallArg.intent.fiatCurrency).toBe('NGN');
+    expect(result.outcome).toMatchObject({ kind: 'proposal', txType: 'buy' });
+  });
+
   // ── sell_crypto with non-live currency → currency_not_live ─────────────────
 
   it('sell_crypto with non-live fiatCurrency (RWF) → currency_not_live, no proposal', async () => {
@@ -1273,6 +1319,43 @@ describe('WebChatService', () => {
     });
     expect(fakeProposalService.createSellProposal).not.toHaveBeenCalled();
     expect(fakeBeneficiaryService.getDefault).not.toHaveBeenCalled();
+  });
+
+  it('sell_crypto with NO fiatCurrency in the intent → resolves to AssetRegistry.defaultFiat() and reaches a proposal', async () => {
+    fakeBeneficiaryService.getDefault.mockResolvedValue({ id: 'bene-1' });
+    const sellConf = {
+      proposalId: 'p-sell-default-fiat',
+      asset: 'USDT',
+      cryptoAmount: '5',
+      fiatCurrency: 'NGN',
+      netFiatAmount: '4800',
+      fxRate: '1000',
+      processingFeeAmount: '50.00',
+      expiresAt: new Date().toISOString(),
+    };
+    fakeProposalService.createSellProposal.mockResolvedValue({
+      proposalId: 'p-sell-default-fiat',
+      quoteId: 'q-sell-default',
+      confirmation: sellConf,
+    });
+    fakeAgentPort.run.mockResolvedValue({
+      action: 'sell_crypto',
+      asset: 'USDT',
+      cryptoAmount: '5',
+      // fiatCurrency deliberately omitted.
+    });
+
+    const result = await service.handleMessage({
+      userId: 'user-1',
+      text: 'sell 5 USDT',
+    });
+
+    expect(fakeAssetRegistry.defaultFiat).toHaveBeenCalled();
+    expect(fakeAssetRegistry.isCurrencyLive).toHaveBeenCalledWith('NGN');
+    const [sellCallArg] = fakeProposalService.createSellProposal.mock
+      .calls[0] as [{ intent: { fiatCurrency?: string } }];
+    expect(sellCallArg.intent.fiatCurrency).toBe('NGN');
+    expect(result.outcome).toMatchObject({ kind: 'proposal', txType: 'sell' });
   });
 
   // ── sell_crypto, unverified → needs_kyc ───────────────────────────────────

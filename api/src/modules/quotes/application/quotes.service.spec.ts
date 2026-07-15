@@ -108,6 +108,66 @@ describe('QuotesService.quoteBuy', () => {
     expect(quote.expiresInSec).toBe(30);
     expect(quote.quotedAt).toBe('2026-06-18T00:00:00.000Z');
   });
+
+  // ── fiatCurrency defaulting (multi-currency ergonomics, CLAUDE.md §7) ──────
+
+  it('resolves fiatCurrency to AssetRegistry.defaultFiat() when the input omits it', async () => {
+    const rateProvider: IRateProvider = {
+      getRate: jest.fn().mockResolvedValue(RATE),
+      getValuationRate: jest
+        .fn()
+        .mockResolvedValue({ baseRate: RATE.baseRate }),
+    };
+    const registry = new AssetRegistry(makeRegistryConfig());
+    const service = new QuotesService(rateProvider, fixedClock, registry);
+
+    const quote = await service.quoteBuy({
+      asset: 'USDT',
+      fiatAmount: '100000',
+      // fiatCurrency omitted — STUB_CATALOG_WITH_FEES enables only NGN.
+    } as never);
+
+    expect(rateProvider.getRate).toHaveBeenCalledWith('USDT', 'NGN');
+    expect(quote.fiatCurrency).toBe('NGN');
+  });
+
+  it('uses the input fiatCurrency when provided (unchanged), without consulting AssetRegistry', async () => {
+    const rateProvider: IRateProvider = {
+      getRate: jest.fn().mockResolvedValue(RATE),
+      getValuationRate: jest
+        .fn()
+        .mockResolvedValue({ baseRate: RATE.baseRate }),
+    };
+    const registry = new AssetRegistry(makeRegistryConfig());
+    const defaultFiatSpy = jest.spyOn(registry, 'defaultFiat');
+    const service = new QuotesService(rateProvider, fixedClock, registry);
+
+    const quote = await service.quoteBuy({
+      asset: 'USDT',
+      fiatAmount: '100000',
+      fiatCurrency: 'NGN',
+    });
+
+    expect(quote.fiatCurrency).toBe('NGN');
+    expect(defaultFiatSpy).not.toHaveBeenCalled();
+  });
+
+  it('throws when fiatCurrency is omitted and no AssetRegistry is available to resolve a default', async () => {
+    const rateProvider: IRateProvider = {
+      getRate: jest.fn().mockResolvedValue(RATE),
+      getValuationRate: jest
+        .fn()
+        .mockResolvedValue({ baseRate: RATE.baseRate }),
+    };
+    const service = new QuotesService(rateProvider, fixedClock);
+
+    await expect(
+      service.quoteBuy({
+        asset: 'USDT',
+        fiatAmount: '100000',
+      } as never),
+    ).rejects.toThrow(/AssetRegistry/);
+  });
 });
 
 describe('QuotesService.quoteSell', () => {
@@ -184,6 +244,66 @@ describe('QuotesService.quoteSell', () => {
     });
 
     expect(() => QuoteSellOutputSchema.parse(quote)).not.toThrow();
+  });
+
+  // ── fiatCurrency defaulting (multi-currency ergonomics, CLAUDE.md §7) ──────
+
+  it('resolves fiatCurrency to AssetRegistry.defaultFiat() when the input omits it', async () => {
+    const rateProvider: IRateProvider = {
+      getRate: jest.fn().mockResolvedValue(RATE),
+      getValuationRate: jest
+        .fn()
+        .mockResolvedValue({ baseRate: RATE.baseRate }),
+    };
+    const registry = new AssetRegistry(makeRegistryConfig());
+    const service = new QuotesService(rateProvider, fixedClock, registry);
+
+    const quote = await service.quoteSell({
+      asset: 'USDT',
+      cryptoAmount: '100',
+      // fiatCurrency omitted — STUB_CATALOG_WITH_FEES enables only NGN.
+    } as never);
+
+    expect(rateProvider.getRate).toHaveBeenCalledWith('USDT', 'NGN');
+    expect(quote.fiatCurrency).toBe('NGN');
+  });
+
+  it('uses the input fiatCurrency when provided (unchanged), without consulting AssetRegistry', async () => {
+    const rateProvider: IRateProvider = {
+      getRate: jest.fn().mockResolvedValue(RATE),
+      getValuationRate: jest
+        .fn()
+        .mockResolvedValue({ baseRate: RATE.baseRate }),
+    };
+    const registry = new AssetRegistry(makeRegistryConfig());
+    const defaultFiatSpy = jest.spyOn(registry, 'defaultFiat');
+    const service = new QuotesService(rateProvider, fixedClock, registry);
+
+    const quote = await service.quoteSell({
+      asset: 'USDT',
+      cryptoAmount: '100',
+      fiatCurrency: 'NGN',
+    });
+
+    expect(quote.fiatCurrency).toBe('NGN');
+    expect(defaultFiatSpy).not.toHaveBeenCalled();
+  });
+
+  it('throws when fiatCurrency is omitted and no AssetRegistry is available to resolve a default', async () => {
+    const rateProvider: IRateProvider = {
+      getRate: jest.fn().mockResolvedValue(RATE),
+      getValuationRate: jest
+        .fn()
+        .mockResolvedValue({ baseRate: RATE.baseRate }),
+    };
+    const service = new QuotesService(rateProvider, fixedClock);
+
+    await expect(
+      service.quoteSell({
+        asset: 'USDT',
+        cryptoAmount: '100',
+      } as never),
+    ).rejects.toThrow(/AssetRegistry/);
   });
 });
 

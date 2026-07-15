@@ -207,9 +207,13 @@ function makeBeneficiaryService(
 
 function makeAssetRegistry(
   network = 'TRON',
-): jest.Mocked<Pick<AssetRegistry, 'defaultNetworkFor'>> {
+  defaultFiat = 'NGN',
+): jest.Mocked<Pick<AssetRegistry, 'defaultNetworkFor' | 'defaultFiat'>> {
   return {
     defaultNetworkFor: jest.fn().mockReturnValue(network),
+    // Only reached when the intent omits fiatCurrency (`??` short-circuits
+    // otherwise) — see the fiatCurrency-defaulting tests below.
+    defaultFiat: jest.fn().mockReturnValue(defaultFiat),
   };
 }
 
@@ -254,6 +258,10 @@ function makeBuySvc(
   kycGate: KycGateService = makeKycGate() as unknown as KycGateService,
   quoteRepo: IQuoteRepository = makeQuoteRepo(),
   proposalRepo: IProposalRepository = makeProposalRepo(),
+  assetRegistry: Pick<
+    AssetRegistry,
+    'defaultNetworkFor' | 'defaultFiat'
+  > = makeAssetRegistry(),
 ): ProposalService {
   return new ProposalService(
     quotesService,
@@ -263,7 +271,7 @@ function makeBuySvc(
     stubClock,
     makeWalletService() as unknown as WalletService,
     makeBeneficiaryService() as unknown as BeneficiaryService,
-    makeAssetRegistry() as unknown as AssetRegistry,
+    assetRegistry as unknown as AssetRegistry,
     makeLedgerRepo(),
     NOOP_COMPLIANCE_SERVICE,
     NOOP_CONFIG_SERVICE,
@@ -283,7 +291,7 @@ function makeSellSvc(opts?: {
   proposalRepo?: IProposalRepository;
   walletService?: Pick<WalletService, 'getOrProvisionNetworkWallet'>;
   beneficiaryService?: Pick<BeneficiaryService, 'getById'>;
-  assetRegistry?: Pick<AssetRegistry, 'defaultNetworkFor'>;
+  assetRegistry?: Pick<AssetRegistry, 'defaultNetworkFor' | 'defaultFiat'>;
   ledgerRepo?: ILedgerRepository;
   configService?: { get: (key: string) => unknown };
 }): ProposalService {
@@ -673,6 +681,57 @@ describe('ProposalService.createBuyProposal', () => {
         intent: { ...BASE_INPUT.intent, fiatAmount: '500' },
       }),
     ).resolves.toBeDefined();
+  });
+
+  // ── fiatCurrency defaulting (multi-currency ergonomics, CLAUDE.md §7) ──────
+
+  it('resolves fiatCurrency to AssetRegistry.defaultFiat() when the intent omits it', async () => {
+    const quotesService = makeQuotesService();
+    const registry = makeAssetRegistry('TRON', 'GHS');
+    const svc = makeBuySvc(
+      quotesService as unknown as QuotesService,
+      undefined,
+      undefined,
+      undefined,
+      registry,
+    );
+    // fiatCurrency deliberately omitted — assignable to BuyCryptoIntent since
+    // it's now optional on the shared contract schema.
+    const intentWithoutFiat = {
+      action: BASE_INPUT.intent.action,
+      asset: BASE_INPUT.intent.asset,
+      fiatAmount: BASE_INPUT.intent.fiatAmount,
+    };
+
+    const result = await svc.createBuyProposal({
+      ...BASE_INPUT,
+      intent: intentWithoutFiat,
+    });
+
+    expect(registry.defaultFiat).toHaveBeenCalled();
+    expect(quotesService.quoteBuy).toHaveBeenCalledWith(
+      expect.objectContaining({ fiatCurrency: 'GHS' }),
+    );
+    expect(result.confirmation.fiatCurrency).toBe('GHS');
+  });
+
+  it('uses the intent fiatCurrency when provided (unchanged), even when it differs from AssetRegistry.defaultFiat()', async () => {
+    const registry = makeAssetRegistry('TRON', 'KES');
+    const svc = makeBuySvc(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      registry,
+    );
+
+    const result = await svc.createBuyProposal({
+      ...BASE_INPUT,
+      intent: { ...BASE_INPUT.intent, fiatCurrency: 'GHS' },
+    });
+
+    expect(result.confirmation.fiatCurrency).toBe('GHS');
+    expect(registry.defaultFiat).not.toHaveBeenCalled();
   });
 });
 
@@ -1176,6 +1235,57 @@ describe('ProposalService.createSellProposal', () => {
       }),
     ).rejects.toMatchObject({ code: 'AMOUNT_TOO_SMALL' });
     expect(quotesService.quoteSell).not.toHaveBeenCalled();
+  });
+
+  // ── fiatCurrency defaulting (multi-currency ergonomics, CLAUDE.md §7) ──────
+
+  it('resolves fiatCurrency to AssetRegistry.defaultFiat() when the intent omits it', async () => {
+    const quotesService = {
+      quoteBuy: jest.fn(),
+      quoteSell: jest.fn().mockResolvedValue(STUB_SELL_QUOTE),
+    };
+    const registry = makeAssetRegistry('TRON', 'GHS');
+    // Payout currency matches the resolved default so the sell reaches
+    // confirmation (a mismatch would throw BeneficiaryCurrencyMismatchError).
+    const beneficiaryService = makeBeneficiaryService({
+      ...STUB_BENEFICIARY_RECORD,
+      payoutCurrency: 'GHS',
+    });
+    const svc = makeSellSvc({
+      quotesService,
+      assetRegistry: registry,
+      beneficiaryService,
+    });
+    // fiatCurrency deliberately omitted — assignable to SellCryptoIntent since
+    // it's now optional on the shared contract schema.
+    const intentWithoutFiat = {
+      action: BASE_SELL_INPUT.intent.action,
+      asset: BASE_SELL_INPUT.intent.asset,
+      cryptoAmount: BASE_SELL_INPUT.intent.cryptoAmount,
+    };
+
+    const result = await svc.createSellProposal({
+      ...BASE_SELL_INPUT,
+      intent: intentWithoutFiat,
+    });
+
+    expect(registry.defaultFiat).toHaveBeenCalled();
+    expect(quotesService.quoteSell).toHaveBeenCalledWith(
+      expect.objectContaining({ fiatCurrency: 'GHS' }),
+    );
+    expect(result.confirmation.fiatCurrency).toBe('GHS');
+  });
+
+  it('uses the intent fiatCurrency when provided (unchanged), even when it differs from AssetRegistry.defaultFiat()', async () => {
+    const registry = makeAssetRegistry('TRON', 'KES');
+    const svc = makeSellSvc({ assetRegistry: registry });
+
+    // BASE_SELL_INPUT.intent.fiatCurrency is 'NGN', matching
+    // STUB_BENEFICIARY_RECORD.payoutCurrency — reaches confirmation unchanged.
+    const result = await svc.createSellProposal(BASE_SELL_INPUT);
+
+    expect(result.confirmation.fiatCurrency).toBe('NGN');
+    expect(registry.defaultFiat).not.toHaveBeenCalled();
   });
 });
 

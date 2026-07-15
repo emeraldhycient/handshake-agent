@@ -9,7 +9,10 @@ export const SellCryptoIntentSchema = z.object({
   action: z.literal('sell_crypto'),
   asset: SupportedAssetSchema,
   cryptoAmount: CryptoAmountSchema,
-  fiatCurrency: FiatCurrencySchema.default('NGN'),
+  // Which fiat the payout settles in. Optional: the calling layer defaults to
+  // the catalog base fiat when the user names none — never hardcoded here
+  // (§7), mirroring GetRateIntentSchema.
+  fiatCurrency: FiatCurrencySchema.optional(),
   /**
    * SECURITY (CLAUDE.md §3.1): a LOOKUP KEY only — the payout recipient's name
    * as the user said it ("sell 100 USDT to my GTB account"). It is resolved
