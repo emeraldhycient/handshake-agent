@@ -1081,6 +1081,12 @@ export class ProposalService {
       recipientWalletId: recipientWallet.id,
       walletId: senderWallet.id,
       requiresTravelRule: false,
+      // Audit-snapshot the recipient's @handle + display name at propose time so
+      // the settled transfer's read projections (MCP + chat) surface the
+      // counterparty identity WITHOUT a read-time cross-module lookup (§3.1 —
+      // resolved server-side, never model free-text).
+      recipientHandle: destination.displayHandle,
+      recipientDisplayName: destination.recipientDisplayName,
     };
     const parametersChecksum = sha256Hex(parameters);
 

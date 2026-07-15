@@ -4986,6 +4986,8 @@ const INTERNAL_TRANSFER_PROPOSAL: ProposalRecord = {
     recipientWalletId: RECIPIENT_WALLET_ID,
     walletId: SENDER_WALLET_ID,
     requiresTravelRule: 'false',
+    recipientHandle: '@ada',
+    recipientDisplayName: 'Ada A.',
   },
   parametersChecksum: 'c'.repeat(64),
   quoteId: null, // internal transfers have NO quote
@@ -5162,6 +5164,11 @@ describe('ExecutionService.executeInternalTransfer', () => {
         cryptoAmount: '10.000000',
         assetDecimals: 6,
         idempotencyKey: IT_IDEMPOTENCY_KEY,
+        // The recipient @handle + display name are threaded from the proposal
+        // params into the settle so the atomic can audit-snapshot them onto the
+        // Transaction metadata (read projections show the counterparty identity).
+        recipientHandle: '@ada',
+        recipientDisplayName: 'Ada A.',
       }),
     );
 

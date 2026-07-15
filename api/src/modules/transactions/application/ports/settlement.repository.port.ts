@@ -496,6 +496,15 @@ export interface SettleInternalTransferAtomicInput {
   /** Crypto amount moved from sender to recipient (positive decimal string). */
   cryptoAmount: string;
   /**
+   * The recipient's `@handle` (audit snapshot from the proposal params). Written
+   * to the anchor Transaction metadata so the read projections surface the
+   * counterparty identity. Optional/defensive — older or non-handle callers omit
+   * it (an internal transfer without a handle simply reads a blank counterparty).
+   */
+  recipientHandle?: string;
+  /** The recipient's resolved display name (audit snapshot from the proposal params). */
+  recipientDisplayName?: string;
+  /**
    * Per-asset decimal places for the WalletBalance snapshots. Resolved from the
    * AssetRegistry by the executor, so the repository never hardcodes a decimals
    * literal (§7).

@@ -154,7 +154,11 @@ function buildTransactionStatusPayload(
           currency: str('fiatCurrency'),
         }
       : undefined;
-  const counterparty = str('destination') ?? str('senderAddress');
+  // destination (send) → senderAddress (deposit) → recipientHandle (internal
+  // transfer, which has no address/destination). Kept in lockstep with the chat
+  // TransactionStatusController projection (proposal.controller.ts).
+  const counterparty =
+    str('destination') ?? str('senderAddress') ?? str('recipientHandle');
   const cryptoAmount = str('cryptoAmount') ?? str('amount');
 
   return TransactionStatusResponseSchema.parse({

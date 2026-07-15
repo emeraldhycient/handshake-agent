@@ -116,6 +116,7 @@ const mockProposalRepo = {
 
 const mockTransactionRepo = {
   findById: jest.fn(),
+  findByUserId: jest.fn(),
   findByIdempotencyKey: jest.fn(),
   create: jest.fn(),
   createSettlingWithProposal: jest.fn(),
@@ -938,6 +939,30 @@ describe('TransactionStatusController', () => {
     expect(result.txHash).toBe('send-hash-001');
   });
 
+  it('uses the recipient @handle as counterparty for an internal_transfer (direction out)', async () => {
+    // Internal-transfer metadata has no address/destination — only the
+    // audit-snapshot recipientHandle. The projection must fall back to it so
+    // the settled transfer shows the recipient, mirroring the MCP surface.
+    mockTransactionRepo.findById.mockResolvedValue(
+      makeTransaction({
+        type: 'internal_transfer',
+        status: 'completed',
+        metadata: {
+          asset: 'USDT',
+          cryptoAmount: '3.00',
+          recipientUserId: 'recipient-user-2',
+          recipientHandle: '@ada',
+        },
+      }),
+    );
+    mockSettlementRepo.findReceiptNumber.mockResolvedValue('HS-2026-000009');
+
+    const result = await controller.getStatus('txn-uuid', TEST_USER);
+
+    expect(result.direction).toBe('out');
+    expect(result.counterparty).toBe('@ada');
+  });
+
   it('omits on-chain fields when not present in metadata', async () => {
     mockTransactionRepo.findById.mockResolvedValue(
       makeTransaction({
@@ -962,6 +987,28 @@ describe('TransactionStatusController', () => {
     expect(result.network).toBeUndefined();
     expect(result.fees).toBeUndefined();
     expect(result.counterparty).toBeUndefined();
+  });
+
+  it('list surfaces the recipient @handle as counterparty for an internal_transfer (lockstep with getStatus)', async () => {
+    mockTransactionRepo.findByUserId.mockResolvedValue([
+      makeTransaction({
+        // The list response schema validates item.id as a uuid.
+        id: 'aaaaaaaa-0000-7000-8000-000000000009',
+        type: 'internal_transfer',
+        status: 'completed',
+        metadata: {
+          asset: 'USDT',
+          cryptoAmount: '3.00',
+          recipientUserId: 'recipient-user-2',
+          recipientHandle: '@ada',
+        },
+      }),
+    ]);
+
+    const result = await controller.list(TEST_USER);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].counterparty).toBe('@ada');
   });
 });
 

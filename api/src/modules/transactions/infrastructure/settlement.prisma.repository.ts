@@ -2835,6 +2835,8 @@ export class SettlementPrismaRepository implements ISettlementRepository {
       recipientWalletId,
       asset,
       cryptoAmount,
+      recipientHandle,
+      recipientDisplayName,
       assetDecimals,
       idempotencyKey,
       requestChecksum,
@@ -2957,6 +2959,14 @@ export class SettlementPrismaRepository implements ISettlementRepository {
               cryptoAmount,
               recipientUserId,
               recipientWalletId,
+              // Audit-snapshot the recipient's @handle + display name so the read
+              // projections (MCP + chat) surface the counterparty identity — an
+              // internal transfer has no address/destination to fall back on.
+              // Spread defensively: a legacy/handle-less caller omits them.
+              ...(recipientHandle !== undefined ? { recipientHandle } : {}),
+              ...(recipientDisplayName !== undefined
+                ? { recipientDisplayName }
+                : {}),
               // Persist the sender's velocity contribution for parity with the
               // send/sell paths (audit + any future reversal).
               velocityFiatAmount: velocityIncrement.fiatAmountStr,

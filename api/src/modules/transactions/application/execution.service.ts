@@ -1834,6 +1834,12 @@ export class ExecutionService {
     const recipientUserId = params.recipientUserId;
     const recipientWalletId = params.recipientWalletId;
     const walletId = params.walletId;
+    // Audit-snapshot fields the propose step resolved server-side (§3.1). Threaded
+    // to the settle so the anchor Transaction metadata carries the counterparty
+    // identity the read projections show. Optional — a legacy proposal without
+    // them settles fine (the projection just reads a blank counterparty).
+    const recipientHandle = params.recipientHandle;
+    const recipientDisplayName = params.recipientDisplayName;
     if (!recipientUserId) {
       throw new ProposalNotExecutableError(
         'proposal parameters missing recipientUserId',
@@ -2002,6 +2008,8 @@ export class ExecutionService {
       recipientWalletId,
       asset,
       cryptoAmount,
+      recipientHandle,
+      recipientDisplayName,
       assetDecimals: assetMeta.decimals,
       idempotencyKey,
       requestChecksum,

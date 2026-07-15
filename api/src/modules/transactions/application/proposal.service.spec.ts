@@ -2333,6 +2333,11 @@ describe('createSendProposal — internal_user destination (PayID transfer)', ()
       recipientWalletId: FIXED_RECIPIENT_WALLET_ID,
       walletId: FIXED_SEND_WALLET_ID,
       requiresTravelRule: false,
+      // Audit-snapshot the recipient's @handle + display name at propose time so
+      // the settled transfer's read projections can show the counterparty
+      // identity WITHOUT a read-time cross-module lookup.
+      recipientHandle: INTERNAL_HANDLE,
+      recipientDisplayName: INTERNAL_DISPLAY_NAME,
     });
     expect(createArg.parameters).not.toHaveProperty('toAddress');
     expect(createArg.parameters).not.toHaveProperty('beneficiaryId');
