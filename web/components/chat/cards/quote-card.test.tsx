@@ -98,3 +98,50 @@ describe("QuoteCard — reassurance/expiry footer (finding: desktop drops it)", 
     expect(screen.getByText(/no hidden fees/i)).toBeInTheDocument()
   })
 })
+
+describe("QuoteCard — terminal proposal state on reload (Bug 2)", () => {
+  it("renders a disabled 'Completed' CTA (not 'Review & confirm') for an executed proposal", () => {
+    render(
+      <QuoteCard {...baseProps} lockSeconds={58} proposalStatus="executed" />
+    )
+    // The active confirm affordance is gone.
+    expect(
+      screen.queryByRole("button", { name: /review & confirm/i })
+    ).not.toBeInTheDocument()
+    const cta = screen.getByRole("button", { name: /completed/i })
+    expect(cta).toBeDisabled()
+  })
+
+  it("does not call onConfirm when an executed card's CTA is clicked", async () => {
+    const onConfirm = vi.fn()
+    render(
+      <QuoteCard
+        {...baseProps}
+        lockSeconds={58}
+        proposalStatus="executed"
+        onConfirm={onConfirm}
+      />
+    )
+    await userEvent.click(screen.getByRole("button", { name: /completed/i }))
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+
+  it("renders a 'Cancelled' terminal state for a rejected proposal", () => {
+    render(
+      <QuoteCard {...baseProps} lockSeconds={58} proposalStatus="rejected" />
+    )
+    expect(screen.getByRole("button", { name: /cancelled/i })).toBeDisabled()
+    expect(
+      screen.queryByRole("button", { name: /review & confirm/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it("keeps the live active CTA for a still-pending proposal (unchanged behaviour)", () => {
+    render(
+      <QuoteCard {...baseProps} lockSeconds={58} proposalStatus="pending" />
+    )
+    expect(
+      screen.getByRole("button", { name: /review & confirm/i })
+    ).toBeEnabled()
+  })
+})

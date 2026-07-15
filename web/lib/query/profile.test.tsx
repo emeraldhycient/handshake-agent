@@ -9,6 +9,10 @@ const revokeProfileSession = vi.fn()
 const listPats = vi.fn()
 const createPat = vi.fn()
 const revokePat = vi.fn()
+const getPublicNicknames = vi.fn()
+const createPublicNickname = vi.fn()
+const deletePublicNickname = vi.fn()
+const changePayId = vi.fn()
 vi.mock("@/lib/api/profile", () => ({
   updateProfile: (...a: unknown[]) => updateProfile(...a),
   changePin: (...a: unknown[]) => changePin(...a),
@@ -17,6 +21,10 @@ vi.mock("@/lib/api/profile", () => ({
   listPats: (...a: unknown[]) => listPats(...a),
   createPat: (...a: unknown[]) => createPat(...a),
   revokePat: (...a: unknown[]) => revokePat(...a),
+  getPublicNicknames: (...a: unknown[]) => getPublicNicknames(...a),
+  createPublicNickname: (...a: unknown[]) => createPublicNickname(...a),
+  deletePublicNickname: (...a: unknown[]) => deletePublicNickname(...a),
+  changePayId: (...a: unknown[]) => changePayId(...a),
 }))
 
 // The list queries gate on an access token the way useProfile does.
@@ -26,10 +34,14 @@ vi.mock("@/lib/store/auth-store", () => ({
 }))
 
 import {
+  useChangePayId,
   useChangePin,
   useCreatePat,
+  useCreatePublicNickname,
+  useDeletePublicNickname,
   usePats,
   useProfileSessions,
+  usePublicNicknames,
   useRevokePat,
   useRevokeSession,
   useUpdateProfile,
@@ -55,6 +67,10 @@ describe("profile query hooks", () => {
     listPats.mockReset()
     createPat.mockReset()
     revokePat.mockReset()
+    getPublicNicknames.mockReset()
+    createPublicNickname.mockReset()
+    deletePublicNickname.mockReset()
+    changePayId.mockReset()
   })
 
   it("useUpdateProfile writes the fresh profile into the cache", async () => {
@@ -142,5 +158,51 @@ describe("profile query hooks", () => {
 
     expect(revokePat).toHaveBeenCalledWith("t1")
     expect(spy).toHaveBeenCalledWith({ queryKey: qk.pats })
+  })
+
+  it("usePublicNicknames loads the nickname list", async () => {
+    getPublicNicknames.mockResolvedValue({ nicknames: [{ id: "n1" }] })
+    const { wrapper } = makeWrapper()
+    const { result } = renderHook(() => usePublicNicknames(), { wrapper })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.nicknames).toHaveLength(1)
+  })
+
+  it("useCreatePublicNickname invalidates the nickname list on success", async () => {
+    createPublicNickname.mockResolvedValue({ id: "n1", alias: "adaonly" })
+    const { client, wrapper } = makeWrapper()
+    const spy = vi.spyOn(client, "invalidateQueries")
+    const { result } = renderHook(() => useCreatePublicNickname(), { wrapper })
+
+    await result.current.mutateAsync({ alias: "adaonly" })
+
+    expect(createPublicNickname).toHaveBeenCalledWith({ alias: "adaonly" })
+    expect(spy).toHaveBeenCalledWith({ queryKey: qk.publicNicknames })
+  })
+
+  it("useDeletePublicNickname invalidates the nickname list on success", async () => {
+    deletePublicNickname.mockResolvedValue(undefined)
+    const { client, wrapper } = makeWrapper()
+    const spy = vi.spyOn(client, "invalidateQueries")
+    const { result } = renderHook(() => useDeletePublicNickname(), { wrapper })
+
+    await result.current.mutateAsync("n1")
+
+    expect(deletePublicNickname).toHaveBeenCalledWith("n1")
+    expect(spy).toHaveBeenCalledWith({ queryKey: qk.publicNicknames })
+  })
+
+  it("useChangePayId invalidates both the profile and me caches on success", async () => {
+    changePayId.mockResolvedValue(undefined)
+    const { client, wrapper } = makeWrapper()
+    const spy = vi.spyOn(client, "invalidateQueries")
+    const { result } = renderHook(() => useChangePayId(), { wrapper })
+
+    await result.current.mutateAsync({ payId: "adaonly" })
+
+    expect(changePayId).toHaveBeenCalledWith({ payId: "adaonly" })
+    expect(spy).toHaveBeenCalledWith({ queryKey: qk.profile })
+    expect(spy).toHaveBeenCalledWith({ queryKey: qk.me })
   })
 })

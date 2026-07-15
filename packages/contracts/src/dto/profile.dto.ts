@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { FiatCurrencySchema } from "../common";
+import { FiatCurrencySchema, PayIdSchema } from "../common";
 import { TransactionPinSchema } from "./kyc-complete.dto";
 
 export const ProfileLimitsSchema = z.object({
@@ -17,6 +17,8 @@ export const ProfileResponseSchema = z.object({
   kycTier: z.string(),
   fiatCurrency: FiatCurrencySchema,
   limits: ProfileLimitsSchema.nullable(),
+  /** PayId handle for @-mention sends (Spec 2). Present when claimed. */
+  payId: z.string().optional(),
 });
 export type ProfileResponse = z.infer<typeof ProfileResponseSchema>;
 
@@ -77,3 +79,39 @@ export const ProfileSessionListResponseSchema = z.object({
 export type ProfileSessionListResponse = z.infer<
   typeof ProfileSessionListResponseSchema
 >;
+
+/**
+ * Request DTO for POST /profile/payid (claim a PayId handle).
+ * Spec 2: internal transfer via @handle.
+ */
+export const ClaimPayIdSchema = z.object({
+  payId: PayIdSchema,
+}).strict();
+export type ClaimPayId = z.infer<typeof ClaimPayIdSchema>;
+
+/**
+ * Request DTO for POST /profile/nicknames (create a public nickname).
+ * Alias is validated as a PayId and stored as a public lookup key.
+ */
+export const CreatePublicNicknameSchema = z.object({
+  alias: PayIdSchema,
+}).strict();
+export type CreatePublicNickname = z.infer<typeof CreatePublicNicknameSchema>;
+
+/**
+ * Public nickname schema: a user-generated alias that resolves to their PayId.
+ * Visible in the public directory for @-mention discovery.
+ */
+export const PublicNicknameSchema = z.object({
+  id: z.string().uuid(),
+  alias: z.string(),
+});
+export type PublicNickname = z.infer<typeof PublicNicknameSchema>;
+
+/**
+ * Response DTO for GET /profile/nicknames (list public nicknames).
+ */
+export const PublicNicknamesResponseSchema = z.object({
+  nicknames: z.array(PublicNicknameSchema),
+});
+export type PublicNicknamesResponse = z.infer<typeof PublicNicknamesResponseSchema>;

@@ -5,6 +5,7 @@ import { useStore } from "zustand"
 import { defaultChatStore } from "@/lib/store/chat-store"
 import { useAuthStore } from "@/lib/store/auth-store"
 import { useChatHistory } from "@/hooks/use-chat-history"
+import { useChatCacheInvalidation } from "@/hooks/use-chat-cache-invalidation"
 import { useOptionalRouter } from "@/hooks/use-optional-router"
 import {
   buildConfirmFromQuote,
@@ -35,6 +36,8 @@ export function MobileShell({ store: injectedStore }: MobileShellProps) {
   const router = useOptionalRouter()
   // Rehydrate the thread from server history on mount (authenticated only).
   useChatHistory("m", store)
+  // Bug 3: refresh activity + balances when a transaction completes.
+  useChatCacheInvalidation(store)
   const [tab, setTab] = useState<MobileTabId>("chat")
   const recorder = useVoiceRecorder()
 

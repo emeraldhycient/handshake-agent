@@ -2083,6 +2083,288 @@ describe('createSendProposal — saved_beneficiary destination (unchanged behavi
   });
 });
 
+// ---------------------------------------------------------------------------
+// createSendProposal — internal_user destination (PayID transfer, Task 6)
+// ---------------------------------------------------------------------------
+
+const FIXED_RECIPIENT_USER_ID = 'recipient-user-2';
+const FIXED_RECIPIENT_WALLET_ID = 'wallet-recipient-2222-0000-7000-8000-0000a';
+const INTERNAL_HANDLE = 'alice';
+const INTERNAL_DISPLAY_NAME = 'Alice A.';
+
+const STUB_RECIPIENT_WALLET_RECORD = {
+  id: FIXED_RECIPIENT_WALLET_ID,
+  userId: FIXED_RECIPIENT_USER_ID,
+  asset: 'USDT',
+  network: 'TRON',
+  address: 'TFakeRecipientWalletAddr987654321',
+  providerReference: 'br_fake_recipient_ref',
+  status: 'active',
+};
+
+/**
+ * Wallet service that returns the SENDER wallet for the sender's userId and the
+ * RECIPIENT wallet (auto-provisioned) for the recipient's userId — so the test
+ * can assert both are resolved on the internal-transfer path.
+ */
+function makeInternalWalletService(): jest.Mocked<
+  Pick<WalletService, 'getOrProvisionNetworkWallet'>
+> {
+  return {
+    getOrProvisionNetworkWallet: jest
+      .fn()
+      .mockImplementation((userId: string) =>
+        Promise.resolve(
+          userId === FIXED_RECIPIENT_USER_ID
+            ? STUB_RECIPIENT_WALLET_RECORD
+            : STUB_SEND_WALLET_RECORD,
+        ),
+      ),
+  };
+}
+
+function makeCounterpartyCompliance(
+  passed = true,
+): jest.Mocked<Pick<ComplianceService, 'screenCounterpartyUser'>> {
+  return {
+    screenCounterpartyUser: jest.fn().mockResolvedValue({
+      passed,
+      reason: passed ? null : 'OFAC identity match',
+      complianceEventId: 'ce-cp-000000-0000-7000-8000-000000000001',
+    }),
+  };
+}
+
+/** Stub ConfigService for internal-transfer tests: pricing baseRate + catalog TTL. */
+const INTERNAL_CONFIG_SERVICE = {
+  get: jest.fn((key: string) => {
+    if (key === 'pricing')
+      return { assets: { USDT: { baseRates: { NGN: 1600 } } } };
+    if (key === 'catalog') return { sendQuoteExpiresInSec: 300 };
+    return undefined;
+  }),
+};
+
+function makeInternalSvc(opts?: {
+  kycGate?: Pick<KycGateService, 'assertCanTransact'>;
+  proposalRepo?: IProposalRepository;
+  walletService?: Pick<WalletService, 'getOrProvisionNetworkWallet'>;
+  complianceService?: Pick<ComplianceService, 'screenCounterpartyUser'>;
+  ledgerRepo?: ILedgerRepository;
+  configService?: { get: jest.Mock };
+  assetRegistry?: Pick<
+    AssetRegistry,
+    'defaultNetworkFor' | 'validateAddress' | 'asset' | 'defaultFiat'
+  >;
+}): ProposalService {
+  return new ProposalService(
+    makeQuotesServiceWithSend() as unknown as QuotesService,
+    (opts?.kycGate ?? makeKycGate()) as unknown as KycGateService,
+    makeQuoteRepo(),
+    opts?.proposalRepo ?? makeProposalRepo(FIXED_SEND_PROPOSAL_ID),
+    stubClock,
+    (opts?.walletService ??
+      makeInternalWalletService()) as unknown as WalletService,
+    makeBeneficiaryServiceSend() as unknown as BeneficiaryService,
+    (opts?.assetRegistry ??
+      makeAssetRegistrySend()) as unknown as AssetRegistry,
+    opts?.ledgerRepo ?? makeLedgerRepo('100.0'),
+    (opts?.complianceService ??
+      makeCounterpartyCompliance()) as unknown as ComplianceService,
+    (opts?.configService ?? INTERNAL_CONFIG_SERVICE) as never,
+    undefined as never,
+  );
+}
+
+const BASE_INTERNAL_INPUT = {
+  userId: 'user-id-1',
+  conversationId: 'conv-id-1',
+  intent: {
+    action: 'send_crypto' as const,
+    asset: 'USDT' as const,
+    cryptoAmount: '10.0',
+    network: 'TRON' as const,
+  },
+  destination: {
+    kind: 'internal_user' as const,
+    recipientUserId: FIXED_RECIPIENT_USER_ID,
+    displayHandle: INTERNAL_HANDLE,
+    recipientDisplayName: INTERNAL_DISPLAY_NAME,
+  },
+};
+
+describe('createSendProposal — internal_user destination (PayID transfer)', () => {
+  it('returns proposalId, quoteId=null, and an instant SendProposalConfirmation with no address', async () => {
+    const svc = makeInternalSvc();
+    const result = await svc.createSendProposal(BASE_INTERNAL_INPUT);
+
+    expect(result.proposalId).toBe(FIXED_SEND_PROPOSAL_ID);
+    expect(result.quoteId).toBeNull();
+    expect(() =>
+      SendProposalConfirmationSchema.parse(result.confirmation),
+    ).not.toThrow();
+    expect(result.confirmation.toAddressMasked).toBeUndefined();
+    expect(result.confirmation.recipientHandle).toBe(INTERNAL_HANDLE);
+    expect(result.confirmation.recipientDisplayName).toBe(
+      INTERNAL_DISPLAY_NAME,
+    );
+    expect(result.confirmation.instant).toBe(true);
+    expect(result.confirmation.networkFeeCrypto).toBe('0');
+    expect(result.confirmation.totalDebit).toBe('10.0');
+  });
+
+  it('resolves (auto-provisions) the recipient wallet on the asset network', async () => {
+    const walletService = makeInternalWalletService();
+    const svc = makeInternalSvc({ walletService });
+
+    await svc.createSendProposal(BASE_INTERNAL_INPUT);
+
+    // Sender first, then recipient — the recipient call auto-provisions if absent.
+    expect(walletService.getOrProvisionNetworkWallet).toHaveBeenCalledWith(
+      'user-id-1',
+      'TRON',
+    );
+    expect(walletService.getOrProvisionNetworkWallet).toHaveBeenCalledWith(
+      FIXED_RECIPIENT_USER_ID,
+      'TRON',
+    );
+  });
+
+  it('rejects a self-send (recipientUserId === userId) with SelfSendError before provisioning the recipient wallet', async () => {
+    const walletService = makeInternalWalletService();
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeInternalSvc({ walletService, proposalRepo });
+
+    await expect(
+      svc.createSendProposal({
+        ...BASE_INTERNAL_INPUT,
+        destination: {
+          ...BASE_INTERNAL_INPUT.destination,
+          recipientUserId: 'user-id-1', // same as sender
+        },
+      }),
+    ).rejects.toBeInstanceOf(SelfSendError);
+    // Only the SENDER wallet was resolved — the guard fired before the recipient
+    // provisioning (and before any persistence).
+    expect(walletService.getOrProvisionNetworkWallet).toHaveBeenCalledTimes(1);
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('blocks a sanctioned counterparty with SanctionsBlockedError and does NOT persist', async () => {
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeInternalSvc({
+      complianceService: makeCounterpartyCompliance(false),
+      proposalRepo,
+    });
+
+    await expect(
+      svc.createSendProposal(BASE_INTERNAL_INPUT),
+    ).rejects.toBeInstanceOf(SanctionsBlockedError);
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('screens the recipient by userId (counterparty identity, not an address)', async () => {
+    const complianceService = makeCounterpartyCompliance();
+    const svc = makeInternalSvc({ complianceService });
+
+    await svc.createSendProposal(BASE_INTERNAL_INPUT);
+
+    expect(complianceService.screenCounterpartyUser).toHaveBeenCalledWith({
+      userId: FIXED_RECIPIENT_USER_ID,
+    });
+  });
+
+  it('has NO network fee — networkFeeCrypto=0 and totalDebit === cryptoAmount', async () => {
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeInternalSvc({ proposalRepo });
+
+    await svc.createSendProposal(BASE_INTERNAL_INPUT);
+
+    const createArg = (
+      proposalRepo.create as jest.Mock<
+        Promise<{ id: string }>,
+        [CreateProposalData]
+      >
+    ).mock.calls[0][0];
+    expect(createArg.parameters['networkFeeCrypto']).toBe('0');
+    expect(createArg.parameters['totalDebit']).toBe('10.0');
+  });
+
+  it('calls the KYC gate with onChainSend:false and capability "crypto.transfer"', async () => {
+    const kycGate = makeKycGate();
+    const svc = makeInternalSvc({ kycGate });
+
+    await svc.createSendProposal(BASE_INTERNAL_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: 'crypto.transfer',
+        onChainSend: false,
+        // 10 USDT × ₦1600 = ₦16,000 (BigInt-exact, same helper as the send path).
+        fiatAmount: '16000',
+        fiatCurrency: 'NGN',
+      }),
+    );
+  });
+
+  it('persists a Proposal (type=internal_transfer) carrying the internal params and NO toAddress', async () => {
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeInternalSvc({ proposalRepo });
+
+    await svc.createSendProposal(BASE_INTERNAL_INPUT);
+
+    const createArg = (
+      proposalRepo.create as jest.Mock<
+        Promise<{ id: string }>,
+        [CreateProposalData]
+      >
+    ).mock.calls[0][0];
+    expect(createArg.type).toBe('internal_transfer');
+    expect(createArg.quoteId).toBeUndefined();
+    expect(createArg.parametersChecksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(createArg.parameters).toMatchObject({
+      asset: 'USDT',
+      cryptoAmount: '10.0',
+      network: 'TRON',
+      networkFeeCrypto: '0',
+      totalDebit: '10.0',
+      destinationKind: 'internal_user',
+      recipientUserId: FIXED_RECIPIENT_USER_ID,
+      recipientWalletId: FIXED_RECIPIENT_WALLET_ID,
+      walletId: FIXED_SEND_WALLET_ID,
+      requiresTravelRule: false,
+    });
+    expect(createArg.parameters).not.toHaveProperty('toAddress');
+    expect(createArg.parameters).not.toHaveProperty('beneficiaryId');
+  });
+
+  it('throws InsufficientBalanceError when the sender balance < cryptoAmount', async () => {
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeInternalSvc({
+      ledgerRepo: makeLedgerRepo('5.0'), // 5 < 10
+      proposalRepo,
+    });
+
+    await expect(svc.createSendProposal(BASE_INTERNAL_INPUT)).rejects.toThrow(
+      InsufficientBalanceError,
+    );
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('propagates a KYC gate error and does NOT persist', async () => {
+    const proposalRepo = makeProposalRepo(FIXED_SEND_PROPOSAL_ID);
+    const svc = makeInternalSvc({
+      kycGate: makeKycGate(new Error('KYC_NOT_VERIFIED')),
+      proposalRepo,
+    });
+
+    await expect(svc.createSendProposal(BASE_INTERNAL_INPUT)).rejects.toThrow(
+      'KYC_NOT_VERIFIED',
+    );
+    expect(proposalRepo.create).not.toHaveBeenCalled();
+  });
+});
+
 // ============================================================================
 // ProposalService.createSwapProposal
 // ============================================================================
@@ -2408,5 +2690,41 @@ describe('ProposalService.createSwapProposal', () => {
       svc.createSwapProposal({ ...BASE_SWAP_INPUT, amount: '0.5' }),
     ).rejects.toMatchObject({ code: 'AMOUNT_TOO_SMALL' });
     expect(swapProvider.getQuote).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProposalService.getProposalStatus (Bug 2 — read-only status lookup)', () => {
+  it("returns the proposal's current status when it exists", async () => {
+    const proposalRepo = makeProposalRepo();
+    (proposalRepo.findById as jest.Mock).mockResolvedValue({
+      id: FIXED_PROPOSAL_ID,
+      status: 'executed',
+    });
+    const svc = makeBuySvc(undefined, undefined, undefined, proposalRepo);
+
+    await expect(svc.getProposalStatus(FIXED_PROPOSAL_ID)).resolves.toBe(
+      'executed',
+    );
+    expect(proposalRepo.findById).toHaveBeenCalledWith(FIXED_PROPOSAL_ID);
+  });
+
+  it('returns null when the proposal does not exist', async () => {
+    const proposalRepo = makeProposalRepo();
+    (proposalRepo.findById as jest.Mock).mockResolvedValue(null);
+    const svc = makeBuySvc(undefined, undefined, undefined, proposalRepo);
+
+    await expect(svc.getProposalStatus('missing')).resolves.toBeNull();
+  });
+
+  it('never mutates the proposal (§3.1 — read-only)', async () => {
+    const proposalRepo = makeProposalRepo();
+    (proposalRepo.findById as jest.Mock).mockResolvedValue({
+      id: FIXED_PROPOSAL_ID,
+      status: 'pending',
+    });
+    const svc = makeBuySvc(undefined, undefined, undefined, proposalRepo);
+
+    await svc.getProposalStatus(FIXED_PROPOSAL_ID);
+    expect(proposalRepo.updateStatus).not.toHaveBeenCalled();
   });
 });

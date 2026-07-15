@@ -84,3 +84,21 @@ export class DeviceAlreadyBoundError extends AuthDomainError {
     this.name = 'DeviceAlreadyBoundError';
   }
 }
+
+/**
+ * PayID minting could not find a free handle for a new user after exhausting
+ * both the incrementing-suffix retries and the random-suffix fallback (Spec 2,
+ * Task 3). This is effectively unreachable — the random suffix makes a full
+ * exhaustion astronomically unlikely — but minting is inside the signup
+ * transaction, so a typed error (rather than a bare `throw new Error`) keeps
+ * parity with {@link DeviceAlreadyBoundError} and lets the controller map it to
+ * a clean 500 instead of leaking a raw Error to the global filter.
+ */
+export class PayIdMintExhaustedError extends AuthDomainError {
+  readonly code = 'PAYID_MINT_EXHAUSTED' as const;
+
+  constructor() {
+    super('Could not allocate a PayID — please try again');
+    this.name = 'PayIdMintExhaustedError';
+  }
+}

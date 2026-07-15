@@ -156,8 +156,12 @@ export class ProposalController {
   ): Promise<AuthorizeProposalResponse> {
     const proposal = await this.loadExecutable(proposalId, user.userId);
 
-    // send requires a step-up directive; buy/sell use PIN.
-    const ref = proposal.type === 'send' ? 'request_step_up' : 'request_pin';
+    // send + internal_transfer require a step-up directive (both are irreversible
+    // value moves — §3.4); buy/sell/swap use PIN.
+    const ref =
+      proposal.type === 'send' || proposal.type === 'internal_transfer'
+        ? 'request_step_up'
+        : 'request_pin';
 
     const { directiveId, nonce, expiresAt } = await this.directiveService.issue(
       {
@@ -256,6 +260,34 @@ export class ProposalController {
           transactionId: result.transactionId,
           status: result.status,
           onChain: { providerRef: result.onChain.providerRef },
+        };
+      }
+
+      if (proposalType === 'internal_transfer') {
+        // Internal transfer uses step-up authorization (parity with send, §3.4).
+        // Resolve the acting device from the client fingerprint so the step-up is
+        // bound to it; falls back to the user's pinned device when unresolved.
+        const deviceId =
+          (await this.sessionService.findDeviceIdByFingerprint(
+            user.userId,
+            body.deviceFingerprint,
+          )) ?? undefined;
+
+        // idempotencyKey = proposalId (I8 at-most-once). The body-supplied key is
+        // never trusted here — a retry must collapse onto the engine's
+        // findByIdempotencyKey check, not mint a second real-money transfer.
+        const result = await this.executionService.executeInternalTransfer({
+          userId: user.userId,
+          proposalId,
+          directiveId: body.directiveId,
+          nonce: body.nonce,
+          pin: body.pin,
+          idempotencyKey,
+          deviceId,
+        });
+        return {
+          transactionId: result.transactionId,
+          status: result.status,
         };
       }
 

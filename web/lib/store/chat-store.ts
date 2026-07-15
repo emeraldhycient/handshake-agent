@@ -203,6 +203,14 @@ interface ChatState {
   /** Wire (or replace) the dead-session redirect after construction (findings #1/#2). */
   setSessionExpiredHandler(handler: () => void): void
   /**
+   * Wire (or replace) the on-completion cache-invalidation callback (Bug 3). The
+   * store is not a React component, so the surface injects a callback that holds
+   * a `queryClient` and invalidates the activity feed + balances when an execute
+   * COMPLETES — otherwise those TanStack Query caches stay stale until a manual
+   * page refresh. Fires only on a terminal `completed`, never on settling/failed.
+   */
+  setTransactionCompleteHandler(handler: () => void): void
+  /**
    * Transcribe a recorded voice note (POST /chat/voice) and route the transcript
    * through the same agent path as text: appends the transcript as the user
    * bubble + the mapped outcome. Never appends a receipt (§3.1).
@@ -263,6 +271,13 @@ interface CreateChatStoreOptions {
    * construction via `setSessionExpiredHandler`.
    */
   onSessionExpired?: () => void
+  /**
+   * Called when an execute COMPLETES (Bug 3) so the surface can invalidate the
+   * activity feed + balances + transactions TanStack Query caches. The store
+   * can't hold a `queryClient`, so the surface injects this. May also be wired
+   * after construction via `setTransactionCompleteHandler`.
+   */
+  onTransactionComplete?: () => void
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -285,6 +300,11 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
   // interceptor already clears the session, so RequireAuth redirects on its next
   // render even when no handler is wired).
   let onSessionExpired: () => void = options.onSessionExpired ?? (() => {})
+
+  // Mutable completion handler (Bug 3) — set at construction and/or via
+  // setTransactionCompleteHandler. Default no-op so the store works headless.
+  let onTransactionComplete: () => void =
+    options.onTransactionComplete ?? (() => {})
 
   // Lazy-import the real API functions so tests can inject mocks without
   // bundling the axios client. These are only called when the injected
@@ -391,6 +411,10 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
 
       setSessionExpiredHandler(handler) {
         onSessionExpired = handler
+      },
+
+      setTransactionCompleteHandler(handler) {
+        onTransactionComplete = handler
       },
 
       hydrateHistory(surface, items) {
@@ -1018,6 +1042,12 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
               successSurface: overlaySurface,
             }))
 
+            // Bug 3: an execute that completes instantly (e.g. an internal
+            // transfer) never hands off to the settlement watcher, so the
+            // activity feed + balances would stay stale until a manual refresh.
+            // Invalidate those caches here via the injected callback.
+            onTransactionComplete()
+
             setTimeout(() => {
               set({ successOpen: false })
             }, SUCCESS_DISMISS_MS)
@@ -1117,6 +1147,10 @@ export function createChatStore(options: CreateChatStoreOptions = {}) {
             successText: COMPLETION_SUCCESS_LABEL[_settlingAction] ?? "Done",
             successSurface: surface,
           }))
+
+          // Bug 3: a settled transaction changes balances + the activity feed —
+          // invalidate those caches so the UI refreshes without a manual reload.
+          onTransactionComplete()
 
           setTimeout(() => {
             set({ successOpen: false })

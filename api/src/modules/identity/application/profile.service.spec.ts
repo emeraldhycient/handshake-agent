@@ -202,6 +202,52 @@ describe('ProfileService', () => {
     expect(out.fiatCurrency).toBe('GHS');
   });
 
+  it('surfaces payId from the me projection when the user has claimed one', async () => {
+    const auth = {
+      me: jest.fn().mockResolvedValue({
+        userId: 'u1',
+        email: 'a@b.com',
+        kycStatus: 'verified',
+        kycTier: 'tier_1',
+        hasPin: true,
+        payId: 'amara',
+      }),
+    };
+    const identity = makeIdentity();
+    const svc = new ProfileService(
+      auth as never,
+      identity as never,
+      config,
+      registry as never,
+    );
+
+    const out = await svc.getProfile('u1');
+    expect(out.payId).toBe('amara');
+  });
+
+  it('returns payId undefined (not null) when the user has not claimed one', async () => {
+    const auth = {
+      me: jest.fn().mockResolvedValue({
+        userId: 'u1',
+        email: 'a@b.com',
+        kycStatus: 'verified',
+        kycTier: 'tier_1',
+        hasPin: true,
+        payId: null,
+      }),
+    };
+    const identity = makeIdentity();
+    const svc = new ProfileService(
+      auth as never,
+      identity as never,
+      config,
+      registry as never,
+    );
+
+    const out = await svc.getProfile('u1');
+    expect(out.payId).toBeUndefined();
+  });
+
   it('falls back to the default fiat when the preferred one is no longer live (fail-safe)', async () => {
     const auth = {
       me: jest.fn().mockResolvedValue({

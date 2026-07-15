@@ -65,6 +65,14 @@ export const MeResponseSchema = z.object({
   /** From KycProfile — null when no KYC profile exists yet. */
   firstName: z.string().nullable().optional(),
   lastName: z.string().nullable().optional(),
+  /**
+   * PayId handle for @-mention sends (Spec 2). Every user is minted one at
+   * signup (Task 3) so this is populated in practice; nullable to mirror the
+   * DB column (`User.payId String?`) rather than assert a guarantee the
+   * schema can't itself enforce, and optional for callers/fixtures that omit
+   * it entirely.
+   */
+  payId: z.string().nullable().optional(),
 });
 export type MeResponse = z.infer<typeof MeResponseSchema>;
 

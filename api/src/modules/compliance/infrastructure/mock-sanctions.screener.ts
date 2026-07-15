@@ -5,6 +5,7 @@ import { EffectiveConfigService } from '../../../core/config/application/effecti
 import type { AppConfig } from '../../../core/config/configuration';
 import type {
   ISanctionsScreener,
+  SanctionsScreenIdentityInput,
   SanctionsScreenInput,
   SanctionsScreenResult,
 } from '../application/ports/sanctions-screener.port';
@@ -48,6 +49,34 @@ export class MockSanctionsScreener implements ISanctionsScreener {
       return Promise.resolve({
         passed: false,
         reason: 'sanctioned address',
+        provider: 'mock',
+        reference,
+      });
+    }
+
+    return Promise.resolve({
+      passed: true,
+      provider: 'mock',
+      reference,
+    });
+  }
+
+  /**
+   * Identity screen for internal-transfer counterparties (Task 8). Keys on the
+   * subject `userId` against the SAME `sanctionsDenylist` config the address
+   * screen uses — so a test/admin can force a block by denylisting a userId.
+   * Non-throwing.
+   */
+  screenIdentity(
+    input: SanctionsScreenIdentityInput,
+  ): Promise<SanctionsScreenResult> {
+    const reference =
+      input.reference ?? `mock-sanctions-${randomUUID().slice(0, 8)}`;
+
+    if (this.denylist.has(input.userId)) {
+      return Promise.resolve({
+        passed: false,
+        reason: 'sanctioned identity',
         provider: 'mock',
         reference,
       });

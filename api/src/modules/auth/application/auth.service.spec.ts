@@ -66,6 +66,7 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
         emailVerified: boolean;
         firstName: string | null;
         lastName: string | null;
+        payId: string | null;
       } | null>,
       [string]
     >(() =>
@@ -78,6 +79,7 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
         emailVerified: false,
         firstName: null,
         lastName: null,
+        payId: 'ab',
       }),
     ),
   };
@@ -420,6 +422,7 @@ describe('AuthService.signupVerify', () => {
       emailVerified: true,
       firstName: null,
       lastName: null,
+      payId: 'a',
     });
 
     const res = await service.signupVerify({
@@ -456,6 +459,7 @@ describe('AuthService.signupVerify', () => {
         firstName: null,
         lastName: null,
         emailVerified: true,
+        payId: 'a',
       },
     });
   });
@@ -577,6 +581,7 @@ describe('AuthService.loginVerify', () => {
         emailVerified: false,
         firstName: null,
         lastName: null,
+        payId: 'ab',
       },
     });
   });
@@ -733,6 +738,7 @@ describe('AuthService.refresh', () => {
         emailVerified: false,
         firstName: null,
         lastName: null,
+        payId: 'ab',
       },
     });
   });
@@ -787,6 +793,7 @@ describe('AuthService.logout + me', () => {
       emailVerified: false,
       firstName: null,
       lastName: null,
+      payId: 'ab',
     });
   });
 
@@ -801,6 +808,7 @@ describe('AuthService.logout + me', () => {
       emailVerified: true,
       firstName: 'Amara',
       lastName: 'Okeke',
+      payId: 'amara',
     });
     expect(await service.me('u1')).toEqual(
       expect.objectContaining({ firstName: 'Amara', lastName: 'Okeke' }),

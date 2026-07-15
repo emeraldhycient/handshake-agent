@@ -58,6 +58,11 @@ import {
 } from '../../modules/admin/domain/settings-errors';
 import { CurrencyCollisionError } from '../../modules/admin/domain/currency-errors';
 import { NameChangeNotAllowedError } from '../../modules/identity/domain/profile-errors';
+import {
+  HandleTakenError,
+  NicknameCapError,
+  PayIdAlreadyChangedError,
+} from '../../modules/identity/domain/handle-errors';
 import { SumsubPrerequisiteNotMetError } from '../../modules/identity/domain/kyc-errors';
 
 interface ErrorBody {
@@ -157,6 +162,10 @@ describe('DomainExceptionFilter', () => {
     [new NameChangeNotAllowedError(), 409],
     // Task 3.4: Sumsub token requested for a tier above the earned prerequisite.
     [new SumsubPrerequisiteNotMetError('tier_2', 'tier_1', 'unverified'), 403],
+    // Spec 2: handle resolver / PayID / public nicknames.
+    [new HandleTakenError('ada'), 409],
+    [new NicknameCapError(5), 422],
+    [new PayIdAlreadyChangedError(), 409],
   ])('maps %s → %i', (err, expected) => {
     const { statusCode } = run(filter, err);
     expect(statusCode).toBe(expected);
@@ -269,6 +278,28 @@ describe('DomainExceptionFilter', () => {
     expect(body.message).toMatch(/already linked to another account/i);
     // No user id / fingerprint / raw Prisma detail leaks to the client.
     expect(body.message).not.toMatch(/pinnedDeviceId|P2002/i);
+  });
+
+  it('maps HANDLE_TAKEN → 409 without leaking the attempted handle in the message', () => {
+    const { statusCode, body } = run(filter, new HandleTakenError('ada'));
+    expect(statusCode).toBe(409);
+    expect(body.code).toBe('HANDLE_TAKEN');
+    expect(body.message).toMatch(/already taken/i);
+    expect(body.message).not.toMatch(/ada/i);
+  });
+
+  it('maps NICKNAME_CAP_EXCEEDED → 422 without leaking the numeric cap', () => {
+    const { statusCode, body } = run(filter, new NicknameCapError(5));
+    expect(statusCode).toBe(422);
+    expect(body.code).toBe('NICKNAME_CAP_EXCEEDED');
+    expect(body.message).toMatch(/maximum number of public nicknames/i);
+  });
+
+  it('maps PAYID_ALREADY_CHANGED → 409 with the one-change message and code echoed', () => {
+    const { statusCode, body } = run(filter, new PayIdAlreadyChangedError());
+    expect(statusCode).toBe(409);
+    expect(body.code).toBe('PAYID_ALREADY_CHANGED');
+    expect(body.message).toMatch(/already been changed once/i);
   });
 
   it('passes a NestJS HttpException through with its own status', () => {

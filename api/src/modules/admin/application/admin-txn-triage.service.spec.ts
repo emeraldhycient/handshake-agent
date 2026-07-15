@@ -35,6 +35,7 @@ function makeSettlementRepo(): jest.Mocked<ISettlementRepository> {
     settleSwapFinalizeAtomic: jest.fn(),
     settleSwapRefundAtomic: jest.fn().mockResolvedValue(undefined),
     settleManualCreditAtomic: jest.fn(),
+    settleInternalTransferAtomic: jest.fn(),
   };
 }
 

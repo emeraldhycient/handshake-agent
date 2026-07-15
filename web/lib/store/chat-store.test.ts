@@ -968,6 +968,123 @@ describe("resolveSettlement (C4)", () => {
   })
 })
 
+// ─── onTransactionComplete (Bug 3 — refresh activity + balances on completion) ─
+
+describe("onTransactionComplete callback", () => {
+  const proposalId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+  const transactionId = "tttttttt-tttt-tttt-tttt-tttttttttttt"
+
+  function makeAuthApi() {
+    return vi.fn(() =>
+      Promise.resolve({
+        directiveId: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        nonce: "n0nce_secret",
+        expiresAt: new Date(Date.now() + 30_000).toISOString(),
+      })
+    )
+  }
+
+  it("fires on the IMMEDIATE-completion execute path (e.g. an instant internal transfer)", async () => {
+    const onTransactionComplete = vi.fn()
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.resolve({
+        transactionId: "tx-complete",
+        status: "completed" as const,
+      })
+    )
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+      onTransactionComplete,
+    })
+    store.getState().openConfirm("m", buildBuyConfirm())
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+
+    expect(onTransactionComplete).toHaveBeenCalledTimes(1)
+  })
+
+  it("fires when a settling transaction resolves to completed", () => {
+    const onTransactionComplete = vi.fn()
+    const store = createChatStore({
+      schedule: immediate,
+      onTransactionComplete,
+    })
+    store.setState({
+      _pollingTransactionId: transactionId,
+      _settlingSurface: "m",
+      _settlingAction: "send",
+      _settlingPending: buildBuyConfirm(),
+    })
+    store.getState().resolveSettlement({
+      id: transactionId,
+      type: "send",
+      status: "completed",
+      createdAt: "2026-06-29T00:00:00.000Z",
+    })
+
+    expect(onTransactionComplete).toHaveBeenCalledTimes(1)
+  })
+
+  it("does NOT fire while a transaction is still settling, nor on failure", async () => {
+    const onTransactionComplete = vi.fn()
+    const authorizeApi = makeAuthApi()
+    const executeApi = vi.fn(() =>
+      Promise.resolve({
+        transactionId,
+        status: "settling" as const,
+        onChain: { providerRef: "REF001" },
+      })
+    )
+    const store = createChatStore({
+      schedule: immediate,
+      authorizeApi,
+      executeApi,
+      onTransactionComplete,
+    })
+    store.getState().openConfirm("m", buildBuyConfirm())
+    store.setState({ pendingProposalId: proposalId })
+    await store.getState().confirmToPin()
+    store.setState({ pin: "1234" })
+    await store.getState().pinComplete()
+    // Still in flight → no invalidation yet.
+    expect(onTransactionComplete).not.toHaveBeenCalled()
+
+    // Terminal failure → surfaced in-thread, but still no cache invalidation.
+    store.getState().resolveSettlement({
+      id: transactionId,
+      type: "send",
+      status: "failed",
+      createdAt: "2026-06-29T00:00:00.000Z",
+    })
+    expect(onTransactionComplete).not.toHaveBeenCalled()
+  })
+
+  it("can be wired after construction via setTransactionCompleteHandler", () => {
+    const onTransactionComplete = vi.fn()
+    const store = createChatStore({ schedule: immediate })
+    store.getState().setTransactionCompleteHandler(onTransactionComplete)
+    store.setState({
+      _pollingTransactionId: transactionId,
+      _settlingSurface: "m",
+      _settlingAction: "send",
+      _settlingPending: buildBuyConfirm(),
+    })
+    store.getState().resolveSettlement({
+      id: transactionId,
+      type: "send",
+      status: "completed",
+      createdAt: "2026-06-29T00:00:00.000Z",
+    })
+
+    expect(onTransactionComplete).toHaveBeenCalledTimes(1)
+  })
+})
+
 // ─── sendToAgent ──────────────────────────────────────────────────────────────
 
 function makeResponse(outcome: WebChatResponse["outcome"]): WebChatResponse {

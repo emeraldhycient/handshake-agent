@@ -42,6 +42,20 @@ export interface ScreenSendDestinationResult {
   complianceEventId: string;
 }
 
+export interface ScreenCounterpartyUserInput {
+  /** The recipient's userId — the counterparty of an internal transfer. */
+  userId: string;
+}
+
+export interface ScreenCounterpartyUserResult {
+  /** true = clear to proceed; false = blocked. */
+  passed: boolean;
+  /** Provider reason when passed is false; null when clear or unavailable. */
+  reason: string | null;
+  /** Id of the persisted ComplianceEvent (always present — event is always written). */
+  complianceEventId: string;
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -104,6 +118,67 @@ export class ComplianceService {
     return {
       passed: screening.passed,
       ...(screening.reason !== undefined ? { reason: screening.reason } : {}),
+      complianceEventId: event.id,
+    };
+  }
+
+  /**
+   * Screens an internal-transfer counterparty (recipient) and persists the
+   * result as a ComplianceEvent (Task 8).
+   *
+   * Internal transfers move value user→user via a ledger double-entry — there
+   * is no on-chain destination address to AML-screen. The counterparty is
+   * screened by IDENTITY through the dedicated `screenIdentity` port method,
+   * NOT by overloading the address `screen()` path with a fake
+   * `network: 'internal'` — that fake network fail-closes the real Blockradar
+   * adapter (which only maps real on-chain networks), throwing before the
+   * ComplianceEvent is written and breaking every internal transfer in prod.
+   * `screenIdentity` is non-throwing: address-only providers pass through and
+   * record the gap; a name/entity provider can be wired later without changing
+   * this caller.
+   *
+   * The event is always written — regardless of pass/fail — keyed to the
+   * counterparty (`userId` on the event) with `counterpartyUserId` also
+   * recorded in `details` for explicit traceability. Task 6 (the internal
+   * transfer proposal) calls this method; when `passed` is false, Task 6 must
+   * throw `SanctionsBlockedError` to block the transfer — this method never
+   * throws, it only reports.
+   *
+   * Severity/status mapping mirrors screenSendDestination exactly:
+   *   - passed: true  → severity 'low',  status 'approved'
+   *   - passed: false → severity 'high', status 'flagged'
+   */
+  async screenCounterpartyUser(
+    input: ScreenCounterpartyUserInput,
+  ): Promise<ScreenCounterpartyUserResult> {
+    const { userId: counterpartyUserId } = input;
+
+    // ── Step 1: Screen the counterparty by identity (not by address) ────────
+    const screening = await this.sanctionsScreener.screenIdentity({
+      userId: counterpartyUserId,
+      reference: null,
+    });
+
+    // ── Step 2: Persist an immutable ComplianceEvent ───────────────────────
+    const event = await this.eventRepo.create({
+      userId: counterpartyUserId,
+      transactionId: null,
+      eventType: 'sanctions_hit',
+      severity: screening.passed ? 'low' : 'high',
+      screeningProvider: screening.provider,
+      ruleOrHit: screening.passed ? null : (screening.reason ?? 'sanctioned'),
+      details: {
+        counterpartyUserId,
+        reference: screening.reference,
+        ...(screening.reason !== undefined ? { reason: screening.reason } : {}),
+      },
+      status: screening.passed ? 'approved' : 'flagged',
+    });
+
+    // ── Step 3: Return the result ───────────────────────────────────────────
+    return {
+      passed: screening.passed,
+      reason: screening.reason ?? null,
       complianceEventId: event.id,
     };
   }

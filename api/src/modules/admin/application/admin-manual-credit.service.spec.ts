@@ -40,6 +40,7 @@ function makeSettlementRepo(): jest.Mocked<ISettlementRepository> {
       newBalance: '125.5',
       receiptNumber: 'HS-2026-000042',
     }),
+    settleInternalTransferAtomic: jest.fn(),
   };
 }
 

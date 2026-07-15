@@ -8,6 +8,7 @@ import { QuoteExpiryPill } from "@/components/chat/cards/quote-expiry-pill"
 import { ExpiringCardCTA } from "@/components/chat/cards/expiring-card-cta"
 import { useQuoteCountdown } from "@/hooks/use-quote-countdown"
 import { formatCountdown } from "@/lib/format"
+import { proposalTerminalState } from "@/lib/chat/proposal-terminal"
 import type { SwapCardProps } from "@/types/components"
 
 /** Human ETA for a swap, e.g. "~2 min" / "~45 sec" / "instant". */
@@ -33,6 +34,7 @@ export function SwapCard({
   estimatedArrivalSec,
   expiresAt,
   lockSeconds,
+  proposalStatus,
   density,
   onConfirm,
   className,
@@ -40,6 +42,8 @@ export function SwapCard({
 }: SwapCardProps) {
   const isMobile = density === "mobile"
   const { remaining, isExpired } = useQuoteCountdown(expiresAt, lockSeconds)
+  // Bug 2: a reloaded executed/rejected swap proposal renders terminal.
+  const terminal = proposalTerminalState(proposalStatus)
 
   // Network gas is paid in the chain's NATIVE asset (TRX on TRON), not fromAsset.
   // Read the fee denomination defensively until it lands on the SwapView contract.
@@ -74,6 +78,7 @@ export function SwapCard({
           remaining={remaining}
           isExpired={isExpired}
           density={density}
+          terminal={terminal}
         />
       </div>
 
@@ -164,6 +169,7 @@ export function SwapCard({
         activeHint={`Rate locked ${formatCountdown(remaining)} · No hidden fees`}
         expiredHint="Request a new swap to continue"
         density={density}
+        terminal={terminal}
       />
     </ChatCardShell>
   )

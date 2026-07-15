@@ -47,6 +47,12 @@ vi.mock("@/lib/query/hooks", () => ({
 vi.mock("./profile-section", () => ({
   ProfileSection: () => <div data-testid="profile-section" />,
 }))
+vi.mock("./payid-section", () => ({
+  PayIdSection: () => <div data-testid="payid-section" />,
+}))
+vi.mock("./public-nicknames-section", () => ({
+  PublicNicknamesSection: () => <div data-testid="public-nicknames-section" />,
+}))
 vi.mock("./VerificationSection", () => ({
   VerificationSection: () => <div data-testid="verification-section" />,
 }))
@@ -75,9 +81,11 @@ describe("SettingsPanel (orchestrator)", () => {
     }
   })
 
-  it("composes the profile, security, MCP and language sections", () => {
+  it("composes the profile, PayID, nicknames, security, MCP and language sections", () => {
     render(<SettingsPanel />)
     expect(screen.getByTestId("profile-section")).toBeInTheDocument()
+    expect(screen.getByTestId("payid-section")).toBeInTheDocument()
+    expect(screen.getByTestId("public-nicknames-section")).toBeInTheDocument()
     expect(screen.getByTestId("verification-section")).toBeInTheDocument()
     expect(screen.getByTestId("security-section")).toBeInTheDocument()
     expect(screen.getByTestId("mcp-section")).toBeInTheDocument()

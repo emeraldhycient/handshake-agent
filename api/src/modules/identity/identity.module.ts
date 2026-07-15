@@ -17,18 +17,22 @@ import { IdentityService } from './application/identity.service';
 import { KycGateService } from './application/kyc-gate.service';
 import { KycService } from './application/kyc.service';
 import { PinSetupService } from './application/pin-setup.service';
+import { HandleService } from './application/handle.service';
 import { IdentityPrismaRepository } from './infrastructure/identity.prisma.repository';
 import { VelocityPrismaRepository } from './infrastructure/velocity.prisma.repository';
 import { KycPrismaRepository } from './infrastructure/kyc.prisma.repository';
 import { ActiveUserListerPrismaAdapter } from './infrastructure/active-user-lister.prisma';
 import { ProfileSessionPrismaRepository } from './infrastructure/profile-session.prisma.repository';
+import { HandlePrismaRepository } from './infrastructure/handle.prisma.repository';
 import { MockKycProvider } from './infrastructure/mock-kyc.provider';
 import { SumsubKycProvider } from './infrastructure/sumsub-kyc.provider';
 import { KycController } from './presentation/kyc.controller';
 import { ProfileService } from './application/profile.service';
 import { ProfileSettingsService } from './application/profile-settings.service';
 import { PROFILE_SESSION_REPOSITORY } from './application/ports/profile-session.repository.port';
+import { HANDLE_REPOSITORY } from './application/ports/handle.repository.port';
 import { ProfileController } from './presentation/profile.controller';
+import { HandleController } from './presentation/handle.controller';
 
 /**
  * Selects the active KYC adapter from the layered config.
@@ -77,7 +81,7 @@ export function selectKycProvider(
  */
 @Module({
   imports: [AuthModule, WebAuthModule, HttpModule],
-  controllers: [KycController, ProfileController],
+  controllers: [KycController, ProfileController, HandleController],
   providers: [
     ProfileService,
     // Wave C settings writes (PIN change / profile patch / session revoke).
@@ -87,6 +91,9 @@ export function selectKycProvider(
       provide: PROFILE_SESSION_REPOSITORY,
       useClass: ProfileSessionPrismaRepository,
     },
+    // Spec 2: global handle resolver + public-nickname CRUD + PayID change.
+    HandleService,
+    { provide: HANDLE_REPOSITORY, useClass: HandlePrismaRepository },
     IdentityService,
     KycGateService,
     KycService,
@@ -114,6 +121,9 @@ export function selectKycProvider(
     KycService,
     // Wave C: exported for the MCP module's get_profile tool (read-only).
     ProfileService,
+    // Spec 2: exported so the chat module can resolve `@handle` recipients
+    // into the internal-transfer send destination (Task 9).
+    HandleService,
     IDENTITY_REPOSITORY,
     // Phase 2, Task 2: export KYC_REPOSITORY so AdminModule can inject it for
     // the admin KYC-review decision write path (updateKycProfileDecision).

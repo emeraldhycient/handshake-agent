@@ -289,6 +289,13 @@ function makeSettlementRepo(
       newBalance: '0',
       receiptNumber: STUB_RECEIPT_NUMBER,
     }),
+    // Internal transfer (Spec 2, Task 7) — single-phase ledger double-entry.
+    settleInternalTransferAtomic: jest.fn().mockResolvedValue({
+      txn: STUB_TXN,
+      receiptNumber: STUB_RECEIPT_NUMBER,
+      senderBalanceAfter: '90.000000',
+      recipientBalanceAfter: '10.000000',
+    }),
   };
 }
 
@@ -4943,5 +4950,379 @@ describe('ExecutionService.settleSwap', () => {
     await expect(
       svc.settleSwap({ reference: 'nonexistent-key', success: true }),
     ).rejects.toThrow(ProposalNotExecutableError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Internal transfer execution (Spec 2, Task 7)
+// ---------------------------------------------------------------------------
+//
+// A user→user, PayID transfer settles as a SINGLE-PHASE ledger double-entry —
+// NO walletService.withdraw, NO SettlementOutbox, NO webhook. The engine
+// re-validates everything at execute (§3.1), demands PIN + step-up (parity with
+// send), and posts both legs atomically (debit sender, credit recipient).
+
+const IT_PROPOSAL_ID = 'internal-transfer-proposal-id';
+const IT_TXN_ID = 'internal-transfer-txn-id';
+const IT_IDEMPOTENCY_KEY = IT_PROPOSAL_ID; // I8: idempotencyKey = proposalId
+const RECIPIENT_USER_ID = 'bbbbbbbb-0002-7000-8000-000000000002';
+const RECIPIENT_WALLET_ID = 'recipient-wallet-id';
+const SENDER_WALLET_ID = 'wallet-id'; // matches makeWalletService's walletRecord.id
+
+const INTERNAL_TRANSFER_PROPOSAL: ProposalRecord = {
+  id: IT_PROPOSAL_ID,
+  userId: USER_ID,
+  conversationId: null,
+  type: 'internal_transfer',
+  status: 'pending',
+  parameters: {
+    asset: 'USDT',
+    cryptoAmount: '10.000000',
+    network: 'TRON',
+    networkFeeCrypto: '0',
+    totalDebit: '10.000000',
+    destinationKind: 'internal_user',
+    recipientUserId: RECIPIENT_USER_ID,
+    recipientWalletId: RECIPIENT_WALLET_ID,
+    walletId: SENDER_WALLET_ID,
+    requiresTravelRule: 'false',
+  },
+  parametersChecksum: 'c'.repeat(64),
+  quoteId: null, // internal transfers have NO quote
+  expiresAt: FUTURE,
+  confirmedAt: null,
+  createdAt: FIXED_NOW,
+};
+
+const INTERNAL_TRANSFER_GRANT: DirectiveGrantRecord = {
+  directiveId: DIRECTIVE_ID,
+  proposalId: IT_PROPOSAL_ID,
+  userId: USER_ID,
+  directiveRef: 'request_step_up', // internal transfer uses step-up, not request_pin
+  origin: 'engine',
+  nonceHash: 'hash',
+  signatureValue: 'sig',
+  status: 'consumed',
+  issuedAt: FIXED_NOW,
+  expiresAt: FUTURE,
+  consumedAt: FIXED_NOW,
+  consumedProposalId: IT_PROPOSAL_ID,
+  failureReason: null,
+  failureCount: 0,
+};
+
+const INTERNAL_TRANSFER_TXN: TransactionRecord = {
+  id: IT_TXN_ID,
+  proposalId: IT_PROPOSAL_ID,
+  userId: USER_ID,
+  type: 'internal_transfer',
+  status: 'completed',
+  idempotencyKey: IT_IDEMPOTENCY_KEY,
+  requestChecksum: 'it-checksum',
+  fxRateSnapshot: null,
+  metadata: {
+    asset: 'USDT',
+    cryptoAmount: '10.000000',
+    recipientUserId: RECIPIENT_USER_ID,
+    recipientWalletId: RECIPIENT_WALLET_ID,
+  },
+  processorTxRef: null,
+  onChainTxHash: null,
+  failureReason: null,
+  pinVerifiedAt: FIXED_NOW,
+  createdAt: FIXED_NOW,
+  executedAt: FIXED_NOW,
+  completedAt: FIXED_NOW,
+  failedAt: null,
+};
+
+const INTERNAL_TRANSFER_INPUT = {
+  userId: USER_ID,
+  proposalId: IT_PROPOSAL_ID,
+  directiveId: DIRECTIVE_ID,
+  nonce: NONCE,
+  pin: PIN,
+  idempotencyKey: IT_IDEMPOTENCY_KEY,
+};
+
+function makeCounterpartyComplianceService(
+  opts: { passed: boolean } = { passed: true },
+): { screenCounterpartyUser: jest.Mock } {
+  return {
+    screenCounterpartyUser: jest.fn().mockResolvedValue({
+      passed: opts.passed,
+      complianceEventId: 'compliance-event-id',
+      reason: opts.passed ? null : 'sanctioned counterparty',
+    }),
+  };
+}
+
+function makeInternalTransferSettlementRepo(
+  receiptNumber: string | null = STUB_RECEIPT_NUMBER,
+): jest.Mocked<ISettlementRepository> {
+  const repo = makeSettlementRepo(receiptNumber);
+  repo.settleInternalTransferAtomic = jest.fn().mockResolvedValue({
+    txn: INTERNAL_TRANSFER_TXN,
+    receiptNumber: STUB_RECEIPT_NUMBER,
+    senderBalanceAfter: '90.000000',
+    recipientBalanceAfter: '10.000000',
+  });
+  return repo;
+}
+
+function buildInternalTransferService(
+  overrides: {
+    proposalRepo?: jest.Mocked<IProposalRepository>;
+    transactionRepo?: jest.Mocked<ITransactionRepository>;
+    outboxRepo?: jest.Mocked<ISettlementOutboxRepository>;
+    settlementRepo?: jest.Mocked<ISettlementRepository>;
+    kycGate?: jest.Mocked<
+      Pick<KycGateService, 'assertCanTransact' | 'getOriginatorName'>
+    >;
+    directiveService?: jest.Mocked<Pick<DirectiveService, 'consume'>>;
+    pinService?: jest.Mocked<Pick<PinService, 'verifyPin'>>;
+    walletService?: jest.Mocked<
+      Pick<WalletService, 'getOrProvisionNetworkWallet' | 'withdraw'>
+    >;
+    ledgerRepo?: ReturnType<typeof makeLedgerRepo>;
+    complianceService?: ReturnType<typeof makeCounterpartyComplianceService>;
+    sessionService?: ReturnType<typeof makeSessionService>;
+  } = {},
+): ExecutionService {
+  const assetRegistry = makeAssetRegistry();
+  // executeInternalTransfer resolves assetDecimals via assetRegistry.asset(asset).
+  (assetRegistry.asset as jest.Mock).mockReturnValue({ decimals: 6 });
+
+  return new ExecutionService(
+    overrides.proposalRepo ?? makeProposalRepo(INTERNAL_TRANSFER_PROPOSAL),
+    // quoteRepo — not used by internal transfer
+    makeQuoteRepo(null),
+    overrides.transactionRepo ??
+      makeTransactionRepoForSend(null, INTERNAL_TRANSFER_TXN),
+    overrides.outboxRepo ?? makeOutboxRepo(),
+    overrides.settlementRepo ?? makeInternalTransferSettlementRepo(),
+    // quotesService — not used by internal transfer
+    makeQuotesService() as unknown as QuotesService,
+    (overrides.kycGate as unknown as KycGateService) ??
+      (makeKycGate() as unknown as KycGateService),
+    (overrides.directiveService as unknown as DirectiveService) ??
+      (makeDirectiveService(
+        INTERNAL_TRANSFER_GRANT,
+      ) as unknown as DirectiveService),
+    (overrides.pinService as unknown as PinService) ??
+      (makePinService() as unknown as PinService),
+    (overrides.walletService as unknown as WalletService) ??
+      (makeWalletServiceWithWithdraw() as unknown as WalletService),
+    // paymentProvider — not used by internal transfer
+    makePaymentProvider() as unknown as IPaymentProvider,
+    stubConfig as never,
+    stubClock,
+    assetRegistry,
+    makeBeneficiaryServiceForSend() as never,
+    (overrides.ledgerRepo as never) ?? makeLedgerRepo('100'),
+    makeIdentityService() as never,
+    makeWhatsAppSender() as never,
+    (overrides.complianceService as never) ??
+      (makeCounterpartyComplianceService() as never),
+    (overrides.sessionService as never) ?? (makeSessionService() as never),
+  );
+}
+
+describe('ExecutionService.executeInternalTransfer', () => {
+  it('happy path: posts the two-leg ledger via settleInternalTransferAtomic (NOT withdraw, NOT outbox); status completed', async () => {
+    const settlementRepo = makeInternalTransferSettlementRepo();
+    const outboxRepo = makeOutboxRepo();
+    const walletService = makeWalletServiceWithWithdraw();
+
+    const svc = buildInternalTransferService({
+      settlementRepo,
+      outboxRepo,
+      walletService,
+    });
+
+    const result = await svc.executeInternalTransfer(INTERNAL_TRANSFER_INPUT);
+
+    expect(result.status).toBe('completed');
+    expect(result.transactionId).toBe(IT_TXN_ID);
+    expect(result.receiptNumber).toBe(STUB_RECEIPT_NUMBER);
+    expect(result.recipientUserId).toBe(RECIPIENT_USER_ID);
+
+    // Single-phase ledger settle called with both legs + at-most-once key.
+    expect(settlementRepo.settleInternalTransferAtomic).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(settlementRepo.settleInternalTransferAtomic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proposalId: IT_PROPOSAL_ID,
+        senderUserId: USER_ID,
+        recipientUserId: RECIPIENT_USER_ID,
+        senderWalletId: SENDER_WALLET_ID,
+        recipientWalletId: RECIPIENT_WALLET_ID,
+        asset: 'USDT',
+        cryptoAmount: '10.000000',
+        assetDecimals: 6,
+        idempotencyKey: IT_IDEMPOTENCY_KEY,
+      }),
+    );
+
+    // NO on-chain withdraw, NO settlement outbox row.
+    expect(walletService.withdraw).not.toHaveBeenCalled();
+    expect(outboxRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('surfaces sender balance decreased and recipient balance increased by the amount', async () => {
+    // The settle returns sender 100→90 (−10) and recipient 0→10 (+10).
+    const settlementRepo = makeInternalTransferSettlementRepo();
+    settlementRepo.settleInternalTransferAtomic = jest.fn().mockResolvedValue({
+      txn: INTERNAL_TRANSFER_TXN,
+      receiptNumber: STUB_RECEIPT_NUMBER,
+      senderBalanceAfter: '90.000000',
+      recipientBalanceAfter: '10.000000',
+    });
+    const svc = buildInternalTransferService({ settlementRepo });
+
+    const result = await svc.executeInternalTransfer(INTERNAL_TRANSFER_INPUT);
+
+    expect(result.senderBalanceAfter).toBe('90.000000');
+    expect(result.recipientBalanceAfter).toBe('10.000000');
+  });
+
+  it('calls the KYC gate with capability "crypto.transfer" and onChainSend:false', async () => {
+    const kycGate = makeKycGate();
+    const svc = buildInternalTransferService({ kycGate });
+
+    await svc.executeInternalTransfer(INTERNAL_TRANSFER_INPUT);
+
+    expect(kycGate.assertCanTransact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: 'crypto.transfer',
+        onChainSend: false,
+      }),
+    );
+  });
+
+  it('records a device-bound step-up after PIN + directive pass (§3.4)', async () => {
+    const sessionService = makeSessionService();
+    const svc = buildInternalTransferService({ sessionService });
+
+    await svc.executeInternalTransfer(INTERNAL_TRANSFER_INPUT);
+
+    expect(sessionService.recordStepUp).toHaveBeenCalledTimes(1);
+    expect(sessionService.recordStepUp).toHaveBeenCalledWith(
+      USER_ID,
+      'device-id-stub',
+      expect.any(Date),
+    );
+  });
+
+  it('idempotent replay: returns the prior result WITHOUT re-posting (no settle call)', async () => {
+    const settlementRepo = makeInternalTransferSettlementRepo();
+    const transactionRepo = makeTransactionRepoForSend(
+      INTERNAL_TRANSFER_TXN, // findByIdempotencyKey returns the existing txn
+      INTERNAL_TRANSFER_TXN,
+    );
+
+    const svc = buildInternalTransferService({
+      settlementRepo,
+      transactionRepo,
+    });
+
+    const result = await svc.executeInternalTransfer(INTERNAL_TRANSFER_INPUT);
+
+    expect(result.transactionId).toBe(IT_TXN_ID);
+    expect(result.status).toBe('completed');
+    // The double-post guard: settle is NOT called on replay.
+    expect(settlementRepo.settleInternalTransferAtomic).not.toHaveBeenCalled();
+  });
+
+  it('wrong directive ref (request_pin instead of request_step_up) → throws, no settle', async () => {
+    const settlementRepo = makeInternalTransferSettlementRepo();
+    const badGrant: DirectiveGrantRecord = {
+      ...INTERNAL_TRANSFER_GRANT,
+      directiveRef: 'request_pin', // buy/sell ref — not allowed for a transfer
+    };
+    const directiveService = makeDirectiveService(badGrant);
+
+    const svc = buildInternalTransferService({
+      settlementRepo,
+      directiveService,
+    });
+
+    await expect(
+      svc.executeInternalTransfer(INTERNAL_TRANSFER_INPUT),
+    ).rejects.toBeInstanceOf(ProposalNotExecutableError);
+    expect(settlementRepo.settleInternalTransferAtomic).not.toHaveBeenCalled();
+  });
+
+  it('bad PIN → PinInvalidError; no settle', async () => {
+    const settlementRepo = makeInternalTransferSettlementRepo();
+    const pinService = makePinService(new PinInvalidError(2));
+
+    const svc = buildInternalTransferService({ settlementRepo, pinService });
+
+    await expect(
+      svc.executeInternalTransfer(INTERNAL_TRANSFER_INPUT),
+    ).rejects.toBeInstanceOf(PinInvalidError);
+    expect(settlementRepo.settleInternalTransferAtomic).not.toHaveBeenCalled();
+  });
+
+  it('counterparty sanctions block → SanctionsBlockedError; no settle', async () => {
+    const settlementRepo = makeInternalTransferSettlementRepo();
+    const complianceService = makeCounterpartyComplianceService({
+      passed: false,
+    });
+
+    const svc = buildInternalTransferService({
+      settlementRepo,
+      complianceService,
+    });
+
+    await expect(
+      svc.executeInternalTransfer(INTERNAL_TRANSFER_INPUT),
+    ).rejects.toBeInstanceOf(SanctionsBlockedError);
+    expect(settlementRepo.settleInternalTransferAtomic).not.toHaveBeenCalled();
+  });
+
+  it('insufficient sender balance → InsufficientBalanceError; no settle', async () => {
+    const settlementRepo = makeInternalTransferSettlementRepo();
+    // Ledger balance 5 < cryptoAmount 10.
+    const ledgerRepo = makeLedgerRepo('5');
+
+    const svc = buildInternalTransferService({ settlementRepo, ledgerRepo });
+
+    await expect(
+      svc.executeInternalTransfer(INTERNAL_TRANSFER_INPUT),
+    ).rejects.toBeInstanceOf(InsufficientBalanceError);
+    expect(settlementRepo.settleInternalTransferAtomic).not.toHaveBeenCalled();
+  });
+
+  it('wrong proposal type (send) → ProposalNotExecutableError; no settle', async () => {
+    const settlementRepo = makeInternalTransferSettlementRepo();
+    const proposalRepo = makeProposalRepo({
+      ...INTERNAL_TRANSFER_PROPOSAL,
+      type: 'send',
+    });
+
+    const svc = buildInternalTransferService({ settlementRepo, proposalRepo });
+
+    await expect(
+      svc.executeInternalTransfer(INTERNAL_TRANSFER_INPUT),
+    ).rejects.toBeInstanceOf(ProposalNotExecutableError);
+    expect(settlementRepo.settleInternalTransferAtomic).not.toHaveBeenCalled();
+  });
+
+  it('expired proposal → ProposalExpiredError; no settle', async () => {
+    const settlementRepo = makeInternalTransferSettlementRepo();
+    const proposalRepo = makeProposalRepo({
+      ...INTERNAL_TRANSFER_PROPOSAL,
+      expiresAt: new Date('2025-06-01T11:00:00.000Z'), // 1h in the past
+    });
+
+    const svc = buildInternalTransferService({ settlementRepo, proposalRepo });
+
+    await expect(
+      svc.executeInternalTransfer(INTERNAL_TRANSFER_INPUT),
+    ).rejects.toBeInstanceOf(ProposalExpiredError);
+    expect(settlementRepo.settleInternalTransferAtomic).not.toHaveBeenCalled();
   });
 });
